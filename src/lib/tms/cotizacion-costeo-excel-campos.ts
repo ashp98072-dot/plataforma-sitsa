@@ -64,32 +64,11 @@ export const CAMPOS_EXCEL_PARAMETROS = [
     "group": "Gastos globales"
   },
   {
-    "key": "salarioPilotoMensual",
-    "col": "salario_piloto_mensual",
-    "type": "DECIMAL(12,2)",
-    "label": "Salario piloto mensual",
-    "group": "Personal"
-  },
-  {
-    "key": "salarioAuxiliarMensual",
-    "col": "salario_auxiliar_mensual",
-    "type": "DECIMAL(12,2)",
-    "label": "Salario auxiliar mensual",
-    "group": "Personal"
-  },
-  {
     "key": "diasLaboralesMes",
     "col": "dias_laborales_mes",
     "type": "DECIMAL(5,2)",
     "label": "Días laborales salarios",
     "group": "Personal"
-  },
-  {
-    "key": "margen2",
-    "col": "margen2",
-    "type": "DECIMAL(10,6)",
-    "label": "Margen 2 (%)",
-    "group": "Márgenes"
   }
 ] as const;
 export const CAMPOS_EXCEL_PERFIL = [
@@ -113,6 +92,20 @@ export const CAMPOS_EXCEL_PERFIL = [
     "type": "INT",
     "label": "Cantidad de llantas",
     "group": "Mantenimiento"
+  },
+  {
+    "key": "salarioPilotoMensual",
+    "col": "salario_piloto_mensual",
+    "type": "DECIMAL(12,2)",
+    "label": "Salario piloto mensual",
+    "group": "Personal"
+  },
+  {
+    "key": "salarioAuxiliarMensual",
+    "col": "salario_auxiliar_mensual",
+    "type": "DECIMAL(12,2)",
+    "label": "Salario auxiliar mensual",
+    "group": "Personal"
   }
 ] as const;
 export type ParametrosExcel = {
@@ -125,12 +118,11 @@ export type ParametrosExcel = {
   gastosMantenimiento?: number | null;
   gastosSeguridad?: number | null;
   gastosPredios?: number | null;
-  salarioPilotoMensual?: number | null;
-  salarioAuxiliarMensual?: number | null;
   diasLaboralesMes?: number | null;
-  margen2?: number | null;
 };
 export type PerfilExcel = {
+  salarioPilotoMensual?: number | null;
+  salarioAuxiliarMensual?: number | null;
   viajesMes?: number | null;
   precioLlanta?: number | null;
   cantidadLlantas?: number | null;

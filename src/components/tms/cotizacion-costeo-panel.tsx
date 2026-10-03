@@ -18,7 +18,7 @@ export type ConfigCosteo =
   | { estado: "cargando" }
   | { estado: "sin-permiso" }
   | { estado: "error"; mensaje: string }
-  | { estado: "listo"; perfiles: PerfilOpcion[]; margenObjetivo: number | null; margen2?: number | null; precioCombustibleGalon?: number; vigenteDesde: string };
+  | { estado: "listo"; perfiles: PerfilOpcion[]; margenObjetivo: number | null; precioCombustibleGalon?: number; vigenteDesde: string };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
 
@@ -50,7 +50,7 @@ export function useCosteoConfig(slug: string, fechaEmision: string): ConfigCoste
         if (controller.signal.aborted) return;
         if (status === 401 || status === 403) setConfig({ estado: "sin-permiso" });
         else if (!ok) setConfig({ estado: "error", mensaje: data.error ?? "No se pudo cargar la configuración del costeo." });
-        else setConfig({ estado: "listo", perfiles: data.perfiles ?? [], margenObjetivo: data.parametros?.margenObjetivo ?? null, margen2: data.parametros?.margen2 ?? null, precioCombustibleGalon: data.parametros?.precioCombustibleGalon, vigenteDesde: data.parametros?.vigenteDesde ?? "" });
+        else setConfig({ estado: "listo", perfiles: data.perfiles ?? [], margenObjetivo: data.parametros?.margenObjetivo ?? null, precioCombustibleGalon: data.parametros?.precioCombustibleGalon, vigenteDesde: data.parametros?.vigenteDesde ?? "" });
       })
       .catch(() => { if (!controller.signal.aborted) setConfig({ estado: "error", mensaje: "No se pudo cargar la configuración del costeo." }); });
     return () => controller.abort();
@@ -74,14 +74,12 @@ export function ResumenCosteo({ datos }: { datos: ResumenCosteoDatos }) {
   ];
   if (datos.subtotalComercial != null) filas.splice(0, filas.length,
     ["COSTO BASE", monedaCosteo(datos.costoOperativo)],
-    ["Margen 1 valor", monedaCosteo(datos.margen1Valor)],
-    ["Margen 2 valor", monedaCosteo(datos.margen2Valor)],
+    ["Margen objetivo (%)", porcentajeCosteo(datos.margenObjetivo)],
+    ["Valor del margen", monedaCosteo(datos.margenObjetivoMonto)],
     ["Subtotal antes IVA", monedaCosteo(datos.subtotalComercial)],
     ["IVA", monedaCosteo(datos.iva)],
     ["TOTAL CON IVA", monedaCosteo(datos.precioSugerido)],
     ["Precio/km (informativo)", monedaCosteo(datos.precioPorKm)],
-    ["Margen 1", porcentajeCosteo(datos.margenObjetivo)],
-    ["Margen 2", porcentajeCosteo(datos.margen2)],
     ["Tarifa comercial", monedaCosteo(datos.precioVenta)],
     ["Utilidad estimada", monedaCosteo(datos.utilidadEstimada)]);
   return (
@@ -268,13 +266,9 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         <button type="button" className="rounded border border-[var(--border)] px-2 py-1 text-xs" onClick={() => set({ otrosCostos: [...form.otrosCostos, { concepto: "", monto: "" }] })}>+ Agregar otro costo</button>
       </div>
       <div className="flex flex-wrap items-end gap-3">
-        <label className="text-xs text-[var(--muted)]">Margen 1 (%)
+        <label className="text-xs text-[var(--muted)]">Margen objetivo (%)
           <input type="number" min="0" step="any" className={`${inputCls} mt-0.5 w-32 block`} placeholder={p.config.margenObjetivo != null ? String(p.config.margenObjetivo * 100) : "0"}
             value={form.margenObjetivoPct} onChange={(e) => set({ margenObjetivoPct: e.target.value })} />
-        </label>
-        <label className="text-xs text-[var(--muted)]">Margen 2 (%)
-          <input type="number" min="0" max="500" step="any" className={inputCls} placeholder={String((p.config.margen2 ?? 0) * 100)}
-            value={form.margen2Pct ?? ""} onChange={e => set({ margen2Pct: e.target.value })} />
         </label>
         {num("Precio combustible usado (Q/galón; override interno)", "precioCombustibleOverride", { placeholder: String(p.config.precioCombustibleGalon ?? "") })}
         <label><input type="checkbox" checked={form.incluirSeguroMercaderia ?? true} onChange={e => set({ incluirSeguroMercaderia: e.target.checked })} /> Seguro mercadería global (vacío en monto = prorrateo)</label>

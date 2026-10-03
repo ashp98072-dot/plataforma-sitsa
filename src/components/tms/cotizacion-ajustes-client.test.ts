@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";import { join } from "node:path";import { describe,expect,it } from "vitest";import type { ParametroAjustes } from "@/lib/tms/cotizacion-costeo-ajustes";import { decimalAPorcentaje,formularioNuevaVigencia,porcentajeADecimal,ultimaVigencia } from "./cotizacion-ajustes-client";
+import { readFileSync } from "node:fs";import { join } from "node:path";import { describe,expect,it } from "vitest";import type { ParametroAjustes, PerfilAjustes } from "@/lib/tms/cotizacion-costeo-ajustes";import { formPerfil,payloadPerfil,decimalAPorcentaje,formularioNuevaVigencia,porcentajeADecimal,ultimaVigencia } from "./cotizacion-ajustes-client";
 const src=readFileSync(join(__dirname,"cotizacion-ajustes-client.tsx"),"utf8");
 describe("UI ajustes de costeo",()=>{
  it("convierte porcentajes de UI a fracción persistida y viceversa",()=>{expect(porcentajeADecimal("12")).toBe(.12);expect(decimalAPorcentaje(.2)).toBe("20");});
@@ -25,7 +25,7 @@ describe("Nueva vigencia: plantilla = última vigencia disponible",()=>{
  it("copia TODOS los campos de la última vigencia (no una mezcla con la actual)",()=>{
   const form=formularioNuevaVigencia(ultimaVigencia([FUTURA,ACTUAL]),"2026-11-01");
   expect(form).toMatchObject({vigenteDesde:"2026-11-01",precioCombustibleGalon:"31.5",ivaTasa:"15",costoPilotoDia:"250",costoAuxiliarDia:"148.04",viaticoPilotoDia:"200",viaticoAuxiliarDia:"200",viaticoGuiaDia:"125",hotelDia:"300",margenObjetivo:"25"});
-  expect(form.seguroMercaderiaAnual).toBe(""); expect(form.margen2).toBe("");
+  expect(form.seguroMercaderiaAnual).toBe("");
  });
  it("solo con la vigencia actual, la plantilla es esa misma",()=>{
   expect(Number(formularioNuevaVigencia(ultimaVigencia([ACTUAL]),"2026-11-01").precioCombustibleGalon)).toBe(29.89);
@@ -46,13 +46,23 @@ describe("Nueva vigencia: plantilla = última vigencia disponible",()=>{
  });
 });
 describe("Ajustes Excel 2026",()=>{
- it("la nueva plantilla copia también globales y segundo margen sin alterar la vigencia",()=>{
-  const p=vigencia(3,"2026-10-02",49.8,{margen2:.15,seguroMercaderiaAnual:70000,cantidadCamiones:46});
-  expect(formularioNuevaVigencia(p,"2026-10-03")).toMatchObject({margen2:"15",seguroMercaderiaAnual:"70000",cantidadCamiones:"46",precioCombustibleGalon:"49.8"});
-  expect(p.margen2).toBe(.15);
+ it("la nueva plantilla copia también globales y margen objetivo sin alterar la vigencia",()=>{
+  const p=vigencia(3,"2026-10-02",49.8,{margenObjetivo:.45,seguroMercaderiaAnual:70000,cantidadCamiones:46});
+  expect(formularioNuevaVigencia(p,"2026-10-03")).toMatchObject({margenObjetivo:"45",seguroMercaderiaAnual:"70000",cantidadCamiones:"46",precioCombustibleGalon:"49.8"});
+  expect(p.margenObjetivo).toBe(.45);
  });
  it("perfil agrupado y derivados de solo lectura; 1T/12T configurables sin sembrar importes",()=>{
   for(const etiqueta of ["Operación","Mantenimiento","Seguros","Depreciación vehículo","Refrigeración / Thermo","GPS/viaje:","Aceite/km:","Llantas/km:","Seguro/día:","Depreciación/día:"]) expect(src).toContain(etiqueta);
   expect(src).toContain('CODIGOS_PERFIL_COSTEO.map');
+ });
+ it("PERSONAL pertenece al perfil; formulario/payload conservan salarios propios sin mutar otro perfil",()=>{
+  const base={id:5,codigo:"CAMION_5T",nombre:"5T",activo:true,creadoPor:null,creadoEn:"",actualizadoEn:"",costoAdquisicion:null,diasOperacionMes:26,gpsMensual:0,seguroVehiculoMensual:0,costoAceiteServicio:0,vidaUtilAceiteKm:5000,costoJuegoLlantas:0,vidaUtilLlantasKm:50000,rendimientoKmGalon:10,deprecValorBase:null,deprecAnios:null,deprecDiasOperacionMes:null,refrigValorBase:null,refrigAnios:null,refrigDiasOperacionMes:null,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000} satisfies PerfilAjustes;
+  const otro={...base,id:10,codigo:"CAMION_10T",salarioPilotoMensual:6000};
+  const form=formPerfil(base);
+  expect(payloadPerfil({...form,salarioPilotoMensual:"4500"})).toMatchObject({salarioPilotoMensual:4500,salarioAuxiliarMensual:3000});
+  expect(formPerfil(otro).salarioPilotoMensual).toBe("6000");
+  expect(base.salarioPilotoMensual).toBe(4000);
+  expect(formularioNuevaVigencia(ACTUAL,"2026-10-03")).not.toHaveProperty("salarioPilotoMensual");
+  expect(src).toContain("salarioPilotoMensual:pf.salarioPilotoMensual");
  });
 });

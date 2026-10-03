@@ -34,8 +34,6 @@ export const costeoPayloadSchema = z.object({
   seguroMercaderia: opcional(monto),
   incluirSeguroMercaderia: opcional(z.boolean()),
   precioCombustibleOverride: opcional(monto),
-  margen1: opcional(z.number().finite().min(0).max(5)),
-  margen2: opcional(z.number().finite().min(0).max(5)),
   usarRefrigeracion: opcional(z.boolean()),
   viaticoPilotoTotal: opcional(monto),
   viaticoAuxiliarTotal: opcional(monto),
@@ -100,8 +98,6 @@ function construirInput(payload: CosteoPayload, perfil: InputCosteoServicio["per
   if (payload.hotelTotal != null) input.hotelTotal = payload.hotelTotal;
   if (payload.otrosCostos?.length) input.otrosCostos = payload.otrosCostos;
   if (payload.margenObjetivo != null) input.margenObjetivo = payload.margenObjetivo;
-  if (payload.margen1 != null) input.margen1 = payload.margen1;
-  if (payload.margen2 != null) input.margen2 = payload.margen2;
   if (payload.precioCombustibleOverride != null) input.precioCombustibleOverride = payload.precioCombustibleOverride;
   if (payload.incluirSeguroMercaderia != null) input.incluirSeguroMercaderia = payload.incluirSeguroMercaderia;
   return input;

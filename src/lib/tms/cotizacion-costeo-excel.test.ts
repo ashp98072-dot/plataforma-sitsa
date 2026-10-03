@@ -18,20 +18,20 @@ const entrada = (extra: Partial<InputCosteoServicio> = {}): InputCosteoServicio 
  seguroMercaderiaAnual:70000,cantidadCamiones:46,viajesAnuales:240,diasGastosMes:20,
  gastosAdministracion:203236.49,gastosMantenimiento:0,gastosSeguridad:0,gastosPredios:0},
  distanciaKm:220,diasServicio:1,cantidadPilotos:1,cantidadAuxiliares:1,
- incluirGps:true,incluirSeguroVehiculo:true,precioCombustibleOverride:43,margen1:.15,margen2:.15,
+ incluirGps:true,incluirSeguroVehiculo:true,precioCombustibleOverride:43,margenObjetivo:.30,
  ...extra,
 });
 describe("Paridad de fórmulas Excel 2026 (A–F)",()=>{
- it("A: desglose, dos márgenes, IVA posterior y precio/km",()=>{
+ it("A: desglose, único margen, IVA posterior y precio/km",()=>{
   const r=calcularCosteoServicio(entrada());
   expect(r).toMatchObject({gps:5,aceite:77,llantas:14.96,combustible:946,depreciacion:96.15,
    seguroVehiculo:31.67,seguroMercaderia:6.34,piloto:207.74,auxiliares:148.04,
-   gastosGenerales:220.91,costoOperativo:1933.81,margen1Valor:290.07,margen2Valor:290.07,
+   gastosGenerales:220.91,costoOperativo:1933.81,margenObjetivoMonto:580.14,
    subtotalComercial:2513.95,iva:301.67,precioSugerido:2815.62,precioPorKm:12.80});
  });
- it("B: 30% + 15% usan el MISMO costo base, sin capitalizar",()=>{
-  const r=calcularCosteoServicio(entrada({margen1:.30,margen2:.15}));
-  expect(r.margen1Valor).toBe(580.14); expect(r.margen2Valor).toBe(290.07);
+ it("B: margen objetivo 45% sobre costo base",()=>{
+  const r=calcularCosteoServicio(entrada({margenObjetivo:.45}));
+  expect(r.margenObjetivoMonto).toBe(870.21);
   expect(r.subtotalComercial).toBe(2804.02);
  });
  it("C: dos días escalan diarios, no GPS/seguro mercadería/km; Thermo redondea al final",()=>{
@@ -57,7 +57,7 @@ describe("Paridad de fórmulas Excel 2026 (A–F)",()=>{
  it("F: cero km no divide por cero",()=>expect(calcularCosteoServicio(entrada({distanciaKm:0})).precioPorKm).toBeNull());
  it("salarios mensuales y divisor global sustituyen solo los equivalentes configurados",()=>{
   const i=entrada();
-  const r=calcularCosteoServicio({...i,diasServicio:2,cantidadPilotos:2,cantidadAuxiliares:3,parametros:{...i.parametros,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000,diasLaboralesMes:20,diasDepreciacionMes:25}});
+  const r=calcularCosteoServicio({...i,diasServicio:2,cantidadPilotos:2,cantidadAuxiliares:3,perfil:{...i.perfil,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000},parametros:{...i.parametros,diasLaboralesMes:20,diasDepreciacionMes:25}});
   expect(r).toMatchObject({piloto:800,auxiliares:900,depreciacion:200});
  });
  it("NULL no se inventa como gasto confirmado; snapshot conserva advertencias y valores usados",()=>{
@@ -67,9 +67,9 @@ describe("Paridad de fórmulas Excel 2026 (A–F)",()=>{
   expect(r.valoresUsados).toMatchObject({precioCombustibleGalon:43,rendimientoKmGalon:10,viajesMes:20,costoJuegoLlantas:3400,diasDepreciacionVehiculo:26});
   expect(decimalCosteoSql(r.costoOperativo)).toBe(r.costoOperativo.toFixed(6));
  });
- it("redondeo de dos márgenes sobre ejemplo aislado del ticket",()=>{
+ it("redondeo de un margen sobre ejemplo aislado del ticket",()=>{
   const i=entrada(); const r=calcularCosteoServicio({...i,distanciaKm:0,cantidadPilotos:0,cantidadAuxiliares:0,incluirGps:false,incluirSeguroVehiculo:false,perfil:{...i.perfil,depreciacion:null},seguroMercaderia:0,parametros:{...i.parametros,gastosAdministracion:0},otrosCostos:[{concepto:"Base ejemplo de márgenes",monto:1671.81}]});
-  expect(r).toMatchObject({costoOperativo:1671.81,margen1Valor:250.77,margen2Valor:250.77,subtotalComercial:2173.35,iva:260.8,precioSugerido:2434.15});
+  expect(r).toMatchObject({costoOperativo:1671.81,margenObjetivoMonto:501.54,subtotalComercial:2173.35,iva:260.8,precioSugerido:2434.15});
  });
  it("preserva overrides totales aunque cambien días/personas",()=>{
   expect(calcularCosteoServicio(entrada({diasServicio:2,cantidadPilotos:3,viaticoPilotoTotal:17,hotelTotal:120}))).toMatchObject({viaticoPiloto:17,hotel:120});
@@ -84,13 +84,41 @@ describe("Paridad de fórmulas Excel 2026 (A–F)",()=>{
   expect(()=>calcularCosteoServicio(entrada({perfil:{...entrada().perfil,cantidadLlantas:null}}))).toThrow();
  });
  it("payload permite solo override autorizado, no combustible global ni datos de perfil",()=>{
-  const payload={perfilId:1,distanciaKm:220,diasServicio:1,cantidadPilotos:1,cantidadAuxiliares:0,incluirGps:true,incluirSeguroVehiculo:true,precioCombustibleOverride:43,margen1:.3,margen2:.15};
+  const payload={perfilId:1,distanciaKm:220,diasServicio:1,cantidadPilotos:1,cantidadAuxiliares:0,incluirGps:true,incluirSeguroVehiculo:true,precioCombustibleOverride:43,margenObjetivo:.45};
   expect(costeoPayloadSchema.safeParse(payload).success).toBe(true);
   expect(costeoPayloadSchema.safeParse({...payload,precioCombustibleGalon:43}).success).toBe(false);
-  expect(costeoPayloadSchema.safeParse({...payload,margen2:-1}).success).toBe(false);
+  expect(costeoPayloadSchema.safeParse({...payload,margenObjetivo:-1}).success).toBe(false);
  });
- it("UI captura override y segundo margen; huella contiene los valores enviados",()=>{
-  const r=construirPayloadCosteo({...COSTEO_FORM_VACIO,perfilId:1,distanciaKm:"220",precioCombustibleOverride:"43",margenObjetivoPct:"30",margen2Pct:"15"});
-  expect(r.ok&&r.payload).toMatchObject({precioCombustibleOverride:43,margenObjetivo:.3,margen2:.15});
+ it("UI captura override y único margen objetivo; huella contiene los valores enviados",()=>{
+  const r=construirPayloadCosteo({...COSTEO_FORM_VACIO,perfilId:1,distanciaKm:"220",precioCombustibleOverride:"43",margenObjetivoPct:"30"});
+  expect(r.ok&&r.payload).toMatchObject({precioCombustibleOverride:43,margenObjetivo:.3});
+ });
+ it.each([[.30,1200,5200],[.45,1800,5800]])("base Q4000 y margen %s produce valor %s/subtotal %s", (porcentaje,valor,subtotal)=>{
+  const i=entrada();
+  const r=calcularCosteoServicio({...i,distanciaKm:0,cantidadPilotos:0,cantidadAuxiliares:0,incluirGps:false,incluirSeguroVehiculo:false,perfil:{...i.perfil,depreciacion:null},seguroMercaderia:0,parametros:{...i.parametros,gastosAdministracion:0},otrosCostos:[{concepto:"Base ejemplo",monto:4000}],margenObjetivo:porcentaje});
+  expect(r).toMatchObject({costoOperativo:4000,margenObjetivoAplicado:porcentaje,margenObjetivoMonto:valor,subtotalComercial:subtotal,iva:subtotal*.12});
+  expect(Object.keys(r).filter(k=>/^margen/.test(k))).toEqual(["margenObjetivoAplicado","margenObjetivoMonto","margenReal"]);
+ });
+ it("5T y 10T resuelven salarios diferentes con el mismo divisor global; cambiar 5T no altera 10T",()=>{
+  const i=entrada(),parametros={...i.parametros,diasLaboralesMes:20};
+  const cinco={...i.perfil,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000};
+  const diez={...cinco,codigo:"CAMION_10T",salarioPilotoMensual:6000,salarioAuxiliarMensual:3500};
+  expect(calcularCosteoServicio({...i,perfil:cinco,parametros})).toMatchObject({piloto:200,auxiliares:150,valoresUsados:{salarioPilotoMensual:4000,salarioAuxiliarMensual:3000,costoPilotoDia:200,costoAuxiliarDia:150,diasLaboralesMes:20}});
+  expect(calcularCosteoServicio({...i,perfil:{...cinco,salarioPilotoMensual:4500},parametros}).piloto).toBe(225);
+  expect(calcularCosteoServicio({...i,perfil:diez,parametros})).toMatchObject({piloto:300,auxiliares:175});
+  expect(diez.salarioPilotoMensual).toBe(6000);
+ });
+ it("salarios NULL usan los diarios legados sin exigir divisor; cero configurado NO activa fallback",()=>{
+  const i=entrada();
+  const r=calcularCosteoServicio({...i,perfil:{...i.perfil,salarioPilotoMensual:null,salarioAuxiliarMensual:null}});
+  expect(r).toMatchObject({piloto:207.74,auxiliares:148.04,valoresUsados:{salarioPilotoMensual:null,salarioAuxiliarMensual:null,costoPilotoDia:207.74,costoAuxiliarDia:148.04}});
+  expect(calcularCosteoServicio({...i,perfil:{...i.perfil,salarioPilotoMensual:0},parametros:{...i.parametros,diasLaboralesMes:20}}).piloto).toBe(0);
+  expect(()=>calcularCosteoServicio({...i,perfil:{...i.perfil,salarioPilotoMensual:4000}})).toThrow("días laborales");
+ });
+ it("V1 ignora nuevos salarios del perfil y conserva el cálculo diario histórico",()=>{
+  const i=entrada(),viejo={...i,motorVersion:"COSTEO_V1"};
+  const antes=calcularCosteoServicio(viejo);
+  expect(calcularCosteoServicio({...viejo,perfil:{...i.perfil,salarioPilotoMensual:9999,salarioAuxiliarMensual:8888}})).toEqual(antes);
+  expect(antes.piloto).toBe(207.74);
  });
 });

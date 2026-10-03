@@ -79,7 +79,7 @@ const SELECT_PERFIL = `
   SELECT id, codigo, nombre, costo_adquisicion, dias_operacion_mes, gps_mensual, seguro_vehiculo_mensual,
          costo_aceite_servicio, vida_util_aceite_km, costo_juego_llantas, vida_util_llantas_km, rendimiento_km_galon,
          deprec_valor_base, deprec_anios, deprec_dias_operacion_mes,
-         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas
+         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual
   FROM tms_cotizacion_costeo_perfiles
 `;
 
@@ -111,7 +111,7 @@ export async function obtenerParametrosCosteoVigentes(empresaId: number, fecha: 
   const rows = await query<RowDataPacket[]>(
     `SELECT DATE_FORMAT(vigente_desde, '%Y-%m-%d') AS vigente_desde, precio_combustible_galon, iva_tasa, costo_piloto_dia,
             costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia, margen_objetivo,
-            seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, salario_piloto_mensual, salario_auxiliar_mensual, dias_laborales_mes, margen2
+            seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, dias_laborales_mes
      FROM tms_cotizacion_costeo_parametros
      WHERE empresa_id = ? AND vigente_desde <= ?
      ORDER BY vigente_desde DESC

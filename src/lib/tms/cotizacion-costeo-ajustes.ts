@@ -24,10 +24,7 @@ export const parametrosAjustesSchema = z.object({
   gastosMantenimiento: noNegativo.nullable().optional(),
   gastosSeguridad: noNegativo.nullable().optional(),
   gastosPredios: noNegativo.nullable().optional(),
-  salarioPilotoMensual: noNegativo.nullable().optional(),
-  salarioAuxiliarMensual: noNegativo.nullable().optional(),
   diasLaboralesMes: positivo.nullable().optional(),
-  margen2: noNegativo.max(5).nullable().optional(),
   vigenteDesde: fecha,
   precioCombustibleGalon: positivo,
   ivaTasa: z.number().finite().min(0).max(1),
@@ -45,12 +42,13 @@ export const parametrosAjustesSchema = z.object({
   }
   const gastos = [v.gastosAdministracion, v.gastosMantenimiento, v.gastosSeguridad, v.gastosPredios];
   if (gastos.some(x => x != null) && gastos.some(x => x == null)) ctx.addIssue({code:"custom",path:["gastosAdministracion"],message:"Complete los cuatro gastos (0 cuando no aplica), o deje los cuatro vacíos."});
-  if ((v.salarioPilotoMensual != null || v.salarioAuxiliarMensual != null) && v.diasLaboralesMes == null) ctx.addIssue({code:"custom",path:["diasLaboralesMes"],message:"Los salarios mensuales requieren días laborales."});
   if ((v.seguroMercaderiaAnual ?? 0) > 0 && (v.cantidadCamiones == null || v.viajesAnuales == null)) ctx.addIssue({code:"custom",path:["seguroMercaderiaAnual"],message:"El seguro anual requiere flota y viajes anuales."});
   if (gastos.some(x => x != null && x > 0) && (v.cantidadCamiones == null || v.diasGastosMes == null)) ctx.addIssue({code:"custom",path:["diasGastosMes"],message:"Los gastos requieren flota y días mensuales."});
 });
 
 const perfilBase = z.object({
+  salarioPilotoMensual: noNegativo.nullable().optional(),
+  salarioAuxiliarMensual: noNegativo.nullable().optional(),
   viajesMes: positivo.nullable().optional(),
   precioLlanta: noNegativo.nullable().optional(),
   cantidadLlantas: positivo.int().max(2147483647).nullable().optional(),
@@ -122,7 +120,7 @@ export type PerfilAjustes = PerfilAjustesCrearInput & { id: number; creadoPor: s
 export async function listarParametrosAjustes(empresaId: number, hoy = hoyGuatemala()): Promise<ParametroAjustes[]> {
   const rows = await query<RowDataPacket[]>(`SELECT id, DATE_FORMAT(vigente_desde,'%Y-%m-%d') vigente_desde, precio_combustible_galon, iva_tasa,
     costo_piloto_dia, costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia,
-    margen_objetivo, seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, salario_piloto_mensual, salario_auxiliar_mensual, dias_laborales_mes, margen2, creado_por, DATE_FORMAT(creado_en,'%Y-%m-%d %H:%i:%s') creado_en
+    margen_objetivo, seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, dias_laborales_mes, creado_por, DATE_FORMAT(creado_en,'%Y-%m-%d %H:%i:%s') creado_en
     FROM tms_cotizacion_costeo_parametros WHERE empresa_id = ? ORDER BY vigente_desde DESC, id DESC`, [empresaId]);
   const actual = rows.find((r) => String(r.vigente_desde) <= hoy)?.id;
   return rows.map((r) => ({ ...mapCamposExcel(r, CAMPOS_EXCEL_PARAMETROS), id:n(r.id), vigenteDesde:String(r.vigente_desde), precioCombustibleGalon:n(r.precio_combustible_galon),
@@ -156,7 +154,7 @@ export async function crearParametrosAjustes(empresaId: number, usuario: string,
   try { return await tx(async (conn) => {
     const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_cotizacion_costeo_parametros
       (empresa_id,vigente_desde,precio_combustible_galon,iva_tasa,costo_piloto_dia,costo_auxiliar_dia,viatico_piloto_dia,
-       viatico_auxiliar_dia,viatico_guia_dia,hotel_dia,margen_objetivo,creado_por,seguro_mercaderia_anual,cantidad_camiones,viajes_anuales,dias_depreciacion_mes,dias_gastos_mes,gastos_administracion,gastos_mantenimiento,gastos_seguridad,gastos_predios,salario_piloto_mensual,salario_auxiliar_mensual,dias_laborales_mes,margen2) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       viatico_auxiliar_dia,viatico_guia_dia,hotel_dia,margen_objetivo,creado_por,seguro_mercaderia_anual,cantidad_camiones,viajes_anuales,dias_depreciacion_mes,dias_gastos_mes,gastos_administracion,gastos_mantenimiento,gastos_seguridad,gastos_predios,dias_laborales_mes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [empresaId,input.vigenteDesde,input.precioCombustibleGalon,input.ivaTasa,input.costoPilotoDia,input.costoAuxiliarDia,
        input.viaticoPilotoDia,input.viaticoAuxiliarDia,input.viaticoGuiaDia,input.hotelDia,input.margenObjetivo,usuario,...CAMPOS_EXCEL_PARAMETROS.map(c => campoExcelSql(c,input[c.key]))]);
     await registrarAuditoriaTx(conn,{empresaId,usuario,accion:"crear_vigencia_costeo",modulo:"tms_cotizaciones",detalle:`Nueva vigencia de costeo desde ${input.vigenteDesde}.`});
@@ -166,7 +164,7 @@ export async function crearParametrosAjustes(empresaId: number, usuario: string,
 
 const CAMPOS_PERFIL = `nombre,activo,costo_adquisicion,dias_operacion_mes,gps_mensual,seguro_vehiculo_mensual,costo_aceite_servicio,
  vida_util_aceite_km,costo_juego_llantas,vida_util_llantas_km,rendimiento_km_galon,deprec_valor_base,deprec_anios,
- deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas`;
+ deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas,salario_piloto_mensual,salario_auxiliar_mensual`;
 const valoresPerfil = (x: PerfilAjustesActualizarInput) => [x.nombre,x.activo,x.costoAdquisicion,x.diasOperacionMes,x.gpsMensual,x.seguroVehiculoMensual,
   x.costoAceiteServicio,x.vidaUtilAceiteKm,x.costoJuegoLlantas,x.vidaUtilLlantasKm,x.rendimientoKmGalon,x.deprecValorBase,x.deprecAnios,
   x.deprecDiasOperacionMes,x.refrigValorBase,x.refrigAnios,x.refrigDiasOperacionMes,...CAMPOS_EXCEL_PERFIL.map(c => campoExcelSql(c,x[c.key]))];
@@ -174,7 +172,7 @@ const valoresPerfil = (x: PerfilAjustesActualizarInput) => [x.nombre,x.activo,x.
 export async function crearPerfilAjustes(empresaId:number, usuario:string, input:PerfilAjustesCrearInput) {
   try { return await tx(async(conn) => {
     const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_cotizacion_costeo_perfiles (empresa_id,codigo,${CAMPOS_PERFIL},creado_por)
-      VALUES (${Array(23).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
+      VALUES (${Array(25).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
     await registrarAuditoriaTx(conn,{empresaId,usuario,accion:"crear_perfil_costeo",modulo:"tms_cotizaciones",detalle:`Perfil de costeo ${input.codigo} creado.`});
     return Number(r.insertId);
   }); } catch(e) { if(duplicado(e)) throw new ErrorAjustesCosteo("Ya existe un perfil con ese código."); throw e; }

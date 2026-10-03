@@ -46,10 +46,10 @@ export function calcularCosteoExcel(i: InputCosteoServicio): ResultadoCosteoServ
   if (e.cantidadCamiones != null && !Number.isInteger(e.cantidadCamiones)) throw new ErrorCosteo("cantidad camiones", "La cantidad de camiones debe ser entera.");
   const llantas = q(juego.div(p.vidaUtilLlantasKm).mul(km));
   const combustible = q(km.div(p.rendimientoKmGalon).mul(monto("combustible usado", i.precioCombustibleOverride ?? e.precioCombustibleGalon)));
-  const salario = (mensual: number | null | undefined, diario: number, cantidad: number) => q(
-    (mensual == null ? dec(diario) : dec(mensual).div(positivo("días laborales mes", e.diasLaboralesMes))).mul(dias).mul(cantidad));
-  const piloto = salario(e.salarioPilotoMensual, e.costoPilotoDia, i.cantidadPilotos);
-  const auxiliares = salario(e.salarioAuxiliarMensual, e.costoAuxiliarDia, i.cantidadAuxiliares);
+  const diarioPiloto = p.salarioPilotoMensual == null ? dec(e.costoPilotoDia) : dec(p.salarioPilotoMensual).div(positivo("días laborales mes", e.diasLaboralesMes));
+  const diarioAuxiliar = p.salarioAuxiliarMensual == null ? dec(e.costoAuxiliarDia) : dec(p.salarioAuxiliarMensual).div(positivo("días laborales mes", e.diasLaboralesMes));
+  const piloto = q(diarioPiloto.mul(dias).mul(i.cantidadPilotos));
+  const auxiliares = q(diarioAuxiliar.mul(dias).mul(i.cantidadAuxiliares));
   const viatico = (override: number | undefined, diario: number, cantidad: number) => override == null ? q(dec(diario).mul(dias).mul(cantidad)) : q(dec(override));
   const viaticoPiloto = viatico(i.viaticoPilotoTotal, e.viaticoPilotoDia, i.cantidadPilotos);
   const viaticoAuxiliar = viatico(i.viaticoAuxiliarTotal, e.viaticoAuxiliarDia, i.cantidadAuxiliares);
@@ -75,10 +75,10 @@ export function calcularCosteoExcel(i: InputCosteoServicio): ResultadoCosteoServ
     ...(otros.length ? otros : [{clave:"otrosCostos",concepto:"Otros costos",monto:0}]),
   ];
   const base = componentes.reduce((s, c) => s.plus(c.monto), dec(0));
-  const margen1 = i.margen1 ?? i.margenObjetivo ?? e.margenObjetivo ?? 0, margen2 = i.margen2 ?? e.margen2 ?? 0;
-  for (const m of [margen1, margen2]) if (!Number.isFinite(m) || m < 0 || m > 5) throw new ErrorCosteo("margen", "Los márgenes deben estar entre 0 y 500%.");
-  const margen1Valor = q(base.mul(margen1)), margen2Valor = q(base.mul(margen2));
-  const subtotal = base.plus(margen1Valor).plus(margen2Valor), iva = q(subtotal.mul(e.ivaTasa));
+  const margenObjetivo = i.margenObjetivo ?? e.margenObjetivo ?? 0;
+  if (!Number.isFinite(margenObjetivo) || margenObjetivo < 0 || margenObjetivo > 5) throw new ErrorCosteo("margenObjetivo", "El margen objetivo debe estar entre 0 y 500%.");
+  const margenValor = q(base.mul(margenObjetivo));
+  const subtotal = base.plus(margenValor), iva = q(subtotal.mul(e.ivaTasa));
   const total = subtotal.plus(iva);
   if (total.greaterThan("9999999999.999999")) throw new ErrorCosteo("total costeo", "El resultado excede la precisión monetaria admitida por el snapshot.");
   const costoConIva = q(base.mul(dec(1).plus(e.ivaTasa)));
@@ -92,12 +92,16 @@ export function calcularCosteoExcel(i: InputCosteoServicio): ResultadoCosteoServ
       diasDepreciacionVehiculo: p.depreciacion ? e.diasDepreciacionMes ?? p.depreciacion.diasOperacionMes : null,
       diasDepreciacionThermo: i.usarRefrigeracion && p.costoRefrigeracion ? e.diasDepreciacionMes ?? p.costoRefrigeracion.diasOperacionMes : null,
       costoJuegoLlantas: juego.toNumber(),
+      salarioPilotoMensual: p.salarioPilotoMensual ?? null,
+      salarioAuxiliarMensual: p.salarioAuxiliarMensual ?? null,
+      costoPilotoDia: diarioPiloto.toNumber(), costoAuxiliarDia: diarioAuxiliar.toNumber(),
+      diasLaboralesMes: e.diasLaboralesMes ?? null,
     },
     motorVersion: "COSTEO_EXCEL_2026", depreciacion, refrigeracion, gps, seguroVehiculo, seguroMercaderia,
     gastosGenerales, aceite, llantas, combustible, piloto, auxiliares, viaticoPiloto, viaticoAuxiliar,
     viaticoGuia, hotel, otrosCostos: q(otros.reduce((s,c) => s.plus(c.monto), dec(0))),
-    costoOperativo: q(base), iva, costoConIva, margenObjetivoAplicado: margen1,
-    margenObjetivoMonto: margen1Valor, margen1, margen2, margen1Valor, margen2Valor,
+    costoOperativo: q(base), iva, costoConIva, margenObjetivoAplicado: margenObjetivo,
+    margenObjetivoMonto: margenValor,
     subtotalComercial: q(subtotal), precioSugerido: q(total),
     precioPorKm: km.isZero() ? null : q(total.div(km)), precioVenta, utilidadEstimada,
     margenReal: utilidadEstimada == null || costoConIva === 0 ? null : dec(utilidadEstimada).div(costoConIva).toNumber(), componentes,

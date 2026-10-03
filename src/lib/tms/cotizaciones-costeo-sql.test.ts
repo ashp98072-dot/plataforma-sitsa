@@ -24,6 +24,17 @@ describe("Migración Excel 2026",()=>{
   }
   expect(migracionExcel).toContain("ADD COLUMN IF NOT EXISTS resultado_snapshot JSON NULL DEFAULT NULL");
  });
+ it("salarios pertenecen solo al perfil; el único margen conserva su columna histórica",()=>{
+  const params=migracionExcel.split("ALTER TABLE tms_cotizacion_costeo_parametros")[1].split(";")[0];
+  const perfiles=migracionExcel.split("ALTER TABLE tms_cotizacion_costeo_perfiles")[1].split(";")[0];
+  expect(CAMPOS_EXCEL_PARAMETROS.map(c=>c.key).filter(k=>/salario|margen/i.test(k))).toEqual([]);
+  expect(CAMPOS_EXCEL_PERFIL.map(c=>c.key).filter(k=>/salario/.test(k))).toEqual(["salarioPilotoMensual","salarioAuxiliarMensual"]);
+  expect(params).not.toMatch(/salario|margen/i);
+  for(const col of ["salario_piloto_mensual","salario_auxiliar_mensual"]) expect(perfiles).toContain(col+" DECIMAL(12,2) NULL DEFAULT NULL");
+  expect(migracionExcel).not.toMatch(/ADD COLUMN.*margen/i);
+  expect(create(schema,"tms_cotizacion_costeo_parametros")).not.toMatch(/salario/i);
+  expect(create(schema,"tms_cotizacion_costeo_perfiles")).toContain("salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL");
+ });
  it("no altera datos/snapshots ni siembra costos inventados; preflight solo SHOW/SELECT",()=>{
   const limpio=(s:string)=>s.split("\n").filter(l=>!l.trim().startsWith("--")).join("\n");
   expect(limpio(migracionExcel)).not.toMatch(/\b(?:DROP|TRUNCATE|UPDATE|DELETE|INSERT)\b/i);

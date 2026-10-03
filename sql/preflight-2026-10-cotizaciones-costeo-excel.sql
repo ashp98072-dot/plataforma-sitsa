@@ -14,15 +14,14 @@ SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'gastos_administracion';
 SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'gastos_mantenimiento';
 SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'gastos_seguridad';
 SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'gastos_predios';
-SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'salario_piloto_mensual';
-SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'salario_auxiliar_mensual';
 SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'dias_laborales_mes';
-SHOW COLUMNS FROM tms_cotizacion_costeo_parametros LIKE 'margen2';
 
 SHOW CREATE TABLE tms_cotizacion_costeo_perfiles;
 SHOW COLUMNS FROM tms_cotizacion_costeo_perfiles LIKE 'viajes_mes';
 SHOW COLUMNS FROM tms_cotizacion_costeo_perfiles LIKE 'precio_llanta';
 SHOW COLUMNS FROM tms_cotizacion_costeo_perfiles LIKE 'cantidad_llantas';
+SHOW COLUMNS FROM tms_cotizacion_costeo_perfiles LIKE 'salario_piloto_mensual';
+SHOW COLUMNS FROM tms_cotizacion_costeo_perfiles LIKE 'salario_auxiliar_mensual';
 
 SHOW CREATE TABLE tms_cotizacion_costeos;
 SHOW COLUMNS FROM tms_cotizacion_costeos LIKE 'resultado_snapshot';

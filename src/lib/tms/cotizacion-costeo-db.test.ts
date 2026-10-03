@@ -152,17 +152,20 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
     expect(params.slice(9, 18)).toEqual([r.costoOperativo, r.iva, r.costoConIva, r.margenObjetivoAplicado, r.precioSugerido, r.precioVenta, r.utilidadEstimada, r.margenReal, "admin"]);
     expect(JSON.parse(String(params[18]))).toEqual(r);
   });
-  it("V2 conserva override, márgenes y resultado completo; envía importes DECIMAL como texto", async () => {
-    const entrada = {...input,motorVersion:"COSTEO_EXCEL_2026",perfil:{...input.perfil,viajesMes:20},precioCombustibleOverride:43,margen1:.3,margen2:.15};
+  it("V2 conserva override, margen objetivo y resultado completo; envía importes DECIMAL como texto", async () => {
+    const entrada = {...input,motorVersion:"COSTEO_EXCEL_2026",perfil:{...input.perfil,viajesMes:20,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000},parametros:{...input.parametros,diasLaboralesMes:20},precioCombustibleOverride:43,margenObjetivo:.45};
     const resultado = calcularCosteoServicio(entrada);
     const conn = conexion();
-    await guardar(conn,{perfil:{...perfil,viajesMes:20},input:entrada,resultado});
+    await guardar(conn,{perfil:{...perfil,...entrada.perfil},input:entrada,resultado});
     const [sql, params] = conn.execute.mock.calls[0] as unknown as [string,unknown[]];
     expect(sql.match(/\?/g)).toHaveLength(params.length);
     expect(params[8]).toBe("COSTEO_EXCEL_2026");
     expect(params[9]).toBe(resultado.costoOperativo.toFixed(6));
-    expect(JSON.parse(String(params[7]))).toMatchObject({precioCombustibleOverride:43,margen1:.3,margen2:.15});
+    expect(JSON.parse(String(params[7]))).toMatchObject({precioCombustibleOverride:43,margenObjetivo:.45});
     expect(JSON.parse(String(params[18]))).toEqual(resultado);
+    expect(JSON.parse(String(params[5]))).toMatchObject({salarioPilotoMensual:4000,salarioAuxiliarMensual:3000});
+    expect(JSON.parse(String(params[6]))).not.toHaveProperty("salarioPilotoMensual");
+    expect(JSON.parse(String(params[18]))).toMatchObject({valoresUsados:{salarioPilotoMensual:4000,salarioAuxiliarMensual:3000,costoPilotoDia:200,costoAuxiliarDia:150}});
     expect(input.parametros.precioCombustibleGalon).toBe(29.89);
   });
   it("inserta TODOS los componentes del motor, en orden estable 1..N, y su suma coincide con el costo operativo", async () => {
@@ -243,7 +246,7 @@ describe("Snapshot: leer", () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
   it("lee el resultado V2 guardado sin consultar parámetros maestros ni ejecutar el motor",async()=>{
-    const resultado={motorVersion:"COSTEO_EXCEL_2026",margen1:.3,margen2:.15,subtotalComercial:2173.35,precioPorKm:11.06};
+    const resultado={motorVersion:"COSTEO_EXCEL_2026",margenObjetivoAplicado:.45,margenObjetivoMonto:870.21,subtotalComercial:2804.02,precioPorKm:14.28};
     vi.mocked(query).mockResolvedValueOnce([{...fila,motor_version:"COSTEO_EXCEL_2026",resultado_snapshot:JSON.stringify(resultado)}] as never).mockResolvedValueOnce([] as never);
     const s=await obtenerSnapshotCosteo(1,10);
     expect(s!.resultado).toEqual(resultado);

@@ -82,8 +82,6 @@ export type OtroCostoCosteo = { concepto: string; monto: number };
 export type InputCosteoServicio = {
   motorVersion?: string;
   precioCombustibleOverride?: number;
-  margen1?: number;
-  margen2?: number;
   perfil: PerfilCosteoUnidad;
   parametros: ParametrosEconomicosCosteo;
   distanciaKm: number;
@@ -126,13 +124,14 @@ export type ResultadoCosteoServicio = {
     diasDepreciacionVehiculo: number | null;
     diasDepreciacionThermo: number | null;
     costoJuegoLlantas: number;
+    salarioPilotoMensual: number | null;
+    salarioAuxiliarMensual: number | null;
+    costoPilotoDia: number;
+    costoAuxiliarDia: number;
+    diasLaboralesMes: number | null;
   };
   motorVersion?: string;
   gastosGenerales?: number;
-  margen1?: number;
-  margen2?: number;
-  margen1Valor?: number;
-  margen2Valor?: number;
   subtotalComercial?: number;
   precioPorKm?: number | null;
   depreciacion: number;
