@@ -143,7 +143,10 @@ describe("Cotizaciones históricas y lecturas normales sin costeo", () => {
     expect(vi.mocked(query).mock.calls.some((x) => /costeo/i.test(String(x[0])))).toBe(false);
     for (const c of [uno!, lista[0]]) {
       const json = JSON.stringify(c);
-      for (const clave of ["costeo", "costoOperativo", "precioSugerido", "utilidad", "margen", "perfil", "combustible", "salario"]) expect(json.toLowerCase()).not.toContain(clave.toLowerCase());
+      // COTIZACIONES-CREDITO-COMBUSTIBLE: `combustibleReferenciaTipo/Precio` son datos COMERCIALES de la cotización
+      // (snapshot visible al cliente), no del costeo interno — se excluyen de la búsqueda; el dato interno sigue prohibido.
+      const sinComerciales = json.toLowerCase().replace(/"combustiblereferencia(tipo|precio)"/g, '""');
+      for (const clave of ["costeo", "costoOperativo", "precioSugerido", "utilidad", "margen", "perfil", "combustible", "precioCombustibleGalon", "salario"]) expect(sinComerciales).not.toContain(clave.toLowerCase());
     }
   });
 });

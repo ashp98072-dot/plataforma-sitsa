@@ -80,7 +80,8 @@ describe("COTIZACIONES FASE 6 — migración y preflight", () => {
 
   it("el código lee y escribe exactamente esas columnas (SELECT, INSERT y UPDATE)", () => {
     const fuente = leer("src/lib/tms/cotizaciones.ts");
-    const select = fuente.slice(fuente.indexOf("const SELECT = `"), fuente.indexOf("export type FiltrosCotizaciones"));
+    // COTIZACIONES-CREDITO-COMBUSTIBLE: el SELECT se arma con `selectCotizaciones(...)` (respaldo de lectura sin columnas nuevas).
+    const select = fuente.slice(fuente.indexOf("const selectCotizaciones = "), fuente.indexOf("export type FiltrosCotizaciones"));
     expect(select).toContain("documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion");
     // FASE presentación comercial (posterior): mensaje_comercial/cierre_comercial se agregan justo
     // después de estas 4 columnas, tanto en el INSERT como en el UPDATE — ver cotizaciones-presentacion-migracion.test.ts.

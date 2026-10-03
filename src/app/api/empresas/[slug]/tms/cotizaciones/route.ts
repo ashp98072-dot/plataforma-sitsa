@@ -5,6 +5,7 @@ import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/t
 import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT } from "@/lib/tms/cotizacion-documento";
 import { obtenerPresentacionComercial } from "@/lib/tms/cotizacion-presentacion";
 import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -65,6 +66,8 @@ const schema = z.object({
   // recalcula al leer o exportar más tarde — eso lo lee directamente el PDF del snapshot guardado.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — condiciones de crédito + combustible de referencia (snapshot comercial).
+  ...creditoCombustibleSchema,
   // Rutas/destinos adicionales a la línea principal (varias rutas en una sola cotización, cada una con su propio precio).
   lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
   // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).

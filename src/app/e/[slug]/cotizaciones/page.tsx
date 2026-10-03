@@ -8,7 +8,17 @@ import { aplicarDefaultsRutaCotizacion, sugerirServicioRefrigerado } from "@/lib
 import { CosteoRegistradoDetalle, CotizacionCosteoPanel, useCosteoConfig } from "@/components/tms/cotizacion-costeo-panel";
 import { aplicarPrecioSugerido, type PayloadCosteoCliente } from "@/lib/tms/cotizacion-costeo-ui";
 import { CotizacionCatalogosRapidos } from "@/components/tms/cotizacion-catalogos-rapidos";
-import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT, MARCAS_DOCUMENTO, type DocumentoEmisor } from "@/lib/tms/cotizacion-documento";
+import {
+  DOCUMENTOS_EMISOR,
+  DOCUMENTO_EMISOR_DEFAULT,
+  ETIQUETA_COMBUSTIBLE,
+  LIMITE_CONDICIONES_CREDITO,
+  MARCAS_DOCUMENTO,
+  TIPOS_COMBUSTIBLE_REFERENCIA,
+  textoCombustibleReferencia,
+  type DocumentoEmisor,
+  type TipoCombustibleReferencia,
+} from "@/lib/tms/cotizacion-documento";
 
 type EstadoCotizacion = "Borrador" | "Enviada" | "Aceptada" | "Rechazada" | "Vencida";
 
@@ -42,6 +52,10 @@ type Cotizacion = {
   atencionCargo: string | null;
   unidadDescripcion: string | null;
   mensajeComercial: string | null;
+  /** COTIZACIONES-CREDITO-COMBUSTIBLE — snapshot comercial guardado (null en históricas). */
+  condicionesCredito?: string | null;
+  combustibleReferenciaTipo?: TipoCombustibleReferencia | null;
+  combustibleReferenciaPrecio?: number | null;
   lineasAdicionales: LineaAdicional[];
 };
 
@@ -94,6 +108,10 @@ const FORM_VACIO = {
   atencionCargo: "",
   unidadDescripcion: "",
   mensajeComercial: "",
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — datos comerciales opcionales ("" = sin dato).
+  condicionesCredito: "",
+  combustibleReferenciaTipo: "" as TipoCombustibleReferencia | "",
+  combustibleReferenciaPrecio: "",
   lineasAdicionales: [] as LineaForm[],
 };
 
@@ -211,6 +229,9 @@ export default function CotizacionesPage() {
       atencionCargo: c.atencionCargo ?? "",
       unidadDescripcion: c.unidadDescripcion ?? "",
       mensajeComercial: c.mensajeComercial ?? "",
+      condicionesCredito: c.condicionesCredito ?? "",
+      combustibleReferenciaTipo: c.combustibleReferenciaTipo ?? "",
+      combustibleReferenciaPrecio: c.combustibleReferenciaPrecio != null ? String(c.combustibleReferenciaPrecio) : "",
       lineasAdicionales: (c.lineasAdicionales ?? []).map((l) => ({
         origenTexto: l.origenTexto ?? "",
         destinoTexto: l.destinoTexto ?? "",
@@ -292,6 +313,10 @@ export default function CotizacionesPage() {
       atencionNombre: form.atencionNombre.trim() || null,
       atencionCargo: form.atencionCargo.trim() || null,
       unidadDescripcion: form.unidadDescripcion.trim() || null,
+      // COTIZACIONES-CREDITO-COMBUSTIBLE — vacío = sin dato (null); el servidor valida tipo y precio.
+      condicionesCredito: form.condicionesCredito.trim() || null,
+      combustibleReferenciaTipo: form.combustibleReferenciaTipo || null,
+      combustibleReferenciaPrecio: form.combustibleReferenciaPrecio === "" ? null : Number(form.combustibleReferenciaPrecio),
       // Siempre se manda: en editar, reemplaza por completo las líneas adicionales guardadas
       // (incluido vaciarlas si el usuario quitó todas); en crear, [] equivale a no mandarlo.
       lineasAdicionales,
@@ -486,6 +511,42 @@ export default function CotizacionesPage() {
               <input type="number" min="0" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaKmAdicional} onChange={(e) => setForm((f) => ({ ...f, tarifaKmAdicional: e.target.value }))} />
             </label>
           </div>
+          {/* COTIZACIONES-CREDITO-COMBUSTIBLE — datos COMERCIALES (van al PDF); no confundir con el costeo interno ni con la tarifa de referencia. */}
+          <label className="block text-xs text-[var(--muted)]">Condiciones de crédito
+            <input
+              className={`${inputCls} mt-0.5 w-full`}
+              maxLength={LIMITE_CONDICIONES_CREDITO}
+              placeholder="Ej. Crédito 30 días, Pago contra entrega, 50% anticipo / 50% contra entrega"
+              value={form.condicionesCredito}
+              onChange={(e) => setForm((f) => ({ ...f, condicionesCredito: e.target.value }))}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <label className="text-xs text-[var(--muted)]">Tipo de combustible
+              <select
+                className={`${inputCls} mt-0.5 w-full`}
+                value={form.combustibleReferenciaTipo}
+                onChange={(e) => setForm((f) => ({ ...f, combustibleReferenciaTipo: e.target.value as TipoCombustibleReferencia | "" }))}
+              >
+                <option value="">— Sin especificar —</option>
+                {TIPOS_COMBUSTIBLE_REFERENCIA.map((t) => <option key={t} value={t}>{ETIQUETA_COMBUSTIBLE[t]}</option>)}
+              </select>
+            </label>
+            <label className="text-xs text-[var(--muted)]">Precio referencia combustible (Q/galón)
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                className={`${inputCls} mt-0.5 w-full`}
+                placeholder="Ej. 29.75"
+                value={form.combustibleReferenciaPrecio}
+                onChange={(e) => setForm((f) => ({ ...f, combustibleReferenciaPrecio: e.target.value }))}
+              />
+            </label>
+            <p className="col-span-2 self-end text-[10px] text-[var(--muted)]">
+              Se guardan con esta cotización y salen en el PDF tal cual; no cambian si después cambia el precio del combustible.
+            </p>
+          </div>
           <label className="block text-xs text-[var(--muted)]">Condiciones adicionales
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.condicionesAdicionales} onChange={(e) => setForm((f) => ({ ...f, condicionesAdicionales: e.target.value }))} />
           </label>
@@ -567,6 +628,8 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Servicio refrigerado:</span> {c.servicioRefrigerado ? "Sí" : "No"}</div>
                 <div><span className="text-[var(--muted)]">Km incluidos:</span> {c.kmIncluidos ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Tarifa km adicional:</span> {money(c.tarifaKmAdicional)}</div>
+                <div><span className="text-[var(--muted)]">Condiciones de crédito:</span> {c.condicionesCredito?.trim() || "—"}</div>
+                <div className="md:col-span-2"><span className="text-[var(--muted)]">Combustible referencia:</span> {textoCombustibleReferencia(c.combustibleReferenciaTipo, c.combustibleReferenciaPrecio) ?? "—"}</div>
                 {c.condicionesAdicionales ? <div className="md:col-span-3"><span className="text-[var(--muted)]">Condiciones:</span> {c.condicionesAdicionales}</div> : null}
                 {c.observaciones ? <div className="md:col-span-3"><span className="text-[var(--muted)]">Observaciones:</span> {c.observaciones}</div> : null}
                 {costeoConfig.estado === "listo" ? <CosteoRegistradoDetalle slug={slug} cotizacionId={c.id} /> : null}
