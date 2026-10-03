@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import type { SqlParams } from "@/lib/db";
+import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 
 /**
  * GASTOS-ADMINISTRATIVO-1 — helpers de identidad/seguridad REALMENTE
@@ -47,7 +48,7 @@ export async function validarEmpleadoDeEmpresaTx(
 ): Promise<void> {
   if (empleadoId == null) return;
   const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [empleadoId, empresaId]);
-  if (!rows[0]) throw new Error(`El ${etiqueta} indicado no pertenece a esta empresa.`);
+  if (!rows[0]) throw new ErrorDominioFormulario(`El ${etiqueta} indicado no pertenece a esta empresa.`);
 }
 
 /**
@@ -71,7 +72,7 @@ export async function resolverEntidadRequirenteTx(
      LIMIT 1`,
     [entidadId, empresaId, ...CODIGOS_ENTIDAD_REQUIRIENTE],
   );
-  if (!rows[0]) throw new Error("La empresa requirente no es válida, no está activa o no pertenece a esta empresa.");
+  if (!rows[0]) throw new ErrorDominioFormulario("La empresa requirente no es válida, no está activa o no pertenece a esta empresa.");
   return { id: Number(rows[0].id), nombre: String(rows[0].nombre) };
 }
 
@@ -123,9 +124,9 @@ export async function resolverRequirenteOperacionesTx(
   const mismoNombre = idActual !== null || input.requirenteNombre === undefined || (input.requirenteNombre?.trim() || null) === (actual?.requirente_nombre == null ? null : String(actual.requirente_nombre).trim() || null);
   const mismoEmpleado = input.requirenteEmpleadoId === undefined || input.requirenteEmpleadoId === (actual?.requirente_empleado_id == null ? null : Number(actual.requirente_empleado_id));
   if (actual && mismoId && mismoNombre && mismoEmpleado) return null;
-  if (input.requirenteUsuarioId == null) throw new Error(ERROR_REQUIRIENTE_OPERACIONES);
+  if (input.requirenteUsuarioId == null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_OPERACIONES);
   const usuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.requirenteUsuarioId);
-  if (!usuario || input.requirenteEmpleadoId != null) throw new Error(ERROR_REQUIRIENTE_OPERACIONES);
+  if (!usuario || input.requirenteEmpleadoId != null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_OPERACIONES);
   return usuario;
 }
 

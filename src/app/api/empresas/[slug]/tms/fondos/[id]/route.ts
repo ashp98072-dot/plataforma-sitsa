@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos, requireTenantGastosAutorizar } from "@/lib/tenant";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
+import { CONFIG_FONDOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
 import {
   actualizarSolicitudFondo,
   cambiarEstadoSolicitudFondo,
@@ -21,7 +22,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json({ solicitud });
 }
 
-const lineaSchema = z.object({
+const lineaSchema = conCuentaMovil(z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
@@ -36,7 +37,7 @@ const lineaSchema = z.object({
   cargoOverride: z.string().trim().max(150).nullable().optional(),
   // FONDOS-GASTOS-METODO-PAGO-1 — ver fondos/route.ts.
   metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
-});
+}), "cuentaOverride", false);
 
 const schema = z.object({
   accion: z.enum(["autorizar", "rechazar", "liquidar", "editar"]),
@@ -66,9 +67,10 @@ const schema = z.object({
  */
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const parsed = schema.safeParse(await req.json().catch(() => ({})));
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErroresZod(parsed.error, CONFIG_FONDOS, body);
   }
   // Autorizar y rechazar son decisiones independientes de la edición:
   // ambas exigen "gastos_autorizar", sin fallback a gastos/tms. Liquidar
@@ -122,6 +124,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (!solicitud) return NextResponse.json({ error: "Solicitud no encontrada." }, { status: 404 });
     return NextResponse.json({ mensaje: "Solicitud actualizada.", solicitud });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar la solicitud." }, { status: 400 });
+    return respuestaFalloOperacion(error, "PATCH tms/fondos/[id]");
   }
 }

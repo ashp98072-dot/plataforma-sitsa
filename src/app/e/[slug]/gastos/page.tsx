@@ -9,6 +9,8 @@ import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
+import { leerErroresRespuesta, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
@@ -185,6 +187,8 @@ export default function GastosPage() {
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor (línea + campo + problema) para el resumen y el resaltado de campos.
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [msg, setMsg] = useState("");
 
   const [fFechaDesde, setFFechaDesde] = useState("");
@@ -202,6 +206,8 @@ export default function GastosPage() {
   const [form, setForm] = useState(FORM_VACIO);
   /** GASTOS-MULTIPLES-LINEAS-1 — líneas ADICIONALES a "Línea 1" (los campos de `form`); `[]` = gasto simple, comportamiento idéntico al actual. */
   const [lineasAdicionales, setLineasAdicionales] = useState<LineaGastoForm[]>([]);
+  // Clave de campo del servidor para "Línea 1" (los campos de arriba): `lineas.0.x` en modo líneas, `x` en modo cabecera.
+  const campoL1 = (campo: string) => (lineasAdicionales.length > 0 ? `lineas.0.${campo}` : campo);
   const [comprobante, setComprobante] = useState<File | null>(null);
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
@@ -327,17 +333,10 @@ export default function GastosPage() {
   }
 
   async function guardar() {
-    setError(""); setMsg("");
-    if (!form.categoria) { setError("Selecciona una categoría."); return; }
-    if (!(Number(form.monto) > 0)) { setError("El monto debe ser mayor a cero."); return; }
-    // GASTOS-MULTIPLES-LINEAS-1 — validación cliente de las líneas
-    // ADICIONALES (mismo criterio que valida el servidor,
-    // validarLineasGasto en gastos.ts: categoría + monto > 0). "Línea 1"
-    // (`form`) ya se validó arriba, igual que siempre.
-    if (lineasAdicionales.some((l) => !l.categoria || !(Number(l.monto) > 0))) {
-      setError("Cada línea adicional necesita categoría y un monto mayor a cero.");
-      return;
-    }
+    setError(""); setMsg(""); setErrores([]);
+    // Categoría y monto (de "Línea 1" y de cada línea adicional) los valida el SERVIDOR y responde por línea y campo
+    // («Línea 2 — Monto: debe ser mayor que Q0.»); aquí ya no se corta con un mensaje genérico. El número de línea del
+    // servidor coincide con el de pantalla: "Línea 1" = campos de arriba, "Línea 2…" = las adicionales en orden.
     const payload = {
       fechaSolicitud: form.fechaSolicitud,
       fechaViaje: form.fechaViaje || null,
@@ -378,7 +377,13 @@ export default function GastosPage() {
     const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
     const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? "No se pudo guardar."); return; }
+    if (!res.ok) {
+      const leidos = leerErroresRespuesta(data, "No se pudo guardar.");
+      setErrores(leidos.errores);
+      setError(leidos.errores.length ? "" : leidos.mensaje);
+      return;
+    }
+    setErrores([]);
     const gastoId = editandoId ?? data.gasto?.id;
     if (comprobante && gastoId) {
       const archivos = new FormData(); archivos.set("file", comprobante);
@@ -503,7 +508,7 @@ export default function GastosPage() {
           */}
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
+              <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
                 <option value={0}>—</option>
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
@@ -512,24 +517,27 @@ export default function GastosPage() {
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
+              <input type="date" className={`${claseCampo(errores, "fechaSolicitud", inputCls)} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Categoría
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
+              <select className={`${claseCampo(errores, campoL1("categoria"), inputCls)} mt-0.5 w-full`} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
                 <option value="">Selecciona…</option>
                 {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
+              <ErrorCampo errores={errores} campo={campoL1("categoria")} />
             </label>
             <label className="text-xs text-[var(--muted)]">Descripción
               <input className={`${inputCls} mt-0.5 w-full`} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
             </label>
             <label className="text-xs text-[var(--muted)]">Cantidad
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+              <input type="number" min="0.01" step="0.01" className={`${claseCampo(errores, campoL1("cantidad"), inputCls)} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("cantidad")} />
             </label>
             <label className="text-xs text-[var(--muted)]">Monto (Q)
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+              <input type="number" min="0.01" step="0.01" className={`${claseCampo(errores, campoL1("monto"), inputCls)} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("monto")} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
@@ -543,7 +551,8 @@ export default function GastosPage() {
               </select>
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha viaje
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
+              <input type="date" className={`${claseCampo(errores, campoL1("fechaViaje"), inputCls)} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("fechaViaje")} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
@@ -551,7 +560,7 @@ export default function GastosPage() {
               <input className={`${inputCls} mt-0.5 w-full`} readOnly value={catalogos.empleados.find((x) => x.id === form.empleadoId)?.nombre ?? ""} />
             </label>
             <label className="text-xs text-[var(--muted)]">Método de pago
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === f.empleadoId)) }))}>
+              <select className={`${claseCampo(errores, campoL1("metodoPago"), inputCls)} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === f.empleadoId)) }))}>
                 <option value="">—</option>
                 {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -564,7 +573,7 @@ export default function GastosPage() {
               (numeroCuentaPago) — nunca un campo separado.
             */}
             <label className="text-xs text-[var(--muted)]">{form.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-              <input className={`${inputCls} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
+              <input className={`${claseCampo(errores, campoL1("numeroCuentaPago"), inputCls)} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
               {form.empleadoId && form.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === form.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
             </label>
             <label className="text-xs text-[var(--muted)]">Cargo
@@ -605,13 +614,13 @@ export default function GastosPage() {
               return (
                 <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                    <select className={claseCampo(errores, `lineas.${i + 1}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
                       {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <input className={claseCampo(errores, `lineas.${i + 1}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i + 1}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i + 1}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
                     <button type="button" onClick={() => setLineasAdicionales((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
                   </div>
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
@@ -625,18 +634,18 @@ export default function GastosPage() {
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
-                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <input type="date" className={`${claseCampo(errores, `lineas.${i + 1}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
                     </label>
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === l.empleadoId)) })}>
+                      <select className={`${claseCampo(errores, `lineas.${i + 1}.metodoPago`, inputCls)} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === l.empleadoId)) })}>
                         <option value="">—</option>
                         {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
+                      <input className={`${claseCampo(errores, `lineas.${i + 1}.numeroCuentaPago`, inputCls)} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
                       {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                   </div>
@@ -650,6 +659,7 @@ export default function GastosPage() {
             {lineasAdicionales.length ? <p className="text-sm font-medium">Total del gasto: Q{totalFormulario().toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p> : null}
           </div>
           <div className="flex gap-2">
+            <ErroresFormulario errores={errores} />
             <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
             <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
           </div>

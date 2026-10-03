@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { ESTADOS_FONDO, crearSolicitudFondo, listarSolicitudesFondo } from "@/lib/tms/fondos";
+import { CONFIG_FONDOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -28,7 +29,7 @@ export async function GET(req: Request, ctx: Ctx) {
   );
 }
 
-const lineaSchema = z.object({
+const lineaSchema = conCuentaMovil(z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
@@ -50,7 +51,7 @@ const lineaSchema = z.object({
   // validación de "Transferencia móvil" (obligatorio, 8-15 dígitos) vive
   // en normalizarDestinoPago (gastos.ts), reutilizada por fondos.ts.
   metodoPago: z.enum(METODOS_PAGO_GASTO).nullable().optional(),
-});
+}), "cuentaOverride", false);
 
 const schema = z.object({
   entidadRequirenteId: z.number().int().positive(),
@@ -74,9 +75,11 @@ export async function POST(req: Request, ctx: Ctx) {
   const guard = await requireTenantGastos(slug, "crear");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json().catch(() => ({})));
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    // Errores claros por campo/línea ("Línea 2 — Monto: debe ser mayor que Q0."); `error` se conserva por compatibilidad.
+    return respuestaErroresZod(parsed.error, CONFIG_FONDOS, body);
   }
   try {
     // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 (§1 del ticket) — identidad real
@@ -87,6 +90,6 @@ export async function POST(req: Request, ctx: Ctx) {
     const solicitud = await crearSolicitudFondo(guard.empresa.id, parsed.data, guard.session.username);
     return NextResponse.json({ mensaje: "Solicitud de fondo creada.", solicitud });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear la solicitud." }, { status: 400 });
+    return respuestaFalloOperacion(error, "POST tms/fondos");
   }
 }

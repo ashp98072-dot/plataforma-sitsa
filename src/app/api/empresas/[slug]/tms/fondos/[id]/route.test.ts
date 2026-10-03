@@ -97,7 +97,7 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     beforeEach(() => vi.mocked(actualizarSolicitudFondo).mockResolvedValue({ id: 1 } as never));
 
     it("acepta un método del catálogo existente", async () => {
-      const res = await PATCH(req({ accion: "editar", entidadRequirenteId: 10, lineas: [{ categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil" }] }), ctx);
+      const res = await PATCH(req({ accion: "editar", entidadRequirenteId: 10, lineas: [{ categoria: "Combustible", monto: 100, metodoPago: "Transferencia móvil", empleadoId: 5 }] }), ctx); // con empleado: el servidor toma el teléfono de RRHH
       expect(res.status).toBe(200);
       expect(actualizarSolicitudFondo).toHaveBeenCalled();
     });

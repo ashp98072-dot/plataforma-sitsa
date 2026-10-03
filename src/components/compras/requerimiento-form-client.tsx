@@ -7,6 +7,8 @@ import { seleccionarProveedorCompra } from "@/lib/compras/metodos-pago";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { ProveedorCompraPicker, opcionesProveedoresCompra, fusionarProveedorEnCatalogo, type ProveedorPickerOpt } from "@/components/compras/proveedor-compra-picker";
 import { LineaDocumentosClient } from "@/components/compras/linea-documentos-client";
+import { ErroresFormulario } from "@/components/errores-formulario";
+import { leerErroresRespuesta, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { DocumentosPendientesClient, subirPendientesCompra, type DocumentoPendienteCompra } from "./documentos-pendientes-client";
 import { RequerimientoDecisionClient, formatearTimestampCompra } from "@/components/compras/requerimiento-decision-client";
 import { FacturaEstadoLinea } from "@/components/compras/factura-estado-linea";
@@ -52,6 +54,8 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   const [lineas, setLineas] = useState<LineaForm[]>(detalle ? detalle.lineas.map(lineaEditable) : [nuevaLinea(fechaHoy, "nueva-1")]);
   const [catalogos, setCatalogos] = useState<Catalogos | null>(null);
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor ("Línea 2 — Repuesto a comprar: …").
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [guardando, setGuardando] = useState(false);
   const [conflicto, setConflicto] = useState(false);
   // FACTURAS DUPLICADAS — claves de línea cuya factura YA existe en la BD (la consulta con debounce vive en <FacturaEstadoLinea>).
@@ -77,13 +81,21 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   const repetidas = indicesFacturasRepetidas(lineas);
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
-    if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError("Selecciona un requirente de Operaciones."); return; }
-    if (lineas.some(l => !l.proveedor_id)) { setError("Selecciona un proveedor para cada línea."); return; }
+    setErrores([]);
+    if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError(""); setErrores([{ campo: "requirente_usuario_id", etiqueta: "Requirente", mensaje: "selecciona un requirente de Operaciones." }]); return; }
+    // El proveedor de cada línea lo valida el servidor junto con el resto de campos ("Línea 2 — Proveedor: …"): se listan todos a la vez.
     if (repetidas.size) { setError(MSG_FACTURAS_REPETIDAS); return; }
     setGuardando(true); setError("");
     try {
       const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key" && campo !== "documentosPendientes"))) }) });
-      const data = await r.json(); if (!r.ok) { if (r.status === 409) setConflicto(true); throw new Error(data.error); }
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (r.status === 409) setConflicto(true);
+        const leidos = leerErroresRespuesta(data, "No se pudo guardar.");
+        setErrores(leidos.errores);
+        setError(leidos.errores.length ? "" : leidos.mensaje);
+        return;
+      }
       const fallidos = await subirPendientesCompra(slug, data.id, lineas);
       if (fallidos) window.alert(`El requerimiento fue ${detalle ? "actualizado" : "creado"} correctamente, pero algunos documentos no pudieron subirse. Puede agregarlos desde el detalle.`);
       router.push(`/e/${slug}/compras/requerimientos/${data.id}`); router.refresh();
@@ -130,7 +142,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       {editable && !l.id && puedeSubirDocumentos && <DocumentosPendientesClient documentos={l.documentosPendientes ?? []} disabled={deshabilitado} onChange={docs => cambiar(l.key, { documentosPendientes: docs })} />}
     </section>; })}
     {editable && <button className={boton} type="button" disabled={deshabilitado || lineas.length >= 500} onClick={() => setLineas(actual => [...actual, nuevaLinea(fecha, crypto.randomUUID())])}>+ Agregar línea</button>}
-    <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{repetidas.size > 0 && <p role="alert" className="text-red-300">{MSG_FACTURAS_REPETIDAS}</p>}{error && <p role="alert">{error}</p>}
+    <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{repetidas.size > 0 && <p role="alert" className="text-red-300">{MSG_FACTURAS_REPETIDAS}</p>}{error && <p role="alert">{error}</p>}<ErroresFormulario errores={errores} />
     {conflicto && <button className={boton} type="button" onClick={() => window.location.reload()}>Actualizar información (descarta cambios locales)</button>}
     {editable && <button className={boton} disabled={deshabilitado || !catalogos || bloqueoFactura} type="submit">{guardando ? "Guardando…" : "Guardar requerimiento"}</button>}
     </form><Link href={`/e/${slug}/compras/requerimientos`}>Volver al listado</Link></main>;

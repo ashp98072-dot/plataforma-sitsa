@@ -59,6 +59,7 @@ import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { lugaresDesdeParadas, resolverDescargaReporte } from "@/lib/tms/plan-lugares";
+import { respuestaErroresPrograma } from "@/lib/tms/validacion-programacion";
 import {
   MSG_EXTRA_SOLO_PROPIO,
   MSG_PERSONA_DUPLICADA,
@@ -687,9 +688,11 @@ export async function POST(req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    // Errores claros por campo/fila ("Parada 2 — Lugar: es obligatorio."); `error` se conserva por compatibilidad.
+    return respuestaErroresPrograma(parsed.error, body);
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
@@ -1540,9 +1543,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const parsed = patchSchema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErroresPrograma(parsed.error, body);
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;

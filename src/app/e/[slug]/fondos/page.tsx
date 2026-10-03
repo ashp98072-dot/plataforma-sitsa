@@ -12,6 +12,8 @@ import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { FondoLineasClient, type DetalleLineasFondo } from "@/components/tms/fondo-lineas-client";
+import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
+import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -97,6 +99,8 @@ export default function FondosPage() {
   const [solicitudes, setSolicitudes] = useState<SolicitudFondo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor (línea + campo + problema) para el resumen y el resaltado de campos.
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [msg, setMsg] = useState("");
   const [fEstado, setFEstado] = useState("");
   const [fFechaDesde, setFFechaDesde] = useState("");
@@ -175,6 +179,7 @@ export default function FondosPage() {
 
   function cerrarFormulario() {
     setMostrarForm(false);
+    setErrores([]);
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setEntidadRequirenteId(""); setRequirenteNombre(""); setRequirenteUsuarioId(""); setSolicitanteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
   }
@@ -218,13 +223,16 @@ export default function FondosPage() {
   }
 
   async function guardar() {
-    setError(""); setMsg("");
+    setError(""); setMsg(""); setErrores([]);
     if (!entidadRequirenteId) { setError("Selecciona la empresa requirente."); return; }
     if (!requirenteUsuarioId && !(editandoId && !requirenteHistorico.id)) { setError("Selecciona un requirente de Operaciones."); return; }
     if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
-    const lineasValidas = lineas.filter((l) => l.categoria && Number(l.monto) > 0);
-    if (!lineasValidas.length) { setError("Agrega al menos una línea de gasto válida."); return; }
-    const lineasPayload = lineasValidas.map((l) => {
+    // Se envían todas las líneas que el usuario llenó (antes se descartaban en silencio las incompletas): así el servidor puede
+    // decir «Línea 2 — Monto: …». Las filas totalmente en blanco se omiten; `lineasPantalla` conserva su número visible.
+    const lineasLlenas = indicesLlenos(lineas, LINEA_VACIA);
+    if (!lineasLlenas.length) { setError("Agrega al menos una línea de gasto."); return; }
+    const lineasPantalla = lineasLlenas.map((i) => i + 1);
+    const lineasPayload = lineasLlenas.map((i) => lineas[i]).map((l) => {
       const empleado = catalogos.empleados.find((e) => String(e.id) === l.empleadoId);
       return {
         categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
@@ -271,7 +279,14 @@ export default function FondosPage() {
           }),
         });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? (editandoId ? "No se pudo editar la solicitud." : "No se pudo crear la solicitud.")); return; }
+    if (!res.ok) {
+      const leidos = leerErroresRespuesta(data, editandoId ? "No se pudo editar la solicitud." : "No se pudo crear la solicitud.");
+      const delServidor = remapearLineas(leidos.errores, "lineas", lineasPantalla);
+      setErrores(delServidor);
+      setError(delServidor.length ? "" : leidos.mensaje);
+      return;
+    }
+    setErrores([]);
     setMsg(data.mensaje ?? (editandoId ? "Solicitud actualizada." : "Solicitud creada."));
     cerrarFormulario();
     await cargar();
@@ -369,16 +384,17 @@ export default function FondosPage() {
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente *
-              <select className={`${inputCls} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
+              <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
                 <option value="">Seleccionar empresa requirente…</option>
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
             </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={requirenteUsuarioId} options={opcionesConHistorico(opcionesUsuarios(catalogos.usuariosOperaciones), requirenteUsuarioId === requirenteHistorico.id ? requirenteUsuarioId : "", requirenteHistorico.nombre)} inputClassName={inputCls} onChange={(value) => { setRequirenteUsuarioId(value); if (value) setRequirenteNombre(""); }} />
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
-            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={setSolicitanteUsuarioId} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={claseCampo(errores, "solicitanteUsuarioId", inputCls)} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
+              <input type="date" className={`${claseCampo(errores, "fechaRequerimiento", inputCls)} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
+              <ErrorCampo errores={errores} campo="fechaRequerimiento" />
             </label>
           </div>
           <div className="space-y-2">
@@ -389,13 +405,13 @@ export default function FondosPage() {
               return (
                 <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                    <select className={claseCampo(errores, `lineas.${i}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
                       {catalogos.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <input className={claseCampo(errores, `lineas.${i}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
                     <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
                   </div>
                   {/*
@@ -427,7 +443,8 @@ export default function FondosPage() {
                       set(aplicarPlanSeleccionado(l, plan, value, empleado));
                     }} />
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
-                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <input type="date" className={`${claseCampo(errores, `lineas.${i}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <ErrorCampo errores={errores} campo={`lineas.${i}.fechaViaje`} />
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>
                     </label>
                   </div>
@@ -444,13 +461,14 @@ export default function FondosPage() {
                       "Cuenta / Número".
                     */}
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, cuenta: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => String(x.id) === l.empleadoId)) })}>
+                      <select className={`${claseCampo(errores, `lineas.${i}.metodoPago`, inputCls)} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, cuenta: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => String(x.id) === l.empleadoId)) })}>
                         <option value="">—</option>
                         {catalogos.metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      <input className={`${claseCampo(errores, `lineas.${i}.cuentaOverride`, inputCls)} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      <ErrorCampo errores={errores} campo={`lineas.${i}.cuentaOverride`} />
                       {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => String(x.id) === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
@@ -469,6 +487,7 @@ export default function FondosPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} />
           </label>
+          <ErroresFormulario errores={errores} />
           <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">
             {editandoId ? "Guardar cambios" : "Crear solicitud"}
           </button>
