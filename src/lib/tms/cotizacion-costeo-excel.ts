@@ -54,7 +54,9 @@ export function calcularCosteoExcel(i: InputCosteoServicio): ResultadoCosteoServ
   const viaticoPiloto = viatico(i.viaticoPilotoTotal, e.viaticoPilotoDia, i.cantidadPilotos);
   const viaticoAuxiliar = viatico(i.viaticoAuxiliarTotal, e.viaticoAuxiliarDia, i.cantidadAuxiliares);
   const viaticoGuia = viatico(i.viaticoGuiaTotal, e.viaticoGuiaDia, i.cantidadGuias ?? 0);
-  const hotel = q(i.hotelTotal == null ? dec(e.hotelDia ?? 0).mul(dias) : dec(i.hotelTotal));
+  const hotel = q(i.hotelTotal == null
+    ? dec(e.hotelDia ?? 0).mul(dias).mul(dec(i.cantidadPilotos).plus(i.cantidadAuxiliares).plus(i.cantidadGuias ?? 0))
+    : dec(i.hotelTotal));
   const otros = (i.otrosCostos ?? []).map((c, n) => ({ clave: `otro:${n}`, concepto: c.concepto.trim(), monto: q(dec(c.monto)) }));
   const componentes = [
     { clave: "gastosGenerales", concepto: "Gastos generales", monto: gastosGenerales },

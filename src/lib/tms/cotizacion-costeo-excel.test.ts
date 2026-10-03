@@ -22,6 +22,22 @@ const entrada = (extra: Partial<InputCosteoServicio> = {}): InputCosteoServicio 
  ...extra,
 });
 describe("Paridad de fórmulas Excel 2026 (A–F)",()=>{
+ it.each([
+  [1,1,0,2,300,1200],
+  [1,0,0,3,250,750],
+  [1,1,1,2,300,1800],
+ ])("hotel por persona/día: %s pilotos, %s auxiliares, %s guías, %s días a Q%s = Q%s", (cantidadPilotos,cantidadAuxiliares,cantidadGuias,diasServicio,hotelDia,hotel)=>{
+  const i=entrada();
+  expect(calcularCosteoServicio({...i,cantidadPilotos,cantidadAuxiliares,cantidadGuias,diasServicio,parametros:{...i.parametros,hotelDia}}).hotel).toBe(hotel);
+ });
+ it("hotelTotal manual Q900 prevalece sobre automático Q1200",()=>{
+  const i=entrada();
+  expect(calcularCosteoServicio({...i,diasServicio:2,hotelTotal:900,parametros:{...i.parametros,hotelDia:300}}).hotel).toBe(900);
+ });
+ it("V1 conserva hotel diario histórico sin multiplicarlo por personas",()=>{
+  const i=entrada();
+  expect(calcularCosteoServicio({...i,motorVersion:"COSTEO_V1",diasServicio:2,parametros:{...i.parametros,hotelDia:300}}).hotel).toBe(600);
+ });
  it("A: desglose, único margen, IVA posterior y precio/km",()=>{
   const r=calcularCosteoServicio(entrada());
   expect(r).toMatchObject({gps:5,aceite:77,llantas:14.96,combustible:946,depreciacion:96.15,

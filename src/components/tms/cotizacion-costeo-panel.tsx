@@ -175,7 +175,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
     return (
       <section aria-label="Costeo interno" className={claseSeccion}>
         {encabezado}
-        <p role="status" className="text-xs text-amber-200">Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable; para recostear, duplica la cotización.</p>
+        <p role="status" className="text-xs text-amber-200">Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable. Para realizar un nuevo costeo, crea una nueva cotización.</p>
         <p className="text-xs text-[var(--muted)]">Perfil {snapshot.perfilNombre} · motor {snapshot.motorVersion}{snapshot.creadoEn ? ` · ${snapshot.creadoEn}` : ""}</p>
         <ResumenCosteo datos={snapshot} />
       </section>

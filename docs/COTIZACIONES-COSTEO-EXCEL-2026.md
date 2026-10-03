@@ -68,12 +68,18 @@ al final del concepto a 2 decimales. La suma y el único margen objetivo usan De
 | Gastos generales | suma 4 conceptos / flota / días gastos × días servicio |
 | Salarios | mensual del perfil / días laborales globales × personas × días |
 | Viáticos | diario × personas × días; total manual prevalece |
-| Hotel | total manual prevalece; en su ausencia hotel diario × días |
+| Hotel | hotelTotal manual prevalece; en su ausencia hotelDia por persona/día × diasServicio × (cantidadPilotos + cantidadAuxiliares + cantidadGuias) |
 | Margen objetivo | porcentaje único × costo base |
 | Subtotal comercial | base + valor del margen redondeado |
 | IVA | subtotal comercial × tasa vigente |
 | Total sugerido | subtotal comercial + IVA |
 | Precio/km | total / km; NULL si km = 0 |
+
+Hotel V2: Q300 × 2 días × (1 piloto + 1 auxiliar) = Q1,200;
+Q250 × 3 días × 1 piloto = Q750. Un hotelTotal manual de Q900 produce
+Q900, sin multiplicarlo. Guías omitidos cuentan como cero. V1 y sus snapshots
+históricos conservan su fórmula anterior. El aviso de costeo histórico invita
+a crear una nueva cotización, sin reactivar Duplicar ni alterar su backend.
 
 Decisión explícita para viajes de varios días: gastos generales representan
 una cuota **diaria operativa**, por eso se multiplican por días. GPS y seguro
@@ -188,9 +194,9 @@ Comando de suite en ambos worktrees: `npx vitest run --reporter=json --outputFil
 | Ejecución | Pass | Fail | Skip |
 | --- | ---: | ---: | ---: |
 | BASE exacta | 7964 | 21 | 15 |
-| Rama final corregida | 7999 | 21 | 15 |
+| Rama final corregida | 8005 | 21 | 15 |
 
-Pruebas dirigidas de Cotizaciones: 640/640 (incluyen A–F, overrides,
+Pruebas dirigidas de Cotizaciones: 646/646 (incluyen hotel por persona/día, override Q900, V1, mensaje histórico, A–F, overrides,
 snapshots, SQL y UI). TypeScript, ESLint dirigido y diff-check limpios.
 Build final exitoso, con advertencias existentes de middleware/cache y
 tracing de archivos en otros módulos; no se modifican en este ticket.

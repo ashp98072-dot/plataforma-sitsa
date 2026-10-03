@@ -23,6 +23,11 @@ import { calcularCosteoServicio } from "@/lib/tms/cotizacion-costeo";
 import { COSTEO_FORM_VACIO, monedaCosteo, resumenDesdeResultado } from "@/lib/tms/cotizacion-costeo-ui";
 
 const fetchMock = vi.fn();
+it("mensaje histórico invita a crear una cotización nueva, no a duplicar",()=>{
+ const fuente=readFileSync(new URL("./cotizacion-costeo-panel.tsx",import.meta.url),"utf8");
+ expect(fuente).toContain("Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable. Para realizar un nuevo costeo, crea una nueva cotización.");
+ expect(fuente).not.toContain("para recostear, duplica la cotización");
+});
 const respuesta = (body: unknown, ok = true, status = ok ? 200 : 400) => Promise.resolve({ ok, status, json: async () => body });
 function ejecutar<T>(render: () => T): T {
   hooks.indice = 0; hooks.efectos = []; hooks.activo = true;
