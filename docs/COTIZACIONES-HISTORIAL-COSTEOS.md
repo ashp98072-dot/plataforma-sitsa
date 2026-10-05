@@ -5,8 +5,8 @@ Pasa de **1 cotización → 1 costeo** a **1 cotización → N versiones de cost
 SQL propuesto, **no ejecutado**. No cambia fórmulas, perfiles, parámetros, PDF, rutas ni permisos.
 
 > **Orden de despliegue:** aplicar la migración (preflight → migrate) **antes** de desplegar. El código nuevo exige `version`, `es_seleccionado`,
-> `seleccionado_por`, `seleccionado_en` y el índice `uq_cotizacion_costeo_version`. **Ventana:** entre aplicar la migración y desplegar, el código anterior
-> no puede registrar costeos nuevos (`version` es `NOT NULL` sin default); aplicar y desplegar seguido.
+> `seleccionado_por`, `seleccionado_en` y el índice `uq_cotizacion_costeo_version`. **Sin ventana de incompatibilidad:** la columna queda
+> `version INT NOT NULL DEFAULT 1`, así que entre el SQL y el deploy el código anterior sigue registrando costeos (su INSERT no envía `version` ⇒ 1).
 
 ## Discovery (estado antes del cambio)
 
@@ -25,7 +25,7 @@ SQL propuesto, **no ejecutado**. No cambia fórmulas, perfiles, parámetros, PDF
 
 | Columna / índice | Definición |
 | --- | --- |
-| `version` | `INT NOT NULL` — 1, 2, 3… por cotización (la asigna la app) |
+| `version` | `INT NOT NULL DEFAULT 1` — 1, 2, 3… por cotización. El código nuevo **siempre** la envía; el default existe solo para el código anterior |
 | `es_seleccionado` | `TINYINT(1) NOT NULL DEFAULT 0` — versión «utilizada»; a lo sumo una por cotización |
 | `seleccionado_por` / `seleccionado_en` | `VARCHAR(100) NULL` / `DATETIME NULL` — quién y cuándo la eligió (útiles para auditar; NULL en históricos migrados) |
 | `uq_cotizacion_costeo_version` | `UNIQUE (empresa_id, cotizacion_id, version)` — reemplaza al 1:1 |
@@ -42,11 +42,20 @@ transacción** con `SELECT ... FOR UPDATE` (cotización padre y todas sus versio
 
 - `sql/preflight-2026-10-cotizaciones-historial-costeos.sql` — solo lectura: versión de MariaDB, `SHOW CREATE TABLE`, `SHOW INDEX`, las 4 columnas nuevas,
   cantidad de costeos, cotizaciones con más de un costeo (debe ser 0) y verificación posterior (sin `version` NULL; una sola seleccionada por cotización). Criterios APLICAR / NOOP / DETENER.
-- `sql/migrate-2026-10-cotizaciones-historial-costeos.sql` — 5 sentencias en orden seguro: (1) columnas (`version` nullable solo mientras se rellena) →
-  (2) `UPDATE ... SET version = 1, es_seleccionado = 1 WHERE version IS NULL` → (3) `version NOT NULL` → (4) índices nuevos →
+- `sql/migrate-2026-10-cotizaciones-historial-costeos.sql` — 5 sentencias en orden seguro: (1) columnas (`version` nullable, sin default, solo mientras se rellena) →
+  (2) `UPDATE ... SET version = 1, es_seleccionado = 1 WHERE version IS NULL` → (3) `version INT NOT NULL DEFAULT 1` → (4) índices nuevos →
   (5) `DROP INDEX IF EXISTS uq_cotizacion_costeo_cotizacion`. El índice nuevo se crea antes de soltar el viejo porque la FK compuesta necesita un índice con
   `(empresa_id, cotizacion_id)` al frente. Idempotente (el `UPDATE` solo toca filas sin versión, así re-ejecutarla no marca como seleccionadas versiones posteriores).
 - `sql/schema.sql` — `tms_cotizacion_costeos` con las columnas e índices nuevos. Las migraciones anteriores (2026-09, 2026-10 costeo Excel, paridad Cotizador 2026) no se modifican.
+
+### Compatibilidad durante la transición (SQL → deploy)
+- `version INT NOT NULL DEFAULT 1`: el código anterior no envía `version`, recibe 1 y sigue funcionando. Como ese código rechaza un segundo costeo por cotización,
+  no puede crear versiones duplicadas en la transición.
+- El código **nuevo** siempre envía la versión explícita (cotización padre bloqueada + `MAX(version) + 1`); el default no participa en la numeración. `UNIQUE (empresa_id, cotizacion_id, version)` es la protección residual.
+- La columna se agrega primero **sin default** (NULL), se resuelven los históricos y solo entonces se fija `NOT NULL DEFAULT 1`: con `DEFAULT 1` desde el `ADD COLUMN`
+  MariaDB rellenaría las filas existentes con 1 y el `UPDATE ... WHERE version IS NULL` ya no las encontraría (quedarían sin `es_seleccionado = 1`).
+- Un costeo registrado por el código anterior en la transición queda con `version = 1` y `es_seleccionado = 0`. El preflight incluye la comprobación
+  `cotizaciones_con_costeos_sin_seleccionado` (debe ser 0 tras el deploy) con la reparación sugerida (solo con revisión y autorización).
 
 ### Históricos
 Hasta hoy cada cotización tenía como máximo un costeo (lo imponía el índice único), así que **cada fila existente es su versión 1 y era el único costeo de su cotización**:

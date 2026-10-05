@@ -1763,7 +1763,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   -- Historial de costeos: N versiones por cotización, cada una inmutable. es_seleccionado = versión utilizada (a lo sumo una; la unicidad la garantiza la app con FOR UPDATE).
-  version INT NOT NULL,
+  version INT NOT NULL DEFAULT 1,
   es_seleccionado TINYINT(1) NOT NULL DEFAULT 0,
   seleccionado_por VARCHAR(100) NULL DEFAULT NULL,
   seleccionado_en DATETIME NULL DEFAULT NULL,
