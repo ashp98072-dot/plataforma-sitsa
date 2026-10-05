@@ -1,3 +1,4 @@
+import { esMotorCotizador2026 } from "./cotizacion-costeo";
 import type { SnapshotCosteo } from "./cotizacion-costeo-db";
 import { monedaCosteo, porcentajeCosteo } from "./cotizacion-costeo-ui";
 
@@ -31,7 +32,8 @@ export function seccionesConfiguracionCosteo(v: SnapshotCosteo): SeccionConfigur
   const par = v.parametros;
   const i = v.input;
   const conDesglose = p.precioLlanta != null && p.cantidadLlantas != null;
-  const motorAnterior = v.motorVersion !== "COSTEO_COTIZADOR_2026";
+  // El motor sale del resultado persistido cuando existe (es el de la propia versión del costeo); si no, de la columna motor_version.
+  const motorAnterior = !esMotorCotizador2026(v.resultado?.motorVersion ?? v.motorVersion);
 
   const perfil: FilaConfiguracion[] = [
     ["Código", v.perfilCodigo],

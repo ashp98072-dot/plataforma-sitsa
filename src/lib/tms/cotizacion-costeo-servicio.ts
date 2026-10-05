@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { calcularIva } from "./cotizaciones";
-import { calcularCosteoServicio, COTIZACION_COSTEO_COTIZADOR_VERSION, ErrorCosteo, type InputCosteoServicio, type ResultadoCosteoServicio } from "./cotizacion-costeo";
+import { calcularCosteoServicio, COTIZACION_COSTEO_COTIZADOR_V2_VERSION, ErrorCosteo, type InputCosteoServicio, type ResultadoCosteoServicio } from "./cotizacion-costeo";
 import {
   ErrorCosteoConfig,
   obtenerParametrosCosteoVigentes,
@@ -75,7 +75,7 @@ export function precioVentaDesdeTarifa(tarifaCotizada: number | null | undefined
 
 function construirInput(payload: CosteoPayload, perfil: InputCosteoServicio["perfil"], parametros: InputCosteoServicio["parametros"], precioVenta: number | null): InputCosteoServicio {
   const input: InputCosteoServicio = {
-    motorVersion: COTIZACION_COSTEO_COTIZADOR_VERSION,
+    motorVersion: COTIZACION_COSTEO_COTIZADOR_V2_VERSION,
     perfil,
     parametros,
     distanciaKm: payload.distanciaKm,

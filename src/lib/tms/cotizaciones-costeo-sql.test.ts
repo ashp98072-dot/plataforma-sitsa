@@ -18,6 +18,8 @@ function sinAdicionesExcel(sql: string) {
  return sql.split("\n")
   // Historial de costeos: schema.sql reemplaza el índice único 1:1 original (ya aplicado en producción) por el de versión y agrega un índice de consulta.
   .map(l=>l.replace("UNIQUE KEY uq_cotizacion_costeo_version (empresa_id, cotizacion_id, version),","UNIQUE KEY uq_cotizacion_costeo_cotizacion (empresa_id, cotizacion_id),"))
+  // motor_version se amplió a VARCHAR(40) (migrate-2026-10-cotizaciones-motor-version.sql, YA aplicada en producción); la migración 2026-09 es histórica y conserva VARCHAR(20).
+  .map(l=>l.replace("motor_version VARCHAR(40) NOT NULL","motor_version VARCHAR(20) NOT NULL"))
   .filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Paridad Cotizador 2026:")&&!l.includes("-- Configuración global aditiva")&&!l.includes("-- Historial de costeos")&&!l.includes("idx_cotizacion_costeo_historial")).join("\n");
 }
 const propuesta = leer("docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md");
@@ -154,7 +156,9 @@ describe.each([["sql/migrate-2026-09-cotizaciones-costeo.sql", migracion], ["sql
     expect(create(sql, "tms_cotizacion_costeo_perfiles")).toMatch(/gps_mensual DECIMAL\(12,2\)[\s\S]*costo_juego_llantas DECIMAL\(14,2\)[\s\S]*rendimiento_km_galon DECIMAL\(8,3\)/);
     expect(create(sql, "tms_cotizacion_costeo_parametros")).toMatch(/precio_combustible_galon DECIMAL\(10,4\)[\s\S]*iva_tasa DECIMAL\(6,4\)[\s\S]*margen_objetivo DECIMAL\(6,4\) NULL/);
     const costeos = create(sql, "tms_cotizacion_costeos");
-    expect(costeos).toMatch(/perfil_snapshot JSON NOT NULL[\s\S]*parametros_snapshot JSON NOT NULL[\s\S]*input_snapshot JSON NOT NULL[\s\S]*motor_version VARCHAR\(20\) NOT NULL/);
+    expect(costeos).toMatch(/perfil_snapshot JSON NOT NULL[\s\S]*parametros_snapshot JSON NOT NULL[\s\S]*input_snapshot JSON NOT NULL[\s\S]*motor_version VARCHAR\((20|40)\) NOT NULL/);
+    // schema.sql refleja producción (VARCHAR(40), ampliada manualmente); la migración 2026-09 es histórica y conserva VARCHAR(20).
+    expect(costeos).toContain(nombre === "sql/schema.sql" ? "motor_version VARCHAR(40) NOT NULL" : "motor_version VARCHAR(20) NOT NULL");
     expect(costeos).toContain("costo_operativo DECIMAL(16,6) NOT NULL");
     expect(costeos).toContain("FOREIGN KEY (empresa_id, cotizacion_id) REFERENCES tms_cotizaciones (empresa_id, id) ON DELETE RESTRICT");
     const componentes = create(sql, "tms_cotizacion_costeo_componentes");

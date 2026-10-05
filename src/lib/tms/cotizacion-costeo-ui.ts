@@ -1,4 +1,4 @@
-import type { ComponenteCosteo, ResultadoCosteoServicio } from "./cotizacion-costeo";
+import { esMotorCotizador2026, type ComponenteCosteo, type ResultadoCosteoServicio } from "./cotizacion-costeo";
 
 /**
  * COTIZACIONES-COSTEO (Fase 3) — lógica pura del formulario de costeo
@@ -179,7 +179,7 @@ export type ResumenCosteoDatos = {
  * Motores que guardan un `resultado_snapshot` completo (subtotal, margen, IVA, precio/km). V1 no lo tiene y se muestra con su
  * formato original; tanto los snapshots del PR #406 como los nuevos del Cotizador 2026 usan el resumen detallado.
  */
-export const motorConResultadoCompleto = (version: string | undefined | null): boolean => version === "COSTEO_EXCEL_2026" || version === "COSTEO_COTIZADOR_2026";
+export const motorConResultadoCompleto = (version: string | undefined | null): boolean => version === "COSTEO_EXCEL_2026" || esMotorCotizador2026(version);
 
 export function resumenDesdeResultado(r: ResultadoCosteoServicio): ResumenCosteoDatos {
   return {

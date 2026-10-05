@@ -19,8 +19,20 @@ import { calcularCosteoCotizador2026 } from "./cotizacion-costeo-cotizador-2026"
 export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
 /** Motor del PR #406 (viáticos/hotel desglosados). SOLO lectura de snapshots existentes y funciones puras: los cálculos NUEVOS usan COTIZADOR_2026. */
 export const COTIZACION_COSTEO_EXCEL_VERSION = "COSTEO_EXCEL_2026";
-/** Paridad estricta con «Cotizador 2026.xlsx»: una sola columna «Viáticos y hotel». Es la versión de los cálculos NUEVOS. */
+/**
+ * Paridad con «Cotizador 2026.xlsx»: una sola columna «Viáticos y hotel». REDONDEA CADA CONCEPTO a 2 decimales antes de sumar (política anterior).
+ * Solo lectura de snapshots ya guardados y funciones puras: los cálculos NUEVOS usan COTIZADOR_V2.
+ */
 export const COTIZACION_COSTEO_COTIZADOR_VERSION = "COSTEO_COTIZADOR_2026";
+/**
+ * Paridad MATEMÁTICA exacta con «Cotizador 2026.xlsx»: mismas fórmulas, pero la precisión interna se conserva (Decimal de 40 dígitos) y solo se redondea a 2
+ * decimales para mostrar/persistir (como el libro: la celda solo da formato). Es la versión de los cálculos NUEVOS. Un mismo input puede dar un centavo
+ * distinto que COSTEO_COTIZADOR_2026, por eso es una versión propia y los snapshots anteriores no se reinterpretan.
+ */
+export const COTIZACION_COSTEO_COTIZADOR_V2_VERSION = "COSTEO_COTIZADOR_2026_V2";
+
+/** Motores de la familia «Cotizador 2026» (con `resultado_snapshot` completo, un solo margen y una sola columna de viáticos y hotel). */
+export const esMotorCotizador2026 = (version: string | null | undefined): boolean => version === COTIZACION_COSTEO_COTIZADOR_VERSION || version === COTIZACION_COSTEO_COTIZADOR_V2_VERSION;
 
 // ---------------------------------------------------------------------------
 // A. PARÁMETROS / INPUTS
@@ -146,6 +158,22 @@ export type ResultadoCosteoServicio = {
     viaticosHotelMultiplicaDias?: boolean;
   };
   motorVersion?: string;
+  /**
+   * COSTEO_COTIZADOR_2026_V2: valores de CÁLCULO con precisión completa (cadenas decimales de 12 decimales), para auditar el cálculo exactamente.
+   * Los campos numéricos del resultado (componentes, costo base, IVA, total...) son los valores de PRESENTACIÓN/persistencia, redondeados a 2 decimales
+   * una sola vez, al final. Ausente en los motores anteriores (que redondeaban cada concepto).
+   */
+  precision?: {
+    politicaRedondeo: "al_final";
+    componentes: Record<string, string>;
+    costoOperativo: string;
+    margenObjetivoMonto: string;
+    subtotalComercial: string;
+    iva: string;
+    costoConIva: string;
+    precioSugerido: string;
+    precioPorKm: string | null;
+  };
   gastosGenerales?: number;
   subtotalComercial?: number;
   precioPorKm?: number | null;
@@ -300,7 +328,8 @@ export function costoPersonal(costoDia: number, diasServicio: number, cantidad: 
 
 export function calcularCosteoServicio(input: InputCosteoServicio): ResultadoCosteoServicio {
   validarInput(input);
-  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_VERSION) return calcularCosteoCotizador2026(input);
+  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_V2_VERSION) return calcularCosteoCotizador2026(input, "al_final");
+  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_VERSION) return calcularCosteoCotizador2026(input, "por_componente");
   if (input.motorVersion === COTIZACION_COSTEO_EXCEL_VERSION) return calcularCosteoExcel(input);
   const { perfil, parametros } = input;
   const dias = input.diasServicio;
