@@ -9,18 +9,21 @@ import { dec, monto, positivo, q } from "./cotizacion-costeo-excel";
  * Mismas fórmulas y misma política de redondeo que COSTEO_EXCEL_2026 (Decimal HALF_UP, cada concepto a 2 decimales y la suma
  * sin redondeo adicional), con UNA diferencia deliberada: el libro tiene una sola columna «VIATICOS Y HOTEL» con un valor directo
  * por viaje. Aquí «Viáticos y hotel» es:
- *     override manual de la cotización  ?? perfil.viaticosHotelViaje  ?? 0 (con advertencia)
- * y NUNCA se multiplica por personas, guías ni días. Ya no existen viático piloto / auxiliar / guía ni hotel por persona-día:
+ *     override manual de la cotización (TOTAL explícito, nunca se multiplica)  ??  perfil.viaticosHotelViaje [× días solo si el perfil lo indica]  ??  0 (con advertencia)
+ * y nunca se multiplica por personas ni guías. Ya no existen viático piloto / auxiliar / guía ni hotel por persona-día:
  * los parámetros globales viaticoPilotoDia, viaticoAuxiliarDia, viaticoGuiaDia y hotelDia, los overrides de PR #406 y las guías se
  * IGNORAN (permanecen en BD solo por compatibilidad con snapshots históricos, que nunca se recalculan).
  *
  * Salarios: salario mensual del perfil / días laborales globales; si el perfil no lo tiene (NULL) se usa el costo diario global
- * como respaldo histórico. Piloto y auxiliar se multiplican por personas × días (el libro usa 1 y 1).
+ * como respaldo histórico. El piloto SIEMPRE es diario × personas × días (las cinco hojas lo multiplican por días).
+ *
+ * DIFERENCIAS ENTRE HOJAS (se reproducen sin normalizar y sin ramificar por código de perfil): el libro multiplica por días el auxiliar solo en
+ * 1T y 2.7T, y «Viáticos y hotel» solo en 2.7T. Se modelan como dos banderas del perfil: `auxiliarMultiplicaDias` y `viaticosHotelMultiplicaDias`.
  *
  * VIAJES DE VARIOS DÍAS (fila 15 del libro: «=E6» = Días): se multiplican por días gastos generales, seguro de mercadería, depreciación,
- * GPS y seguro del vehículo; piloto y auxiliar por personas × días. Dependen de los km (no de los días): aceite, llantas y combustible.
- * «Viáticos y hotel» es un valor por viaje y NO se multiplica por días (regla de negocio). Un seguro de mercadería MANUAL es el total del
- * servicio que escribió el usuario: se usa tal cual y no se vuelve a multiplicar.
+ * GPS, seguro del vehículo y piloto; el auxiliar y «Viáticos y hotel» del perfil, según las banderas de arriba. Dependen de los km (no de los
+ * días): aceite, llantas y combustible. Un total MANUAL (seguro de mercadería o «Viáticos y hotel») es el total del servicio que escribió el
+ * usuario: se usa tal cual y no se vuelve a multiplicar.
  */
 export function calcularCosteoCotizador2026(i: InputCosteoServicio): ResultadoCosteoServicio {
   const p = i.perfil, e = i.parametros, km = dec(i.distanciaKm), dias = dec(i.diasServicio);
@@ -61,12 +64,24 @@ export function calcularCosteoCotizador2026(i: InputCosteoServicio): ResultadoCo
   const diarioPiloto = p.salarioPilotoMensual == null ? dec(e.costoPilotoDia) : dec(p.salarioPilotoMensual).div(positivo("días laborales mes", e.diasLaboralesMes));
   const diarioAuxiliar = p.salarioAuxiliarMensual == null ? dec(e.costoAuxiliarDia) : dec(p.salarioAuxiliarMensual).div(positivo("días laborales mes", e.diasLaboralesMes));
   const piloto = q(diarioPiloto.mul(dias).mul(i.cantidadPilotos));
-  const auxiliares = q(diarioAuxiliar.mul(dias).mul(i.cantidadAuxiliares));
+  // Auxiliar: base = diario × cantidad; × días solo si el perfil lo indica (sin configurar => por día, como el PR #406 y las hojas 1T y 2.7T).
+  const auxiliarMultiplicaDias = p.auxiliarMultiplicaDias ?? true;
+  const auxiliares = q(diarioAuxiliar.mul(i.cantidadAuxiliares).mul(auxiliarMultiplicaDias ? dias : 1));
+  if (p.auxiliarMultiplicaDias == null && i.diasServicio > 1 && i.cantidadAuxiliares > 0 && !diarioAuxiliar.isZero()) {
+    advertencias.push("El perfil no indica si el auxiliar se cobra por cada día de servicio: se cobró por día. Configúrelo en Ajustes para igualar la hoja del Cotizador 2026.");
+  }
 
   // «VIATICOS Y HOTEL»: UN valor por viaje. Override de la cotización > valor del perfil > 0 (advertido). No se multiplica por nada.
+  // El override manual es el TOTAL explícito del servicio (no se multiplica); el valor del PERFIL se multiplica por días solo si el perfil lo indica.
   const origenViaticosHotel: "override" | "perfil" | "sin_configurar" = i.viaticosHotelTotal != null ? "override" : p.viaticosHotelViaje != null ? "perfil" : "sin_configurar";
   if (origenViaticosHotel === "sin_configurar") advertencias.push("Viáticos y hotel no configurados en el perfil: se usó Q0. Configure el valor del perfil o ingrese el monto de esta cotización.");
-  const viaticosHotel = q(dec(monto("viáticos y hotel", i.viaticosHotelTotal ?? p.viaticosHotelViaje ?? 0)));
+  const viaticosHotelMultiplicaDias = p.viaticosHotelMultiplicaDias ?? false;
+  if (origenViaticosHotel === "perfil" && p.viaticosHotelMultiplicaDias == null && i.diasServicio > 1 && (p.viaticosHotelViaje ?? 0) > 0) {
+    advertencias.push("El perfil no indica si «Viáticos y hotel» se cobra por cada día de servicio: se cobró una sola vez. Configúrelo en Ajustes para igualar la hoja del Cotizador 2026.");
+  }
+  const viaticosHotel = i.viaticosHotelTotal != null
+    ? q(dec(monto("viáticos y hotel", i.viaticosHotelTotal)))
+    : q(dec(monto("viáticos y hotel", p.viaticosHotelViaje ?? 0)).mul(viaticosHotelMultiplicaDias ? dias : 1));
 
   const otros = (i.otrosCostos ?? []).map((c, n) => ({ clave: `otro:${n}`, concepto: c.concepto.trim(), monto: q(dec(c.monto)) }));
   const componentes = [
@@ -108,7 +123,7 @@ export function calcularCosteoCotizador2026(i: InputCosteoServicio): ResultadoCo
       salarioAuxiliarMensual: p.salarioAuxiliarMensual ?? null,
       costoPilotoDia: diarioPiloto.toNumber(), costoAuxiliarDia: diarioAuxiliar.toNumber(),
       diasLaboralesMes: e.diasLaboralesMes ?? null,
-      viaticosHotelViaje: viaticosHotel, origenViaticosHotel,
+      viaticosHotelViaje: viaticosHotel, origenViaticosHotel, auxiliarMultiplicaDias, viaticosHotelMultiplicaDias,
     },
     motorVersion: "COSTEO_COTIZADOR_2026", depreciacion, refrigeracion, gps, seguroVehiculo, seguroMercaderia,
     gastosGenerales, aceite, llantas, combustible, piloto, auxiliares,

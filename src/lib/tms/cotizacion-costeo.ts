@@ -141,6 +141,9 @@ export type ResultadoCosteoServicio = {
     /** COSTEO_COTIZADOR_2026: «Viáticos y hotel» efectivamente usado y su origen. */
     viaticosHotelViaje?: number;
     origenViaticosHotel?: "override" | "perfil" | "sin_configurar";
+    /** Comportamiento efectivo por días (config del perfil, o el predeterminado si estaba sin configurar). */
+    auxiliarMultiplicaDias?: boolean;
+    viaticosHotelMultiplicaDias?: boolean;
   };
   motorVersion?: string;
   gastosGenerales?: number;

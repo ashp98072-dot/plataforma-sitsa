@@ -1660,6 +1660,9 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
   salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL,
   -- Paridad Cotizador 2026: UN solo valor «Viáticos y hotel» por viaje (no por persona ni por día). NULL = sin configurar.
   viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL,
+  -- Paridad Cotizador 2026: comportamiento por hoja fuente. 1 = por cada día de servicio, 0 = una sola vez, NULL = sin configurar.
+  auxiliar_multiplica_dias TINYINT(1) NULL DEFAULT NULL,
+  viaticos_hotel_multiplica_dias TINYINT(1) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   codigo VARCHAR(40) NOT NULL,                 -- p. ej. CAMION_5T, CABEZAL

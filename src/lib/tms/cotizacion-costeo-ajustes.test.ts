@@ -98,6 +98,42 @@ describe("viaticos_hotel_viaje del perfil (Cotizador 2026)",()=>{
   const columnas=sql.match(/\(([^)]+)\)\s*VALUES/)![1].split(",").map(x=>x.trim());
   expect(values[columnas.indexOf("viaticos_hotel_viaje")]).toBeNull();
  });
+ it("las banderas «se cobra por cada día de servicio» son booleano nullable: true/false/null válidos, otros tipos rechazados",()=>{
+  for(const v of [true,false,null,undefined]){
+   expect(perfilAjustesCrearSchema.safeParse({...perfil,auxiliarMultiplicaDias:v}).success).toBe(true);
+   expect(perfilAjustesCrearSchema.safeParse({...perfil,viaticosHotelMultiplicaDias:v}).success).toBe(true);
+  }
+  for(const v of [1,0,"true","si",{}]){
+   expect(perfilAjustesCrearSchema.safeParse({...perfil,auxiliarMultiplicaDias:v}).success).toBe(false);
+   expect(perfilAjustesCrearSchema.safeParse({...perfil,viaticosHotelMultiplicaDias:v}).success).toBe(false);
+  }
+ });
+ it("INSERT guarda las banderas como 1 / 0 / NULL (false no es NULL) y cuadran columnas, placeholders y parámetros",async()=>{
+  const conn=conexion();
+  await crearPerfilAjustes(1,"admin",{...perfil,auxiliarMultiplicaDias:true,viaticosHotelMultiplicaDias:false});
+  const [sql,values]=conn.execute.mock.calls[0];
+  const columnas=sql.match(/\(([^)]+)\)\s*VALUES/)![1].split(",").map(x=>x.trim());
+  expect(columnas).toHaveLength(values.length);expect(sql.match(/\?/g)).toHaveLength(values.length);
+  expect(values[columnas.indexOf("auxiliar_multiplica_dias")]).toBe(1);
+  expect(values[columnas.indexOf("viaticos_hotel_multiplica_dias")]).toBe(0);
+  conn.execute.mockClear();
+  await crearPerfilAjustes(1,"admin",{...perfil});
+  const [sql2,values2]=conn.execute.mock.calls[0];
+  const col2=sql2.match(/\(([^)]+)\)\s*VALUES/)![1].split(",").map(x=>x.trim());
+  expect(values2[col2.indexOf("auxiliar_multiplica_dias")]).toBeNull();
+  expect(values2[col2.indexOf("viaticos_hotel_multiplica_dias")]).toBeNull();
+ });
+ it("UPDATE escribe las banderas solo en el perfil indicado (empresa_id + id)",async()=>{
+  const conn=conexion();
+  const {codigo,...input}=perfil;void codigo;
+  await actualizarPerfilAjustes(1,5,"admin",{...input,auxiliarMultiplicaDias:false,viaticosHotelMultiplicaDias:true});
+  const [sql,values]=conn.execute.mock.calls[0];
+  expect(sql).toContain("auxiliar_multiplica_dias=?");expect(sql).toContain("viaticos_hotel_multiplica_dias=?");expect(sql).toContain("WHERE empresa_id=? AND id=?");
+  const columnas=sql.split(" SET ")[1].split(" WHERE ")[0].split(",").map(x=>x.split("=")[0]);
+  expect(values[columnas.indexOf("auxiliar_multiplica_dias")]).toBe(0);
+  expect(values[columnas.indexOf("viaticos_hotel_multiplica_dias")]).toBe(1);
+  expect(values.slice(-2)).toEqual([1,5]);
+ });
  it("UPDATE lo escribe solo en el perfil indicado (empresa_id + id) y conserva los demás campos",async()=>{
   const conn=conexion();
   const {codigo,...input}=perfil;void codigo;

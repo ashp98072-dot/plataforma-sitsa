@@ -11,7 +11,7 @@ const preflightExcel = leer("sql/preflight-2026-10-cotizaciones-costeo-excel.sql
 // La migración del PR #406 (ya aplicada) NO incluye viaticos_hotel_viaje: esa columna tiene su propia migración (paridad Cotizador 2026).
 const CAMPOS_PR406_PERFIL = CAMPOS_EXCEL_PERFIL.filter(c=>c.key!=="viaticosHotelViaje");
 const nuevas: string[] = [...CAMPOS_EXCEL_PARAMETROS, ...CAMPOS_EXCEL_PERFIL].map(c=>c.col);
-nuevas.push("resultado_snapshot");
+nuevas.push("resultado_snapshot", "auxiliar_multiplica_dias", "viaticos_hotel_multiplica_dias"); // banderas TINYINT(1): no están en el catálogo numérico
 function sinAdicionesExcel(sql: string) {
  return sql.split("\n").filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Paridad Cotizador 2026:")&&!l.includes("-- Configuración global aditiva")).join("\n");
 }

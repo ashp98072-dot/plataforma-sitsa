@@ -5,18 +5,19 @@ Fuente funcional ÚNICA: `Cotizador 2026.xlsx` (hojas «Camion 1 ton», «Camion
 **No** se usó `COTIZADOR RUTAS(3).xlsx`. Alcance: Costeo interno y Ajustes de Cotizaciones.
 SQL propuesto, **no ejecutado**.
 
-> **Orden de despliegue:** aplicar la migración (ver «SQL») ANTES de desplegar. El código nuevo lee `viaticos_hotel_viaje` al
-> consultar perfiles; sin la columna, las consultas de perfiles fallan (mismo criterio del PR #406).
+> **Orden de despliegue:** aplicar la migración (ver «SQL») ANTES de desplegar. El código nuevo lee `viaticos_hotel_viaje`,
+> `auxiliar_multiplica_dias` y `viaticos_hotel_multiplica_dias` al consultar perfiles; sin las columnas, las consultas de perfiles fallan (mismo criterio del PR #406).
 
 ## Qué cambia
 
 | Área | Cambio |
 | --- | --- |
 | Motor | Nuevo `COSTEO_COTIZADOR_2026` para los cálculos NUEVOS. `COSTEO_V1` y `COSTEO_EXCEL_2026` siguen leyéndose y calculándose igual. |
-| Viáticos y hotel | Una sola línea «Viáticos y hotel»: override de la cotización → valor del perfil → Q0 con advertencia. **No** se multiplica por personas, guías ni días. |
-| Perfil | Columna aditiva `viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL` (`viaticosHotelViaje`). |
+| Viáticos y hotel | Una sola línea «Viáticos y hotel»: override de la cotización (TOTAL explícito, nunca se multiplica) → valor del perfil (× días solo si el perfil lo indica) → Q0 con advertencia. **No** se multiplica por personas ni guías. |
+| Diferencias por perfil | El libro NO trata igual a todas las hojas con varios días. Se reproducen con dos banderas editables del perfil (sin ramificar por código de perfil): `auxiliarMultiplicaDias` y `viaticosHotelMultiplicaDias`. |
+| Perfil | Tres columnas aditivas, todas `NULL DEFAULT NULL`: `viaticos_hotel_viaje DECIMAL(12,2)`, `auxiliar_multiplica_dias TINYINT(1)`, `viaticos_hotel_multiplica_dias TINYINT(1)`. |
 | UI de costeo | Se quitan Guías, viático piloto/auxiliar/guía y hotel; se agrega «Viáticos y hotel (Q)» (un override opcional, con el valor del perfil como sugerencia). |
-| Ajustes → Perfiles | Agrupado: Identificación, Operación, Mantenimiento, Seguro, Depreciación, Personal. «Valor del camión (Q)» único. |
+| Ajustes → Perfiles | Agrupado: Identificación, Operación, Mantenimiento, Seguro, Depreciación, Personal. «Valor del camión (Q)» único. En Personal: «Auxiliar se cobra por cada día de servicio» y «Viáticos y hotel se cobran por cada día de servicio» (Sin configurar / Sí / No). |
 | Ajustes → Parámetros | Se ocultan Piloto/día, Auxiliar/día, Viático piloto/auxiliar/guía por día y Hotel/persona/día (siguen en BD y se reenvían). |
 | Desglose | Conceptos del libro: Gastos varios, Seguro mercadería, Depreciación, GPS, Seguro vehículo, Aceite, Llantas, Combustible, Piloto, Auxiliar, Viáticos y hotel, Otros costos; luego COSTO BASE, margen, subtotal, IVA, TOTAL CON IVA, precio/km. |
 
@@ -34,30 +35,56 @@ Cada concepto se calcula con Decimal (HALF_UP) y se redondea a 2 decimales; la s
 | Aceite | costo cambio / intervalo km × km |
 | Llantas | precio × cantidad / vida útil km × km (respaldo: juego histórico) |
 | Combustible | km / rendimiento × precio usado (override por cotización; no modifica el global) |
-| Piloto / Auxiliar | salario mensual del perfil / días laborales globales × personas × días (respaldo: costo diario global si el salario es NULL; 0 configurado es 0) |
-| Viáticos y hotel | override ?? `perfil.viaticosHotelViaje` ?? 0 (advertencia) |
+| Piloto | salario mensual del perfil / días laborales globales × personas **× días siempre** (respaldo: costo diario global si el salario es NULL; 0 configurado es 0) |
+| Auxiliar | (salario mensual / días laborales × cantidad) **× días solo si** `auxiliarMultiplicaDias`; si no, una sola vez |
+| Viáticos y hotel | override de la cotización (TOTAL explícito, **no** se multiplica) ?? `perfil.viaticosHotelViaje` **× días solo si** `viaticosHotelMultiplicaDias` ?? 0 (advertencia) |
 | Margen | UN margen objetivo: valor = base × margen; subtotal = base + valor; IVA después |
 
 El libro usa dos columnas de margen en algunas hojas; Novalvion maneja la suma como un único margen (15 % + 15 % → 30 %,
 20 % + 20 % → 40 %). **No** se reintroduce `margen2`.
 
-## Viajes de varios días
+## Viajes de varios días y diferencias por perfil
 
 La fila 15 de las cinco hojas es `=E6` (Días) para gastos, seguro de mercadería, depreciación, GPS y seguro del vehículo (`D16 = D15 × D14`, …),
-así que el motor nuevo los multiplica por días y coincide con el libro también en viajes multidía.
+así que el motor nuevo los multiplica por días en **todos** los perfiles. El piloto también va × días en las cinco hojas.
+Las hojas **no** coinciden entre sí en el auxiliar ni en «Viáticos y hotel»; se reproducen tal cual (no se normalizan):
 
 | Concepto | Con varios días |
 | --- | --- |
-| Gastos generales, depreciación, seguro vehículo | × días |
+| Gastos generales, depreciación, seguro vehículo | × días (todos los perfiles) |
 | GPS | (mensual / viajes mensuales) × días |
 | Seguro mercadería automático | (anual / flota / viajes anuales) × días |
 | Seguro mercadería manual | total explícito del servicio: **no** se multiplica (Q50 con 3 días = Q50) |
-| Piloto y auxiliar | × personas × días |
+| Piloto | × personas × días (todos los perfiles) |
+| Auxiliar | × días **solo si** el perfil tiene `auxiliarMultiplicaDias` |
+| Viáticos y hotel (valor del perfil) | × días **solo si** el perfil tiene `viaticosHotelMultiplicaDias` |
+| Viáticos y hotel (override de la cotización) | TOTAL explícito: **nunca** se multiplica (2.7T, 3 días, perfil Q200, override Q350 ⇒ Q350, no Q1,050) |
 | Aceite, llantas, combustible | dependen de los km, no de los días |
-| Viáticos y hotel | un valor por viaje: **no** × días (regla de negocio; ver observación 2) |
 
-Ejemplo 2.7T, 2 días: GPS Q10 · seguro mercadería ≈ Q12.68 · depreciación Q192.31 · seguro vehículo Q63.33 · gastos Q441.82 · viáticos y hotel Q200 (no Q400).
-`COSTEO_EXCEL_2026` y `COSTEO_V1` **no** cambian: siguen cobrando GPS y seguro de mercadería como ya lo hacían.
+### Configuración de referencia por hoja (para configurar desde Ajustes → Perfiles; NO se siembra en BD)
+
+| Perfil | Auxiliar × días | Viáticos y hotel × días | Origen en el libro |
+| --- | :---: | :---: | --- |
+| CAMION_1T | Sí | No | auxiliar `=L15`→Días; viáticos `1` fijo |
+| CAMION_2_7T | Sí | Sí | auxiliar `=L15`→Días; viáticos `=M15`→Días |
+| CAMION_5T | No | No | ambos `1` fijo |
+| CAMION_10T | No | No | ambos `1` fijo |
+| CABEZAL | No | No | ambos `1` fijo |
+
+El piloto siempre es diario × cantidad × días; no tiene bandera.
+
+Ejemplo con 2 días (piloto × 2 en todos): 1T auxiliar = diario × 2 y viáticos una vez · 2.7T auxiliar × 2 y viáticos Q200 × 2 = Q400 ·
+5T y 10T auxiliar una vez (diario) y viáticos Q300 una vez · Cabezal auxiliar Q0 y viáticos Q200 una vez.
+
+### Perfil sin configurar (bandera NULL)
+
+Las columnas son `NULL DEFAULT NULL` para no inventar valores. Mientras una bandera esté en NULL el motor usa el comportamiento previo
+(auxiliar **por día**, como el PR #406; viáticos del perfil **una vez**, como la primera versión de este PR) y, si hay más de un día y existe
+un valor que escalar, agrega una **advertencia visible** («El perfil no indica si el auxiliar / “Viáticos y hotel” se cobra por cada día de servicio…»).
+`false` configurado respeta el No y no genera advertencia. Los valores efectivos usados quedan en `valoresUsados` del snapshot
+(`auxiliarMultiplicaDias`, `viaticosHotelMultiplicaDias`). Con las banderas en NULL, un viaje de más de un día coincide con el libro salvo en: auxiliar de 5T y 10T (el libro lo cobra una vez; NULL lo cobra por día) y «Viáticos y hotel» de 2.7T (el libro × días; NULL una vez). Configurar las banderas en Ajustes elimina esas diferencias.
+
+`COSTEO_EXCEL_2026` y `COSTEO_V1` **no** cambian y ignoran estas banderas; ningún snapshot existente se recalcula.
 
 ## Compatibilidad e históricos
 
@@ -70,6 +97,7 @@ Ejemplo 2.7T, 2 días: GPS Q10 · seguro mercadería ≈ Q12.68 · depreciación
 - Los snapshots `COSTEO_V1` y `COSTEO_EXCEL_2026` se muestran con su propio resultado; nunca se recalculan.
 - Los campos retirados (`cantidadGuias`, `viaticoPilotoTotal`, `viaticoAuxiliarTotal`, `viaticoGuiaTotal`, `hotelTotal`) se **rechazan** en el cálculo nuevo
   (esquema estricto) en lugar de ignorarse en silencio.
+- Perfiles con banderas «por cada día» en NULL (todos, hasta que se configuren): el costeo no falla; ver «Perfil sin configurar».
 - Perfiles sin `viaticos_hotel_viaje` configurado: el costeo no falla; usa Q0 y muestra la advertencia «Viáticos y hotel no configurados en el perfil».
 - Thermo: infraestructura intacta para perfiles refrigerados/personalizados; oculto en perfiles normales; **no** se suma a los cinco perfiles del libro.
   `CAMION_5T_REFRIGERADO` y `CAMION_12T` se conservan sin datos del libro. No se siembra ningún valor.
@@ -77,9 +105,9 @@ Ejemplo 2.7T, 2 días: GPS Q10 · seguro mercadería ≈ Q12.68 · depreciación
 ## SQL (no ejecutado)
 
 - `sql/preflight-2026-10-cotizaciones-paridad-cotizador-2026.sql` — solo lectura (SELECT/SHOW), criterios APLICAR / NOOP / DETENER.
-- `sql/migrate-2026-10-cotizaciones-paridad-cotizador-2026.sql` — una sentencia:
-  `ALTER TABLE tms_cotizacion_costeo_perfiles ADD COLUMN IF NOT EXISTS viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL;`
-- `sql/schema.sql` — solo esa columna (2 líneas, CRLF preservado).
+- `sql/migrate-2026-10-cotizaciones-paridad-cotizador-2026.sql` — una sentencia con tres columnas, sin UPDATE ni seeds:
+  `ALTER TABLE tms_cotizacion_costeo_perfiles ADD COLUMN IF NOT EXISTS viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL, ADD COLUMN IF NOT EXISTS auxiliar_multiplica_dias TINYINT(1) NULL DEFAULT NULL, ADD COLUMN IF NOT EXISTS viaticos_hotel_multiplica_dias TINYINT(1) NULL DEFAULT NULL;`
+- `sql/schema.sql` — las tres columnas dentro de `tms_cotizacion_costeo_perfiles` (CRLF preservado).
 
 ## Paridad por hoja
 
@@ -95,7 +123,7 @@ Valores del libro vs. sistema (los conceptos coinciden a 2 decimales; el libro n
 
 Las pruebas (`cotizacion-costeo-cotizador-2026.test.ts`) comparan cada concepto de las cinco hojas (gastos, seguro mercadería, depreciación, GPS, seguro, aceite,
 llantas, combustible, piloto, auxiliar, viáticos y hotel), la base, el subtotal, el IVA posterior y el precio/km, y los casos multidía de la sección anterior
-(incluida una comparación contra las fórmulas del libro para 2 días).
+(incluida una comparación contra las fórmulas de la hoja 2.7T para 2 días), más los casos multidía por perfil, el override manual, las banderas en NULL y los históricos.
 
 ## Observaciones sobre el libro (para validar con negocio; NO se cambió nada por ellas)
 
@@ -103,11 +131,9 @@ llantas, combustible, piloto, auxiliar, viáticos y hotel), la base, el subtotal
    Cabezal: 7); vida útil de llantas = 50,000 km (`juego/50000`); intervalo de aceite = 5,000 km (`aceite/5000`). Se usan en las pruebas solo para
    reproducir los ejemplos y están marcadas como **inferidas**. Los rendimientos configurados hoy en Novalvion no se modificaron ni se afirman
    como fuente del libro; conviene que negocio los compare con estos valores.
-2. **«Viáticos y hotel» y auxiliar en la fila 15:** en cuatro hojas (1T, 5T, 10T y Cabezales) el multiplicador de «VIATICOS Y HOTEL» es un `1` escrito a mano, y el motor
-   lo cobra una vez por viaje. En la hoja «Camion de 2.7» esa celda es `=M15` (que encadena a `=E6`, Días), es decir, el libro **sí** lo multiplicaría por días allí;
-   con 2 días daría Q400 en vez de Q200. Se sigue la regla de negocio confirmada (un valor por viaje, sin multiplicar). Igualmente, el multiplicador del auxiliar es
-   `=L15`/días en 1T y 2.7T pero `1` fijo en 5T, 10T y Cabezales; el motor lo escala por días en todos los perfiles. Solo importa en viajes de más de un día; conviene que
-   negocio confirme si esas dos hojas deben cobrarse igual.
+2. **Diferencias entre hojas en la fila 15 (auxiliar y «Viáticos y hotel»):** el auxiliar escala por días en 1T y 2.7T pero es `1` fijo en 5T, 10T y Cabezales; «VIATICOS Y HOTEL»
+   es `1` fijo en 1T, 5T, 10T y Cabezales y `=M15` (→ Días) en 2.7T. **Decisión de negocio:** se respetan tal cual, sin normalizar (ver «Viajes de varios días y diferencias por perfil»);
+   se modelan como banderas por perfil y no hay un valor sembrado. Conviene validar con negocio que el libro refleja la intención en 5T, 10T y Cabezales.
 3. Algunos valores del libro vienen escritos a mano y redondeados (auxiliar 302 en 2.7T, piloto 339.38 en 5T, seguro de mercadería 6.34): por eso ±Q0.01.
 4. El valor del camión de 1T es `=85000/1.12` (75,892.857…), sin IVA.
 5. El Cabezal tiene UN solo porcentaje (20 %); en 5T el libro suma 20 % + 20 %.

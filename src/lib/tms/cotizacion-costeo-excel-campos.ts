@@ -133,6 +133,13 @@ export type PerfilExcel = {
   salarioAuxiliarMensual?: number | null;
   /** Valor predeterminado de «Viáticos y hotel (Q)» del perfil (un solo monto por viaje). NULL = sin configurar. */
   viaticosHotelViaje?: number | null;
+  /**
+   * Comportamiento de la hoja fuente del Cotizador 2026 (fila 15 «Días»): true = el auxiliar se cobra por cada día de servicio,
+   * false = una sola vez, null/ausente = sin configurar (se usa el predeterminado: por día).
+   */
+  auxiliarMultiplicaDias?: boolean | null;
+  /** true = el «Viáticos y hotel» del PERFIL se cobra por cada día, false = una vez, null/ausente = sin configurar (predeterminado: una vez). */
+  viaticosHotelMultiplicaDias?: boolean | null;
   viajesMes?: number | null;
   precioLlanta?: number | null;
   cantidadLlantas?: number | null;

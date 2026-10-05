@@ -42,6 +42,8 @@ export class ErrorCosteoYaRegistrado extends Error {
 
 const num = (v: unknown): number => Number(v);
 const numONull = (v: unknown): number | null => (v == null ? null : Number(v));
+/** TINYINT(1) nullable: NULL (o columna ausente en filas viejas) = sin configurar; 1 = true; 0 = false. */
+const boolONull = (v: unknown): boolean | null => (v == null ? null : Number(v) === 1);
 
 // ---------------------------------------------------------------------------
 // Perfiles
@@ -59,6 +61,8 @@ function mapPerfil(r: RowDataPacket): PerfilCosteoConId {
   return {
     id: num(r.id),
     ...mapCamposExcel(r, CAMPOS_EXCEL_PERFIL),
+    auxiliarMultiplicaDias: boolONull(r.auxiliar_multiplica_dias),
+    viaticosHotelMultiplicaDias: boolONull(r.viaticos_hotel_multiplica_dias),
     codigo: String(r.codigo),
     nombre: String(r.nombre),
     costoAdquisicion: numONull(r.costo_adquisicion),
@@ -79,7 +83,8 @@ const SELECT_PERFIL = `
   SELECT id, codigo, nombre, costo_adquisicion, dias_operacion_mes, gps_mensual, seguro_vehiculo_mensual,
          costo_aceite_servicio, vida_util_aceite_km, costo_juego_llantas, vida_util_llantas_km, rendimiento_km_galon,
          deprec_valor_base, deprec_anios, deprec_dias_operacion_mes,
-         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual, viaticos_hotel_viaje
+         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual, viaticos_hotel_viaje,
+         auxiliar_multiplica_dias, viaticos_hotel_multiplica_dias
   FROM tms_cotizacion_costeo_perfiles
 `;
 

@@ -269,6 +269,22 @@ describe("Perfil: viaticos_hotel_viaje", () => {
     vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: "0.00" })] as never);
     expect((await obtenerPerfilCosteo(1, 4))?.viaticosHotelViaje).toBe(0); // 0 configurado es 0
   });
+  it("el SELECT lee las banderas «por cada día» y las mapea: NULL => null (sin configurar), 1 => true, 0 => false", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: 1, viaticos_hotel_multiplica_dias: 0 })] as never);
+    const cfg = await obtenerPerfilCosteo(1, 4);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("auxiliar_multiplica_dias");
+    expect(sql).toContain("viaticos_hotel_multiplica_dias");
+    expect([cfg?.auxiliarMultiplicaDias, cfg?.viaticosHotelMultiplicaDias]).toEqual([true, false]);
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: null, viaticos_hotel_multiplica_dias: null })] as never);
+    const sin = await obtenerPerfilCosteo(1, 4);
+    expect([sin?.auxiliarMultiplicaDias, sin?.viaticosHotelMultiplicaDias]).toEqual([null, null]);
+    vi.mocked(query).mockResolvedValue([filaPerfil()] as never); // fila sin las columnas (datos previos a la migración)
+    expect((await obtenerPerfilCosteo(1, 4))?.auxiliarMultiplicaDias).toBeNull();
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: "0", viaticos_hotel_multiplica_dias: "1" })] as never);
+    const txt = await obtenerPerfilCosteo(1, 4);
+    expect([txt?.auxiliarMultiplicaDias, txt?.viaticosHotelMultiplicaDias]).toEqual([false, true]);
+  });
   it("sigue filtrando por empresa_id (aislamiento) también al leer la columna nueva", async () => {
     vi.mocked(query).mockResolvedValue([filaPerfil()] as never);
     await listarPerfilesCosteo(7);

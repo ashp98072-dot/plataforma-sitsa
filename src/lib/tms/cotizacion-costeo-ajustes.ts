@@ -50,6 +50,8 @@ const perfilBase = z.object({
   salarioPilotoMensual: noNegativo.nullable().optional(),
   salarioAuxiliarMensual: noNegativo.nullable().optional(),
   viaticosHotelViaje: noNegativo.nullable().optional(),
+  auxiliarMultiplicaDias: z.boolean().nullable().optional(),
+  viaticosHotelMultiplicaDias: z.boolean().nullable().optional(),
   viajesMes: positivo.nullable().optional(),
   precioLlanta: noNegativo.nullable().optional(),
   cantidadLlantas: positivo.int().max(2147483647).nullable().optional(),
@@ -113,6 +115,8 @@ const campoExcelSql = (c: {type:string}, v:number|null|undefined) => {
   return tipo ? decimalCosteoSql(v ?? null, Number(tipo[1])) : v ?? null;
 };
 const nn = (v: unknown) => v == null ? null : Number(v);
+const bn = (v: unknown) => v == null ? null : Number(v) === 1;
+const bsql = (v: boolean | null | undefined) => v == null ? null : v ? 1 : 0;
 export const hoyGuatemala = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Guatemala" }).format(new Date());
 
 export type ParametroAjustes = ParametrosAjustesInput & { id: number; creadoPor: string | null; creadoEn: string; esVigenciaActual: boolean };
@@ -135,7 +139,7 @@ export async function listarPerfilesAjustes(empresaId: number): Promise<PerfilAj
   const rows = await query<RowDataPacket[]>(`SELECT *, DATE_FORMAT(creado_en,'%Y-%m-%d %H:%i:%s') creado_fmt,
     DATE_FORMAT(actualizado_en,'%Y-%m-%d %H:%i:%s') actualizado_fmt FROM tms_cotizacion_costeo_perfiles
     WHERE empresa_id = ? ORDER BY activo DESC, nombre ASC`, [empresaId]);
-  return rows.map((r) => ({ ...mapCamposExcel(r, CAMPOS_EXCEL_PERFIL), id:n(r.id), codigo:String(r.codigo), nombre:String(r.nombre), activo:Boolean(r.activo),
+  return rows.map((r) => ({ ...mapCamposExcel(r, CAMPOS_EXCEL_PERFIL), auxiliarMultiplicaDias:bn(r.auxiliar_multiplica_dias), viaticosHotelMultiplicaDias:bn(r.viaticos_hotel_multiplica_dias), id:n(r.id), codigo:String(r.codigo), nombre:String(r.nombre), activo:Boolean(r.activo),
     costoAdquisicion:nn(r.costo_adquisicion), diasOperacionMes:n(r.dias_operacion_mes), gpsMensual:n(r.gps_mensual),
     seguroVehiculoMensual:n(r.seguro_vehiculo_mensual), costoAceiteServicio:n(r.costo_aceite_servicio), vidaUtilAceiteKm:n(r.vida_util_aceite_km),
     costoJuegoLlantas:n(r.costo_juego_llantas), vidaUtilLlantasKm:n(r.vida_util_llantas_km), rendimientoKmGalon:n(r.rendimiento_km_galon),
@@ -165,15 +169,15 @@ export async function crearParametrosAjustes(empresaId: number, usuario: string,
 
 const CAMPOS_PERFIL = `nombre,activo,costo_adquisicion,dias_operacion_mes,gps_mensual,seguro_vehiculo_mensual,costo_aceite_servicio,
  vida_util_aceite_km,costo_juego_llantas,vida_util_llantas_km,rendimiento_km_galon,deprec_valor_base,deprec_anios,
- deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas,salario_piloto_mensual,salario_auxiliar_mensual,viaticos_hotel_viaje`;
+ deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas,salario_piloto_mensual,salario_auxiliar_mensual,viaticos_hotel_viaje,auxiliar_multiplica_dias,viaticos_hotel_multiplica_dias`;
 const valoresPerfil = (x: PerfilAjustesActualizarInput) => [x.nombre,x.activo,x.costoAdquisicion,x.diasOperacionMes,x.gpsMensual,x.seguroVehiculoMensual,
   x.costoAceiteServicio,x.vidaUtilAceiteKm,x.costoJuegoLlantas,x.vidaUtilLlantasKm,x.rendimientoKmGalon,x.deprecValorBase,x.deprecAnios,
-  x.deprecDiasOperacionMes,x.refrigValorBase,x.refrigAnios,x.refrigDiasOperacionMes,...CAMPOS_EXCEL_PERFIL.map(c => campoExcelSql(c,x[c.key]))];
+  x.deprecDiasOperacionMes,x.refrigValorBase,x.refrigAnios,x.refrigDiasOperacionMes,...CAMPOS_EXCEL_PERFIL.map(c => campoExcelSql(c,x[c.key])),bsql(x.auxiliarMultiplicaDias),bsql(x.viaticosHotelMultiplicaDias)];
 
 export async function crearPerfilAjustes(empresaId:number, usuario:string, input:PerfilAjustesCrearInput) {
   try { return await tx(async(conn) => {
     const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_cotizacion_costeo_perfiles (empresa_id,codigo,${CAMPOS_PERFIL},creado_por)
-      VALUES (${Array(26).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
+      VALUES (${Array(28).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
     await registrarAuditoriaTx(conn,{empresaId,usuario,accion:"crear_perfil_costeo",modulo:"tms_cotizaciones",detalle:`Perfil de costeo ${input.codigo} creado.`});
     return Number(r.insertId);
   }); } catch(e) { if(duplicado(e)) throw new ErrorAjustesCosteo("Ya existe un perfil con ese código."); throw e; }

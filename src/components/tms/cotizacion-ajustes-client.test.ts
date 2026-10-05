@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";import { join } from "node:path";import { describe,expect,it } from "vitest";import type { ParametroAjustes, PerfilAjustes } from "@/lib/tms/cotizacion-costeo-ajustes";import { CAMPOS_EXCEL_PARAMETROS } from "@/lib/tms/cotizacion-costeo-excel-campos";import { gruposPerfil,mostrarThermoPerfil,formPerfil,payloadPerfil,decimalAPorcentaje,formularioNuevaVigencia,porcentajeADecimal,ultimaVigencia } from "./cotizacion-ajustes-client";
+import { readFileSync } from "node:fs";import { join } from "node:path";import { describe,expect,it } from "vitest";import type { ParametroAjustes, PerfilAjustes } from "@/lib/tms/cotizacion-costeo-ajustes";import { CAMPOS_EXCEL_PARAMETROS } from "@/lib/tms/cotizacion-costeo-excel-campos";import { gruposPerfil,mostrarThermoPerfil,formPerfil,payloadPerfil,decimalAPorcentaje,formularioNuevaVigencia,porcentajeADecimal,ultimaVigencia,OPCIONES_BANDERA_PERFIL,CAMPOS_BANDERA_PERFIL } from "./cotizacion-ajustes-client";
 const src=readFileSync(join(__dirname,"cotizacion-ajustes-client.tsx"),"utf8");
 describe("UI ajustes de costeo",()=>{
  it("convierte porcentajes de UI a fracción persistida y viceversa",()=>{expect(porcentajeADecimal("12")).toBe(.12);expect(decimalAPorcentaje(.2)).toBe("20");});
@@ -64,7 +64,7 @@ describe("Ajustes Excel 2026",()=>{
   expect(base.salarioPilotoMensual).toBe(4000);
   expect(formularioNuevaVigencia(ACTUAL,"2026-10-03")).not.toHaveProperty("salarioPilotoMensual");
   // Los tres datos de PERSONAL se piden en el propio perfil (grupo «Personal»).
-  expect(gruposPerfil(form).find(([g])=>g==="Personal")?.[1]).toEqual(["salarioPilotoMensual","salarioAuxiliarMensual","viaticosHotelViaje"]);
+  expect(gruposPerfil(form).find(([g])=>g==="Personal")?.[1]).toEqual(["salarioPilotoMensual","salarioAuxiliarMensual","auxiliarMultiplicaDias","viaticosHotelViaje","viaticosHotelMultiplicaDias"]);
  });
 });
 
@@ -78,7 +78,7 @@ describe("Perfil de unidad — modelo Cotizador 2026",()=>{
   expect(Object.fromEntries(g)).toMatchObject({
    "Identificación":["codigo","nombre"],"Operación":["rendimientoKmGalon","gpsMensual","viajesMes"],
    "Mantenimiento":["costoAceiteServicio","vidaUtilAceiteKm","precioLlanta","cantidadLlantas","vidaUtilLlantasKm"],
-   "Seguro":["seguroVehiculoMensual"],"Depreciación":["deprecValorBase","deprecAnios"],"Personal":["salarioPilotoMensual","salarioAuxiliarMensual","viaticosHotelViaje"]});
+   "Seguro":["seguroVehiculoMensual"],"Depreciación":["deprecValorBase","deprecAnios"],"Personal":["salarioPilotoMensual","salarioAuxiliarMensual","auxiliarMultiplicaDias","viaticosHotelViaje","viaticosHotelMultiplicaDias"]});
  });
  it("oculta los campos de respaldo histórico (no se piden ni se duplican)",()=>{
   const v=visibles(formPerfil(perfilBase));
@@ -111,6 +111,21 @@ describe("Perfil de unidad — modelo Cotizador 2026",()=>{
   expect(formPerfil({...perfilBase,viaticosHotelViaje:null}).viaticosHotelViaje).toBe("");
   expect(payloadPerfil(formPerfil({...perfilBase,viaticosHotelViaje:null})).viaticosHotelViaje).toBeNull();
   expect(payloadPerfil({...formPerfil(perfilBase),viaticosHotelViaje:"0"}).viaticosHotelViaje).toBe(0); // 0 configurado es 0
+ });
+ it("las banderas por perfil «se cobra por cada día de servicio» se editan, se guardan y distinguen NULL / true / false",()=>{
+  const sin=formPerfil(perfilBase);
+  expect(sin.auxiliarMultiplicaDias).toBe("");
+  expect(sin.viaticosHotelMultiplicaDias).toBe("");
+  expect(payloadPerfil(sin)).toMatchObject({auxiliarMultiplicaDias:null,viaticosHotelMultiplicaDias:null});
+  const si=formPerfil({...perfilBase,auxiliarMultiplicaDias:true,viaticosHotelMultiplicaDias:false});
+  expect([si.auxiliarMultiplicaDias,si.viaticosHotelMultiplicaDias]).toEqual(["1","0"]);
+  expect(payloadPerfil(si)).toMatchObject({auxiliarMultiplicaDias:true,viaticosHotelMultiplicaDias:false}); // false es una configuración, no «vacío»
+  expect(payloadPerfil({...si,auxiliarMultiplicaDias:"",viaticosHotelMultiplicaDias:"1"})).toMatchObject({auxiliarMultiplicaDias:null,viaticosHotelMultiplicaDias:true});
+  expect(OPCIONES_BANDERA_PERFIL).toEqual([["","Sin configurar"],["1","Sí"],["0","No"]]);
+  expect(CAMPOS_BANDERA_PERFIL).toEqual(["auxiliarMultiplicaDias","viaticosHotelMultiplicaDias"]);
+
+  expect(src).toContain("Auxiliar se cobra por cada día de servicio");
+  expect(src).toContain("Viáticos y hotel se cobran por cada día de servicio");
  });
  it("un perfil NUEVO arranca con defaults válidos en los campos ocultos (el esquema los exige)",()=>{
   const p=payloadPerfil({...formPerfil(perfilBase),codigo:"X",nombre:"X"} as ReturnType<typeof formPerfil>);
