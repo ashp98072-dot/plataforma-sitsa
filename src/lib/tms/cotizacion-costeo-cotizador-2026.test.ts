@@ -235,18 +235,106 @@ describe("Fórmulas configurables (sin constantes del libro dentro del motor)", 
     cerca(r.iva, (r.subtotalComercial ?? 0) * 0.12, 0.005);
     expect(Object.keys(r)).not.toContain("margen2");
   });
-  it("multiplicación por días: gastos, depreciación, seguro y salarios escalan; GPS y seguro de mercadería son POR VIAJE (decisión del PR #406); viáticos y hotel no escalan", () => {
-    const uno = calcular(f), tres = calcular(f, { diasServicio: 3 });
-    cerca(comp(tres, "gastosGenerales") ?? NaN, (comp(uno, "gastosGenerales") ?? 0) * 3, 0.01);
-    cerca(comp(tres, "piloto") ?? NaN, (comp(uno, "piloto") ?? 0) * 3, 0.01);
-    expect(comp(tres, "gps")).toBe(comp(uno, "gps"));
-    expect(comp(tres, "seguroMercaderia")).toBe(comp(uno, "seguroMercaderia"));
-    expect(comp(tres, "viaticosHotel")).toBe(comp(uno, "viaticosHotel"));
-  });
 });
 function baseInput(f: Fila): InputCosteoServicio {
   return { motorVersion: COTIZACION_COSTEO_COTIZADOR_VERSION, perfil: f.perfil, parametros: parametros(f.combustible), distanciaKm: f.km, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: f.auxiliares, incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: f.margen };
 }
+
+/**
+ * VIAJES DE VARIOS DÍAS — la fila 15 de las cinco hojas es «=E6» (Días) para gastos, seguro de mercadería, depreciación, GPS y seguro del
+ * vehículo (D16 = D15 × D14, …). Aceite/llantas/combustible dependen de km. «Viáticos y hotel» es una regla de negocio: un valor por viaje.
+ */
+describe("Paridad MULTIDÍA con el libro (2.7T)", () => {
+  const f = HOJAS["Camion de 2.7"];
+  const uno = calcular(f);
+  const dos = calcular(f, { diasServicio: 2 });
+  it("2 días: GPS = Q100 / 20 × 2 = Q10", () => {
+    expect(comp(dos, "gps")).toBe(10);
+    expect(dos.gps).toBe(10);
+  });
+  it("2 días: seguro de mercadería automático = 70,000 / 46 / 240 × 2 ≈ Q12.68", () => {
+    expect(comp(dos, "seguroMercaderia")).toBe(12.68);
+    cerca(70000 / 46 / 240 * 2, 12.681159, 1e-5);
+  });
+  it("2 días: depreciación, seguro del vehículo y gastos generales = diario × 2", () => {
+    expect(comp(dos, "depreciacion")).toBe(192.31); // 150000 / 5 / 12 / 26 × 2
+    expect(comp(dos, "seguroVehiculo")).toBe(63.33); // 950 / 30 × 2
+    expect(comp(dos, "gastosGenerales")).toBe(441.82); // 203,236.49 / 46 / 20 × 2
+  });
+  it("2 días: piloto y auxiliar = diario × personas × 2", () => {
+    expect(comp(dos, "piloto")).toBe(678.77);
+    expect(comp(dos, "auxiliares")).toBe(604);
+    expect(comp(calcular(f, { diasServicio: 2, cantidadPilotos: 2 }), "piloto")).toBe(1357.54);
+  });
+  it("2 días: «Viáticos y hotel» permanece Q200 (el valor del perfil), NO Q400", () => {
+    expect(comp(dos, "viaticosHotel")).toBe(200);
+    expect(comp(calcular(f, { diasServicio: 2, viaticosHotelTotal: 450 }), "viaticosHotel")).toBe(450);
+  });
+  it("2 días: aceite, llantas y combustible dependen de los km, no de los días", () => {
+    for (const k of ["aceite", "llantas", "combustible"]) expect(comp(dos, k)).toBe(comp(uno, k));
+    expect([comp(dos, "aceite"), comp(dos, "llantas"), comp(dos, "combustible")]).toEqual([77, 14.96, 378.4]);
+  });
+  it("2 días: el COSTO BASE es la suma de los conceptos (los escalables × 2; viáticos, aceite, llantas y combustible sin escalar)", () => {
+    const esperado = [441.82, 12.68, 192.31, 10, 63.33, 77, 14.96, 378.4, 678.77, 604, 200].reduce((a, b) => a + b, 0);
+    cerca(dos.costoOperativo, esperado, 0.005);
+    expect(dos.componentes.reduce((a, c) => a + c.monto, 0)).toBeCloseTo(dos.costoOperativo, 6);
+  });
+  it("coincide con las fórmulas del libro para 2 días (D16:H16, L16, M16 × Días) salvo «Viáticos y hotel» (regla de negocio): ±Q0.02", () => {
+    const libro = 2 * (203236.49 / 46 / 20) + 2 * 6.34 + 2 * (150000 / 60 / 26) + 2 * (100 / 20) + 2 * (950 / 30)
+      + 220 * (1750 / 5000) + 220 * ((850 * 4) / 50000) + (220 / 25) * 43 + 2 * (6787.685066666668 / 20) + 2 * 302 + 200;
+    cerca(dos.costoOperativo, libro, 0.02);
+  });
+  it("1 día sigue igual (los casos existentes no cambian)", () => {
+    expect(comp(uno, "gps")).toBe(5);
+    expect(comp(uno, "seguroMercaderia")).toBe(6.34);
+    cerca(uno.costoOperativo, 1671.814, 0.01);
+  });
+  it("3 días: GPS Q15 y seguro automático ≈ Q19.02; con GPS desactivado no se cobra aunque haya días", () => {
+    const tres = calcular(f, { diasServicio: 3 });
+    expect(comp(tres, "gps")).toBe(15);
+    expect(comp(tres, "seguroMercaderia")).toBe(19.02);
+    expect(comp(calcular(f, { diasServicio: 3, incluirGps: false }), "gps")).toBe(0);
+    expect(comp(calcular(f, { diasServicio: 3, incluirSeguroMercaderia: false }), "seguroMercaderia")).toBe(0);
+  });
+  it("días fraccionarios escalan igual (1.5 días: GPS Q7.50)", () => {
+    expect(comp(calcular(f, { diasServicio: 1.5 }), "gps")).toBe(7.5);
+  });
+  it("el GPS multidía sigue usando los viajes mensuales del perfil (no un 20 fijo)", () => {
+    expect(comp(calcular({ ...f, perfil: { ...f.perfil, viajesMes: 25 } }, { diasServicio: 2 }), "gps")).toBe(8); // 100 / 25 × 2
+  });
+});
+
+describe("Seguro de mercadería MANUAL: total explícito del servicio, no se multiplica por días", () => {
+  const f = HOJAS["Camion de 2.7"];
+  it("Q50 manual con 3 días => Q50 (no Q150)", () => {
+    const r = calcular(f, { diasServicio: 3, seguroMercaderia: 50 });
+    expect(comp(r, "seguroMercaderia")).toBe(50);
+    expect(comp(r, "seguroMercaderia")).not.toBe(150);
+  });
+  it("un total manual de 0 con varios días sigue siendo 0; y no depende de la configuración anual", () => {
+    expect(comp(calcular(f, { diasServicio: 4, seguroMercaderia: 0 }), "seguroMercaderia")).toBe(0);
+    const sinAnual = calcularCosteoServicio({ ...baseInput(f), diasServicio: 3, seguroMercaderia: 50, parametros: { ...parametros(43), seguroMercaderiaAnual: null } });
+    expect(comp(sinAnual, "seguroMercaderia")).toBe(50);
+  });
+  it("el mismo servicio de 1 y de 3 días con total manual da el mismo seguro", () => {
+    expect(comp(calcular(f, { diasServicio: 1, seguroMercaderia: 80 }), "seguroMercaderia")).toBe(comp(calcular(f, { diasServicio: 3, seguroMercaderia: 80 }), "seguroMercaderia"));
+  });
+});
+
+describe("Los motores anteriores NO cambian con la corrección multidía", () => {
+  const f = HOJAS["Camion de 2.7"];
+  it("COSTEO_EXCEL_2026 (PR #406) conserva GPS y seguro de mercadería por viaje, aunque haya varios días", () => {
+    const r = calcularCosteoServicio({ ...baseInput(f), motorVersion: COTIZACION_COSTEO_EXCEL_VERSION, diasServicio: 3 });
+    expect(r.gps).toBe(5);
+    expect(comp(r, "seguroMercaderia")).toBe(6.34);
+    expect(comp(r, "gastosGenerales")).toBe(662.73); // ya escalaba por días
+  });
+  it("el motor V1 (sin versión) tampoco se altera", () => {
+    const v1 = (dias: number) => calcularCosteoServicio({ ...baseInput(f), motorVersion: undefined, perfil: { ...f.perfil, depreciacion: null }, diasServicio: dias });
+    expect(v1(1).motorVersion).toBeUndefined();
+    expect(v1(3).gps).toBeCloseTo(v1(1).gps * 3, 6); // V1: GPS diario (mensual / días de operación × días), sin cambios
+  });
+});
 
 describe("Thermo / refrigeración: infraestructura conservada, fuera de las cinco hojas", () => {
   const f = HOJAS["Camion de 5"];

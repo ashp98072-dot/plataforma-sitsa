@@ -16,6 +16,11 @@ import { dec, monto, positivo, q } from "./cotizacion-costeo-excel";
  *
  * Salarios: salario mensual del perfil / días laborales globales; si el perfil no lo tiene (NULL) se usa el costo diario global
  * como respaldo histórico. Piloto y auxiliar se multiplican por personas × días (el libro usa 1 y 1).
+ *
+ * VIAJES DE VARIOS DÍAS (fila 15 del libro: «=E6» = Días): se multiplican por días gastos generales, seguro de mercadería, depreciación,
+ * GPS y seguro del vehículo; piloto y auxiliar por personas × días. Dependen de los km (no de los días): aceite, llantas y combustible.
+ * «Viáticos y hotel» es un valor por viaje y NO se multiplica por días (regla de negocio). Un seguro de mercadería MANUAL es el total del
+ * servicio que escribió el usuario: se usa tal cual y no se vuelve a multiplicar.
  */
 export function calcularCosteoCotizador2026(i: InputCosteoServicio): ResultadoCosteoServicio {
   const p = i.perfil, e = i.parametros, km = dec(i.distanciaKm), dias = dec(i.diasServicio);
@@ -31,11 +36,13 @@ export function calcularCosteoCotizador2026(i: InputCosteoServicio): ResultadoCo
   const depreciacion = p.depreciacion ? depreciar(p.depreciacion) : 0;
   // Thermo: infraestructura conservada para perfiles refrigerados/personalizados; NO es una columna de las cinco hojas del libro.
   const refrigeracion = i.usarRefrigeracion && p.costoRefrigeracion ? depreciar(p.costoRefrigeracion) : 0;
-  const gps = i.incluirGps ? q(dec(p.gpsMensual).div(positivo("viajes mensuales GPS", p.viajesMes))) : 0;
+  // GPS = (GPS mensual / viajes mensuales) × días (G16 = G15 × G14, con G15 = Días).
+  const gps = i.incluirGps ? q(dec(p.gpsMensual).div(positivo("viajes mensuales GPS", p.viajesMes)).mul(dias)) : 0;
   const seguroVehiculo = i.incluirSeguroVehiculo ? q(dec(p.seguroVehiculoMensual).div(30).mul(dias)) : 0;
   const seguroMercaderia = i.seguroMercaderia != null ? q(dec(monto("seguro mercadería total", i.seguroMercaderia)))
     : i.incluirSeguroMercaderia === false || e.seguroMercaderiaAnual == null || e.seguroMercaderiaAnual === 0 ? 0
-    : q(dec(e.seguroMercaderiaAnual).div(positivo("cantidad camiones", e.cantidadCamiones)).div(positivo("viajes anuales", e.viajesAnuales)));
+    // Automático: (anual / flota / viajes anuales) × días (E16 = E15 × E14, con E15 = Días). El total manual de arriba NO se multiplica.
+    : q(dec(e.seguroMercaderiaAnual).div(positivo("cantidad camiones", e.cantidadCamiones)).div(positivo("viajes anuales", e.viajesAnuales)).mul(dias));
 
   const gastos = [e.gastosAdministracion, e.gastosMantenimiento, e.gastosSeguridad, e.gastosPredios];
   if (gastos.every((v) => v == null)) advertencias.push("Gastos generales no configurados: no se incluyeron. Complete los cuatro conceptos en Ajustes antes de usar este costeo; NULL no significa costo cero confirmado.");

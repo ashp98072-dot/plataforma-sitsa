@@ -27,9 +27,9 @@ Cada concepto se calcula con Decimal (HALF_UP) y se redondea a 2 decimales; la s
 | Concepto | Fórmula |
 | --- | --- |
 | Gastos generales | (administración + mantenimiento + seguridad + predios) / flota / días gastos × días |
-| Seguro mercadería | anual / flota / viajes anuales (por viaje); total manual (incluso 0) prevalece; se puede excluir |
+| Seguro mercadería | (anual / flota / viajes anuales) **× días**; un total manual (incluso 0) es el TOTAL explícito del servicio y **no** se multiplica; se puede excluir |
 | Depreciación | valor del camión / años / 12 / divisor global × días |
-| GPS | GPS mensual / viajes mensuales del perfil (por viaje) |
+| GPS | (GPS mensual / viajes mensuales del perfil) **× días** |
 | Seguro vehículo | mensual / 30 × días |
 | Aceite | costo cambio / intervalo km × km |
 | Llantas | precio × cantidad / vida útil km × km (respaldo: juego histórico) |
@@ -40,6 +40,24 @@ Cada concepto se calcula con Decimal (HALF_UP) y se redondea a 2 decimales; la s
 
 El libro usa dos columnas de margen en algunas hojas; Novalvion maneja la suma como un único margen (15 % + 15 % → 30 %,
 20 % + 20 % → 40 %). **No** se reintroduce `margen2`.
+
+## Viajes de varios días
+
+La fila 15 de las cinco hojas es `=E6` (Días) para gastos, seguro de mercadería, depreciación, GPS y seguro del vehículo (`D16 = D15 × D14`, …),
+así que el motor nuevo los multiplica por días y coincide con el libro también en viajes multidía.
+
+| Concepto | Con varios días |
+| --- | --- |
+| Gastos generales, depreciación, seguro vehículo | × días |
+| GPS | (mensual / viajes mensuales) × días |
+| Seguro mercadería automático | (anual / flota / viajes anuales) × días |
+| Seguro mercadería manual | total explícito del servicio: **no** se multiplica (Q50 con 3 días = Q50) |
+| Piloto y auxiliar | × personas × días |
+| Aceite, llantas, combustible | dependen de los km, no de los días |
+| Viáticos y hotel | un valor por viaje: **no** × días (regla de negocio; ver observación 2) |
+
+Ejemplo 2.7T, 2 días: GPS Q10 · seguro mercadería ≈ Q12.68 · depreciación Q192.31 · seguro vehículo Q63.33 · gastos Q441.82 · viáticos y hotel Q200 (no Q400).
+`COSTEO_EXCEL_2026` y `COSTEO_V1` **no** cambian: siguen cobrando GPS y seguro de mercadería como ya lo hacían.
 
 ## Compatibilidad e históricos
 
@@ -76,7 +94,8 @@ Valores del libro vs. sistema (los conceptos coinciden a 2 decimales; el libro n
 | Cabezales | diésel 55 · 1,000 km | 9,993.1703 | 20 % | 11,991.8044 |
 
 Las pruebas (`cotizacion-costeo-cotizador-2026.test.ts`) comparan cada concepto de las cinco hojas (gastos, seguro mercadería, depreciación, GPS, seguro, aceite,
-llantas, combustible, piloto, auxiliar, viáticos y hotel), la base, el subtotal, el IVA posterior y el precio/km.
+llantas, combustible, piloto, auxiliar, viáticos y hotel), la base, el subtotal, el IVA posterior y el precio/km, y los casos multidía de la sección anterior
+(incluida una comparación contra las fórmulas del libro para 2 días).
 
 ## Observaciones sobre el libro (para validar con negocio; NO se cambió nada por ellas)
 
@@ -84,8 +103,11 @@ llantas, combustible, piloto, auxiliar, viáticos y hotel), la base, el subtotal
    Cabezal: 7); vida útil de llantas = 50,000 km (`juego/50000`); intervalo de aceite = 5,000 km (`aceite/5000`). Se usan en las pruebas solo para
    reproducir los ejemplos y están marcadas como **inferidas**. Los rendimientos configurados hoy en Novalvion no se modificaron ni se afirman
    como fuente del libro; conviene que negocio los compare con estos valores.
-2. **GPS y seguro de mercadería ×días:** el libro los multiplica por «Días» (filas 15); el motor los cobra **por viaje** (decisión documentada en el PR #406).
-   Con 1 día son idénticos; con varios días difieren. No se cambió.
+2. **«Viáticos y hotel» y auxiliar en la fila 15:** en cuatro hojas (1T, 5T, 10T y Cabezales) el multiplicador de «VIATICOS Y HOTEL» es un `1` escrito a mano, y el motor
+   lo cobra una vez por viaje. En la hoja «Camion de 2.7» esa celda es `=M15` (que encadena a `=E6`, Días), es decir, el libro **sí** lo multiplicaría por días allí;
+   con 2 días daría Q400 en vez de Q200. Se sigue la regla de negocio confirmada (un valor por viaje, sin multiplicar). Igualmente, el multiplicador del auxiliar es
+   `=L15`/días en 1T y 2.7T pero `1` fijo en 5T, 10T y Cabezales; el motor lo escala por días en todos los perfiles. Solo importa en viajes de más de un día; conviene que
+   negocio confirme si esas dos hojas deben cobrarse igual.
 3. Algunos valores del libro vienen escritos a mano y redondeados (auxiliar 302 en 2.7T, piloto 339.38 en 5T, seguro de mercadería 6.34): por eso ±Q0.01.
 4. El valor del camión de 1T es `=85000/1.12` (75,892.857…), sin IVA.
 5. El Cabezal tiene UN solo porcentaje (20 %); en 5T el libro suma 20 % + 20 %.
