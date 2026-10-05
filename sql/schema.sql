@@ -1658,6 +1658,8 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
   cantidad_llantas INT NULL DEFAULT NULL,
   salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL,
   salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL,
+  -- Paridad Cotizador 2026: UN solo valor «Viáticos y hotel» por viaje (no por persona ni por día). NULL = sin configurar.
+  viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   codigo VARCHAR(40) NOT NULL,                 -- p. ej. CAMION_5T, CABEZAL

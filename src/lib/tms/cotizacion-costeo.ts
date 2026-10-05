@@ -15,8 +15,12 @@
 /** Versión de las fórmulas; se persiste en cada snapshot (tms_cotizacion_costeos.motor_version). Cambiar una fórmula exige subirla. */
 import type { ParametrosExcel, PerfilExcel } from "./cotizacion-costeo-excel-campos";
 import { calcularCosteoExcel } from "./cotizacion-costeo-excel";
+import { calcularCosteoCotizador2026 } from "./cotizacion-costeo-cotizador-2026";
 export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
+/** Motor del PR #406 (viáticos/hotel desglosados). SOLO lectura de snapshots existentes y funciones puras: los cálculos NUEVOS usan COTIZADOR_2026. */
 export const COTIZACION_COSTEO_EXCEL_VERSION = "COSTEO_EXCEL_2026";
+/** Paridad estricta con «Cotizador 2026.xlsx»: una sola columna «Viáticos y hotel». Es la versión de los cálculos NUEVOS. */
+export const COTIZACION_COSTEO_COTIZADOR_VERSION = "COSTEO_COTIZADOR_2026";
 
 // ---------------------------------------------------------------------------
 // A. PARÁMETROS / INPUTS
@@ -107,6 +111,11 @@ export type InputCosteoServicio = {
   viaticoAuxiliarTotal?: number;
   viaticoGuiaTotal?: number;
   hotelTotal?: number;
+  /**
+   * COSTEO_COTIZADOR_2026: «Viáticos y hotel (Q)», UN solo monto por viaje (no se multiplica por personas ni por días). Prevalece sobre
+   * `perfil.viaticosHotelViaje`. Los cuatro overrides de arriba pertenecen al motor del PR #406 / V1 y el motor nuevo los ignora.
+   */
+  viaticosHotelTotal?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -129,6 +138,9 @@ export type ResultadoCosteoServicio = {
     costoPilotoDia: number;
     costoAuxiliarDia: number;
     diasLaboralesMes: number | null;
+    /** COSTEO_COTIZADOR_2026: «Viáticos y hotel» efectivamente usado y su origen. */
+    viaticosHotelViaje?: number;
+    origenViaticosHotel?: "override" | "perfil" | "sin_configurar";
   };
   motorVersion?: string;
   gastosGenerales?: number;
@@ -148,6 +160,8 @@ export type ResultadoCosteoServicio = {
   viaticoAuxiliar: number;
   viaticoGuia: number;
   hotel: number;
+  /** COSTEO_COTIZADOR_2026: la columna única «Viáticos y hotel» (los cuatro campos anteriores quedan en 0 en ese motor). */
+  viaticosHotel?: number;
   otrosCostos: number;
   /** Suma de los componentes de arriba; SIN IVA. Costo interno. */
   costoOperativo: number;
@@ -283,6 +297,7 @@ export function costoPersonal(costoDia: number, diasServicio: number, cantidad: 
 
 export function calcularCosteoServicio(input: InputCosteoServicio): ResultadoCosteoServicio {
   validarInput(input);
+  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_VERSION) return calcularCosteoCotizador2026(input);
   if (input.motorVersion === COTIZACION_COSTEO_EXCEL_VERSION) return calcularCosteoExcel(input);
   const { perfil, parametros } = input;
   const dias = input.diasServicio;

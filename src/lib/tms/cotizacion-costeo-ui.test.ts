@@ -10,17 +10,18 @@ const REFRIGERADO: PerfilOpcion = { id: 3, codigo: "CAMION_5T_REFRIGERADO", nomb
 const form = (over: Partial<CosteoFormState> = {}): CosteoFormState => ({ ...COSTEO_FORM_VACIO, perfilId: 4, distanciaKm: "600", ...over });
 
 describe("Valores iniciales al elegir perfil", () => {
-  it("defaults razonables: 1 día, 1 piloto, 0 auxiliares, 0 guías, sin refrigeración, sin distancia inventada", () => {
-    expect(COSTEO_FORM_VACIO).toMatchObject({ diasServicio: "1", cantidadPilotos: "1", cantidadAuxiliares: "0", cantidadGuias: "0", usarRefrigeracion: false, distanciaKm: "" });
+  it("defaults razonables: 1 día, 1 piloto, 0 auxiliares, sin guías ni viáticos separados, sin refrigeración, sin distancia inventada", () => {
+    expect(COSTEO_FORM_VACIO).toMatchObject({ diasServicio: "1", cantidadPilotos: "1", cantidadAuxiliares: "0", viaticosHotelTotal: "", usarRefrigeracion: false, distanciaKm: "" });
+    for (const retirado of ["cantidadGuias", "viaticoPilotoTotal", "viaticoAuxiliarTotal", "viaticoGuiaTotal", "hotelTotal"]) expect(COSTEO_FORM_VACIO).not.toHaveProperty(retirado);
   });
   it("la primera vez, GPS/seguro se sugieren si el perfil los tiene (> 0)", () => {
     expect(aplicarPerfilCosteo(COSTEO_FORM_VACIO, CABEZAL)).toMatchObject({ perfilId: 4, incluirGps: true, incluirSeguroVehiculo: true });
     expect(aplicarPerfilCosteo(COSTEO_FORM_VACIO, REFRIGERADO)).toMatchObject({ perfilId: 3, incluirGps: false, incluirSeguroVehiculo: false });
   });
   it("cambiar de perfil después NO sobrescribe lo que el usuario ya editó", () => {
-    const editado = form({ incluirGps: false, incluirSeguroVehiculo: false, distanciaKm: "250", cantidadAuxiliares: "3", viaticoPilotoTotal: "150", margenObjetivoPct: "15" });
+    const editado = form({ incluirGps: false, incluirSeguroVehiculo: false, distanciaKm: "250", cantidadAuxiliares: "3", viaticosHotelTotal: "150", margenObjetivoPct: "15" });
     const cambiado = aplicarPerfilCosteo(editado, CABEZAL);
-    expect(cambiado).toMatchObject({ incluirGps: false, incluirSeguroVehiculo: false, distanciaKm: "250", cantidadAuxiliares: "3", viaticoPilotoTotal: "150", margenObjetivoPct: "15" });
+    expect(cambiado).toMatchObject({ incluirGps: false, incluirSeguroVehiculo: false, distanciaKm: "250", cantidadAuxiliares: "3", viaticosHotelTotal: "150", margenObjetivoPct: "15" });
   });
   it("un perfil sin refrigeración apaga 'usar refrigeración'; sin perfil se limpia la selección", () => {
     expect(aplicarPerfilCosteo(form({ usarRefrigeracion: true }), CABEZAL).usarRefrigeracion).toBe(false);
@@ -32,13 +33,22 @@ describe("Valores iniciales al elegir perfil", () => {
 describe("construirPayloadCosteo", () => {
   it("convierte el formulario en datos operativos; margen % => fracción; sin parámetros económicos", () => {
     const r = construirPayloadCosteo(form({ diasServicio: "2", cantidadPilotos: "2", cantidadAuxiliares: "1", incluirGps: true, seguroMercaderia: "250", margenObjetivoPct: "20" }));
-    expect(r).toEqual({ ok: true, payload: { incluirSeguroMercaderia: true, perfilId: 4, distanciaKm: 600, diasServicio: 2, cantidadPilotos: 2, cantidadAuxiliares: 1, cantidadGuias: 0, incluirGps: true, incluirSeguroVehiculo: false, usarRefrigeracion: false, seguroMercaderia: 250, margenObjetivo: 0.2 } });
+    expect(r).toEqual({ ok: true, payload: { incluirSeguroMercaderia: true, perfilId: 4, distanciaKm: 600, diasServicio: 2, cantidadPilotos: 2, cantidadAuxiliares: 1, incluirGps: true, incluirSeguroVehiculo: false, usarRefrigeracion: false, seguroMercaderia: 250, margenObjetivo: 0.2 } });
   });
   it("los overrides vacíos NO viajan (nunca 0 implícito); los escritos sí, incluido 0", () => {
     const vacio = construirPayloadCosteo(form());
-    expect(vacio.ok && ["viaticoPilotoTotal", "viaticoAuxiliarTotal", "viaticoGuiaTotal", "hotelTotal", "seguroMercaderia", "otrosCostos", "margenObjetivo"].some((k) => k in vacio.payload)).toBe(false);
-    const con = construirPayloadCosteo(form({ viaticoPilotoTotal: "0", hotelTotal: "300" }));
-    expect(con.ok && con.payload).toMatchObject({ viaticoPilotoTotal: 0, hotelTotal: 300 });
+    expect(vacio.ok && ["viaticosHotelTotal", "seguroMercaderia", "otrosCostos", "margenObjetivo"].some((k) => k in vacio.payload)).toBe(false);
+    const cero = construirPayloadCosteo(form({ viaticosHotelTotal: "0" }));
+    expect(cero.ok && cero.payload).toMatchObject({ viaticosHotelTotal: 0 });
+    const con = construirPayloadCosteo(form({ viaticosHotelTotal: "300" }));
+    expect(con.ok && con.payload).toMatchObject({ viaticosHotelTotal: 300 });
+  });
+  it("Cotizador 2026: «Viáticos y hotel» es UN solo override; el payload nunca lleva guías ni viáticos/hotel separados", () => {
+    const r = construirPayloadCosteo({ ...form({ viaticosHotelTotal: "200" }), cantidadGuias: "2", viaticoPilotoTotal: "9", hotelTotal: "9" } as unknown as CosteoFormState);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    for (const retirado of ["cantidadGuias", "viaticoPilotoTotal", "viaticoAuxiliarTotal", "viaticoGuiaTotal", "hotelTotal"]) expect(r.payload).not.toHaveProperty(retirado);
+    expect(r.payload.viaticosHotelTotal).toBe(200);
   });
   it("otros costos: ignora renglones vacíos, recorta el concepto y valida", () => {
     const r = construirPayloadCosteo(form({ otrosCostos: [{ concepto: " Peaje ", monto: "100" }, { concepto: "", monto: "" }] }));
@@ -48,7 +58,7 @@ describe("construirPayloadCosteo", () => {
   });
   it.each([
     [{ perfilId: 0 }, "perfil"], [{ distanciaKm: "" }, "distancia"], [{ distanciaKm: "-5" }, "distancia"], [{ diasServicio: "0" }, "días"],
-    [{ cantidadPilotos: "-1" }, "cantidades"], [{ hotelTotal: "-3" }, "opcionales"], [{ margenObjetivoPct: "-1" }, "margen"], [{ distanciaKm: "abc" }, "distancia"],
+    [{ cantidadPilotos: "-1" }, "cantidades"], [{ viaticosHotelTotal: "-3" }, "opcionales"], [{ margenObjetivoPct: "-1" }, "margen"], [{ distanciaKm: "abc" }, "distancia"],
   ] as [Partial<CosteoFormState>, string][])("rechaza datos inválidos %j sin llegar al servidor", (over) => {
     expect(construirPayloadCosteo(form(over)).ok).toBe(false);
   });

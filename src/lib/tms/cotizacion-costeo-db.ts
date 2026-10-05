@@ -79,7 +79,7 @@ const SELECT_PERFIL = `
   SELECT id, codigo, nombre, costo_adquisicion, dias_operacion_mes, gps_mensual, seguro_vehiculo_mensual,
          costo_aceite_servicio, vida_util_aceite_km, costo_juego_llantas, vida_util_llantas_km, rendimiento_km_galon,
          deprec_valor_base, deprec_anios, deprec_dias_operacion_mes,
-         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual
+         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual, viaticos_hotel_viaje
   FROM tms_cotizacion_costeo_perfiles
 `;
 
@@ -178,7 +178,8 @@ export async function guardarSnapshotCosteoTx(
   p: { empresaId: number; cotizacionId: number; cotizacionCodigo: string; usuario: string | null; costeo: CosteoPreparado },
 ): Promise<number> {
   const { perfil, input, resultado } = p.costeo;
-  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" ? decimalCosteoSql(v) : v;
+  // Los motores con Decimal (PR #406 y Cotizador 2026) persisten importes como texto decimal; V1 conserva su comportamiento.
+  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" || resultado.motorVersion === "COSTEO_COTIZADOR_2026" ? decimalCosteoSql(v) : v;
   if (!sumaComponentesCoincide(resultado)) {
     throw new Error("Los componentes del costeo no coinciden con el costo operativo.");
   }

@@ -8,20 +8,25 @@ const schema = leer("sql/schema.sql");
 import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL } from "./cotizacion-costeo-excel-campos";
 const migracionExcel = leer("sql/migrate-2026-10-cotizaciones-costeo-excel.sql");
 const preflightExcel = leer("sql/preflight-2026-10-cotizaciones-costeo-excel.sql");
+// La migración del PR #406 (ya aplicada) NO incluye viaticos_hotel_viaje: esa columna tiene su propia migración (paridad Cotizador 2026).
+const CAMPOS_PR406_PERFIL = CAMPOS_EXCEL_PERFIL.filter(c=>c.key!=="viaticosHotelViaje");
 const nuevas: string[] = [...CAMPOS_EXCEL_PARAMETROS, ...CAMPOS_EXCEL_PERFIL].map(c=>c.col);
 nuevas.push("resultado_snapshot");
 function sinAdicionesExcel(sql: string) {
- return sql.split("\n").filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Configuración global aditiva")).join("\n");
+ return sql.split("\n").filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Paridad Cotizador 2026:")&&!l.includes("-- Configuración global aditiva")).join("\n");
 }
 const propuesta = leer("docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md");
 
 const TABLAS = ["tms_cotizacion_costeo_perfiles", "tms_cotizacion_costeo_parametros", "tms_cotizacion_costeos", "tms_cotizacion_costeo_componentes"];
 describe("Migración Excel 2026",()=>{
  it("cada columna aditiva coincide con el esquema y es idempotente",()=>{
-  for(const c of [...CAMPOS_EXCEL_PARAMETROS,...CAMPOS_EXCEL_PERFIL]){
+  for(const c of [...CAMPOS_EXCEL_PARAMETROS,...CAMPOS_PR406_PERFIL]){
    expect(migracionExcel).toContain("ADD COLUMN IF NOT EXISTS "+c.col+" "+c.type+" NULL DEFAULT NULL");
    expect(schema).toContain(c.col+" "+c.type+" NULL DEFAULT NULL");
   }
+  // La columna de la paridad Cotizador 2026 está en schema.sql pero NO se coló en la migración ya aplicada del PR #406.
+  expect(schema).toContain("viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL");
+  expect(migracionExcel).not.toContain("viaticos_hotel_viaje");
   expect(migracionExcel).toContain("ADD COLUMN IF NOT EXISTS resultado_snapshot JSON NULL DEFAULT NULL");
  });
  it("salarios pertenecen solo al perfil; el único margen conserva su columna histórica",()=>{

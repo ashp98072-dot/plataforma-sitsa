@@ -49,6 +49,7 @@ export const parametrosAjustesSchema = z.object({
 const perfilBase = z.object({
   salarioPilotoMensual: noNegativo.nullable().optional(),
   salarioAuxiliarMensual: noNegativo.nullable().optional(),
+  viaticosHotelViaje: noNegativo.nullable().optional(),
   viajesMes: positivo.nullable().optional(),
   precioLlanta: noNegativo.nullable().optional(),
   cantidadLlantas: positivo.int().max(2147483647).nullable().optional(),
@@ -164,7 +165,7 @@ export async function crearParametrosAjustes(empresaId: number, usuario: string,
 
 const CAMPOS_PERFIL = `nombre,activo,costo_adquisicion,dias_operacion_mes,gps_mensual,seguro_vehiculo_mensual,costo_aceite_servicio,
  vida_util_aceite_km,costo_juego_llantas,vida_util_llantas_km,rendimiento_km_galon,deprec_valor_base,deprec_anios,
- deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas,salario_piloto_mensual,salario_auxiliar_mensual`;
+ deprec_dias_operacion_mes,refrig_valor_base,refrig_anios,refrig_dias_operacion_mes,viajes_mes,precio_llanta,cantidad_llantas,salario_piloto_mensual,salario_auxiliar_mensual,viaticos_hotel_viaje`;
 const valoresPerfil = (x: PerfilAjustesActualizarInput) => [x.nombre,x.activo,x.costoAdquisicion,x.diasOperacionMes,x.gpsMensual,x.seguroVehiculoMensual,
   x.costoAceiteServicio,x.vidaUtilAceiteKm,x.costoJuegoLlantas,x.vidaUtilLlantasKm,x.rendimientoKmGalon,x.deprecValorBase,x.deprecAnios,
   x.deprecDiasOperacionMes,x.refrigValorBase,x.refrigAnios,x.refrigDiasOperacionMes,...CAMPOS_EXCEL_PERFIL.map(c => campoExcelSql(c,x[c.key]))];
@@ -172,7 +173,7 @@ const valoresPerfil = (x: PerfilAjustesActualizarInput) => [x.nombre,x.activo,x.
 export async function crearPerfilAjustes(empresaId:number, usuario:string, input:PerfilAjustesCrearInput) {
   try { return await tx(async(conn) => {
     const [r] = await conn.execute<ResultSetHeader>(`INSERT INTO tms_cotizacion_costeo_perfiles (empresa_id,codigo,${CAMPOS_PERFIL},creado_por)
-      VALUES (${Array(25).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
+      VALUES (${Array(26).fill("?").join(",")})`, [empresaId,input.codigo,...valoresPerfil(input),usuario]);
     await registrarAuditoriaTx(conn,{empresaId,usuario,accion:"crear_perfil_costeo",modulo:"tms_cotizaciones",detalle:`Perfil de costeo ${input.codigo} creado.`});
     return Number(r.insertId);
   }); } catch(e) { if(duplicado(e)) throw new ErrorAjustesCosteo("Ya existe un perfil con ese código."); throw e; }

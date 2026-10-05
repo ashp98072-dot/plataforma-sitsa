@@ -71,3 +71,41 @@ describe("Persistencia de salarios por perfil (DB mock)",()=>{
   for(const valor of [-1,1e10,Infinity])expect(perfilAjustesCrearSchema.safeParse({...perfil,salarioPilotoMensual:valor}).success).toBe(false);
  });
 });
+
+describe("viaticos_hotel_viaje del perfil (Cotizador 2026)",()=>{
+ function conexion(){
+  const conn={beginTransaction:vi.fn(),commit:vi.fn(),rollback:vi.fn(),release:vi.fn(),query:vi.fn(async()=>[[{codigo:"CAMION_5T",activo:1}]]),execute:vi.fn(async(sql:string,valores:unknown[])=>{void sql;void valores;return [{insertId:8}];})};
+  vi.mocked(getPool).mockReturnValue({getConnection:async()=>conn} as never);
+  return conn;
+ }
+ it("es opcional, no negativo y no excede DECIMAL(12,2); 0 es un valor válido distinto de vacío",()=>{
+  for(const v of [null,undefined,0,200,300.5])expect(perfilAjustesCrearSchema.safeParse({...perfil,viaticosHotelViaje:v}).success).toBe(true);
+  for(const v of [-1,1e10,Infinity,NaN])expect(perfilAjustesCrearSchema.safeParse({...perfil,viaticosHotelViaje:v}).success).toBe(false);
+ });
+ it("INSERT lo persiste como texto DECIMAL y cuadran columnas, placeholders y parámetros",async()=>{
+  const conn=conexion();
+  await crearPerfilAjustes(1,"admin",{...perfil,viaticosHotelViaje:300});
+  const [sql,values]=conn.execute.mock.calls[0];
+  const columnas=sql.match(/\(([^)]+)\)\s*VALUES/)![1].split(",").map(x=>x.trim());
+  expect(columnas).toContain("viaticos_hotel_viaje");
+  expect(columnas).toHaveLength(values.length);expect(sql.match(/\?/g)).toHaveLength(values.length);
+  expect(values[columnas.indexOf("viaticos_hotel_viaje")]).toBe("300.00");
+ });
+ it("sin valor se guarda NULL (no 0): «sin configurar» no es un monto inventado",async()=>{
+  const conn=conexion();
+  await crearPerfilAjustes(1,"admin",{...perfil});
+  const [sql,values]=conn.execute.mock.calls[0];
+  const columnas=sql.match(/\(([^)]+)\)\s*VALUES/)![1].split(",").map(x=>x.trim());
+  expect(values[columnas.indexOf("viaticos_hotel_viaje")]).toBeNull();
+ });
+ it("UPDATE lo escribe solo en el perfil indicado (empresa_id + id) y conserva los demás campos",async()=>{
+  const conn=conexion();
+  const {codigo,...input}=perfil;void codigo;
+  await actualizarPerfilAjustes(1,5,"admin",{...input,viaticosHotelViaje:200,salarioPilotoMensual:6787.69});
+  const [sql,values]=conn.execute.mock.calls[0];
+  expect(sql).toContain("viaticos_hotel_viaje=?");expect(sql).toContain("WHERE empresa_id=? AND id=?");
+  const columnas=sql.split(" SET ")[1].split(" WHERE ")[0].split(",").map(x=>x.split("=")[0]);
+  expect(values[columnas.indexOf("viaticos_hotel_viaje")]).toBe("200.00");
+  expect(values.slice(-2)).toEqual([1,5]);
+ });
+});
