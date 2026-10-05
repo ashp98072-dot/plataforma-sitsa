@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { ResultadoCosteoServicio } from "@/lib/tms/cotizacion-costeo";
+import type { SnapshotCosteo } from "@/lib/tms/cotizacion-costeo-db";
+import { formatearFechaHoraCosteo, seccionesConfiguracionCosteo } from "@/lib/tms/cotizacion-costeo-historial-ui";
 import {
   COSTEO_FORM_VACIO, aplicarPerfilCosteo, componentesVisibles, construirPayloadCosteo, huellaCosteo, monedaCosteo, motorConResultadoCompleto, porcentajeCosteo,
   resumenDesdeResultado, type CosteoFormState, type PayloadCosteoCliente, type PerfilOpcion, type ResumenCosteoDatos,
@@ -108,7 +110,6 @@ export function ResumenCosteo({ datos }: { datos: ResumenCosteoDatos }) {
 
 // ---------------------------------------------------------------------------
 
-type SnapshotResumen = ResumenCosteoDatos & { perfilNombre: string; motorVersion: string; creadoEn: string | null };
 type Calculado = { datos: ResumenCosteoDatos; huella: string };
 
 export type CotizacionCosteoPanelProps = {
@@ -137,27 +138,31 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
   const [calculando, setCalculando] = useState(false);
   const [errorCalculo, setErrorCalculo] = useState("");
   const [registrar, setRegistrar] = useState(true);
-  const [snapshot, setSnapshot] = useState<SnapshotResumen | null | undefined>(undefined);
+  // Historial de versiones del costeo de la cotización (undefined = cargando; null = no disponible). Más reciente primero.
+  const [historial, setHistorial] = useState<SnapshotCosteo[] | null | undefined>(undefined);
+  const [seleccionando, setSeleccionando] = useState(false);
+  const [errorSeleccion, setErrorSeleccion] = useState("");
 
   const perfiles = p.config.estado === "listo" ? p.config.perfiles : [];
   const perfil = perfiles.find((x) => x.id === form.perfilId) ?? null;
   const construido = construirPayloadCosteo(form);
   const huellaActual = construido.ok ? huellaCosteo(construido.payload, { fechaEmision: p.fechaEmision, tarifaCotizada: p.tarifaCotizada, incluyeIva: p.incluyeIva }) : null;
   const vigente = calculado != null && huellaActual === calculado.huella;
-  const payloadGuardar = vigente && registrar && construido.ok && !snapshot ? construido.payload : null;
+  // Cada guardado confirmado crea una NUEVA versión: ya no hay un costeo único que bloquee otro cálculo.
+  const payloadGuardar = vigente && registrar && construido.ok ? construido.payload : null;
   const payloadJson = payloadGuardar ? JSON.stringify(payloadGuardar) : "";
 
   // Avisa al padre qué costeo (si alguno) debe viajar al guardar. Solo cambia cuando cambia el payload vigente.
   useEffect(() => { p.onPayloadGuardar(payloadJson ? (JSON.parse(payloadJson) as PayloadCosteoCliente) : null); }, [payloadJson]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cotización existente: ¿ya tiene costeo? (inmutable: 200 => solo lectura; 404 => se puede registrar uno).
+  // Cotización existente: historial de costeos registrados (cada versión es inmutable; siempre se puede calcular uno nuevo).
   useEffect(() => {
     if (p.cotizacionId == null || p.config.estado !== "listo") return;
     const controller = new AbortController();
-    fetch(`/api/empresas/${p.slug}/tms/cotizaciones/${p.cotizacionId}/costeo`, { cache: "no-store", signal: controller.signal })
+    fetch(`/api/empresas/${p.slug}/tms/cotizaciones/${p.cotizacionId}/costeo/historial`, { cache: "no-store", signal: controller.signal })
       .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
-      .then(({ ok, data }) => { if (!controller.signal.aborted) setSnapshot(ok ? snapshotResumen(data.costeo) : null); })
-      .catch(() => { if (!controller.signal.aborted) setSnapshot(null); });
+      .then(({ ok, data }) => { if (!controller.signal.aborted) setHistorial(ok ? ((data.historial ?? []) as SnapshotCosteo[]) : null); })
+      .catch(() => { if (!controller.signal.aborted) setHistorial(null); });
     return () => controller.abort();
   }, [p.slug, p.cotizacionId, p.config.estado]);
 
@@ -171,15 +176,22 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
   );
   if (p.config.estado === "error") return <section aria-label="Costeo interno" className={claseSeccion}>{encabezado}<p role="alert" className="text-xs text-red-300">{p.config.mensaje}</p></section>;
 
-  if (snapshot) {
-    return (
-      <section aria-label="Costeo interno" className={claseSeccion}>
-        {encabezado}
-        <p role="status" className="text-xs text-amber-200">Esta cotización ya tiene un costeo registrado. Es un registro histórico inmutable. Para realizar un nuevo costeo, crea una nueva cotización.</p>
-        <p className="text-xs text-[var(--muted)]">Perfil {snapshot.perfilNombre} · motor {snapshot.motorVersion}{snapshot.creadoEn ? ` · ${snapshot.creadoEn}` : ""}</p>
-        <ResumenCosteo datos={snapshot} />
-      </section>
-    );
+  async function usarCosteo(costeoId: number) {
+    if (p.cotizacionId == null || !p.editable) return;
+    setErrorSeleccion("");
+    setSeleccionando(true);
+    try {
+      const res = await fetch(`/api/empresas/${p.slug}/tms/cotizaciones/${p.cotizacionId}/costeo/seleccionar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ costeoId }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setErrorSeleccion(data.error ?? "No se pudo seleccionar el costeo."); return; }
+      const recarga = await fetch(`/api/empresas/${p.slug}/tms/cotizaciones/${p.cotizacionId}/costeo/historial`, { cache: "no-store" });
+      const lista = await recarga.json().catch(() => ({}));
+      if (recarga.ok) setHistorial((lista.historial ?? []) as SnapshotCosteo[]);
+    } catch {
+      setErrorSeleccion("No se pudo seleccionar el costeo.");
+    } finally {
+      setSeleccionando(false);
+    }
   }
 
   const set = (patch: Partial<CosteoFormState>) => { setForm((f) => ({ ...f, ...patch })); };
@@ -220,6 +232,7 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
     <section aria-label="Costeo interno" className={claseSeccion}>
       {encabezado}
       {p.config.vigenteDesde ? <p className="text-[11px] text-[var(--muted)]">Parámetros vigentes desde {p.config.vigenteDesde}. Los define el servidor; no se editan aquí.</p> : null}
+      {historial?.length ? <p role="status" className="text-xs text-amber-200">Esta cotización tiene {historial.length} {historial.length === 1 ? "costeo registrado" : "costeos registrados"}. Cada costeo es una versión histórica inmutable: un cálculo nuevo se guarda como una versión más y no reemplaza al utilizado hasta que elijas «Usar este costeo».</p> : null}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <label className="col-span-2 text-xs text-[var(--muted)]">Perfil de unidad
           <select className={`${inputCls} mt-0.5 w-full`} value={form.perfilId} onChange={(e) => {
@@ -278,40 +291,99 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
           {p.tarifaCotizada && calculado.datos.precioSugerido != null ? <p className="text-xs text-[var(--muted)]">Diferencia tarifa vs. sugerido: {monedaCosteo(Number(p.tarifaCotizada) - calculado.datos.precioSugerido)}</p> : null}
           <div className="flex flex-wrap items-center gap-3 text-xs">
             {p.editable ? <button type="button" disabled={!vigente} onClick={usarPrecioSugerido} className="rounded border border-[var(--border)] px-2 py-1 disabled:opacity-50">Usar precio sugerido</button> : null}
-            <label className="flex items-center gap-2"><input type="checkbox" checked={registrar} onChange={(e) => setRegistrar(e.target.checked)} /> Registrar este costeo al guardar la cotización (queda inmutable)</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={registrar} onChange={(e) => setRegistrar(e.target.checked)} /> Registrar este costeo como {historial?.length ? `versión ${Math.max(...historial.map((h) => h.version)) + 1}` : "una nueva versión"} al guardar la cotización (queda inmutable)</label>
           </div>
         </div>
+      ) : null}
+      {historial?.length ? (
+        <HistorialCosteos versiones={historial} editable={p.editable} ocupado={seleccionando} error={errorSeleccion} onUsar={(id) => void usarCosteo(id)} />
       ) : null}
     </section>
   );
 }
 
-function snapshotResumen(c: {
-  resultado?: ResultadoCosteoServicio | null;
-  perfilNombre: string; motorVersion: string; creadoEn: string | null; costoOperativo: number; iva: number; costoConIva: number; margenObjetivo: number;
-  precioSugerido: number; precioVenta: number | null; utilidadEstimada: number | null; margenReal: number | null; componentes: ResumenCosteoDatos["componentes"];
-}): SnapshotResumen {
-  return { ...c, ...(motorConResultadoCompleto(c.resultado?.motorVersion) && c.resultado ? resumenDesdeResultado(c.resultado) : {}) };
+/** Resumen de una versión para <ResumenCosteo>: el motor con resultado completo usa su snapshot de resultado; V1 conserva su formato original. */
+function resumenDeVersion(v: SnapshotCosteo): ResumenCosteoDatos {
+  return motorConResultadoCompleto(v.resultado?.motorVersion) && v.resultado ? resumenDesdeResultado(v.resultado) : v;
+}
+
+/**
+ * Tarjeta de UNA versión (solo lectura): nada de editar, borrar ni recalcular. «Usar este costeo» solo mueve la marca de selección en el servidor.
+ * «Ver configuración» despliega lo PERSISTIDO en esa versión (perfil, parámetros, input y resultado), no la configuración vigente.
+ */
+export function TarjetaCosteo({ v, editable, ocupado = false, onUsar, abiertoInicial = false }: { v: SnapshotCosteo; editable: boolean; ocupado?: boolean; onUsar?: (costeoId: number) => void; abiertoInicial?: boolean }) {
+  const [abierto, setAbierto] = useState(abiertoInicial);
+  const resumen = resumenDeVersion(v);
+  const total: [string, string][] = [
+    ["Costo base", monedaCosteo(v.costoOperativo)],
+    ["Margen", porcentajeCosteo(v.margenObjetivo)],
+    ["IVA", monedaCosteo(v.iva)],
+    ["Total sugerido", monedaCosteo(v.precioSugerido)],
+    ["Precio/km", monedaCosteo(resumen.precioPorKm)],
+    ["Precio comercial", monedaCosteo(v.precioVenta)],
+  ];
+  return (
+    <article aria-label={`Costeo #${v.version}`} className="space-y-2 rounded border border-[var(--border)] p-2 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-semibold">Costeo #{v.version}{v.esSeleccionado ? <span className="ml-2 rounded bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">Seleccionado</span> : null}</p>
+          <p className="text-[var(--muted)]">{formatearFechaHoraCosteo(v.creadoEn)} · Usuario: {v.creadoPor ?? "—"} · Perfil: {v.perfilCodigo} · Motor: {v.motorVersion}</p>
+          {v.esSeleccionado && v.seleccionadoPor ? <p className="text-[var(--muted)]">Seleccionado por {v.seleccionadoPor}{v.seleccionadoEn ? ` · ${formatearFechaHoraCosteo(v.seleccionadoEn)}` : ""}</p> : null}
+        </div>
+        <div className="flex gap-2">
+          <button type="button" aria-expanded={abierto} onClick={() => setAbierto((a) => !a)} className="rounded border border-[var(--border)] px-2 py-1">{abierto ? "Ocultar configuración" : "Ver configuración"}</button>
+          {editable && !v.esSeleccionado && onUsar ? <button type="button" disabled={ocupado} onClick={() => onUsar(v.id)} className="rounded border border-emerald-500/60 px-2 py-1 disabled:opacity-50">Usar este costeo</button> : null}
+        </div>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-6">
+        {total.map(([etiqueta, valor]) => <div key={etiqueta}><dt className="text-[var(--muted)]">{etiqueta}</dt><dd className="font-medium">{valor}</dd></div>)}
+      </dl>
+      {abierto ? (
+        <div className="space-y-3 border-t border-[var(--border)]/50 pt-2" data-solo-lectura="true">
+          <p className="text-[var(--muted)]">Configuración exacta utilizada en esta versión (solo lectura; no refleja la configuración actual).</p>
+          {seccionesConfiguracionCosteo(v).map((s) => (
+            <div key={s.titulo}>
+              <p className="mb-1 font-semibold uppercase tracking-wide text-[var(--muted)]">{s.titulo}</p>
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-0.5 md:grid-cols-2">
+                {s.filas.map(([etiqueta, valor]) => <div key={etiqueta} className="flex justify-between gap-2 border-b border-[var(--border)]/50"><dt>{etiqueta}</dt><dd className="text-right">{valor}</dd></div>)}
+              </dl>
+            </div>
+          ))}
+          <ResumenCosteo datos={resumen} />
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+/** HISTORIAL DE COSTEOS: una tarjeta por versión, de la más reciente a la más antigua. */
+export function HistorialCosteos({ versiones, editable, ocupado = false, error = "", onUsar }: { versiones: SnapshotCosteo[]; editable: boolean; ocupado?: boolean; error?: string; onUsar?: (costeoId: number) => void }) {
+  return (
+    <div className="space-y-2 border-t border-amber-500/30 pt-2" aria-label="Historial de costeos">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Historial de costeos</p>
+      {error ? <p role="alert" className="text-xs text-red-300">{error}</p> : null}
+      {versiones.map((v) => <TarjetaCosteo key={v.id} v={v} editable={editable} ocupado={ocupado} onUsar={onUsar} />)}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
 
 /**
- * Consulta puntual del costeo registrado de una cotización (detalle
- * expandido). Solo se monta cuando la configuración indica permiso; el
- * backend vuelve a exigir cotizaciones_costeo:ver.
+ * Consulta puntual del historial de costeos de una cotización (detalle expandido), SOLO LECTURA. Solo se monta cuando la configuración
+ * indica permiso; el backend vuelve a exigir cotizaciones_costeo:ver.
  */
 export function CosteoRegistradoDetalle({ slug, cotizacionId }: { slug: string; cotizacionId: number }) {
   const [estado, setEstado] = useState<"cerrado" | "cargando" | "ausente" | "error" | "listo">("cerrado");
-  const [datos, setDatos] = useState<SnapshotResumen | null>(null);
+  const [versiones, setVersiones] = useState<SnapshotCosteo[]>([]);
   async function cargar() {
     setEstado("cargando");
-    const res = await fetch(`/api/empresas/${slug}/tms/cotizaciones/${cotizacionId}/costeo`, { cache: "no-store" }).catch(() => null);
-    if (!res) { setEstado("error"); return; }
-    if (res.status === 404) { setEstado("ausente"); return; }
-    if (!res.ok) { setEstado("error"); return; }
+    const res = await fetch(`/api/empresas/${slug}/tms/cotizaciones/${cotizacionId}/costeo/historial`, { cache: "no-store" }).catch(() => null);
+    if (!res || !res.ok) { setEstado("error"); return; }
     const data = await res.json().catch(() => ({}));
-    setDatos(snapshotResumen(data.costeo));
+    const lista = (data.historial ?? []) as SnapshotCosteo[];
+    if (!lista.length) { setEstado("ausente"); return; }
+    setVersiones(lista);
     setEstado("listo");
   }
   return (
@@ -323,7 +395,7 @@ export function CosteoRegistradoDetalle({ slug, cotizacionId }: { slug: string; 
         {estado === "ausente" ? <span className="text-[var(--muted)]">Esta cotización no tiene costeo registrado.</span> : null}
         {estado === "error" ? <span role="alert" className="text-red-300">No se pudo cargar el costeo.</span> : null}
       </div>
-      {estado === "listo" && datos ? <><p className="text-[var(--muted)]">Perfil {datos.perfilNombre} · motor {datos.motorVersion}</p><ResumenCosteo datos={datos} /></> : null}
+      {estado === "listo" ? <HistorialCosteos versiones={versiones} editable={false} /> : null}
     </div>
   );
 }

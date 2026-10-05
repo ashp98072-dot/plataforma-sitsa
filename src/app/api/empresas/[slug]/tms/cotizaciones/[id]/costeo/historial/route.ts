@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { obtenerCotizacion } from "@/lib/tms/cotizaciones";
-import { obtenerCosteoSeleccionado } from "@/lib/tms/cotizacion-costeo-db";
+import { listarHistorialCosteos } from "@/lib/tms/cotizacion-costeo-db";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 const NO_STORE = { "Cache-Control": "private, no-store" };
 
 /**
- * COTIZACIONES-COSTEO — lectura del costeo SELECCIONADO (utilizado) de una cotización; el historial completo está en ./historial.
- * Guard: cotizaciones_costeo:ver. Esta información NUNCA viaja en el GET
- * normal de cotización, en el listado ni en el PDF comercial.
+ * COTIZACIONES — HISTORIAL DE COSTEOS: todas las versiones de la cotización (más reciente primero), tal como quedaron guardadas
+ * (perfil/parámetros/input/resultado snapshot + componentes). Nunca usa la configuración viva. Solo lectura, también con la cotización
+ * enviada. Guard: cotizaciones_costeo:ver (el mismo que ya protegía el costeo interno).
  */
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
@@ -22,7 +22,6 @@ export async function GET(_req: Request, ctx: Ctx) {
   const cotizacionId = Number(id);
   const cotizacion = await obtenerCotizacion(guard.empresa.id, cotizacionId);
   if (!cotizacion) return NextResponse.json({ error: "Cotización no encontrada." }, { status: 404, headers: NO_STORE });
-  const costeo = await obtenerCosteoSeleccionado(guard.empresa.id, cotizacionId);
-  if (!costeo) return NextResponse.json({ error: "Esta cotización no tiene costeo registrado." }, { status: 404, headers: NO_STORE });
-  return NextResponse.json({ costeo }, { headers: NO_STORE });
+  const historial = await listarHistorialCosteos(guard.empresa.id, cotizacionId);
+  return NextResponse.json({ historial }, { headers: NO_STORE });
 }

@@ -7,7 +7,7 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { actualizarCotizacion, crearCotizacion, duplicarCotizacion, obtenerCotizacion, listarCotizaciones } from "./cotizaciones";
 import { calcularCosteoServicio, type InputCosteoServicio } from "./cotizacion-costeo";
-import { ErrorCosteoYaRegistrado, type CosteoPreparado } from "./cotizacion-costeo-db";
+import type { CosteoPreparado } from "./cotizacion-costeo-db";
 
 function filaCotizacion(over: Record<string, unknown> = {}) {
   return {
@@ -19,13 +19,14 @@ function filaCotizacion(over: Record<string, unknown> = {}) {
   };
 }
 
-/** Conexión simulada; `existeCosteo` = ya hay snapshot; `falla` = SQL que debe fallar. */
-function conexion(opts: { existeCosteo?: boolean; falla?: string } = {}) {
+/** Conexión simulada; `maxVersion` = última versión de costeo ya registrada (0 = ninguna); `falla` = SQL que debe fallar. */
+function conexion(opts: { maxVersion?: number; falla?: string } = {}) {
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string) => {
       if (sql.includes("FROM tms_clientes")) return [[{ nombre: "Cliente Acme" }]];
-      if (sql.includes("FROM tms_cotizacion_costeos")) return [opts.existeCosteo ? [{ id: 9 }] : []];
+      if (sql.startsWith("SELECT id FROM tms_cotizaciones WHERE empresa_id = ? AND id = ?")) return [[{ id: 1 }]]; // bloqueo de la cotización padre al versionar
+      if (sql.includes("FROM tms_cotizacion_costeos")) return [[{ max_version: opts.maxVersion ?? 0, hay_seleccionado: opts.maxVersion ? 1 : 0 }]];
       if (sql.includes("cliente_nombre") && sql.includes("FROM tms_cotizaciones")) return [[filaCotizacion()]];
       return [[]];
     }),
@@ -76,6 +77,9 @@ describe("crearCotizacion — el costeo es OPCIONAL", () => {
     const iSnap = s.findIndex((x) => x.includes("INSERT INTO tms_cotizacion_costeos"));
     const iComp = s.findIndex((x) => x.includes("INSERT INTO tms_cotizacion_costeo_componentes"));
     expect(iCot).toBeGreaterThanOrEqual(0); expect(iSnap).toBeGreaterThan(iCot); expect(iComp).toBeGreaterThan(iSnap);
+    // Primer costeo de la cotización recién creada: versión 1, seleccionada.
+    const paramsPrimera = (conn.execute.mock.calls[iSnap] as unknown as [string, unknown[]])[1];
+    expect(paramsPrimera.slice(19)).toEqual([1, 1, "admin"]);
     expect(getPool).toHaveBeenCalledTimes(1);
     expect(conn.beginTransaction).toHaveBeenCalledOnce(); expect(conn.commit).toHaveBeenCalledOnce(); expect(conn.rollback).not.toHaveBeenCalled();
     // El snapshot queda ligado al id recién creado y a la empresa de la cotización.
@@ -95,21 +99,38 @@ describe("crearCotizacion — el costeo es OPCIONAL", () => {
   });
 });
 
-describe("actualizarCotizacion — snapshot inmutable", () => {
-  it("Borrador SIN snapshot: lo registra por primera vez dentro de la misma transacción", async () => {
+describe("actualizarCotizacion — historial de costeos (cada versión inmutable)", () => {
+  it("Borrador SIN costeos: registra la versión 1 (seleccionada) dentro de la misma transacción", async () => {
     const conn = conexion();
     vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
     await actualizarCotizacion(7, 1, { observaciones: "x" }, costeo, "admin");
     const s = sqls(conn);
     expect(s.some((x) => x.includes("INSERT INTO tms_cotizacion_costeos"))).toBe(true);
     expect(s.some((x) => x.includes("INSERT INTO tms_cotizacion_costeo_componentes"))).toBe(true);
+    const iSnap = s.findIndex((x) => x.includes("INSERT INTO tms_cotizacion_costeos"));
+    expect((conn.execute.mock.calls[iSnap] as unknown as [string, unknown[]])[1].slice(19)).toEqual([1, 1, "admin"]);
     expect(conn.commit).toHaveBeenCalledOnce();
   });
-  it("Borrador CON snapshot: NO se reemplaza (409 lógico), se revierte todo, sin UPDATE/DELETE del snapshot", async () => {
-    const conn = conexion({ existeCosteo: true });
-    await expect(actualizarCotizacion(7, 1, { observaciones: "x" }, costeo, "admin")).rejects.toBeInstanceOf(ErrorCosteoYaRegistrado);
+  it("Borrador CON costeos previos: YA NO falla; crea la versión siguiente, sin seleccionar, y confirma todo en una transacción", async () => {
+    const conn = conexion({ maxVersion: 2 });
+    vi.mocked(query).mockResolvedValue([filaCotizacion()] as never);
+    await actualizarCotizacion(7, 1, { observaciones: "x" }, costeo, "admin");
+    const s = sqls(conn);
+    const iSnap = s.findIndex((x) => x.includes("INSERT INTO tms_cotizacion_costeos"));
+    expect(iSnap).toBeGreaterThanOrEqual(0);
+    expect((conn.execute.mock.calls[iSnap] as unknown as [string, unknown[]])[1].slice(19)).toEqual([3, 0, null]);
+    expect(conn.commit).toHaveBeenCalledOnce(); expect(conn.rollback).not.toHaveBeenCalled();
+    // Las versiones anteriores no se tocan: ningún UPDATE/DELETE sobre las tablas de costeo.
+    expect(s.some((x) => /^\s*(UPDATE|DELETE)\b/i.test(x) && /costeo/.test(x))).toBe(false);
+    expect(vi.mocked(registrarAuditoriaTx).mock.calls.map((x) => x[1].accion)).toContain("crear_costeo");
+    expect(vi.mocked(registrarAuditoriaTx).mock.calls.find((x) => x[1].accion === "crear_costeo")![1].detalle).toContain("versión 3");
+  });
+  it("una cotización que ya no es Borrador sigue sin poder editarse ni registrar costeos (la inmutabilidad comercial no cambia)", async () => {
+    const conn = conexion();
+    conn.query.mockImplementation(async (sql: string) => (sql.includes("cliente_nombre") && sql.includes("FROM tms_cotizaciones") ? [[filaCotizacion({ estado: "Enviada" })]] : [[]]));
+    await expect(actualizarCotizacion(7, 1, { observaciones: "x" }, costeo, "admin")).rejects.toThrow(/solo mientras está en Borrador/);
     expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
-    expect(sqls(conn).some((x) => /costeo/.test(x) && /(INSERT|UPDATE|DELETE)/.test(x))).toBe(false);
+    expect(sqls(conn).some((x) => /costeo/.test(x))).toBe(false);
   });
   it("editar sin costeo no consulta ni toca las tablas de costeo", async () => {
     const conn = conexion();
