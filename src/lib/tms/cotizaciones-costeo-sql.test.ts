@@ -12,8 +12,13 @@ const preflightExcel = leer("sql/preflight-2026-10-cotizaciones-costeo-excel.sql
 const CAMPOS_PR406_PERFIL = CAMPOS_EXCEL_PERFIL.filter(c=>c.key!=="viaticosHotelViaje");
 const nuevas: string[] = [...CAMPOS_EXCEL_PARAMETROS, ...CAMPOS_EXCEL_PERFIL].map(c=>c.col);
 nuevas.push("resultado_snapshot", "auxiliar_multiplica_dias", "viaticos_hotel_multiplica_dias"); // banderas TINYINT(1): no están en el catálogo numérico
+// Historial de costeos (migración propia): columnas nuevas de tms_cotizacion_costeos.
+nuevas.push("version", "es_seleccionado", "seleccionado_por", "seleccionado_en");
 function sinAdicionesExcel(sql: string) {
- return sql.split("\n").filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Paridad Cotizador 2026:")&&!l.includes("-- Configuración global aditiva")).join("\n");
+ return sql.split("\n")
+  // Historial de costeos: schema.sql reemplaza el índice único 1:1 original (ya aplicado en producción) por el de versión y agrega un índice de consulta.
+  .map(l=>l.replace("UNIQUE KEY uq_cotizacion_costeo_version (empresa_id, cotizacion_id, version),","UNIQUE KEY uq_cotizacion_costeo_cotizacion (empresa_id, cotizacion_id),"))
+  .filter(l=>!nuevas.some(c=>l.trim().startsWith(c+" "))&&!l.includes("-- Excel 2026:")&&!l.includes("-- Paridad Cotizador 2026:")&&!l.includes("-- Configuración global aditiva")&&!l.includes("-- Historial de costeos")&&!l.includes("idx_cotizacion_costeo_historial")).join("\n");
 }
 const propuesta = leer("docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md");
 
@@ -106,12 +111,21 @@ const CLAVES_PRODUCCION: Record<string, string[]> = {
     "INDEX idx_costeo_componente_costeo (empresa_id, costeo_id)",
   ],
 };
+/** Estado actual de schema.sql para tms_cotizacion_costeos tras la migración del historial (el índice único 1:1 se reemplazó por el de versión). */
+const CLAVES_SCHEMA_COSTEOS = [
+  "UNIQUE KEY uq_cotizacion_costeo_version (empresa_id, cotizacion_id, version)",
+  "UNIQUE KEY uq_cotizacion_costeo_empresa_id (empresa_id, id)",
+  "INDEX idx_cotizacion_costeo_fecha (empresa_id, creado_en)",
+  "INDEX idx_cotizacion_costeo_historial (empresa_id, cotizacion_id, creado_en)",
+];
 /** Claves únicas e índices de una tabla, en el orden del DDL, sin la coma final. */
 const claves = (ddl: string) => ddl.split("\n").map((l) => l.trim().replace(/,$/, "")).filter((l) => /^(UNIQUE KEY|INDEX|KEY)\s/.test(l));
 
-describe.each([["sql/migrate-2026-09-cotizaciones-costeo.sql", migracion], ["sql/schema.sql", schema]] as const)("DDL real de producción en %s", (_nombre, sql) => {
+describe.each([["sql/migrate-2026-09-cotizaciones-costeo.sql", migracion], ["sql/schema.sql", schema]] as const)("DDL real de producción en %s", (nombre, sql) => {
   it.each(Object.entries(CLAVES_PRODUCCION))("%s: claves únicas e índices EXACTOS (nombre y columnas)", (tabla, esperadas) => {
-    expect(claves(create(sql, tabla))).toEqual(esperadas);
+    // La migración 2026-09 es histórica (ya aplicada) y conserva el índice único 1:1; schema.sql refleja el historial de costeos.
+    const final = nombre === "sql/schema.sql" && tabla === "tms_cotizacion_costeos" ? CLAVES_SCHEMA_COSTEOS : esperadas;
+    expect(claves(create(sql, tabla))).toEqual(final);
   });
   it("perfiles: idx_costeo_perfil_activo (empresa_id, activo, nombre)", () => {
     expect(create(sql, "tms_cotizacion_costeo_perfiles")).toContain("INDEX idx_costeo_perfil_activo (empresa_id, activo, nombre)");

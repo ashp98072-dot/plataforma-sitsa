@@ -4,7 +4,7 @@ import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/li
 import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/tms/cotizaciones";
 import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT } from "@/lib/tms/cotizacion-documento";
 import { obtenerPresentacionComercial } from "@/lib/tms/cotizacion-presentacion";
-import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { ErrorCosteoVersionConflicto } from "@/lib/tms/cotizacion-costeo-db";
 import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
@@ -106,7 +106,7 @@ export async function POST(req: Request, ctx: Ctx) {
     const cotizacion = await crearCotizacion(guard.empresa.id, datos, guard.session.username, preparado);
     return NextResponse.json({ mensaje: preparado ? "Cotización y costeo creados." : "Cotización creada.", cotizacion });
   } catch (error) {
-    if (error instanceof ErrorCosteoYaRegistrado) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ErrorCosteoVersionConflicto) return NextResponse.json({ error: error.message }, { status: 409 });
     const mensajeCosteo = mensajeErrorCosteo(error);
     if (mensajeCosteo) return NextResponse.json({ error: mensajeCosteo }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear la cotización." }, { status: 400 });

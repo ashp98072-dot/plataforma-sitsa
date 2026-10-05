@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { actualizarCotizacion, obtenerCotizacion } from "@/lib/tms/cotizaciones";
 import { DOCUMENTOS_EMISOR } from "@/lib/tms/cotizacion-documento";
-import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { ErrorCosteoVersionConflicto } from "@/lib/tms/cotizacion-costeo-db";
 import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
@@ -59,7 +59,7 @@ const schema = z.object({
   // Rutas/destinos adicionales: si se omite, las líneas existentes no se tocan; si se manda
   // (incluido vacío []), reemplaza por completo las líneas adicionales guardadas.
   lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
-  // COTIZACIONES-COSTEO: registra el snapshot por primera vez; si ya existe, 409 (inmutable).
+  // COTIZACIONES-COSTEO: registra una NUEVA versión del costeo (historial; cada versión es inmutable).
   costeo: costeoPayloadSchema.optional(),
 });
 
@@ -92,7 +92,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (!cotizacion) return NextResponse.json({ error: "Cotización no encontrada." }, { status: 404 });
     return NextResponse.json({ mensaje: "Cotización actualizada.", cotizacion });
   } catch (error) {
-    if (error instanceof ErrorCosteoYaRegistrado) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ErrorCosteoVersionConflicto) return NextResponse.json({ error: error.message }, { status: 409 });
     const mensajeCosteo = mensajeErrorCosteo(error);
     if (mensajeCosteo) return NextResponse.json({ error: mensajeCosteo }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar la cotización." }, { status: 400 });

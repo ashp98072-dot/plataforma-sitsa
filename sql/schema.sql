@@ -1762,9 +1762,15 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   margen_real DECIMAL(12,6) NULL,              -- utilidad / costo con IVA (margen SOBRE COSTO)
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_cotizacion_costeo_cotizacion (empresa_id, cotizacion_id),
+  -- Historial de costeos: N versiones por cotización, cada una inmutable. es_seleccionado = versión utilizada (a lo sumo una; la unicidad la garantiza la app con FOR UPDATE).
+  version INT NOT NULL DEFAULT 1,
+  es_seleccionado TINYINT(1) NOT NULL DEFAULT 0,
+  seleccionado_por VARCHAR(100) NULL DEFAULT NULL,
+  seleccionado_en DATETIME NULL DEFAULT NULL,
+  UNIQUE KEY uq_cotizacion_costeo_version (empresa_id, cotizacion_id, version),
   UNIQUE KEY uq_cotizacion_costeo_empresa_id (empresa_id, id),
   INDEX idx_cotizacion_costeo_fecha (empresa_id, creado_en),
+  INDEX idx_cotizacion_costeo_historial (empresa_id, cotizacion_id, creado_en),
   CONSTRAINT fk_cotizacion_costeo_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_cotizacion_costeo_cotizacion FOREIGN KEY (empresa_id, cotizacion_id) REFERENCES tms_cotizaciones (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
