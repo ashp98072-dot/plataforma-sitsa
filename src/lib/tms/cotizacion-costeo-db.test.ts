@@ -5,7 +5,7 @@ vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { calcularCosteoServicio, COTIZACION_COSTEO_MOTOR_VERSION, type InputCosteoServicio } from "./cotizacion-costeo";
+import { calcularCosteoServicio, COTIZACION_COSTEO_COTIZADOR_V2_VERSION, COTIZACION_COSTEO_MOTOR_VERSION, type InputCosteoServicio } from "./cotizacion-costeo";
 import {
   ErrorCosteoConfig, ErrorCosteoVersionConflicto, MENSAJE_COSTEO_VERSION_CONFLICTO, MENSAJE_SIN_PARAMETROS, guardarSnapshotCosteoTx,
   listarHistorialCosteos, listarPerfilesCosteo, obtenerCosteoSeleccionado, obtenerParametrosCosteoVigentes, obtenerPerfilCosteo, sumaComponentesCoincide,
@@ -486,5 +486,116 @@ describe("Snapshot COSTEO_COTIZADOR_2026", () => {
     expect(params[8]).toBe("COSTEO_EXCEL_2026");
     expect(params[9]).toBe(r.costoOperativo.toFixed(6));
     expect(r.hotel).toBe(900);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PARIDAD MATEMÁTICA: COSTEO_COTIZ_2026_V2 conserva la precisión del cálculo en el snapshot
+// ---------------------------------------------------------------------------
+describe("Snapshot COSTEO_COTIZ_2026_V2 (precisión completa; redondeo a 2 decimales solo para mostrar)", () => {
+  const perfil: PerfilCosteoConId = {
+    id: 4, codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas", costoAdquisicion: null, diasOperacionMes: 30, gpsMensual: 100, seguroVehiculoMensual: 950,
+    costoAceiteServicio: 1750, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 3400, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 25, viajesMes: 20,
+    precioLlanta: 850, cantidadLlantas: 4, salarioPilotoMensual: 6787.685066666668, salarioAuxiliarMensual: 6040, viaticosHotelViaje: 200,
+    auxiliarMultiplicaDias: true, viaticosHotelMultiplicaDias: true, depreciacion: { valorBase: 150000, anios: 5, diasOperacionMes: 26 }, costoRefrigeracion: null,
+  };
+  const parametros = {
+    precioCombustibleGalon: 43, ivaTasa: 0.12, costoPilotoDia: 0, costoAuxiliarDia: 0, viaticoPilotoDia: 0, viaticoAuxiliarDia: 0, viaticoGuiaDia: 0,
+    seguroMercaderiaAnual: 70000, cantidadCamiones: 46, viajesAnuales: 240, diasDepreciacionMes: 26, diasGastosMes: 20, diasLaboralesMes: 20,
+    gastosAdministracion: 90586.01, gastosMantenimiento: 34602.28, gastosSeguridad: 25826.24, gastosPredios: 52221.96,
+  };
+  const { id: _id, ...perfilMotor } = perfil; void _id;
+  const input: InputCosteoServicio = {
+    motorVersion: COTIZACION_COSTEO_COTIZADOR_V2_VERSION, perfil: perfilMotor, parametros, distanciaKm: 220, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 1,
+    incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, seguroMercaderia: 6.34,
+  };
+  const resultado = calcularCosteoServicio(input);
+  const exacto = resultado.precision!;
+  const conexion = () => ({ query: vi.fn(consultaGuardar()), execute: vi.fn(async () => [{ insertId: 55, affectedRows: 1 }]) });
+  const guardar = (conn: ReturnType<typeof conexion>, r = resultado) =>
+    guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 10, cotizacionCodigo: "COT-000010", usuario: "admin", costeo: { perfil, input, resultado: r } });
+
+  it("el resultado de V2 trae `precision` (cadenas decimales) y los valores visibles redondeados a 2 decimales una sola vez", () => {
+    expect(resultado.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(exacto.costoOperativo.startsWith("1671.8139944")).toBe(true);
+    expect(resultado.costoOperativo).toBe(1671.81);
+    expect(exacto.precioSugerido.startsWith("2434.1611758")).toBe(true);
+    expect(resultado.precioSugerido).toBe(2434.16);
+  });
+  it("motor_version = COSTEO_COTIZ_2026_V2 (20 caracteres: cabe en VARCHAR(20)) y resultado_snapshot conserva la precisión y el motor", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_COTIZ_2026_V2");
+    expect(String(params[8]).length).toBeLessThanOrEqual(20);
+    const guardado = JSON.parse(String(params[18]));
+    expect(guardado.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(guardado.precision).toEqual(exacto);
+    expect(guardado.precision.politicaRedondeo).toBe("al_final");
+  });
+  it("las columnas DECIMAL(16,6) guardan el valor de CÁLCULO (6 decimales), no el redondeado a 2: costo base, IVA, costo con IVA y precio sugerido", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    const a6 = (t: string) => Number(t).toFixed(6);
+    expect(params[9]).toBe(a6(exacto.costoOperativo)); expect(params[9]).toBe("1671.813994");
+    expect(params[10]).toBe(a6(exacto.iva)); expect(params[11]).toBe(a6(exacto.costoConIva));
+    expect(params[13]).toBe(a6(exacto.precioSugerido)); expect(params[13]).toBe("2434.161176");
+    expect(typeof params[9]).toBe("string");
+  });
+  it("los componentes se guardan con el valor de cálculo (6 decimales) y suman el costo base guardado con holgura de microcentavos", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[1] as unknown as [string, unknown[]];
+    let suma = 0;
+    for (let i = 0; i < params.length; i += 6) {
+      const clave = String(params[i + 3]);
+      expect(params[i + 5]).toBe(Number(exacto.componentes[clave]).toFixed(6));
+      suma += Number(params[i + 5]);
+    }
+    expect(Math.abs(suma - Number((conn.execute.mock.calls[0] as unknown as [string, unknown[]])[1][9]))).toBeLessThan(1e-4);
+    expect(params.slice(0, 6)[5]).toBe("220.909228"); // gastos generales: 220.90922826… (no 220.91)
+  });
+  it("sumaComponentesCoincide con `precision`: acepta V2 aunque los componentes VISIBLES sumen distinto del costo base visible", () => {
+    const visibles = resultado.componentes.reduce((s, c) => s + c.monto, 0);
+    expect(Math.abs(visibles - resultado.costoOperativo)).toBeLessThan(0.1); // 1671.81 (coincide aquí; en otros casos puede diferir en centavos, como el libro)
+    expect(sumaComponentesCoincide(resultado)).toBe(true);
+    const desfasado = { ...resultado, componentes: resultado.componentes.map((c) => (c.clave === "gps" ? { ...c, monto: c.monto + 0.05 } : c)) };
+    expect(sumaComponentesCoincide(desfasado)).toBe(true); // lo visible no decide: valida el cálculo con precisión
+  });
+  it("sumaComponentesCoincide rechaza una precisión adulterada, incompleta o con claves de más", () => {
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, costoOperativo: String(Number(exacto.costoOperativo) + 1) } })).toBe(false);
+    const { gps: _g, ...sinGps } = exacto.componentes; void _g;
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, componentes: sinGps } })).toBe(false);
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, componentes: { ...exacto.componentes, extra: "1" } } })).toBe(false);
+  });
+  it("un adulterado sin precisión (motores anteriores) sigue rechazándose por la suma de componentes visibles", async () => {
+    const conn = conexion();
+    const anterior = calcularCosteoServicio({ ...input, motorVersion: "COSTEO_COTIZADOR_2026" });
+    expect(anterior.precision).toBeUndefined();
+    await expect(guardar(conn, { ...anterior, costoOperativo: anterior.costoOperativo + 5 })).rejects.toThrow("no coinciden");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("COSTEO_COTIZADOR_2026 anterior sigue guardándose redondeado por componente, tal como antes (sin `precision`)", async () => {
+    const conn = conexion();
+    const anterior = calcularCosteoServicio({ ...input, motorVersion: "COSTEO_COTIZADOR_2026" });
+    await guardar(conn, anterior);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026");
+    expect(params[9]).toBe(anterior.costoOperativo.toFixed(6));
+    expect(JSON.parse(String(params[18]))).not.toHaveProperty("precision");
+  });
+  it("lectura: un snapshot V2 conserva `precision` y el historial no recalcula nada", async () => {
+    const fila = {
+      id: 55, cotizacion_id: 10, version: 1, es_seleccionado: 1, seleccionado_por: null, seleccionado_en: null, perfil_id: 4, perfil_codigo: "CAMION_2_7T", perfil_nombre: "Camión 2.7 toneladas",
+      perfil_snapshot: JSON.stringify(perfil), parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZ_2026_V2",
+      costo_operativo: "1671.813994", iva: Number(exacto.iva).toFixed(6), costo_con_iva: Number(exacto.costoConIva).toFixed(6), margen_objetivo: "0.300000", precio_sugerido: "2434.161176", precio_venta: null,
+      utilidad_estimada: null, margen_real: null, creado_por: "admin", creado_en: "2026-10-05 10:00:00", resultado_snapshot: JSON.stringify(resultado),
+    };
+    vi.mocked(query).mockResolvedValueOnce([fila] as never).mockResolvedValueOnce([] as never);
+    const [v] = await listarHistorialCosteos(1, 10);
+    expect(v.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(v.resultado?.precision).toEqual(exacto);
+    expect(v.costoOperativo).toBe(1671.813994);
   });
 });

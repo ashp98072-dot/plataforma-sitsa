@@ -298,9 +298,9 @@ const PERFIL_2026 = {
 };
 const PARAM_2026 = { ...PARAM, precioCombustibleGalon: 43, seguroMercaderiaAnual: 70000, cantidadCamiones: 46, viajesAnuales: 240, diasDepreciacionMes: 26, diasGastosMes: 20, diasLaboralesMes: 20, gastosAdministracion: 90586.01, gastosMantenimiento: 34602.28, gastosSeguridad: 25826.24, gastosPredios: 52221.96 };
 const INPUT_2026 = { distanciaKm: 220, diasServicio: 2, cantidadPilotos: 1, cantidadAuxiliares: 1, incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, viaticosHotelTotal: 250, seguroMercaderia: 50, otrosCostos: [{ concepto: "Peaje", monto: 100 }] };
-type Motor = "V1" | "EXCEL" | "COTIZADOR";
+type Motor = "V1" | "EXCEL" | "COTIZADOR" | "V2";
 function version(n: number, motor: Motor = "COTIZADOR", seleccionado = false, over: Partial<SnapshotCosteo> = {}): SnapshotCosteo {
-  const motorVersion = motor === "COTIZADOR" ? "COSTEO_COTIZADOR_2026" : motor === "EXCEL" ? "COSTEO_EXCEL_2026" : undefined;
+  const motorVersion = motor === "COTIZADOR" ? "COSTEO_COTIZADOR_2026" : motor === "V2" ? "COSTEO_COTIZ_2026_V2" : motor === "EXCEL" ? "COSTEO_EXCEL_2026" : undefined;
   const perfil = motor === "V1" ? PERFIL_MOTOR : { ...PERFIL_2026, rendimientoKmGalon: 25 + n };
   const parametros = motor === "V1" ? PARAM : { ...PARAM_2026, precioCombustibleGalon: 40 + n };
   const input = motor === "V1" ? { distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, incluirGps: true, incluirSeguroVehiculo: true } : { ...INPUT_2026, distanciaKm: 200 + n };
@@ -386,7 +386,7 @@ describe("F. Historial de costeos en la tarjeta de versiones", () => {
 });
 
 describe("G. Compatibilidad: V1, COSTEO_EXCEL_2026 y COSTEO_COTIZADOR_2026 se renderizan", () => {
-  it.each([["V1", version(1, "V1", true)], ["EXCEL", version(1, "EXCEL", true)], ["COTIZADOR", version(1, "COTIZADOR", true)]] as const)("motor %s: tarjeta, configuración y resultado sin errores", (_n, v) => {
+  it.each([["V1", version(1, "V1", true)], ["EXCEL", version(1, "EXCEL", true)], ["COTIZADOR", version(1, "COTIZADOR", true)], ["V2", version(1, "V2", true)]] as const)("motor %s: tarjeta, configuración y resultado sin errores", (_n, v) => {
     const salida = html(createElement(TarjetaCosteo, { v, editable: true, abiertoInicial: true }));
     expect(salida).toContain("Costeo #1"); expect(salida).toContain(v.motorVersion);
     expect(salida).toContain("Datos del perfil usado"); expect(salida).toContain("Resumen de costeo"); // V1 usa el resumen original; V2 el detallado
@@ -403,6 +403,19 @@ describe("G. Compatibilidad: V1, COSTEO_EXCEL_2026 y COSTEO_COTIZADOR_2026 se re
   it("el motor nuevo no muestra los globales que ignora (piloto/viático/hotel por día)", () => {
     const etiquetas = seccionesConfiguracionCosteo(V2).flatMap((x) => x.filas.map((f) => f[0]));
     expect(etiquetas.filter((e) => /motor anterior/.test(e))).toEqual([]);
+  });
+  it("COSTEO_COTIZ_2026_V2: resumen detallado con valores a 2 decimales (sin llenar la pantalla de decimales) y sin globales del motor anterior", () => {
+    const v = version(1, "V2", true);
+    expect(v.resultado?.precision).toBeDefined(); // el snapshot guarda la precisión; la UI solo muestra 2 decimales
+    const salida = html(createElement(TarjetaCosteo, { v, editable: false, abiertoInicial: true }));
+    expect(salida).toContain("Motor: COSTEO_COTIZ_2026_V2"); expect(salida).toContain("Subtotal antes IVA"); expect(salida).toContain("TOTAL CON IVA");
+    expect(salida).not.toMatch(/Q[\d,]+\.\d{3,}/); // ningún importe con más de 2 decimales
+    expect(seccionesConfiguracionCosteo(v).flatMap((x) => x.filas.map((f) => f[0])).filter((e) => /motor anterior/.test(e))).toEqual([]);
+  });
+  it("el motor se toma del resultado persistido: una columna motor_version truncada (VARCHAR(20) vs «COSTEO_COTIZADOR_2026», 21 caracteres) no hace pasar el snapshot por «motor anterior»", () => {
+    const v = version(1, "COTIZADOR", true, { motorVersion: "COSTEO_COTIZADOR_202" });
+    expect(v.resultado?.motorVersion).toBe("COSTEO_COTIZADOR_2026");
+    expect(seccionesConfiguracionCosteo(v).flatMap((x) => x.filas.map((f) => f[0])).filter((e) => /motor anterior/.test(e))).toEqual([]);
   });
   it("un único costeo antiguo (versión 1, seleccionado) funciona: tarjeta con badge y sin botón «Usar»", () => {
     const salida = html(HistorialCosteos({ versiones: [version(1, "V1", true)], editable: true, onUsar: vi.fn() }));

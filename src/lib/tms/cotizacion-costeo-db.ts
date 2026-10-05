@@ -1,11 +1,12 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
-import { decimalCosteoSql } from "./cotizacion-costeo-excel";
+import { D, decimalCosteoSql } from "./cotizacion-costeo-excel";
 import type { PoolConnection } from "mysql2/promise";
 import { query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL, mapCamposExcel } from "./cotizacion-costeo-excel-campos";
 import {
   COTIZACION_COSTEO_MOTOR_VERSION,
+  esMotorCotizador2026,
   type ComponenteCosteo,
   type DepreciacionCosteo,
   type InputCosteoServicio,
@@ -163,7 +164,17 @@ export function inputParaSnapshot(input: InputCosteoServicio): InputSnapshotCost
 
 const TOLERANCIA_SUMA_COMPONENTES = 1e-4;
 
+/** Con `precision` (COSTEO_COTIZ_2026_V2) los componentes de CÁLCULO suman el costo base con la precisión del cálculo; los de presentación (2 decimales) pueden diferir en centavos, como en el libro. */
+const TOLERANCIA_SUMA_PRECISA = new D("1e-9");
+
 export function sumaComponentesCoincide(resultado: ResultadoCosteoServicio): boolean {
+  if (resultado.precision) {
+    const claves = resultado.componentes.map((c) => c.clave);
+    const p = resultado.precision.componentes;
+    if (claves.some((k) => p[k] == null) || Object.keys(p).length !== claves.length) return false;
+    const suma = claves.reduce((s, k) => s.plus(p[k]), new D(0));
+    return suma.minus(resultado.precision.costoOperativo).abs().lte(TOLERANCIA_SUMA_PRECISA);
+  }
   const suma = resultado.componentes.reduce((s, c) => s + c.monto, 0);
   return Math.abs(suma - resultado.costoOperativo) <= TOLERANCIA_SUMA_COMPONENTES;
 }
@@ -188,7 +199,11 @@ export async function guardarSnapshotCosteoTx(
 ): Promise<number> {
   const { perfil, input, resultado } = p.costeo;
   // Los motores con Decimal (PR #406 y Cotizador 2026) persisten importes como texto decimal; V1 conserva su comportamiento.
-  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" || resultado.motorVersion === "COSTEO_COTIZADOR_2026" ? decimalCosteoSql(v) : v;
+  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" || esMotorCotizador2026(resultado.motorVersion) ? decimalCosteoSql(v) : v;
+  // COSTEO_COTIZ_2026_V2: las columnas DECIMAL(16,6) y los componentes guardan el valor de CÁLCULO (hasta 6 decimales, desde `precision`), no el redondeado a 2;
+  // el JSON resultado_snapshot conserva 12 decimales. Los demás motores guardan lo que siempre guardaron.
+  const exacto = resultado.precision;
+  const preciso = (texto: string | undefined, v: number | null) => (exacto && texto != null ? new D(texto).toFixed(6) : monetario(v));
   if (!sumaComponentesCoincide(resultado)) {
     throw new Error("Los componentes del costeo no coinciden con el costo operativo.");
   }
@@ -221,7 +236,7 @@ export async function guardarSnapshotCosteoTx(
         p.empresaId, p.cotizacionId, perfil.id, perfil.codigo, perfil.nombre,
         JSON.stringify(perfilSnapshot), JSON.stringify(input.parametros), JSON.stringify(inputParaSnapshot(input)),
         resultado.motorVersion ?? COTIZACION_COSTEO_MOTOR_VERSION,
-        monetario(resultado.costoOperativo), monetario(resultado.iva), monetario(resultado.costoConIva), monetario(resultado.margenObjetivoAplicado), monetario(resultado.precioSugerido),
+        preciso(exacto?.costoOperativo, resultado.costoOperativo), preciso(exacto?.iva, resultado.iva), preciso(exacto?.costoConIva, resultado.costoConIva), monetario(resultado.margenObjetivoAplicado), preciso(exacto?.precioSugerido, resultado.precioSugerido),
         monetario(resultado.precioVenta), monetario(resultado.utilidadEstimada), monetario(resultado.margenReal), p.usuario, JSON.stringify(resultado),
         version, seleccionado ? 1 : 0, seleccionado ? p.usuario : null,
       ],
@@ -238,7 +253,7 @@ export async function guardarSnapshotCosteoTx(
     await conn.execute<ResultSetHeader>(
       `INSERT INTO tms_cotizacion_costeo_componentes (empresa_id, costeo_id, orden, clave, concepto, monto)
        VALUES ${componentes.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
-      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, monetario(c.monto)]),
+      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, preciso(exacto?.componentes[c.clave], c.monto)]),
     );
   }
 
