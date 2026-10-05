@@ -164,7 +164,7 @@ export function inputParaSnapshot(input: InputCosteoServicio): InputSnapshotCost
 
 const TOLERANCIA_SUMA_COMPONENTES = 1e-4;
 
-/** Con `precision` (COSTEO_COTIZ_2026_V2) los componentes de CÁLCULO suman el costo base con la precisión del cálculo; los de presentación (2 decimales) pueden diferir en centavos, como en el libro. */
+/** Con `precision` (COSTEO_COTIZADOR_2026_V2) los componentes de CÁLCULO suman el costo base con la precisión del cálculo; los de presentación (2 decimales) pueden diferir en centavos, como en el libro. */
 const TOLERANCIA_SUMA_PRECISA = new D("1e-9");
 
 export function sumaComponentesCoincide(resultado: ResultadoCosteoServicio): boolean {
@@ -200,7 +200,7 @@ export async function guardarSnapshotCosteoTx(
   const { perfil, input, resultado } = p.costeo;
   // Los motores con Decimal (PR #406 y Cotizador 2026) persisten importes como texto decimal; V1 conserva su comportamiento.
   const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" || esMotorCotizador2026(resultado.motorVersion) ? decimalCosteoSql(v) : v;
-  // COSTEO_COTIZ_2026_V2: las columnas DECIMAL(16,6) y los componentes guardan el valor de CÁLCULO (hasta 6 decimales, desde `precision`), no el redondeado a 2;
+  // COSTEO_COTIZADOR_2026_V2: las columnas DECIMAL(16,6) y los componentes guardan el valor de CÁLCULO (hasta 6 decimales, desde `precision`), no el redondeado a 2;
   // el JSON resultado_snapshot conserva 12 decimales. Los demás motores guardan lo que siempre guardaron.
   const exacto = resultado.precision;
   const preciso = (texto: string | undefined, v: number | null) => (exacto && texto != null ? new D(texto).toFixed(6) : monetario(v));

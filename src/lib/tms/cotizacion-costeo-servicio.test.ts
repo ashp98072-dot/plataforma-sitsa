@@ -67,7 +67,7 @@ describe("El servidor arma TODO lo económico (el cliente solo manda datos opera
     expect(input.perfil).toEqual({ ...perfilMotor, viajesMes: 20 }); expect(input.parametros).toEqual(PARAMETROS);
     expect(perfil.id).toBe(4); expect(parametrosVigenteDesde).toBe("2026-09-21");
     expect(resultado).toEqual(calcularCosteoServicio(input));
-    expect(resultado.motorVersion).toBe("COSTEO_COTIZ_2026_V2"); // los cálculos NUEVOS usan el motor V2 (paridad matemática: redondeo solo al final)
+    expect(resultado.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2"); // los cálculos NUEVOS usan el motor V2 (paridad matemática: redondeo solo al final)
     expect(resultado.gps).toBe(8.71); // GPS por viaje, ya no diario V1.
     expect(resultado.viaticosHotel).toBe(200); // un solo monto, sin multiplicar por personas
     expect(resultado.costoOperativo).toBe(3585.11); // V2 redondea solo al final; COSTEO_COTIZADOR_2026 (redondeo por componente) daba 3585.12

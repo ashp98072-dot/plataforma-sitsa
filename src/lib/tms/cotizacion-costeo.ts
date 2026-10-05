@@ -21,16 +21,15 @@ export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
 export const COTIZACION_COSTEO_EXCEL_VERSION = "COSTEO_EXCEL_2026";
 /**
  * Paridad con «Cotizador 2026.xlsx»: una sola columna «Viáticos y hotel». REDONDEA CADA CONCEPTO a 2 decimales antes de sumar (política anterior).
- * Solo lectura de snapshots ya guardados y funciones puras: los cálculos NUEVOS usan COTIZADOR_V2. Nombre de 21 caracteres: no cabe en motor_version VARCHAR(20).
+ * Solo lectura de snapshots ya guardados y funciones puras: los cálculos NUEVOS usan COTIZADOR_V2.
  */
 export const COTIZACION_COSTEO_COTIZADOR_VERSION = "COSTEO_COTIZADOR_2026";
 /**
  * Paridad MATEMÁTICA exacta con «Cotizador 2026.xlsx»: mismas fórmulas, pero la precisión interna se conserva (Decimal de 40 dígitos) y solo se redondea a 2
  * decimales para mostrar/persistir (como el libro: la celda solo da formato). Es la versión de los cálculos NUEVOS. Un mismo input puede dar un centavo
  * distinto que COSTEO_COTIZADOR_2026, por eso es una versión propia y los snapshots anteriores no se reinterpretan.
- * El nombre cabe en tms_cotizacion_costeos.motor_version VARCHAR(20) (20 caracteres): «COSTEO_COTIZADOR_2026_V2» (24) se truncaría o fallaría.
  */
-export const COTIZACION_COSTEO_COTIZADOR_V2_VERSION = "COSTEO_COTIZ_2026_V2";
+export const COTIZACION_COSTEO_COTIZADOR_V2_VERSION = "COSTEO_COTIZADOR_2026_V2";
 
 /** Motores de la familia «Cotizador 2026» (con `resultado_snapshot` completo, un solo margen y una sola columna de viáticos y hotel). */
 export const esMotorCotizador2026 = (version: string | null | undefined): boolean => version === COTIZACION_COSTEO_COTIZADOR_VERSION || version === COTIZACION_COSTEO_COTIZADOR_V2_VERSION;

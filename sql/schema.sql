@@ -1750,7 +1750,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   perfil_snapshot JSON NOT NULL,               -- PerfilCosteoUnidad tal como se usó
   parametros_snapshot JSON NOT NULL,           -- ParametrosEconomicosCosteo tal como se usó
   input_snapshot JSON NOT NULL,                -- km, días, cantidades, banderas, overrides, otros costos, precio de venta
-  motor_version VARCHAR(20) NOT NULL,          -- versión de las fórmulas; permite auditar recálculos
+  motor_version VARCHAR(40) NOT NULL,          -- versión de las fórmulas; permite auditar recálculos
   -- Resultados denormalizados para consultas/reportes (los componentes viven en D).
   costo_operativo DECIMAL(16,6) NOT NULL,
   iva DECIMAL(16,6) NOT NULL,

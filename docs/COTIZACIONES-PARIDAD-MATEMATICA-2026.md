@@ -1,4 +1,4 @@
-# Cotizaciones — paridad matemática exacta con «Cotizador 2026.xlsx» (COSTEO_COTIZ_2026_V2)
+# Cotizaciones — paridad matemática exacta con «Cotizador 2026.xlsx» (COSTEO_COTIZADOR_2026_V2)
 
 Base: `344bb72c0bdc693101a2e1f064b4cf910d206cb5` (posterior al PR #408). Fuente ÚNICA: `Cotizador 2026.xlsx`, hojas «Camion 1 ton», «Camion de 2.7», «Camion de 5», «Camion de 10» y «Cabezales »
 (no `COTIZADOR RUTAS`). Las fórmulas y valores se leyeron **directamente del archivo** (openpyxl, fórmulas y valores en caché), no de capturas. SQL: ninguno ejecutado ni requerido.
@@ -16,7 +16,7 @@ muestra 2 decimales. Resultado: el total difería del libro en **un centavo en 4
 | Cabezales | Q13,430.82 | Q13,430.82 | 0.00 |
 
 ## 2. Política de redondeo
-| | COSTEO_COTIZADOR_2026 (anterior) | COSTEO_COTIZ_2026_V2 (nuevo) |
+| | COSTEO_COTIZADOR_2026 (anterior) | COSTEO_COTIZADOR_2026_V2 (nuevo) |
 | --- | --- | --- |
 | Componentes | `q()` a 2 decimales cada uno | precisión interna completa (Decimal.js, 40 dígitos, HALF_UP) |
 | Costo base | suma de los componentes ya redondeados | suma de los componentes sin redondear |
@@ -28,13 +28,12 @@ muestra 2 decimales. Resultado: el total difería del libro en **un centavo en 4
 Sin `Number` en las operaciones monetarias: todo el cálculo es Decimal. `COSTEO_V1`, `COSTEO_EXCEL_2026` y `COSTEO_COTIZADOR_2026` siguen calculando exactamente igual que antes (pruebas existentes intactas).
 
 ## 3. Versión del motor
-Se introduce **`COSTEO_COTIZ_2026_V2`** (constante `COTIZACION_COSTEO_COTIZADOR_V2_VERSION`): el mismo input puede dar un centavo distinto que el motor anterior, así que es una versión propia. Los snapshots
+Se introduce **`COSTEO_COTIZADOR_2026_V2`** (constante `COTIZACION_COSTEO_COTIZADOR_V2_VERSION`): el mismo input puede dar un centavo distinto que el motor anterior, así que es una versión propia. Los snapshots
 `COSTEO_COTIZADOR_2026` existentes **no se reinterpretan ni se recalculan**; los cálculos nuevos (`prepararCosteo`) usan V2.
 
-> **Nombre:** se usa `COSTEO_COTIZ_2026_V2` (20 caracteres) y no `COSTEO_COTIZADOR_2026_V2` (24) porque `tms_cotizacion_costeos.motor_version` es `VARCHAR(20)`.
-> **Hallazgo adicional (existente desde el PR #407):** `COSTEO_COTIZADOR_2026` tiene **21** caracteres y tampoco cabe en `VARCHAR(20)`: con `sql_mode` estricto el INSERT del costeo fallaría («Data too long») y sin modo estricto
-> se guardaría truncado como `COSTEO_COTIZADOR_202`. Esto no afecta a V2. Ver `sql/propuesta-2026-10-cotizaciones-motor-version.sql` (solo lectura + propuesta, **no ejecutada**). La UI toma el motor de `resultado_snapshot.motorVersion`
-> (no de la columna), así que un valor truncado no cambia cómo se muestra un snapshot.
+> **`motor_version` en producción:** `tms_cotizacion_costeos.motor_version` ya es **`VARCHAR(40) NOT NULL`** (ampliada manualmente desde `VARCHAR(20)`, verificada). Diagnóstico posterior: único valor existente `COSTEO_V1`, **no hay filas truncadas**
+> (`COSTEO_COTIZADOR_202`) y no hubo datos que reparar. Los nombres de motor (`COSTEO_COTIZADOR_2026`, 21 caracteres, y `COSTEO_COTIZADOR_2026_V2`, 24) caben. `schema.sql` refleja `VARCHAR(40)`; la migración aplicada
+> queda registrada en `sql/migrate-2026-10-cotizaciones-motor-version.sql` (**ya aplicada; no volver a ejecutar**). La UI toma el motor de `resultado_snapshot.motorVersion` cuando existe.
 
 ## 4. Fórmulas reales de las cinco hojas (fila 12 = entrada, fila 14 = unitario, fila 15 = multiplicador, fila 16 = valor)
 Comunes a las cinco: `D16 = D15×D14` (gastos: `Q7/46/20`), `F16` (deprec: `L3/60/26`), `G16 = G15×(G12/20)` (GPS), `H16 = H15×(H12/30)` (seguro vehículo), `I16 = km×(I12/5000)` (aceite), `J16 = km×(J13/50000)` con `J13 = J12×cant. llantas`,
@@ -123,7 +122,7 @@ auxiliar y viáticos según las banderas del perfil (deducidas de las fórmulas 
 - Columnas `DECIMAL(16,6)` y `tms_cotizacion_costeo_componentes.monto` (`DECIMAL(16,6)`): V2 guarda ahí el valor de **cálculo** a 6 decimales (p. ej. gastos `220.909228`, costo base `1671.813994`, total `2434.161176`). 6 decimales bastan para
   auditar las fórmulas del libro (error ≤ 5e-7 por valor; los totales visibles no cambian), por lo que **no hace falta migrar precisión**; el JSON conserva 12 decimales.
 - `sumaComponentesCoincide` valida V2 con la suma de los componentes de cálculo (tolerancia 1e-9) y exige que `precision` tenga exactamente los mismos componentes; los motores anteriores conservan su validación.
-- Historial (PR #408) intacto: las versiones nuevas son `COSTEO_COTIZ_2026_V2`; las anteriores siguen mostrándose con su propio resultado.
+- Historial (PR #408) intacto: las versiones nuevas son `COSTEO_COTIZADOR_2026_V2`; las anteriores siguen mostrándose con su propio resultado.
 
 ## 10. UI
 Sin cambios visuales: importes a 2 decimales (ningún importe muestra más). El historial / «Ver configuración» muestra el resultado a 2 decimales y los inputs usados; los motores de la familia Cotizador (V1 anterior y V2) se muestran sin los globales del motor viejo.

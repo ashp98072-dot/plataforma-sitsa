@@ -32,7 +32,7 @@ export function seccionesConfiguracionCosteo(v: SnapshotCosteo): SeccionConfigur
   const par = v.parametros;
   const i = v.input;
   const conDesglose = p.precioLlanta != null && p.cantidadLlantas != null;
-  // El motor sale del resultado persistido cuando existe (la columna motor_version es VARCHAR(20) y COSTEO_COTIZADOR_2026 tiene 21 caracteres).
+  // El motor sale del resultado persistido cuando existe (es el de la propia versión del costeo); si no, de la columna motor_version.
   const motorAnterior = !esMotorCotizador2026(v.resultado?.motorVersion ?? v.motorVersion);
 
   const perfil: FilaConfiguracion[] = [

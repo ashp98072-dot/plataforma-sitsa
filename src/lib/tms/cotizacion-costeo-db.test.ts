@@ -490,9 +490,9 @@ describe("Snapshot COSTEO_COTIZADOR_2026", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PARIDAD MATEMÁTICA: COSTEO_COTIZ_2026_V2 conserva la precisión del cálculo en el snapshot
+// PARIDAD MATEMÁTICA: COSTEO_COTIZADOR_2026_V2 conserva la precisión del cálculo en el snapshot
 // ---------------------------------------------------------------------------
-describe("Snapshot COSTEO_COTIZ_2026_V2 (precisión completa; redondeo a 2 decimales solo para mostrar)", () => {
+describe("Snapshot COSTEO_COTIZADOR_2026_V2 (precisión completa; redondeo a 2 decimales solo para mostrar)", () => {
   const perfil: PerfilCosteoConId = {
     id: 4, codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas", costoAdquisicion: null, diasOperacionMes: 30, gpsMensual: 100, seguroVehiculoMensual: 950,
     costoAceiteServicio: 1750, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 3400, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 25, viajesMes: 20,
@@ -516,20 +516,20 @@ describe("Snapshot COSTEO_COTIZ_2026_V2 (precisión completa; redondeo a 2 decim
     guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 10, cotizacionCodigo: "COT-000010", usuario: "admin", costeo: { perfil, input, resultado: r } });
 
   it("el resultado de V2 trae `precision` (cadenas decimales) y los valores visibles redondeados a 2 decimales una sola vez", () => {
-    expect(resultado.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(resultado.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
     expect(exacto.costoOperativo.startsWith("1671.8139944")).toBe(true);
     expect(resultado.costoOperativo).toBe(1671.81);
     expect(exacto.precioSugerido.startsWith("2434.1611758")).toBe(true);
     expect(resultado.precioSugerido).toBe(2434.16);
   });
-  it("motor_version = COSTEO_COTIZ_2026_V2 (20 caracteres: cabe en VARCHAR(20)) y resultado_snapshot conserva la precisión y el motor", async () => {
+  it("motor_version = COSTEO_COTIZADOR_2026_V2 (cabe en VARCHAR(40), el ancho de la columna) y resultado_snapshot conserva la precisión y el motor", async () => {
     const conn = conexion();
     await guardar(conn);
     const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
-    expect(params[8]).toBe("COSTEO_COTIZ_2026_V2");
-    expect(String(params[8]).length).toBeLessThanOrEqual(20);
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(String(params[8]).length).toBeLessThanOrEqual(40); // motor_version VARCHAR(40) NOT NULL
     const guardado = JSON.parse(String(params[18]));
-    expect(guardado.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(guardado.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
     expect(guardado.precision).toEqual(exacto);
     expect(guardado.precision.politicaRedondeo).toBe("al_final");
   });
@@ -588,13 +588,13 @@ describe("Snapshot COSTEO_COTIZ_2026_V2 (precisión completa; redondeo a 2 decim
   it("lectura: un snapshot V2 conserva `precision` y el historial no recalcula nada", async () => {
     const fila = {
       id: 55, cotizacion_id: 10, version: 1, es_seleccionado: 1, seleccionado_por: null, seleccionado_en: null, perfil_id: 4, perfil_codigo: "CAMION_2_7T", perfil_nombre: "Camión 2.7 toneladas",
-      perfil_snapshot: JSON.stringify(perfil), parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZ_2026_V2",
+      perfil_snapshot: JSON.stringify(perfil), parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZADOR_2026_V2",
       costo_operativo: "1671.813994", iva: Number(exacto.iva).toFixed(6), costo_con_iva: Number(exacto.costoConIva).toFixed(6), margen_objetivo: "0.300000", precio_sugerido: "2434.161176", precio_venta: null,
       utilidad_estimada: null, margen_real: null, creado_por: "admin", creado_en: "2026-10-05 10:00:00", resultado_snapshot: JSON.stringify(resultado),
     };
     vi.mocked(query).mockResolvedValueOnce([fila] as never).mockResolvedValueOnce([] as never);
     const [v] = await listarHistorialCosteos(1, 10);
-    expect(v.motorVersion).toBe("COSTEO_COTIZ_2026_V2");
+    expect(v.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
     expect(v.resultado?.precision).toEqual(exacto);
     expect(v.costoOperativo).toBe(1671.813994);
   });

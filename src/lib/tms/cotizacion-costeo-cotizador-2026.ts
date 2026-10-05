@@ -11,7 +11,7 @@ import { dec, monto, positivo } from "./cotizacion-costeo-excel";
  *
  *  - "por_componente" → COSTEO_COTIZADOR_2026 (versión anterior, SOLO para leer/recalcular de forma pura lo ya guardado): cada concepto, el valor del margen y el IVA se redondean a
  *    2 decimales (HALF_UP) ANTES de seguir sumando. No coincide con el libro al centavo (p. ej. 2.7T daba Q2,434.15 en vez de Q2,434.16).
- *  - "al_final" → COSTEO_COTIZ_2026_V2 (cálculos NUEVOS): el libro NO redondea; conserva la precisión de las fórmulas y la celda solo da formato de 2 decimales. Aquí todo el cálculo
+ *  - "al_final" → COSTEO_COTIZADOR_2026_V2 (cálculos NUEVOS): el libro NO redondea; conserva la precisión de las fórmulas y la celda solo da formato de 2 decimales. Aquí todo el cálculo
  *    (componentes, costo base, margen, subtotal, IVA, total, precio/km) se hace con Decimal de 40 dígitos SIN redondear, y se redondea a 2 decimales (HALF_UP) una sola vez, solo para
  *    presentar/persistir. Los valores de cálculo se conservan como cadenas decimales en `precision` (resultado_snapshot) para poder auditar el cálculo exactamente.
  *

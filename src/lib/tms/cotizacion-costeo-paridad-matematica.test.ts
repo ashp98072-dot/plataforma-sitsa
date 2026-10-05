@@ -7,7 +7,7 @@ import {
 } from "./cotizacion-costeo";
 
 /**
- * PARIDAD MATEMÁTICA EXACTA con «Cotizador 2026.xlsx» — COSTEO_COTIZ_2026_V2.
+ * PARIDAD MATEMÁTICA EXACTA con «Cotizador 2026.xlsx» — COSTEO_COTIZADOR_2026_V2.
  *
  * LIBRO = valores leídos DIRECTAMENTE del archivo (openpyxl; fórmulas y valores en caché), hojas «Camion 1 ton», «Camion de 2.7», «Camion de 5», «Camion de 10» y «Cabezales »
  * (NO «COTIZADOR RUTAS»). Cada número de `excel` es la celda D16:O16 / P16 / Q16 / R16 / G3 / H3 tal como la calculó Excel (doble precisión). `literales` son las celdas escritas a mano
@@ -508,7 +508,7 @@ describe("Los datos del libro leído y los valores del ticket coinciden (la fuen
   });
 });
 
-describe.each(HOJAS)("COSTEO_COTIZ_2026_V2 — paridad matemática hoja «%s» (1 día)", (h) => {
+describe.each(HOJAS)("COSTEO_COTIZADOR_2026_V2 — paridad matemática hoja «%s» (1 día)", (h) => {
   const x = LIBRO[h];
   const r = calcular(h);
   it("motor V2 con precisión completa en el snapshot (política «al final»)", () => {
@@ -699,24 +699,26 @@ describe("Configuración de producción (sin los literales del libro): diferenci
 });
 
 describe("Versionado y persistencia", () => {
-  it("V2 cabe en tms_cotizacion_costeos.motor_version (VARCHAR(20)); el nombre «COSTEO_COTIZADOR_2026_V2» (24) no cabría", () => {
+  it("motor_version es VARCHAR(40) en schema.sql (igual que producción) y los nombres de motor caben: COSTEO_COTIZADOR_2026 (21) y COSTEO_COTIZADOR_2026_V2 (24)", () => {
     const schema = readFileSync("sql/schema.sql", "utf8");
     const ancho = Number(/motor_version VARCHAR\((\d+)\) NOT NULL/.exec(schema)![1]);
-    expect(COTIZACION_COSTEO_COTIZADOR_V2_VERSION.length).toBeLessThanOrEqual(ancho);
-    expect("COSTEO_COTIZADOR_2026_V2".length).toBeGreaterThan(ancho);
+    expect(ancho).toBe(40);
+    expect(COTIZACION_COSTEO_COTIZADOR_V2_VERSION).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(COTIZACION_COSTEO_COTIZADOR_V2_VERSION.length).toBe(24);
+    for (const motor of ["COSTEO_V1", "COSTEO_EXCEL_2026", COTIZACION_COSTEO_COTIZADOR_VERSION, COTIZACION_COSTEO_COTIZADOR_V2_VERSION]) expect(motor.length).toBeLessThanOrEqual(ancho);
   });
-  it("la propuesta SQL de motor_version NO se ejecuta aquí: solo SELECT/SHOW activos y un ALTER de ampliación; la reparación está comentada", () => {
-    const sql = readFileSync("sql/propuesta-2026-10-cotizaciones-motor-version.sql", "utf8").replace(/\r\n/g, "\n");
-    expect(sql).toContain("PROPUESTA: NO ejecutada");
+  it("la migración de motor_version YA fue aplicada en producción: el archivo la registra (un solo ALTER, sin diagnóstico pendiente ni reparación) y avisa que no se vuelva a ejecutar", () => {
+    const sql = readFileSync("sql/migrate-2026-10-cotizaciones-motor-version.sql", "utf8").replace(/\r\n/g, "\n");
+    expect(sql).toContain("YA APLICADA MANUALMENTE EN PRODUCCIÓN");
+    expect(sql).toContain("NO volver a ejecutar");
+    expect(sql).not.toMatch(/PROPUESTA|propuesta|pendiente/);
     const activas = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n").split(";").map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
-    expect(activas.map((x) => x.split(" ")[0])).toEqual(["SELECT", "SHOW", "SELECT", "ALTER"]);
-    expect(activas[3]).toBe("ALTER TABLE tms_cotizacion_costeos MODIFY COLUMN motor_version VARCHAR(40) NOT NULL");
-    expect(activas.join(" ")).not.toMatch(/\b(UPDATE|DELETE|DROP|INSERT|TRUNCATE)\b/i);
-    expect(sql).toMatch(/-- UPDATE tms_cotizacion_costeos SET motor_version = 'COSTEO_COTIZADOR_2026'/);
+    expect(activas).toEqual(["ALTER TABLE tms_cotizacion_costeos MODIFY COLUMN motor_version VARCHAR(40) NOT NULL"]);
+    expect(() => readFileSync("sql/propuesta-2026-10-cotizaciones-motor-version.sql", "utf8")).toThrow(); // ya no existe como propuesta pendiente
   });
   it("tres motores distintos coexisten y COSTEO_COTIZADOR_2026 sigue calculándose igual que antes para snapshots/pruebas antiguos", () => {
     expect(COTIZACION_COSTEO_COTIZADOR_VERSION).toBe("COSTEO_COTIZADOR_2026");
-    expect(COTIZACION_COSTEO_COTIZADOR_V2_VERSION).toBe("COSTEO_COTIZ_2026_V2");
+    expect(COTIZACION_COSTEO_COTIZADOR_V2_VERSION).toBe("COSTEO_COTIZADOR_2026_V2");
     expect(esMotorCotizador2026("COSTEO_COTIZADOR_2026")).toBe(true);
     expect(esMotorCotizador2026("COSTEO_EXCEL_2026")).toBe(false);
     expect(esMotorCotizador2026(undefined)).toBe(false);

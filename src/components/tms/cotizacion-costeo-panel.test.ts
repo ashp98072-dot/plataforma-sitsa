@@ -300,7 +300,7 @@ const PARAM_2026 = { ...PARAM, precioCombustibleGalon: 43, seguroMercaderiaAnual
 const INPUT_2026 = { distanciaKm: 220, diasServicio: 2, cantidadPilotos: 1, cantidadAuxiliares: 1, incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, viaticosHotelTotal: 250, seguroMercaderia: 50, otrosCostos: [{ concepto: "Peaje", monto: 100 }] };
 type Motor = "V1" | "EXCEL" | "COTIZADOR" | "V2";
 function version(n: number, motor: Motor = "COTIZADOR", seleccionado = false, over: Partial<SnapshotCosteo> = {}): SnapshotCosteo {
-  const motorVersion = motor === "COTIZADOR" ? "COSTEO_COTIZADOR_2026" : motor === "V2" ? "COSTEO_COTIZ_2026_V2" : motor === "EXCEL" ? "COSTEO_EXCEL_2026" : undefined;
+  const motorVersion = motor === "COTIZADOR" ? "COSTEO_COTIZADOR_2026" : motor === "V2" ? "COSTEO_COTIZADOR_2026_V2" : motor === "EXCEL" ? "COSTEO_EXCEL_2026" : undefined;
   const perfil = motor === "V1" ? PERFIL_MOTOR : { ...PERFIL_2026, rendimientoKmGalon: 25 + n };
   const parametros = motor === "V1" ? PARAM : { ...PARAM_2026, precioCombustibleGalon: 40 + n };
   const input = motor === "V1" ? { distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, incluirGps: true, incluirSeguroVehiculo: true } : { ...INPUT_2026, distanciaKm: 200 + n };
@@ -404,16 +404,16 @@ describe("G. Compatibilidad: V1, COSTEO_EXCEL_2026 y COSTEO_COTIZADOR_2026 se re
     const etiquetas = seccionesConfiguracionCosteo(V2).flatMap((x) => x.filas.map((f) => f[0]));
     expect(etiquetas.filter((e) => /motor anterior/.test(e))).toEqual([]);
   });
-  it("COSTEO_COTIZ_2026_V2: resumen detallado con valores a 2 decimales (sin llenar la pantalla de decimales) y sin globales del motor anterior", () => {
+  it("COSTEO_COTIZADOR_2026_V2: resumen detallado con valores a 2 decimales (sin llenar la pantalla de decimales) y sin globales del motor anterior", () => {
     const v = version(1, "V2", true);
     expect(v.resultado?.precision).toBeDefined(); // el snapshot guarda la precisión; la UI solo muestra 2 decimales
     const salida = html(createElement(TarjetaCosteo, { v, editable: false, abiertoInicial: true }));
-    expect(salida).toContain("Motor: COSTEO_COTIZ_2026_V2"); expect(salida).toContain("Subtotal antes IVA"); expect(salida).toContain("TOTAL CON IVA");
+    expect(salida).toContain("Motor: COSTEO_COTIZADOR_2026_V2"); expect(salida).toContain("Subtotal antes IVA"); expect(salida).toContain("TOTAL CON IVA");
     expect(salida).not.toMatch(/Q[\d,]+\.\d{3,}/); // ningún importe con más de 2 decimales
     expect(seccionesConfiguracionCosteo(v).flatMap((x) => x.filas.map((f) => f[0])).filter((e) => /motor anterior/.test(e))).toEqual([]);
   });
-  it("el motor se toma del resultado persistido: una columna motor_version truncada (VARCHAR(20) vs «COSTEO_COTIZADOR_2026», 21 caracteres) no hace pasar el snapshot por «motor anterior»", () => {
-    const v = version(1, "COTIZADOR", true, { motorVersion: "COSTEO_COTIZADOR_202" });
+  it("el motor se toma del resultado persistido (el de la propia versión) cuando existe: la familia Cotizador no se muestra como «motor anterior»", () => {
+    const v = version(1, "COTIZADOR", true, { motorVersion: "COSTEO_V1" }); // la columna no decide si el resultado persistido dice otra cosa
     expect(v.resultado?.motorVersion).toBe("COSTEO_COTIZADOR_2026");
     expect(seccionesConfiguracionCosteo(v).flatMap((x) => x.filas.map((f) => f[0])).filter((e) => /motor anterior/.test(e))).toEqual([]);
   });
