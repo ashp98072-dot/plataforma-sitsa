@@ -17,7 +17,7 @@ const PERFIL = {
 const PARAMETROS = { precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 };
 const PAYLOAD: CosteoPayload = {
   perfilId: 4, distanciaKm: 600, diasServicio: 1, cantidadPilotos: 2, cantidadAuxiliares: 2, incluirGps: true, incluirSeguroVehiculo: true,
-  viaticoPilotoTotal: 200, viaticoAuxiliarTotal: 200, viaticoGuiaTotal: 125,
+  viaticosHotelTotal: 200,
 };
 
 beforeEach(() => {
@@ -36,6 +36,8 @@ describe("El servidor arma TODO lo económico (el cliente solo manda datos opera
     "gpsMensual", "seguroVehiculoMensual", "precioCombustibleGalon", "costoPilotoDia", "costoAuxiliarDia", "ivaTasa", "costoJuegoLlantas",
     "costoAceiteServicio", "vidaUtilLlantasKm", "vidaUtilAceiteKm", "depreciacion", "costoRefrigeracion", "rendimientoKmGalon", "perfil", "parametros",
     "viaticoPilotoDia", "hotelDia", "precioVenta", "empresaId",
+    // Cotizador 2026: ya no existen guías ni viáticos/hotel separados; el cálculo nuevo los rechaza en vez de ignorarlos en silencio.
+    "cantidadGuias", "viaticoPilotoTotal", "viaticoAuxiliarTotal", "viaticoGuiaTotal", "hotelTotal",
   ])("rechaza el campo %s enviado por el cliente (esquema estricto)", (campo) => {
     expect(conExtra({ [campo]: 1 }).success).toBe(false);
     expect(costeoPayloadSchema.safeParse({ ...PAYLOAD, [campo]: 1 }).success).toBe(false);
@@ -65,13 +67,14 @@ describe("El servidor arma TODO lo económico (el cliente solo manda datos opera
     expect(input.perfil).toEqual({ ...perfilMotor, viajesMes: 20 }); expect(input.parametros).toEqual(PARAMETROS);
     expect(perfil.id).toBe(4); expect(parametrosVigenteDesde).toBe("2026-09-21");
     expect(resultado).toEqual(calcularCosteoServicio(input));
-    expect(resultado.motorVersion).toBe("COSTEO_EXCEL_2026");
+    expect(resultado.motorVersion).toBe("COSTEO_COTIZADOR_2026"); // los cálculos NUEVOS usan el motor del Cotizador 2026
     expect(resultado.gps).toBe(8.71); // GPS por viaje, ya no diario V1.
-    expect(resultado.costoOperativo).toBe(3910.12);
+    expect(resultado.viaticosHotel).toBe(200); // un solo monto, sin multiplicar por personas
+    expect(resultado.costoOperativo).toBe(3585.12);
   });
   it("solo viajan al motor las claves informadas: vacío/null = no informado, nunca 0 implícito", async () => {
-    const { input } = await prepararCosteo(7, { perfilId: 4, distanciaKm: 10, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 0, incluirGps: false, incluirSeguroVehiculo: false, hotelTotal: null, otrosCostos: [] }, { fechaEmision: "2026-09-21" });
-    for (const clave of ["hotelTotal", "seguroMercaderia", "viaticoPilotoTotal", "otrosCostos", "margenObjetivo", "usarRefrigeracion", "cantidadGuias"]) expect(clave in input).toBe(false);
+    const { input } = await prepararCosteo(7, { perfilId: 4, distanciaKm: 10, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 0, incluirGps: false, incluirSeguroVehiculo: false, viaticosHotelTotal: null, otrosCostos: [] }, { fechaEmision: "2026-09-21" });
+    for (const clave of ["viaticosHotelTotal", "seguroMercaderia", "otrosCostos", "margenObjetivo", "usarRefrigeracion", "hotelTotal", "viaticoPilotoTotal", "cantidadGuias"]) expect(clave in input).toBe(false);
   });
   it("datos que el motor rechaza (p. ej. refrigeración sin configuración) => ErrorCosteo con mensaje seguro", async () => {
     const error = await prepararCosteo(7, { ...PAYLOAD, usarRefrigeracion: true }, { fechaEmision: "2026-09-21" }).catch((e) => e);

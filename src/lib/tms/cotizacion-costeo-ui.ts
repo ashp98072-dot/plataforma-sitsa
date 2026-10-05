@@ -14,6 +14,8 @@ export type PerfilOpcion = {
   gpsMensual: number;
   seguroVehiculoMensual: number;
   costoRefrigeracion?: unknown | null;
+  /** Valor predeterminado de «Viáticos y hotel (Q)» del perfil (se muestra como sugerencia del campo). */
+  viaticosHotelViaje?: number | null;
 };
 
 export type OtroCostoForm = { concepto: string; monto: string };
@@ -26,15 +28,12 @@ export type CosteoFormState = {
   diasServicio: string;
   cantidadPilotos: string;
   cantidadAuxiliares: string;
-  cantidadGuias: string;
   incluirGps: boolean;
   incluirSeguroVehiculo: boolean;
   seguroMercaderia: string;
   usarRefrigeracion: boolean;
-  viaticoPilotoTotal: string;
-  viaticoAuxiliarTotal: string;
-  viaticoGuiaTotal: string;
-  hotelTotal: string;
+  /** «Viáticos y hotel (Q)»: UN solo monto del viaje. Vacío = valor del perfil. */
+  viaticosHotelTotal: string;
   otrosCostos: OtroCostoForm[];
   /** En porcentaje (20 = 20 %). Vacío = usar el margen de los parámetros vigentes. */
   margenObjetivoPct: string;
@@ -48,15 +47,11 @@ export const COSTEO_FORM_VACIO: CosteoFormState = {
   diasServicio: "1",
   cantidadPilotos: "1",
   cantidadAuxiliares: "0",
-  cantidadGuias: "0",
   incluirGps: false,
   incluirSeguroVehiculo: false,
   seguroMercaderia: "",
   usarRefrigeracion: false,
-  viaticoPilotoTotal: "",
-  viaticoAuxiliarTotal: "",
-  viaticoGuiaTotal: "",
-  hotelTotal: "",
+  viaticosHotelTotal: "",
   otrosCostos: [],
   margenObjetivoPct: "",
 };
@@ -90,15 +85,11 @@ export type PayloadCosteoCliente = {
   diasServicio: number;
   cantidadPilotos: number;
   cantidadAuxiliares: number;
-  cantidadGuias: number;
   incluirGps: boolean;
   incluirSeguroVehiculo: boolean;
   usarRefrigeracion: boolean;
   seguroMercaderia?: number;
-  viaticoPilotoTotal?: number;
-  viaticoAuxiliarTotal?: number;
-  viaticoGuiaTotal?: number;
-  hotelTotal?: number;
+  viaticosHotelTotal?: number;
   otrosCostos?: { concepto: string; monto: number }[];
   margenObjetivo?: number;
 };
@@ -109,7 +100,7 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   if (!(distanciaKm >= 0)) return { ok: false, error: "Indica la distancia en km (0 o más)." };
   const diasServicio = numero(form.diasServicio);
   if (!(diasServicio > 0)) return { ok: false, error: "Los días de servicio deben ser mayores a cero." };
-  const cantidades = { cantidadPilotos: numero(form.cantidadPilotos), cantidadAuxiliares: numero(form.cantidadAuxiliares), cantidadGuias: numero(form.cantidadGuias) };
+  const cantidades = { cantidadPilotos: numero(form.cantidadPilotos), cantidadAuxiliares: numero(form.cantidadAuxiliares) };
   if (Object.values(cantidades).some((c) => !(c >= 0))) return { ok: false, error: "Las cantidades de personal deben ser 0 o más." };
 
   const payload: PayloadCosteoCliente = {
@@ -125,8 +116,7 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   // Vacío = no informado (nunca 0 implícito): los overrides solo viajan si el usuario los escribió.
   const opcionales = [
     ["precioCombustibleOverride", form.precioCombustibleOverride ?? ""],
-    ["seguroMercaderia", form.seguroMercaderia], ["viaticoPilotoTotal", form.viaticoPilotoTotal], ["viaticoAuxiliarTotal", form.viaticoAuxiliarTotal],
-    ["viaticoGuiaTotal", form.viaticoGuiaTotal], ["hotelTotal", form.hotelTotal],
+    ["seguroMercaderia", form.seguroMercaderia], ["viaticosHotelTotal", form.viaticosHotelTotal],
   ] as const;
   for (const [clave, texto] of opcionales) {
     if (texto.trim() === "") continue;
@@ -184,6 +174,12 @@ export type ResumenCosteoDatos = {
   margenReal: number | null;
   componentes: ComponenteCosteo[];
 };
+
+/**
+ * Motores que guardan un `resultado_snapshot` completo (subtotal, margen, IVA, precio/km). V1 no lo tiene y se muestra con su
+ * formato original; tanto los snapshots del PR #406 como los nuevos del Cotizador 2026 usan el resumen detallado.
+ */
+export const motorConResultadoCompleto = (version: string | undefined | null): boolean => version === "COSTEO_EXCEL_2026" || version === "COSTEO_COTIZADOR_2026";
 
 export function resumenDesdeResultado(r: ResultadoCosteoServicio): ResumenCosteoDatos {
   return {

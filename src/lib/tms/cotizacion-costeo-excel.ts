@@ -3,17 +3,17 @@ import { ErrorCosteo, type InputCosteoServicio, type ResultadoCosteoServicio } f
 import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL } from "./cotizacion-costeo-excel-campos";
 
 // Aritmética decimal local: no modifica la configuración global de Decimal.
-const D = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
-const dec = (v: number) => new D(String(v));
-const q = (v: Decimal) => v.toDecimalPlaces(2).toNumber();
+export const D = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
+export const dec = (v: number) => new D(String(v));
+export const q = (v: Decimal) => v.toDecimalPlaces(2).toNumber();
 /** mysql2 recibe texto decimal, nunca representación binaria para los nuevos importes. */
 export const decimalCosteoSql = (v: number | null, escala = 6): string | null =>
   v == null ? null : dec(v).toFixed(escala);
-function positivo(campo: string, v: number | null | undefined): number {
+export function positivo(campo: string, v: number | null | undefined): number {
   if (v == null || !Number.isFinite(v) || v <= 0) throw new ErrorCosteo(campo, `Configure ${campo} con un valor mayor a cero.`);
   return v;
 }
-function monto(campo: string, v: number | null | undefined): number {
+export function monto(campo: string, v: number | null | undefined): number {
   if (v == null || !Number.isFinite(v) || v < 0) throw new ErrorCosteo(campo, `${campo} debe ser un monto no negativo.`);
   return v;
 }

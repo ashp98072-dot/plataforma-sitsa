@@ -106,6 +106,14 @@ export const CAMPOS_EXCEL_PERFIL = [
     "type": "DECIMAL(12,2)",
     "label": "Salario auxiliar mensual",
     "group": "Personal"
+  },
+  {
+    // Paridad Cotizador 2026: columna única «VIATICOS Y HOTEL» de las hojas del libro (valor directo por viaje).
+    "key": "viaticosHotelViaje",
+    "col": "viaticos_hotel_viaje",
+    "type": "DECIMAL(12,2)",
+    "label": "Viáticos y hotel por viaje (Q)",
+    "group": "Personal"
   }
 ] as const;
 export type ParametrosExcel = {
@@ -123,6 +131,15 @@ export type ParametrosExcel = {
 export type PerfilExcel = {
   salarioPilotoMensual?: number | null;
   salarioAuxiliarMensual?: number | null;
+  /** Valor predeterminado de «Viáticos y hotel (Q)» del perfil (un solo monto por viaje). NULL = sin configurar. */
+  viaticosHotelViaje?: number | null;
+  /**
+   * Comportamiento de la hoja fuente del Cotizador 2026 (fila 15 «Días»): true = el auxiliar se cobra por cada día de servicio,
+   * false = una sola vez, null/ausente = sin configurar (se usa el predeterminado: por día).
+   */
+  auxiliarMultiplicaDias?: boolean | null;
+  /** true = el «Viáticos y hotel» del PERFIL se cobra por cada día, false = una vez, null/ausente = sin configurar (predeterminado: una vez). */
+  viaticosHotelMultiplicaDias?: boolean | null;
   viajesMes?: number | null;
   precioLlanta?: number | null;
   cantidadLlantas?: number | null;

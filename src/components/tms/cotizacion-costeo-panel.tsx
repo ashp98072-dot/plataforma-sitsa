@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import type { ResultadoCosteoServicio } from "@/lib/tms/cotizacion-costeo";
 import {
-  COSTEO_FORM_VACIO, aplicarPerfilCosteo, componentesVisibles, construirPayloadCosteo, huellaCosteo, monedaCosteo, porcentajeCosteo,
+  COSTEO_FORM_VACIO, aplicarPerfilCosteo, componentesVisibles, construirPayloadCosteo, huellaCosteo, monedaCosteo, motorConResultadoCompleto, porcentajeCosteo,
   resumenDesdeResultado, type CosteoFormState, type PayloadCosteoCliente, type PerfilOpcion, type ResumenCosteoDatos,
 } from "@/lib/tms/cotizacion-costeo-ui";
 
@@ -238,7 +238,6 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         {num("Días de servicio", "diasServicio", { min: "0.01" })}
         {num("Pilotos", "cantidadPilotos")}
         {num("Auxiliares", "cantidadAuxiliares")}
-        {num("Guías", "cantidadGuias")}
         {num("Seguro de mercadería (Q)", "seguroMercaderia", { placeholder: "0" })}
       </div>
       <div className="flex flex-wrap gap-4 text-xs">
@@ -247,12 +246,9 @@ export function CotizacionCosteoPanel(p: CotizacionCosteoPanelProps) {
         <label className="flex items-center gap-2"><input type="checkbox" checked={form.usarRefrigeracion} disabled={!perfil?.costoRefrigeracion} onChange={(e) => set({ usarRefrigeracion: e.target.checked })} /> Usar refrigeración</label>
       </div>
       {p.servicioRefrigerado && perfil && !perfil.costoRefrigeracion ? <p role="alert" className="text-xs text-amber-300">El servicio está marcado como refrigerado, pero este perfil no tiene refrigeración configurada. Selecciona otro perfil o corrige la configuración antes de calcular.</p> : null}
-      <p className="text-[11px] text-[var(--muted)]">Overrides opcionales (monto TOTAL del servicio; vacío = cálculo automático):</p>
+      <p className="text-[11px] text-[var(--muted)]">Override opcional del viaje (vacío = valor del perfil):</p>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        {num("Viático piloto total (Q)", "viaticoPilotoTotal")}
-        {num("Viático auxiliar total (Q)", "viaticoAuxiliarTotal")}
-        {num("Viático guía total (Q)", "viaticoGuiaTotal")}
-        {num("Hotel total (Q)", "hotelTotal")}
+        {num("Viáticos y hotel (Q)", "viaticosHotelTotal", { placeholder: perfil?.viaticosHotelViaje != null ? String(perfil.viaticosHotelViaje) : "Valor del perfil" })}
       </div>
       <div className="space-y-1">
         <p className="text-xs text-[var(--muted)]">Otros costos</p>
@@ -295,7 +291,7 @@ function snapshotResumen(c: {
   perfilNombre: string; motorVersion: string; creadoEn: string | null; costoOperativo: number; iva: number; costoConIva: number; margenObjetivo: number;
   precioSugerido: number; precioVenta: number | null; utilidadEstimada: number | null; margenReal: number | null; componentes: ResumenCosteoDatos["componentes"];
 }): SnapshotResumen {
-  return { ...c, ...(c.resultado?.motorVersion === "COSTEO_EXCEL_2026" ? resumenDesdeResultado(c.resultado) : {}) };
+  return { ...c, ...(motorConResultadoCompleto(c.resultado?.motorVersion) && c.resultado ? resumenDesdeResultado(c.resultado) : {}) };
 }
 
 // ---------------------------------------------------------------------------

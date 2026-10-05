@@ -254,3 +254,112 @@ describe("Snapshot: leer", () => {
     expect(vi.mocked(query).mock.calls.every(([sql])=>!String(sql).includes("FROM tms_cotizacion_costeo_parametros"))).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Paridad Cotizador 2026: columna viaticos_hotel_viaje y snapshot COSTEO_COTIZADOR_2026
+// ---------------------------------------------------------------------------
+describe("Perfil: viaticos_hotel_viaje", () => {
+  it("el SELECT del perfil lee la columna nueva y se mapea a viaticosHotelViaje (NULL => null, no 0)", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: "300.00" })] as never);
+    const conValor = await obtenerPerfilCosteo(1, 4);
+    expect(String(vi.mocked(query).mock.calls[0][0])).toContain("viaticos_hotel_viaje");
+    expect(conValor?.viaticosHotelViaje).toBe(300);
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: null })] as never);
+    expect((await obtenerPerfilCosteo(1, 4))?.viaticosHotelViaje).toBeNull();
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: "0.00" })] as never);
+    expect((await obtenerPerfilCosteo(1, 4))?.viaticosHotelViaje).toBe(0); // 0 configurado es 0
+  });
+  it("el SELECT lee las banderas «por cada día» y las mapea: NULL => null (sin configurar), 1 => true, 0 => false", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: 1, viaticos_hotel_multiplica_dias: 0 })] as never);
+    const cfg = await obtenerPerfilCosteo(1, 4);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("auxiliar_multiplica_dias");
+    expect(sql).toContain("viaticos_hotel_multiplica_dias");
+    expect([cfg?.auxiliarMultiplicaDias, cfg?.viaticosHotelMultiplicaDias]).toEqual([true, false]);
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: null, viaticos_hotel_multiplica_dias: null })] as never);
+    const sin = await obtenerPerfilCosteo(1, 4);
+    expect([sin?.auxiliarMultiplicaDias, sin?.viaticosHotelMultiplicaDias]).toEqual([null, null]);
+    vi.mocked(query).mockResolvedValue([filaPerfil()] as never); // fila sin las columnas (datos previos a la migración)
+    expect((await obtenerPerfilCosteo(1, 4))?.auxiliarMultiplicaDias).toBeNull();
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: "0", viaticos_hotel_multiplica_dias: "1" })] as never);
+    const txt = await obtenerPerfilCosteo(1, 4);
+    expect([txt?.auxiliarMultiplicaDias, txt?.viaticosHotelMultiplicaDias]).toEqual([false, true]);
+  });
+  it("sigue filtrando por empresa_id (aislamiento) también al leer la columna nueva", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil()] as never);
+    await listarPerfilesCosteo(7);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("WHERE empresa_id = ?");
+    expect(params).toEqual([7]);
+  });
+});
+
+describe("Snapshot COSTEO_COTIZADOR_2026", () => {
+  const perfil: PerfilCosteoConId = {
+    id: 4, codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas", costoAdquisicion: null, diasOperacionMes: 30, gpsMensual: 100, seguroVehiculoMensual: 950,
+    costoAceiteServicio: 1750, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 3400, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 25, viajesMes: 20,
+    precioLlanta: 850, cantidadLlantas: 4, salarioPilotoMensual: 6787.685066666668, salarioAuxiliarMensual: 6039.965066666668, viaticosHotelViaje: 200,
+    depreciacion: { valorBase: 150000, anios: 5, diasOperacionMes: 26 }, costoRefrigeracion: null,
+  };
+  const parametros = {
+    precioCombustibleGalon: 43, ivaTasa: 0.12, costoPilotoDia: 0, costoAuxiliarDia: 0, viaticoPilotoDia: 0, viaticoAuxiliarDia: 0, viaticoGuiaDia: 0,
+    seguroMercaderiaAnual: 70000, cantidadCamiones: 46, viajesAnuales: 240, diasDepreciacionMes: 26, diasGastosMes: 20, diasLaboralesMes: 20,
+    gastosAdministracion: 90586.01, gastosMantenimiento: 34602.28, gastosSeguridad: 25826.24, gastosPredios: 52221.96,
+  };
+  const { id: _id, ...perfilMotor } = perfil; void _id;
+  const input: InputCosteoServicio = {
+    motorVersion: "COSTEO_COTIZADOR_2026", perfil: perfilMotor, parametros, distanciaKm: 220, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 1,
+    incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, viaticosHotelTotal: 250,
+  };
+  const resultado = calcularCosteoServicio(input);
+  const conexion = () => ({ query: vi.fn(async () => [[]]), execute: vi.fn(async () => [{ insertId: 55, affectedRows: 1 }]) });
+  const guardar = (conn: ReturnType<typeof conexion>) =>
+    guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 10, cotizacionCodigo: "COT-000010", usuario: "admin", costeo: { perfil, input, resultado } });
+
+  it("guarda versión COSTEO_COTIZADOR_2026, importes como texto DECIMAL, el override y el perfil con viaticosHotelViaje", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql.match(/\?/g)).toHaveLength(params.length);
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026");
+    expect(params[9]).toBe(resultado.costoOperativo.toFixed(6));
+    expect(typeof params[9]).toBe("string");
+    expect(JSON.parse(String(params[5]))).toMatchObject({ viaticosHotelViaje: 200 });
+    expect(JSON.parse(String(params[7]))).toMatchObject({ viaticosHotelTotal: 250, margenObjetivo: 0.3 });
+    expect(JSON.parse(String(params[18]))).toEqual(resultado);
+  });
+  it("los componentes llevan UNA sola línea «Viáticos y hotel» (sin viático por rol ni hotel) y suman el costo operativo", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[1] as unknown as [string, unknown[]];
+    const claves = [] as string[];
+    for (let i = 0; i < params.length; i += 6) claves.push(String(params[i + 3]));
+    expect(claves).toContain("viaticosHotel");
+    for (const retirada of ["viaticoPiloto", "viaticoAuxiliar", "viaticoGuia", "hotel"]) expect(claves).not.toContain(retirada);
+    expect(sumaComponentesCoincide(resultado)).toBe(true);
+  });
+  it("la lectura devuelve el resultado guardado tal cual, sin consultar parámetros ni recalcular", async () => {
+    const fila = {
+      id: 55, cotizacion_id: 10, perfil_id: 4, perfil_codigo: "CAMION_2_7T", perfil_nombre: "Camión 2.7 toneladas", perfil_snapshot: JSON.stringify(perfil),
+      parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZADOR_2026",
+      costo_operativo: String(resultado.costoOperativo), iva: String(resultado.iva), costo_con_iva: String(resultado.costoConIva), margen_objetivo: "0.300000",
+      precio_sugerido: String(resultado.precioSugerido), precio_venta: null, utilidad_estimada: null, margen_real: null, creado_por: "admin", creado_en: "2026-10-05 10:00:00",
+      resultado_snapshot: JSON.stringify(resultado),
+    };
+    vi.mocked(query).mockResolvedValueOnce([fila] as never).mockResolvedValueOnce([] as never);
+    const s = await obtenerSnapshotCosteo(1, 10);
+    expect(s?.motorVersion).toBe("COSTEO_COTIZADOR_2026");
+    expect(s?.resultado).toEqual(resultado);
+    expect(vi.mocked(query).mock.calls.every(([sql]) => !String(sql).includes("FROM tms_cotizacion_costeo_parametros"))).toBe(true);
+  });
+  it("los snapshots anteriores (V1 y COSTEO_EXCEL_2026) siguen usando su propio formato de persistencia", async () => {
+    const conn = conexion();
+    const anterior = { ...input, motorVersion: "COSTEO_EXCEL_2026", viaticosHotelTotal: undefined, hotelTotal: 900 };
+    const r = calcularCosteoServicio(anterior);
+    await guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 11, cotizacionCodigo: "COT-000011", usuario: "admin", costeo: { perfil, input: anterior, resultado: r } });
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_EXCEL_2026");
+    expect(params[9]).toBe(r.costoOperativo.toFixed(6));
+    expect(r.hotel).toBe(900);
+  });
+});
