@@ -502,7 +502,7 @@ export default function CotizacionesPage() {
               <input type="number" min="0" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.tarifaKmAdicional} onChange={(e) => setForm((f) => ({ ...f, tarifaKmAdicional: e.target.value }))} />
             </label>
           </div>
-          {/* COTIZACIONES-CREDITO-COMBUSTIBLE — datos COMERCIALES (van al PDF); no confundir con el costeo interno ni con la tarifa de referencia. */}
+          {/* COTIZACIONES-CREDITO-COMBUSTIBLE — las condiciones de crédito son datos COMERCIALES (van al PDF); el combustible de referencia es SOLO de control interno (se guarda y se ve aquí, pero NO sale en el PDF). No confundir con el costeo interno ni con la tarifa de referencia. */}
           <label className="block text-xs text-[var(--muted)]">Condiciones de crédito
             <input
               className={`${inputCls} mt-0.5 w-full`}

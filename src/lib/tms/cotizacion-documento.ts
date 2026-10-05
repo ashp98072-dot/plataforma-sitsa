@@ -184,8 +184,8 @@ export function condicionesComerciales(c: DatosDocumento): string[] {
   // (cotizaciones históricas) la línea se omite en vez de imprimir "—".
   const credito = textoOpcional(c.condicionesCredito);
   if (credito) items.push(`Condiciones de crédito: ${credito}`);
-  const combustible = textoCombustibleReferencia(c.combustibleReferenciaTipo, c.combustibleReferenciaPrecio);
-  if (combustible) items.push(`Combustible de referencia: ${combustible}`);
+  // El combustible de referencia (tipo y precio) es SOLO de control interno: se guarda con la cotización y se ve en la pantalla interna,
+  // pero NUNCA se agrega a las condiciones ni a ningún otro bloque del documento comercial (PDF KuiqTrans / Mónaco).
   items.push(...lineasDeTexto(c.condicionesAdicionales));
   return items;
 }
@@ -205,9 +205,8 @@ export type DocumentoComercial = {
   encabezadoPrecio: string;
   moneda: string;
   condiciones: string[];
-  /** COTIZACIONES-CREDITO-COMBUSTIBLE — valores guardados (también incluidos como líneas en `condiciones`). */
+  /** COTIZACIONES-CREDITO-COMBUSTIBLE — valor guardado (también incluido como línea en `condiciones`). El combustible de referencia NO forma parte del documento comercial. */
   condicionesCredito: string | null;
-  combustibleReferencia: string | null;
   observaciones: string[];
   cierre: string;
 };
@@ -243,7 +242,6 @@ export function construirDocumentoComercial(c: DatosDocumento): DocumentoComerci
     moneda: c.moneda,
     condiciones: condicionesComerciales(c),
     condicionesCredito: textoOpcional(c.condicionesCredito),
-    combustibleReferencia: textoCombustibleReferencia(c.combustibleReferenciaTipo, c.combustibleReferenciaPrecio),
     observaciones: lineasDeTexto(c.observaciones),
     cierre: textoOpcional(c.cierreComercial) ?? marca.cierre,
   };

@@ -25,7 +25,8 @@ import { cotizacionPdfMonaco } from "./cotizacion-pdf-monaco";
 
 /**
  * COTIZACIONES-CREDITO-COMBUSTIBLE — condiciones de crédito + combustible de referencia: datos comerciales guardados
- * con la cotización (NULL en históricas), editables solo en Borrador, copiados al duplicar y mostrados en ambos PDFs.
+ * con la cotización (NULL en históricas), editables solo en Borrador y copiados al duplicar. Las condiciones de crédito se muestran en ambos PDFs;
+ * el combustible de referencia es SOLO de control interno y NO aparece en ningún PDF comercial.
  */
 const leer = (ruta: string) => readFileSync(join(process.cwd(), ruta), "utf8");
 
@@ -240,12 +241,15 @@ describe("documento comercial y PDFs", () => {
     return { buffer, todo };
   }
 
-  it("construirDocumentoComercial usa solo el valor guardado y lo pone en condiciones", () => {
+  it("construirDocumentoComercial usa solo el valor guardado de crédito y lo pone en condiciones; el combustible de referencia NO entra al documento comercial", () => {
     const doc = construirDocumentoComercial(CON);
     expect(doc.condicionesCredito).toBe("Crédito 30 días");
-    expect(doc.combustibleReferencia).toBe(textoCombustibleReferencia("diesel", 29.75));
     expect(doc.condiciones).toContain("Condiciones de crédito: Crédito 30 días");
-    expect(doc.condiciones.some((l) => l.startsWith("Combustible de referencia: Diésel") && l.includes("29.75") && l.endsWith("/galón"))).toBe(true);
+    expect(doc.condiciones.some((l) => /combustible|di[eé]sel|galón/i.test(l))).toBe(false);
+    expect(doc).not.toHaveProperty("combustibleReferencia");
+    // El dato sigue existiendo en la cotización (modelo interno): solo se impide que salga en el documento.
+    expect(CON.combustibleReferenciaTipo).toBe("diesel");
+    expect(textoCombustibleReferencia("diesel", 29.75)).toContain("29.75");
   });
 
   it("PDF KuiqTrans muestra condiciones de crédito", async () => {
@@ -255,17 +259,19 @@ describe("documento comercial y PDFs", () => {
     expect(todo).not.toContain("Combustible de referencia");
   });
 
-  it("PDF KuiqTrans muestra combustible de referencia", async () => {
+  it("PDF KuiqTrans con combustible guardado: NO muestra el combustible de referencia (ni tipo ni precio)", async () => {
     const { todo } = await textosPdf(() => cotizacionPdfKuiqtrans(construirDocumentoComercial({ ...CON, documentoEmisor: "KUIQTRANS", condicionesCredito: null })));
-    expect(todo).toContain("Combustible de referencia: Diésel");
+    expect(todo).not.toContain("Combustible de referencia");
+    expect(todo).not.toMatch(/Di[eé]sel|29\.75|\/galón/);
     expect(todo).not.toContain("Condiciones de crédito");
   });
 
-  it("PDF Mónaco muestra ambos", async () => {
+  it("PDF Mónaco muestra condiciones de crédito pero NO el combustible de referencia", async () => {
     const { buffer, todo } = await textosPdf(() => cotizacionPdfMonaco(construirDocumentoComercial({ ...CON, documentoEmisor: "MONACO", combustibleReferenciaTipo: "gasolina", combustibleReferenciaPrecio: 32.1 })));
     expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
     expect(todo).toContain("Condiciones de crédito: Crédito 30 días");
-    expect(todo).toContain("Combustible de referencia: Gasolina");
+    expect(todo).not.toContain("Combustible de referencia");
+    expect(todo).not.toMatch(/Gasolina|32\.10|\/galón/);
   });
 
   it("PDF de cotización histórica sin datos no falla y omite las líneas", async () => {
@@ -273,7 +279,6 @@ describe("documento comercial y PDFs", () => {
       const historica: Cotizacion = { ...COTIZACION_DOC, documentoEmisor: emisor };
       const doc = construirDocumentoComercial(historica);
       expect(doc.condicionesCredito).toBeNull();
-      expect(doc.combustibleReferencia).toBeNull();
       const { buffer, todo } = await textosPdf(() => gen(doc));
       expect(buffer.subarray(0, 4).toString("latin1")).toBe("%PDF");
       expect(todo).not.toContain("Condiciones de crédito");
@@ -283,7 +288,7 @@ describe("documento comercial y PDFs", () => {
 
   it("el precio histórico no se recalcula: el documento no consulta BD ni Ajustes", () => {
     const doc = construirDocumentoComercial({ ...CON, combustibleReferenciaPrecio: 25.4 });
-    expect(doc.combustibleReferencia).toContain("25.40");
+    expect(doc.condicionesCredito).toBe("Crédito 30 días");
     expect(query).not.toHaveBeenCalled();
     const fuente = leer("src/lib/tms/cotizacion-documento.ts");
     expect(fuente).not.toMatch(/from\s+["']@\/lib\/db["']/);
