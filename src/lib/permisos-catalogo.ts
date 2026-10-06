@@ -1,6 +1,7 @@
 import type { PermisoModulo } from "./permisos-shared";
 import { tienePermiso } from "./permisos-shared";
 import { puedeEditarModulo, type Modulo, type RolGlobal } from "./roles";
+import { alcanceFacturacionPorRol } from "./facturacion/alcance-rol";
 
 export type FlagPermiso = keyof Omit<PermisoModulo, "modulo">;
 export type AreaPermiso = "rrhh" | "operaciones" | "flota" | "contabilidad" | "sitio" | "administracion";
@@ -10,6 +11,10 @@ export type AccionCatalogo = {
   descripcion?: string;
   /** Únicamente un grant equivalente anterior, nunca eliminar -> anular. */
   legacy?: { modulo: string; flag: FlagPermiso };
+  /** Acción del mismo módulo que debe estar activa para que esta lo esté (p. ej. editar requiere ver). Activarla activa la requerida; quitar la requerida la limpia. */
+  requiere?: string;
+  /** Subtítulo con el que la matriz de Usuarios agrupa visualmente acciones consecutivas del módulo (no cambia el catálogo ni la persistencia). */
+  grupo?: string;
 };
 export type ModuloCatalogo = { id: string; label: string; area: AreaPermiso; acciones: AccionCatalogo[] };
 export const AREAS_PERMISOS = [
@@ -93,6 +98,17 @@ agregar("viaticos",
 agregar("programacion", accion("viajes_cerrar","cerrar","Cerrar administrativamente",E), nueva("programacion","exportar","Exportar reportes", "puedeVer"));
 agregar("cotizaciones", nueva("cotizaciones","estado","Cambiar estado / marcar enviada",E));
 agregar("facturacion", nueva("facturacion","emitir","Emitir factura",E), nueva("facturacion","anular","Anular factura",E), nueva("facturacion","pagos","Registrar pago",C));
+// FACTURACION-PERMISOS-CONFIG-REQUISITOS: «Configuración empresa» y «Requisitos clientes» dejan de depender del ROL (alcanceFacturacion) y pasan a ser acciones
+// asignables, independientes de emitir/anular/pagar («Emitir factura» solo es borrador -> emitida; nunca edita NIT, razón social, FEL ni configuración).
+// Cada sección usa una fila propia (VARCHAR(40)) con dos flags: ver = puedeVer, editar = puedeEditar. Sin fila explícita NO hay acceso (a diferencia de `nueva`, no hay
+// fallback a facturacion:editar); la equivalencia legacy por rol se materializa como filas en adaptarPermisosLegacy. Activar cualquiera activa «Ver» de Facturación.
+export const FILA_FACTURACION_EMPRESA = "facturacion_empresa";
+export const FILA_FACTURACION_REQUISITOS = "facturacion_clientes_requisitos";
+agregar("facturacion",
+  { ...accion(FILA_FACTURACION_EMPRESA,"ver_empresa","Ver configuración de facturación de la empresa","puedeVer"), grupo: "Configuración de la empresa" },
+  { ...accion(FILA_FACTURACION_EMPRESA,"editar_empresa","Editar configuración de facturación de la empresa",E), requiere: "ver_empresa", grupo: "Configuración de la empresa" },
+  { ...accion(FILA_FACTURACION_REQUISITOS,"ver_requisitos","Ver requisitos de facturación de clientes","puedeVer"), grupo: "Requisitos de clientes" },
+  { ...accion(FILA_FACTURACION_REQUISITOS,"editar_requisitos","Editar requisitos de facturación de clientes",E), requiere: "ver_requisitos", grupo: "Requisitos de clientes" });
 // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (fila propia `flota_vehiculos_otras_empresas`, flag editar). Activarla implica
 // «Ver vehículos» y quitar «Ver vehículos» la limpia (mismas dependencias que el resto de acciones, ver cambiarAccion). No es acceso global: solo habilita editar
 // vehículos de otras empresas que sean ACCESIBLES desde la empresa activa (propios o compartidos con ella); no amplía las operaciones solo-dueña.
@@ -136,6 +152,27 @@ export const VERSION_PERMISOS = "permisos_acciones_v2";
  * Una matriz V2 explícita no vuelve a heredar esos grants al desmarcar Ver.
  */
 export function adaptarPermisosLegacy(permisos: PermisoModulo[], rol?: string): PermisoModulo[] {
+  return conEquivalenciasFacturacion(adaptarBase(permisos, rol), rol);
+}
+/**
+ * Equivalencia por ROL de «Configuración empresa» / «Requisitos clientes» (antes salía de alcanceFacturacion(rol)). Solo agrega la fila de permiso cuando AÚN NO
+ * existe: una fila explícita (aunque esté en cero) es la fuente de verdad y no se vuelve a mirar el rol. Requiere «Ver Facturación». Sin rol (p. ej. al normalizar
+ * lo que envía la UI) no hace nada. Aplica tanto a matrices anteriores a la V2 como a V2 ya guardadas que todavía no tenían estas filas.
+ */
+function conEquivalenciasFacturacion(permisos: PermisoModulo[], rol?: string): PermisoModulo[] {
+  if (!rol || !flag(permisos,"facturacion","puedeVer")) return permisos;
+  const alc = alcanceFacturacionPorRol(rol);
+  const salida = [...permisos];
+  for (const [fila, ver, editar] of [
+    [FILA_FACTURACION_EMPRESA, alc.verEmpresa, alc.editarEmpresa],
+    [FILA_FACTURACION_REQUISITOS, alc.verClientes, alc.editarClientes],
+  ] as const) {
+    if (!ver || salida.some(p => p.modulo === fila)) continue;
+    salida.push({...vacio(fila), puedeVer: true, puedeEditar: editar});
+  }
+  return salida;
+}
+function adaptarBase(permisos: PermisoModulo[], rol?: string): PermisoModulo[] {
   if (permisos.some(p => p.modulo === VERSION_PERMISOS && p.puedeVer)) return permisos.map(p => ({...p}));
   const mapa = new Map(permisos.map(p => [p.modulo,{...p}]));
   // Los permisos especializados también inferían lectura desde su acción.
@@ -214,6 +251,10 @@ export function cambiarAccion(permisos: PermisoModulo[], moduloId: string, id: s
   };
   asignar(a,valor);
   if (id !== "ver" && valor) asignar(m.acciones[0]!,true);
+  // Dependencia dentro del módulo (p. ej. editar requiere ver): activarla activa la requerida y quitar la requerida limpia las que dependen de ella.
+  const requerida = a.requiere ? m.acciones.find(x => x.id === a.requiere) : undefined;
+  if (valor && requerida) asignar(requerida,true);
+  if (!valor) for (const dependiente of m.acciones.filter(x => x.requiere === id)) asignar(dependiente,false);
   if (id !== "ver" && valor && a.modulo !== m.id) {
     // Las bandejas/GET de los permisos especializados requieren su lectura.
     const propio = mapa.get(a.modulo)!;

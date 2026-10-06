@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -141,16 +142,21 @@ function PermisosTable({ modulos, permisos, onChange }: {
           <fieldset key={id} className="rounded border border-[var(--border)] p-3">
             <legend className="px-1 text-sm font-medium">{modulo.label}</legend>
             <div className="flex flex-wrap gap-x-5 gap-y-2">
-              {modulo.acciones.map((a) => (
-                <label key={a.id} className="flex items-center gap-2 text-xs" title={a.descripcion}>
-                  <input type="checkbox"
-                    checked={tieneAccionCatalogo(permisos, id, a.id)}
-                    onChange={(e) => onChange(id, a.id, e.target.checked)} />
-                  <span>
-                    {a.label}
-                    {a.descripcion ? <span className="block max-w-xs text-[10px] text-[var(--muted)]">{a.descripcion}</span> : null}
-                  </span>
-                </label>
+              {modulo.acciones.map((a, i) => (
+                <Fragment key={a.id}>
+                  {a.grupo && a.grupo !== modulo.acciones[i - 1]?.grupo ? (
+                    <p className="basis-full pt-1 text-[11px] font-medium uppercase tracking-wide text-[var(--muted)]">{a.grupo}</p>
+                  ) : null}
+                  <label className="flex items-center gap-2 text-xs" title={a.descripcion}>
+                    <input type="checkbox"
+                      checked={tieneAccionCatalogo(permisos, id, a.id)}
+                      onChange={(e) => onChange(id, a.id, e.target.checked)} />
+                    <span>
+                      {a.label}
+                      {a.descripcion ? <span className="block max-w-xs text-[10px] text-[var(--muted)]">{a.descripcion}</span> : null}
+                    </span>
+                  </label>
+                </Fragment>
               ))}
             </div>
           </fieldset>

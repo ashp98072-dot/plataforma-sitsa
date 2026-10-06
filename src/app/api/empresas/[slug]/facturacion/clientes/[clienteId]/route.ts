@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireClientesOFacturacion } from "@/lib/clientes/acceso";
 import { obtenerCliente } from "@/lib/clientes/repository";
-import {
-  alcanceFacturacion,
-  denyFacturacionAlcance,
-} from "@/lib/facturacion/alcance";
+import { requireFacturacionConfig } from "@/lib/facturacion/acceso";
 import { CUESTIONARIO_CLIENTE } from "@/lib/facturacion/cuestionario";
 import {
   guardarPerfilCliente,
@@ -16,14 +12,8 @@ type Ctx = { params: Promise<{ slug: string; clienteId: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireClientesOFacturacion(slug, "facturacion");
+  const guard = await requireFacturacionConfig(slug, "ver_requisitos");
   if (guard.error) return guard.error;
-  const alcance = alcanceFacturacion(guard.session.rol);
-  if (!alcance.verClientes) {
-    return denyFacturacionAlcance(
-      "Solo Operaciones administra la facturación por cliente.",
-    );
-  }
   const cliente = await obtenerCliente(guard.empresa.id, Number(clienteId));
   if (!cliente) {
     return NextResponse.json({ error: "Cliente no encontrado." }, { status: 404 });
@@ -54,14 +44,8 @@ const schema = z.object({
 
 export async function PUT(req: Request, ctx: Ctx) {
   const { slug, clienteId } = await ctx.params;
-  const guard = await requireClientesOFacturacion(slug, "facturacion", true);
+  const guard = await requireFacturacionConfig(slug, "editar_requisitos");
   if (guard.error) return guard.error;
-  const alcance = alcanceFacturacion(guard.session.rol);
-  if (!alcance.editarClientes) {
-    return denyFacturacionAlcance(
-      "Solo Operaciones puede editar la facturación por cliente.",
-    );
-  }
   const cliente = await obtenerCliente(guard.empresa.id, Number(clienteId));
   if (!cliente) {
     return NextResponse.json({ error: "Cliente no encontrado." }, { status: 404 });

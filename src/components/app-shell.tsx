@@ -19,7 +19,7 @@ import { AccountMenu } from "@/components/account-menu";
 import { NovalvionIcono } from "@/components/novalvion-brand";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
-import { alcanceFacturacion } from "@/lib/facturacion/alcance";
+import { capacidadesFacturacion } from "@/lib/facturacion/capacidades";
 import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
 import type { RolGlobal } from "@/lib/roles";
 
@@ -491,7 +491,7 @@ export function AppShell({
       if (isAdmin || tienePermisoBase(permisos, "compras_requerimientos")) opsLinks.push({ href: `${base}/compras/requerimientos`, label: "Requerimientos de compra", key: "compras-requerimientos" });
       if (isAdmin || tienePermisoBase(permisos, "compras_proveedores")) opsLinks.push({ href: `${base}/compras/proveedores`, label: "Proveedores comerciales", key: "compras-proveedores" });
     }
-    const alcanceFact = alcanceFacturacion(rol);
+    const alcanceFact = capacidadesFacturacion(permisos, rol);
     const puedeVerFact =
       isAdmin ||
       tienePermisoBase(permisos, "facturacion");
