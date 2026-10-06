@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
 import type { RolGlobal } from "@/lib/roles";
+import { adaptarPermisosLegacy, normalizarMatriz } from "@/lib/permisos-catalogo";
 import {
   catalogoPermisosRol,
   esFlotaSubmodulo,
@@ -61,7 +62,7 @@ async function permisosEfectivosUncached(
 
   const stored = await listarPermisosUsuario(usuarioId);
   if (stored.length === 0) {
-    return permisosDefaultPorRol(rol);
+    return adaptarPermisosLegacy(permisosDefaultPorRol(rol), rol);
   }
 
   const defaults = permisosDefaultPorRol(rol);
@@ -95,7 +96,7 @@ async function permisosEfectivosUncached(
     }),
     ...extras,
   ];
-  return data;
+  return adaptarPermisosLegacy(data, rol);
 }
 
 /** Lectura vigente: evita permisos obsoletos entre procesos/instancias. */
@@ -105,41 +106,27 @@ export async function guardarPermisosUsuario(
   usuarioId: number,
   permisos: PermisoModulo[],
 ): Promise<void> {
-  await execute(
-    "DELETE FROM usuario_modulo WHERE usuario_id = ? AND empresa_id IS NULL",
-    [usuarioId],
-  );
-  for (const p of permisos) {
-    // Guardamos también filas en cero para respetar desmarques explícitos.
-    try {
-      await execute(
+  const normalizados = normalizarMatriz(permisos);
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    // V2 necesita los cuatro flags y filas explícitas en cero. No degradar
+    // silenciosamente una revocación a la variante antigua de dos flags.
+    await conn.query("SELECT puede_crear, puede_eliminar FROM usuario_modulo LIMIT 0");
+    await conn.execute("DELETE FROM usuario_modulo WHERE usuario_id = ? AND empresa_id IS NULL", [usuarioId]);
+    for (const p of normalizados) {
+      await conn.execute(
         `INSERT INTO usuario_modulo
           (usuario_id, empresa_id, modulo, puede_ver, puede_crear, puede_editar, puede_eliminar)
          VALUES (?, NULL, ?, ?, ?, ?, ?)`,
-        [
-          usuarioId,
-          p.modulo,
-          p.puedeVer ? 1 : 0,
-          p.puedeCrear ? 1 : 0,
-          p.puedeEditar ? 1 : 0,
-          p.puedeEliminar ? 1 : 0,
-        ],
-      );
-    } catch {
-      if (!p.puedeVer && !p.puedeCrear && !p.puedeEditar && !p.puedeEliminar) {
-        continue;
-      }
-      await execute(
-        `INSERT INTO usuario_modulo
-          (usuario_id, empresa_id, modulo, puede_ver, puede_editar)
-         VALUES (?, NULL, ?, ?, ?)`,
-        [
-          usuarioId,
-          p.modulo,
-          p.puedeVer ? 1 : 0,
-          p.puedeEditar || p.puedeCrear || p.puedeEliminar ? 1 : 0,
-        ],
+        [usuarioId, p.modulo, Number(p.puedeVer), Number(p.puedeCrear), Number(p.puedeEditar), Number(p.puedeEliminar)],
       );
     }
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
   }
 }

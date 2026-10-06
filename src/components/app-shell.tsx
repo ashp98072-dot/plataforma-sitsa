@@ -1,6 +1,8 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { tienePermisoBase } from "@/lib/permisos-catalogo";
+import { enlaceSidebarActivo } from "@/lib/sidebar-activo";
 import { useEffect, useMemo, useState } from "react";
 import { mapaDominios } from "@/lib/dominios";
 import {
@@ -8,7 +10,6 @@ import {
   RRHH_NAV,
   esPlataformaPermisible,
   labelRol,
-  tienePermiso,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
 import { MODULO_LABEL, type Modulo } from "@/lib/roles";
@@ -143,13 +144,6 @@ function IconClose() {
   );
 }
 
-function linkActive(pathname: string, href: string) {
-  const pathOnly = href.split("?")[0];
-  if (pathname === pathOnly) return true;
-  if (pathOnly !== "/" && pathname.startsWith(pathOnly + "/")) return true;
-  return false;
-}
-
 export function AppShell({
   slug,
   empresaNombre,
@@ -160,6 +154,7 @@ export function AppShell({
   children,
 }: Props) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const base = `/e/${slug}`;
   const [dominioEmpresa, setDominioEmpresa] = useState(false);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
@@ -215,7 +210,7 @@ export function AppShell({
 
     const rrhhLinks: NavLink[] = [];
     if (rol === "RRHH" || isAdmin || modulos.includes("rrhh")) {
-      if (rol === "RRHH" || isAdmin) {
+      if (isAdmin || tienePermisoBase(permisos, "rrhh")) {
         rrhhLinks.push({
           href: homeRrhh,
           label: "Dashboard Talento Humano",
@@ -226,8 +221,7 @@ export function AppShell({
         for (const item of RRHH_NAV) {
           if (
             !isAdmin &&
-            permisos.length > 0 &&
-            !tienePermiso(permisos, item.sub, "ver")
+            !tienePermisoBase(permisos, item.sub)
           ) {
             continue;
           }
@@ -246,7 +240,7 @@ export function AppShell({
           ["rrhh_requerimientos", "Requerimientos", "requerimientos"],
           ["rrhh_proveedores", "Proveedores", "proveedores"],
         ] as const) {
-          if (!isAdmin && permisos.length > 0 && !tienePermiso(permisos, modulo, "ver")) continue;
+          if (!isAdmin && !tienePermisoBase(permisos, modulo)) continue;
           rrhhLinks.push({ href: `${base}/rrhh/${path}`, label, key: `rrhh-${modulo}` });
         }
       }
@@ -273,8 +267,7 @@ export function AppShell({
     const puedeVerAtraccion =
       modulos.includes("rrhh") &&
       (isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "entrevistas", "ver"));
+        tienePermisoBase(permisos, "entrevistas"));
     if (puedeVerAtraccion) {
       atraccionLinks.push({
         href: dominioEmpresa
@@ -306,9 +299,8 @@ export function AppShell({
         if (!modulos.includes(m)) return false;
         if (
           !isAdmin &&
-          permisos.length > 0 &&
           esPlataformaPermisible(m) &&
-          !tienePermiso(permisos, m, "ver")
+          !tienePermisoBase(permisos, m)
         ) {
           return false;
         }
@@ -316,7 +308,7 @@ export function AppShell({
       },
     );
     // Dashboard Operaciones solo si el usuario tiene algún módulo de ops (no Predios puro).
-    if (isAdmin || rol === "Operaciones" || opsMods.length > 0) {
+    if (isAdmin || opsMods.length > 0) {
       opsLinks.push({
         href: homeOps,
         label: "Dashboard Operaciones",
@@ -327,13 +319,11 @@ export function AppShell({
     const puedeDisponibilidad =
       rol !== "Piloto" &&
       (isAdmin ||
-        rol === "Operaciones" ||
-        opsMods.includes("tms") ||
+        (modulos.includes("tms") && tienePermisoBase(permisos, "tms")) ||
         (modulos.includes("flota") &&
-          (permisos.length === 0 ||
-            tienePermiso(permisos, "flota_vehiculos", "ver") ||
-            tienePermiso(permisos, "flota_reportes", "ver") ||
-            tienePermiso(permisos, "tms", "ver"))));
+          (tienePermisoBase(permisos, "flota_vehiculos") ||
+            tienePermisoBase(permisos, "flota_reportes") ||
+            tienePermisoBase(permisos, "tms"))));
     if (puedeDisponibilidad) {
       opsLinks.push({
         href: `${base}/disponibilidad`,
@@ -360,10 +350,8 @@ export function AppShell({
     const puedeRutas =
       rol !== "Piloto" &&
       (isAdmin ||
-        (opsMods.includes("tms") &&
-          (permisos.length === 0 ||
-            tienePermiso(permisos, "rutas", "ver") ||
-            tienePermiso(permisos, "tms", "ver"))));
+        (modulos.includes("tms") &&
+          (tienePermisoBase(permisos, "rutas"))));
     if (puedeRutas) {
       opsLinks.push({
         href: `${base}/rutas`,
@@ -380,9 +368,8 @@ export function AppShell({
     const puedeProgramacion =
       rol !== "Piloto" &&
       (isAdmin ||
-        rol === "Operaciones" ||
-        (opsMods.includes("tms") &&
-          (permisos.length === 0 || tienePermiso(permisos, "programacion", "ver"))));
+        (modulos.includes("tms") &&
+          (tienePermisoBase(permisos, "programacion"))));
     if (puedeProgramacion) {
       opsLinks.push({
         href: `${base}/programacion`,
@@ -412,10 +399,7 @@ export function AppShell({
       rol !== "Piloto" &&
       modulos.includes("tms") &&
       (isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "viaticos", "ver") ||
-        tienePermiso(permisos, "viaticos_autorizar", "ver") ||
-        tienePermiso(permisos, "viaticos_pagar", "ver"));
+        tienePermisoBase(permisos, "viaticos"));
     if (puedeViaticos) {
       opsLinks.push({
         href: `${base}/viaticos`,
@@ -429,10 +413,8 @@ export function AppShell({
     const puedeGastos =
       rol !== "Piloto" &&
       (isAdmin ||
-        (opsMods.includes("tms") &&
-          (permisos.length === 0 ||
-            tienePermiso(permisos, "gastos", "ver") ||
-            tienePermiso(permisos, "tms", "ver"))));
+        (modulos.includes("tms") &&
+          (tienePermisoBase(permisos, "gastos"))));
     if (puedeGastos) {
       opsLinks.push({
         href: `${base}/gastos`,
@@ -461,10 +443,8 @@ export function AppShell({
     const puedeCotizaciones =
       rol !== "Piloto" &&
       (isAdmin ||
-        (opsMods.includes("tms") &&
-          (permisos.length === 0 ||
-            tienePermiso(permisos, "cotizaciones", "ver") ||
-            tienePermiso(permisos, "tms", "ver"))));
+        (modulos.includes("tms") &&
+          (tienePermisoBase(permisos, "cotizaciones"))));
     if (puedeCotizaciones) {
       opsLinks.push({
         href: `${base}/cotizaciones`,
@@ -474,8 +454,8 @@ export function AppShell({
     }
     const puedeAjustesCotizaciones =
       rol !== "Piloto" &&
-      opsMods.includes("tms") &&
-      (isAdmin || tienePermiso(permisos, "cotizaciones_ajustes", "ver"));
+      modulos.includes("tms") &&
+      (isAdmin || tienePermisoBase(permisos, "cotizaciones_ajustes"));
     if (puedeAjustesCotizaciones) {
       opsLinks.push({
         href: `${base}/cotizaciones/ajustes`,
@@ -489,8 +469,8 @@ export function AppShell({
     // ticket lo pide explícito: "Usar permiso multas:ver. NO usar rol.").
     const puedeMultas =
       rol !== "Piloto" &&
-      opsMods.includes("tms") &&
-      (isAdmin || permisos.length === 0 || tienePermiso(permisos, "multas", "ver"));
+      modulos.includes("tms") &&
+      (isAdmin || tienePermisoBase(permisos, "multas"));
     if (puedeMultas) {
       opsLinks.push({
         href: `${base}/operaciones/multas`,
@@ -498,7 +478,7 @@ export function AppShell({
         key: "multas",
       });
     }
-    if (puedeUsarPortalesProveedores(rol as RolGlobal)) {
+    if (puedeUsarPortalesProveedores(rol as RolGlobal) && (isAdmin || tienePermisoBase(permisos, "proveedor_portales"))) {
       opsLinks.push({
         href: `${base}/portales-proveedores`,
         label: "Accesos proveedores",
@@ -507,23 +487,21 @@ export function AppShell({
     }
     // No depender de tms:ver: el catálogo tiene permiso propio y su guard
     // comprueba que la empresa tenga Operaciones habilitado.
-    if ((isAdmin && modulos.includes("tms")) || (!isAdmin && (tienePermiso(permisos, "compras_proveedores", "ver") || tienePermiso(permisos, "compras_requerimientos", "ver")))) {
-      if (isAdmin || tienePermiso(permisos, "compras_requerimientos", "ver")) opsLinks.push({ href: `${base}/compras/requerimientos`, label: "Requerimientos de compra", key: "compras-requerimientos" });
-      if (isAdmin || tienePermiso(permisos, "compras_proveedores", "ver")) opsLinks.push({ href: `${base}/compras/proveedores`, label: "Proveedores comerciales", key: "compras-proveedores" });
+    if ((isAdmin && modulos.includes("tms")) || (!isAdmin && (tienePermisoBase(permisos, "compras_proveedores") || tienePermisoBase(permisos, "compras_requerimientos")))) {
+      if (isAdmin || tienePermisoBase(permisos, "compras_requerimientos")) opsLinks.push({ href: `${base}/compras/requerimientos`, label: "Requerimientos de compra", key: "compras-requerimientos" });
+      if (isAdmin || tienePermisoBase(permisos, "compras_proveedores")) opsLinks.push({ href: `${base}/compras/proveedores`, label: "Proveedores comerciales", key: "compras-proveedores" });
     }
     const alcanceFact = alcanceFacturacion(rol);
     const puedeVerFact =
       isAdmin ||
-      permisos.length === 0 ||
-      tienePermiso(permisos, "facturacion", "ver");
+      tienePermisoBase(permisos, "facturacion");
     // Operaciones: facturación por cliente (también Admin, aparte de Conta).
     if (
       modulos.includes("facturacion") &&
-      puedeVerFact &&
-      alcanceFact.verClientes
+      puedeVerFact
     ) {
       opsLinks.push({
-        href: `${base}/facturacion?vista=clientes`,
+        href: `${base}/facturacion?vista=${alcanceFact.verClientes ? "clientes" : "facturas"}`,
         label: "Facturación clientes",
         key: "fact-cli",
       });
@@ -555,14 +533,14 @@ export function AppShell({
     const flotaLinks: NavLink[] = [];
     if (modulos.includes("flota")) {
       // Piloto: ir directo a registrar viaje
-      if (rol === "Piloto") {
+      if (rol === "Piloto" && (isAdmin || tienePermisoBase(permisos, "flota_piloto"))) {
         flotaLinks.push({
           href: `${base}/flota?tab=piloto`,
           label: "Registrar viaje",
           key: "flota-piloto",
         });
       } else {
-        flotaLinks.push({
+        if (isAdmin || tienePermisoBase(permisos, "flota")) flotaLinks.push({
           href: `${base}/flota`,
           label: "Dashboard flota",
           key: "flota-home",
@@ -570,8 +548,7 @@ export function AppShell({
         for (const item of FLOTA_NAV) {
           if (
             !isAdmin &&
-            permisos.length > 0 &&
-            !tienePermiso(permisos, item.sub, "ver")
+            !tienePermisoBase(permisos, item.sub)
           ) {
             continue;
           }
@@ -596,8 +573,7 @@ export function AppShell({
     if (modulos.includes("clientes")) {
       if (
         isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "clientes", "ver")
+        tienePermisoBase(permisos, "clientes")
       ) {
         clientesLinks.push({
           href: `${base}/clientes`,
@@ -631,8 +607,7 @@ export function AppShell({
     if (modulos.includes("contabilidad")) {
       if (
         isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "contabilidad", "ver")
+        tienePermisoBase(permisos, "contabilidad")
       ) {
         contaLinks.push({
           href: `${base}/contabilidad`,
@@ -653,8 +628,7 @@ export function AppShell({
     if (modulos.includes("cms")) {
       if (
         isAdmin ||
-        permisos.length === 0 ||
-        tienePermiso(permisos, "cms", "ver")
+        tienePermisoBase(permisos, "cms")
       ) {
         g.push({
           id: "cms",
@@ -712,10 +686,12 @@ export function AppShell({
     rol,
   ]);
 
+  const activeHref = enlaceSidebarActivo(pathname, searchParams.toString(), groups.flatMap((g) => g.links.map((l) => l.href)));
+  const linkActive = (_pathname: string, href: string) => href === activeHref;
   // Abrir el grupo activo automáticamente
   useEffect(() => {
     const activo = groups.find((gr) =>
-      gr.links.some((l) => linkActive(pathname, l.href)),
+      gr.links.some((l) => l.href === activeHref),
     );
     if (!activo) return;
     const t = window.setTimeout(() => {
@@ -724,7 +700,7 @@ export function AppShell({
       );
     }, 0);
     return () => window.clearTimeout(t);
-  }, [pathname, groups]);
+  }, [activeHref, groups]);
 
   function toggle(id: string) {
     setAbiertos((prev) => ({ ...prev, [id]: !prev[id] }));

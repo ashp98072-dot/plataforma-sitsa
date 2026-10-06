@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { aplicarDefaultsRutaCotizacion, sugerirServicioRefrigerado } from "@/lib/tms/cotizacion-defaults";
@@ -124,6 +126,8 @@ const FORM_VACIO = {
  */
 export default function CotizacionesPage() {
   const slug = String(useParams().slug);
+  const { permisos, rol } = useEmpresaSession();
+  const puedeCambiarEstado = rol === "Admin" || tieneAccionCatalogo(permisos,"cotizaciones","estado");
 
   const [cotizaciones, setCotizaciones] = useState<Cotizacion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -580,8 +584,8 @@ export default function CotizacionesPage() {
                 </button>
                 {c.estado === "Borrador" ? <button type="button" onClick={() => editar(c)} className="text-[var(--accent)]">Editar</button> : null}
                 <a href={`/api/empresas/${slug}/tms/cotizaciones/${c.id}/pdf`} className="rounded border border-[var(--border)] px-2 py-1">PDF comercial</a>
-                {c.estado === "Borrador" ? <button type="button" onClick={() => void cambiarEstado(c.id, "Enviada")} className="rounded bg-amber-600 px-2 py-1 text-white">Marcar enviada</button> : null}
-                {c.estado === "Enviada" ? (
+                {puedeCambiarEstado && c.estado === "Borrador" ? <button type="button" onClick={() => void cambiarEstado(c.id, "Enviada")} className="rounded bg-amber-600 px-2 py-1 text-white">Marcar enviada</button> : null}
+                {puedeCambiarEstado && c.estado === "Enviada" ? (
                   <>
                     <button type="button" onClick={() => void cambiarEstado(c.id, "Aceptada")} className="rounded bg-emerald-600 px-2 py-1 text-white">Aceptada</button>
                     <button type="button" onClick={() => void cambiarEstado(c.id, "Rechazada")} className="rounded bg-red-600 px-2 py-1 text-white">Rechazada</button>

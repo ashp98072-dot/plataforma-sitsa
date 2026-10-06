@@ -4,11 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ listarParadasDePlanes: vi.fn(() => Promise.resolve(new Map())) }));
 vi.mock("@/lib/rrhh/export-files", () => ({ tablaAExcel: vi.fn(async () => Buffer.from("xlsx")), tablaAPdf: vi.fn(async () => Buffer.from("pdf")) }));
-vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionOTms: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionExportar: vi.fn() }));
 
 import { query } from "@/lib/db";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import { obtenerReporteViajes, type PlanReporte } from "./reportes-viajes";
 import { filaOperativa, HEADERS_OPERATIVOS, reporteViajesHistorialPdf } from "./reporte-viajes-historial-pdf";
 import { reporteViajePdf } from "./reporte-viaje-pdf";
@@ -170,7 +170,7 @@ describe("cierre", () => {
 
 describe("reportes / exportaciones", () => {
   it("5) Excel de Planes/Viajes: 'Vehículo solicitado' al FINAL, separado de Equipo asignado/Identificación vehículo", async () => {
-    vi.mocked(requireTenantProgramacionOTms).mockResolvedValue({ error: null, empresa: { id: 7, nombre: "KT" } } as never);
+    vi.mocked(requireTenantProgramacionExportar).mockResolvedValue({ error: null, empresa: { id: 7, nombre: "KT" } } as never);
     vi.mocked(query).mockImplementation((async (sql: string) => {
       const s = String(sql);
       if (s.includes("LEFT JOIN tms_clientes")) return [fila(), fila({ id: 2, codigo: "PLAN-2", vehiculo_solicitado_perfil_id: null, vehiculo_solicitado_nombre: null })];

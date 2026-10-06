@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 
 /**
  * TMS-PROGRAMACION-HABILITACIONES-1 — panel de administración (3 estados por rol: Sin habilitar/
@@ -49,9 +50,16 @@ describe("Integración en el área TMS existente", () => {
   });
 });
 
-describe("TMS-PROGRAMACION-HABILITACIONES-1 (corrección post-revisión) — panel gateado por tms:editar", () => {
-  it("calcula puedeEditarTms con tienePermiso(permisosTms, \"tms\", \"editar\") — mismo patrón que puedeCerrarViaje", () => {
-    expect(page).toContain('const puedeEditarTms = tienePermiso(permisosTms, "tms", "editar");');
+describe("Habilitaciones — panel gateado por gestionar TMS", () => {
+  it("usa la acción central; Ver no concede gestión y una denegación explícita prevalece", () => {
+    const expresion = page.match(/const puedeEditarTms = (.*);/)?.[1];
+    expect(expresion).toContain('tieneAccionCatalogo(permisosTms, "tms", "gestionar")');
+    const evaluar = new Function("rol","permisosTms","tieneAccionCatalogo",`return ${expresion};`);
+    const ver = {modulo:"tms",puedeVer:true,puedeCrear:false,puedeEditar:false,puedeEliminar:false};
+    expect(evaluar("Operaciones",[ver],tieneAccionCatalogo)).toBe(false);
+    expect(evaluar("Operaciones",[ver,{...ver,modulo:"tms_gestionar"}],tieneAccionCatalogo)).toBe(true);
+    expect(evaluar("Operaciones",[{...ver,puedeEditar:true},{...ver,modulo:"tms_gestionar",puedeVer:false}],tieneAccionCatalogo)).toBe(false);
+    expect(evaluar("Admin",[],tieneAccionCatalogo)).toBe(true);
   });
 
   it("el bloque completo de 'Habilitaciones operativas' (el <details> entero) está condicionado a puedeEditarTms", () => {
@@ -72,7 +80,7 @@ describe("TMS-PROGRAMACION-HABILITACIONES-1 (corrección post-revisión) — pan
     expect(bloque).toContain(") : null}");
   });
 
-  it("el backend sigue siendo la autoridad real: PUT exige tms:editar vía requireTenantModulo, sin cambios", () => {
+  it("el backend sigue siendo la autoridad real: PUT usa requireTenantModulo con escritura", () => {
     const route = readFileSync("src/app/api/empresas/[slug]/tms/personal-habilitaciones/route.ts", "utf8");
     expect(route).toContain('requireTenantModulo(slug, "tms", true)');
   });

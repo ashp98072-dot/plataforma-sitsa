@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ listarParadasDePlanes: vi.fn(() => Promise.resolve(new Map())) }));
 vi.mock("@/lib/rrhh/export-files", () => ({ tablaAExcel: vi.fn(async () => Buffer.from("xlsx")), tablaAPdf: vi.fn(async () => Buffer.from("pdf")) }));
-vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionOTms: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionExportar: vi.fn() }));
 vi.mock("@/lib/tms/reporte-viajes-historial-pdf", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tms/reporte-viajes-historial-pdf")>()),
   reporteViajesHistorialPdf: vi.fn(async () => Buffer.from("pdf")),
@@ -12,7 +12,7 @@ vi.mock("@/lib/tms/reporte-viajes-historial-pdf", async (importOriginal) => ({
 
 import { query } from "@/lib/db";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import { calcularKpisReporte, obtenerReporteViajes, resolverTcReporte, type PlanReporte } from "./reportes-viajes";
 import { filaOperativa, HEADERS_OPERATIVOS, reporteViajesHistorialPdf } from "./reporte-viajes-historial-pdf";
 import { etiquetaOrigenTc } from "./tc-viaje-shared";
@@ -196,7 +196,7 @@ const plan = (over: Partial<PlanReporte> = {}) => ({
 
 describe("exportación Excel de viajes", () => {
   beforeEach(() => {
-    vi.mocked(requireTenantProgramacionOTms).mockResolvedValue({ empresa: { id: 7, nombre: "ACME" }, session: {} } as never);
+    vi.mocked(requireTenantProgramacionExportar).mockResolvedValue({ empresa: { id: 7, nombre: "ACME" }, session: {} } as never);
   });
   const exportarConPlanes = async (planes: PlanReporte[]) => {
     vi.mocked(query).mockImplementation((async (sql: string) => {

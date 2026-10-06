@@ -7,6 +7,8 @@ import { alcanceFacturacion } from "@/lib/facturacion/alcance";
 import { asegurarSchemaFacturacion } from "@/lib/facturacion/schema";
 import { obtenerEmpresaPorSlug } from "@/lib/empresas";
 import { getSession } from "@/lib/session";
+import { permisosEfectivos } from "@/lib/permisos";
+import { tienePermisoBase } from "@/lib/permisos-catalogo";
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -20,6 +22,9 @@ export default async function FacturacionPage({ params, searchParams }: Props) {
     getSession(),
     obtenerEmpresaPorSlug(slug),
   ]);
+  if (!session || !empresa || (session.rol !== "Admin" && !tienePermisoBase(await permisosEfectivos(session.id, session.rol), "facturacion"))) {
+    return <p>Sin permiso para ver Facturación.</p>;
+  }
   if (empresa) {
     await asegurarSchemaClientes();
     await asegurarSchemaFacturacion();

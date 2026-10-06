@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 
 export default function TarimasPage() {
   const slug = String(useParams().slug);
+  const { permisos, rol } = useEmpresaSession();
+  const puedeGestionar = rol === "Admin" || tieneAccionCatalogo(permisos, "tarimas", "gestionar");
   const [ordenes, setOrdenes] = useState<Record<string, unknown>[]>([]);
   const [form, setForm] = useState({
     codigo: "",
@@ -27,6 +31,7 @@ export default function TarimasPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!puedeGestionar) return;
     const res = await fetch(`/api/empresas/${slug}/tarimas`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -43,13 +48,13 @@ export default function TarimasPage() {
       <p className="text-sm text-[var(--muted)]">
         Órdenes de fabricación/venta (Tarimas Center).
       </p>
-      <form onSubmit={onSubmit} className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+      {puedeGestionar ? <form onSubmit={onSubmit} className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Código" value={form.codigo} onChange={(e) => setForm({ ...form, codigo: e.target.value })} required />
         <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Cliente" value={form.cliente} onChange={(e) => setForm({ ...form, cliente: e.target.value })} />
         <input type="number" className="w-28 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={form.cantidad} onChange={(e) => setForm({ ...form, cantidad: Number(e.target.value) })} />
         <input type="date" className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={form.fecha} onChange={(e) => setForm({ ...form, fecha: e.target.value })} />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Crear orden</button>
-      </form>
+      </form> : null}
       {msg ? <p className="text-sm">{msg}</p> : null}
       <ul className="space-y-1 text-sm">
         {ordenes.map((o) => (
