@@ -3,7 +3,7 @@ import {
   asegurarModulosClientesFacturacion,
   asegurarSchemaClientes,
 } from "@/lib/clientes/schema";
-import { alcanceFacturacion } from "@/lib/facturacion/alcance";
+import { capacidadesFacturacion } from "@/lib/facturacion/capacidades";
 import { asegurarSchemaFacturacion } from "@/lib/facturacion/schema";
 import { obtenerEmpresaPorSlug } from "@/lib/empresas";
 import { getSession } from "@/lib/session";
@@ -22,7 +22,9 @@ export default async function FacturacionPage({ params, searchParams }: Props) {
     getSession(),
     obtenerEmpresaPorSlug(slug),
   ]);
-  if (!session || !empresa || (session.rol !== "Admin" && !tienePermisoBase(await permisosEfectivos(session.id, session.rol), "facturacion"))) {
+  if (!session || !empresa) return <p>Sin permiso para ver Facturación.</p>;
+  const permisos = await permisosEfectivos(session.id, session.rol);
+  if (session.rol !== "Admin" && !tienePermisoBase(permisos, "facturacion")) {
     return <p>Sin permiso para ver Facturación.</p>;
   }
   if (empresa) {
@@ -30,7 +32,8 @@ export default async function FacturacionPage({ params, searchParams }: Props) {
     await asegurarSchemaFacturacion();
     await asegurarModulosClientesFacturacion(empresa.id);
   }
-  const alcance = alcanceFacturacion(session?.rol ?? "");
+  // Capacidades de Configuración empresa / Requisitos clientes: PERMISOS asignables (catálogo granular), no el rol.
+  const alcance = capacidadesFacturacion(permisos, session.rol);
   const vistaRaw = (sp.vista ?? "").toLowerCase();
   const VISTAS_VALIDAS = ["facturas", "viajes-pendientes", "clientes", "empresa", "ayuda"] as const;
   const vistaInicial = (VISTAS_VALIDAS as readonly string[]).includes(vistaRaw)

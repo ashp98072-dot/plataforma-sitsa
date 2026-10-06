@@ -1,71 +1,17 @@
 import { NextResponse } from "next/server";
+import {
+  alcanceFacturacionPorRol,
+  type AlcanceFacturacion,
+} from "@/lib/facturacion/alcance-rol";
 
-/** Quién ve/edita cada parte de Facturación. */
-export type AlcanceFacturacion = {
-  verEmpresa: boolean;
-  editarEmpresa: boolean;
-  verClientes: boolean;
-  editarClientes: boolean;
-};
+export type { AlcanceFacturacion };
 
 /**
- * Contabilidad → solo facturación de la empresa.
- * Operaciones → solo facturación por cliente.
- * Admin → ambas. Visualizador → lectura de ambas.
+ * @deprecated Solo equivalencia LEGACY por rol. Las capacidades de Facturación (configuración de la empresa y requisitos de clientes) salen de
+ * los permisos asignables: usar `capacidadesFacturacion(permisos, rol)` (capacidades.ts) y `requireFacturacionConfig` (acceso.ts) en el backend.
  */
 export function alcanceFacturacion(rol: string): AlcanceFacturacion {
-  if (rol === "Admin") {
-    return {
-      verEmpresa: true,
-      editarEmpresa: true,
-      verClientes: true,
-      editarClientes: true,
-    };
-  }
-  if (rol === "Contabilidad") {
-    return {
-      verEmpresa: true,
-      editarEmpresa: true,
-      verClientes: false,
-      editarClientes: false,
-    };
-  }
-  if (rol === "Operaciones") {
-    return {
-      verEmpresa: false,
-      editarEmpresa: false,
-      verClientes: true,
-      editarClientes: true,
-    };
-  }
-  if (rol === "Visualizador") {
-    return {
-      verEmpresa: true,
-      editarEmpresa: false,
-      verClientes: true,
-      editarClientes: false,
-    };
-  }
-  // FACT-1-UI — Facturador necesita llegar a "Facturación clientes" (ahí
-  // viven ahora las pestañas Facturas/Viajes pendientes, gateadas aparte
-  // por el permiso propio facturacion:ver/crear/editar, ver
-  // requireTenantFacturacion). Ve el cuestionario de requisitos por
-  // cliente en solo lectura (contexto útil al facturar) pero no lo edita
-  // — eso sigue siendo trabajo de Operaciones.
-  if (rol === "Facturador") {
-    return {
-      verEmpresa: false,
-      editarEmpresa: false,
-      verClientes: true,
-      editarClientes: false,
-    };
-  }
-  return {
-    verEmpresa: false,
-    editarEmpresa: false,
-    verClientes: false,
-    editarClientes: false,
-  };
+  return alcanceFacturacionPorRol(rol);
 }
 
 export function denyFacturacionAlcance(

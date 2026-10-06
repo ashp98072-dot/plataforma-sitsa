@@ -6,6 +6,7 @@ import {
 } from "./empresas";
 import { derivarModulosEmpresa } from "./roles";
 import { tieneAccionCatalogo, tienePermisoBase, tienePermisoOperativo } from "./permisos-catalogo";
+import { capacidadesFacturacion } from "./facturacion/capacidades";
 import { puedeUsarPortalesProveedores } from "./proveedores/acceso";
 import {
   puedeEditarModulo,
@@ -1190,9 +1191,16 @@ export async function requireTenantRrhhAny(
  * "tms" como alternativa) — mantenerlos separados es precisamente lo que
  * impide que dar acceso a TMS implique acceso a facturación, o viceversa.
  */
+export type AccionConfigFacturacion = "ver_empresa" | "editar_empresa" | "ver_requisitos" | "editar_requisitos";
+const MENSAJE_CONFIG_FACTURACION: Record<AccionConfigFacturacion, string> = {
+  ver_empresa: "Sin permiso para ver la configuración de facturación de la empresa.",
+  editar_empresa: "Sin permiso para editar la configuración de facturación de la empresa.",
+  ver_requisitos: "Sin permiso para ver los requisitos de facturación de clientes.",
+  editar_requisitos: "Sin permiso para editar los requisitos de facturación de clientes.",
+};
 export async function requireTenantFacturacion(
   slug: string,
-  accion: AccionPermiso | "emitir" | "anular" | "pagos" = "ver",
+  accion: AccionPermiso | "emitir" | "anular" | "pagos" | AccionConfigFacturacion = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -1213,9 +1221,19 @@ export async function requireTenantFacturacion(
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  // Configuración de la empresa / requisitos de clientes: permisos PROPIOS (capacidades.ts), nunca el rol ni «emitir/editar factura».
+  if (accion in MENSAJE_CONFIG_FACTURACION) {
+    const cap = capacidadesFacturacion(perms, session.rol);
+    const permitido = {
+      ver_empresa: cap.verEmpresa, editar_empresa: cap.editarEmpresa,
+      ver_requisitos: cap.verClientes, editar_requisitos: cap.editarClientes,
+    }[accion as AccionConfigFacturacion];
+    if (permitido) return { session, empresa };
+    return { error: NextResponse.json({ error: MENSAJE_CONFIG_FACTURACION[accion as AccionConfigFacturacion] }, { status: 403 }) };
+  }
   const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos"
     ? tieneAccionCatalogo(perms, "facturacion", accion)
-    : tienePermiso(perms, "facturacion", accion);
+    : tienePermiso(perms, "facturacion", accion as AccionPermiso);
   if (tienePermisoBase(perms, "facturacion") && autorizado) {
     return { session, empresa };
   }

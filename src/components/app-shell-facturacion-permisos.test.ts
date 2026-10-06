@@ -1,15 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { tienePermisoBase } from "@/lib/permisos-catalogo";
+import { adaptarPermisosLegacy, tienePermisoBase } from "@/lib/permisos-catalogo";
 import { alcanceFacturacion } from "@/lib/facturacion/alcance";
+import { capacidadesFacturacion } from "@/lib/facturacion/capacidades";
 import type { PermisoModulo } from "@/lib/permisos-shared";
 const src = readFileSync("src/components/app-shell.tsx","utf8");
 const bloque = src.slice(src.indexOf("    const alcanceFact ="),src.indexOf("    for (const m of opsMods)"));
 const permiso = (modulo: string, puedeVer: boolean): PermisoModulo => ({modulo,puedeVer,puedeCrear:false,puedeEditar:false,puedeEliminar:false});
 function links(rol: string, permisos: PermisoModulo[], modulos = ["facturacion"]) {
-  return new Function("rol","permisos","modulos","isAdmin","alcanceFacturacion","tienePermisoBase","base",
+  // El AppShell recibe los permisos EFECTIVOS (ya adaptados con el rol): se reproduce aquí.
+  return new Function("rol","permisos","modulos","isAdmin","capacidadesFacturacion","tienePermisoBase","base",
     "const opsLinks = []; " + bloque + "; return opsLinks;")(
-      rol,permisos,modulos,rol==="Admin",alcanceFacturacion,tienePermisoBase,"/e/kt");
+      rol,adaptarPermisosLegacy(permisos,rol),modulos,rol==="Admin",capacidadesFacturacion,tienePermisoBase,"/e/kt");
 }
 describe("Facturación clientes: caso estructural independiente del username", () => {
   it.each(["JefeOperaciones","GerenteOperaciones","AuxiliarOperaciones"])("%s con Ver accede a Facturas aunque no administra cuestionarios", rol => {
