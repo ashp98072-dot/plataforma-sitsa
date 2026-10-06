@@ -5,21 +5,24 @@ import { PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS } from "@/lib/permisos-shared";
  *
  * Regla única (la usan el backend y la UI, así nunca divergen):
  *
- *   puedeEditarVehiculo = esEmpresaPropietaria  OR  (permiso «flota_vehiculos_otras_empresas:editar» AND la empresa propietaria es una de las
- *                                                    empresas que el usuario está autorizado a operar)
+ *   puedeEditarVehiculo = esEmpresaPropietaria  OR  (permiso «flota_vehiculos_otras_empresas:editar» AND el vehículo es ACCESIBLE desde la empresa activa)
+ *
+ * «Accesible desde la empresa activa» es la regla REAL que ya hace aparecer un vehículo en la empresa activa (`obtenerVehiculoAccesible` /
+ * `listarVehiculosAccesibles`, src/lib/flota/acceso.ts): el vehículo es propio de la empresa activa o está explícitamente compartido con ella
+ * (`flota_vehiculo_acceso`). No se inventa una condición paralela. El usuario NO necesita acceso directo a la empresa propietaria: basta que el
+ * vehículo esté compartido y visible en la empresa activa (que a su vez ya validó `requireTenant`). El permiso NO es acceso global: un vehículo de
+ * otra empresa que no esté compartido con la empresa activa (o de otro tenant) no es accesible, así que no se puede editar aunque se manipulen ids.
  *
  * No depende de `username` ni de `rol`: el permiso es un registro más de la matriz de Usuarios (Admin lo recibe por catálogo global; el
- * Encargado de Taller lo recibe cuando un Admin se lo asigna). El permiso NUNCA amplía el alcance más allá de las empresas del usuario: un
- * vehículo de una empresa a la que el usuario no tiene acceso no se puede editar aunque se manipulen los ids.
+ * Encargado de Taller lo recibe cuando un Admin se lo asigna).
  *
  * Editar NO transfiere la propiedad: el UPDATE nunca toca `empresa_id` y se acota por la empresa propietaria leída de la BD (nunca del cliente).
  */
 export { PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS };
 
 export const MENSAJE_SOLO_EMPRESA_DUENA = "Este vehículo es compartido; solo la empresa dueña puede editarlo.";
-export const MENSAJE_EMPRESA_DUENA_NO_AUTORIZADA = "No tienes acceso a la empresa propietaria de este vehículo; no puedes editarlo.";
 
-export type MotivoDenegado = "no_dueno" | "empresa_no_autorizada";
+export type MotivoDenegado = "no_dueno" | "no_accesible";
 
 export type DecisionEdicionVehiculo = {
   puede: boolean;
@@ -35,14 +38,17 @@ export function decidirEdicionVehiculo(i: {
   empresaDuenaId: number;
   /** El usuario tiene «Editar vehículos de otras empresas» (o es Admin). */
   permisoTransversal: boolean;
-  /** Empresas que el usuario está autorizado a operar (solo hace falta cuando hay permiso transversal). */
-  empresasAutorizadasIds: number[];
+  /**
+   * El vehículo es accesible desde la empresa activa (propio o compartido con ella): el resultado de `obtenerVehiculoAccesible` /
+   * `listarVehiculosAccesibles`. Un vehículo que no lo es ni siquiera se encuentra (404) y nunca llega a esta función como `true`.
+   */
+  vehiculoAccesibleDesdeEmpresaActiva: boolean;
 }): DecisionEdicionVehiculo {
   const esDueno = i.empresaActivaId === i.empresaDuenaId;
   if (esDueno) return { puede: true, esDueno: true, porPermisoTransversal: false, motivoDenegado: null };
   if (!i.permisoTransversal) return { puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "no_dueno" };
-  if (!i.empresasAutorizadasIds.includes(i.empresaDuenaId)) {
-    return { puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "empresa_no_autorizada" };
+  if (!i.vehiculoAccesibleDesdeEmpresaActiva) {
+    return { puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "no_accesible" };
   }
   return { puede: true, esDueno: false, porPermisoTransversal: true, motivoDenegado: null };
 }
@@ -55,12 +61,8 @@ export function esSolicitudSoloTaller(clavesPresentes: string[]): boolean {
   return clavesPresentes.includes("enTaller") && clavesPresentes.every((k) => (CLAVES_OPERACION_TALLER as readonly string[]).includes(k));
 }
 
-export function mensajeDenegado(motivo: MotivoDenegado | null): string {
-  return motivo === "empresa_no_autorizada" ? MENSAJE_EMPRESA_DUENA_NO_AUTORIZADA : MENSAJE_SOLO_EMPRESA_DUENA;
-}
-
 export function avisoEdicionOtraEmpresa(empresaDuena: string): string {
-  return `Vehículo propiedad de ${empresaDuena}. Tienes permiso para editar vehículos de otras empresas.`;
+  return `Vehículo propiedad de ${empresaDuena}. Tienes permiso para editar vehículos compartidos de otras empresas.`;
 }
 
 /** Texto de la auditoría de una edición transversal (sin datos sensibles): vehículo, empresa propietaria, empresa activa y usuario. */

@@ -9,18 +9,18 @@ vi.mock("@/lib/flota/acceso", () => ({
   listarEmpresasActivasSimple: vi.fn(async () => []), guardarAccesoVehiculo: vi.fn(),
 }));
 vi.mock("@/lib/flota/filtros", () => ({ guardarFiltrosVehiculo: vi.fn(), listarFiltrosPorVehiculos: vi.fn(async () => new Map()) }));
-vi.mock("@/lib/empresas", () => ({ empresasParaUsuario: vi.fn(), obtenerEmpresaPorId: vi.fn() }));
+vi.mock("@/lib/empresas", () => ({ obtenerEmpresaPorId: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn() }));
 
 import { execute, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny, sesionPuedeEditarVehiculosOtrasEmpresas } from "@/lib/tenant";
 import { listarVehiculosAccesibles, obtenerVehiculoAccesible, guardarAccesoVehiculo } from "@/lib/flota/acceso";
 import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
-import { empresasParaUsuario, obtenerEmpresaPorId } from "@/lib/empresas";
+import { obtenerEmpresaPorId } from "@/lib/empresas";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { GET, PATCH } from "../../app/api/empresas/[slug]/flota/vehiculos/route";
 import {
-  MENSAJE_EMPRESA_DUENA_NO_AUTORIZADA, MENSAJE_SOLO_EMPRESA_DUENA, avisoEdicionOtraEmpresa, decidirEdicionVehiculo,
+  MENSAJE_SOLO_EMPRESA_DUENA, avisoEdicionOtraEmpresa, decidirEdicionVehiculo,
   detalleAuditoriaEdicionTransversal, esSolicitudSoloTaller,
 } from "./edicion-vehiculo";
 import {
@@ -32,8 +32,10 @@ import { ROLES } from "@/lib/roles";
 /**
  * FLOTA — EDICIÓN DE VEHÍCULOS COMPARTIDOS / DE OTRAS EMPRESAS.
  * Escenario real: empresa activa = Logiservicios Mónaco (id 2); vehículo C-091BXF propiedad de Frescofresh (id 9), compartido con Mónaco.
+ * Regla: propietaria OR (permiso transversal AND vehículo ACCESIBLE desde la empresa activa — la regla real de obtenerVehiculoAccesible: propio o
+ * compartido con la empresa activa). El usuario NO necesita acceso directo a la propietaria.
  */
-const MONACO = 2, FRESCOFRESH = 9, OTRO_ENTORNO = 77;
+const MONACO = 2, FRESCOFRESH = 9;
 const sesion = (rol = "CoordinadorPredios", extra: Record<string, unknown> = {}) => ({ id: 41, username: "taller", rol, accesoTodas: false, ...extra });
 const guardOk = (rol = "CoordinadorPredios") => ({ session: sesion(rol), empresa: { id: MONACO, nombre: "Logiservicios Mónaco", slug: "monaco", modulos: ["flota"] } }) as never;
 const vehiculo = (over: Record<string, unknown> = {}) => ({
@@ -44,12 +46,11 @@ const vehiculo = (over: Record<string, unknown> = {}) => ({
 const patch = (body: Record<string, unknown>) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), { params: Promise.resolve({ slug: "monaco" }) });
 const get = () => GET(new Request("http://x/api"), { params: Promise.resolve({ slug: "monaco" }) });
 
-/** Configura sesión/permiso/empresas autorizadas y el vehículo accesible. */
-function escenario(o: { rol?: string; permiso?: boolean; autorizadas?: number[]; vehiculo?: Record<string, unknown> | null } = {}) {
+/** Configura sesión/permiso y el vehículo accesible desde la empresa activa (`vehiculo: null` = NO accesible: no es propio ni está compartido con ella). */
+function escenario(o: { rol?: string; permiso?: boolean; vehiculo?: Record<string, unknown> | null } = {}) {
   vi.mocked(requireTenantFlota).mockResolvedValue(guardOk(o.rol));
   vi.mocked(requireTenantFlotaAny).mockResolvedValue(guardOk(o.rol));
   vi.mocked(sesionPuedeEditarVehiculosOtrasEmpresas).mockResolvedValue(o.permiso ?? false);
-  vi.mocked(empresasParaUsuario).mockResolvedValue((o.autorizadas ?? [MONACO]).map((id) => ({ id })) as never);
   vi.mocked(obtenerVehiculoAccesible).mockResolvedValue((o.vehiculo === undefined ? vehiculo() : o.vehiculo) as never);
   vi.mocked(obtenerEmpresaPorId).mockResolvedValue({ id: FRESCOFRESH, nombre: "Frescofresh" } as never);
   vi.mocked(execute).mockResolvedValue([{ affectedRows: 1 }] as never);
@@ -59,23 +60,25 @@ const updates = () => vi.mocked(execute).mock.calls.map((c) => ({ sql: String(c[
 
 beforeEach(() => vi.resetAllMocks());
 
-describe("decidirEdicionVehiculo: puedeEditar = propietaria OR permiso transversal (con empresa propietaria autorizada)", () => {
-  const base = { empresaActivaId: MONACO, empresaDuenaId: FRESCOFRESH, permisoTransversal: false, empresasAutorizadasIds: [MONACO, FRESCOFRESH] };
-  it("A. empresa propietaria: edita (sin necesitar el permiso transversal)", () => {
+describe("decidirEdicionVehiculo: puedeEditar = propietaria OR (permiso transversal AND vehículo accesible desde la empresa activa)", () => {
+  const base = { empresaActivaId: MONACO, empresaDuenaId: FRESCOFRESH, permisoTransversal: false, vehiculoAccesibleDesdeEmpresaActiva: true };
+  it("1. empresa propietaria: edita (sin necesitar el permiso transversal)", () => {
     expect(decidirEdicionVehiculo({ ...base, empresaActivaId: FRESCOFRESH })).toEqual({ puede: true, esDueno: true, porPermisoTransversal: false, motivoDenegado: null });
   });
-  it("B. otra empresa SIN permiso transversal: no edita (aunque tenga acceso a ambas empresas)", () => {
+  it("3. vehículo compartido SIN permiso transversal: no edita", () => {
     expect(decidirEdicionVehiculo(base)).toEqual({ puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "no_dueno" });
   });
-  it("C. otra empresa CON permiso transversal: edita y se marca como edición transversal", () => {
+  it("2. vehículo compartido CON permiso transversal: edita y se marca como edición transversal (no se pide acceso a la propietaria)", () => {
     expect(decidirEdicionVehiculo({ ...base, permisoTransversal: true })).toEqual({ puede: true, esDueno: false, porPermisoTransversal: true, motivoDenegado: null });
   });
-  it("F. con permiso, pero la empresa propietaria no está entre las que el usuario opera: NO edita (otro entorno)", () => {
-    expect(decidirEdicionVehiculo({ ...base, permisoTransversal: true, empresaDuenaId: OTRO_ENTORNO })).toEqual({ puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "empresa_no_autorizada" });
+  it("4. con permiso, pero el vehículo NO es accesible desde la empresa activa: no edita (el permiso no es acceso global)", () => {
+    expect(decidirEdicionVehiculo({ ...base, permisoTransversal: true, vehiculoAccesibleDesdeEmpresaActiva: false })).toEqual({ puede: false, esDueno: false, porPermisoTransversal: false, motivoDenegado: "no_accesible" });
   });
-  it("las listas de empresas autorizadas son irrelevantes para la propietaria y para quien no tiene permiso", () => {
-    expect(decidirEdicionVehiculo({ ...base, empresaActivaId: FRESCOFRESH, empresasAutorizadasIds: [] }).puede).toBe(true);
-    expect(decidirEdicionVehiculo({ ...base, empresasAutorizadasIds: [] }).puede).toBe(false);
+  it("la regla ya no depende de las empresas del usuario: la decisión no recibe ni consulta empresasParaUsuario", () => {
+    const fuente = readFileSync("src/lib/flota/edicion-vehiculo.ts", "utf8");
+    expect(fuente).not.toContain("empresasAutorizadas"); expect(fuente).not.toContain("empresasParaUsuario");
+    const ruta = readFileSync("src/app/api/empresas/[slug]/flota/vehiculos/route.ts", "utf8");
+    expect(ruta).not.toContain("empresasParaUsuario"); expect(ruta).not.toContain("empresasAutorizadas");
   });
   it("solo operación de taller (enviar/sacar de taller) se reconoce como tal; cualquier otro campo es edición", () => {
     expect(esSolicitudSoloTaller(["id", "enTaller", "motivoTaller"])).toBe(true);
@@ -86,8 +89,7 @@ describe("decidirEdicionVehiculo: puedeEditar = propietaria OR permiso transvers
   });
   it("mensajes: el de siempre para quien no puede; informativo (no error) para quien sí", () => {
     expect(MENSAJE_SOLO_EMPRESA_DUENA).toBe("Este vehículo es compartido; solo la empresa dueña puede editarlo.");
-    expect(MENSAJE_EMPRESA_DUENA_NO_AUTORIZADA).toMatch(/acceso a la empresa propietaria/);
-    expect(avisoEdicionOtraEmpresa("Frescofresh")).toBe("Vehículo propiedad de Frescofresh. Tienes permiso para editar vehículos de otras empresas.");
+    expect(avisoEdicionOtraEmpresa("Frescofresh")).toBe("Vehículo propiedad de Frescofresh. Tienes permiso para editar vehículos compartidos de otras empresas.");
   });
 });
 
@@ -126,7 +128,7 @@ describe("PATCH /flota/vehiculos — backend", () => {
   });
 
   it("C. otra empresa CON permiso transversal: edita todos los campos normales, filtros incluidos, y la propiedad NO cambia", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+    escenario({ permiso: true });
     const r = await patch({ id: 5, placa: "c-091bxf", marca: "Hino 500", modelo: "2020", descripcion: "Cabezal 6x4", kmActual: 1500, notas: "revisado", rinLlanta: "22.5", activo: true, filtros: [{ tipo: "Aceite", codigo: "F-1" }] });
     expect(r.status).toBe(200);
     const [u] = updates();
@@ -141,16 +143,16 @@ describe("PATCH /flota/vehiculos — backend", () => {
   });
 
   it("C2. un empresa_id enviado por el cliente se ignora: manda la propietaria leída de la BD", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+    escenario({ permiso: true });
     const r = await patch({ id: 5, marca: "X", empresa_id: 123, empresaId: 123 });
     expect(r.status).toBe(200);
     expect(updates()[0].params.slice(-2)).toEqual([5, FRESCOFRESH]);
     expect(updates()[0].params).not.toContain(123);
   });
 
-  it("D. Encargado de Taller (rol no administrador, permiso asignado): edita vehículos de cualquier empresa autorizada del entorno", async () => {
+  it("D. Encargado de Taller (rol no administrador, permiso asignado): edita los vehículos compartidos en Mónaco de cualquier empresa propietaria", async () => {
     for (const duena of [FRESCOFRESH, 11, 12]) {
-      escenario({ rol: "CoordinadorPredios", permiso: true, autorizadas: [MONACO, FRESCOFRESH, 11, 12], vehiculo: vehiculo({ empresa_id: duena }) });
+      escenario({ rol: "CoordinadorPredios", permiso: true, vehiculo: vehiculo({ empresa_id: duena }) });
       const r = await patch({ id: 5, marca: "Isuzu" });
       expect(r.status).toBe(200);
       expect(updates()[0].params.slice(-2)).toEqual([5, duena]);
@@ -159,25 +161,63 @@ describe("PATCH /flota/vehiculos — backend", () => {
   });
 
   it("E. Admin General: el bypass administrativo existente sigue funcionando (la capacidad es verdadera) y accesoTodas cubre las empresas", async () => {
-    escenario({ rol: "Admin", permiso: true, autorizadas: [MONACO, FRESCOFRESH, 11, 12, OTRO_ENTORNO] });
+    escenario({ rol: "Admin", permiso: true });
     const r = await patch({ id: 5, marca: "Isuzu" });
     expect(r.status).toBe(200);
   });
 
-  it("F. seguridad: con permiso pero propietaria NO autorizada para el usuario => 403 sin escribir; vehículo no accesible => 404 aunque manipule el id", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO], vehiculo: vehiculo({ empresa_id: OTRO_ENTORNO }) });
-    const r = await patch({ id: 5, marca: "Isuzu" });
-    expect(r.status).toBe(403); expect((await r.json()).error).toBe(MENSAJE_EMPRESA_DUENA_NO_AUTORIZADA);
-    expect(execute).not.toHaveBeenCalled(); expect(registrarAuditoria).not.toHaveBeenCalled();
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH], vehiculo: null });
-    const r2 = await patch({ id: 99999, marca: "X" });
-    expect(r2.status).toBe(404); expect(execute).not.toHaveBeenCalled();
-    // La búsqueda se hace SIEMPRE con la empresa activa de la sesión (nunca con una enviada por el cliente).
-    expect(vi.mocked(obtenerVehiculoAccesible).mock.calls.at(-1)!.slice(0, 2)).toEqual([MONACO, 99999]);
+  it("2. usuario de Taller SIN acceso directo a la propietaria: edita el vehículo de Frescofresh compartido y visible en Mónaco (basta con que Mónaco lo vea)", async () => {
+    escenario({ rol: "CoordinadorPredios", permiso: true });
+    // El usuario solo opera Mónaco: entrar a Frescofresh le da 403 en el guard de la empresa (requireTenant), pero eso no interviene al editar desde Mónaco.
+    const sinAccesoAFrescofresh = { error: new Response(JSON.stringify({ error: "Sin acceso a esta empresa." }), { status: 403 }) } as never;
+    vi.mocked(requireTenantFlota).mockResolvedValueOnce(guardOk("CoordinadorPredios"));
+    const r = await patch({ id: 5, marca: "Isuzu", descripcion: "Cabezal revisado" });
+    expect(r.status).toBe(200);
+    expect(updates()[0].params.slice(-2)).toEqual([5, FRESCOFRESH]); // se actualiza la fila de Frescofresh…
+    expect(vi.mocked(obtenerVehiculoAccesible).mock.calls.at(-1)!.slice(0, 2)).toEqual([MONACO, 5]); // …encontrada desde la empresa ACTIVA (Mónaco)
+    vi.mocked(requireTenantFlota).mockResolvedValueOnce(sinAccesoAFrescofresh);
+    const directo = await PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify({ id: 5, marca: "X" }) }), { params: Promise.resolve({ slug: "frescofresh" }) });
+    expect(directo.status).toBe(403); // por la URL de Frescofresh no puede operar: la capacidad es solo vía el vehículo compartido en su empresa
   });
 
-  it("G. lo que solo define la empresa dueña NO se abre con el permiso: compartición, tipo de unidad y limpiar kilometraje siguen siendo 403", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+  it("4. con permiso, vehículo de otra empresa NO compartido con la empresa activa (no accesible): no se encuentra (404) y no se escribe nada, aunque se manipule el id", async () => {
+    escenario({ permiso: true, vehiculo: null });
+    for (const id of [5, 6, 99999]) {
+      const r = await patch({ id, marca: "Isuzu" });
+      expect(r.status).toBe(404);
+    }
+    expect(execute).not.toHaveBeenCalled(); expect(registrarAuditoria).not.toHaveBeenCalled(); expect(guardarFiltrosVehiculo).not.toHaveBeenCalled();
+    // La búsqueda se hace SIEMPRE con la empresa activa de la sesión (nunca con una enviada por el cliente).
+    expect(vi.mocked(obtenerVehiculoAccesible).mock.calls.every((c) => c[0] === MONACO)).toBe(true);
+  });
+
+  it("5. otro tenant: sin acceso a la empresa (guard 401/403/404) nunca se llega a editar, con o sin permiso transversal", async () => {
+    escenario({ permiso: true });
+    for (const status of [401, 403, 404]) {
+      vi.mocked(requireTenantFlota).mockResolvedValueOnce({ error: new Response(JSON.stringify({ error: "x" }), { status }) } as never);
+      const r = await patch({ id: 5, marca: "Isuzu" });
+      expect(r.status).toBe(status);
+    }
+    expect(obtenerVehiculoAccesible).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
+    // Un vehículo de otro tenant no es accesible desde la empresa activa: 404.
+    escenario({ permiso: true, vehiculo: null });
+    expect((await patch({ id: 12345, marca: "Isuzu" })).status).toBe(404);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("6. la edición transversal no transfiere la propiedad: el vehículo sigue siendo de Frescofresh (empresa_id intacto, sin tocar los accesos compartidos)", async () => {
+    escenario({ permiso: true });
+    const r = await patch({ id: 5, marca: "Isuzu", placa: "C-091BXF" });
+    expect(r.status).toBe(200);
+    const [u] = updates();
+    expect(u.sql.split("WHERE")[0]).not.toMatch(/empresa_id\s*=/);
+    expect(u.params.slice(-2)).toEqual([5, FRESCOFRESH]);
+    expect(guardarAccesoVehiculo).not.toHaveBeenCalled();
+    expect(vi.mocked(execute).mock.calls.every((c) => !/flota_vehiculo_acceso/.test(String(c[0])))).toBe(true);
+  });
+
+  it("7. (G) lo que solo define la empresa dueña NO se abre con el permiso: compartición, tipo de unidad y limpiar kilometraje siguen siendo 403", async () => {
+    escenario({ permiso: true });
     expect((await patch({ id: 5, accesoEmpresaIds: [1, 2] })).status).toBe(403);
     expect((await patch({ id: 5, tipoUnidad: "TC" })).status).toBe(403);
     expect((await patch({ id: 5, reiniciarKilometraje: true })).status).toBe(403);
@@ -186,7 +226,7 @@ describe("PATCH /flota/vehiculos — backend", () => {
   });
 
   it("auditoría: solo la edición transversal se registra (vehículo, empresa propietaria, usuario, empresa activa), una sola vez", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+    escenario({ permiso: true });
     await patch({ id: 5, marca: "Isuzu" });
     expect(registrarAuditoria).toHaveBeenCalledOnce();
     const a = vi.mocked(registrarAuditoria).mock.calls[0][0];
@@ -196,7 +236,7 @@ describe("PATCH /flota/vehiculos — backend", () => {
   });
 
   it("un fallo del UPDATE no deja auditoría de una edición que no ocurrió", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+    escenario({ permiso: true });
     vi.mocked(execute).mockRejectedValue(new Error("boom"));
     const r = await patch({ id: 5, marca: "Isuzu" });
     expect(r.status).toBe(500);
@@ -205,24 +245,26 @@ describe("PATCH /flota/vehiculos — backend", () => {
 });
 
 describe("GET /flota/vehiculos — la UI recibe la decisión del backend por vehículo", () => {
-  const filas = [vehiculo({ id: 1, empresa_id: MONACO, compartido: 0 }), vehiculo({ id: 2, empresa_id: FRESCOFRESH }), vehiculo({ id: 3, empresa_id: OTRO_ENTORNO })];
+  // listarVehiculosAccesibles SOLO devuelve lo accesible desde la empresa activa (propio o compartido con ella): los de otras empresas no compartidas no aparecen.
+  const filas = [vehiculo({ id: 1, empresa_id: MONACO, compartido: 0 }), vehiculo({ id: 2, empresa_id: FRESCOFRESH })];
   const lista = async () => (await (await get()).json()) as { vehiculos: { id: number; puedeEditar: boolean; esDueno: boolean }[]; puedeEditarOtrasEmpresas: boolean };
   it("sin permiso transversal: solo los propios son editables; los compartidos conservan esDueno=false y puedeEditar=false", async () => {
     escenario({ permiso: false });
     vi.mocked(listarVehiculosAccesibles).mockResolvedValue(filas as never);
     const r = await lista();
     expect(r.puedeEditarOtrasEmpresas).toBe(false);
-    expect(r.vehiculos.map((v) => [v.id, v.esDueno, v.puedeEditar])).toEqual([[1, true, true], [2, false, false], [3, false, false]]);
+    expect(r.vehiculos.map((v) => [v.id, v.esDueno, v.puedeEditar])).toEqual([[1, true, true], [2, false, false]]);
   });
-  it("con permiso: también los de empresas que el usuario opera; nunca los de otro entorno", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+  it("con permiso: también los compartidos con la empresa activa (aunque el usuario no opere la propietaria)", async () => {
+    escenario({ permiso: true });
     vi.mocked(listarVehiculosAccesibles).mockResolvedValue(filas as never);
     const r = await lista();
     expect(r.puedeEditarOtrasEmpresas).toBe(true);
-    expect(r.vehiculos.map((v) => [v.id, v.esDueno, v.puedeEditar])).toEqual([[1, true, true], [2, false, true], [3, false, false]]);
+    expect(r.vehiculos.map((v) => [v.id, v.esDueno, v.puedeEditar])).toEqual([[1, true, true], [2, false, true]]);
+    expect(vi.mocked(listarVehiculosAccesibles).mock.calls[0][0]).toBe(MONACO); // la lista sale de la empresa activa de la sesión
   });
   it("los vehículos siguen visibles como compartidos: la propiedad y el indicador no cambian", async () => {
-    escenario({ permiso: true, autorizadas: [MONACO, FRESCOFRESH] });
+    escenario({ permiso: true });
     vi.mocked(listarVehiculosAccesibles).mockResolvedValue(filas as never);
     const r = await (await get()).json();
     expect(r.vehiculos[1]).toMatchObject({ empresa_id: FRESCOFRESH, compartido: true, esDueno: false });

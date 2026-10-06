@@ -4,12 +4,12 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny, sesionPuedeEditarVehiculosOtrasEmpresas } from "@/lib/tenant";
 import { registrarAuditoria } from "@/lib/auditoria";
-import { empresasParaUsuario, obtenerEmpresaPorId } from "@/lib/empresas";
+import { obtenerEmpresaPorId } from "@/lib/empresas";
 import {
   decidirEdicionVehiculo,
   detalleAuditoriaEdicionTransversal,
   esSolicitudSoloTaller,
-  mensajeDenegado,
+  MENSAJE_SOLO_EMPRESA_DUENA,
 } from "@/lib/flota/edicion-vehiculo";
 import {
   asegurarSchemaFlota,
@@ -54,9 +54,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const rows = await listarVehiculosAccesibles(guard.empresa.id);
-  // Misma regla que el PATCH (decidirEdicionVehiculo): la UI solo ofrece «Editar» donde el backend lo va a aceptar.
+  // Misma regla que el PATCH (decidirEdicionVehiculo): la UI solo ofrece «Editar» donde el backend lo va a aceptar. Todo lo que devuelve
+  // listarVehiculosAccesibles es accesible desde la empresa activa (propio o compartido con ella): esa es la regla real de visibilidad.
   const permisoTransversal = await sesionPuedeEditarVehiculosOtrasEmpresas(guard.session);
-  const empresasAutorizadasIds = permisoTransversal ? await empresasAutorizadasDeLaSesion(guard.session) : [];
   const ids = rows.map((r) => Number(r.id));
   const duenosIds = rows
     .filter((r) => Number(r.empresa_id) === guard.empresa.id)
@@ -98,7 +98,7 @@ export async function GET(_req: Request, ctx: Ctx) {
         empresaActivaId: guard.empresa.id,
         empresaDuenaId: Number(r.empresa_id),
         permisoTransversal,
-        empresasAutorizadasIds,
+        vehiculoAccesibleDesdeEmpresaActiva: true,
       }).puede,
       filtros,
     });
@@ -111,15 +111,6 @@ export async function GET(_req: Request, ctx: Ctx) {
   });
 }
 
-/** Empresas que el usuario de la sesión está autorizado a operar (mismo criterio que requireTenant): el alcance del permiso transversal. */
-async function empresasAutorizadasDeLaSesion(session: { id: number; rol: string; accesoTodas?: boolean }): Promise<number[]> {
-  const permitidas = await empresasParaUsuario({
-    usuarioId: session.id,
-    rol: session.rol as Parameters<typeof empresasParaUsuario>[0]["rol"],
-    accesoTodas: Boolean(session.accesoTodas),
-  });
-  return permitidas.map((e) => e.id);
-}
 
 const schema = z.object({
   placa: z.string().min(1),
@@ -334,19 +325,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const esDueno = Number(curRow.empresa_id) === guard.empresa.id;
   const empresaDuenaId = Number(curRow.empresa_id);
 
-  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: puedeEditar = empresa propietaria OR permiso transversal (y empresa propietaria entre las que el usuario
-  // opera). La propietaria sale de la BD (curRow), jamás del cliente. Sin permiso, un vehículo COMPARTIDO solo admite la operación de taller.
+  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: puedeEditar = empresa propietaria OR (permiso transversal AND vehículo accesible desde la empresa activa).
+  // «Accesible» es la regla real de obtenerVehiculoAccesible (propio o compartido con la empresa activa): si no lo fuera, curRow sería null (404) y no
+  // se llegaría aquí. No hace falta acceso directo a la empresa propietaria. La propietaria sale de la BD (curRow), jamás del cliente.
+  // Sin permiso, un vehículo COMPARTIDO solo admite la operación de taller.
   const permisoTransversal = esDueno ? false : await sesionPuedeEditarVehiculosOtrasEmpresas(guard.session);
   const decision = decidirEdicionVehiculo({
     empresaActivaId: guard.empresa.id,
     empresaDuenaId,
     permisoTransversal,
-    empresasAutorizadasIds: permisoTransversal ? await empresasAutorizadasDeLaSesion(guard.session) : [],
+    vehiculoAccesibleDesdeEmpresaActiva: true, // curRow vino de obtenerVehiculoAccesible(empresa activa de la sesión, id)
   });
   const solicitud = Object.entries(d).filter(([, v]) => v !== undefined).map(([k]) => k);
   const soloTaller = esSolicitudSoloTaller(solicitud);
   if (!decision.puede && !soloTaller) {
-    return NextResponse.json({ error: mensajeDenegado(decision.motivoDenegado) }, { status: 403 });
+    return NextResponse.json({ error: MENSAJE_SOLO_EMPRESA_DUENA }, { status: 403 });
   }
 
   if (d.reiniciarKilometraje) {
