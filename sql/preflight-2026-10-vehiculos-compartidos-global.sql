@@ -1,6 +1,7 @@
 -- =====================================================================
 -- PREFLIGHT (SOLO LECTURA) — VEHICULOS COMPARTIDOS EN TODOS LOS MODULOS OPERATIVOS
--- Para revisar ANTES de aplicar sql/migrate-2026-10-vehiculos-compartidos-global.sql.
+-- Se uso ANTES de aplicar sql/migrate-2026-10-vehiculos-compartidos-global.sql (ya aplicada en produccion el 2026-10-06;
+-- resultado del preflight: 0 huerfanos, 0 referencias cruzadas, FK compuesta antigua confirmada).
 -- No ejecutado por Claude. Solo SELECT / SHOW: no modifica nada.
 -- (tms_gastos_operativos y tms_solicitud_fondo_lineas ya se migraron con
 --  sql/migrate-2026-10-fondos-vehiculos-compartidos.sql: no se tocan aqui.)

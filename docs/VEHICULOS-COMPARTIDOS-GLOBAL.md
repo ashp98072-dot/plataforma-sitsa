@@ -1,6 +1,6 @@
 # Vehículos compartidos en todos los módulos operativos
 
-Estado: **IMPLEMENTADO + VERIFICADO TÉCNICAMENTE** (tsc, eslint, pruebas unitarias, build). **No probado en navegador ni contra base real.** Requiere **una migración SQL manual** (solo Compras) antes del despliegue. **Pendiente de decisión:** doble reserva de una misma unidad física en Programación (ver §6).
+Estado: **IMPLEMENTADO + VERIFICADO TÉCNICAMENTE** (tsc, eslint, pruebas unitarias, build). **No probado en navegador ni contra base real.** La **migración SQL de Compras ya fue aplicada manualmente en producción el 2026-10-06** (ver §5); el archivo `sql/migrate-…` queda como registro de lo ejecutado. **Pendiente de decisión:** doble reserva de una misma unidad física en Programación (ver §6).
 
 ## 1. Regla única
 
@@ -58,19 +58,25 @@ Leyenda: ✅ ya correcto · 🔧 corregido en este PR · ➖ clase A (solo propi
 
 En ningún módulo se escribe `flota_vehiculos` ni `flota_vehiculo_acceso` por seleccionar una unidad (pruebas lo verifican en Compras y Viáticos): no cambia `empresa_id`, no se amplía la compartición, no se elimina.
 
-## 5. FK encontradas y SQL (NO ejecutado)
+## 5. FK encontradas y SQL (aplicado manualmente en producción el 2026-10-06)
 
 | Tabla · FK | Tipo | Clase | Acción |
 |---|---|---|---|
-| `compras_requerimiento_lineas` · `fk_cb_requerimiento_lineas_vehiculo (empresa_id, vehiculo_id) → flota_vehiculos(empresa_id, id)` | compuesta | **B** | **se reemplaza** por FK simple `fk_cb_requerimiento_lineas_veh (vehiculo_id) → flota_vehiculos(id)` + índice `idx_compras_linea_vehiculo_id` |
+| `compras_requerimiento_lineas` · `fk_cb_requerimiento_lineas_vehiculo (empresa_id, vehiculo_id) → flota_vehiculos(empresa_id, id)` | compuesta | **B** | **se reemplaza** por FK simple `fk_cb_requerimiento_lineas_veh (vehiculo_id) → flota_vehiculos(id)` + índice `idx_compras_req_linea_vehiculo_id` — **aplicado** |
 | `ops_multas_revisiones` · `fk_omr_vehiculo` (y la cadena `ops_multas` → revisiones) | compuesta | **A** | **no se toca**: MULTAS-2 decidió explícitamente que la multa pertenece a la empresa propietaria («Compartir una unidad mediante `flota_vehiculo_acceso` NO comparte este historial»). Si negocio cambia esa decisión, requiere un ticket propio |
 | `tms_gastos_operativos`, `tms_solicitud_fondo_lineas` | simple | B | ya migradas (#413) |
 | `tms_unidades.flota_vehiculo_id`, `tms_planes_viaje.tc_vehiculo_id`, `tms_cliente_rutas.unidad_recurrente_id`, `tms_viatico_requerimiento_lineas.vehiculo_id`, `flota_*.vehiculo_id` | simple | B | ya aceptan compartidas |
 | `sql/propuesta-2026-09-gastos-multiples-lineas.sql` (sin aplicar) | compuesta | B | si se implementa «múltiples líneas», debe usar FK simple |
 
-Archivos: `sql/preflight-2026-10-vehiculos-compartidos-global.sql` (solo lectura: lista **todas** las FK hacia `flota_vehiculos`, huérfanos, líneas con unidad de otra empresa), `sql/migrate-2026-10-vehiculos-compartidos-global.sql` (idempotente: índice → FK nueva → se elimina la compuesta; con rollback), `sql/schema.sql` actualizado.
+Archivos: `sql/preflight-2026-10-vehiculos-compartidos-global.sql` (solo lectura: lista **todas** las FK hacia `flota_vehiculos`, huérfanos, líneas con unidad de otra empresa), `sql/migrate-2026-10-vehiculos-compartidos-global.sql` (registro de lo ejecutado: índice → FK nueva → se elimina la compuesta; DDL plano compatible con MariaDB, con verificación previa/posterior y rollback de referencia; **no volver a ejecutar sin verificar el estado**), `sql/schema.sql` actualizado.
 
-**Trade-off:** la garantía «propio o compartido» deja de estar en la FK (que solo garantiza que el vehículo exista) y queda en la aplicación (`obtenerVehiculoAccesibleTx`); `RESTRICT` se conserva. Orden: preflight → migración → deploy. Sin migrar, Compras con unidad **propia** sigue funcionando y solo falla guardar una unidad compartida (error de base).
+**Trade-off:** la garantía «propio o compartido» deja de estar en la FK (que solo garantiza que el vehículo exista) y queda en la aplicación (`obtenerVehiculoAccesibleTx`); `RESTRICT` se conserva. Orden seguido: preflight → migración → deploy.
+
+**Constancia de la ejecución en producción (2026-10-06, manual):**
+- Preflight: **0 huérfanos** y **0 referencias cruzadas** entre empresas antes de migrar; FK compuesta antigua `fk_cb_requerimiento_lineas_vehiculo` confirmada.
+- Migración aplicada manualmente (índice → FK simple → se elimina la compuesta). Las sentencias `ADD CONSTRAINT IF NOT EXISTS` / `DROP FOREIGN KEY IF EXISTS` del borrador inicial dieron problemas en MariaDB/Hostinger, por eso el archivo quedó con DDL plano.
+- **Estado final verificado:** FK `fk_cb_requerimiento_lineas_veh`, columna `vehiculo_id` → `flota_vehiculos.id`; `fk_cb_requerimiento_lineas_vehiculo` ya **no** existe como foreign key; índice `idx_compras_req_linea_vehiculo_id` con `vehiculo_id` en `SEQ_IN_INDEX = 1`.
+- `sql/schema.sql` refleja ese mismo estado (índice y FK con esos nombres; sin la FK compuesta antigua para esa relación).
 
 ## 6. Programación: una unidad compartida es la MISMA unidad física — hallazgo pendiente
 

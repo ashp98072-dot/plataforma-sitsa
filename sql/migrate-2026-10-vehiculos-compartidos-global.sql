@@ -1,7 +1,11 @@
 -- =====================================================================
--- VEHICULOS COMPARTIDOS EN TODOS LOS MODULOS OPERATIVOS
--- PROPUESTA PARA REVISION — NO EJECUTADA por Claude (CLAUDE.md seccion 4). La aplica el responsable en Hostinger,
--- despues de revisar sql/preflight-2026-10-vehiculos-compartidos-global.sql y ANTES de desplegar el PR.
+-- VEHICULOS COMPARTIDOS EN TODOS LOS MODULOS OPERATIVOS — Compras
+--
+-- *** MIGRACION APLICADA MANUALMENTE EN PRODUCCION EL 2026-10-06. ***
+-- *** NO VOLVER A EJECUTAR SIN VERIFICAR EL ESTADO (ver PASO 0). ***
+-- Este archivo queda como REGISTRO/REFERENCIA del cambio realmente ejecutado (CLAUDE.md seccion 4: Claude no ejecuta SQL).
+-- No esta pensado para re-ejecutarse automaticamente: las sentencias son DDL planas (sin IF [NOT] EXISTS, sintaxis que dio
+-- problemas en MariaDB/Hostinger) y fallarian o duplicarian objetos si el cambio ya esta aplicado.
 --
 -- Auditoria de FK hacia flota_vehiculos (ver docs/VEHICULOS-COMPARTIDOS-GLOBAL.md):
 --   compras_requerimiento_lineas.fk_cb_requerimiento_lineas_vehiculo  (empresa_id, vehiculo_id) -> flota_vehiculos(empresa_id, id)
@@ -13,33 +17,60 @@
 --   tms_unidades.flota_vehiculo_id, tms_planes_viaje.tc_vehiculo_id, tms_cliente_rutas.unidad_recurrente_id,
 --   tms_viatico_requerimiento_lineas.vehiculo_id, flota_*.vehiculo_id => ya son FK SIMPLES: aceptan compartidas sin cambio.
 --
--- CAMBIO: compras_requerimiento_lineas — FK compuesta (empresa_id, vehiculo_id) -> FK simple vehiculo_id -> flota_vehiculos(id),
--- ON DELETE RESTRICT (se conserva: no se puede borrar un vehiculo referenciado por una linea de compra de ninguna empresa).
--- La garantia «solo propio o compartido con la empresa» pasa de la FK a la aplicacion (obtenerVehiculoAccesibleTx, regla unica de Flota).
+-- CAMBIO: compras_requerimiento_lineas — FK compuesta (empresa_id, vehiculo_id) -> FK simple
+--   fk_cb_requerimiento_lineas_veh : vehiculo_id -> flota_vehiculos(id), ON DELETE RESTRICT
+-- con el indice idx_compras_req_linea_vehiculo_id (vehiculo_id). ON DELETE RESTRICT se conserva: no se puede borrar un vehiculo
+-- referenciado por una linea de compra de ninguna empresa. La garantia «solo propio o compartido con la empresa» pasa de la FK a la
+-- aplicacion (obtenerVehiculoAccesibleTx, regla unica de Flota).
 --
 -- ORDEN SEGURO (sin ventana sin FK): 1) indice, 2) FK nueva, 3) se elimina la FK compuesta vieja.
--- IDEMPOTENTE (MariaDB 11.8): se puede re-ejecutar. No toca datos ni columnas.
+-- Datos previos a la migracion (preflight del 2026-10-06): 0 huerfanos, 0 referencias cruzadas entre empresas, FK compuesta
+-- antigua confirmada. No toca datos ni columnas.
 -- =====================================================================
 
-ALTER TABLE IF EXISTS compras_requerimiento_lineas
-  ADD INDEX IF NOT EXISTS idx_compras_linea_vehiculo_id (vehiculo_id);
-
-ALTER TABLE IF EXISTS compras_requerimiento_lineas
-  ADD CONSTRAINT IF NOT EXISTS fk_cb_requerimiento_lineas_veh
-  FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
-
-ALTER TABLE IF EXISTS compras_requerimiento_lineas
-  DROP FOREIGN KEY IF EXISTS fk_cb_requerimiento_lineas_vehiculo;
-
--- ---- Verificacion (solo lectura) -----------------------------------
--- Se espera ahora SOLO fk_cb_requerimiento_lineas_veh (vehiculo_id -> flota_vehiculos.id).
-SELECT TABLE_NAME, CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+-- ---- PASO 0 — VERIFICACION PREVIA (solo lectura) --------------------
+-- Antes de aplicar (estado original): debe aparecer fk_cb_requerimiento_lineas_vehiculo con 2 columnas (empresa_id, vehiculo_id)
+-- y NO debe existir fk_cb_requerimiento_lineas_veh. Si ya aparece fk_cb_requerimiento_lineas_veh con 1 columna (vehiculo_id), la
+-- migracion YA esta aplicada: NO ejecutar los pasos 1 a 3.
+SELECT CONSTRAINT_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) AS columnas, REFERENCED_TABLE_NAME,
+       GROUP_CONCAT(REFERENCED_COLUMN_NAME ORDER BY ORDINAL_POSITION) AS columnas_ref
 FROM information_schema.KEY_COLUMN_USAGE
 WHERE CONSTRAINT_SCHEMA = DATABASE()
   AND TABLE_NAME = 'compras_requerimiento_lineas'
-  AND REFERENCED_TABLE_NAME = 'flota_vehiculos';
+  AND REFERENCED_TABLE_NAME = 'flota_vehiculos'
+GROUP BY CONSTRAINT_NAME, REFERENCED_TABLE_NAME;
 
--- ---- ROLLBACK (solo si NO existen lineas con vehiculo de otra empresa; ver preflight, consulta 4) ----
+SHOW INDEX FROM compras_requerimiento_lineas WHERE Column_name = 'vehiculo_id';
+
+-- ---- PASO 1 — indice (DDL ejecutado) --------------------------------
+ALTER TABLE compras_requerimiento_lineas
+  ADD INDEX idx_compras_req_linea_vehiculo_id (vehiculo_id);
+
+-- ---- PASO 2 — FK simple nueva (DDL ejecutado) -----------------------
+ALTER TABLE compras_requerimiento_lineas
+  ADD CONSTRAINT fk_cb_requerimiento_lineas_veh
+  FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
+
+-- ---- PASO 3 — se elimina la FK compuesta antigua (DDL ejecutado) ----
+ALTER TABLE compras_requerimiento_lineas
+  DROP FOREIGN KEY fk_cb_requerimiento_lineas_vehiculo;
+
+-- ---- PASO 4 — VERIFICACION POSTERIOR (solo lectura) -----------------
+-- Estado final verificado en produccion:
+--   * FK vigente: fk_cb_requerimiento_lineas_veh, columnas = vehiculo_id, referencia = flota_vehiculos(id).
+--   * fk_cb_requerimiento_lineas_vehiculo ya NO existe como foreign key.
+--   * Indice idx_compras_req_linea_vehiculo_id con vehiculo_id en SEQ_IN_INDEX = 1.
+SELECT CONSTRAINT_NAME, GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) AS columnas, REFERENCED_TABLE_NAME,
+       GROUP_CONCAT(REFERENCED_COLUMN_NAME ORDER BY ORDINAL_POSITION) AS columnas_ref
+FROM information_schema.KEY_COLUMN_USAGE
+WHERE CONSTRAINT_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'compras_requerimiento_lineas'
+  AND REFERENCED_TABLE_NAME = 'flota_vehiculos'
+GROUP BY CONSTRAINT_NAME, REFERENCED_TABLE_NAME;
+
+SHOW INDEX FROM compras_requerimiento_lineas WHERE Column_name = 'vehiculo_id';
+
+-- ---- ROLLBACK (referencia; solo si NO existen lineas con vehiculo de otra empresa) ----
 -- ALTER TABLE compras_requerimiento_lineas
 --   ADD CONSTRAINT fk_cb_requerimiento_lineas_vehiculo FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT;
 -- ALTER TABLE compras_requerimiento_lineas DROP FOREIGN KEY fk_cb_requerimiento_lineas_veh;

@@ -216,14 +216,20 @@ describe("FK: solo se cambia la clase B (Compras); las demás no se tocan", () =
     const s = leer("sql/schema.sql");
     expect(s).toMatch(/fk_cb_requerimiento_lineas_veh FOREIGN KEY \(vehiculo_id\) REFERENCES flota_vehiculos\(id\) ON DELETE RESTRICT/);
     expect(s).not.toMatch(/fk_cb_requerimiento_lineas_vehiculo FOREIGN KEY \(empresa_id, vehiculo_id\)/);
-    expect(s).toContain("idx_compras_linea_vehiculo_id (vehiculo_id)");
+    expect(s).toContain("idx_compras_req_linea_vehiculo_id (vehiculo_id)");
     expect(s).toContain("fk_gasto_vehiculo FOREIGN KEY (vehiculo_id)");
     expect(s).toContain("fk_fondolin_vehiculo FOREIGN KEY (vehiculo_id)");
   });
-  it("la migración es idempotente, agrega la FK nueva ANTES de quitar la vieja y no toca datos ni Multas", () => {
-    const m = leer("sql/migrate-2026-10-vehiculos-compartidos-global.sql").split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
-    expect(m.indexOf("ADD CONSTRAINT IF NOT EXISTS fk_cb_requerimiento_lineas_veh")).toBeGreaterThan(-1);
-    expect(m.indexOf("ADD CONSTRAINT IF NOT EXISTS")).toBeLessThan(m.indexOf("DROP FOREIGN KEY IF EXISTS fk_cb_requerimiento_lineas_vehiculo"));
+  it("la migración es el registro de lo aplicado en producción: DDL plano (sin IF [NOT] EXISTS), FK nueva ANTES de quitar la vieja, sin tocar datos ni Multas", () => {
+    const completo = leer("sql/migrate-2026-10-vehiculos-compartidos-global.sql");
+    expect(completo).toContain("MIGRACION APLICADA MANUALMENTE EN PRODUCCION EL 2026-10-06");
+    expect(completo).toContain("NO VOLVER A EJECUTAR SIN VERIFICAR EL ESTADO");
+    const m = completo.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    expect(m).not.toMatch(/IF\s+(NOT\s+)?EXISTS/i);
+    expect(m).toContain("ADD INDEX idx_compras_req_linea_vehiculo_id (vehiculo_id)");
+    expect(m).toMatch(/ADD CONSTRAINT fk_cb_requerimiento_lineas_veh\s+FOREIGN KEY \(vehiculo_id\) REFERENCES flota_vehiculos \(id\) ON DELETE RESTRICT/);
+    expect(m.indexOf("ADD INDEX")).toBeLessThan(m.indexOf("ADD CONSTRAINT"));
+    expect(m.indexOf("ADD CONSTRAINT")).toBeLessThan(m.indexOf("DROP FOREIGN KEY fk_cb_requerimiento_lineas_vehiculo"));
     expect(m).not.toMatch(/^\s*(UPDATE|DELETE|INSERT|TRUNCATE|DROP\s+TABLE)\b/im); // sin datos; «ON DELETE RESTRICT» es parte de la FK
     expect(m).not.toMatch(/\b(ops_multas|tms_gastos_operativos|tms_solicitud_fondo_lineas)\b/i);
   });

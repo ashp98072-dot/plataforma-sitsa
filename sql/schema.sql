@@ -1950,7 +1950,7 @@ CREATE TABLE IF NOT EXISTS compras_requerimiento_lineas (
   CONSTRAINT fk_cb_requerimiento_lineas_proveedor FOREIGN KEY (empresa_id, proveedor_id) REFERENCES compras_proveedores(empresa_id, id) ON DELETE RESTRICT,
   -- Unidad propia o compartida (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
   -- Ver sql/migrate-2026-10-vehiculos-compartidos-global.sql.
-  INDEX idx_compras_linea_vehiculo_id (vehiculo_id),
+  INDEX idx_compras_req_linea_vehiculo_id (vehiculo_id),
   CONSTRAINT fk_cb_requerimiento_lineas_veh FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
