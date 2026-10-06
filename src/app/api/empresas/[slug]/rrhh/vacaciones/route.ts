@@ -5,6 +5,7 @@ import {
   calcularSaldoTotalDisponible,
   contarDiasHabiles,
   listarVacaciones,
+  obtenerHistorialPeriodos,
   obtenerPeriodosDisponibles,
   registrarIncidenciaSinSaldo,
   registrarVacacionesFifo,
@@ -39,6 +40,16 @@ const filtrosSchema = z.object({
 }).refine((v) => !v.desde || !v.hasta || v.desde <= v.hasta, { message: "El rango de fechas no es válido." })
   .refine((v) => !v.soloResumen || v.empleadoId, { message: "soloResumen requiere empleadoId." });
 
+/** Historial completo de períodos (ADITIVO): si falla no rompe la respuesta de saldo/registro (y la clave `historial` simplemente se omite). */
+async function historialSeguro(empresaId: number, empleadoId: number) {
+  try {
+    return await obtenerHistorialPeriodos(empresaId, empleadoId);
+  } catch (error) {
+    console.error("[vacaciones] historial de períodos:", error);
+    return null;
+  }
+}
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
@@ -60,7 +71,7 @@ export async function GET(req: Request, ctx: Ctx) {
     try {
       const saldo = await calcularSaldoTotalDisponible(guard.empresa.id, empleadoId);
       const periodos = await obtenerPeriodosDisponibles(guard.empresa.id, empleadoId);
-      return NextResponse.json({ saldo, periodos });
+      return NextResponse.json({ saldo, periodos, historial: (await historialSeguro(guard.empresa.id, empleadoId)) ?? undefined });
     } catch {
       return NextResponse.json({
         saldo: null,
@@ -82,7 +93,7 @@ export async function GET(req: Request, ctx: Ctx) {
         guard.empresa.id,
         empleadoId,
       );
-      return NextResponse.json({ vacaciones, saldo, periodos });
+      return NextResponse.json({ vacaciones, saldo, periodos, historial: (await historialSeguro(guard.empresa.id, empleadoId)) ?? undefined });
     } catch {
       return NextResponse.json({
         vacaciones,
