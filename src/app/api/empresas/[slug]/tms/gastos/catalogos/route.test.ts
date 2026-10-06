@@ -9,13 +9,13 @@ import { GET } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
 
-function datosCatalogos() {
+function datosCatalogos(vehiculos: unknown[] = [{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }]) {
   vi.mocked(query)
     .mockResolvedValueOnce([
       { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuenta_bancaria: "123456", telefono: "55551234" },
       { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuenta_bancaria: "00123456789" },
     ] as never)
-    .mockResolvedValueOnce([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }] as never)
+    .mockResolvedValueOnce(vehiculos as never)
     .mockResolvedValueOnce([{ id: 3, nombre: "Cliente Uno", nit: "123-4" }] as never)
     .mockResolvedValueOnce([{
       id: 4, codigo: "PLAN-1", cliente_id: 3, cliente_nombre: "Cliente Uno", fecha_plan: "2026-09-09",
@@ -47,7 +47,7 @@ describe("GET catálogos de Gastos/Fondos", () => {
       { id: 1, codigo: "EMP-1", nombre: "Carlos Abel Pineda", puesto: "Piloto", cuentaBancaria: "123456", telefono: "55551234" },
       { id: 8, codigo: "EMP-8", nombre: "Empleado con cuenta", puesto: "Contador", cuentaBancaria: "00123456789", telefono: null },
     ]);
-    expect(body.vehiculos).toEqual([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500" }]);
+    expect(body.vehiculos).toEqual([{ id: 2, placa: "C-130BQ", marca: "Hino", modelo: "500", compartido: false, empresaDuenaId: null, empresaDuenaNombre: null }]);
     expect(body.clientes).toEqual([{ id: 3, codigo: null, nombre: "Cliente Uno", nit: "123-4" }]);
     expect(body.planes).toEqual([{
       id: 4, codigo: "PLAN-1", clienteId: 3, clienteNombre: "Cliente Uno", fechaPlan: "2026-09-09",
@@ -134,5 +134,54 @@ describe("GET catálogos de Gastos/Fondos", () => {
     expect(await response.json()).toEqual({ error: "No se pudo cargar el catálogo de empleados." });
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("empleados"), expect.any(Error));
     spy.mockRestore();
+  });
+});
+
+/**
+ * SOLICITUDES DE FONDO: VEHÍCULOS COMPARTIDOS — el selector ofrece los vehículos PROPIOS + los COMPARTIDOS con la empresa activa
+ * (listarVehiculosAccesibles, la regla de Flota), solo activos y sin duplicados. Los campos nuevos son aditivos.
+ */
+describe("GET catálogos — vehículos propios + compartidos", () => {
+  const propio = { id: 1, empresa_id: 7, placa: "M-001MON", marca: "Hino", modelo: "500", activo: 1, compartido: 0, empresa_duena_nombre: "Logiservicios Mónaco" };
+  const compartido = { id: 2, empresa_id: 3, placa: "C-091BXF", marca: "Volvo", modelo: "FH", activo: 1, compartido: 1, empresa_duena_nombre: "Frescofresh" };
+
+  it("A/B: incluye el vehículo propio y el compartido, con dueña y bandera `compartido`", async () => {
+    datosCatalogos([propio, compartido]);
+    const body = await (await GET(new Request("http://local"), ctx)).json();
+    expect(body.vehiculos).toEqual([
+      { id: 1, placa: "M-001MON", marca: "Hino", modelo: "500", compartido: false, empresaDuenaId: 7, empresaDuenaNombre: "Logiservicios Mónaco" },
+      { id: 2, placa: "C-091BXF", marca: "Volvo", modelo: "FH", compartido: true, empresaDuenaId: 3, empresaDuenaNombre: "Frescofresh" },
+    ]);
+  });
+
+  it("usa la lógica de acceso de Flota con la empresa de la SESIÓN (no un `empresa_id = ?` propio)", async () => {
+    datosCatalogos([propio, compartido]);
+    await GET(new Request("http://local"), ctx);
+    const [sql, params] = vi.mocked(query).mock.calls[1];
+    expect(sql).toContain("flota_vehiculo_acceso");
+    expect(params).toEqual([7, 7, 7]);
+  });
+
+  it("E: los vehículos inactivos no son seleccionables (aunque sean propios o compartidos)", async () => {
+    datosCatalogos([propio, { ...compartido, id: 5, placa: "C-INACT", activo: 0 }, { ...propio, id: 6, placa: "M-INACT", activo: 0 }]);
+    const body = await (await GET(new Request("http://local"), ctx)).json();
+    expect(body.vehiculos.map((v: { placa: string }) => v.placa)).toEqual(["M-001MON"]);
+  });
+
+  it("L: sin duplicados (un vehículo propio también presente como acceso aparece una sola vez)", async () => {
+    datosCatalogos([propio, { ...propio }, compartido, { ...compartido }]);
+    const body = await (await GET(new Request("http://local"), ctx)).json();
+    expect(body.vehiculos.map((v: { id: number }) => v.id)).toEqual([1, 2]);
+  });
+
+  it("el catálogo de PLANES acepta unidades compartidas, sin ampliar el acceso a planes de otras empresas", async () => {
+    datosCatalogos([propio]);
+    await GET(new Request("http://local"), ctx);
+    const [sql, params] = vi.mocked(query).mock.calls[3];
+    expect(sql).toContain("FROM tms_planes_viaje p");
+    expect(sql).toContain("p.empresa_id = ?");
+    expect(sql).toContain("fva.empresa_id = p.empresa_id");
+    expect(sql).not.toContain("fv.empresa_id = p.empresa_id AND");
+    expect(params).toEqual([7]);
   });
 });

@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — reportes iniciales sobre
@@ -178,7 +179,7 @@ export async function reporteGastosPorUnidad(empresaId: number, f: FiltrosReport
     `SELECT CAST(g.vehiculo_id AS CHAR) AS clave, COALESCE(veh.placa, 'Sin unidad') AS etiqueta,
             COUNT(*) AS registros, SUM(g.cantidad * g.monto) AS total_monto
      FROM tms_gastos_operativos g
-     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND ${predicadoVehiculoAccesible("veh", "g.empresa_id")}
      WHERE ${where}
      GROUP BY g.vehiculo_id, veh.placa
      ORDER BY total_monto DESC`,
@@ -485,7 +486,7 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
       FROM tms_gastos_operativos g
       LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
       LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
-      LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+      LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND ${predicadoVehiculoAccesible("veh", "g.empresa_id")}
       LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
       WHERE ${whereFlat}
       UNION ALL

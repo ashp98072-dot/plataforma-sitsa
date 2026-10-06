@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
+import { listarVehiculosAccesibles, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { esUsuarioOperaciones } from "@/lib/tms/identidad-administrativa";
 
@@ -36,10 +37,19 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, codigo, nombre, puesto, cuenta_bancaria, telefono FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
-    consultar("vehículos",
-      "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa LIMIT 1000",
-      [eid],
-    ),
+    // Vehículos PROPIOS + COMPARTIDOS con la empresa activa (la regla real de Flota, listarVehiculosAccesibles), solo activos, sin duplicados.
+    // Antes: solo `WHERE empresa_id = ?`, que dejaba fuera las unidades compartidas (p. ej. C-091BXF de Frescofresh visto desde Mónaco).
+    (async () => {
+      try {
+        const vistos = new Set<number>();
+        return (await listarVehiculosAccesibles(eid))
+          .filter((r) => Number(r.activo ?? 1) === 1 && !vistos.has(Number(r.id)) && vistos.add(Number(r.id)))
+          .slice(0, 1000);
+      } catch (error) {
+        console.error("[tms/gastos/catalogos] Falló catálogo vehículos", error);
+        throw new Error("No se pudo cargar el catálogo de vehículos.");
+      }
+    })(),
     consultar("clientes",
       "SELECT id, nombre, nit FROM tms_clientes WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
@@ -52,7 +62,7 @@ export async function GET(_req: Request, ctx: Ctx) {
        FROM tms_planes_viaje p
        LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
-       LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND fv.empresa_id = p.empresa_id
+       LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND ${predicadoVehiculoAccesible("fv", "p.empresa_id")}
        LEFT JOIN tms_personal pil ON pil.id = p.piloto_id AND pil.empresa_id = p.empresa_id
        LEFT JOIN empleados e ON e.id = pil.id_empleado AND e.empresa_id = p.empresa_id
        WHERE p.empresa_id = ? ORDER BY p.id DESC LIMIT 500`,
@@ -84,7 +94,13 @@ export async function GET(_req: Request, ctx: Ctx) {
     return NextResponse.json(
     {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null, telefono: r.telefono != null ? String(r.telefono) : null })),
-      vehiculos: vehiculos.map((r) => ({ id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null })),
+      // `compartido`/`empresaDuena*` son aditivos: los consumidores anteriores solo leían id/placa/marca/modelo.
+      vehiculos: vehiculos.map((r) => ({
+        id: Number(r.id), placa: String(r.placa), marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null,
+        compartido: Number(r.compartido ?? 0) === 1,
+        empresaDuenaId: r.empresa_id != null ? Number(r.empresa_id) : null,
+        empresaDuenaNombre: r.empresa_duena_nombre != null ? String(r.empresa_duena_nombre) : null,
+      })),
       clientes: clientes.map((r) => ({ id: Number(r.id), codigo: null, nombre: String(r.nombre), nit: r.nit != null ? String(r.nit) : null })),
       planes: planes.map((r) => ({
         id: Number(r.id), codigo: String(r.codigo),

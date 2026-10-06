@@ -14,6 +14,7 @@ import { leerErroresRespuesta, type ErrorFormulario } from "@/lib/validacion-for
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
+import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 
 type Gasto = {
   id: number;
@@ -102,7 +103,7 @@ type PlanCatalogo = {
  */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria?: string | null; telefono?: string | null }[];
-  vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null }[];
+  vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null; compartido?: boolean; empresaDuenaNombre?: string | null }[];
   clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
   usuarios: { id: number; nombre: string }[];
@@ -483,7 +484,7 @@ export default function GastosPage() {
           {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
         </select></label>
         <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={fEmpleadoId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={setFEmpleadoId} />
-        <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={fVehiculoId} inputClassName={inputCls} emptyLabel="Todas" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={setFVehiculoId} />
+        <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={fVehiculoId} inputClassName={inputCls} emptyLabel="Todas" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={setFVehiculoId} />
         <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={fClienteId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre }))} onChange={setFClienteId} />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -542,7 +543,7 @@ export default function GastosPage() {
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
             <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={String(form.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(f.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) }))} />
-            <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
+            <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
             <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(form.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, clienteId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Viaje / plan
               <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => seleccionarPlan(Number(e.target.value))}>
@@ -625,7 +626,7 @@ export default function GastosPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={String(l.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => set({ empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(l.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) })} />
-                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(l.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => set({ clienteId: Number(value) || 0 })} />
                     <label className="text-xs text-[var(--muted)]">Viaje / plan
                       <select className={`${inputCls} mt-0.5 w-full`} value={l.planId} onChange={(e) => set({ planId: Number(e.target.value) || 0 })}>

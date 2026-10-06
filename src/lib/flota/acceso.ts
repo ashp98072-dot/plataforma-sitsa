@@ -1,7 +1,17 @@
 import type { RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { execute, query } from "@/lib/db";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarEmpresasActivas } from "@/lib/empresas";
+
+/**
+ * REGLA ÚNICA de «vehículo accesible desde una empresa»: es propio de la empresa o está explícitamente compartido con ella
+ * (`flota_vehiculo_acceso`). La usan Flota (lista, edición), Fondos/Gastos (catálogo y validación) y el catálogo de planes: nadie
+ * reimplementa esta condición. `empresaExpr` es `?` (parámetro, se repite 2 veces) o una columna (p. ej. `g.empresa_id`, sin parámetros).
+ */
+export function predicadoVehiculoAccesible(alias: string, empresaExpr: string): string {
+  return `(${alias}.empresa_id = ${empresaExpr} OR EXISTS (SELECT 1 FROM flota_vehiculo_acceso fva WHERE fva.vehiculo_id = ${alias}.id AND fva.empresa_id = ${empresaExpr}))`;
+}
 
 /**
  * Una unidad propia o compartida con esta empresa.
@@ -20,13 +30,7 @@ export async function obtenerVehiculoAccesible(
               CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
        FROM flota_vehiculos v
        WHERE v.id = ?
-         AND (
-           v.empresa_id = ?
-           OR EXISTS (
-             SELECT 1 FROM flota_vehiculo_acceso a
-             WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-           )
-         )
+         AND ${predicadoVehiculoAccesible("v", "?")}
        LIMIT 1`,
       [empresaId, vehiculoId, empresaId, empresaId],
     );
@@ -34,6 +38,37 @@ export async function obtenerVehiculoAccesible(
   } catch {
     const rows = await query<RowDataPacket[]>(
       `SELECT * FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1`,
+      [vehiculoId, empresaId],
+    );
+    return rows[0] ?? null;
+  }
+}
+
+/**
+ * Misma regla que obtenerVehiculoAccesible, DENTRO de la transacción del llamador (Fondos/Gastos validan y escriben atómicamente). Devuelve
+ * `id, placa, activo` por defecto; `null` si el vehículo no es propio ni está compartido con la empresa (otra empresa sin compartir, otro tenant
+ * o id inexistente).
+ */
+export async function obtenerVehiculoAccesibleTx(
+  conn: PoolConnection,
+  empresaId: number,
+  vehiculoId: number,
+  cols = "v.id, v.placa, v.activo",
+): Promise<RowDataPacket | null> {
+  if (!vehiculoId || !empresaId) return null;
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT ${cols}, CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
+       FROM flota_vehiculos v
+       WHERE v.id = ? AND ${predicadoVehiculoAccesible("v", "?")}
+       LIMIT 1`,
+      [empresaId, vehiculoId, empresaId, empresaId],
+    );
+    return rows[0] ?? null;
+  } catch {
+    // Misma tolerancia que obtenerVehiculoAccesible: sin la tabla de accesos (migración pendiente) solo cuentan las unidades propias.
+    const [rows] = await conn.query<RowDataPacket[]>(
+      "SELECT id, placa, activo FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
       [vehiculoId, empresaId],
     );
     return rows[0] ?? null;
@@ -72,11 +107,7 @@ export async function listarVehiculosAccesibles(
               CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
        FROM flota_vehiculos v
        LEFT JOIN empresas e ON e.id = v.empresa_id
-       WHERE v.empresa_id = ?
-          OR EXISTS (
-            SELECT 1 FROM flota_vehiculo_acceso a
-            WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-          )
+       WHERE ${predicadoVehiculoAccesible("v", "?")}
        ORDER BY v.activo DESC, v.placa`,
       [empresaId, empresaId, empresaId],
     );

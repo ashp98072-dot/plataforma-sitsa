@@ -14,6 +14,7 @@ import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirm
 import { FondoLineasClient, type DetalleLineasFondo } from "@/components/tms/fondo-lineas-client";
 import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
 import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
+import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -48,7 +49,7 @@ const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 p
  */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null; telefono?: string | null }[];
-  vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
+  vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null; compartido?: boolean; empresaDuenaNombre?: string | null }[];
   clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
   planes: {
     id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string;
@@ -426,7 +427,7 @@ export default function FondosPage() {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
                       set(aplicarEmpleadoSeleccionado(l, empleado, value));
                     }} />
-                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={l.clienteId} options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ clienteId: value })} />
                     {/*
                       SOLICITUD-FONDOS-REPORTE-1 (pendiente 2 del PR #211) —

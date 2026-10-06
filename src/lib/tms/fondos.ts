@@ -6,6 +6,7 @@ import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
 import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
+import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
 import { CAMPOS_DOMINIO_FONDOS } from "@/lib/tms/validacion-fondos-gastos";
 import { ErrorDominioFormulario, conLinea } from "@/lib/validacion-formulario";
@@ -128,9 +129,10 @@ async function resolverSnapshotLineaTx(
   }
   let placa: string | null = null;
   if (input.vehiculoId != null) {
-    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
-    placa = String(rows[0].placa);
+    // Vehículo PROPIO o COMPARTIDO con la empresa activa (regla real de Flota); nunca «cualquier id». La placa se congela como snapshot; la propiedad no cambia.
+    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, input.vehiculoId);
+    if (!veh) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
+    placa = String(veh.placa);
   }
   let clienteId = input.clienteId ?? null;
   let clienteNombre: string | null = null;
