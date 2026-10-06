@@ -16,6 +16,7 @@ import {
   tienePermiso,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
+import { avisoEdicionOtraEmpresa, MENSAJE_SOLO_EMPRESA_DUENA } from "@/lib/flota/edicion-vehiculo";
 import {
   estiloAlertaKm,
   kmPendienteServicio,
@@ -123,6 +124,8 @@ type Vehiculo = {
   tipo_unidad?: string | null;
   compartido?: boolean;
   esDueno?: boolean;
+  /** FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: el backend decide (dueña OR permiso transversal con empresa propietaria autorizada); la UI solo lo refleja. */
+  puedeEditar?: boolean;
   accesoEmpresaIds?: number[];
   empresa_duena_codigo?: string | null;
   empresa_duena_nombre?: string | null;
@@ -491,6 +494,11 @@ export default function FlotaClient() {
     return Number(v.activo ?? 1) !== 0;
   }
 
+  /** ¿Se ofrece «Editar»? Lo decide el backend por vehículo (`puedeEditar`); sin ese dato (respuesta antigua) solo la empresa dueña. */
+  function puedeEditarVehiculo(v: Vehiculo): boolean {
+    return v.puedeEditar ?? v.esDueno !== false;
+  }
+
   function empresaDe(v: Vehiculo): string {
     return etiquetaEmpresaVehiculo({
       empresaActivo: v.empresa_activo,
@@ -499,6 +507,10 @@ export default function FlotaClient() {
       compartido: Boolean(v.compartido),
     });
   }
+
+  // Vehículo que se está editando y si pertenece a OTRA empresa (se edita por el permiso transversal): oculta lo que solo define la empresa dueña.
+  const vehiculoEnEdicion = editId != null ? vehiculos.find((x) => x.id === editId) : undefined;
+  const editandoAjeno = vehiculoEnEdicion?.esDueno === false;
 
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
@@ -1079,8 +1091,8 @@ export default function FlotaClient() {
   }
 
   function empezarEdicion(v: Vehiculo) {
-    if (v.esDueno === false) {
-      setErr("Este vehículo es compartido; solo la empresa dueña puede editarlo.");
+    if (!puedeEditarVehiculo(v)) {
+      setErr(MENSAJE_SOLO_EMPRESA_DUENA);
       return;
     }
     setEditId(v.id);
@@ -1129,6 +1141,8 @@ export default function FlotaClient() {
     e.preventDefault();
     setErr("");
     setMsg("");
+    // Editando un vehículo de OTRA empresa (permiso transversal): el tipo de unidad y con quién se comparte los define solo la empresa dueña, así que no viajan.
+    const ajeno = editId != null && vehiculos.find((x) => x.id === editId)?.esDueno === false;
     const payload = {
       placa: form.placa,
       marca: form.marca,
@@ -1137,7 +1151,7 @@ export default function FlotaClient() {
       color: form.color,
       // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo se edita desde la empresa dueña
       // (empezarEdicion ya bloquea las unidades compartidas; el backend también lo exige).
-      tipoUnidad: form.tipoUnidad,
+      tipoUnidad: ajeno ? undefined : form.tipoUnidad,
       empresaActivo: form.empresaActivo || undefined,
       kmActual: form.kmActual,
       kmIntervaloServicio: form.intervalo,
@@ -1154,7 +1168,7 @@ export default function FlotaClient() {
           codigo: f.codigo.trim(),
         }))
         .filter((f) => f.tipo && f.codigo),
-      accesoEmpresaIds: editId ? accesoEmpresaIds : undefined,
+      accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined,
     };
     const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
       method: editId ? "PATCH" : "POST",
@@ -2888,6 +2902,11 @@ export default function FlotaClient() {
                 </button>
                 </div>
               </div>
+              {editandoAjeno && vehiculoEnEdicion ? (
+                <p role="status" className="rounded border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+                  {avisoEdicionOtraEmpresa(empresaDe(vehiculoEnEdicion))}
+                </p>
+              ) : null}
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 {(
                   [
@@ -2947,7 +2966,7 @@ export default function FlotaClient() {
                     }
                   />
                 </label> : null}
-                <label className="text-xs text-[var(--muted)]">
+                {!editandoAjeno ? <label className="text-xs text-[var(--muted)]">
                   Tipo de unidad
                   <select
                     className={`${input} mt-1 w-full`}
@@ -2965,7 +2984,7 @@ export default function FlotaClient() {
                   <span className="mt-0.5 block text-[10px]">
                     Los TC / cajas / remolques se asignan por viaje desde Programación (campo TC), no como Unidad.
                   </span>
-                </label>
+                </label> : null}
                 <label className="text-xs text-[var(--muted)]">
                   Estado
                   <select
@@ -3114,7 +3133,7 @@ export default function FlotaClient() {
                   }
                 />
               </label>
-              {editId ? (
+              {editId && !editandoAjeno ? (
                 <div className="rounded border border-[var(--border)] p-3">
                   <p className="mb-2 text-xs text-[var(--muted)]">
                     Empresas que pueden usar esta unidad (además de la dueña)
@@ -3148,7 +3167,7 @@ export default function FlotaClient() {
                 <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
                   {editId ? "Guardar cambios" : "Registrar vehículo"}
                 </button>
-                {editId ? (
+                {editId && !editandoAjeno ? (
                   <>
                     <button
                       type="button"
@@ -3180,7 +3199,7 @@ export default function FlotaClient() {
                   </>
                 ) : null}
               </div>
-              {editId ? (
+              {editId && !editandoAjeno ? (
                 <>
                   <p className="text-xs text-[var(--muted)]">
                     Ya puedes agregar la papelería de este vehículo (tarjeta
@@ -3282,13 +3301,22 @@ export default function FlotaClient() {
                     <td className="space-x-2 px-3 py-2 text-xs">
                       {can("flota_vehiculos", "editar") ? (
                         <>
-                          <button
-                            type="button"
-                            className="text-sky-300 underline"
-                            onClick={() => empezarEdicion(v)}
-                          >
-                            Editar
-                          </button>
+                          {puedeEditarVehiculo(v) ? (
+                            <button
+                              type="button"
+                              className="text-sky-300 underline"
+                              onClick={() => empezarEdicion(v)}
+                            >
+                              Editar
+                            </button>
+                          ) : (
+                            <span
+                              className="cursor-help text-[var(--muted)]"
+                              title={MENSAJE_SOLO_EMPRESA_DUENA}
+                            >
+                              Solo empresa dueña
+                            </span>
+                          )}
                           {v.esDueno !== false ? (
                             <>
                               <button

@@ -6,6 +6,8 @@ export type FlagPermiso = keyof Omit<PermisoModulo, "modulo">;
 export type AreaPermiso = "rrhh" | "operaciones" | "flota" | "contabilidad" | "sitio" | "administracion";
 export type AccionCatalogo = {
   id: string; label: string; modulo: string; flag: FlagPermiso;
+  /** Aclaración opcional que la matriz de Usuarios muestra bajo la etiqueta. */
+  descripcion?: string;
   /** Únicamente un grant equivalente anterior, nunca eliminar -> anular. */
   legacy?: { modulo: string; flag: FlagPermiso };
 };
@@ -91,6 +93,11 @@ agregar("viaticos",
 agregar("programacion", accion("viajes_cerrar","cerrar","Cerrar administrativamente",E), nueva("programacion","exportar","Exportar reportes", "puedeVer"));
 agregar("cotizaciones", nueva("cotizaciones","estado","Cambiar estado / marcar enviada",E));
 agregar("facturacion", nueva("facturacion","emitir","Emitir factura",E), nueva("facturacion","anular","Anular factura",E), nueva("facturacion","pagos","Registrar pago",C));
+// FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (fila propia `flota_vehiculos_otras_empresas`, flag editar). Activarla implica
+// «Ver vehículos» y quitar «Ver vehículos» la limpia (mismas dependencias que el resto de acciones, ver cambiarAccion). No es acceso global: solo habilita editar
+// vehículos de otras empresas que sean ACCESIBLES desde la empresa activa (propios o compartidos con ella); no amplía las operaciones solo-dueña.
+agregar("flota_vehiculos", { ...accion("flota_vehiculos_otras_empresas","editar_otras_empresas","Editar vehículos de otras empresas",E),
+  descripcion: "Permite editar vehículos compartidos de otras empresas cuando son accesibles desde la empresa activa." });
 agregar("tms", nueva("tms","gestionar","Gestionar datos operativos",E));
 agregar("reciclaje", nueva("reciclaje","gestionar","Gestionar reciclaje",E));
 agregar("tarimas", nueva("tarimas","gestionar","Gestionar tarimas",E));

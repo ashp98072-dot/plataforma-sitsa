@@ -562,6 +562,18 @@ export async function requireTenantFlotaCombustible(
 }
 
 /**
+ * FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS — ¿puede esta sesión editar vehículos de OTRAS empresas? Acción «Editar vehículos de otras empresas» del catálogo
+ * central (Flota / Predios → Vehículos) Y la base «Ver vehículos» (sin base la acción no da ningún acceso). Admin conserva el bypass administrativo ya
+ * existente. No mira `username` ni `rol` fuera de ese bypass. Es solo una CAPACIDAD: el endpoint además exige que el vehículo sea accesible desde la
+ * empresa activa (obtenerVehiculoAccesible: propio o compartido con ella; ver decidirEdicionVehiculo) y nunca consulta empresasParaUsuario.
+ */
+export async function sesionPuedeEditarVehiculosOtrasEmpresas(session: { id: number; rol: string }): Promise<boolean> {
+  if (session.rol === "Admin") return true;
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  return tienePermisoBase(perms, "flota_vehiculos") && tieneAccionCatalogo(perms, "flota_vehiculos", "editar_otras_empresas");
+}
+
+/**
  * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
  * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
  * GerenteOperaciones lo traen por defecto, pero cualquier rol puede

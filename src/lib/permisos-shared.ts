@@ -251,7 +251,15 @@ export const PLATAFORMA_PERMISIBLES = [
   // defecto. Gatea sobre el módulo de empresa "flota" (ver
   // moduloEmpresaDelPermiso), igual que el resto de Flota/Predios.
   "flota_combustible",
+  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (acción `editar`); su etiqueta, descripción y dependencias viven en el catálogo central
+  // (permisos-catalogo.ts, Flota / Predios → Vehículos). Mismo patrón que flota_combustible/viajes_cerrar: NO se agrega a FLOTA_SUBMODULOS a propósito (ese arreglo se
+  // reparte completo a varios roles y se lo habría dado a todos). Ningún rol lo trae por defecto; un Admin lo asigna desde Usuarios. Sin él, solo la empresa propietaria
+  // edita un vehículo; con él, además, los vehículos compartidos accesibles desde la empresa activa (la propiedad nunca cambia). Gatea sobre el módulo de empresa "flota".
+  "flota_vehiculos_otras_empresas",
 ] as const;
+
+/** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
+export const PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS = "flota_vehiculos_otras_empresas";
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
 
@@ -338,7 +346,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
-  if (m === "flota_combustible") return "flota";
+  if (m === "flota_combustible" || m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
@@ -836,7 +844,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "gastos" &&
       p.modulo !== "gastos_autorizar" &&
       p.modulo !== "gastos_operativos_autorizar" &&
-      p.modulo !== "flota_combustible"
+      p.modulo !== "flota_combustible" &&
+      p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS
     ) {
       out.add(p.modulo);
     }

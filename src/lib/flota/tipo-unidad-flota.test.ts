@@ -104,7 +104,8 @@ describe("Flota — formulario de vehículo (código fuente)", () => {
   it("tiene el selector 'Tipo de unidad' con los tres valores y lo manda al guardar", () => {
     expect(cliente).toContain("Tipo de unidad");
     expect(cliente).toContain("TIPOS_UNIDAD.map((t) => (");
-    expect(cliente).toContain("tipoUnidad: form.tipoUnidad,");
+    // La empresa dueña lo manda siempre; al editar un vehículo de OTRA empresa (permiso transversal) no viaja: solo la dueña reclasifica.
+    expect(cliente).toContain("tipoUnidad: ajeno ? undefined : form.tipoUnidad,");
   });
 
   it("los vehículos nuevos arrancan como VEHICULO y al editar se precarga la clasificación existente", () => {
