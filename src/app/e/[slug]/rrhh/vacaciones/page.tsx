@@ -17,6 +17,8 @@ import {
 } from "@/lib/rrhh/vacaciones-eliminar-ui";
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
 import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
+import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
+import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
 type Periodo = {
@@ -49,6 +51,7 @@ export default function VacacionesPage() {
   const [tipo, setTipo] = useState<(typeof TIPOS)[number]>("Vacaciones");
   const [saldo, setSaldo] = useState<number | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
+  const [historial, setHistorial] = useState<HistorialVacaciones | null>(null);
   const [aviso, setAviso] = useState("");
   // RRHH-VACACIONES-FILTROS-HISTORIAL-1 — estados INDEPENDIENTES del empleado/tipo del formulario de registro
   // (empleadoId/tipo arriba). 0/"" = sin filtro ("Todos"). Cambiar estos filtros nunca toca empleadoId/tipo/
@@ -82,12 +85,13 @@ export default function VacacionesPage() {
   // ambas lean del mismo endpoint GET con el mismo parámetro `empleadoId` (con significado distinto según la llamada
   // — el del formulario en una, el del filtro en la otra).
   const cargarFormularioEmpleado = useCallback(async () => {
-    if (!empleadoId) { setSaldo(null); setPeriodos([]); setAviso(""); return; }
+    if (!empleadoId) { setSaldo(null); setPeriodos([]); setHistorial(null); setAviso(""); return; }
     // AJUSTE PR #376 (punto 1) — soloResumen=1: el backend calcula saldo/periodos SIN ejecutar listarVacaciones()
     // (antes esta llamada traía y descartaba el historial completo; ahora nunca lo toca).
     const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones?empleadoId=${empleadoId}&soloResumen=1`).then((r) => r.json());
     setSaldo(v.saldo ?? null);
     setPeriodos(v.periodos ?? []);
+    setHistorial(v.historial ?? null);
     setAviso(v.aviso ?? "");
   }, [slug, empleadoId]);
 
@@ -324,6 +328,8 @@ export default function VacacionesPage() {
           </ul>
         </div>
       ) : null}
+
+      {usaSaldo && historial ? <HistorialPeriodosVacaciones historial={historial} admin /> : null}
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}

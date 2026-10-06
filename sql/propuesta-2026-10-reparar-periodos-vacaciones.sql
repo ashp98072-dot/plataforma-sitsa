@@ -1,0 +1,92 @@
+-- =====================================================================
+-- PROPUESTA (NO EJECUTABLE AUTOMATICAMENTE) — REPARACION DE PERIODOS DE VACACIONES
+-- TODO el contenido de este archivo esta COMENTADO a proposito. NO se ejecuta desde la aplicacion ni por Claude (CLAUDE.md seccion 4).
+-- Es una guia para que RRHH + el responsable de la base la apliquen MANUALMENTE, por clase y con evidencia, DESPUES de:
+--   1) desplegar el motor corregido (src/lib/rrhh/vacaciones-periodos.ts): ya no genera traslapes ni series nuevas;
+--   2) correr sql/preflight-2026-10-vacaciones-historial-periodos.sql y revisar sus resultados;
+--   3) respaldo completo de saldos_vacaciones, detalle_consumo_vacaciones, vacaciones e incidencias.
+--
+-- REGLAS INVIOLABLES
+--   * NO se borra ninguna vacaciones/incidencia real (31 registros) ni ningun detalle FIFO (35 lineas).
+--   * detalle_consumo_vacaciones.saldo_id es ON DELETE CASCADE: borrar un saldo con consumo BORRARIA su detalle. Por eso todo DELETE
+--     de abajo exige NOT EXISTS (detalle) y se verifica el conteo antes y despues.
+--   * Un saldo referenciado por el detalle FIFO NO se elimina ni se renumera sin una migracion explicita y aprobada.
+--   * La fecha laboral de un empleado (p. ej. Elisa, id 37) NO se corrige hasta tener el dato real de RRHH.
+--   * No se reconstruyen periodos "a ciegas": cada UPDATE/DELETE lista ids concretos revisados por una persona.
+--
+-- CLASIFICACION (misma del preflight, seccion 9)
+--   A  SEGUROS DE ELIMINAR   — sin consumo, fecha laboral plausible, periodo fuera de la vida laboral.
+--   B  CON CONSUMO           — NO eliminar. Si sus fechas son incorrectas se corrigen con UPDATE explicito (clase C), nunca se borran.
+--   C  DECISION DE RRHH      — traslape real, anio laboral nulo/duplicado o fechas distintas a las esperadas: requiere decidir cual fila es la valida.
+--   D  FICHA DEL EMPLEADO    — fecha laboral invalida/sospechosa: corregir primero el dato en la ficha (con el valor real de RRHH).
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- PASO 0 — respaldo (ejecutar y verificar que las copias existan y tengan las mismas filas)
+-- ---------------------------------------------------------------------
+-- CREATE TABLE respaldo_2026_10_saldos_vacaciones        AS SELECT * FROM saldos_vacaciones;
+-- CREATE TABLE respaldo_2026_10_detalle_consumo_vacaciones AS SELECT * FROM detalle_consumo_vacaciones;
+-- SELECT (SELECT COUNT(*) FROM saldos_vacaciones) = (SELECT COUNT(*) FROM respaldo_2026_10_saldos_vacaciones) AS saldos_ok,
+--        (SELECT COUNT(*) FROM detalle_consumo_vacaciones) = (SELECT COUNT(*) FROM respaldo_2026_10_detalle_consumo_vacaciones) AS detalle_ok;
+
+-- ---------------------------------------------------------------------
+-- CLASE D — corregir la ficha ANTES de tocar saldos (ELISA, empleado id 37)
+-- ---------------------------------------------------------------------
+-- Dato requerido de RRHH: la fecha REAL de alta (y, si aplica, fecha_inicio_laboral) de Elisa Jimenez Lopez.
+-- Hoy: fecha_alta = 1899-12-31, fecha_inicio_laboral = 1899-12-31, 127 periodos desde 1900-01-01 hasta 2026-12-30.
+-- NO asumir la fecha. Cuando exista el dato:
+--   UPDATE empleados SET fecha_alta = '<FECHA_REAL_RRHH>' /* , fecha_inicio_laboral = '<FECHA_REAL_RRHH>' */
+--    WHERE id = 37 AND empresa_id = <EMPRESA_ID>;
+-- Despues se repite el preflight (secciones 2, 3, 9 y 10) y SOLO ENTONCES se decide que saldos de Elisa son A/B/C.
+-- Hasta entonces el motor no genera ni modifica periodos de este empleado y la UI muestra una advertencia.
+
+-- ---------------------------------------------------------------------
+-- CLASE A — saldos seguros de eliminar (revisar la lista del preflight 9b, clase 'A', y pegar SOLO los ids aprobados)
+-- ---------------------------------------------------------------------
+-- START TRANSACTION;
+--   SELECT COUNT(*) AS detalle_antes FROM detalle_consumo_vacaciones;          -- debe ser 35 (o el valor vigente) y NO cambiar
+--   DELETE s FROM saldos_vacaciones s
+--    WHERE s.id IN (/* ids de clase A aprobados por RRHH */)
+--      AND NOT EXISTS (SELECT 1 FROM detalle_consumo_vacaciones d WHERE d.saldo_id = s.id);   -- nunca un saldo con consumo
+--   SELECT ROW_COUNT() AS saldos_borrados;                                     -- debe coincidir con la cantidad de ids aprobados
+--   SELECT COUNT(*) AS detalle_despues FROM detalle_consumo_vacaciones;        -- debe ser IGUAL a detalle_antes
+-- -- Si algo no coincide:  ROLLBACK;   Si todo coincide:  COMMIT;
+
+-- ---------------------------------------------------------------------
+-- CLASE B — saldos con consumo: NO se eliminan. Solo se admite corregir fechas/otorgados de un saldo concreto
+--           cuando RRHH confirme la fecha laboral real; el detalle FIFO (incidencia_id, saldo_id, dias_tomados) NO cambia.
+-- ---------------------------------------------------------------------
+-- START TRANSACTION;
+--   UPDATE saldos_vacaciones
+--      SET periodo_inicio = '<INICIO_CORRECTO>', periodo_fin = '<FIN_CORRECTO>'
+--    WHERE id = <SALDO_ID> AND empresa_id = <EMPRESA_ID>
+--      AND NOT EXISTS (SELECT 1 FROM saldos_vacaciones o WHERE o.id_empleado = <EMPLEADO_ID> AND o.id <> <SALDO_ID>
+--                      AND o.periodo_inicio <= '<FIN_CORRECTO>' AND '<INICIO_CORRECTO>' <= o.periodo_fin);  -- el rango nuevo no debe traslapar
+--   -- verificar: SELECT * FROM saldos_vacaciones WHERE id_empleado = <EMPLEADO_ID> ORDER BY periodo_inicio;  y que detalle no cambio
+-- -- COMMIT; o ROLLBACK;
+
+-- ---------------------------------------------------------------------
+-- CLASE C — decision de RRHH (traslapes). Ejemplo documentado: Amilcar Bernabe Torres Cho, saldos 78 y 79
+--   saldo 78: 2024-05-31 -> 2025-05-30      saldo 79: 2025-04-13 -> 2026-04-12     (superposicion real > 1 mes)
+--   La fecha laboral/base cambio y el sincronizador anterior agrego periodos sin reconciliar los previos.
+-- Pasos (por empleado, con la fecha laboral REAL confirmada por RRHH):
+--   1. Calcular los periodos esperados: periodo n = [alta + (n-1) anios, alta + n anios - 1 dia] (ver preflight, seccion 9).
+--   2. Para cada saldo del empleado decidir: conservar (clase B si tiene consumo), realinear fechas (UPDATE de arriba) o eliminar (clase A,
+--      solo si no tiene consumo y queda fuera de la vida laboral).
+--   3. Borde de un dia (traslape tipo BORDE, p. ej. Alvaro 2022-10-31 -> 2023-10-30 y 2023-10-30 -> 2024-10-29): son desfases de un dia
+--      por la correccion previa de zona horaria de fechas DATE; se realinean con UPDATE al valor esperado cuando NO hay consumo, y se dejan
+--      documentados (no se tocan) cuando tienen consumo. No bloquean al motor corregido.
+--   4. Repetir el preflight (secciones 3, 4, 5, 9) hasta que los traslapes REALES sean 0.
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- VERIFICACION FINAL (solo lectura) — debe cumplirse tras la reparacion
+-- ---------------------------------------------------------------------
+-- SELECT COUNT(*) AS vacaciones FROM vacaciones;                                        -- 31 (sin cambios)
+-- SELECT COUNT(*) AS incidencias_vacaciones FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones');   -- 31
+-- SELECT COUNT(*) AS detalle FROM detalle_consumo_vacaciones;                           -- 35, y comparar contra respaldo_2026_10_detalle_consumo_vacaciones
+-- SELECT COUNT(*) AS traslapes_reales FROM saldos_vacaciones a JOIN saldos_vacaciones b
+--    ON b.empresa_id = a.empresa_id AND b.id_empleado = a.id_empleado AND b.id > a.id
+--  WHERE a.periodo_inicio <= b.periodo_fin AND b.periodo_inicio <= a.periodo_fin
+--    AND NOT (DATEDIFF(LEAST(a.periodo_fin, b.periodo_fin), GREATEST(a.periodo_inicio, b.periodo_inicio)) + 1 = 1
+--             AND (a.periodo_fin = b.periodo_inicio OR b.periodo_fin = a.periodo_inicio));  -- 0
