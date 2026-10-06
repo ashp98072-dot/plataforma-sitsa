@@ -2,7 +2,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
-import { requireTenantFlota, requireTenantFlotaAny } from "@/lib/tenant";
+import { requireTenantFlota, requireTenantFlotaAny, sesionPuedeEditarVehiculosOtrasEmpresas } from "@/lib/tenant";
+import { registrarAuditoria } from "@/lib/auditoria";
+import { empresasParaUsuario, obtenerEmpresaPorId } from "@/lib/empresas";
+import {
+  decidirEdicionVehiculo,
+  detalleAuditoriaEdicionTransversal,
+  esSolicitudSoloTaller,
+  mensajeDenegado,
+} from "@/lib/flota/edicion-vehiculo";
 import {
   asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
@@ -46,6 +54,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const rows = await listarVehiculosAccesibles(guard.empresa.id);
+  // Misma regla que el PATCH (decidirEdicionVehiculo): la UI solo ofrece «Editar» donde el backend lo va a aceptar.
+  const permisoTransversal = await sesionPuedeEditarVehiculosOtrasEmpresas(guard.session);
+  const empresasAutorizadasIds = permisoTransversal ? await empresasAutorizadasDeLaSesion(guard.session) : [];
   const ids = rows.map((r) => Number(r.id));
   const duenosIds = rows
     .filter((r) => Number(r.empresa_id) === guard.empresa.id)
@@ -83,6 +94,12 @@ export async function GET(_req: Request, ctx: Ctx) {
       compartido: Number(r.compartido ?? 0) === 1,
       accesoEmpresaIds: esDueno ? (accesosMap.get(vid) ?? []) : [],
       esDueno,
+      puedeEditar: decidirEdicionVehiculo({
+        empresaActivaId: guard.empresa.id,
+        empresaDuenaId: Number(r.empresa_id),
+        permisoTransversal,
+        empresasAutorizadasIds,
+      }).puede,
       filtros,
     });
   }
@@ -90,7 +107,18 @@ export async function GET(_req: Request, ctx: Ctx) {
     vehiculos,
     empresas,
     empresaActualId: guard.empresa.id,
+    puedeEditarOtrasEmpresas: permisoTransversal,
   });
+}
+
+/** Empresas que el usuario de la sesión está autorizado a operar (mismo criterio que requireTenant): el alcance del permiso transversal. */
+async function empresasAutorizadasDeLaSesion(session: { id: number; rol: string; accesoTodas?: boolean }): Promise<number[]> {
+  const permitidas = await empresasParaUsuario({
+    usuarioId: session.id,
+    rol: session.rol as Parameters<typeof empresasParaUsuario>[0]["rol"],
+    accesoTodas: Boolean(session.accesoTodas),
+  });
+  return permitidas.map((e) => e.id);
 }
 
 const schema = z.object({
@@ -304,6 +332,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const cur = [curRow];
   const esDueno = Number(curRow.empresa_id) === guard.empresa.id;
+  const empresaDuenaId = Number(curRow.empresa_id);
+
+  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: puedeEditar = empresa propietaria OR permiso transversal (y empresa propietaria entre las que el usuario
+  // opera). La propietaria sale de la BD (curRow), jamás del cliente. Sin permiso, un vehículo COMPARTIDO solo admite la operación de taller.
+  const permisoTransversal = esDueno ? false : await sesionPuedeEditarVehiculosOtrasEmpresas(guard.session);
+  const decision = decidirEdicionVehiculo({
+    empresaActivaId: guard.empresa.id,
+    empresaDuenaId,
+    permisoTransversal,
+    empresasAutorizadasIds: permisoTransversal ? await empresasAutorizadasDeLaSesion(guard.session) : [],
+  });
+  const solicitud = Object.entries(d).filter(([, v]) => v !== undefined).map(([k]) => k);
+  const soloTaller = esSolicitudSoloTaller(solicitud);
+  if (!decision.puede && !soloTaller) {
+    return NextResponse.json({ error: mensajeDenegado(decision.motivoDenegado) }, { status: 403 });
+  }
 
   if (d.reiniciarKilometraje) {
     if (!esDueno) {
@@ -419,7 +463,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         medida_llanta = ?,
         tipo_aceite = ?,
         empresa_activo = ?
-       WHERE id = ?`,
+       WHERE id = ? AND empresa_id = ?`,
       [
         d.placa?.trim().toUpperCase() || String(cur[0].placa),
         d.marca ?? cur[0].marca,
@@ -461,11 +505,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
           ? d.empresaActivo.trim() || null
           : cur[0].empresa_activo,
         d.id,
+        empresaDuenaId,
       ],
     );
-    if (d.filtros && esDueno) {
+    if (d.filtros && decision.puede) {
       await guardarFiltrosVehiculo(
-        Number(cur[0].empresa_id),
+        empresaDuenaId,
         d.id,
         d.filtros as FiltroVehiculo[],
       );
@@ -476,6 +521,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.accesoEmpresaIds,
         Number(cur[0].empresa_id),
       );
+    }
+    // Auditoría SOLO de la edición transversal (la de la propia empresa y la operación de taller no cambian): vehículo, empresa propietaria,
+    // empresa activa y usuario; la fecha/hora la registra la tabla de auditoría.
+    if (decision.porPermisoTransversal && !soloTaller) {
+      const duena = await obtenerEmpresaPorId(empresaDuenaId).catch(() => null);
+      await registrarAuditoria({
+        empresaId: guard.empresa.id,
+        usuario: guard.session.username,
+        accion: "editar_vehiculo_otra_empresa",
+        modulo: "flota_vehiculos",
+        detalle: detalleAuditoriaEdicionTransversal({
+          placa: String(cur[0].placa),
+          vehiculoId: d.id,
+          empresaDuenaNombre: duena?.nombre ?? `empresa ${empresaDuenaId}`,
+          empresaDuenaId,
+          empresaActivaNombre: guard.empresa.nombre,
+          empresaActivaId: guard.empresa.id,
+          usuario: guard.session.username,
+        }),
+      });
     }
     return NextResponse.json({
       mensaje:
@@ -497,12 +562,13 @@ export async function PATCH(req: Request, ctx: Ctx) {
           en_taller = ?,
           fecha_entrada_taller = ?,
           estado = ?
-         WHERE id = ?`,
+         WHERE id = ? AND empresa_id = ?`,
         [
           enTaller,
           fechaTaller,
           enTaller ? "En taller" : "Activo",
           d.id,
+          empresaDuenaId,
         ],
       );
       return NextResponse.json({

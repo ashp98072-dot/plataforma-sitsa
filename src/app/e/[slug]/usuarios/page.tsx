@@ -13,6 +13,7 @@ import {
   GRUPOS_PERMISOS,
   catalogoPermisosRol,
   grupoPrincipalDelRol,
+  descripcionPermiso,
   labelPermiso,
   labelRol,
   mergePermisosConCatalogo,
@@ -178,7 +179,10 @@ function PermisosTable({
             };
             return (
               <tr key={m} className="border-t border-[var(--border)]">
-                <td className="px-2 py-1.5">{labelPermiso(m)}</td>
+                <td className="px-2 py-1.5">
+                  {labelPermiso(m)}
+                  {descripcionPermiso(m) ? <span className="block max-w-sm text-[10px] font-normal text-[var(--muted)]">{descripcionPermiso(m)}</span> : null}
+                </td>
                 {FLAGS.map(([flag]) => (
                   <td key={flag} className="px-2 py-1.5">
                     <input

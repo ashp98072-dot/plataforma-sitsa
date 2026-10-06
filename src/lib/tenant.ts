@@ -529,6 +529,18 @@ export async function requireTenantFlotaCombustible(
 }
 
 /**
+ * FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS — ¿puede esta sesión editar vehículos de OTRAS empresas? Permiso explícito
+ * `flota_vehiculos_otras_empresas:editar` (Admin lo tiene por catálogo global). No mira `username` ni `rol` fuera del bypass administrativo ya
+ * existente: la autoridad real es el permiso de la matriz de Usuarios. Es solo una CAPACIDAD: el endpoint además exige que la empresa propietaria
+ * del vehículo esté entre las que el usuario está autorizado a operar (ver decidirEdicionVehiculo).
+ */
+export async function sesionPuedeEditarVehiculosOtrasEmpresas(session: { id: number; rol: string }): Promise<boolean> {
+  if (session.rol === "Admin") return true;
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  return tienePermiso(perms, "flota_vehiculos_otras_empresas", "editar");
+}
+
+/**
  * OPS-1 — cerrar administrativamente un viaje (Descargado -> Cerrado).
  * Permiso EXPLÍCITO e independiente del rol — JefeOperaciones/
  * GerenteOperaciones lo traen por defecto, pero cualquier rol puede
