@@ -7,7 +7,7 @@ import { ProveedoresComercialesClient, camposFormulario } from "@/components/com
 import ComprasPage from "@/app/e/[slug]/compras/page";
 const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 it("menú/rutas y formulario sin funcionalidad de requerimientos", () => {
-  const shell = leer("src/components/app-shell.tsx"); expect(shell).toContain('tienePermiso(permisos, "compras_proveedores", "ver")'); expect(shell).not.toContain('label: "Compras / Repuestos"'); expect(shell).toContain('label: "Proveedores comerciales"');
+  const shell = leer("src/components/app-shell.tsx"); expect(shell).toContain('tienePermisoBase(permisos, "compras_proveedores")'); expect(shell).not.toContain('label: "Compras / Repuestos"'); expect(shell).toContain('label: "Proveedores comerciales"');
   expect(leer("src/app/e/[slug]/compras/page.tsx")).toContain("compras/requerimientos");
   const html = renderToStaticMarkup(createElement(ProveedoresComercialesClient, { slug: "a", puedeCrear: true, puedeEditar: true })); expect(html).toContain("Proveedores comerciales"); expect(html).toContain("Nuevo proveedor"); expect(html).toContain("Buscar por nombre comercial");
   expect(renderToStaticMarkup(createElement(ProveedoresComercialesClient, { slug: "a", puedeCrear: false, puedeEditar: false }))).not.toContain("Nuevo proveedor");

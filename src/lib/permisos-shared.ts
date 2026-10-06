@@ -105,6 +105,8 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
 export const PLATAFORMA_PERMISIBLES = [
+  "cotizaciones",
+  "proveedor_portales",
   "compras_proveedores",
   "compras_requerimientos",
   // COMPRAS-FASE-4-AUTORIZACION: autorizar/rechazar un Requerimiento de
@@ -332,7 +334,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
+  if (m === "cotizaciones" || m === "proveedor_portales" || m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
@@ -622,7 +624,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "rrhh", "flota", "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -725,9 +727,11 @@ export function mergePermisosConCatalogo(
       }
     }
   }
-  return catalogoPermisosRol(rol).map(
-    (m) => map.get(m) ?? permisoVacio(m),
-  );
+  const catalogo = catalogoPermisosRol(rol);
+  return [
+    ...catalogo.map((m) => map.get(m) ?? permisoVacio(m)),
+    ...[...map.values()].filter((p) => !catalogo.includes(p.modulo)),
+  ];
 }
 
 export function tienePermiso(
@@ -736,6 +740,11 @@ export function tienePermiso(
   accion: AccionPermiso,
 ): boolean {
   const p = permisos.find((x) => x.modulo === modulo);
+  if (p && permisos.some(x => x.modulo === "permisos_acciones_v2" && x.puedeVer)) {
+    // Una matriz V2 tiene denegaciones explícitas; no inferir lectura ni
+    // volver a conceder un submódulo negado desde el paraguas Flota.
+    return p[accion === "ver" ? "puedeVer" : accion === "crear" ? "puedeCrear" : accion === "editar" ? "puedeEditar" : "puedeEliminar"];
+  }
   if (p) {
     switch (accion) {
       case "ver":
@@ -809,6 +818,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&
       p.modulo !== "cotizaciones_costeo" &&
+      p.modulo !== "cotizaciones" &&
+      p.modulo !== "proveedor_portales" &&
       p.modulo !== "cotizaciones_ajustes" &&
       p.modulo !== "rrhh_requerimientos" &&
       p.modulo !== "rrhh_requerimientos_autorizar" &&

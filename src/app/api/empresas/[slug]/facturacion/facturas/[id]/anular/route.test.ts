@@ -18,11 +18,12 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /facturacion/facturas/[id]/anular — 21) rechaza si hay pagos (vía la lib)", () => {
-  it("exige facturacion:editar antes de tocar la lib", async () => {
+  it("exige facturacion:anular antes de tocar la lib", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
     const res = await POST(new Request("http://localhost/x", { method: "POST" }), ctx);
     expect(res.status).toBe(403);
     expect(anularFactura).not.toHaveBeenCalled();
+    expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "anular");
   });
 
   it("20) éxito: delega en anularFactura con el actor del guard", async () => {

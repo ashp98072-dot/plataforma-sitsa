@@ -7,6 +7,7 @@ import { FacturasPanel } from "@/components/facturacion/facturas-panel";
 import { ViajesPendientesPanel } from "@/components/facturacion/viajes-pendientes-panel";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { tieneAccionCatalogo, tienePermisoBase } from "@/lib/permisos-catalogo";
 import type {
   RespuestasFacturacion,
   SeccionFacturacion,
@@ -67,8 +68,8 @@ export function FacturacionClient({
   // permiso propio del módulo "facturacion" (el MISMO que exige
   // requireTenantFacturacion en el backend), nunca por el alcance de rol
   // del cuestionario (empresa/clientes) ni por "tms".
-  const { permisos } = useEmpresaSession();
-  const puedeVerFacturas = tienePermiso(permisos, "facturacion", "ver");
+  const { permisos, rol } = useEmpresaSession();
+  const puedeVerFacturas = rol === "Admin" || tienePermisoBase(permisos, "facturacion");
   const puedeCrearFacturas = tienePermiso(permisos, "facturacion", "crear");
   const puedeEditarFacturas = tienePermiso(permisos, "facturacion", "editar");
 
@@ -295,8 +296,10 @@ export function FacturacionClient({
       {tab === "facturas" && puedeVerFacturas ? (
         <FacturasPanel
           slug={slug}
-          puedeCrear={puedeCrearFacturas}
           puedeEditar={puedeEditarFacturas}
+          puedeEmitir={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "emitir")}
+          puedeAnular={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "anular")}
+          puedePagar={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "pagos")}
           abrirFacturaId={facturaAAbrir}
           onAbierta={() => setFacturaAAbrir(null)}
           onCambio={() => void cargarKpi()}

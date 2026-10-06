@@ -25,7 +25,7 @@ function requireAdmin() {
 }
 
 const permisoSchema = z.object({
-  modulo: z.string(),
+  modulo: z.string().min(1).max(40),
   puedeVer: z.boolean(),
   puedeCrear: z.boolean(),
   puedeEditar: z.boolean(),

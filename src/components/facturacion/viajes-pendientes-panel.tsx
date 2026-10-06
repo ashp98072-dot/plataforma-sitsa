@@ -45,7 +45,7 @@ const PAGE_SIZE = 50;
 export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Props) {
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/facturacion/clientes`)
+    fetch(`/api/empresas/${slug}/facturacion/facturas/catalogos`)
       .then((r) => r.json())
       .then((data) => setClientesCat(((data.clientes ?? []) as ClienteCat[])))
       .catch(() => undefined);

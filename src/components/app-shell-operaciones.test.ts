@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tienePermiso, type PermisoModulo } from "@/lib/permisos-shared";
+import type { PermisoModulo } from "@/lib/permisos-shared";
+import { tienePermisoBase } from "@/lib/permisos-catalogo";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — reorganización visual del menú de
@@ -27,8 +28,8 @@ describe("Compras — accesos directos sin padre redundante", () => {
       { modulo: "compras_requerimientos", puedeVer: requerimientos, puedeCrear: false, puedeEditar: false, puedeEliminar: false },
       { modulo: "compras_proveedores", puedeVer: proveedores, puedeCrear: false, puedeEditar: false, puedeEliminar: false },
     ];
-    return new Function("isAdmin", "modulos", "permisos", "tienePermiso", "base", `const opsLinks = []; ${bloque}; return opsLinks;`)(
-      rol === "Admin", modulos, permisos, tienePermiso, "/e/kt-monaco",
+    return new Function("isAdmin", "modulos", "permisos", "tienePermisoBase", "base", `const opsLinks = []; ${bloque}; return opsLinks;`)(
+      rol === "Admin", modulos, permisos, tienePermisoBase, "/e/kt-monaco",
     ) as { href: string; label: string; key: string }[];
   }
   it("elimina únicamente el enlace clicable Compras / Repuestos", () => {
@@ -50,8 +51,16 @@ describe("Compras — accesos directos sin padre redundante", () => {
 });
 
 describe("menú Operaciones — nombres y orden", () => {
+  it("capacidad TMS de empresa no concede Disponibilidad sin permiso de lectura", () => {
+    const condicion = src.match(/const puedeDisponibilidad =[\s\S]*?;/)?.[0];
+    expect(condicion).toBeDefined();
+    const evaluar = new Function("rol", "isAdmin", "modulos", "permisos", "tienePermisoBase", `${condicion}; return puedeDisponibilidad;`);
+    expect(evaluar("Operaciones",false,["tms"],[],tienePermisoBase)).toBe(false);
+    expect(evaluar("Operaciones",false,["tms"],[{modulo:"tms",puedeVer:true}],tienePermisoBase)).toBe(true);
+    expect(evaluar("Operaciones",false,["flota"],[{modulo:"flota_reportes",puedeVer:true}],tienePermisoBase)).toBe(true);
+  });
   it("muestra Ajustes de costeo solo con su permiso explícito y la ruta correcta", () => {
-    expect(src).toContain('tienePermiso(permisos, "cotizaciones_ajustes", "ver")');
+    expect(src).toContain('tienePermisoBase(permisos, "cotizaciones_ajustes")');
     expect(src).toContain('href: `${base}/cotizaciones/ajustes`');
     expect(src).toContain('label: "Ajustes de cotizaciones"');
     const bloque = src.match(/const puedeAjustesCotizaciones =[\s\S]*?\n    \}/)?.[0] ?? "";

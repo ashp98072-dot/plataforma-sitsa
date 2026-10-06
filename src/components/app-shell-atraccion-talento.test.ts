@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tienePermiso, RRHH_NAV, type PermisoModulo } from "@/lib/permisos-shared";
+import { RRHH_NAV, type PermisoModulo } from "@/lib/permisos-shared";
+import { tienePermisoBase } from "@/lib/permisos-catalogo";
 
 /**
  * ATRACCION-TALENTO-1 — el grupo "RRHH" se renombra visualmente a
@@ -12,7 +13,7 @@ import { tienePermiso, RRHH_NAV, type PermisoModulo } from "@/lib/permisos-share
  * Mismo criterio que app-shell-operaciones.test.ts: app-shell.tsx es un
  * componente cliente grande sin harness de render en este repo — se
  * extrae el bloque REAL de construcción del grupo y se evalúa con el
- * evaluador real (tienePermiso real, sin duplicar su lógica aquí).
+ * evaluador real (tienePermisoBase real, sin duplicar su lógica aquí).
  */
 const src = readFileSync(join(__dirname, "app-shell.tsx"), "utf-8");
 
@@ -48,9 +49,9 @@ describe("navegación: RRHH -> Gestión de Talento Humano / Atracción de Talent
       ? [{ modulo: "entrevistas", puedeVer: true, puedeCrear: false, puedeEditar: false, puedeEliminar: false }]
       : [{ modulo: "entrevistas", puedeVer: false, puedeCrear: false, puedeEditar: false, puedeEliminar: false }];
     return new Function(
-      "isAdmin", "modulos", "permisos", "tienePermiso", "base", "dominioEmpresa",
+      "isAdmin", "modulos", "permisos", "tienePermisoBase", "base", "dominioEmpresa",
       `${bloque}; return atraccionLinks;`,
-    )(rol === "Admin", modulos, permisos, tienePermiso, "/e/kt-monaco", false) as { href: string; label: string; key: string }[];
+    )(rol === "Admin", modulos, permisos, tienePermisoBase, "/e/kt-monaco", false) as { href: string; label: string; key: string }[];
   }
 
   it("5/6) el grupo contiene Entrevistas y Reportes cuando hay permiso entrevistas:ver", () => {

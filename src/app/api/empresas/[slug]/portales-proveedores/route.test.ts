@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RowDataPacket } from "mysql2";
 
-vi.mock("@/lib/tenant", () => ({ requireTenant: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantPortalesProveedores: vi.fn() }));
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
 vi.mock("@/lib/proveedores/credenciales", () => ({ cifrarCredencial: vi.fn(() => "cifrado"), descifrarCredencial: vi.fn(() => "clave") }));
-import { requireTenant } from "@/lib/tenant";
+import { requireTenantPortalesProveedores } from "@/lib/tenant";
 import { query, execute } from "@/lib/db";
 import { cifrarCredencial, descifrarCredencial } from "@/lib/proveedores/credenciales";
 import { GET, POST } from "./route";
@@ -17,7 +17,7 @@ const req = (body: unknown) => new Request("http://localhost", { method: "POST",
 const filas = (datos: Record<string, unknown>[]) => datos as RowDataPacket[];
 
 function sesion(rol = "Operaciones", empresaId = 7) {
-  vi.mocked(requireTenant).mockResolvedValue({ empresa: { id: empresaId }, session: { id: 12, rol } } as Awaited<ReturnType<typeof requireTenant>>);
+  vi.mocked(requireTenantPortalesProveedores).mockResolvedValue({ empresa: { id: empresaId }, session: { id: 12, rol }, permisos: [{modulo:"proveedor_portales",puedeVer:true,puedeCrear:true,puedeEditar:true,puedeEliminar:true}] } as Awaited<ReturnType<typeof requireTenantPortalesProveedores>>);
 }
 
 describe("portales de proveedores: validación y aislamiento", () => {
@@ -28,6 +28,15 @@ describe("portales de proveedores: validación y aislamiento", () => {
     vi.mocked(descifrarCredencial).mockReturnValue("clave");
     vi.mocked(query).mockResolvedValue([]);
     vi.mocked(execute).mockResolvedValue({ affectedRows: 1, insertId: 3 } as Awaited<ReturnType<typeof execute>>);
+  });
+
+  it("GET publica acciones independientes, sin conceder CRUD por Ver", async () => {
+    vi.mocked(requireTenantPortalesProveedores).mockResolvedValue({
+      empresa:{id:7}, session:{id:12,rol:"Operaciones"},
+      permisos:[{modulo:"proveedor_portales",puedeVer:true,puedeCrear:false,puedeEditar:true,puedeEliminar:false}],
+    } as Awaited<ReturnType<typeof requireTenantPortalesProveedores>>);
+    const body = await (await GET(req({}),ctx)).json();
+    expect(body).toMatchObject({puedeCrear:false,puedeEditar:true,puedeEliminar:false});
   });
 
   it.each([

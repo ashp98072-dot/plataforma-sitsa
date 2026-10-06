@@ -9,7 +9,7 @@ const schema = z.object({ estado: z.enum(ESTADOS_COTIZACION) });
 
 export async function PATCH(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantCotizaciones(slug, "editar");
+  const guard = await requireTenantCotizaciones(slug, "estado");
   if (guard.error) return guard.error;
 
   const parsed = schema.safeParse(await req.json().catch(() => ({})));

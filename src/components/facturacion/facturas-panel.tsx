@@ -44,8 +44,10 @@ type ClienteCat = { clienteId: number; nombre: string };
 
 type Props = {
   slug: string;
-  puedeCrear: boolean;
   puedeEditar: boolean;
+  puedeEmitir: boolean;
+  puedeAnular: boolean;
+  puedePagar: boolean;
   abrirFacturaId: number | null;
   onAbierta: () => void;
   onCambio: () => void;
@@ -60,10 +62,10 @@ const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 p
 const linkCls = "text-[var(--accent)] hover:underline";
 const PAGE_SIZE = 50;
 
-export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, onAbierta, onCambio }: Props) {
+export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, puedePagar, abrirFacturaId, onAbierta, onCambio }: Props) {
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/facturacion/clientes`)
+    fetch(`/api/empresas/${slug}/facturacion/facturas/catalogos`)
       .then((r) => r.json())
       .then((data) => setClientesCat((data.clientes ?? []) as ClienteCat[]))
       .catch(() => undefined);
@@ -408,7 +410,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                           </div>
 
                           {/* Fase I: emitir — solo Borrador */}
-                          {puedeEditar && esBorrador(detalle.factura.estadoAdmin) ? (
+                          {puedeEmitir && esBorrador(detalle.factura.estadoAdmin) ? (
                             confirmandoEmitir ? (
                               <div className="space-y-1.5 rounded border border-sky-700/60 bg-sky-950/10 p-2 text-xs">
                                 <p className="font-semibold text-sky-700">Confirmar emisión</p>
@@ -449,7 +451,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                           {esEmitida(detalle.factura.estadoAdmin) ? (
                             <div>
                               <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{moneda(detalle.factura.saldo)}</span></p>
-                              {puedeCrear && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
+                              {puedePagar && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
                                 mostrarPago ? (
                                   <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
                                     <div className="grid gap-2 sm:grid-cols-2">
@@ -477,7 +479,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                           ) : null}
 
                           {/* Fase K: anular — Borrador o Emitida, nunca ya Anulada */}
-                          {puedeEditar && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
+                          {puedeAnular && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
                             confirmandoAnular ? (
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
                                 <p className="font-semibold text-rose-600">Confirmar anulación</p>
