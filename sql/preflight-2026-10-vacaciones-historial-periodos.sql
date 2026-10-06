@@ -204,3 +204,53 @@ ORDER BY s.periodo_inicio;
 SELECT s.id AS saldo_id, s.id_empleado, s.anio_laboral, s.periodo_inicio, s.periodo_fin, s.dias_otorgados, s.dias_disponibles, s.estado
 FROM saldos_vacaciones s WHERE s.id IN (69, 70, 78, 79) ORDER BY s.id;
 SELECT d.id, d.incidencia_id, d.saldo_id, d.dias_tomados FROM detalle_consumo_vacaciones d WHERE d.incidencia_id = 24 ORDER BY d.id;
+
+-- 12) EMPLEADOS QUE QUEDARIAN CONGELADOS por el motor corregido (REQUIERE_REPARACION_ADMINISTRADA). SOLO LECTURA.
+--     El motor NO escribe nada (ni periodos, ni vencimientos, ni tope de 30) para un empleado cuando:
+--       a) FECHA_SOSPECHOSA            fecha_alta NULL/invalida o < 1980;
+--       b) SERIE_HISTORICA_CON_CONSUMO existe un saldo CON consumo FIFO (cualquier estado) cuyas fechas no coinciden con las esperadas
+--                                      para su anio laboral (o sin anio laboral, o con anio fuera de la serie esperada);
+--       c) ESTRUCTURA_INCONSISTENTE    anio laboral repetido, saldo sin anio que se superpone con la serie, o traslape REAL (> 1 dia).
+--     Tener consumo con fechas que YA coinciden con la serie esperada NO congela. Un traslape de BORDE (1 dia) tampoco.
+--     Estos empleados NO reciben periodos nuevos hasta repararlos: revisar esta lista ANTES de desplegar.
+SELECT motivo, empresa_id, id_empleado, nombre, GROUP_CONCAT(DISTINCT detalle ORDER BY detalle SEPARATOR ' | ') AS detalle
+FROM (
+  -- a) fecha sospechosa
+  SELECT 'a) FECHA_SOSPECHOSA' AS motivo, e.empresa_id, e.id AS id_empleado, e.nombre, CONCAT('fecha_alta=', COALESCE(e.fecha_alta, 'NULL')) AS detalle
+  FROM empleados e WHERE (e.fecha_alta IS NULL OR e.fecha_alta < '1980-01-01') AND EXISTS (SELECT 1 FROM saldos_vacaciones s WHERE s.empresa_id = e.empresa_id AND s.id_empleado = e.id)
+  UNION ALL
+  -- b) saldo con consumo cuyas fechas no coinciden con la serie esperada
+  SELECT 'b) SERIE_HISTORICA_CON_CONSUMO', e.empresa_id, e.id, e.nombre,
+         CONCAT('saldo ', s.id, ' anio ', COALESCE(s.anio_laboral, 'NULL'), ' ', s.periodo_inicio, '->', s.periodo_fin)
+  FROM saldos_vacaciones s JOIN empleados e ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
+  WHERE e.fecha_alta >= '1980-01-01'
+    AND EXISTS (SELECT 1 FROM detalle_consumo_vacaciones d WHERE d.saldo_id = s.id)
+    AND (s.anio_laboral IS NULL
+         OR s.anio_laboral < 1 OR s.anio_laboral > TIMESTAMPDIFF(YEAR, e.fecha_alta, CURDATE()) + 1
+         OR s.periodo_inicio <> DATE_ADD(e.fecha_alta, INTERVAL (s.anio_laboral - 1) YEAR)
+         OR s.periodo_fin <> DATE_SUB(DATE_ADD(e.fecha_alta, INTERVAL s.anio_laboral YEAR), INTERVAL 1 DAY))
+  UNION ALL
+  -- c1) anio laboral repetido
+  SELECT 'c) ESTRUCTURA_INCONSISTENTE', s.empresa_id, s.id_empleado, e.nombre, CONCAT('anio ', s.anio_laboral, ' repetido')
+  FROM saldos_vacaciones s JOIN empleados e ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
+  WHERE s.anio_laboral IS NOT NULL
+  GROUP BY s.empresa_id, s.id_empleado, e.nombre, s.anio_laboral HAVING COUNT(*) > 1
+  UNION ALL
+  -- c2) saldo sin anio laboral que se superpone con la serie esperada
+  SELECT 'c) ESTRUCTURA_INCONSISTENTE', s.empresa_id, s.id_empleado, e.nombre, CONCAT('saldo ', s.id, ' sin anio laboral se superpone con la serie')
+  FROM saldos_vacaciones s JOIN empleados e ON e.id = s.id_empleado AND e.empresa_id = s.empresa_id
+  WHERE s.anio_laboral IS NULL AND e.fecha_alta >= '1980-01-01'
+    AND s.periodo_inicio <= DATE_SUB(DATE_ADD(e.fecha_alta, INTERVAL TIMESTAMPDIFF(YEAR, e.fecha_alta, CURDATE()) + 1 YEAR), INTERVAL 1 DAY)
+    AND s.periodo_fin >= e.fecha_alta
+  UNION ALL
+  -- c3) traslape REAL (mas de 1 dia) ya existente entre dos saldos del empleado
+  SELECT 'c) ESTRUCTURA_INCONSISTENTE', a.empresa_id, a.id_empleado, e.nombre,
+         CONCAT('saldos ', a.id, ' y ', b.id, ' se superponen ', DATEDIFF(LEAST(a.periodo_fin, b.periodo_fin), GREATEST(a.periodo_inicio, b.periodo_inicio)) + 1, ' dias')
+  FROM saldos_vacaciones a
+  JOIN saldos_vacaciones b ON b.empresa_id = a.empresa_id AND b.id_empleado = a.id_empleado AND b.id > a.id
+  JOIN empleados e ON e.id = a.id_empleado AND e.empresa_id = a.empresa_id
+  WHERE a.periodo_inicio <= b.periodo_fin AND b.periodo_inicio <= a.periodo_fin
+    AND DATEDIFF(LEAST(a.periodo_fin, b.periodo_fin), GREATEST(a.periodo_inicio, b.periodo_inicio)) + 1 > 1
+) congelados
+GROUP BY motivo, empresa_id, id_empleado, nombre
+ORDER BY motivo, id_empleado;

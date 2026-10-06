@@ -65,16 +65,28 @@ export type FilaSaldo = {
 };
 
 export type CodigoAdvertencia =
+  // BLOQUEANTES: el empleado queda congelado (REQUIERE_REPARACION_ADMINISTRADA): el motor no escribe NADA.
   | "FECHA_LABORAL_SOSPECHOSA"
-  | "ANIO_LABORAL_NULO"
+  | "SERIE_HISTORICA_CON_CONSUMO"
   | "ANIO_LABORAL_DUPLICADO"
-  | "FECHAS_DISTINTAS_CON_CONSUMO"
+  | "ANIO_LABORAL_NULO_EN_SERIE"
+  | "TRASLAPE_REAL_EXISTENTE"
+  // INFORMATIVAS: no impiden sincronizar.
+  | "ANIO_LABORAL_NULO"
   | "REALINEACION_OMITIDA_POR_TRASLAPE"
   | "NUEVO_PERIODO_OMITIDO_POR_TRASLAPE"
   | "TRASLAPE_BORDE"
   | "TRASLAPE_REAL";
 
-export type AdvertenciaPeriodos = { codigo: CodigoAdvertencia; mensaje: string; saldoId?: number; anioLaboral?: number | null; dias?: number };
+export type AdvertenciaPeriodos = {
+  codigo: CodigoAdvertencia;
+  mensaje: string;
+  saldoId?: number;
+  anioLaboral?: number | null;
+  dias?: number;
+  /** true = la advertencia impide toda escritura de sincronización para este empleado (requiere reparación administrada). */
+  bloqueante?: boolean;
+};
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -106,24 +118,41 @@ export function calcularDiasAcumuladosProporcional(periodoInicio: Date, periodoF
   return Math.round(Math.min(acumulados, diasMeta) * 100) / 100;
 }
 
+/** Motivo por el que NO se sincroniza nada para un empleado. */
+export type MotivoOmision = "FECHA_SOSPECHOSA" | "FECHA_FUTURA" | "SERIE_HISTORICA_CON_CONSUMO" | "ESTRUCTURA_INCONSISTENTE";
+
 export type PlanSincronizacion = {
-  omitido: "FECHA_SOSPECHOSA" | "FECHA_FUTURA" | null;
+  omitido: MotivoOmision | null;
+  /** true si el empleado queda en REQUIERE_REPARACION_ADMINISTRADA (fecha sospechosa, serie histórica con consumo o estructura inconsistente). */
+  requiereReparacion: boolean;
   inserts: { anioLaboral: number; inicio: string; fin: string; otorgados: number }[];
   updates: { id: number; anioLaboral: number; inicio: string; fin: string; otorgados: number; disponibles: number; realineado: boolean }[];
   advertencias: AdvertenciaPeriodos[];
 };
 
+function plan0(): PlanSincronizacion {
+  return { omitido: null, requiereReparacion: false, inserts: [], updates: [], advertencias: [] };
+}
+
 /**
- * Decide qué escribir para sincronizar los períodos de UN empleado, SIN tocar la BD.
+ * Decide qué escribir para sincronizar los períodos de UN empleado, SIN tocar la BD. Es TODO O NADA: o se sincroniza la serie
+ * completa con seguridad, o el empleado queda congelado (sin inserts, updates, vencimientos ni tope) hasta una reparación administrada.
  *
- * Garantías:
- *  - Fecha laboral sospechosa (< 1980 o inválida): NO se genera ni modifica nada (solo advertencia).
- *  - Los períodos esperados se calculan siempre desde la fecha base (sin traslape por construcción).
- *  - Una fila se empareja por `anio_laboral`; una fila con `anio_laboral` NULO o repetido no participa (se advierte).
- *  - Un período NUEVO nunca se inserta si se superpone con CUALQUIER fila existente (aunque sea Vencida o de otra serie).
- *  - Una fila CON consumo FIFO jamás cambia de fechas: si no coincide con lo esperado, se deja igual y se advierte
- *    (reparación administrada). Una fila SIN consumo se realinea solo si el rango nuevo no se superpone con otra fila.
- *  - Filas Vencidas no se modifican (como antes).
+ * CONGELA (omitido + requiereReparacion + advertencias bloqueantes) cuando:
+ *  1. La fecha laboral es sospechosa (< 1980 o inválida).
+ *  2. SERIE HISTÓRICA CON CONSUMO: existe al menos un saldo con consumo FIFO cuyas fechas NO coinciden con las esperadas para su
+ *     año laboral (o que no tiene año laboral, o cuyo año excede la serie esperada). Es la evidencia de que la fecha laboral cambió
+ *     / la serie es incompatible: no se realinea nada, no se crean períodos, no se vence ni se aplica tope.
+ *  3. Estructura que impide determinar UNA serie segura: año laboral duplicado, fila sin año que se superpone con la serie esperada,
+ *     o traslape REAL (> 1 día) ya existente entre filas.
+ *
+ * NO congela: tener consumo con las fechas YA coincidentes con la serie esperada (crecimiento normal del historial), filas sin año
+ * fuera de la serie (solo advertencia informativa) ni traslapes de BORDE de un día.
+ *
+ * Cuando NO congela:
+ *  - Los períodos esperados salen siempre de la fecha base (sin traslape por construcción).
+ *  - Un período NUEVO nunca se inserta si se superpone con cualquier fila existente.
+ *  - Una fila SIN consumo se realinea solo si el rango nuevo no se superpone con otra fila. Filas Vencidas no se modifican.
  *  - Idempotente: sincronizar dos veces seguidas no produce escrituras nuevas (una fila sin cambios no genera UPDATE).
  */
 export function planificarSincronizacion(
@@ -132,40 +161,85 @@ export function planificarSincronizacion(
   existentes: FilaSaldo[],
   diasPorPeriodo = DIAS_POR_PERIODO,
 ): PlanSincronizacion {
-  const plan: PlanSincronizacion = { omitido: null, inserts: [], updates: [], advertencias: [] };
-  if (fechaLaboralSospechosa(base)) {
-    plan.omitido = "FECHA_SOSPECHOSA";
-    plan.advertencias.push({ codigo: "FECHA_LABORAL_SOSPECHOSA", mensaje: "Fecha laboral inválida o anterior a 1980: no se generan períodos; requiere el dato real de RRHH." });
+  const plan = plan0();
+  const congelar = (motivo: MotivoOmision, avisos: AdvertenciaPeriodos[]): PlanSincronizacion => {
+    plan.omitido = motivo;
+    plan.requiereReparacion = true;
+    plan.inserts = [];
+    plan.updates = [];
+    plan.advertencias.push(...avisos.map((a) => ({ ...a, bloqueante: true })));
     return plan;
+  };
+  if (fechaLaboralSospechosa(base)) {
+    return congelar("FECHA_SOSPECHOSA", [{ codigo: "FECHA_LABORAL_SOSPECHOSA", mensaje: "Fecha laboral inválida o anterior a 1980: no se generan períodos; requiere el dato real de RRHH." }]);
   }
   if (base > hoy) {
     plan.omitido = "FECHA_FUTURA";
     return plan;
   }
 
-  const porAnio = new Map<number, FilaSaldo[]>();
-  for (const f of existentes) {
-    if (f.anioLaboral == null) {
-      plan.advertencias.push({ codigo: "ANIO_LABORAL_NULO", mensaje: `El saldo #${f.id} no tiene año laboral y no participa en la sincronización.`, saldoId: f.id });
-      continue;
-    }
-    porAnio.set(f.anioLaboral, [...(porAnio.get(f.anioLaboral) ?? []), f]);
-  }
+  const aniosCompletos = differenceInYears(hoy, base);
+  const maxAnio = aniosCompletos + 1;
+  const esperado = (n: number): PeriodoLaboral | null => (n >= 1 && n <= maxAnio ? periodoLaboral(base, n) : null);
+  const coincide = (f: FilaSaldo): boolean => {
+    if (f.anioLaboral == null) return false;
+    const e = esperado(f.anioLaboral);
+    return e != null && f.inicio === aIso(e.inicio) && f.fin === aIso(e.fin);
+  };
   const rango = (f: FilaSaldo): RangoPeriodo => ({ inicio: deIso(f.inicio), fin: deIso(f.fin) });
+
+  // 2) SERIE HISTÓRICA CON CONSUMO (cualquier estado, también Vencido): congelación total.
+  const conflictos = existentes.filter((f) => f.conConsumo && !coincide(f));
+  if (conflictos.length) {
+    return congelar("SERIE_HISTORICA_CON_CONSUMO", [
+      {
+        codigo: "SERIE_HISTORICA_CON_CONSUMO",
+        mensaje: "Los períodos históricos con consumo no coinciden con la fecha laboral actual. No se modificó ningún saldo; requiere reparación administrada.",
+      },
+      ...conflictos.map((f) => ({
+        codigo: "SERIE_HISTORICA_CON_CONSUMO" as const,
+        mensaje: `El saldo #${f.id} (año laboral ${f.anioLaboral ?? "sin año"}, ${f.inicio} → ${f.fin}) tiene consumo y no coincide con la serie esperada.`,
+        saldoId: f.id, anioLaboral: f.anioLaboral,
+      })),
+    ]);
+  }
+
+  // 3) ESTRUCTURA que impide determinar una única serie segura
+  const estructura: AdvertenciaPeriodos[] = [];
+  const porAnio = new Map<number, FilaSaldo[]>();
+  for (const f of existentes) if (f.anioLaboral != null) porAnio.set(f.anioLaboral, [...(porAnio.get(f.anioLaboral) ?? []), f]);
+  for (const [anio, filas] of porAnio) {
+    if (filas.length > 1) estructura.push({ codigo: "ANIO_LABORAL_DUPLICADO", mensaje: `El año laboral ${anio} tiene ${filas.length} saldos (#${filas.map((x) => x.id).join(", #")}).`, anioLaboral: anio });
+  }
+  const serieEsperada = Array.from({ length: maxAnio }, (_, i) => periodoLaboral(base, i + 1));
+  for (const f of existentes) {
+    if (f.anioLaboral != null) continue;
+    if (serieEsperada.some((e) => diasSuperposicion(e, rango(f)) > 0)) {
+      estructura.push({ codigo: "ANIO_LABORAL_NULO_EN_SERIE", mensaje: `El saldo #${f.id} no tiene año laboral y se superpone con la serie esperada.`, saldoId: f.id });
+    } else {
+      plan.advertencias.push({ codigo: "ANIO_LABORAL_NULO", mensaje: `El saldo #${f.id} no tiene año laboral y no participa en la sincronización.`, saldoId: f.id });
+    }
+  }
+  const ordenadas = [...existentes].sort((x, y) => x.inicio.localeCompare(y.inicio) || x.id - y.id);
+  for (let i = 0; i < ordenadas.length; i++) {
+    for (let j = i + 1; j < ordenadas.length; j++) {
+      const t = clasificarTraslape(rango(ordenadas[i]), rango(ordenadas[j]));
+      if (t.tipo === "REAL") {
+        estructura.push({ codigo: "TRASLAPE_REAL_EXISTENTE", mensaje: `Los saldos #${ordenadas[i].id} y #${ordenadas[j].id} se superponen ${t.dias} días.`, saldoId: ordenadas[j].id, dias: t.dias });
+      }
+    }
+  }
+  if (estructura.length) return congelar("ESTRUCTURA_INCONSISTENTE", estructura);
+
+  // --- Serie segura: se sincroniza ---
   const seSuperpone = (r: RangoPeriodo, ignorarId: number | null) =>
     existentes.some((f) => f.id !== ignorarId && diasSuperposicion(r, rango(f)) > 0);
 
-  const aniosCompletos = differenceInYears(hoy, base);
-  for (let n = 1; n <= aniosCompletos + 1; n++) {
+  for (let n = 1; n <= maxAnio; n++) {
     const esp = periodoLaboral(base, n);
     const esCompleto = n <= aniosCompletos;
     const otorgados = esCompleto ? diasPorPeriodo : calcularDiasAcumuladosProporcional(esp.inicio, esp.fin, hoy, diasPorPeriodo);
-    const filas = porAnio.get(n) ?? [];
-    if (filas.length > 1) {
-      plan.advertencias.push({ codigo: "ANIO_LABORAL_DUPLICADO", mensaje: `El año laboral ${n} tiene ${filas.length} saldos: no se modifica ninguno.`, anioLaboral: n });
-      continue;
-    }
-    const fila = filas[0];
+    const fila = porAnio.get(n)?.[0];
     if (!fila) {
       if (otorgados <= 0) continue;
       if (seSuperpone(esp, null)) {
@@ -176,25 +250,17 @@ export function planificarSincronizacion(
       continue;
     }
     if (fila.estado === "Vencido") continue;
-    const coincide = fila.inicio === aIso(esp.inicio) && fila.fin === aIso(esp.fin);
-    if (!coincide) {
-      if (fila.conConsumo) {
-        plan.advertencias.push({ codigo: "FECHAS_DISTINTAS_CON_CONSUMO", mensaje: `El período ${n} tiene consumo FIFO y fechas distintas a las esperadas: no se reescribe (reparación administrada).`, saldoId: fila.id, anioLaboral: n });
-        continue;
-      }
-      if (seSuperpone(esp, fila.id)) {
-        plan.advertencias.push({ codigo: "REALINEACION_OMITIDA_POR_TRASLAPE", mensaje: `Realinear el período ${n} lo superpondría con otro: no se modificó.`, saldoId: fila.id, anioLaboral: n });
-        continue;
-      }
+    const igual = fila.inicio === aIso(esp.inicio) && fila.fin === aIso(esp.fin);
+    // (Una fila con consumo y fechas distintas ya congeló todo arriba: aquí solo llegan filas sin consumo o coincidentes.)
+    if (!igual && seSuperpone(esp, fila.id)) {
+      plan.advertencias.push({ codigo: "REALINEACION_OMITIDA_POR_TRASLAPE", mensaje: `Realinear el período ${n} lo superpondría con otro: no se modificó.`, saldoId: fila.id, anioLaboral: n });
+      continue;
     }
     const consumido = r2(fila.otorgados - fila.disponibles);
     const disponibles = r2(Math.max(otorgados - consumido, 0));
     // Idempotencia real: si nada cambia no se escribe (sincronizar dos veces seguidas no genera escrituras).
-    if (coincide && fila.otorgados === otorgados && fila.disponibles === disponibles) continue;
-    plan.updates.push({
-      id: fila.id, anioLaboral: n, inicio: aIso(esp.inicio), fin: aIso(esp.fin), otorgados,
-      disponibles, realineado: !coincide,
-    });
+    if (igual && fila.otorgados === otorgados && fila.disponibles === disponibles) continue;
+    plan.updates.push({ id: fila.id, anioLaboral: n, inicio: aIso(esp.inicio), fin: aIso(esp.fin), otorgados, disponibles, realineado: !igual });
   }
   return plan;
 }

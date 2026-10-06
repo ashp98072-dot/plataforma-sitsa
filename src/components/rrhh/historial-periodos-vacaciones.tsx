@@ -20,7 +20,7 @@ const COLOR_ESTADO: Record<string, string> = {
  */
 export function HistorialPeriodosVacaciones({ historial, admin = false }: { historial: HistorialVacaciones | null | undefined; admin?: boolean }) {
   if (!historial) return null;
-  const { periodos, advertencias, fechaLaboralSospechosa, historialOculto, saldoActual } = historial;
+  const { periodos, advertencias, fechaLaboralSospechosa, historialOculto, saldoActual, requiereReparacion } = historial;
   const avisos = advertencias.filter((a) => a.codigo !== "TRASLAPE_BORDE" || admin);
   return (
     <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
@@ -38,6 +38,13 @@ export function HistorialPeriodosVacaciones({ historial, admin = false }: { hist
             ? "La fecha de alta de este colaborador es inválida o anterior a 1980: no se generan períodos y los generados antes no se muestran como válidos. RRHH debe confirmar la fecha real antes de repararlos."
             : "Tu fecha de ingreso está en revisión por RRHH; por ahora solo se muestran los períodos con saldo o consumo."}
           {historialOculto && admin ? " (Se muestran solo los períodos vigentes o con consumo.)" : ""}
+        </p>
+      ) : null}
+
+      {admin && requiereReparacion && !fechaLaboralSospechosa ? (
+        <p className="mt-2 rounded border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200">
+          Sincronización congelada para este colaborador: los períodos con consumo o la estructura de saldos no coinciden con su fecha laboral actual.
+          No se modificó ningún saldo; requiere reparación administrada (ver sql/preflight-2026-10-vacaciones-historial-periodos.sql).
         </p>
       ) : null}
 

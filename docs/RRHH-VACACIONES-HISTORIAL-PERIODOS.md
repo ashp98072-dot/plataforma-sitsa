@@ -48,21 +48,36 @@ Las dos categorías del reporte: **BORDE** (solo comparten la fecha límite, 1 d
 
 Nuevo módulo puro `src/lib/rrhh/vacaciones-periodos.ts` (probado) y `vacaciones.ts` lo usa:
 
+El planificador (`planificarSincronizacion`) es **TODO O NADA**: o sincroniza la serie completa con seguridad, o el empleado queda **congelado** y no se escribe NADA.
+
 - **Fechas inclusivas, sin traslape por construcción:** período `n = [alta+(n−1) años, alta+n años−1 día]`; el siguiente empieza **exactamente** el día después. Cada límite se calcula desde la fecha base (sin deriva); bisiestos: el 29-feb cae al 28 en años no bisiestos y vuelve al 29, siempre `inicio(n+1) = fin(n)+1`.
-- **Nunca inserta un período que se superponga** con cualquier fila existente (vencida, de otra serie o sin año).
-- **Saldo con consumo FIFO: sus fechas no se reescriben**; si no coinciden con lo esperado → advertencia `FECHAS_DISTINTAS_CON_CONSUMO` (reparación administrada). Sin consumo: se realinea solo si el rango nuevo no se superpone.
-- **Fecha laboral sospechosa (< 1980 o inválida): no se genera ni modifica nada** (ni períodos ni vencimientos ni tope). Se advierte.
-- **Filas con `anio_laboral` NULO o repetido:** no participan y se advierte.
-- **Idempotente:** sincronizar dos veces no inserta ni actualiza nada la segunda vez.
+- **Idempotente:** sincronizar dos veces no inserta ni actualiza nada la segunda vez (y el estado congelado tampoco escribe nunca).
 - **Sin cambios:** FIFO (orden, `incidencia_id/saldo_id/dias_tomados`), vencimiento, tope de 30, fórmula proporcional (movida sin cambios al módulo puro y re-exportada), eliminación y devolución de saldo.
+
+### A) Consumo + serie correcta → operación normal
+Tener consumo **no** bloquea: si las fechas del saldo consumido **ya coinciden** con la serie esperada para su año laboral, el saldo se conserva tal cual (días y fechas), el historial **sigue creciendo** (se crea el siguiente período) y se aplican vencimiento y tope de 30 como siempre. Ejemplo: alta `2024-10-31`, saldo 1 `2024-10-31 → 2025-10-30` con consumo, hoy `2026-10-06` → se conserva el saldo 1 y se crea el período 2 `2025-10-31 → 2026-10-30`.
+
+### B) Consumo + serie incompatible con la fecha laboral actual → CONGELACIÓN TOTAL
+**Condición exacta que bloquea la sincronización de un empleado** (cualquiera de las tres; se emite una advertencia `bloqueante` y `requiereReparacion = true`):
+
+1. **`FECHA_SOSPECHOSA`** — fecha de alta inválida o anterior a 1980.
+2. **`SERIE_HISTORICA_CON_CONSUMO`** — existe **al menos un saldo con consumo FIFO** (en cualquier estado, también `Vencido`) cuyas fechas **no coinciden** con las esperadas para su `anio_laboral` según la fecha de alta actual; o que no tiene año laboral; o cuyo año excede la serie esperada. Es la evidencia de que la fecha laboral cambió o la serie es incompatible.
+3. **`ESTRUCTURA_INCONSISTENTE`** (fail-safe: no se puede determinar una única serie segura) — año laboral **duplicado**; un saldo **sin año laboral que se superpone** con la serie esperada; o un **traslape REAL** (> 1 día) ya existente entre filas.
+
+Cuando bloquea: **0 inserts, 0 updates**; **no** se realinea ningún otro saldo (ni siquiera los sin consumo); **no** se crean períodos futuros; **no** se vence ningún período; **no** se reduce nada a 0; **no** se aplica el tope de 30; el detalle FIFO queda intacto. La **lectura/historial sigue funcionando** y muestra el aviso «Sincronización congelada… requiere reparación administrada».
+
+**No bloquea** (advertencias informativas): un saldo sin año laboral **fuera** de la serie; traslapes de **BORDE** de 1 día; un período nuevo omitido por superponerse con una fila existente; una realineación omitida por traslape.
+
+> **Impacto operativo a conocer antes de desplegar:** los empleados que cumplan alguna de estas condiciones **dejan de recibir períodos nuevos** hasta repararse. La **sección 12 del preflight** lista exactamente quiénes (por motivo). Con los datos descritos (≥ 27 pares traslapados, Elisa con fecha 1899, cambios de fecha con consumo) habrá empleados en este estado: es el comportamiento seguro buscado, y se corrigen con la propuesta de reparación administrada.
 
 ### Comportamiento ante cambio de fecha laboral
 | Situación | Resultado |
 |---|---|
-| Sin consumos y el nuevo rango no se superpone | Se **realinean** las fechas (y otorgados) de los períodos existentes; **no** se crea una segunda serie |
-| Con consumos en el período | **No se reescribe**; advertencia y reparación administrada (preflight + propuesta); no se crean períodos que lo superpongan |
-| Rango nuevo se superpondría con otra fila | No se escribe; advertencia |
-| Fecha nueva sospechosa (< 1980) | No se genera nada; advertencia |
+| Sin consumos y la serie nueva no se superpone | Se **realinean** las fechas (y otorgados) de los períodos existentes; **no** se crea una segunda serie |
+| **Con consumo y la serie ya no coincide** | **Congelación total** (B): no se escribe nada para ese empleado |
+| Con consumo pero las fechas ya coinciden con la serie esperada | Operación normal (A) |
+| Fecha nueva sospechosa (< 1980) | Congelación (`FECHA_SOSPECHOSA`) |
+
 La confirmación explícita al editar la ficha (UI de empleados) **no** se implementó (alcance: RRHH empleados); queda documentada como siguiente paso: al cambiar `fecha_alta` con saldos existentes, mostrar el resumen de impacto del preflight y exigir confirmación. El motor ya es seguro sin ella.
 
 ## 6. Historial completo (API y UI)
@@ -70,6 +85,7 @@ La confirmación explícita al editar la ficha (UI de empleados) **no** se imple
 - `obtenerHistorialPeriodos(empresa, empleado)` devuelve **todos** los períodos (año laboral, período, otorgados, **consumidos** = Σ detalle FIFO, disponibles, estado visual `En curso | Vigente | Consumido | Vencido`), el **saldo actual utilizable** (solo vigentes, tope 30; **no** suma el historial), la fecha laboral, `fechaLaboralSospechosa`, `historialOculto` y `advertencias` (incluye `TRASLAPE_BORDE` / `TRASLAPE_REAL` con días).
 - `GET /rrhh/vacaciones?empleadoId=` (y `soloResumen=1`): campo **aditivo** `historial` (si falla, no rompe saldo/registro).
 - UI: componente `HistorialPeriodosVacaciones` — «Saldo actual: XX días» + tabla expandible *Año laboral | Período | Otorgados | Consumidos | Disponibles | Estado*; en RRHH con advertencias administrativas, en el portal solo la tabla.
+- **Congelado:** `requiereReparacion` + advertencias bloqueantes (en RRHH se muestra un aviso; el historial sigue legible).
 - **Fecha sospechosa:** no se muestran 127 períodos como válidos; se muestran solo los **vigentes o con consumo** y una advertencia («requiere el dato real de RRHH»).
 
 ## 7. SQL (propuesta; NO ejecutado)
@@ -87,4 +103,6 @@ La confirmación explícita al editar la ficha (UI de empleados) **no** se imple
 
 ## 9. Pruebas
 
-`vacaciones-periodos.test.ts` (20): períodos sin traslape, bisiestos, borde vs real (casos Álvaro/Amílcar), fecha sospechosa (Elisa), 1 y 10 períodos, histórico completo, vencidos, prevención de traslape, no duplicar, cambio de fecha con y sin consumo, vacaciones existentes sin cambio. `vacaciones-historial-db.test.ts` (14, BD en memoria sobre el código real): historial conservado sin DELETE, tope 30, vencimiento, idempotencia, Elisa sin escrituras, cambio de fecha con/sin consumo, **FIFO** (9+1 con `incidencia_id/saldo_id/dias_tomados` exactos, orden por año laboral), `obtenerHistorialPeriodos`. `vacaciones-sql-contrato.test.ts` (5): preflight solo lectura, propuesta 100 % comentada, protección de saldos con consumo, Elisa.
+`vacaciones-periodos.test.ts` (29): períodos sin traslape, bisiestos, borde vs real (casos Álvaro/Amílcar), fecha sospechosa (Elisa), 1 y 10 períodos, histórico completo, vencidos, prevención de traslape, no duplicar, cambio de fecha sin consumo, vacaciones existentes sin cambio, **y la congelación total**: (1) cambio de fecha + saldo 1 con consumo + saldo 2 sin consumo → 0 inserts / 0 updates / ningún saldo cambia / advertencia bloqueante; (2) cambio de fecha + consumo + período nuevo potencial → no se crea; (3) serie correcta + consumo → el siguiente período se crea normal; consumo en `Vencido`, sin año o fuera de serie → congela; idempotencia del estado bloqueado; bloqueantes vs informativas; fail-safe por año duplicado, sin año en la serie y traslape REAL (el borde de 1 día no bloquea).
+`vacaciones-historial-db.test.ts` (19, BD en memoria sobre el código real): historial conservado sin DELETE, tope 30, vencimiento, idempotencia, Elisa sin escrituras, **conflicto histórico con consumo: sin INSERT ni UPDATE de saldos, sin `Vencido`, sin tope y `detalle_consumo_vacaciones` intacto** (también para un saldo sin consumo de la misma serie vieja y repetido N veces), serie correcta con consumo (crecimiento normal), estructura inconsistente, FIFO (9+1 con `incidencia_id/saldo_id/dias_tomados` exactos, orden por año laboral), `obtenerHistorialPeriodos` (también congelado).
+`vacaciones-sql-contrato.test.ts` (5): preflight solo lectura, propuesta 100 % comentada, protección de saldos con consumo, Elisa.

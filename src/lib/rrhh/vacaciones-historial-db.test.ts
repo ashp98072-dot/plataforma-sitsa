@@ -139,18 +139,85 @@ describe("historial completo (BD en memoria)", () => {
     expect(r.advertencias.map((a) => a.codigo)).toContain("FECHA_LABORAL_SOSPECHOSA");
   });
 
-  it("cambio de fecha laboral CON consumo: el saldo consumido no se reescribe", async () => {
+  it("cambio de fecha laboral CON consumo: CONGELACIÓN TOTAL — ningún INSERT/UPDATE de saldos, sin vencimientos ni tope, detalle intacto", async () => {
     await sync();
     const consumido = mem.saldos.find((s) => s.anio_laboral === 10)!;
     mem.detalles.push({ incidencia_id: 24, saldo_id: consumido.id, dias_tomados: 9 });
     consumido.dias_disponibles = 6;
-    const fechasAntes = { inicio: consumido.periodo_inicio, fin: consumido.periodo_fin };
-    mem.fechaAlta = "2016-02-10"; // RRHH cambió la fecha laboral
+    const saldosAntes = JSON.parse(JSON.stringify(mem.saldos));
+    const detalleAntes = JSON.parse(JSON.stringify(mem.detalles));
+    mem.fechaAlta = "2016-02-10"; // RRHH cambió la fecha laboral: la serie con consumo ya no coincide
     mem.ejecutados = [];
     const r = await sync();
-    expect(mem.saldos.find((s) => s.id === consumido.id)).toMatchObject({ periodo_inicio: fechasAntes.inicio, periodo_fin: fechasAntes.fin, dias_disponibles: 6 });
-    expect(r.advertencias.map((a) => a.codigo)).toContain("FECHAS_DISTINTAS_CON_CONSUMO");
-    expect(mem.detalles).toEqual([{ incidencia_id: 24, saldo_id: consumido.id, dias_tomados: 9 }]);
+    expect(r.requiereReparacion).toBe(true);
+    expect(r.omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+    expect(r.advertencias.map((a) => a.codigo)).toContain("SERIE_HISTORICA_CON_CONSUMO");
+    expect(mem.ejecutados).toEqual([]); // NINGUNA escritura: ni INSERT, ni UPDATE (fechas, estado Vencido, dias_disponibles = 0, tope)
+    expect(mem.saldos).toEqual(saldosAntes);
+    expect(mem.detalles).toEqual(detalleAntes);
+    expect(mem.saldos.find((s) => s.id === consumido.id)!.dias_disponibles).toBe(6);
+  });
+
+  it("congelado: un saldo SIN consumo de la misma serie vieja tampoco se realinea ni se vence, y no se crean períodos futuros", async () => {
+    mem.fechaAlta = "2024-05-31";
+    await sync();
+    const antes = mem.saldos.length;
+    mem.detalles.push({ incidencia_id: 7, saldo_id: mem.saldos[0].id, dias_tomados: 3 });
+    mem.saldos[0].dias_disponibles = 12;
+    const foto = JSON.parse(JSON.stringify(mem.saldos));
+    mem.fechaAlta = "2024-04-13";
+    mem.ejecutados = [];
+    await sync();
+    expect(mem.ejecutados).toEqual([]);
+    expect(mem.saldos).toHaveLength(antes);
+    expect(mem.saldos).toEqual(foto);
+  });
+
+  it("5) idempotencia del estado bloqueado: sincronizar varias veces no cambia nada ni escribe", async () => {
+    await sync();
+    mem.detalles.push({ incidencia_id: 24, saldo_id: mem.saldos.find((s) => s.anio_laboral === 10)!.id, dias_tomados: 9 });
+    mem.fechaAlta = "2016-02-10";
+    const foto = JSON.parse(JSON.stringify(mem.saldos));
+    mem.ejecutados = [];
+    for (let i = 0; i < 3; i++) await sync();
+    expect(mem.ejecutados).toEqual([]);
+    expect(mem.saldos).toEqual(foto);
+  });
+
+  it("SERIE CORRECTA + consumo: el historial sigue creciendo con normalidad y se aplican vencimiento y tope (sin bloqueo global)", async () => {
+    mem.fechaAlta = "2024-10-31";
+    mem.saldos = [{ id: 1, empresa_id: 7, id_empleado: 1, anio_laboral: 1, periodo_inicio: "2024-10-31", periodo_fin: "2025-10-30", dias_otorgados: 15, dias_disponibles: 5, estado: "Vigente" }];
+    mem.siguienteId = 2;
+    mem.detalles = [{ incidencia_id: 24, saldo_id: 1, dias_tomados: 10 }];
+    const r = await sync();
+    expect(r.requiereReparacion).toBe(false);
+    expect(mem.saldos.find((s) => s.id === 1)).toMatchObject({ dias_otorgados: 15, dias_disponibles: 5, periodo_inicio: "2024-10-31", periodo_fin: "2025-10-30" });
+    expect(mem.saldos.find((s) => s.anio_laboral === 2)).toMatchObject({ periodo_inicio: "2025-10-31", periodo_fin: "2026-10-30" });
+    expect(mem.detalles).toEqual([{ incidencia_id: 24, saldo_id: 1, dias_tomados: 10 }]);
+  });
+
+  it("FAIL-SAFE de estructura (año laboral duplicado): no se escribe nada, tampoco vencimientos ni tope", async () => {
+    mem.fechaAlta = "2024-10-31";
+    mem.saldos = [
+      { id: 1, empresa_id: 7, id_empleado: 1, anio_laboral: 1, periodo_inicio: "2024-10-31", periodo_fin: "2025-10-30", dias_otorgados: 15, dias_disponibles: 15, estado: "Vigente" },
+      { id: 2, empresa_id: 7, id_empleado: 1, anio_laboral: 1, periodo_inicio: "2024-11-30", periodo_fin: "2025-11-29", dias_otorgados: 15, dias_disponibles: 15, estado: "Vigente" },
+    ];
+    mem.siguienteId = 3;
+    const r = await sync();
+    expect(r.omitido).toBe("ESTRUCTURA_INCONSISTENTE");
+    expect(mem.ejecutados).toEqual([]);
+  });
+
+  it("el historial sigue legible con el empleado congelado y lo señala (requiereReparacion)", async () => {
+    await sync();
+    mem.detalles.push({ incidencia_id: 24, saldo_id: mem.saldos.find((s) => s.anio_laboral === 10)!.id, dias_tomados: 9 });
+    mem.fechaAlta = "2016-02-10";
+    mem.ejecutados = [];
+    const h = await obtenerHistorialPeriodos(7, 1);
+    expect(h.requiereReparacion).toBe(true);
+    expect(h.periodos).toHaveLength(11); // la lectura continúa
+    expect(h.advertencias.some((a) => a.bloqueante)).toBe(true);
+    expect(mem.ejecutados).toEqual([]);
   });
 
   it("cambio de fecha laboral SIN consumo: se realinea sin crear una segunda serie encima", async () => {

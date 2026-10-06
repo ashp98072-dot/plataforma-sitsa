@@ -143,13 +143,35 @@ describe("planificarSincronizacion — historial y períodos", () => {
     expect(plan.inserts).toEqual([]);
     expect(plan.advertencias.map((a) => a.codigo)).toContain("NUEVO_PERIODO_OMITIDO_POR_TRASLAPE");
   });
-  it("fila con año laboral NULO o repetido no participa y no provoca duplicados", () => {
+  it("fila con año laboral NULO FUERA de la serie: solo advertencia informativa; la sincronización continúa", () => {
+    const plan = planificarSincronizacion(d("2025-10-31"), hoy, [fila(5, null, "1999-01-01", "1999-12-31", { estado: "Vencido" })]);
+    expect(plan.omitido).toBeNull();
+    expect(plan.inserts).toHaveLength(1);
+    const aviso = plan.advertencias.find((a) => a.codigo === "ANIO_LABORAL_NULO");
+    expect(aviso).toBeTruthy();
+    expect(aviso!.bloqueante).toBeFalsy();
+  });
+  it("FAIL-SAFE: fila sin año que se superpone con la serie, o año laboral repetido, congelan la sincronización (no se reconstruye parcialmente)", () => {
     const nulo = planificarSincronizacion(d("2025-10-31"), hoy, [fila(5, null, "2025-10-31", "2026-10-30")]);
-    expect(nulo.inserts).toEqual([]); // se superpone con la fila sin año: no se duplica
-    expect(nulo.advertencias.map((a) => a.codigo)).toEqual(expect.arrayContaining(["ANIO_LABORAL_NULO"]));
+    expect(nulo.omitido).toBe("ESTRUCTURA_INCONSISTENTE");
+    expect(nulo.requiereReparacion).toBe(true);
+    expect(nulo.inserts).toEqual([]);
+    expect(nulo.updates).toEqual([]);
+    expect(nulo.advertencias.map((a) => a.codigo)).toContain("ANIO_LABORAL_NULO_EN_SERIE");
     const dup = planificarSincronizacion(d("2025-10-31"), hoy, [fila(5, 1, "2025-10-31", "2026-10-30"), fila(6, 1, "2025-10-31", "2026-10-30")]);
+    expect(dup.omitido).toBe("ESTRUCTURA_INCONSISTENTE");
     expect(dup.updates).toEqual([]);
     expect(dup.advertencias.map((a) => a.codigo)).toContain("ANIO_LABORAL_DUPLICADO");
+  });
+  it("FAIL-SAFE: un traslape REAL ya existente congela; un traslape de BORDE de 1 día NO bloquea", () => {
+    const real = planificarSincronizacion(d("2022-10-31"), hoy, [fila(1, 1, "2022-10-31", "2023-10-30"), fila(2, 2, "2023-09-01", "2024-08-31")]);
+    expect(real.omitido).toBe("ESTRUCTURA_INCONSISTENTE");
+    expect(real.advertencias.map((a) => a.codigo)).toContain("TRASLAPE_REAL_EXISTENTE");
+    expect(real.inserts).toEqual([]);
+    const borde = planificarSincronizacion(d("2022-10-31"), hoy, [
+      fila(1, 1, "2022-10-31", "2023-10-30", { estado: "Vencido", disponibles: 0 }), fila(2, 2, "2023-10-30", "2024-10-29", { estado: "Vencido", disponibles: 0 }),
+    ]);
+    expect(borde.omitido).toBeNull(); // el desfase de un día entre vencidos sin consumo no frena el crecimiento normal
   });
 });
 
@@ -164,15 +186,12 @@ describe("cambio de fecha laboral", () => {
     expect(final.filter((f) => f.anioLaboral === 2)).toHaveLength(1);
     expect(analizarTraslapes(final).filter((a) => a.codigo === "TRASLAPE_REAL")).toEqual([]);
   });
-  it("CON consumos: NO se recalculan las fechas del saldo consumido; se advierte para reparación administrada", () => {
+  it("CON consumos y la serie ya NO coincide: congelación TOTAL (ver describe de congelación) — nada se escribe", () => {
     const existentes = [fila(1, 1, "2024-05-31", "2025-05-30", { disponibles: 6, conConsumo: true })];
     const plan = planificarSincronizacion(d("2024-04-13"), hoy, existentes);
-    expect(plan.updates.find((u) => u.id === 1)).toBeUndefined();
-    expect(plan.advertencias.map((a) => a.codigo)).toContain("FECHAS_DISTINTAS_CON_CONSUMO");
-    // y tampoco crea un período nuevo que se superponga con el consumido
-    const final = aplicar(existentes, plan);
-    expect(final.find((f) => f.id === 1)).toMatchObject({ inicio: "2024-05-31", fin: "2025-05-30", disponibles: 6 });
-    expect(analizarTraslapes(final).filter((a) => a.codigo === "TRASLAPE_REAL")).toEqual([]);
+    expect(plan.omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+    expect(plan.inserts).toEqual([]);
+    expect(plan.updates).toEqual([]);
   });
   it("las VACACIONES EXISTENTES no cambian: un saldo con consumo coherente conserva sus días y solo crece lo nuevo", () => {
     const base = d("2024-10-31");
@@ -191,5 +210,71 @@ describe("estado visual del historial", () => {
     expect(estadoVisualPeriodo(p, 5)).toBe("Vigente");
     expect(estadoVisualPeriodo({ ...p, disponibles: 0, consumidos: 15 }, 5)).toBe("Consumido");
     expect(estadoVisualPeriodo({ ...p, estado: "Vencido", disponibles: 0 }, 5)).toBe("Vencido");
+  });
+});
+
+describe("CONGELACIÓN TOTAL ante serie histórica con consumo (todo o nada)", () => {
+  const hoy = d("2026-10-06");
+
+  it("1) cambio de fecha + saldo 1 CON consumo + saldo 2 SIN consumo: 0 inserts, 0 updates, ningún saldo cambia, advertencia bloqueante", () => {
+    const existentes = [
+      fila(1, 1, "2023-05-31", "2024-05-30", { disponibles: 4, conConsumo: true, estado: "Vencido" }),
+      fila(2, 2, "2024-05-31", "2025-05-30", { disponibles: 15, conConsumo: false }),
+    ];
+    const plan = planificarSincronizacion(d("2024-04-13"), hoy, existentes); // fecha_alta cambió
+    expect(plan.omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+    expect(plan.requiereReparacion).toBe(true);
+    expect(plan.inserts).toEqual([]);
+    expect(plan.updates).toEqual([]);
+    expect(aplicar(existentes, plan)).toEqual(existentes); // ningún saldo cambia: ni siquiera el que NO tiene consumo
+    expect(plan.advertencias.some((a) => a.bloqueante === true && a.codigo === "SERIE_HISTORICA_CON_CONSUMO")).toBe(true);
+    expect(plan.advertencias[0].mensaje).toContain("No se modificó ningún saldo");
+  });
+
+  it("2) cambio de fecha + consumo + período NUEVO potencial: NO se crea el período nuevo", () => {
+    const existentes = [fila(1, 1, "2024-05-31", "2025-05-30", { disponibles: 6, conConsumo: true })];
+    const plan = planificarSincronizacion(d("2024-04-13"), hoy, existentes);
+    expect(plan.inserts).toEqual([]);
+    expect(aplicar(existentes, plan)).toHaveLength(1);
+    // sin el consumo, la misma situación SÍ habría generado/realineado períodos: el bloqueo es por el consumo + serie incompatible
+    const sinConsumo = planificarSincronizacion(d("2024-04-13"), hoy, [fila(1, 1, "2024-05-31", "2025-05-30", { disponibles: 6 })]);
+    expect(sinConsumo.omitido).toBeNull();
+    expect(sinConsumo.inserts.length + sinConsumo.updates.length).toBeGreaterThan(0);
+  });
+
+  it("3) SERIE CORRECTA + consumo: el saldo consumido no cambia y el siguiente período se crea normal (no hay bloqueo global)", () => {
+    const existentes = [fila(1, 1, "2024-10-31", "2025-10-30", { disponibles: 5, conConsumo: true })];
+    const plan = planificarSincronizacion(d("2024-10-31"), hoy, existentes);
+    expect(plan.omitido).toBeNull();
+    expect(plan.requiereReparacion).toBe(false);
+    expect(plan.inserts.map((i) => [i.anioLaboral, i.inicio, i.fin])).toEqual([[2, "2025-10-31", "2026-10-30"]]);
+    const final = aplicar(existentes, plan);
+    expect(final.find((f) => f.id === 1)).toMatchObject({ otorgados: 15, disponibles: 5, inicio: "2024-10-31", fin: "2025-10-30" });
+  });
+
+  it("consumo en un período VENCIDO con fechas distintas también congela (cualquier estado cuenta)", () => {
+    const plan = planificarSincronizacion(d("2022-10-31"), hoy, [fila(1, 1, "2022-10-30", "2023-10-29", { estado: "Vencido", disponibles: 0, conConsumo: true })]);
+    expect(plan.omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+  });
+
+  it("consumo en un saldo SIN año laboral o con año fuera de la serie esperada congela", () => {
+    expect(planificarSincronizacion(d("2024-10-31"), hoy, [fila(1, null, "2024-10-31", "2025-10-30", { conConsumo: true })]).omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+    expect(planificarSincronizacion(d("2024-10-31"), hoy, [fila(1, 9, "2024-10-31", "2025-10-30", { conConsumo: true })]).omitido).toBe("SERIE_HISTORICA_CON_CONSUMO");
+  });
+
+  it("5) IDEMPOTENCIA del estado bloqueado: planificar N veces da el mismo resultado y nunca produce escrituras", () => {
+    const existentes = [fila(1, 1, "2023-05-31", "2024-05-30", { conConsumo: true, estado: "Vencido", disponibles: 0 }), fila(2, 2, "2024-05-31", "2025-05-30")];
+    const a = planificarSincronizacion(d("2024-04-13"), hoy, existentes);
+    const b = planificarSincronizacion(d("2024-04-13"), hoy, aplicar(existentes, a));
+    expect(b).toEqual(a);
+    expect(b.inserts).toEqual([]);
+    expect(b.updates).toEqual([]);
+  });
+
+  it("distingue advertencias BLOQUEANTES de informativas", () => {
+    const plan = planificarSincronizacion(d("2024-04-13"), hoy, [fila(1, 1, "2024-05-31", "2025-05-30", { conConsumo: true })]);
+    expect(plan.advertencias.every((a) => a.bloqueante === true)).toBe(true);
+    const informativa = planificarSincronizacion(d("2025-10-31"), hoy, [fila(5, null, "1999-01-01", "1999-12-31", { estado: "Vencido" })]);
+    expect(informativa.advertencias.every((a) => !a.bloqueante)).toBe(true);
   });
 });

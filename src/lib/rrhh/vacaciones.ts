@@ -13,6 +13,7 @@ import {
   type AdvertenciaPeriodos,
   type EstadoVisualPeriodo,
   type FilaSaldo,
+  type MotivoOmision,
 } from "./vacaciones-periodos";
 
 // La fórmula proporcional vive ahora en vacaciones-periodos.ts (módulo puro); se re-exporta para no romper a nadie.
@@ -142,7 +143,12 @@ async function fechaBaseAntiguedad(
   return toDate(rows[0].fecha_alta as string | Date);
 }
 
-export type ResultadoSincronizacionPeriodos = { advertencias: AdvertenciaPeriodos[] };
+export type ResultadoSincronizacionPeriodos = {
+  advertencias: AdvertenciaPeriodos[];
+  /** true = el empleado quedó CONGELADO (REQUIERE_REPARACION_ADMINISTRADA): no se escribió nada (ni períodos, ni vencimientos, ni tope). */
+  requiereReparacion: boolean;
+  omitido: MotivoOmision | null;
+};
 
 /** Ids de saldos del empleado referenciados por detalle FIFO (tolerante a que la tabla aún no exista). */
 async function saldosConConsumo(conn: PoolConnection, empresaId: number, idEmpleado: number): Promise<Set<number>> {
@@ -176,11 +182,11 @@ export async function sincronizarPeriodosVacacionesEnConexion(
   idEmpleado: number,
 ): Promise<ResultadoSincronizacionPeriodos> {
     const fechaAlta = await fechaBaseAntiguedad(conn, empresaId, idEmpleado);
-    if (!fechaAlta) return { advertencias: [] };
+    if (!fechaAlta) return { advertencias: [], requiereReparacion: false, omitido: null };
 
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
-    if (fechaAlta > hoy) return { advertencias: [] };
+    if (fechaAlta > hoy) return { advertencias: [], requiereReparacion: false, omitido: null };
 
     const [existentesRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, anio_laboral, periodo_inicio, periodo_fin,
@@ -203,8 +209,9 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     }));
 
     const plan = planificarSincronizacion(fechaAlta, hoy, existentes);
-    // Fecha laboral sospechosa / futura: no se escribe nada (ni períodos ni vencimientos ni tope).
-    if (plan.omitido) return { advertencias: plan.advertencias };
+    // Fecha sospechosa / futura / serie histórica con consumo / estructura inconsistente: NO se escribe nada
+    // (ni INSERT ni UPDATE de períodos, ni vencimientos, ni reducción a 0, ni tope de 30). La lectura/historial sigue funcionando.
+    if (plan.omitido) return { advertencias: plan.advertencias, requiereReparacion: plan.requiereReparacion, omitido: plan.omitido };
 
     for (const ins of plan.inserts) {
       await conn.execute(
@@ -300,7 +307,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
         }
       }
     }
-    return { advertencias: plan.advertencias };
+    return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null };
 }
 
 export async function sincronizarPeriodosVacaciones(
@@ -386,6 +393,8 @@ export type HistorialVacaciones = {
   fechaLaboralSospechosa: boolean;
   /** true si la ficha tiene una fecha laboral sospechosa y NO se muestran como válidos los períodos que generó. */
   historialOculto: boolean;
+  /** true = el motor no sincroniza a este empleado (fecha sospechosa, serie histórica con consumo o estructura inconsistente): requiere reparación administrada. */
+  requiereReparacion: boolean;
   advertencias: AdvertenciaPeriodos[];
 };
 
@@ -460,6 +469,7 @@ export async function obtenerHistorialPeriodos(
     fechaLaboral: base ? toIso(base) : null,
     fechaLaboralSospechosa: sospechosa,
     historialOculto: sospechosa && periodos.length < todos.length,
+    requiereReparacion: sync.requiereReparacion || sospechosa,
     advertencias,
   };
 }
