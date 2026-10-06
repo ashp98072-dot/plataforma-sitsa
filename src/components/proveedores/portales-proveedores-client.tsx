@@ -39,6 +39,8 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
   const [usuarios, setUsuarios] = useState<Usuario[]>([]);
   const [puedeAdministrar, setPuedeAdministrar] = useState(false);
   const [puedeCrear, setPuedeCrear] = useState(false);
+  const [puedeEditar, setPuedeEditar] = useState(false);
+  const [puedeEliminar, setPuedeEliminar] = useState(false);
   const [usuarioActualId, setUsuarioActualId] = useState(0);
   const [form, setForm] = useState(FORM_INICIAL);
   const [mostrarPassword, setMostrarPassword] = useState(false);
@@ -57,6 +59,8 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
     setUsuarios(body.usuariosAsignables ?? []);
     setPuedeAdministrar(Boolean(body.puedeAdministrar));
     setPuedeCrear(Boolean(body.puedeCrear));
+    setPuedeEditar(Boolean(body.puedeEditar));
+    setPuedeEliminar(Boolean(body.puedeEliminar));
     setUsuarioActualId(Number(body.usuarioActualId ?? 0));
     setForm((actual) => ({
       ...actual,
@@ -180,7 +184,7 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
       {error ? <p className="rounded border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">{error}</p> : null}
       {mensaje ? <p className="rounded border border-emerald-500/40 bg-emerald-500/10 p-3 text-sm text-emerald-200">{mensaje}</p> : null}
 
-      {puedeCrear ? (
+      {(form.id ? puedeEditar : puedeCrear) ? (
         <form onSubmit={guardar} className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2 xl:grid-cols-3">
           <h2 className="text-lg font-semibold md:col-span-2 xl:col-span-3">
             {form.id ? "Editar portal" : "Registrar portal"}
@@ -225,7 +229,8 @@ export function PortalesProveedoresClient({ slug }: { slug: string }) {
                 <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void copiar(p.usuarioPortal, "Usuario")}>Copiar usuario</button>
                 <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void revelar(p.id)}>{passwords[p.id] ? "Ocultar contraseña" : "Mostrar contraseña"}</button>
                 {passwords[p.id] ? <button type="button" className="rounded bg-slate-700 px-3 py-1.5 text-sm" onClick={() => void copiar(passwords[p.id], "Contraseña")}>Copiar contraseña</button> : null}
-                {puedeCrear ? <><button type="button" className="rounded bg-amber-700 px-3 py-1.5 text-sm" onClick={() => editar(p)}>Editar</button><button type="button" className="rounded bg-red-800 px-3 py-1.5 text-sm" onClick={() => void eliminar(p.id)}>Eliminar</button></> : null}
+                {puedeEditar ? <button type="button" className="rounded bg-amber-700 px-3 py-1.5 text-sm" onClick={() => editar(p)}>Editar</button> : null}
+                {puedeEliminar ? <button type="button" className="rounded bg-red-800 px-3 py-1.5 text-sm" onClick={() => void eliminar(p.id)}>Eliminar</button> : null}
               </div>
             </article>
           ))}

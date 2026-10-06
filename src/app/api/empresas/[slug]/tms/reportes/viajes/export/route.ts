@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import {
   calcularKpisReporte,
   filtrosReporteDesdeUrl,
@@ -106,7 +106,7 @@ const HEADERS_EXCEL = [
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantProgramacionOTms(slug, "ver");
+  const guard = await requireTenantProgramacionExportar(slug);
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);

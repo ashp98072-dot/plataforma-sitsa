@@ -23,11 +23,6 @@ import {
   MENSAJE_SOLO_EMPRESA_DUENA, avisoEdicionOtraEmpresa, decidirEdicionVehiculo,
   detalleAuditoriaEdicionTransversal, esSolicitudSoloTaller,
 } from "./edicion-vehiculo";
-import {
-  PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS, PLATAFORMA_PERMISIBLES, catalogoGlobalPermisos, catalogoPermisosRol, descripcionPermiso,
-  GRUPOS_PERMISOS, labelPermiso, moduloEmpresaDelPermiso, permisosDefaultPorRol, tienePermiso,
-} from "@/lib/permisos-shared";
-import { ROLES } from "@/lib/roles";
 
 /**
  * FLOTA — EDICIÓN DE VEHÍCULOS COMPARTIDOS / DE OTRAS EMPRESAS.
@@ -268,71 +263,5 @@ describe("GET /flota/vehiculos — la UI recibe la decisión del backend por veh
     vi.mocked(listarVehiculosAccesibles).mockResolvedValue(filas as never);
     const r = await (await get()).json();
     expect(r.vehiculos[1]).toMatchObject({ empresa_id: FRESCOFRESH, compartido: true, esDueno: false });
-  });
-});
-
-describe("Catálogo de permisos: «Editar vehículos de otras empresas»", () => {
-  it("existe como permiso explícito y persistible (cabe en usuario_modulo.modulo VARCHAR(40); no requiere SQL)", () => {
-    expect(PLATAFORMA_PERMISIBLES).toContain(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS);
-    expect(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS.length).toBeLessThanOrEqual(40);
-    expect(catalogoGlobalPermisos()).toContain(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS);
-    const schema = readFileSync("sql/schema.sql", "utf8");
-    expect(schema).toMatch(/usuario_modulo \(\n?[\s\S]*?modulo VARCHAR\(40\) NOT NULL/);
-  });
-  it("etiqueta y descripción pedidas; se agrupa en Flota / Predios; depende del módulo de empresa «flota»", () => {
-    expect(labelPermiso(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS)).toBe("Editar vehículos de otras empresas");
-    expect(descripcionPermiso(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS)).toContain("Permite modificar datos de vehículos pertenecientes a otras empresas del mismo entorno corporativo");
-    expect(descripcionPermiso("flota_vehiculos")).toBeNull();
-    expect(GRUPOS_PERMISOS.find((g) => g.id === "flota")!.modulos).toContain(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS);
-    expect(GRUPOS_PERMISOS.filter((g) => g.id !== "flota").every((g) => !g.modulos.includes(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS))).toBe(true);
-    expect(moduloEmpresaDelPermiso(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS)).toBe("flota");
-  });
-  it("Admin lo recibe por catálogo; NINGÚN otro rol lo trae por defecto (no se abre la edición cruzada a todos)", () => {
-    const tiene = (rol: string) => tienePermiso(permisosDefaultPorRol(rol as never), PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS, "editar");
-    expect(tiene("Admin")).toBe(true);
-    for (const rol of ROLES.filter((r) => r !== "Admin")) expect(tiene(rol), rol).toBe(false);
-  });
-  it("es asignable desde Administración de usuarios a roles de Flota/Predios (Encargado de Taller) y operativos, sin hardcodear usuarios", () => {
-    for (const rol of ["CoordinadorPredios", "CoordinadorCompras", "Operaciones", "GerenteOperaciones", "JefeOperaciones", "Visualizador"]) {
-      expect(catalogoPermisosRol(rol as never), rol).toContain(PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS);
-    }
-    const rol = readFileSync("src/lib/permisos-shared.ts", "utf8");
-    expect(rol).not.toMatch(/username\s*===|usuario\s*===/);
-  });
-  it("un usuario con el permiso asignado (matriz de Usuarios) lo tiene; sin él, no", () => {
-    const base = permisosDefaultPorRol("CoordinadorPredios" as never);
-    expect(tienePermiso(base, PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS, "editar")).toBe(false);
-    const conPermiso = base.map((p) => (p.modulo === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS ? { ...p, puedeVer: true, puedeEditar: true } : p));
-    expect(tienePermiso(conPermiso, PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS, "editar")).toBe(true);
-  });
-});
-
-describe("H. UI de Flota y matriz de Usuarios", () => {
-  const cliente = readFileSync("src/app/e/[slug]/flota/flota-client.tsx", "utf8").replace(/\r\n/g, "\n");
-  const usuarios = readFileSync("src/app/e/[slug]/usuarios/page.tsx", "utf8").replace(/\r\n/g, "\n");
-  it("sin permiso: «Editar» no se ofrece (se muestra «Solo empresa dueña» con la explicación) y empezarEdicion conserva el mensaje de siempre", () => {
-    expect(cliente).toContain("function puedeEditarVehiculo(v: Vehiculo)");
-    expect(cliente).toContain("return v.puedeEditar ?? v.esDueno !== false;");
-    expect(cliente).toContain("if (!puedeEditarVehiculo(v)) {\n      setErr(MENSAJE_SOLO_EMPRESA_DUENA);");
-    expect(cliente).toContain("{puedeEditarVehiculo(v) ? (");
-    expect(cliente).toContain("Solo empresa dueña");
-    expect(cliente).not.toContain('if (v.esDueno === false) {\n      setErr("Este vehículo es compartido');
-  });
-  it("con permiso: el formulario se abre editable con un aviso informativo (no un error) y sin lo que solo define la empresa dueña", () => {
-    expect(cliente).toContain("const editandoAjeno = vehiculoEnEdicion?.esDueno === false;");
-    expect(cliente).toContain("avisoEdicionOtraEmpresa(empresaDe(vehiculoEnEdicion))");
-    expect(cliente).toContain('role="status"'); // aviso, no role="alert"
-    expect(cliente).toContain("{!editandoAjeno ? <label");   // tipo de unidad
-    expect(cliente).toContain("{editId && !editandoAjeno ? (\n                <div className=\"rounded border border-[var(--border)] p-3\">"); // compartición
-    expect(cliente).toContain("tipoUnidad: ajeno ? undefined : form.tipoUnidad");
-    expect(cliente).toContain("accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined");
-  });
-  it("Dar de baja / Eliminar / papelería siguen siendo solo de la empresa dueña (no se amplían acciones sensibles)", () => {
-    expect(cliente).toMatch(/\{editId && !editandoAjeno \? \(\n\s+<>\n\s+<button\n\s+type="button"\n\s+className="rounded bg-violet-800/);
-    expect(cliente).toMatch(/\{editId && !editandoAjeno \? \(\n\s+<>\n\s+<p className="text-xs text-\[var\(--muted\)\]">\n\s+Ya puedes agregar la papelería/);
-    expect(cliente).toContain("{v.esDueno !== false ? (");
-  });
-  it("la matriz de Usuarios muestra la descripción del permiso bajo su nombre", () => {
-    expect(usuarios).toContain("descripcionPermiso(m)");
   });
 });

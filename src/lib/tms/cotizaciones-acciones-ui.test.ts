@@ -16,6 +16,6 @@ describe("Acciones visibles del listado de Cotizaciones", () => {
 
   it("conserva Editar y Marcar enviada exclusivamente para Borrador", () => {
     expect(page).toMatch(/c.estado === "Borrador" \? <button[^\n]*onClick=\{\(\) => editar\(c\)\}[^\n]*>Editar<\/button> : null/);
-    expect(page).toMatch(/c.estado === "Borrador" \? <button[^\n]*cambiarEstado\(c.id, "Enviada"\)[^\n]*>Marcar enviada<\/button> : null/);
+    expect(page).toMatch(/puedeCambiarEstado && c.estado === "Borrador" \? <button[^\n]*cambiarEstado\(c.id, "Enviada"\)[^\n]*>Marcar enviada<\/button> : null/);
   });
 });

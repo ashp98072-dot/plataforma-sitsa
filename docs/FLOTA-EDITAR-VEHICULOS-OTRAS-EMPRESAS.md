@@ -16,8 +16,10 @@ Base: `98c94c7be4a0284e73c830e285b0c7f9834c59a6`. **Sin SQL** (el permiso se gua
 Sin `if usuario === …` ni `if rol === …`: la autoridad es el permiso. Admin lo tiene por el catálogo global (bypass administrativo ya existente); cualquier otro usuario lo recibe desde Usuarios.
 
 ## Permiso
-- Clave `flota_vehiculos_otras_empresas` (acción `editar`), en `PLATAFORMA_PERMISIBLES`, grupo «Flota / Predios», depende del módulo de empresa `flota`.
-  Etiqueta «Editar vehículos de otras empresas» + descripción en la matriz de Usuarios («Permite modificar datos de vehículos pertenecientes a otras empresas del mismo entorno corporativo…»).
+- **Catálogo central (PR #411, `src/lib/permisos-catalogo.ts`):** acción «Editar vehículos de otras empresas» (`editar_otras_empresas`) dentro de **Flota / Predios → Vehículos**, fila persistida `flota_vehiculos_otras_empresas` (flag editar; se conserva el identificador). Se registra también en `PLATAFORMA_PERMISIBLES` (como `flota_combustible`/`viajes_cerrar`) y depende del módulo de empresa `flota`; no hay etiqueta, descripción ni grupo paralelos en `permisos-shared.ts`.
+  Descripción en la matriz de Usuarios: «Permite editar vehículos compartidos de otras empresas cuando son accesibles desde la empresa activa.»
+- **Dependencias (mismas que el resto del catálogo, `cambiarAccion`):** activar la acción activa **Ver vehículos**; quitar **Ver vehículos** limpia la acción. No es un permiso independiente: sin Ver no hay acceso, y **no hace aparecer Flota en el sidebar por sí solo** (el sidebar usa la base por módulo). Es aditiva: no activa «Editar vehículo / documentos», que el endpoint sigue exigiendo (`flota_vehiculos:editar`).
+- **Guard:** `sesionPuedeEditarVehiculosOtrasEmpresas` (tenant.ts) = Admin (bypass existente, sin duplicarlo) OR (base «Ver vehículos» AND acción del catálogo).
 - **Ningún rol lo trae por defecto** (no se abre la edición cruzada a todos); Admin lo recibe por catálogo. Es asignable a cualquier rol con acceso a Flota (CoordinadorPredios, CoordinadorCompras, Operaciones, etc.).
 - **No existe un rol «Encargado de Taller»** en `ROLES` (`src/lib/roles.ts`): el encargado de taller es un usuario con otro rol (típicamente Predios). Un Admin debe marcarle «Editar vehículos de otras empresas» (y darle acceso a las empresas propietarias). No se creó un rol nuevo.
 
@@ -41,5 +43,5 @@ Antes: Taller podía **enviar a taller, registrar servicio y ver historial** de 
 Esas acciones **no cambian** y siguen usando cada una su permiso; el permiso nuevo no las amplía.
 
 ## Pruebas
-`src/lib/flota/edicion-vehiculos-multiempresa.test.ts`: A propietaria; B sin permiso (403 en API y operación de taller aún disponible); C con permiso (incluye propiedad intacta, `empresa_id` del cliente ignorado y filtros); D Encargado de Taller con permiso en varias empresas;
+`src/lib/flota/permisos-flota-vehiculos-otras-empresas.test.ts` (catálogo central: ubicación, dependencias Ver ↔ acción, persistencia V2, sidebar/guard, UI) y `src/lib/flota/edicion-vehiculos-multiempresa.test.ts`: A propietaria; B sin permiso (403 en API y operación de taller aún disponible); C con permiso (incluye propiedad intacta, `empresa_id` del cliente ignorado y filtros); D Encargado de Taller con permiso en varias empresas;
 E Admin; 2 Taller sin acceso directo a la propietaria; 4 vehículo no compartido (404); 5 otro tenant (guard / 404); 6 propiedad intacta; 7 operaciones solo-dueña; H UI; auditoría; catálogo (no se concede por defecto, asignable, descripción, grupo). `acceso-vehiculo-edicion.test.ts` ejecuta la regla real de `obtenerVehiculoAccesible` con una base simulada.

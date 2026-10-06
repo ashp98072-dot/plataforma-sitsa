@@ -142,7 +142,7 @@ describe("navegación y guard de /rrhh/*", () => {
     const shell = readFileSync("src/components/app-shell.tsx", "utf8");
     expect(shell).toContain('"rrhh_requerimientos", "Requerimientos", "requerimientos"');
     expect(shell).toContain('"rrhh_proveedores", "Proveedores", "proveedores"');
-    expect(shell).toContain('tienePermiso(permisos, modulo, "ver")');
+    expect(shell).toContain('tienePermisoBase(permisos, modulo)');
   });
   it("page.tsx usa rrhh_requerimientos_autorizar (no rrhh_requerimientos) para puedeAutorizar", () => {
     const page = readFileSync("src/app/e/[slug]/rrhh/requerimientos/page.tsx", "utf8");

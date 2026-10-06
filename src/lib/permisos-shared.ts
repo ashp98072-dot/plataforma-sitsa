@@ -105,6 +105,8 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
 export const PLATAFORMA_PERMISIBLES = [
+  "cotizaciones",
+  "proveedor_portales",
   "compras_proveedores",
   "compras_requerimientos",
   // COMPRAS-FASE-4-AUTORIZACION: autorizar/rechazar un Requerimiento de
@@ -249,15 +251,14 @@ export const PLATAFORMA_PERMISIBLES = [
   // defecto. Gatea sobre el módulo de empresa "flota" (ver
   // moduloEmpresaDelPermiso), igual que el resto de Flota/Predios.
   "flota_combustible",
-  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: «Editar vehículos de otras empresas» — permiso propio y explícito (acción `editar`), mismo patrón que
-  // flota_combustible/viajes_cerrar: NO se agrega a FLOTA_SUBMODULOS a propósito (ese arreglo se reparte completo a varios roles y se lo habría dado a
-  // todos). Ningún rol lo trae por defecto; Admin lo recibe por catálogo global y un Admin lo asigna desde Usuarios (p. ej. al Encargado de Taller).
-  // Sin él, solo la empresa propietaria edita un vehículo; con él, además, se pueden editar los de otras empresas que el usuario está autorizado a operar
-  // (la propiedad nunca cambia). Gatea sobre el módulo de empresa "flota".
+  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (acción `editar`); su etiqueta, descripción y dependencias viven en el catálogo central
+  // (permisos-catalogo.ts, Flota / Predios → Vehículos). Mismo patrón que flota_combustible/viajes_cerrar: NO se agrega a FLOTA_SUBMODULOS a propósito (ese arreglo se
+  // reparte completo a varios roles y se lo habría dado a todos). Ningún rol lo trae por defecto; un Admin lo asigna desde Usuarios. Sin él, solo la empresa propietaria
+  // edita un vehículo; con él, además, los vehículos compartidos accesibles desde la empresa activa (la propiedad nunca cambia). Gatea sobre el módulo de empresa "flota".
   "flota_vehiculos_otras_empresas",
 ] as const;
 
-/** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) del permiso «Editar vehículos de otras empresas». */
+/** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
 export const PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS = "flota_vehiculos_otras_empresas";
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
@@ -341,7 +342,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
+  if (m === "cotizaciones" || m === "proveedor_portales" || m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
@@ -399,22 +400,10 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "gastos_autorizar") return "Solicitudes de fondo: autorizar y rechazar";
   if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
   if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
-  if (modulo === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "Editar vehículos de otras empresas";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
   return modulo;
-}
-
-/**
- * Descripción opcional de un permiso (se muestra bajo su nombre en la matriz de Usuarios). Solo los permisos que necesitan aclarar su alcance la tienen.
- * Para «Editar vehículos de otras empresas» la acción relevante es «Editar».
- */
-export function descripcionPermiso(modulo: string): string | null {
-  if (modulo === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) {
-    return "Permite modificar datos de vehículos pertenecientes a otras empresas del mismo entorno corporativo (marca «Editar»). La propiedad del vehículo no cambia.";
-  }
-  return null;
 }
 
 /** Etiqueta amigable del rol en formularios. */
@@ -492,13 +481,13 @@ export const GRUPOS_PERMISOS: {
   {
     id: "flota",
     titulo: "Permisos Flota / Predios por módulos",
-    descripcion: "Vehículos (incluida la edición de vehículos de otras empresas), taller, lecturas, reportes, viajes y revisión de combustible.",
+    descripcion: "Vehículos, taller, lecturas, reportes, viajes y revisión de combustible.",
     // "flota_combustible" se agrega aquí como literal (no dentro de
     // FLOTA_SUBMODULOS) a propósito: sigue siendo visible/asignable en
     // este grupo de Usuarios, pero sin heredar los "...FLOTA_SUBMODULOS"
     // que se reparten completos a Operaciones (legado), CoordinadorPredios
     // y Visualizador — ver el comentario en PLATAFORMA_PERMISIBLES.
-    modulos: [...FLOTA_SUBMODULOS, "flota_combustible", PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS],
+    modulos: [...FLOTA_SUBMODULOS, "flota_combustible"],
   },
   {
     id: "contabilidad",
@@ -643,7 +632,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "rrhh", "flota", "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -746,9 +735,11 @@ export function mergePermisosConCatalogo(
       }
     }
   }
-  return catalogoPermisosRol(rol).map(
-    (m) => map.get(m) ?? permisoVacio(m),
-  );
+  const catalogo = catalogoPermisosRol(rol);
+  return [
+    ...catalogo.map((m) => map.get(m) ?? permisoVacio(m)),
+    ...[...map.values()].filter((p) => !catalogo.includes(p.modulo)),
+  ];
 }
 
 export function tienePermiso(
@@ -757,6 +748,11 @@ export function tienePermiso(
   accion: AccionPermiso,
 ): boolean {
   const p = permisos.find((x) => x.modulo === modulo);
+  if (p && permisos.some(x => x.modulo === "permisos_acciones_v2" && x.puedeVer)) {
+    // Una matriz V2 tiene denegaciones explícitas; no inferir lectura ni
+    // volver a conceder un submódulo negado desde el paraguas Flota.
+    return p[accion === "ver" ? "puedeVer" : accion === "crear" ? "puedeCrear" : accion === "editar" ? "puedeEditar" : "puedeEliminar"];
+  }
   if (p) {
     switch (accion) {
       case "ver":
@@ -830,6 +826,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&
       p.modulo !== "cotizaciones_costeo" &&
+      p.modulo !== "cotizaciones" &&
+      p.modulo !== "proveedor_portales" &&
       p.modulo !== "cotizaciones_ajustes" &&
       p.modulo !== "rrhh_requerimientos" &&
       p.modulo !== "rrhh_requerimientos_autorizar" &&

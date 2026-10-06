@@ -10,18 +10,15 @@ import {
 } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  GRUPOS_PERMISOS,
   catalogoPermisosRol,
   grupoPrincipalDelRol,
-  descripcionPermiso,
-  labelPermiso,
   labelRol,
   mergePermisosConCatalogo,
   moduloEmpresaDelPermiso,
   permisosDefaultPorRol,
-  type GrupoPermisosId,
   type PermisoModulo,
 } from "@/lib/permisos-shared";
+import { AREAS_PERMISOS, CATALOGO_PERMISOS, adaptarPermisosLegacy, cambiarAccion, marcarArea, materializarAcciones, tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 import { derivarModulosEmpresa, type Modulo, type RolGlobal } from "@/lib/roles";
 
 // Corrección de matriz de permisos: `modulos`/`slug` se agregan para
@@ -65,15 +62,8 @@ const ROLES = [
   "Visualizador",
 ] as const;
 
-const FLAGS = [
-  ["puedeVer", "Ver"],
-  ["puedeCrear", "Crear"],
-  ["puedeEditar", "Editar"],
-  ["puedeEliminar", "Eliminar"],
-] as const;
-
 function clonePermisos(rol: string): PermisoModulo[] {
-  return permisosDefaultPorRol(rol as RolGlobal).map((p) => ({ ...p }));
+  return materializarAcciones(adaptarPermisosLegacy(permisosDefaultPorRol(rol as RolGlobal), rol));
 }
 
 function IconChevron({ open }: { open: boolean }) {
@@ -92,7 +82,7 @@ function IconChevron({ open }: { open: boolean }) {
   );
 }
 
-function iconGrupo(id: GrupoPermisosId): ReactNode {
+function iconGrupo(id: string): ReactNode {
   const cls = "h-4 w-4";
   switch (id) {
     case "rrhh":
@@ -137,66 +127,35 @@ function iconGrupo(id: GrupoPermisosId): ReactNode {
   }
 }
 
-function PermisosTable({
-  modulos,
-  permisos,
-  onChange,
-}: {
+function PermisosTable({ modulos, permisos, onChange }: {
   modulos: string[];
   permisos: PermisoModulo[];
-  onChange: (
-    modulo: string,
-    flag: keyof Omit<PermisoModulo, "modulo">,
-    value: boolean,
-  ) => void;
+  onChange: (modulo: string, accion: string, value: boolean) => void;
 }) {
-  const byMod = useMemo(
-    () => new Map(permisos.map((p) => [p.modulo, p])),
-    [permisos],
-  );
-
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-xs">
-        <thead className="bg-[var(--input)] text-[var(--muted)]">
-          <tr>
-            <th className="px-2 py-2">Módulo</th>
-            {FLAGS.map(([, label]) => (
-              <th key={label} className="px-2 py-2">
-                {label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {modulos.map((m) => {
-            const p = byMod.get(m) ?? {
-              modulo: m,
-              puedeVer: false,
-              puedeCrear: false,
-              puedeEditar: false,
-              puedeEliminar: false,
-            };
-            return (
-              <tr key={m} className="border-t border-[var(--border)]">
-                <td className="px-2 py-1.5">
-                  {labelPermiso(m)}
-                  {descripcionPermiso(m) ? <span className="block max-w-sm text-[10px] font-normal text-[var(--muted)]">{descripcionPermiso(m)}</span> : null}
-                </td>
-                {FLAGS.map(([flag]) => (
-                  <td key={flag} className="px-2 py-1.5">
-                    <input
-                      type="checkbox"
-                      checked={p[flag]}
-                      onChange={(e) => onChange(m, flag, e.target.checked)}
-                    />
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div className="space-y-3">
+      {modulos.map((id) => {
+        const modulo = CATALOGO_PERMISOS.find((m) => m.id === id);
+        if (!modulo) return null;
+        return (
+          <fieldset key={id} className="rounded border border-[var(--border)] p-3">
+            <legend className="px-1 text-sm font-medium">{modulo.label}</legend>
+            <div className="flex flex-wrap gap-x-5 gap-y-2">
+              {modulo.acciones.map((a) => (
+                <label key={a.id} className="flex items-center gap-2 text-xs" title={a.descripcion}>
+                  <input type="checkbox"
+                    checked={tieneAccionCatalogo(permisos, id, a.id)}
+                    onChange={(e) => onChange(id, a.id, e.target.checked)} />
+                  <span>
+                    {a.label}
+                    {a.descripcion ? <span className="block max-w-xs text-[10px] text-[var(--muted)]">{a.descripcion}</span> : null}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        );
+      })}
     </div>
   );
 }
@@ -249,9 +208,10 @@ export default function UsuariosPage() {
 
   const gruposVisibles = useMemo(() => {
     const set = new Set(catalogoRol);
-    return GRUPOS_PERMISOS.map((g) => ({
+    return AREAS_PERMISOS.map((g) => ({
       ...g,
-      modulos: g.modulos.filter((m) => {
+      descripcion: "Activar una acción activa Ver. Quitar Ver limpia las acciones del módulo.",
+      modulos: CATALOGO_PERMISOS.filter((m) => m.area === g.id).map((m) => m.id).filter((m) => {
         if (!set.has(m)) return false;
         if (!modulosEmpresaActual.length) return true;
         const padre = moduloEmpresaDelPermiso(m);
@@ -308,10 +268,10 @@ export default function UsuariosPage() {
     setActivo(u.activo);
     setEmpresaIds([...u.empresas]);
     setPermisos(
-      mergePermisosConCatalogo(
+      materializarAcciones(adaptarPermisosLegacy(mergePermisosConCatalogo(
         u.rol as RolGlobal,
         u.permisos?.length ? u.permisos : clonePermisos(u.rol),
-      ),
+      ), u.rol)),
     );
     abrirGrupoPrincipal(u.rol);
     setMsg("");
@@ -329,49 +289,12 @@ export default function UsuariosPage() {
     );
   }
 
-  function setPermisoFlag(
-    modulo: string,
-    flag: keyof Omit<PermisoModulo, "modulo">,
-    value: boolean,
-  ) {
-    setPermisos((prev) => {
-      const exists = prev.some((p) => p.modulo === modulo);
-      if (!exists) {
-        return [
-          ...prev,
-          {
-            modulo,
-            puedeVer: flag === "puedeVer" ? value : false,
-            puedeCrear: flag === "puedeCrear" ? value : false,
-            puedeEditar: flag === "puedeEditar" ? value : false,
-            puedeEliminar: flag === "puedeEliminar" ? value : false,
-          },
-        ];
-      }
-      return prev.map((p) =>
-        p.modulo === modulo ? { ...p, [flag]: value } : p,
-      );
-    });
+  function setPermisoFlag(modulo: string, accion: string, value: boolean) {
+    setPermisos((prev) => cambiarAccion(prev, modulo, accion, value));
   }
 
-  function marcarGrupo(
-    modulos: string[],
-    value: boolean,
-    soloVer = false,
-  ) {
-    setPermisos((prev) => {
-      const map = new Map(prev.map((p) => [p.modulo, { ...p }]));
-      for (const m of modulos) {
-        map.set(m, {
-          modulo: m,
-          puedeVer: value,
-          puedeCrear: soloVer ? false : value,
-          puedeEditar: soloVer ? false : value,
-          puedeEliminar: soloVer ? false : value,
-        });
-      }
-      return [...map.values()];
-    });
+  function marcarGrupo(modulos: string[], value: boolean, soloVer = false) {
+    setPermisos((prev) => marcarArea(prev, modulos, !value ? "quitar" : soloVer ? "ver" : "todo"));
   }
 
   async function onSubmit(e: FormEvent) {
@@ -444,7 +367,7 @@ export default function UsuariosPage() {
         <h1 className="text-2xl font-semibold">Usuarios y permisos</h1>
         <p className="text-sm text-[var(--muted)]">
           Abre cada área (RRHH, Operaciones, Flota, Contabilidad) para marcar
-          qué puede Ver / Crear / Editar / Eliminar. Contexto: {slug}
+          qué módulos puede ver y qué acciones reales puede realizar. Contexto: {slug}
         </p>
         <a
           href={`/e/${slug}/admin/limpiar`}
@@ -677,6 +600,13 @@ export default function UsuariosPage() {
                 </div>
               );
             })}
+            <div className="rounded-xl border border-[var(--border)] p-3">
+              <p className="text-sm font-medium">Administración</p>
+              <p className="text-xs text-[var(--muted)]">
+                Usuarios y limpieza de datos son exclusivos del rol Admin.
+                La matriz no concede acceso a estas funciones.
+              </p>
+            </div>
           </div>
         ) : (
           <p className="text-sm text-[var(--muted)]">

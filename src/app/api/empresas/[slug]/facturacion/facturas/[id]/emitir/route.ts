@@ -13,7 +13,7 @@ const schema = z.object({
 /** Borrador -> Emitida. Exige número + fecha (ya guardados o enviados aquí) + ≥1 viaje + viajes aún Cerrados. facturacion:editar. */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantFacturacion(slug, "editar");
+  const guard = await requireTenantFacturacion(slug, "emitir");
   if (guard.error) return guard.error;
 
   const facturaId = Number(id);

@@ -4,6 +4,9 @@ import {
   obtenerEmpresaPorSlug,
   type Empresa,
 } from "./empresas";
+import { derivarModulosEmpresa } from "./roles";
+import { tieneAccionCatalogo, tienePermisoBase, tienePermisoOperativo } from "./permisos-catalogo";
+import { puedeUsarPortalesProveedores } from "./proveedores/acceso";
 import {
   puedeEditarModulo,
   modulosPorRol,
@@ -24,12 +27,35 @@ import {
   permisosEfectivos,
   tienePermiso,
   type AccionPermiso,
+  type PermisoModulo,
   type FlotaSubmodulo,
   type RrhhSubmodulo,
 } from "./permisos";
 
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
+
+export async function requireTenantPortalesProveedores(slug: string, accion: AccionPermiso = "ver"): Promise<(Ok & { permisos: PermisoModulo[] }) | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+  if (tenant.session.rol === "Admin") return { ...tenant, permisos: [] };
+  const permisos = await permisosEfectivos(tenant.session.id, tenant.session.rol);
+  if (!puedeUsarPortalesProveedores(tenant.session.rol) || !tienePermisoBase(permisos, "proveedor_portales") ||
+      !tienePermiso(permisos, "proveedor_portales", accion)) {
+    return { error: NextResponse.json({error:"Sin permiso para accesos proveedores."},{status:403}) };
+  }
+  return { ...tenant, permisos };
+}
+
+export async function requireTenantProgramacionExportar(slug: string): Promise<Ok | Fail> {
+  const guard = await requireTenantProgramacionOTms(slug, "ver");
+  if (guard.error || guard.session.rol === "Admin") return guard;
+  const permisos = await permisosEfectivos(guard.session.id, guard.session.rol);
+  if (!tieneAccionCatalogo(permisos,"programacion","exportar")) {
+    return { error: NextResponse.json({error:"Sin permiso para exportar Programación."},{status:403}) };
+  }
+  return guard;
+}
 
 /** Multas tiene permiso propio: nunca hereda autoridad de TMS/Flota. */
 export async function requireTenantMultas(
@@ -149,6 +175,12 @@ export async function requireTenantModulo(
   }
 
   if (editar) {
+    const accionGeneral = modulo === "cms" ? "publicar" : "gestionar";
+    const usaAccionGeneral = ["tms","reciclaje","tarimas","cms"].includes(modulo);
+    if (usaAccionGeneral &&
+        !tieneAccionCatalogo(perms,modulo,accionGeneral)) {
+      return { error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }) };
+    }
     // Contabilidad: una revocación explícita no se recupera por el rol.
     // Mantiene el contrato legado crear O editar de este guard, sin afectar otros módulos.
     if (modulo === "contabilidad" &&
@@ -157,6 +189,7 @@ export async function requireTenantModulo(
       return { error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }) };
     }
     const puedeEditar =
+      (usaAccionGeneral && tieneAccionCatalogo(perms,modulo,accionGeneral)) ||
       puedeEditarModulo(session.rol, modulo) ||
       tienePermiso(perms, modulo, "editar") ||
       tienePermiso(perms, modulo, "crear") ||
@@ -529,15 +562,15 @@ export async function requireTenantFlotaCombustible(
 }
 
 /**
- * FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS — ¿puede esta sesión editar vehículos de OTRAS empresas? Permiso explícito
- * `flota_vehiculos_otras_empresas:editar` (Admin lo tiene por catálogo global). No mira `username` ni `rol` fuera del bypass administrativo ya
- * existente: la autoridad real es el permiso de la matriz de Usuarios. Es solo una CAPACIDAD: el endpoint además exige que la empresa propietaria
- * del vehículo esté entre las que el usuario está autorizado a operar (ver decidirEdicionVehiculo).
+ * FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS — ¿puede esta sesión editar vehículos de OTRAS empresas? Acción «Editar vehículos de otras empresas» del catálogo
+ * central (Flota / Predios → Vehículos) Y la base «Ver vehículos» (sin base la acción no da ningún acceso). Admin conserva el bypass administrativo ya
+ * existente. No mira `username` ni `rol` fuera de ese bypass. Es solo una CAPACIDAD: el endpoint además exige que el vehículo sea accesible desde la
+ * empresa activa (obtenerVehiculoAccesible: propio o compartido con ella; ver decidirEdicionVehiculo) y nunca consulta empresasParaUsuario.
  */
 export async function sesionPuedeEditarVehiculosOtrasEmpresas(session: { id: number; rol: string }): Promise<boolean> {
   if (session.rol === "Admin") return true;
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  return tienePermiso(perms, "flota_vehiculos_otras_empresas", "editar");
+  return tienePermisoBase(perms, "flota_vehiculos") && tieneAccionCatalogo(perms, "flota_vehiculos", "editar_otras_empresas");
 }
 
 /**
@@ -665,8 +698,7 @@ export async function requireTenantRutas(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "rutas", accion) ||
-    tienePermiso(perms, "tms", accion)
+    tienePermisoOperativo(perms, "rutas", accion)
   ) {
     return { session, empresa };
   }
@@ -711,8 +743,7 @@ export async function requireTenantGastos(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "gastos", accion) ||
-    tienePermiso(perms, "tms", accion)
+    tienePermisoOperativo(perms, "gastos", accion)
   ) {
     return { session, empresa };
   }
@@ -805,7 +836,7 @@ export async function requireTenantGastosOperativosAutorizar(
  */
 export async function requireTenantCotizaciones(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionPermiso | "estado" = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -827,8 +858,9 @@ export async function requireTenantCotizaciones(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "cotizaciones", accion) ||
-    tienePermiso(perms, "tms", accion)
+    accion === "estado"
+      ? ((tienePermisoBase(perms, "cotizaciones") || tienePermisoBase(perms, "tms")) && tieneAccionCatalogo(perms, "cotizaciones", "estado"))
+      : tienePermisoOperativo(perms, "cotizaciones", accion)
   ) {
     return { session, empresa };
   }
@@ -1160,7 +1192,7 @@ export async function requireTenantRrhhAny(
  */
 export async function requireTenantFacturacion(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionPermiso | "emitir" | "anular" | "pagos" = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -1168,9 +1200,9 @@ export async function requireTenantFacturacion(
   const { session, empresa } = tenant;
   if (session.rol === "Admin") return { session, empresa };
 
-  const empresaMods = empresa.modulos.length
+  const empresaMods = derivarModulosEmpresa((empresa.modulos.length
     ? empresa.modulos
-    : modulosPorRol(session.rol);
+    : modulosPorRol(session.rol)) as Modulo[]);
   if (empresaMods.length && !empresaMods.includes("facturacion")) {
     return {
       error: NextResponse.json(
@@ -1181,7 +1213,10 @@ export async function requireTenantFacturacion(
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  if (tienePermiso(perms, "facturacion", accion)) {
+  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos"
+    ? tieneAccionCatalogo(perms, "facturacion", accion)
+    : tienePermiso(perms, "facturacion", accion);
+  if (tienePermisoBase(perms, "facturacion") && autorizado) {
     return { session, empresa };
   }
   return {

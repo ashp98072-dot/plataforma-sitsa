@@ -17,13 +17,13 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("POST /facturacion/facturas/[id]/emitir — 26) permisos: facturacion:editar", () => {
+describe("POST /facturacion/facturas/[id]/emitir — permisos: facturacion:emitir", () => {
   it("exige el permiso antes de tocar la lib", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
     const res = await POST(new Request("http://localhost/x", { method: "POST", body: "{}" }), ctx);
     expect(res.status).toBe(403);
     expect(emitirFactura).not.toHaveBeenCalled();
-    expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "editar");
+    expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "emitir");
   });
 
   it("delega en emitirFactura con el actor del guard", async () => {

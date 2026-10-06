@@ -9,6 +9,7 @@ import ClienteUbicacionesAdmin from "@/components/tms/cliente-ubicaciones-admin"
 import ClienteContactosAdmin from "@/components/tms/cliente-contactos-admin";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 import { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
@@ -289,14 +290,14 @@ export default function TmsPage() {
   // incidencias del expediente, así que sirve como la "revisión antes de
   // cerrar" sin construir un modal nuevo). El botón solo se OCULTA sin el
   // permiso — la autoridad real es el 403 del endpoint.
-  const { permisos: permisosTms } = useEmpresaSession();
+  const { permisos: permisosTms, rol } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisosTms, "viajes_cerrar", "editar");
   // TMS-PROGRAMACION-HABILITACIONES-1 (corrección post-revisión) — el panel de administración solo se
   // MUESTRA con tms:editar (igual que el permiso real que ya exige el backend en PUT
   // /tms/personal-habilitaciones, ver route.ts) — el botón/sección se OCULTA sin el permiso, la autoridad
   // real sigue siendo el 403 del endpoint (mismo criterio que puedeCerrarViaje arriba). Un usuario con solo
   // tms:ver no ve el panel.
-  const puedeEditarTms = tienePermiso(permisosTms, "tms", "editar");
+  const puedeEditarTms = rol === "Admin" || tieneAccionCatalogo(permisosTms, "tms", "gestionar");
   const [cerrandoId, setCerrandoId] = useState<number | null>(null);
   const [errorCierre, setErrorCierre] = useState("");
 

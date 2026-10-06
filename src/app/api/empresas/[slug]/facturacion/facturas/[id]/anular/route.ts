@@ -7,7 +7,7 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 /** Solo si NO tiene pagos registrados — libera sus viajes de inmediato. facturacion:editar. */
 export async function POST(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantFacturacion(slug, "editar");
+  const guard = await requireTenantFacturacion(slug, "anular");
   if (guard.error) return guard.error;
 
   const facturaId = Number(id);
