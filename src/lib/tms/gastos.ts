@@ -3,7 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { obtenerVehiculoAccesibleTx, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
+import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
@@ -356,6 +356,7 @@ function mapRow(r: RowDataPacket): GastoOperativo {
   };
 }
 
+// Histórico: el gasto ya guardó un vehiculo_id validado al registrarlo; el JOIN de la placa no exige la compartición actual (no debe quedar vacía).
 const SELECT = `
   SELECT g.id, g.codigo, g.empresa_id, DATE_FORMAT(g.fecha_solicitud, '%Y-%m-%d') AS fecha_solicitud,
          DATE_FORMAT(g.fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
@@ -373,7 +374,7 @@ const SELECT = `
          g.estado, g.autorizado_en, g.rechazado_en, g.motivo_rechazo
   FROM tms_gastos_operativos g
   LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
-  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND ${predicadoVehiculoAccesible("veh", "g.empresa_id")}
+  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id
   LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
   LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id AND plan.empresa_id = g.empresa_id
 `;

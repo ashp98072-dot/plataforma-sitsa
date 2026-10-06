@@ -16,14 +16,15 @@ import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS } from "@/lib/compras/
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = ProveedorPickerOpt;
-type Vehiculo = { id: number; placa: string; descripcion: string | null; marca: string | null; modelo: string | null };
+type Vehiculo = { id: number; placa: string; descripcion: string | null; marca: string | null; modelo: string | null; compartido?: boolean; empresaDuenaNombre?: string | null };
 type Catalogos = { entidades: Opcion[]; usuarios: Opcion[]; requirentesOperaciones: Opcion[]; proveedores: Proveedor[]; vehiculos: Vehiculo[] };
 
 export function opcionesUnidadesCompra(vehiculos: Vehiculo[], id: number | null, nombre: string | null): CatalogoSearchOption[] {
   return opcionesConHistorico(vehiculos.map(v => ({
     value: String(v.id),
-    label: [v.placa, v.descripcion || [v.marca, v.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · "),
-    searchText: [v.placa, v.descripcion, v.marca, v.modelo].filter(Boolean).join(" "),
+    // Unidad compartida con la empresa activa: «C-091BXF · … · Frescofresh · Compartido» (la placa sigue siendo lo principal).
+    label: [v.placa, v.descripcion || [v.marca, v.modelo].filter(Boolean).join(" "), ...(v.compartido ? [v.empresaDuenaNombre, "Compartido"] : [])].filter(Boolean).join(" · "),
+    searchText: [v.placa, v.descripcion, v.marca, v.modelo, v.compartido ? v.empresaDuenaNombre : null].filter(Boolean).join(" "),
   })), String(id || ""), nombre || "Unidad histórica");
 }
 

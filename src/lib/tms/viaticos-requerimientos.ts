@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2";
 import { randomUUID } from "node:crypto";
 import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
+import { listarVehiculosActivosAccesibles, obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { resolverUsuarioDeEmpresaTx } from "@/lib/tms/identidad-administrativa";
 import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
@@ -26,12 +27,19 @@ export async function catalogosRequerimientoViatico(empresaId: number) {
       LEFT JOIN empleados e ON e.id=tp.id_empleado AND e.empresa_id=tp.empresa_id
       LEFT JOIN tms_viaticos_config cfg ON cfg.empresa_id=tp.empresa_id AND cfg.puesto=COALESCE(e.categoria_ops,tp.tipo) AND cfg.activo=1
       WHERE tp.empresa_id=? AND tp.estado='Activo' ORDER BY tp.nombre`, [empresaId]),
-    query<RowDataPacket[]>(`SELECT id, placa, marca, modelo, descripcion FROM flota_vehiculos WHERE empresa_id=? AND activo=1 ORDER BY placa`, [empresaId]),
+    // Unidades propias + compartidas con la empresa activa (regla única de Flota), activas y sin duplicados.
+    listarVehiculosActivosAccesibles(empresaId),
     query<RowDataPacket[]>(`SELECT id, nombre FROM tms_clientes WHERE empresa_id=? AND activo=1 ORDER BY nombre`, [empresaId]),
     query<RowDataPacket[]>(`SELECT u.id,u.nombre FROM usuarios u LEFT JOIN usuario_empresa ue ON ue.usuario_id=u.id AND ue.empresa_id=?
       WHERE u.activo=1 AND (u.acceso_todas_empresas=1 OR ue.usuario_id IS NOT NULL) ORDER BY u.nombre`, [empresaId]),
   ]);
-  return { personal, vehiculos, clientes, usuarios };
+  return {
+    personal, clientes, usuarios,
+    vehiculos: vehiculos.map(r => ({
+      id: Number(r.id), placa: String(r.placa), marca: r.marca ?? null, modelo: r.modelo ?? null, descripcion: r.descripcion ?? null,
+      compartido: Number(r.compartido ?? 0) === 1, empresaDuenaNombre: r.empresa_duena_nombre != null ? String(r.empresa_duena_nombre) : null,
+    })),
+  };
 }
 
 function mapCabecera(r: RowDataPacket): RequerimientoViatico {
@@ -56,8 +64,10 @@ async function snapshotLinea(conn: PoolConnection, empresaId: number, l: Guardar
     LEFT JOIN tms_viaticos_config cfg ON cfg.empresa_id=tp.empresa_id AND cfg.puesto=COALESCE(e.categoria_ops,tp.tipo) AND cfg.activo=1
     WHERE tp.empresa_id=? AND tp.id=? AND tp.estado='Activo' LIMIT 1`, [empresaId,l.personalId]);
   if (!p[0]) throw new ErrorRequerimientoViatico("El colaborador no pertenece a esta empresa o no está activo.");
-  const [v] = l.vehiculoId ? await conn.query<RowDataPacket[]>(`SELECT placa FROM flota_vehiculos WHERE empresa_id=? AND id=? LIMIT 1`,[empresaId,l.vehiculoId]) : [[]] as unknown as [RowDataPacket[]];
-  if (l.vehiculoId && !v[0]) throw new ErrorRequerimientoViatico("La unidad no pertenece a esta empresa.");
+  // Propia o COMPARTIDA con la empresa activa (regla única de Flota); la placa se congela como snapshot.
+  const veh = l.vehiculoId ? await obtenerVehiculoAccesibleTx(conn, empresaId, Number(l.vehiculoId), "v.id, v.placa, v.activo") : null;
+  if (l.vehiculoId && !veh) throw new ErrorRequerimientoViatico("La unidad no pertenece a esta empresa.");
+  const v: RowDataPacket[] = veh ? [veh] : [];
   const [c] = l.clienteId ? await conn.query<RowDataPacket[]>(`SELECT nombre FROM tms_clientes WHERE empresa_id=? AND id=? LIMIT 1`,[empresaId,l.clienteId]) : [[]] as unknown as [RowDataPacket[]];
   if (l.clienteId && !c[0]) throw new ErrorRequerimientoViatico("El cliente no pertenece a esta empresa.");
   const sugerido = centavos(String(p[0].sugerido ?? 0)), unitario = centavos(l.montoUnitario), cantidad = centavos(l.cantidad);
