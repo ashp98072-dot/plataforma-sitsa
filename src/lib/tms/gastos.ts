@@ -3,6 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { obtenerVehiculoAccesibleTx, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
@@ -372,7 +373,7 @@ const SELECT = `
          g.estado, g.autorizado_en, g.rechazado_en, g.motivo_rechazo
   FROM tms_gastos_operativos g
   LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
-  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+  LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND ${predicadoVehiculoAccesible("veh", "g.empresa_id")}
   LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
   LEFT JOIN tms_planes_viaje plan ON plan.id = g.plan_id AND plan.empresa_id = g.empresa_id
 `;
@@ -571,8 +572,9 @@ async function validarReferenciasGastoTx(
     if (!rows[0]) throw new ErrorDominioFormulario("El empleado indicado no pertenece a esta empresa.");
   }
   if (input.vehiculoId != null) {
-    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
+    // Propio o compartido con la empresa activa (regla real de Flota); nunca «cualquier id».
+    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, input.vehiculoId);
+    if (!veh) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
   }
   if (input.clienteId != null) {
     const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM tms_clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [input.clienteId, empresaId]);
@@ -646,9 +648,9 @@ async function resolverSnapshotLineaGastoTx(
   }
   let placa: string | null = null;
   if (input.vehiculoId != null) {
-    const rows = await queryConn<RowDataPacket[]>(conn, "SELECT placa FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [input.vehiculoId, empresaId]);
-    if (!rows[0]) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
-    placa = String(rows[0].placa);
+    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, input.vehiculoId);
+    if (!veh) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
+    placa = String(veh.placa);
   }
   let clienteId = input.clienteId ?? null;
   let clienteNombre: string | null = null;

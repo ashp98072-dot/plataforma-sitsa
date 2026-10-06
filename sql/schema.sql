@@ -1497,7 +1497,10 @@ CREATE TABLE IF NOT EXISTS tms_gastos_operativos (
   INDEX idx_gastos_empleado (empresa_id, empleado_id),
   CONSTRAINT fk_gasto_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_gasto_empleado_ambito FOREIGN KEY (empresa_id, empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_gasto_vehiculo_ambito FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT,
+  -- Vehículos propios o compartidos (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
+  -- Ver sql/migrate-2026-10-fondos-vehiculos-compartidos.sql.
+  INDEX idx_gastos_vehiculo_id (vehiculo_id),
+  CONSTRAINT fk_gasto_vehiculo FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT,
   CONSTRAINT fk_gasto_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_gasto_plan_ambito FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1566,7 +1569,10 @@ CREATE TABLE IF NOT EXISTS tms_solicitud_fondo_lineas (
   CONSTRAINT fk_fondolin_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_fondolin_solicitud_ambito FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_fondolin_empleado_ambito FOREIGN KEY (empresa_id, empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_fondolin_vehiculo_ambito FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT,
+  -- Vehículos propios o compartidos (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
+  -- Ver sql/migrate-2026-10-fondos-vehiculos-compartidos.sql.
+  INDEX idx_fondolin_vehiculo_id (vehiculo_id),
+  CONSTRAINT fk_fondolin_vehiculo FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondolin_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondolin_plan_ambito FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
