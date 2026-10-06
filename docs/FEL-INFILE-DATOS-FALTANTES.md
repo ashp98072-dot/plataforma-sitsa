@@ -37,7 +37,7 @@ Estado: checklist. **No se inventó ningún valor.** Sección A = datos que falt
 ### A4. Operación
 - [ ] Contador/responsable que valida cada fase
 - [ ] Cómo seguirá la contabilidad durante la convivencia (captura manual o exportación desde SITSA)
-- [ ] Viajes ya facturados en Milenium que hay que marcar (`facturado_externo`)
+- [ ] Viajes ya facturados en Milenium que hay que marcar en `fact_viajes_facturacion_externa` (criterio: por fecha de corte, por cliente o lista; quién autoriza el marcado y su reversión; formato de la referencia externa: serie/número/autorización)
 - [ ] Variable de entorno `FEL_CREDENTIALS_KEY` (la configura el responsable; nunca en git)
 
 ## B. Checklist para solicitar a INFILE
@@ -53,7 +53,10 @@ Pedir por escrito (y guardar la versión/fecha de cada documento recibido). **Ni
 - [ ] Tipos de DTE soportados y su código (FACT, FCAM, notas de crédito/débito, exportación, otros)
 - [ ] Operación de **certificación**: request/response, campos devueltos (autorización, serie, número, fecha, XML, PDF)
 - [ ] Operación de **anulación**: payload, plazos, condiciones, respuesta
-- [ ] Operación de **consulta/estado** (por qué identificador: UUID del emisor, autorización, referencia propia)
+- [ ] Operación de **consulta/estado** (por qué identificador: UUID del emisor, autorización, referencia propia) y **cómo responde cuando el documento NO existe** (código HTTP, cuerpo, código de error) y cuando está **en proceso**; sin esto no se puede declarar `NO_ENCONTRADO` ni habilitar un reenvío seguro
+- [ ] ¿La consulta puede tener **consistencia eventual** (cuánto debe esperarse tras el envío antes de que «no existe» sea confiable)?
+- [ ] ¿Se puede **reutilizar la misma referencia** tras un rechazo definitivo, o hay que enviar una nueva?
+- [ ] Cómo distingue INFILE los **ambientes** (URL, host, credenciales, campos) para validar que una configuración TEST no se use como PROD
 - [ ] **Idempotencia**: ¿aceptan un identificador/referencia del emisor que impida duplicados? ¿qué responden ante reenvío del mismo documento?
 - [ ] Catálogo de **errores/códigos** (validación vs transitorios) y cuáles son reintentables
 - [ ] Timeout recomendado, **límites/rate limits**, concurrencia máxima

@@ -11,10 +11,11 @@ Estado: **PLAN. No implementado.** Las fases FEL-3 en adelante **no pueden empez
 - **Criterio de salida:** documentación oficial, sandbox y credenciales de **TEST** en poder del responsable; decisiones de negocio firmadas.
 
 ### FEL-2 — Modelo + dominio + proveedor mock (sin red)
-- Migración manual propuesta (`fel_emisores`, `fel_documentos`, `fel_intentos`, columnas aditivas en `fact_facturas`) con preflight; reconciliar `schema.sql`.
+- Migración manual propuesta con preflight (`fel_emisores`, `fel_emisor_ambientes`, `fel_documentos`, `fel_intentos`, `fact_viajes_facturacion_externa`; columnas y `UNIQUE (empresa_id, id[, entidad_id])` aditivos en `fact_facturas`); reconciliar `schema.sql`. El orden: claves y columnas de `fact_facturas` → tablas FEL → tabla de facturación externa.
 - `src/lib/fel`: tipos, estados, `FelProvider`, mapper `Factura → DTO` (con fixtures sintéticos), servicio con el protocolo de idempotencia (§7), redacción de logs, cifrado con `FEL_CREDENTIALS_KEY`.
-- Proveedor `MOCK` determinista (incluye timeout/respuesta perdida).
-- Pruebas: protocolo completo contra el mock, **caso de corte de conexión**, doble clic/concurrencia, bloqueos de estado, redacción de logs, aislamiento por empresa/entidad.
+- Proveedor `MOCK` determinista: reproduce `CERTIFICADO`, `RECHAZADO`, `INCIERTO` (timeout/respuesta perdida), y en consulta `CERTIFICADO`, `PENDIENTE`, `NO_ENCONTRADO`, `INCIERTO`, `ERROR_CONFIG`.
+- Marcado/reversión de viajes facturados externamente y su exclusión de `listarViajesPendientes` y de la creación de facturas.
+- Pruebas: protocolo completo contra el mock, **caso de corte de conexión**, `NO_ENCONTRADO` ≠ `RECHAZADO` (timeout/404 nunca producen `NO_ENCONTRADO`), doble clic/concurrencia, bloqueos de estado, redacción de logs, aislamiento por empresa/entidad (incluida la FK compuesta), **imposibilidad de usar la configuración TEST como PROD** (resolución única del modo, documento atado a su ambiente, AAD de secretos) y exclusión mutua entre viaje facturado externo y factura SITSA.
 - **No** toca UI productiva ni emite nada. **Criterio:** el caso «certificó pero no recibí respuesta» se recupera sin doble certificación en pruebas.
 
 ### FEL-3 — Integración sandbox INFILE
@@ -47,7 +48,7 @@ Escenario: durante un tiempo Milenium **sigue pudiendo emitir** y SITSA empieza 
 
 | Riesgo | Mitigación propuesta |
 |---|---|
-| **Doble facturación del mismo viaje** (una en Milenium, otra en SITSA) | Fecha de corte por emisor (`inicio_emision`): SITSA solo factura viajes con `fecha_plan ≥ corte` (o desbloqueo explícito con permiso). Para viajes ya facturados en Milenium, marca `facturado_externo` (carga inicial desde Milenium o marcado manual) que los excluye de «viajes pendientes» |
+| **Doble facturación del mismo viaje** (una en Milenium, otra en SITSA) | Fecha de corte por emisor (`inicio_emision`): SITSA solo factura viajes con `fecha_plan ≥ corte` (o desbloqueo explícito con permiso). Para viajes ya facturados en Milenium se usa la tabla **a nivel de viaje** `fact_viajes_facturacion_externa` (marca vigente por `plan_id`, sistema de origen, referencia externa opcional, quién/cuándo, reversible con auditoría; carga manual o por lote desde Milenium): `listarViajesPendientes` y la creación de facturas **excluyen** esos viajes. No se crean facturas SITSA ficticias ni se toca TMS |
 | **Numeración** | La serie/número los asigna el certificador; **un emisor/establecimiento/serie no se usa en los dos sistemas a la vez** tras el corte. Antes del corte Milenium emite; después, SITSA. Si INFILE usa series separadas, usar una serie propia de SITSA durante la transición (A CONFIRMAR) |
 | **Notas de crédito de facturas de Milenium** | Documento origen **externo**: campos de referencia manual (autorización, serie, número, fecha) validados con la consulta al certificador; hasta FEL-5 las notas sobre facturas viejas se siguen emitiendo desde Milenium |
 | **Conciliación contable** | Mientras la contabilidad siga en Milenium, SITSA exporta cada documento certificado (factura/nota/anulación) para su captura; definir con el contador si es manual o por archivo. A largo plazo lo cubre el roadmap contable (C4) |
@@ -70,7 +71,11 @@ Escenario: durante un tiempo Milenium **sigue pudiendo emitir** y SITSA empieza 
 | 8 | Hostinger sin colas/cron | Reconciliación bajo demanda; si hiciera falta, un job externo después |
 | 9 | Depender de un solo proveedor | Interfaz `FelProvider` |
 | 10 | Limpieza de pruebas borra facturas con FEL PROD | Bloquear `limpiar-*` para facturas con documento PROD |
-| 11 | `fact_facturas` fuera de `schema.sql` | Reconciliar al aplicar la migración |
+| 11 | `fact_facturas` fuera de `schema.sql` y sin `UNIQUE (empresa_id, id)` | Agregar las claves compuestas con preflight y reconciliar `schema.sql` al aplicar la migración |
+| 12 | Tratar «no encontrado» como rechazo / inferirlo de un timeout | Resultado de consulta `NO_ENCONTRADO` distinto de `RECHAZADO`; solo según contrato oficial; guardia de ventana/segunda consulta (A CONFIRMAR) |
+| 13 | Viaje facturado en Milenium vuelve a aparecer como facturable | Tabla `fact_viajes_facturacion_externa` por viaje, con exclusión en listado y creación; sin facturas ficticias |
+| 14 | Documento fiscal de la empresa A ligado a la factura/emisor de B | FK compuestas con `empresa_id` (ARQUITECTURA §6.0) + validación de tenant en la aplicación |
+| 15 | Estados incoherentes TEST/PROD | `fel_modo` único en `fel_emisores`; ambiente por filas hijas; documento atado a su ambiente por FK |
 
 ## 4. Fuera de alcance de este plan
 
