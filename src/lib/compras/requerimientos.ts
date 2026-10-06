@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
+import { listarVehiculosActivosAccesibles, obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { esUsuarioOperaciones, ERROR_REQUIRIENTE_OPERACIONES, resolverUsuarioDeEmpresaTx, resolverSolicitanteOperacionesTx } from "@/lib/tms/identidad-administrativa";
 import { normalizarMetodoPagoCompra } from "./metodos-pago";
@@ -44,17 +45,26 @@ export async function obtenerRequerimiento(empresaId: number, id: number): Promi
   return { ...rows[0], lineas, cantidad_lineas: lineas.length } as unknown as DetalleCompra;
 }
 export async function catalogosCompra(empresaId: number) {
-  // No usar listarVehiculosAccesibles: incluye unidades compartidas de otros tenants.
-  const [proveedores, vehiculos, entidades, usuarios] = await Promise.all([
+  // Unidades PROPIAS + COMPARTIDAS con la empresa activa (regla única de Flota: flota_vehiculo_acceso), solo activas y sin duplicados.
+  // Una unidad de otra empresa que NO está compartida con esta nunca aparece.
+  const [proveedores, vehiculosAccesibles, entidades, usuarios] = await Promise.all([
     query<RowDataPacket[]>(`SELECT id, nombre_comercial, nit, contacto_nombre, contacto_telefono, telefono,
       metodo_pago_habitual, banco, numero_cuenta, dias_credito FROM compras_proveedores WHERE empresa_id = ? AND activo = 1 ORDER BY nombre_comercial, id`, [empresaId]),
-    query<RowDataPacket[]>(`SELECT id, placa, descripcion, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa, id`, [empresaId]),
+    listarVehiculosActivosAccesibles(empresaId),
     // El helper de Fondos/Gastos limita códigos KT/MONACO; Compras usa entidades reales del tenant, sin nombres/códigos hardcodeados.
     query<RowDataPacket[]>(`SELECT id, nombre FROM cont_entidades WHERE empresa_id = ? AND activa = 1 ORDER BY nombre, id`, [empresaId]),
     query<RowDataPacket[]>(`SELECT DISTINCT u.id, u.nombre, u.rol_global FROM usuarios u LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
       WHERE u.activo = 1 AND u.nombre IS NOT NULL AND TRIM(u.nombre) <> '' AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1) ORDER BY u.nombre, u.id`, [empresaId]),
   ]);
   const opciones = (rows: RowDataPacket[]) => rows.map(r => ({ id: Number(r.id), nombre: String(r.nombre) }));
+  // Campos aditivos: `compartido` y la empresa dueña para rotular «Frescofresh · Compartido» (los consumidores anteriores leían id/placa/descripcion/marca/modelo).
+  const vehiculos = vehiculosAccesibles
+    .sort((a, b) => String(a.placa).localeCompare(String(b.placa)) || Number(a.id) - Number(b.id))
+    .map(r => ({
+      id: Number(r.id), placa: String(r.placa), descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null,
+      compartido: Number(r.compartido ?? 0) === 1, empresaDuenaNombre: r.empresa_duena_nombre != null ? String(r.empresa_duena_nombre) : null,
+    }));
   return { proveedores, vehiculos, entidades, usuarios: opciones(usuarios), requirentesOperaciones: opciones(usuarios.filter(r => esUsuarioOperaciones(r.rol_global))) };
 }
 export const MSG_FACTURA_UNICA_BD = "Una de las facturas ya está registrada para ese proveedor en otro requerimiento. Revisa las líneas e inténtalo de nuevo.";
@@ -153,15 +163,22 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       };
       let unidad = linea.unidad_descripcion;
       if (linea.vehiculo_id !== null) {
+        // Línea que YA referenciaba esta unidad: es histórica y se conserva aunque luego se haya retirado la compartición (no se vuelve a exigir
+        // acceso actual ni se reescribe su descripción). Una unidad nueva o cambiada sí debe ser propia o compartida AHORA con la empresa.
+        const yaReferenciada = vieja !== undefined && Number(vieja.vehiculo_id) === linea.vehiculo_id;
         let vehiculo = vehiculos.get(linea.vehiculo_id);
         if (!vehiculo) {
-          const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, activo, placa, descripcion, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND id = ? LOCK IN SHARE MODE`, [empresaId, linea.vehiculo_id]);
-          vehiculo = rows[0];
-          if (!vehiculo) throw new ErrorCompra("El vehículo no pertenece a esta empresa.");
-          vehiculos.set(linea.vehiculo_id, vehiculo);
+          // Propia o COMPARTIDA con la empresa activa (regla única de Flota); nunca «cualquier id». La propiedad del vehículo no cambia.
+          vehiculo = (await obtenerVehiculoAccesibleTx(conn, empresaId, linea.vehiculo_id, "v.id, v.activo, v.placa, v.descripcion, v.marca, v.modelo", true)) ?? undefined;
+          if (!vehiculo && !yaReferenciada) throw new ErrorCompra("El vehículo no pertenece a esta empresa.");
+          if (vehiculo) vehiculos.set(linea.vehiculo_id, vehiculo);
         }
-        if (!vehiculo.activo && (!vieja || Number(vieja.vehiculo_id) !== linea.vehiculo_id)) throw new ErrorCompra("La unidad seleccionada no está activa.");
-        unidad = !vehiculo.activo && vieja ? vieja.unidad_descripcion : [vehiculo.placa, vehiculo.descripcion || [vehiculo.marca, vehiculo.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ").slice(0, 200);
+        if (!vehiculo) {
+          unidad = vieja!.unidad_descripcion;
+        } else {
+          if (!vehiculo.activo && !yaReferenciada) throw new ErrorCompra("La unidad seleccionada no está activa.");
+          unidad = !vehiculo.activo && vieja ? vieja.unidad_descripcion : [vehiculo.placa, vehiculo.descripcion || [vehiculo.marca, vehiculo.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ").slice(0, 200);
+        }
       }
       const metodoPago = vieja && Number(vieja.proveedor_id) === linea.proveedor_id && vieja.metodo_pago === linea.metodo_pago
         ? linea.metodo_pago : normalizarMetodoPagoCompra(linea.metodo_pago);

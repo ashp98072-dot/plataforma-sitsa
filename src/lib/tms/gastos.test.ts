@@ -356,7 +356,10 @@ describe("listarGastos", () => {
     await listarGastos(7);
     const sql = vi.mocked(query).mock.calls[0][0] as string;
     expect(sql).toContain("emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id");
-    expect(sql).toContain("veh.id = g.vehiculo_id AND (veh.empresa_id = g.empresa_id OR EXISTS (SELECT 1 FROM flota_vehiculo_acceso fva WHERE fva.vehiculo_id = veh.id AND fva.empresa_id = g.empresa_id))");
+    // Vehículo: JOIN histórico por id; un gasto con vehículo compartido conserva la placa aunque luego cambie la compartición. El aislamiento lo da `g.empresa_id = ?`.
+    expect(sql).toContain("veh.id = g.vehiculo_id");
+    expect(sql).not.toContain("veh.empresa_id");
+    expect(sql).toContain("g.empresa_id = ?");
     expect(sql).toContain("cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id");
     expect(sql).toContain("plan.id = g.plan_id AND plan.empresa_id = g.empresa_id");
   });

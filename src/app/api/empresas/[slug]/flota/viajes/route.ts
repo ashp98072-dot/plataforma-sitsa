@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { requireTenantFlota } from "@/lib/tenant";
+import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import {
   asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
@@ -155,13 +156,7 @@ export async function POST(req: Request, ctx: Ctx) {
         `SELECT v.id, v.placa, v.en_taller, v.km_actual, v.activo, v.estado
          FROM flota_vehiculos v
          WHERE v.id = ?
-           AND (
-             v.empresa_id = ?
-             OR EXISTS (
-               SELECT 1 FROM flota_vehiculo_acceso a
-               WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-             )
-           )
+           AND ${predicadoVehiculoAccesible("v", "?")}
          LIMIT 1`,
         [vid, guard.empresa.id, guard.empresa.id],
       ).catch(async () =>

@@ -8,6 +8,7 @@ import { CatalogoSearchSelect, type CatalogoSearchOption } from "@/components/tm
 import { RutaTarifasPanel } from "@/components/tms/ruta-tarifas-panel";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 
 type ClienteOpt = {
   id: number;
@@ -142,7 +143,7 @@ export default function RutasPage() {
   const [personal, setPersonal] = useState<EmpleadoOpt[]>([]);
   // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota de esta
   // empresa para el selector de "unidad recurrente" de la ruta.
-  const [flotaVehiculos, setFlotaVehiculos] = useState<{ id: number; placa: string; marca: string | null; modelo: string | null }[]>([]);
+  const [flotaVehiculos, setFlotaVehiculos] = useState<{ id: number; placa: string; marca: string | null; modelo: string | null; compartido?: boolean; empresaDuenaNombre?: string | null }[]>([]);
   const [rutas, setRutas] = useState<ClienteRuta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -896,7 +897,7 @@ export default function RutasPage() {
                   options={flotaVehiculos.map((v) => ({
                     value: String(v.id),
                     label: v.placa,
-                    detail: [v.marca, v.modelo].filter(Boolean).join(" ") || undefined,
+                    detail: detalleVehiculoCatalogo(v) || undefined,
                   }))}
                   inputClassName={campoCls("unidadRecurrenteId")}
                   emptyLabel="— Sin unidad recurrente —"

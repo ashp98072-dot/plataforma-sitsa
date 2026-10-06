@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
+import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import {
   asegurarSchemaFlota,
@@ -40,8 +41,8 @@ export async function GET(req: Request, ctx: Ctx) {
     query<RowDataPacket[]>(
       `SELECT id, placa, marca, modelo, km_actual, km_intervalo_servicio, km_ultimo_servicio,
               en_taller, estado
-       FROM flota_vehiculos WHERE empresa_id = ? ORDER BY placa`,
-      [guard.empresa.id],
+       FROM flota_vehiculos v WHERE ${predicadoVehiculoAccesible("v", "?")} ORDER BY placa`,
+      [guard.empresa.id, guard.empresa.id],
     ),
     query<RowDataPacket[]>(
       `SELECT DATE_FORMAT(fecha_servicio, '%Y-%m') AS mes,

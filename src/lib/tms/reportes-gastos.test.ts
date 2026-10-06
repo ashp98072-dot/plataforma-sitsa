@@ -278,7 +278,9 @@ describe("reporteGastosDetalle", () => {
     const sql = vi.mocked(query).mock.calls[0][0] as string;
     expect(sql).toContain("p.empresa_id = g.empresa_id");
     expect(sql).toContain("emp.empresa_id = g.empresa_id");
-    expect(sql).toContain("veh.empresa_id = g.empresa_id");
+    // Vehículo: JOIN histórico por id (el gasto ya guardó un vehiculo_id validado; un vehículo compartido no debe quedar con la placa vacía). El aislamiento lo da `g.empresa_id = ?`.
+    expect(sql).toContain("veh.id = g.vehiculo_id");
+    expect(sql).not.toContain("veh.empresa_id");
     expect(sql).toContain("cli.empresa_id = g.empresa_id");
   });
 
@@ -379,7 +381,9 @@ describe("aislamiento multiempresa en los JOIN de reportes (bloqueo 1, revisión
     await reporteGastosPorViaje(7);
     expect(vi.mocked(query).mock.calls[0][0]).toContain("plan.empresa_id = g.empresa_id");
     await reporteGastosPorUnidad(7);
-    expect(vi.mocked(query).mock.calls[1][0]).toContain("veh.empresa_id = g.empresa_id");
+    expect(vi.mocked(query).mock.calls[1][0]).toContain("veh.id = g.vehiculo_id");
+    expect(vi.mocked(query).mock.calls[1][0]).not.toContain("veh.empresa_id");
+    expect(vi.mocked(query).mock.calls[1][0]).toContain("g.empresa_id = ?");
     await reporteGastosPorCliente(7);
     expect(vi.mocked(query).mock.calls[2][0]).toContain("cli.empresa_id = g.empresa_id");
   });

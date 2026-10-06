@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { normalizarTipoUnidad, type TipoUnidad } from "@/lib/flota/tipo-unidad";
 
 /**
@@ -124,11 +125,7 @@ export async function listarDisponibilidadVehiculos(
               CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
        FROM flota_vehiculos v
        LEFT JOIN empresas e ON e.id = v.empresa_id
-       WHERE v.empresa_id = ?
-          OR EXISTS (
-            SELECT 1 FROM flota_vehiculo_acceso a
-            WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-          )
+       WHERE ${predicadoVehiculoAccesible("v", "?")}
        ORDER BY v.activo DESC, v.en_taller ASC, v.placa`,
       [empresaId, empresaId, empresaId],
     );

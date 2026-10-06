@@ -6,8 +6,15 @@ import { listarEmpresasActivas } from "@/lib/empresas";
 
 /**
  * REGLA ÚNICA de «vehículo accesible desde una empresa»: es propio de la empresa o está explícitamente compartido con ella
- * (`flota_vehiculo_acceso`). La usan Flota (lista, edición), Fondos/Gastos (catálogo y validación) y el catálogo de planes: nadie
- * reimplementa esta condición. `empresaExpr` es `?` (parámetro, se repite 2 veces) o una columna (p. ej. `g.empresa_id`, sin parámetros).
+ * (`flota_vehiculo_acceso`). La usan Flota (lista, edición, viajes, reportes, disponibilidad), Fondos/Gastos, Requerimientos de compra,
+ * Requerimientos de viáticos, Rutas y el catálogo de planes: nadie reimplementa esta condición. `empresaExpr` es `?` (parámetro, se repite
+ * 2 veces) o una columna (p. ej. `g.empresa_id`, sin parámetros).
+ *
+ * ALTAS / EDICIONES (validar un id que manda el cliente, listar un catálogo seleccionable): usar SIEMPRE esta regla — el vehículo debe ser
+ * propio o estar compartido AHORA con la empresa activa.
+ * LECTURA HISTÓRICA (mostrar la placa de un registro que ya guardó su `vehiculo_id`, reportes, PDFs): el vínculo ya fue validado al
+ * escribir y el registro está acotado por su propia `empresa_id`, así que se une por `v.id = x.vehiculo_id` SIN exigir la compartición
+ * actual; si luego se retira el acceso, el histórico no debe quedar con la placa vacía.
  */
 export function predicadoVehiculoAccesible(alias: string, empresaExpr: string): string {
   return `(${alias}.empresa_id = ${empresaExpr} OR EXISTS (SELECT 1 FROM flota_vehiculo_acceso fva WHERE fva.vehiculo_id = ${alias}.id AND fva.empresa_id = ${empresaExpr}))`;
@@ -45,15 +52,16 @@ export async function obtenerVehiculoAccesible(
 }
 
 /**
- * Misma regla que obtenerVehiculoAccesible, DENTRO de la transacción del llamador (Fondos/Gastos validan y escriben atómicamente). Devuelve
- * `id, placa, activo` por defecto; `null` si el vehículo no es propio ni está compartido con la empresa (otra empresa sin compartir, otro tenant
- * o id inexistente).
+ * Misma regla que obtenerVehiculoAccesible, DENTRO de la transacción del llamador (Fondos/Gastos/Compras/Viáticos/Rutas validan y escriben
+ * atómicamente). Devuelve `id, placa, activo` por defecto; `null` si el vehículo no es propio ni está compartido con la empresa (otra empresa
+ * sin compartir, otro tenant o id inexistente). `bloquear` agrega `LOCK IN SHARE MODE` (Compras bloquea la unidad mientras escribe).
  */
 export async function obtenerVehiculoAccesibleTx(
   conn: PoolConnection,
   empresaId: number,
   vehiculoId: number,
   cols = "v.id, v.placa, v.activo",
+  bloquear = false,
 ): Promise<RowDataPacket | null> {
   if (!vehiculoId || !empresaId) return null;
   try {
@@ -61,14 +69,15 @@ export async function obtenerVehiculoAccesibleTx(
       `SELECT ${cols}, CASE WHEN v.empresa_id = ? THEN 0 ELSE 1 END AS compartido
        FROM flota_vehiculos v
        WHERE v.id = ? AND ${predicadoVehiculoAccesible("v", "?")}
-       LIMIT 1`,
+       LIMIT 1${bloquear ? " LOCK IN SHARE MODE" : ""}`,
       [empresaId, vehiculoId, empresaId, empresaId],
     );
     return rows[0] ?? null;
-  } catch {
-    // Misma tolerancia que obtenerVehiculoAccesible: sin la tabla de accesos (migración pendiente) solo cuentan las unidades propias.
+  } catch (error) {
+    // Solo se tolera la tabla de accesos ausente (migración pendiente): entonces cuentan únicamente las unidades propias. Un bloqueo/timeout NO se enmascara.
+    if ((error as { errno?: number } | null)?.errno !== 1146) throw error;
     const [rows] = await conn.query<RowDataPacket[]>(
-      "SELECT id, placa, activo FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1",
+      `SELECT ${cols}, 0 AS compartido FROM flota_vehiculos v WHERE v.id = ? AND v.empresa_id = ? LIMIT 1${bloquear ? " LOCK IN SHARE MODE" : ""}`,
       [vehiculoId, empresaId],
     );
     return rows[0] ?? null;
@@ -123,6 +132,18 @@ export async function listarVehiculosAccesibles(
       [empresaId],
     );
   }
+}
+
+/**
+ * Catálogo SELECCIONABLE para altas/ediciones (Fondos, Gastos, Compras, Viáticos, Rutas): los vehículos PROPIOS + COMPARTIDOS con la empresa activa
+ * (la regla de Flota, listarVehiculosAccesibles), solo ACTIVOS y sin duplicados. Cada fila trae `compartido` y la empresa dueña
+ * (`empresa_duena_nombre`) para rotular «Frescofresh · Compartido». Los inactivos solo se conservan en históricos (no se ofrecen para registros nuevos).
+ */
+export async function listarVehiculosActivosAccesibles(empresaId: number, limite = 1000): Promise<RowDataPacket[]> {
+  const vistos = new Set<number>();
+  return (await listarVehiculosAccesibles(empresaId))
+    .filter((r) => Number(r.activo ?? 1) === 1 && !vistos.has(Number(r.id)) && vistos.add(Number(r.id)))
+    .slice(0, limite);
 }
 
 /**

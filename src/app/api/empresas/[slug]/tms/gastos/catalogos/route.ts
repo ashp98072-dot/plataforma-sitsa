@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
-import { listarVehiculosAccesibles, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
+import { listarVehiculosActivosAccesibles, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { esUsuarioOperaciones } from "@/lib/tms/identidad-administrativa";
 
@@ -37,14 +37,11 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, codigo, nombre, puesto, cuenta_bancaria, telefono FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre LIMIT 1000",
       [eid],
     ),
-    // Vehículos PROPIOS + COMPARTIDOS con la empresa activa (la regla real de Flota, listarVehiculosAccesibles), solo activos, sin duplicados.
+    // Vehículos PROPIOS + COMPARTIDOS con la empresa activa (la regla real de Flota), solo activos, sin duplicados (helper único de acceso.ts).
     // Antes: solo `WHERE empresa_id = ?`, que dejaba fuera las unidades compartidas (p. ej. C-091BXF de Frescofresh visto desde Mónaco).
     (async () => {
       try {
-        const vistos = new Set<number>();
-        return (await listarVehiculosAccesibles(eid))
-          .filter((r) => Number(r.activo ?? 1) === 1 && !vistos.has(Number(r.id)) && vistos.add(Number(r.id)))
-          .slice(0, 1000);
+        return await listarVehiculosActivosAccesibles(eid);
       } catch (error) {
         console.error("[tms/gastos/catalogos] Falló catálogo vehículos", error);
         throw new Error("No se pudo cargar el catálogo de vehículos.");
