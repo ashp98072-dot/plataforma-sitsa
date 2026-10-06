@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({ plantilla: vi.fn(), firma: vi.fn(), upload: vi.fn(), borrar: vi.fn(), query: vi.fn(), audit: vi.fn(), conn: { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() } }));
 vi.mock("@/lib/db", () => ({ query: m.query, getPool: () => ({ getConnection: async () => m.conn }) }));
@@ -8,6 +9,7 @@ vi.mock("@/lib/uploads", () => ({ guardarUpload: m.upload, borrarUpload: m.borra
 import { pngFirmaFixture } from "./requerimiento-exportaciones.fixture";
 import { catalogosCompra, CONFLICTO_COMPRA, guardarRequerimiento, listarRequerimientos, obtenerRequerimiento } from "./requerimientos";
 import { crearRequerimientoSchema, editarRequerimientoSchema, filtrosCompraSchema, type RequerimientoDatos } from "./requerimiento-schema";
+import { EMPRESA_B, ID, esConsultaAccesible, filaAccesibleTx, filasListado } from "@/lib/flota/vehiculos-compartidos.fixture";
 
 const linea = { fecha: "2026-09-17", proveedor_id: 3, vehiculo_id: null, repuesto_descripcion: "Filtro", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "10.25" };
 const payload = { fecha_requerimiento: "2026-09-17", entidad_requirente_id: 4, requirente_usuario_id: 9, lineas: [linea] };
@@ -162,10 +164,14 @@ describe("lectura tenant-safe", () => {
     m.query.mockResolvedValueOnce([cabecera]).mockResolvedValueOnce(existentes);
     expect((await obtenerRequerimiento(1, 12))?.lineas.map(l => l.id)).toEqual([21, 22]); expect(m.query.mock.calls[1][1]).toEqual([1, 12]);
   });
-  it("catálogos propios/activos, usuarios globales con acceso, sin vehículos compartidos", async () => {
+  it("catálogos de la empresa, vehículos propios + compartidos con la empresa (regla de Flota), usuarios globales con acceso", async () => {
     await catalogosCompra(1); expect(m.query).toHaveBeenCalledTimes(4);
-    for (const [, params] of m.query.mock.calls) expect(params).toEqual([1]);
-    expect(m.query.mock.calls[0][0]).toContain("activo = 1"); expect(m.query.mock.calls[1][0]).toContain("WHERE empresa_id = ? AND activo = 1"); expect(m.query.mock.calls[3][0]).toContain("u.acceso_todas_empresas = 1");
+    // Vehículos: la regla única de Flota (propio O flota_vehiculo_acceso), parametrizada con la empresa de la sesión. El resto sigue acotado a [empresa].
+    const sqls = m.query.mock.calls.map(c => String(c[0]));
+    const iVeh = sqls.findIndex(s => s.includes("FROM flota_vehiculos"));
+    expect(iVeh).toBeGreaterThanOrEqual(0); expect(sqls[iVeh]).toContain("flota_vehiculo_acceso"); expect(m.query.mock.calls[iVeh][1]).toEqual([1, 1, 1]);
+    m.query.mock.calls.forEach(([, params], i) => { if (i !== iVeh) expect(params).toEqual([1]); });
+    expect(m.query.mock.calls[0][0]).toContain("activo = 1"); expect(m.query.mock.calls[3][0]).toContain("u.acceso_todas_empresas = 1");
   });
 });
 describe("mutaciones transaccionales", () => {
@@ -242,5 +248,71 @@ describe("mutaciones transaccionales", () => {
     await editar({ lineas: [{ ...linea, id: 21, metodo_pago: "Tarjeta" }] } as Partial<RequerimientoDatos>);
     const [, params] = m.conn.execute.mock.calls.find(([s]) => s.startsWith("UPDATE compras_requerimiento_lineas"))!;
     expect(params).toContain("Tarjeta"); expect(params).not.toContain("Tarjeta de crédito");
+  });
+});
+
+/**
+ * VEHÍCULOS COMPARTIDOS — Requerimientos de compra. Fixture estándar: Frescofresh (dueña) comparte C-091BXF con Mónaco (empresa activa = B).
+ * El caso real: «Buscar unidad / placa» no encontraba C-091BXF y la UI caía en «Unidad manual / sin unidad».
+ */
+describe("vehículos compartidos (regla única de Flota)", () => {
+  const conFlota = () => {
+    const original = m.conn.query.getMockImplementation()!;
+    m.conn.query.mockImplementation(async (sql: string, params: unknown[]) => esConsultaAccesible(sql) ? [filaAccesibleTx(params)] : original(sql, params));
+  };
+  const guardarB = (vehiculo_id: number, extra: Record<string, unknown> = {}) => guardarRequerimiento(EMPRESA_B, 8, "registrador", crearRequerimientoSchema.parse({ ...payload, lineas: [{ ...linea, vehiculo_id, ...extra }] }), false);
+  const insertLinea = () => m.conn.execute.mock.calls.find(([sql]) => sql.includes("INSERT INTO compras_requerimiento_lineas"))!;
+  beforeEach(conFlota);
+
+  it("el catálogo ofrece la unidad propia y la compartida (con dueña y `compartido`), no la no compartida ni la de otro tenant ni la inactiva, sin duplicados", async () => {
+    m.query.mockImplementation(async (sql: string, params: unknown[]) => esConsultaAccesible(sql) && sql.includes("ORDER BY") ? filasListado(params) : []);
+    const { vehiculos } = await catalogosCompra(EMPRESA_B);
+    expect(vehiculos.map(v => v.placa)).toEqual(["C-091BXF", "M-001MON"]);
+    expect(vehiculos.find(v => v.placa === "C-091BXF")).toMatchObject({ compartido: true, empresaDuenaNombre: "Frescofresh", descripcion: "Cabezal" });
+    expect(vehiculos.find(v => v.placa === "M-001MON")).toMatchObject({ compartido: false });
+    expect(new Set(vehiculos.map(v => v.id)).size).toBe(vehiculos.length);
+  });
+  it("guarda el requerimiento con la unidad compartida: vehiculo_id real y snapshot de la unidad; commit", async () => {
+    await guardarB(ID.COMPARTIDO);
+    const [, params] = insertLinea();
+    expect(params).toContain(ID.COMPARTIDO); expect(params).toContain("C-091BXF · Cabezal");
+    expect(m.conn.commit).toHaveBeenCalledOnce(); expect(m.conn.rollback).not.toHaveBeenCalled();
+  });
+  it("la propiedad no cambia: ningún UPDATE/INSERT/DELETE sobre flota_vehiculos ni flota_vehiculo_acceso", async () => {
+    await guardarB(ID.COMPARTIDO);
+    const sqls = [...m.conn.execute.mock.calls, ...m.conn.query.mock.calls].map(c => String(c[0]));
+    expect(sqls.some(s => /(UPDATE|INSERT INTO|DELETE FROM)\s+flota_/i.test(s))).toBe(false);
+  });
+  it.each([["no compartida", ID.NO_COMPARTIDO], ["de otro tenant", ID.OTRO_TENANT], ["id manipulado", ID.INEXISTENTE]])("rechaza una unidad %s, con rollback y sin insertar", async (_n, id) => {
+    await expect(guardarB(id)).rejects.toThrow("El vehículo no pertenece a esta empresa.");
+    expect(m.conn.execute.mock.calls.some(([sql]) => sql.includes("INSERT INTO compras_requerimiento_lineas"))).toBe(false);
+    expect(m.conn.rollback).toHaveBeenCalledOnce(); expect(m.conn.commit).not.toHaveBeenCalled();
+  });
+  it("una unidad compartida pero INACTIVA no se acepta en una línea nueva", async () => {
+    await expect(guardarB(ID.INACTIVO)).rejects.toThrow("no está activa");
+  });
+  it("valida con la regla de acceso (propio OR compartido) y los parámetros de la empresa de la sesión, bloqueando la fila", async () => {
+    await guardarB(ID.COMPARTIDO);
+    const [sql, params] = m.conn.query.mock.calls.find(([s]) => String(s).includes("FROM flota_vehiculos"))!;
+    expect(sql).toContain("flota_vehiculo_acceso"); expect(sql).toContain("LOCK IN SHARE MODE");
+    expect(params).toEqual([EMPRESA_B, ID.COMPARTIDO, EMPRESA_B, EMPRESA_B]);
+  });
+  it("EDICIÓN: una línea que ya referenciaba la unidad compartida se conserva aunque luego se retire la compartición (snapshot intacto, sin error)", async () => {
+    existentes = [{ ...existentes[0], id: 21, vehiculo_id: ID.NO_COMPARTIDO, unidad_descripcion: "C-777NOC · Histórica" }, existentes[1]];
+    await guardarRequerimiento(EMPRESA_B, 8, "editor", editarRequerimientoSchema.parse({ ...payload, version: 2, lineas: [{ ...linea, id: 21, vehiculo_id: ID.NO_COMPARTIDO }, { ...linea, id: 22 }] }), true, 12);
+    const update = m.conn.execute.mock.calls.find(([s]) => s.startsWith("UPDATE compras_requerimiento_lineas") && (s as string).includes("vehiculo_id"))!;
+    expect(update[1]).toContain(ID.NO_COMPARTIDO); expect(update[1]).toContain("C-777NOC · Histórica");
+    expect(m.conn.commit).toHaveBeenCalledOnce();
+  });
+  it("EDICIÓN: pero CAMBIAR una línea a una unidad no compartida sigue rechazándose", async () => {
+    existentes = [{ ...existentes[0], id: 21, vehiculo_id: ID.COMPARTIDO, unidad_descripcion: "C-091BXF · Cabezal" }, existentes[1]];
+    await expect(guardarRequerimiento(EMPRESA_B, 8, "editor", editarRequerimientoSchema.parse({ ...payload, version: 2, lineas: [{ ...linea, id: 21, vehiculo_id: ID.NO_COMPARTIDO }, { ...linea, id: 22 }] }), true, 12))
+      .rejects.toThrow("El vehículo no pertenece a esta empresa.");
+  });
+  it("el detalle/PDF/Excel leen la unidad del snapshot de la línea (sin JOIN a flota): la placa compartida no se pierde", () => {
+    const fuentes = ["src/lib/compras/requerimientos.ts", "src/lib/compras/requerimiento-exportaciones.fixture.ts"];
+    const sql = readFileSync(fuentes[0], "utf8");
+    expect(sql).toContain("columnasLinea = `id, orden, vehiculo_id, unidad_descripcion");
+    expect(sql.match(/JOIN flota_vehiculos/g) ?? []).toHaveLength(0);
   });
 });

@@ -33,6 +33,10 @@ it("migración canónica coincide y no altera/borrra datos", () => {
     // original de migrate-2026-09-compras-base.sql sin falsos negativos.
     .replace(/ {2}-- COMPRAS-PROVEEDOR-INLINE — identidad normalizada \(sql\/migrate-2026-09-compras-proveedores-unicidad\.sql\):\n {2}-- calculada SIEMPRE por el backend \(src\/lib\/compras\/proveedor-identidad\.ts\), nunca confiada del cliente\.\n {2}-- Instalación nueva: no requiere backfill \(la tabla nace vacía\)\. Producción existente usa la migración\.\n {2}nombre_normalizado VARCHAR\(200\) NULL,\n/, "")
     .replace(/ {2}nit_normalizado VARCHAR\(30\) NULL,\n/, "")
+    // VEHICULOS-COMPARTIDOS-GLOBAL — sql/migrate-2026-10-vehiculos-compartidos-global.sql reemplaza la FK compuesta de la unidad por una FK simple
+    // (ALTER, no recrea el CREATE TABLE canónico de compras-base): se restituye aquí la línea original para comparar contra el bloque base.
+    .replace(/ {2}-- Unidad propia o compartida[^\n]*\n {2}-- Ver sql\/migrate-2026-10-vehiculos-compartidos-global\.sql\.\n {2}INDEX idx_compras_linea_vehiculo_id \(vehiculo_id\),\n {2}CONSTRAINT fk_cb_requerimiento_lineas_veh FOREIGN KEY \(vehiculo_id\) REFERENCES flota_vehiculos\(id\) ON DELETE RESTRICT\n/,
+      "  CONSTRAINT fk_cb_requerimiento_lineas_vehiculo FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos(empresa_id, id) ON DELETE RESTRICT\n")
     .replace(/ {2}UNIQUE KEY uq_cb_proveedor_nombre \(empresa_id, nombre_normalizado\),\n {2}UNIQUE KEY uq_cb_proveedor_nit \(empresa_id, nit_normalizado\),\n/, "");
   expect(bloques).toHaveLength(4); for (const bloque of bloques) expect(baseSinExpansion).toContain(bloque);
   const sinComentarios = sql.replace(/^--.*$/gm, ""); expect(sinComentarios).not.toMatch(/\b(ALTER|DROP|INSERT|UPDATE|DELETE|REPLACE)\b\s+(TABLE|INTO|FROM|compras_)/i);

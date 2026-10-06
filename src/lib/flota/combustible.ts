@@ -318,7 +318,6 @@ export async function listarCargasCombustibleParaConciliacion(
      FROM flota_combustible_cargas c
      INNER JOIN flota_vehiculos v
        ON v.id = c.vehiculo_id
-      AND v.empresa_id = c.empresa_id
      WHERE c.empresa_id = ?
        AND c.numero_vale IS NOT NULL
        AND TRIM(c.numero_vale) <> ''

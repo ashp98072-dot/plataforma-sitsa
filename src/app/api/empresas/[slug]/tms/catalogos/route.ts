@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
+import { listarVehiculosActivosAccesibles } from "@/lib/flota/acceso";
 import {
   asegurarVinculosTmsClientes,
   crearClienteDesdeTms,
@@ -57,12 +58,10 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, id_empleado, codigo, nombre, tipo, telefono, estado FROM tms_personal WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
-    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota de ESTA
-    // empresa para el selector de "unidad recurrente" de las rutas.
-    query<RowDataPacket[]>(
-      "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa",
-      [eid],
-    ).catch(() => [] as RowDataPacket[]),
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota ACCESIBLE desde ESTA
+    // empresa (propia + compartida, regla única de Flota) para el selector de
+    // "unidad recurrente" de las rutas; solo activas y sin duplicados.
+    listarVehiculosActivosAccesibles(eid).catch(() => [] as RowDataPacket[]),
     // PROGRAMACION-VEHICULO-SOLICITADO — perfiles ACTIVOS de costeo (Cotizaciones) de ESTA empresa: id/código/nombre.
     listarVehiculosSolicitables(eid),
   ]);
@@ -101,6 +100,9 @@ export async function GET(_req: Request, ctx: Ctx) {
         placa: String(v.placa),
         marca: v.marca != null ? String(v.marca) : null,
         modelo: v.modelo != null ? String(v.modelo) : null,
+        // Aditivos: unidad compartida con la empresa activa y su empresa dueña (rótulo «Frescofresh · Compartido»).
+        compartido: Number(v.compartido ?? 0) === 1,
+        empresaDuenaNombre: v.empresa_duena_nombre != null ? String(v.empresa_duena_nombre) : null,
       })),
     },
     { headers: { "Cache-Control": "private, no-store" } },
