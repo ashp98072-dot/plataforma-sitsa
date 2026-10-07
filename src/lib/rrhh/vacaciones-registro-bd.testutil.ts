@@ -12,7 +12,8 @@ export type Inc = { id: number; empresa_id: number; id_empleado: number; tipo: s
 export type Vac = { id: number; empresa_id: number; id_empleado: number; fecha_inicio: string; fecha_fin: string; dias_habiles: number; estado: string };
 export type Det = { id: number; incidencia_id: number; saldo_id: number; dias_tomados: number };
 export type Aud = { empresa_id: number | null; usuario: string | null; accion: string; detalle: string | null };
-export type Tablas = { empleados: Emp[]; saldos: Saldo[]; incidencias: Inc[]; vacaciones: Vac[]; detalle: Det[]; auditoria: Aud[] };
+export type Evi = { id: number; empresa_id: number; incidencia_id: number; ruta_archivo: string };
+export type Tablas = { empleados: Emp[]; saldos: Saldo[]; incidencias: Inc[]; vacaciones: Vac[]; detalle: Det[]; auditoria: Aud[]; evidencias: Evi[] };
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const clon = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
@@ -20,7 +21,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const TIPOS = ["Vacaciones", "A cuenta de Vacaciones"];
 
 export class BdVac {
-  t: Tablas = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [] };
+  t: Tablas = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [] };
   feriados: string[] = [];
   ejecutadas: string[] = [];
   eventos: string[] = [];
@@ -29,7 +30,7 @@ export class BdVac {
   private seq = { saldo: 0, inc: 0, vac: 0, det: 0 };
 
   reiniciar(t: Partial<Tablas> = {}): void {
-    this.t = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], ...clon(t) };
+    this.t = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], ...clon(t) };
     this.feriados = []; this.ejecutadas = []; this.eventos = []; this.fallarSi = null; this.foto = null;
     const max = (xs: { id: number }[], base: number) => Math.max(base, ...xs.map((x) => x.id));
     this.seq = { saldo: max(this.t.saldos, 0), inc: max(this.t.incidencias, 0), vac: max(this.t.vacaciones, 0), det: max(this.t.detalle, 0) };
@@ -66,7 +67,7 @@ export class BdVac {
 
   private leer(sql: string, p: unknown[]): Record<string, unknown>[] {
     const t = this.t;
-    if (sql === "SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1") {
+    if (sql.startsWith("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1")) {
       const e = t.empleados.find((x) => x.id === p[0] && x.empresa_id === p[1]);
       return e ? [{ fecha_alta: e.fecha_alta }] : [];
     }
@@ -112,6 +113,26 @@ export class BdVac {
         const i = t.incidencias.find((x) => x.id === d.incidencia_id);
         return i ? [{ saldo_id: d.saldo_id, incidencia_id: i.id, dias_tomados: d.dias_tomados, fecha_inicio: i.fecha_inicio, fecha_fin: i.fecha_fin }] : [];
       }).sort((a, b) => String(a.fecha_inicio).localeCompare(String(b.fecha_inicio)) || 0);
+    }
+    // rebase de la serie al cambiar fecha_alta
+    if (sql.startsWith("SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? AND tipo IN")) {
+      return t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1] && TIPOS.includes(i.tipo)).sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio) || a.id - b.id).map((i) => ({ ...i }));
+    }
+    if (sql.startsWith("SELECT d.id, d.incidencia_id, d.saldo_id, d.dias_tomados FROM detalle_consumo_vacaciones d INNER JOIN incidencias i")) {
+      const incs = new Set(t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1] && TIPOS.includes(i.tipo)).map((i) => i.id));
+      return t.detalle.filter((d) => incs.has(d.incidencia_id)).map((d) => ({ ...d }));
+    }
+    if (sql.startsWith("SELECT d.id, d.incidencia_id, d.saldo_id, d.dias_tomados FROM detalle_consumo_vacaciones d INNER JOIN saldos_vacaciones s")) {
+      const ids = new Set(this.saldosDe(Number(p[0]), Number(p[1])).map((s) => s.id));
+      return t.detalle.filter((d) => ids.has(d.saldo_id)).map((d) => ({ ...d }));
+    }
+    const m = /^SELECT COUNT\(\*\) AS n FROM incidencias WHERE empresa_id = \? AND id_empleado = \? AND tipo (NOT IN|IN) /.exec(sql);
+    if (m) return [{ n: t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1] && (m![1] === "IN") === TIPOS.includes(i.tipo)).length }];
+    if (sql === "SELECT COUNT(*) AS n FROM vacaciones WHERE empresa_id = ? AND id_empleado = ?") return [{ n: t.vacaciones.filter((v) => v.empresa_id === p[0] && v.id_empleado === p[1]).length }];
+    if (sql === "SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id = ? AND id_empleado <> ?") return [{ n: t.saldos.filter((s) => s.empresa_id === p[0] && s.id_empleado !== p[1]).length }];
+    if (sql === "SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id <> ?") return [{ n: t.saldos.filter((s) => s.empresa_id !== p[0]).length }];
+    if (sql.startsWith("SELECT COUNT(*) AS n FROM evidencias_incidencias e INNER JOIN incidencias i")) {
+      return [{ n: t.evidencias.filter((e) => t.incidencias.some((i) => i.id === e.incidencia_id && i.empresa_id === p[0] && i.id_empleado === p[1])).length }];
     }
     if (sql.startsWith("SELECT fecha FROM feriados")) return this.feriados.filter((f) => f >= String(p[1]) && f <= String(p[2])).map((fecha) => ({ fecha }));
     // eliminar
@@ -183,6 +204,18 @@ export class BdVac {
     if (sql.startsWith("INSERT INTO auditoria")) {
       const [empresa_id, usuario, accion, , detalle] = p as [number | null, string | null, string, unknown, string | null];
       t.auditoria.push({ empresa_id, usuario, accion, detalle }); return ok(t.auditoria.length);
+    }
+    if (sql.startsWith("DELETE FROM detalle_consumo_vacaciones WHERE id IN (")) { const ids = p as number[]; const n = t.detalle.length; t.detalle = t.detalle.filter((d) => !ids.includes(d.id)); return ok(0, n - t.detalle.length); }
+    if (sql === "DELETE FROM saldos_vacaciones WHERE empresa_id = ? AND id_empleado = ?") {
+      const borrados = t.saldos.filter((s) => s.empresa_id === p[0] && s.id_empleado === p[1]).map((s) => s.id);
+      t.saldos = t.saldos.filter((s) => !borrados.includes(s.id));
+      t.detalle = t.detalle.filter((d) => !borrados.includes(d.saldo_id)); // ON DELETE CASCADE (fk_det_saldo)
+      return ok(0, borrados.length);
+    }
+    if (sql.startsWith("INSERT INTO saldos_vacaciones (empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+      const [empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado] = p as [number, number, number, string, string, number, number, string];
+      if (t.saldos.some((s) => s.id_empleado === id_empleado && s.periodo_inicio === periodo_inicio && s.periodo_fin === periodo_fin)) throw new Error("Duplicate entry (uq_saldo_periodo)");
+      const id = ++this.seq.saldo; t.saldos.push({ id, empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado }); return ok(id);
     }
     if (sql === "DELETE FROM detalle_consumo_vacaciones WHERE incidencia_id = ?") { const n = t.detalle.length; t.detalle = t.detalle.filter((d) => d.incidencia_id !== p[0]); return ok(0, n - t.detalle.length); }
     if (sql === "DELETE FROM vacaciones WHERE id = ? AND empresa_id = ?") { const n = t.vacaciones.length; t.vacaciones = t.vacaciones.filter((v) => !(v.id === p[0] && v.empresa_id === p[1])); return ok(0, n - t.vacaciones.length); }
