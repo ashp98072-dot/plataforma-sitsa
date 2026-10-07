@@ -91,21 +91,22 @@ export function planificarRebase(e: EntradaRebase): PlanRebase {
     vacaciones: e.hechos.length, consumidoPreservado: r2(e.hechos.reduce((t, h) => t + h.consumido, 0)), saldoAntes, saldoDespues: saldoAntes, reasignaciones: [],
   };
   if (e.fechaAnterior === e.fechaNueva) return base; // la fecha no cambia: comportamiento actual idéntico
-  if (e.hechos.length === 0 && e.saldos.length === 0) return base; // sin historia de vacaciones: nada que rebasar
+  // A) sin vacaciones Y sin saldos: no existe historia ni serie de vacaciones que dependa de fecha_alta ⇒ nada que rebasar (no-op).
+  // B) con saldos, aunque no haya vacaciones tomadas: existe una serie CALCULADA desde fecha_alta; jamás puede quedar con la base anterior.
+  if (e.hechos.length === 0 && e.saldos.length === 0) return base;
 
   base.aplica = true;
   const bloquear = (codigo: CodigoBloqueoRebase, mensaje: string) => { base.bloqueos.push({ codigo, mensaje }); return base; };
   if (!FECHA.test(e.fechaNueva)) return bloquear("FECHA_NUEVA_INVALIDA", `La nueva fecha de contratación no es válida (${e.fechaNueva}).`);
   const nueva = deIso(e.fechaNueva);
   if (Number.isNaN(nueva.getTime())) return bloquear("FECHA_NUEVA_INVALIDA", `La nueva fecha de contratación no es válida (${e.fechaNueva}).`);
+  // Con saldos (aunque el consumo sea 0) o con vacaciones, una fecha nueva sospechosa o futura NO se puede aplicar: dejaría la serie calculada con la base anterior.
+  const que = e.hechos.length ? "vacaciones registradas" : "períodos de vacaciones ya generados";
   if (fechaLaboralSospechosa(nueva)) {
-    // Sin vacaciones registradas no hay hechos que proteger: el cambio sigue su camino normal (la sincronización ya congela fechas sospechosas)
-    if (e.hechos.length === 0) { base.aplica = false; return base; }
-    return bloquear("FECHA_NUEVA_SOSPECHOSA", "La nueva fecha de contratación es inválida o anterior a 1980: no se pueden recalcular los períodos con vacaciones ya registradas.");
+    return bloquear("FECHA_NUEVA_SOSPECHOSA", `La nueva fecha de contratación es inválida o anterior a 1980: no se pueden recalcular los períodos con ${que}.`);
   }
   if (nueva > hoy) {
-    if (e.hechos.length === 0) { base.aplica = false; return base; }
-    return bloquear("FECHA_NUEVA_FUTURA", "La nueva fecha de contratación es posterior a hoy y hay vacaciones registradas: no se pueden recalcular los períodos.");
+    return bloquear("FECHA_NUEVA_FUTURA", `La nueva fecha de contratación es posterior a hoy y hay ${que}: no se pueden recalcular los períodos.`);
   }
 
   const hechos = [...e.hechos].sort((a, b) => a.inicio.localeCompare(b.inicio) || a.incidenciaId - b.incidenciaId);

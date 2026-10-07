@@ -234,7 +234,14 @@ describe("rebase: otros casos", () => {
     expect(planificarRebase({ ...base, fechaNueva: "2027-01-01" }).bloqueos[0].codigo).toBe("FECHA_NUEVA_FUTURA");
     expect(planificarRebase({ ...base, fechaNueva: "1899-12-31" }).bloqueos[0].codigo).toBe("FECHA_NUEVA_SOSPECHOSA");
     expect(planificarRebase({ ...base, fechaNueva: "2025/01/01" }).bloqueos[0].codigo).toBe("FECHA_NUEVA_INVALIDA");
-    expect(planificarRebase({ ...base, hechos: [], fechaNueva: "1899-12-31" }).aplica).toBe(false);
+    // SIN vacaciones pero CON saldos: existe una serie que depende de fecha_alta ⇒ también bloquea (antes devolvía aplica=false y dejaba los saldos con la base anterior)
+    const sinVacaciones = planificarRebase({ ...base, hechos: [], fechaNueva: "1899-12-31" });
+    expect(sinVacaciones.aplica).toBe(true);
+    expect(sinVacaciones.bloqueos[0].codigo).toBe("FECHA_NUEVA_SOSPECHOSA");
+    expect(sinVacaciones.bloqueos[0].mensaje).toContain("períodos de vacaciones ya generados");
+    const futuraSinVacaciones = planificarRebase({ ...base, hechos: [], fechaNueva: "2027-01-01" });
+    expect(futuraSinVacaciones.aplica).toBe(true);
+    expect(futuraSinVacaciones.bloqueos[0].codigo).toBe("FECHA_NUEVA_FUTURA");
     expect(planificarRebase({ ...base, hechos: [], saldos: [], fechaNueva: "2024-01-01" }).aplica).toBe(false);
   });
 });
@@ -387,5 +394,78 @@ describe("DETALLE FIFO CRUZADO hacia saldos de otro empleado / otra empresa = ha
     bd.reiniciar({ empleados: [A], saldos: [saldoA], incidencias: [incidenciaA], vacaciones: [espejoA], detalle: [{ id: 1, incidencia_id: 10, saldo_id: 999, dias_tomados: 5 }] });
     const r = await cambiarFechaAlta("2025-01-01");
     expect(r.aplicado).toBe(false);
+  });
+});
+
+describe("SIN vacaciones tomadas pero CON saldos: la serie depende de fecha_alta y nunca puede quedar con la base anterior", () => {
+  const empleado = { id: EMP, empresa_id: EMPRESA, nombre: "Ana Pérez", fecha_alta: "2025-01-01" };
+  /** Serie existente calculada desde 2025-01-01, consumo 0, sin incidencias ni detalle. */
+  const seriesSinConsumo = () => bd.reiniciar({
+    empleados: [empleado],
+    saldos: [
+      { id: 1, empresa_id: EMPRESA, id_empleado: EMP, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 15, estado: "Vigente" },
+      { id: 2, empresa_id: EMPRESA, id_empleado: EMP, anio_laboral: 2, periodo_inicio: "2026-01-01", periodo_fin: "2026-12-31", dias_otorgados: 0.62, dias_disponibles: 0.62, estado: "Vigente" },
+    ],
+  });
+  beforeEach(() => hoyFijo("2026-01-15"));
+
+  it("1/5) fecha válida distinta: el rebase aplica y TODOS los períodos resultan derivados de la nueva fecha (ninguno de la anterior)", async () => {
+    seriesSinConsumo();
+    const p = (await previsualizarRebase(EMPRESA, EMP, "2024-01-01", new Date(2026, 0, 15)))!;
+    expect(p).toMatchObject({ aplica: true, bloqueos: [], vacaciones: 0, consumidoPreservado: 0, periodosAntes: 2 });
+    const r = await cambiarFechaAlta("2024-01-01");
+    expect(r.aplicado).toBe(true);
+    const ps = periodos();
+    expect(ps.map((x) => [x.anio_laboral, x.periodo_inicio, x.periodo_fin])).toEqual([[1, "2024-01-01", "2024-12-31"], [2, "2025-01-01", "2025-12-31"], [3, "2026-01-01", "2026-12-31"]]);
+    expect(ps.some((x) => x.periodo_inicio === "2025-01-01" && x.anio_laboral === 1)).toBe(false); // no queda el período de la fecha anterior
+    expect(new Set(ps.map((x) => x.id)).size).toBe(3);
+    expect(bd.t.detalle).toEqual([]); // sin consumo
+    expect(bd.t.saldos.every((s) => s.id !== 1 && s.id !== 2)).toBe(true); // las filas viejas fueron reemplazadas
+    expect(JSON.parse(bd.t.auditoria.at(-1)!.detalle!)).toMatchObject({ fechaAnterior: "2025-01-01", fechaNueva: "2024-01-01", vacacionesConservadas: 0, consumidoPreservado: 0, periodosAnteriores: 2, periodosNuevos: 3 });
+    // el tope de 30 de la regla vigente: 15 + 15 + 0.62 ⇒ recorta 0.62 del período completo más viejo
+    expect(vigentes()).toBe(30);
+  });
+
+  for (const [titulo, nueva] of [["2) fecha FUTURA", "2027-01-01"], ["3) fecha SOSPECHOSA (< 1980)", "1899-12-31"], ["fecha INVÁLIDA", "2025/01/01"]] as const) {
+    it(`${titulo}: la vista previa y el guardado bloquean; fecha_alta y saldos no cambian y no hay escrituras persistentes`, async () => {
+      seriesSinConsumo();
+      const antes = bd.instantanea();
+      bd.ejecutadas = [];
+      const p = (await previsualizarRebase(EMPRESA, EMP, nueva, new Date(2026, 0, 15)))!;
+      expect(p.aplica).toBe(true);
+      expect(p.bloqueos).toHaveLength(1);
+      expect(bd.ejecutadas.every((s) => s.startsWith("SELECT"))).toBe(true);
+      const err = await cambiarFechaAlta(nueva).catch((e) => e);
+      expect(err).toBeInstanceOf(RebaseBloqueadoError);
+      expect(bd.ejecutadas.some((s) => /^(INSERT|UPDATE|DELETE)/.test(s))).toBe(false);
+      expect(bd.instantanea()).toEqual(antes);
+      expect(bd.t.empleados[0].fecha_alta).toBe("2025-01-01");
+      expect(bd.eventos).toContain("ROLLBACK");
+    });
+  }
+
+  it("4) SIN vacaciones Y SIN saldos: no hay serie que rebasar ⇒ no-op del rebase (el cambio de fecha sigue su camino normal)", async () => {
+    bd.reiniciar({ empleados: [empleado] });
+    bd.ejecutadas = [];
+    for (const nueva of ["2024-01-01", "1899-12-31", "2027-01-01"]) {
+      const p = (await previsualizarRebase(EMPRESA, EMP, nueva, new Date(2026, 0, 15)))!;
+      expect(p.aplica).toBe(false);
+      expect(p.bloqueos).toEqual([]);
+    }
+    const r = await cambiarFechaAlta("1899-12-31");
+    expect(r.aplicado).toBe(false);
+    expect(bd.t.saldos).toEqual([]);
+    expect(bd.ejecutadas.some((s) => /^(INSERT|DELETE)/.test(s))).toBe(false);
+  });
+
+  it("con saldos y consumo 0, los bloqueos de detalle ajeno se siguen respetando (el saldo del empleado consumido por la incidencia de OTRO empleado)", async () => {
+    seriesSinConsumo();
+    bd.t.incidencias.push({ id: 90, empresa_id: EMPRESA, id_empleado: 2, tipo: "Vacaciones", fecha_inicio: "2025-07-07", fecha_fin: "2025-07-08", dias_habiles: 2 });
+    bd.t.detalle.push({ id: 1, incidencia_id: 90, saldo_id: 1, dias_tomados: 2 });
+    const antes = bd.instantanea();
+    const err = await cambiarFechaAlta("2024-01-01").catch((e) => e);
+    expect(err).toBeInstanceOf(RebaseBloqueadoError);
+    expect((err as RebaseBloqueadoError).plan.bloqueos.map((b) => b.codigo)).toContain("DETALLE_AJENO");
+    expect(bd.instantanea()).toEqual(antes);
   });
 });
