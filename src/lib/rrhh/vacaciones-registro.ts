@@ -51,11 +51,26 @@ const SQL_SALDOS = `SELECT s.id, s.anio_laboral, s.periodo_inicio, s.periodo_fin
        WHERE s.empresa_id = ? AND s.id_empleado = ?
        ORDER BY COALESCE(s.anio_laboral, 99999), s.periodo_inicio, s.id`;
 
-const aPeriodos = (rows: RowDataPacket[]): PeriodoBD[] =>
-  rows.map((r) => ({
+/** Consumos ya registrados, UNO POR LÍNEA DE DETALLE, con la fecha de su vacación: permite descontar solo lo ocurrido hasta la fecha histórica evaluada. */
+const SQL_CONSUMOS = `SELECT d.saldo_id, d.incidencia_id, d.dias_tomados, i.fecha_inicio, i.fecha_fin
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN incidencias i ON i.id = d.incidencia_id
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       ORDER BY i.fecha_inicio, d.id`;
+
+const aPeriodos = (rows: RowDataPacket[], consumos: RowDataPacket[]): PeriodoBD[] => {
+  const porSaldo = new Map<number, PeriodoBD["consumos"]>();
+  for (const c of consumos) {
+    const k = Number(c.saldo_id);
+    porSaldo.set(k, [...(porSaldo.get(k) ?? []), { incidenciaId: Number(c.incidencia_id), fechaInicio: String(toIsoDate(c.fecha_inicio) ?? ""), fechaFin: String(toIsoDate(c.fecha_fin) ?? ""), dias: r2(Number(c.dias_tomados)) }]);
+  }
+  return rows.map((r) => ({
     id: Number(r.id), anioLaboral: r.anio_laboral != null ? Number(r.anio_laboral) : null, inicio: String(toIsoDate(r.periodo_inicio) ?? ""), fin: String(toIsoDate(r.periodo_fin) ?? ""),
     otorgados: Number(r.dias_otorgados), disponibles: Number(r.dias_disponibles), estado: String(r.estado), consumidoDetalle: r2(Number(r.dias_consumidos ?? 0)),
+    consumos: porSaldo.get(Number(r.id)) ?? [],
   }));
+};
 
 const fechaAlta = (rows: RowDataPacket[]): Date | null => (rows[0]?.fecha_alta ? deIso(String(toIsoDate(rows[0].fecha_alta as string | Date))) : null);
 
@@ -91,7 +106,7 @@ export async function previsualizarRegistro(
   const emp = await query<RowDataPacket[]>("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [idEmpleado, empresaId]);
   if (!emp.length) return { aplica: false, esHistorico: false, plan: null, superposiciones: [], puedeGuardar: false };
   const base = fechaAlta(emp);
-  const periodos = aPeriodos(await query<RowDataPacket[]>(SQL_SALDOS, [empresaId, idEmpleado]));
+  const periodos = aPeriodos(await query<RowDataPacket[]>(SQL_SALDOS, [empresaId, idEmpleado]), await query<RowDataPacket[]>(SQL_CONSUMOS, [empresaId, idEmpleado]));
   const feriados = await obtenerFeriadosEnRango(empresaId, fechaInicio, fechaFin);
   const plan = planificarConsumoHistorico({ base, hoy: hoyCero(), inicio: fechaInicio, fin: fechaFin, dias, feriados, periodos });
   const sup = plan.esHistorico ? superposiciones(await query<RowDataPacket[]>(SQL_SUPERPOSICION, [empresaId, idEmpleado, fechaFin, fechaInicio])) : [];
@@ -112,7 +127,8 @@ export async function registrarVacaciones(input: EntradaRegistro): Promise<Resul
     const [empRows] = await conn.query<RowDataPacket[]>("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [input.idEmpleado, input.empresaId]);
     const base = fechaAlta(empRows);
     const [saldoRows] = await conn.query<RowDataPacket[]>(`${SQL_SALDOS} FOR UPDATE`, [input.empresaId, input.idEmpleado]);
-    const periodos = aPeriodos(saldoRows);
+    const [consumoRows] = await conn.query<RowDataPacket[]>(SQL_CONSUMOS, [input.empresaId, input.idEmpleado]);
+    const periodos = aPeriodos(saldoRows, consumoRows);
     const hoy = hoyCero();
     // Una vacación anterior a la fecha de alta jamás se registra (ni normal ni histórica).
     if (base && /^\d{4}-\d{2}-\d{2}$/.test(input.fechaInicio) && deIso(input.fechaInicio) < base) {

@@ -106,6 +106,13 @@ export class BdVac {
         return i ? [{ saldo_id: d.saldo_id, dias_tomados: d.dias_tomados, incidencia_id: i.id, tipo: i.tipo, fecha_inicio: i.fecha_inicio, fecha_fin: i.fecha_fin }] : [];
       }).sort((a, b) => String(a.fecha_inicio).localeCompare(String(b.fecha_inicio)));
     }
+    if (sql.startsWith("SELECT d.saldo_id, d.incidencia_id, d.dias_tomados, i.fecha_inicio, i.fecha_fin FROM detalle_consumo_vacaciones d")) {
+      const ids = new Set(this.saldosDe(Number(p[0]), Number(p[1])).map((s) => s.id));
+      return t.detalle.filter((d) => ids.has(d.saldo_id)).flatMap((d) => {
+        const i = t.incidencias.find((x) => x.id === d.incidencia_id);
+        return i ? [{ saldo_id: d.saldo_id, incidencia_id: i.id, dias_tomados: d.dias_tomados, fecha_inicio: i.fecha_inicio, fecha_fin: i.fecha_fin }] : [];
+      }).sort((a, b) => String(a.fecha_inicio).localeCompare(String(b.fecha_inicio)) || 0);
+    }
     if (sql.startsWith("SELECT fecha FROM feriados")) return this.feriados.filter((f) => f >= String(p[1]) && f <= String(p[2])).map((fecha) => ({ fecha }));
     // eliminar
     if (sql.startsWith("SELECT id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE id = ? AND empresa_id = ?")) {

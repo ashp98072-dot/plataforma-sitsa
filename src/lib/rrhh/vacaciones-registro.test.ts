@@ -300,13 +300,86 @@ describe("historial de períodos", () => {
     await reg("2022-05-10", "2022-05-20", 9);
     const h = await obtenerHistorialPeriodos(EMPRESA, 1);
     expect(h.periodos.map((p) => p.anioLaboral)).toEqual([1, 2, 3, 4, 5, 6, 7]);
-    // lo ya consumido contra un período reduce lo que el tope de 30 de esa fecha recorta: el orden de registro es el del detalle real
+    // Se registró primero 2023 y luego 2022: el resultado es el mismo que en el orden inverso (el consumo posterior no reduce el saldo anterior)
     const p2 = h.periodos.find((p) => p.anioLaboral === 2)!;
-    expect(p2).toMatchObject({ estado: "Vencido", diasConsumidos: 5 });
-    expect(p2.consumos.map((c) => [c.fechaInicio, c.dias])).toEqual([["2023-05-08", 5]]);
+    expect(p2).toMatchObject({ estado: "Vencido", diasConsumidos: 7.58 });
+    expect(p2.consumos.map((c) => [c.fechaInicio, c.dias])).toEqual([["2022-05-10", 2.58], ["2023-05-08", 5]]);
     const p1 = h.periodos.find((p) => p.anioLaboral === 1)!;
-    expect(p1).toMatchObject({ estado: "Vencido", diasConsumidos: 9 });
-    expect(p1.consumos).toEqual([expect.objectContaining({ fechaInicio: "2022-05-10", fechaFin: "2022-05-20", dias: 9, tipo: "Vacaciones" })]);
+    expect(p1.consumos).toEqual([expect.objectContaining({ fechaInicio: "2022-05-10", fechaFin: "2022-05-20", dias: 6.42, tipo: "Vacaciones" })]);
     expect(h.saldoActual).toBe(30);
+  });
+});
+
+describe("disponibilidad histórica respeta la FECHA REAL de cada consumo", () => {
+  const libreN1 = (p: Awaited<ReturnType<typeof previsualizarRegistro>>) => p.plan!.tramos[0].disponiblePorPeriodo.find((d) => d.anioLaboral === 1)!.libre;
+  /** Mapa lógico del resultado: por vacación (fecha de inicio), qué años laborales y cuántos días consumió. */
+  const mapa = () =>
+    bd.t.incidencias.map((i) => `${i.fecha_inicio}:` + detalleDe(i.id).map(([a, d]) => `${a}=${d}`).join(",")).sort();
+
+  it("1) un consumo POSTERIOR no reduce el saldo histórico anterior (la vacación B de más tarde aún no había ocurrido)", async () => {
+    await obtenerHistorialPeriodos(EMPRESA, 1);
+    const base = libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-03-02", "2020-03-06", 5));
+    await reg("2020-06-01", "2020-06-05", 5); // B: año 1, registrada ANTES pero ocurrida DESPUÉS
+    const conB = await previsualizarRegistro(EMPRESA, 1, "2020-03-02", "2020-03-06", 5);
+    expect(libreN1(conB)).toBe(base);
+    expect(conB.plan!.deficit).toBe(0);
+    expect((await reg("2020-03-02", "2020-03-06", 5)).ok).toBe(true);
+  });
+
+  it("2) un consumo ANTERIOR sí reduce el saldo histórico posterior", async () => {
+    await obtenerHistorialPeriodos(EMPRESA, 1);
+    const base = libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-06-01", "2020-06-05", 5));
+    expect((await reg("2020-03-02", "2020-03-06", 5)).ok).toBe(true);
+    const despues = await previsualizarRegistro(EMPRESA, 1, "2020-06-01", "2020-06-05", 5);
+    expect(libreN1(despues)).toBe(Math.round((base - 5) * 100) / 100);
+  });
+
+  it("3) dos consumos en el mismo período en fechas distintas: cada fecha ve solo lo ocurrido hasta ella", async () => {
+    await obtenerHistorialPeriodos(EMPRESA, 1);
+    const baseD = libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-03-16", "2020-03-18", 3));
+    const baseE = libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-06-01", "2020-06-05", 5));
+    await reg("2020-03-02", "2020-03-04", 3); // A
+    await reg("2020-04-06", "2020-04-08", 3); // C
+    // entre A y C: solo descuenta A
+    expect(libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-03-16", "2020-03-18", 3))).toBe(Math.round((baseD - 3) * 100) / 100);
+    // antes de A: no descuenta ninguna
+    expect(libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-02-17", "2020-02-19", 3))).toBe(libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-02-17", "2020-02-19", 3)));
+    // después de ambas: descuenta las dos
+    expect(libreN1(await previsualizarRegistro(EMPRESA, 1, "2020-06-01", "2020-06-05", 5))).toBe(Math.round((baseE - 6) * 100) / 100);
+  });
+
+  it("4) registrar 2023-09 y luego 2023-05 produce el MISMO resultado lógico que 2023-05 y luego 2023-09 (no depende del orden de captura)", async () => {
+    const A: [string, string, number] = ["2023-05-08", "2023-05-12", 5];
+    const B: [string, string, number] = ["2023-09-04", "2023-09-08", 5];
+    await reg(...A); await reg(...B);
+    const ordenCronologico = mapa();
+    expect(ordenCronologico.every((x) => x.includes("="))).toBe(true);
+    bd.reiniciar(escenario());
+    await reg(...B); await reg(...A);
+    expect(mapa()).toEqual(ordenCronologico);
+    // y el saldo de hoy queda igual en ambos casos (períodos Vencidos: no cambian)
+    expect(bd.t.saldos.map((s) => [s.anio_laboral, s.estado, s.dias_disponibles])).toEqual([[1, "Vencido", 0], [2, "Vencido", 0], [3, "Vencido", 0], [4, "Vencido", 0], [5, "Vigente", 0.24], [6, "Vigente", 15], [7, "Vigente", 14.76]]);
+  });
+
+  it("el TOTAL de un período nunca se excede: si lo registrado después ya agotó el período, la vacación anterior queda con déficit (decisión explícita)", async () => {
+    await obtenerHistorialPeriodos(EMPRESA, 1);
+    // B (posterior) ya consumió 13 de los 15 días del año 1 → solo quedan 2 en total, aunque en marzo de 2020 hubiese 5.7 acumulados
+    bd.t.incidencias.push({ id: 950, empresa_id: EMPRESA, id_empleado: 1, tipo: "Vacaciones", fecha_inicio: "2020-09-14", fecha_fin: "2020-09-26", dias_habiles: 13 });
+    bd.t.detalle.push({ id: 950, incidencia_id: 950, saldo_id: saldoDe(1).id, dias_tomados: 13 });
+    const p = await previsualizarRegistro(EMPRESA, 1, "2020-03-02", "2020-03-06", 5);
+    expect(libreN1(p)).toBeGreaterThan(5); // el saldo histórico de esa fecha
+    expect(p.plan!.tramos[0].asignaciones.map((a) => [a.anioLaboral, a.dias])).toEqual([[1, 2]]); // limitado por el total del período
+    expect(p.plan!.deficit).toBe(3);
+    expect(p.plan!.requiereDecision).toBe(true);
+  });
+
+  it("8) el saldo actual no cambia con registros históricos en cualquier orden", async () => {
+    await obtenerHistorialPeriodos(EMPRESA, 1);
+    const antes = bd.instantanea().saldos.map((s) => [s.anio_laboral, s.estado, s.dias_disponibles]);
+    await reg("2020-06-01", "2020-06-05", 5);
+    await reg("2020-03-02", "2020-03-06", 5);
+    await reg("2023-05-08", "2023-05-12", 5);
+    expect(bd.instantanea().saldos.map((s) => [s.anio_laboral, s.estado, s.dias_disponibles])).toEqual(antes);
+    expect(vigentes()).toBe(30);
   });
 });

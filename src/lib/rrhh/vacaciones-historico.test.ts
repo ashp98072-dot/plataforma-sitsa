@@ -9,12 +9,12 @@ const d = (iso: string) => new Date(Number(iso.slice(0, 4)), Number(iso.slice(5,
 const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 
 /** Filas de saldos_vacaciones como las deja el sistema hoy: 4 Vencidos (disponible 0) y 3 Vigentes (tope aplicado). */
-function filas(consumos: Record<number, number> = {}): PeriodoBD[] {
+function filas(consumos: Record<number, number> = {}, fechaConsumo = "2000-01-01"): PeriodoBD[] {
   const vigDisp: Record<number, number> = { 5: 0.24, 6: 15, 7: 14.76 };
   return Array.from({ length: 7 }, (_, i) => {
     const n = i + 1;
     const p = periodoLaboral(BASE, n);
-    return { id: n, anioLaboral: n, inicio: iso(p.inicio), fin: iso(p.fin), otorgados: n === 7 ? 14.76 : 15, disponibles: vigDisp[n] ?? 0, estado: n >= 5 ? "Vigente" : "Vencido", consumidoDetalle: consumos[n] ?? 0 };
+    return { id: n, anioLaboral: n, inicio: iso(p.inicio), fin: iso(p.fin), otorgados: n === 7 ? 14.76 : 15, disponibles: vigDisp[n] ?? 0, estado: n >= 5 ? "Vigente" : "Vencido", consumidoDetalle: consumos[n] ?? 0, consumos: consumos[n] ? [{ incidenciaId: 1000 + n, fechaInicio: fechaConsumo, fechaFin: fechaConsumo, dias: consumos[n] }] : [] };
   });
 }
 const plan = (inicio: string, fin: string, dias: number, extra: Partial<Parameters<typeof planificarConsumoHistorico>[0]> = {}) =>
@@ -135,5 +135,54 @@ describe("avanzarPeriodos (reutilizado del motor cronológico)", () => {
     expect(sinGancho[0].disponibles).toBeLessThan(15);
     expect(conGancho[0].disponibles).toBe(0);
     expect(conGancho[1].disponibles).toBe(15); // sin exceso que recortar: el tope no toca al siguiente
+  });
+});
+
+describe("consumos como EVENTOS CRONOLÓGICOS (fecha_inicio de la vacación)", () => {
+  const libre = (p: ReturnType<typeof plan>, anio: number) => p.tramos[0].disponiblePorPeriodo.find((x) => x.anioLaboral === anio)?.libre;
+
+  it("un consumo posterior a la fecha evaluada NO reduce su saldo; uno anterior o del mismo día sí", () => {
+    const base = libre(plan("2020-06-01", "2020-06-05", 5, { periodos: filas() }), 1)!;
+    expect(libre(plan("2020-06-01", "2020-06-05", 5, { periodos: filas({ 1: 4 }, "2020-09-14") }), 1)).toBe(base); // posterior: ignora
+    expect(libre(plan("2020-06-01", "2020-06-05", 5, { periodos: filas({ 1: 4 }, "2020-03-02") }), 1)).toBe(Math.round((base - 4) * 100) / 100); // anterior: descuenta
+    expect(libre(plan("2020-06-01", "2020-06-05", 5, { periodos: filas({ 1: 4 }, "2020-06-01") }), 1)).toBe(Math.round((base - 4) * 100) / 100); // mismo día de inicio
+  });
+
+  it("dos consumos del mismo período en fechas distintas se filtran de forma independiente", () => {
+    const f = filas();
+    f[0].consumos = [
+      { incidenciaId: 1, fechaInicio: "2020-03-02", fechaFin: "2020-03-04", dias: 3 },
+      { incidenciaId: 2, fechaInicio: "2020-04-06", fechaFin: "2020-04-08", dias: 3 },
+    ];
+    f[0].consumidoDetalle = 6;
+    const base = libre(plan("2020-06-01", "2020-06-05", 5), 1)!;
+    expect(libre(plan("2020-03-16", "2020-03-18", 3, { periodos: f }), 1)).toBe(Math.round((libre(plan("2020-03-16", "2020-03-18", 3), 1)! - 3) * 100) / 100);
+    expect(libre(plan("2020-06-01", "2020-06-05", 5, { periodos: f }), 1)).toBe(Math.round((base - 6) * 100) / 100);
+    expect(libre(plan("2020-02-17", "2020-02-19", 3, { periodos: f }), 1)).toBe(libre(plan("2020-02-17", "2020-02-19", 3), 1));
+  });
+
+  it("el total del período no se excede aunque el consumo registrado sea posterior (red de seguridad)", () => {
+    const p = plan("2020-03-02", "2020-03-06", 5, { periodos: filas({ 1: 13 }, "2020-09-14") });
+    expect(libre(p, 1)).toBeGreaterThan(5); // el saldo de ESA fecha sí alcanzaba (≈ 5.7 acumulados)…
+    expect(p.tramos[0].asignaciones.map((a) => [a.anioLaboral, a.dias])).toEqual([[1, 2]]); // …pero el total del período (15 − 13 posteriores) solo da 2
+    expect(p.deficit).toBe(3);
+    expect(p.advertencias.join(" ")).toContain("agota su total otorgado");
+  });
+
+  it("el consumo de la propia simulación entre tramos sigue descontándose (consumidoExtra) además de lo existente hasta la fecha", () => {
+    const p = plan("2023-10-05", "2023-10-20", 15, { periodos: filas({ 2: 3 }, "2023-05-08") });
+    const t1 = p.tramos[0].asignaciones.reduce((s, a) => s + a.dias, 0);
+    expect(Math.round(t1 * 100) / 100).toBe(8);
+    expect(p.tramos[1].disponiblePorPeriodo.find((x) => x.anioLaboral === 3)!.libre).toBeLessThan(15); // descontó lo que el tramo 1 tomó del año 3
+    expect(p.diasAsignados + p.deficit).toBe(15);
+  });
+
+  it("el orden de captura no importa: mismo plan con los consumos presentes o ausentes cuando son posteriores a la fecha", () => {
+    const a = plan("2022-05-10", "2022-05-20", 9, { periodos: filas() });
+    const b = plan("2022-05-10", "2022-05-20", 9, { periodos: filas({ 2: 5, 3: 5 }, "2023-05-08") });
+    const par = (x: ReturnType<typeof plan>) => x.tramos.map((t) => t.asignaciones.map((z) => [z.anioLaboral, z.dias]));
+    expect(par(b)).toEqual(par(a));
+    expect(b.tramos[0].disponiblePorPeriodo).toEqual(a.tramos[0].disponiblePorPeriodo); // el saldo histórico mostrado es el de la fecha: no descuenta lo posterior
+    expect(b.huella).toBe(a.huella);
   });
 });

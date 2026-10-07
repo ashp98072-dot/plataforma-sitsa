@@ -15,13 +15,19 @@ import { avanzarPeriodos, repartirDiasEnTramos, type EstadoPeriodo } from "./vac
  *   1. Los períodos salen de `fecha_alta` (`periodoLaboral`), 15 días/año, proporcional del en curso (`calcularDiasAcumuladosProporcional`).
  *   2. `avanzarPeriodos(estados, fecha)` deja el estado de los períodos a esa fecha: solo los 2 períodos completos más recientes a esa fecha
  *      (+ el en curso) son utilizables (vencimiento) y se aplica el tope de 30 — ANTES del tope se descuenta lo ya consumido (detalle FIFO).
- *   3. Lo ya consumido contra cada período es la suma de `detalle_consumo_vacaciones` (histórico real), de manera conservadora (todo lo
- *      registrado contra ese período), y para un período que HOY sigue Vigente el libre nunca excede su `dias_disponibles` actual.
+ *   3. Lo ya consumido contra cada período se modela como EVENTOS CRONOLÓGICOS (`detalle_consumo_vacaciones` ⨝ `incidencias`, con la fecha
+ *      de inicio de cada vacación). Al evaluar la fecha X solo se descuentan los consumos con `fecha_inicio <= X`: un consumo POSTERIOR no
+ *      existía todavía y NO reduce el saldo de X (el resultado no depende del orden en que RRHH capture el historial). Para no exceder
+ *      jamás lo que el período otorga en total, además se respeta `otorgados − todo lo registrado` (red de seguridad, no un descuento por
+ *      fecha), y para un período que HOY sigue Vigente el libre nunca excede su `dias_disponibles` actual.
  *   4. FIFO por `anio_laboral` ascendente SOLO entre períodos ya iniciados a esa fecha: nunca se descuenta de períodos futuros.
  *   5. Si la vacación cruza un aniversario se parte en TRAMOS con la misma función de la reconstrucción (`repartirDiasEnTramos`) y cada
  *      tramo se evalúa a su propia fecha; eso queda como DECISION visible (no se inventan reglas nuevas).
  *   6. Si en la fecha no había saldo suficiente: déficit (nada se inventa) y DECISION explícita de RRHH para poder guardarlo.
  */
+
+/** Un consumo ya registrado contra un período (detalle FIFO) con la fecha de su vacación: es lo que permite filtrar por fecha histórica. */
+export type ConsumoPrevio = { incidenciaId: number; fechaInicio: string; fechaFin: string; dias: number };
 
 export type PeriodoBD = {
   id: number;
@@ -31,8 +37,10 @@ export type PeriodoBD = {
   otorgados: number;
   disponibles: number;
   estado: string;
-  /** Suma de detalle_consumo_vacaciones contra este período. */
+  /** Suma de TODO el detalle FIFO contra este período (cualquier fecha): solo para no exceder el total otorgado. */
   consumidoDetalle: number;
+  /** Consumos registrados contra este período, con la fecha de inicio de su vacación (eventos cronológicos). */
+  consumos: ConsumoPrevio[];
 };
 
 export type CodigoBloqueoHistorico =
@@ -163,25 +171,36 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
     const fecha = t.desde > hoy ? hoy : t.desde;
     const estados: EstadoPeriodo[] = serie.map((p) => ({ anioLaboral: p.anioLaboral, inicio: p.inicio, fin: p.fin, otorgados: 0, disponibles: 0, consumidos: 0, recortados: 0, perdidos: 0, vencido: false }));
     // Estado de los períodos a ESA fecha (acumulación, vencimiento y tope); lo ya consumido se descuenta antes del tope.
+    const fechaIso = aIso(fecha);
     avanzarPeriodos(estados, fecha, (ps) => {
       for (const p of ps) {
-        const gastado = (filas.get(p.anioLaboral)?.consumidoDetalle ?? 0) + (consumidoExtra.get(p.anioLaboral) ?? 0);
-        p.disponibles = Math.max(0, r2(p.disponibles - gastado));
+        // Solo lo consumido por vacaciones que ya habían EMPEZADO a esa fecha (fecha_inicio <= X) + lo que esta misma simulación ya tomó en tramos previos.
+        const previo = (filas.get(p.anioLaboral)?.consumos ?? []).filter((c) => c.fechaInicio <= fechaIso).reduce((t, c) => t + c.dias, 0);
+        p.disponibles = Math.max(0, r2(p.disponibles - previo - (consumidoExtra.get(p.anioLaboral) ?? 0)));
       }
     });
+    /** Saldo que el período TENÍA en la fecha X (solo consumos con fecha_inicio <= X): es lo que se muestra como «saldo histórico disponible». */
+    const libreFecha = (p: EstadoPeriodo): number => p.disponibles;
+    /** Lo que realmente se puede tomar: la disponibilidad de la fecha, sin exceder el total del período ni el disponible de hoy si sigue Vigente. */
     const libre = (p: EstadoPeriodo): number => {
       const fila = filas.get(p.anioLaboral);
+      if (!fila) return p.disponibles;
+      const extra = consumidoExtra.get(p.anioLaboral) ?? 0;
+      // Red de seguridad: ningún período entrega en total más de lo que otorga (considera TODO lo registrado, también lo posterior a la fecha).
+      let l = Math.min(p.disponibles, Math.max(0, r2(fila.otorgados - fila.consumidoDetalle - extra)));
       // Un período que HOY sigue Vigente nunca puede dar más de lo que tiene hoy (tope/recortes ya aplicados); uno Vencido hoy se evalúa a la fecha.
-      if (fila && fila.estado === "Vigente") return Math.min(p.disponibles, Math.max(0, r2(fila.disponibles - (consumidoExtra.get(p.anioLaboral) ?? 0))));
-      return p.disponibles;
+      if (fila.estado === "Vigente") l = Math.min(l, Math.max(0, r2(fila.disponibles - extra)));
+      return l;
     };
     const usables = estados.filter((p) => !p.vencido && fecha >= p.inicio).sort((a, b) => a.anioLaboral - b.anioLaboral);
-    const disponiblePorPeriodo = usables.map((p) => ({ anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, filas.get(p.anioLaboral)), libre: r2(libre(p)) }));
+    const disponiblePorPeriodo = usables.map((p) => ({ anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, filas.get(p.anioLaboral)), libre: r2(libreFecha(p)) }));
     let resto = t.asignados;
     const asignaciones: AsignacionHistorica[] = [];
+    let limitadoPorTotal = false;
     for (const p of usables) {
       if (resto <= 0) break;
       const l = libre(p);
+      if (l < libreFecha(p) - 0.004) limitadoPorTotal = true;
       const tomar = r2(Math.min(l, resto));
       if (tomar <= 0) continue;
       const fila = filas.get(p.anioLaboral);
@@ -190,6 +209,7 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
       consumidoExtra.set(p.anioLaboral, r2((consumidoExtra.get(p.anioLaboral) ?? 0) + tomar));
       resto = r2(resto - tomar);
     }
+    if (resto > 0 && limitadoPorTotal) advertencias.push(`En ${aIso(fecha)} el saldo de la fecha alcanzaba, pero lo ya registrado en esos períodos (también con fechas posteriores) agota su total otorgado: el período no puede entregar más de lo que otorga.`);
     deficitTotal = r2(deficitTotal + resto);
     asignadoTotal = r2(asignadoTotal + (t.asignados - resto));
     tramos.push({ desde: aIso(t.desde), hasta: aIso(t.hasta), fechaEvaluacion: aIso(fecha), dias: t.asignados, asignaciones, deficit: resto, disponiblePorPeriodo });
