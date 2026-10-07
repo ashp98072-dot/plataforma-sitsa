@@ -162,13 +162,13 @@ describe("previsualizar el historial actual (reutiliza el motor de #418; SOLO le
     expect(preview.existentes.noEnArchivo).toBe(1);
   });
 
-  it("duplicados idénticos: se exportan y el motor los reconoce como DUPLICADO_EN_ARCHIVO", async () => {
+  it("duplicados idénticos: ERROR administrativo, no se incluyen en el archivo y el export NO es completo", async () => {
     vacaciones = [v(1, 1, "2024-06-03", "2024-06-14", 11), v(2, 1, "2024-06-03", "2024-06-14", 11)];
     incidencias = [i(11, 1, "Vacaciones", "2024-06-03", "2024-06-14", 11), i(12, 1, "Vacaciones", "2024-06-03", "2024-06-14", 11)];
     const { exportacion, preview } = await previsualizarHistorialActual(7, HOY);
-    expect(exportacion.problemas.map((p) => p.codigo)).toEqual(["DUPLICADO_IDENTICO"]);
-    expect(preview.resumen.filasLeidas).toBe(2);
-    expect(preview.resumen.duplicadosEnArchivo).toBe(1);
+    expect(exportacion.problemas.map((p) => [p.codigo, p.severidad])).toEqual([["DUPLICADO_IDENTICO", "ERROR"]]);
+    expect(exportacion.resumen).toMatchObject({ completo: false, filasExportadas: 0, vacacionesLeidas: 2 });
+    expect(preview.resumen.filasLeidas).toBe(0);
   });
 
   it("un historial limpio y completo no tiene errores y se puede revisar como aplicable", async () => {

@@ -59,6 +59,7 @@ describe("GET exportar-historial", () => {
     expect(r.headers.get("Cache-Control")).toContain("no-store");
     expect(r.headers.get("X-Export-Filas")).toBe("2");
     expect(r.headers.get("X-Export-Problemas")).toBe("1");
+    expect(r.headers.get("X-Export-Completo")).toBe("false"); // hay una vacación sin pareja: el archivo no reconstruye todo
     const texto = await r.text();
     expect(texto).toContain("codigo,dpi,nombre,fecha_inicio,fecha_fin,dias_habiles,tipo,observacion");
     expect(texto).not.toContain("2025-03-03");

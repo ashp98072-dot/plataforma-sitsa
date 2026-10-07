@@ -28,6 +28,7 @@ export async function GET(req: Request, ctx: Ctx) {
       "Cache-Control": "private, no-store",
       "X-Export-Filas": String(historial.resumen.filasExportadas),
       "X-Export-Problemas": String(historial.resumen.problemasError),
+      "X-Export-Completo": String(historial.resumen.completo),
     };
     if (formato === "csv") {
       return new NextResponse(construirCsvHistorial(historial.filas), {

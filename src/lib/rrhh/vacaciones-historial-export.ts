@@ -1,4 +1,15 @@
-import { TIPOS_RECONSTRUIBLES, type FilaCruda, type TipoVacacionImport } from "./vacaciones-historial-import";
+import {
+  MAX_FILAS_ARCHIVO,
+  TIPOS_RECONSTRUIBLES,
+  detectarColumnas,
+  llaveLogica,
+  normalizarFilas,
+  normalizarTexto,
+  parsearDias,
+  parsearFecha,
+  type FilaCruda,
+  type TipoVacacionImport,
+} from "./vacaciones-historial-import";
 
 /**
  * RRHH VACACIONES — EXPORTAR EL HISTORIAL ACTUAL en el formato del importador «Importar historial (solo vista previa)» (módulo PURO:
@@ -15,6 +26,12 @@ import { TIPOS_RECONSTRUIBLES, type FilaCruda, type TipoVacacionImport } from ".
  * resuelto jamás se escribe con tipo vacío (el importador lo leería como «Vacaciones» en silencio).
  *
  * No exporta saldos, detalle FIFO ni IDs internos como contenido del archivo.
+ *
+ * `resumen.completo === true` significa EXACTAMENTE: el archivo reimportable reconstruye todas las vacaciones de la empresa SIN pérdida,
+ * incluida la pérdida por deduplicación del importador (llave empleado + inicio + fin + días + tipo). Por eso las filas idénticas
+ * (DUPLICADO_IDENTICO) son ERROR y NO se incluyen en el archivo: reimportarlas las consolidaría en una sola. Como red de seguridad,
+ * `completo` solo es verdadero si la simulación del propio importador (mismos lector, normalizador y llave lógica) devuelve
+ * exactamente las mismas filas, una por vacación, sin descartar ninguna.
  */
 
 export const COLUMNAS_EXPORT = ["codigo", "dpi", "nombre", "fecha_inicio", "fecha_fin", "dias_habiles", "tipo", "observacion"] as const;
@@ -43,7 +60,9 @@ export type CodigoProblemaExport =
   | "ESTADO_NO_APROBADO"
   | "EMPLEADO_NO_ENCONTRADO"
   | "FECHA_INVALIDA"
-  | "DUPLICADO_IDENTICO";
+  | "DUPLICADO_IDENTICO"
+  | "EMPLEADO_NO_IDENTIFICABLE"
+  | "REIMPORTACION_NO_LOSSLESS";
 
 export type ProblemaExport = {
   severidad: "ERROR" | "ADVERTENCIA";
@@ -64,9 +83,14 @@ export type ResultadoExport = {
     incidenciasVacaciones: number;
     filasExportadas: number;
     filasNoExportadas: number;
+    /** Filas distintas que el importador conservaría al reimportar el archivo (debe ser = filasExportadas). */
+    filasReimportables: number;
     problemasError: number;
     problemasAdvertencia: number;
-    /** true solo si TODAS las vacaciones actuales se exportaron con tipo resuelto y no quedan incidencias sin pareja. */
+    /**
+     * true SOLO si el archivo reimportable reconstruye exactamente todas las vacaciones de la empresa sin pérdida (tipo resuelto, sin
+     * duplicados que el importador consolidaría, sin incidencias sin pareja, reimportación 1:1). Si es false NO se puede limpiar el módulo.
+     */
     completo: boolean;
   };
 };
@@ -74,7 +98,9 @@ export type ResultadoExport = {
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const clave = (idEmpleado: number, inicio: string, fin: string, dias: number) => `${idEmpleado}|${inicio}|${fin}|${r2(dias).toFixed(2)}`;
 const TIPOS = new Set<string>(TIPOS_RECONSTRUIBLES);
-const fechaOk = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+/** Una fecha/días son exportables solo si el propio importador los leería de vuelta idénticos. */
+const fechaOk = (s: string) => parsearFecha(s) === s;
+const diasOk = (n: number) => parsearDias(n) === r2(n);
 
 export function armarHistorialExportable(
   vacaciones: readonly VacacionActual[],
@@ -83,6 +109,9 @@ export function armarHistorialExportable(
 ): ResultadoExport {
   const problemas: ProblemaExport[] = [];
   const porEmpleado = new Map(empleados.map((e) => [e.id, e]));
+  // El importador identifica al empleado por código (normalizado): debe ser único en la empresa o se perdería/confundiría al reimportar
+  const usoCodigo = new Map<string, number>();
+  for (const e of empleados) usoCodigo.set(normalizarTexto(e.codigo), (usoCodigo.get(normalizarTexto(e.codigo)) ?? 0) + 1);
   const candidatas = incidencias.filter((i) => TIPOS.has(i.tipo));
 
   // Incidencias candidatas por llave
@@ -91,13 +120,20 @@ export function armarHistorialExportable(
 
   // Vacaciones por llave (solo las exportables a priori: aprobadas, con empleado y fechas válidas)
   const vacPorLlave = new Map<string, VacacionActual[]>();
+  // Llaves de vacaciones ya rechazadas por otro motivo: sus incidencias NO se vuelven a reportar como «sin vacación»
+  const llavesRechazadas = new Set<string>();
   for (const v of vacaciones) {
     const emp = porEmpleado.get(v.idEmpleado);
+    llavesRechazadas.add(clave(v.idEmpleado, v.inicio, v.fin, v.dias));
     if (!emp) {
       problemas.push({ severidad: "ERROR", codigo: "EMPLEADO_NO_ENCONTRADO", empleadoId: v.idEmpleado, vacacionIds: [v.id], mensaje: `La vacación ${v.id} pertenece a un empleado (#${v.idEmpleado}) que no existe en esta empresa: no se exporta.` });
       continue;
     }
-    if (!fechaOk(v.inicio) || !fechaOk(v.fin) || v.fin < v.inicio || !(v.dias > 0)) {
+    if (!normalizarTexto(emp.codigo) || usoCodigo.get(normalizarTexto(emp.codigo)) !== 1) {
+      problemas.push({ severidad: "ERROR", codigo: "EMPLEADO_NO_IDENTIFICABLE", empleadoId: emp.id, empleado: emp.nombre, vacacionIds: [v.id], mensaje: `La vacación ${v.id} de ${emp.nombre}: el código «${emp.codigo}» está vacío o lo comparte otro empleado, así que el importador no podría identificarlo con certeza: no se exporta.` });
+      continue;
+    }
+    if (!fechaOk(v.inicio) || !fechaOk(v.fin) || v.fin < v.inicio || !diasOk(v.dias)) {
       problemas.push({ severidad: "ERROR", codigo: "FECHA_INVALIDA", empleadoId: emp.id, empleado: emp.nombre, vacacionIds: [v.id], mensaje: `La vacación ${v.id} de ${emp.nombre} tiene fechas o días inválidos (${v.inicio} → ${v.fin}, ${v.dias}): no se exporta.` });
       continue;
     }
@@ -106,6 +142,7 @@ export function armarHistorialExportable(
       continue;
     }
     const k = clave(v.idEmpleado, v.inicio, v.fin, v.dias);
+    llavesRechazadas.delete(k);
     vacPorLlave.set(k, [...(vacPorLlave.get(k) ?? []), v]);
   }
 
@@ -130,20 +167,25 @@ export function armarHistorialExportable(
       continue;
     }
     const tipo = incs[0].tipo as TipoVacacionImport;
-    for (const v of [...grupo].sort((a, b) => a.id - b.id)) {
-      filas.push({
-        codigo: emp.codigo, dpi: emp.dpi ?? "", nombre: emp.nombre, fecha_inicio: v.inicio, fecha_fin: v.fin, dias_habiles: r2(v.dias), tipo,
-        observacion: (v.observaciones ?? "").trim(),
-      });
-    }
     if (grupo.length > 1) {
-      problemas.push({ ...base, severidad: "ADVERTENCIA", codigo: "DUPLICADO_IDENTICO", mensaje: `${emp.nombre}: ${grupo.length} vacaciones idénticas (${cuando}, ${tipo}). Se exportan todas, pero el importador ignora las repetidas como duplicado: confirme con RRHH si son tomas reales distintas.` });
+      // El importador consolidaría estas filas (misma llave empleado + fechas + días + tipo): reimportar daría 1 sola. El archivo no sería
+      // una fuente sin pérdida, así que el grupo NO se incluye hasta que RRHH/TI decida si son tomas reales distintas o un duplicado de datos.
+      problemas.push({
+        ...base, severidad: "ERROR", codigo: "DUPLICADO_IDENTICO",
+        mensaje: `Existen ${grupo.length} vacaciones idénticas. El importador las consolidaría como duplicado, por lo que no es posible reconstruirlas con certeza. Debe resolverse antes del reset. Detalle: ${emp.nombre}, ${cuando}, ${tipo} (vacaciones ${grupo.map((g) => g.id).join(", ")}); no se incluyen en el archivo reimportable.`,
+      });
+      continue;
     }
+    const v = grupo[0];
+    filas.push({
+      codigo: emp.codigo, dpi: emp.dpi ?? "", nombre: emp.nombre, fecha_inicio: v.inicio, fecha_fin: v.fin, dias_habiles: r2(v.dias), tipo,
+      observacion: (v.observaciones ?? "").trim(),
+    });
   }
 
   // Incidencias de vacaciones sin ninguna fila en `vacaciones` (la fuente del archivo): NO se pueden exportar, se reportan
   for (const [k, incs] of incPorLlave) {
-    if (vacPorLlave.has(k)) continue;
+    if (vacPorLlave.has(k) || llavesRechazadas.has(k)) continue;
     const emp = porEmpleado.get(incs[0].idEmpleado);
     problemas.push({
       severidad: "ERROR", codigo: "INCIDENCIA_SIN_VACACION", empleadoId: incs[0].idEmpleado, empleado: emp?.nombre, incidenciaIds: incs.map((i) => i.id),
@@ -152,6 +194,14 @@ export function armarHistorialExportable(
   }
 
   filas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es") || a.fecha_inicio.localeCompare(b.fecha_inicio) || a.fecha_fin.localeCompare(b.fecha_fin) || a.dias_habiles - b.dias_habiles);
+  // Red de seguridad: lo que el IMPORTADOR conservaría al reimportar este archivo debe ser EXACTAMENTE una fila por cada fila exportada
+  const reimportables = simularReimportacion(filas);
+  if (reimportables.filasUnicas !== filas.length || reimportables.invalidas > 0 || filas.length > MAX_FILAS_ARCHIVO) {
+    problemas.push({
+      severidad: "ERROR", codigo: "REIMPORTACION_NO_LOSSLESS",
+      mensaje: `El archivo no es reimportable sin pérdida: ${filas.length} fila(s) exportadas pero el importador conservaría ${reimportables.filasUnicas} (${reimportables.invalidas} inválida(s); máximo ${MAX_FILAS_ARCHIVO} filas). Debe resolverse antes del reset.`,
+    });
+  }
   const errores = problemas.filter((p) => p.severidad === "ERROR").length;
   return {
     filas,
@@ -161,11 +211,21 @@ export function armarHistorialExportable(
       incidenciasVacaciones: candidatas.length,
       filasExportadas: filas.length,
       filasNoExportadas: vacaciones.length - filas.length,
+      filasReimportables: reimportables.filasUnicas,
       problemasError: errores,
       problemasAdvertencia: problemas.length - errores,
-      completo: errores === 0 && filas.length === vacaciones.length,
+      completo: errores === 0 && filas.length === vacaciones.length && reimportables.filasUnicas === vacaciones.length,
     },
   };
+}
+
+/** Simula la reimportación con el MISMO lector, normalizador y llave lógica del importador (#418): cuántas filas distintas se conservarían. */
+export function simularReimportacion(filas: readonly FilaExport[]): { filasLeidas: number; filasUnicas: number; invalidas: number } {
+  const archivo = filasComoArchivo(filas);
+  const { validas, invalidas } = normalizarFilas(archivo.filas, detectarColumnas(archivo.encabezados));
+  const vistos = new Set<string>();
+  for (const f of validas) vistos.add(llaveLogica(normalizarTexto(f.codigo), f));
+  return { filasLeidas: filas.length, filasUnicas: vistos.size, invalidas: invalidas.length };
 }
 
 /** Las mismas filas, tal como las entregaría el lector de CSV/XLSX del importador (para la vista previa del historial actual). */

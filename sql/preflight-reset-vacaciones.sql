@@ -12,6 +12,10 @@
 --   * detalle_consumo_vacaciones.saldo_id / incidencia_id son ON DELETE CASCADE: el orden de borrado importa.
 --   * Criterio de pareja vacaciones <-> incidencias = el mismo de "Exportar historial actual" (empresa + empleado + fecha_inicio +
 --     fecha_fin + dias_habiles; tipo resuelto solo si hay tantas incidencias candidatas como filas y todas del mismo tipo).
+--
+-- PRECONDICION FUERTE: el RESET NO SE EJECUTA si existe CUALQUIERA de estos (secciones 4, 4b, 4c, 7, 8, 11 y 12):
+--   incidencia de vacaciones con evidencia · incidencia con solicitud ligada · vacaciones sin incidencia · incidencias sin vacaciones ·
+--   tipo ambiguo · duplicado identico no resuelto (el importador lo consolidaria: reimportar daria 1 sola fila) · export incompleto.
 -- =====================================================================
 
 -- 0) Conteos actuales (referencia segun la inspeccion: vacaciones 31, incidencias de vacaciones 31, detalle 35, saldos 441, solicitudes 0).
@@ -73,6 +77,15 @@ ORDER BY empresa_id, id_empleado, fecha_inicio;
 
 -- 4b) Vacaciones con estado distinto de 'Aprobado' (el export no las asume: esperado 0)
 SELECT id, empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles, estado FROM vacaciones WHERE LOWER(TRIM(estado)) <> 'aprobado';
+
+-- 4c) DUPLICADOS IDENTICOS en vacaciones (misma llave empresa + empleado + inicio + fin + dias). Esperado: CERO filas.
+--     El importador consolida estas filas (llave empleado + inicio + fin + dias + tipo): exportarlas y reimportarlas dejaria UNA sola, asi que el
+--     archivo no seria una fuente sin perdida. Deben resolverse (toma real distinta o duplicado de datos) ANTES del reset.
+SELECT v.empresa_id, v.id_empleado, v.fecha_inicio, v.fecha_fin, v.dias_habiles, COUNT(*) AS filas_identicas, GROUP_CONCAT(v.id ORDER BY v.id) AS vacaciones_ids
+FROM vacaciones v
+GROUP BY v.empresa_id, v.id_empleado, v.fecha_inicio, v.fecha_fin, v.dias_habiles
+HAVING COUNT(*) > 1
+ORDER BY v.empresa_id, v.id_empleado, v.fecha_inicio;
 
 -- 5) DETALLE FIFO huerfano o inconsistente (todas esperadas en 0)
 -- 5a) detalle cuya incidencia o cuyo saldo ya no existe (las FK en CASCADE deberian impedirlo)
@@ -156,4 +169,39 @@ SELECT 'evidencias en incidencias de vacaciones', COUNT(*) FROM evidencias_incid
 UNION ALL
 SELECT 'solicitudes pendientes o ligadas a incidencias', COUNT(*) FROM solicitudes_vacaciones WHERE estado = 'Pendiente' OR incidencia_id IS NOT NULL
 UNION ALL
+SELECT 'duplicados identicos en vacaciones (grupos)', COUNT(*) FROM (
+  SELECT 1 FROM vacaciones GROUP BY empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles HAVING COUNT(*) > 1) d
+UNION ALL
+SELECT 'tipo ambiguo o cantidad de incidencias distinta (grupos)', COUNT(*) FROM (
+  SELECT g.empresa_id FROM (
+    SELECT empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles FROM vacaciones
+    UNION
+    SELECT empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones')
+  ) g
+  WHERE (SELECT COUNT(*) FROM vacaciones v WHERE v.empresa_id = g.empresa_id AND v.id_empleado = g.id_empleado AND v.fecha_inicio = g.fecha_inicio AND v.fecha_fin = g.fecha_fin AND v.dias_habiles = g.dias_habiles)
+     <> (SELECT COUNT(*) FROM incidencias i WHERE i.empresa_id = g.empresa_id AND i.id_empleado = g.id_empleado AND i.fecha_inicio = g.fecha_inicio AND i.fecha_fin = g.fecha_fin AND i.dias_habiles = g.dias_habiles AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones'))
+     OR (SELECT COUNT(DISTINCT i.tipo) FROM incidencias i WHERE i.empresa_id = g.empresa_id AND i.id_empleado = g.id_empleado AND i.fecha_inicio = g.fecha_inicio AND i.fecha_fin = g.fecha_fin AND i.dias_habiles = g.dias_habiles AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones')) > 1
+) t
+UNION ALL
+SELECT 'vacaciones con estado distinto de Aprobado', COUNT(*) FROM vacaciones WHERE LOWER(TRIM(estado)) <> 'aprobado'
+UNION ALL
 SELECT 'empleados con fecha_alta invalida (Elisa)', COUNT(*) FROM empleados WHERE fecha_alta IS NULL OR fecha_alta < '1980-01-01';
+
+-- 12) CONJUNTO OBJETIVO DEL RESET vs TOTAL, por empresa (HARD BLOCKER: para un RESET COMPLETO deben ser iguales; si no, NO se borra nada)
+--     Objetivo = incidencias de vacaciones con fila espejo INEQUIVOCA (1 incidencia <-> 1 vacacion aprobada para su llave), sin evidencias y sin
+--     solicitud ligada. Es la misma definicion de tmp_reset_incidencias_objetivo en sql/propuesta-reset-vacaciones.sql. SOLO LECTURA.
+--     Ademas debe coincidir con el numero de filas del export validado (completo = true).
+SELECT e.id AS empresa_id,
+       (SELECT COUNT(*) FROM incidencias i WHERE i.empresa_id = e.id AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones')) AS total_incidencias_vacaciones,
+       (SELECT COUNT(*) FROM incidencias i
+         WHERE i.empresa_id = e.id AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
+           AND (SELECT COUNT(*) FROM vacaciones v WHERE v.empresa_id = i.empresa_id AND v.id_empleado = i.id_empleado AND v.fecha_inicio = i.fecha_inicio AND v.fecha_fin = i.fecha_fin AND v.dias_habiles = i.dias_habiles AND LOWER(TRIM(v.estado)) = 'aprobado') = 1
+           AND (SELECT COUNT(*) FROM vacaciones v WHERE v.empresa_id = i.empresa_id AND v.id_empleado = i.id_empleado AND v.fecha_inicio = i.fecha_inicio AND v.fecha_fin = i.fecha_fin AND v.dias_habiles = i.dias_habiles) = 1
+           AND (SELECT COUNT(*) FROM incidencias i2 WHERE i2.empresa_id = i.empresa_id AND i2.id_empleado = i.id_empleado AND i2.fecha_inicio = i.fecha_inicio AND i2.fecha_fin = i.fecha_fin AND i2.dias_habiles = i.dias_habiles AND i2.tipo IN ('Vacaciones','A cuenta de Vacaciones')) = 1
+           AND NOT EXISTS (SELECT 1 FROM evidencias_incidencias ev WHERE ev.incidencia_id = i.id)
+           AND NOT EXISTS (SELECT 1 FROM solicitudes_vacaciones sv WHERE sv.incidencia_id = i.id)) AS total_objetivo,
+       (SELECT COUNT(*) FROM vacaciones v WHERE v.empresa_id = e.id) AS total_vacaciones
+FROM empresas e
+ORDER BY e.id;
+--     Lectura: la empresa SOLO puede resetearse si total_incidencias_vacaciones = total_objetivo = total_vacaciones = filas del export validado.
+--     Cualquier diferencia es un HARD BLOCKER: se corrige el dato (o RRHH decide caso por caso) y se repite el preflight; NO se borra nada.

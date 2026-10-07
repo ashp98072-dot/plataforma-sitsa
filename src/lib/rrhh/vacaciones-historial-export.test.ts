@@ -3,7 +3,6 @@ import {
   COLUMNAS_EXPORT,
   armarHistorialExportable,
   construirCsvHistorial,
-  filasComoArchivo,
   type EmpleadoExport,
   type FilaExport,
   type IncidenciaActual,
@@ -112,20 +111,130 @@ describe("export: emparejamiento vacaciones ↔ incidencias (nunca se inventa el
   });
 });
 
-describe("export: duplicados", () => {
-  it("dos vacaciones idénticas con dos incidencias idénticas se exportan ambas y se advierte (el importador ignora las repetidas)", () => {
+describe("export: duplicados idénticos (el importador los consolidaría → ERROR, no lossless)", () => {
+  const dup = () => armarHistorialExportable(
+    [vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11)],
+    [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)],
+    EMPS,
+  );
+
+  it("2 vacaciones idénticas + 2 incidencias iguales: ERROR, completo = false y NO se incluyen en el archivo reimportable", () => {
+    const r = dup();
+    expect(r.filas).toEqual([]);
+    expect(r.problemas).toHaveLength(1);
+    expect(r.problemas[0]).toMatchObject({ severidad: "ERROR", codigo: "DUPLICADO_IDENTICO", empleado: "Ana Pérez" });
+    expect(r.resumen).toMatchObject({ completo: false, problemasError: 1, problemasAdvertencia: 0, filasExportadas: 0, filasNoExportadas: 2 });
+  });
+
+  it("el mensaje explica que el importador las consolidaría y que debe resolverse antes del reset", () => {
+    const m = dup().problemas[0].mensaje;
+    expect(m).toContain("Existen 2 vacaciones idénticas. El importador las consolidaría como duplicado, por lo que no es posible reconstruirlas con certeza. Debe resolverse antes del reset.");
+  });
+
+  it("no puede declararse export lossless: ni con el grupo duplicado mezclado con vacaciones normales", () => {
     const r = armarHistorialExportable(
-      [vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11)],
-      [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)],
+      [vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-12-02", "2024-12-13", 10)],
+      [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-12-02", "2024-12-13", 10)],
       EMPS,
     );
-    expect(r.filas).toHaveLength(2);
-    expect(r.problemas).toHaveLength(1);
-    expect(r.problemas[0]).toMatchObject({ severidad: "ADVERTENCIA", codigo: "DUPLICADO_IDENTICO" });
-    expect(r.resumen).toMatchObject({ completo: true, problemasError: 0, problemasAdvertencia: 1 });
-    // y al reimportar, el MISMO criterio de llave lógica del importador las reconoce como duplicado
-    const { validas } = normalizarFilas(filasComoArchivo(r.filas).filas, detectarColumnas(COLUMNAS_EXPORT as unknown as string[]));
-    expect(llaveLogica(1, validas[0])).toBe(llaveLogica(1, validas[1]));
+    expect(r.filas).toHaveLength(1); // solo la normal
+    expect(r.resumen.vacacionesLeidas).toBe(3);
+    expect(r.resumen.completo).toBe(false);
+    expect(r.resumen.filasReimportables).toBeLessThan(r.resumen.vacacionesLeidas);
+  });
+
+  it("tres o más idénticas también son ERROR; con tipos distintos en la misma llave sigue siendo TIPO_AMBIGUO", () => {
+    const tres = armarHistorialExportable(
+      [vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11)],
+      [inc(1, "A cuenta de Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "A cuenta de Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "A cuenta de Vacaciones", "2024-06-03", "2024-06-14", 11)],
+      EMPS,
+    );
+    expect(codigos(tres)).toEqual(["DUPLICADO_IDENTICO"]);
+    expect(tres.problemas[0].mensaje).toContain("Existen 3 vacaciones idénticas");
+    expect(tres.resumen.completo).toBe(false);
+  });
+
+  it("una sola vacación normal sigue exportando normalmente y completo = true", () => {
+    const r = armarHistorialExportable([vac(1, "2024-06-03", "2024-06-14", 11)], [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)], EMPS);
+    expect(r.filas).toHaveLength(1);
+    expect(r.problemas).toEqual([]);
+    expect(r.resumen).toMatchObject({ completo: true, problemasError: 0, filasExportadas: 1, filasReimportables: 1 });
+  });
+
+  it("vacaciones iguales en fechas pero de empleados distintos, o con días distintos, NO son duplicados", () => {
+    const r = armarHistorialExportable(
+      [vac(1, "2024-06-03", "2024-06-14", 11), vac(2, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 10)],
+      [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(2, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 10)],
+      EMPS,
+    );
+    expect(r.filas).toHaveLength(3);
+    expect(r.resumen.completo).toBe(true);
+  });
+
+  it("empleados que comparten código (el importador no podría distinguirlos): ERROR y no se exportan", () => {
+    const compartido = [{ ...EMPS[0] }, { ...EMPS[1], codigo: "E-1" }];
+    const r = armarHistorialExportable([vac(1, "2024-06-03", "2024-06-14", 11)], [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)], compartido);
+    expect(r.filas).toEqual([]);
+    expect(codigos(r)).toEqual(["EMPLEADO_NO_IDENTIFICABLE"]);
+    expect(r.resumen.completo).toBe(false);
+  });
+
+  it("fechas fuera del rango que el importador acepta (p. ej. año 1899) son ERROR: no se exportan filas que el importador descartaría", () => {
+    const r = armarHistorialExportable([vac(1, "1899-12-31", "1900-01-05", 5)], [inc(1, "Vacaciones", "1899-12-31", "1900-01-05", 5)], EMPS);
+    expect(r.filas).toEqual([]);
+    expect(codigos(r)).toEqual(["FECHA_INVALIDA"]);
+    expect(r.resumen.completo).toBe(false);
+  });
+});
+
+describe("export: completo = true implica reimportación SIN pérdida (misma cardinalidad)", () => {
+  const completoOk = () => {
+    const vs = [
+      vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-12-02", "2024-12-13", 10), vac(2, "2025-02-03", "2025-02-07", 4.5),
+      vac(2, "2024-02-29", "2024-03-01", 2), vac(1, "2025-06-02", "2025-06-06", 5),
+    ];
+    const is = [
+      inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "A cuenta de Vacaciones", "2024-12-02", "2024-12-13", 10), inc(2, "Vacaciones", "2025-02-03", "2025-02-07", 4.5),
+      inc(2, "A cuenta de Vacaciones", "2024-02-29", "2024-03-01", 2), inc(1, "Vacaciones", "2025-06-02", "2025-06-06", 5),
+    ];
+    return armarHistorialExportable(vs, is, EMPS);
+  };
+  const unicas = (validas: ReturnType<typeof normalizarFilas>["validas"]) => new Set(validas.map((v) => llaveLogica(v.codigo ?? "", v))).size;
+
+  it("CSV: cada vacación exportada vuelve como una fila distinta (no se consolida ninguna)", () => {
+    const r = completoOk();
+    expect(r.resumen).toMatchObject({ completo: true, filasExportadas: 5, filasReimportables: 5, vacacionesLeidas: 5 });
+    const { encabezados, filas } = parsearCsv(construirCsvHistorial(r.filas));
+    const { validas, invalidas } = normalizarFilas(filas, detectarColumnas(encabezados));
+    expect(invalidas).toEqual([]);
+    expect(validas).toHaveLength(r.resumen.vacacionesLeidas);
+    expect(unicas(validas)).toBe(r.resumen.vacacionesLeidas);
+  });
+
+  it("XLSX: cada vacación exportada vuelve como una fila distinta (no se consolida ninguna)", async () => {
+    const r = completoOk();
+    const leido = await leerXlsx(await construirXlsxHistorial(r));
+    const { validas, invalidas } = normalizarFilas(leido.filas, detectarColumnas(leido.encabezados));
+    expect(invalidas).toEqual([]);
+    expect(validas).toHaveLength(r.resumen.vacacionesLeidas);
+    expect(unicas(validas)).toBe(r.resumen.vacacionesLeidas);
+  });
+
+  it("si completo = false el archivo NO puede declararse equivalente al estado actual (hay menos filas que vacaciones)", () => {
+    const r = armarHistorialExportable([vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11)], [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)], EMPS);
+    expect(r.resumen.completo).toBe(false);
+    expect(r.resumen.filasReimportables).toBeLessThan(r.resumen.vacacionesLeidas);
+  });
+
+  it("la hoja «Problemas» del XLSX recoge el duplicado para inspección sin incluirlo en el historial reimportable", async () => {
+    const r = armarHistorialExportable([vac(1, "2024-06-03", "2024-06-14", 11), vac(1, "2024-06-03", "2024-06-14", 11)], [inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11), inc(1, "Vacaciones", "2024-06-03", "2024-06-14", 11)], EMPS);
+    const buffer = await construirXlsxHistorial(r);
+    const ExcelJS = (await import("exceljs")).default;
+    const libro = new ExcelJS.Workbook();
+    await libro.xlsx.load(buffer as unknown as ArrayBuffer);
+    expect(libro.worksheets[1].getRow(2).getCell(2).value).toBe("DUPLICADO_IDENTICO");
+    expect(String(libro.worksheets[1].getRow(2).getCell(4).value)).toContain("Debe resolverse antes del reset");
+    expect((await leerXlsx(buffer)).filas).toEqual([]);
   });
 });
 
