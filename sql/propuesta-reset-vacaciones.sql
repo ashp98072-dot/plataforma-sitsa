@@ -1,0 +1,124 @@
+-- =====================================================================
+-- PROPUESTA (NO EJECUTADA) — RESET CONTROLADO DEL MODULO DE VACACIONES
+-- 100 % COMENTADA: este archivo no ejecuta nada aunque se corra completo. Es para REVISION.
+-- MariaDB 11.8. Complementa a sql/preflight-reset-vacaciones.sql (solo lectura) y al historial exportado ("Exportar historial actual").
+--
+-- PROHIBIDO EN ESTE PROCESO:
+--   * NO TRUNCATE (en particular NO TRUNCATE de incidencias ni de ninguna tabla).
+--   * NO "SET FOREIGN_KEY_CHECKS = 0".
+--   * NO borrar ni sobrescribir backup_saldos_vacaciones_20261006 ni ningun respaldo existente.
+--   * NO tocar incidencias de otros tipos, ni empleados, ni solicitudes_vacaciones / evidencias_incidencias sin decision previa.
+--   * NO reparar a Elisa (id 37) ni a Amilcar (id 14) aqui: la reconstruccion posterior los informa/bloquea segun sus fechas.
+--   * NO ejecutar en produccion sin autorizacion explicita y escrita; una empresa a la vez, siempre con empresa_id.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- ORDEN FUTURO (resumen)
+--   1. backups completos (tablas bk_reset_<TS>_*, separadas)
+--   2. validar el export historico (archivo XLSX/CSV descargado de "Exportar historial actual")
+--   3. validar el preview (vista previa del historial actual y del archivo): sin errores ni bloqueantes sin resolver
+--   4. iniciar transaccion
+--   5. borrar detalle_consumo_vacaciones
+--   6. borrar SOLO incidencias de vacaciones reconstruibles
+--   7. borrar vacaciones
+--   8. borrar saldos_vacaciones
+--   9. NO tocar otras incidencias
+--  10. NO tocar empleados
+--  11. NO tocar solicitudes con evidencia/relaciones sin decision previa
+--  12. reconstruccion posterior desde el historial exportado (paso aparte, con el aplicador controlado que aun NO existe)
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- PASO 0 — REQUISITOS (todos deben cumplirse por escrito antes de seguir)
+--   [ ] sql/preflight-reset-vacaciones.sql ejecutado en la base real; seccion 11 (RESUMEN DE BLOQUEOS) en 0, o decidido por RRHH.
+--   [ ] "Exportar historial actual": completo = true (ninguna vacacion sin pareja / tipo ambiguo) y archivo guardado fuera del servidor.
+--   [ ] "Previsualizar historial actual" y la vista previa del archivo exportado revisadas por RRHH: sin ERROR ni BLOQUEANTE sin resolver
+--       (vacaciones futuras y superpuestas corregidas; Elisa con fecha real; decisiones de cruces de aniversario aprobadas).
+--   [ ] Autorizacion explicita para ejecutar en produccion, con ventana de mantenimiento.
+-- ---------------------------------------------------------------------
+-- SET @empresa_id := <EMPRESA_ID>;      -- una empresa a la vez
+-- SET @ts := '<AAAAMMDDHHMM>';          -- sello unico; si ya existe alguna tabla bk_reset_<sello>_*, elegir otro
+
+-- ---------------------------------------------------------------------
+-- PASO 1 — BACKUPS COMPLETOS Y SEPARADOS (tablas nuevas; NO se sobrescribe backup_saldos_vacaciones_20261006)
+-- ---------------------------------------------------------------------
+-- CREATE TABLE bk_reset_<TS>_vacaciones                    AS SELECT * FROM vacaciones;
+-- CREATE TABLE bk_reset_<TS>_incidencias_vacaciones        AS SELECT * FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones');
+-- CREATE TABLE bk_reset_<TS>_detalle_consumo_vacaciones    AS SELECT * FROM detalle_consumo_vacaciones;
+-- CREATE TABLE bk_reset_<TS>_saldos_vacaciones             AS SELECT * FROM saldos_vacaciones;
+-- CREATE TABLE bk_reset_<TS>_solicitudes_vacaciones        AS SELECT * FROM solicitudes_vacaciones;
+-- -- verificar que cada respaldo tiene EXACTAMENTE las mismas filas que su origen (diferencia = detener el proceso):
+-- SELECT (SELECT COUNT(*) FROM vacaciones)                AS origen_vacaciones,   (SELECT COUNT(*) FROM bk_reset_<TS>_vacaciones)                 AS respaldo_vacaciones;
+-- SELECT (SELECT COUNT(*) FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones')) AS origen_incidencias, (SELECT COUNT(*) FROM bk_reset_<TS>_incidencias_vacaciones) AS respaldo_incidencias;
+-- SELECT (SELECT COUNT(*) FROM detalle_consumo_vacaciones) AS origen_detalle,     (SELECT COUNT(*) FROM bk_reset_<TS>_detalle_consumo_vacaciones) AS respaldo_detalle;
+-- SELECT (SELECT COUNT(*) FROM saldos_vacaciones)          AS origen_saldos,      (SELECT COUNT(*) FROM bk_reset_<TS>_saldos_vacaciones)          AS respaldo_saldos;
+-- SELECT (SELECT COUNT(*) FROM solicitudes_vacaciones)     AS origen_solicitudes, (SELECT COUNT(*) FROM bk_reset_<TS>_solicitudes_vacaciones)     AS respaldo_solicitudes;
+
+-- ---------------------------------------------------------------------
+-- PASO 2 — VALIDAR EL EXPORT HISTORICO Y EL PREVIEW (manual, fuera de SQL)
+--   * El numero de filas del archivo exportado = vacaciones de la empresa (SELECT COUNT(*) FROM vacaciones WHERE empresa_id = @empresa_id).
+--   * El preview del archivo exportado = el de "Previsualizar historial actual" (mismo motor, mismas filas).
+--   * Conservar el archivo y la captura del preview junto al sello del respaldo.
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- PASO 3 — RESET en UNA transaccion (alcance: SOLO la empresa @empresa_id; sin TRUNCATE, sin FOREIGN_KEY_CHECKS = 0)
+-- ---------------------------------------------------------------------
+-- START TRANSACTION;
+--
+--   -- 3.0 conteos de partida (anotar; "otras_incidencias" y "empleados" NO deben cambiar)
+--   SELECT (SELECT COUNT(*) FROM incidencias WHERE empresa_id = @empresa_id AND tipo NOT IN ('Vacaciones','A cuenta de Vacaciones')) AS otras_incidencias_antes,
+--          (SELECT COUNT(*) FROM empleados WHERE empresa_id = @empresa_id) AS empleados_antes,
+--          (SELECT COUNT(*) FROM solicitudes_vacaciones WHERE empresa_id = @empresa_id) AS solicitudes_antes;
+--
+--   -- 3.1 borrar el DETALLE FIFO de las incidencias de vacaciones (los saldos aun existen: nada se borra en cascada por sorpresa)
+--   DELETE d FROM detalle_consumo_vacaciones d JOIN incidencias i ON i.id = d.incidencia_id
+--    WHERE i.empresa_id = @empresa_id AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones');
+--   -- el detalle restante sobre los saldos de la empresa debe ser 0; si no, algun consumo de otro origen quedaria borrado en cascada al borrar saldos:
+--   SELECT COUNT(*) AS detalle_restante_en_saldos_de_la_empresa FROM detalle_consumo_vacaciones d JOIN saldos_vacaciones s ON s.id = d.saldo_id WHERE s.empresa_id = @empresa_id;   -- debe ser 0 (si no: ROLLBACK)
+--
+--   -- 3.2 borrar UNICAMENTE incidencias de vacaciones RECONSTRUIBLES: con su fila espejo en vacaciones, sin evidencias y sin solicitud ligada.
+--   --     NUNCA otros tipos. Las que no cumplan quedan sin borrar y deben decidirse caso por caso (ver preflight 8 y 7).
+--   DELETE i FROM incidencias i
+--    WHERE i.empresa_id = @empresa_id
+--      AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
+--      AND EXISTS (SELECT 1 FROM vacaciones v WHERE v.empresa_id = i.empresa_id AND v.id_empleado = i.id_empleado
+--                  AND v.fecha_inicio = i.fecha_inicio AND v.fecha_fin = i.fecha_fin AND v.dias_habiles = i.dias_habiles)
+--      AND NOT EXISTS (SELECT 1 FROM evidencias_incidencias ev WHERE ev.incidencia_id = i.id)
+--      AND NOT EXISTS (SELECT 1 FROM solicitudes_vacaciones sv WHERE sv.incidencia_id = i.id);
+--   -- cuantas incidencias de vacaciones NO se borraron (esperado 0; si > 0: ROLLBACK y decidir):
+--   SELECT COUNT(*) AS incidencias_vacaciones_restantes FROM incidencias WHERE empresa_id = @empresa_id AND tipo IN ('Vacaciones','A cuenta de Vacaciones');
+--
+--   -- 3.3 borrar las vacaciones (historial simple) de la empresa
+--   DELETE FROM vacaciones WHERE empresa_id = @empresa_id;
+--
+--   -- 3.4 borrar los saldos de la empresa (el detalle ya fue eliminado en 3.1; el filtro NOT EXISTS evita cualquier cascada inesperada)
+--   DELETE s FROM saldos_vacaciones s
+--    WHERE s.empresa_id = @empresa_id
+--      AND NOT EXISTS (SELECT 1 FROM detalle_consumo_vacaciones d WHERE d.saldo_id = s.id);
+--
+--   -- 3.5 NO se toca: otras incidencias, empleados, solicitudes_vacaciones (con evidencia o relaciones: decision previa), evidencias_incidencias.
+--
+--   -- 3.6 VALIDACIONES (todas deben cumplirse; si alguna falla: ROLLBACK;)
+--   SELECT COUNT(*) AS vacaciones_restantes FROM vacaciones WHERE empresa_id = @empresa_id;                                                                                 -- 0
+--   SELECT COUNT(*) AS saldos_restantes FROM saldos_vacaciones WHERE empresa_id = @empresa_id;                                                                              -- 0
+--   SELECT COUNT(*) AS detalle_huerfano FROM detalle_consumo_vacaciones d LEFT JOIN incidencias i ON i.id = d.incidencia_id LEFT JOIN saldos_vacaciones s ON s.id = d.saldo_id WHERE i.id IS NULL OR s.id IS NULL;   -- 0
+--   SELECT (SELECT COUNT(*) FROM incidencias WHERE empresa_id = @empresa_id AND tipo NOT IN ('Vacaciones','A cuenta de Vacaciones')) AS otras_incidencias_despues;     -- = otras_incidencias_antes
+--   SELECT COUNT(*) AS empleados_despues FROM empleados WHERE empresa_id = @empresa_id;                                                                                     -- = empleados_antes
+--   SELECT COUNT(*) AS solicitudes_despues FROM solicitudes_vacaciones WHERE empresa_id = @empresa_id;                                                                      -- = solicitudes_antes
+--   SELECT COUNT(*) AS respaldo_intacto FROM backup_saldos_vacaciones_20261006;                                                                                              -- igual que antes (no se tocó)
+--
+-- COMMIT;   -- solo si TODAS las validaciones pasaron
+-- -- ROLLBACK;  -- ante cualquier diferencia
+
+-- ---------------------------------------------------------------------
+-- PASO 4 — RECONSTRUCCION POSTERIOR desde el historial exportado (NO incluida aqui)
+--   Se hara con el aplicador controlado (aun no existe) a partir del archivo exportado y validado, usando el mismo motor de la vista previa
+--   (periodos desde fecha_alta, FIFO cronologico, vencimiento y tope de 30). Ver sql/reconstruccion-vacaciones-propuesta.sql.
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
+-- PASO 5 — PLAN DE REVERSA (si hiciera falta tras el COMMIT): restaurar desde las tablas bk_reset_<TS>_* conservando los IDs originales
+--   (INSERT ... SELECT * respetando el orden: saldos_vacaciones -> incidencias -> vacaciones -> detalle_consumo_vacaciones) y verificar conteos.
+--   Las tablas de respaldo NO se borran hasta que RRHH apruebe por escrito el resultado de la reconstruccion.
+-- ---------------------------------------------------------------------
