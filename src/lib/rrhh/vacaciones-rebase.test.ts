@@ -283,3 +283,109 @@ describe("rebase: todo-o-nada y no regresión", () => {
     expect(bd.instantanea().saldos).toEqual(antes);
   });
 });
+
+describe("DETALLE FIFO CRUZADO hacia saldos de otro empleado / otra empresa = hard blocker (preview y rebase real)", () => {
+  const A = { id: EMP, empresa_id: EMPRESA, nombre: "Ana Pérez", fecha_alta: "2025-01-01" };
+  const incidenciaA = { id: 10, empresa_id: EMPRESA, id_empleado: EMP, tipo: "Vacaciones", fecha_inicio: "2025-05-05", fecha_fin: "2025-05-09", dias_habiles: 5 };
+  const espejoA = { id: 10, empresa_id: EMPRESA, id_empleado: EMP, fecha_inicio: "2025-05-05", fecha_fin: "2025-05-09", dias_habiles: 5, estado: "Aprobado" };
+  const saldoA = { id: 1, empresa_id: EMPRESA, id_empleado: EMP, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 10, estado: "Vigente" };
+  const sinEscrituras = () => bd.ejecutadas.every((s) => !/^(INSERT|UPDATE|DELETE)/.test(s));
+
+  beforeEach(() => hoyFijo("2026-01-15"));
+
+  async function debeBloquear(codigo: string) {
+    const antes = bd.instantanea();
+    bd.ejecutadas = [];
+    const p = (await previsualizarRebase(EMPRESA, EMP, "2024-01-01", new Date(2026, 0, 15)))!;
+    expect(p.aplica).toBe(true);
+    expect(p.bloqueos.map((b) => b.codigo)).toContain(codigo);
+    expect(sinEscrituras()).toBe(true); // la vista previa no escribe nada
+    expect(bd.instantanea()).toEqual(antes);
+    const err = await cambiarFechaAlta("2024-01-01").catch((e) => e);
+    expect(err).toBeInstanceOf(RebaseBloqueadoError);
+    expect((err as RebaseBloqueadoError).plan.bloqueos.map((b) => b.codigo)).toContain(codigo);
+    expect(sinEscrituras()).toBe(true); // ni un INSERT / UPDATE / DELETE: no se borra, ni reasigna, ni corrige la línea
+    expect(bd.instantanea()).toEqual(antes); // ninguna fila cambió
+    expect(bd.t.empleados.find((e) => e.id === EMP)!.fecha_alta).toBe("2025-01-01"); // fecha_alta de A intacta
+    expect(bd.eventos).toContain("ROLLBACK");
+    return err as RebaseBloqueadoError;
+  }
+
+  it("1) MISMA EMPRESA / OTRO EMPLEADO: la incidencia #10 de A consume el saldo #50 de B ⇒ preview y rebase bloqueados, cero escrituras", async () => {
+    bd.reiniciar({
+      empleados: [A, { id: 2, empresa_id: EMPRESA, nombre: "Beto Ruiz", fecha_alta: "2025-01-01" }],
+      saldos: [saldoA, { id: 50, empresa_id: EMPRESA, id_empleado: 2, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 4, estado: "Vigente" }],
+      incidencias: [incidenciaA], vacaciones: [espejoA],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: 50, dias_tomados: 5 }],
+    });
+    const err = await debeBloquear("DETALLE_SALDO_AJENO");
+    expect(err.message).toContain("consumo de una vacación del colaborador asociado a un saldo que no le pertenece");
+    expect(err.message).toContain("revisión administrada");
+    expect(err.message).toContain("saldo #50");
+    expect(err.message).toContain("otro empleado");
+    expect(bd.t.saldos.find((s) => s.id === 50)).toMatchObject({ id_empleado: 2, dias_disponibles: 4 }); // saldo de B intacto
+    expect(bd.t.detalle).toEqual([{ id: 1, incidencia_id: 10, saldo_id: 50, dias_tomados: 5 }]); // detalle intacto
+  });
+
+  it("2) OTRA EMPRESA: la incidencia #10 de la empresa 7 consume el saldo #60 de la empresa 8 ⇒ bloqueo, cero escrituras, datos de la empresa 8 intactos", async () => {
+    bd.reiniciar({
+      empleados: [A, { id: 3, empresa_id: 8, nombre: "Otra Empresa", fecha_alta: "2025-01-01" }],
+      saldos: [saldoA, { id: 60, empresa_id: 8, id_empleado: 3, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 9, estado: "Vigente" }],
+      incidencias: [incidenciaA], vacaciones: [espejoA],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: 60, dias_tomados: 5 }],
+    });
+    const err = await debeBloquear("DETALLE_SALDO_AJENO");
+    expect(err.message).toContain("otra empresa");
+    expect(bd.t.saldos.find((s) => s.id === 60)).toMatchObject({ empresa_id: 8, id_empleado: 3, dias_disponibles: 9 });
+    expect(bd.t.empleados.find((e) => e.id === 3)!.fecha_alta).toBe("2025-01-01");
+  });
+
+  it("también bloquea si UNA sola línea de varias es ajena (la propia sana no basta)", async () => {
+    bd.reiniciar({
+      empleados: [A, { id: 2, empresa_id: EMPRESA, nombre: "Beto Ruiz", fecha_alta: "2025-01-01" }],
+      saldos: [saldoA, { id: 50, empresa_id: EMPRESA, id_empleado: 2, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 12, estado: "Vigente" }],
+      incidencias: [incidenciaA], vacaciones: [espejoA],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: 1, dias_tomados: 3 }, { id: 2, incidencia_id: 10, saldo_id: 50, dias_tomados: 2 }],
+    });
+    await debeBloquear("DETALLE_SALDO_AJENO");
+  });
+
+  it("3) el caso contrario sigue bloqueado: detalle sobre un saldo del empleado proveniente de una incidencia AJENA (DETALLE_AJENO)", async () => {
+    bd.reiniciar({
+      empleados: [A, { id: 2, empresa_id: EMPRESA, nombre: "Beto Ruiz", fecha_alta: "2025-01-01" }],
+      saldos: [saldoA],
+      incidencias: [incidenciaA, { id: 90, empresa_id: EMPRESA, id_empleado: 2, tipo: "Vacaciones", fecha_inicio: "2025-07-07", fecha_fin: "2025-07-08", dias_habiles: 2 }],
+      vacaciones: [espejoA],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: 1, dias_tomados: 5 }, { id: 2, incidencia_id: 90, saldo_id: 1, dias_tomados: 2 }],
+    });
+    await debeBloquear("DETALLE_AJENO");
+  });
+
+  it("4) caso sano: todas las líneas son del mismo empleado y empresa ⇒ no hay bloqueo de detalle y el rebase continúa funcionando igual", async () => {
+    bd.reiniciar({
+      empleados: [A, { id: 2, empresa_id: EMPRESA, nombre: "Beto Ruiz", fecha_alta: "2025-01-01" }],
+      saldos: [saldoA, { id: 50, empresa_id: EMPRESA, id_empleado: 2, anio_laboral: 1, periodo_inicio: "2025-01-01", periodo_fin: "2025-12-31", dias_otorgados: 15, dias_disponibles: 4, estado: "Vigente" }],
+      incidencias: [incidenciaA], vacaciones: [espejoA],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: 1, dias_tomados: 5 }],
+    });
+    const p = (await previsualizarRebase(EMPRESA, EMP, "2024-01-01", new Date(2026, 0, 15)))!;
+    expect(p.bloqueos).toEqual([]);
+    const r = await cambiarFechaAlta("2024-01-01");
+    expect(r.aplicado).toBe(true);
+    expect(sumaDetalle(bd.t)).toBe(5);
+    expect(bd.t.saldos.find((s) => s.id === 50)).toMatchObject({ id_empleado: 2, dias_disponibles: 4 }); // el saldo de otro empleado ni se toca
+    expect(bd.t.detalle.every((d) => bd.t.saldos.find((s) => s.id === d.saldo_id)!.id_empleado === EMP)).toBe(true);
+  });
+
+  it("un saldo inexistente (detalle huérfano) también bloquea: no se puede verificar a quién pertenece", async () => {
+    bd.reiniciar({ empleados: [A], saldos: [saldoA], incidencias: [incidenciaA], vacaciones: [espejoA], detalle: [{ id: 1, incidencia_id: 10, saldo_id: 999, dias_tomados: 5 }] });
+    const err = await debeBloquear("DETALLE_SALDO_AJENO");
+    expect(err.message).toContain("inexistente");
+  });
+
+  it("si la fecha no cambia no se evalúa nada ni se bloquea (comportamiento actual idéntico)", async () => {
+    bd.reiniciar({ empleados: [A], saldos: [saldoA], incidencias: [incidenciaA], vacaciones: [espejoA], detalle: [{ id: 1, incidencia_id: 10, saldo_id: 999, dias_tomados: 5 }] });
+    const r = await cambiarFechaAlta("2025-01-01");
+    expect(r.aplicado).toBe(false);
+  });
+});

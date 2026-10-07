@@ -34,7 +34,8 @@ export type CodigoBloqueoRebase =
   | "FECHA_NUEVA_FUTURA"
   | "VACACION_ANTERIOR_A_NUEVA_ALTA"
   | "DEFICIT_AL_REBASAR"
-  | "DETALLE_AJENO";
+  | "DETALLE_AJENO"
+  | "DETALLE_SALDO_AJENO";
 export type BloqueoRebase = { codigo: CodigoBloqueoRebase; mensaje: string };
 
 export type PeriodoRebase = { anioLaboral: number; inicio: string; fin: string; otorgados: number; consumidos: number; disponibles: number; estado: "Vigente" | "Vencido" };

@@ -122,6 +122,9 @@ export class BdVac {
       const incs = new Set(t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1] && TIPOS.includes(i.tipo)).map((i) => i.id));
       return t.detalle.filter((d) => incs.has(d.incidencia_id)).map((d) => ({ ...d }));
     }
+    if (sql.startsWith("SELECT id, empresa_id, id_empleado FROM saldos_vacaciones WHERE id IN (")) {
+      return t.saldos.filter((s) => (p as number[]).includes(s.id)).map((s) => ({ id: s.id, empresa_id: s.empresa_id, id_empleado: s.id_empleado }));
+    }
     if (sql.startsWith("SELECT d.id, d.incidencia_id, d.saldo_id, d.dias_tomados FROM detalle_consumo_vacaciones d INNER JOIN saldos_vacaciones s")) {
       const ids = new Set(this.saldosDe(Number(p[0]), Number(p[1])).map((s) => s.id));
       return t.detalle.filter((d) => ids.has(d.saldo_id)).map((d) => ({ ...d }));

@@ -32,7 +32,9 @@ const SQL = {
   saldos: "SELECT id, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado FROM saldos_vacaciones WHERE empresa_id = ? AND id_empleado = ? ORDER BY id",
 };
 
-type Hechos = { hechos: HechoVacacion[]; saldos: SaldoPrevio[]; detalleIds: number[]; ajenos: number[]; lineasPrevias: Map<number, number> };
+/** Línea de consumo de una vacación DEL empleado cuyo `saldo_id` no pertenece a (empresa, empleado): base corrupta que exige revisión administrada. */
+type DetalleCruzado = { detalleId: number; incidenciaId: number; saldoId: number; duenoEmpresa: number | null; duenoEmpleado: number | null };
+type Hechos = { hechos: HechoVacacion[]; saldos: SaldoPrevio[]; detalleIds: number[]; ajenos: number[]; cruzados: DetalleCruzado[]; lineasPrevias: Map<number, number> };
 
 async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: number, bloqueo: boolean): Promise<Hechos> {
   const fu = bloqueo ? " FOR UPDATE" : "";
@@ -40,6 +42,17 @@ async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: n
   const detH = await consulta(SQL.detalleDeHechos + fu, [empresaId, idEmpleado]);
   const detS = await consulta(SQL.detalleDeSaldos + fu, [empresaId, idEmpleado]);
   const sal = await consulta(SQL.saldos + fu, [empresaId, idEmpleado]);
+  // Dueño real de cada saldo al que apunta el detalle de las vacaciones del empleado (lectura simple, sin bloquear filas ajenas)
+  const duenos = new Map<number, { empresa: number; empleado: number }>();
+  const saldoIdsDetalle = [...new Set(detH.map((d) => Number(d.saldo_id)))];
+  for (const t of trozos(saldoIdsDetalle)) {
+    for (const r of await consulta(`SELECT id, empresa_id, id_empleado FROM saldos_vacaciones WHERE id IN (${ph(t.length)})`, t)) {
+      duenos.set(Number(r.id), { empresa: Number(r.empresa_id), empleado: Number(r.id_empleado) });
+    }
+  }
+  const cruzados: DetalleCruzado[] = detH
+    .filter((d) => { const o = duenos.get(Number(d.saldo_id)); return !o || o.empresa !== empresaId || o.empleado !== idEmpleado; })
+    .map((d) => { const o = duenos.get(Number(d.saldo_id)); return { detalleId: Number(d.id), incidenciaId: Number(d.incidencia_id), saldoId: Number(d.saldo_id), duenoEmpresa: o?.empresa ?? null, duenoEmpleado: o?.empleado ?? null }; });
   const consumo = new Map<number, number>();
   for (const d of detH) consumo.set(Number(d.incidencia_id), r2((consumo.get(Number(d.incidencia_id)) ?? 0) + Number(d.dias_tomados)));
   const ids = new Set(inc.map((i) => Number(i.id)));
@@ -55,6 +68,7 @@ async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: n
     detalleIds: [...new Set([...detH, ...detS].map((d) => Number(d.id)))],
     // detalle sobre saldos del empleado que NO proviene de sus incidencias de vacaciones: no se puede reubicar con certeza
     ajenos: detS.filter((d) => !ids.has(Number(d.incidencia_id))).map((d) => Number(d.id)),
+    cruzados,
     lineasPrevias: consumo,
   };
 }
@@ -66,6 +80,15 @@ async function armarPlan(consulta: Consulta, empresaId: number, idEmpleado: numb
   const plan = planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: h.hechos, saldos: h.saldos, feriados });
   if (plan.aplica && h.ajenos.length) {
     plan.bloqueos.push({ codigo: "DETALLE_AJENO", mensaje: `Hay ${h.ajenos.length} línea(s) de consumo sobre los saldos del colaborador que no pertenecen a sus vacaciones registradas: no se pueden reubicar con certeza.` });
+  }
+  // HARD BLOCKER: consumo de una vacación del colaborador asociado a un saldo de OTRO empleado u OTRA empresa. Se valida en la vista previa y en el
+  // rebase real, ANTES de cualquier escritura. Nunca se corrige, reasigna ni borra automáticamente (podría modificar datos ajenos).
+  if (plan.aplica && h.cruzados.length) {
+    const ejemplo = h.cruzados.slice(0, 5).map((c) => `incidencia #${c.incidenciaId} → saldo #${c.saldoId}${c.duenoEmpresa == null ? " (inexistente)" : c.duenoEmpresa !== empresaId ? ` (de otra empresa, #${c.duenoEmpresa})` : ` (de otro empleado, #${c.duenoEmpleado})`}`).join("; ");
+    plan.bloqueos.push({
+      codigo: "DETALLE_SALDO_AJENO",
+      mensaje: `Existe consumo de una vacación del colaborador asociado a un saldo que no le pertenece (${h.cruzados.length} línea(s): ${ejemplo}${h.cruzados.length > 5 ? "…" : ""}). Requiere revisión administrada: no se corrige, reasigna ni borra automáticamente.`,
+    });
   }
   return { plan, datos: h };
 }
@@ -105,6 +128,8 @@ export async function rebasearVacacionesEnConexion(
   const { plan, datos } = await armarPlan(consulta, empresaId, idEmpleado, fechaAnterior, fechaNueva, hoy, true);
   if (!plan.aplica) return { aplicado: false, plan };
   if (plan.bloqueos.length) throw new RebaseBloqueadoError(plan.bloqueos.map((b) => b.mensaje).join(" "), plan);
+  // Defensa en profundidad: jamás se borra una línea de detalle que apunte a un saldo ajeno (el bloqueo anterior ya lo impide).
+  if (datos.cruzados.length) throw new RebaseBloqueadoError("Detalle FIFO cruzado hacia saldos ajenos: requiere revisión administrada.", plan);
 
   const cuenta = async (sql: string, p: SqlParams) => Number((await consulta(sql, p))[0]?.n ?? 0);
   const antes = {
