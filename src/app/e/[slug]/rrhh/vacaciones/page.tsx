@@ -19,6 +19,7 @@ import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaci
 import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
 import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
 import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
+import { ExportarHistorialVacaciones } from "@/components/rrhh/exportar-historial-vacaciones";
 import { tienePermiso } from "@/lib/permisos-shared";
 import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
@@ -335,6 +336,7 @@ export default function VacacionesPage() {
 
       {usaSaldo && historial ? <HistorialPeriodosVacaciones historial={historial} admin /> : null}
 
+      {puedeImportarHistorial ? <ExportarHistorialVacaciones slug={slug} /> : null}
       {puedeImportarHistorial ? <ImportarHistorialVacaciones slug={slug} /> : null}
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
