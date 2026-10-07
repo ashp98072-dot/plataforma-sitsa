@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
 const dma = (iso: string) => {
@@ -73,14 +74,22 @@ export function HistorialPeriodosVacaciones({ historial, admin = false }: { hist
             </thead>
             <tbody>
               {periodos.map((p) => (
-                <tr key={p.id} className="border-t border-[var(--border)]">
-                  <td className="py-1 pr-3">{p.anioLaboral ?? "—"}</td>
-                  <td className="py-1 pr-3">{dma(p.periodoInicio)} → {dma(p.periodoFin)}</td>
-                  <td className="py-1 pr-3 text-right">{dias(p.diasOtorgados)}</td>
-                  <td className="py-1 pr-3 text-right">{dias(p.diasConsumidos)}</td>
-                  <td className="py-1 pr-3 text-right">{dias(p.diasDisponibles)}</td>
-                  <td className={`py-1 ${COLOR_ESTADO[p.estadoVisual] ?? ""}`}>{p.estadoVisual}</td>
-                </tr>
+                <Fragment key={p.id}>
+                  <tr className="border-t border-[var(--border)]">
+                    <td className="py-1 pr-3">{p.anioLaboral ?? "—"}</td>
+                    <td className="py-1 pr-3">{dma(p.periodoInicio)} → {dma(p.periodoFin)}</td>
+                    <td className="py-1 pr-3 text-right">{dias(p.diasOtorgados)}</td>
+                    <td className="py-1 pr-3 text-right">{dias(p.diasConsumidos)}</td>
+                    <td className="py-1 pr-3 text-right">{dias(p.diasDisponibles)}</td>
+                    <td className={`py-1 ${COLOR_ESTADO[p.estadoVisual] ?? ""}`}>{p.estadoVisual}</td>
+                  </tr>
+                  {(p.consumos ?? []).map((c) => (
+                    <tr key={`${p.id}-${c.incidenciaId}`} className="text-[var(--muted)]">
+                      <td className="pb-1 pr-3" />
+                      <td className="pb-1 pr-3" colSpan={5}>↳ {c.tipo} · {dma(c.fechaInicio)} → {dma(c.fechaFin)} · {dias(c.dias)} día(s) consumidos de este período</td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
           </table>
