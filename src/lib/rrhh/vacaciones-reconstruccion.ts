@@ -21,13 +21,18 @@ import { differenceInYears } from "date-fns";
  *   - saldo final, períodos vencidos y advertencias.
  *
  * Supuestos explícitos (documentados en docs/RRHH-VACACIONES-RECONSTRUCCION.md):
- *   - Cada vacación consume saldo en su `fecha_inicio` (si es futura, en la fecha de hoy): la disponibilidad se evalúa a esa fecha
+ *   - Cada vacación consume saldo en su `fecha_inicio`: la disponibilidad se evalúa a esa fecha
  *     (períodos ya iniciados, acumulación proporcional del período en curso, vencimiento y tope vigentes a esa fecha).
  *   - VACACIÓN QUE CRUZA UN ANIVERSARIO: se reparte por TRAMOS con las fechas reales. Cada tramo (desde el inicio de la vacación hasta el
  *     día anterior al aniversario, y desde el aniversario en adelante) consume con FIFO (`anio_laboral` ASC) sobre los períodos que
  *     EXISTEN en la fecha de inicio del tramo; los días hábiles de cada tramo se cuentan con la misma regla del módulo (sin domingos ni
  *     feriados). El reparto es PROVISIONAL: se emite VACACION_CRUZA_ANIVERSARIO (DECISION) con el detalle para que RRHH lo confirme.
  *   - Orden: `fecha_inicio` ASC y, como desempate, el orden de origen (fila del archivo) ASC.
+ *   - El archivo oficial contiene SOLO vacaciones YA TOMADAS: una vacación con `fecha_inicio` > hoy es un ERROR (VACACION_FUTURA); NO consume
+ *     saldo, no genera FIFO y no reduce el saldo simulado (queda visible en el reporte con `excluida = "VACACION_FUTURA"`).
+ *   - VACACIONES SUPERPUESTAS: el estado interno de la simulación solo avanza hacia adelante, así que con filas superpuestas el FIFO no
+ *     representaría fielmente la cronología. Se detectan ANTES de reaplicar; el empleado queda `bloqueado = "VACACIONES_SUPERPUESTAS"`
+ *     (sin simulación ni saldo) y cada par es un ERROR. No se inventa ninguna prioridad entre vacaciones superpuestas.
  *   - Si no hay saldo suficiente a esa fecha, la vacación NO se descarta (el historial oficial es la verdad): consume lo disponible,
  *     el faltante queda como `deficit` y se emite la advertencia SALDO_INSUFICIENTE que requiere decisión de RRHH.
  *   - Una vacación histórica nunca se descarta porque su período hoy esté vencido: se explica cronológicamente (consumió cuando estaba vigente).
@@ -55,7 +60,7 @@ export type VacacionReconstruccion = {
   observacion?: string | null;
 };
 
-export type SeveridadReconstruccion = "BLOQUEANTE" | "DECISION" | "ADVERTENCIA" | "INFO";
+export type SeveridadReconstruccion = "BLOQUEANTE" | "ERROR" | "DECISION" | "ADVERTENCIA" | "INFO";
 export type CodigoReconstruccion =
   | "SIN_FECHA_BASE"
   | "FECHA_SOSPECHOSA"
@@ -92,14 +97,14 @@ export type ResumenDiasReconstruccion = { otorgado: number; consumido: number; r
 
 export type VacacionReconstruida = VacacionReconstruccion & {
   /** null = procesada; si no, motivo por el que no consume saldo. */
-  excluida: "ANTERIOR_A_FECHA_BASE" | "EMPLEADO_BLOQUEADO" | null;
+  excluida: "ANTERIOR_A_FECHA_BASE" | "VACACION_FUTURA" | "EMPLEADO_BLOQUEADO" | null;
   consumido: number;
   deficit: number;
 };
 
 export type ResultadoReconstruccion = {
   empleadoId: number;
-  bloqueado: "SIN_FECHA_BASE" | "FECHA_SOSPECHOSA" | "FECHA_FUTURA" | null;
+  bloqueado: "SIN_FECHA_BASE" | "FECHA_SOSPECHOSA" | "FECHA_FUTURA" | "VACACIONES_SUPERPUESTAS" | null;
   periodos: PeriodoReconstruido[];
   consumos: ConsumoReconstruido[];
   vacaciones: VacacionReconstruida[];
@@ -224,31 +229,46 @@ export function reconstruirEmpleado(
     return { anioLaboral: i + 1, inicio: p.inicio, fin: p.fin, otorgados: 0, disponibles: 0, consumidos: 0, recortados: 0, perdidos: 0, vencido: false };
   });
 
-  // Advertencias del historial
-  for (let i = 0; i < orden.length; i++) {
-    for (let j = i + 1; j < orden.length; j++) {
-      const dias = diasSuperposicion({ inicio: deIso(orden[i].inicio), fin: deIso(orden[i].fin) }, { inicio: deIso(orden[j].inicio), fin: deIso(orden[j].fin) });
-      if (dias > 0) {
-        advertencias.push({
-          codigo: "VACACIONES_SUPERPUESTAS", severidad: "DECISION", origen: orden[j].origen, dias,
-          mensaje: `Las vacaciones de las filas ${orden[i].origen} y ${orden[j].origen} se superponen ${dias} día(s).`,
-        });
-      }
-    }
-  }
-
-  // Reaplicación cronológica con FIFO
-  const consumos: ConsumoReconstruido[] = [];
+  // Clasificación previa por fila (se reporta aunque el empleado quede bloqueado por superposición después).
   for (const v of vacaciones) {
     const inicio = deIso(v.inicio);
     if (inicio < base) {
       v.excluida = "ANTERIOR_A_FECHA_BASE";
       advertencias.push({ codigo: "VACACION_ANTERIOR_A_FECHA_BASE", severidad: "DECISION", origen: v.origen, dias: v.dias, mensaje: `La fila ${v.origen} (${v.inicio}) es anterior a la fecha base ${emp.fechaAlta}: no consume saldo.` });
-      continue;
+    } else if (inicio > hoy) {
+      v.excluida = "VACACION_FUTURA";
+      advertencias.push({
+        codigo: "VACACION_FUTURA", severidad: "ERROR", origen: v.origen, dias: v.dias,
+        mensaje: `La fila ${v.origen} (${v.inicio} → ${v.fin}) corresponde a una vacación futura. El archivo de reconstrucción debe contener únicamente vacaciones ya tomadas. No se incluyó en el saldo simulado.`,
+      });
     }
-    if (inicio > hoy) {
-      advertencias.push({ codigo: "VACACION_FUTURA", severidad: "ADVERTENCIA", origen: v.origen, dias: v.dias, mensaje: `La fila ${v.origen} (${v.inicio}) es futura: consume saldo a la fecha de hoy.` });
+  }
+
+  // Superposiciones: se detectan ANTES de reaplicar. Con filas superpuestas la cronología no es confiable (el estado de la simulación
+  // no retrocede), así que el empleado queda bloqueado: se informan las filas, fechas y días de traslape, pero NO se simula.
+  let haySuperpuestas = false;
+  for (let i = 0; i < orden.length; i++) {
+    for (let j = i + 1; j < orden.length; j++) {
+      const dias = diasSuperposicion({ inicio: deIso(orden[i].inicio), fin: deIso(orden[i].fin) }, { inicio: deIso(orden[j].inicio), fin: deIso(orden[j].fin) });
+      if (dias > 0) {
+        haySuperpuestas = true;
+        advertencias.push({
+          codigo: "VACACIONES_SUPERPUESTAS", severidad: "ERROR", origen: orden[j].origen, dias,
+          mensaje: `Las vacaciones de las filas ${orden[i].origen} (${orden[i].inicio} → ${orden[i].fin}) y ${orden[j].origen} (${orden[j].inicio} → ${orden[j].fin}) se superponen ${dias} día(s). La reconstrucción de este empleado no es confiable hasta corregir el archivo; no se simuló su saldo.`,
+        });
+      }
     }
+  }
+  if (haySuperpuestas) {
+    for (const v of vacaciones) v.excluida = v.excluida ?? "EMPLEADO_BLOQUEADO";
+    return resultado("VACACIONES_SUPERPUESTAS", [], [], 0);
+  }
+
+  // Reaplicación cronológica con FIFO
+  const consumos: ConsumoReconstruido[] = [];
+  for (const v of vacaciones) {
+    if (v.excluida) continue; // anterior a la fecha base o futura: se reportan, no consumen saldo
+    const inicio = deIso(v.inicio);
     const fin = deIso(v.fin);
     // Tramos: se parte la vacación en cada inicio de período (aniversario) que cae DENTRO del rango (después del primer día).
     const cortes = periodos.map((p) => p.inicio).filter((i) => i > inicio && i <= fin).sort((x, y) => x.getTime() - y.getTime());
@@ -271,8 +291,7 @@ export function reconstruirEmpleado(
     let deficitTotal = 0;
     for (const t of asignacion) {
       if (t.asignados <= 0) continue;
-      let fecha = t.desde;
-      if (fecha > hoy) fecha = hoy;
+      const fecha = t.desde > hoy ? hoy : t.desde; // un tramo posterior a hoy (vacación en curso) se evalúa a hoy
       avanzar(periodos, fecha);
       let resto = t.asignados;
       const tomadoPorAnio: string[] = [];

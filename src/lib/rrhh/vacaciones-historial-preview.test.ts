@@ -86,11 +86,16 @@ describe("vista previa de la reconstrucción (SOLO lectura)", () => {
     expect(r.resumen.diasCalculadosDistintos).toBeGreaterThanOrEqual(1);
   });
 
-  it("vacaciones anteriores a la fecha base, futuras y superpuestas se reportan", async () => {
+  it("vacaciones anteriores a la fecha base, futuras y superpuestas se reportan (aunque el empleado quede bloqueado por superposición)", async () => {
     const r = await previsualizarHistorial(7, archivo(CSV), HOY);
     expect(r.resumen.anterioresAFechaBase).toBe(1);
     expect(r.resumen.futuras).toBe(1);
     expect(r.resumen.vacacionesSuperpuestas).toBeGreaterThanOrEqual(1);
+    expect(r.problemas.find((p) => p.codigo === "VACACION_FUTURA")!.severidad).toBe("ERROR");
+    const sup = r.problemas.find((p) => p.codigo === "VACACIONES_SUPERPUESTAS")!;
+    expect(sup.severidad).toBe("ERROR");
+    expect(sup.empleadoId).toBe(1);
+    expect(r.empleados.find((e) => e.empleadoId === 1)!.bloqueado).toBe("VACACIONES_SUPERPUESTAS");
   });
 
   it("ELISA (fecha_alta 1899-12-31): BLOQUEANTE; no se simula su saldo y la vista previa NO puede aplicarse", async () => {
@@ -99,7 +104,7 @@ describe("vista previa de la reconstrucción (SOLO lectura)", () => {
     expect(elisa.bloqueado).toBe("FECHA_SOSPECHOSA");
     expect(elisa.periodos).toBe(0);
     expect(r.problemas.some((p) => p.empleadoId === 37 && p.severidad === "BLOQUEANTE" && p.codigo === "FECHA_SOSPECHOSA")).toBe(true);
-    expect(r.resumen.empleadosBloqueados).toBe(1);
+    expect(r.resumen.empleadosBloqueados).toBe(2); // Elisa (fecha) y Ana (filas superpuestas)
     expect(r.puedeAplicarse).toBe(false);
   });
 
@@ -190,5 +195,42 @@ describe("resolución de empleados y cruce de aniversario", () => {
     expect(d.consumido).toBe(12);
     expect(Math.round((d.consumido + d.recortadoPorTope + d.perdidoPorVencimiento + d.saldoUtilizable) * 100) / 100).toBe(d.otorgado);
     expect(db.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("vacaciones futuras y superpuestas: el preview NO es aplicable", () => {
+  const cab = "codigo,fecha_inicio,fecha_fin,dias_habiles";
+
+  it("vacación futura: puedeAplicarse = false, la fila queda visible y no altera el saldo simulado", async () => {
+    const limpio = await previsualizarHistorial(7, archivo([cab, "E-1,2024-06-03,2024-06-14,11"].join("\n")), HOY);
+    const conFutura = await previsualizarHistorial(7, archivo([cab, "E-1,2024-06-03,2024-06-14,11", "E-1,2026-12-01,2026-12-05,5"].join("\n")), HOY);
+    expect(limpio.puedeAplicarse).toBe(true);
+    expect(conFutura.puedeAplicarse).toBe(false);
+    const p = conFutura.problemas.find((x) => x.codigo === "VACACION_FUTURA")!;
+    expect(p.severidad).toBe("ERROR");
+    expect(p.fila).toBe(3);
+    expect(p.mensaje).toContain("No se incluyó en el saldo simulado");
+    const a = conFutura.empleados[0];
+    expect(a.vacaciones).toBe(2);
+    expect(a.saldoFinal).toBe(limpio.empleados[0].saldoFinal);
+    expect(a.deficit).toBe(0);
+    expect(a.resumenDias).toEqual(limpio.empleados[0].resumenDias);
+  });
+
+  it("A cruza aniversario y B empieza dentro de A: detecta la superposición, puedeAplicarse = false y NO presenta saldo simulado", async () => {
+    const r = await previsualizarHistorial(7, archivo([cab, "E-1,2024-04-05,2024-04-25,18", "E-1,2024-04-10,2024-04-12,3"].join("\n")), HOY);
+    const sup = r.problemas.find((x) => x.codigo === "VACACIONES_SUPERPUESTAS")!;
+    expect(sup.severidad).toBe("ERROR");
+    expect(sup.empleado).toBe("Ana Pérez");
+    expect(sup.mensaje).toContain("2024-04-05");
+    expect(sup.mensaje).toContain("3 día(s)");
+    expect(r.puedeAplicarse).toBe(false);
+    const e = r.empleados[0];
+    expect(e.bloqueado).toBe("VACACIONES_SUPERPUESTAS");
+    expect(e.periodos).toBe(0);
+    expect(e.saldoFinal).toBe(0);
+    expect(e.resumenDias.consumido).toBe(0);
+    expect(r.resumen.empleadosBloqueados).toBe(1);
+    expect(r.problemas.some((x) => x.codigo === "VACACION_CRUZA_ANIVERSARIO")).toBe(false);
   });
 });

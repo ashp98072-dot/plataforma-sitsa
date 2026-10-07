@@ -113,8 +113,8 @@ export function ImportarHistorialVacaciones({ slug }: { slug: string }) {
                       <td className="pr-3 text-right">{e.periodos}</td>
                       <td className="pr-3 text-right">{e.bloqueado ? "—" : e.saldoFinal.toFixed(2)}</td>
                       <td className="pr-3 text-right">{e.deficit > 0 ? e.deficit.toFixed(2) : "—"}</td>
-                      <td className={e.bloqueado ? "text-red-300" : e.advertencias.some((a) => a.severidad === "DECISION") ? "text-amber-300" : "text-emerald-300"}>
-                        {e.bloqueado ? "Bloqueante" : e.advertencias.some((a) => a.severidad === "DECISION") ? "Requiere decisión" : "OK"}
+                      <td className={e.bloqueado || e.advertencias.some((a) => a.severidad === "ERROR") ? "text-red-300" : e.advertencias.some((a) => a.severidad === "DECISION") ? "text-amber-300" : "text-emerald-300"}>
+                        {e.bloqueado === "VACACIONES_SUPERPUESTAS" ? "Bloqueante: filas superpuestas (no confiable)" : e.bloqueado ? "Bloqueante" : e.advertencias.some((a) => a.severidad === "ERROR") ? "Con errores: corregir el archivo" : e.advertencias.some((a) => a.severidad === "DECISION") ? "Requiere decisión" : "OK"}
                       </td>
                     </tr>
                   ))}

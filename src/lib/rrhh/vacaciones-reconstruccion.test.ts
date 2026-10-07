@@ -174,10 +174,38 @@ describe("reaplicación cronológica con FIFO", () => {
     expect(r.advertencias.find((a) => a.codigo === "SALDO_INSUFICIENTE")!.severidad).toBe("DECISION");
   });
 
-  it("vacaciones superpuestas: advierte (decisión) y las procesa", () => {
+  it("vacaciones superpuestas: ERROR + empleado BLOQUEADO; no se simula (sin consumos ni saldo) y se informan filas, fechas y días", () => {
     const r = reconstruirEmpleado(emp(alta), [vac(1, "2024-06-03", "2024-06-14", 10), vac(2, "2024-06-10", "2024-06-21", 10)], HOY);
-    expect(codigos(r)).toContain("VACACIONES_SUPERPUESTAS");
-    expect(r.vacaciones.every((v) => v.excluida === null)).toBe(true);
+    const w = r.advertencias.find((x) => x.codigo === "VACACIONES_SUPERPUESTAS")!;
+    expect(w.severidad).toBe("ERROR");
+    expect(w.dias).toBe(5); // 10..14 de junio
+    expect(w.mensaje).toContain("2024-06-03");
+    expect(w.mensaje).toContain("2024-06-21");
+    expect(w.mensaje).toContain("no es confiable");
+    expect(r.bloqueado).toBe("VACACIONES_SUPERPUESTAS");
+    expect(r.consumos).toEqual([]);
+    expect(r.periodos).toEqual([]);
+    expect(r.saldoFinal).toBe(0);
+    expect(r.vacaciones.map((v) => [v.consumido, v.deficit, v.excluida])).toEqual([[0, 0, "EMPLEADO_BLOQUEADO"], [0, 0, "EMPLEADO_BLOQUEADO"]]);
+    expect(r.totalDiasHistorial).toBe(20); // las filas siguen visibles en el reporte
+  });
+
+  it("A cruza un aniversario y B empieza DENTRO de A: se detecta la superposición y NO se simula (el orden cronológico no es confiable)", () => {
+    // A = 2024-04-05..04-25 (cruza el aniversario 2024-04-13); B = 2024-04-10..04-12 empieza dentro de A (después de A por fecha_inicio,
+    // pero su fecha real es anterior al avance interno de A hasta el 13/04).
+    const r = reconstruirEmpleado(emp(alta), [vac(1, "2024-04-05", "2024-04-25", 18), vac(2, "2024-04-10", "2024-04-12", 3)], HOY);
+    expect(r.bloqueado).toBe("VACACIONES_SUPERPUESTAS");
+    expect(r.advertencias.filter((x) => x.codigo === "VACACIONES_SUPERPUESTAS")).toHaveLength(1);
+    expect(r.advertencias.find((x) => x.codigo === "VACACIONES_SUPERPUESTAS")!.dias).toBe(3);
+    expect(r.consumos).toEqual([]);
+    expect(codigos(r)).not.toContain("VACACION_CRUZA_ANIVERSARIO"); // nunca se llegó a repartir
+    expect(r.saldoFinal).toBe(0);
+  });
+
+  it("un empleado sin superposición no se bloquea aunque tenga vacaciones contiguas (fin de una = día anterior al inicio de la otra)", () => {
+    const r = reconstruirEmpleado(emp(alta), [vac(1, "2024-06-03", "2024-06-07", 5), vac(2, "2024-06-08", "2024-06-14", 6)], HOY);
+    expect(r.bloqueado).toBeNull();
+    expect(codigos(r)).not.toContain("VACACIONES_SUPERPUESTAS");
   });
 
   it("vacación anterior a la fecha base: no consume saldo y se advierte", () => {
@@ -187,10 +215,39 @@ describe("reaplicación cronológica con FIFO", () => {
     expect(codigos(r)).toContain("VACACION_ANTERIOR_A_FECHA_BASE");
   });
 
-  it("vacación futura: se advierte y consume a la fecha de hoy", () => {
+  it("vacación FUTURA (archivo = solo vacaciones ya tomadas): ERROR, no consume saldo, no genera FIFO y queda visible", () => {
+    const sin = reconstruirEmpleado(emp(alta), [vac(1, "2024-06-03", "2024-06-14", 10)], HOY);
+    const con = reconstruirEmpleado(emp(alta), [vac(1, "2024-06-03", "2024-06-14", 10), vac(2, "2026-12-01", "2026-12-12", 8)], HOY);
+    const w = con.advertencias.find((x) => x.codigo === "VACACION_FUTURA")!;
+    expect(w.severidad).toBe("ERROR");
+    expect(w.origen).toBe(2);
+    expect(w.mensaje).toContain("únicamente vacaciones ya tomadas");
+    expect(w.mensaje).toContain("No se incluyó en el saldo simulado");
+    const futura = con.vacaciones.find((v) => v.origen === 2)!; // sigue en el reporte
+    expect(futura.excluida).toBe("VACACION_FUTURA");
+    expect(futura.consumido).toBe(0);
+    expect(futura.deficit).toBe(0);
+    expect(con.consumos.some((c) => c.origen === 2)).toBe(false);
+    // el saldo y los períodos son EXACTAMENTE los de la reconstrucción sin la fila futura
+    expect(con.saldoFinal).toBe(sin.saldoFinal);
+    expect(con.periodos).toEqual(sin.periodos);
+    expect(con.resumenDias).toEqual(sin.resumenDias);
+    expect(con.totalDiasHistorial).toBe(18); // la fila se conserva en el total del archivo
+  });
+
+  it("vacación futura sola: saldo intacto, sin consumos, sin faltante", () => {
     const r = reconstruirEmpleado(emp(alta), [vac(1, "2026-12-01", "2026-12-12", 8)], HOY);
-    expect(codigos(r)).toContain("VACACION_FUTURA");
-    expect(r.vacaciones[0].consumido).toBe(8);
+    const base = reconstruirEmpleado(emp(alta), [], HOY);
+    expect(r.consumos).toEqual([]);
+    expect(r.saldoFinal).toBe(base.saldoFinal);
+    expect(r.vacaciones[0]).toMatchObject({ excluida: "VACACION_FUTURA", consumido: 0, deficit: 0 });
+    expect(codigos(r)).not.toContain("SALDO_INSUFICIENTE");
+  });
+
+  it("una vacación que empieza HOY no es futura", () => {
+    const r = reconstruirEmpleado(emp(alta), [vac(1, "2026-10-06", "2026-10-09", 4)], HOY);
+    expect(codigos(r)).not.toContain("VACACION_FUTURA");
+    expect(r.vacaciones[0].consumido).toBe(4);
   });
 });
 
