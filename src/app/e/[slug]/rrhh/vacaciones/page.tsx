@@ -18,6 +18,8 @@ import {
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
 import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
 import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
+import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
+import { tienePermiso } from "@/lib/permisos-shared";
 import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
@@ -45,6 +47,8 @@ export default function VacacionesPage() {
   const slug = String(useParams().slug);
   const { rol, permisos } = useEmpresaSession();
   const puedeEliminar = puedeEliminarVacaciones(rol, permisos);
+  // Importar historial (solo vista previa): el endpoint exige RRHH · Vacaciones · editar; aquí solo se oculta la herramienta.
+  const puedeImportarHistorial = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [empleadoId, setEmpleadoId] = useState(0);
@@ -330,6 +334,8 @@ export default function VacacionesPage() {
       ) : null}
 
       {usaSaldo && historial ? <HistorialPeriodosVacaciones historial={historial} admin /> : null}
+
+      {puedeImportarHistorial ? <ImportarHistorialVacaciones slug={slug} /> : null}
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
