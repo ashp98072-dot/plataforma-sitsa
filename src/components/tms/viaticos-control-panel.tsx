@@ -26,8 +26,7 @@ import {
   type GruposAbiertos,
 } from "@/lib/tms/viaticos-grupos-expansion";
 import { TEXTO_FIRMA_INTERNA } from "@/lib/firmas/textos";
-import { hoyLocal } from "@/lib/rrhh/dates";
-import { valorPeriodoHoy, type TipoPeriodoComprobante } from "@/lib/tms/viaticos-comprobante-periodo";
+import { coincideFiltroReporte, tituloReporte, type EstadoReporte } from "@/lib/tms/viaticos-reporte-filtros";
 import type { FirmaCanvasHandle } from "@/components/tms/firma-canvas";
 import SelectorFirma from "@/components/tms/selector-firma";
 import HistorialFirmasModal from "@/components/tms/historial-firmas-modal";
@@ -155,18 +154,15 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
   // VIATICOS-COMPROBANTE-PDF — permiso propio y explícito, nunca por
   // defecto (ver requireTenantViaticosComprobantes en tenant.ts).
   const [puedeComprobantes, setPuedeComprobantes] = useState(false);
-  // VIATICOS-COMPROBANTE-PERIODO — selector propio del comprobante histórico (Día/Semana/Mes), TOTALMENTE
-  // independiente de fEstado/fFechaDesde/fFechaHasta/modoAgrupacion (esos filtran el LISTADO en pantalla; el
-  // comprobante es un reporte histórico separado por `autorizado_en`, no por lo que está visible en la tabla).
-  // Default pedido por el ticket: DÍA + fecha de hoy Guatemala.
-  const [tipoPeriodoComprobante, setTipoPeriodoComprobante] = useState<TipoPeriodoComprobante>("DIA");
-  const [valorPeriodoComprobante, setValorPeriodoComprobante] = useState(() => hoyLocal());
+  // El reporte comparte los filtros visibles; no tiene un período histórico independiente.
   const [descargandoComprobante, setDescargandoComprobante] = useState(false);
   const [errorComprobante, setErrorComprobante] = useState("");
+  const [contextoPdf, setContextoPdf] = useState("");
   // VIATICOS-COMPROBANTE-ADMIN-1 — botón Excel independiente: su propio loading/error, para que una descarga
-  // no bloquee ni pise el mensaje de la otra (mismo período/valor, comparten el resto del selector).
+  // no bloquee ni pise el mensaje de la otra (ambos usan los filtros del listado).
   const [descargandoComprobanteExcel, setDescargandoComprobanteExcel] = useState(false);
   const [errorComprobanteExcel, setErrorComprobanteExcel] = useState("");
+  const [contextoExcel, setContextoExcel] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [mensaje, setMensaje] = useState("");
@@ -338,19 +334,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setSeleccionados(new Set());
   }, [fBusqueda, fRol, fMetodo, modoAgrupacion]);
 
-  const filtrados = items.filter((r) => {
-    if (fBusqueda.trim()) {
-      const t = fBusqueda.trim().toLowerCase();
-      const coincide =
-        r.planCodigo.toLowerCase().includes(t) ||
-        (r.cliente ?? "").toLowerCase().includes(t) ||
-        r.personalNombre.toLowerCase().includes(t);
-      if (!coincide) return false;
-    }
-    if (fRol && r.rol !== fRol) return false;
-    if (fMetodo && r.metodoPago !== fMetodo) return false;
-    return true;
-  });
+  const filtrados = items.filter((r) => coincideFiltroReporte(r, { busqueda: fBusqueda, rol: fRol, metodo: fMetodo }));
 
   function toggleSeleccion(id: number) {
     setSeleccionados((prev) => alternarEnSeleccion(prev, id));
@@ -603,16 +587,13 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     await cargar();
   }
 
-  /**
-   * VIATICOS-COMPROBANTE-PERIODO — cambiar el tipo de período recalcula un valor por defecto razonable (fecha/
-   * semana/mes de HOY, Guatemala) en vez de dejar el input vacío — el usuario ajusta desde ahí si necesita otra
-   * fecha. No dispara ninguna descarga por sí solo.
-   */
-  function cambiarTipoPeriodoComprobante(tipo: TipoPeriodoComprobante) {
-    setTipoPeriodoComprobante(tipo);
-    setValorPeriodoComprobante(valorPeriodoHoy(tipo, hoyLocal()));
-    setErrorComprobante("");
-    setErrorComprobanteExcel("");
+  /** Una sola fuente de parámetros para ambos formatos. */
+  const estadoReporte: EstadoReporte = (fEstado || "TODOS") as EstadoReporte;
+  function parametrosReporte(formato: "pdf" | "excel") {
+    return new URLSearchParams({
+      formato, estado: estadoReporte, busqueda: fBusqueda, empleado: fEmpleado,
+      rol: fRol, metodo: fMetodo, fechaDesde: fFechaDesde, fechaHasta: fFechaHasta, agrupacion: modoAgrupacion,
+    });
   }
 
   /**
@@ -628,11 +609,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setErrorComprobante("");
     setDescargandoComprobante(true);
     try {
-      const params = new URLSearchParams({ periodo: tipoPeriodoComprobante, valor: valorPeriodoComprobante });
-      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-pdf?${params.toString()}`);
+      const params = parametrosReporte("pdf");
+      setContextoPdf(params.toString());
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/reporte?${params.toString()}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setErrorComprobante(data.error ?? `No se pudo generar el comprobante (${res.status}).`);
+        setErrorComprobante(data.error ?? `No se pudo generar el reporte (${res.status}).`);
         return;
       }
       const blob = await res.blob();
@@ -641,7 +623,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = nombreServidor || `viaticos-autorizados-${valorPeriodoComprobante}.pdf`;
+      a.download = nombreServidor || `viaticos-${estadoReporte.toLowerCase()}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -658,11 +640,12 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
     setErrorComprobanteExcel("");
     setDescargandoComprobanteExcel(true);
     try {
-      const params = new URLSearchParams({ periodo: tipoPeriodoComprobante, valor: valorPeriodoComprobante });
-      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/comprobante-autorizacion-excel?${params.toString()}`);
+      const params = parametrosReporte("excel");
+      setContextoExcel(params.toString());
+      const res = await fetch(`/api/empresas/${slug}/tms/viaticos/reporte?${params.toString()}`);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setErrorComprobanteExcel(data.error ?? `No se pudo generar el comprobante (${res.status}).`);
+        setErrorComprobanteExcel(data.error ?? `No se pudo generar el reporte (${res.status}).`);
         return;
       }
       const blob = await res.blob();
@@ -671,7 +654,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = nombreServidor || `viaticos-autorizados-${valorPeriodoComprobante}.xlsx`;
+      a.download = nombreServidor || `viaticos-${estadoReporte.toLowerCase()}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -833,38 +816,16 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         })}
       </div>
 
-      {/* VIATICOS-COMPROBANTE-PERIODO — comprobante HISTÓRICO de autorización por Día/Semana/Mes (criterio
-          autorizado_en, no el estado actual). Permiso propio (viaticos_comprobantes), independiente de
-          autorizar/pagar/liquidar — nunca por defecto, un Admin lo otorga desde Usuarios. Selector propio,
-          totalmente independiente de fEstado/fFechaDesde/fFechaHasta/modoAgrupacion del listado de abajo.
-          Descarga por fetch+blob (nunca un <a href> directo): un 404/400 muestra el mensaje AQUÍ mismo, sin
-          navegar nunca a una pestaña con el JSON crudo. */}
+      {/* Mismo estado, fecha del viaje, filtros y agrupación que el listado; sin selector independiente. */}
       {puedeComprobantes ? (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] p-2">
-          <label className="text-xs text-[var(--muted)]">
-            Comprobante de autorización — Período
-            <select
-              className={`${inputCls} mt-0.5 block`}
-              value={tipoPeriodoComprobante}
-              onChange={(e) => cambiarTipoPeriodoComprobante(e.target.value as TipoPeriodoComprobante)}
-            >
-              <option value="DIA">Día</option>
-              <option value="SEMANA">Semana</option>
-              <option value="MES">Mes</option>
-            </select>
-          </label>
-          <label className="text-xs text-[var(--muted)]">
-            {tipoPeriodoComprobante === "DIA" ? "Fecha" : tipoPeriodoComprobante === "SEMANA" ? "Semana" : "Mes"}
-            <input
-              type={tipoPeriodoComprobante === "DIA" ? "date" : tipoPeriodoComprobante === "SEMANA" ? "week" : "month"}
-              className={`${inputCls} mt-0.5 block`}
-              value={valorPeriodoComprobante}
-              onChange={(e) => setValorPeriodoComprobante(e.target.value)}
-            />
-          </label>
+          <div className="mr-auto text-xs">
+            <h3 className="font-semibold">{tituloReporte(estadoReporte)}</h3>
+            <p className="text-[var(--muted)]">Exporta esta pestaña con los filtros y la agrupación visibles. Desde/Hasta usan la fecha del viaje.</p>
+          </div>
           <button
             type="button"
-            disabled={descargandoComprobante || !valorPeriodoComprobante}
+            disabled={descargandoComprobante || loading}
             onClick={() => void descargarComprobante()}
             className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)] disabled:opacity-50"
           >
@@ -872,14 +833,14 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
           </button>
           <button
             type="button"
-            disabled={descargandoComprobanteExcel || !valorPeriodoComprobante}
+            disabled={descargandoComprobanteExcel || loading}
             onClick={() => void descargarComprobanteExcel()}
             className="rounded border border-[var(--border)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--input)] disabled:opacity-50"
           >
             {descargandoComprobanteExcel ? "Generando…" : "Descargar Excel"}
           </button>
-          {errorComprobante ? <p className="w-full text-xs text-red-300">{errorComprobante}</p> : null}
-          {errorComprobanteExcel ? <p className="w-full text-xs text-red-300">{errorComprobanteExcel}</p> : null}
+          {errorComprobante && contextoPdf === parametrosReporte("pdf").toString() ? <p className="w-full text-xs text-red-300">{errorComprobante}</p> : null}
+          {errorComprobanteExcel && contextoExcel === parametrosReporte("excel").toString() ? <p className="w-full text-xs text-red-300">{errorComprobanteExcel}</p> : null}
         </div>
       ) : null}
 
