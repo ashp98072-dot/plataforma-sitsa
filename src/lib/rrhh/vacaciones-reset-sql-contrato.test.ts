@@ -25,6 +25,7 @@ describe("SQL del reset controlado de vacaciones (preparado; NO ejecutado)", () 
       "detalle sin incidencia", "detalle sin saldo", "i.tipo NOT IN ('Vacaciones','A cuenta de Vacaciones')",
       "SALDOS CON CONSUMO", "SOLICITUDES ACTIVAS", "EVIDENCIAS", "e.fecha_alta < '1980-01-01'", "fecha_alta <> e.fecha_inicio_laboral",
       "CONTEOS POR EMPRESA", "RESUMEN DE BLOQUEOS", "DUPLICADOS IDENTICOS", "CONJUNTO OBJETIVO DEL RESET", "HARD BLOCKER", "PRECONDICION FUERTE",
+      "IDENTIDAD LOGICA de las evidencias", "coincidencias_en_historial", "fk_ev_inc es ON DELETE CASCADE",
     ]) expect(preflight, parte).toContain(parte);
   });
 
@@ -132,6 +133,25 @@ describe("SQL del reset controlado de vacaciones (preparado; NO ejecutado)", () 
     }
     expect(propuesta).toContain("NO se sobrescribe backup_saldos_vacaciones_20261006");
     expect(propuesta).not.toMatch(/(DROP|CREATE OR REPLACE|DELETE|TRUNCATE)[^\n]*backup_saldos_vacaciones_20261006/i);
+  });
+
+  it("respalda las EVIDENCIAS con IDs originales, identidad lógica y todos sus campos (la FK fk_ev_inc es ON DELETE CASCADE)", () => {
+    expect(propuesta).toContain("CREATE TABLE bk_reset_<TS>_evidencias_incidencias AS");
+    for (const c of ["e.id", "e.empresa_id", "e.incidencia_id", "i.id_empleado", "i.tipo", "i.fecha_inicio", "i.fecha_fin", "i.dias_habiles", "e.ruta_archivo", "e.nombre_original", "e.subido_en", "e.subido_por"]) {
+      expect(propuesta, c).toContain(c);
+    }
+    expect(propuesta).toContain("LEFT JOIN incidencias i ON i.id = e.incidencia_id"); // conserva incluso evidencias huérfanas
+    expect(propuesta).toContain("ON DELETE CASCADE");
+    expect(propuesta).toContain("origen_evidencias");
+    expect(propuesta).toContain("APLICADOR CONTROLADO");
+  });
+
+  it("el preflight de evidencias es de solo lectura y empareja por identidad lógica, no por el ID viejo", () => {
+    const bloque = preflight.slice(preflight.indexOf("8b) IDENTIDAD LOGICA"), preflight.indexOf("9) EMPLEADOS"));
+    expect(bloque).toContain("v.fecha_inicio = i.fecha_inicio");
+    expect(bloque).toContain("v.dias_habiles = i.dias_habiles");
+    expect(bloque).not.toMatch(/v\.id\s*=\s*ev\.incidencia_id/);
+    expect(sinComentarios(bloque)).not.toMatch(/\b(INSERT|UPDATE|DELETE|ALTER|DROP|TRUNCATE|CREATE)\b/i);
   });
 
   it("no repara a Elisa ni a Amílcar", () => {

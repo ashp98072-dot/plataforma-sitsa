@@ -70,6 +70,7 @@ export type CodigoReconstruccion =
   | "VACACION_FUTURA"
   | "VACACION_CRUZA_ANIVERSARIO"
   | "VACACIONES_SUPERPUESTAS"
+  | "REPARTO_MANUAL_APLICADO"
   | "SALDO_INSUFICIENTE";
 
 export type AdvertenciaReconstruccion = { codigo: CodigoReconstruccion; severidad: SeveridadReconstruccion; mensaje: string; origen?: number; dias?: number };
@@ -179,12 +180,18 @@ function avanzar(periodos: Estado[], fecha: Date): void {
   }
 }
 
+/** Opciones del motor. `repartoManual`: decisión EXPLÍCITA de RRHH para una vacación (por `origen`): días a tomar de cada año laboral. */
+export type OpcionesReconstruccion = {
+  repartoManual?: ReadonlyMap<number, readonly { anioLaboral: number; dias: number }[]>;
+};
+
 export function reconstruirEmpleado(
   emp: EmpleadoReconstruccion,
   historial: readonly VacacionReconstruccion[],
   hoyEntrada: Date,
   /** Feriados ("YYYY-MM-DD") para contar los días hábiles de cada tramo cuando una vacación cruza un aniversario. */
   feriados: ReadonlySet<string> = new Set(),
+  opciones: OpcionesReconstruccion = {},
 ): ResultadoReconstruccion {
   const hoy = hoyCero(hoyEntrada);
   const advertencias: AdvertenciaReconstruccion[] = [];
@@ -282,20 +289,29 @@ export function reconstruirEmpleado(
     // Días de la vacación (los informados por RRHH) repartidos por tramo en orden cronológico, hasta los hábiles reales de cada tramo;
     // el remanente (si el archivo informa más días que los hábiles calculados) cae en el último tramo.
     let porAsignar = v.dias;
-    const asignacion = tramos.map((t, i) => {
-      const dias = i === tramos.length - 1 ? porAsignar : Math.min(t.dias, porAsignar);
-      porAsignar = r2(porAsignar - dias);
-      return { ...t, asignados: dias };
-    });
+    type Paso = { desde: Date; hasta: Date; asignados: number; anio: number | null };
+    const manual = opciones.repartoManual?.get(v.origen);
+    const pasos: Paso[] = manual
+      ? manual.map((m) => {
+          const periodo = periodos.find((p) => p.anioLaboral === m.anioLaboral);
+          return { desde: periodo && periodo.inicio > inicio ? periodo.inicio : inicio, hasta: fin, asignados: r2(m.dias), anio: m.anioLaboral };
+        })
+      : tramos.map((t, i) => {
+          const dias = i === tramos.length - 1 ? porAsignar : Math.min(t.dias, porAsignar);
+          porAsignar = r2(porAsignar - dias);
+          return { desde: t.desde, hasta: t.hasta, asignados: dias, anio: null };
+        });
     const detalleTramos: string[] = [];
     let deficitTotal = 0;
-    for (const t of asignacion) {
+    for (const t of pasos) {
       if (t.asignados <= 0) continue;
       const fecha = t.desde > hoy ? hoy : t.desde; // un tramo posterior a hoy (vacación en curso) se evalúa a hoy
       avanzar(periodos, fecha);
       let resto = t.asignados;
       const tomadoPorAnio: string[] = [];
-      const utilizables = periodos.filter((p) => !p.vencido && fecha >= p.inicio && p.disponibles > 0).sort((a, b) => a.anioLaboral - b.anioLaboral);
+      const utilizables = periodos
+        .filter((p) => !p.vencido && fecha >= p.inicio && p.disponibles > 0 && (t.anio == null || p.anioLaboral === t.anio))
+        .sort((a, b) => a.anioLaboral - b.anioLaboral);
       for (const p of utilizables) {
         if (resto <= 0) break;
         const tomar = r2(Math.min(p.disponibles, resto));
@@ -310,7 +326,12 @@ export function reconstruirEmpleado(
       if (resto > 0) deficitTotal = r2(deficitTotal + resto);
       detalleTramos.push(`${aIso(t.desde)}→${aIso(t.hasta)} (${t.asignados} d.) ${tomadoPorAnio.length ? tomadoPorAnio.join(", ") : "sin saldo"}${resto > 0 ? ` [faltan ${resto}]` : ""}`);
     }
-    if (cortes.length > 0) {
+    if (manual) {
+      advertencias.push({
+        codigo: "REPARTO_MANUAL_APLICADO", severidad: "INFO", origen: v.origen, dias: v.dias,
+        mensaje: `La fila ${v.origen} (${v.inicio} → ${v.fin}, ${v.dias} días) usa el reparto MANUAL aprobado por RRHH: ${detalleTramos.join(" | ")}.`,
+      });
+    } else if (cortes.length > 0) {
       advertencias.push({
         codigo: "VACACION_CRUZA_ANIVERSARIO", severidad: "DECISION", origen: v.origen, dias: v.dias,
         mensaje: `La fila ${v.origen} (${v.inicio} → ${v.fin}, ${v.dias} días) cruza ${cortes.length === 1 ? "un aniversario" : `${cortes.length} aniversarios`} (${cortes.map(aIso).join(", ")}). Reparto PROVISIONAL por fechas reales con FIFO sobre los períodos existentes en cada tramo: ${detalleTramos.join(" | ")}. RRHH debe confirmar esta distribución.`,

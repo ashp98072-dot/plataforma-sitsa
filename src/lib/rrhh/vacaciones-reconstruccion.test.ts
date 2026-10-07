@@ -365,3 +365,30 @@ describe("otorgado / consumido / saldo utilizable (el historial no se descarta p
     expect(r.resumenDias).toEqual({ otorgado: 0, consumido: 0, recortadoPorTope: 0, perdidoPorVencimiento: 0, saldoUtilizable: 0 });
   });
 });
+
+describe("reparto manual aprobado por RRHH (vacación que cruza un aniversario)", () => {
+  const alta = "2022-10-30";
+  const v = [vac(1, "2025-10-20", "2025-11-05", 15)];
+
+  it("sin reparto manual: decisión pendiente (propuesta FIFO por tramos)", () => {
+    const r = reconstruirEmpleado(emp(alta), v, HOY);
+    expect(codigos(r)).toContain("VACACION_CRUZA_ANIVERSARIO");
+    expect(r.advertencias.find((a) => a.codigo === "VACACION_CRUZA_ANIVERSARIO")!.severidad).toBe("DECISION");
+  });
+
+  it("con reparto manual: consume exactamente los días indicados de cada año laboral y la advertencia pasa a INFO", () => {
+    const r = reconstruirEmpleado(emp(alta), v, HOY, new Set(), { repartoManual: new Map([[1, [{ anioLaboral: 2, dias: 10 }, { anioLaboral: 3, dias: 5 }]]]) });
+    expect(r.consumos.map((c) => [c.anioLaboral, c.dias])).toEqual([[2, 10], [3, 5]]);
+    expect(codigos(r)).not.toContain("VACACION_CRUZA_ANIVERSARIO");
+    expect(r.advertencias.find((a) => a.codigo === "REPARTO_MANUAL_APLICADO")!.severidad).toBe("INFO");
+    expect(r.vacaciones[0]).toMatchObject({ consumido: 15, deficit: 0 });
+    expect(r.advertencias.some((a) => a.severidad === "DECISION")).toBe(false);
+  });
+
+  it("un reparto manual que pide más de lo disponible en un año genera SALDO_INSUFICIENTE (nueva decisión), nunca consume de otro año en silencio", () => {
+    const r = reconstruirEmpleado(emp(alta), v, HOY, new Set(), { repartoManual: new Map([[1, [{ anioLaboral: 4, dias: 15 }]]]) });
+    expect(r.vacaciones[0].deficit).toBeGreaterThan(0);
+    expect(codigos(r)).toContain("SALDO_INSUFICIENTE");
+    expect(r.consumos.every((c) => c.anioLaboral === 4)).toBe(true);
+  });
+});

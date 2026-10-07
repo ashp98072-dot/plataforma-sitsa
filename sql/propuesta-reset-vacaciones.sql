@@ -48,6 +48,11 @@
 --   * tipo ambiguo
 --   * duplicado identico no resuelto (el importador lo consolidaria: reimportar daria 1 sola fila)
 --   * export incompleto (completo = false) o numero de filas del export distinto del conjunto objetivo
+--
+-- EVIDENCIAS: este reset SQL puro NO preserva evidencias (se detiene si existe alguna: hard blocker B4). Para reconstruir PRESERVANDO las
+-- evidencias existe el APLICADOR CONTROLADO (src/lib/rrhh/vacaciones-reconstruccion-aplicador.ts; ver docs/RRHH-VACACIONES-APLICADOR-RECONSTRUCCION.md):
+-- captura cada evidencia en staging ANTES de borrar y la recrea apuntando a la unica incidencia nueva con su identidad logica. Los archivos
+-- fisicos (ruta_archivo) jamas se borran ni se mueven en ninguno de los dos caminos.
 -- ---------------------------------------------------------------------
 -- SET @empresa_id := <EMPRESA_ID>;                   -- una empresa a la vez
 -- SET @ts := '<AAAAMMDDHHMM>';                       -- sello unico; si ya existe alguna tabla bk_reset_<sello>_*, elegir otro
@@ -61,12 +66,19 @@
 -- CREATE TABLE bk_reset_<TS>_detalle_consumo_vacaciones    AS SELECT * FROM detalle_consumo_vacaciones;
 -- CREATE TABLE bk_reset_<TS>_saldos_vacaciones             AS SELECT * FROM saldos_vacaciones;
 -- CREATE TABLE bk_reset_<TS>_solicitudes_vacaciones        AS SELECT * FROM solicitudes_vacaciones;
+-- -- EVIDENCIAS: respaldo con los IDs originales, la identidad logica de su incidencia (empleado, tipo, fechas, dias) y TODOS sus campos.
+-- -- Es indispensable: evidencias_incidencias.incidencia_id -> incidencias.id es ON DELETE CASCADE (fk_ev_inc); borrar una incidencia borra su fila de evidencia.
+-- CREATE TABLE bk_reset_<TS>_evidencias_incidencias AS
+--   SELECT e.id, e.empresa_id, e.incidencia_id, i.id_empleado, i.tipo, i.fecha_inicio, i.fecha_fin, i.dias_habiles,
+--          e.ruta_archivo, e.nombre_original, e.subido_en, e.subido_por
+--   FROM evidencias_incidencias e LEFT JOIN incidencias i ON i.id = e.incidencia_id;
 -- -- verificar que cada respaldo tiene EXACTAMENTE las mismas filas que su origen (diferencia = detener el proceso):
 -- SELECT (SELECT COUNT(*) FROM vacaciones)                AS origen_vacaciones,   (SELECT COUNT(*) FROM bk_reset_<TS>_vacaciones)                 AS respaldo_vacaciones;
 -- SELECT (SELECT COUNT(*) FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones')) AS origen_incidencias, (SELECT COUNT(*) FROM bk_reset_<TS>_incidencias_vacaciones) AS respaldo_incidencias;
 -- SELECT (SELECT COUNT(*) FROM detalle_consumo_vacaciones) AS origen_detalle,     (SELECT COUNT(*) FROM bk_reset_<TS>_detalle_consumo_vacaciones) AS respaldo_detalle;
 -- SELECT (SELECT COUNT(*) FROM saldos_vacaciones)          AS origen_saldos,      (SELECT COUNT(*) FROM bk_reset_<TS>_saldos_vacaciones)          AS respaldo_saldos;
 -- SELECT (SELECT COUNT(*) FROM solicitudes_vacaciones)     AS origen_solicitudes, (SELECT COUNT(*) FROM bk_reset_<TS>_solicitudes_vacaciones)     AS respaldo_solicitudes;
+-- SELECT (SELECT COUNT(*) FROM evidencias_incidencias)     AS origen_evidencias,  (SELECT COUNT(*) FROM bk_reset_<TS>_evidencias_incidencias)     AS respaldo_evidencias;
 
 -- ---------------------------------------------------------------------
 -- PASO 2 — VALIDAR EL EXPORT HISTORICO Y EL PREVIEW (manual, fuera de SQL)

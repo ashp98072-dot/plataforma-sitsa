@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { ResultadoPreviewActual } from "@/lib/rrhh/vacaciones-historial-actual";
 import { VistaPreviaHistorial } from "./vista-previa-historial-vacaciones";
+import { SimularReconstruccionVacaciones } from "./simular-reconstruccion-vacaciones";
 
 /**
  * Exportar historial actual — descarga las vacaciones registradas hoy en el formato de «Importar historial (solo vista previa)» y
@@ -71,6 +72,7 @@ export function ExportarHistorialVacaciones({ slug }: { slug: string }) {
             <VistaPreviaHistorial preview={resultado.preview} />
           </div>
         ) : null}
+        <SimularReconstruccionVacaciones slug={slug} />
       </div>
     </details>
   );

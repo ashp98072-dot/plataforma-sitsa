@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { query } from "@/lib/db";
+import { query, type SqlParams } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import {
   armarHistorialExportable,
@@ -18,19 +18,23 @@ import { previsualizarHistorial, type ResultadoPreview } from "./vacaciones-hist
  * Toda consulta va acotada por `empresa_id` (la empresa sale de la sesión, nunca del cliente).
  */
 
-export async function cargarHistorialActual(empresaId: number): Promise<ResultadoExport> {
-  const vac = await query<RowDataPacket[]>(
+/** Función de consulta (SELECT) inyectable: el pool por defecto, o la conexión de una transacción (el aplicador relee bajo bloqueo). */
+export type Consulta = (sql: string, params?: SqlParams) => Promise<RowDataPacket[]>;
+const consultaPool: Consulta = (sql, params) => query<RowDataPacket[]>(sql, params);
+
+export async function cargarHistorialActual(empresaId: number, consulta: Consulta = consultaPool): Promise<ResultadoExport> {
+  const vac = await consulta(
     "SELECT id, id_empleado, fecha_inicio, fecha_fin, dias_habiles, observaciones, estado FROM vacaciones WHERE empresa_id = ? ORDER BY id",
     [empresaId],
   );
-  const inc = await query<RowDataPacket[]>(
+  const inc = await consulta(
     "SELECT id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND tipo IN ('Vacaciones', 'A cuenta de Vacaciones') ORDER BY id",
     [empresaId],
   );
-  const emp = await query<RowDataPacket[]>("SELECT id, codigo, nombre FROM empleados WHERE empresa_id = ?", [empresaId]);
+  const emp = await consulta("SELECT id, codigo, nombre FROM empleados WHERE empresa_id = ?", [empresaId]);
   let dpis = new Map<number, string>();
   try {
-    const d = await query<RowDataPacket[]>("SELECT id, dpi FROM empleados WHERE empresa_id = ?", [empresaId]);
+    const d = await consulta("SELECT id, dpi FROM empleados WHERE empresa_id = ?", [empresaId]);
     dpis = new Map(d.filter((r) => r.dpi).map((r) => [Number(r.id), String(r.dpi)]));
   } catch {
     /* la columna dpi aún no existe en esta base: el archivo se identifica por código y nombre */

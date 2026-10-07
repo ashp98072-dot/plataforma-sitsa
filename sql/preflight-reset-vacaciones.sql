@@ -129,6 +129,23 @@ FROM evidencias_incidencias ev JOIN incidencias i ON i.id = ev.incidencia_id
 WHERE i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
 ORDER BY ev.empresa_id, ev.incidencia_id;
 
+-- 8b) IDENTIDAD LOGICA de las evidencias (para relinkear a la nueva incidencia con el aplicador controlado; NUNCA por el ID viejo).
+--     Cada evidencia debe poder emparejarse con EXACTAMENTE UNA incidencia nueva (empresa + empleado + tipo + fecha_inicio + fecha_fin + dias_habiles).
+--     Esperado: coincidencias_en_historial = 1 para todas. 0 o mas de 1 = HARD ERROR del aplicador (rollback completo). fk_ev_inc es ON DELETE CASCADE.
+SELECT ev.id AS evidencia_id, ev.empresa_id, ev.incidencia_id AS incidencia_actual, i.id_empleado, i.tipo, i.fecha_inicio, i.fecha_fin, i.dias_habiles,
+       ev.ruta_archivo, ev.nombre_original, ev.subido_en, ev.subido_por,
+       (SELECT COUNT(*) FROM vacaciones v WHERE v.empresa_id = i.empresa_id AND v.id_empleado = i.id_empleado AND v.fecha_inicio = i.fecha_inicio
+          AND v.fecha_fin = i.fecha_fin AND v.dias_habiles = i.dias_habiles) AS coincidencias_en_historial,
+       (SELECT COUNT(*) FROM evidencias_incidencias ev2 WHERE ev2.incidencia_id = ev.incidencia_id) AS evidencias_en_la_misma_incidencia
+FROM evidencias_incidencias ev JOIN incidencias i ON i.id = ev.incidencia_id
+WHERE i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
+ORDER BY ev.empresa_id, ev.id;
+-- 8c) Evidencias por empleado (controla la cardinalidad esperada despues del relink: n antes = n despues)
+SELECT i.empresa_id, i.id_empleado, COUNT(*) AS evidencias, COUNT(DISTINCT ev.incidencia_id) AS incidencias_distintas
+FROM evidencias_incidencias ev JOIN incidencias i ON i.id = ev.incidencia_id
+WHERE i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
+GROUP BY i.empresa_id, i.id_empleado ORDER BY i.empresa_id, i.id_empleado;
+
 -- 9) EMPLEADOS que condicionan la reconstruccion posterior (el reset NO los modifica ni los repara)
 -- 9a) BLOQUEANTE: fecha_alta NULL / invalida / < 1980 (Elisa, id 37, 1899-12-31). NO se repara automaticamente: requiere el dato de RRHH.
 SELECT e.empresa_id, e.id AS empleado_id, e.nombre, e.fecha_alta, e.fecha_inicio_laboral, e.estado,
