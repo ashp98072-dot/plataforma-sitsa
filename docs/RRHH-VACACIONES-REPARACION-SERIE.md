@@ -31,17 +31,18 @@ Se eligió una **función separada** (`repararSerieVacacionesEnConexion`) y no u
 `fecha_alta` y la reparación no se puedan mezclar por accidente.
 
 ### 3.1 Qué se considera «requiere reparación»
-Hay saldos y la fecha de alta es válida, y ocurre **cualquiera** de:
+Hay saldos (sin saldos nunca se requiere reparación) y ocurre **cualquiera** de:
 - un período cuyo inicio/fin no es `periodoLaboral(fecha_alta, anio_laboral)` (otra fecha base / mezcla de series) → `PERIODO_FUERA_DE_BASE`;
 - un `anio_laboral` fuera de la serie esperada (`< 1` o `> años completos + 1`) → `ANIO_FUERA_DE_SERIE`;
 - un año laboral duplicado → `ANIO_LABORAL_DUPLICADO`;
+- **períodos faltantes o intercalados**: deben existir los años `1..N` (N = año vigente a hoy); cada hueco → `PERIODO_FALTANTE` indicando qué años faltan. No se exigen períodos futuros, ni el año en curso mientras todavía no acumuló días (p. ej. aniversario en domingo, que la sincronización tampoco crea);
 - un saldo sin año laboral que se superpone con la serie esperada o tiene consumo → `ANIO_LABORAL_NULO_EN_SERIE`;
 - un traslape **real** (más de un día) → `TRASLAPE_REAL` (el borde de un día es normal);
 - la sincronización normal ya lo congela (#417) → `ESTRUCTURA_CONGELADA`;
+- **saldos pero sin fecha de alta** (null, vacía) → `FECHA_ALTA_AUSENTE`: la serie no se puede validar sin base, sea corrupta o aparentemente correcta; sale en pendientes y la reparación queda **bloqueada** («RRHH debe completar o corregir la fecha de contratación primero»). Esta herramienta no inventa ni corrige la fecha;
 - fecha de alta sospechosa (<1980/inválida) o futura **con** saldos → `FECHA_ALTA_SOSPECHOSA` / `FECHA_ALTA_FUTURA` (la reparación queda **bloqueada**).
 
-**No** es un error: tener períodos `Vencido`s, un saldo sin año laboral fuera de la serie y sin consumo, o la ausencia de períodos (la sincronización
-normal los crea). Sin saldos o sin fecha de alta no hay nada que diagnosticar.
+**No** es un error: tener períodos `Vencido`s ni un saldo sin año laboral fuera de la serie y sin consumo. Un colaborador **sin saldos** no tiene nada que diagnosticar (tenga o no fecha de alta).
 
 ### 3.2 Reparación
 Todo en **una transacción** (`BEGIN … COMMIT`, cualquier error ⇒ `ROLLBACK`):
@@ -79,7 +80,7 @@ Permiso en los tres: **RRHH · Vacaciones · editar**. La empresa, el usuario y 
 | `GET /api/empresas/[slug]/rrhh/vacaciones/reparacion/pendientes` | **Solo lectura.** `{ total, empleados: [{ empleadoId, codigo, nombre, estado, fechaAlta, motivos }] }`. |
 
 ## 6. Pruebas (sintéticas; sin DPI, nombres ni IDs reales)
-- `vacaciones-reparacion.test.ts` (31, BD en memoria transaccional): diagnóstico puro; caso del ticket sin y con consumo (A/B/C); duplicada (D), traslapada (E), años incorrectos (F), desplazada sin traslape; `DETALLE_AJENO` (G); `DETALLE_SALDO_AJENO` incl. otra empresa y saldo inexistente (H); vacación anterior a `fecha_alta` (I); déficit (J); fecha futura/sospechosa; otro empleado y otra empresa intactos (K/L); evidencias, incidencias y `vacaciones` idénticas (M/N); sincronización posterior sin congelarse (O); nueva vacación después (P); eliminar después restaura al período de la serie nueva (Q); serie ya correcta ⇒ sin escrituras (R); huella distinta, cambio entre preview y POST, bloqueo sobrevenido; rollback ante fallo en cada paso; transacción única con `FOR UPDATE` antes de escribir; auditoría; listado de pendientes de solo lectura.
+- `vacaciones-reparacion.test.ts` (41, BD en memoria transaccional): diagnóstico puro; caso del ticket sin y con consumo (A/B/C); duplicada (D), traslapada (E), años incorrectos (F), desplazada sin traslape; `DETALLE_AJENO` (G); `DETALLE_SALDO_AJENO` incl. otra empresa y saldo inexistente (H); vacación anterior a `fecha_alta` (I); déficit (J); fecha futura/sospechosa; otro empleado y otra empresa intactos (K/L); evidencias, incidencias y `vacaciones` idénticas (M/N); sincronización posterior sin congelarse (O); nueva vacación después (P); eliminar después restaura al período de la serie nueva (Q); serie ya correcta ⇒ sin escrituras (R); huella distinta, cambio entre preview y POST, bloqueo sobrevenido; rollback ante fallo en cada paso; transacción única con `FOR UPDATE` antes de escribir; auditoría; listado de pendientes de solo lectura; **sin fecha de alta** (con saldos corruptos o correctos ⇒ requiere reparación, bloqueada, en pendientes, POST bloquea sin escribir; sin saldos ⇒ no requiere); **períodos faltantes** (años 1,3,4 y 2,3,4; serie completa sin falsos positivos; futuros y año en curso con 0 días no se exigen).
 - Rutas: preview (3), POST (6), pendientes (3).
 - UI (`reparacion-serie-vacaciones.test.ts`, 7): la acción solo aparece para RRHH con permiso y serie congelada; nada se ejecuta al renderizar; texto aprobado; confirmar deshabilitado con bloqueos; solo el botón confirmar hace POST y solo envía la huella; cableado de la página.
 - Verificado por mutación: quitar el chequeo de huella o los bloqueos de detalle hace fallar las pruebas.

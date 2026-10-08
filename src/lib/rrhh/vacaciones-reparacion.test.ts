@@ -90,9 +90,47 @@ describe("diagnosticarSerie (puro): ¿la serie guardada coincide estructuralment
     const d = diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: filas(serieCorrecta()) });
     expect(d).toMatchObject({ requiereReparacion: false, congelada: false, defectos: [], traslapesReales: 0, aniosDuplicados: [], fueraDeBase: [] });
   });
-  it("sin saldos, o sin fecha de alta, no hay nada que diagnosticar", () => {
+  it("sin saldos no hay nada que diagnosticar, tenga o no fecha de alta", () => {
     expect(diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: [] }).requiereReparacion).toBe(false);
-    expect(diagnosticarSerie({ fechaAlta: null, hoy, filas: filas(serieCorrupta()) }).requiereReparacion).toBe(false);
+    expect(diagnosticarSerie({ fechaAlta: null, hoy, filas: [] }).requiereReparacion).toBe(false);
+    expect(diagnosticarSerie({ fechaAlta: "", hoy, filas: [] }).requiereReparacion).toBe(false);
+  });
+  it("con saldos y SIN fecha de alta (null/vacía) la serie no se puede validar: requiere reparación (FECHA_ALTA_AUSENTE), sea corrupta o correcta", () => {
+    for (const alta of [null, "", "   "]) {
+      for (const xs of [serieCorrupta(), serieCorrecta()]) {
+        const d = diagnosticarSerie({ fechaAlta: alta, hoy, filas: filas(xs) });
+        expect(d.requiereReparacion).toBe(true);
+        expect(d.defectos.map((x) => x.codigo)).toEqual(["FECHA_ALTA_AUSENTE"]);
+        expect(d.defectos[0].mensaje).toContain("RRHH debe completar o corregir la fecha de contratación");
+      }
+    }
+  });
+  it("PERIODO_FALTANTE: serie 1,3,4 ⇒ falta el año 2; serie 2,3,4 ⇒ falta el año 1; con cualquier hueco requiere reparación", () => {
+    const sin = (...anios: number[]) => filas(serieCorrecta().filter((s) => !anios.includes(s.anio_laboral as number)));
+    const d2 = diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: sin(2) });
+    expect(d2).toMatchObject({ requiereReparacion: true, aniosFaltantes: [2], fueraDeBase: [], aniosDuplicados: [], traslapesReales: 0 });
+    expect(d2.defectos.map((x) => x.codigo)).toEqual(["PERIODO_FALTANTE"]);
+    expect(d2.defectos[0].mensaje).toContain("2 (2024-04-13 → 2025-04-12)");
+    expect(diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: sin(1) }).aniosFaltantes).toEqual([1]);
+    const varios = diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: sin(1, 3) });
+    expect(varios.aniosFaltantes).toEqual([1, 3]);
+    expect(varios.defectos[0].mensaje).toContain("los años laborales");
+  });
+  it("serie completa 1,2,3,4 ⇒ sin falsos positivos; los períodos FUTUROS no se exigen y el año en curso con 0 días acumulados (aniversario en domingo) tampoco", () => {
+    expect(diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: filas(serieCorrecta()) })).toMatchObject({ requiereReparacion: false, aniosFaltantes: [] });
+    // 2025-04-13 es domingo: el año 3 empieza hoy y aún no acumuló nada; no puede exigirse (la sincronización tampoco lo crea)
+    const domingo = new Date(2025, 3, 13);
+    expect(diagnosticarSerie({ fechaAlta: ALTA, hoy: domingo, filas: filas(serieCorrecta().slice(0, 2)) }).requiereReparacion).toBe(false);
+    // al día siguiente (lunes) el año 3 ya acumuló: si no existe, falta
+    expect(diagnosticarSerie({ fechaAlta: ALTA, hoy: new Date(2025, 3, 14), filas: filas(serieCorrecta().slice(0, 2)) }).aniosFaltantes).toEqual([3]);
+    // sin el año 4 en curso pero con los anteriores completos: es el año vigente a hoy, falta
+    expect(diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: filas(serieCorrecta().slice(0, 3)) }).aniosFaltantes).toEqual([4]);
+  });
+  it("la serie corrupta tipo ticket se detecta exactamente igual (fuera de base + traslapes; sin años faltantes porque están los 4 números de año)", () => {
+    const d = diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: filas(serieCorrupta()) });
+    expect(d).toMatchObject({ requiereReparacion: true, aniosFaltantes: [], aniosDuplicados: [] });
+    expect(d.fueraDeBase.sort()).toEqual([1, 2]);
+    expect(d.traslapesReales).toBeGreaterThan(0);
   });
   it("la serie del ejemplo (bases distintas + traslapes) requiere reparación: períodos fuera de base y traslapes reales", () => {
     const d = diagnosticarSerie({ fechaAlta: ALTA, hoy, filas: filas(serieCorrupta()) });
@@ -269,6 +307,83 @@ describe("D/E/F) serie duplicada, traslapada o con años laborales incorrectos",
     expect((await previa()).requiereReparacion).toBe(true);
     await reparar();
     expect(fechasSerie()).toEqual(esperada);
+  });
+});
+
+describe("Sin fecha de alta: con saldos la serie no se puede validar (bloqueado) y sin saldos no hay nada que reparar", () => {
+  const verificar = async (saldos: Saldo[], alta: string | null) => {
+    bd.reiniciar({
+      empleados: [empleado({ fecha_alta: alta })], saldos,
+      incidencias: [inc(10, "2024-08-05", "2024-08-09", 5)], vacaciones: [vac(10, "2024-08-05", "2024-08-09", 5)],
+      detalle: [{ id: 1, incidencia_id: 10, saldo_id: saldos[0].id, dias_tomados: 5 }],
+    });
+    const antes = bd.instantanea();
+    bd.ejecutadas = []; bd.eventos = [];
+    const p = await previa();
+    expect(p).toMatchObject({ requiereReparacion: true, puedeReparar: false, fechaAltaActual: null, periodosPropuestos: [] });
+    expect(p.defectos.map((d) => d.codigo)).toContain("FECHA_ALTA_AUSENTE");
+    expect(p.bloqueos).toHaveLength(1);
+    expect(p.bloqueos[0].mensaje).toContain("RRHH debe completar o corregir la fecha de contratación primero");
+    // aparece en pendientes
+    const pend = await listarPendientesReparacion(EMPRESA);
+    expect(pend.empleados.map((e) => e.empleadoId)).toEqual([EMP]);
+    expect(pend.empleados[0].motivos).toEqual(["FECHA_ALTA_AUSENTE"]);
+    // el POST BLOQUEA (no responde «serie ya correcta») y no escribe nada
+    const err = await repararSerieVacaciones(EMPRESA, EMP, { huella: p.huella, usuario: "rrhh.ana" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ReparacionBloqueadaError);
+    expect(sinEscrituras()).toBe(true);
+    expect(bd.eventos).toContain("ROLLBACK");
+    expect(bd.instantanea()).toEqual(antes);
+    expect(bd.t.empleados[0].fecha_alta).toBe(alta); // no se inventa ni se corrige la fecha
+  };
+  it("1) saldos corruptos y fecha_alta=null ⇒ requiere reparación, NO se puede reparar, aparece en pendientes, el POST bloquea y no escribe", async () => {
+    await verificar(serieCorrupta(), null);
+  });
+  it("2) saldos correctos pero fecha_alta=null (o vacía) ⇒ mismo comportamiento: sin base no se puede afirmar que la serie sea correcta", async () => {
+    await verificar(serieCorrecta(), null);
+    await verificar(serieCorrecta(), "");
+  });
+  it("3) sin saldos y fecha_alta=null ⇒ requiereReparacion=false, fuera de pendientes y el POST no hace nada", async () => {
+    bd.reiniciar({ empleados: [empleado({ fecha_alta: null })] });
+    const p = await previa();
+    expect(p).toMatchObject({ requiereReparacion: false, puedeReparar: false, bloqueos: [] });
+    expect((await listarPendientesReparacion(EMPRESA)).total).toBe(0);
+    const antes = bd.instantanea();
+    expect((await repararSerieVacaciones(EMPRESA, EMP, { huella: p.huella })).aplicado).toBe(false);
+    expect(bd.instantanea()).toEqual(antes);
+  });
+  it("los hard blockers de detalle también se informan cuando falta la fecha de alta", async () => {
+    bd.reiniciar({ empleados: [empleado({ fecha_alta: null })], saldos: serieCorrecta(), incidencias: [inc(90, "2025-07-07", "2025-07-08", 2, OTRO)], detalle: [{ id: 1, incidencia_id: 90, saldo_id: 101, dias_tomados: 2 }] });
+    expect((await previa()).bloqueos.map((b) => b.codigo)).toEqual(expect.arrayContaining(["FECHA_NUEVA_INVALIDA", "DETALLE_AJENO"]));
+  });
+});
+
+describe("Períodos faltantes / serie intercalada: preview, pendientes y reparación", () => {
+  it("4/5) años 1,3,4 ⇒ falta el 2; años 2,3,4 ⇒ falta el 1: requiere reparación, se informa qué años faltan y la reparación completa la serie conservando el consumo", async () => {
+    for (const faltan of [[2], [1]]) {
+      bd.reiniciar({
+        empleados: [empleado()],
+        saldos: serieCorrecta().filter((s) => !faltan.includes(s.anio_laboral as number)),
+        incidencias: [inc(10, "2025-09-01", "2025-09-05", 5)], vacaciones: [vac(10, "2025-09-01", "2025-09-05", 5)],
+        detalle: [{ id: 1, incidencia_id: 10, saldo_id: 103, dias_tomados: 5 }],
+      });
+      const p = await previa();
+      expect(p).toMatchObject({ requiereReparacion: true, puedeReparar: true, aniosLaboralesFaltantes: faltan, aniosLaboralesDuplicados: [], periodosFueraDeBase: [], consumidoPreservado: 5 });
+      expect(p.defectos.map((d) => d.codigo)).toEqual(["PERIODO_FALTANTE"]);
+      expect((await listarPendientesReparacion(EMPRESA)).empleados[0].motivos).toEqual(["PERIODO_FALTANTE"]);
+      const antes = bd.instantanea();
+      await reparar(p.huella);
+      expect(fechasSerie()).toEqual(esperada);
+      expect(sumaDetalle(bd.t)).toBe(5);
+      expect(bd.t.incidencias).toEqual(antes.incidencias);
+      expect(bd.t.vacaciones).toEqual(antes.vacaciones);
+      expect((await previa()).requiereReparacion).toBe(false); // ya no hay faltantes
+    }
+  });
+  it("6) serie completa 1,2,3,4 ⇒ sin falsos positivos ni en la vista previa ni en pendientes", async () => {
+    bd.reiniciar({ empleados: [empleado()], saldos: serieCorrecta() });
+    expect(await previa()).toMatchObject({ requiereReparacion: false, aniosLaboralesFaltantes: [] });
+    expect((await listarPendientesReparacion(EMPRESA)).total).toBe(0);
   });
 });
 

@@ -131,9 +131,9 @@ function VistaPrevia({ previa }: { previa: PreviaReparacion }) {
         Consumo que se conservará: <strong>{n2(previa.consumidoPreservado)}</strong> día(s) · Saldo utilizable antes: <strong>{n2(previa.saldoAntes)}</strong> → después:{" "}
         <strong>{n2(previa.saldoDespues)}</strong>.
       </p>
-      {previa.traslapesActuales || previa.aniosLaboralesDuplicados.length || previa.periodosFueraDeBase.length ? (
+      {previa.traslapesActuales || previa.aniosLaboralesDuplicados.length || previa.aniosLaboralesFaltantes.length || previa.periodosFueraDeBase.length ? (
         <p className="text-amber-200">
-          Problemas detectados: {previa.traslapesActuales} traslape(s) · {previa.aniosLaboralesDuplicados.length} año(s) laboral(es) duplicado(s) · {previa.periodosFueraDeBase.length} período(s) fuera de la base.
+          Problemas detectados: {previa.traslapesActuales} traslape(s) · {previa.aniosLaboralesDuplicados.length} año(s) laboral(es) duplicado(s) · {previa.aniosLaboralesFaltantes.length} período(s) faltante(s) · {previa.periodosFueraDeBase.length} período(s) fuera de la base.
         </p>
       ) : null}
       {previa.bloqueos.length ? (

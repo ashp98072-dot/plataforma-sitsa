@@ -1,6 +1,6 @@
 import { differenceInYears } from "date-fns";
 import {
-  aIso, clasificarTraslape, deIso, diasSuperposicion, fechaLaboralSospechosa, periodoLaboral, planificarSincronizacion, type FilaSaldo,
+  aIso, calcularDiasAcumuladosProporcional, clasificarTraslape, DIAS_POR_PERIODO, deIso, diasSuperposicion, fechaLaboralSospechosa, periodoLaboral, planificarSincronizacion, type FilaSaldo,
 } from "./vacaciones-periodos";
 import { planificarRebase, planificarReconstruccion, type EntradaRebase, type PlanRebase, type SaldoPrevio } from "./vacaciones-rebase";
 
@@ -18,12 +18,14 @@ import { planificarRebase, planificarReconstruccion, type EntradaRebase, type Pl
  */
 
 export type CodigoDefectoSerie =
+  | "FECHA_ALTA_AUSENTE"
   | "FECHA_ALTA_SOSPECHOSA"
   | "FECHA_ALTA_FUTURA"
   | "ANIO_LABORAL_DUPLICADO"
   | "TRASLAPE_REAL"
   | "PERIODO_FUERA_DE_BASE"
   | "ANIO_FUERA_DE_SERIE"
+  | "PERIODO_FALTANTE"
   | "ANIO_LABORAL_NULO_EN_SERIE"
   | "ESTRUCTURA_CONGELADA";
 export type DefectoSerie = { codigo: CodigoDefectoSerie; mensaje: string; saldoId?: number; anioLaboral?: number | null };
@@ -37,6 +39,8 @@ export type DiagnosticoSerie = {
   /** Pares de saldos que se superponen más de un día. */
   traslapesReales: number;
   aniosDuplicados: number[];
+  /** Años laborales 1..N (N = el vigente a hoy) que la serie debería tener y no tiene. No incluye períodos futuros. */
+  aniosFaltantes: number[];
   /** IDs de saldos cuyo inicio/fin no es `periodoLaboral(fecha_alta, anio_laboral)` (o cuyo año excede la serie esperada). */
   fueraDeBase: number[];
 };
@@ -46,11 +50,16 @@ const cero = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 export function diagnosticarSerie(e: { fechaAlta: string | null; hoy: Date; filas: readonly FilaSaldo[] }): DiagnosticoSerie {
-  const d: DiagnosticoSerie = { requiereReparacion: false, congelada: false, defectos: [], traslapesReales: 0, aniosDuplicados: [], fueraDeBase: [] };
-  if (e.filas.length === 0 || !e.fechaAlta) return d; // sin saldos (o sin fecha) no hay serie que no coincida
+  const d: DiagnosticoSerie = { requiereReparacion: false, congelada: false, defectos: [], traslapesReales: 0, aniosDuplicados: [], aniosFaltantes: [], fueraDeBase: [] };
+  if (e.filas.length === 0) return d; // sin saldos no hay serie que no coincida
   const hoy = cero(e.hoy);
   const marcar = (x: DefectoSerie) => { d.defectos.push(x); d.requiereReparacion = true; };
 
+  // Con saldos pero SIN fecha base la serie no se puede validar: requiere reparación, pero queda BLOQUEADA (no se inventa ni se corrige la fecha aquí).
+  if (e.fechaAlta == null || String(e.fechaAlta).trim() === "") {
+    marcar({ codigo: "FECHA_ALTA_AUSENTE", mensaje: "El colaborador tiene períodos de vacaciones pero no tiene fecha de contratación: la serie no se puede validar. RRHH debe completar o corregir la fecha de contratación primero." });
+    return d;
+  }
   const base = FECHA.test(e.fechaAlta) ? deIso(e.fechaAlta) : null;
   if (!base || fechaLaboralSospechosa(base)) {
     marcar({ codigo: "FECHA_ALTA_SOSPECHOSA", mensaje: "La fecha de contratación es inválida o anterior a 1980: los períodos guardados no pueden derivarse de ella." });
@@ -82,6 +91,19 @@ export function diagnosticarSerie(e: { fechaAlta: string | null; hoy: Date; fila
         saldoId: f.id, anioLaboral: f.anioLaboral,
       });
     }
+  }
+  // 1b) años laborales FALTANTES o intercalados: deben existir 1..N (N = año vigente a hoy). El año en curso se exige solo si ya acumuló algo
+  //     (la sincronización no lo crea con 0 días, p. ej. un aniversario en domingo); nunca se exigen períodos futuros.
+  const presentes = new Set(filas.filter((f) => f.anioLaboral != null).map((f) => f.anioLaboral as number));
+  for (let n = 1; n <= maxAnio; n++) {
+    if (presentes.has(n)) continue;
+    const esp = periodoLaboral(base, n);
+    if (n === maxAnio && calcularDiasAcumuladosProporcional(esp.inicio, esp.fin, hoy, DIAS_POR_PERIODO) <= 0) continue;
+    d.aniosFaltantes.push(n);
+  }
+  if (d.aniosFaltantes.length) {
+    const detalle = d.aniosFaltantes.map((n) => { const p = periodoLaboral(base, n); return `${n} (${aIso(p.inicio)} → ${aIso(p.fin)})`; }).join(", ");
+    marcar({ codigo: "PERIODO_FALTANTE", mensaje: `Faltan ${d.aniosFaltantes.length === 1 ? "el año laboral" : "los años laborales"} ${detalle} de la serie.`, anioLaboral: d.aniosFaltantes[0] });
   }
   // 2) año laboral duplicado
   const porAnio = new Map<number, FilaSaldo[]>();
@@ -156,9 +178,14 @@ export function planificarReparacion(e: EntradaReparacion): PlanReparacion {
   }));
   const consumidoAntes = r2(periodosActuales.reduce((t, p) => t + p.consumidos, 0));
   const extra = { requiereReparacion: diagnostico.requiereReparacion, fechaAltaActual: e.fechaAlta, diagnostico, periodosActuales, lineasAntes: e.lineasAntes ?? 0, consumidoAntes };
-  if (!diagnostico.requiereReparacion || !e.fechaAlta) {
+  if (!diagnostico.requiereReparacion) {
     // Serie correcta (o sin saldos): no hay nada que reparar → plan vacío, ni siquiera se construye la reconstrucción.
     return { ...planificarRebase(entrada), ...extra }; // misma fecha ⇒ plan sin cambios (aplica=false) con el saldo actual
+  }
+  if (e.fechaAlta == null || String(e.fechaAlta).trim() === "") {
+    // Hay saldos y no hay fecha base: BLOQUEADO (nunca se inventa una fecha ni se afirma que la serie esté bien).
+    const d = diagnostico.defectos[0];
+    return { ...planificarRebase(entrada), aplica: true, bloqueos: [{ codigo: "FECHA_NUEVA_INVALIDA", mensaje: d.mensaje }], ...extra };
   }
   const plan = planificarReconstruccion(entrada);
   return { ...plan, ...extra };

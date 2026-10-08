@@ -69,6 +69,7 @@ export type PreviaReparacion = {
   periodosPropuestos: PlanReparacion["periodos"];
   traslapesActuales: number;
   aniosLaboralesDuplicados: number[];
+  aniosLaboralesFaltantes: number[];
   periodosFueraDeBase: { saldoId: number; anioLaboral: number | null; inicio: string; fin: string }[];
   defectos: DefectoSerie[];
   vacacionesRegistradas: number;
@@ -96,6 +97,7 @@ function aPrevia(plan: PlanReparacion, datos: Hechos): PreviaReparacion {
     periodosPropuestos: plan.periodos,
     traslapesActuales: traslapes,
     aniosLaboralesDuplicados: plan.diagnostico.aniosDuplicados,
+    aniosLaboralesFaltantes: plan.diagnostico.aniosFaltantes,
     periodosFueraDeBase: datos.saldos.filter((s) => fuera.has(s.id)).map((s) => ({ saldoId: s.id, anioLaboral: s.anioLaboral, inicio: s.inicio, fin: s.fin })),
     defectos: plan.diagnostico.defectos,
     vacacionesRegistradas: plan.vacaciones,
