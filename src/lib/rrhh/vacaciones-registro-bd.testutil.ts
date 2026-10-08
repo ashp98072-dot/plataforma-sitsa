@@ -152,6 +152,17 @@ export class BdVac {
     if (sql.startsWith("SELECT DISTINCT id_empleado FROM saldos_vacaciones WHERE empresa_id = ?")) {
       return [...new Set(t.saldos.filter((s) => s.empresa_id === p[0]).map((s) => s.id_empleado))].sort((a, b) => a - b).map((id_empleado) => ({ id_empleado }));
     }
+    // preflight del modo de carga histórica (solo lectura)
+    if (sql.startsWith("SELECT DISTINCT id_empleado FROM incidencias WHERE empresa_id = ? AND tipo IN")) {
+      return [...new Set(t.incidencias.filter((i) => i.empresa_id === p[0] && TIPOS.includes(i.tipo)).map((i) => i.id_empleado))].map((id_empleado) => ({ id_empleado }));
+    }
+    if (sql === "SELECT DISTINCT id_empleado FROM vacaciones WHERE empresa_id = ?") return [...new Set(t.vacaciones.filter((v) => v.empresa_id === p[0]).map((v) => v.id_empleado))].map((id_empleado) => ({ id_empleado }));
+    if (sql === "SELECT id, codigo, nombre FROM empleados WHERE empresa_id = ?") return t.empleados.filter((e) => e.empresa_id === p[0]).map((e) => ({ id: e.id, codigo: `E-${e.id}`, nombre: e.nombre }));
+    if (sql === "SELECT fecha_inicio, fecha_fin, dias_habiles FROM vacaciones WHERE empresa_id = ? AND id_empleado = ? AND estado = 'Aprobado'") {
+      return t.vacaciones.filter((v) => v.empresa_id === p[0] && v.id_empleado === p[1] && v.estado === "Aprobado").map((v) => ({ fecha_inicio: v.fecha_inicio, fecha_fin: v.fecha_fin, dias_habiles: v.dias_habiles }));
+    }
+    if (sql.startsWith("SELECT id, incidencia_id FROM detalle_consumo_vacaciones WHERE id IN (")) return t.detalle.filter((d) => (p as number[]).includes(d.id)).map((d) => ({ id: d.id, incidencia_id: d.incidencia_id }));
+    if (sql.startsWith("SELECT id, empresa_id, id_empleado FROM incidencias WHERE id IN (")) return t.incidencias.filter((i) => (p as number[]).includes(i.id)).map((i) => ({ id: i.id, empresa_id: i.empresa_id, id_empleado: i.id_empleado }));
     // contenido que la serie nunca debe modificar (rebase / reparación)
     if (sql === "SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? ORDER BY id") {
       return t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1]).sort((x, y) => x.id - y.id).map((i) => ({ ...i }));

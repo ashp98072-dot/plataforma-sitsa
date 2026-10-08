@@ -9,7 +9,7 @@ const schema = z.object({ confirmar: z.literal(true) });
 
 /**
  * Resincronización ADMINISTRADA de los saldos persistidos con el modo vigente: sincroniza colaborador por colaborador (cada uno en su propia transacción, con la sincronización
- * normal de períodos). No es un UPDATE masivo ni borra/crea períodos, incidencias, vacaciones, detalle FIFO o evidencias. Requiere confirmación explícita y RRHH · Configuración · editar.
+ * normal de períodos). No es un UPDATE masivo: no borra historial ni crea vacaciones/incidencias, y puede completar períodos faltantes mediante la sincronización normal. En modo carga, un colaborador con consumo no verificable no se recalcula (`CONSUMO_NO_VERIFICABLE`). Requiere confirmación explícita y RRHH · Configuración · editar.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const m = vi.hoisted(() => ({ requireTenantRrhh: vi.fn(), leerModoCargaHistorica: vi.fn(), cambiarModoCargaHistorica: vi.fn(), resincronizarSaldosEmpresa: vi.fn() }));
+const m = vi.hoisted(() => ({ requireTenantRrhh: vi.fn(), leerModoCargaHistorica: vi.fn(), cambiarModoCargaHistorica: vi.fn(), resincronizarSaldosEmpresa: vi.fn(), previsualizarActivacionModoHistorico: vi.fn() }));
 vi.mock("@/lib/tenant", () => ({ requireTenantRrhh: m.requireTenantRrhh }));
 vi.mock("@/lib/rrhh/vacaciones-modo-db", () => ({ leerModoCargaHistorica: m.leerModoCargaHistorica, cambiarModoCargaHistorica: m.cambiarModoCargaHistorica }));
+vi.mock("@/lib/rrhh/vacaciones-modo-preflight-db", () => ({ previsualizarActivacionModoHistorico: m.previsualizarActivacionModoHistorico }));
 vi.mock("@/lib/rrhh/vacaciones-modo-resync-db", () => ({ resincronizarSaldosEmpresa: m.resincronizarSaldosEmpresa }));
 
 import { NextResponse } from "next/server";
 import { GET, PUT } from "./route";
 import { POST as RESYNC } from "./resincronizar/route";
+import { GET as PREFLIGHT } from "./preflight/route";
 
 const ctx = { params: Promise.resolve({ slug: "empresa-sintetica" }) };
 const put = (b: unknown) => new Request("http://local/api/x", { method: "PUT", body: typeof b === "string" ? b : JSON.stringify(b) });
@@ -20,7 +22,8 @@ beforeEach(() => {
   m.requireTenantRrhh.mockResolvedValue({ empresa: { id: 7 }, session: { username: "rrhh.ana" } });
   m.leerModoCargaHistorica.mockResolvedValue(true);
   m.cambiarModoCargaHistorica.mockResolvedValue({ cambiado: true, valorAnterior: false, valorNuevo: true });
-  m.resincronizarSaldosEmpresa.mockResolvedValue({ total: 2, sincronizados: 2, congelados: 0, errores: 0, resultados: [] });
+  m.resincronizarSaldosEmpresa.mockResolvedValue({ total: 2, sincronizados: 2, congelados: 0, consumoNoVerificable: 0, errores: 0, resultados: [] });
+  m.previsualizarActivacionModoHistorico.mockResolvedValue({ puedeActivar: true, revisados: 27, aptos: 27, bloqueados: 0, motivos: [] });
 });
 
 describe("GET modo-carga-historica (solo lectura)", () => {
@@ -64,6 +67,41 @@ describe("PUT modo-carga-historica (administración RRHH, con confirmación expl
     const r = await PUT(put({ activo: false, confirmar: true }), ctx);
     expect(r.status).toBe(500);
     expect(JSON.stringify(await r.json())).not.toContain("Duplicate");
+  });
+});
+
+describe("ACTIVAR exige el preflight: consumo no verificable ⇒ 409 y NO se cambia nada", () => {
+  const bloqueado = { puedeActivar: false, revisados: 27, aptos: 24, bloqueados: 3, motivos: [{ empleadoId: 4, codigo: "E-4", nombre: "Colaborador Sintético", motivos: [{ codigo: "SIN_DETALLE", mensaje: "1 vacación(es) con días tomados y SIN detalle de consumo FIFO." }] }] };
+  it("PUT activo=true con preflight bloqueado ⇒ 409 PREFLIGHT_BLOQUEADO con resumen seguro (puedeActivar=false, bloqueados, motivos), sin detalles internos", async () => {
+    m.cambiarModoCargaHistorica.mockResolvedValue({ cambiado: false, valorAnterior: false, valorNuevo: false, preflight: bloqueado });
+    const r = await PUT(put({ activo: true, confirmar: true }), ctx);
+    expect(r.status).toBe(409);
+    const b = await r.json();
+    expect(b).toMatchObject({ codigo: "PREFLIGHT_BLOQUEADO", puedeActivar: false, bloqueados: 3, revisados: 27, aptos: 24 });
+    expect(b.motivos[0]).toMatchObject({ nombre: "Colaborador Sintético", motivos: [{ codigo: "SIN_DETALLE" }] });
+    expect(b.error).toContain("No se puede activar el modo histórico todavía");
+    expect(JSON.stringify(b)).not.toMatch(/SELECT|FROM |sql/i);
+  });
+  it("PUT activo=false nunca se bloquea por el preflight (volver a NORMAL siempre es posible)", async () => {
+    m.cambiarModoCargaHistorica.mockResolvedValue({ cambiado: true, valorAnterior: true, valorNuevo: false });
+    const r = await PUT(put({ activo: false, confirmar: true }), ctx);
+    expect(r.status).toBe(200);
+    expect(m.cambiarModoCargaHistorica).toHaveBeenCalledWith(7, false, { usuario: "rrhh.ana" });
+  });
+  it("GET preflight: solo lectura, RRHH · Configuración · editar, empresa de la sesión y, si falla, no se asume que sea seguro activar", async () => {
+    sinPermiso();
+    expect((await PREFLIGHT(new Request("http://local/api/x"), ctx)).status).toBe(403);
+    expect(m.requireTenantRrhh).toHaveBeenCalledWith("empresa-sintetica", "configuracion", "editar");
+    expect(m.previsualizarActivacionModoHistorico).not.toHaveBeenCalled();
+    m.requireTenantRrhh.mockResolvedValue({ empresa: { id: 7 }, session: { username: "rrhh.ana" } });
+    const ok = await PREFLIGHT(new Request("http://local/api/x?empresa_id=999"), ctx);
+    expect(m.previsualizarActivacionModoHistorico).toHaveBeenCalledWith(7);
+    expect(await ok.json()).toMatchObject({ puedeActivar: true, revisados: 27, aptos: 27, bloqueados: 0 });
+    expect(ok.headers.get("Cache-Control")).toContain("no-store");
+    m.previsualizarActivacionModoHistorico.mockRejectedValue(new Error("boom"));
+    const f = await PREFLIGHT(new Request("http://local/api/x"), ctx);
+    expect(f.status).toBe(500);
+    expect(JSON.stringify(await f.json())).not.toContain("boom");
   });
 });
 

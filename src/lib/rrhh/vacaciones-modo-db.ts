@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2/promise";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { getPool, query, type SqlParams } from "@/lib/db";
+import type { ResultadoPreflight } from "./vacaciones-modo-preflight";
 import { PARAMETRO_MODO_CARGA_HISTORICA, politicaPorModo, valorEsCargaHistorica, type PoliticaVacaciones } from "./vacaciones-politica";
 
 /**
@@ -42,11 +43,19 @@ export async function obtenerPoliticaConConsulta(consulta: ConsultaModo, empresa
   return politicaPorModo(await modoCargaHistoricaActivo(consulta, empresaId));
 }
 
-export type ResultadoCambioModo = { cambiado: boolean; valorAnterior: boolean; valorNuevo: boolean };
+export type ResultadoCambioModo = {
+  cambiado: boolean;
+  valorAnterior: boolean;
+  valorNuevo: boolean;
+  /** Presente cuando se pidió ACTIVAR y el preflight encontró consumo no verificable: NO se cambió nada. */
+  preflight?: ResultadoPreflight;
+};
 
 /**
  * Activa o desactiva el modo de la empresa en UNA transacción: bloquea la fila, registra el cambio y audita (`vacaciones_modo_historico_activado` /
  * `vacaciones_modo_historico_desactivado`: empresa, usuario, fecha, valor anterior y nuevo). Idempotente: pedir el valor que ya tiene no escribe ni audita.
+ * ACTIVAR exige antes un PREFLIGHT de solo lectura: si algún colaborador tiene consumo que no puede reconstruirse de forma verificable (en modo carga el saldo sale de
+ * `otorgados − detalle FIFO` y podría inventar días), NO se cambia la bandera, NO se audita la activación y se devuelve el resumen en `preflight`. DESACTIVAR nunca se bloquea.
  */
 export async function cambiarModoCargaHistorica(empresaId: number, activo: boolean, opciones: { usuario?: string | null; hoy?: Date } = {}): Promise<ResultadoCambioModo> {
   const conn = await getPool().getConnection();
@@ -56,6 +65,14 @@ export async function cambiarModoCargaHistorica(empresaId: number, activo: boole
     if (anterior === activo) {
       await conn.rollback(); // nada que escribir
       return { cambiado: false, valorAnterior: anterior, valorNuevo: activo };
+    }
+    if (activo) {
+      const { ejecutarPreflightModoHistorico } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
+      const preflight = await ejecutarPreflightModoHistorico(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId);
+      if (!preflight.puedeActivar) {
+        await conn.rollback(); // nada que escribir
+        return { cambiado: false, valorAnterior: anterior, valorNuevo: anterior, preflight };
+      }
     }
     await conn.execute(
       "INSERT INTO configuracion (empresa_id, parametro, valor) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE valor = VALUES(valor)",

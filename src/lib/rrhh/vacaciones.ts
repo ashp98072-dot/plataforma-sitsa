@@ -149,6 +149,8 @@ export type ResultadoSincronizacionPeriodos = {
   /** true = el empleado quedó CONGELADO (REQUIERE_REPARACION_ADMINISTRADA): no se escribió nada (ni períodos, ni vencimientos, ni tope). */
   requiereReparacion: boolean;
   omitido: MotivoOmision | null;
+  /** true = modo de carga histórica activo pero el consumo del colaborador NO es verificable: no se restauró ningún saldo (defensa en profundidad). */
+  consumoNoVerificable?: boolean;
 };
 
 /** Σ de días consumidos por saldo (detalle FIFO) del empleado; tolerante a que la tabla aún no exista. Solo lo usa el modo de carga histórica. */
@@ -269,7 +271,12 @@ export async function sincronizarPeriodosVacacionesEnConexion(
 
     if (politica.maxPeriodosVigentes == null) {
       // MODO CARGA HISTÓRICA: sin vencimiento ni tope. Todo período desde la fecha de alta es utilizable por lo que NO se haya consumido; el consumo sale del
-      // detalle FIFO (verificable), de modo que ni reaparece lo ya tomado ni se pierde nada. Idempotente: sin cambios no escribe. No borra ni crea períodos.
+      // detalle FIFO (verificable), de modo que ni reaparece lo ya tomado ni se pierde nada. Idempotente: sin cambios no escribe. Aquí no borra historial; los períodos faltantes los completa el plan normal de sincronización (inserts de `planificarSincronizacion`).
+      // Defensa en profundidad: si existe consumo NO verificable (sin detalle FIFO suficiente, detalle cruzado/huérfano…), reconstruir `otorgados − detalle` podría INVENTAR días
+      // disponibles: ese colaborador no se recalcula (sus saldos quedan como están) y se informa `consumoNoVerificable`.
+      const { verificarConsumoEmpleado } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
+      const noVerificable = await verificarConsumoEmpleado(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId, idEmpleado);
+      if (noVerificable.length) return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null, consumoNoVerificable: true };
       const consumo = await consumoPorSaldo(conn, empresaId, idEmpleado);
       for (const p of periodos) {
         const esperado = Math.max(0, Math.round((Number(p.dias_otorgados) - (consumo.get(Number(p.id)) ?? 0)) * 100) / 100);

@@ -24,11 +24,20 @@ describe("Modo de carga histórica — UI", () => {
     expect(fuente).toContain("Confirmar desactivación");
     expect(fuente).toContain("{puedeCambiar && activo !== null ? (");
     // los botones solo abren la confirmación; únicamente «Confirmar …» llama al servidor (PUT/POST con confirmar:true)
-    expect(fuente).toContain("onClick={() => setConfirmar(activo ? \"desactivar\" : \"activar\")}");
+    expect(fuente).toContain("onClick={() => (activo ? setConfirmar(\"desactivar\") : void pedirActivar())}");
     expect(fuente.match(/method: "PUT"/g)).toHaveLength(1);
     expect(fuente.match(/method: "POST"/g)).toHaveLength(1);
     expect(fuente.match(/confirmar: true/g)).toHaveLength(2);
     expect(fuente).not.toMatch(/empresa_?id/i);
+  });
+  it("antes de confirmar la activación se muestra la verificación previa; sin bloqueados «Confirmar activación», con bloqueados NO hay botón para ignorarlos", () => {
+    for (const t of [
+      "Verificación previa:", "colaboradores revisados", "aptos", "con consumo no verificable",
+      "No se puede activar el modo histórico todavía. Hay {preflight.bloqueados} colaboradores con consumo que no puede reconstruirse de forma verificable.",
+      "{confirmar !== \"activar\" || preflight?.puedeActivar ? (", "m.nombre", "consumo no verificable (no recalculados)",
+    ]) expect(fuente).toContain(t);
+    expect(fuente).toContain("/preflight");
+    expect(fuente).not.toMatch(/ignorar|omitir|forzar/i);
   });
   it("la página muestra el aviso, solo ofrece el cambio con RRHH · Configuración · editar y refresca todo al cambiar", () => {
     expect(pagina).toContain('const puedeCambiarModo = rol === "Admin" || tienePermiso(permisos, "configuracion", "editar");');
