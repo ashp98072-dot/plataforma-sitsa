@@ -21,6 +21,7 @@ import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodo
 import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
 import { ExportarHistorialVacaciones } from "@/components/rrhh/exportar-historial-vacaciones";
 import { PendientesReparacionVacaciones } from "@/components/rrhh/pendientes-reparacion-vacaciones";
+import { ModoCargaHistoricaVacaciones } from "@/components/rrhh/modo-carga-historica-vacaciones";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { PrevisualizacionHistorica } from "@/components/rrhh/previsualizacion-historica-vacaciones";
 import type { PrevisualizacionRegistro } from "@/lib/rrhh/vacaciones-registro";
@@ -63,6 +64,9 @@ export default function VacacionesPage() {
   // Reparación administrada de series de períodos: RRHH · Vacaciones · editar (los endpoints lo exigen de nuevo). `versionReparacion` refresca el indicador.
   const puedeReparar = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
   const [versionReparacion, setVersionReparacion] = useState(0);
+  // Modo de carga histórica (temporal, por empresa): cambiarlo exige RRHH · Configuración · editar (el servidor lo vuelve a exigir).
+  const puedeCambiarModo = rol === "Admin" || tienePermiso(permisos, "configuracion", "editar");
+  const [modoHistorico, setModoHistorico] = useState(false);
   const [aviso, setAviso] = useState("");
   // RRHH-VACACIONES-FILTROS-HISTORIAL-1 — estados INDEPENDIENTES del empleado/tipo del formulario de registro
   // (empleadoId/tipo arriba). 0/"" = sin filtro ("Todos"). Cambiar estos filtros nunca toca empleadoId/tipo/
@@ -290,6 +294,13 @@ export default function VacacionesPage() {
         </div>
       </div>
 
+      <ModoCargaHistoricaVacaciones
+        slug={slug}
+        puedeCambiar={puedeCambiarModo}
+        onModo={setModoHistorico}
+        onCambio={async () => { await cargar(); setVersionReparacion((v) => v + 1); }}
+      />
+
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
 
       <VacacionesAlertasPanel slug={slug} />
@@ -367,10 +378,9 @@ export default function VacacionesPage() {
       {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p className="text-xs text-[var(--muted)]">
-            El saldo se calcula desde la fecha de contratación / alta (no la
-            entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular
-            el periodo actual, el excedente se descuenta del periodo más viejo
-            (FIFO).
+            {modoHistorico
+              ? "El saldo se calcula desde la fecha de contratación / alta (no la entrada laboral). MODO DE CARGA HISTÓRICA: saldo TEMPORAL, sin el límite de 2 períodos / 30 días."
+              : "El saldo se calcula desde la fecha de contratación / alta (no la entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular el periodo actual, el excedente se descuenta del periodo más viejo (FIFO)."}
           </p>
           <p className="mt-1">
             Saldo disponible:{" "}
@@ -395,6 +405,7 @@ export default function VacacionesPage() {
         <HistorialPeriodosVacaciones
           historial={historial}
           admin
+          modoCargaHistorica={modoHistorico}
           reparacion={puedeReparar && empleadoId ? { slug, empleadoId, onReparado: async () => { await cargar(); setVersionReparacion((v) => v + 1); } } : undefined}
         />
       ) : null}

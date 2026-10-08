@@ -8,6 +8,7 @@ import {
   fechaLaboralSospechosa,
   periodoLaboral,
 } from "./vacaciones-periodos";
+import { POLITICA_NORMAL, venceConPolitica, type PoliticaVacaciones } from "./vacaciones-politica";
 import { differenceInYears } from "date-fns";
 
 /**
@@ -172,7 +173,7 @@ export function repartirDiasEnTramos(
  * `antesDelTope` (opcional) se ejecuta DESPUÉS de acumular y vencer y ANTES de aplicar el tope: el registro histórico lo usa para descontar
  * lo ya consumido (detalle FIFO) y que el tope de 30 se aplique sobre lo realmente disponible. El motor de reconstrucción no lo usa.
  */
-export function avanzarPeriodos(periodos: Estado[], fecha: Date, antesDelTope?: (periodos: Estado[]) => void): void {
+export function avanzarPeriodos(periodos: Estado[], fecha: Date, antesDelTope?: (periodos: Estado[]) => void, politica: PoliticaVacaciones = POLITICA_NORMAL): void {
   for (const p of periodos) {
     if (fecha < p.inicio) continue;
     const nuevo = fecha > p.fin ? DIAS_POR_PERIODO : calcularDiasAcumuladosProporcional(p.inicio, p.fin, fecha, DIAS_POR_PERIODO);
@@ -185,16 +186,16 @@ export function avanzarPeriodos(periodos: Estado[], fecha: Date, antesDelTope?: 
   const iniciados = periodos.filter((p) => fecha >= p.inicio);
   const completados = iniciados.filter((p) => fecha > p.fin).sort((a, b) => b.anioLaboral - a.anioLaboral);
   completados.forEach((p, idx) => {
-    if (idx >= MAX_PERIODOS_VIGENTES && !p.vencido) {
+    if (venceConPolitica(politica, idx) && !p.vencido) {
       p.perdidos = r2(p.perdidos + p.disponibles);
       p.disponibles = 0;
       p.vencido = true;
     }
   });
   antesDelTope?.(periodos);
-  const vigentes = completados.filter((p, idx) => idx < MAX_PERIODOS_VIGENTES && !p.vencido).sort((a, b) => a.anioLaboral - b.anioLaboral);
-  // Tope de 30: solo con 2 períodos completos vigentes (misma condición que el motor actual).
-  if (vigentes.length >= MAX_PERIODOS_VIGENTES) {
+  const vigentes = completados.filter((p, idx) => !venceConPolitica(politica, idx) && !p.vencido).sort((a, b) => a.anioLaboral - b.anioLaboral);
+  // Tope de 30: solo con 2 períodos completos vigentes (misma condición que el motor actual). En modo CARGA HISTÓRICA no hay vencimiento ni tope.
+  if (politica.aplicarTope && politica.maxPeriodosVigentes != null && vigentes.length >= politica.maxPeriodosVigentes) {
     const enCurso = iniciados.find((p) => !(fecha > p.fin));
     const capTotal = vigentes.reduce((s, p) => s + p.otorgados, 0);
     const total = vigentes.reduce((s, p) => s + p.disponibles, 0) + (enCurso && !enCurso.vencido ? enCurso.disponibles : 0);
@@ -210,8 +211,8 @@ export function avanzarPeriodos(periodos: Estado[], fecha: Date, antesDelTope?: 
   }
 }
 
-function avanzar(periodos: Estado[], fecha: Date): void {
-  avanzarPeriodos(periodos, fecha);
+function avanzar(periodos: Estado[], fecha: Date, politica: PoliticaVacaciones = POLITICA_NORMAL): void {
+  avanzarPeriodos(periodos, fecha, undefined, politica);
 }
 
 export function reconstruirEmpleado(
@@ -220,6 +221,8 @@ export function reconstruirEmpleado(
   hoyEntrada: Date,
   /** Feriados ("YYYY-MM-DD") para contar los días hábiles de cada tramo cuando una vacación cruza un aniversario. */
   feriados: ReadonlySet<string> = new Set(),
+  /** Política de vencimiento/tope (por omisión NORMAL). En modo CARGA HISTÓRICA no hay vencimiento por antigüedad ni tope de 30. */
+  politica: PoliticaVacaciones = POLITICA_NORMAL,
 ): ResultadoReconstruccion {
   const hoy = hoyCero(hoyEntrada);
   const advertencias: AdvertenciaReconstruccion[] = [];
@@ -312,7 +315,7 @@ export function reconstruirEmpleado(
     for (const t of asignacion) {
       if (t.asignados <= 0) continue;
       const fecha = t.desde > hoy ? hoy : t.desde; // un tramo posterior a hoy (vacación en curso) se evalúa a hoy
-      avanzar(periodos, fecha);
+      avanzar(periodos, fecha, politica);
       let resto = t.asignados;
       const tomadoPorAnio: string[] = [];
       const utilizables = periodos.filter((p) => !p.vencido && fecha >= p.inicio && p.disponibles > 0).sort((a, b) => a.anioLaboral - b.anioLaboral);
@@ -344,7 +347,7 @@ export function reconstruirEmpleado(
       });
     }
   }
-  avanzar(periodos, hoy);
+  avanzar(periodos, hoy, politica);
 
   const saldoFinal = r2(periodos.filter((p) => !p.vencido).reduce((s, p) => s + p.disponibles, 0));
   const salida: PeriodoReconstruido[] = periodos.map((p) => ({

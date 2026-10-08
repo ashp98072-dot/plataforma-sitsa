@@ -2,6 +2,7 @@ import { differenceInYears } from "date-fns";
 import {
   aIso, calcularDiasAcumuladosProporcional, clasificarTraslape, DIAS_POR_PERIODO, deIso, diasSuperposicion, fechaLaboralSospechosa, periodoLaboral, planificarSincronizacion, type FilaSaldo,
 } from "./vacaciones-periodos";
+import type { PoliticaVacaciones } from "./vacaciones-politica";
 import { planificarRebase, planificarReconstruccion, type EntradaRebase, type PlanRebase, type SaldoPrevio } from "./vacaciones-rebase";
 
 /**
@@ -160,6 +161,8 @@ export type EntradaReparacion = {
   saldos: readonly SaldoPrevio[];
   feriados: ReadonlySet<string>;
   lineasAntes?: number;
+  /** Política de vencimiento/tope del modo vigente de la empresa (por omisión NORMAL). */
+  politica?: PoliticaVacaciones;
 };
 
 const aFila = (s: SaldoPrevio): FilaSaldo => ({
@@ -171,7 +174,7 @@ const aFila = (s: SaldoPrevio): FilaSaldo => ({
 export function planificarReparacion(e: EntradaReparacion): PlanReparacion {
   const diagnostico = diagnosticarSerie({ fechaAlta: e.fechaAlta, hoy: e.hoy, filas: e.saldos.map(aFila) });
   const entrada: EntradaRebase = {
-    fechaAnterior: e.fechaAlta, fechaNueva: e.fechaAlta ?? "", hoy: e.hoy, hechos: e.hechos, saldos: e.saldos, feriados: e.feriados, modo: "reparacion",
+    fechaAnterior: e.fechaAlta, fechaNueva: e.fechaAlta ?? "", hoy: e.hoy, hechos: e.hechos, saldos: e.saldos, feriados: e.feriados, modo: "reparacion", politica: e.politica,
   };
   const periodosActuales: PeriodoActualReparacion[] = e.saldos.map((s) => ({
     id: s.id, anioLaboral: s.anioLaboral, inicio: s.inicio, fin: s.fin, otorgados: s.otorgados, consumidos: r2(s.consumidos ?? 0), disponibles: s.disponibles, estado: s.estado,

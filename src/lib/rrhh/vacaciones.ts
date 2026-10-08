@@ -3,6 +3,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { getPool, query } from "@/lib/db";
 import { hoyLocal, toIsoDate } from "./dates";
 import { contarEvidenciasPorIncidencia } from "./evidencias";
+import { obtenerPoliticaConConsulta, obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
 import {
   MAX_PERIODOS_VIGENTES,
   analizarTraslapes,
@@ -148,7 +149,27 @@ export type ResultadoSincronizacionPeriodos = {
   /** true = el empleado quedó CONGELADO (REQUIERE_REPARACION_ADMINISTRADA): no se escribió nada (ni períodos, ni vencimientos, ni tope). */
   requiereReparacion: boolean;
   omitido: MotivoOmision | null;
+  /** true = modo de carga histórica activo pero el consumo del colaborador NO es verificable: no se restauró ningún saldo (defensa en profundidad). */
+  consumoNoVerificable?: boolean;
 };
+
+/** Σ de días consumidos por saldo (detalle FIFO) del empleado; tolerante a que la tabla aún no exista. Solo lo usa el modo de carga histórica. */
+async function consumoPorSaldo(conn: PoolConnection, empresaId: number, idEmpleado: number): Promise<Map<number, number>> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT d.saldo_id, SUM(d.dias_tomados) AS consumido
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       GROUP BY d.saldo_id`,
+      [empresaId, idEmpleado],
+    );
+    return new Map((rows ?? []).map((r) => [Number(r.saldo_id), Number(r.consumido)]));
+  } catch (error) {
+    if ((error as { errno?: number } | null)?.errno === 1146) return new Map();
+    throw error;
+  }
+}
 
 /** Ids de saldos del empleado referenciados por detalle FIFO (tolerante a que la tabla aún no exista). */
 async function saldosConConsumo(conn: PoolConnection, empresaId: number, idEmpleado: number): Promise<Set<number>> {
@@ -208,6 +229,18 @@ export async function sincronizarPeriodosVacacionesEnConexion(
       conConsumo: consumidos.has(Number(r.id)),
     }));
 
+    // Política por empresa: NORMAL (vencimiento a 2 períodos + tope de 30) o CARGA HISTÓRICA (temporal: sin vencimiento ni tope).
+    const politica = await obtenerPoliticaConConsulta(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId);
+
+    // DEFENSA EN PROFUNDIDAD (modo carga histórica): la verificación del consumo va ANTES de planificar y de cualquier INSERT/UPDATE. En modo carga el saldo se reconstruye como
+    // `otorgados − detalle FIFO`; si el consumo del colaborador NO es verificable (sin detalle suficiente, detalle cruzado/huérfano…) eso podría INVENTAR días disponibles. Ese
+    // colaborador queda COMPLETAMENTE intacto: sin inserts (ni períodos faltantes), sin updates, sin deletes, sin tocar estado/disponible; se informa `consumoNoVerificable`.
+    if (politica.maxPeriodosVigentes == null) {
+      const { verificarConsumoEmpleado } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
+      const noVerificable = await verificarConsumoEmpleado(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId, idEmpleado);
+      if (noVerificable.length) return { advertencias: [], requiereReparacion: false, omitido: null, consumoNoVerificable: true };
+    }
+
     const plan = planificarSincronizacion(fechaAlta, hoy, existentes);
     // Fecha sospechosa / futura / serie histórica con consumo / estructura inconsistente: NO se escribe nada
     // (ni INSERT ni UPDATE de períodos, ni vencimientos, ni reducción a 0, ni tope de 30). La lectura/historial sigue funcionando.
@@ -244,11 +277,25 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     );
     // Un saldo sin año laboral no participa en vencimiento ni tope (queda como advertencia del plan).
     const periodos = (periodosTodos ?? []).filter((p) => p.anio_laboral != null);
+
+    if (politica.maxPeriodosVigentes == null) {
+      // MODO CARGA HISTÓRICA: sin vencimiento ni tope. Todo período desde la fecha de alta es utilizable por lo que NO se haya consumido; el consumo sale del
+      // detalle FIFO (verificable), de modo que ni reaparece lo ya tomado ni se pierde nada. Idempotente: sin cambios no escribe. Aquí no borra historial; los períodos faltantes los completa el plan normal de sincronización (inserts de `planificarSincronizacion`).
+      // (El consumo ya fue verificado al inicio de la función, antes de cualquier escritura.)
+      const consumo = await consumoPorSaldo(conn, empresaId, idEmpleado);
+      for (const p of periodos) {
+        const esperado = Math.max(0, Math.round((Number(p.dias_otorgados) - (consumo.get(Number(p.id)) ?? 0)) * 100) / 100);
+        if (String(p.estado) === "Vigente" && Number(p.dias_disponibles) === esperado) continue;
+        await conn.execute("UPDATE saldos_vacaciones SET estado = 'Vigente', dias_disponibles = ? WHERE id = ?", [esperado, Number(p.id)]);
+      }
+      return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null };
+    }
+
     const completados = periodos.filter(
       (p) => Number(p.anio_laboral) !== periodoEnCursoN,
     );
     for (let idx = 0; idx < completados.length; idx++) {
-      if (idx < MAX_PERIODOS_VIGENTES) continue;
+      if (idx < (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES)) continue;
       const p = completados[idx];
       if (String(p.estado) !== "Vencido") {
         await conn.execute(
@@ -267,7 +314,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     const completadosVigentes = completados
       .filter(
         (p, idx) =>
-          idx < MAX_PERIODOS_VIGENTES && String(p.estado) !== "Vencido",
+          idx < (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES) && String(p.estado) !== "Vencido",
       )
       .sort((a, b) => Number(a.anio_laboral) - Number(b.anio_laboral));
 
@@ -275,7 +322,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     // completos vigentes. Si todavía no se completa el segundo periodo, la
     // suma de ambos nunca puede superar el tope (15 + hasta 15 = 30 como
     // máximo), así que no hay excedente real que descontar todavía.
-    if (completadosVigentes.length >= MAX_PERIODOS_VIGENTES) {
+    if (politica.aplicarTope && completadosVigentes.length >= (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES)) {
       const capTotal = completadosVigentes.reduce(
         (s, p) => s + Number(p.dias_otorgados),
         0,
@@ -398,6 +445,8 @@ export type HistorialVacaciones = {
   /** true = el motor no sincroniza a este empleado (fecha sospechosa, serie histórica con consumo o estructura inconsistente): requiere reparación administrada. */
   requiereReparacion: boolean;
   advertencias: AdvertenciaPeriodos[];
+  /** true = la empresa está en MODO DE CARGA HISTÓRICA: sin vencimiento ni tope; el saldo mostrado es TEMPORAL. */
+  modoCargaHistorica?: boolean;
 };
 
 /**
@@ -496,6 +545,7 @@ export async function obtenerHistorialPeriodos(
     historialOculto: sospechosa && periodos.length < todos.length,
     requiereReparacion: sync.requiereReparacion || sospechosa,
     advertencias,
+    modoCargaHistorica: (await obtenerPoliticaVacaciones(empresaId)).modo === "CARGA_HISTORICA",
   };
 }
 

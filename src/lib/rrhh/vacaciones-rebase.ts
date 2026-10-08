@@ -1,5 +1,6 @@
 import { differenceInYears } from "date-fns";
-import { MAX_PERIODOS_VIGENTES, aIso, deIso, fechaLaboralSospechosa, periodoLaboral } from "./vacaciones-periodos";
+import { aIso, deIso, fechaLaboralSospechosa, periodoLaboral } from "./vacaciones-periodos";
+import { POLITICA_NORMAL, venceConPolitica, type PoliticaVacaciones } from "./vacaciones-politica";
 import { planificarConsumoHistorico, type PeriodoBD } from "./vacaciones-historico";
 import { avanzarPeriodos, type EstadoPeriodo } from "./vacaciones-reconstruccion";
 
@@ -89,6 +90,8 @@ export type EntradaRebase = {
   feriados: ReadonlySet<string>;
   /** `reparacion` = misma fecha base (la fecha de alta actual); solo cambia la redacción de los mensajes. Por omisión, `rebase`. */
   modo?: "rebase" | "reparacion";
+  /** Política de vencimiento/tope del modo vigente de la empresa (por omisión NORMAL). */
+  politica?: PoliticaVacaciones;
 };
 
 function planVacio(e: EntradaRebase): PlanRebase {
@@ -119,6 +122,7 @@ export function planificarReconstruccion(e: EntradaRebase): PlanRebase {
 function construirPlan(e: EntradaRebase, base: PlanRebase): PlanRebase {
   const hoy = cero(e.hoy);
   const rep = e.modo === "reparacion";
+  const politica = e.politica ?? POLITICA_NORMAL;
   base.aplica = true;
   const bloquear = (codigo: CodigoBloqueoRebase, mensaje: string) => { base.bloqueos.push({ codigo, mensaje }); return base; };
   const fechaTxt = rep ? "La fecha de contratación actual" : "La nueva fecha de contratación";
@@ -146,7 +150,7 @@ function construirPlan(e: EntradaRebase, base: PlanRebase): PlanRebase {
   const completos = hoyN - 1;
   const filas: PeriodoBD[] = serie.map((p) => ({
     id: p.anioLaboral, anioLaboral: p.anioLaboral, inicio: aIso(p.inicio), fin: aIso(p.fin), otorgados: 15, disponibles: 15,
-    estado: p.anioLaboral <= completos - MAX_PERIODOS_VIGENTES ? "Vencido" : "Vigente", consumidoDetalle: 0, consumos: [],
+    estado: p.anioLaboral <= completos && venceConPolitica(politica, completos - p.anioLaboral) ? "Vencido" : "Vigente", consumidoDetalle: 0, consumos: [],
   }));
   const porAnio = new Map(filas.map((f) => [f.anioLaboral as number, f]));
 
@@ -154,7 +158,7 @@ function construirPlan(e: EntradaRebase, base: PlanRebase): PlanRebase {
   const acumulado = new Map<string, number>();
   for (const h of hechos) {
     if (!(h.consumido > 0)) { base.advertencias.push(`La ${h.tipo} ${h.inicio} → ${h.fin} no tiene detalle de consumo FIFO: se conserva sin consumir saldo.`); continue; }
-    const plan = planificarConsumoHistorico({ base: nueva, hoy, inicio: h.inicio, fin: h.fin, dias: h.consumido, feriados: e.feriados, periodos: filas });
+    const plan = planificarConsumoHistorico({ base: nueva, hoy, inicio: h.inicio, fin: h.fin, dias: h.consumido, feriados: e.feriados, periodos: filas, politica });
     if (plan.bloqueos.length) { base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `La ${h.tipo} ${h.inicio} → ${h.fin} no se puede reubicar en la ${rep ? "serie reconstruida" : "nueva serie"}: ${plan.bloqueos.map((b) => b.mensaje).join(" ")}` }); continue; }
     if (plan.deficit > 0) {
       base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `Con ${rep ? "la fecha de contratación actual" : "la nueva fecha de contratación"} la ${h.tipo} ${h.inicio} → ${h.fin} (${h.consumido} día(s) consumidos) no tiene saldo suficiente en su fecha: faltan ${plan.deficit} día(s). Revise el historial antes de continuar.` });
@@ -180,7 +184,7 @@ function construirPlan(e: EntradaRebase, base: PlanRebase): PlanRebase {
   const estados: EstadoPeriodo[] = serie.map((p) => ({ anioLaboral: p.anioLaboral, inicio: p.inicio, fin: p.fin, otorgados: 0, disponibles: 0, consumidos: 0, recortados: 0, perdidos: 0, vencido: false }));
   avanzarPeriodos(estados, hoy, (ps) => {
     for (const p of ps) p.disponibles = Math.max(0, r2(p.disponibles - (porAnio.get(p.anioLaboral)?.consumidoDetalle ?? 0)));
-  });
+  }, politica);
   base.periodos = estados
     .filter((p) => p.otorgados > 0 || (porAnio.get(p.anioLaboral)?.consumidoDetalle ?? 0) > 0)
     .map((p) => ({

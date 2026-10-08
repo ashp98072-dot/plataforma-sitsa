@@ -20,9 +20,11 @@ const COLOR_ESTADO: Record<string, string> = {
  * consumidos siguen siendo parte del historial. «Saldo actual» es solo lo UTILIZABLE (tope de 30 días); NO es la suma de la tabla.
  * Presentacional y sin estado: sirve en la pantalla de RRHH (`admin`, con advertencias administrativas) y en el portal.
  */
-export function HistorialPeriodosVacaciones({ historial, admin = false, reparacion }: {
+export function HistorialPeriodosVacaciones({ historial, admin = false, reparacion, modoCargaHistorica = false }: {
   historial: HistorialVacaciones | null | undefined;
   admin?: boolean;
+  /** true = MODO DE CARGA HISTÓRICA: el saldo mostrado es TEMPORAL (sin el límite de 2 períodos / 30 días). */
+  modoCargaHistorica?: boolean;
   /** Solo RRHH con permiso de edición: habilita «Reparar períodos» (vista previa + confirmación, uno por uno). */
   reparacion?: { slug: string; empleadoId: number; onReparado: () => void | Promise<void> };
 }) {
@@ -35,8 +37,9 @@ export function HistorialPeriodosVacaciones({ historial, admin = false, reparaci
         Historial de períodos ({periodos.length}) · Saldo actual: <span className="text-emerald-300">{dias(saldoActual)}</span> día(s)
       </summary>
       <p className="mt-2 text-xs text-[var(--muted)]">
-        El saldo actual solo incluye los períodos vigentes (máximo 2 períodos completos = 30 días). Los períodos anteriores, consumidos o vencidos
-        permanecen en el historial y no se suman al saldo.
+        {modoCargaHistorica
+          ? "MODO DE CARGA HISTÓRICA: el saldo actual es TEMPORAL e incluye todos los períodos desde la fecha de ingreso por lo que no se ha consumido (sin el límite de 2 períodos / 30 días). No es el saldo normal."
+          : "El saldo actual solo incluye los períodos vigentes (máximo 2 períodos completos = 30 días). Los períodos anteriores, consumidos o vencidos permanecen en el historial y no se suman al saldo."}
       </p>
 
       {fechaLaboralSospechosa ? (

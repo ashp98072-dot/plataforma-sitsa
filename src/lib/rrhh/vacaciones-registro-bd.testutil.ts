@@ -13,7 +13,8 @@ export type Vac = { id: number; empresa_id: number; id_empleado: number; fecha_i
 export type Det = { id: number; incidencia_id: number; saldo_id: number; dias_tomados: number };
 export type Aud = { empresa_id: number | null; usuario: string | null; accion: string; detalle: string | null };
 export type Evi = { id: number; empresa_id: number; incidencia_id: number; ruta_archivo: string };
-export type Tablas = { empleados: Emp[]; saldos: Saldo[]; incidencias: Inc[]; vacaciones: Vac[]; detalle: Det[]; auditoria: Aud[]; evidencias: Evi[] };
+export type Cfg = { empresa_id: number; parametro: string; valor: string };
+export type Tablas = { empleados: Emp[]; saldos: Saldo[]; incidencias: Inc[]; vacaciones: Vac[]; detalle: Det[]; auditoria: Aud[]; evidencias: Evi[]; configuracion: Cfg[] };
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const clon = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
@@ -21,7 +22,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const TIPOS = ["Vacaciones", "A cuenta de Vacaciones"];
 
 export class BdVac {
-  t: Tablas = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [] };
+  t: Tablas = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], configuracion: [] };
   feriados: string[] = [];
   ejecutadas: string[] = [];
   eventos: string[] = [];
@@ -30,7 +31,7 @@ export class BdVac {
   private seq = { saldo: 0, inc: 0, vac: 0, det: 0 };
 
   reiniciar(t: Partial<Tablas> = {}): void {
-    this.t = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], ...clon(t) };
+    this.t = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], configuracion: [], ...clon(t) };
     this.feriados = []; this.ejecutadas = []; this.eventos = []; this.fallarSi = null; this.foto = null;
     const max = (xs: { id: number }[], base: number) => Math.max(base, ...xs.map((x) => x.id));
     this.seq = { saldo: max(this.t.saldos, 0), inc: max(this.t.incidencias, 0), vac: max(this.t.vacaciones, 0), det: max(this.t.detalle, 0) };
@@ -138,6 +139,30 @@ export class BdVac {
       return [{ n: t.evidencias.filter((e) => t.incidencias.some((i) => i.id === e.incidencia_id && i.empresa_id === p[0] && i.id_empleado === p[1])).length }];
     }
     if (sql.startsWith("SELECT fecha FROM feriados")) return this.feriados.filter((f) => f >= String(p[1]) && f <= String(p[2])).map((fecha) => ({ fecha }));
+    // modo de carga histórica (almacén genérico por empresa) y consumo por saldo
+    if (sql.startsWith("SELECT valor FROM configuracion WHERE empresa_id = ? AND parametro = ? LIMIT 1")) {
+      return t.configuracion.filter((c) => c.empresa_id === p[0] && c.parametro === p[1]).map((c) => ({ valor: c.valor }));
+    }
+    if (sql.startsWith("SELECT d.saldo_id, SUM(d.dias_tomados) AS consumido FROM detalle_consumo_vacaciones d")) {
+      const ids = new Set(this.saldosDe(Number(p[0]), Number(p[1])).map((s) => s.id));
+      const m = new Map<number, number>();
+      for (const d of t.detalle) if (ids.has(d.saldo_id)) m.set(d.saldo_id, r2((m.get(d.saldo_id) ?? 0) + d.dias_tomados));
+      return [...m].map(([saldo_id, consumido]) => ({ saldo_id, consumido }));
+    }
+    if (sql.startsWith("SELECT DISTINCT id_empleado FROM saldos_vacaciones WHERE empresa_id = ?")) {
+      return [...new Set(t.saldos.filter((s) => s.empresa_id === p[0]).map((s) => s.id_empleado))].sort((a, b) => a - b).map((id_empleado) => ({ id_empleado }));
+    }
+    // preflight del modo de carga histórica (solo lectura)
+    if (sql.startsWith("SELECT DISTINCT id_empleado FROM incidencias WHERE empresa_id = ? AND tipo IN")) {
+      return [...new Set(t.incidencias.filter((i) => i.empresa_id === p[0] && TIPOS.includes(i.tipo)).map((i) => i.id_empleado))].map((id_empleado) => ({ id_empleado }));
+    }
+    if (sql === "SELECT DISTINCT id_empleado FROM vacaciones WHERE empresa_id = ?") return [...new Set(t.vacaciones.filter((v) => v.empresa_id === p[0]).map((v) => v.id_empleado))].map((id_empleado) => ({ id_empleado }));
+    if (sql === "SELECT id, codigo, nombre FROM empleados WHERE empresa_id = ?") return t.empleados.filter((e) => e.empresa_id === p[0]).map((e) => ({ id: e.id, codigo: `E-${e.id}`, nombre: e.nombre }));
+    if (sql === "SELECT fecha_inicio, fecha_fin, dias_habiles FROM vacaciones WHERE empresa_id = ? AND id_empleado = ? AND estado = 'Aprobado'") {
+      return t.vacaciones.filter((v) => v.empresa_id === p[0] && v.id_empleado === p[1] && v.estado === "Aprobado").map((v) => ({ fecha_inicio: v.fecha_inicio, fecha_fin: v.fecha_fin, dias_habiles: v.dias_habiles }));
+    }
+    if (sql.startsWith("SELECT id, incidencia_id FROM detalle_consumo_vacaciones WHERE id IN (")) return t.detalle.filter((d) => (p as number[]).includes(d.id)).map((d) => ({ id: d.id, incidencia_id: d.incidencia_id }));
+    if (sql.startsWith("SELECT id, empresa_id, id_empleado FROM incidencias WHERE id IN (")) return t.incidencias.filter((i) => (p as number[]).includes(i.id)).map((i) => ({ id: i.id, empresa_id: i.empresa_id, id_empleado: i.id_empleado }));
     // contenido que la serie nunca debe modificar (rebase / reparación)
     if (sql === "SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? ORDER BY id") {
       return t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1]).sort((x, y) => x.id - y.id).map((i) => ({ ...i }));
@@ -198,6 +223,15 @@ export class BdVac {
     if (sql.startsWith("UPDATE saldos_vacaciones SET periodo_inicio = ?")) {
       const [ini, fin, otorg, disp, id] = p as [string, string, number, number, number];
       Object.assign(t.saldos.find((s) => s.id === id)!, { periodo_inicio: ini, periodo_fin: fin, dias_otorgados: otorg, dias_disponibles: disp }); return ok();
+    }
+    if (sql === "UPDATE saldos_vacaciones SET estado = 'Vigente', dias_disponibles = ? WHERE id = ?") {
+      const s = t.saldos.find((x) => x.id === p[1]); if (s) { s.estado = "Vigente"; s.dias_disponibles = p[0] as number; } return ok(0, s ? 1 : 0);
+    }
+    if (sql.startsWith("INSERT INTO configuracion (empresa_id, parametro, valor) VALUES (?, ?, ?)")) {
+      const [empresa_id, parametro, valor] = p as [number, string, string];
+      const c = t.configuracion.find((x) => x.empresa_id === empresa_id && x.parametro === parametro);
+      if (c) c.valor = valor; else t.configuracion.push({ empresa_id, parametro, valor });
+      return ok(0, 1);
     }
     if (sql.startsWith("UPDATE saldos_vacaciones SET estado = 'Vencido', dias_disponibles = 0 WHERE id = ?")) {
       Object.assign(t.saldos.find((s) => s.id === p[0])!, { estado: "Vencido", dias_disponibles: 0 }); return ok();

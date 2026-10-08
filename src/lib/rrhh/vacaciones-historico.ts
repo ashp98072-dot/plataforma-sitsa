@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { differenceInYears } from "date-fns";
-import { MAX_PERIODOS_VIGENTES, aIso, deIso, fechaLaboralSospechosa, periodoLaboral } from "./vacaciones-periodos";
+import { aIso, deIso, fechaLaboralSospechosa, periodoLaboral } from "./vacaciones-periodos";
+import { POLITICA_NORMAL, venceConPolitica, type PoliticaVacaciones } from "./vacaciones-politica";
 import { avanzarPeriodos, repartirDiasEnTramos, type EstadoPeriodo } from "./vacaciones-reconstruccion";
 
 /**
@@ -107,22 +108,25 @@ const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 const cero = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
 /** Estado de un período HOY: el de la BD si existe; si no, el que el vencimiento le daría (solo los 2 completos más recientes son Vigentes). */
-function estadoHoyDe(n: number, hoyN: number, fila: PeriodoBD | undefined): string {
+function estadoHoyDe(n: number, hoyN: number, fila: PeriodoBD | undefined, politica: PoliticaVacaciones = POLITICA_NORMAL): string {
   if (fila) return fila.estado;
   const completos = hoyN - 1;
-  return n <= completos - MAX_PERIODOS_VIGENTES ? "Vencido" : "Vigente";
+  return n <= completos && venceConPolitica(politica, completos - n) ? "Vencido" : "Vigente";
 }
 
-/** ¿La fecha de inicio cae en un período que HOY está Vencido? (= «Registro histórico»). Las fechas futuras o anteriores a la fecha base no lo son. */
-export function clasificarRegistro(base: Date, hoyEntrada: Date, inicioIso: string, periodos: readonly PeriodoBD[]): { esHistorico: boolean; anioLaboral: number | null; estadoHoy: string | null } {
+/**
+ * ¿Es un «Registro histórico»? NORMAL: la fecha de inicio cae en un período que HOY está Vencido. CARGA HISTÓRICA (sin vencimiento): cae en un período YA COMPLETADO
+ * (anterior al período en curso), para consumir el saldo que tenía en esa fecha (cronológico) y no el de hoy. Las fechas futuras o anteriores a la fecha base no lo son.
+ */
+export function clasificarRegistro(base: Date, hoyEntrada: Date, inicioIso: string, periodos: readonly PeriodoBD[], politica: PoliticaVacaciones = POLITICA_NORMAL): { esHistorico: boolean; anioLaboral: number | null; estadoHoy: string | null } {
   const hoy = cero(hoyEntrada);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(inicioIso)) return { esHistorico: false, anioLaboral: null, estadoHoy: null };
   const inicio = deIso(inicioIso);
   if (Number.isNaN(inicio.getTime()) || inicio < base || inicio > hoy) return { esHistorico: false, anioLaboral: null, estadoHoy: null };
   const n = differenceInYears(inicio, base) + 1;
   const hoyN = differenceInYears(hoy, base) + 1;
-  const estadoHoy = estadoHoyDe(n, hoyN, periodos.find((p) => p.anioLaboral === n));
-  return { esHistorico: estadoHoy === "Vencido", anioLaboral: n, estadoHoy };
+  const estadoHoy = estadoHoyDe(n, hoyN, periodos.find((p) => p.anioLaboral === n), politica);
+  return { esHistorico: politica.maxPeriodosVigentes == null ? n < hoyN : estadoHoy === "Vencido", anioLaboral: n, estadoHoy };
 }
 
 export type EntradaHistorica = {
@@ -133,10 +137,13 @@ export type EntradaHistorica = {
   dias: number;
   feriados: ReadonlySet<string>;
   periodos: readonly PeriodoBD[];
+  /** Política de vencimiento/tope del modo vigente de la empresa (por omisión NORMAL). */
+  politica?: PoliticaVacaciones;
 };
 
 export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
   const hoy = cero(e.hoy);
+  const politica = e.politica ?? POLITICA_NORMAL;
   const vacio = (bloqueos: BloqueoHistorico[]): PlanHistorico => ({
     esHistorico: false, periodoInicio: null, bloqueos, tramos: [], cruzaAniversario: false, aniversarios: [], dias: e.dias, diasAsignados: 0, deficit: 0,
     decisiones: [], requiereDecision: false, huella: sha(JSON.stringify([e.inicio, e.fin, e.dias, bloqueos.map((b) => b.codigo)])), advertencias: [], faltantes: [],
@@ -154,10 +161,10 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
   const hoyN = aniosCompletos + 1;
   const serie = Array.from({ length: hoyN }, (_, i) => ({ ...periodoLaboral(base, i + 1), anioLaboral: i + 1 }));
   const filas = new Map(e.periodos.filter((p) => p.anioLaboral != null).map((p) => [p.anioLaboral as number, p]));
-  const cls = clasificarRegistro(base, hoy, e.inicio, e.periodos);
+  const cls = clasificarRegistro(base, hoy, e.inicio, e.periodos, politica);
   const anioIni = differenceInYears(inicio, base) + 1;
   const pIni = serie.find((p) => p.anioLaboral === anioIni);
-  const periodoInicio = pIni ? { anioLaboral: anioIni, inicio: aIso(pIni.inicio), fin: aIso(pIni.fin), estadoHoy: estadoHoyDe(anioIni, hoyN, filas.get(anioIni)) } : null;
+  const periodoInicio = pIni ? { anioLaboral: anioIni, inicio: aIso(pIni.inicio), fin: aIso(pIni.fin), estadoHoy: estadoHoyDe(anioIni, hoyN, filas.get(anioIni), politica) } : null;
 
   const { cortes, tramos: repartidos } = repartirDiasEnTramos(serie.map((p) => p.inicio), inicio, fin, e.dias, e.feriados);
   const consumidoExtra = new Map<number, number>();
@@ -178,7 +185,7 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
         const previo = (filas.get(p.anioLaboral)?.consumos ?? []).filter((c) => c.fechaInicio <= fechaIso).reduce((t, c) => t + c.dias, 0);
         p.disponibles = Math.max(0, r2(p.disponibles - previo - (consumidoExtra.get(p.anioLaboral) ?? 0)));
       }
-    });
+    }, politica);
     /** Saldo que el período TENÍA en la fecha X (solo consumos con fecha_inicio <= X): es lo que se muestra como «saldo histórico disponible». */
     const libreFecha = (p: EstadoPeriodo): number => p.disponibles;
     /** Lo que realmente se puede tomar: la disponibilidad de la fecha, sin exceder el total del período ni el disponible de hoy si sigue Vigente. */
@@ -193,7 +200,7 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
       return l;
     };
     const usables = estados.filter((p) => !p.vencido && fecha >= p.inicio).sort((a, b) => a.anioLaboral - b.anioLaboral);
-    const disponiblePorPeriodo = usables.map((p) => ({ anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, filas.get(p.anioLaboral)), libre: r2(libreFecha(p)) }));
+    const disponiblePorPeriodo = usables.map((p) => ({ anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, filas.get(p.anioLaboral), politica), libre: r2(libreFecha(p)) }));
     let resto = t.asignados;
     const asignaciones: AsignacionHistorica[] = [];
     let limitadoPorTotal = false;
@@ -205,7 +212,7 @@ export function planificarConsumoHistorico(e: EntradaHistorica): PlanHistorico {
       if (tomar <= 0) continue;
       const fila = filas.get(p.anioLaboral);
       if (!fila) faltantes.add(p.anioLaboral);
-      asignaciones.push({ saldoId: fila?.id ?? null, anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), dias: tomar, estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, fila), libreAntes: r2(l) });
+      asignaciones.push({ saldoId: fila?.id ?? null, anioLaboral: p.anioLaboral, periodoInicio: aIso(p.inicio), periodoFin: aIso(p.fin), dias: tomar, estadoHoy: estadoHoyDe(p.anioLaboral, hoyN, fila, politica), libreAntes: r2(l) });
       consumidoExtra.set(p.anioLaboral, r2((consumidoExtra.get(p.anioLaboral) ?? 0) + tomar));
       resto = r2(resto - tomar);
     }
