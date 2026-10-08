@@ -4,7 +4,6 @@ import { getPool, query } from "@/lib/db";
 import { toIsoDate, hoyLocal } from "./dates";
 import { asegurarSchemaEmpleados } from "./empleados-schema";
 import { filtrarPersonas } from "@/lib/busqueda-personas";
-import { rebasearVacacionesEnConexion } from "./vacaciones-rebase-db";
 
 export type Empleado = {
   id: number;
@@ -791,6 +790,8 @@ export async function actualizarEmpleado(
     // RRHH VACACIONES: cambiar `fecha_alta` cambia la BASE de los períodos de vacaciones. Si cambia y el empleado ya tiene saldos o vacaciones,
     // se REBASEA la serie (reaplicando cronológicamente todos los consumos) en ESTA misma transacción y ANTES del UPDATE de la ficha: si hay un
     // bloqueo o cualquier invariante falla se lanza un error, todo se revierte y la ficha conserva su fecha_alta. Misma fecha: no hace nada.
+    // Carga diferida: el grafo del rebase (vacaciones, reconstrucción, períodos…) solo se necesita al actualizar; no debe cargarse con cada import de este módulo (p. ej. listarEmpleados).
+    const { rebasearVacacionesEnConexion } = await import("./vacaciones-rebase-db");
     await rebasearVacacionesEnConexion(conn, empresaId, id, data.fechaAlta, { usuario: opciones.usuario });
 
     // Si no se debe tocar el supervisor (campo omitido), se conserva el
