@@ -207,6 +207,7 @@ export async function POST(req: Request, ctx: Ctx) {
             guard.empresa.id,
             existente.id,
             payloadActualizado,
+            { usuario: guard.session.username },
           );
           actualizados += 1;
         } else {

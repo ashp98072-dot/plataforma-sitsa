@@ -20,6 +20,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
+import { CambioFechaAltaVacaciones } from "@/components/rrhh/cambio-fecha-alta-vacaciones";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import {
@@ -456,6 +457,8 @@ export default function EmpleadosPage() {
   const [fotoPreview, setFotoPreview] = useState<string>();
   const [guardando, setGuardando] = useState(false);
   const guardandoRef = useRef(false);
+  // Cambiar la fecha de contratación con vacaciones registradas: si la vista previa del rebase trae un bloqueo no se puede guardar.
+  const [bloqueoFechaAlta, setBloqueoFechaAlta] = useState(false);
   useEffect(() => () => { if (fotoPreview) URL.revokeObjectURL(fotoPreview); }, [fotoPreview]);
   function seleccionarFoto(file: File | null) {
     if (file && (!file.size || file.size > 5 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(file.type))) {
@@ -773,6 +776,10 @@ export default function EmpleadosPage() {
     if (guardandoRef.current) return;
     setError("");
     setMensaje("");
+    if (editId && bloqueoFechaAlta) {
+      setError("La nueva fecha de contratación no se puede guardar: revisa el aviso de vacaciones.");
+      return;
+    }
     const { labels, secciones: secs } = faltantesAlta(
       form as unknown as Record<string, unknown>,
     );
@@ -1636,10 +1643,13 @@ export default function EmpleadosPage() {
           </FormSection>
         ) : null}
 
+        {editId ? <CambioFechaAltaVacaciones slug={slug} empleadoId={editId} fechaAlta={form.fechaAlta} onBloqueo={setBloqueoFechaAlta} /> : null}
+
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
           <button
             type="submit"
-            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white"
+            disabled={Boolean(editId) && bloqueoFechaAlta}
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-50"
           >
             {guardando ? "Guardando…" : editId ? "Guardar cambios" : "Crear"}
           </button>

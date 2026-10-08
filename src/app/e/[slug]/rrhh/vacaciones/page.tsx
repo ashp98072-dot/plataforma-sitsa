@@ -21,6 +21,8 @@ import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodo
 import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
 import { ExportarHistorialVacaciones } from "@/components/rrhh/exportar-historial-vacaciones";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { PrevisualizacionHistorica } from "@/components/rrhh/previsualizacion-historica-vacaciones";
+import type { PrevisualizacionRegistro } from "@/lib/rrhh/vacaciones-registro";
 import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
@@ -75,6 +77,10 @@ export default function VacacionesPage() {
   const [dias, setDias] = useState("1");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Registro HISTÓRICO: vista previa del consumo en la fecha de la vacación (no el saldo de hoy) y decisión explícita de RRHH cuando se requiere.
+  const [previa, setPrevia] = useState<(PrevisualizacionRegistro & { diasHabiles: number }) | null>(null);
+  const [decisionAcepta, setDecisionAcepta] = useState(false);
+  const [decisionMotivo, setDecisionMotivo] = useState("");
   const [evModal, setEvModal] = useState<{
     id: number;
     titulo: string;
@@ -165,6 +171,27 @@ export default function VacacionesPage() {
     return () => clearTimeout(t);
   }, [slug, fechaInicio, fechaFin]);
 
+  // Vista previa del registro histórico: solo cuando el tipo descuenta saldo. No limita las fechas del formulario por períodos vigentes.
+  useEffect(() => {
+    const diasNum = Number(dias);
+    if (!empleadoId || !fechaInicio || !fechaFin || fechaFin < fechaInicio || !Number.isFinite(diasNum) || diasNum <= 0 || !(tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones")) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- limpia la vista previa cuando el formulario deja de ser evaluable
+      setPrevia(null);
+      return;
+    }
+    let vigente = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/empresas/${slug}/rrhh/vacaciones/preview-historico?empleadoId=${empleadoId}&fechaInicio=${fechaInicio}&fechaFin=${fechaFin}&diasHabiles=${diasNum}`);
+        const data = await res.json();
+        if (vigente) { setPrevia(res.ok && data.esHistorico ? data : null); setDecisionAcepta(false); setDecisionMotivo(""); }
+      } catch {
+        if (vigente) setPrevia(null);
+      }
+    }, 400);
+    return () => { vigente = false; clearTimeout(t); };
+  }, [slug, empleadoId, fechaInicio, fechaFin, dias, tipo]);
+
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
     setError("");
@@ -173,6 +200,17 @@ export default function VacacionesPage() {
     if (!Number.isFinite(diasNum) || diasNum <= 0) {
       setError("Días hábiles inválidos.");
       return;
+    }
+    const plan = previa?.plan ?? null;
+    if (previa && plan) {
+      if (plan.bloqueos.length || previa.superposiciones.length) {
+        setError(plan.bloqueos[0]?.mensaje ?? "La vacación se superpone con otra ya registrada.");
+        return;
+      }
+      if (plan.requiereDecision && (!decisionAcepta || decisionMotivo.trim().length < 10)) {
+        setError("Este registro histórico requiere una decisión explícita: marca la confirmación e indica el motivo (mínimo 10 caracteres).");
+        return;
+      }
     }
     const res = await fetch(`/api/empresas/${slug}/rrhh/vacaciones`, {
       method: "POST",
@@ -183,6 +221,7 @@ export default function VacacionesPage() {
         fechaFin,
         diasHabiles: diasNum,
         tipo,
+        ...(plan?.requiereDecision && decisionAcepta ? { decision: { huella: plan.huella, motivo: decisionMotivo.trim() } } : {}),
       }),
     });
     const data = await res.json();
@@ -190,6 +229,8 @@ export default function VacacionesPage() {
       setError(data.error ?? "Error");
       return;
     }
+    setDecisionAcepta(false);
+    setDecisionMotivo("");
     setMsg(
       `${data.mensaje} · ${data.diasHabiles} día(s)` +
         (data.desglose?.length
@@ -308,6 +349,16 @@ export default function VacacionesPage() {
           </button>
         </div>
       </form>
+
+      {usaSaldo && previa ? (
+        <PrevisualizacionHistorica
+          previa={previa}
+          decisionAcepta={decisionAcepta}
+          onDecisionAcepta={setDecisionAcepta}
+          decisionMotivo={decisionMotivo}
+          onDecisionMotivo={setDecisionMotivo}
+        />
+      ) : null}
 
       {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">

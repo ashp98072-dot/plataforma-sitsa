@@ -165,7 +165,7 @@ export async function PUT(req: Request, ctx: Ctx) {
     "16:00:00";
   const input = toInput(d, he, hs);
   try {
-    const ok = await actualizarEmpleado(guard.empresa.id, empId, input);
+    const ok = await actualizarEmpleado(guard.empresa.id, empId, input, { usuario: guard.session.username });
     if (!ok) {
       return NextResponse.json({ error: "No encontrado." }, { status: 404 });
     }

@@ -8,8 +8,8 @@ import {
   obtenerHistorialPeriodos,
   obtenerPeriodosDisponibles,
   registrarIncidenciaSinSaldo,
-  registrarVacacionesFifo,
 } from "@/lib/rrhh/vacaciones";
+import { registrarVacaciones } from "@/lib/rrhh/vacaciones-registro";
 import { TIPOS_VACACIONES } from "@/lib/rrhh/vacaciones-eliminar-ui";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -113,6 +113,8 @@ const schema = z.object({
   fechaFin: z.string().min(8),
   diasHabiles: z.number().positive().optional(),
   tipo: z.string().default("Vacaciones"),
+  /** Decisión explícita de RRHH para un registro HISTÓRICO que cruza un aniversario o tiene déficit (atada a la huella de la propuesta). */
+  decision: z.object({ huella: z.string().length(64), motivo: z.string().max(500) }).optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -130,22 +132,29 @@ export async function POST(req: Request, ctx: Ctx) {
     (await contarDiasHabiles(guard.empresa.id, d.fechaInicio, d.fechaFin));
 
   if (TIPOS_CON_SALDO.has(d.tipo)) {
-    const r = await registrarVacacionesFifo({
+    // Registro normal sin cambios; si la fecha de inicio cae en un período que HOY está Vencido es un registro HISTÓRICO (ver vacaciones-registro.ts).
+    const r = await registrarVacaciones({
       empresaId: guard.empresa.id,
       idEmpleado: d.empleadoId,
       fechaInicio: d.fechaInicio,
       fechaFin: d.fechaFin,
       diasATomar: dias,
       tipo: d.tipo,
+      decision: d.decision,
+      usuario: guard.session.username,
     });
     if (!r.ok) {
-      return NextResponse.json({ error: r.mensaje }, { status: 400 });
+      return NextResponse.json(
+        { error: r.mensaje, ...(r.codigo ? { codigo: r.codigo } : {}), ...(r.requiereDecision ? { requiereDecision: true } : {}), ...(r.plan ? { plan: r.plan } : {}) },
+        { status: r.codigo === "DECISION_REQUERIDA" ? 409 : 400 },
+      );
     }
     return NextResponse.json({
       mensaje: r.mensaje,
       desglose: r.desglose,
       incidenciaId: r.incidenciaId,
       diasHabiles: dias,
+      ...(r.historico ? { historico: true, plan: r.plan } : {}),
     });
   }
 

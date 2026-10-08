@@ -115,7 +115,7 @@ export type ResultadoReconstruccion = {
   advertencias: AdvertenciaReconstruccion[];
 };
 
-type Estado = {
+export type EstadoPeriodo = {
   anioLaboral: number;
   inicio: Date;
   fin: Date;
@@ -126,6 +126,7 @@ type Estado = {
   perdidos: number;
   vencido: boolean;
 };
+type Estado = EstadoPeriodo;
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const hoyCero = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -141,8 +142,37 @@ export function contarDiasHabilesPuro(inicio: string, fin: string, feriados: Rea
   return dias;
 }
 
-/** Avanza el estado de los períodos a `fecha`: acumulación proporcional, vencimiento (2 completos vigentes) y tope de 30. */
-function avanzar(periodos: Estado[], fecha: Date): void {
+/**
+ * Parte una vacación en TRAMOS con fechas reales: se corta en cada inicio de período (aniversario) que cae dentro del rango, después del
+ * primer día. Los días de la vacación (los informados) se asignan a los tramos en orden cronológico, hasta los hábiles reales de cada uno
+ * (sin domingos ni feriados); el remanente cae en el último tramo. MISMA regla para la reconstrucción y para el registro histórico.
+ */
+export function repartirDiasEnTramos(
+  iniciosDePeriodo: readonly Date[], inicio: Date, fin: Date, dias: number, feriados: ReadonlySet<string>,
+): { cortes: Date[]; tramos: { desde: Date; hasta: Date; habiles: number; asignados: number }[] } {
+  const cortes = iniciosDePeriodo.filter((i) => i > inicio && i <= fin).sort((x, y) => x.getTime() - y.getTime());
+  const base: { desde: Date; hasta: Date; habiles: number }[] = [];
+  let desde = inicio;
+  for (const corte of [...cortes, null]) {
+    const hasta = corte ? new Date(corte.getFullYear(), corte.getMonth(), corte.getDate() - 1) : fin;
+    base.push({ desde, hasta, habiles: contarDiasHabilesPuro(aIso(desde), aIso(hasta), feriados) });
+    if (corte) desde = corte;
+  }
+  let porAsignar = dias;
+  const tramos = base.map((t, i) => {
+    const asignados = i === base.length - 1 ? porAsignar : Math.min(t.habiles, porAsignar);
+    porAsignar = r2(porAsignar - asignados);
+    return { ...t, asignados };
+  });
+  return { cortes, tramos };
+}
+
+/**
+ * Avanza el estado de los períodos a `fecha`: acumulación proporcional, vencimiento (2 completos vigentes) y tope de 30.
+ * `antesDelTope` (opcional) se ejecuta DESPUÉS de acumular y vencer y ANTES de aplicar el tope: el registro histórico lo usa para descontar
+ * lo ya consumido (detalle FIFO) y que el tope de 30 se aplique sobre lo realmente disponible. El motor de reconstrucción no lo usa.
+ */
+export function avanzarPeriodos(periodos: Estado[], fecha: Date, antesDelTope?: (periodos: Estado[]) => void): void {
   for (const p of periodos) {
     if (fecha < p.inicio) continue;
     const nuevo = fecha > p.fin ? DIAS_POR_PERIODO : calcularDiasAcumuladosProporcional(p.inicio, p.fin, fecha, DIAS_POR_PERIODO);
@@ -161,6 +191,7 @@ function avanzar(periodos: Estado[], fecha: Date): void {
       p.vencido = true;
     }
   });
+  antesDelTope?.(periodos);
   const vigentes = completados.filter((p, idx) => idx < MAX_PERIODOS_VIGENTES && !p.vencido).sort((a, b) => a.anioLaboral - b.anioLaboral);
   // Tope de 30: solo con 2 períodos completos vigentes (misma condición que el motor actual).
   if (vigentes.length >= MAX_PERIODOS_VIGENTES) {
@@ -177,6 +208,10 @@ function avanzar(periodos: Estado[], fecha: Date): void {
       exceso = r2(exceso - recorte);
     }
   }
+}
+
+function avanzar(periodos: Estado[], fecha: Date): void {
+  avanzarPeriodos(periodos, fecha);
 }
 
 export function reconstruirEmpleado(
@@ -270,23 +305,8 @@ export function reconstruirEmpleado(
     if (v.excluida) continue; // anterior a la fecha base o futura: se reportan, no consumen saldo
     const inicio = deIso(v.inicio);
     const fin = deIso(v.fin);
-    // Tramos: se parte la vacación en cada inicio de período (aniversario) que cae DENTRO del rango (después del primer día).
-    const cortes = periodos.map((p) => p.inicio).filter((i) => i > inicio && i <= fin).sort((x, y) => x.getTime() - y.getTime());
-    const tramos: { desde: Date; hasta: Date; dias: number }[] = [];
-    let desde = inicio;
-    for (const corte of [...cortes, null]) {
-      const hasta = corte ? new Date(corte.getFullYear(), corte.getMonth(), corte.getDate() - 1) : fin;
-      tramos.push({ desde, hasta, dias: contarDiasHabilesPuro(aIso(desde), aIso(hasta), feriados) });
-      if (corte) desde = corte;
-    }
-    // Días de la vacación (los informados por RRHH) repartidos por tramo en orden cronológico, hasta los hábiles reales de cada tramo;
-    // el remanente (si el archivo informa más días que los hábiles calculados) cae en el último tramo.
-    let porAsignar = v.dias;
-    const asignacion = tramos.map((t, i) => {
-      const dias = i === tramos.length - 1 ? porAsignar : Math.min(t.dias, porAsignar);
-      porAsignar = r2(porAsignar - dias);
-      return { ...t, asignados: dias };
-    });
+    // Tramos con fechas reales (misma función que usa el registro histórico): se corta en cada aniversario dentro del rango.
+    const { cortes, tramos: asignacion } = repartirDiasEnTramos(periodos.map((p) => p.inicio), inicio, fin, v.dias, feriados);
     const detalleTramos: string[] = [];
     let deficitTotal = 0;
     for (const t of asignacion) {

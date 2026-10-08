@@ -382,6 +382,8 @@ export type HistorialPeriodo = {
   estado: string;
   /** Estado para mostrar: En curso | Vigente | Consumido | Vencido. */
   estadoVisual: EstadoVisualPeriodo;
+  /** Consumos históricos registrados contra este período (detalle FIFO), del más antiguo al más reciente. */
+  consumos: { incidenciaId: number; tipo: string; fechaInicio: string; fechaFin: string; dias: number }[];
 };
 
 export type HistorialVacaciones = {
@@ -429,6 +431,28 @@ export async function obtenerHistorialPeriodos(
   hoy.setHours(0, 0, 0, 0);
   const anioEnCurso = base && !sospechosa && base <= hoy ? differenceInYears(hoy, base) + 1 : null;
 
+  // Consumos por período (detalle FIFO ↔ incidencia). Aditivo: si falla no rompe el historial.
+  const consumosPorSaldo = new Map<number, HistorialPeriodo["consumos"]>();
+  try {
+    const cons = await query<RowDataPacket[]>(
+      `SELECT d.saldo_id, d.dias_tomados, i.id AS incidencia_id, i.tipo, i.fecha_inicio, i.fecha_fin
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN incidencias i ON i.id = d.incidencia_id
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       ORDER BY i.fecha_inicio, d.id`,
+      [empresaId, idEmpleado],
+    );
+    for (const c of cons ?? []) {
+      const k = Number(c.saldo_id);
+      consumosPorSaldo.set(k, [...(consumosPorSaldo.get(k) ?? []), {
+        incidenciaId: Number(c.incidencia_id), tipo: String(c.tipo), fechaInicio: toIsoDate(c.fecha_inicio) ?? "", fechaFin: toIsoDate(c.fecha_fin) ?? "",
+        dias: Math.round(Number(c.dias_tomados) * 100) / 100,
+      }]);
+    }
+  } catch {
+    /* sin detalle de consumos: el historial sigue mostrando totales */
+  }
   const todos: HistorialPeriodo[] = rows.map((r) => {
     const base2 = {
       estado: String(r.estado),
@@ -446,6 +470,7 @@ export async function obtenerHistorialPeriodos(
       diasDisponibles: base2.disponibles,
       estado: base2.estado,
       estadoVisual: estadoVisualPeriodo(base2, anioEnCurso),
+      consumos: consumosPorSaldo.get(Number(r.id)) ?? [],
     };
   });
 
