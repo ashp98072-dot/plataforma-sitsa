@@ -23,7 +23,7 @@ const COLOR_ESTADO: Record<string, string> = {
 export function HistorialPeriodosVacaciones({ historial, admin = false, reparacion, modoCargaHistorica = false }: {
   historial: HistorialVacaciones | null | undefined;
   admin?: boolean;
-  /** true = MODO DE CARGA HISTÓRICA: el saldo mostrado es TEMPORAL (sin el límite de 2 períodos / 30 días). */
+  /** true = historial completo activo: el saldo incluye todos los períodos acumulados desde la fecha de contratación. */
   modoCargaHistorica?: boolean;
   /** Solo RRHH con permiso de edición: habilita «Reparar períodos» (vista previa + confirmación, uno por uno). */
   reparacion?: { slug: string; empleadoId: number; onReparado: () => void | Promise<void> };
@@ -38,7 +38,7 @@ export function HistorialPeriodosVacaciones({ historial, admin = false, reparaci
       </summary>
       <p className="mt-2 text-xs text-[var(--muted)]">
         {modoCargaHistorica
-          ? "MODO DE CARGA HISTÓRICA: el saldo actual es TEMPORAL e incluye todos los períodos desde la fecha de ingreso por lo que no se ha consumido (sin el límite de 2 períodos / 30 días). No es el saldo normal."
+          ? "El saldo actual incluye todos los períodos acumulados desde la fecha de contratación, descontando las vacaciones registradas. Los períodos anteriores permanecen en el historial."
           : "El saldo actual solo incluye los períodos vigentes (máximo 2 períodos completos = 30 días). Los períodos anteriores, consumidos o vencidos permanecen en el historial y no se suman al saldo."}
       </p>
 

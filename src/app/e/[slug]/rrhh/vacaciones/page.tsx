@@ -64,7 +64,7 @@ export default function VacacionesPage() {
   // Reparación administrada de series de períodos: RRHH · Vacaciones · editar (los endpoints lo exigen de nuevo). `versionReparacion` refresca el indicador.
   const puedeReparar = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
   const [versionReparacion, setVersionReparacion] = useState(0);
-  // Modo de carga histórica (temporal, por empresa): cambiarlo exige RRHH · Configuración · editar (el servidor lo vuelve a exigir).
+  // Historial completo de vacaciones (por empresa): la activación exige RRHH · Configuración · editar (el servidor lo vuelve a exigir); la interfaz no ofrece desactivarlo.
   const puedeCambiarModo = rol === "Admin" || tienePermiso(permisos, "configuracion", "editar");
   const [modoHistorico, setModoHistorico] = useState(false);
   const [aviso, setAviso] = useState("");
@@ -379,7 +379,7 @@ export default function VacacionesPage() {
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p className="text-xs text-[var(--muted)]">
             {modoHistorico
-              ? "El saldo se calcula desde la fecha de contratación / alta (no la entrada laboral). MODO DE CARGA HISTÓRICA: saldo TEMPORAL, sin el límite de 2 períodos / 30 días."
+              ? "El saldo se calcula desde la fecha de contratación / alta e incluye todos los períodos acumulados, descontando las vacaciones registradas."
               : "El saldo se calcula desde la fecha de contratación / alta (no la entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular el periodo actual, el excedente se descuenta del periodo más viejo (FIFO)."}
           </p>
           <p className="mt-1">
