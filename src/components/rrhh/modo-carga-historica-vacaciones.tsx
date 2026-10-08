@@ -1,23 +1,30 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { ResultadoResync } from "@/lib/rrhh/vacaciones-modo-resync-db";
 import type { ResultadoPreflight } from "@/lib/rrhh/vacaciones-modo-preflight";
 
-type Accion = "activar" | "desactivar" | "resincronizar" | null;
+/** Aviso visible mientras la empresa tiene activo el historial completo de vacaciones (presentacional). No habla de saldo «temporal» ni de desactivar. */
+export function AvisoHistorialCompletoVacaciones() {
+  return (
+    <div className="rounded-xl border-2 border-amber-400 bg-amber-400/10 p-4" role="status">
+      <p className="text-base font-bold tracking-wide text-amber-300">HISTORIAL COMPLETO DE VACACIONES ACTIVO</p>
+      <p className="mt-1 text-sm text-amber-100">
+        El saldo incluye todos los períodos acumulados desde la fecha de contratación, descontando las vacaciones registradas.
+      </p>
+    </div>
+  );
+}
 
 /**
- * MODO DE CARGA HISTÓRICA de vacaciones (temporal, por empresa). Mientras está activo se muestra un aviso MUY visible: todos los períodos históricos no consumidos se consideran
- * disponibles y el límite normal de 2 períodos / 30 días está suspendido. Activar, desactivar y resincronizar requieren confirmación explícita (solo con permiso de
- * administración RRHH · Configuración · editar; el servidor lo vuelve a exigir). Cambiar el modo solo cambia una bandera: no borra ni modifica vacaciones, incidencias ni evidencias.
+ * Historial completo de vacaciones (por empresa). Con la empresa en este modo solo se muestra el aviso: la interfaz NO ofrece desactivar ni recalcular (el backend sigue siendo
+ * reversible para un administrador técnico). Para una empresa que aún no lo tiene, quien tiene permiso de administración (RRHH · Configuración · editar) puede activarlo
+ * tras la verificación previa (preflight de solo lectura) y una confirmación explícita; el servidor vuelve a exigir permiso y verificación.
  */
 export function ModoCargaHistoricaVacaciones({ slug, puedeCambiar, onCambio, onModo }: { slug: string; puedeCambiar: boolean; onCambio: () => void | Promise<void>; onModo?: (activo: boolean) => void }) {
   const [activo, setActivo] = useState<boolean | null>(null);
-  const [confirmar, setConfirmar] = useState<Accion>(null);
+  const [confirmando, setConfirmando] = useState(false);
   const [trabajando, setTrabajando] = useState(false);
   const [error, setError] = useState("");
-  const [aviso, setAviso] = useState("");
-  const [resync, setResync] = useState<ResultadoResync | null>(null);
   // Verificación previa (solo lectura) que se muestra ANTES de confirmar la activación
   const [preflight, setPreflight] = useState<ResultadoPreflight | null>(null);
   const [verificando, setVerificando] = useState(false);
@@ -41,48 +48,37 @@ export function ModoCargaHistoricaVacaciones({ slug, puedeCambiar, onCambio, onM
   }, [cargar]);
 
   async function pedirActivar() {
-    setConfirmar("activar");
+    setConfirmando(true);
     setPreflight(null);
     setError("");
-    setAviso("");
     setVerificando(true);
     try {
       const res = await fetch(`${base}/preflight`, { cache: "no-store" });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(d.error ?? "No se pudo verificar el consumo histórico. No se puede activar el modo."); return; }
+      if (!res.ok) { setError(d.error ?? "No se pudo verificar el consumo histórico. No se puede activar."); return; }
       setPreflight(d as ResultadoPreflight);
     } catch {
-      setError("No se pudo verificar el consumo histórico. No se puede activar el modo.");
+      setError("No se pudo verificar el consumo histórico. No se puede activar.");
     } finally {
       setVerificando(false);
     }
   }
 
-  async function ejecutar(accion: Exclude<Accion, null>) {
+  async function activar() {
     if (trabajando) return;
     setTrabajando(true);
     setError("");
-    setAviso("");
     try {
-      if (accion === "resincronizar") {
-        const res = await fetch(`${base}/resincronizar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmar: true }) });
-        const d = await res.json().catch(() => ({}));
-        if (!res.ok) { setError(d.error ?? "No se pudo resincronizar."); return; }
-        setResync(d as ResultadoResync);
-      } else {
-        const res = await fetch(base, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: accion === "activar", confirmar: true }) });
-        const d = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          if (d.codigo === "PREFLIGHT_BLOQUEADO") { setPreflight(d as ResultadoPreflight); setError(""); return; } // el servidor volvió a verificar y hay consumo no verificable
-          setError(d.error ?? "No se pudo cambiar el modo.");
-          return;
-        }
-        setActivo(d.activo as boolean);
-        onModo?.(d.activo as boolean);
-        setResync(null);
-        setAviso(d.cambiado ? "Modo actualizado. Para que los saldos guardados de todos los colaboradores reflejen el modo ahora, use «Recalcular saldos»; de lo contrario se actualizan al consultar a cada colaborador." : "El modo ya tenía ese valor: no se modificó nada.");
+      const res = await fetch(base, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: true, confirmar: true }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (d.codigo === "PREFLIGHT_BLOQUEADO") { setPreflight(d as ResultadoPreflight); return; } // el servidor volvió a verificar y hay consumo no verificable
+        setError(d.error ?? "No se pudo activar.");
+        return;
       }
-      setConfirmar(null);
+      setActivo(d.activo as boolean);
+      onModo?.(d.activo as boolean);
+      setConfirmando(false);
       await onCambio();
     } catch {
       setError("No se pudo completar la operación. No se modificó nada.");
@@ -91,78 +87,56 @@ export function ModoCargaHistoricaVacaciones({ slug, puedeCambiar, onCambio, onM
     }
   }
 
-  const TEXTO: Record<Exclude<Accion, null>, string> = {
-    activar: "Activar el modo de carga histórica suspende temporalmente el vencimiento y el límite de 2 períodos / 30 días para esta empresa: todos los períodos históricos no consumidos se mostrarán como disponibles. No borra ni modifica vacaciones, incidencias ni evidencias.",
-    desactivar: "Al volver al modo normal se reaplicará el vencimiento y el límite de períodos vigentes. Los consumos históricos se conservarán.",
-    resincronizar: "Se recalcularán los saldos guardados de cada colaborador (uno por uno, cada uno en su propia transacción) con el modo vigente. No se borra historial ni se crea ninguna vacación o incidencia; la sincronización normal puede completar períodos faltantes. Un colaborador con consumo no verificable no se recalcula.",
-  };
-
   return (
     <div className="space-y-2">
-      {activo ? (
-        <div className="rounded-xl border-2 border-amber-400 bg-amber-400/10 p-4" role="alert">
-          <p className="text-base font-bold tracking-wide text-amber-300">MODO DE CARGA HISTÓRICA ACTIVO</p>
-          <p className="mt-1 text-sm text-amber-100">
-            Todos los períodos históricos no consumidos se consideran disponibles temporalmente. El límite normal de 2 períodos / 30 días está suspendido durante la carga histórica.
-          </p>
-          <p className="mt-1 text-xs text-amber-200">Este saldo es TEMPORAL: no es el saldo normal.</p>
-        </div>
-      ) : null}
+      {activo ? <AvisoHistorialCompletoVacaciones /> : null}
 
-      {puedeCambiar && activo !== null ? (
+      {!activo && activo !== null && puedeCambiar ? (
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-[var(--muted)]">Modo de carga histórica de vacaciones:</span>
-          <strong>{activo ? "ACTIVO" : "normal"}</strong>
-          <button type="button" onClick={() => (activo ? setConfirmar("desactivar") : void pedirActivar())} disabled={trabajando} className="rounded border border-amber-400/60 px-2 py-0.5 text-amber-200 hover:bg-amber-400/10">
-            {activo ? "Desactivar" : "Activar"}
-          </button>
-          <button type="button" onClick={() => setConfirmar("resincronizar")} disabled={trabajando} className="rounded border border-[var(--border)] px-2 py-0.5">
-            Recalcular saldos
+          <span className="text-[var(--muted)]">Historial completo de vacaciones (todos los períodos acumulados desde la fecha de contratación):</span>
+          <strong>no activo</strong>
+          <button type="button" onClick={() => void pedirActivar()} disabled={trabajando || verificando} className="rounded border border-amber-400/60 px-2 py-0.5 text-amber-200 hover:bg-amber-400/10">
+            Activar
           </button>
         </div>
       ) : null}
 
-      {confirmar ? (
-        <div className="space-y-2 rounded-lg border border-amber-400/60 bg-[var(--card)] p-3 text-xs" role="dialog" aria-label="Confirmar cambio de modo">
-          <p>{TEXTO[confirmar]}</p>
-          {confirmar === "activar" ? (
-            <div className="space-y-1 rounded border border-[var(--border)] p-2">
-              {verificando || !preflight ? <p className="text-[var(--muted)]">{verificando ? "Verificando el consumo histórico…" : "Sin verificación previa."}</p> : (
-                <>
-                  <p className="font-medium">Verificación previa:</p>
-                  <p>{preflight.revisados} colaboradores revisados · {preflight.aptos} aptos · {preflight.bloqueados} con consumo no verificable</p>
-                  {preflight.bloqueados > 0 ? (
-                    <div className="space-y-1 text-red-300" role="alert">
-                      <p>No se puede activar el modo histórico todavía. Hay {preflight.bloqueados} colaboradores con consumo que no puede reconstruirse de forma verificable.</p>
-                      <ul className="list-disc space-y-1 pl-5">
-                        {preflight.motivos.map((m) => (
-                          <li key={m.empleadoId}><strong>{m.nombre}</strong>{m.codigo ? ` (${m.codigo})` : ""}: {m.motivos.map((x) => x.mensaje).join(" ")}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                </>
-              )}
-            </div>
-          ) : null}
+      {confirmando && !activo ? (
+        <div className="space-y-2 rounded-lg border border-amber-400/60 bg-[var(--card)] p-3 text-xs" role="dialog" aria-label="Confirmar activación">
+          <p>
+            Activar el historial completo hace que todos los períodos acumulados desde la fecha de contratación se consideren disponibles (sin el límite de 2 períodos / 30 días),
+            descontando las vacaciones registradas. No borra ni modifica vacaciones, incidencias ni evidencias.
+          </p>
+          <div className="space-y-1 rounded border border-[var(--border)] p-2">
+            {verificando || !preflight ? <p className="text-[var(--muted)]">{verificando ? "Verificando el consumo histórico…" : "Sin verificación previa."}</p> : (
+              <>
+                <p className="font-medium">Verificación previa:</p>
+                <p>{preflight.revisados} colaboradores revisados · {preflight.aptos} aptos · {preflight.bloqueados} con consumo no verificable</p>
+                {preflight.bloqueados > 0 ? (
+                  <div className="space-y-1 text-red-300" role="alert">
+                    <p>No se puede activar el modo histórico todavía. Hay {preflight.bloqueados} colaboradores con consumo que no puede reconstruirse de forma verificable.</p>
+                    <ul className="list-disc space-y-1 pl-5">
+                      {preflight.motivos.map((m) => (
+                        <li key={m.empleadoId}><strong>{m.nombre}</strong>{m.codigo ? ` (${m.codigo})` : ""}: {m.motivos.map((x) => x.mensaje).join(" ")}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
           <div className="flex gap-2">
-            {confirmar !== "activar" || preflight?.puedeActivar ? (
-            <button type="button" onClick={() => void ejecutar(confirmar)} disabled={trabajando || verificando} className="rounded bg-amber-400 px-3 py-1 font-semibold text-black disabled:opacity-40">
-              {trabajando ? "Procesando…" : confirmar === "activar" ? "Confirmar activación" : confirmar === "desactivar" ? "Confirmar desactivación" : "Confirmar recálculo"}
-            </button>
+            {preflight?.puedeActivar ? (
+              <button type="button" onClick={() => void activar()} disabled={trabajando || verificando} className="rounded bg-amber-400 px-3 py-1 font-semibold text-black disabled:opacity-40">
+                {trabajando ? "Procesando…" : "Confirmar activación"}
+              </button>
             ) : null}
-            <button type="button" onClick={() => setConfirmar(null)} disabled={trabajando} className="rounded border border-[var(--border)] px-3 py-1">Cancelar</button>
+            <button type="button" onClick={() => setConfirmando(false)} disabled={trabajando} className="rounded border border-[var(--border)] px-3 py-1">Cancelar</button>
           </div>
         </div>
       ) : null}
 
       {error ? <p className="text-xs text-red-300" role="alert">{error}</p> : null}
-      {aviso ? <p className="text-xs text-emerald-300" role="status">{aviso}</p> : null}
-      {resync ? (
-        <p className="text-xs text-emerald-300" role="status">
-          Saldos recalculados: {resync.sincronizados} de {resync.total} colaborador(es) · congelados (requieren reparación): {resync.congelados} · consumo no verificable (no recalculados): {resync.consumoNoVerificable} · errores: {resync.errores}.
-        </p>
-      ) : null}
     </div>
   );
 }
