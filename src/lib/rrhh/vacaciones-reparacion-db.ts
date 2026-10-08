@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import { obtenerFeriadosEnRango } from "./vacaciones";
@@ -213,4 +214,126 @@ export async function listarPendientesReparacion(empresaId: number, hoy: Date = 
     empleados.push({ empleadoId: Number(e.id), codigo: String(e.codigo ?? ""), nombre: String(e.nombre ?? ""), estado: String(e.estado ?? ""), fechaAlta, motivos: [...new Set(d.defectos.map((x) => x.codigo))] });
   }
   return { total: empleados.length, empleados };
+}
+
+/* ───────────────────────── REPARACIÓN POR LOTE (todos los elegibles) ─────────────────────────
+ * NO es un UPDATE/DELETE masivo: equivale a ejecutar, colaborador por colaborador, EXACTAMENTE la reparación individual (`previsualizarReparacion` /
+ * `repararSerieVacaciones`), cada una en SU PROPIA transacción (un fallo no revierte a los demás). No hay un segundo motor ni lógica duplicada. */
+
+export type EstadoLote = "ELEGIBLE" | "BLOQUEADO" | "SIN_CAMBIOS";
+export type FilaLote = {
+  empleadoId: number;
+  codigo: string;
+  nombre: string;
+  fechaAlta: string | null;
+  motivos: string[];
+  periodosActuales: PreviaReparacion["periodosActuales"];
+  periodosPropuestos: PreviaReparacion["periodosPropuestos"];
+  saldoAntes: number;
+  saldoDespues: number;
+  consumidoPreservado: number;
+  bloqueos: PreviaReparacion["bloqueos"];
+  estado: EstadoLote;
+  /** Huella individual de lo previsualizado: solo para ELEGIBLES (se vuelve a verificar al confirmar). */
+  huella: string | null;
+};
+export type PreviaLote = { pendientes: number; elegibles: number; bloqueados: number; sinCambios: number; filas: FilaLote[] };
+
+/** Vista previa GLOBAL (SOLO LECTURA): la vista previa individual de cada pendiente. No escribe absolutamente nada. */
+export async function previsualizarReparacionLote(empresaId: number, hoy: Date = new Date()): Promise<PreviaLote> {
+  const pendientes = await listarPendientesReparacion(empresaId, hoy);
+  const filas: FilaLote[] = [];
+  for (const p of pendientes.empleados) {
+    const previa = await previsualizarReparacion(empresaId, p.empleadoId, hoy);
+    if (!previa) continue; // desapareció entre el listado y la vista previa
+    // Solo es ELEGIBLE si hay algo que reparar, la fecha de alta es válida (sin bloqueos del motor) y el plan es aplicable; nada se asume desde el cliente.
+    const estado: EstadoLote = !previa.requiereReparacion ? "SIN_CAMBIOS" : previa.puedeReparar && previa.fechaAltaActual ? "ELEGIBLE" : "BLOQUEADO";
+    filas.push({
+      empleadoId: p.empleadoId, codigo: p.codigo, nombre: p.nombre, fechaAlta: previa.fechaAltaActual,
+      motivos: [...new Set(previa.defectos.map((d) => d.codigo))],
+      periodosActuales: previa.periodosActuales, periodosPropuestos: previa.periodosPropuestos,
+      saldoAntes: previa.saldoAntes, saldoDespues: previa.saldoDespues, consumidoPreservado: previa.consumidoPreservado,
+      bloqueos: previa.bloqueos, estado, huella: estado === "ELEGIBLE" ? previa.huella : null,
+    });
+  }
+  return {
+    pendientes: pendientes.total,
+    elegibles: filas.filter((f) => f.estado === "ELEGIBLE").length,
+    bloqueados: filas.filter((f) => f.estado === "BLOQUEADO").length,
+    sinCambios: filas.filter((f) => f.estado === "SIN_CAMBIOS").length,
+    filas,
+  };
+}
+
+export type ResultadoEmpleadoLote = {
+  empleadoId: number;
+  resultado: "REPARADO" | "BLOQUEADO" | "CAMBIO_DESDE_PREVIEW" | "SIN_CAMBIOS" | "ERROR";
+  mensaje: string;
+};
+export type ResultadoLote = {
+  solicitados: number;
+  reparados: number;
+  bloqueados: number;
+  cambiosDesdePreview: number;
+  sinCambios: number;
+  errores: number;
+  resultados: ResultadoEmpleadoLote[];
+};
+
+/**
+ * Repara, UNO POR UNO y cada uno en su propia transacción, los colaboradores indicados con la huella de su vista previa. Para cada uno se ejecuta
+ * `repararSerieVacaciones` (FOR UPDATE del empleado, recarga, rediagnóstico, replanificación, verificación de huella, invariantes y auditoría
+ * individual `vacaciones_reparacion_serie`). Un bloqueo, un cambio desde la vista previa o un error en uno NO impide continuar con los siguientes
+ * ni revierte los ya confirmados. La empresa viene siempre del servidor: un colaborador de otra empresa jamás entra (no se encuentra). Al final se
+ * registra un resumen `vacaciones_reparacion_lote` (la auditoría individual sigue siendo la obligatoria).
+ */
+export async function repararLoteVacaciones(
+  empresaId: number, items: readonly { empleadoId: number; huella: string }[], opciones: { usuario?: string | null; hoy?: Date } = {},
+): Promise<ResultadoLote> {
+  const hoy = opciones.hoy ?? new Date();
+  const vistos = new Set<number>();
+  const unicos = items.filter((i) => (vistos.has(i.empleadoId) ? false : (vistos.add(i.empleadoId), true)));
+  const resultados: ResultadoEmpleadoLote[] = [];
+  for (const it of unicos) {
+    let r: ResultadoEmpleadoLote;
+    try {
+      const res = await repararSerieVacaciones(empresaId, it.empleadoId, { huella: it.huella, usuario: opciones.usuario ?? null, hoy });
+      r = res.aplicado
+        ? { empleadoId: it.empleadoId, resultado: "REPARADO", mensaje: "Serie reconstruida correctamente." }
+        : { empleadoId: it.empleadoId, resultado: "SIN_CAMBIOS", mensaje: "La serie ya era correcta: no se modificó nada." };
+    } catch (error) {
+      if (error instanceof ReparacionBloqueadaError) r = { empleadoId: it.empleadoId, resultado: "BLOQUEADO", mensaje: `No reparado — requiere revisión manual. ${error.message}` };
+      else if (error instanceof ReparacionCambioError) r = { empleadoId: it.empleadoId, resultado: "CAMBIO_DESDE_PREVIEW", mensaje: "La información cambió desde la vista previa: revise nuevamente. No se modificó nada." };
+      else if (error instanceof ReparacionEmpleadoNoEncontradoError) r = { empleadoId: it.empleadoId, resultado: "ERROR", mensaje: "Colaborador no encontrado en esta empresa. No se modificó nada." };
+      else {
+        console.error("[vacaciones/reparacion/lote]", it.empleadoId, error);
+        r = { empleadoId: it.empleadoId, resultado: "ERROR", mensaje: "Error inesperado: este colaborador no se modificó." };
+      }
+    }
+    resultados.push(r);
+  }
+  const cuenta = (x: ResultadoEmpleadoLote["resultado"]) => resultados.filter((r) => r.resultado === x).length;
+  const lote: ResultadoLote = {
+    solicitados: unicos.length, reparados: cuenta("REPARADO"), bloqueados: cuenta("BLOQUEADO"), cambiosDesdePreview: cuenta("CAMBIO_DESDE_PREVIEW"),
+    sinCambios: cuenta("SIN_CAMBIOS"), errores: cuenta("ERROR"), resultados,
+  };
+  // Resumen del lote (solo informativo; la auditoría individual ya quedó dentro de cada transacción). Un fallo aquí no deshace nada.
+  try {
+    const conn = await getPool().getConnection();
+    try {
+      await registrarAuditoriaTx(conn, {
+        empresaId, usuario: opciones.usuario ?? null, accion: "vacaciones_reparacion_lote", modulo: "rrhh",
+        detalle: JSON.stringify({
+          empresaId, usuario: opciones.usuario ?? null, fecha: hoy.toISOString(), cantidadSolicitada: lote.solicitados, reparados: lote.reparados,
+          bloqueados: lote.bloqueados, cambiosPreview: lote.cambiosDesdePreview, sinCambios: lote.sinCambios, errores: lote.errores,
+          empleados: resultados.map((r) => [r.empleadoId, r.resultado]),
+        }),
+      });
+    } finally {
+      conn.release();
+    }
+  } catch (error) {
+    console.error("[vacaciones/reparacion/lote] auditoría del lote", error);
+  }
+  return lote;
 }
