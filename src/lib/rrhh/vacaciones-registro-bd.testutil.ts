@@ -138,6 +138,27 @@ export class BdVac {
       return [{ n: t.evidencias.filter((e) => t.incidencias.some((i) => i.id === e.incidencia_id && i.empresa_id === p[0] && i.id_empleado === p[1])).length }];
     }
     if (sql.startsWith("SELECT fecha FROM feriados")) return this.feriados.filter((f) => f >= String(p[1]) && f <= String(p[2])).map((fecha) => ({ fecha }));
+    // contenido que la serie nunca debe modificar (rebase / reparación)
+    if (sql === "SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? ORDER BY id") {
+      return t.incidencias.filter((i) => i.empresa_id === p[0] && i.id_empleado === p[1]).sort((x, y) => x.id - y.id).map((i) => ({ ...i }));
+    }
+    if (sql === "SELECT id, fecha_inicio, fecha_fin, dias_habiles, estado FROM vacaciones WHERE empresa_id = ? AND id_empleado = ? ORDER BY id") {
+      return t.vacaciones.filter((v) => v.empresa_id === p[0] && v.id_empleado === p[1]).sort((x, y) => x.id - y.id).map((v) => ({ ...v }));
+    }
+    if (sql.startsWith("SELECT e.id, e.incidencia_id FROM evidencias_incidencias e INNER JOIN incidencias i")) {
+      return t.evidencias.filter((e) => t.incidencias.some((i) => i.id === e.incidencia_id && i.empresa_id === p[0] && i.id_empleado === p[1])).sort((x, y) => x.id - y.id).map((e) => ({ id: e.id, incidencia_id: e.incidencia_id }));
+    }
+    // reparación: pendientes de la empresa (solo lectura)
+    if (sql.startsWith("SELECT e.id, e.codigo, e.nombre, e.estado, e.fecha_alta FROM empleados e WHERE e.empresa_id = ? AND EXISTS")) {
+      return t.empleados.filter((e) => e.empresa_id === p[0] && t.saldos.some((s) => s.empresa_id === e.empresa_id && s.id_empleado === e.id)).map((e) => ({ id: e.id, codigo: `E-${e.id}`, nombre: e.nombre, estado: "Activo", fecha_alta: e.fecha_alta }));
+    }
+    if (sql === "SELECT id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado FROM saldos_vacaciones WHERE empresa_id = ?") {
+      return t.saldos.filter((s) => s.empresa_id === p[0]).map((s) => ({ ...s }));
+    }
+    if (sql === "SELECT DISTINCT s.id AS saldo_id FROM saldos_vacaciones s INNER JOIN detalle_consumo_vacaciones d ON d.saldo_id = s.id WHERE s.empresa_id = ?") {
+      const ids = new Set(t.saldos.filter((s) => s.empresa_id === p[0]).map((s) => s.id));
+      return [...new Set(t.detalle.filter((d) => ids.has(d.saldo_id)).map((d) => d.saldo_id))].map((saldo_id) => ({ saldo_id }));
+    }
     // eliminar
     if (sql.startsWith("SELECT id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE id = ? AND empresa_id = ?")) {
       return t.incidencias.filter((i) => i.id === p[0] && i.empresa_id === p[1]).map((i) => ({ ...i }));

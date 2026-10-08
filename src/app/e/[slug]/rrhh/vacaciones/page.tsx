@@ -20,6 +20,7 @@ import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-pan
 import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
 import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
 import { ExportarHistorialVacaciones } from "@/components/rrhh/exportar-historial-vacaciones";
+import { PendientesReparacionVacaciones } from "@/components/rrhh/pendientes-reparacion-vacaciones";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { PrevisualizacionHistorica } from "@/components/rrhh/previsualizacion-historica-vacaciones";
 import type { PrevisualizacionRegistro } from "@/lib/rrhh/vacaciones-registro";
@@ -59,6 +60,9 @@ export default function VacacionesPage() {
   const [saldo, setSaldo] = useState<number | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
   const [historial, setHistorial] = useState<HistorialVacaciones | null>(null);
+  // Reparación administrada de series de períodos: RRHH · Vacaciones · editar (los endpoints lo exigen de nuevo). `versionReparacion` refresca el indicador.
+  const puedeReparar = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
+  const [versionReparacion, setVersionReparacion] = useState(0);
   const [aviso, setAviso] = useState("");
   // RRHH-VACACIONES-FILTROS-HISTORIAL-1 — estados INDEPENDIENTES del empleado/tipo del formulario de registro
   // (empleadoId/tipo arriba). 0/"" = sin filtro ("Todos"). Cambiar estos filtros nunca toca empleadoId/tipo/
@@ -385,7 +389,15 @@ export default function VacacionesPage() {
         </div>
       ) : null}
 
-      {usaSaldo && historial ? <HistorialPeriodosVacaciones historial={historial} admin /> : null}
+      {puedeReparar ? <PendientesReparacionVacaciones slug={slug} version={versionReparacion} onRevisar={(id) => setEmpleadoId(id)} /> : null}
+
+      {usaSaldo && historial ? (
+        <HistorialPeriodosVacaciones
+          historial={historial}
+          admin
+          reparacion={puedeReparar && empleadoId ? { slug, empleadoId, onReparado: async () => { await cargar(); setVersionReparacion((v) => v + 1); } } : undefined}
+        />
+      ) : null}
 
       {puedeImportarHistorial ? <ExportarHistorialVacaciones slug={slug} /> : null}
       {puedeImportarHistorial ? <ImportarHistorialVacaciones slug={slug} /> : null}

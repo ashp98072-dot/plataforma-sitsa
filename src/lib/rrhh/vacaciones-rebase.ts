@@ -26,7 +26,11 @@ export type HechoVacacion = {
   /** Días REALMENTE consumidos (suma del detalle FIFO actual de esta incidencia): es lo que se preserva. */
   consumido: number;
 };
-export type SaldoPrevio = { id: number; anioLaboral: number | null; inicio: string; fin: string; otorgados: number; disponibles: number; estado: string };
+export type SaldoPrevio = {
+  id: number; anioLaboral: number | null; inicio: string; fin: string; otorgados: number; disponibles: number; estado: string;
+  /** Solo lectura/diagnóstico (reparación de series): suma del detalle FIFO que apunta a este saldo y si existe alguna línea. */
+  consumidos?: number; conDetalle?: boolean;
+};
 
 export type CodigoBloqueoRebase =
   | "FECHA_NUEVA_INVALIDA"
@@ -67,6 +71,8 @@ export class RebaseBloqueadoError extends Error {
   }
 }
 
+export const MENSAJE_ANTERIOR_A_ALTA_ACTUAL =
+  "Hay vacaciones registradas antes de la fecha de contratación actual. Corrija/revise el historial antes de reparar.";
 export const MENSAJE_ANTERIOR_A_ALTA =
   "La nueva fecha de contratación dejaría vacaciones registradas antes de la fecha de alta. Corrija/revise el historial antes de continuar.";
 
@@ -81,38 +87,57 @@ export type EntradaRebase = {
   hechos: readonly HechoVacacion[];
   saldos: readonly SaldoPrevio[];
   feriados: ReadonlySet<string>;
+  /** `reparacion` = misma fecha base (la fecha de alta actual); solo cambia la redacción de los mensajes. Por omisión, `rebase`. */
+  modo?: "rebase" | "reparacion";
 };
 
-export function planificarRebase(e: EntradaRebase): PlanRebase {
-  const hoy = cero(e.hoy);
+function planVacio(e: EntradaRebase): PlanRebase {
   const saldoAntes = r2(e.saldos.filter((s) => s.estado === "Vigente").reduce((t, s) => t + s.disponibles, 0));
-  const base: PlanRebase = {
+  return {
     aplica: false, fechaAnterior: e.fechaAnterior, fechaNueva: e.fechaNueva, bloqueos: [], advertencias: [], periodosAntes: e.saldos.length, periodos: [], lineas: [],
     vacaciones: e.hechos.length, consumidoPreservado: r2(e.hechos.reduce((t, h) => t + h.consumido, 0)), saldoAntes, saldoDespues: saldoAntes, reasignaciones: [],
   };
+}
+
+export function planificarRebase(e: EntradaRebase): PlanRebase {
+  const base = planVacio(e);
   if (e.fechaAnterior === e.fechaNueva) return base; // la fecha no cambia: comportamiento actual idéntico
   // A) sin vacaciones Y sin saldos: no existe historia ni serie de vacaciones que dependa de fecha_alta ⇒ nada que rebasar (no-op).
   // B) con saldos, aunque no haya vacaciones tomadas: existe una serie CALCULADA desde fecha_alta; jamás puede quedar con la base anterior.
   if (e.hechos.length === 0 && e.saldos.length === 0) return base;
+  return construirPlan(e, base);
+}
 
+/**
+ * Reconstruye la serie COMPLETA desde `e.fechaNueva` (en la reparación, la fecha de alta actual) reaplicando todos los consumos. Mismo motor que el rebase:
+ * NO decide si hay algo que reparar (eso lo hace `diagnosticarSerie`); el llamador decide cuándo invocarlo.
+ */
+export function planificarReconstruccion(e: EntradaRebase): PlanRebase {
+  return construirPlan({ ...e, modo: "reparacion" }, planVacio(e));
+}
+
+function construirPlan(e: EntradaRebase, base: PlanRebase): PlanRebase {
+  const hoy = cero(e.hoy);
+  const rep = e.modo === "reparacion";
   base.aplica = true;
   const bloquear = (codigo: CodigoBloqueoRebase, mensaje: string) => { base.bloqueos.push({ codigo, mensaje }); return base; };
-  if (!FECHA.test(e.fechaNueva)) return bloquear("FECHA_NUEVA_INVALIDA", `La nueva fecha de contratación no es válida (${e.fechaNueva}).`);
+  const fechaTxt = rep ? "La fecha de contratación actual" : "La nueva fecha de contratación";
+  if (!FECHA.test(e.fechaNueva)) return bloquear("FECHA_NUEVA_INVALIDA", `${fechaTxt} no es válida (${e.fechaNueva}).`);
   const nueva = deIso(e.fechaNueva);
-  if (Number.isNaN(nueva.getTime())) return bloquear("FECHA_NUEVA_INVALIDA", `La nueva fecha de contratación no es válida (${e.fechaNueva}).`);
+  if (Number.isNaN(nueva.getTime())) return bloquear("FECHA_NUEVA_INVALIDA", `${fechaTxt} no es válida (${e.fechaNueva}).`);
   // Con saldos (aunque el consumo sea 0) o con vacaciones, una fecha nueva sospechosa o futura NO se puede aplicar: dejaría la serie calculada con la base anterior.
   const que = e.hechos.length ? "vacaciones registradas" : "períodos de vacaciones ya generados";
   if (fechaLaboralSospechosa(nueva)) {
-    return bloquear("FECHA_NUEVA_SOSPECHOSA", `La nueva fecha de contratación es inválida o anterior a 1980: no se pueden recalcular los períodos con ${que}.`);
+    return bloquear("FECHA_NUEVA_SOSPECHOSA", `${fechaTxt} es inválida o anterior a 1980: no se pueden ${rep ? "reconstruir" : "recalcular"} los períodos con ${que}.`);
   }
   if (nueva > hoy) {
-    return bloquear("FECHA_NUEVA_FUTURA", `La nueva fecha de contratación es posterior a hoy y hay ${que}: no se pueden recalcular los períodos.`);
+    return bloquear("FECHA_NUEVA_FUTURA", `${fechaTxt} es posterior a hoy y hay ${que}: no se pueden ${rep ? "reconstruir" : "recalcular"} los períodos.`);
   }
 
   const hechos = [...e.hechos].sort((a, b) => a.inicio.localeCompare(b.inicio) || a.incidenciaId - b.incidenciaId);
   const anteriores = hechos.filter((h) => h.inicio < e.fechaNueva);
   if (anteriores.length) {
-    return bloquear("VACACION_ANTERIOR_A_NUEVA_ALTA", `${MENSAJE_ANTERIOR_A_ALTA} (${anteriores.slice(0, 5).map((h) => `${h.tipo} ${h.inicio} → ${h.fin}`).join("; ")}${anteriores.length > 5 ? "…" : ""})`);
+    return bloquear("VACACION_ANTERIOR_A_NUEVA_ALTA", `${rep ? MENSAJE_ANTERIOR_A_ALTA_ACTUAL : MENSAJE_ANTERIOR_A_ALTA} (${anteriores.slice(0, 5).map((h) => `${h.tipo} ${h.inicio} → ${h.fin}`).join("; ")}${anteriores.length > 5 ? "…" : ""})`);
   }
 
   // Serie NUEVA, derivada de UNA sola fecha base
@@ -130,9 +155,9 @@ export function planificarRebase(e: EntradaRebase): PlanRebase {
   for (const h of hechos) {
     if (!(h.consumido > 0)) { base.advertencias.push(`La ${h.tipo} ${h.inicio} → ${h.fin} no tiene detalle de consumo FIFO: se conserva sin consumir saldo.`); continue; }
     const plan = planificarConsumoHistorico({ base: nueva, hoy, inicio: h.inicio, fin: h.fin, dias: h.consumido, feriados: e.feriados, periodos: filas });
-    if (plan.bloqueos.length) { base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `La ${h.tipo} ${h.inicio} → ${h.fin} no se puede reubicar en la nueva serie: ${plan.bloqueos.map((b) => b.mensaje).join(" ")}` }); continue; }
+    if (plan.bloqueos.length) { base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `La ${h.tipo} ${h.inicio} → ${h.fin} no se puede reubicar en la ${rep ? "serie reconstruida" : "nueva serie"}: ${plan.bloqueos.map((b) => b.mensaje).join(" ")}` }); continue; }
     if (plan.deficit > 0) {
-      base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `Con la nueva fecha de contratación la ${h.tipo} ${h.inicio} → ${h.fin} (${h.consumido} día(s) consumidos) no tiene saldo suficiente en su fecha: faltan ${plan.deficit} día(s). Revise el historial antes de continuar.` });
+      base.bloqueos.push({ codigo: "DEFICIT_AL_REBASAR", mensaje: `Con ${rep ? "la fecha de contratación actual" : "la nueva fecha de contratación"} la ${h.tipo} ${h.inicio} → ${h.fin} (${h.consumido} día(s) consumidos) no tiene saldo suficiente en su fecha: faltan ${plan.deficit} día(s). Revise el historial antes de continuar.` });
       continue;
     }
     const tramos: { anioLaboral: number; dias: number }[] = [];
@@ -144,7 +169,7 @@ export function planificarRebase(e: EntradaRebase): PlanRebase {
       acumulado.set(k, r2((acumulado.get(k) ?? 0) + a.dias));
       tramos.push({ anioLaboral: a.anioLaboral, dias: a.dias });
     }
-    if (plan.cruzaAniversario) base.advertencias.push(`La ${h.tipo} ${h.inicio} → ${h.fin} cruza un aniversario de la nueva serie (${plan.aniversarios.join(", ")}): se reparte por tramos con la lógica existente.`);
+    if (plan.cruzaAniversario) base.advertencias.push(`La ${h.tipo} ${h.inicio} → ${h.fin} cruza un aniversario de la ${rep ? "serie reconstruida" : "nueva serie"} (${plan.aniversarios.join(", ")}): se reparte por tramos con la lógica existente.`);
     base.reasignaciones.push({ incidenciaId: h.incidenciaId, inicio: h.inicio, fin: h.fin, dias: h.consumido, tramos });
   }
   if (base.bloqueos.length) return base;

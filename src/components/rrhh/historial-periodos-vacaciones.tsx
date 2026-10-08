@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
+import { ReparacionSerieVacaciones } from "./reparacion-serie-vacaciones";
 
 const dma = (iso: string) => {
   const p = String(iso).slice(0, 10).split("-");
@@ -19,7 +20,12 @@ const COLOR_ESTADO: Record<string, string> = {
  * consumidos siguen siendo parte del historial. «Saldo actual» es solo lo UTILIZABLE (tope de 30 días); NO es la suma de la tabla.
  * Presentacional y sin estado: sirve en la pantalla de RRHH (`admin`, con advertencias administrativas) y en el portal.
  */
-export function HistorialPeriodosVacaciones({ historial, admin = false }: { historial: HistorialVacaciones | null | undefined; admin?: boolean }) {
+export function HistorialPeriodosVacaciones({ historial, admin = false, reparacion }: {
+  historial: HistorialVacaciones | null | undefined;
+  admin?: boolean;
+  /** Solo RRHH con permiso de edición: habilita «Reparar períodos» (vista previa + confirmación, uno por uno). */
+  reparacion?: { slug: string; empleadoId: number; onReparado: () => void | Promise<void> };
+}) {
   if (!historial) return null;
   const { periodos, advertencias, fechaLaboralSospechosa, historialOculto, saldoActual, requiereReparacion } = historial;
   const avisos = advertencias.filter((a) => a.codigo !== "TRASLAPE_BORDE" || admin);
@@ -43,10 +49,13 @@ export function HistorialPeriodosVacaciones({ historial, admin = false }: { hist
       ) : null}
 
       {admin && requiereReparacion && !fechaLaboralSospechosa ? (
-        <p className="mt-2 rounded border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200">
-          Sincronización congelada para este colaborador: los períodos con consumo o la estructura de saldos no coinciden con su fecha laboral actual.
-          No se modificó ningún saldo; requiere reparación administrada (ver sql/preflight-2026-10-vacaciones-historial-periodos.sql).
-        </p>
+        <>
+          <p className="mt-2 rounded border border-amber-400/40 bg-amber-400/10 p-2 text-xs text-amber-200">
+            Sincronización congelada para este colaborador: los períodos con consumo o la estructura de saldos no coinciden con su fecha laboral actual.
+            No se modificó ningún saldo; requiere reparación administrada (ver sql/preflight-2026-10-vacaciones-historial-periodos.sql).
+          </p>
+          {reparacion ? <ReparacionSerieVacaciones slug={reparacion.slug} empleadoId={reparacion.empleadoId} onReparado={reparacion.onReparado} /> : null}
+        </>
       ) : null}
 
       {admin && avisos.length > 0 ? (
