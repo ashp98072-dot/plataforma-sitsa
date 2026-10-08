@@ -229,6 +229,18 @@ export async function sincronizarPeriodosVacacionesEnConexion(
       conConsumo: consumidos.has(Number(r.id)),
     }));
 
+    // Política por empresa: NORMAL (vencimiento a 2 períodos + tope de 30) o CARGA HISTÓRICA (temporal: sin vencimiento ni tope).
+    const politica = await obtenerPoliticaConConsulta(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId);
+
+    // DEFENSA EN PROFUNDIDAD (modo carga histórica): la verificación del consumo va ANTES de planificar y de cualquier INSERT/UPDATE. En modo carga el saldo se reconstruye como
+    // `otorgados − detalle FIFO`; si el consumo del colaborador NO es verificable (sin detalle suficiente, detalle cruzado/huérfano…) eso podría INVENTAR días disponibles. Ese
+    // colaborador queda COMPLETAMENTE intacto: sin inserts (ni períodos faltantes), sin updates, sin deletes, sin tocar estado/disponible; se informa `consumoNoVerificable`.
+    if (politica.maxPeriodosVigentes == null) {
+      const { verificarConsumoEmpleado } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
+      const noVerificable = await verificarConsumoEmpleado(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId, idEmpleado);
+      if (noVerificable.length) return { advertencias: [], requiereReparacion: false, omitido: null, consumoNoVerificable: true };
+    }
+
     const plan = planificarSincronizacion(fechaAlta, hoy, existentes);
     // Fecha sospechosa / futura / serie histórica con consumo / estructura inconsistente: NO se escribe nada
     // (ni INSERT ni UPDATE de períodos, ni vencimientos, ni reducción a 0, ni tope de 30). La lectura/historial sigue funcionando.
@@ -253,9 +265,6 @@ export async function sincronizarPeriodosVacacionesEnConexion(
       );
     }
 
-    // Política por empresa: NORMAL (vencimiento a 2 períodos + tope de 30) o CARGA HISTÓRICA (temporal: sin vencimiento ni tope).
-    const politica = await obtenerPoliticaConConsulta(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId);
-
     const aniosCompletos = differenceInYears(hoy, fechaAlta);
     const periodoEnCursoN = aniosCompletos + 1;
     const [periodosTodos] = await conn.query<RowDataPacket[]>(
@@ -272,11 +281,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     if (politica.maxPeriodosVigentes == null) {
       // MODO CARGA HISTÓRICA: sin vencimiento ni tope. Todo período desde la fecha de alta es utilizable por lo que NO se haya consumido; el consumo sale del
       // detalle FIFO (verificable), de modo que ni reaparece lo ya tomado ni se pierde nada. Idempotente: sin cambios no escribe. Aquí no borra historial; los períodos faltantes los completa el plan normal de sincronización (inserts de `planificarSincronizacion`).
-      // Defensa en profundidad: si existe consumo NO verificable (sin detalle FIFO suficiente, detalle cruzado/huérfano…), reconstruir `otorgados − detalle` podría INVENTAR días
-      // disponibles: ese colaborador no se recalcula (sus saldos quedan como están) y se informa `consumoNoVerificable`.
-      const { verificarConsumoEmpleado } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
-      const noVerificable = await verificarConsumoEmpleado(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId, idEmpleado);
-      if (noVerificable.length) return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null, consumoNoVerificable: true };
+      // (El consumo ya fue verificado al inicio de la función, antes de cualquier escritura.)
       const consumo = await consumoPorSaldo(conn, empresaId, idEmpleado);
       for (const p of periodos) {
         const esperado = Math.max(0, Math.round((Number(p.dias_otorgados) - (consumo.get(Number(p.id)) ?? 0)) * 100) / 100);

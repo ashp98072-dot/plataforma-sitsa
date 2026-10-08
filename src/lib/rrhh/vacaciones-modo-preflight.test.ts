@@ -10,7 +10,7 @@ vi.mock("@/lib/db", async () => {
 });
 
 import { bd, EMPRESA } from "./vacaciones-registro-bd.testutil";
-import { obtenerHistorialPeriodos } from "./vacaciones";
+import { obtenerHistorialPeriodos, sincronizarPeriodosVacaciones } from "./vacaciones";
 import { registrarVacaciones } from "./vacaciones-registro";
 import { cambiarModoCargaHistorica, leerModoCargaHistorica } from "./vacaciones-modo-db";
 import { previsualizarActivacionModoHistorico } from "./vacaciones-modo-preflight-db";
@@ -195,6 +195,66 @@ describe("H/I) defensa en profundidad con el modo YA activo: resincronización",
     bd.t.configuracion.push({ empresa_id: EMPRESA, parametro: "vacaciones_modo_carga_historica", valor: "1" });
     expect(await saldo()).toBe(27.38); // sigue como estaba (5 + 15 + 7.38): NO se infla a 52.38
     expect(periodos()[1].dias_disponibles).toBe(5);
+  });
+});
+
+describe("Orden de la defensa: la verificación ocurre ANTES de cualquier INSERT/UPDATE de la sincronización", () => {
+  /** Modo activado con colaboradores válidos; después aparece consumo no verificable en OTRO y su serie queda en una condición que haría escribir (período faltante + período a actualizar). */
+  async function escenario() {
+    await saldo(EMP); await saldo(OTRO);
+    expect((await activar()).cambiado).toBe(true); // ambos eran válidos
+    expect(await saldo(EMP)).toBe(52.38);
+    expect(await saldo(OTRO)).toBe(52.38);
+    // anomalía POSTERIOR en OTRO: consumo sin detalle
+    bd.t.incidencias.push(inc(20, "2024-08-05", "2024-08-16", 10, OTRO));
+    bd.t.vacaciones.push(vac(20, "2024-08-05", "2024-08-16", 10, OTRO));
+    // además su serie haría que planificarSincronizacion quiera ESCRIBIR: falta el año 4 (insert) y el año 3 tiene otorgados distinto (update)
+    bd.t.saldos = bd.t.saldos.filter((s) => !(s.id_empleado === OTRO && s.anio_laboral === 4));
+    periodos(OTRO)[2].dias_otorgados = 14;
+    // y en EMP (válido) también hay algo por reconstruir, para comprobar que el lote continúa
+    periodos(EMP)[3].dias_disponibles = 1;
+  }
+  const instantaneaOtro = () => JSON.stringify({ s: periodos(OTRO), d: bd.t.detalle.filter((x) => periodos(OTRO).some((p) => p.id === x.saldo_id)), i: bd.t.incidencias.filter((i) => i.id_empleado === OTRO), v: bd.t.vacaciones.filter((v) => v.id_empleado === OTRO) });
+
+  it("la sincronización de un colaborador no verificable es una NO-OPERACIÓN total: cero INSERT/UPDATE/DELETE, saldos idénticos y sin completar períodos faltantes", async () => {
+    await escenario();
+    const antes = instantaneaOtro();
+    bd.ejecutadas = [];
+    const r = await sincronizarPeriodosVacaciones(EMPRESA, OTRO);
+    expect(r.consumoNoVerificable).toBe(true);
+    expect(sinEscrituras()).toBe(true); // ni INSERT (período faltante) ni UPDATE (otorgados) ni DELETE
+    expect(instantaneaOtro()).toBe(antes);
+    expect(periodos(OTRO)).toHaveLength(3); // el año 4 faltante NO se completó
+    expect(periodos(OTRO)[2].dias_otorgados).toBe(14); // el período a actualizar NO se tocó
+  });
+
+  it("la consulta normal del historial tampoco muta al colaborador no verificable", async () => {
+    await escenario();
+    const antes = instantaneaOtro();
+    bd.ejecutadas = [];
+    const h = await obtenerHistorialPeriodos(EMPRESA, OTRO);
+    expect(h.periodos).toHaveLength(3);
+    expect(sinEscrituras()).toBe(true);
+    expect(instantaneaOtro()).toBe(antes);
+  });
+
+  it("«Recalcular saldos»: el no verificable queda COMPLETAMENTE intacto (CONSUMO_NO_VERIFICABLE) y el válido SÍ se sincroniza (el lote continúa)", async () => {
+    await escenario();
+    const antes = instantaneaOtro();
+    const r = await resincronizarSaldosEmpresa(EMPRESA, { usuario: "rrhh.ana" });
+    expect(r.resultados).toEqual([{ empleadoId: EMP, resultado: "SINCRONIZADO" }, { empleadoId: OTRO, resultado: "CONSUMO_NO_VERIFICABLE" }]);
+    expect(r).toMatchObject({ sincronizados: 1, consumoNoVerificable: 1, congelados: 0, errores: 0 });
+    expect(instantaneaOtro()).toBe(antes); // saldos antes === después EXACTAMENTE
+    expect(periodos(EMP).map((s) => s.dias_disponibles)).toEqual([15, 15, 15, 7.38]); // el válido se reconstruyó
+  });
+
+  it("modo NORMAL: el comportamiento no cambia (la sincronización sí completa períodos faltantes y actualiza)", async () => {
+    await saldo(OTRO);
+    bd.t.incidencias.push(inc(20, "2024-08-05", "2024-08-16", 10, OTRO)); // aunque haya consumo sin detalle, en NORMAL no aplica la defensa
+    bd.t.saldos = bd.t.saldos.filter((s) => !(s.id_empleado === OTRO && s.anio_laboral === 4));
+    const r = await sincronizarPeriodosVacaciones(EMPRESA, OTRO);
+    expect(r.consumoNoVerificable).toBeUndefined();
+    expect(periodos(OTRO)).toHaveLength(4); // se completó el año 4
   });
 });
 
