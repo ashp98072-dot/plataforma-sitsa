@@ -56,6 +56,13 @@ Todo en **una transacción** (`BEGIN … COMMIT`, cualquier error ⇒ `ROLLBACK`
 
 **No modifica:** `empleados.fecha_alta`, incidencias, `vacaciones`, evidencias, otros colaboradores ni otras empresas.
 
+### 3.2b La serie reconstruida es el HISTORIAL COMPLETO desde `fecha_alta` (cobertura explícita)
+La reparación **no** parte de los períodos hoy utilizables: construye los años `1..N` completos (N = año laboral vigente a hoy) con `periodoLaboral`
+(aniversario calendario: inicio N = alta + (N−1) años; fin N = alta + N años − 1 día; los domingos no desplazan fechas), 15 días por año completo y, para el año
+en curso, `calcularDiasAcumuladosProporcional` (la fórmula existente, que excluye domingos) dentro de `avanzarPeriodos`. Los años ya vencidos permanecen en el historial
+con su estado y saldo según las reglas existentes (vencimiento, tope de 30, FIFO). No existe ni se agregó ninguna regla o motor nuevo; el ajuste solo añadió pruebas
+(`vacaciones-reparacion-serie-historica.test.ts`) que fijan este comportamiento, con verificación independiente de la exclusión de domingos y mutaciones que las hacen fallar.
+
 ### 3.3 Invariantes (cualquier diferencia ⇒ ROLLBACK)
 Sin traslapes · un solo período por `anio_laboral` · todos derivados de la misma `fecha_alta` · total consumido antes = después · total por incidencia antes = después ·
 ningún consumo reaparece como disponible · saldo utilizable ≤ 30 · sin consumo que no pertenezca a sus vacaciones · sin líneas duplicadas ·
