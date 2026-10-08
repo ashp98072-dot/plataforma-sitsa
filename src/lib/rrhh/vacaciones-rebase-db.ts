@@ -4,7 +4,7 @@ import { query, type SqlParams } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import { obtenerFeriadosEnRango } from "./vacaciones";
 import { analizarTraslapes, aIso, deIso, periodoLaboral } from "./vacaciones-periodos";
-import { RebaseBloqueadoError, planificarRebase, type HechoVacacion, type PlanRebase, type SaldoPrevio } from "./vacaciones-rebase";
+import { RebaseBloqueadoError, planificarRebase, type BloqueoRebase, type HechoVacacion, type PlanRebase, type SaldoPrevio } from "./vacaciones-rebase";
 
 /**
  * RRHH VACACIONES — REBASE al cambiar `empleados.fecha_alta` (capa de BD). Ver vacaciones-rebase.ts para las reglas.
@@ -15,15 +15,15 @@ import { RebaseBloqueadoError, planificarRebase, type HechoVacacion, type PlanRe
  * conserva su fecha_alta). Todas las consultas van acotadas por `empresa_id` y `id_empleado`.
  */
 
-const TIPOS = "('Vacaciones', 'A cuenta de Vacaciones')";
+export const TIPOS = "('Vacaciones', 'A cuenta de Vacaciones')";
 const TROZO = 400;
-const r2 = (n: number) => Math.round(n * 100) / 100;
+export const r2 = (n: number) => Math.round(n * 100) / 100;
 const ph = (n: number) => Array.from({ length: n }, () => "?").join(",");
 const trozos = <T,>(xs: readonly T[], t = TROZO): T[][] => { const o: T[][] = []; for (let i = 0; i < xs.length; i += t) o.push(xs.slice(i, i + t)); return o; };
 
 export { RebaseBloqueadoError };
 
-type Consulta = (sql: string, params?: SqlParams) => Promise<RowDataPacket[]>;
+export type Consulta = (sql: string, params?: SqlParams) => Promise<RowDataPacket[]>;
 
 const SQL = {
   hechos: `SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? AND tipo IN ${TIPOS} ORDER BY fecha_inicio, id`,
@@ -34,9 +34,9 @@ const SQL = {
 
 /** Línea de consumo de una vacación DEL empleado cuyo `saldo_id` no pertenece a (empresa, empleado): base corrupta que exige revisión administrada. */
 type DetalleCruzado = { detalleId: number; incidenciaId: number; saldoId: number; duenoEmpresa: number | null; duenoEmpleado: number | null };
-type Hechos = { hechos: HechoVacacion[]; saldos: SaldoPrevio[]; detalleIds: number[]; ajenos: number[]; cruzados: DetalleCruzado[]; lineasPrevias: Map<number, number> };
+export type Hechos = { hechos: HechoVacacion[]; saldos: SaldoPrevio[]; detalleIds: number[]; ajenos: number[]; cruzados: DetalleCruzado[]; lineasPrevias: Map<number, number> };
 
-async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: number, bloqueo: boolean): Promise<Hechos> {
+export async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: number, bloqueo: boolean): Promise<Hechos> {
   const fu = bloqueo ? " FOR UPDATE" : "";
   const inc = await consulta(SQL.hechos + fu, [empresaId, idEmpleado]);
   const detH = await consulta(SQL.detalleDeHechos + fu, [empresaId, idEmpleado]);
@@ -56,6 +56,8 @@ async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: n
   const consumo = new Map<number, number>();
   for (const d of detH) consumo.set(Number(d.incidencia_id), r2((consumo.get(Number(d.incidencia_id)) ?? 0) + Number(d.dias_tomados)));
   const ids = new Set(inc.map((i) => Number(i.id)));
+  const porSaldo = new Map<number, number>();
+  for (const d of detS) porSaldo.set(Number(d.saldo_id), r2((porSaldo.get(Number(d.saldo_id)) ?? 0) + Number(d.dias_tomados)));
   return {
     hechos: inc.map((i) => ({
       incidenciaId: Number(i.id), tipo: String(i.tipo), inicio: String(toIsoDate(i.fecha_inicio) ?? ""), fin: String(toIsoDate(i.fecha_fin) ?? ""),
@@ -64,6 +66,7 @@ async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: n
     saldos: sal.map((s) => ({
       id: Number(s.id), anioLaboral: s.anio_laboral != null ? Number(s.anio_laboral) : null, inicio: String(toIsoDate(s.periodo_inicio) ?? ""), fin: String(toIsoDate(s.periodo_fin) ?? ""),
       otorgados: Number(s.dias_otorgados), disponibles: Number(s.dias_disponibles), estado: String(s.estado),
+      consumidos: porSaldo.get(Number(s.id)) ?? 0, conDetalle: porSaldo.has(Number(s.id)),
     })),
     detalleIds: [...new Set([...detH, ...detS].map((d) => Number(d.id)))],
     // detalle sobre saldos del empleado que NO proviene de sus incidencias de vacaciones: no se puede reubicar con certeza
@@ -73,23 +76,29 @@ async function cargarHechos(consulta: Consulta, empresaId: number, idEmpleado: n
   };
 }
 
+/** HARD BLOCKERS de integridad del detalle FIFO (rebase y reparación): se validan en la vista previa y ANTES de cualquier escritura. */
+export function bloqueosDeDetalle(h: Hechos, empresaId: number): BloqueoRebase[] {
+  const out: BloqueoRebase[] = [];
+  if (h.ajenos.length) {
+    out.push({ codigo: "DETALLE_AJENO", mensaje: `Hay ${h.ajenos.length} línea(s) de consumo sobre los saldos del colaborador que no pertenecen a sus vacaciones registradas: no se pueden reubicar con certeza.` });
+  }
+  // consumo de una vacación del colaborador asociado a un saldo de OTRO empleado u OTRA empresa (o inexistente). Nunca se corrige, reasigna ni borra automáticamente.
+  if (h.cruzados.length) {
+    const ejemplo = h.cruzados.slice(0, 5).map((c) => `incidencia #${c.incidenciaId} → saldo #${c.saldoId}${c.duenoEmpresa == null ? " (inexistente)" : c.duenoEmpresa !== empresaId ? ` (de otra empresa, #${c.duenoEmpresa})` : ` (de otro empleado, #${c.duenoEmpleado})`}`).join("; ");
+    out.push({
+      codigo: "DETALLE_SALDO_AJENO",
+      mensaje: `Existe consumo de una vacación del colaborador asociado a un saldo que no le pertenece (${h.cruzados.length} línea(s): ${ejemplo}${h.cruzados.length > 5 ? "…" : ""}). Requiere revisión administrada: no se corrige, reasigna ni borra automáticamente.`,
+    });
+  }
+  return out;
+}
+
 async function armarPlan(consulta: Consulta, empresaId: number, idEmpleado: number, fechaAnterior: string | null, fechaNueva: string, hoy: Date, bloqueo: boolean) {
   const h = await cargarHechos(consulta, empresaId, idEmpleado, bloqueo);
   const fechas = h.hechos.flatMap((x) => [x.inicio, x.fin]).sort();
   const feriados = fechas.length ? await obtenerFeriadosEnRango(empresaId, fechas[0], fechas[fechas.length - 1]) : new Set<string>();
   const plan = planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: h.hechos, saldos: h.saldos, feriados });
-  if (plan.aplica && h.ajenos.length) {
-    plan.bloqueos.push({ codigo: "DETALLE_AJENO", mensaje: `Hay ${h.ajenos.length} línea(s) de consumo sobre los saldos del colaborador que no pertenecen a sus vacaciones registradas: no se pueden reubicar con certeza.` });
-  }
-  // HARD BLOCKER: consumo de una vacación del colaborador asociado a un saldo de OTRO empleado u OTRA empresa. Se valida en la vista previa y en el
-  // rebase real, ANTES de cualquier escritura. Nunca se corrige, reasigna ni borra automáticamente (podría modificar datos ajenos).
-  if (plan.aplica && h.cruzados.length) {
-    const ejemplo = h.cruzados.slice(0, 5).map((c) => `incidencia #${c.incidenciaId} → saldo #${c.saldoId}${c.duenoEmpresa == null ? " (inexistente)" : c.duenoEmpresa !== empresaId ? ` (de otra empresa, #${c.duenoEmpresa})` : ` (de otro empleado, #${c.duenoEmpleado})`}`).join("; ");
-    plan.bloqueos.push({
-      codigo: "DETALLE_SALDO_AJENO",
-      mensaje: `Existe consumo de una vacación del colaborador asociado a un saldo que no le pertenece (${h.cruzados.length} línea(s): ${ejemplo}${h.cruzados.length > 5 ? "…" : ""}). Requiere revisión administrada: no se corrige, reasigna ni borra automáticamente.`,
-    });
-  }
+  if (plan.aplica) plan.bloqueos.push(...bloqueosDeDetalle(h, empresaId));
   return { plan, datos: h };
 }
 
@@ -104,33 +113,34 @@ export async function previsualizarRebase(empresaId: number, idEmpleado: number,
   return { ...plan, traslapesActuales: traslapes };
 }
 
-export type ResultadoRebase = { aplicado: boolean; plan: PlanRebase };
+export type OpcionesReemplazo = {
+  etiqueta: string; fechaTxt: string; fechaBase: string; usuario: string | null; hoy: Date; accion: string; detalle: Record<string, unknown>;
+};
 
 /**
- * Rebasea la serie de vacaciones del empleado a `fechaNueva` DENTRO de la transacción del llamador (no confirma ni revierte).
- * - Misma fecha, o empleado sin saldos ni vacaciones: no hace nada (`aplicado: false`).
- * - Bloqueo o verificación fallida: lanza (el llamador revierte TODO y la ficha conserva su fecha_alta).
+ * Contenido (no solo conteos) que la serie NUNCA debe modificar: incidencias (todos los tipos), filas de `vacaciones`, evidencias y la fecha de alta
+ * del colaborador. Se compara antes/después como texto; cualquier diferencia revierte la transacción.
  */
-export async function rebasearVacacionesEnConexion(
-  conn: PoolConnection,
-  empresaId: number,
-  idEmpleado: number,
-  fechaNueva: string,
-  opciones: { usuario?: string | null; hoy?: Date } = {},
-): Promise<ResultadoRebase> {
-  const hoy = opciones.hoy ?? new Date();
-  const consulta: Consulta = async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0];
-  const [emp] = await conn.query<RowDataPacket[]>("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE", [idEmpleado, empresaId]);
-  if (!emp.length) throw new Error("Empleado no encontrado.");
-  const fechaAnterior = emp[0].fecha_alta ? toIsoDate(emp[0].fecha_alta as string | Date) : null;
-  if (fechaAnterior === fechaNueva) return { aplicado: false, plan: planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: [], saldos: [], feriados: new Set() }) };
+async function contenidoIntacto(consulta: Consulta, empresaId: number, idEmpleado: number): Promise<string> {
+  const inc = await consulta("SELECT id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM incidencias WHERE empresa_id = ? AND id_empleado = ? ORDER BY id", [empresaId, idEmpleado]);
+  const vac = await consulta("SELECT id, fecha_inicio, fecha_fin, dias_habiles, estado FROM vacaciones WHERE empresa_id = ? AND id_empleado = ? ORDER BY id", [empresaId, idEmpleado]);
+  const evi = await consulta("SELECT e.id, e.incidencia_id FROM evidencias_incidencias e INNER JOIN incidencias i ON i.id = e.incidencia_id WHERE i.empresa_id = ? AND i.id_empleado = ? ORDER BY e.id", [empresaId, idEmpleado]).catch(() => [] as RowDataPacket[]);
+  const emp = await consulta("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1", [idEmpleado, empresaId]);
+  return JSON.stringify({
+    inc: inc.map((i) => [Number(i.id), String(i.tipo), toIsoDate(i.fecha_inicio), toIsoDate(i.fecha_fin), Number(i.dias_habiles)]),
+    vac: vac.map((v) => [Number(v.id), toIsoDate(v.fecha_inicio), toIsoDate(v.fecha_fin), Number(v.dias_habiles), String(v.estado)]),
+    evi: evi.map((e) => [Number(e.id), Number(e.incidencia_id)]),
+    alta: emp[0]?.fecha_alta ? toIsoDate(emp[0].fecha_alta as string | Date) : null,
+  });
+}
 
-  const { plan, datos } = await armarPlan(consulta, empresaId, idEmpleado, fechaAnterior, fechaNueva, hoy, true);
-  if (!plan.aplica) return { aplicado: false, plan };
-  if (plan.bloqueos.length) throw new RebaseBloqueadoError(plan.bloqueos.map((b) => b.mensaje).join(" "), plan);
-  // Defensa en profundidad: jamás se borra una línea de detalle que apunte a un saldo ajeno (el bloqueo anterior ya lo impide).
-  if (datos.cruzados.length) throw new RebaseBloqueadoError("Detalle FIFO cruzado hacia saldos ajenos: requiere revisión administrada.", plan);
-
+/**
+ * Reemplaza la serie del colaborador (saldos + detalle FIFO) por la del plan DENTRO de la transacción del llamador, verifica las invariantes y audita.
+ * Compartido por el rebase de `fecha_alta` y por la reparación administrada. Cualquier verificación fallida lanza (el llamador revierte TODO).
+ */
+export async function reemplazarSerieEnConexion(
+  conn: PoolConnection, consulta: Consulta, empresaId: number, idEmpleado: number, plan: PlanRebase, datos: Hechos, op: OpcionesReemplazo,
+): Promise<void> {
   const cuenta = async (sql: string, p: SqlParams) => Number((await consulta(sql, p))[0]?.n ?? 0);
   const antes = {
     incidenciasVac: await cuenta(`SELECT COUNT(*) AS n FROM incidencias WHERE empresa_id = ? AND id_empleado = ? AND tipo IN ${TIPOS}`, [empresaId, idEmpleado]),
@@ -139,6 +149,7 @@ export async function rebasearVacacionesEnConexion(
     saldosOtros: await cuenta("SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id = ? AND id_empleado <> ?", [empresaId, idEmpleado]),
     saldosOtrasEmpresas: await cuenta("SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id <> ?", [empresaId]),
     evidencias: await cuenta("SELECT COUNT(*) AS n FROM evidencias_incidencias e INNER JOIN incidencias i ON i.id = e.incidencia_id WHERE i.empresa_id = ? AND i.id_empleado = ?", [empresaId, idEmpleado]).catch(() => 0),
+    contenido: await contenidoIntacto(consulta, empresaId, idEmpleado),
   };
 
   // 1) retira la serie anterior (detalle FIFO de sus saldos/incidencias y los saldos del empleado) — SOLO de este empleado y empresa
@@ -159,17 +170,17 @@ export async function rebasearVacacionesEnConexion(
   }
 
   // 3) INVARIANTES (cualquier diferencia → error → ROLLBACK COMPLETO; la ficha no cambia)
-  const fallo = (m: string) => new Error(`Rebase de vacaciones abortado: ${m} No se modificó nada.`);
+  const fallo = (m: string) => new Error(`${op.etiqueta} abortado: ${m} No se modificó nada.`);
   const nuevos = await consulta(SQL.saldos, [empresaId, idEmpleado]);
   if (nuevos.length !== plan.periodos.length) throw fallo(`hay ${nuevos.length} período(s) y se esperaban ${plan.periodos.length}.`);
   const anios = new Set<number>();
-  const nueva = deIso(fechaNueva);
+  const nueva = deIso(op.fechaBase);
   for (const s of nuevos) {
     const anio = Number(s.anio_laboral);
     if (anios.has(anio)) throw fallo(`año laboral ${anio} duplicado.`);
     anios.add(anio);
     const esp = periodoLaboral(nueva, anio);
-    if (String(toIsoDate(s.periodo_inicio)) !== aIso(esp.inicio) || String(toIsoDate(s.periodo_fin)) !== aIso(esp.fin)) throw fallo(`el período ${anio} no se deriva de la nueva fecha de alta.`);
+    if (String(toIsoDate(s.periodo_inicio)) !== aIso(esp.inicio) || String(toIsoDate(s.periodo_fin)) !== aIso(esp.fin)) throw fallo(`el período ${anio} no se deriva de ${op.fechaTxt}.`);
     if (Number(s.dias_disponibles) < 0 || Number(s.dias_disponibles) > Number(s.dias_otorgados)) throw fallo(`el período ${anio} tiene un disponible fuera de rango.`);
   }
   const filas = nuevos.map((s) => ({ id: Number(s.id), anioLaboral: Number(s.anio_laboral), inicio: String(toIsoDate(s.periodo_inicio)), fin: String(toIsoDate(s.periodo_fin)), otorgados: Number(s.dias_otorgados), disponibles: Number(s.dias_disponibles), estado: String(s.estado), conConsumo: false }));
@@ -200,17 +211,49 @@ export async function rebasearVacacionesEnConexion(
     saldosOtros: await cuenta("SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id = ? AND id_empleado <> ?", [empresaId, idEmpleado]),
     saldosOtrasEmpresas: await cuenta("SELECT COUNT(*) AS n FROM saldos_vacaciones WHERE empresa_id <> ?", [empresaId]),
     evidencias: await cuenta("SELECT COUNT(*) AS n FROM evidencias_incidencias e INNER JOIN incidencias i ON i.id = e.incidencia_id WHERE i.empresa_id = ? AND i.id_empleado = ?", [empresaId, idEmpleado]).catch(() => 0),
+    contenido: await contenidoIntacto(consulta, empresaId, idEmpleado),
   };
-  for (const k of Object.keys(antes) as (keyof typeof antes)[]) if (antes[k] !== despues[k]) throw fallo(`cambió ${k} (${antes[k]} → ${despues[k]}).`);
+  for (const k of Object.keys(antes) as (keyof typeof antes)[]) if (antes[k] !== despues[k]) throw fallo(`cambió ${k}${typeof antes[k] === "number" ? ` (${antes[k]} → ${despues[k]})` : ""}.`);
 
   // 4) auditoría (misma transacción)
-  await registrarAuditoriaTx(conn, {
-    empresaId, usuario: opciones.usuario ?? null, accion: "vacaciones_rebase_fecha_alta", modulo: "rrhh",
-    detalle: JSON.stringify({
+  await registrarAuditoriaTx(conn, { empresaId, usuario: op.usuario, accion: op.accion, modulo: "rrhh", detalle: JSON.stringify(op.detalle) });
+}
+
+export type ResultadoRebase = { aplicado: boolean; plan: PlanRebase };
+
+/**
+ * Rebasea la serie de vacaciones del empleado a `fechaNueva` DENTRO de la transacción del llamador (no confirma ni revierte).
+ * - Misma fecha, o empleado sin saldos ni vacaciones: no hace nada (`aplicado: false`).
+ * - Bloqueo o verificación fallida: lanza (el llamador revierte TODO y la ficha conserva su fecha_alta).
+ */
+export async function rebasearVacacionesEnConexion(
+  conn: PoolConnection,
+  empresaId: number,
+  idEmpleado: number,
+  fechaNueva: string,
+  opciones: { usuario?: string | null; hoy?: Date } = {},
+): Promise<ResultadoRebase> {
+  const hoy = opciones.hoy ?? new Date();
+  const consulta: Consulta = async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0];
+  const [emp] = await conn.query<RowDataPacket[]>("SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE", [idEmpleado, empresaId]);
+  if (!emp.length) throw new Error("Empleado no encontrado.");
+  const fechaAnterior = emp[0].fecha_alta ? toIsoDate(emp[0].fecha_alta as string | Date) : null;
+  if (fechaAnterior === fechaNueva) return { aplicado: false, plan: planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: [], saldos: [], feriados: new Set() }) };
+
+  const { plan, datos } = await armarPlan(consulta, empresaId, idEmpleado, fechaAnterior, fechaNueva, hoy, true);
+  if (!plan.aplica) return { aplicado: false, plan };
+  if (plan.bloqueos.length) throw new RebaseBloqueadoError(plan.bloqueos.map((b) => b.mensaje).join(" "), plan);
+  // Defensa en profundidad: jamás se borra una línea de detalle que apunte a un saldo ajeno (el bloqueo anterior ya lo impide).
+  if (datos.cruzados.length) throw new RebaseBloqueadoError("Detalle FIFO cruzado hacia saldos ajenos: requiere revisión administrada.", plan);
+
+  await reemplazarSerieEnConexion(conn, consulta, empresaId, idEmpleado, plan, datos, {
+    etiqueta: "Rebase de vacaciones", fechaTxt: "la nueva fecha de alta", fechaBase: fechaNueva, usuario: opciones.usuario ?? null, hoy,
+    accion: "vacaciones_rebase_fecha_alta",
+    detalle: {
       empleadoId: idEmpleado, fechaAnterior, fechaNueva, periodosAnteriores: plan.periodosAntes, periodosNuevos: plan.periodos.length,
       vacacionesConservadas: plan.vacaciones, consumidoPreservado: plan.consumidoPreservado, saldoAntes: plan.saldoAntes, saldoDespues: plan.saldoDespues,
       fecha: hoy.toISOString(),
-    }),
+    },
   });
   return { aplicado: true, plan };
 }
