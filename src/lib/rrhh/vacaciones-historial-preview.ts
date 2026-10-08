@@ -19,6 +19,7 @@ import {
   type ResultadoReconstruccion,
 } from "./vacaciones-reconstruccion";
 import { obtenerFeriadosEnRango } from "./vacaciones";
+import { obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
 
 /**
  * VISTA PREVIA / SIMULACIÓN de la reconstrucción completa de vacaciones desde el historial oficial de RRHH.
@@ -199,13 +200,14 @@ export async function previsualizarHistorial(
     else actualesNoEnArchivoPorEmpleado.set(Number(a.id_empleado), (actualesNoEnArchivoPorEmpleado.get(Number(a.id_empleado)) ?? 0) + 1);
   }
 
-  // Simulación por empleado
+  // Simulación por empleado (con la política de la empresa: NORMAL o CARGA HISTÓRICA)
+  const politica = await obtenerPoliticaVacaciones(empresaId);
   const resumenEmpleados: ResumenEmpleadoPreview[] = [];
   let superpuestas = 0, anteriores = 0, cruzan = 0, futuras = 0, bloqueados = 0, decision = 0, totalDias = 0;
   const porId = new Map(empleados.map((e) => [e.id, e]));
   for (const [id, filas] of porEmpleado) {
     const emp = porId.get(id)!;
-    const r = reconstruirEmpleado(emp, filas.map((f) => ({ origen: f.fila, inicio: f.inicio, fin: f.fin, dias: f.dias, tipo: f.tipo, observacion: f.observacion })), hoy, feriados);
+    const r = reconstruirEmpleado(emp, filas.map((f) => ({ origen: f.fila, inicio: f.inicio, fin: f.fin, dias: f.dias, tipo: f.tipo, observacion: f.observacion })), hoy, feriados, politica);
     if (r.bloqueado) bloqueados += 1;
     for (const w of r.advertencias) {
       if (w.codigo === "VACACIONES_SUPERPUESTAS") superpuestas += 1;

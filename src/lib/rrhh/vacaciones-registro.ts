@@ -17,6 +17,7 @@ import {
   type PlanHistorico,
 } from "./vacaciones-historico";
 import { deIso } from "./vacaciones-periodos";
+import { obtenerPoliticaConConsulta, obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
 
 /**
  * RRHH VACACIONES — REGISTRO CON SOPORTE HISTÓRICO (orquestador). Extiende el registro actual SIN cambiar su lógica:
@@ -108,7 +109,8 @@ export async function previsualizarRegistro(
   const base = fechaAlta(emp);
   const periodos = aPeriodos(await query<RowDataPacket[]>(SQL_SALDOS, [empresaId, idEmpleado]), await query<RowDataPacket[]>(SQL_CONSUMOS, [empresaId, idEmpleado]));
   const feriados = await obtenerFeriadosEnRango(empresaId, fechaInicio, fechaFin);
-  const plan = planificarConsumoHistorico({ base, hoy: hoyCero(), inicio: fechaInicio, fin: fechaFin, dias, feriados, periodos });
+  const politica = await obtenerPoliticaVacaciones(empresaId);
+  const plan = planificarConsumoHistorico({ base, hoy: hoyCero(), inicio: fechaInicio, fin: fechaFin, dias, feriados, periodos, politica });
   const sup = plan.esHistorico ? superposiciones(await query<RowDataPacket[]>(SQL_SUPERPOSICION, [empresaId, idEmpleado, fechaFin, fechaInicio])) : [];
   return {
     aplica: true, esHistorico: plan.esHistorico, plan, superposiciones: sup,
@@ -135,7 +137,10 @@ export async function registrarVacaciones(input: EntradaRegistro): Promise<Resul
       await conn.rollback();
       return { ok: false, mensaje: `La vacación empieza (${input.fechaInicio}) antes de la fecha de alta del colaborador: no se puede registrar.`, desglose: [], incidenciaId: null, codigo: "ANTERIOR_A_FECHA_ALTA" };
     }
-    const cls = base ? clasificarRegistro(base, hoy, input.fechaInicio, periodos) : null;
+    // Política de la empresa: NORMAL o CARGA HISTÓRICA (temporal, sin vencimiento ni tope). En carga histórica un registro en un período YA COMPLETADO usa el motor
+    // cronológico (saldo de ESA fecha), no el FIFO de hoy.
+    const politica = await obtenerPoliticaConConsulta(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], input.empresaId);
+    const cls = base ? clasificarRegistro(base, hoy, input.fechaInicio, periodos, politica) : null;
 
     // Camino NORMAL: idéntico al de siempre (período actual, vigentes recientes, futuras, sin fecha de alta…)
     if (!cls || !cls.esHistorico) {
@@ -148,7 +153,7 @@ export async function registrarVacaciones(input: EntradaRegistro): Promise<Resul
     // Camino HISTÓRICO
     const rechazo = async (r: ResultadoRegistro): Promise<ResultadoRegistro> => { await conn.rollback(); return r; };
     const feriados = await obtenerFeriadosEnRango(input.empresaId, input.fechaInicio, input.fechaFin);
-    const plan = planificarConsumoHistorico({ base, hoy, inicio: input.fechaInicio, fin: input.fechaFin, dias: input.diasATomar, feriados, periodos });
+    const plan = planificarConsumoHistorico({ base, hoy, inicio: input.fechaInicio, fin: input.fechaFin, dias: input.diasATomar, feriados, periodos, politica });
     if (plan.bloqueos.length) return rechazo({ ok: false, mensaje: plan.bloqueos.map((b) => b.mensaje).join(" "), desglose: [], incidenciaId: null, historico: true, codigo: plan.bloqueos[0].codigo, plan });
     if (sync.requiereReparacion || sync.omitido) {
       return rechazo({ ok: false, mensaje: "La serie de períodos de este colaborador está congelada (estructura inconsistente o serie histórica con consumo que no coincide con su fecha de alta): requiere reparación administrada antes de registrar vacaciones históricas.", desglose: [], incidenciaId: null, historico: true, codigo: "ESTRUCTURA_CONGELADA" });

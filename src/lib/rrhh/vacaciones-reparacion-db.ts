@@ -5,6 +5,8 @@ import { getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import { obtenerFeriadosEnRango } from "./vacaciones";
 import { analizarTraslapes } from "./vacaciones-periodos";
+import { obtenerPoliticaConConsulta } from "./vacaciones-modo-db";
+import type { PoliticaVacaciones } from "./vacaciones-politica";
 import { bloqueosDeDetalle, cargarHechos, reemplazarSerieEnConexion, type Consulta, type Hechos } from "./vacaciones-rebase-db";
 import { diagnosticarSerie, planificarReparacion, type DefectoSerie, type PlanReparacion } from "./vacaciones-reparacion";
 
@@ -52,13 +54,14 @@ export function huellaReparacion(plan: PlanReparacion): string {
   return createHash("sha256").update(JSON.stringify(base)).digest("hex").slice(0, 32);
 }
 
-async function armarPlanReparacion(consulta: Consulta, empresaId: number, idEmpleado: number, fechaAlta: string | null, hoy: Date, bloqueo: boolean): Promise<{ plan: PlanReparacion; datos: Hechos }> {
+async function armarPlanReparacion(consulta: Consulta, empresaId: number, idEmpleado: number, fechaAlta: string | null, hoy: Date, bloqueo: boolean): Promise<{ plan: PlanReparacion; datos: Hechos; politica: PoliticaVacaciones }> {
   const h = await cargarHechos(consulta, empresaId, idEmpleado, bloqueo);
   const fechas = h.hechos.flatMap((x) => [x.inicio, x.fin]).sort();
   const feriados = fechas.length ? await obtenerFeriadosEnRango(empresaId, fechas[0], fechas[fechas.length - 1]) : new Set<string>();
-  const plan = planificarReparacion({ fechaAlta, hoy, hechos: h.hechos, saldos: h.saldos, feriados, lineasAntes: h.detalleIds.length });
+  const politica = await obtenerPoliticaConConsulta(consulta, empresaId);
+  const plan = planificarReparacion({ fechaAlta, hoy, hechos: h.hechos, saldos: h.saldos, feriados, lineasAntes: h.detalleIds.length, politica });
   if (plan.aplica) plan.bloqueos.push(...bloqueosDeDetalle(h, empresaId));
-  return { plan, datos: h };
+  return { plan, datos: h, politica };
 }
 
 export type PreviaReparacion = {
@@ -140,7 +143,7 @@ export async function repararSerieVacacionesEnConexion(
   if (!emp.length) throw new ReparacionEmpleadoNoEncontradoError();
   const fechaAlta = emp[0].fecha_alta ? toIsoDate(emp[0].fecha_alta as string | Date) : null;
 
-  const { plan, datos } = await armarPlanReparacion(consulta, empresaId, idEmpleado, fechaAlta, hoy, true);
+  const { plan, datos, politica } = await armarPlanReparacion(consulta, empresaId, idEmpleado, fechaAlta, hoy, true);
   if (!plan.requiereReparacion || !plan.aplica) return { aplicado: false, plan };
   if (plan.bloqueos.length) throw new ReparacionBloqueadaError(plan.bloqueos.map((b) => b.mensaje).join(" "), plan);
   if (datos.cruzados.length) throw new ReparacionBloqueadaError("Detalle FIFO cruzado hacia saldos ajenos: requiere revisión administrada.", plan);
@@ -149,7 +152,7 @@ export async function repararSerieVacacionesEnConexion(
   const traslapesAnteriores = analizarTraslapes(datos.saldos.map((s) => ({ id: s.id, anioLaboral: s.anioLaboral, inicio: s.inicio, fin: s.fin, otorgados: s.otorgados, disponibles: s.disponibles, estado: s.estado, conConsumo: false }))).filter((a) => a.codigo === "TRASLAPE_REAL").length;
   await reemplazarSerieEnConexion(conn, consulta, empresaId, idEmpleado, plan, datos, {
     etiqueta: "Reparación de la serie de vacaciones", fechaTxt: "la fecha de alta", fechaBase: fechaAlta!, usuario: opciones.usuario ?? null, hoy,
-    accion: "vacaciones_reparacion_serie",
+    accion: "vacaciones_reparacion_serie", aplicarTope: politica.aplicarTope,
     detalle: {
       empresaId, empleadoId: idEmpleado, fechaAlta, usuario: opciones.usuario ?? null, fecha: hoy.toISOString(),
       periodosAnteriores: plan.periodosActuales.map((p) => ({ id: p.id, anio: p.anioLaboral, inicio: p.inicio, fin: p.fin, otorgados: p.otorgados, consumidos: p.consumidos, disponibles: p.disponibles, estado: p.estado })),

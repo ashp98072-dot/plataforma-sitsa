@@ -4,6 +4,8 @@ import { query, type SqlParams } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import { obtenerFeriadosEnRango } from "./vacaciones";
 import { analizarTraslapes, aIso, deIso, periodoLaboral } from "./vacaciones-periodos";
+import { obtenerPoliticaConConsulta } from "./vacaciones-modo-db";
+import type { PoliticaVacaciones } from "./vacaciones-politica";
 import { RebaseBloqueadoError, planificarRebase, type BloqueoRebase, type HechoVacacion, type PlanRebase, type SaldoPrevio } from "./vacaciones-rebase";
 
 /**
@@ -97,9 +99,10 @@ async function armarPlan(consulta: Consulta, empresaId: number, idEmpleado: numb
   const h = await cargarHechos(consulta, empresaId, idEmpleado, bloqueo);
   const fechas = h.hechos.flatMap((x) => [x.inicio, x.fin]).sort();
   const feriados = fechas.length ? await obtenerFeriadosEnRango(empresaId, fechas[0], fechas[fechas.length - 1]) : new Set<string>();
-  const plan = planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: h.hechos, saldos: h.saldos, feriados });
+  const politica = await obtenerPoliticaConConsulta(consulta, empresaId);
+  const plan = planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: h.hechos, saldos: h.saldos, feriados, politica });
   if (plan.aplica) plan.bloqueos.push(...bloqueosDeDetalle(h, empresaId));
-  return { plan, datos: h };
+  return { plan, datos: h, politica };
 }
 
 /** Vista previa del rebase (SOLO LECTURA, pool): se usa antes de guardar la ficha. */
@@ -115,6 +118,8 @@ export async function previsualizarRebase(empresaId: number, idEmpleado: number,
 
 export type OpcionesReemplazo = {
   etiqueta: string; fechaTxt: string; fechaBase: string; usuario: string | null; hoy: Date; accion: string; detalle: Record<string, unknown>;
+  /** Falso en modo CARGA HISTÓRICA (sin tope de 30 días). Por omisión verdadero. */
+  aplicarTope?: boolean;
 };
 
 /**
@@ -186,7 +191,7 @@ export async function reemplazarSerieEnConexion(
   const filas = nuevos.map((s) => ({ id: Number(s.id), anioLaboral: Number(s.anio_laboral), inicio: String(toIsoDate(s.periodo_inicio)), fin: String(toIsoDate(s.periodo_fin)), otorgados: Number(s.dias_otorgados), disponibles: Number(s.dias_disponibles), estado: String(s.estado), conConsumo: false }));
   if (analizarTraslapes(filas).some((a) => a.codigo === "TRASLAPE_REAL")) throw fallo("quedaron períodos traslapados.");
   const usables = r2(filas.filter((f) => f.estado === "Vigente").reduce((t, f) => t + f.disponibles, 0));
-  if (usables > 30) throw fallo(`el saldo utilizable (${usables}) supera 30 días.`);
+  if ((op.aplicarTope ?? true) && usables > 30) throw fallo(`el saldo utilizable (${usables}) supera 30 días.`);
   const detNuevo = await consulta(SQL.detalleDeHechos, [empresaId, idEmpleado]);
   const porInc = new Map<number, number>();
   for (const d of detNuevo) porInc.set(Number(d.incidencia_id), r2((porInc.get(Number(d.incidencia_id)) ?? 0) + Number(d.dias_tomados)));
@@ -240,7 +245,7 @@ export async function rebasearVacacionesEnConexion(
   const fechaAnterior = emp[0].fecha_alta ? toIsoDate(emp[0].fecha_alta as string | Date) : null;
   if (fechaAnterior === fechaNueva) return { aplicado: false, plan: planificarRebase({ fechaAnterior, fechaNueva, hoy, hechos: [], saldos: [], feriados: new Set() }) };
 
-  const { plan, datos } = await armarPlan(consulta, empresaId, idEmpleado, fechaAnterior, fechaNueva, hoy, true);
+  const { plan, datos, politica } = await armarPlan(consulta, empresaId, idEmpleado, fechaAnterior, fechaNueva, hoy, true);
   if (!plan.aplica) return { aplicado: false, plan };
   if (plan.bloqueos.length) throw new RebaseBloqueadoError(plan.bloqueos.map((b) => b.mensaje).join(" "), plan);
   // Defensa en profundidad: jamás se borra una línea de detalle que apunte a un saldo ajeno (el bloqueo anterior ya lo impide).
@@ -248,7 +253,7 @@ export async function rebasearVacacionesEnConexion(
 
   await reemplazarSerieEnConexion(conn, consulta, empresaId, idEmpleado, plan, datos, {
     etiqueta: "Rebase de vacaciones", fechaTxt: "la nueva fecha de alta", fechaBase: fechaNueva, usuario: opciones.usuario ?? null, hoy,
-    accion: "vacaciones_rebase_fecha_alta",
+    accion: "vacaciones_rebase_fecha_alta", aplicarTope: (politica as PoliticaVacaciones).aplicarTope,
     detalle: {
       empleadoId: idEmpleado, fechaAnterior, fechaNueva, periodosAnteriores: plan.periodosAntes, periodosNuevos: plan.periodos.length,
       vacacionesConservadas: plan.vacaciones, consumidoPreservado: plan.consumidoPreservado, saldoAntes: plan.saldoAntes, saldoDespues: plan.saldoDespues,
