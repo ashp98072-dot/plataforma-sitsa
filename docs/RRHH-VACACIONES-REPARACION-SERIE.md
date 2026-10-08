@@ -103,3 +103,19 @@ Permiso en los tres: **RRHH · Vacaciones · editar**. La empresa, el usuario y 
 ## 8. Pendiente
 - Revisión independiente y prueba manual en un entorno de pruebas con una copia de un caso real (solo vista previa primero).
 - No se ejecutó ninguna reparación sobre datos reales ni SQL.
+
+## 9. Reparación por lote de los elegibles («Reparar todos los elegibles»)
+Herramienta para corregir a los pendientes sin abrirlos uno por uno, **sin motor nuevo ni UPDATE/DELETE masivo**: equivale a ejecutar la reparación individual
+(`previsualizarReparacion` / `repararSerieVacaciones`: diagnóstico, plan, bloqueos, huella, `reemplazarSerieEnConexion`, invariantes y auditoría) para cada colaborador.
+**Cada colaborador se repara en SU PROPIA transacción**: un bloqueo, un cambio desde la vista previa o un error en uno no revierte a los ya confirmados ni detiene a los siguientes.
+
+- **Vista previa global** (`GET …/rrhh/vacaciones/reparacion/lote/preview`, solo lectura, sin transacciones): `pendientes`, `elegibles`, `bloqueados`, `sinCambios` y, por colaborador,
+  fecha de contratación, motivos, períodos actuales/propuestos, saldo antes/después, consumo preservado, bloqueos, estado (`ELEGIBLE` / `BLOQUEADO` / `SIN_CAMBIOS`) y la **huella** individual (solo elegibles).
+  Elegible = requiere reparación, plan aplicable, sin ningún bloqueo del motor individual y fecha de alta válida; nunca se asume consumo 0 desde el cliente.
+- **Ejecución** (`POST …/rrhh/vacaciones/reparacion/lote`, cuerpo `{ confirmar: true, empleados: [{ empleadoId, huella }] }`, máx. 500): para cada uno bloquea el empleado `FOR UPDATE`, recarga, re-diagnostica, re-planifica y verifica la huella.
+  Resultados por colaborador: `REPARADO`, `BLOQUEADO` («No reparado — requiere revisión manual»), `CAMBIO_DESDE_PREVIEW`, `SIN_CAMBIOS` (ya no requería reparación) o `ERROR`. Un colaborador de **otra empresa** nunca se encuentra (la empresa sale del servidor).
+  Permiso: RRHH · Vacaciones · editar.
+- **Auditoría**: la individual `vacaciones_reparacion_serie` sigue siendo obligatoria por cada reparado; además un resumen `vacaciones_reparacion_lote` (usuario, empresa, fecha, solicitados, reparados, bloqueados, cambios, sin cambios, errores). Un fallo al auditar el resumen no deshace nada.
+- **UI** (RRHH → Vacaciones, panel de pendientes): «Revisar reparación de pendientes» abre el modal con el resumen y la tabla; **no ejecuta al abrir**. «Confirmar reparación de X colaboradores» (con la advertencia aprobada) envía solo ids y huellas de los elegibles vistos;
+  luego muestra el resumen (reparados / bloqueados / cambió / ya no requerían / errores), la tabla por empleado y refresca pendientes, empleado seleccionado, saldo e historial.
+- **Pruebas**: `vacaciones-reparacion-lote.test.ts` (14, BD en memoria transaccional), `…/lote/route.test.ts` (7) y `reparacion-lote-vacaciones.test.ts` (5, UI).

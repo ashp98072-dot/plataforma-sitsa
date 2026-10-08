@@ -389,7 +389,7 @@ export default function VacacionesPage() {
         </div>
       ) : null}
 
-      {puedeReparar ? <PendientesReparacionVacaciones slug={slug} version={versionReparacion} onRevisar={(id) => setEmpleadoId(id)} /> : null}
+      {puedeReparar ? <PendientesReparacionVacaciones slug={slug} version={versionReparacion} onRevisar={(id) => setEmpleadoId(id)} onLoteTerminado={async () => { await cargar(); setVersionReparacion((v) => v + 1); }} /> : null}
 
       {usaSaldo && historial ? (
         <HistorialPeriodosVacaciones
