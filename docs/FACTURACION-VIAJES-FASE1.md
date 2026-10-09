@@ -222,3 +222,23 @@ Se levantó la aplicación en desarrollo (`next dev`) contra una **base MariaDB 
 2. Viaje **propio** → la placa de su unidad interna (`tms_unidades.placa`); sin unidad, `—`.
 
 No es «placa interna primero» porque en un tercerizado `unidad_id` es NULL por diseño; si apareciera un `unidad_id` huérfano, Programación lo ignora y Facturación debe decir lo mismo. La respuesta sigue llamándose `placa` (compatibilidad) con el valor ya resuelto. Además, la unión con `tms_unidades` ahora filtra por la **misma empresa** del viaje (antes no lo hacía). No cambia la facturabilidad, el IVA, los filtros ni los snapshots.
+
+## 17. PDF DEMO de la factura (NO FISCAL)
+
+Representación visual para que Contabilidad valide el **formato** antes de integrar FEL. **No es un documento fiscal**: no hay FEL, INFILE, SAT, XML ni UUID, no se usan credenciales externas y no escribe nada en la base (solo lee).
+
+**Dónde**: botón **«Ver PDF demo»** en el detalle de una factura (Borrador y Emitida; no en Anuladas) → `GET /api/empresas/[slug]/facturacion/facturas/[id]/pdf-demo` (se abre inline en otra pestaña). Permiso: el mismo `requireTenantFacturacion(slug, "ver")`; la empresa sale de la sesión/guard, nunca del cliente, y `obtenerFactura` filtra por `empresa_id` (la factura de otra empresa → **404**).
+
+**Librería reutilizada**: PDFKit, igual que el resto del proyecto (no hay un segundo sistema de PDF). Se reutiliza el patrón de ruta de `tms/gastos/[id]/pdf`, el logo vía `empresa.logoUrl` + `absPathFromRelative` (si falta, encabezado solo texto), `formatearFechaVisible/ahoraLocal` y `ui-logica` (`formatearMonto`, `etiquetaTratamientoIva`, `resumenTratamientoIva`). Código: `src/lib/facturacion/factura-demo-pdf.ts`.
+
+**Datos**: SOLO lo **congelado** (`obtenerFactura`): cliente (nombre/NIT/dirección del snapshot), viaje (código, fecha, ruta, origen, destino, descripción) y por línea `precio_incluye_iva`, `porcentaje_iva`, base, IVA y total. Nunca se reconstruye con datos vivos. El IVA es **por línea** tal como se congeló (puede haber líneas incluidas y agregadas en la misma factura); no se recalcula globalmente. Subtotal / IVA / TOTAL son los de la factura congelada y se **validan** contra la suma de las líneas (en centavos).
+
+**Casos que NO generan PDF (409, sin inventar importes)**: factura Anulada; sin viajes; factura anterior al desglose de IVA por línea (sin snapshot); línea con base + IVA ≠ total; totales del encabezado ≠ suma de líneas.
+
+**Contenido**: encabezado (logo, razón social, NIT, dirección del emisor), «FACTURA DEMO», leyenda **«DEMO — DOCUMENTO NO FISCAL»** en franja, marca de agua «DEMO - NO FISCAL» y pie con la leyenda + «Página i de n» + fecha de generación (Guatemala) en **todas** las páginas; N.º de factura o «BORRADOR #id (sin número)», fecha, moneda, cliente; tabla Fecha | Viaje | Descripción (Origen -> Destino, tarifa y tratamiento de IVA) | Base | IVA | Total; totales; recuadro «Certificación electrónica: **PENDIENTE FEL**» (solo texto reservado, sin datos simulados). PDFKit estándar (Helvetica) no dibuja «→», por eso en el PDF aparece «->».
+
+**Datos de la empresa emisora (pendientes de definir)**: salen de `fact_empresa_perfil` (`razon_social_factura`, `nit_emisor`, `nombre_comercial`, `direccion_fiscal`) y de `empresas.logo_url`. Si no están capturados, el PDF usa el nombre de la empresa y muestra «pendiente de definir» (NIT/dirección); sin logo, encabezado solo texto. No hay aún un lugar estructurado y validado para el emisor fiscal (ver §11.6).
+
+**Muestra**: `docs/ejemplos/FACTURA-DEMO-EJEMPLO.pdf` (datos sintéticos, factura mixta).
+
+**Verificación**: pruebas unitarias del generador y de la ruta (IVA incluido, agregado y mixto, varias líneas, snapshots, `subtotal + IVA = total`, multiempresa, leyenda NO FISCAL, ausencia total de FEL/INFILE/SAT/UUID salvo «PENDIENTE FEL»); pruebas opt-in contra MariaDB real (lo congelado no cambia si cambian cliente/ruta/tarifa vivos, multiempresa 404, Emitida, Anulada/legacy 409, solo lectura); en el navegador (dev, datos sintéticos) se comprobó que el enlace aparece en el borrador y que el endpoint responde `application/pdf`, `Cache-Control: private, no-store`, y 400/404 para id inválido, inexistente o empresa distinta. El **aspecto visual** se revisó sobre renders del PDF de muestra.
