@@ -251,6 +251,53 @@ describe("emitirFactura", () => {
     expect(audit.accion).toBe("emitir_factura");
   });
 
+  describe("fecha_emision al emitir (YYYY-MM-DD, nunca un Date)", () => {
+    const borradorConFecha = { id: 1, estado_admin: "Borrador", numero_factura: "F-001", fecha_emision: "2026-08-27", monto_total: 1000 };
+    const update = () => conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE fact_facturas"));
+
+    it("la consulta de bloqueo formatea la fecha EN SQL", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      await emitirFactura(actor, 1, {});
+      const lock = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM fact_facturas WHERE id = ? AND empresa_id = ?"));
+      expect(String(lock?.[0])).toContain("DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision");
+    });
+
+    it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: usa exactamente «2026-08-27» en el UPDATE y en la auditoría", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      const r = await emitirFactura(actor, 1, {});
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-08-27", actor.usuarioId, 1, actor.empresaId]);
+      const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
+      expect(audit.detalle).toContain("fecha 2026-08-27");
+      expect(audit.detalle).not.toMatch(/GMT|Thu|Aug/);
+    });
+
+    it("6) emitir CON fechaEmision nueva sigue usando la nueva (tiene prioridad)", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      const r = await emitirFactura(actor, 1, { fechaEmision: "2026-09-01" });
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-09-01", actor.usuarioId, 1, actor.empresaId]);
+      const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
+      expect(audit.detalle).toContain("fecha 2026-09-01");
+      expect(audit.detalle).not.toContain("2026-08-27");
+    });
+
+    it("7) fecha NULL y sin fecha nueva → el error actual de fecha obligatoria, sin UPDATE", async () => {
+      mockConnQuery({ factura: { ...borradorConFecha, fecha_emision: null } });
+      const r = await emitirFactura(actor, 1, {});
+      expect(r.ok).toBe(false);
+      if (!r.ok) { expect(r.status).toBe(400); expect(r.error).toBe("La fecha de emisión es obligatoria para emitir."); }
+      expect(update()).toBeUndefined();
+    });
+
+    it("NULL con fecha nueva → emite con la nueva", async () => {
+      mockConnQuery({ factura: { ...borradorConFecha, fecha_emision: null } });
+      const r = await emitirFactura(actor, 1, { fechaEmision: "2026-09-01" });
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-09-01", actor.usuarioId, 1, actor.empresaId]);
+    });
+  });
+
   it("no se puede emitir una factura que ya no está en Borrador", async () => {
     mockConnQuery({ factura: { id: 1, estado_admin: "Emitida", numero_factura: "F-001", fecha_emision: "2026-08-27", monto_total: 1000 } });
     const r = await emitirFactura(actor, 1, {});

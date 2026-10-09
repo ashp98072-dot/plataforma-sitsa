@@ -944,7 +944,7 @@ export async function emitirFactura(
 ): Promise<ResultadoSimple> {
   return tx(async (conn) => {
     const [facturaRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado_admin, numero_factura, fecha_emision, monto_total
+      `SELECT id, estado_admin, numero_factura, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision, monto_total
        FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [facturaId, actor.empresaId],
     );

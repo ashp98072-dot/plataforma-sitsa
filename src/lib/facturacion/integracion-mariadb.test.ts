@@ -47,6 +47,7 @@ import {
   actualizarFacturaBorrador,
   anularFactura,
   crearFactura,
+  emitirFactura,
   listarFacturas,
   listarViajesPendientes,
   obtenerFactura,
@@ -343,6 +344,51 @@ describe.skipIf(!PUERTO)("MariaDB real — fecha_emision llega como YYYY-MM-DD (
     const ids = lista.items.map((f) => f.id);
     expect(ids).toContain(dentro);
     expect(ids).not.toContain(fuera);
+  });
+
+  describe("emitir (emitirFactura lee fecha_emision con su propia consulta)", () => {
+    const borrador = async (codigo: string, fecha: string | null): Promise<number> => {
+      const plan = await crearPlan({ codigo });
+      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan }], numeroFactura: `NUM-${codigo}`, fechaEmision: fecha });
+      expect(c.ok).toBe(true);
+      return c.ok ? c.facturaId : 0;
+    };
+    const fechaEnDb = async (id: number) => (await filas("SELECT DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS f FROM fact_facturas WHERE id = ?", [id]))[0].f as string | null;
+    const auditoriaEmitir = async (id: number) => String((await filas("SELECT detalle FROM auditoria WHERE accion = 'emitir_factura' AND detalle LIKE ? ORDER BY id DESC LIMIT 1", [`Factura #${id} %`]))[0]?.detalle);
+
+    it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: conserva «2026-08-27» (BD, lectura y auditoría)", async () => {
+      const id = await borrador("EMIT-1", "2026-08-27");
+      const r = await emitirFactura(actorA, id, {});
+      expect(r.ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-08-27");
+      const d = await obtenerFactura(E1, id);
+      expect(d?.factura).toMatchObject({ estadoAdmin: "Emitida", fechaEmision: "2026-08-27", numeroFactura: "NUM-EMIT-1" });
+      const aud = await auditoriaEmitir(id);
+      expect(aud).toContain("fecha 2026-08-27");
+      expect(aud).not.toMatch(/GMT|Thu|Aug/);
+    });
+
+    it("6) emitir CON fechaEmision nueva usa la nueva", async () => {
+      const id = await borrador("EMIT-2", "2026-08-27");
+      const r = await emitirFactura(actorA, id, { fechaEmision: "2026-09-01" });
+      expect(r.ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-09-01");
+      expect(await auditoriaEmitir(id)).toContain("fecha 2026-09-01");
+    });
+
+    it("7) sin fecha en el borrador y sin fecha nueva → error de fecha obligatoria y NO se emite", async () => {
+      const id = await borrador("EMIT-3", null);
+      const r = await emitirFactura(actorA, id, {});
+      expect(r).toEqual({ ok: false, status: 400, error: "La fecha de emisión es obligatoria para emitir." });
+      expect((await filas("SELECT estado_admin FROM fact_facturas WHERE id = ?", [id]))[0].estado_admin).toBe("Borrador");
+      expect(await fechaEnDb(id)).toBeNull();
+    });
+
+    it("sin fecha en el borrador pero CON fecha nueva → emite con la nueva", async () => {
+      const id = await borrador("EMIT-4", null);
+      expect((await emitirFactura(actorA, id, { fechaEmision: "2026-10-09" })).ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-10-09");
+    });
   });
 
   it("editar un borrador con fecha de emisión la conserva como YYYY-MM-DD de ida y vuelta", async () => {
