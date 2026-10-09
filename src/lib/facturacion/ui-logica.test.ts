@@ -9,6 +9,7 @@ import {
   esEmitida,
   etiquetaAnular,
   evaluarSeleccion,
+  etiquetaSumaTarifas,
   etiquetaTratamientoIva,
   firmaLineas,
   firmaPreview,
@@ -293,5 +294,13 @@ describe("FACT-2 — textos del tratamiento de IVA", () => {
     expect(resumenTratamientoIva([true, null])).toBe("Mixto: varía por viaje"); // una línea sin tratamiento congelado
     expect(resumenTratamientoIva([null, null])).toBe("Sin definir");
     expect(resumenTratamientoIva([])).toBe("Sin definir");
+  });
+});
+
+describe("FACT-2 — etiquetaSumaTarifas (hallazgo de la prueba manual)", () => {
+  it("al CREAR remite a la vista previa; al EDITAR (que no tiene vista previa) dice que se recalcula al guardar", () => {
+    expect(etiquetaSumaTarifas(false)).toContain("vista previa");
+    expect(etiquetaSumaTarifas(true)).toContain("al guardar");
+    expect(etiquetaSumaTarifas(true)).not.toContain("vista previa");
   });
 });

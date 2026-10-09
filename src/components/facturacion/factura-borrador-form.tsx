@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { calcularTotalLineas, etiquetaTratamientoIva, firmaPreview, formatearMonto, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
+import { calcularTotalLineas, etiquetaSumaTarifas, etiquetaTratamientoIva, firmaPreview, formatearMonto, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
 
 /**
  * FACT-1-UI — formulario de Borrador COMPARTIDO entre:
@@ -276,7 +276,7 @@ export function FacturaBorradorForm({
           </tbody>
           <tfoot>
             <tr className="border-t border-[var(--border)] font-medium">
-              <td colSpan={4} className="px-2 py-1.5 text-right text-xs text-[var(--muted)]">Suma de tarifas (el total con IVA se calcula en la vista previa)</td>
+              <td colSpan={4} className="px-2 py-1.5 text-right text-xs text-[var(--muted)]">{etiquetaSumaTarifas(facturaId != null)}</td>
               <td colSpan={3} className="px-2 py-1.5 text-sm text-[var(--text)]">{formatearMonto(total, monedaCodigo)}</td>
             </tr>
           </tfoot>

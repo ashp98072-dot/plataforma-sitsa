@@ -1,5 +1,7 @@
--- PROPUESTA: NO ejecutada. MariaDB 11.8.9. Ejecutar primero sql/preflight-2026-10-fact-2-borrador-snapshots-iva.sql
--- y revisar. DEBE aplicarse ANTES de desplegar el código FACT-2 (el código lee y escribe estas columnas).
+-- PROPUESTA PARA DESPLIEGUE. Probada únicamente en bases MariaDB desechables (11.8.9 y 10.4.32), incluida su segunda
+-- ejecución (idempotencia); NO ejecutada en Hostinger/producción. Ejecutar primero
+-- sql/preflight-2026-10-fact-2-borrador-snapshots-iva.sql y revisar. DEBE aplicarse ANTES de desplegar el código FACT-2
+-- (el código lee y escribe estas columnas).
 --
 -- FACT-2 (viaje cerrado -> borrador de factura): congela en el borrador los datos que no deben cambiar si luego
 -- editan el cliente, la ruta o la tarifa, y guarda el desglose de IVA. Sin FEL: no hay UUID, serie, XML ni

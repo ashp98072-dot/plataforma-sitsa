@@ -76,6 +76,16 @@ export function firmaPreview(input: {
   return `${input.clienteId}#${firmaLineas(input.lineas)}`;
 }
 
+/**
+ * FACT-2 — pie de la tabla de líneas del formulario del borrador. Al CREAR hay vista previa; al EDITAR no la hay (el
+ * servidor recalcula al guardar), así que el texto no puede remitir a una vista previa que no existe.
+ */
+export function etiquetaSumaTarifas(esEdicion: boolean): string {
+  return esEdicion
+    ? "Suma de tarifas (el total con IVA se recalcula al guardar)"
+    : "Suma de tarifas (el total con IVA se calcula en la vista previa)";
+}
+
 /** FACT-2 — tratamiento de IVA de UNA línea. */
 export function etiquetaTratamientoIva(precioIncluyeIva: boolean | null): string {
   if (precioIncluyeIva == null) return "Sin definir";

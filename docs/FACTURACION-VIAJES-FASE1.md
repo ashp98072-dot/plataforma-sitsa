@@ -1,6 +1,6 @@
 # Facturación de viajes — Fase 1: viaje cerrado → viaje facturable → borrador de factura
 
-**Estado: IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (tsc, ESLint, build, pruebas con base simulada y pruebas contra MariaDB 11.8.9 y 10.4 reales y desechables — ver §14). NO probado en la base de producción/Hostinger ni con usuarios. NO aprobado para producción.**
+**Estado: IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (tsc, ESLint, build, pruebas con base simulada y pruebas contra MariaDB 11.8.9 y 10.4 reales y desechables — ver §14 — y validación manual de la interfaz en navegador con datos de desarrollo — ver §15). NO probado en la base de producción/Hostinger ni con usuarios reales. NO aprobado para producción.**
 
 Esta fase **no emite FEL**: no conecta con INFILE ni con la SAT, no usa credenciales FEL, no genera UUID/serie/número FEL, no crea pólizas ni cuentas por cobrar. Un test de arquitectura (`src/lib/facturacion/sin-fel-fase1.test.ts`) lo exige sobre el código del flujo.
 
@@ -172,7 +172,7 @@ Sin FEL todavía: emisión/certificación con INFILE (endpoint, autenticación, 
 
 - **Hecho**: `tsc --noEmit`, ESLint, `git diff --check`, `npm run build` y toda la suite de vitest (resultado y comparación con `origin/main` en el PR).
 - **Pruebas nuevas**: IVA y redondeo; elegibilidad del viaje; preview sin escritura; creación con snapshot; doble uso del mismo viaje (secuencial y por carrera en el INSERT); deadlock → 409; orden de bloqueo; cancelar libera viajes; snapshots no cambian al editar cliente/ruta; permisos; multiempresa; arquitectura sin FEL.
-- **Limitaciones restantes**: el esquema de las pruebas es el de `sql/schema.sql` + la migración FACT-1 (no una copia de producción) y el volumen es de pruebas. La interfaz no se probó en un navegador con datos. Hace falta revisar manualmente la UI y repetir §14 en un ambiente de pruebas con datos representativos antes de considerarlo **PROBADO**. (La validación en MariaDB 11.8.9 —la versión del servidor objetivo— ya se hizo; no está pendiente.)
+- **Limitaciones restantes**: el esquema de las pruebas es el de `sql/schema.sql` + la migración FACT-1 (no una copia de producción) y el volumen es de pruebas. La interfaz se validó manualmente solo con datos sintéticos de desarrollo (§15). Hace falta repetir §14 y §15 en un ambiente de pruebas con datos representativos antes de considerarlo **PROBADO**. (La validación en MariaDB 11.8.9 —la versión del servidor objetivo— ya se hizo; no está pendiente.)
 
 ## 14. Validación contra una MariaDB real y desechable
 
@@ -192,3 +192,23 @@ Qué cubre (47 pruebas): A preflight · B migración · C idempotencia (2.ª eje
 3. **Filtro «ruta o destino»**: `NOT (NULL REGEXP …)` es `NULL` y ocultaba los viajes sin destino congelado → se usa `COALESCE`.
 
 **Hallazgo preexistente de FACT-1, ya corregido**: `mapFactura` convertía `fecha_emision` con `String(valor).slice(0, 10)`, pero el driver devuelve un objeto `Date` para una columna `DATE`; con una factura que ya tenía fecha, el listado, el detalle y el formulario de edición mostraban «Thu Aug 27». Ahora `FACTURA_SELECT` **y la consulta de bloqueo de `emitirFactura`** formatean en SQL (`DATE_FORMAT(…, '%Y-%m-%d') AS fecha_emision`), sin depender de la zona horaria; `mapFactura` no cambió y los filtros por rango siguen comparando la columna. Cubierto por pruebas unitarias y por la prueba opt-in contra MariaDB real (que además demuestra que el driver SÍ entrega un `Date`).
+
+## 15. Validación manual de la interfaz (navegador, datos de desarrollo)
+
+Se levantó la aplicación en desarrollo (`next dev`) contra una **base MariaDB 10.4 desechable local** (puerto 3399, creada con `sql/schema.sql`, el seed de usuarios del proyecto, la migración FACT-1 y el preflight + migración FACT-2) y **datos sintéticos** («Cliente Demo Uno/Dos», viajes `DEMO-*`, `PAG-*` y casos negativos `NO-*`). Sin Hostinger, sin producción, sin FEL/INFILE/SAT. Se probó en escritorio (1440×900) y se revisó el ancho a 1024 px.
+
+| # | Caso | Resultado |
+|---|---|---|
+| 1 | Una línea, **IVA incluido**, Q100 | Vista previa **89.29 + 10.71 = 100.00**. Guardado y reabierto tras recargar: conserva «IVA incluido en la tarifa» y los mismos importes. |
+| 2 | Una línea, **Agregar IVA**, Q100 | Vista previa **100.00 + 12.00 = 112.00**. Guardado y reabierto: conserva «IVA agregado a la tarifa». |
+| 3 | **Factura mixta** (A: Q100 incluido, B: Q100 agregado) | Vista previa: A 89.29 + 10.71 = 100.00; B 100.00 + 12.00 = 112.00; **subtotal 189.29, IVA 22.71, TOTAL 212.00**. El detalle guardado muestra el tratamiento de cada viaje y el resumen dice **«Mixto: varía por viaje»**; en la base el encabezado `precio_incluye_iva` es `NULL` y cada línea guarda el suyo. |
+| 4 | Invalidación de la vista previa | «Guardar borrador» queda deshabilitado y aparece el aviso «vuelve a previsualizar» al cambiar el tratamiento de una línea, un monto, **quitar** un viaje o **agregar** un viaje. Volver exactamente a la selección previsualizada la vuelve a validar (misma huella). |
+| 5 | Edición del borrador mixto | Los selectores cargan lo almacenado (A «IVA incluido», B «Agregar IVA»). Al cambiar solo una línea y guardar, solo esa línea cambia fiscalmente, los totales se recalculan (200.00 + 24.00 = 224.00) y las descripciones/ruta/fecha congeladas no cambian; devolverla a «IVA incluido» restituye 189.29 / 22.71 / 212.00 y el encabezado vuelve a `NULL`. |
+| 6 | Emitida no editable | Tras emitir (número y fecha de prueba), el detalle ya no ofrece «Editar borrador», ni campos de monto/viajes, ni selectores de IVA; solo «Registrar pago» y «Anular factura». Un `PATCH` directo a la API responde **409** y nada cambia en la base. |
+| 7 | Cancelar borrador | Queda **Anulada**, se borran sus vínculos, el contador de «Viajes pendientes» sube y el viaje vuelve a aparecer en «Viajes por facturar» y se puede seleccionar de nuevo. |
+| 8 | «Viajes por facturar» | Columnas ruta, origen → destino, unidad, piloto, tarifa, estado y fecha de cierre correctas; el filtro de ruta/destino encuentra tanto el código como el nombre del destino de catálogo (sin destino congelado); paginación 50 + 14 de 64 con la selección conservada entre páginas; seleccionar viajes de otro cliente se bloquea con explicación. **No aparecen** los viajes sin tarifa (NULL o 0), en ruta/programados, en USD ni sin ruta/destino. |
+| 9 | UX / diseño | La columna «Tratamiento IVA (12 %)» se entiende; «IVA incluido» aparece preseleccionado al agregar un viaje y «Agregar IVA» se elige sin ambigüedad. Sin columnas cortadas ni textos superpuestos y sin scroll horizontal a 1440 px (ni en las tablas del formulario y de la vista previa a 1024 px; allí solo «Unidad» baja a dos líneas). Antes de la vista previa el pie dice «Suma de tarifas (el total con IVA se calcula en la vista previa)», no un «Total» engañoso. |
+
+**Defecto encontrado y corregido** (único cambio de código tras la prueba): al **editar** un borrador el pie decía «el total con IVA se calcula en la vista previa», pero la edición no tiene vista previa. Ahora dice «el total con IVA se recalcula al guardar» (`etiquetaSumaTarifas`, con prueba unitaria). Se repitió el caso en el navegador.
+
+**Observaciones sin cambios** (preexistentes de FACT-1 o menores): en la edición las columnas «Unidad» y «Tarifa comercial» muestran «—» (el formulario de edición no las recibe); el botón de confirmación al cancelar un borrador sigue diciendo «Confirmar anulación» (el título de la confirmación sí dice «cancelar borrador»); los endpoints de notificaciones del layout fallan en esta base mínima de desarrollo porque faltan tablas de otros módulos (`rrhh_recordatorios`, `flota_vehiculo_documentos`, `flota_viajes.plan_id`), sin relación con Facturación.
