@@ -405,6 +405,17 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                   Editar borrador
                                 </button>
                               ) : null}
+                              {detalle.factura.estadoAdmin !== "Anulada" ? (
+                                <a
+                                  href={`/api/empresas/${slug}/facturacion/facturas/${detalle.factura.id}/pdf-demo`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="mt-2 ml-2 inline-block rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text)] hover:underline"
+                                  title="Representación de prueba para validar el formato. No es un documento fiscal."
+                                >
+                                  Ver PDF demo
+                                </a>
+                              ) : null}
                             </div>
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>

@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import mysql, { type Connection, type Pool, type RowDataPacket } from "mysql2/promise";
+import PDFDocument from "pdfkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -56,6 +58,7 @@ import {
   type ActorFacturacion,
 } from "./facturas";
 import { MENSAJE_MONEDA_NO_SOPORTADA } from "./borrador-calculo";
+import { generarPdfFacturaDemo, LEYENDA_NO_FISCAL } from "./factura-demo-pdf";
 
 const RAIZ = process.cwd();
 const E1 = 7; // empresa de la sesión
@@ -934,5 +937,130 @@ describe.skipIf(!PUERTO)("MariaDB real — columna «Unidad» de Viajes pendient
     const filtrada = await listarViajesPendientes(E1, { ruta: "RUTA-01", pageSize: 200 });
     expect(filtrada.totalReal).toBe(filtrada.items.length);
     expect(filtrada.items.map((i) => i.planId)).toContain(ids.get("tercerizado con placa externa")!);
+  });
+});
+
+describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congelado en la base", () => {
+  // El logo es OBLIGATORIO: cada empresa usa un archivo real de su propio directorio dentro de un `uploads` temporal.
+  const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const empresa1 = { id: E1, nombre: "Empresa 7", logoUrl: `empresas/${E1}/logo.png` };
+  const empresa2 = { id: E2, nombre: "Empresa 8", logoUrl: `empresas/${E2}/logo.png` };
+  let uploadsTemporal = "";
+  let uploadDirOriginal: string | undefined;
+  beforeAll(() => {
+    uploadDirOriginal = process.env.UPLOAD_DIR;
+    uploadsTemporal = mkdtempSync(join(tmpdir(), "fact-real-uploads-"));
+    process.env.UPLOAD_DIR = uploadsTemporal;
+    for (const e of [E1, E2]) {
+      mkdirSync(dirname(join(uploadsTemporal, `empresas/${e}/logo.png`)), { recursive: true });
+      writeFileSync(join(uploadsTemporal, `empresas/${e}/logo.png`), PNG_1X1);
+    }
+  });
+  afterAll(() => {
+    if (uploadDirOriginal === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = uploadDirOriginal;
+    rmSync(uploadsTemporal, { recursive: true, force: true });
+  });
+  const textoPdf = async (fn: () => Promise<unknown>): Promise<string> => {
+    const spy = vi.spyOn(PDFDocument.prototype, "text");
+    try { await fn(); return spy.mock.calls.map((c) => String(c[0])).join("\n"); } finally { spy.mockRestore(); }
+  };
+  let mixtaId = 0;
+
+  it("factura MIXTA real (Q100 incluido + Q100 agregado): el PDF muestra Código / Descripción / Total (Q100.00 y Q112.00), TOTAL Q212.00 y en letras; el desglose 89.29 + 10.71 / 22.71 se guarda pero NO se imprime", async () => {
+    // (pruebas anteriores de este archivo cambiaron los datos vivos del cliente 20: se restablecen antes de congelarlos)
+    await admin.query("UPDATE clientes SET razon_social = 'Cliente X, S.A.', nit = '1234567-8', direccion = 'Zona 1', codigo = '0000020' WHERE id = 20");
+    await admin.query("UPDATE clientes SET codigo = 'COD-OTRA-EMPRESA' WHERE id = 30");
+    const a = await crearPlan({ codigo: "PDF-A", tarifa_comercial: 100, fecha_plan: "2026-09-01" });
+    const b = await crearPlan({ codigo: "PDF-B", tarifa_comercial: 100, fecha_plan: "2026-09-02" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: a, precioIncluyeIva: true }, { planId: b, precioIncluyeIva: false }] });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    mixtaId = c.facturaId;
+    let r: Awaited<ReturnType<typeof generarPdfFacturaDemo>> | null = null;
+    const t = await textoPdf(async () => { r = await generarPdfFacturaDemo(empresa1, mixtaId); });
+    expect(r).toMatchObject({ ok: true, nombreArchivo: `factura-demo-${mixtaId}.pdf` });
+    for (const v of ["Q100.00", "Q112.00", "Q212.00", "PDF-A", "PDF-B", LEYENDA_NO_FISCAL, "Cliente X, S.A.", "1234567-8", "0000020", "DOSCIENTOS DOCE CON 00/100", "CÓDIGO", "DESCRIPCIÓN", "TOTAL EN LETRAS:", "SERVICIO DE TRANSPORTE"]) {
+      expect(t, v).toContain(v);
+    }
+    // Base e IVA se calculan y se guardan (verificado en otras pruebas), pero la factura no los imprime
+    for (const v of ["Q89.29", "Q10.71", "Q12.00", "Q189.29", "Q22.71", "IVA", "SUBTOTAL"]) expect(t, v).not.toContain(v);
+    const [guardado] = await filas(`SELECT subtotal, iva_monto, monto_total, precio_incluye_iva FROM fact_facturas WHERE id = ${mixtaId}`);
+    expect([Number(guardado.subtotal), Number(guardado.iva_monto), Number(guardado.monto_total), guardado.precio_incluye_iva]).toEqual([189.29, 22.71, 212, null]);
+    const lineasGuardadas = await filas(`SELECT base_monto, iva_monto, total_linea, precio_incluye_iva FROM fact_factura_viajes WHERE factura_id = ${mixtaId} ORDER BY id`);
+    expect(lineasGuardadas.map((l) => [Number(l.base_monto), Number(l.iva_monto), Number(l.total_linea), l.precio_incluye_iva])).toEqual([[89.29, 10.71, 100, 1], [100, 12, 112, 0]]);
+  });
+
+  it("usa lo CONGELADO: si después cambian el cliente, la ruta, el destino y la tarifa vivos, el PDF no cambia", async () => {
+    await admin.query("UPDATE clientes SET razon_social = 'Razón NUEVA', nit = '0000000-0', direccion = 'Otra zona' WHERE id = 20");
+    await admin.query("UPDATE tms_planes_viaje SET lugar_descarga_historico = 'Destino NUEVO', ruta_codigo_historico = 'RUTA-NUEVA', tarifa_comercial = 9999 WHERE codigo IN ('PDF-A', 'PDF-B')");
+    const t = await textoPdf(() => generarPdfFacturaDemo(empresa1, mixtaId));
+    expect(t).toContain("Cliente X, S.A.");
+    expect(t).toContain("1234567-8");
+    expect(t).toContain("Q212.00");
+    expect(t).not.toMatch(/Razón NUEVA|0000000-0|Destino NUEVO|9,?999/);
+  });
+
+  it("código de cliente: es lectura VIVA de clientes.codigo (filtrada por empresa); sin código dice «Pendiente de definir» y el de otra empresa nunca aparece", async () => {
+    const conCodigo = await textoPdf(() => generarPdfFacturaDemo(empresa1, mixtaId));
+    expect(conCodigo).toContain("0000020");
+    expect(conCodigo).not.toContain("COD-OTRA-EMPRESA");
+    await admin.query("UPDATE clientes SET codigo = NULL WHERE id = 20");
+    const sinCodigo = await textoPdf(() => generarPdfFacturaDemo(empresa1, mixtaId));
+    expect(sinCodigo).toContain("Pendiente de definir");
+    expect(sinCodigo).not.toContain("0000020");
+    // un cliente de la empresa 8 con el mismo id de factura no se cuela: la consulta lleva empresa_id
+    await admin.query("UPDATE clientes SET codigo = '0000020' WHERE id = 20");
+  });
+
+  it("multiempresa: la empresa 8 no puede generar el PDF de una factura de la empresa 7 (404, sin PDF), tenga o no logo", async () => {
+    expect(await generarPdfFacturaDemo(empresa2, mixtaId)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+    expect(await generarPdfFacturaDemo({ ...empresa2, logoUrl: null }, mixtaId)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+  });
+
+  it("LOGO obligatorio: sin logo, con archivo inexistente o con el logo de OTRA empresa → 409 y no se genera el PDF de una factura válida", async () => {
+    const esperado = { ok: false, status: 409, error: "Esta empresa no tiene un logo válido configurado para la factura." };
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: null }, mixtaId)).toEqual(esperado);
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: `empresas/${E1}/no-existe.png` }, mixtaId)).toEqual(esperado);
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: `empresas/${E2}/logo.png` }, mixtaId)).toEqual(esperado);
+    const ok = await generarPdfFacturaDemo(empresa1, mixtaId);
+    expect(ok.ok).toBe(true);
+    // (un PNG con canal alfa se guarda como imagen + máscara: puede haber más de un objeto de imagen)
+    if (ok.ok) expect((ok.buffer.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("Emitida: lleva su número y fecha de emisión y SIGUE marcada como NO FISCAL; Anulada → 409", async () => {
+    const p = await crearPlan({ codigo: "PDF-E", tarifa_comercial: 500.5 });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: false }], numeroFactura: "F-PDF-1", fechaEmision: "2026-08-27" });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    const t = await textoPdf(() => generarPdfFacturaDemo(empresa1, c.facturaId));
+    expect(t).toContain("F-PDF-1");
+    expect(t).toContain("27/08/2026");
+    expect(t).toContain("Q560.56");
+    expect(t).toContain("QUINIENTOS SESENTA CON 56/100");
+    expect(t).toContain(LEYENDA_NO_FISCAL);
+    const pb = await crearPlan({ codigo: "PDF-X" });
+    const b = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pb, precioIncluyeIva: true }] });
+    expect(b.ok).toBe(true);
+    if (!b.ok) return;
+    expect((await anularFactura(actorA, b.facturaId)).ok).toBe(true);
+    expect(await generarPdfFacturaDemo(empresa1, b.facturaId)).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("una factura ANTERIOR al desglose por línea (sin snapshot fiscal) no genera PDF: no se inventan importes", async () => {
+    const plan = await crearPlan({ codigo: "PDF-LEG", tarifa_comercial: 750 });
+    const [f] = await admin.query<mysql.ResultSetHeader>(`INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, estado_admin, creado_por) VALUES (${E1}, 20, 750, 'Borrador', 1)`);
+    await admin.query("INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, 750)", [f.insertId, plan]);
+    const r = await generarPdfFacturaDemo(empresa1, f.insertId);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    if (!r.ok) expect(r.error).toContain("anterior al desglose de IVA por línea");
+  });
+
+  it("solo LEE: generar el PDF no cambia ninguna fila de facturación", async () => {
+    const huella = async () => JSON.stringify(await filas("SELECT (SELECT COUNT(*) FROM fact_facturas) f, (SELECT COUNT(*) FROM fact_factura_viajes) v, (SELECT COUNT(*) FROM auditoria) a, (SELECT SUM(monto_total) FROM fact_facturas) t"));
+    const antes = await huella();
+    await generarPdfFacturaDemo(empresa1, mixtaId);
+    expect(await huella()).toBe(antes);
   });
 });
