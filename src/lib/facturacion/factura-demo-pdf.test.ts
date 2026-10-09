@@ -4,20 +4,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/facturacion/facturas", () => ({ obtenerFactura: vi.fn() }));
 vi.mock("@/lib/facturacion/repository", () => ({ obtenerPerfilEmpresa: vi.fn() }));
+vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/uploads", () => ({ absPathFromRelative: vi.fn((r: string) => `/abs/${r}`) }));
 vi.mock("fs", () => ({ existsSync: vi.fn(() => false), readFileSync: vi.fn() }));
 
 import { existsSync, readFileSync as readFileMock } from "fs";
+import { query } from "@/lib/db";
 import { obtenerFactura } from "@/lib/facturacion/facturas";
 import { obtenerPerfilEmpresa } from "@/lib/facturacion/repository";
 // `fs` está mockeado más arriba (para el logo); las pruebas que leen archivos reales usan el módulo verdadero.
 const { readFileSync, mkdirSync, writeFileSync } = await vi.importActual<typeof import("fs")>("fs");
 import {
+  descripcionVisible,
   generarPdfFacturaDemo,
   LEYENDA_NO_FISCAL,
   prepararFacturaDemo,
   renderizarFacturaDemo,
+  TEXTO_PENDIENTE_DEFINIR,
   TEXTO_PENDIENTE_FEL,
+  type ComplementosDemo,
   type EmisorDemo,
 } from "./factura-demo-pdf";
 
@@ -31,11 +36,13 @@ function espiarTexto() {
 }
 const textos = (spy: ReturnType<typeof espiarTexto>): string[] => spy.mock.calls.map((c) => String(c[0]));
 const todo = (spy: ReturnType<typeof espiarTexto>): string => textos(spy).join("\n");
+const cuenta = (spy: ReturnType<typeof espiarTexto>, exacto: string): number => textos(spy).filter((t) => t === exacto).length;
 const paginas = (buf: Buffer): number => (buf.toString("latin1").match(/\/Type\s*\/Page(?!s)\b/g) ?? []).length;
 
 type Detalle = NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>;
 
-const EMISOR: EmisorDemo = { razonSocial: "Empresa Demo, S.A.", nombreComercial: "Demo Logística", nit: "9999999-9", direccion: "Zona 10, Ciudad de Guatemala", logo: null };
+const EMISOR: EmisorDemo = { razonSocial: "Empresa Demo, S.A.", nombreComercial: "Demo Logística", nit: "9999999-9", direccion: "Zona 10, Ciudad de Guatemala", telefono: null, logo: null };
+const COMPLETOS: ComplementosDemo = { clienteCodigo: "0000066", condiciones: null, leyendaTributaria: null };
 
 function linea(n: number, over: Partial<Detalle["viajes"][number]> = {}): Detalle["viajes"][number] {
   return {
@@ -72,95 +79,212 @@ beforeEach(() => {
     respuestas: { razon_social_factura: "Empresa Demo, S.A.", nit_emisor: "9999999-9", direccion_fiscal: "Zona 10, Ciudad de Guatemala", nombre_comercial: "Demo Logística" },
     completadoPct: 100, actualizadoAt: null, actualizadoPor: null,
   } as never);
+  vi.mocked(query).mockResolvedValue([{ codigo: "0000066" }] as never);
 });
 afterEach(() => { vi.restoreAllMocks(); vi.mocked(existsSync).mockReturnValue(false); });
 
-async function renderizar(d: Detalle | null, emisor: EmisorDemo = EMISOR) {
-  const m = prepararFacturaDemo(d, emisor, "2026-10-09");
+async function renderizar(d: Detalle | null, emisor: EmisorDemo = EMISOR, complementos: ComplementosDemo = COMPLETOS) {
+  const m = prepararFacturaDemo(d, emisor, "2026-10-09", complementos);
   if (!m.ok) throw new Error(m.error);
   const spy = espiarTexto();
   const buffer = await renderizarFacturaDemo(m.factura);
   return { spy, buffer, factura: m.factura };
 }
 
-describe("PDF demo — IVA por línea, exactamente como quedó congelado", () => {
-  it("1) factura SOLO con IVA incluido: cada línea con su desglose y totales congelados", async () => {
-    const { spy, buffer } = await renderizar(detalle([INCLUIDO(1), INCLUIDO(2)]));
-    const t = todo(spy);
-    expect(t).toContain("Q89.29");
-    expect(t).toContain("Q10.71");
-    expect(t).toContain("Subtotal");
-    expect(t).toContain("Q178.58");
-    expect(t).toContain("Q21.42");
-    expect(t).toContain("Q200.00");
-    expect(t).toContain("Tratamiento de IVA: IVA incluido en la tarifa");
-    expect(t).toContain("IVA incluido"); // por línea (en la descripción)
-    expect(buffer.subarray(0, 5).toString()).toBe("%PDF-");
+describe("PDF demo — formato de la factura actual: Código / Descripción / Total", () => {
+  it("1) el detalle es una tabla CÓDIGO | DESCRIPCIÓN | TOTAL (en ese orden), con una fila por viaje", async () => {
+    const { spy } = await renderizar(detalle([INCLUIDO(1), AGREGADO(2)]));
+    const ts = textos(spy);
+    const i = (t: string) => ts.indexOf(t);
+    expect(i("CÓDIGO")).toBeGreaterThan(-1);
+    expect(i("DESCRIPCIÓN")).toBeGreaterThan(i("CÓDIGO"));
+    expect(i("TOTAL")).toBeGreaterThan(i("DESCRIPCIÓN"));
+    // fila: código → descripción → total de la línea
+    const f1 = i("DEMO-1");
+    expect(ts.slice(f1, f1 + 3)).toEqual(["DEMO-1", "SERVICIO DE TRANSPORTE - BODEGA CENTRAL A DESTINO 1 - 01/09/2026", "Q100.00"]);
+    const f2 = i("DEMO-2");
+    expect(ts.slice(f2, f2 + 3)).toEqual(["DEMO-2", "SERVICIO DE TRANSPORTE - BODEGA CENTRAL A DESTINO 2 - 02/09/2026", "Q112.00"]);
   });
 
-  it("2) factura SOLO con IVA agregado", async () => {
-    const { spy } = await renderizar(detalle([AGREGADO(1), AGREGADO(2)]));
-    const t = todo(spy);
-    expect(t).toContain("Q100.00");
-    expect(t).toContain("Q12.00");
-    expect(t).toContain("Q112.00");
-    expect(t).toContain("Q200.00");
-    expect(t).toContain("Q24.00");
-    expect(t).toContain("Q224.00");
-    expect(t).toContain("Tratamiento de IVA: IVA agregado a la tarifa");
+  it("2) NO se muestran Base ni IVA como columnas ni por línea: solo el TOTAL de cada línea y el TOTAL de la factura", async () => {
+    for (const d of [detalle([INCLUIDO(1), INCLUIDO(2)]), detalle([AGREGADO(1), AGREGADO(2)]), detalle([INCLUIDO(1), AGREGADO(2)])]) {
+      vi.restoreAllMocks();
+      vi.mocked(query).mockResolvedValue([{ codigo: "0000066" }] as never);
+      const { spy } = await renderizar(d);
+      const ts = textos(spy);
+      expect(ts.filter((t) => /^(base|iva|subtotal|tarifa)\b/i.test(t.trim()))).toEqual([]);
+      const t = todo(spy);
+      expect(t).not.toMatch(/IVA|SUBTOTAL|BASE\b|tarifa/i);
+      // ni los importes internos de base / IVA: 89.29, 10.71 y 12.00 no aparecen
+      for (const interno of ["Q89.29", "Q10.71", "Q12.00", "Q178.58", "Q21.42", "Q22.71", "Q189.29", "Q24.00"]) expect(t, interno).not.toContain(interno);
+    }
   });
 
-  it("3) factura MIXTA Q100 incluido + Q100 agregado: 89.29+10.71=100.00 y 100.00+12.00=112.00; subtotal 189.29, IVA 22.71, TOTAL 212.00", async () => {
+  it("3) TOTAL EN LETRAS en quetzales y centavos, y el TOTAL Q. de la factura (ejemplo: Q1,239.44)", async () => {
+    const { spy } = await renderizar(detalle([linea(1, { montoAsignado: 1239.44, base: 1106.64, iva: 132.8, total: 1239.44 })]));
+    const ts = textos(spy);
+    expect(ts).toContain("TOTAL EN LETRAS:");
+    expect(ts).toContain("UN MIL DOSCIENTOS TREINTA Y NUEVE CON 44/100");
+    expect(ts).toContain("TOTAL Q.:");
+    expect(ts.filter((t) => t === "Q1,239.44")).toHaveLength(2); // la línea y el TOTAL Q.
+    const mixta = await (async () => { vi.restoreAllMocks(); return renderizar(detalle([INCLUIDO(1), AGREGADO(2)])); })();
+    expect(textos(mixta.spy)).toContain("DOSCIENTOS DOCE CON 00/100");
+    expect(textos(mixta.spy)).toContain("Q212.00");
+  });
+
+  it("4) los espacios de FEL (serie, número, autorización, certificador, NIT, recuadro) dicen SOLO «PENDIENTE FEL»; nada simulado", async () => {
+    const { spy, buffer } = await renderizar(detalle([INCLUIDO(1), AGREGADO(2)]));
+    const ts = textos(spy);
+    const sig = (etiqueta: string) => ts[ts.indexOf(etiqueta) + 1];
+    expect(sig("SERIE:")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(sig("NO.:")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(sig("NÚMERO DE AUTORIZACIÓN")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(sig("NÚMERO DE AUTORIZACIÓN:")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(sig("CERTIFICADOR:")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(sig("NIT CERTIFICADOR:")).toBe(TEXTO_PENDIENTE_FEL);
+    expect(ts.some((t) => t.includes(`certificación electrónica: ${TEXTO_PENDIENTE_FEL}`))).toBe(true);
+    // el correlativo interno es el número interno de la plataforma, no uno de FEL
+    expect(sig("CORRELATIVO INTERNO:")).toBe("BORRADOR #12 (sin número)");
+    // fuera de las etiquetas y de «PENDIENTE FEL» no hay nada que parezca un identificador fiscal
+    const resto = ts.join("\n").split(TEXTO_PENDIENTE_FEL).join("");
+    expect(resto).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    expect(resto).not.toMatch(/infile|\bsat\b|\bxml\b|\bqr\b|uuid/i);
+    expect(buffer.toString("latin1")).not.toMatch(/\/Subtype\s*\/Image/); // un QR sería una imagen
+  });
+
+  it("5) la marca «DEMO — DOCUMENTO NO FISCAL» es visible: franja superior, marca de agua y pie", async () => {
+    const { spy } = await renderizar(detalle([INCLUIDO(1)]));
+    const ts = textos(spy);
+    expect(LEYENDA_NO_FISCAL).toBe("DEMO — DOCUMENTO NO FISCAL");
+    expect(ts).toContain(LEYENDA_NO_FISCAL); // franja
+    expect(ts).toContain("DEMO - NO FISCAL"); // marca de agua
+    expect(ts.some((t) => t.startsWith(`${LEYENDA_NO_FISCAL} · Página 1 de 1`))).toBe(true); // pie
+    expect(ts).toContain("FACTURA DEMO");
+    expect(ts).toContain("DOCUMENTO TRIBUTARIO ELECTRÓNICO");
+  });
+
+  it("6) factura MIXTA: se imprime solo el total de cada línea y el modelo conserva internamente base, IVA y tratamiento por línea", async () => {
     const { spy, factura } = await renderizar(detalle([INCLUIDO(1), AGREGADO(2)]));
     const t = todo(spy);
-    for (const v of ["Q89.29", "Q10.71", "Q100.00", "Q12.00", "Q112.00", "Q189.29", "Q22.71", "Q212.00"]) expect(t, v).toContain(v);
-    expect(t).toContain("Tratamiento de IVA: Mixto: varía por viaje");
-    expect(t).toContain("Tarifa Q100.00 · IVA incluido");
-    expect(t).toContain("Tarifa Q100.00 · IVA agregado");
-    // Cada línea conserva SU política: no se recalcula con una global.
+    expect(t).toContain("Q100.00"); // línea 1 (IVA incluido)
+    expect(t).toContain("Q112.00"); // línea 2 (IVA agregado)
+    expect(t).toContain("Q212.00"); // total
     expect(factura.lineas.map((l) => [l.precioIncluyeIva, l.base, l.iva, l.total])).toEqual([[true, 89.29, 10.71, 100], [false, 100, 12, 112]]);
     expect([factura.subtotal, factura.iva, factura.total]).toEqual([189.29, 22.71, 212]);
   });
 
-  it("4) varios viajes: se dibujan TODOS", async () => {
+  it("7) varias líneas: se dibujan TODAS, con su código y su total", async () => {
     const lineas = [1, 2, 3, 4, 5].map((n) => (n % 2 ? INCLUIDO(n) : AGREGADO(n)));
     const { spy, factura } = await renderizar(detalle(lineas));
     expect(factura.lineas).toHaveLength(5);
     const t = todo(spy);
     for (let n = 1; n <= 5; n++) expect(t).toContain(`DEMO-${n}`);
+    expect(cuenta(spy, "Q112.00")).toBe(2);
+    expect(cuenta(spy, "Q100.00")).toBe(3);
+    expect(t).toContain("Q524.00"); // 3×100 + 2×112
+    expect(textos(spy)).toContain("QUINIENTOS VEINTICUATRO CON 00/100");
   });
 
-  it("muchas líneas pasan a otra página y TODAS las páginas llevan la leyenda NO FISCAL en el pie", async () => {
-    const lineas = Array.from({ length: 60 }, (_, i) => linea((i % 9) + 1, { id: i, codigo: `DEMO-${i}` }));
-    const { spy, buffer } = await renderizar(detalle(lineas));
+  it("8) OBSERVACIONES: se imprimen si existen y dicen «—» si no hay", async () => {
+    const con = await renderizar(detalle([INCLUIDO(1)], { observaciones: "  Entregas cercanas al club  " }));
+    const ts = textos(con.spy);
+    expect(ts).toContain("OBSERVACIONES:");
+    expect(ts[ts.indexOf("OBSERVACIONES:") + 1]).toBe("Entregas cercanas al club");
+    vi.restoreAllMocks();
+    const sin = await renderizar(detalle([INCLUIDO(1)], { observaciones: "   " }));
+    const t2 = textos(sin.spy);
+    expect(t2[t2.indexOf("OBSERVACIONES:") + 1]).toBe("—");
+    // una observación muy larga no rompe el PDF (se recorta con «…» dentro de su recuadro)
+    vi.restoreAllMocks();
+    const larga = await renderizar(detalle([INCLUIDO(1)], { observaciones: "texto largo ".repeat(200) }));
+    expect(paginas(larga.buffer)).toBe(1);
+  });
+
+  it("9) los datos que la plataforma aún no tiene salen «Pendiente de definir» y nunca se inventan", async () => {
+    const { spy } = await renderizar(
+      detalle([INCLUIDO(1)], { clienteNit: null, clienteDireccion: null }),
+      { razonSocial: "Empresa X", nombreComercial: null, nit: null, direccion: null, telefono: null, logo: null },
+      { clienteCodigo: null, condiciones: null, leyendaTributaria: null },
+    );
+    const ts = textos(spy);
+    const sig = (etiqueta: string) => ts[ts.indexOf(etiqueta) + 1];
+    expect(TEXTO_PENDIENTE_DEFINIR).toBe("Pendiente de definir");
+    expect(ts).toContain("Teléfono: pendiente de definir");
+    expect(ts).toContain("NIT: pendiente de definir");
+    expect(ts).toContain("Dirección: pendiente de definir");
+    expect(sig("CONDICIONES:")).toBe("Pendiente de definir");
+    expect(sig("CÓDIGO CLIENTE:")).toBe("Pendiente de definir");
+    expect(ts).toContain("Leyenda tributaria: pendiente de definir");
+    expect(sig("NIT:")).toBe("—"); // NIT del cliente sin dato
+    expect(sig("DIRECCIÓN:")).toBe("—");
+    expect(ts).not.toContain("Nombre comercial");
+  });
+
+  it("los datos que SÍ existen se usan: código de cliente, observaciones, teléfono y leyenda cuando llegan", async () => {
+    const { spy } = await renderizar(
+      detalle([INCLUIDO(1)]),
+      { ...EMISOR, telefono: "2222-3333" },
+      { clienteCodigo: "0000066", condiciones: "CONTADO", leyendaTributaria: "SUJETO A PAGOS TRIMESTRALES" },
+    );
+    const ts = textos(spy);
+    const sig = (etiqueta: string) => ts[ts.indexOf(etiqueta) + 1];
+    expect(ts).toContain("Teléfono: 2222-3333");
+    expect(sig("CÓDIGO CLIENTE:")).toBe("0000066");
+    expect(sig("CONDICIONES:")).toBe("CONTADO");
+    expect(ts).toContain("SUJETO A PAGOS TRIMESTRALES");
+    expect(ts).toContain("Nombre comercial: Demo Logística");
+  });
+
+  it("10) multipágina: el encabezado, el cliente, el recuadro FEL y el pie se repiten en CADA página; el total y las letras solo en la última", async () => {
+    const lineas = Array.from({ length: 70 }, (_, i) => linea((i % 9) + 1, { id: i, codigo: `DEMO-${i}` }));
+    const { spy, buffer, factura } = await renderizar(detalle(lineas, { observaciones: "Obs final" }));
     const n = paginas(buffer);
-    expect(n).toBeGreaterThan(1);
+    expect(n).toBeGreaterThan(2);
+    for (const fijo of ["DOCUMENTO TRIBUTARIO ELECTRÓNICO", "FACTURA DEMO", "NOMBRE:", "CÓDIGO", "DESCRIPCIÓN", "NÚMERO DE AUTORIZACIÓN:", "CORRELATIVO INTERNO:", LEYENDA_NO_FISCAL, "DEMO - NO FISCAL"]) {
+      expect(cuenta(spy, fijo), fijo).toBe(n);
+    }
+    expect(textos(spy).filter((t) => t === "Cliente Congelado, S.A.")).toHaveLength(n);
+    // pie «Página i de n» en todas, bien numerado
     const pies = textos(spy).filter((x) => x.startsWith(`${LEYENDA_NO_FISCAL} · Página`));
-    expect(pies).toHaveLength(n);
     expect(pies.map((p) => p.match(/Página (\d+) de (\d+)/)?.slice(1).join("/"))).toEqual(Array.from({ length: n }, (_, i) => `${i + 1}/${n}`));
+    // total, letras y observaciones SOLO en la última; las demás dicen «Continúa…»
+    expect(cuenta(spy, "TOTAL Q.:")).toBe(1);
+    expect(cuenta(spy, "OBSERVACIONES:")).toBe(1);
+    expect(textos(spy).filter((t) => /^[A-ZÁÉÍÓÚ ]+ CON \d\d\/100$/.test(t))).toHaveLength(1);
+    expect(textos(spy).filter((t) => t.startsWith("Continúa en la página"))).toHaveLength(n - 1);
+    // ninguna línea se pierde ni se repite
+    const codigos = textos(spy).filter((t) => /^DEMO-\d+$/.test(t));
+    expect(new Set(codigos).size).toBe(factura.lineas.length);
+    expect(codigos).toHaveLength(factura.lineas.length);
+  });
+});
+
+describe("descripcionVisible — «SERVICIO DE TRANSPORTE - ORIGEN A DESTINO - FECHA»", () => {
+  it("usa la descripción congelada: mayúsculas, «→» como «A» y guiones normales", () => {
+    expect(descripcionVisible("Servicio de transporte – Guatemala → Xela – 27/08/2026")).toBe("SERVICIO DE TRANSPORTE - GUATEMALA A XELA - 27/08/2026");
+    expect(descripcionVisible("Servicio de transporte – — → — – 01/09/2026")).toBe("SERVICIO DE TRANSPORTE - — A — - 01/09/2026"); // «—» = desconocido, se conserva
+    expect(descripcionVisible("Servicio – Cobán → Petén – 02/09/2026")).toBe("SERVICIO - COBÁN A PETÉN - 02/09/2026");
   });
 });
 
 describe("PDF demo — snapshots y validaciones", () => {
-  it("5) el cliente sale del snapshot (nombre fiscal, NIT, dirección), no de un dato vivo", async () => {
+  it("el cliente sale del snapshot (nombre fiscal, NIT, dirección), no de un dato vivo", async () => {
     const { spy } = await renderizar(detalle([INCLUIDO(1)], { cliente: "Razón Social CONGELADA, S.A.", clienteNit: "5555555-5", clienteDireccion: "Dirección CONGELADA" }));
-    const t = todo(spy);
-    expect(t).toContain("Razón Social CONGELADA, S.A.");
-    expect(t).toContain("NIT: 5555555-5");
-    expect(t).toContain("Dirección: Dirección CONGELADA");
+    const ts = textos(spy);
+    expect(ts).toContain("Razón Social CONGELADA, S.A.");
+    expect(ts[ts.indexOf("NIT:") + 1]).toBe("5555555-5");
+    expect(ts[ts.indexOf("DIRECCIÓN:") + 1]).toBe("Dirección CONGELADA");
   });
 
-  it("6) la línea sale de su snapshot (código, fecha, descripción), y «→» se escribe «->» (PDFKit estándar no lo dibuja)", async () => {
+  it("la línea sale de su snapshot (código y descripción congelados); «→» nunca llega al PDF", async () => {
     const { spy } = await renderizar(detalle([linea(1, { codigo: "DEMO-X", fechaPlan: "2026-08-27", descripcion: "Servicio de transporte – Guatemala → Xela – 27/08/2026" })]));
-    const t = todo(spy);
-    expect(t).toContain("DEMO-X");
-    expect(t).toContain("27/08/2026");
-    // la celda se parte en renglones: se compara el texto corrido
-    expect(t.replace(/\s+/g, " ")).toContain("Servicio de transporte – Guatemala -> Xela – 27/08/2026");
-    expect(t).not.toContain("→");
+    const ts = textos(spy);
+    expect(ts).toContain("DEMO-X");
+    expect(ts).toContain("SERVICIO DE TRANSPORTE - GUATEMALA A XELA - 27/08/2026");
+    expect(todo(spy)).not.toContain("→");
   });
 
-  it("7) subtotal + IVA = total: los totales congelados se VALIDAN contra la suma de las líneas y nunca se recalculan", () => {
+  it("subtotal + IVA = total: los totales congelados se VALIDAN contra la suma de las líneas y nunca se recalculan", () => {
     const base = detalle([INCLUIDO(1), AGREGADO(2)]);
     expect(prepararFacturaDemo(base, EMISOR, "2026-10-09").ok).toBe(true);
     for (const over of [{ subtotal: 189.3 }, { iva: 22.7 }, { montoTotal: 212.01 }]) {
@@ -185,58 +309,28 @@ describe("PDF demo — snapshots y validaciones", () => {
     expect(prepararFacturaDemo(detalle([], { subtotal: 0, iva: 0 }), EMISOR, "2026-10-09")).toMatchObject({ ok: false, status: 409 });
   });
 
-  it("Borrador: «BORRADOR #id (sin número)» y la fecha mostrada es la de generación; Emitida: su número y su fecha de emisión", async () => {
+  it("Borrador: «BORRADOR #id (sin número)» y la fecha mostrada es la de generación; Emitida: su número y su fecha de emisión (DÍA / MES / AÑO)", async () => {
     const b = await renderizar(detalle([INCLUIDO(1)]));
-    expect(b.factura).toMatchObject({ numero: "BORRADOR #12 (sin número)", estado: "Borrador", fecha: "2026-10-09" });
-    expect(textos(b.spy)).toContain("Fecha (borrador):");
+    expect(b.factura).toMatchObject({ numero: "BORRADOR #12 (sin número)", estado: "Borrador", fecha: "2026-10-09", etiquetaFecha: "Fecha del borrador (sin emitir)" });
+    const tb = textos(b.spy);
+    expect(tb.slice(tb.indexOf("DÍA"), tb.indexOf("DÍA") + 6)).toEqual(["DÍA", "MES", "AÑO", "09", "10", "2026"]);
+    expect(tb[tb.indexOf("No. INTERNO:") + 1]).toBe("BORRADOR #12 (sin número)");
     vi.restoreAllMocks();
     const e = await renderizar(detalle([INCLUIDO(1)], { estadoAdmin: "Emitida", numeroFactura: "F-0001", fechaEmision: "2026-08-27" }));
-    expect(e.factura).toMatchObject({ numero: "F-0001", estado: "Emitida", fecha: "2026-08-27" });
-    const t = todo(e.spy);
-    expect(t).toContain("F-0001");
-    expect(t).toContain("27/08/2026");
-  });
-
-  it("emisor: sin NIT o dirección definidos dice «pendiente de definir» (nunca los inventa); con nombre comercial distinto lo muestra", async () => {
-    const sin = await renderizar(detalle([INCLUIDO(1)]), { razonSocial: "Empresa X", nombreComercial: null, nit: null, direccion: null, logo: null });
-    const t = todo(sin.spy);
-    expect(t).toContain("NIT: pendiente de definir");
-    expect(t).toContain("Dirección: pendiente de definir");
-    expect(t).not.toContain("Nombre comercial");
-    vi.restoreAllMocks();
-    const con = await renderizar(detalle([INCLUIDO(1)]));
-    expect(todo(con.spy)).toContain("Nombre comercial: Demo Logística");
+    expect(e.factura).toMatchObject({ numero: "F-0001", estado: "Emitida", fecha: "2026-08-27", etiquetaFecha: "Fecha de emisión" });
+    const te = textos(e.spy);
+    expect(te.slice(te.indexOf("DÍA"), te.indexOf("DÍA") + 6)).toEqual(["DÍA", "MES", "AÑO", "27", "08", "2026"]);
+    expect(te[te.indexOf("No. INTERNO:") + 1]).toBe("F-0001");
+    expect(te[te.indexOf("CORRELATIVO INTERNO:") + 1]).toBe("F-0001");
   });
 });
 
-describe("PDF demo — NO FISCAL y sin datos de certificación", () => {
-  it("9) lleva la leyenda «DEMO — DOCUMENTO NO FISCAL» y el título «FACTURA DEMO»", async () => {
-    const { spy } = await renderizar(detalle([INCLUIDO(1)]));
-    const ts = textos(spy);
-    expect(ts).toContain(LEYENDA_NO_FISCAL);
-    expect(ts).toContain("FACTURA DEMO");
-    expect(LEYENDA_NO_FISCAL).toBe("DEMO — DOCUMENTO NO FISCAL");
-    expect(todo(spy)).toContain("No tiene validez fiscal");
-  });
-
-  it("10) NO contiene ningún dato fiscal simulado: solo el recuadro «PENDIENTE FEL»", async () => {
-    for (const d of [detalle([INCLUIDO(1), AGREGADO(2)]), detalle([INCLUIDO(1)], { estadoAdmin: "Emitida", numeroFactura: "F-0001", fechaEmision: "2026-08-27" })]) {
-      vi.restoreAllMocks();
-      const { spy, buffer } = await renderizar(d);
-      const t = todo(spy);
-      expect(t).toContain(`Certificación electrónica: ${TEXTO_PENDIENTE_FEL}`);
-      const sinPermitido = t.split(TEXTO_PENDIENTE_FEL).join("");
-      expect(sinPermitido).not.toMatch(/uuid|infile|\bsat\b|autoriza|\bserie\b|\bxml\b|\bqr\b|certificador|\bdte\b|\bfel\b/i);
-      expect(sinPermitido).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-      // nada de imágenes embebidas (un QR sería una imagen): el PDF no contiene objetos de imagen
-      expect(buffer.toString("latin1")).not.toMatch(/\/Subtype\s*\/Image/);
-    }
-  });
-
-  it("el código fuente del módulo y de la ruta no importa ni llama a ningún proveedor fiscal, red ni credenciales", () => {
+describe("PDF demo — código fuente sin FEL, red ni credenciales", () => {
+  it("el módulo y la ruta no importan ni llaman a ningún proveedor fiscal, red ni credenciales", () => {
     const raiz = process.cwd();
     const fuentes = [
       "src/lib/facturacion/factura-demo-pdf.ts",
+      "src/lib/facturacion/numero-letras.ts",
       "src/app/api/empresas/[slug]/facturacion/facturas/[id]/pdf-demo/route.ts",
     ].map((r) => readFileSync(join(raiz, r), "utf8"));
     // (con `fs` mockeado en este archivo, se lee con el real)
@@ -245,7 +339,7 @@ describe("PDF demo — NO FISCAL y sin datos de certificación", () => {
       const imports = [...codigo.matchAll(/(?:import|from)\s+["']([^"']+)["']/g)].map((m) => m[1]);
       for (const spec of imports) expect(spec, spec).not.toMatch(/infile|(^|[/_-])fel([/_.-]|$)|certific|(^|[/_-])sat([/_.-]|$)|dte/i);
       expect(codigo).not.toMatch(/https?:\/\/|\bfetch\(|axios|process\.env|XMLHttpRequest|WebSocket/);
-      expect(codigo).not.toMatch(/infile|uuid|\bsat\b|\bxml\b|certificador/i);
+      expect(codigo).not.toMatch(/infile|uuid|\bsat\b|\bxml\b/i);
       // la única mención permitida a «FEL» es el texto reservado
       const sinReservado = codigo.split("PENDIENTE FEL").join("");
       expect(sinReservado).not.toMatch(/\bfel\b/i);
@@ -257,7 +351,7 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
   const empresa7 = { id: 7, nombre: "Empresa 7", logoUrl: null };
   const empresa8 = { id: 8, nombre: "Empresa 8", logoUrl: null };
 
-  it("8) multiempresa: la factura se busca SIEMPRE con la empresa del guard; la de otra empresa es un 404 y no se genera nada", async () => {
+  it("multiempresa: la factura se busca SIEMPRE con la empresa del guard; la de otra empresa es un 404 y no se genera nada", async () => {
     const propia = detalle([INCLUIDO(1)]);
     vi.mocked(obtenerFactura).mockImplementation(async (empresaId: number) => (empresaId === 7 ? propia : null));
     const ok = await generarPdfFacturaDemo(empresa7, 12);
@@ -268,6 +362,27 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
     expect(vi.mocked(obtenerPerfilEmpresa).mock.calls.map((c) => c[0])).toEqual([7, 8]); // el emisor también es el de la empresa del guard
   });
 
+  it("el código de cliente se lee filtrando por la empresa del guard; de una factura ajena (404) no se consulta nada", async () => {
+    vi.mocked(obtenerFactura).mockImplementation(async (empresaId: number) => (empresaId === 7 ? detalle([INCLUIDO(1)]) : null));
+    await generarPdfFacturaDemo(empresa7, 12);
+    const [sql, params] = vi.mocked(query).mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql.replace(/\s+/g, " ")).toBe("SELECT codigo FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1");
+    expect(params).toEqual([20, 7]); // cliente de la factura, empresa del guard
+    vi.mocked(query).mockClear();
+    await generarPdfFacturaDemo(empresa8, 12);
+    expect(vi.mocked(query)).not.toHaveBeenCalled();
+  });
+
+  it("si el cliente no tiene código (o es de otra empresa y no aparece), el PDF dice «Pendiente de definir»", async () => {
+    vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)]));
+    vi.mocked(query).mockResolvedValue([] as never);
+    const spy = espiarTexto();
+    const r = await generarPdfFacturaDemo(empresa7, 12);
+    expect(r.ok).toBe(true);
+    const ts = textos(spy);
+    expect(ts[ts.indexOf("CÓDIGO CLIENTE:") + 1]).toBe("Pendiente de definir");
+  });
+
   it("devuelve un PDF real con nombre de archivo y usa los datos del emisor del perfil de la empresa", async () => {
     vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1), AGREGADO(2)]));
     const spy = espiarTexto();
@@ -276,9 +391,11 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
     if (!r.ok) return;
     expect(r.nombreArchivo).toBe("factura-demo-12.pdf");
     expect(r.buffer.subarray(0, 5).toString()).toBe("%PDF-");
-    const t = todo(spy);
-    expect(t).toContain("Empresa Demo, S.A.");
-    expect(t).toContain("NIT: 9999999-9");
+    const ts = textos(spy);
+    expect(ts).toContain("Empresa Demo, S.A.");
+    expect(ts).toContain("NIT: 9999999-9");
+    expect(ts).toContain("Teléfono: pendiente de definir"); // la plataforma aún no tiene teléfono del emisor
+    expect(ts[ts.indexOf("CÓDIGO CLIENTE:") + 1]).toBe("0000066");
   });
 
   it("sin perfil de Facturación usa el nombre de la empresa como razón social y marca NIT/dirección como pendientes", async () => {
@@ -286,9 +403,10 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
     vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)]));
     const spy = espiarTexto();
     await generarPdfFacturaDemo(empresa7, 12);
-    const t = todo(spy);
-    expect(t).toContain("Empresa 7");
-    expect(t).toContain("NIT: pendiente de definir");
+    const ts = textos(spy);
+    expect(ts).toContain("Empresa 7");
+    expect(ts).toContain("NIT: pendiente de definir");
+    expect(ts).toContain("Dirección: pendiente de definir");
   });
 
   it("logo: se dibuja si existe y se puede leer; si no, el PDF sale igual solo con texto", async () => {
@@ -301,11 +419,13 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
     expect(logoIlegible.ok).toBe(true); // imagen inválida: respaldo de texto, sin romper
   });
 
-  it("solo lee: nunca modifica nada (solo se invocan funciones de lectura)", async () => {
+  it("solo lee: nunca modifica nada (solo se invocan funciones de lectura y un SELECT)", async () => {
     vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)]));
     await generarPdfFacturaDemo(empresa7, 12);
     expect(vi.mocked(obtenerFactura)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(obtenerPerfilEmpresa)).toHaveBeenCalledTimes(1);
+    const sqls = vi.mocked(query).mock.calls.map((c) => String(c[0]).trim().toUpperCase());
+    expect(sqls.every((s) => s.startsWith("SELECT"))).toBe(true);
   });
 });
 
@@ -322,9 +442,9 @@ describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos s
         linea(2, { fechaPlan: "2026-09-02", codigo: "DEMO-B", precioIncluyeIva: false, base: 100, iva: 12, total: 112, descripcion: "Servicio de transporte – Bodega Central Guatemala → Cobán – 02/09/2026" }),
         linea(3, { fechaPlan: "2026-09-03", codigo: "DEMO-C", montoAsignado: 250, base: 223.21, iva: 26.79, total: 250, descripcion: "Servicio de transporte – Bodega Central Guatemala → Escuintla – 03/09/2026" }),
       ],
-      { cliente: "Cliente Demo Uno, S.A.", clienteNit: "1234567-8", clienteDireccion: "Zona 1, Ciudad de Guatemala" },
+      { cliente: "Cliente Demo Uno, S.A.", clienteNit: "1234567-8", clienteDireccion: "Zona 1, Ciudad de Guatemala", observaciones: "Entregas de prueba (datos sintéticos)" },
     );
-    const m = prepararFacturaDemo(d, { ...EMISOR, logo }, "2026-10-09");
+    const m = prepararFacturaDemo(d, { ...EMISOR, logo }, "2026-10-09", COMPLETOS);
     if (!m.ok) throw new Error(m.error);
     const buf = await renderizarFacturaDemo(m.factura);
     const salida = String(process.env.FACT_DEMO_PDF_SALIDA);
@@ -334,10 +454,10 @@ describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos s
   });
 
   it.skipIf(!process.env.FACT_DEMO_PDF_SALIDA_LARGO)("escribe también una versión LARGA (varias páginas) para revisar los saltos de página", async () => {
-    const lineas = Array.from({ length: 34 }, (_, i) => (i % 3 === 1
+    const lineas = Array.from({ length: 70 }, (_, i) => (i % 3 === 1
       ? linea(i % 9 + 1, { id: i, codigo: `DEMO-${100 + i}`, precioIncluyeIva: false, base: 100, iva: 12, total: 112 })
       : linea(i % 9 + 1, { id: i, codigo: `DEMO-${100 + i}` })));
-    const m = prepararFacturaDemo(detalle(lineas, { estadoAdmin: "Emitida", numeroFactura: "F-DEV-0001", fechaEmision: "2026-10-09" }), EMISOR, "2026-10-09");
+    const m = prepararFacturaDemo(detalle(lineas, { estadoAdmin: "Emitida", numeroFactura: "F-DEV-0001", fechaEmision: "2026-10-09", observaciones: "Factura larga de prueba" }), EMISOR, "2026-10-09", COMPLETOS);
     if (!m.ok) throw new Error(m.error);
     const salida = String(process.env.FACT_DEMO_PDF_SALIDA_LARGO);
     mkdirSync(dirname(salida), { recursive: true });

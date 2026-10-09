@@ -1,40 +1,61 @@
 import PDFDocument from "pdfkit";
+import type { RowDataPacket } from "mysql2";
 import { existsSync, readFileSync } from "fs";
+import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
-import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
-import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
+import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { obtenerFactura } from "@/lib/facturacion/facturas";
 import { obtenerPerfilEmpresa } from "@/lib/facturacion/repository";
-import { etiquetaTratamientoIva, formatearMonto, resumenTratamientoIva } from "@/lib/facturacion/ui-logica";
+import { totalEnLetras } from "@/lib/facturacion/numero-letras";
+import { formatearMonto } from "@/lib/facturacion/ui-logica";
 
 /**
  * FACTURA DEMO — representación en PDF, NO FISCAL, de una factura de Facturación (FACT-1/FACT-2), para que Contabilidad
  * valide el formato visual ANTES de integrar la factura electrónica.
  *
- * Qué NO es: no es un documento fiscal y no contiene ningún dato de certificación. El único dato reservado para eso es
- * un recuadro que dice «PENDIENTE FEL»; nada de él se simula (sin identificadores, series, números, autorizaciones,
- * códigos QR, certificador ni fechas de certificación).
+ * FORMATO: sigue la factura que la empresa usa hoy (referencia «FRAIJANES 4855»): emisor a la izquierda, bloque tributario
+ * y fecha DÍA/MES/AÑO a la derecha, cliente en bloque, detalle CÓDIGO / DESCRIPCIÓN / TOTAL, total en letras, leyenda,
+ * observaciones, TOTAL y datos de certificación al pie. NO se muestran Base ni IVA por línea: se guardan y VALIDAN
+ * internamente (ver abajo), pero la representación visual es la del documento real.
+ *
+ * Qué NO es: no es un documento fiscal y no contiene ningún dato de certificación. Los espacios del formato real que
+ * corresponden a la certificación (serie, número, autorización, certificador, NIT del certificador y el recuadro del
+ * código QR) dicen «PENDIENTE FEL»; nada de ello se simula.
  *
  * Datos: SOLO los ya congelados de `fact_facturas` / `fact_factura_viajes`, leídos con `obtenerFactura` (que ya filtra por
- * empresa y prefiere los snapshots a los datos vivos). Nunca se recalcula un importe: cada línea se imprime con el
- * tratamiento de IVA (incluido / agregado), la base, el IVA y el total que quedaron guardados, y los totales del
- * documento se VALIDAN contra la suma de sus líneas (si no coinciden, no se genera el PDF). Una factura anterior al
- * desglose por línea (sin snapshot fiscal) tampoco se genera: habría que inventar importes.
+ * empresa y prefiere los snapshots a los datos vivos). Nunca se recalcula un importe: cada línea conserva el tratamiento
+ * de IVA, la base, el IVA y el total que quedaron guardados, y los totales del documento se VALIDAN contra la suma de sus
+ * líneas (si no coinciden, no se genera el PDF). Una factura anterior al desglose por línea (sin snapshot fiscal)
+ * tampoco se genera: habría que inventar importes.
  *
- * PDF: se reutiliza PDFKit (mismo patrón que Gastos/Fondos/Boleta de vacaciones), `dibujarTablaEnDoc` para el detalle,
- * el logo de la empresa por `logo_url` (con el mismo respaldo de solo texto) y los datos del emisor del perfil de
- * Facturación de la empresa (`fact_empresa_perfil`).
+ * Datos que el formato real tiene y la plataforma AÚN NO modela (no se inventan; salen como «Pendiente de definir»):
+ * teléfono del emisor, condiciones de pago de la factura y leyenda tributaria. El código de cliente es el único dato no
+ * congelado que se lee (`clientes.codigo`, filtrado por empresa); no es un dato fiscal del snapshot.
+ *
+ * PDF: se reutiliza PDFKit (mismo patrón que Gastos/Fondos/Boleta de vacaciones), el logo de la empresa por `logo_url`
+ * (con el mismo respaldo de solo texto) y los datos del emisor del perfil de Facturación de la empresa
+ * (`fact_empresa_perfil`).
  */
 
 export const LEYENDA_NO_FISCAL = "DEMO — DOCUMENTO NO FISCAL";
 export const TEXTO_PENDIENTE_FEL = "PENDIENTE FEL";
+export const TEXTO_PENDIENTE_DEFINIR = "Pendiente de definir";
 
 export type EmisorDemo = {
   razonSocial: string;
   nombreComercial: string | null;
   nit: string | null;
   direccion: string | null;
+  /** La plataforma todavía no guarda el teléfono del emisor: hoy llega siempre `null`. */
+  telefono: string | null;
   logo: Buffer | null;
+};
+
+/** Datos del formato real que no están en el snapshot de la factura. `null` = pendiente de definir. */
+export type ComplementosDemo = {
+  clienteCodigo: string | null;
+  condiciones: string | null;
+  leyendaTributaria: string | null;
 };
 
 export type LineaDemo = {
@@ -50,21 +71,23 @@ export type LineaDemo = {
 
 export type FacturaDemo = {
   emisor: EmisorDemo;
-  /** «BORRADOR #12 (sin número)» o el número de la factura Emitida. */
+  /** «BORRADOR #12 (sin número)» o el número de la factura Emitida; es el «No. interno» y el correlativo interno. */
   numero: string;
   estado: "Borrador" | "Emitida";
+  /** «Fecha de emisión» / «Fecha del borrador (sin emitir)». */
   etiquetaFecha: string;
   /** YYYY-MM-DD */
   fecha: string;
   moneda: string;
-  cliente: { nombre: string; nit: string | null; direccion: string | null };
+  cliente: { nombre: string; nit: string | null; direccion: string | null; codigo: string | null };
+  condiciones: string | null;
+  observaciones: string | null;
+  leyendaTributaria: string | null;
   lineas: LineaDemo[];
   porcentajeIva: number;
   subtotal: number;
   iva: number;
   total: number;
-  /** «IVA incluido en la tarifa» / «IVA agregado a la tarifa» / «Mixto: varía por viaje». */
-  resumenIva: string;
 };
 
 export type ResultadoFacturaDemo =
@@ -77,6 +100,8 @@ const MENSAJE_SIN_SNAPSHOT =
 
 type DetalleFactura = NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>;
 
+const SIN_COMPLEMENTOS: ComplementosDemo = { clienteCodigo: null, condiciones: null, leyendaTributaria: null };
+
 /**
  * PURA (sin DB). Valida y arma el modelo del PDF a partir de lo congelado. `fechaGeneracion` (YYYY-MM-DD) solo se usa como
  * fecha mostrada para un Borrador, que todavía no tiene fecha de emisión.
@@ -85,6 +110,7 @@ export function prepararFacturaDemo(
   detalle: DetalleFactura | null,
   emisor: EmisorDemo,
   fechaGeneracion: string,
+  complementos: ComplementosDemo = SIN_COMPLEMENTOS,
 ): ResultadoFacturaDemo {
   if (!detalle) return { ok: false, status: 404, error: "Factura no encontrada." };
   const { factura: f, viajes } = detalle;
@@ -129,32 +155,75 @@ export function prepararFacturaDemo(
       emisor,
       numero: emitida && f.numeroFactura ? f.numeroFactura : `BORRADOR #${f.id} (sin número)`,
       estado: emitida ? "Emitida" : "Borrador",
-      etiquetaFecha: emitida && f.fechaEmision ? "Fecha de emisión" : "Fecha (borrador)",
+      etiquetaFecha: emitida && f.fechaEmision ? "Fecha de emisión" : "Fecha del borrador (sin emitir)",
       fecha: emitida && f.fechaEmision ? f.fechaEmision : fechaGeneracion,
       moneda: f.moneda,
-      cliente: { nombre: f.cliente, nit: f.clienteNit, direccion: f.clienteDireccion },
+      cliente: { nombre: f.cliente, nit: f.clienteNit, direccion: f.clienteDireccion, codigo: complementos.clienteCodigo },
+      condiciones: complementos.condiciones,
+      observaciones: f.observaciones?.trim() ? f.observaciones.trim() : null,
+      leyendaTributaria: complementos.leyendaTributaria,
       lineas,
       porcentajeIva: f.porcentajeIva,
       subtotal: f.subtotal,
       iva: f.iva,
       total: f.montoTotal,
-      resumenIva: resumenTratamientoIva(lineas.map((l) => l.precioIncluyeIva)),
     },
   };
 }
 
-/** PDFKit con las fuentes estándar no dibuja «→»; en el PDF se escribe «->». El resto del texto (WinAnsi) se conserva. */
+/**
+ * PDFKit con las fuentes estándar solo dibuja WinAnsi. La descripción congelada («Servicio de transporte – ORIGEN →
+ * DESTINO – 27/08/2026») se imprime como en la factura actual: «SERVICIO DE TRANSPORTE - ORIGEN A DESTINO - 27/08/2026».
+ * Solo el guion «–» (U+2013) es separador: el «—» (U+2014) marca un origen o destino desconocido y se conserva.
+ */
+export const descripcionVisible = (s: string): string =>
+  s.normalize("NFC").replace(/\s*→\s*/g, " A ").replace(/\s+–\s+/g, " - ").replace(/\s+/g, " ").trim().toLocaleUpperCase("es");
+
+/** Texto libre (nombres, direcciones, observaciones): solo se normaliza; «→» no existe en WinAnsi. */
 const textoPdf = (s: string): string => s.normalize("NFC").replace(/\s*→\s*/g, " -> ");
 
-const COLOR_TEXTO = "#0f172a";
-const COLOR_SUAVE = "#475569";
+const NEGRO = "#111111";
+const GRIS_TEXTO = "#4b5563";
+const GRIS_BANDA = "#d9d9d9";
+const LINEA = 0.7;
+
+// ── Geometría (puntos; carta 612 × 792). Todas las páginas comparten el mismo marco. ──────────────────────────────────
+const M = 28;
+const ANCHO = 556;
+const DER = M + ANCHO;
+const Y_FRANJA = 10;
+const Y_ENC = 32;
+const X_DTE = 344;
+const W_DTE = DER - X_DTE;
+const Y_CUERPO = 182;
+const Y_CLIENTE_FIN = Y_CUERPO + 84;
+const Y_TABLA_ENC = Y_CLIENTE_FIN;
+const H_TABLA_ENC = 17;
+const Y_DETALLE = Y_TABLA_ENC + H_TABLA_ENC;
+const Y_FIN_CUERPO = 664;
+const H_BLOQUE_INF = 72;
+const H_LETRAS = 22;
+const Y_BLOQUE_INF = Y_FIN_CUERPO - H_BLOQUE_INF;
+const Y_LETRAS = Y_BLOQUE_INF - H_LETRAS;
+const Y_FIN_DETALLE = Y_LETRAS;
+const Y_QR = 672;
+const H_QR = 40;
+const Y_PIE_FEL = 720;
+const Y_PIE_DEMO = 772;
+const X_COD = M + 8;
+const W_COD = 112;
+const X_DESC = M + 128;
+const W_DESC = 330;
+const X_TOT = X_DESC + W_DESC + 8;
+const W_TOT = DER - 8 - X_TOT;
 
 export async function renderizarFacturaDemo(f: FacturaDemo): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
       layout: "portrait",
-      margins: { top: 40, bottom: 52, left: 40, right: 40 },
+      // Sin márgenes: todo se coloca con coordenadas explícitas (un margen inferior haría saltar de página el pie).
+      margins: { top: 0, bottom: 0, left: 0, right: 0 },
       bufferPages: true,
       info: { Title: `${LEYENDA_NO_FISCAL} — ${f.numero}`, Subject: "Representación de prueba. Sin validez fiscal." },
     });
@@ -163,138 +232,244 @@ export async function renderizarFacturaDemo(f: FacturaDemo): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const marginL = doc.page.margins.left;
-    const pageWidth = doc.page.width - marginL - doc.page.margins.right;
-    const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
     const moneda = (v: number) => formatearMonto(v, f.moneda);
-
-    // ── Encabezado: logo + emisor (izquierda) · título y datos del documento (derecha) ──────────────────────────────
-    const yTop = doc.y;
-    let xEmisor = marginL;
-    if (f.emisor.logo) {
-      try {
-        doc.image(f.emisor.logo, marginL, yTop, { fit: [100, 55] });
-        xEmisor = marginL + 112;
-      } catch {
-        xEmisor = marginL; // logo ilegible: encabezado solo de texto
-      }
-    }
-    const anchoEmisor = 330 - xEmisor;
-    let yE = yTop;
-    doc.font("Helvetica-Bold").fontSize(12).fillColor(COLOR_TEXTO).text(textoPdf(f.emisor.razonSocial), xEmisor, yE, { width: anchoEmisor });
-    yE = doc.y;
-    doc.font("Helvetica").fontSize(8.5).fillColor(COLOR_SUAVE);
-    if (f.emisor.nombreComercial && f.emisor.nombreComercial !== f.emisor.razonSocial) {
-      doc.text(textoPdf(`Nombre comercial: ${f.emisor.nombreComercial}`), xEmisor, yE, { width: anchoEmisor });
-      yE = doc.y;
-    }
-    doc.text(`NIT: ${f.emisor.nit ?? "pendiente de definir"}`, xEmisor, yE, { width: anchoEmisor });
-    yE = doc.y;
-    doc.text(textoPdf(`Dirección: ${f.emisor.direccion ?? "pendiente de definir"}`), xEmisor, yE, { width: anchoEmisor });
-    yE = doc.y;
-
-    const xDoc = 345;
-    const anchoDoc = marginL + pageWidth - xDoc;
-    doc.font("Helvetica-Bold").fontSize(19).fillColor(COLOR_TEXTO).text("FACTURA DEMO", xDoc, yTop, { width: anchoDoc, align: "right" });
-    let yD = doc.y + 2;
-    const anchoEtiqueta = 92;
-    const campoDoc = (etiqueta: string, valor: string) => {
-      // Dos textos independientes (etiqueta a la izquierda, valor a la derecha): `continued` con alineación derecha los superpone.
-      doc.font("Helvetica-Bold").fontSize(8.5).fillColor(COLOR_SUAVE).text(`${etiqueta}:`, xDoc, yD, { width: anchoEtiqueta, lineBreak: false });
-      doc.font("Helvetica").fillColor(COLOR_TEXTO).text(textoPdf(valor), xDoc + anchoEtiqueta, yD, { width: anchoDoc - anchoEtiqueta, align: "right", lineBreak: false });
-      yD += 13;
+    const serif = (negrita = false, cursiva = false) => doc.font(negrita ? "Times-Bold" : cursiva ? "Times-Italic" : "Times-Roman");
+    const trazo = () => doc.lineWidth(LINEA).strokeColor(NEGRO);
+    const texto = (s: string, x: number, y: number, o: PDFKit.Mixins.TextOptions = {}) =>
+      doc.text(textoPdf(s), x, y, { lineBreak: false, ...o });
+    const linea = (x1: number, y1: number, x2: number, y2: number) => { trazo().moveTo(x1, y1).lineTo(x2, y2).stroke(); };
+    const banda = (x: number, y: number, w: number, h: number) => {
+      doc.save();
+      doc.rect(x, y, w, h).fillAndStroke(GRIS_BANDA, NEGRO);
+      doc.restore();
     };
-    campoDoc("N.º", f.numero);
-    campoDoc(f.etiquetaFecha, formatearFechaVisible(f.fecha));
-    campoDoc("Moneda", f.moneda === "GTQ" ? "GTQ (Quetzales)" : f.moneda);
-    campoDoc("Estado interno", f.estado);
 
-    // ── Leyenda bien visible ────────────────────────────────────────────────────────────────────────────────────────
-    const yBanner = Math.max(yE, yD, yTop + 58) + 8;
-    doc.save();
-    doc.rect(marginL, yBanner, pageWidth, 24).fillAndStroke("#fef3c7", "#b45309");
-    doc.restore();
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#92400e").text(LEYENDA_NO_FISCAL, marginL, yBanner + 6.5, { width: pageWidth, align: "center", lineBreak: false });
-
-    // ── Cliente (datos congelados al crear el borrador) ─────────────────────────────────────────────────────────────
-    const yCliente = yBanner + 36;
-    doc.font("Helvetica-Bold").fontSize(8).fillColor(COLOR_SUAVE).text("CLIENTE", marginL, yCliente, { width: pageWidth });
-    doc.font("Helvetica-Bold").fontSize(10.5).fillColor(COLOR_TEXTO).text(textoPdf(f.cliente.nombre), marginL, doc.y + 1, { width: pageWidth });
-    doc.font("Helvetica").fontSize(9).fillColor(COLOR_TEXTO);
-    doc.text(`NIT: ${f.cliente.nit ?? "—"}`, marginL, doc.y + 1, { width: pageWidth });
-    doc.text(textoPdf(`Dirección: ${f.cliente.direccion ?? "—"}`), marginL, doc.y + 1, { width: pageWidth });
-    doc.moveDown(0.8);
-    doc.x = marginL;
-
-    // ── Detalle: una fila por viaje, con SU tratamiento de IVA ─────────────────────────────────────────────────────
-    const filas = f.lineas.map((l) => [
-      formatearFechaVisible(l.fecha),
-      l.codigo,
-      textoPdf(`${l.descripcion} · Tarifa ${moneda(l.tarifa)} · ${etiquetaTratamientoIva(l.precioIncluyeIva)}`),
-      moneda(l.base),
-      moneda(l.iva),
-      moneda(l.total),
-    ]);
-    dibujarTablaEnDoc(doc, {
-      headers: ["Fecha", "Viaje", "Descripción", "Base", "IVA", "Total"],
-      rows: filas,
-      align: { 3: "right", 4: "right", 5: "right" },
-      weight: { 0: 10, 1: 11, 2: 38, 3: 12, 4: 11, 5: 12 },
-      preserveSingleLine: [0, 1, 3, 4, 5],
-      maxLines: 4,
+    // ── Paginación del detalle (se mide antes de dibujar para saber cuál es la última página) ───────────────────────
+    const filas = f.lineas.map((l) => ({
+      codigo: l.codigo,
+      descripcion: descripcionVisible(l.descripcion),
+      total: moneda(l.total),
+    }));
+    serif().fontSize(8.5);
+    const MAX_LINEAS_FILA = 4;
+    const altoLinea = doc.currentLineHeight(true);
+    const medidas = filas.map((fila) => {
+      const h = doc.heightOfString(textoPdf(fila.descripcion), { width: W_DESC });
+      const lineas = Math.min(MAX_LINEAS_FILA, Math.max(1, Math.round(h / altoLinea)));
+      return lineas * altoLinea + 5;
+    });
+    const capacidad = Y_FIN_DETALLE - Y_DETALLE - 6;
+    const paginas: number[][] = [[]];
+    let usado = 0;
+    medidas.forEach((h, i) => {
+      if (usado + h > capacidad && paginas[paginas.length - 1].length) {
+        paginas.push([]);
+        usado = 0;
+      }
+      paginas[paginas.length - 1].push(i);
+      usado += h;
     });
 
-    // ── Totales (los congelados; ya validados contra la suma de las líneas) ────────────────────────────────────────
-    if (doc.y + 120 > pageBottom()) doc.addPage();
-    doc.moveDown(1);
-    const xTot = marginL + pageWidth - 230;
-    let yT = doc.y;
-    const filaTotal = (etiqueta: string, valor: string, fuerte = false) => {
-      doc.font(fuerte ? "Helvetica-Bold" : "Helvetica").fontSize(fuerte ? 11 : 9.5).fillColor(COLOR_TEXTO);
-      doc.text(etiqueta, xTot, yT, { width: 120, lineBreak: false });
-      doc.text(valor, xTot + 120, yT, { width: 110, align: "right", lineBreak: false });
-      yT += fuerte ? 18 : 15;
+    const totalPaginas = paginas.length;
+    const [anio, mes, dia] = f.fecha.split("-");
+
+    const dibujarPagina = (indice: number) => {
+      const ultima = indice === totalPaginas - 1;
+
+      // Franja NO FISCAL (arriba, fuera del marco del documento)
+      doc.save();
+      doc.rect(M, Y_FRANJA, ANCHO, 15).fillAndStroke("#fef3c7", "#b45309");
+      doc.restore();
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#92400e");
+      texto(LEYENDA_NO_FISCAL, M, Y_FRANJA + 3.5, { width: ANCHO, align: "center" });
+
+      // ── Encabezado izquierdo: razón social, logo, dirección, teléfono, NIT ────────────────────────────────────────
+      const wIzq = 304;
+      serif(true).fontSize(11.5).fillColor(NEGRO);
+      doc.text(textoPdf(f.emisor.razonSocial), M, Y_ENC + 2, { width: wIzq, align: "center", height: 28, ellipsis: true });
+      let xDatos = M;
+      let wDatos = wIzq;
+      if (f.emisor.logo) {
+        try {
+          doc.image(f.emisor.logo, M + 8, Y_ENC + 36, { fit: [118, 76] });
+          xDatos = M + 132;
+          wDatos = wIzq - 132;
+        } catch {
+          xDatos = M; // logo ilegible: encabezado solo de texto
+          wDatos = wIzq;
+        }
+      }
+      serif().fontSize(8.5).fillColor(NEGRO);
+      let yD = Y_ENC + 40;
+      const lineaDato = (s: string) => {
+        doc.text(textoPdf(s), xDatos, yD, { width: wDatos, align: "center" });
+        yD = doc.y + 1;
+      };
+      if (f.emisor.nombreComercial && f.emisor.nombreComercial !== f.emisor.razonSocial) lineaDato(`Nombre comercial: ${f.emisor.nombreComercial}`);
+      lineaDato(f.emisor.direccion ?? `Dirección: ${TEXTO_PENDIENTE_DEFINIR.toLowerCase()}`);
+      lineaDato(`Teléfono: ${f.emisor.telefono ?? TEXTO_PENDIENTE_DEFINIR.toLowerCase()}`);
+      lineaDato(`NIT: ${f.emisor.nit ?? TEXTO_PENDIENTE_DEFINIR.toLowerCase()}`);
+
+      // ── Encabezado derecho: documento tributario, serie, número, autorización (todo PENDIENTE FEL) ─────────────────
+      const hDte = 16 + 15 + 16 + 16 + 16 + 20;
+      let y = Y_ENC;
+      banda(X_DTE, y + 16, W_DTE, 15);
+      banda(X_DTE, y + 16 + 15 + 16 + 16, W_DTE, 16);
+      trazo();
+      doc.roundedRect(X_DTE, y, W_DTE, hDte, 6).stroke();
+      serif().fontSize(8.5).fillColor(NEGRO);
+      texto("DOCUMENTO TRIBUTARIO ELECTRÓNICO", X_DTE, y + 4, { width: W_DTE, align: "center" });
+      y += 16;
+      serif(true).fontSize(9);
+      texto("FACTURA DEMO", X_DTE, y + 3.5, { width: W_DTE, align: "center" });
+      y += 15;
+      serif().fontSize(8.5);
+      texto("SERIE:", X_DTE + 24, y + 4.5);
+      serif(true);
+      texto(TEXTO_PENDIENTE_FEL, X_DTE + 80, y + 4.5);
+      y += 16;
+      serif().fontSize(8.5);
+      texto("NO.:", X_DTE + 38, y + 4.5);
+      serif(true);
+      texto(TEXTO_PENDIENTE_FEL, X_DTE + 80, y + 4.5);
+      y += 16;
+      serif(true).fontSize(10);
+      texto("NÚMERO DE AUTORIZACIÓN", X_DTE, y + 3, { width: W_DTE, align: "center" });
+      y += 16;
+      texto(TEXTO_PENDIENTE_FEL, X_DTE, y + 5.5, { width: W_DTE, align: "center" });
+
+      // ── Fecha DÍA / MES / AÑO ─────────────────────────────────────────────────────────────────────────────────────
+      const yF = Y_ENC + hDte + 6;
+      const wCol = W_DTE / 3;
+      banda(X_DTE, yF, W_DTE, 14);
+      trazo();
+      doc.rect(X_DTE, yF + 14, W_DTE, 17).stroke();
+      linea(X_DTE + wCol, yF, X_DTE + wCol, yF + 31);
+      linea(X_DTE + 2 * wCol, yF, X_DTE + 2 * wCol, yF + 31);
+      serif().fontSize(8.5).fillColor(NEGRO);
+      ["DÍA", "MES", "AÑO"].forEach((t, i) => texto(t, X_DTE + i * wCol, yF + 3.5, { width: wCol, align: "center" }));
+      [dia, mes, anio].forEach((t, i) => texto(t ?? "", X_DTE + i * wCol, yF + 14 + 4.5, { width: wCol, align: "center" }));
+      serif(false, true).fontSize(7).fillColor(GRIS_TEXTO);
+      texto(f.etiquetaFecha, X_DTE, yF + 33, { width: W_DTE, align: "right" });
+
+      // ── Cuerpo: un solo marco redondeado (cliente + detalle + totales), como la factura actual ───────────────────────
+      trazo();
+      doc.roundedRect(M, Y_CUERPO, ANCHO, Y_FIN_CUERPO - Y_CUERPO, 7).stroke();
+      const hNombre = 34;
+      const hDireccion = 26;
+      const hConds = Y_CLIENTE_FIN - Y_CUERPO - hNombre - hDireccion;
+      const yDir = Y_CUERPO + hNombre;
+      const yConds = yDir + hDireccion;
+      linea(M, yDir, DER, yDir);
+      linea(M, yConds, DER, yConds);
+      const xNit = DER - 118;
+      linea(xNit, yDir, xNit, yConds);
+      const xInterno = M + 196;
+      const xCodigo = M + 388;
+      linea(xInterno, yConds, xInterno, Y_CLIENTE_FIN);
+      linea(xCodigo, yConds, xCodigo, Y_CLIENTE_FIN);
+
+      const campo = (etiqueta: string, valor: string, x: number, yTop: number, w: number, h: number, tam = 9) => {
+        serif().fontSize(8).fillColor(NEGRO);
+        const wEt = doc.widthOfString(etiqueta);
+        doc.text(etiqueta, x + 6, yTop + 6, { lineBreak: false });
+        serif().fontSize(tam).fillColor(NEGRO);
+        doc.text(textoPdf(valor), x + 6 + wEt + 4, yTop + 5.5, { width: w - wEt - 16, height: h - 8, ellipsis: true });
+      };
+      campo("NOMBRE:", f.cliente.nombre, M, Y_CUERPO, ANCHO, hNombre, 9.5);
+      campo("DIRECCIÓN:", f.cliente.direccion ?? "—", M, yDir, xNit - M, hDireccion, 8.5);
+      campo("NIT:", f.cliente.nit ?? "—", xNit, yDir, DER - xNit, hDireccion);
+      campo("CONDICIONES:", f.condiciones ?? TEXTO_PENDIENTE_DEFINIR, M, yConds, xInterno - M, hConds, 8.5);
+      campo("No. INTERNO:", f.numero, xInterno, yConds, xCodigo - xInterno, hConds, 8);
+      campo("CÓDIGO CLIENTE:", f.cliente.codigo ?? TEXTO_PENDIENTE_DEFINIR, xCodigo, yConds, DER - xCodigo, hConds, 8.5);
+
+      // ── Encabezado de la tabla: CÓDIGO | DESCRIPCIÓN | TOTAL ──────────────────────────────────────────────────────
+      banda(M, Y_TABLA_ENC, ANCHO, H_TABLA_ENC);
+      serif().fontSize(8.5).fillColor(NEGRO);
+      texto("CÓDIGO", X_COD, Y_TABLA_ENC + 4.5);
+      texto("DESCRIPCIÓN", X_DESC, Y_TABLA_ENC + 4.5, { width: W_DESC, align: "center" });
+      texto("TOTAL", X_TOT, Y_TABLA_ENC + 4.5, { width: W_TOT, align: "right" });
+
+      // ── Detalle: una fila por viaje (código, descripción congelada, total de la línea) ──────────────────────────────
+      let yFila = Y_DETALLE + 5;
+      for (const i of paginas[indice]) {
+        const fila = filas[i];
+        const hFila = medidas[i];
+        serif().fontSize(8.5).fillColor(NEGRO);
+        doc.text(textoPdf(fila.codigo), X_COD, yFila, { width: W_COD, lineBreak: false, ellipsis: true });
+        doc.text(textoPdf(fila.descripcion), X_DESC, yFila, { width: W_DESC, height: hFila - 5, ellipsis: true });
+        doc.text(fila.total, X_TOT, yFila, { width: W_TOT, align: "right", lineBreak: false });
+        yFila += hFila;
+      }
+
+      // ── Total en letras ───────────────────────────────────────────────────────────────────────────────────────────
+      linea(M, Y_LETRAS, DER, Y_LETRAS);
+      linea(M, Y_BLOQUE_INF, DER, Y_BLOQUE_INF);
+      serif().fontSize(8.5).fillColor(NEGRO);
+      texto("TOTAL EN LETRAS:", M + 6, Y_LETRAS + 7);
+      if (ultima) {
+        serif(true).fontSize(9);
+        doc.text(totalEnLetras(f.total), M + 6 + 88, Y_LETRAS + 6.5, { width: ANCHO - 100, lineBreak: false, ellipsis: true });
+      }
+
+      // ── Leyenda tributaria, observaciones y TOTAL ─────────────────────────────────────────────────────────────────
+      if (ultima) {
+        serif(false, true).fontSize(8).fillColor(f.leyendaTributaria ? NEGRO : GRIS_TEXTO);
+        texto(f.leyendaTributaria ?? `Leyenda tributaria: ${TEXTO_PENDIENTE_DEFINIR.toLowerCase()}`, M + 8, Y_BLOQUE_INF + 7, { width: ANCHO - 16 });
+        serif().fontSize(8).fillColor(NEGRO);
+        texto("OBSERVACIONES:", M + 8, Y_BLOQUE_INF + 28);
+        serif().fontSize(8.5).fillColor(NEGRO);
+        doc.text(textoPdf(f.observaciones ?? "—"), M + 8 + 78, Y_BLOQUE_INF + 27, { width: 262, height: 38, ellipsis: true });
+        const xBox = DER - 188;
+        banda(xBox, Y_BLOQUE_INF + 36, 88, 24);
+        serif().fontSize(9).fillColor(NEGRO);
+        texto(f.moneda === "GTQ" ? "TOTAL Q.:" : `TOTAL ${f.moneda}:`, xBox, Y_BLOQUE_INF + 44, { width: 88, align: "center" });
+        serif(true).fontSize(10.5);
+        texto(moneda(f.total), xBox + 92, Y_BLOQUE_INF + 43, { width: 88, align: "right" });
+      } else {
+        serif(false, true).fontSize(9).fillColor(GRIS_TEXTO);
+        texto(`Continúa en la página ${indice + 2} de ${totalPaginas}`, M, Y_BLOQUE_INF + 30, { width: ANCHO, align: "center" });
+      }
+
+      // ── Recuadro reservado (en la factura real, el código QR) y datos de certificación: PENDIENTE FEL ──────────────
+      trazo();
+      doc.roundedRect(M, Y_QR, ANCHO, H_QR, 7).stroke();
+      serif(false, true).fontSize(8.5).fillColor(GRIS_TEXTO);
+      texto(`Espacio reservado para la certificación electrónica: ${TEXTO_PENDIENTE_FEL}`, M, Y_QR + 15, { width: ANCHO, align: "center" });
+
+      const pie: [string, string][] = [
+        ["NÚMERO DE AUTORIZACIÓN:", TEXTO_PENDIENTE_FEL],
+        ["CERTIFICADOR:", TEXTO_PENDIENTE_FEL],
+        ["NIT CERTIFICADOR:", TEXTO_PENDIENTE_FEL],
+        ["CORRELATIVO INTERNO:", f.numero],
+      ];
+      pie.forEach(([etiqueta, valor], i) => {
+        const yP = Y_PIE_FEL + i * 12.5;
+        serif().fontSize(8.5).fillColor(NEGRO);
+        texto(etiqueta, M, yP, { width: 150, align: "right" });
+        serif(valor === TEXTO_PENDIENTE_FEL).fontSize(8.5);
+        texto(valor, M + 158, yP, { width: 300 });
+      });
     };
-    filaTotal("Subtotal", moneda(f.subtotal));
-    filaTotal(`IVA (${f.porcentajeIva} %)`, moneda(f.iva));
-    doc.strokeColor("#94a3b8").lineWidth(0.6).moveTo(xTot, yT - 2).lineTo(xTot + 230, yT - 2).stroke();
-    filaTotal("TOTAL", moneda(f.total), true);
-    doc.x = marginL;
-    doc.y = yT + 4;
 
-    doc.font("Helvetica").fontSize(8).fillColor(COLOR_SUAVE).text(
-      textoPdf(`Tratamiento de IVA: ${f.resumenIva}. El IVA se calcula línea por línea según el tratamiento guardado de cada viaje; el total es la suma de las líneas.`),
-      marginL, doc.y, { width: pageWidth - 240 },
-    );
+    for (let i = 0; i < totalPaginas; i++) {
+      if (i > 0) doc.addPage();
+      dibujarPagina(i);
+    }
 
-    // ── Espacio reservado: no se simula ningún dato de certificación ────────────────────────────────────────────────
-    if (doc.y + 70 > pageBottom()) doc.addPage();
-    doc.moveDown(1);
-    const yFel = doc.y;
-    doc.save();
-    doc.rect(marginL, yFel, pageWidth, 44).dash(3, { space: 3 }).stroke("#94a3b8");
-    doc.undash();
-    doc.restore();
-    doc.font("Helvetica-Bold").fontSize(9).fillColor(COLOR_SUAVE).text(`Certificación electrónica: ${TEXTO_PENDIENTE_FEL}`, marginL + 10, yFel + 9, { width: pageWidth - 20 });
-    doc.font("Helvetica").fontSize(8).fillColor(COLOR_SUAVE).text(
-      "Este documento es solo una representación de prueba del formato. No tiene validez fiscal.",
-      marginL + 10, doc.y + 2, { width: pageWidth - 20 },
-    );
-
-    // ── Marca de agua y pie en TODAS las páginas ────────────────────────────────────────────────────────────────────
+    // ── Marca de agua y pie NO FISCAL en TODAS las páginas ──────────────────────────────────────────────────────────
     const rango = doc.bufferedPageRange();
     const generado = formatearTimestampVisible(ahoraLocal());
     for (let i = 0; i < rango.count; i++) {
       doc.switchToPage(rango.start + i);
       doc.save();
       doc.fillColor("#b91c1c").fillOpacity(0.07);
-      doc.rotate(-35, { origin: [doc.page.width / 2, doc.page.height / 2] });
-      doc.font("Helvetica-Bold").fontSize(58).text("DEMO - NO FISCAL", 0, doc.page.height / 2 - 30, { width: doc.page.width, align: "center", lineBreak: false });
+      doc.rotate(-35, { origin: [doc.page.width / 2, (Y_DETALLE + Y_FIN_DETALLE) / 2] });
+      doc.font("Helvetica-Bold").fontSize(58).text("DEMO - NO FISCAL", 0, (Y_DETALLE + Y_FIN_DETALLE) / 2 - 30, { width: doc.page.width, align: "center", lineBreak: false });
       doc.restore();
-      doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8").text(
+      doc.font("Helvetica").fontSize(7.5).fillColor("#6b7280").text(
         `${LEYENDA_NO_FISCAL} · Página ${i + 1} de ${rango.count} · Generado el ${generado} (Guatemala)`,
-        marginL, doc.page.height - doc.page.margins.bottom - 12,
-        { width: pageWidth, align: "center", lineBreak: false },
+        M, Y_PIE_DEMO, { width: ANCHO, align: "center", lineBreak: false },
       );
     }
     doc.end();
@@ -319,6 +494,12 @@ function leerLogo(logoUrl: string | null | undefined): Buffer | null {
   }
 }
 
+/** Código del cliente (`clientes.codigo`), SIEMPRE filtrado por la empresa del guard. Es lectura viva (no hay snapshot). */
+async function leerCodigoCliente(empresaId: number, clienteId: number): Promise<string | null> {
+  const rows = await query<RowDataPacket[]>("SELECT codigo FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1", [clienteId, empresaId]);
+  return textoDe(rows[0]?.codigo);
+}
+
 export type ResultadoPdfFacturaDemo =
   | { ok: true; buffer: Buffer; nombreArchivo: string }
   | { ok: false; status: 404 | 409; error: string };
@@ -339,9 +520,15 @@ export async function generarPdfFacturaDemo(
     nombreComercial: textoDe(r.nombre_comercial),
     nit: textoDe(r.nit_emisor),
     direccion: textoDe(r.direccion_fiscal),
+    telefono: null, // la plataforma todavía no modela el teléfono del emisor
     logo: leerLogo(empresa.logoUrl),
   };
-  const modelo = prepararFacturaDemo(detalle, emisor, ahoraLocal().slice(0, 10));
+  const complementos: ComplementosDemo = {
+    clienteCodigo: detalle ? await leerCodigoCliente(empresa.id, detalle.factura.clienteId) : null,
+    condiciones: null, // la factura no congela condiciones de pago todavía
+    leyendaTributaria: null, // sin dato modelado
+  };
+  const modelo = prepararFacturaDemo(detalle, emisor, ahoraLocal().slice(0, 10), complementos);
   if (!modelo.ok) return modelo;
   return { ok: true, buffer: await renderizarFacturaDemo(modelo.factura), nombreArchivo: `factura-demo-${facturaId}.pdf` };
 }
