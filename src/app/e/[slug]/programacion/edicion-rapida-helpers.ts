@@ -76,6 +76,9 @@ export type SnapshotEsperado = RecursosEditables & {
 export type EstadoEditado = RecursosEditables & { tarifaId?: number | null; tarifaComercial?: number | null; viaticos?: MontoViatico[] };
 export type TipoTarifa = "catalogo" | "manual" | "sin";
 export const TARIFA_MANUAL_PENDIENTE = Number.NaN;
+/** Vacío no es Q0: conserva el estado pendiente; el resto se valida con errorAntesDeEnviar. */
+export const montoTarifaManualDesdeTexto = (texto: string): number =>
+  texto.trim() === "" ? TARIFA_MANUAL_PENDIENTE : Number(texto);
 export const tipoTarifa = (tarifaId: number | null | undefined, tarifaComercial: number | null | undefined): TipoTarifa =>
   tarifaId != null ? "catalogo" : tarifaComercial != null ? "manual" : "sin";
 export type EntradaBorrador = { esperado: SnapshotEsperado; nuevo: EstadoEditado };

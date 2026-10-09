@@ -19,6 +19,7 @@ import {
   MAX_AUXILIARES_EDICION_RAPIDA,
   motivoNoEditable,
   motivoNoEditableTarifa,
+  montoTarifaManualDesdeTexto,
   montoViaticoValido,
   opcionesPersonal,
   opcionesTarifa,
@@ -93,6 +94,8 @@ export function EdicionRapida({
 }) {
   const [personal, setPersonal] = useState<PersonalCatalogo[]>([]);
   const [borrador, setBorrador] = useState<Borrador>(new Map<number, EntradaBorrador>());
+  // Texto por viaje para conservar decimales como "0.00" sin recrear el input al escribir.
+  const [montosManualesTexto, setMontosManualesTexto] = useState<Record<number, string>>({});
   const [resultados, setResultados] = useState<ReadonlyMap<number, FilaResultadoEdicionRapida>>(new Map());
   const [motivo, setMotivo] = useState("");
   const [validando, setValidando] = useState(false);
@@ -129,6 +132,7 @@ export function EdicionRapida({
   }, [hayPendientes, onPendientesChange]);
 
   const resumen = resumenEdicion(borrador, resultados);
+  const errorLocal = hayPendientes ? errorAntesDeEnviar(borrador, motivo) : null;
   const ocupado = validando || guardando;
   const nombrePersonal = useMemo(() => new Map(personal.map((p) => [p.id, p.nombre])), [personal]);
 
@@ -153,6 +157,7 @@ export function EdicionRapida({
     if (!confirmarPerdida(borrador.size > 0, (m) => window.confirm(m))) return;
     versionRef.current++;
     setBorrador(new Map());
+    setMontosManualesTexto({});
     setResultados(new Map());
     setError("");
     setMensaje("");
@@ -192,6 +197,7 @@ export function EdicionRapida({
         await onGuardado(); // nuevos snapshots reales desde el servidor
         versionRef.current++;
         setBorrador(new Map());
+        setMontosManualesTexto({});
         setResultados(new Map());
         setMotivo("");
         setMensaje(mensajeGuardado(r.guardados));
@@ -238,7 +244,7 @@ export function EdicionRapida({
           </button>
         </div>
       </div>
-      {hayPendientes && !motivo.trim() ? <p className="text-xs text-amber-300">El motivo es obligatorio para validar y guardar.</p> : null}
+      {errorLocal ? <p role="status" aria-live="polite" className="text-xs text-amber-300">{errorLocal}</p> : null}
       {error ? <p role="alert" className="text-sm text-rose-300">{error}</p> : null}
       {mensaje ? <p role="status" className="rounded border border-emerald-700/60 bg-emerald-900/20 px-3 py-1.5 text-sm text-emerald-300">{mensaje}</p> : null}
 
@@ -364,6 +370,11 @@ export function EdicionRapida({
                       value={tarifaSel}
                       onChange={(e) => {
                         const v = e.target.value;
+                        setMontosManualesTexto((actual) => {
+                          const siguiente = { ...actual };
+                          delete siguiente[p.id];
+                          return siguiente;
+                        });
                         if (v === "manual") {
                           // Con monto manual ya guardado se parte de él; si no, queda pendiente hasta escribir el monto.
                           const real = p.tarifa_id == null && p.tarifa_comercial != null ? Number(p.tarifa_comercial) : TARIFA_MANUAL_PENDIENTE;
@@ -380,7 +391,6 @@ export function EdicionRapida({
                       <label className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted)]">
                         Q
                         <input
-                          key={`${p.id}-tarifa-${Number.isNaN(tarifa.monto) ? "" : tarifa.monto}`}
                           type="number"
                           min={0}
                           step="0.01"
@@ -388,11 +398,12 @@ export function EdicionRapida({
                           className={`${celda} w-24`}
                           aria-label={`Monto de tarifa manual de ${p.codigo}`}
                           disabled={tarifaDeshabilitada}
-                          defaultValue={tarifa.monto != null && !Number.isNaN(tarifa.monto) ? tarifa.monto : ""}
-                          placeholder="0.00"
-                          onBlur={(e) => {
-                            const n = e.target.value === "" ? TARIFA_MANUAL_PENDIENTE : Number(e.target.value);
-                            if (!Object.is(n, tarifa.monto) && n !== tarifa.monto) cambiar(p, { tarifaId: null, tarifaComercial: n });
+                          value={montosManualesTexto[p.id] ?? (tarifa.monto != null && Number.isFinite(tarifa.monto) ? String(tarifa.monto) : "")}
+                          placeholder="Ingrese monto"
+                          onChange={(e) => {
+                            const texto = e.target.value;
+                            setMontosManualesTexto((actual) => ({ ...actual, [p.id]: texto }));
+                            cambiar(p, { tarifaId: null, tarifaComercial: montoTarifaManualDesdeTexto(texto) });
                           }}
                         />
                       </label>

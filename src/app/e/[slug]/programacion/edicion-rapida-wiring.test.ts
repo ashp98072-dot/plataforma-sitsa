@@ -82,6 +82,34 @@ describe("programacion-client.tsx — no perder el borrador", () => {
 });
 
 describe("edicion-rapida.tsx", () => {
+  it("monto manual controlado: sincroniza onChange, sin blur ni key que remonte por tecla", () => {
+    const manual = trozo(tabla, '{tarifa.tipo === "manual" ? (', "</label>");
+    expect(manual).toContain("value={montosManualesTexto[p.id] ??");
+    expect(manual).toContain('String(tarifa.monto) : ""');
+    expect(manual).toContain("onChange={(e) => {");
+    expect(manual).toContain("setMontosManualesTexto((actual) => ({ ...actual, [p.id]: texto }));");
+    expect(manual).toContain("cambiar(p, { tarifaId: null, tarifaComercial: montoTarifaManualDesdeTexto(texto) });");
+    expect(manual).not.toMatch(/onBlur|defaultValue|key=|enviarGuardar|enviarValidar|fetch\(/);
+    expect(manual).toContain('placeholder="Ingrese monto"');
+    expect(tabla).toContain('<tr key={p.id}');
+  });
+
+  it("error local visible bajo resumen usa errorAntesDeEnviar, incluso con botones disabled", () => {
+    expect(tabla).toContain("const errorLocal = hayPendientes ? errorAntesDeEnviar(borrador, motivo) : null;");
+    expect(tabla).toContain('{errorLocal ? <p role="status" aria-live="polite" className="text-xs text-amber-300">{errorLocal}</p> : null}');
+    expect(tabla.indexOf("{errorLocal ?")).toBeGreaterThan(tabla.indexOf("Cambios: <strong>"));
+  });
+
+  it("texto se limpia al descartar/guardar OK/cambiar tipo; fallo conserva borrador", () => {
+    expect(trozo(tabla, "function descartar()", "\n  }\n")).toContain("setMontosManualesTexto({});");
+    const guardar = trozo(tabla, "async function guardar()", "\n  }\n");
+    expect(trozo(guardar, 'if (r.tipo === "ok") {', "return;")).toContain("setMontosManualesTexto({});");
+    expect(guardar.slice(guardar.indexOf("// 409 / error"))).not.toContain("setMontosManualesTexto");
+    const selector = trozo(tabla, 'aria-label={`Tarifa de ${p.codigo}`}', "</select>");
+    expect(selector).toContain("delete siguiente[p.id];");
+    expect(selector).toContain("TARIFA_MANUAL_PENDIENTE");
+  });
+
   it("histórico: solo tarifa tiene bloqueo independiente; recursos y viáticos conservan el general", () => {
     expect(tabla).toContain("const bloqueoTarifa = motivoNoEditableTarifa(p, hoy);");
     expect(tabla).toContain("const tarifaDeshabilitada = bloqueoTarifa != null || guardando;");
