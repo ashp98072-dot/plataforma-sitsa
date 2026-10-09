@@ -212,3 +212,13 @@ Se levantó la aplicación en desarrollo (`next dev`) contra una **base MariaDB 
 **Defecto encontrado y corregido** (único cambio de código tras la prueba): al **editar** un borrador el pie decía «el total con IVA se calcula en la vista previa», pero la edición no tiene vista previa. Ahora dice «el total con IVA se recalcula al guardar» (`etiquetaSumaTarifas`, con prueba unitaria). Se repitió el caso en el navegador.
 
 **Observaciones sin cambios** (preexistentes de FACT-1 o menores): en la edición las columnas «Unidad» y «Tarifa comercial» muestran «—» (el formulario de edición no las recibe); el botón de confirmación al cancelar un borrador sigue diciendo «Confirmar anulación» (el título de la confirmación sí dice «cancelar borrador»); los endpoints de notificaciones del layout fallan en esta base mínima de desarrollo porque faltan tablas de otros módulos (`rrhh_recordatorios`, `flota_vehiculo_documentos`, `flota_viajes.plan_id`), sin relación con Facturación.
+
+## 16. Columna «Unidad» de «Viajes pendientes» (viajes tercerizados)
+
+**Datos reales** (`tms_planes_viaje`): `tipo_viaje` (`'Propio'` | `'Tercerizado'`, `DEFAULT 'Propio'`) identifica el viaje tercerizado; en ellos `unidad_id` queda **NULL a propósito** y la placa externa se guarda como texto en **`unidad_externa_placa`** (`VARCHAR(40)`, mayúsculas, opcional). No existe una tabla ni un snapshot aparte: esa columna *es* el snapshot. (`tc_externo_placa` es la caja/remolque, otro dato; `unidad_externa_descripcion` y `transportista_externo` no se muestran.)
+
+**Regla** (`src/lib/facturacion/unidad-viaje.ts`, la misma que usan Programación y su reporte: `esTercerizado ? unidad_externa_placa : placa`):
+1. Viaje **tercerizado** → su placa externa; si no la capturaron (NULL, vacía o en blanco), **«Tercerizado»**.
+2. Viaje **propio** → la placa de su unidad interna (`tms_unidades.placa`); sin unidad, `—`.
+
+No es «placa interna primero» porque en un tercerizado `unidad_id` es NULL por diseño; si apareciera un `unidad_id` huérfano, Programación lo ignora y Facturación debe decir lo mismo. La respuesta sigue llamándose `placa` (compatibilidad) con el valor ya resuelto. Además, la unión con `tms_unidades` ahora filtra por la **misma empresa** del viaje (antes no lo hacía). No cambia la facturabilidad, el IVA, los filtros ni los snapshots.

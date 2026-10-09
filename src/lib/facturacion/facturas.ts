@@ -3,6 +3,7 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
+import { resolverUnidadViaje } from "@/lib/facturacion/unidad-viaje";
 import {
   construirBorrador,
   EQUIVALENTES_GTQ,
@@ -65,6 +66,10 @@ export type ViajePendiente = {
    */
   clienteId: number;
   cliente: string;
+  /**
+   * Unidad que se muestra (ya resuelta): placa interna en viajes propios; placa externa —o «Tercerizado»— en viajes
+   * tercerizados. Ver src/lib/facturacion/unidad-viaje.ts. Se mantiene el nombre `placa` por compatibilidad.
+   */
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
@@ -492,14 +497,15 @@ export async function listarViajesPendientes(
   const [rows, countRows] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
-              cli.id AS cliente_id, cli.nombre AS cliente, u.placa, p.tarifa_comercial,
+              cli.id AS cliente_id, cli.nombre AS cliente, u.placa AS placa_interna, p.tipo_viaje,
+              p.unidad_externa_placa, p.tarifa_comercial,
               DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
               p.estado, p.tarifa_moneda_historico, NULLIF(TRIM(p.ruta_codigo_historico), '') AS ruta_codigo,
               lc.nombre AS origen,
               COALESCE(NULLIF(TRIM(p.lugar_descarga_historico), ''), ld.nombre) AS destino,
               COALESCE(pil.nombre, NULLIF(TRIM(p.piloto_externo_nombre), '')) AS piloto
        ${from}
-       LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+       LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
        LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id AND lc.empresa_id = p.empresa_id
        LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id AND ld.empresa_id = p.empresa_id
        LEFT JOIN tms_personal pil ON pil.id = p.piloto_id AND pil.empresa_id = p.empresa_id
@@ -519,7 +525,11 @@ export async function listarViajesPendientes(
       planId: Number(r.id), codigo: String(r.codigo), fechaPlan: String(r.fecha_plan),
       clienteId: Number(r.cliente_id),
       cliente: String(r.cliente),
-      placa: r.placa != null ? String(r.placa) : null,
+      placa: resolverUnidadViaje({
+        tipoViaje: r.tipo_viaje != null ? String(r.tipo_viaje) : null,
+        placaInterna: r.placa_interna != null ? String(r.placa_interna) : null,
+        placaExterna: r.unidad_externa_placa != null ? String(r.unidad_externa_placa) : null,
+      }),
       tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
       cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
       rutaCodigo: r.ruta_codigo != null ? String(r.ruta_codigo) : null,

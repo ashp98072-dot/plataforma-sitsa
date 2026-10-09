@@ -753,6 +753,60 @@ describe("fecha_emision llega como YYYY-MM-DD (nunca «Thu Aug 27»)", () => {
   });
 });
 
+describe("listarViajesPendientes — columna «Unidad»: placa interna, externa (tercerizado) o «Tercerizado»", () => {
+  const fila = (over: Record<string, unknown>) => ({
+    id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X", placa_interna: null, tipo_viaje: "Propio",
+    unidad_externa_placa: null, tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00", estado: "Cerrado", tarifa_moneda_historico: "GTQ",
+    ruta_codigo: "RUTA-01", origen: "Guatemala", destino: "Xela", piloto: null, ...over,
+  });
+  const placaDe = async (over: Record<string, unknown>) => {
+    vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("COUNT(*)") ? [{ total: 1 }] : [fila(over)])) as never);
+    return (await listarViajesPendientes(EMPRESA, {})).items[0].placa;
+  };
+
+  it("1) viaje PROPIO con unidad interna → su placa interna", async () => {
+    expect(await placaDe({ tipo_viaje: "Propio", placa_interna: "C-101DEM" })).toBe("C-101DEM");
+  });
+
+  it("2) TERCERIZADO con placa externa → la placa externa", async () => {
+    expect(await placaDe({ tipo_viaje: "Tercerizado", placa_interna: null, unidad_externa_placa: "TC-555XYZ" })).toBe("TC-555XYZ");
+  });
+
+  it("3) TERCERIZADO sin placa externa (NULL, vacía o en blanco) → «Tercerizado»", async () => {
+    for (const unidad_externa_placa of [null, "", "   "]) {
+      expect(await placaDe({ tipo_viaje: "Tercerizado", unidad_externa_placa }), JSON.stringify(unidad_externa_placa)).toBe("Tercerizado");
+    }
+  });
+
+  it("4) viaje PROPIO sin unidad → null (la pantalla muestra «—»), aunque tuviera texto en la columna externa", async () => {
+    expect(await placaDe({ tipo_viaje: "Propio", placa_interna: null })).toBeNull();
+    expect(await placaDe({ tipo_viaje: "Propio", placa_interna: null, unidad_externa_placa: "RESTO-123" })).toBeNull();
+  });
+
+  it("la misma consulta lee tipo_viaje y unidad_externa_placa y NO trae descripción, transportista ni piloto externo de la unidad", async () => {
+    await placaDe({});
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("p.tipo_viaje");
+    expect(sql).toContain("p.unidad_externa_placa");
+    expect(sql).not.toMatch(/unidad_externa_descripcion|transportista_externo|auxiliares_externos|tc_externo_placa/);
+  });
+
+  it("5) multiempresa: la unidad se une SOLO si es de la misma empresa del viaje", async () => {
+    await placaDe({});
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id");
+  });
+
+  it("7) la elegibilidad NO cambia: el WHERE del listado y del conteo sigue siendo el mismo (la unidad no es condición)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("COUNT(*)") ? [{ total: 0 }] : [])) as never);
+    await listarViajesPendientes(EMPRESA, {});
+    const [[sqlListado], [sqlConteo]] = vi.mocked(query).mock.calls;
+    const where = (s: unknown) => String(s).match(/WHERE([\s\S]*?)(ORDER BY|$)/)![1].replace(/\s+/g, " ").trim();
+    expect(where(sqlListado)).toBe(where(sqlConteo));
+    expect(where(sqlListado)).not.toMatch(/unidad|placa/i);
+  });
+});
+
 describe("listarViajesPendientes — «viajes por facturar»: SOLO elegibles (se deriva, sin columna «facturable»)", () => {
   async function sqlDelListado(filtros: Parameters<typeof listarViajesPendientes>[1] = {}) {
     vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("COUNT(*)") ? [{ total: 0 }] : [])) as never);
@@ -826,7 +880,7 @@ describe("listarViajesPendientes — «viajes por facturar»: SOLO elegibles (se
       String(sql).includes("COUNT(*)")
         ? [{ total: 1 }]
         : [{
-            id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X", placa: "C-034BXR",
+            id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X", placa_interna: "C-034BXR", tipo_viaje: "Propio", unidad_externa_placa: null,
             tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00", estado: "Cerrado", tarifa_moneda_historico: null,
             ruta_codigo: "RUTA-01", origen: "Guatemala", destino: "Xela", piloto: "Juan Pérez",
           }]) as never);

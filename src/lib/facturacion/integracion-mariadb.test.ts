@@ -870,3 +870,69 @@ describe.skipIf(!PUERTO)("MariaDB real — «Viajes por facturar» == lo que el 
     expect(qtz?.moneda).toBe("GTQ");
   });
 });
+
+describe.skipIf(!PUERTO)("MariaDB real — columna «Unidad» de Viajes pendientes: placa interna, externa (tercerizado) o «Tercerizado»", () => {
+  const ids = new Map<string, number>();
+  let unidadPropia = 0;
+  let unidadAjena = 0;
+
+  it("preparación: una unidad interna de la empresa 7, otra de la empresa 8 y un viaje por caso", async () => {
+    const [u1] = await admin.query<mysql.ResultSetHeader>(`INSERT INTO tms_unidades (empresa_id, placa) VALUES (${E1}, 'C-INT-001')`);
+    const [u2] = await admin.query<mysql.ResultSetHeader>(`INSERT INTO tms_unidades (empresa_id, placa) VALUES (${E2}, 'C-AJENA-9')`);
+    unidadPropia = u1.insertId;
+    unidadAjena = u2.insertId;
+    const casos: [string, Record<string, unknown>][] = [
+      ["propio con unidad", { unidad_id: unidadPropia }],
+      ["propio sin unidad", {}],
+      ["propio con unidad de OTRA empresa", { unidad_id: unidadAjena }],
+      ["tercerizado con placa externa", { tipo_viaje: "Tercerizado", unidad_externa_placa: "TC-555XYZ", unidad_externa_descripcion: "Camión 10 t", transportista_externo: "Proveedor Demo", piloto_externo_nombre: "Piloto Externo" }],
+      ["tercerizado sin placa", { tipo_viaje: "Tercerizado", unidad_externa_placa: null }],
+      ["tercerizado con placa en blanco", { tipo_viaje: "Tercerizado", unidad_externa_placa: "   " }],
+      ["tercerizado con unidad interna huérfana", { tipo_viaje: "Tercerizado", unidad_id: unidadPropia, unidad_externa_placa: "TC-777ABC" }],
+      ["tercerizado SIN tarifa (no facturable)", { tipo_viaje: "Tercerizado", unidad_externa_placa: "TC-000", tarifa_comercial: null }],
+    ];
+    for (const [nombre, over] of casos) ids.set(nombre, await crearPlan({ codigo: `UN-${nombre}`.slice(0, 70), ...over }));
+    expect(ids.size).toBe(casos.length);
+  });
+
+  it("1-4) cada caso muestra la unidad correcta, sin datos extra del proveedor", async () => {
+    const lista = await listarViajesPendientes(E1, { ruta: "RUTA-01", pageSize: 200 });
+    const placa = (nombre: string) => lista.items.find((i) => i.planId === ids.get(nombre)!)?.placa;
+    expect(placa("propio con unidad")).toBe("C-INT-001");
+    expect(placa("propio sin unidad")).toBeNull();
+    expect(placa("tercerizado con placa externa")).toBe("TC-555XYZ");
+    expect(placa("tercerizado sin placa")).toBe("Tercerizado");
+    expect(placa("tercerizado con placa en blanco")).toBe("Tercerizado");
+    expect(placa("tercerizado con unidad interna huérfana")).toBe("TC-777ABC"); // misma regla que Programación
+    const claves = Object.keys(lista.items[0]).sort();
+    expect(claves).toEqual(["cerradoEn", "cliente", "clienteId", "codigo", "destino", "estado", "fechaPlan", "moneda", "origen", "piloto", "placa", "planId", "rutaCodigo", "tarifaComercial"]);
+    expect(JSON.stringify(lista.items)).not.toMatch(/Camión 10 t|Proveedor Demo/);
+  });
+
+  it("5) multiempresa: una unidad de OTRA empresa asociada por id NO se muestra", async () => {
+    const lista = await listarViajesPendientes(E1, { ruta: "RUTA-01", pageSize: 200 });
+    const item = lista.items.find((i) => i.planId === ids.get("propio con unidad de OTRA empresa")!);
+    expect(item).toBeDefined();
+    expect(item?.placa).toBeNull();
+    expect(JSON.stringify(lista.items)).not.toContain("C-AJENA-9");
+  });
+
+  it("7) la facturabilidad NO cambió: aparece en el listado exactamente lo que el servidor acepta; el tercerizado sin tarifa sigue fuera", async () => {
+    const lista = await listarViajesPendientes(E1, { pageSize: 200 });
+    const listados = new Set(lista.items.map((i) => i.planId));
+    for (const [nombre, id] of ids) {
+      const prev = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: id, precioIncluyeIva: true }] });
+      expect(listados.has(id), `listado: ${nombre}`).toBe(nombre !== "tercerizado SIN tarifa (no facturable)");
+      expect(prev.ok, `servidor: ${nombre}`).toBe(nombre !== "tercerizado SIN tarifa (no facturable)");
+    }
+  });
+
+  it("6) listado, conteo, KPI y filtro de ruta siguen coherentes", async () => {
+    const lista = await listarViajesPendientes(E1, { pageSize: 200 });
+    expect(lista.totalReal).toBe(lista.items.length);
+    expect((await obtenerKpisFacturacion(E1)).viajesPendientes).toBe(lista.totalReal);
+    const filtrada = await listarViajesPendientes(E1, { ruta: "RUTA-01", pageSize: 200 });
+    expect(filtrada.totalReal).toBe(filtrada.items.length);
+    expect(filtrada.items.map((i) => i.planId)).toContain(ids.get("tercerizado con placa externa")!);
+  });
+});
