@@ -10,6 +10,8 @@ import {
   esBorrador,
   esEmitida,
   interpretarError,
+  etiquetaAnular,
+  formatearMonto,
   puedeOfrecerAnular,
   puedeRegistrarOtroPago,
   validarEmision,
@@ -36,9 +38,19 @@ type Factura = {
   totalPagado: number;
   saldo: number;
   estadoFinanciero: EstadoFinanciero | null;
+  // FACT-2 — desglose congelado (null en facturas anteriores a FACT-2).
+  moneda: string;
+  subtotal: number | null;
+  iva: number | null;
+  porcentajeIva: number | null;
+  precioIncluyeIva: boolean | null;
+  clienteNit: string | null;
 };
 
-type FacturaViajeLinea = { id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number };
+type FacturaViajeLinea = {
+  id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number;
+  descripcion: string | null; base: number | null; iva: number | null; total: number | null;
+};
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
 type ClienteCat = { clienteId: number; nombre: string };
 
@@ -360,7 +372,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           clienteId={detalle.factura.clienteId}
                           clienteNombre={detalle.factura.cliente}
                           facturaId={detalle.factura.id}
-                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado }))}
+                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, moneda: detalle.factura.moneda }))}
                           numeroFacturaInicial={detalle.factura.numeroFactura}
                           fechaEmisionInicial={detalle.factura.fechaEmision}
                           observacionesInicial={detalle.factura.observaciones}
@@ -377,6 +389,13 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 <li>Cliente: {detalle.factura.cliente}</li>
                                 <li>Fecha emisión: {detalle.factura.fechaEmision ?? "—"}</li>
                                 <li>Estado: {detalle.factura.estadoAdmin}</li>
+                                {detalle.factura.clienteNit ? <li>NIT: {detalle.factura.clienteNit}</li> : null}
+                                {detalle.factura.subtotal != null && detalle.factura.iva != null ? (
+                                  <>
+                                    <li>Subtotal: {formatearMonto(detalle.factura.subtotal, detalle.factura.moneda)}</li>
+                                    <li>IVA{detalle.factura.porcentajeIva != null ? ` (${detalle.factura.porcentajeIva} %)` : ""}: {formatearMonto(detalle.factura.iva, detalle.factura.moneda)}</li>
+                                  </>
+                                ) : null}
                                 <li>Monto total: {moneda(detalle.factura.montoTotal)}</li>
                                 <li>Total pagado: {moneda(detalle.factura.totalPagado)}</li>
                                 <li>Saldo: {moneda(detalle.factura.saldo)}</li>
@@ -393,7 +412,15 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.viajes.map((v) => (
-                                  <li key={v.id}>{v.codigo} · {v.fechaPlan} · {moneda(v.montoAsignado)}</li>
+                                  <li key={v.id}>
+                                    {v.codigo} · {v.fechaPlan} · {moneda(v.montoAsignado)}
+                                    {v.descripcion ? <span className="block text-[var(--muted)]">{v.descripcion}</span> : null}
+                                    {v.base != null && v.iva != null && v.total != null ? (
+                                      <span className="block text-[var(--muted)]">
+                                        Base {formatearMonto(v.base, detalle.factura.moneda)} · IVA {formatearMonto(v.iva, detalle.factura.moneda)} · Total {formatearMonto(v.total, detalle.factura.moneda)}
+                                      </span>
+                                    ) : null}
+                                  </li>
                                 ))}
                                 {!detalle.viajes.length ? <li className="text-[var(--muted)]">Sin viajes.</li> : null}
                               </ul>
@@ -482,7 +509,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           {puedeAnular && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
                             confirmandoAnular ? (
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
-                                <p className="font-semibold text-rose-600">Confirmar anulación</p>
+                                <p className="font-semibold text-rose-600">Confirmar: {etiquetaAnular(detalle.factura.estadoAdmin).toLowerCase()}</p>
                                 <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse.</p>
                                 {errorAnular ? <p className="text-rose-500">{errorAnular}</p> : null}
                                 <div className="flex gap-2 pt-1">
@@ -493,7 +520,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 </div>
                               </div>
                             ) : (
-                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>Anular factura</button>
+                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>{etiquetaAnular(detalle.factura.estadoAdmin)}</button>
                             )
                           ) : null}
                         </div>

@@ -7,7 +7,10 @@ import {
   detalleCorrespondeAFactura,
   esBorrador,
   esEmitida,
+  etiquetaAnular,
   evaluarSeleccion,
+  firmaLineas,
+  formatearMonto,
   interpretarError,
   lineaDifiereDeTarifa,
   puedeOfrecerAnular,
@@ -187,5 +190,57 @@ describe("Fase M — cada estado_admin tiene su propio color (relleno sólido)",
   it("Borrador/Emitida/Anulada nunca comparten clase", () => {
     const clases = new Set([badgeAdminClase("Borrador"), badgeAdminClase("Emitida"), badgeAdminClase("Anulada")]);
     expect(clases.size).toBe(3);
+  });
+});
+
+describe("FACT-2 — una factura admite una sola moneda al seleccionar", () => {
+  type Sel = { planId: number; clienteId: number; cliente: string; moneda?: string };
+  const Q1: Sel = { planId: 1, clienteId: 20, cliente: "Cliente A", moneda: "GTQ" };
+  const Q2: Sel = { planId: 2, clienteId: 20, cliente: "Cliente A", moneda: "GTQ" };
+  const D1: Sel = { planId: 3, clienteId: 20, cliente: "Cliente A", moneda: "USD" };
+
+  it("mismo cliente y misma moneda → se agrega", () => {
+    expect(evaluarSeleccion(Q2, new Map([[1, Q1]]))).toEqual({ accion: "agregar" });
+  });
+
+  it("mismo cliente pero moneda distinta → se rechaza explicando por qué", () => {
+    const r = evaluarSeleccion(D1, new Map([[1, Q1]]));
+    expect(r.accion).toBe("rechazar");
+    if (r.accion === "rechazar") { expect(r.mensaje).toContain("GTQ"); expect(r.mensaje).toContain("USD"); expect(r.mensaje).toContain("una sola moneda"); }
+  });
+
+  it("si falta el dato de moneda no se bloquea en la UI (el servidor decide)", () => {
+    expect(evaluarSeleccion({ planId: 9, clienteId: 20, cliente: "Cliente A" }, new Map([[1, Q1]]))).toEqual({ accion: "agregar" });
+  });
+});
+
+describe("FACT-2 — formatearMonto", () => {
+  it("quetzales con «Q»; otra moneda con su código; sin dato → «—»", () => {
+    expect(formatearMonto(1500.5)).toBe("Q1,500.50");
+    expect(formatearMonto(1500.5, "GTQ")).toBe("Q1,500.50");
+    expect(formatearMonto(99, "USD")).toBe("USD 99.00");
+    expect(formatearMonto(null)).toBe("—");
+    expect(formatearMonto(Number.NaN)).toBe("—");
+  });
+});
+
+describe("FACT-2 — firmaLineas (la vista previa solo vale para la selección exacta que la generó)", () => {
+  it("no depende del orden de las líneas", () => {
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }]))
+      .toBe(firmaLineas([{ planId: 2, montoAsignado: 50 }, { planId: 1, montoAsignado: 100 }]));
+  });
+
+  it("cambia si cambia un monto, se quita un viaje o se agrega otro", () => {
+    const base = firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }]);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 101 }, { planId: 2, montoAsignado: 50 }])).not.toBe(base);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }])).not.toBe(base);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }, { planId: 3, montoAsignado: 1 }])).not.toBe(base);
+  });
+});
+
+describe("FACT-2 — etiquetaAnular", () => {
+  it("un Borrador se «cancela»; una Emitida se «anula»", () => {
+    expect(etiquetaAnular("Borrador")).toBe("Cancelar borrador");
+    expect(etiquetaAnular("Emitida")).toBe("Anular factura");
   });
 });

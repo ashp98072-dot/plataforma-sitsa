@@ -35,7 +35,11 @@ const actor: ActorFacturacion = { empresaId: 7, usuarioId: 3, usuario: "facturad
 
 // tms_clientes.id = 501 <-> clientes.id = 20 (mismo cliente, dos espacios de ID distintos)
 const CLIENTE = { id: 20, nombre: "Cliente X", tms_cliente_id: 501 };
-const PLAN_CERRADO = { id: 1, codigo: "PLAN-1", empresa_id: 7, cliente_id: 501, estado: "Cerrado", tarifa_comercial: 1000 };
+const PLAN_CERRADO = {
+  id: 1, codigo: "PLAN-1", empresa_id: 7, cliente_id: 501, estado: "Cerrado", tarifa_comercial: 1000,
+  fecha_plan: "2026-08-27", ruta_codigo_historico: "RUTA-01", lugar_carga_id: null, lugar_descarga_id: null,
+  lugar_descarga_historico: "Xela", tarifa_moneda_historico: "GTQ",
+};
 
 type Overrides = {
   cliente?: Record<string, unknown> | null;
@@ -45,6 +49,8 @@ type Overrides = {
   pagosCount?: number;
   pagosSuma?: number;
   lineasEmitir?: Record<string, unknown>[];
+  /** Filas previas (snapshot) del borrador que se edita: SELECT ... FROM fact_factura_viajes WHERE factura_id = ? */
+  lineasPrevias?: Record<string, unknown>[];
 };
 
 function mockConnQuery(o: Overrides = {}) {
@@ -54,6 +60,12 @@ function mockConnQuery(o: Overrides = {}) {
     }
     if (sql.includes("FROM tms_planes_viaje WHERE id = ?")) {
       return [o.plan === undefined ? [PLAN_CERRADO] : o.plan ? [o.plan] : []];
+    }
+    if (sql.includes("FROM tms_lugares WHERE id = ?")) {
+      return [[]];
+    }
+    if (sql.includes("FROM fact_factura_viajes WHERE factura_id = ?")) {
+      return [o.lineasPrevias ?? []];
     }
     if (sql.includes("FROM fact_factura_viajes WHERE plan_id = ?")) {
       return [o.vinculoExistente ? [o.vinculoExistente] : []];
@@ -141,12 +153,13 @@ describe("crearFactura — validación e integridad", () => {
     expect(insertFactura?.[1]).toEqual(expect.arrayContaining([250])); // monto_total = 250, no otro valor inventado
   });
 
-  it("7) tarifa_comercial null y sin monto explícito → monto_asignado = 0 (nunca inventado)", async () => {
+  it("7) FACT-2: tarifa_comercial null → el viaje NO es facturable (409), nunca se factura en cero ni se inventa el monto", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, tarifa_comercial: null } });
     const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
-    expect(r.ok).toBe(true);
-    const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
-    expect(insertFactura?.[1]).toEqual(expect.arrayContaining([0]));
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("tarifa comercial válida"); }
+    expect(conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"))).toBeUndefined();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 
   it("8) monto_asignado distinto de tarifa_comercial queda AUDITADO explícitamente", async () => {
@@ -353,10 +366,13 @@ describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () =
     expect(viajes).toEqual([]);
   });
 
-  it("nunca expone piloto/auxiliares/evidencias/paradas/GPS", async () => {
+  it("FACT-2: expone SOLO el nombre del piloto — nunca auxiliares/evidencias/paradas/GPS", async () => {
     await listarViajesPendientes(7, {});
     const [sql] = vi.mocked(query).mock.calls[0];
-    expect(sql).not.toMatch(/piloto|auxiliar|evidencia|parada|latitud|longitud/i);
+    expect(sql).not.toMatch(/auxiliar|evidencia|parada|latitud|longitud/i);
+    expect(sql).toContain("pil.nombre");
+    // No se leen otros datos de la persona (teléfono, código, tipo…).
+    expect(sql).not.toMatch(/pil\.(telefono|codigo|tipo|estado)/);
   });
 
   it("filtra por clienteId vía el puente clientes.tms_cliente_id (nunca compara IDs de espacios distintos)", async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { calcularTotalLineas, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
+import { calcularTotalLineas, firmaLineas, formatearMonto, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
 
 /**
  * FACT-1-UI — formulario de Borrador COMPARTIDO entre:
@@ -10,9 +10,11 @@ import { calcularTotalLineas, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-
  *    viajes/montos) — nunca aplicable a Emitida/Anulada, el caller decide
  *    cuándo mostrar este componente.
  *
- * NUNCA envía monto_total — el backend lo calcula server-side sumando
- * monto_asignado (crearFactura/actualizarFacturaBorrador en
- * src/lib/facturacion/facturas.ts).
+ * NUNCA envía monto_total ni base/IVA — el backend los calcula server-side
+ * (crearFactura/actualizarFacturaBorrador en src/lib/facturacion/facturas.ts).
+ * FACT-2: al CREAR hay un paso de «Previsualizar» (POST .../facturas/preview,
+ * sin escritura) y «Guardar borrador» solo se habilita con una vista previa
+ * vigente. Al EDITAR el flujo no cambia. Aquí no existe ninguna acción FEL.
  */
 
 export type LineaBorrador = {
@@ -22,6 +24,20 @@ export type LineaBorrador = {
   placa: string | null;
   tarifaComercial: number | null;
   montoAsignado: number;
+  moneda?: string;
+};
+
+type PreviewApi = {
+  cliente: { id: number; nombre: string; nit: string | null; direccion: string | null };
+  cantidadViajes: number;
+  borrador: {
+    moneda: string;
+    politica: { porcentajeIva: number; precioIncluyeIva: boolean };
+    lineas: { planId: number; codigo: string; fechaPlan: string; descripcion: string; montoAsignado: number; base: number; iva: number; total: number }[];
+    subtotal: number;
+    iva: number;
+    total: number;
+  };
 };
 
 type ViajePendienteApi = {
@@ -35,6 +51,7 @@ type ViajePendienteApi = {
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
+  moneda: string;
 };
 
 type Props = {
@@ -50,11 +67,6 @@ type Props = {
   onGuardado: (facturaId: number) => void;
   onCancelar: () => void;
 };
-
-function moneda(v: number | null): string {
-  if (v == null) return "—";
-  return `Q${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]";
 
@@ -75,6 +87,14 @@ export function FacturaBorradorForm({
   const [cargandoPendientes, setCargandoPendientes] = useState(false);
 
   const total = useMemo(() => calcularTotalLineas(lineas), [lineas]);
+  const monedaCodigo = lineas[0]?.moneda ?? "GTQ";
+
+  // Vista previa (solo al crear). Su huella debe coincidir con la de las líneas actuales para poder guardar.
+  const [preview, setPreview] = useState<{ datos: PreviewApi; firma: string } | null>(null);
+  const [previsualizando, setPrevisualizando] = useState(false);
+  const firmaActual = useMemo(() => firmaLineas(lineas), [lineas]);
+  const requierePreview = facturaId == null;
+  const previewVigente = preview != null && preview.firma === firmaActual;
 
   function setMonto(planId: number, monto: number) {
     setLineas((prev) => prev.map((l) => (l.planId === planId ? { ...l, montoAsignado: monto } : l)));
@@ -103,7 +123,7 @@ export function FacturaBorradorForm({
   function agregarViaje(v: ViajePendienteApi) {
     setLineas((prev) => [
       ...prev,
-      { planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0 },
+      { planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, moneda: v.moneda },
     ]);
     setPendientesCliente((prev) => prev.filter((p) => p.planId !== v.planId));
   }
@@ -111,8 +131,34 @@ export function FacturaBorradorForm({
   const idsEnLineas = useMemo(() => new Set(lineas.map((l) => l.planId)), [lineas]);
   const disponiblesParaAgregar = pendientesCliente.filter((v) => !idsEnLineas.has(v.planId));
 
+  async function previsualizar() {
+    if (!lineas.length) { setError("Selecciona al menos un viaje."); return; }
+    setPrevisualizando(true);
+    setError("");
+    const firma = firmaActual;
+    try {
+      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clienteId, planes: lineas.map((l) => ({ planId: l.planId, montoAsignado: l.montoAsignado })) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPreview(null);
+        setError(data.error || "No se pudo generar la vista previa.");
+        return;
+      }
+      setPreview({ datos: data as PreviewApi, firma });
+    } catch {
+      setError("Error de conexión.");
+    } finally {
+      setPrevisualizando(false);
+    }
+  }
+
   async function guardar() {
     if (!lineas.length) { setError("Selecciona al menos un viaje."); return; }
+    if (requierePreview && !previewVigente) { setError("Previsualiza el borrador antes de guardarlo."); return; }
     setGuardando(true);
     setError("");
     try {
@@ -187,7 +233,7 @@ export function FacturaBorradorForm({
                   <td className="px-2 py-1.5 font-mono text-xs">{l.codigo}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{l.fechaPlan}</td>
                   <td className="px-2 py-1.5 text-xs">{l.placa ?? "—"}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(l.tarifaComercial)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(l.tarifaComercial, l.moneda)}</td>
                   <td className="px-2 py-1.5">
                     <input
                       type="number" step="0.01" min={0}
@@ -210,7 +256,7 @@ export function FacturaBorradorForm({
           <tfoot>
             <tr className="border-t border-[var(--border)] font-medium">
               <td colSpan={4} className="px-2 py-1.5 text-right text-xs text-[var(--muted)]">Total</td>
-              <td colSpan={2} className="px-2 py-1.5 text-sm text-[var(--text)]">{moneda(total)}</td>
+              <td colSpan={2} className="px-2 py-1.5 text-sm text-[var(--text)]">{formatearMonto(total, monedaCodigo)}</td>
             </tr>
           </tfoot>
         </table>
@@ -225,7 +271,7 @@ export function FacturaBorradorForm({
             <ul className="max-h-40 space-y-1 overflow-y-auto text-xs">
               {disponiblesParaAgregar.map((v) => (
                 <li key={v.planId} className="flex items-center justify-between gap-2 border-t border-[var(--border)] pt-1 first:border-t-0 first:pt-0">
-                  <span>{v.codigo} · {v.fechaPlan} · {moneda(v.tarifaComercial)}</span>
+                  <span>{v.codigo} · {v.fechaPlan} · {formatearMonto(v.tarifaComercial, v.moneda)}</span>
                   <button type="button" className="text-[var(--accent)] hover:underline" onClick={() => agregarViaje(v)}>Agregar</button>
                 </li>
               ))}
@@ -238,10 +284,64 @@ export function FacturaBorradorForm({
         </button>
       )}
 
+      {requierePreview && preview ? (
+        <div className={`space-y-2 rounded-lg border p-3 ${previewVigente ? "border-emerald-700/50" : "border-amber-600/60"}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Vista previa del borrador</p>
+            {!previewVigente ? <span className="text-xs text-amber-600">Cambiaste los viajes o montos: vuelve a previsualizar.</span> : null}
+          </div>
+          <ul className="space-y-0.5 text-xs text-[var(--text)]">
+            <li>Cliente: {preview.datos.cliente.nombre}{preview.datos.cliente.nit ? ` · NIT ${preview.datos.cliente.nit}` : ""}</li>
+            <li>Moneda: {preview.datos.borrador.moneda} · Viajes: {preview.datos.cantidadViajes}</li>
+            <li>
+              IVA {preview.datos.borrador.politica.porcentajeIva} % — los montos se interpretan{" "}
+              {preview.datos.borrador.politica.precioIncluyeIva ? "CON el IVA incluido" : "SIN IVA (se suma aparte)"}
+            </li>
+          </ul>
+          <div className="table-scroll rounded border border-[var(--border)]">
+            <table className="min-w-full text-left text-xs">
+              <thead className="bg-[var(--thead)] uppercase text-[var(--muted)]">
+                <tr>
+                  <th className="px-2 py-1">Viaje</th>
+                  <th className="px-2 py-1">Descripción</th>
+                  <th className="px-2 py-1 text-right">Precio</th>
+                  <th className="px-2 py-1 text-right">Base</th>
+                  <th className="px-2 py-1 text-right">IVA</th>
+                  <th className="px-2 py-1 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.datos.borrador.lineas.map((l) => (
+                  <tr key={l.planId} className="border-t border-[var(--border)]">
+                    <td className="px-2 py-1 font-mono">{l.codigo}</td>
+                    <td className="px-2 py-1">{l.descripcion}</td>
+                    <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.montoAsignado, preview.datos.borrador.moneda)}</td>
+                    <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.base, preview.datos.borrador.moneda)}</td>
+                    <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.iva, preview.datos.borrador.moneda)}</td>
+                    <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.total, preview.datos.borrador.moneda)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t border-[var(--border)] font-medium">
+                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">Subtotal</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.subtotal, preview.datos.borrador.moneda)}</td></tr>
+                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">IVA</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.iva, preview.datos.borrador.moneda)}</td></tr>
+                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">TOTAL</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.total, preview.datos.borrador.moneda)}</td></tr>
+              </tfoot>
+            </table>
+          </div>
+          <p className="text-[11px] text-[var(--muted)]">Es una vista previa: todavía no se reservó ningún viaje. Al guardar, el servidor vuelve a validar todo.</p>
+        </div>
+      ) : null}
+
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
       <div className="flex flex-wrap gap-2 pt-1">
-        <button type="button" disabled={guardando} className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => void guardar()}>
+        {requierePreview ? (
+          <button type="button" disabled={guardando || previsualizando || !lineas.length} className="rounded-lg border border-[var(--accent)] px-3 py-1.5 text-sm text-[var(--accent)] disabled:opacity-60" onClick={() => void previsualizar()}>
+            {previsualizando ? "Calculando…" : previewVigente ? "Actualizar vista previa" : "Previsualizar"}
+          </button>
+        ) : null}
+        <button type="button" disabled={guardando || (requierePreview && !previewVigente)} className="rounded-lg bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => void guardar()}>
           {guardando ? "Guardando…" : "Guardar borrador"}
         </button>
         <button type="button" disabled={guardando} className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--text)]" onClick={onCancelar}>

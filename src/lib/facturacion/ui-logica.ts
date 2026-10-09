@@ -15,7 +15,7 @@
 export type EstadoAdmin = "Borrador" | "Emitida" | "Anulada";
 export type EstadoFinanciero = "Sin pagos" | "Pago parcial" | "Cobrado";
 
-type ViajeConCliente = { planId: number; clienteId: number | null; cliente?: string | null };
+type ViajeConCliente = { planId: number; clienteId: number | null; cliente?: string | null; moneda?: string | null };
 
 /**
  * Fase D — un viaje solo puede agregarse a la selección si no hay
@@ -34,7 +34,38 @@ export function evaluarSeleccion<T extends ViajeConCliente>(
       mensaje: `Ya seleccionaste viajes de "${primero.cliente ?? "otro cliente"}". Solo puedes facturar viajes de un mismo cliente a la vez — deselecciona esos viajes primero.`,
     };
   }
+  // FACT-2: una factura admite una sola moneda. Si el dato falta en alguno se deja pasar: el servidor decide.
+  if (primero && primero.moneda && viaje.moneda && primero.moneda !== viaje.moneda) {
+    return {
+      accion: "rechazar",
+      mensaje: `Los viajes seleccionados están en ${primero.moneda}; este viaje está en ${viaje.moneda}. Una factura admite una sola moneda — factúralos por separado.`,
+    };
+  }
   return { accion: "agregar" };
+}
+
+/** FACT-2 — «Q1,234.00» para quetzales; «USD 1,234.00» para cualquier otra moneda. */
+export function formatearMonto(valor: number | null | undefined, monedaCodigo = "GTQ"): string {
+  if (valor == null || !Number.isFinite(valor)) return "—";
+  const n = valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return monedaCodigo === "GTQ" ? `Q${n}` : `${monedaCodigo} ${n}`;
+}
+
+/**
+ * FACT-2 — huella de la selección (viajes + montos). La vista previa solo habilita «Guardar borrador» mientras su
+ * huella coincida con la de las líneas actuales; si el usuario cambia un monto o quita un viaje, debe previsualizar
+ * de nuevo. El servidor igualmente revalida todo al guardar.
+ */
+export function firmaLineas(lineas: { planId: number; montoAsignado: number }[]): string {
+  return lineas
+    .map((l) => `${l.planId}:${l.montoAsignado}`)
+    .sort()
+    .join("|");
+}
+
+/** FACT-2 — un Borrador se «cancela» (libera sus viajes); una factura Emitida se «anula». Mismo endpoint y permiso. */
+export function etiquetaAnular(estadoAdmin: EstadoAdmin): string {
+  return estadoAdmin === "Borrador" ? "Cancelar borrador" : "Anular factura";
 }
 
 /** Fase E — total de la factura: SUM de monto_asignado, solo lectura. */

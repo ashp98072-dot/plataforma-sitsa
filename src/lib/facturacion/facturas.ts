@@ -3,6 +3,14 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
+import {
+  construirBorrador,
+  evaluarPlanFacturable,
+  normalizarMoneda,
+  type BorradorCalculado,
+  type PlanParaFactura,
+  type SnapshotLineaPrevio,
+} from "@/lib/facturacion/borrador-calculo";
 
 /**
  * FACT-1 — Facturas de cliente vinculadas a viajes TMS Cerrados, y sus
@@ -59,6 +67,15 @@ export type ViajePendiente = {
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
+  /** FACT-2 — contexto para que Facturación identifique el servicio sin abrir TMS. */
+  rutaCodigo: string | null;
+  origen: string | null;
+  destino: string | null;
+  /** Nombre del piloto asignado (solo el nombre). Para viajes tercerizados, el nombre externo. */
+  piloto: string | null;
+  estado: string;
+  /** Código normalizado (GTQ por defecto): una factura admite una sola moneda. */
+  moneda: string;
 };
 
 export type Factura = {
@@ -78,9 +95,35 @@ export type Factura = {
   saldo: number;
   /** null si la factura no está Emitida (Borrador/Anulada no tienen estado financiero). */
   estadoFinanciero: EstadoFinancieroFactura | null;
+  /**
+   * FACT-2 — desglose congelado al crear el borrador. `null` en facturas anteriores a FACT-2 (sin snapshot):
+   * para esas solo existe `montoTotal`. `montoTotal` es siempre el TOTAL con IVA.
+   */
+  moneda: string;
+  subtotal: number | null;
+  iva: number | null;
+  porcentajeIva: number | null;
+  precioIncluyeIva: boolean | null;
+  clienteNit: string | null;
+  clienteDireccion: string | null;
 };
 
-export type FacturaViajeLinea = { id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number };
+export type FacturaViajeLinea = {
+  id: number;
+  planId: number;
+  codigo: string;
+  fechaPlan: string;
+  montoAsignado: number;
+  /** FACT-2 — fotografía de la línea (null en líneas anteriores a FACT-2). */
+  descripcion: string | null;
+  rutaCodigo: string | null;
+  origen: string | null;
+  destino: string | null;
+  cantidad: number;
+  base: number | null;
+  iva: number | null;
+  total: number | null;
+};
 export type PagoFactura = {
   id: number;
   fechaPago: string;
@@ -166,7 +209,8 @@ const mapFactura = (r: RowDataPacket): Factura => {
   return {
     id: Number(r.id),
     clienteId: Number(r.cliente_id),
-    cliente: String(r.cliente),
+    // El nombre congelado en el borrador manda sobre el vivo: editar el cliente después no reescribe el documento.
+    cliente: String(r.cliente_nombre_snapshot ?? r.cliente),
     numeroFactura: r.numero_factura != null ? String(r.numero_factura) : null,
     fechaEmision: r.fecha_emision != null ? String(r.fecha_emision).slice(0, 10) : null,
     montoTotal,
@@ -179,6 +223,13 @@ const mapFactura = (r: RowDataPacket): Factura => {
     totalPagado,
     saldo: montoTotal - totalPagado,
     estadoFinanciero: estadoAdmin === "Emitida" ? estadoFinancieroDe(montoTotal, totalPagado) : null,
+    moneda: r.moneda != null ? String(r.moneda) : "GTQ",
+    subtotal: r.subtotal != null ? Number(r.subtotal) : null,
+    iva: r.iva_monto != null ? Number(r.iva_monto) : null,
+    porcentajeIva: r.porcentaje_iva != null ? Number(r.porcentaje_iva) : null,
+    precioIncluyeIva: r.precio_incluye_iva != null ? Number(r.precio_incluye_iva) === 1 : null,
+    clienteNit: r.cliente_nit_snapshot != null ? String(r.cliente_nit_snapshot) : null,
+    clienteDireccion: r.cliente_direccion_snapshot != null ? String(r.cliente_direccion_snapshot) : null,
   };
 };
 
@@ -186,6 +237,8 @@ const FACTURA_SELECT = `
   SELECT f.id, f.cliente_id, c.nombre AS cliente, f.numero_factura,
          f.fecha_emision, f.monto_total, f.estado_admin, f.observaciones,
          f.creado_por, f.creado_en, f.actualizado_por, f.actualizado_en,
+         f.moneda, f.subtotal, f.iva_monto, f.porcentaje_iva, f.precio_incluye_iva,
+         f.cliente_nombre_snapshot, f.cliente_nit_snapshot, f.cliente_direccion_snapshot,
          COALESCE(pg.total_pagado, 0) AS total_pagado
   FROM fact_facturas f
   INNER JOIN clientes c ON c.id = f.cliente_id
@@ -237,11 +290,15 @@ export async function obtenerFactura(
   if (!rows[0]) return null;
   const [viajesRows, pagosRows] = await Promise.all([
     query<RowDataPacket[]>(
-      `SELECT ffv.id, ffv.plan_id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan, ffv.monto_asignado
+      // Se prefiere SIEMPRE la fotografía de la línea; el dato vivo del viaje solo rellena filas anteriores a FACT-2.
+      `SELECT ffv.id, ffv.plan_id, COALESCE(ffv.codigo_viaje_snapshot, p.codigo) AS codigo,
+              DATE_FORMAT(COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan), '%Y-%m-%d') AS fecha_plan,
+              ffv.monto_asignado, ffv.descripcion, ffv.ruta_codigo_snapshot, ffv.origen_snapshot,
+              ffv.destino_snapshot, ffv.cantidad, ffv.base_monto, ffv.iva_monto, ffv.total_linea
        FROM fact_factura_viajes ffv
        INNER JOIN tms_planes_viaje p ON p.id = ffv.plan_id
        WHERE ffv.factura_id = ?
-       ORDER BY p.fecha_plan, ffv.id`,
+       ORDER BY COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan), ffv.id`,
       [facturaId],
     ),
     query<RowDataPacket[]>(
@@ -256,6 +313,14 @@ export async function obtenerFactura(
     viajes: viajesRows.map((r) => ({
       id: Number(r.id), planId: Number(r.plan_id), codigo: String(r.codigo),
       fechaPlan: String(r.fecha_plan), montoAsignado: Number(r.monto_asignado),
+      descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      rutaCodigo: r.ruta_codigo_snapshot != null ? String(r.ruta_codigo_snapshot) : null,
+      origen: r.origen_snapshot != null ? String(r.origen_snapshot) : null,
+      destino: r.destino_snapshot != null ? String(r.destino_snapshot) : null,
+      cantidad: r.cantidad != null ? Number(r.cantidad) : 1,
+      base: r.base_monto != null ? Number(r.base_monto) : null,
+      iva: r.iva_monto != null ? Number(r.iva_monto) : null,
+      total: r.total_linea != null ? Number(r.total_linea) : null,
     })),
     pagos: pagosRows.map((r) => ({
       id: Number(r.id), fechaPago: String(r.fecha_pago), monto: Number(r.monto),
@@ -282,13 +347,17 @@ export async function obtenerFactura(
  */
 function condicionesViajesPendientes(
   empresaId: number,
-  filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string },
+  filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string; ruta?: string },
 ): { condiciones: string[]; params: (string | number)[] } {
+  // "Facturable" NO es una columna: se deriva de estado + relaciones + facturación viva (ver docs/FACTURACION-VIAJES-FASE1.md).
+  // Las mismas reglas las aplica en servidor `evaluarPlanFacturable` (borrador-calculo.ts) al crear/previsualizar.
   const condiciones = [
     "p.empresa_id = ?",
     "p.estado = 'Cerrado'",
     "NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)",
     "cli.id IS NOT NULL",
+    "p.tarifa_comercial > 0",
+    "(NULLIF(TRIM(p.ruta_codigo_historico), '') IS NOT NULL OR NULLIF(TRIM(p.lugar_descarga_historico), '') IS NOT NULL OR p.lugar_descarga_id IS NOT NULL)",
   ];
   const params: (string | number)[] = [empresaId];
   // filtros.clienteId es un clientes.id (espacio de Facturación) — se
@@ -297,6 +366,11 @@ function condicionesViajesPendientes(
   if (filtros.clienteId) { condiciones.push("cli.id = ?"); params.push(filtros.clienteId); }
   if (filtros.fechaDesde) { condiciones.push("p.fecha_plan >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(filtros.fechaHasta); }
+  if (filtros.ruta) {
+    // Mismo criterio que el filtro de ruta de los reportes de viajes (código de ruta o destino congelados).
+    condiciones.push("(p.ruta_codigo_historico LIKE ? OR p.lugar_descarga_historico LIKE ?)");
+    params.push(`%${filtros.ruta}%`, `%${filtros.ruta}%`);
+  }
   return { condiciones, params };
 }
 
@@ -357,7 +431,7 @@ export async function obtenerKpisFacturacion(empresaId: number): Promise<KpisFac
 
 export async function listarViajesPendientes(
   empresaId: number,
-  filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string } & Paginacion,
+  filtros: { clienteId?: number; fechaDesde?: string; fechaHasta?: string; ruta?: string } & Paginacion,
 ): Promise<ResultadoPaginado<ViajePendiente>> {
   // Asegura el puente clientes.tms_cliente_id antes de leer — mismo
   // criterio ya usado por la pantalla de Facturación existente
@@ -375,15 +449,23 @@ export async function listarViajesPendientes(
   const where = condiciones.join(" AND ");
   const from = `FROM tms_planes_viaje p
      LEFT JOIN clientes cli ON cli.tms_cliente_id = p.cliente_id AND cli.empresa_id = p.empresa_id`;
-  // Deliberadamente NO se seleccionan piloto/auxiliares/evidencias/paradas/
-  // GPS — Facturador no necesita ni debe ver esos datos operativos.
+  // FACT-2: se agrega SOLO el nombre del piloto (más ruta/origen/destino/moneda) a petición de Facturación.
+  // Siguen fuera auxiliares/evidencias/paradas/GPS — Facturador no necesita ni debe ver esos datos operativos.
+  // Los JOIN extra filtran por empresa_id: nunca se une un catálogo de otra empresa.
   const [rows, countRows] = await Promise.all([
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
               cli.id AS cliente_id, cli.nombre AS cliente, u.placa, p.tarifa_comercial,
-              DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en
+              DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
+              p.estado, p.tarifa_moneda_historico, NULLIF(TRIM(p.ruta_codigo_historico), '') AS ruta_codigo,
+              lc.nombre AS origen,
+              COALESCE(NULLIF(TRIM(p.lugar_descarga_historico), ''), ld.nombre) AS destino,
+              COALESCE(pil.nombre, NULLIF(TRIM(p.piloto_externo_nombre), '')) AS piloto
        ${from}
        LEFT JOIN tms_unidades u ON u.id = p.unidad_id
+       LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id AND lc.empresa_id = p.empresa_id
+       LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id AND ld.empresa_id = p.empresa_id
+       LEFT JOIN tms_personal pil ON pil.id = p.piloto_id AND pil.empresa_id = p.empresa_id
        WHERE ${where}
        ORDER BY p.fecha_plan DESC, p.id DESC
        LIMIT ? OFFSET ?`,
@@ -403,6 +485,12 @@ export async function listarViajesPendientes(
       placa: r.placa != null ? String(r.placa) : null,
       tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
       cerradoEn: r.cerrado_en != null ? String(r.cerrado_en) : null,
+      rutaCodigo: r.ruta_codigo != null ? String(r.ruta_codigo) : null,
+      origen: r.origen != null ? String(r.origen) : null,
+      destino: r.destino != null ? String(r.destino) : null,
+      piloto: r.piloto != null ? String(r.piloto) : null,
+      estado: String(r.estado),
+      moneda: normalizarMoneda(r.tarifa_moneda_historico != null ? String(r.tarifa_moneda_historico) : null),
     })),
     totalReal: Number(countRows[0]?.total ?? 0),
     page,
@@ -419,72 +507,142 @@ export type DatosFactura = {
   observaciones?: string | null;
 };
 
+type SqlArg = string | number | null;
+/** Ejecuta una lectura. En transacción usa la conexión (permite FOR UPDATE); en preview usa el pool, sin transacción. */
+type Lector = (sql: string, params: SqlArg[]) => Promise<RowDataPacket[]>;
+const lectorTx = (conn: PoolConnection): Lector => async (sql, params) => (await conn.query<RowDataPacket[]>(sql, params))[0];
+const lectorPool: Lector = (sql, params) => query<RowDataPacket[]>(sql, params);
+
+const textoONull = (v: unknown): string | null => {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s ? s : null;
+};
+
+type ClienteFactura = { id: number; nombre: string; nit: string | null; direccion: string | null; tmsClienteId: number | null };
+
+async function leerClienteFactura(leer: Lector, empresaId: number, clienteId: number): Promise<ClienteFactura | null> {
+  const rows = await leer(
+    `SELECT id, nombre, razon_social, nit, direccion, tms_cliente_id FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1`,
+    [clienteId, empresaId],
+  );
+  const c = rows[0];
+  if (!c) return null;
+  return {
+    id: Number(c.id),
+    // El nombre fiscal es la razón social cuando existe; si no, el nombre comercial.
+    nombre: textoONull(c.razon_social) ?? String(c.nombre),
+    nit: textoONull(c.nit),
+    direccion: textoONull(c.direccion),
+    tmsClienteId: c.tms_cliente_id != null ? Number(c.tms_cliente_id) : null,
+  };
+}
+
+const MENSAJE_CLIENTE_SIN_TMS =
+  "Este cliente todavía no está vinculado a TMS (clientes.tms_cliente_id) — no tiene viajes asociables.";
+
+/** Un viaje tal como lo necesita el borrador, leído SIEMPRE de la DB (nunca del payload del cliente). */
+async function leerPlanParaFactura(
+  leer: Lector,
+  empresaId: number,
+  planId: number,
+  bloquear: boolean,
+): Promise<PlanParaFactura | null> {
+  const planRows = await leer(
+    `SELECT id, codigo, empresa_id, cliente_id, estado, tarifa_comercial,
+            DATE_FORMAT(fecha_plan, '%Y-%m-%d') AS fecha_plan,
+            ruta_codigo_historico, lugar_carga_id, lugar_descarga_id, lugar_descarga_historico,
+            tarifa_moneda_historico
+     FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1${bloquear ? " FOR UPDATE" : ""}`,
+    [planId, empresaId],
+  );
+  const p = planRows[0];
+  if (!p) return null;
+
+  const nombreLugar = async (lugarId: unknown): Promise<string | null> => {
+    if (lugarId == null) return null;
+    const rows = await leer(`SELECT nombre FROM tms_lugares WHERE id = ? AND empresa_id = ? LIMIT 1`, [Number(lugarId), empresaId]);
+    return textoONull(rows[0]?.nombre);
+  };
+  const origen = await nombreLugar(p.lugar_carga_id);
+  // El destino congelado en el viaje manda sobre el catálogo vivo (mismo criterio que el reporte de viajes).
+  const destino = textoONull(p.lugar_descarga_historico) ?? (await nombreLugar(p.lugar_descarga_id));
+
+  return {
+    id: Number(p.id),
+    codigo: String(p.codigo),
+    empresaId: Number(p.empresa_id),
+    clienteTmsId: p.cliente_id != null ? Number(p.cliente_id) : null,
+    estado: String(p.estado),
+    fechaPlan: String(p.fecha_plan),
+    tarifaComercial: p.tarifa_comercial != null ? Number(p.tarifa_comercial) : null,
+    monedaRaw: textoONull(p.tarifa_moneda_historico),
+    rutaCodigo: textoONull(p.ruta_codigo_historico),
+    origen,
+    destino,
+  };
+}
+
+type PlanValidado = { plan: PlanParaFactura; montoAsignado: number };
+
 /**
- * Valida y bloquea (FOR UPDATE) cada plan solicitado, dentro de la
- * transacción del caller. Nunca confía en el payload: empresa/cliente/
- * estado se releen de tms_planes_viaje. Devuelve el detalle para poder
- * calcular monto_total server-side y auditar diferencias vs
- * tarifa_comercial.
+ * Valida cada plan solicitado. Con `bloquear` (transacción de crear/editar) toma FOR UPDATE sobre cada viaje —
+ * esa fila es el punto de serialización entre dos usuarios que intentan facturar el mismo viaje; el UNIQUE
+ * (plan_id) de fact_factura_viajes es la garantía final de base de datos. Sin `bloquear` (preview) solo lee.
+ * Nunca confía en el payload: empresa/cliente/estado/tarifa se releen de tms_planes_viaje.
  *
- * `tmsClienteId` es el `tms_clientes.id` YA RESUELTO por el caller desde
- * el `clientes.id` de la factura (vía `clientes.tms_cliente_id`) — esta
- * función nunca compara un `clientes.id` directamente contra
- * `tms_planes_viaje.cliente_id` (espacios de ID distintos, ver comentario
- * de cabecera del archivo).
+ * `tmsClienteId` es el `tms_clientes.id` YA RESUELTO por el caller desde el `clientes.id` de la factura (vía
+ * `clientes.tms_cliente_id`) — nunca se compara un `clientes.id` contra `tms_planes_viaje.cliente_id`
+ * (espacios de ID distintos, ver comentario de cabecera del archivo).
  */
-async function validarYBloquearPlanes(
-  conn: PoolConnection,
+async function validarPlanesParaFactura(
+  leer: Lector,
   empresaId: number,
   tmsClienteId: number,
   planes: LineaFacturaInput[],
   facturaIdExcluir: number | null,
-): Promise<
-  | { ok: true; lineas: { planId: number; codigo: string; montoAsignado: number; tarifaComercial: number | null }[] }
-  | { ok: false; error: string; status: number }
-> {
+  bloquear: boolean,
+): Promise<{ ok: true; lineas: PlanValidado[] } | { ok: false; error: string; status: number }> {
   if (!planes.length) {
     return { ok: false, error: "Selecciona al menos un viaje.", status: 400 };
   }
   const idsVistos = new Set<number>();
-  const lineas: { planId: number; codigo: string; montoAsignado: number; tarifaComercial: number | null }[] = [];
   for (const linea of planes) {
     if (idsVistos.has(linea.planId)) {
       return { ok: false, error: `El viaje #${linea.planId} está repetido en la selección.`, status: 400 };
     }
     idsVistos.add(linea.planId);
+  }
 
-    const [planRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, codigo, empresa_id, cliente_id, estado, tarifa_comercial
-       FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
-      [linea.planId, empresaId],
-    );
-    const plan = planRows[0];
+  // Orden de bloqueo estable (id ascendente): dos transacciones con viajes en común toman los locks en el mismo
+  // orden, así no se interbloquean entre sí.
+  const ordenadas = [...planes].sort((a, b) => a.planId - b.planId);
+  const lineas: PlanValidado[] = [];
+  for (const linea of ordenadas) {
+    const plan = await leerPlanParaFactura(leer, empresaId, linea.planId, bloquear);
     if (!plan) {
       return { ok: false, error: `Viaje #${linea.planId} no encontrado.`, status: 404 };
     }
-    if (Number(plan.cliente_id) !== tmsClienteId) {
-      return { ok: false, error: `El viaje ${plan.codigo} no pertenece al cliente seleccionado.`, status: 400 };
-    }
-    if (String(plan.estado) !== "Cerrado") {
-      return { ok: false, error: `El viaje ${plan.codigo} no está Cerrado (estado actual: ${plan.estado}).`, status: 409 };
-    }
-
-    const [vinculoRows] = await conn.query<RowDataPacket[]>(
-      `SELECT factura_id FROM fact_factura_viajes WHERE plan_id = ? FOR UPDATE`,
+    const vinculoRows = await leer(
+      `SELECT factura_id FROM fact_factura_viajes WHERE plan_id = ?${bloquear ? " FOR UPDATE" : ""}`,
       [linea.planId],
     );
-    const vinculoExistente = vinculoRows[0];
-    if (vinculoExistente && Number(vinculoExistente.factura_id) !== facturaIdExcluir) {
-      return { ok: false, error: `El viaje ${plan.codigo} ya está vinculado a otra factura.`, status: 409 };
-    }
+    const evaluacion = evaluarPlanFacturable(plan, {
+      empresaId,
+      tmsClienteId,
+      vinculoFacturaId: vinculoRows[0] ? Number(vinculoRows[0].factura_id) : null,
+      facturaIdExcluir,
+    });
+    if (!evaluacion.ok) return evaluacion;
 
-    const tarifa = plan.tarifa_comercial != null ? Number(plan.tarifa_comercial) : null;
-    const montoAsignado = linea.montoAsignado != null ? Number(linea.montoAsignado) : (tarifa ?? 0);
+    const montoAsignado = linea.montoAsignado != null ? Number(linea.montoAsignado) : (plan.tarifaComercial ?? 0);
     if (!Number.isFinite(montoAsignado) || montoAsignado < 0) {
       return { ok: false, error: `Monto inválido para el viaje ${plan.codigo}.`, status: 400 };
     }
-    lineas.push({ planId: linea.planId, codigo: String(plan.codigo), montoAsignado, tarifaComercial: tarifa });
+    lineas.push({ plan, montoAsignado });
   }
+  // Presentación estable: por fecha del viaje y luego por id.
+  lineas.sort((a, b) => a.plan.fechaPlan.localeCompare(b.plan.fechaPlan) || a.plan.id - b.plan.id);
   return { ok: true, lineas };
 }
 
@@ -498,70 +656,147 @@ function detalleAjustesMonto(
     .join(", ");
 }
 
+/** Resumen auditable del borrador: totales, moneda, política de IVA y viajes. Sin datos fiscales del cliente. */
+function detalleBorrador(b: BorradorCalculado): string {
+  return ` · ${b.moneda} · subtotal ${b.subtotal} · IVA ${b.iva} (${b.politica.porcentajeIva} %, ${
+    b.politica.precioIncluyeIva ? "precio con IVA" : "precio sin IVA"
+  }) · viajes: ${b.lineas.map((l) => l.codigo).join(", ")}`;
+}
+
+function esConflictoConcurrencia(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_LOCK_DEADLOCK" || err?.errno === 1213 || err?.code === "ER_LOCK_WAIT_TIMEOUT" || err?.errno === 1205;
+}
+
+const ERROR_CONCURRENCIA: { ok: false; error: string; status: number } = {
+  ok: false,
+  error: "Otro usuario está facturando alguno de estos viajes en este momento. Actualiza la pantalla y vuelve a intentar.",
+  status: 409,
+};
+
+const ERROR_VIAJE_YA_VINCULADO: { ok: false; error: string; status: number } = {
+  ok: false,
+  error: "Alguno de los viajes ya está vinculado a otra factura. Actualiza la pantalla.",
+  status: 409,
+};
+
+async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b: BorradorCalculado): Promise<boolean> {
+  for (const l of b.lineas) {
+    try {
+      await conn.execute(
+        `INSERT INTO fact_factura_viajes
+           (factura_id, plan_id, monto_asignado, codigo_viaje_snapshot, fecha_viaje_snapshot, ruta_codigo_snapshot,
+            origen_snapshot, destino_snapshot, descripcion, cantidad, base_monto, iva_monto, total_linea)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          facturaId, l.planId, l.montoAsignado, l.codigo, l.fechaPlan, l.rutaCodigo,
+          l.origen, l.destino, l.descripcion, l.cantidad, l.base, l.iva, l.total,
+        ],
+      );
+    } catch (err) {
+      // UNIQUE (plan_id): última defensa si otra transacción se coló entre la validación y el INSERT.
+      if (esDuplicadoNumeroFactura(err)) return false;
+      throw err;
+    }
+  }
+  return true;
+}
+
+export type PreviewFactura = {
+  cliente: { id: number; nombre: string; nit: string | null; direccion: string | null };
+  cantidadViajes: number;
+  borrador: BorradorCalculado;
+};
+
+/**
+ * Vista previa del borrador: valida y recalcula EN EL SERVIDOR exactamente igual que `crearFactura`, pero SIN
+ * escribir nada y sin reservar los viajes (sin transacción, sin FOR UPDATE, sin auditoría). Al guardar se
+ * revalida de forma transaccional: una preview correcta NO garantiza que el viaje siga libre un segundo después.
+ */
+export async function previsualizarFactura(
+  actor: ActorFacturacion,
+  datos: { clienteId: number; planes: LineaFacturaInput[] },
+): Promise<{ ok: true; preview: PreviewFactura } | { ok: false; error: string; status: number }> {
+  const cliente = await leerClienteFactura(lectorPool, actor.empresaId, datos.clienteId);
+  if (!cliente) return { ok: false, error: "Cliente no encontrado.", status: 404 };
+  if (cliente.tmsClienteId == null) return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
+
+  const validacion = await validarPlanesParaFactura(
+    lectorPool, actor.empresaId, cliente.tmsClienteId, datos.planes, null, false,
+  );
+  if (!validacion.ok) return validacion;
+  const calculo = construirBorrador(validacion.lineas);
+  if (!calculo.ok) return calculo;
+  return {
+    ok: true,
+    preview: {
+      cliente: { id: cliente.id, nombre: cliente.nombre, nit: cliente.nit, direccion: cliente.direccion },
+      cantidadViajes: calculo.borrador.lineas.length,
+      borrador: calculo.borrador,
+    },
+  };
+}
+
 export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura): Promise<ResultadoFactura> {
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — nunca silenciado: un fallo de
   // schema/vínculo/DB/permisos aquí debe rechazar la operación completa,
   // no dejar pasar una factura que "parece válida" con un puente roto.
   await asegurarSchemaClientes();
   await asegurarVinculosTmsClientes(actor.empresaId);
-  return tx(async (conn) => {
-    const [clienteRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, nombre, tms_cliente_id FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1`,
-      [datos.clienteId, actor.empresaId],
-    );
-    if (!clienteRows[0]) {
-      return { ok: false, error: "Cliente no encontrado.", status: 404 };
-    }
-    const tmsClienteId = clienteRows[0].tms_cliente_id != null ? Number(clienteRows[0].tms_cliente_id) : null;
-    if (tmsClienteId == null) {
-      return {
-        ok: false,
-        error: "Este cliente todavía no está vinculado a TMS (clientes.tms_cliente_id) — no tiene viajes asociables.",
-        status: 409,
-      };
-    }
-
-    const validacion = await validarYBloquearPlanes(conn, actor.empresaId, tmsClienteId, datos.planes, null);
-    if (!validacion.ok) return validacion;
-    const { lineas } = validacion;
-    const montoTotal = lineas.reduce((s, l) => s + l.montoAsignado, 0);
-
-    let facturaId: number;
-    try {
-      const [insertFactura] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO fact_facturas
-          (empresa_id, cliente_id, numero_factura, fecha_emision, monto_total, estado_admin, observaciones, creado_por)
-         VALUES (?, ?, ?, ?, ?, 'Borrador', ?, ?)`,
-        [
-          actor.empresaId, datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null,
-          montoTotal, datos.observaciones ?? null, actor.usuarioId,
-        ],
-      );
-      facturaId = Number(insertFactura.insertId);
-    } catch (err) {
-      if (esDuplicadoNumeroFactura(err)) {
-        return { ok: false, error: "Ya existe una factura con ese número.", status: 409 };
+  try {
+    return await tx(async (conn) => {
+      const cliente = await leerClienteFactura(lectorTx(conn), actor.empresaId, datos.clienteId);
+      if (!cliente) {
+        return { ok: false, error: "Cliente no encontrado.", status: 404 };
       }
-      throw err;
-    }
+      if (cliente.tmsClienteId == null) {
+        return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
+      }
 
-    for (const l of lineas) {
-      await conn.execute(
-        `INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, ?)`,
-        [facturaId, l.planId, l.montoAsignado],
-      );
-    }
+      const validacion = await validarPlanesParaFactura(lectorTx(conn), actor.empresaId, cliente.tmsClienteId, datos.planes, null, true);
+      if (!validacion.ok) return validacion;
+      const calculo = construirBorrador(validacion.lineas);
+      if (!calculo.ok) return calculo;
+      const b = calculo.borrador;
 
-    await registrarAuditoriaTx(conn, {
-      empresaId: actor.empresaId,
-      usuario: actor.usuario,
-      modulo: "facturacion",
-      accion: "crear_factura",
-      detalle: `Factura #${facturaId} (Borrador) · cliente ${clienteRows[0].nombre} · ${lineas.length} viaje(s) · monto total Q${montoTotal}${detalleAjustesMonto(lineas)}`,
+      let facturaId: number;
+      try {
+        const [insertFactura] = await conn.execute<ResultSetHeader>(
+          `INSERT INTO fact_facturas
+            (empresa_id, cliente_id, numero_factura, fecha_emision, monto_total, moneda, subtotal, iva_monto,
+             porcentaje_iva, precio_incluye_iva, cliente_nombre_snapshot, cliente_nit_snapshot,
+             cliente_direccion_snapshot, estado_admin, observaciones, creado_por)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Borrador', ?, ?)`,
+          [
+            actor.empresaId, datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null,
+            b.total, b.moneda, b.subtotal, b.iva, b.politica.porcentajeIva, b.politica.precioIncluyeIva ? 1 : 0,
+            cliente.nombre, cliente.nit, cliente.direccion, datos.observaciones ?? null, actor.usuarioId,
+          ],
+        );
+        facturaId = Number(insertFactura.insertId);
+      } catch (err) {
+        if (esDuplicadoNumeroFactura(err)) {
+          return { ok: false, error: "Ya existe una factura con ese número.", status: 409 };
+        }
+        throw err;
+      }
+
+      if (!(await insertarLineasBorrador(conn, facturaId, b))) return ERROR_VIAJE_YA_VINCULADO;
+
+      await registrarAuditoriaTx(conn, {
+        empresaId: actor.empresaId,
+        usuario: actor.usuario,
+        modulo: "facturacion",
+        accion: "crear_factura",
+        detalle: `Factura #${facturaId} (Borrador) · cliente ${cliente.nombre} · ${b.lineas.length} viaje(s) · monto total Q${b.total}${detalleBorrador(b)}${detalleAjustesMonto(b.lineas)}`,
+      });
+
+      return { ok: true, facturaId };
     });
-
-    return { ok: true, facturaId };
-  });
+  } catch (err) {
+    if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
+    throw err;
+  }
 }
 
 export async function actualizarFacturaBorrador(
@@ -573,75 +808,101 @@ export async function actualizarFacturaBorrador(
   // nunca silenciado.
   await asegurarSchemaClientes();
   await asegurarVinculosTmsClientes(actor.empresaId);
-  return tx(async (conn) => {
-    const [facturaRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado_admin, cliente_id FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
-      [facturaId, actor.empresaId],
-    );
-    const factura = facturaRows[0];
-    if (!factura) return { ok: false, error: "Factura no encontrada.", status: 404 };
-    if (String(factura.estado_admin) !== "Borrador") {
-      return { ok: false, error: "Solo se puede editar una factura en Borrador.", status: 409 };
-    }
-
-    const [clienteRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, nombre, tms_cliente_id FROM clientes WHERE id = ? AND empresa_id = ? LIMIT 1`,
-      [datos.clienteId, actor.empresaId],
-    );
-    if (!clienteRows[0]) return { ok: false, error: "Cliente no encontrado.", status: 404 };
-    const tmsClienteId = clienteRows[0].tms_cliente_id != null ? Number(clienteRows[0].tms_cliente_id) : null;
-    if (tmsClienteId == null) {
-      return {
-        ok: false,
-        error: "Este cliente todavía no está vinculado a TMS (clientes.tms_cliente_id) — no tiene viajes asociables.",
-        status: 409,
-      };
-    }
-
-    const validacion = await validarYBloquearPlanes(conn, actor.empresaId, tmsClienteId, datos.planes, facturaId);
-    if (!validacion.ok) return validacion;
-    const { lineas } = validacion;
-    const montoTotal = lineas.reduce((s, l) => s + l.montoAsignado, 0);
-
-    // Reemplaza el conjunto de viajes por completo, dentro de la MISMA
-    // transacción — sin ventana donde un viaje quede "huérfano" o libre
-    // para otra factura mientras se reconstruye la lista.
-    await conn.execute(`DELETE FROM fact_factura_viajes WHERE factura_id = ?`, [facturaId]);
-    for (const l of lineas) {
-      await conn.execute(
-        `INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, ?)`,
-        [facturaId, l.planId, l.montoAsignado],
+  try {
+    return await tx(async (conn) => {
+      const [facturaRows] = await conn.query<RowDataPacket[]>(
+        `SELECT id, estado_admin, cliente_id, cliente_nombre_snapshot, cliente_nit_snapshot, cliente_direccion_snapshot
+         FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+        [facturaId, actor.empresaId],
       );
-    }
-
-    try {
-      await conn.execute(
-        `UPDATE fact_facturas
-         SET cliente_id = ?, numero_factura = ?, fecha_emision = ?, monto_total = ?, observaciones = ?,
-             actualizado_por = ?, actualizado_en = NOW()
-         WHERE id = ? AND empresa_id = ? AND estado_admin = 'Borrador'`,
-        [
-          datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null, montoTotal,
-          datos.observaciones ?? null, actor.usuarioId, facturaId, actor.empresaId,
-        ],
-      );
-    } catch (err) {
-      if (esDuplicadoNumeroFactura(err)) {
-        return { ok: false, error: "Ya existe una factura con ese número.", status: 409 };
+      const factura = facturaRows[0];
+      if (!factura) return { ok: false, error: "Factura no encontrada.", status: 404 };
+      if (String(factura.estado_admin) !== "Borrador") {
+        return { ok: false, error: "Solo se puede editar una factura en Borrador.", status: 409 };
       }
-      throw err;
-    }
 
-    await registrarAuditoriaTx(conn, {
-      empresaId: actor.empresaId,
-      usuario: actor.usuario,
-      modulo: "facturacion",
-      accion: "editar_factura_borrador",
-      detalle: `Factura #${facturaId} (Borrador) editada · cliente ${clienteRows[0].nombre} · ${lineas.length} viaje(s) · monto total Q${montoTotal}${detalleAjustesMonto(lineas)}`,
+      const cliente = await leerClienteFactura(lectorTx(conn), actor.empresaId, datos.clienteId);
+      if (!cliente) return { ok: false, error: "Cliente no encontrado.", status: 404 };
+      if (cliente.tmsClienteId == null) return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
+
+      const validacion = await validarPlanesParaFactura(lectorTx(conn), actor.empresaId, cliente.tmsClienteId, datos.planes, facturaId, true);
+      if (!validacion.ok) return validacion;
+
+      // Editar el borrador NO refresca lo ya congelado: las líneas que siguen en el borrador conservan su
+      // fotografía (descripción/ruta/origen/destino/fecha), y el cliente conserva la suya si no cambió de cliente.
+      const [previasRows] = await conn.query<RowDataPacket[]>(
+        `SELECT plan_id, fecha_viaje_snapshot, ruta_codigo_snapshot, origen_snapshot, destino_snapshot, descripcion
+         FROM fact_factura_viajes WHERE factura_id = ?`,
+        [facturaId],
+      );
+      const previas = new Map<number, SnapshotLineaPrevio>();
+      for (const r of previasRows) {
+        if (r.descripcion == null || r.fecha_viaje_snapshot == null) continue; // fila anterior a FACT-2: se fotografía ahora
+        previas.set(Number(r.plan_id), {
+          fechaPlan: String(r.fecha_viaje_snapshot).slice(0, 10),
+          rutaCodigo: textoONull(r.ruta_codigo_snapshot),
+          origen: textoONull(r.origen_snapshot),
+          destino: textoONull(r.destino_snapshot),
+          descripcion: String(r.descripcion),
+        });
+      }
+      const calculo = construirBorrador(
+        validacion.lineas.map((l) => ({ ...l, snapshotPrevio: previas.get(l.plan.id) ?? null })),
+      );
+      if (!calculo.ok) return calculo;
+      const b = calculo.borrador;
+
+      const mismoCliente = Number(factura.cliente_id) === datos.clienteId && factura.cliente_nombre_snapshot != null;
+      const snapCliente = mismoCliente
+        ? {
+            nombre: String(factura.cliente_nombre_snapshot),
+            nit: textoONull(factura.cliente_nit_snapshot),
+            direccion: textoONull(factura.cliente_direccion_snapshot),
+          }
+        : { nombre: cliente.nombre, nit: cliente.nit, direccion: cliente.direccion };
+
+      // Reemplaza el conjunto de viajes por completo, dentro de la MISMA
+      // transacción — sin ventana donde un viaje quede "huérfano" o libre
+      // para otra factura mientras se reconstruye la lista.
+      await conn.execute(`DELETE FROM fact_factura_viajes WHERE factura_id = ?`, [facturaId]);
+      if (!(await insertarLineasBorrador(conn, facturaId, b))) return ERROR_VIAJE_YA_VINCULADO;
+
+      try {
+        await conn.execute(
+          `UPDATE fact_facturas
+           SET cliente_id = ?, numero_factura = ?, fecha_emision = ?, monto_total = ?, moneda = ?, subtotal = ?,
+               iva_monto = ?, porcentaje_iva = ?, precio_incluye_iva = ?, cliente_nombre_snapshot = ?,
+               cliente_nit_snapshot = ?, cliente_direccion_snapshot = ?, observaciones = ?,
+               actualizado_por = ?, actualizado_en = NOW()
+           WHERE id = ? AND empresa_id = ? AND estado_admin = 'Borrador'`,
+          [
+            datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null, b.total, b.moneda, b.subtotal,
+            b.iva, b.politica.porcentajeIva, b.politica.precioIncluyeIva ? 1 : 0, snapCliente.nombre,
+            snapCliente.nit, snapCliente.direccion, datos.observaciones ?? null,
+            actor.usuarioId, facturaId, actor.empresaId,
+          ],
+        );
+      } catch (err) {
+        if (esDuplicadoNumeroFactura(err)) {
+          return { ok: false, error: "Ya existe una factura con ese número.", status: 409 };
+        }
+        throw err;
+      }
+
+      await registrarAuditoriaTx(conn, {
+        empresaId: actor.empresaId,
+        usuario: actor.usuario,
+        modulo: "facturacion",
+        accion: "editar_factura_borrador",
+        detalle: `Factura #${facturaId} (Borrador) editada · cliente ${cliente.nombre} · ${b.lineas.length} viaje(s) · monto total Q${b.total}${detalleBorrador(b)}${detalleAjustesMonto(b.lineas)}`,
+      });
+
+      return { ok: true, facturaId };
     });
-
-    return { ok: true, facturaId };
-  });
+  } catch (err) {
+    if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
+    throw err;
+  }
 }
 
 export type EmitirInput = { numeroFactura?: string | null; fechaEmision?: string | null };
