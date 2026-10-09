@@ -34,6 +34,22 @@ describe("GET /facturacion/facturas/[id]/pdf-demo", () => {
     expect(generarPdfFacturaDemo).toHaveBeenCalledWith({ id: 7, nombre: "Empresa 7", logoUrl: "uploads/logo.png" }, 12);
   });
 
+  it("el LOGO sale solo del guard: una ruta de logo enviada por el cliente (URL) se ignora", async () => {
+    await GET(new Request("http://localhost/x?logoUrl=empresas/8/logo.png&logo=../../etc/passwd&logo_url=x"), ctx());
+    expect(generarPdfFacturaDemo).toHaveBeenCalledTimes(1);
+    const [empresaPasada] = vi.mocked(generarPdfFacturaDemo).mock.calls[0];
+    expect(empresaPasada.logoUrl).toBe("uploads/logo.png");
+  });
+
+  it("si la empresa no tiene un logo válido, responde 409 con el mensaje claro y NO devuelve un PDF", async () => {
+    const mensaje = "Esta empresa no tiene un logo válido configurado para la factura.";
+    vi.mocked(generarPdfFacturaDemo).mockResolvedValue({ ok: false, status: 409, error: mensaje });
+    const res = await GET(new Request("http://localhost/x"), ctx());
+    expect(res.status).toBe(409);
+    expect(res.headers.get("Content-Type")).not.toBe("application/pdf");
+    expect((await res.json()).error).toBe(mensaje);
+  });
+
   it("devuelve el PDF: tipo application/pdf, en línea (se abre en una pestaña), sin caché", async () => {
     const res = await GET(new Request("http://localhost/x"), ctx());
     expect(res.status).toBe(200);

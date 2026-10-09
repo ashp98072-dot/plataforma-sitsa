@@ -1,6 +1,6 @@
 import PDFDocument from "pdfkit";
 import type { RowDataPacket } from "mysql2";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, statSync } from "fs";
 import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
@@ -32,14 +32,18 @@ import { formatearMonto } from "@/lib/facturacion/ui-logica";
  * teléfono del emisor, condiciones de pago de la factura y leyenda tributaria. El código de cliente es el único dato no
  * congelado que se lee (`clientes.codigo`, filtrado por empresa); no es un dato fiscal del snapshot.
  *
- * PDF: se reutiliza PDFKit (mismo patrón que Gastos/Fondos/Boleta de vacaciones), el logo de la empresa por `logo_url`
- * (con el mismo respaldo de solo texto) y los datos del emisor del perfil de Facturación de la empresa
- * (`fact_empresa_perfil`).
+ * LOGO OBLIGATORIO: la factura siempre muestra el logo de la empresa emisora (`empresas.logo_url` de la empresa del guard,
+ * nunca una ruta del cliente ni el logo de otra empresa). Si falta, el archivo no existe, no es legible por PDFKit o su
+ * ruta apunta al directorio de otra empresa, NO se genera el PDF (409): no hay respaldo silencioso a solo texto.
+ *
+ * PDF: se reutiliza PDFKit (mismo patrón que Gastos/Fondos/Boleta de vacaciones) y los datos del emisor del perfil de
+ * Facturación de la empresa (`fact_empresa_perfil`).
  */
 
 export const LEYENDA_NO_FISCAL = "DEMO — DOCUMENTO NO FISCAL";
 export const TEXTO_PENDIENTE_FEL = "PENDIENTE FEL";
 export const TEXTO_PENDIENTE_DEFINIR = "Pendiente de definir";
+export const MENSAJE_SIN_LOGO = "Esta empresa no tiene un logo válido configurado para la factura.";
 
 export type EmisorDemo = {
   razonSocial: string;
@@ -48,7 +52,6 @@ export type EmisorDemo = {
   direccion: string | null;
   /** La plataforma todavía no guarda el teléfono del emisor: hoy llega siempre `null`. */
   telefono: string | null;
-  logo: Buffer | null;
 };
 
 /** Datos del formato real que no están en el snapshot de la factura. `null` = pendiente de definir. */
@@ -217,7 +220,8 @@ const W_DESC = 330;
 const X_TOT = X_DESC + W_DESC + 8;
 const W_TOT = DER - 8 - X_TOT;
 
-export async function renderizarFacturaDemo(f: FacturaDemo): Promise<Buffer> {
+/** `logo` es OBLIGATORIO y ya viene validado (ver `cargarLogoEmpresa`); si PDFKit no pudiera dibujarlo, el render falla. */
+export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
@@ -232,6 +236,8 @@ export async function renderizarFacturaDemo(f: FacturaDemo): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
+    // `openImage` existe en PDFKit pero no en sus tipos; lanza si no reconoce el formato (PNG/JPEG).
+    const dimsLogo = (doc as unknown as { openImage(src: Buffer): { width: number; height: number } }).openImage(logo);
     const moneda = (v: number) => formatearMonto(v, f.moneda);
     const serif = (negrita = false, cursiva = false) => doc.font(negrita ? "Times-Bold" : cursiva ? "Times-Italic" : "Times-Roman");
     const trazo = () => doc.lineWidth(LINEA).strokeColor(NEGRO);
@@ -283,24 +289,29 @@ export async function renderizarFacturaDemo(f: FacturaDemo): Promise<Buffer> {
       doc.font("Helvetica-Bold").fontSize(9).fillColor("#92400e");
       texto(LEYENDA_NO_FISCAL, M, Y_FRANJA + 3.5, { width: ANCHO, align: "center" });
 
-      // ── Encabezado izquierdo: razón social, logo, dirección, teléfono, NIT ────────────────────────────────────────
+      // ── Encabezado izquierdo: razón social, LOGO (obligatorio), dirección, teléfono, NIT ─────────────────────────────
       const wIzq = 304;
       serif(true).fontSize(11.5).fillColor(NEGRO);
       doc.text(textoPdf(f.emisor.razonSocial), M, Y_ENC + 2, { width: wIzq, align: "center", height: 28, ellipsis: true });
-      let xDatos = M;
-      let wDatos = wIzq;
-      if (f.emisor.logo) {
-        try {
-          doc.image(f.emisor.logo, M + 8, Y_ENC + 36, { fit: [118, 76] });
-          xDatos = M + 132;
-          wDatos = wIzq - 132;
-        } catch {
-          xDatos = M; // logo ilegible: encabezado solo de texto
-          wDatos = wIzq;
-        }
+      // El logo se escala con `fit` (proporcional, nunca se estira). Un logo apaisado (lockup horizontal) va a todo el
+      // ancho del bloque con los datos debajo; uno cuadrado o vertical va a la izquierda con los datos a su derecha.
+      const apaisado = dimsLogo.width / dimsLogo.height >= 2.2;
+      let xDatos: number;
+      let wDatos: number;
+      let yDatos: number;
+      if (apaisado) {
+        doc.image(logo, M + 8, Y_ENC + 32, { fit: [wIzq - 16, 58], align: "center", valign: "center" });
+        xDatos = M;
+        wDatos = wIzq;
+        yDatos = Y_ENC + 94;
+      } else {
+        doc.image(logo, M + 8, Y_ENC + 32, { fit: [132, 100], align: "center", valign: "center" });
+        xDatos = M + 148;
+        wDatos = wIzq - 148;
+        yDatos = Y_ENC + 44;
       }
       serif().fontSize(8.5).fillColor(NEGRO);
-      let yD = Y_ENC + 40;
+      let yD = yDatos;
       const lineaDato = (s: string) => {
         doc.text(textoPdf(s), xDatos, yD, { width: wDatos, align: "center" });
         yD = doc.y + 1;
@@ -484,13 +495,44 @@ function textoDe(v: unknown): string | null {
   return t ? t : null;
 }
 
-function leerLogo(logoUrl: string | null | undefined): Buffer | null {
-  if (!logoUrl) return null;
+const MAX_BYTES_LOGO = 5 * 1024 * 1024;
+
+/** Dibuja la imagen en un documento descartable: confirma que PDFKit (PNG/JPEG) puede leerla y decodificarla. */
+function pdfkitPuedeLeer(imagen: Buffer): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const doc = new PDFDocument({ size: [20, 20], margin: 0 });
+      doc.on("data", () => undefined);
+      doc.on("end", () => resolve(true));
+      doc.on("error", () => resolve(false));
+      doc.image(imagen, 0, 0, { fit: [10, 10] });
+      doc.end();
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/**
+ * Logo de la EMPRESA DEL GUARD (`empresas.logo_url`; nunca una ruta del cliente). Devuelve `null` si falta, la ruta es
+ * inválida o apunta al directorio de OTRA empresa (`empresas/<otroId>/…`), el archivo no existe / no es un archivo / está
+ * vacío o es demasiado grande, o PDFKit no puede leerlo. Quien llama debe responder 409: no hay respaldo a solo texto.
+ */
+export async function cargarLogoEmpresa(empresa: { id: number; logoUrl: string | null }): Promise<Buffer | null> {
+  const ruta = typeof empresa.logoUrl === "string" ? empresa.logoUrl.trim() : "";
+  if (!ruta || ruta.includes("\0")) return null;
+  const normalizada = ruta.replaceAll("\\", "/").replace(/^\.?\/+/, "");
+  const deOtraEmpresa = /^empresas\/(\d+)(\/|$)/i.exec(normalizada);
+  if (deOtraEmpresa && Number(deOtraEmpresa[1]) !== empresa.id) return null;
   try {
-    const abs = absPathFromRelative(logoUrl);
-    return existsSync(abs) ? readFileSync(abs) : null;
+    const abs = absPathFromRelative(ruta);
+    if (!existsSync(abs)) return null;
+    const info = statSync(abs);
+    if (!info.isFile() || info.size <= 0 || info.size > MAX_BYTES_LOGO) return null;
+    const imagen = readFileSync(abs);
+    return (await pdfkitPuedeLeer(imagen)) ? imagen : null;
   } catch {
-    return null; // sin logo válido: encabezado solo de texto
+    return null;
   }
 }
 
@@ -521,7 +563,6 @@ export async function generarPdfFacturaDemo(
     nit: textoDe(r.nit_emisor),
     direccion: textoDe(r.direccion_fiscal),
     telefono: null, // la plataforma todavía no modela el teléfono del emisor
-    logo: leerLogo(empresa.logoUrl),
   };
   const complementos: ComplementosDemo = {
     clienteCodigo: detalle ? await leerCodigoCliente(empresa.id, detalle.factura.clienteId) : null,
@@ -530,5 +571,9 @@ export async function generarPdfFacturaDemo(
   };
   const modelo = prepararFacturaDemo(detalle, emisor, ahoraLocal().slice(0, 10), complementos);
   if (!modelo.ok) return modelo;
-  return { ok: true, buffer: await renderizarFacturaDemo(modelo.factura), nombreArchivo: `factura-demo-${facturaId}.pdf` };
+  // El logo es obligatorio. Se valida DESPUÉS de la factura (una factura ajena o inexistente sigue siendo 404 y no revela el
+  // estado del logo) y siempre con el de la empresa del guard.
+  const logo = await cargarLogoEmpresa(empresa);
+  if (!logo) return { ok: false, status: 409, error: MENSAJE_SIN_LOGO };
+  return { ok: true, buffer: await renderizarFacturaDemo(modelo.factura, logo), nombreArchivo: `factura-demo-${facturaId}.pdf` };
 }

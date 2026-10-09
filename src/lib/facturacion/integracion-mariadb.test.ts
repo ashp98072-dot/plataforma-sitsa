@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import mysql, { type Connection, type Pool, type RowDataPacket } from "mysql2/promise";
 import PDFDocument from "pdfkit";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -940,8 +941,25 @@ describe.skipIf(!PUERTO)("MariaDB real — columna «Unidad» de Viajes pendient
 });
 
 describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congelado en la base", () => {
-  const empresa1 = { id: E1, nombre: "Empresa 7", logoUrl: null };
-  const empresa2 = { id: E2, nombre: "Empresa 8", logoUrl: null };
+  // El logo es OBLIGATORIO: cada empresa usa un archivo real de su propio directorio dentro de un `uploads` temporal.
+  const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const empresa1 = { id: E1, nombre: "Empresa 7", logoUrl: `empresas/${E1}/logo.png` };
+  const empresa2 = { id: E2, nombre: "Empresa 8", logoUrl: `empresas/${E2}/logo.png` };
+  let uploadsTemporal = "";
+  let uploadDirOriginal: string | undefined;
+  beforeAll(() => {
+    uploadDirOriginal = process.env.UPLOAD_DIR;
+    uploadsTemporal = mkdtempSync(join(tmpdir(), "fact-real-uploads-"));
+    process.env.UPLOAD_DIR = uploadsTemporal;
+    for (const e of [E1, E2]) {
+      mkdirSync(dirname(join(uploadsTemporal, `empresas/${e}/logo.png`)), { recursive: true });
+      writeFileSync(join(uploadsTemporal, `empresas/${e}/logo.png`), PNG_1X1);
+    }
+  });
+  afterAll(() => {
+    if (uploadDirOriginal === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = uploadDirOriginal;
+    rmSync(uploadsTemporal, { recursive: true, force: true });
+  });
   const textoPdf = async (fn: () => Promise<unknown>): Promise<string> => {
     const spy = vi.spyOn(PDFDocument.prototype, "text");
     try { await fn(); return spy.mock.calls.map((c) => String(c[0])).join("\n"); } finally { spy.mockRestore(); }
@@ -994,9 +1012,20 @@ describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congela
     await admin.query("UPDATE clientes SET codigo = '0000020' WHERE id = 20");
   });
 
-  it("multiempresa: la empresa 8 no puede generar el PDF de una factura de la empresa 7 (404, sin PDF)", async () => {
-    const r = await generarPdfFacturaDemo(empresa2, mixtaId);
-    expect(r).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+  it("multiempresa: la empresa 8 no puede generar el PDF de una factura de la empresa 7 (404, sin PDF), tenga o no logo", async () => {
+    expect(await generarPdfFacturaDemo(empresa2, mixtaId)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+    expect(await generarPdfFacturaDemo({ ...empresa2, logoUrl: null }, mixtaId)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+  });
+
+  it("LOGO obligatorio: sin logo, con archivo inexistente o con el logo de OTRA empresa → 409 y no se genera el PDF de una factura válida", async () => {
+    const esperado = { ok: false, status: 409, error: "Esta empresa no tiene un logo válido configurado para la factura." };
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: null }, mixtaId)).toEqual(esperado);
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: `empresas/${E1}/no-existe.png` }, mixtaId)).toEqual(esperado);
+    expect(await generarPdfFacturaDemo({ ...empresa1, logoUrl: `empresas/${E2}/logo.png` }, mixtaId)).toEqual(esperado);
+    const ok = await generarPdfFacturaDemo(empresa1, mixtaId);
+    expect(ok.ok).toBe(true);
+    // (un PNG con canal alfa se guarda como imagen + máscara: puede haber más de un objeto de imagen)
+    if (ok.ok) expect((ok.buffer.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length).toBeGreaterThanOrEqual(1);
   });
 
   it("Emitida: lleva su número y fecha de emisión y SIGUE marcada como NO FISCAL; Anulada → 409", async () => {

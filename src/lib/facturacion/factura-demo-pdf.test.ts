@@ -1,23 +1,23 @@
-import { dirname, join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
+import { deflateSync } from "node:zlib";
 import PDFDocument from "pdfkit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/facturacion/facturas", () => ({ obtenerFactura: vi.fn() }));
 vi.mock("@/lib/facturacion/repository", () => ({ obtenerPerfilEmpresa: vi.fn() }));
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
-vi.mock("@/lib/uploads", () => ({ absPathFromRelative: vi.fn((r: string) => `/abs/${r}`) }));
-vi.mock("fs", () => ({ existsSync: vi.fn(() => false), readFileSync: vi.fn() }));
 
-import { existsSync, readFileSync as readFileMock } from "fs";
 import { query } from "@/lib/db";
 import { obtenerFactura } from "@/lib/facturacion/facturas";
 import { obtenerPerfilEmpresa } from "@/lib/facturacion/repository";
-// `fs` está mockeado más arriba (para el logo); las pruebas que leen archivos reales usan el módulo verdadero.
-const { readFileSync, mkdirSync, writeFileSync } = await vi.importActual<typeof import("fs")>("fs");
 import {
+  cargarLogoEmpresa,
   descripcionVisible,
   generarPdfFacturaDemo,
   LEYENDA_NO_FISCAL,
+  MENSAJE_SIN_LOGO,
   prepararFacturaDemo,
   renderizarFacturaDemo,
   TEXTO_PENDIENTE_DEFINIR,
@@ -41,7 +41,57 @@ const paginas = (buf: Buffer): number => (buf.toString("latin1").match(/\/Type\s
 
 type Detalle = NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>;
 
-const EMISOR: EmisorDemo = { razonSocial: "Empresa Demo, S.A.", nombreComercial: "Demo Logística", nit: "9999999-9", direccion: "Zona 10, Ciudad de Guatemala", telefono: null, logo: null };
+const EMISOR: EmisorDemo = { razonSocial: "Empresa Demo, S.A.", nombreComercial: "Demo Logística", nit: "9999999-9", direccion: "Zona 10, Ciudad de Guatemala", telefono: null };
+
+// ── Logos de prueba: archivos REALES en un directorio temporal que hace de `uploads` (se usa el resolvedor real) ──────────
+const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (b: Buffer): number => { let c = 0xffffffff; for (const x of b) c = CRC[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function chunkPng(tipo: string, datos: Buffer): Buffer {
+  const cuerpo = Buffer.concat([Buffer.from(tipo, "latin1"), datos]);
+  const len = Buffer.alloc(4); len.writeUInt32BE(datos.length);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(cuerpo));
+  return Buffer.concat([len, cuerpo, crc]);
+}
+/** PNG RGB de un solo color: válido y decodificable, de cualquier tamaño. */
+function pngSolido(ancho: number, alto: number, [r, g, b]: [number, number, number]): Buffer {
+  const fila = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: ancho }, () => [r, g, b]).flat())]);
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(ancho, 0); ihdr.writeUInt32BE(alto, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunkPng("IHDR", ihdr), chunkPng("IDAT", deflateSync(Buffer.concat(Array.from({ length: alto }, () => fila)))), chunkPng("IEND", Buffer.alloc(0)),
+  ]);
+}
+const JPEG_48X24 = Buffer.from("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA0JCgsKCA0LCgsODg0PEyAVExISEyccHhcgLikxMC4pLSwzOko+MzZGNywtQFdBRkxOUlNSMj5aYVpQYEpRUk//2wBDAQ4ODhMREyYVFSZPNS01T09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0//wAARCAAYADADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDma7zRfAaeWJdZkbflSIYW4A7hjj8OPTrzxzXhJIH8T2AuSoQSZG5sfMASv/j2OO9eu16mMryg1GOhz0oJ6s56fwXoUsTIlq8LHo6SsSP++iR+lcX4l8Mz6G3nrIstnJJsjbPzLxkBh+fI9O3SvVay/EyQP4b1AXJUIIWI3Nj5hyv/AI9jjvXLQxNSM0m7o0nTi0eP0UUV7JyDo3eKRZI3ZHQhlZTggjoQa9I0XxtYXkYTUStnPlVHUo+e+cfLz69OOTzRRWNajGqveLhNxehsT+INGgiaV9TtSq9Qkgc/kuSa4fxZ4qGrRmxskZbVZMmQsQZcdOOwzzg56A8UUVz4bDwXv9S6lR7HK0UUV3GJ/9k=", "base64");
+const LOGO_7 = pngSolido(120, 120, [200, 30, 30]); // cuadrado — empresa 7
+const LOGO_8 = pngSolido(120, 120, [30, 30, 200]); // cuadrado — empresa 8
+const LOGO_ANCHO = pngSolido(600, 120, [20, 120, 60]); // apaisado (lockup horizontal)
+let TMP_UPLOADS = "";
+let TMP_FUERA = "";
+let UPLOAD_DIR_ORIGINAL: string | undefined;
+
+beforeAll(() => {
+  UPLOAD_DIR_ORIGINAL = process.env.UPLOAD_DIR;
+  TMP_UPLOADS = mkdtempSync(join(tmpdir(), "fact-uploads-"));
+  TMP_FUERA = mkdtempSync(join(tmpdir(), "fact-fuera-"));
+  process.env.UPLOAD_DIR = TMP_UPLOADS;
+  for (const [ruta, datos] of [
+    ["empresas/7/logo.png", LOGO_7], ["empresas/8/logo.png", LOGO_8], ["empresas/7/logo.jpg", JPEG_48X24], ["empresas/7/logo-ancho.png", LOGO_ANCHO],
+    ["empresas/7/roto.png", Buffer.concat([LOGO_7.subarray(0, 40), Buffer.from("esto no es un png valido")])],
+    ["empresas/7/texto.png", Buffer.from("no soy una imagen")], ["empresas/7/vacio.png", Buffer.alloc(0)],
+    ["empresas/7/logo.svg", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>')],
+    ["empresas/7/logo.gif", Buffer.from("GIF89a\x01\x00\x01\x00\x80\x00\x00", "latin1")],
+  ] as [string, Buffer][]) {
+    mkdirSync(dirname(join(TMP_UPLOADS, ruta)), { recursive: true });
+    writeFileSync(join(TMP_UPLOADS, ruta), datos);
+  }
+  mkdirSync(join(TMP_UPLOADS, "empresas/7/carpeta.png"), { recursive: true }); // un directorio, no un archivo
+  writeFileSync(join(TMP_FUERA, "logo-ajeno.png"), LOGO_8);
+});
+afterAll(() => {
+  if (UPLOAD_DIR_ORIGINAL === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = UPLOAD_DIR_ORIGINAL;
+  rmSync(TMP_UPLOADS, { recursive: true, force: true });
+  rmSync(TMP_FUERA, { recursive: true, force: true });
+});
 const COMPLETOS: ComplementosDemo = { clienteCodigo: "0000066", condiciones: null, leyendaTributaria: null };
 
 function linea(n: number, over: Partial<Detalle["viajes"][number]> = {}): Detalle["viajes"][number] {
@@ -81,13 +131,13 @@ beforeEach(() => {
   } as never);
   vi.mocked(query).mockResolvedValue([{ codigo: "0000066" }] as never);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.mocked(existsSync).mockReturnValue(false); });
+afterEach(() => { vi.restoreAllMocks(); });
 
-async function renderizar(d: Detalle | null, emisor: EmisorDemo = EMISOR, complementos: ComplementosDemo = COMPLETOS) {
+async function renderizar(d: Detalle | null, emisor: EmisorDemo = EMISOR, complementos: ComplementosDemo = COMPLETOS, logo: Buffer = LOGO_7) {
   const m = prepararFacturaDemo(d, emisor, "2026-10-09", complementos);
   if (!m.ok) throw new Error(m.error);
   const spy = espiarTexto();
-  const buffer = await renderizarFacturaDemo(m.factura);
+  const buffer = await renderizarFacturaDemo(m.factura, logo);
   return { spy, buffer, factura: m.factura };
 }
 
@@ -149,7 +199,8 @@ describe("PDF demo — formato de la factura actual: Código / Descripción / To
     const resto = ts.join("\n").split(TEXTO_PENDIENTE_FEL).join("");
     expect(resto).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     expect(resto).not.toMatch(/infile|\bsat\b|\bxml\b|\bqr\b|uuid/i);
-    expect(buffer.toString("latin1")).not.toMatch(/\/Subtype\s*\/Image/); // un QR sería una imagen
+    // El único objeto de imagen del PDF es el LOGO de la empresa (un QR sería una segunda imagen)
+    expect(buffer.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).toHaveLength(1);
   });
 
   it("5) la marca «DEMO — DOCUMENTO NO FISCAL» es visible: franja superior, marca de agua y pie", async () => {
@@ -203,7 +254,7 @@ describe("PDF demo — formato de la factura actual: Código / Descripción / To
   it("9) los datos que la plataforma aún no tiene salen «Pendiente de definir» y nunca se inventan", async () => {
     const { spy } = await renderizar(
       detalle([INCLUIDO(1)], { clienteNit: null, clienteDireccion: null }),
-      { razonSocial: "Empresa X", nombreComercial: null, nit: null, direccion: null, telefono: null, logo: null },
+      { razonSocial: "Empresa X", nombreComercial: null, nit: null, direccion: null, telefono: null },
       { clienteCodigo: null, condiciones: null, leyendaTributaria: null },
     );
     const ts = textos(spy);
@@ -348,8 +399,8 @@ describe("PDF demo — código fuente sin FEL, red ni credenciales", () => {
 });
 
 describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
-  const empresa7 = { id: 7, nombre: "Empresa 7", logoUrl: null };
-  const empresa8 = { id: 8, nombre: "Empresa 8", logoUrl: null };
+  const empresa7 = { id: 7, nombre: "Empresa 7", logoUrl: "empresas/7/logo.png" };
+  const empresa8 = { id: 8, nombre: "Empresa 8", logoUrl: "empresas/8/logo.png" };
 
   it("multiempresa: la factura se busca SIEMPRE con la empresa del guard; la de otra empresa es un 404 y no se genera nada", async () => {
     const propia = detalle([INCLUIDO(1)]);
@@ -409,16 +460,6 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
     expect(ts).toContain("Dirección: pendiente de definir");
   });
 
-  it("logo: se dibuja si existe y se puede leer; si no, el PDF sale igual solo con texto", async () => {
-    vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)]));
-    const sinLogo = await generarPdfFacturaDemo({ ...empresa7, logoUrl: "uploads/no-existe.png" }, 12);
-    expect(sinLogo.ok).toBe(true);
-    vi.mocked(existsSync).mockReturnValue(true);
-    vi.mocked(readFileMock).mockReturnValue(Buffer.from("no-es-una-imagen"));
-    const logoIlegible = await generarPdfFacturaDemo({ ...empresa7, logoUrl: "uploads/roto.png" }, 12);
-    expect(logoIlegible.ok).toBe(true); // imagen inválida: respaldo de texto, sin romper
-  });
-
   it("solo lee: nunca modifica nada (solo se invocan funciones de lectura y un SELECT)", async () => {
     vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)]));
     await generarPdfFacturaDemo(empresa7, 12);
@@ -429,13 +470,118 @@ describe("generarPdfFacturaDemo — empresa, permisos y aislamiento", () => {
   });
 });
 
+describe("PDF demo — LOGO OBLIGATORIO de la empresa emisora", () => {
+  const empresa7 = { id: 7, nombre: "Empresa 7", logoUrl: "empresas/7/logo.png" };
+  const empresa8 = { id: 8, nombre: "Empresa 8", logoUrl: "empresas/8/logo.png" };
+  const sinLogo = { ok: false, status: 409, error: MENSAJE_SIN_LOGO } as const;
+  type Op = { fit?: number[]; width?: number; height?: number };
+  const imagenes = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((c) => ({ datos: c[0] as Buffer, opciones: (c[3] ?? {}) as Op }));
+  beforeEach(() => { vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1), AGREGADO(2)])); });
+
+  it("1) empresa con logo PNG válido → el PDF contiene la imagen (una sola: la del logo)", async () => {
+    const r = await generarPdfFacturaDemo(empresa7, 12);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.buffer.toString("latin1").match(/\/Subtype\s*\/Image/g)).toHaveLength(1);
+    expect(r.buffer.subarray(0, 5).toString()).toBe("%PDF-");
+  });
+
+  it("6) con un logo JPG válido el PDF también se genera normalmente (imagen JPEG embebida)", async () => {
+    const r = await generarPdfFacturaDemo({ ...empresa7, logoUrl: "empresas/7/logo.jpg" }, 12);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const pdf = r.buffer.toString("latin1");
+    expect(pdf.match(/\/Subtype\s*\/Image/g)).toHaveLength(1);
+    expect(pdf).toContain("/DCTDecode");
+  });
+
+  it("2) empresa SIN logo_url (null, vacío o en blanco) → 409 con mensaje claro, sin PDF y sin respaldo a solo texto", async () => {
+    for (const logoUrl of [null, "", "   "]) {
+      expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl }, 12), String(logoUrl)).toEqual(sinLogo);
+    }
+    expect(MENSAJE_SIN_LOGO).toBe("Esta empresa no tiene un logo válido configurado para la factura.");
+  });
+
+  it("3) archivo inexistente → 409", async () => {
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: "empresas/7/no-existe.png" }, 12)).toEqual(sinLogo);
+  });
+
+  it("4) archivo ilegible o de formato no soportado (PNG corrupto, texto, vacío, SVG, GIF, una carpeta) → 409", async () => {
+    for (const ruta of ["roto.png", "texto.png", "vacio.png", "logo.svg", "logo.gif", "carpeta.png"]) {
+      expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: `empresas/7/${ruta}` }, 12), ruta).toEqual(sinLogo);
+    }
+  });
+
+  it("rutas peligrosas del propio logo_url (traversal, absolutas, NUL) → 409; nunca se lee fuera de uploads", async () => {
+    const fuera = relative(TMP_UPLOADS, join(TMP_FUERA, "logo-ajeno.png")).replaceAll("\\", "/");
+    expect(fuera.startsWith("..")).toBe(true);
+    for (const logoUrl of [fuera, "../../etc/passwd", join(TMP_FUERA, "logo-ajeno.png"), "empresas/7/../../../x.png", "empresas/7/logo.png\0.txt"]) {
+      expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl }, 12), logoUrl).toEqual(sinLogo);
+    }
+  });
+
+  it("5) el logo de la empresa A NUNCA aparece en la factura de la empresa B: cada empresa dibuja SOLO el suyo", async () => {
+    const espiaA = vi.spyOn(PDFDocument.prototype, "image");
+    await generarPdfFacturaDemo(empresa7, 12);
+    const deA = imagenes(espiaA);
+    espiaA.mockRestore();
+    const espiaB = vi.spyOn(PDFDocument.prototype, "image");
+    await generarPdfFacturaDemo(empresa8, 12);
+    const deB = imagenes(espiaB);
+    expect(deA.length).toBeGreaterThan(0);
+    expect(deB.length).toBeGreaterThan(0);
+    for (const i of deA) expect(i.datos.equals(LOGO_7), "empresa 7").toBe(true);
+    for (const i of deB) expect(i.datos.equals(LOGO_8), "empresa 8").toBe(true);
+  });
+
+  it("5b) una empresa sin logo propio no toma el de otra; y un logo_url que apunta al directorio de OTRA empresa se rechaza (409)", async () => {
+    expect(await generarPdfFacturaDemo({ ...empresa8, logoUrl: null }, 12)).toEqual(sinLogo);
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: "empresas/8/logo.png" }, 12)).toEqual(sinLogo); // existe, pero es de la 8
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: "./empresas/8/logo.png" }, 12)).toEqual(sinLogo);
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: "empresas\\8\\logo.png" }, 12)).toEqual(sinLogo);
+    expect(await cargarLogoEmpresa({ id: 8, logoUrl: "empresas/8/logo.png" })).toEqual(LOGO_8);
+    expect(await cargarLogoEmpresa({ id: 7, logoUrl: "empresas/8/logo.png" })).toBeNull();
+  });
+
+  it("el logo se dibuja con `fit` (proporcional): nunca con width/height, así que no se deforma; el apaisado usa todo el ancho del bloque", async () => {
+    const esp = vi.spyOn(PDFDocument.prototype, "image");
+    await generarPdfFacturaDemo(empresa7, 12);
+    await generarPdfFacturaDemo({ ...empresa7, logoUrl: "empresas/7/logo-ancho.png" }, 12);
+    const todas = imagenes(esp);
+    expect(todas.length).toBeGreaterThanOrEqual(4); // (validación + dibujo) × 2 logos
+    for (const i of todas) {
+      expect(i.opciones.fit, "fit").toBeDefined();
+      expect(i.opciones.width).toBeUndefined();
+      expect(i.opciones.height).toBeUndefined();
+    }
+    const dibujos = todas.filter((i) => (i.opciones.fit?.[0] ?? 0) > 10);
+    expect(dibujos.map((i) => i.opciones.fit)).toEqual([[132, 100], [288, 58]]); // cuadrado / apaisado
+  });
+
+  it("el orden de los errores no revela el estado del logo: factura inexistente → 404 y Anulada → 409 de la factura, aunque falte el logo", async () => {
+    vi.mocked(obtenerFactura).mockResolvedValue(null);
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+    vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)], { estadoAdmin: "Anulada" }));
+    const r = await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    if (!r.ok) expect(r.error).toContain("Anulada");
+  });
+
+  it("renderizar con un logo que PDFKit no puede leer FALLA (nunca cae a encabezado solo de texto)", async () => {
+    const m = prepararFacturaDemo(detalle([INCLUIDO(1)]), EMISOR, "2026-10-09", COMPLETOS);
+    if (!m.ok) throw new Error(m.error);
+    await expect(renderizarFacturaDemo(m.factura, Buffer.from("no-es-una-imagen"))).rejects.toThrow();
+  });
+});
+
 /**
  * Genera el PDF de EJEMPLO con datos sintéticos para revisión visual. Solo corre si se define FACT_DEMO_PDF_SALIDA
  * (ruta del archivo). No forma parte de la suite normal.
  */
 describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos sintéticos)", () => {
   it("escribe el archivo", async () => {
-    const logo = readFileSync(join(process.cwd(), "public", "branding", "novalvion-icon.png"));
+    // Logo sintético de prueba (o el que se indique en FACT_DEMO_PDF_LOGO para revisar otras proporciones).
+    const logo = readFileSync(process.env.FACT_DEMO_PDF_LOGO || join(process.cwd(), "docs", "ejemplos", "logo-demo-empresa.png"));
     const d = detalle(
       [
         linea(1, { fechaPlan: "2026-09-01", codigo: "DEMO-A", descripcion: "Servicio de transporte – Bodega Central Guatemala → Quetzaltenango – 01/09/2026" }),
@@ -444,9 +590,9 @@ describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos s
       ],
       { cliente: "Cliente Demo Uno, S.A.", clienteNit: "1234567-8", clienteDireccion: "Zona 1, Ciudad de Guatemala", observaciones: "Entregas de prueba (datos sintéticos)" },
     );
-    const m = prepararFacturaDemo(d, { ...EMISOR, logo }, "2026-10-09", COMPLETOS);
+    const m = prepararFacturaDemo(d, EMISOR, "2026-10-09", COMPLETOS);
     if (!m.ok) throw new Error(m.error);
-    const buf = await renderizarFacturaDemo(m.factura);
+    const buf = await renderizarFacturaDemo(m.factura, logo);
     const salida = String(process.env.FACT_DEMO_PDF_SALIDA);
     mkdirSync(dirname(salida), { recursive: true });
     writeFileSync(salida, buf);
@@ -461,6 +607,6 @@ describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos s
     if (!m.ok) throw new Error(m.error);
     const salida = String(process.env.FACT_DEMO_PDF_SALIDA_LARGO);
     mkdirSync(dirname(salida), { recursive: true });
-    writeFileSync(salida, await renderizarFacturaDemo(m.factura));
+    writeFileSync(salida, await renderizarFacturaDemo(m.factura, LOGO_7));
   });
 });
