@@ -12,6 +12,7 @@ import {
   actualizarFacturaBorrador,
   anularFactura,
   crearFactura,
+  listarFacturas,
   listarViajesPendientes,
   obtenerFactura,
   obtenerKpisFacturacion,
@@ -508,6 +509,41 @@ describe("14) snapshots: lo congelado no cambia aunque cambie el cliente, la rut
     }) as never);
     const d = await obtenerFactura(EMPRESA, 5);
     expect(d?.factura).toMatchObject({ cliente: "Nombre vivo", subtotal: null, iva: null, porcentajeIva: null, precioIncluyeIva: null, clienteNit: null });
+  });
+});
+
+describe("fecha_emision llega como YYYY-MM-DD (nunca «Thu Aug 27»)", () => {
+  const filaFactura = (fecha: string | null) => ({
+    id: 5, cliente_id: 20, cliente: "Cliente X", numero_factura: null, fecha_emision: fecha, monto_total: "100.00",
+    estado_admin: "Borrador", observaciones: null, creado_por: 3, creado_en: "2026-08-27 10:00:00", actualizado_por: null,
+    actualizado_en: null, total_pagado: 0, moneda: "GTQ", subtotal: null, iva_monto: null, porcentaje_iva: null,
+    precio_incluye_iva: null, cliente_nombre_snapshot: null, cliente_nit_snapshot: null, cliente_direccion_snapshot: null,
+  });
+
+  it("el SELECT formatea la fecha EN SQL (sin depender de cómo el driver materializa DATE ni de la zona horaria)", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("COUNT(*)") ? [{ total: 1 }] : [filaFactura("2026-08-27")])) as never);
+    await listarFacturas(EMPRESA, {});
+    await obtenerFactura(EMPRESA, 5);
+    const selects = vi.mocked(query).mock.calls.map((c) => String(c[0])).filter((s) => s.includes("FROM fact_facturas f"));
+    expect(selects.length).toBeGreaterThanOrEqual(2);
+    for (const s of selects.filter((x) => !x.includes("COUNT(*)"))) {
+      expect(s).toContain("DATE_FORMAT(f.fecha_emision, '%Y-%m-%d') AS fecha_emision");
+      expect(s).not.toMatch(/\sf\.fecha_emision,/); // la columna cruda ya no se selecciona sin formato
+    }
+  });
+
+  it("2026-08-27 se lee como «2026-08-27» (listado y detalle); NULL sigue siendo null", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (String(sql).includes("COUNT(*)")) return [{ total: 2 }];
+      if (String(sql).includes("FROM fact_facturas f")) return [filaFactura("2026-08-27"), { ...filaFactura(null), id: 6 }];
+      return [];
+    }) as never);
+    const lista = await listarFacturas(EMPRESA, {});
+    expect(lista.items[0].fechaEmision).toBe("2026-08-27");
+    expect(lista.items[0].fechaEmision).not.toMatch(/Thu|Aug/);
+    expect(lista.items[1].fechaEmision).toBeNull();
+    const detalle = await obtenerFactura(EMPRESA, 5);
+    expect(detalle?.factura.fechaEmision).toBe("2026-08-27"); // lo que recibe el formulario de edición
   });
 });
 

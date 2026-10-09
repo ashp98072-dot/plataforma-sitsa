@@ -245,7 +245,7 @@ const mapFactura = (r: RowDataPacket): Factura => {
 
 const FACTURA_SELECT = `
   SELECT f.id, f.cliente_id, c.nombre AS cliente, f.numero_factura,
-         f.fecha_emision, f.monto_total, f.estado_admin, f.observaciones,
+         DATE_FORMAT(f.fecha_emision, '%Y-%m-%d') AS fecha_emision, f.monto_total, f.estado_admin, f.observaciones,
          f.creado_por, f.creado_en, f.actualizado_por, f.actualizado_en,
          f.moneda, f.subtotal, f.iva_monto, f.porcentaje_iva, f.precio_incluye_iva,
          f.cliente_nombre_snapshot, f.cliente_nit_snapshot, f.cliente_direccion_snapshot,

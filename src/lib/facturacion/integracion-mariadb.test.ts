@@ -47,6 +47,7 @@ import {
   actualizarFacturaBorrador,
   anularFactura,
   crearFactura,
+  listarFacturas,
   listarViajesPendientes,
   obtenerFactura,
   obtenerKpisFacturacion,
@@ -293,6 +294,69 @@ describe.skipIf(!PUERTO)("MariaDB real — D–I: crear, leer, editar, cancelar,
     const r = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: p }] });
     expect(r.ok).toBe(true);
     expect(await conteo("SELECT (SELECT COUNT(*) FROM fact_facturas) + (SELECT COUNT(*) FROM fact_factura_viajes) + (SELECT COUNT(*) FROM auditoria) AS n")).toBe(antes);
+  });
+});
+
+describe.skipIf(!PUERTO)("MariaDB real — fecha_emision llega como YYYY-MM-DD (bug de DATE → «Thu Aug 27»)", () => {
+  const creadas: number[] = [];
+  const insertar = async (fecha: string | null, estado: string, numero: string | null): Promise<number> => {
+    const [r] = await admin.query<mysql.ResultSetHeader>(
+      "INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, estado_admin, creado_por, fecha_emision, numero_factura) VALUES (?, 20, 100, ?, 1, ?, ?)",
+      [E1, estado, fecha, numero],
+    );
+    creadas.push(r.insertId);
+    return r.insertId;
+  };
+  // Estas facturas sintéticas no tienen líneas: se borran para no alterar las invariantes de las pruebas J/K/L.
+  afterAll(async () => {
+    if (creadas.length) await admin.query("DELETE FROM fact_facturas WHERE id IN (?)", [creadas]);
+  });
+
+  it("el driver SÍ entrega un objeto Date para una columna DATE (por eso hay que formatear en SQL)", async () => {
+    const id = await insertar("2026-08-27", "Emitida", "F-FECHA-0");
+    const [rows] = await getPool().query<RowDataPacket[]>("SELECT fecha_emision FROM fact_facturas WHERE id = ?", [id]);
+    expect(rows[0].fecha_emision).toBeInstanceOf(Date);
+    expect(String(rows[0].fecha_emision).slice(0, 10)).not.toBe("2026-08-27"); // es lo que mostraba «Thu Aug 27»
+  });
+
+  it("detalle y listado devuelven «2026-08-27» (Emitida y Borrador) y NULL sigue siendo null", async () => {
+    const emitida = await insertar("2026-08-27", "Emitida", "F-FECHA-1");
+    const borrador = await insertar("2026-01-05", "Borrador", null);
+    const sinFecha = await insertar(null, "Borrador", null);
+
+    expect((await obtenerFactura(E1, emitida))?.factura.fechaEmision).toBe("2026-08-27");
+    expect((await obtenerFactura(E1, borrador))?.factura.fechaEmision).toBe("2026-01-05"); // lo que recibe el formulario de edición
+    expect((await obtenerFactura(E1, sinFecha))?.factura.fechaEmision).toBeNull();
+
+    const lista = await listarFacturas(E1, { pageSize: 200 });
+    const porId = new Map(lista.items.map((f) => [f.id, f.fechaEmision]));
+    expect(porId.get(emitida)).toBe("2026-08-27");
+    expect(porId.get(borrador)).toBe("2026-01-05");
+    expect(porId.get(sinFecha)).toBeNull();
+    for (const f of lista.items) if (f.fechaEmision != null) expect(f.fechaEmision).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("el filtro por rango de fechas sigue funcionando (compara la columna, no el texto formateado)", async () => {
+    const dentro = await insertar("2026-08-27", "Emitida", "F-FECHA-2");
+    const fuera = await insertar("2025-01-01", "Emitida", "F-FECHA-3");
+    const lista = await listarFacturas(E1, { fechaDesde: "2026-08-01", fechaHasta: "2026-08-31", pageSize: 200 });
+    const ids = lista.items.map((f) => f.id);
+    expect(ids).toContain(dentro);
+    expect(ids).not.toContain(fuera);
+  });
+
+  it("editar un borrador con fecha de emisión la conserva como YYYY-MM-DD de ida y vuelta", async () => {
+    const plan = await crearPlan({ codigo: "FECHA-EDIT" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan }], fechaEmision: "2026-08-27" });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    const leida = (await obtenerFactura(E1, c.facturaId))!;
+    expect(leida.factura.fechaEmision).toBe("2026-08-27");
+    // el formulario reenvía exactamente lo que recibió
+    const e = await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 20, planes: [{ planId: plan }], fechaEmision: leida.factura.fechaEmision });
+    expect(e.ok).toBe(true);
+    expect((await obtenerFactura(E1, c.facturaId))?.factura.fechaEmision).toBe("2026-08-27");
+    expect(String((await filas("SELECT DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS f FROM fact_facturas WHERE id = ?", [c.facturaId]))[0].f)).toBe("2026-08-27");
   });
 });
 
