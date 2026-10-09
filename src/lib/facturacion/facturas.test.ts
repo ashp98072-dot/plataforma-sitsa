@@ -401,7 +401,7 @@ describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () =
     // garantiza esto, porque anularFactura BORRA esa fila.
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
+      placa_interna: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
     }], 1);
     const { items: viajes, totalReal } = await listarViajesPendientes(7, {});
     expect(viajes).toHaveLength(1);
@@ -454,7 +454,7 @@ describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 1: un viaje sin cliente vinculad
   it("3) un viaje CON bridge (cli.id no nulo en la fila devuelta) sí aparece, con clienteId/cliente reales", async () => {
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
+      placa_interna: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
     }], 1);
     const { items } = await listarViajesPendientes(7, {});
     expect(items).toHaveLength(1);
@@ -465,7 +465,7 @@ describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 1: un viaje sin cliente vinculad
   it("4) clienteId/cliente en la respuesta nunca son null (garantizado por cli.id IS NOT NULL en el WHERE)", async () => {
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: null, tarifa_comercial: null, cerrado_en: null,
+      placa_interna: null, tarifa_comercial: null, cerrado_en: null,
     }], 1);
     const { items } = await listarViajesPendientes(7, {});
     expect(items[0]?.clienteId).not.toBeNull();
