@@ -1,6 +1,6 @@
 # Facturación de viajes — Fase 1: viaje cerrado → viaje facturable → borrador de factura
 
-**Estado: IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (tsc, ESLint, pruebas con base de datos simulada, build). NO probado contra la base real ni con usuarios. NO aprobado para producción.**
+**Estado: IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (tsc, ESLint, build, pruebas con base simulada y pruebas contra una MariaDB 10.4 real y desechable — ver §14). NO probado en la base de producción/Hostinger ni con usuarios. NO aprobado para producción.**
 
 Esta fase **no emite FEL**: no conecta con INFILE ni con la SAT, no usa credenciales FEL, no genera UUID/serie/número FEL, no crea pólizas ni cuentas por cobrar. Un test de arquitectura (`src/lib/facturacion/sin-fel-fase1.test.ts`) lo exige sobre el código del flujo.
 
@@ -14,7 +14,7 @@ Antes de escribir código se inspeccionó el repositorio. **`fact_facturas`, `fa
 
 | Pedido de la fase | Ya existía (FACT-1) | Se agregó (FACT-2) |
 |---|---|---|
-| Viaje facturable = Cerrado, del cliente, sin factura viva | `condicionesViajesPendientes`, `UNIQUE(plan_id)`, bridge `clientes.tms_cliente_id` | + tarifa comercial > 0, + ruta/destino identificable, + moneda única |
+| Viaje facturable = Cerrado, del cliente, sin factura viva | `condicionesViajesPendientes`, `UNIQUE(plan_id)`, bridge `clientes.tms_cliente_id` | + tarifa comercial > 0, + ruta/destino identificable, + **solo GTQ** |
 | Pantalla «Viajes por facturar» | pestaña «Viajes pendientes» | + columnas ruta, origen → destino, piloto, estado; + filtro por ruta |
 | Selección de varios viajes del mismo cliente | `evaluarSeleccion` (UI) + validación en servidor | + misma moneda |
 | Borrador de factura | `crearFactura` / `actualizarFacturaBorrador` | + líneas estructuradas, IVA desglosado, snapshots |
@@ -50,9 +50,13 @@ Un viaje es facturable cuando se cumple **todo** lo siguiente (una sola definici
 | Está **Cerrado** (cierre administrativo, `viajes_cerrar`) | `p.estado = 'Cerrado'` |
 | Su cliente TMS está vinculado a un cliente de Facturación | `cli.id IS NOT NULL` (puente `clientes.tms_cliente_id`) |
 | **Tarifa comercial válida** (> 0) | `p.tarifa_comercial > 0` — *nuevo* |
-| **Ruta válida**: tiene código de ruta o un destino identificable | *nuevo* |
+| **Ruta válida**: código de ruta, destino congelado en el viaje, **o un destino de catálogo que realmente existe** (un `tms_lugares` de la MISMA empresa con nombre no vacío) | *nuevo* — mismo criterio en SQL (`EXISTS` correlacionado por `empresa_id`) y en servidor |
 | Sin factura viva (Borrador o Emitida) | `NOT EXISTS` sobre `fact_factura_viajes` |
-| Misma moneda que el resto de la factura | validado al agrupar |
+| **Moneda GTQ** (única soportada en la Fase 1; ver más abajo) | `p.tarifa_moneda_historico` vacío/NULL, `Q`, `QTZ` o `GTQ` |
+
+**Listado y servidor deben decir lo mismo.** Un viaje que aparece en «Viajes por facturar» nunca debe ser rechazado después por la vista previa o por guardar. La prueba contra MariaDB real (§14) verifica la equivalencia caso por caso (moneda, destino de catálogo válido, inexistente, de otra empresa, con nombre vacío, ruta o destino en blanco, tarifa, estado).
+
+**Moneda**: la Fase 1 solo admite **GTQ**, porque Contabilidad no ha definido el tratamiento de moneda extranjera (IVA, tipo de cambio). `null`/vacío, `Q`, `QTZ` y `GTQ` se normalizan a GTQ; cualquier otra (USD, EUR…) **no aparece** en el listado y el servidor responde **409**: «Esta fase de Facturación solo admite GTQ. La facturación en moneda extranjera está pendiente de definición contable.» La restricción vive en `MONEDA_SOPORTADA` (`borrador-calculo.ts`); se levanta en un solo lugar cuando Contabilidad la defina.
 
 Por qué derivado y no un booleano: anular o cancelar una factura **borra** su fila en `fact_factura_viajes`, así que «no existe fila» ya significa «libre». Un booleano redundante podría quedar desincronizado; la derivación no puede.
 
@@ -87,7 +91,7 @@ Extensión futura (no implementada, no hay ninguna columna ni lógica para ellos
 Capas, de la más débil a la más fuerte:
 1. **UI**: no ofrece viajes ya facturados ni mezcla clientes/monedas (no es una defensa; solo ayuda).
 2. **Servidor, siempre**: crear y editar **releen** cada viaje de la base (nunca confían en el payload) y revalidan cliente, empresa, estado, tarifa, ruta, moneda y vínculo.
-3. **Transacción con `FOR UPDATE`** sobre cada viaje, en **orden ascendente de id** (dos usuarios con viajes en común toman los bloqueos en el mismo orden, así no se interbloquean). La fila del viaje es el punto de serialización: el segundo usuario espera al primero y luego ve el vínculo.
+3. **Transacción con `FOR UPDATE`** sobre cada viaje, en **orden ascendente de id** (dos usuarios con viajes en común toman los bloqueos en el mismo orden). La fila del viaje es el punto de serialización: el segundo usuario espera al primero y luego ve el vínculo. **Crear y editar usan `READ COMMITTED`** (solo para esa transacción): con el aislamiento por defecto (REPEATABLE READ) el `SELECT … FOR UPDATE` sobre un vínculo que aún no existe toma un bloqueo de hueco en el índice UNIQUE y dos usuarios —incluso con viajes distintos o solo traslapados— se interbloqueaban al insertar. Se reprodujo contra MariaDB real y se corrigió (§14).
 4. **`UNIQUE(plan_id)` en `fact_factura_viajes`** (ya existente): si algo se colara entre validar e insertar, la base rechaza el duplicado y la aplicación lo devuelve como **409**, con rollback completo (no queda factura a medias).
 5. Un deadlock o `lock wait timeout` se devuelve como **409 reintentable**, no como error 500.
 
@@ -148,7 +152,7 @@ Auditoría (`auditoria`, módulo `facturacion`): crear y editar registran usuari
 1. **Política de IVA** (12 % incluido en el precio) — *pendiente de confirmar*: ¿`tarifa_comercial` incluye IVA? Si no, cambiar `POLITICA_IVA_FACTURACION`. Nada más cambia.
 2. **Tarifa comercial obligatoria.** Antes un viaje sin tarifa podía facturarse en cero (había una prueba que lo exigía); ahora **no es facturable** hasta que tenga tarifa > 0. Aún se puede ajustar el monto de una línea, pero la tarifa de base debe existir. Cambio de comportamiento respecto de FACT-1: confirmar que no hay viajes legítimos sin tarifa que hoy se facturen a mano.
 3. **Ruta válida = código de ruta o destino identificable.** Se eligió ese criterio porque un viaje armado a mano en Programación puede no tener ruta de catálogo; exigir ruta de catálogo ocultaría viajes facturables. Si Contabilidad exige ruta de catálogo, se endurece en `evaluarPlanFacturable` y en la condición SQL.
-4. **Moneda**: se toma de `tarifa_moneda_historico` (vacío = GTQ). Una factura admite una sola moneda; mezclar se bloquea con explicación. El total de la base está pensado para quetzales: el IVA guatemalteco en otra moneda requiere decisión fiscal.
+4. **Moneda**: la Fase 1 solo admite **GTQ** (se toma de `tarifa_moneda_historico`; vacío/`Q`/`QTZ`/`GTQ` = GTQ). Otra moneda se bloquea en servidor y no se lista. Falta que Contabilidad defina el tratamiento de moneda extranjera. (Los KPI de `facturacion-client.tsx` suman en quetzales; no se tocó ese archivo.)
 5. **Piloto visible** en «Viajes pendientes»: solo el **nombre**, a pedido de esta fase. FACT-1 lo había excluido a propósito (Facturación «no necesita ni debe ver» datos operativos) y una prueba lo verificaba; se reemplazó por una que permite únicamente el nombre y sigue excluyendo auxiliares, evidencias, paradas y GPS. Si el criterio de privacidad prevalece, es quitar un campo.
 6. **Emisor legal**: aún no existe como dato (la configuración fiscal de la empresa está en el cuestionario `fact_empresa_perfil`, sin campos estructurados). Dentro de una empresa el emisor es la propia empresa, por lo que la regla «mismo emisor» se cumple por construcción; cuando haya varios emisores por empresa habrá que añadirla.
 7. **Cancelar = anular** (mismo estado, mismo endpoint, mismo permiso). Ver §10.
@@ -162,4 +166,23 @@ Sin FEL todavía: emisión/certificación con INFILE (endpoint, autenticación, 
 
 - **Hecho**: `tsc --noEmit`, ESLint, `git diff --check`, `npm run build` y toda la suite de vitest (resultado y comparación con `origin/main` en el PR).
 - **Pruebas nuevas**: IVA y redondeo; elegibilidad del viaje; preview sin escritura; creación con snapshot; doble uso del mismo viaje (secuencial y por carrera en el INSERT); deadlock → 409; orden de bloqueo; cancelar libera viajes; snapshots no cambian al editar cliente/ruta; permisos; multiempresa; arquitectura sin FEL.
-- **No hecho / pendiente**: la base de datos de las pruebas es una **simulación en memoria**; **no se probó contra MariaDB** (bloqueos reales, `UNIQUE`, collations, rendimiento de los `LEFT JOIN` nuevos) ni con dos sesiones simultáneas reales. No se probó la interfaz en un navegador con datos (esta sesión no tiene credenciales de base de datos). Hace falta una prueba manual en un ambiente de desarrollo/pruebas con el SQL aplicado antes de considerarlo **PROBADO**.
+- **Limitaciones restantes**: la MariaDB real usada es la **10.4.32** (XAMPP), no la 11.8.9 del servidor objetivo; el esquema es el de `sql/schema.sql` + la migración FACT-1 (no una copia de producción); el volumen es de pruebas. La interfaz no se probó en un navegador con datos. Hace falta repetir §14 en un ambiente con MariaDB 11.8.x y revisar manualmente la UI antes de considerarlo **PROBADO**.
+
+## 14. Validación contra una MariaDB real y desechable
+
+`src/lib/facturacion/integracion-mariadb.test.ts` ejecuta el **código real** de `facturas.ts` (sin mocks) y los **archivos SQL reales** (`migrate-2026-08-fact-1…`, preflight y migración FACT-2) contra una base creada solo para la prueba. Es **opt-in**: se omite salvo que exista `FACT_TEST_DB_PORT`, y su `vi.mock("@/lib/db")` apunta fijo a `127.0.0.1` / base `fact_test_fase1` / `root` sin contraseña, sin leer ningún `.env` (no puede conectarse a Hostinger ni a producción). Cada corrida borra y recrea esa base.
+
+Cómo correrla (instancia MariaDB desechable en el puerto 3399, p. ej. con los binarios de XAMPP y un `--datadir` temporal):
+
+```bash
+FACT_TEST_DB_PORT=3399 npx vitest run src/lib/facturacion/integracion-mariadb.test.ts
+```
+
+Qué cubre (26 pruebas): A preflight · B migración · C idempotencia (2.ª ejecución) y datos anteriores intactos · D crear · E leer · F editar (lo congelado no se refresca) · G cancelar y liberar · H snapshots tras cambiar cliente/ruta/destino/tarifa · I `subtotal + IVA = total` verificado en SQL · J dos sesiones con el mismo viaje (20 rondas) · J2 serialización por bloqueo · J3 `UNIQUE(plan_id)` ante INSERT directos · K tres viajes en orden opuesto (10 rondas) · K2 selecciones traslapadas (10 rondas) · L viajes distintos y contiguos (30 rondas) · control de que un orden de bloqueo opuesto SÍ produce deadlock · listado ⇔ servidor (18 casos de moneda/destino/ruta/tarifa/estado) · multiempresa · filtro de ruta/destino sobre el catálogo.
+
+**Defectos que solo aparecieron contra la base real** (la simulación en memoria los ocultaba) y que ya están corregidos:
+1. **Deadlock** con selecciones traslapadas o contiguas (bloqueos de hueco en REPEATABLE READ) → crear/editar usan `READ COMMITTED`. Con ese cambio desactivado las pruebas K2 y L fallan siempre; con él, pasan.
+2. **Editar un borrador** leía `fecha_viaje_snapshot` como objeto `Date` y lo reinsertaba como texto inválido («Thu Aug 27») → ahora se lee con `DATE_FORMAT`.
+3. **Filtro «ruta o destino»**: `NOT (NULL REGEXP …)` es `NULL` y ocultaba los viajes sin destino congelado → se usa `COALESCE`.
+
+**Hallazgo PREEXISTENTE (de FACT-1, no corregido aquí)**: `mapFactura` convierte `fecha_emision` con `String(valor).slice(0, 10)`, pero el driver devuelve un `Date`; con una factura que ya tiene fecha, el listado/detalle muestra «Thu Aug 27» y el formulario de edición recibe ese texto. Se corregiría con `DATE_FORMAT(f.fecha_emision, '%Y-%m-%d')` en `FACTURA_SELECT`; queda pendiente de autorización por estar fuera del alcance de esta fase.

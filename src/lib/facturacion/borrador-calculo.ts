@@ -15,6 +15,18 @@ import {
 
 export const MONEDA_POR_DEFECTO = "GTQ";
 
+/**
+ * FASE 1: la ÚNICA moneda soportada es GTQ. Contabilidad no ha definido el tratamiento de moneda extranjera
+ * (IVA, tipo de cambio, documento), así que cualquier otra moneda se rechaza en el servidor y no aparece en
+ * «Viajes por facturar». Cuando se defina, se levanta esta restricción en UN solo lugar.
+ */
+export const MONEDA_SOPORTADA = "GTQ";
+export const MENSAJE_MONEDA_NO_SOPORTADA =
+  "Esta fase de Facturación solo admite GTQ. La facturación en moneda extranjera está pendiente de definición contable.";
+
+/** Valores crudos (ya en mayúsculas y sin espacios) que equivalen a GTQ. Vacío/null también equivale a GTQ. */
+export const EQUIVALENTES_GTQ: readonly string[] = ["", "Q", "QTZ", "GTQ"];
+
 /** Datos de `tms_planes_viaje` (+ nombres de lugares) que necesita el borrador. */
 export type PlanParaFactura = {
   id: number;
@@ -38,8 +50,12 @@ export type ResultadoValidacion = { ok: true } | { ok: false; error: string; sta
 /** Normaliza el código de moneda del viaje; vacío/null se considera quetzales (como el resto de TMS). */
 export function normalizarMoneda(raw: string | null | undefined): string {
   const m = (raw ?? "").trim().toUpperCase();
-  if (!m || m === "Q" || m === "QTZ") return MONEDA_POR_DEFECTO;
+  if (EQUIVALENTES_GTQ.includes(m)) return MONEDA_POR_DEFECTO;
   return m;
+}
+
+export function esMonedaSoportada(raw: string | null | undefined): boolean {
+  return normalizarMoneda(raw) === MONEDA_SOPORTADA;
 }
 
 /**
@@ -63,6 +79,9 @@ export function evaluarPlanFacturable(
   }
   if (ctx.vinculoFacturaId != null && ctx.vinculoFacturaId !== ctx.facturaIdExcluir) {
     return { ok: false, error: `El viaje ${plan.codigo} ya está vinculado a otra factura.`, status: 409 };
+  }
+  if (!esMonedaSoportada(plan.monedaRaw)) {
+    return { ok: false, error: MENSAJE_MONEDA_NO_SOPORTADA, status: 409 };
   }
   if (plan.tarifaComercial == null || !Number.isFinite(plan.tarifaComercial) || plan.tarifaComercial <= 0) {
     return { ok: false, error: `El viaje ${plan.codigo} no tiene una tarifa comercial válida (mayor que cero).`, status: 409 };
@@ -125,15 +144,12 @@ export function construirBorrador(
   planes: { plan: PlanParaFactura; montoAsignado: number; snapshotPrevio?: SnapshotLineaPrevio | null }[],
   politica: PoliticaIva = POLITICA_IVA_FACTURACION,
 ): { ok: true; borrador: BorradorCalculado } | { ok: false; error: string; status: number } {
-  const monedas = new Set(planes.map((p) => normalizarMoneda(p.plan.monedaRaw)));
-  if (monedas.size > 1) {
-    return {
-      ok: false,
-      error: `Los viajes seleccionados tienen monedas distintas (${Array.from(monedas).sort().join(", ")}); una factura admite una sola moneda.`,
-      status: 409,
-    };
+  // Defensa en profundidad: `evaluarPlanFacturable` ya rechaza cada viaje que no es GTQ; aquí nunca se construye
+  // un documento (ni se le aplica IVA) con una moneda que no sea la soportada.
+  if (planes.some((p) => !esMonedaSoportada(p.plan.monedaRaw))) {
+    return { ok: false, error: MENSAJE_MONEDA_NO_SOPORTADA, status: 409 };
   }
-  const moneda = monedas.values().next().value ?? MONEDA_POR_DEFECTO;
+  const moneda = MONEDA_SOPORTADA;
 
   const lineas: LineaBorradorCalculada[] = planes.map(({ plan, montoAsignado, snapshotPrevio }) => {
     const t = calcularTotalesLinea({ montoLinea: montoAsignado, ...politica });

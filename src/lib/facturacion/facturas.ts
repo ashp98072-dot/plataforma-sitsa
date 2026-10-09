@@ -5,6 +5,7 @@ import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import {
   construirBorrador,
+  EQUIVALENTES_GTQ,
   evaluarPlanFacturable,
   normalizarMoneda,
   type BorradorCalculado,
@@ -171,10 +172,19 @@ function esResultadoFallido(v: unknown): boolean {
   return Boolean(v && typeof v === "object" && "ok" in v && (v as { ok: unknown }).ok === false);
 }
 
-async function tx<T>(fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
+/**
+ * `readCommitted`: crear/editar un borrador usa READ COMMITTED (solo para esa transacción). Con el aislamiento por
+ * defecto (REPEATABLE READ) el `SELECT … FROM fact_factura_viajes WHERE plan_id = ? FOR UPDATE` sobre una fila que
+ * NO existe toma un bloqueo de HUECO en el índice UNIQUE; dos usuarios con viajes distintos (o traslapados) toman
+ * huecos compatibles entre sí y luego sus INSERT se esperan mutuamente → deadlock (reproducido contra MariaDB real).
+ * En READ COMMITTED no hay bloqueos de hueco: la serialización queda en el bloqueo de la fila del viaje, y el
+ * UNIQUE(plan_id) sigue siendo la garantía final.
+ */
+async function tx<T>(fn: (conn: PoolConnection) => Promise<T>, opciones: { readCommitted?: boolean } = {}): Promise<T> {
   const conn = await getPool().getConnection();
   let descartada = false;
   try {
+    if (opciones.readCommitted) await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await conn.beginTransaction();
     const result = await fn(conn);
     if (esResultadoFallido(result)) {
@@ -332,6 +342,12 @@ export async function obtenerFactura(
   };
 }
 
+/** Texto con al menos un carácter que no sea espacio en blanco (equivale a `trim() !== ""` del servidor). */
+const SQL_NO_VACIO = (columna: string): string => `${columna} REGEXP '[^[:space:]]'`;
+/** Negación segura frente a NULL: `NOT (NULL REGEXP …)` sería NULL (nunca verdadero) y ocultaría filas. */
+const SQL_VACIO = (columna: string): string => `COALESCE(${columna}, '') NOT REGEXP '[^[:space:]]'`;
+const SQL_MONEDA_GTQ = `(p.tarifa_moneda_historico IS NULL OR UPPER(TRIM(p.tarifa_moneda_historico)) IN (${EQUIVALENTES_GTQ.map((m) => `'${m}'`).join(", ")}))`;
+
 /**
  * (Ajuste A) Solo viajes genuinamente libres: Cerrado y sin NINGUNA fila
  * en fact_factura_viajes — como anular BORRA esa fila, "sin fila" es
@@ -357,7 +373,15 @@ function condicionesViajesPendientes(
     "NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)",
     "cli.id IS NOT NULL",
     "p.tarifa_comercial > 0",
-    "(NULLIF(TRIM(p.ruta_codigo_historico), '') IS NOT NULL OR NULLIF(TRIM(p.lugar_descarga_historico), '') IS NOT NULL OR p.lugar_descarga_id IS NOT NULL)",
+    // Solo GTQ en esta fase (ver MONEDA_SOPORTADA). Mismas equivalencias que `normalizarMoneda`: vacío/NULL, Q, QTZ, GTQ.
+    SQL_MONEDA_GTQ,
+    // Ruta/destino identificable — EXACTAMENTE lo que el servidor resuelve (`leerPlanParaFactura`): código de ruta,
+    // destino congelado, o un destino de catálogo que EXISTE en la MISMA empresa y tiene nombre. Un lugar_descarga_id
+    // huérfano o de otra empresa NO cuenta.
+    `(${SQL_NO_VACIO("p.ruta_codigo_historico")}
+      OR ${SQL_NO_VACIO("p.lugar_descarga_historico")}
+      OR EXISTS (SELECT 1 FROM tms_lugares ldx
+                 WHERE ldx.id = p.lugar_descarga_id AND ldx.empresa_id = p.empresa_id AND ${SQL_NO_VACIO("ldx.nombre")}))`,
   ];
   const params: (string | number)[] = [empresaId];
   // filtros.clienteId es un clientes.id (espacio de Facturación) — se
@@ -367,9 +391,14 @@ function condicionesViajesPendientes(
   if (filtros.fechaDesde) { condiciones.push("p.fecha_plan >= ?"); params.push(filtros.fechaDesde); }
   if (filtros.fechaHasta) { condiciones.push("p.fecha_plan <= ?"); params.push(filtros.fechaHasta); }
   if (filtros.ruta) {
-    // Mismo criterio que el filtro de ruta de los reportes de viajes (código de ruta o destino congelados).
-    condiciones.push("(p.ruta_codigo_historico LIKE ? OR p.lugar_descarga_historico LIKE ?)");
-    params.push(`%${filtros.ruta}%`, `%${filtros.ruta}%`);
+    // Busca por lo que la pantalla MUESTRA: el código de ruta, el destino congelado, o —si el viaje no tiene destino
+    // congelado— el nombre del destino de catálogo de la MISMA empresa (mismo COALESCE que la columna «destino»).
+    condiciones.push(`(p.ruta_codigo_historico LIKE ?
+      OR p.lugar_descarga_historico LIKE ?
+      OR (${SQL_VACIO("p.lugar_descarga_historico")}
+          AND EXISTS (SELECT 1 FROM tms_lugares ldf
+                      WHERE ldf.id = p.lugar_descarga_id AND ldf.empresa_id = p.empresa_id AND ldf.nombre LIKE ?)))`);
+    params.push(`%${filtros.ruta}%`, `%${filtros.ruta}%`, `%${filtros.ruta}%`);
   }
   return { condiciones, params };
 }
@@ -792,7 +821,7 @@ export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura)
       });
 
       return { ok: true, facturaId };
-    });
+    }, { readCommitted: true });
   } catch (err) {
     if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
     throw err;
@@ -831,7 +860,8 @@ export async function actualizarFacturaBorrador(
       // Editar el borrador NO refresca lo ya congelado: las líneas que siguen en el borrador conservan su
       // fotografía (descripción/ruta/origen/destino/fecha), y el cliente conserva la suya si no cambió de cliente.
       const [previasRows] = await conn.query<RowDataPacket[]>(
-        `SELECT plan_id, fecha_viaje_snapshot, ruta_codigo_snapshot, origen_snapshot, destino_snapshot, descripcion
+        `SELECT plan_id, DATE_FORMAT(fecha_viaje_snapshot, '%Y-%m-%d') AS fecha_viaje_snapshot, ruta_codigo_snapshot,
+                origen_snapshot, destino_snapshot, descripcion
          FROM fact_factura_viajes WHERE factura_id = ?`,
         [facturaId],
       );
@@ -898,7 +928,7 @@ export async function actualizarFacturaBorrador(
       });
 
       return { ok: true, facturaId };
-    });
+    }, { readCommitted: true });
   } catch (err) {
     if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
     throw err;

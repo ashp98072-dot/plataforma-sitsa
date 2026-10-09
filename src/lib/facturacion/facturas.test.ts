@@ -55,6 +55,7 @@ type Overrides = {
 
 function mockConnQuery(o: Overrides = {}) {
   conn.query.mockImplementation(async (sql: string) => {
+    if (sql.startsWith("SET TRANSACTION ISOLATION LEVEL")) return [[]];
     if (sql.includes("FROM clientes WHERE id = ?")) {
       return [o.cliente === undefined ? [CLIENTE] : o.cliente ? [o.cliente] : []];
     }

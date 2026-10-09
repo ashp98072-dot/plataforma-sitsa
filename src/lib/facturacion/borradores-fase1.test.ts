@@ -7,12 +7,14 @@ vi.mock("@/lib/clientes/schema", () => ({ asegurarSchemaClientes: vi.fn() }));
 
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { MENSAJE_MONEDA_NO_SOPORTADA } from "./borrador-calculo";
 import {
   actualizarFacturaBorrador,
   anularFactura,
   crearFactura,
   listarViajesPendientes,
   obtenerFactura,
+  obtenerKpisFacturacion,
   previsualizarFactura,
   type ActorFacturacion,
 } from "./facturas";
@@ -69,6 +71,7 @@ function nuevoEstado(): Estado {
 
 /** Lecturas (SELECT) comunes a la conexión de la transacción y al pool. */
 function leer(sql: string, params: unknown[]): Fila[] {
+  if (sql.startsWith("SET TRANSACTION ISOLATION LEVEL")) return [];
   sqlLeidos.push(sql);
   if (sql.includes("FROM clientes WHERE id = ?")) {
     return db.clientes.filter((c) => c.id === params[0] && c.empresa_id === params[1]);
@@ -199,11 +202,44 @@ describe("previsualizarFactura — la vista previa NO escribe ni reserva", () =>
     if (!r.ok) { expect(r.status).toBe(400); expect(r.error).toContain("PLAN-2"); expect(r.error).toContain("no pertenece al cliente"); }
   });
 
-  it("monedas distintas se bloquean y se explica por qué", async () => {
+  it("moneda extranjera: un viaje en USD se rechaza con el mensaje de la fase (mezclado con GTQ y también solo)", async () => {
     db.planes[1].tarifa_moneda_historico = "USD";
-    const r = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 1 }, { planId: 2 }] });
+    const mezclado = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 1 }, { planId: 2 }] });
+    expect(mezclado).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+    const solo = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 2 }] });
+    expect(solo).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+  });
+
+  it("moneda: null, vacío, Q y QTZ se tratan como GTQ y son facturables", async () => {
+    for (const m of [null, "", "Q", "QTZ", "GTQ"]) {
+      db.planes[0].tarifa_moneda_historico = m;
+      const r = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+      expect(r.ok, String(m)).toBe(true);
+      if (r.ok) expect(r.preview.borrador.moneda).toBe("GTQ");
+    }
+  });
+
+  it("destino por catálogo: lugar_descarga_id apuntando a una fila INEXISTENTE no cuenta → el servidor lo rechaza", async () => {
+    Object.assign(db.planes[1], { lugar_descarga_historico: null, ruta_codigo_historico: null, lugar_descarga_id: 99 });
+    const r = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 2 }] });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("monedas distintas");
+    if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("ruta ni destino"); }
+  });
+
+  it("destino por catálogo: un lugar de OTRA empresa o con nombre vacío tampoco cuenta", async () => {
+    Object.assign(db.planes[1], { lugar_descarga_historico: null, ruta_codigo_historico: null, lugar_descarga_id: 12 });
+    db.lugares[1].empresa_id = 8;
+    expect((await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 2 }] })).ok).toBe(false);
+    db.lugares[1].empresa_id = EMPRESA;
+    db.lugares[1].nombre = "   ";
+    expect((await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 2 }] })).ok).toBe(false);
+  });
+
+  it("destino por catálogo: lugar_descarga_id válido de la MISMA empresa con nombre → el servidor lo acepta", async () => {
+    Object.assign(db.planes[1], { lugar_descarga_historico: null, ruta_codigo_historico: null, lugar_descarga_id: 12 });
+    const r = await previsualizarFactura(actor, { clienteId: 20, planes: [{ planId: 2 }] });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.preview.borrador.lineas[0].destino).toBe("Quetzaltenango");
   });
 
   it("16) multiempresa: cliente/viaje/lugares se buscan SIEMPRE con el empresa_id del actor; un viaje de otra empresa «no existe»", async () => {
@@ -292,10 +328,10 @@ describe("crearFactura — snapshot, IVA y persistencia", () => {
     expect((db.facturasInsertadas[0].params as unknown[])[10]).toBe("Comercial X");
   });
 
-  it("monedas distintas → 409 y NO se escribe nada", async () => {
+  it("moneda extranjera → 409 y NO se escribe nada (la protección es del servidor, no de la UI)", async () => {
     db.planes[1].tarifa_moneda_historico = "USD";
     const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }, { planId: 2 }] });
-    expect(r.ok).toBe(false);
+    expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
     expect(db.facturasInsertadas).toHaveLength(0);
     expect(conn.commit).not.toHaveBeenCalled();
     expect(conn.rollback).toHaveBeenCalled();
@@ -340,6 +376,16 @@ describe("12) doble facturación y concurrencia", () => {
       .filter((c) => String(c[0]).includes("FROM tms_planes_viaje WHERE id = ?") && String(c[0]).includes("FOR UPDATE"))
       .map((c) => (c[1] as unknown[])[0]);
     expect(bloqueos).toEqual([1, 2]);
+  });
+
+  it("crear usa READ COMMITTED (sin bloqueos de hueco) y lo fija ANTES de iniciar la transacción", async () => {
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const orden = [
+      ...conn.query.mock.invocationCallOrder.map((o, i) => ({ o, sql: String(conn.query.mock.calls[i][0]) })),
+      ...conn.beginTransaction.mock.invocationCallOrder.map((o) => ({ o, sql: "BEGIN" })),
+    ].sort((a, b) => a.o - b.o).map((x) => x.sql);
+    expect(orden[0]).toBe("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+    expect(orden[1]).toBe("BEGIN");
   });
 
   it("el mismo viaje repetido en la selección se rechaza antes de tocar la base", async () => {
@@ -482,7 +528,7 @@ describe("listarViajesPendientes — «viajes por facturar»: SOLO elegibles (se
       expect(s).toContain("NOT EXISTS (SELECT 1 FROM fact_factura_viajes ffv WHERE ffv.plan_id = p.id)");
       expect(s).toContain("p.tarifa_comercial > 0");
       expect(s).toContain("p.ruta_codigo_historico");
-      expect(s).toContain("p.lugar_descarga_id IS NOT NULL");
+      expect(s).toContain("tms_lugares ldx");
       expect((params as unknown[])[0]).toBe(EMPRESA);
     }
   });
@@ -495,12 +541,42 @@ describe("listarViajesPendientes — «viajes por facturar»: SOLO elegibles (se
     expect(s).toContain("pil.empresa_id = p.empresa_id");
   });
 
-  it("filtro por ruta: usa el código o destino congelados, parametrizado (sin interpolar texto del usuario en el SQL)", async () => {
-    const { listado } = await sqlDelListado({ ruta: "RUTA-01'; DROP TABLE x;--" });
-    const [sql, params] = listado;
-    expect(String(sql)).toContain("(p.ruta_codigo_historico LIKE ? OR p.lugar_descarga_historico LIKE ?)");
-    expect(String(sql)).not.toContain("DROP TABLE");
-    expect(params).toContain("%RUTA-01'; DROP TABLE x;--%");
+  it("filtro por ruta: código, destino congelado o NOMBRE del destino de catálogo de la misma empresa; todo parametrizado", async () => {
+    const { listado, conteo } = await sqlDelListado({ ruta: "RUTA-01'; DROP TABLE x;--" });
+    for (const [sql, params] of [listado, conteo]) {
+      const s = String(sql);
+      expect(s).toContain("p.ruta_codigo_historico LIKE ?");
+      expect(s).toContain("p.lugar_descarga_historico LIKE ?");
+      expect(s).toMatch(/ldf\.id = p\.lugar_descarga_id AND ldf\.empresa_id = p\.empresa_id AND ldf\.nombre LIKE \?/);
+      expect(s).not.toContain("DROP TABLE");
+      expect((params as unknown[]).filter((x) => x === "%RUTA-01'; DROP TABLE x;--%")).toHaveLength(3);
+    }
+  });
+
+  it("moneda: el listado, el conteo y el KPI excluyen todo lo que no sea GTQ (vacío/NULL, Q, QTZ, GTQ)", async () => {
+    const { listado, conteo } = await sqlDelListado();
+    for (const [sql] of [listado, conteo]) {
+      expect(String(sql)).toContain("(p.tarifa_moneda_historico IS NULL OR UPPER(TRIM(p.tarifa_moneda_historico)) IN ('', 'Q', 'QTZ', 'GTQ'))");
+    }
+    vi.mocked(query).mockReset();
+    vi.mocked(query).mockImplementation((async () => [{ total: 0, valor: 0, emitidas: 0, valor_facturado: 0, cobrado: 0 }]) as never);
+    await obtenerKpisFacturacion(EMPRESA);
+    const sqlKpi = vi.mocked(query).mock.calls.map((c) => String(c[0])).find((s) => s.includes("FROM tms_planes_viaje"))!;
+    expect(sqlKpi).toContain("'QTZ', 'GTQ'");
+  });
+
+  it("destino de catálogo: solo cuenta si existe un tms_lugares de la MISMA empresa con nombre — igual en listado, conteo y KPI", async () => {
+    const { listado, conteo } = await sqlDelListado();
+    for (const [sql] of [listado, conteo]) {
+      const s = String(sql).replace(/\s+/g, " ");
+      expect(s).toContain("EXISTS (SELECT 1 FROM tms_lugares ldx WHERE ldx.id = p.lugar_descarga_id AND ldx.empresa_id = p.empresa_id AND ldx.nombre REGEXP '[^[:space:]]')");
+      expect(s).not.toContain("p.lugar_descarga_id IS NOT NULL");
+    }
+    vi.mocked(query).mockReset();
+    vi.mocked(query).mockImplementation((async () => [{ total: 0, valor: 0, emitidas: 0, valor_facturado: 0, cobrado: 0 }]) as never);
+    await obtenerKpisFacturacion(EMPRESA);
+    const sqlKpi = vi.mocked(query).mock.calls.map((c) => String(c[0]).replace(/\s+/g, " ")).find((s) => s.includes("FROM tms_planes_viaje"))!;
+    expect(sqlKpi).toContain("ldx.empresa_id = p.empresa_id");
   });
 
   it("mapea ruta, origen, destino, piloto, estado y moneda normalizada", async () => {

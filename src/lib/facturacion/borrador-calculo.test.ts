@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   construirBorrador,
   descripcionLinea,
+  esMonedaSoportada,
   evaluarPlanFacturable,
+  MENSAJE_MONEDA_NO_SOPORTADA,
   normalizarMoneda,
   type PlanParaFactura,
 } from "./borrador-calculo";
@@ -90,13 +92,36 @@ describe("descripcionLinea", () => {
   });
 });
 
-describe("normalizarMoneda", () => {
-  it("vacío/null/Q/QTZ → GTQ; el resto en mayúsculas", () => {
-    expect(normalizarMoneda(null)).toBe("GTQ");
-    expect(normalizarMoneda("")).toBe("GTQ");
-    expect(normalizarMoneda(" q ")).toBe("GTQ");
-    expect(normalizarMoneda("gtq")).toBe("GTQ");
+describe("normalizarMoneda / esMonedaSoportada — Fase 1 solo admite GTQ", () => {
+  it("vacío/null/Q/QTZ/GTQ (en cualquier caja y con espacios) → GTQ; el resto queda en mayúsculas", () => {
+    for (const raw of [null, undefined, "", "  ", "Q", " q ", "QTZ", "qtz", "GTQ", "gtq"]) {
+      expect(normalizarMoneda(raw)).toBe("GTQ");
+      expect(esMonedaSoportada(raw)).toBe(true);
+    }
     expect(normalizarMoneda("usd")).toBe("USD");
+    expect(normalizarMoneda(" eur ")).toBe("EUR");
+  });
+
+  it("USD, EUR y cualquier otra moneda NO están soportadas", () => {
+    for (const raw of ["USD", "usd", "EUR", "MXN", "Quetzales", "$"]) expect(esMonedaSoportada(raw)).toBe(false);
+  });
+});
+
+describe("moneda en la elegibilidad del viaje", () => {
+  it("GTQ, null, Q y QTZ son facturables", () => {
+    for (const monedaRaw of ["GTQ", null, "Q", "QTZ"]) {
+      expect(evaluarPlanFacturable({ ...PLAN, monedaRaw }, CTX), String(monedaRaw)).toEqual({ ok: true });
+    }
+  });
+
+  it("USD / EUR → 409 con el mensaje exacto de la fase, y no se les aplica ninguna política de IVA", () => {
+    for (const monedaRaw of ["USD", "EUR"]) {
+      const r = evaluarPlanFacturable({ ...PLAN, monedaRaw }, CTX);
+      expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+    }
+    expect(MENSAJE_MONEDA_NO_SOPORTADA).toBe(
+      "Esta fase de Facturación solo admite GTQ. La facturación en moneda extranjera está pendiente de definición contable.",
+    );
   });
 });
 
@@ -127,13 +152,17 @@ describe("construirBorrador", () => {
     }
   });
 
-  it("monedas distintas se bloquean con un mensaje claro", () => {
+  it("una factura SOLO en USD se bloquea (defensa en profundidad: nunca se calcula IVA sobre otra moneda)", () => {
+    const r = construirBorrador([{ plan: { ...PLAN, monedaRaw: "USD" }, montoAsignado: 1000 }]);
+    expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+  });
+
+  it("mezclar GTQ con USD también se bloquea", () => {
     const r = construirBorrador([
       { plan: PLAN, montoAsignado: 1000 },
       { plan: { ...PLAN, id: 2, codigo: "PLAN-2", monedaRaw: "USD" }, montoAsignado: 100 },
     ]);
-    expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("monedas distintas"); expect(r.error).toContain("GTQ, USD"); }
+    expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
   });
 
   it("moneda ausente en un viaje cuenta como GTQ (no mezcla con otro GTQ explícito)", () => {
