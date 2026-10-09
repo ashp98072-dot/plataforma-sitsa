@@ -37,7 +37,7 @@ describe("GET /facturacion/viajes-pendientes — 27) Facturador no necesita perm
     const res = await GET(new Request("http://localhost/x?clienteId=5&fechaDesde=2026-08-01"), ctx);
     expect(res.status).toBe(200);
     expect(listarViajesPendientes).toHaveBeenCalledWith(7, {
-      clienteId: 5, fechaDesde: "2026-08-01", fechaHasta: undefined, page: undefined, pageSize: undefined,
+      clienteId: 5, fechaDesde: "2026-08-01", fechaHasta: undefined, ruta: undefined, page: undefined, pageSize: undefined,
     });
   });
 

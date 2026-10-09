@@ -10,6 +10,10 @@ import {
   esBorrador,
   esEmitida,
   interpretarError,
+  etiquetaAnular,
+  etiquetaTratamientoIva,
+  formatearMonto,
+  resumenTratamientoIva,
   puedeOfrecerAnular,
   puedeRegistrarOtroPago,
   validarEmision,
@@ -36,9 +40,19 @@ type Factura = {
   totalPagado: number;
   saldo: number;
   estadoFinanciero: EstadoFinanciero | null;
+  // FACT-2 — desglose congelado (null en facturas anteriores a FACT-2).
+  moneda: string;
+  subtotal: number | null;
+  iva: number | null;
+  porcentajeIva: number | null;
+  precioIncluyeIva: boolean | null;
+  clienteNit: string | null;
 };
 
-type FacturaViajeLinea = { id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number };
+type FacturaViajeLinea = {
+  id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number;
+  descripcion: string | null; precioIncluyeIva: boolean | null; base: number | null; iva: number | null; total: number | null;
+};
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
 type ClienteCat = { clienteId: number; nombre: string };
 
@@ -52,11 +66,6 @@ type Props = {
   onAbierta: () => void;
   onCambio: () => void;
 };
-
-function moneda(v: number | null): string {
-  if (v == null) return "—";
-  return `Q${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]";
 const linkCls = "text-[var(--accent)] hover:underline";
@@ -330,9 +339,9 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                   <td className="px-2 py-1.5 font-mono text-xs">{f.numeroFactura ?? "—"}</td>
                   <td className="px-2 py-1.5 text-xs">{f.cliente}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{f.fechaEmision ?? "—"}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.montoTotal)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.totalPagado)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.saldo)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.montoTotal, f.moneda)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.totalPagado, f.moneda)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.saldo, f.moneda)}</td>
                   <td className="px-2 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badgeAdminClase(f.estadoAdmin)}`}>{f.estadoAdmin}</span></td>
                   <td className="px-2 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badgeFinancieroClase(f.estadoFinanciero)}`}>{f.estadoFinanciero ?? "—"}</span></td>
                   <td className="px-2 py-1.5"><button type="button" className={linkCls} onClick={() => void abrirDetalle(f.id)}>{expandido === f.id ? "Cerrar" : "Ver detalle"}</button></td>
@@ -360,7 +369,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           clienteId={detalle.factura.clienteId}
                           clienteNombre={detalle.factura.cliente}
                           facturaId={detalle.factura.id}
-                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado }))}
+                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva ?? true, moneda: detalle.factura.moneda }))}
                           numeroFacturaInicial={detalle.factura.numeroFactura}
                           fechaEmisionInicial={detalle.factura.fechaEmision}
                           observacionesInicial={detalle.factura.observaciones}
@@ -377,9 +386,17 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 <li>Cliente: {detalle.factura.cliente}</li>
                                 <li>Fecha emisión: {detalle.factura.fechaEmision ?? "—"}</li>
                                 <li>Estado: {detalle.factura.estadoAdmin}</li>
-                                <li>Monto total: {moneda(detalle.factura.montoTotal)}</li>
-                                <li>Total pagado: {moneda(detalle.factura.totalPagado)}</li>
-                                <li>Saldo: {moneda(detalle.factura.saldo)}</li>
+                                {detalle.factura.clienteNit ? <li>NIT: {detalle.factura.clienteNit}</li> : null}
+                                {detalle.factura.subtotal != null && detalle.factura.iva != null ? (
+                                  <>
+                                    <li>Tratamiento de IVA: {resumenTratamientoIva(detalle.viajes.map((v) => v.precioIncluyeIva))}</li>
+                                    <li>Subtotal: {formatearMonto(detalle.factura.subtotal, detalle.factura.moneda)}</li>
+                                    <li>IVA{detalle.factura.porcentajeIva != null ? ` (${detalle.factura.porcentajeIva} %)` : ""}: {formatearMonto(detalle.factura.iva, detalle.factura.moneda)}</li>
+                                  </>
+                                ) : null}
+                                <li>Monto total: {formatearMonto(detalle.factura.montoTotal, detalle.factura.moneda)}</li>
+                                <li>Total pagado: {formatearMonto(detalle.factura.totalPagado, detalle.factura.moneda)}</li>
+                                <li>Saldo: {formatearMonto(detalle.factura.saldo, detalle.factura.moneda)}</li>
                                 <li>Estado financiero: {detalle.factura.estadoFinanciero ?? "—"}</li>
                                 <li>Observaciones: {detalle.factura.observaciones ?? "—"}</li>
                               </ul>
@@ -393,7 +410,15 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.viajes.map((v) => (
-                                  <li key={v.id}>{v.codigo} · {v.fechaPlan} · {moneda(v.montoAsignado)}</li>
+                                  <li key={v.id}>
+                                    {v.codigo} · {v.fechaPlan} · {formatearMonto(v.montoAsignado, detalle.factura.moneda)}
+                                    {v.descripcion ? <span className="block text-[var(--muted)]">{v.descripcion}</span> : null}
+                                    {v.base != null && v.iva != null && v.total != null ? (
+                                      <span className="block text-[var(--muted)]">
+                                        {etiquetaTratamientoIva(v.precioIncluyeIva)} · Base {formatearMonto(v.base, detalle.factura.moneda)} · IVA {formatearMonto(v.iva, detalle.factura.moneda)} · Total {formatearMonto(v.total, detalle.factura.moneda)}
+                                      </span>
+                                    ) : null}
+                                  </li>
                                 ))}
                                 {!detalle.viajes.length ? <li className="text-[var(--muted)]">Sin viajes.</li> : null}
                               </ul>
@@ -402,7 +427,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">C. Pagos</p>
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.pagos.map((pg) => (
-                                  <li key={pg.id}>{pg.fechaPago} · {moneda(pg.monto)} {pg.medioPago ? `· ${pg.medioPago}` : ""} {pg.referencia ? `· ref. ${pg.referencia}` : ""}</li>
+                                  <li key={pg.id}>{pg.fechaPago} · {formatearMonto(pg.monto, detalle.factura.moneda)} {pg.medioPago ? `· ${pg.medioPago}` : ""} {pg.referencia ? `· ref. ${pg.referencia}` : ""}</li>
                                 ))}
                                 {!detalle.pagos.length ? <li className="text-[var(--muted)]">Sin pagos registrados.</li> : null}
                               </ul>
@@ -417,7 +442,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 <ul className="grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
                                   <li>Cliente: {detalle.factura.cliente}</li>
                                   <li>Viajes: {detalle.viajes.length}</li>
-                                  <li>Total: {moneda(detalle.factura.montoTotal)}</li>
+                                  <li>Total: {formatearMonto(detalle.factura.montoTotal, detalle.factura.moneda)}</li>
                                 </ul>
                                 <div className="grid gap-2 sm:grid-cols-2">
                                   <label className="flex flex-col gap-1">
@@ -450,7 +475,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               "Factura cobrada" en su lugar. */}
                           {esEmitida(detalle.factura.estadoAdmin) ? (
                             <div>
-                              <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{moneda(detalle.factura.saldo)}</span></p>
+                              <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{formatearMonto(detalle.factura.saldo, detalle.factura.moneda)}</span></p>
                               {puedePagar && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
                                 mostrarPago ? (
                                   <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
@@ -482,7 +507,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           {puedeAnular && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
                             confirmandoAnular ? (
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
-                                <p className="font-semibold text-rose-600">Confirmar anulación</p>
+                                <p className="font-semibold text-rose-600">Confirmar: {etiquetaAnular(detalle.factura.estadoAdmin).toLowerCase()}</p>
                                 <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse.</p>
                                 {errorAnular ? <p className="text-rose-500">{errorAnular}</p> : null}
                                 <div className="flex gap-2 pt-1">
@@ -493,7 +518,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 </div>
                               </div>
                             ) : (
-                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>Anular factura</button>
+                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>{etiquetaAnular(detalle.factura.estadoAdmin)}</button>
                             )
                           ) : null}
                         </div>

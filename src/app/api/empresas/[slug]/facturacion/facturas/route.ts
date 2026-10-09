@@ -11,6 +11,9 @@ const ESTADOS: EstadoAdminFactura[] = ["Borrador", "Emitida", "Anulada"];
 const lineaSchema = z.object({
   planId: z.number().int().positive(),
   montoAsignado: z.number().nonnegative().optional(),
+  // Tratamiento de IVA de ESTA línea (true = ya incluido en la tarifa, false = se agrega). Explícito y por línea: una misma
+  // factura puede mezclar ambos. Sin valor por defecto en el servidor.
+  precioIncluyeIva: z.boolean(),
 });
 const crearSchema = z.object({
   clienteId: z.number().int().positive(),

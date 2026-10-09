@@ -7,7 +7,14 @@ import {
   detalleCorrespondeAFactura,
   esBorrador,
   esEmitida,
+  etiquetaAnular,
   evaluarSeleccion,
+  etiquetaSumaTarifas,
+  etiquetaTratamientoIva,
+  firmaLineas,
+  firmaPreview,
+  formatearMonto,
+  resumenTratamientoIva,
   interpretarError,
   lineaDifiereDeTarifa,
   puedeOfrecerAnular,
@@ -187,5 +194,113 @@ describe("Fase M — cada estado_admin tiene su propio color (relleno sólido)",
   it("Borrador/Emitida/Anulada nunca comparten clase", () => {
     const clases = new Set([badgeAdminClase("Borrador"), badgeAdminClase("Emitida"), badgeAdminClase("Anulada")]);
     expect(clases.size).toBe(3);
+  });
+});
+
+describe("FACT-2 — una factura admite una sola moneda al seleccionar", () => {
+  type Sel = { planId: number; clienteId: number; cliente: string; moneda?: string };
+  const Q1: Sel = { planId: 1, clienteId: 20, cliente: "Cliente A", moneda: "GTQ" };
+  const Q2: Sel = { planId: 2, clienteId: 20, cliente: "Cliente A", moneda: "GTQ" };
+  const D1: Sel = { planId: 3, clienteId: 20, cliente: "Cliente A", moneda: "USD" };
+
+  it("mismo cliente y misma moneda → se agrega", () => {
+    expect(evaluarSeleccion(Q2, new Map([[1, Q1]]))).toEqual({ accion: "agregar" });
+  });
+
+  it("mismo cliente pero moneda distinta → se rechaza explicando por qué", () => {
+    const r = evaluarSeleccion(D1, new Map([[1, Q1]]));
+    expect(r.accion).toBe("rechazar");
+    if (r.accion === "rechazar") { expect(r.mensaje).toContain("GTQ"); expect(r.mensaje).toContain("USD"); expect(r.mensaje).toContain("una sola moneda"); }
+  });
+
+  it("si falta el dato de moneda no se bloquea en la UI (el servidor decide)", () => {
+    expect(evaluarSeleccion({ planId: 9, clienteId: 20, cliente: "Cliente A" }, new Map([[1, Q1]]))).toEqual({ accion: "agregar" });
+  });
+});
+
+describe("FACT-2 — formatearMonto", () => {
+  it("quetzales con «Q»; otra moneda con su código; sin dato → «—»", () => {
+    expect(formatearMonto(1500.5)).toBe("Q1,500.50");
+    expect(formatearMonto(1500.5, "GTQ")).toBe("Q1,500.50");
+    expect(formatearMonto(99, "USD")).toBe("USD 99.00");
+    expect(formatearMonto(null)).toBe("—");
+    expect(formatearMonto(Number.NaN)).toBe("—");
+  });
+});
+
+describe("FACT-2 — firmaLineas (la vista previa solo vale para la selección exacta que la generó)", () => {
+  it("no depende del orden de las líneas", () => {
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }]))
+      .toBe(firmaLineas([{ planId: 2, montoAsignado: 50 }, { planId: 1, montoAsignado: 100 }]));
+  });
+
+  it("cambia si cambia un monto, se quita un viaje o se agrega otro", () => {
+    const base = firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }]);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 101 }, { planId: 2, montoAsignado: 50 }])).not.toBe(base);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }])).not.toBe(base);
+    expect(firmaLineas([{ planId: 1, montoAsignado: 100 }, { planId: 2, montoAsignado: 50 }, { planId: 3, montoAsignado: 1 }])).not.toBe(base);
+  });
+});
+
+describe("FACT-2 — etiquetaAnular", () => {
+  it("un Borrador se «cancela»; una Emitida se «anula»", () => {
+    expect(etiquetaAnular("Borrador")).toBe("Cancelar borrador");
+    expect(etiquetaAnular("Emitida")).toBe("Anular factura");
+  });
+});
+
+describe("FACT-2 — firmaPreview: la vista previa solo vale para el cliente y, de CADA línea, el viaje, el monto y SU tratamiento de IVA", () => {
+  const lineas = [
+    { planId: 1, montoAsignado: 100, precioIncluyeIva: true },
+    { planId: 2, montoAsignado: 100, precioIncluyeIva: false },
+  ];
+  const base = firmaPreview({ clienteId: 20, lineas });
+
+  it("es estable (misma entrada, en cualquier orden → misma huella)", () => {
+    expect(firmaPreview({ clienteId: 20, lineas: [...lineas].reverse() })).toBe(base);
+  });
+
+  it("8) cambiar el tratamiento de IVA de CUALQUIER viaje invalida la vista previa (incluido ↔ agregado), de uno en uno", () => {
+    expect(firmaPreview({ clienteId: 20, lineas: [{ ...lineas[0], precioIncluyeIva: false }, lineas[1]] })).not.toBe(base);
+    expect(firmaPreview({ clienteId: 20, lineas: [lineas[0], { ...lineas[1], precioIncluyeIva: true }] })).not.toBe(base);
+  });
+
+  it("intercambiar los tratamientos entre dos viajes NO deja la misma huella (cada viaje cuenta con el suyo)", () => {
+    const cruzado = [
+      { planId: 1, montoAsignado: 100, precioIncluyeIva: false },
+      { planId: 2, montoAsignado: 100, precioIncluyeIva: true },
+    ];
+    expect(firmaPreview({ clienteId: 20, lineas: cruzado })).not.toBe(base);
+  });
+
+  it("cambiar viajes, montos o cliente también la invalida", () => {
+    expect(firmaPreview({ clienteId: 21, lineas })).not.toBe(base);
+    expect(firmaPreview({ clienteId: 20, lineas: [lineas[0]] })).not.toBe(base);
+    expect(firmaPreview({ clienteId: 20, lineas: [{ ...lineas[0], montoAsignado: 101 }, lineas[1]] })).not.toBe(base);
+  });
+});
+
+describe("FACT-2 — textos del tratamiento de IVA", () => {
+  it("por línea: IVA incluido / IVA agregado / Sin definir", () => {
+    expect(etiquetaTratamientoIva(true)).toBe("IVA incluido");
+    expect(etiquetaTratamientoIva(false)).toBe("IVA agregado");
+    expect(etiquetaTratamientoIva(null)).toBe("Sin definir");
+  });
+
+  it("11) el resumen de la factura sale de sus LÍNEAS y nunca finge una sola política cuando hay mezcla", () => {
+    expect(resumenTratamientoIva([true, true])).toBe("IVA incluido en la tarifa");
+    expect(resumenTratamientoIva([false])).toBe("IVA agregado a la tarifa");
+    expect(resumenTratamientoIva([true, false])).toBe("Mixto: varía por viaje");
+    expect(resumenTratamientoIva([true, null])).toBe("Mixto: varía por viaje"); // una línea sin tratamiento congelado
+    expect(resumenTratamientoIva([null, null])).toBe("Sin definir");
+    expect(resumenTratamientoIva([])).toBe("Sin definir");
+  });
+});
+
+describe("FACT-2 — etiquetaSumaTarifas (hallazgo de la prueba manual)", () => {
+  it("al CREAR remite a la vista previa; al EDITAR (que no tiene vista previa) dice que se recalcula al guardar", () => {
+    expect(etiquetaSumaTarifas(false)).toContain("vista previa");
+    expect(etiquetaSumaTarifas(true)).toContain("al guardar");
+    expect(etiquetaSumaTarifas(true)).not.toContain("vista previa");
   });
 });
