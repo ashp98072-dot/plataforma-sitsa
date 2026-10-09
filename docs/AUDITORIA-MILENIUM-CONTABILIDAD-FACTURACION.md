@@ -1,6 +1,6 @@
 # Auditoría técnica y funcional del sistema legacy «Milenium» (contabilidad y facturación)
 
-Estado: **DISCOVERY / AUDITORÍA. Sin cambios de código, sin commits, sin PR, sin SQL de escritura, sin llamadas a INFILE/SAT, sin emitir ni enviar documentos, sin tocar producción ni Hostinger.**
+Estado: **DISCOVERY / AUDITORÍA. Documento versionado únicamente como documentación; sin cambios de código, sin SQL de escritura, sin llamadas a INFILE/SAT, sin emitir ni enviar documentos, sin tocar producción ni Hostinger.**
 Fecha: 2026-10-08. Base de SITSA revisada: `origin/main` (incluye #421–#428).
 Documentos hermanos ya existentes (esta auditoría los **confirma, corrige o completa** con evidencia nueva): [`FEL-INFILE-DISCOVERY`](FEL-INFILE-DISCOVERY.md) · [`FEL-INFILE-ARQUITECTURA`](FEL-INFILE-ARQUITECTURA.md) · [`FEL-INFILE-PLAN`](FEL-INFILE-PLAN.md) · [`FEL-INFILE-DATOS-FALTANTES`](FEL-INFILE-DATOS-FALTANTES.md) · [`MILENIUM-INVENTARIO-FUNCIONAL`](MILENIUM-INVENTARIO-FUNCIONAL.md) · [`MILENIUM-CONTABILIDAD-FASE1/2/2B`](MILENIUM-CONTABILIDAD-FASE1.md).
 
