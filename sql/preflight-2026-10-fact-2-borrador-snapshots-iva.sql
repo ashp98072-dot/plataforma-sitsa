@@ -4,6 +4,11 @@
 SHOW COLUMNS FROM fact_facturas;
 SHOW COLUMNS FROM fact_factura_viajes;
 
+-- 1b) ANTES de migrar, estas columnas NO deben existir (las dos consultas deben devolver 0 filas). Si devuelven filas, la
+--     migración ya se aplicó (total o parcialmente): es idempotente, pero revísalo antes de continuar.
+SHOW COLUMNS FROM fact_factura_viajes WHERE Field IN ('precio_incluye_iva', 'porcentaje_iva', 'base_monto', 'iva_monto', 'total_linea', 'descripcion');
+SHOW COLUMNS FROM fact_facturas WHERE Field IN ('precio_incluye_iva', 'porcentaje_iva', 'subtotal', 'iva_monto', 'moneda');
+
 -- 2) La garantía anti doble facturación sigue vigente (debe existir UNIQUE uq_factviaje_plan sobre plan_id).
 SHOW INDEX FROM fact_factura_viajes;
 

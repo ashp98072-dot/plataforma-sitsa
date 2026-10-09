@@ -1,9 +1,4 @@
-import {
-  calcularTotalesFactura,
-  calcularTotalesLinea,
-  POLITICA_IVA_FACTURACION,
-  type PoliticaIva,
-} from "@/lib/facturacion/impuestos";
+import { calcularTotalesFactura, PORCENTAJE_IVA_FASE1 } from "@/lib/facturacion/impuestos";
 
 /**
  * FACT-2 — lógica PURA del borrador de factura (sin DB): elegibilidad de un
@@ -115,8 +110,11 @@ export type LineaBorradorCalculada = {
   descripcion: string;
   cantidad: 1;
   tarifaComercial: number | null;
-  /** Monto capturado de la línea (con o sin IVA según la política). Es fact_factura_viajes.monto_asignado. */
+  /** Monto capturado de la línea (con o sin IVA según SU tratamiento). Es fact_factura_viajes.monto_asignado. */
   montoAsignado: number;
+  /** Tratamiento de IVA de ESTA línea: true = ya incluido en la tarifa; false = se agrega a la tarifa. */
+  precioIncluyeIva: boolean;
+  porcentajeIva: number;
   base: number;
   iva: number;
   total: number;
@@ -124,7 +122,13 @@ export type LineaBorradorCalculada = {
 
 export type BorradorCalculado = {
   moneda: string;
-  politica: PoliticaIva;
+  /** Porcentaje de IVA de la fase (todas las líneas usan el mismo). */
+  porcentajeIva: number;
+  /**
+   * RESUMEN del encabezado, NUNCA la fuente de verdad (esa son las líneas): `true`/`false` solo si TODAS las líneas
+   * tienen el mismo tratamiento; `null` cuando hay MEZCLA (no puede mentir indicando una sola política).
+   */
+  precioIncluyeIva: boolean | null;
   lineas: LineaBorradorCalculada[];
   subtotal: number;
   iva: number;
@@ -140,9 +144,22 @@ export type SnapshotLineaPrevio = {
   descripcion: string;
 };
 
+/** Resumen de encabezado: el tratamiento común de las líneas, o `null` si hay mezcla (o ninguna línea). */
+export function tratamientoEncabezado(tratamientos: boolean[]): boolean | null {
+  if (!tratamientos.length) return null;
+  return tratamientos.every((t) => t === tratamientos[0]) ? tratamientos[0] : null;
+}
+
+export type EntradaLineaBorrador = {
+  plan: PlanParaFactura;
+  montoAsignado: number;
+  /** Tratamiento de IVA de ESTA línea, elegido explícitamente (nunca inferido). */
+  precioIncluyeIva: boolean;
+  snapshotPrevio?: SnapshotLineaPrevio | null;
+};
+
 export function construirBorrador(
-  planes: { plan: PlanParaFactura; montoAsignado: number; snapshotPrevio?: SnapshotLineaPrevio | null }[],
-  politica: PoliticaIva = POLITICA_IVA_FACTURACION,
+  planes: EntradaLineaBorrador[],
 ): { ok: true; borrador: BorradorCalculado } | { ok: false; error: string; status: number } {
   // Defensa en profundidad: `evaluarPlanFacturable` ya rechaza cada viaje que no es GTQ; aquí nunca se construye
   // un documento (ni se le aplica IVA) con una moneda que no sea la soportada.
@@ -151,8 +168,14 @@ export function construirBorrador(
   }
   const moneda = MONEDA_SOPORTADA;
 
-  const lineas: LineaBorradorCalculada[] = planes.map(({ plan, montoAsignado, snapshotPrevio }) => {
-    const t = calcularTotalesLinea({ montoLinea: montoAsignado, ...politica });
+  // Cada línea se calcula con SU política (impuestos.ts); el documento es la suma de las líneas.
+  const totales = calcularTotalesFactura({
+    porcentajeIva: PORCENTAJE_IVA_FASE1,
+    lineas: planes.map((p) => ({ montoLinea: p.montoAsignado, precioIncluyeIva: p.precioIncluyeIva })),
+  });
+
+  const lineas: LineaBorradorCalculada[] = planes.map(({ plan, montoAsignado, precioIncluyeIva, snapshotPrevio }, i) => {
+    const t = totales.lineas[i];
     const textos = snapshotPrevio ?? {
       fechaPlan: plan.fechaPlan,
       rutaCodigo: plan.rutaCodigo,
@@ -171,12 +194,24 @@ export function construirBorrador(
       cantidad: 1,
       tarifaComercial: plan.tarifaComercial,
       montoAsignado,
+      precioIncluyeIva,
+      porcentajeIva: PORCENTAJE_IVA_FASE1,
       base: t.base,
       iva: t.iva,
       total: t.total,
     };
   });
 
-  const totales = calcularTotalesFactura({ montosLinea: planes.map((p) => p.montoAsignado), ...politica });
-  return { ok: true, borrador: { moneda, politica, lineas, ...totales } };
+  return {
+    ok: true,
+    borrador: {
+      moneda,
+      porcentajeIva: PORCENTAJE_IVA_FASE1,
+      precioIncluyeIva: tratamientoEncabezado(planes.map((p) => p.precioIncluyeIva)),
+      lineas,
+      subtotal: totales.subtotal,
+      iva: totales.iva,
+      total: totales.total,
+    },
+  };
 }

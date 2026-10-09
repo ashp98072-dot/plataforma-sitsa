@@ -16,7 +16,10 @@ ALTER TABLE fact_facturas
   -- Desglose. monto_total (ya existente) sigue siendo el TOTAL con IVA; subtotal + iva_monto = monto_total.
   ADD COLUMN IF NOT EXISTS subtotal DECIMAL(14,2) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS iva_monto DECIMAL(14,2) NULL DEFAULT NULL,
-  -- Política usada al calcular (decisión de negocio pendiente de Contabilidad; ver src/lib/facturacion/impuestos.ts).
+  -- RESUMEN del IVA del documento. La FUENTE DE VERDAD es cada línea (fact_factura_viajes.precio_incluye_iva): una misma
+  -- factura puede mezclar líneas con IVA incluido y líneas con IVA agregado (confirmado por Contabilidad).
+  --   porcentaje_iva     = 12 cuando todas las líneas usan el mismo porcentaje.
+  --   precio_incluye_iva = 1 / 0 SOLO si TODAS las líneas coinciden; NULL cuando hay MEZCLA (nunca finge una sola política).
   ADD COLUMN IF NOT EXISTS porcentaje_iva DECIMAL(5,2) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS precio_incluye_iva TINYINT(1) NULL DEFAULT NULL,
   -- Fotografía del cliente al crear el borrador.
@@ -33,7 +36,11 @@ ALTER TABLE fact_factura_viajes
   ADD COLUMN IF NOT EXISTS destino_snapshot VARCHAR(300) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS descripcion VARCHAR(500) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS cantidad DECIMAL(10,2) NOT NULL DEFAULT 1,
-  -- monto_asignado (ya existente) = monto capturado de la línea; base + iva = total_linea.
+  -- Política fiscal CONGELADA de la línea: 1 = el IVA ya estaba incluido en la tarifa; 0 = el IVA se agregó a la tarifa.
+  -- NULL en líneas anteriores a FACT-2. Junto con porcentaje_iva, hace el snapshot autosuficiente (no depende del encabezado).
+  ADD COLUMN IF NOT EXISTS precio_incluye_iva TINYINT(1) NULL DEFAULT NULL,
+  ADD COLUMN IF NOT EXISTS porcentaje_iva DECIMAL(5,2) NULL DEFAULT NULL,
+  -- monto_asignado (ya existente) = monto capturado de la línea (con o sin IVA según precio_incluye_iva); base + iva = total_linea.
   ADD COLUMN IF NOT EXISTS base_monto DECIMAL(14,2) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS iva_monto DECIMAL(14,2) NULL DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS total_linea DECIMAL(14,2) NULL DEFAULT NULL;

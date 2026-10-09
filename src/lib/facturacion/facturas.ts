@@ -99,6 +99,8 @@ export type Factura = {
   /**
    * FACT-2 — desglose congelado al crear el borrador. `null` en facturas anteriores a FACT-2 (sin snapshot):
    * para esas solo existe `montoTotal`. `montoTotal` es siempre el TOTAL con IVA.
+   * `precioIncluyeIva` es solo un RESUMEN: true/false si todas las líneas coinciden y `null` si hay MEZCLA (o es una
+   * factura anterior a FACT-2). La fuente de verdad del tratamiento es cada línea (`FacturaViajeLinea`).
    */
   moneda: string;
   subtotal: number | null;
@@ -121,6 +123,9 @@ export type FacturaViajeLinea = {
   origen: string | null;
   destino: string | null;
   cantidad: number;
+  /** Tratamiento de IVA congelado de ESTA línea (null en líneas anteriores a esta versión): es la fuente de verdad. */
+  precioIncluyeIva: boolean | null;
+  porcentajeIva: number | null;
   base: number | null;
   iva: number | null;
   total: number | null;
@@ -304,7 +309,8 @@ export async function obtenerFactura(
       `SELECT ffv.id, ffv.plan_id, COALESCE(ffv.codigo_viaje_snapshot, p.codigo) AS codigo,
               DATE_FORMAT(COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan), '%Y-%m-%d') AS fecha_plan,
               ffv.monto_asignado, ffv.descripcion, ffv.ruta_codigo_snapshot, ffv.origen_snapshot,
-              ffv.destino_snapshot, ffv.cantidad, ffv.base_monto, ffv.iva_monto, ffv.total_linea
+              ffv.destino_snapshot, ffv.cantidad, ffv.precio_incluye_iva, ffv.porcentaje_iva,
+              ffv.base_monto, ffv.iva_monto, ffv.total_linea
        FROM fact_factura_viajes ffv
        INNER JOIN tms_planes_viaje p ON p.id = ffv.plan_id
        WHERE ffv.factura_id = ?
@@ -328,6 +334,8 @@ export async function obtenerFactura(
       origen: r.origen_snapshot != null ? String(r.origen_snapshot) : null,
       destino: r.destino_snapshot != null ? String(r.destino_snapshot) : null,
       cantidad: r.cantidad != null ? Number(r.cantidad) : 1,
+      precioIncluyeIva: r.precio_incluye_iva != null ? Number(r.precio_incluye_iva) === 1 : null,
+      porcentajeIva: r.porcentaje_iva != null ? Number(r.porcentaje_iva) : null,
       base: r.base_monto != null ? Number(r.base_monto) : null,
       iva: r.iva_monto != null ? Number(r.iva_monto) : null,
       total: r.total_linea != null ? Number(r.total_linea) : null,
@@ -527,10 +535,20 @@ export async function listarViajesPendientes(
   };
 }
 
-export type LineaFacturaInput = { planId: number; montoAsignado?: number };
+export type LineaFacturaInput = {
+  planId: number;
+  montoAsignado?: number;
+  /**
+   * Tratamiento de IVA de ESTA línea, elegido explícitamente por quien factura: `true` = el IVA ya está incluido en
+   * la tarifa; `false` = el IVA se agrega a la tarifa. Obligatorio por línea (nunca se infiere ni se asume en el
+   * servidor): una misma factura puede mezclar ambos.
+   */
+  precioIncluyeIva: boolean;
+};
 export type DatosFactura = {
   clienteId: number;
   planes: LineaFacturaInput[];
+
   numeroFactura?: string | null;
   fechaEmision?: string | null;
   observaciones?: string | null;
@@ -566,6 +584,16 @@ async function leerClienteFactura(leer: Lector, empresaId: number, clienteId: nu
     tmsClienteId: c.tms_cliente_id != null ? Number(c.tms_cliente_id) : null,
   };
 }
+
+const ERROR_TRATAMIENTO_IVA_REQUERIDO: { ok: false; error: string; status: number } = {
+  ok: false,
+  error: "Indica el tratamiento de IVA de cada viaje: incluido en la tarifa o agregado a la tarifa.",
+  status: 400,
+};
+
+/** El servidor no confía en la UI: CADA línea debe traer el tratamiento de IVA como booleano explícito. */
+const tratamientosIvaValidos = (planes: { precioIncluyeIva?: unknown }[]): boolean =>
+  Array.isArray(planes) && planes.every((p) => typeof p?.precioIncluyeIva === "boolean");
 
 const MENSAJE_CLIENTE_SIN_TMS =
   "Este cliente todavía no está vinculado a TMS (clientes.tms_cliente_id) — no tiene viajes asociables.";
@@ -612,7 +640,7 @@ async function leerPlanParaFactura(
   };
 }
 
-type PlanValidado = { plan: PlanParaFactura; montoAsignado: number };
+type PlanValidado = { plan: PlanParaFactura; montoAsignado: number; precioIncluyeIva: boolean };
 
 /**
  * Valida cada plan solicitado. Con `bloquear` (transacción de crear/editar) toma FOR UPDATE sobre cada viaje —
@@ -668,7 +696,7 @@ async function validarPlanesParaFactura(
     if (!Number.isFinite(montoAsignado) || montoAsignado < 0) {
       return { ok: false, error: `Monto inválido para el viaje ${plan.codigo}.`, status: 400 };
     }
-    lineas.push({ plan, montoAsignado });
+    lineas.push({ plan, montoAsignado, precioIncluyeIva: linea.precioIncluyeIva });
   }
   // Presentación estable: por fecha del viaje y luego por id.
   lineas.sort((a, b) => a.plan.fechaPlan.localeCompare(b.plan.fechaPlan) || a.plan.id - b.plan.id);
@@ -687,10 +715,21 @@ function detalleAjustesMonto(
 
 /** Resumen auditable del borrador: totales, moneda, política de IVA y viajes. Sin datos fiscales del cliente. */
 function detalleBorrador(b: BorradorCalculado): string {
-  return ` · ${b.moneda} · subtotal ${b.subtotal} · IVA ${b.iva} (${b.politica.porcentajeIva} %, ${
-    b.politica.precioIncluyeIva ? "precio con IVA" : "precio sin IVA"
-  }) · viajes: ${b.lineas.map((l) => l.codigo).join(", ")}`;
+  const incluidos = b.lineas.filter((l) => l.precioIncluyeIva).length;
+  const tratamiento =
+    incluidos === b.lineas.length ? "todas con IVA incluido"
+      : incluidos === 0 ? "todas con IVA agregado"
+        : `${incluidos} con IVA incluido y ${b.lineas.length - incluidos} con IVA agregado`;
+  return ` · ${b.moneda} · subtotal ${b.subtotal} · IVA ${b.iva} (${b.porcentajeIva} %, ${tratamiento}) · viajes: ${b.lineas
+    .map((l) => `${l.codigo} (${l.precioIncluyeIva ? "IVA incluido" : "IVA agregado"})`)
+    .join(", ")}`;
 }
+
+/**
+ * `fact_facturas.precio_incluye_iva` es solo un RESUMEN: 1/0 cuando TODAS las líneas coinciden y NULL cuando hay
+ * mezcla. La fuente de verdad es `fact_factura_viajes.precio_incluye_iva` (por línea).
+ */
+const resumenIvaEncabezado = (b: BorradorCalculado): 0 | 1 | null => (b.precioIncluyeIva == null ? null : b.precioIncluyeIva ? 1 : 0);
 
 function esConflictoConcurrencia(e: unknown): boolean {
   const err = e as { code?: string; errno?: number };
@@ -715,11 +754,13 @@ async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b
       await conn.execute(
         `INSERT INTO fact_factura_viajes
            (factura_id, plan_id, monto_asignado, codigo_viaje_snapshot, fecha_viaje_snapshot, ruta_codigo_snapshot,
-            origen_snapshot, destino_snapshot, descripcion, cantidad, base_monto, iva_monto, total_linea)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            origen_snapshot, destino_snapshot, descripcion, cantidad, precio_incluye_iva, porcentaje_iva,
+            base_monto, iva_monto, total_linea)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           facturaId, l.planId, l.montoAsignado, l.codigo, l.fechaPlan, l.rutaCodigo,
-          l.origen, l.destino, l.descripcion, l.cantidad, l.base, l.iva, l.total,
+          l.origen, l.destino, l.descripcion, l.cantidad, l.precioIncluyeIva ? 1 : 0, l.porcentajeIva,
+          l.base, l.iva, l.total,
         ],
       );
     } catch (err) {
@@ -746,6 +787,7 @@ export async function previsualizarFactura(
   actor: ActorFacturacion,
   datos: { clienteId: number; planes: LineaFacturaInput[] },
 ): Promise<{ ok: true; preview: PreviewFactura } | { ok: false; error: string; status: number }> {
+  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   const cliente = await leerClienteFactura(lectorPool, actor.empresaId, datos.clienteId);
   if (!cliente) return { ok: false, error: "Cliente no encontrado.", status: 404 };
   if (cliente.tmsClienteId == null) return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
@@ -767,6 +809,7 @@ export async function previsualizarFactura(
 }
 
 export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura): Promise<ResultadoFactura> {
+  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — nunca silenciado: un fallo de
   // schema/vínculo/DB/permisos aquí debe rechazar la operación completa,
   // no dejar pasar una factura que "parece válida" con un puente roto.
@@ -798,7 +841,7 @@ export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Borrador', ?, ?)`,
           [
             actor.empresaId, datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null,
-            b.total, b.moneda, b.subtotal, b.iva, b.politica.porcentajeIva, b.politica.precioIncluyeIva ? 1 : 0,
+            b.total, b.moneda, b.subtotal, b.iva, b.porcentajeIva, resumenIvaEncabezado(b),
             cliente.nombre, cliente.nit, cliente.direccion, datos.observaciones ?? null, actor.usuarioId,
           ],
         );
@@ -833,6 +876,7 @@ export async function actualizarFacturaBorrador(
   facturaId: number,
   datos: DatosFactura,
 ): Promise<ResultadoFactura> {
+  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — igual que en crearFactura:
   // nunca silenciado.
   await asegurarSchemaClientes();
@@ -876,6 +920,8 @@ export async function actualizarFacturaBorrador(
           descripcion: String(r.descripcion),
         });
       }
+      // El tratamiento de IVA de CADA línea es el que llega (la UI manda el congelado si no lo cambió): cada línea se
+      // recalcula con el suyo y los totales son la suma. Los textos congelados se conservan. Solo un Borrador llega aquí.
       const calculo = construirBorrador(
         validacion.lineas.map((l) => ({ ...l, snapshotPrevio: previas.get(l.plan.id) ?? null })),
       );
@@ -907,7 +953,7 @@ export async function actualizarFacturaBorrador(
            WHERE id = ? AND empresa_id = ? AND estado_admin = 'Borrador'`,
           [
             datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null, b.total, b.moneda, b.subtotal,
-            b.iva, b.politica.porcentajeIva, b.politica.precioIncluyeIva ? 1 : 0, snapCliente.nombre,
+            b.iva, b.porcentajeIva, resumenIvaEncabezado(b), snapCliente.nombre,
             snapCliente.nit, snapCliente.direccion, datos.observaciones ?? null,
             actor.usuarioId, facturaId, actor.empresaId,
           ],

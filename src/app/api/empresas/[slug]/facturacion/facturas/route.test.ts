@@ -47,7 +47,7 @@ describe("GET /facturacion/facturas — 26) permisos: facturacion:ver", () => {
 describe("POST /facturacion/facturas — 26) permisos: facturacion:crear", () => {
   it("exige facturacion:crear ANTES de tocar la DB", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
-    const res = await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1 }] }) }), ctx);
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }) }), ctx);
     expect(res.status).toBe(403);
     expect(crearFactura).not.toHaveBeenCalled();
     expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "crear");
@@ -56,23 +56,47 @@ describe("POST /facturacion/facturas — 26) permisos: facturacion:crear", () =>
   it("crea siempre como Borrador vía la lib (nunca escribe SQL directo en la ruta)", async () => {
     vi.mocked(crearFactura).mockResolvedValue({ ok: true, facturaId: 10 });
     const res = await POST(
-      new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1 }] }) }),
+      new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }) }),
       ctx,
     );
     expect(res.status).toBe(201);
     expect(crearFactura).toHaveBeenCalledWith(
       { empresaId: 7, usuarioId: 3, usuario: "facturador1" },
-      expect.objectContaining({ clienteId: 1, planes: [{ planId: 1 }] }),
+      expect.objectContaining({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }),
     );
   });
 
   it("propaga el status de error de la lib (p.ej. 409 viaje ya facturado)", async () => {
     vi.mocked(crearFactura).mockResolvedValue({ ok: false, error: "El viaje ya está vinculado a otra factura.", status: 409 });
     const res = await POST(
-      new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1 }] }) }),
+      new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }) }),
       ctx,
     );
     expect(res.status).toBe(409);
+  });
+
+  it("el tratamiento de IVA es OBLIGATORIO y booleano en CADA línea: faltante, null, texto o número → 400 sin llamar a la lib", async () => {
+    const malas = [{ planId: 1 }, { planId: 1, precioIncluyeIva: null }, { planId: 1, precioIncluyeIva: "true" }, { planId: 1, precioIncluyeIva: 1 }];
+    for (const mala of malas) {
+      for (const planes of [[mala], [{ planId: 2, precioIncluyeIva: true }, mala]]) {
+        const res = await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes }) }), ctx);
+        expect(res.status).toBe(400);
+      }
+    }
+    expect(crearFactura).not.toHaveBeenCalled();
+  });
+
+  it("el tratamiento a nivel de factura ya NO existe: se ignora y no sustituye al de las líneas", async () => {
+    const res = await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, precioIncluyeIva: true, planes: [{ planId: 1 }] }) }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearFactura).not.toHaveBeenCalled();
+  });
+
+  it("pasa a la lib el tratamiento de CADA línea (mezcla incluida), tal cual", async () => {
+    vi.mocked(crearFactura).mockResolvedValue({ ok: true, facturaId: 9 });
+    const planes = [{ planId: 1, montoAsignado: 100, precioIncluyeIva: true }, { planId: 2, montoAsignado: 100, precioIncluyeIva: false }];
+    await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ clienteId: 1, planes }) }), ctx);
+    expect(crearFactura).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ planes }));
   });
 
   it("rechaza payload sin planes antes de llamar a la lib", async () => {

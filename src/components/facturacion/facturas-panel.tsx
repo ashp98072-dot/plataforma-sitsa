@@ -11,7 +11,9 @@ import {
   esEmitida,
   interpretarError,
   etiquetaAnular,
+  etiquetaTratamientoIva,
   formatearMonto,
+  resumenTratamientoIva,
   puedeOfrecerAnular,
   puedeRegistrarOtroPago,
   validarEmision,
@@ -49,7 +51,7 @@ type Factura = {
 
 type FacturaViajeLinea = {
   id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number;
-  descripcion: string | null; base: number | null; iva: number | null; total: number | null;
+  descripcion: string | null; precioIncluyeIva: boolean | null; base: number | null; iva: number | null; total: number | null;
 };
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
 type ClienteCat = { clienteId: number; nombre: string };
@@ -367,7 +369,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           clienteId={detalle.factura.clienteId}
                           clienteNombre={detalle.factura.cliente}
                           facturaId={detalle.factura.id}
-                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, moneda: detalle.factura.moneda }))}
+                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva ?? true, moneda: detalle.factura.moneda }))}
                           numeroFacturaInicial={detalle.factura.numeroFactura}
                           fechaEmisionInicial={detalle.factura.fechaEmision}
                           observacionesInicial={detalle.factura.observaciones}
@@ -387,6 +389,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 {detalle.factura.clienteNit ? <li>NIT: {detalle.factura.clienteNit}</li> : null}
                                 {detalle.factura.subtotal != null && detalle.factura.iva != null ? (
                                   <>
+                                    <li>Tratamiento de IVA: {resumenTratamientoIva(detalle.viajes.map((v) => v.precioIncluyeIva))}</li>
                                     <li>Subtotal: {formatearMonto(detalle.factura.subtotal, detalle.factura.moneda)}</li>
                                     <li>IVA{detalle.factura.porcentajeIva != null ? ` (${detalle.factura.porcentajeIva} %)` : ""}: {formatearMonto(detalle.factura.iva, detalle.factura.moneda)}</li>
                                   </>
@@ -412,7 +415,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                     {v.descripcion ? <span className="block text-[var(--muted)]">{v.descripcion}</span> : null}
                                     {v.base != null && v.iva != null && v.total != null ? (
                                       <span className="block text-[var(--muted)]">
-                                        Base {formatearMonto(v.base, detalle.factura.moneda)} · IVA {formatearMonto(v.iva, detalle.factura.moneda)} · Total {formatearMonto(v.total, detalle.factura.moneda)}
+                                        {etiquetaTratamientoIva(v.precioIncluyeIva)} · Base {formatearMonto(v.base, detalle.factura.moneda)} · IVA {formatearMonto(v.iva, detalle.factura.moneda)} · Total {formatearMonto(v.total, detalle.factura.moneda)}
                                       </span>
                                     ) : null}
                                   </li>

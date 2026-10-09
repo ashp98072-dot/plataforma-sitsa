@@ -142,7 +142,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
   if (creando && clienteSeleccionado) {
     const lineas: LineaBorrador[] = Array.from(seleccion.values())
       .sort((a, b) => a.fechaPlan.localeCompare(b.fechaPlan))
-      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, moneda: v.moneda }));
+      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, precioIncluyeIva: true, moneda: v.moneda })); // «IVA incluido» preseleccionado (caso más común); se cambia por viaje
     return (
       <FacturaBorradorForm
         slug={slug}

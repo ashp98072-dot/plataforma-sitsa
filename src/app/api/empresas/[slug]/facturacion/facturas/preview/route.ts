@@ -12,6 +12,8 @@ const previewSchema = z.object({
       z.object({
         planId: z.number().int().positive(),
         montoAsignado: z.number().nonnegative().optional(),
+        // Tratamiento de IVA de ESTA línea, explícito (true = incluido en la tarifa, false = se agrega). Sin valor por defecto.
+        precioIncluyeIva: z.boolean(),
       }),
     )
     .min(1)

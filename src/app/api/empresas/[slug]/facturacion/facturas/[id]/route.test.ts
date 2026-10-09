@@ -32,13 +32,28 @@ describe("GET /facturacion/facturas/[id]", () => {
 describe("PATCH /facturacion/facturas/[id] — 9/10) solo Borrador editable", () => {
   it("exige facturacion:editar", async () => {
     vi.mocked(actualizarFacturaBorrador).mockResolvedValue({ ok: true, facturaId: 10 });
-    await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1 }] }) }), ctx);
+    await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }) }), ctx);
     expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "editar");
   });
 
   it("propaga 409 cuando la lib rechaza (factura ya no está en Borrador)", async () => {
     vi.mocked(actualizarFacturaBorrador).mockResolvedValue({ ok: false, error: "Solo se puede editar una factura en Borrador.", status: 409 });
-    const res = await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1 }] }) }), ctx);
+    const res = await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 1, precioIncluyeIva: true }] }) }), ctx);
     expect(res.status).toBe(409);
+  });
+});
+
+describe("PATCH /facturacion/facturas/[id] — tratamiento de IVA por línea", () => {
+  it("es OBLIGATORIO y booleano en cada línea: sin él → 400 sin llamar a la lib; con true/false (mezcla) se pasa tal cual", async () => {
+    vi.mocked(actualizarFacturaBorrador).mockReset();
+    vi.mocked(actualizarFacturaBorrador).mockResolvedValue({ ok: true, facturaId: 1 });
+    for (const mala of [{ planId: 1 }, { planId: 1, precioIncluyeIva: null }, { planId: 1, precioIncluyeIva: "false" }]) {
+      const res = await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes: [{ planId: 2, precioIncluyeIva: true }, mala] }) }), ctx);
+      expect(res.status).toBe(400);
+    }
+    expect(actualizarFacturaBorrador).not.toHaveBeenCalled();
+    const planes = [{ planId: 1, precioIncluyeIva: true }, { planId: 2, precioIncluyeIva: false }];
+    await PATCH(new Request("http://localhost/x", { method: "PATCH", body: JSON.stringify({ clienteId: 1, planes }) }), ctx);
+    expect(actualizarFacturaBorrador).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ planes }));
   });
 });

@@ -9,6 +9,9 @@ const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
 const lineaSchema = z.object({
   planId: z.number().int().positive(),
   montoAsignado: z.number().nonnegative().optional(),
+  // Tratamiento de IVA de ESTA línea (true = ya incluido en la tarifa, false = se agrega). Explícito y por línea: una misma
+  // factura puede mezclar ambos. Sin valor por defecto en el servidor.
+  precioIncluyeIva: z.boolean(),
 });
 const editarSchema = z.object({
   clienteId: z.number().int().positive(),

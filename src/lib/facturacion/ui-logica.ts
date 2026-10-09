@@ -56,11 +56,43 @@ export function formatearMonto(valor: number | null | undefined, monedaCodigo = 
  * huella coincida con la de las líneas actuales; si el usuario cambia un monto o quita un viaje, debe previsualizar
  * de nuevo. El servidor igualmente revalida todo al guardar.
  */
-export function firmaLineas(lineas: { planId: number; montoAsignado: number }[]): string {
+export function firmaLineas(lineas: { planId: number; montoAsignado: number; precioIncluyeIva?: boolean | null }[]): string {
   return lineas
-    .map((l) => `${l.planId}:${l.montoAsignado}`)
+    .map((l) => `${l.planId}:${l.montoAsignado}:${l.precioIncluyeIva == null ? "?" : l.precioIncluyeIva ? "i" : "a"}`)
     .sort()
     .join("|");
+}
+
+/**
+ * FACT-2 — huella de TODO lo que determina el resultado de la vista previa: el cliente y, de cada línea, el viaje, el
+ * monto y SU tratamiento de IVA. «Guardar borrador» solo se habilita mientras la huella actual coincida con la de la
+ * vista previa; cambiar el tratamiento de IVA de CUALQUIER viaje (o un monto, o quitar/agregar un viaje) obliga a
+ * previsualizar de nuevo.
+ */
+export function firmaPreview(input: {
+  clienteId: number;
+  lineas: { planId: number; montoAsignado: number; precioIncluyeIva: boolean }[];
+}): string {
+  return `${input.clienteId}#${firmaLineas(input.lineas)}`;
+}
+
+/** FACT-2 — tratamiento de IVA de UNA línea. */
+export function etiquetaTratamientoIva(precioIncluyeIva: boolean | null): string {
+  if (precioIncluyeIva == null) return "Sin definir";
+  return precioIncluyeIva ? "IVA incluido" : "IVA agregado";
+}
+
+/**
+ * FACT-2 — resumen del tratamiento de IVA de una factura a partir de SUS LÍNEAS (la fuente de verdad). Nunca finge una
+ * sola política cuando hay mezcla.
+ */
+export function resumenTratamientoIva(lineas: (boolean | null)[]): string {
+  const conocidas = lineas.filter((v): v is boolean => v != null);
+  if (!conocidas.length) return "Sin definir";
+  const incluidas = conocidas.filter(Boolean).length;
+  if (incluidas > 0 && incluidas < conocidas.length) return "Mixto: varía por viaje";
+  if (conocidas.length < lineas.length) return "Mixto: varía por viaje"; // hay líneas sin tratamiento congelado
+  return incluidas === conocidas.length ? "IVA incluido en la tarifa" : "IVA agregado a la tarifa";
 }
 
 /** FACT-2 — un Borrador se «cancela» (libera sus viajes); una factura Emitida se «anula». Mismo endpoint y permiso. */

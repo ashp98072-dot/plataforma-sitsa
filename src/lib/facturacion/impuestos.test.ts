@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   calcularTotalesFactura,
   calcularTotalesLinea,
-  POLITICA_IVA_FACTURACION,
+  PORCENTAJE_IVA_FASE1,
+  politicaIva,
 } from "./impuestos";
 
 const CON_IVA = { porcentajeIva: 12, precioIncluyeIva: true };
@@ -57,29 +58,58 @@ describe("calcularTotalesLinea — precio SIN IVA (el IVA se suma)", () => {
   });
 });
 
-describe("calcularTotalesFactura — varias líneas", () => {
-  it("el total es la SUMA de líneas ya redondeadas: 3 × 100.00 → subtotal 267.87 + IVA 32.13 = 300.00", () => {
-    const t = calcularTotalesFactura({ montosLinea: [100, 100, 100], ...CON_IVA });
-    expect(t).toEqual({ subtotal: 267.87, iva: 32.13, total: 300 });
+const PCT = 12;
+const lin = (montoLinea: number | string, precioIncluyeIva: boolean) => ({ montoLinea, precioIncluyeIva });
+
+describe("calcularTotalesFactura — varias líneas, cada una con SU política", () => {
+  it("todas con IVA incluido: 3 × 100.00 → subtotal 267.87 + IVA 32.13 = 300.00 (suma de líneas redondeadas)", () => {
+    const t = calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(100, true), lin(100, true), lin(100, true)] });
+    expect({ subtotal: t.subtotal, iva: t.iva, total: t.total }).toEqual({ subtotal: 267.87, iva: 32.13, total: 300 });
     expect(Number((t.subtotal + t.iva).toFixed(2))).toBe(t.total);
   });
 
-  it("el total exacto de la factura = suma exacta de los montos capturados (con IVA incluido)", () => {
-    const montos = [1500, 2750.5, 980.25, 0.01];
-    const t = calcularTotalesFactura({ montosLinea: montos, ...CON_IVA });
+  it("3) MEZCLA: Q100 incluido + Q100 agregado → subtotal 189.29, IVA 22.71, total 212.00", () => {
+    const t = calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(100, true), lin(100, false)] });
+    expect(t.lineas).toEqual([{ base: 89.29, iva: 10.71, total: 100 }, { base: 100, iva: 12, total: 112 }]);
+    expect({ subtotal: t.subtotal, iva: t.iva, total: t.total }).toEqual({ subtotal: 189.29, iva: 22.71, total: 212 });
+  });
+
+  it("el IVA NUNCA se recalcula globalmente sobre el total agregado (distinto de aplicar una sola política a la suma)", () => {
+    const mezcla = calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(100, true), lin(100, false)] });
+    const global = calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(200, true)] });
+    expect(mezcla.total).not.toBe(global.total);
+    expect(mezcla.total).toBe(Number((mezcla.lineas[0].total + mezcla.lineas[1].total).toFixed(2)));
+  });
+
+  it("todas con IVA agregado: 2 × 100.00 → subtotal 200.00 + IVA 24.00 = 224.00", () => {
+    expect(calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(100, false), lin(100, false)] })).toMatchObject({ subtotal: 200, iva: 24, total: 224 });
+  });
+
+  it("el total exacto con IVA incluido = suma exacta de los montos capturados", () => {
+    const t = calcularTotalesFactura({ porcentajeIva: PCT, lineas: [1500, 2750.5, 980.25, 0.01].map((m) => lin(m, true)) });
     expect(t.total).toBe(5230.76);
   });
 
   it("aritmética decimal, no float: 0.1 + 0.2 = 0.30 exacto", () => {
-    expect(calcularTotalesFactura({ montosLinea: [0.1, 0.2], ...CON_IVA }).total).toBe(0.3);
+    expect(calcularTotalesFactura({ porcentajeIva: PCT, lineas: [lin(0.1, true), lin(0.2, true)] }).total).toBe(0.3);
   });
 
   it("sin líneas → ceros", () => {
-    expect(calcularTotalesFactura({ montosLinea: [], ...CON_IVA })).toEqual({ subtotal: 0, iva: 0, total: 0 });
+    expect(calcularTotalesFactura({ porcentajeIva: PCT, lineas: [] })).toEqual({ subtotal: 0, iva: 0, total: 0, lineas: [] });
   });
 
-  it("sin IVA incluido: 2 líneas de 100.00 → subtotal 200.00 + IVA 24.00 = 224.00", () => {
-    expect(calcularTotalesFactura({ montosLinea: [100, 100], ...SIN_IVA })).toEqual({ subtotal: 200, iva: 24, total: 224 });
+  it("11) en cualquier combinación de modos subtotal + IVA = total exacto (miles de casos)", () => {
+    let semilla = 4242;
+    for (let i = 0; i < 2000; i++) {
+      const lineas = [] as { montoLinea: number; precioIncluyeIva: boolean }[];
+      for (let k = 0; k < 4; k++) {
+        semilla = (semilla * 1103515245 + 12345) & 0x7fffffff;
+        lineas.push({ montoLinea: (semilla % 3_000_000) / 100, precioIncluyeIva: (semilla >> 8) % 2 === 0 });
+      }
+      const t = calcularTotalesFactura({ porcentajeIva: PCT, lineas });
+      expect(Number((t.subtotal + t.iva).toFixed(2)), `caso ${i}`).toBe(t.total);
+      expect(t.total).toBe(Number(t.lineas.reduce((s, l) => s + l.total, 0).toFixed(2)));
+    }
   });
 });
 
@@ -101,16 +131,27 @@ describe("validación de entradas", () => {
   });
 });
 
-describe("política de IVA vigente (decisión pendiente de Contabilidad)", () => {
-  it("está encapsulada en UN solo valor: 12 % y precio con IVA incluido, inmutable", () => {
-    expect(POLITICA_IVA_FACTURACION).toEqual({ porcentajeIva: 12, precioIncluyeIva: true });
-    expect(Object.isFrozen(POLITICA_IVA_FACTURACION)).toBe(true);
+describe("tratamiento de IVA: se elige por LÍNEA, no es una constante global", () => {
+  it("politicaIva(true|false) = 12 % + el tratamiento recibido (sin valor por defecto)", () => {
+    expect(PORCENTAJE_IVA_FASE1).toBe(12);
+    expect(politicaIva(true)).toEqual({ porcentajeIva: 12, precioIncluyeIva: true });
+    expect(politicaIva(false)).toEqual({ porcentajeIva: 12, precioIncluyeIva: false });
   });
 
-  it("cambiar la política cambia el resultado SIN tocar el cálculo (misma función, otro parámetro)", () => {
-    const con = calcularTotalesFactura({ montosLinea: [112], ...CON_IVA });
-    const sin = calcularTotalesFactura({ montosLinea: [112], ...SIN_IVA });
-    expect(con.total).toBe(112);
-    expect(sin.total).toBe(125.44);
+  it("los DOS modos con la misma función: 112 incluido → 100 + 12 = 112; 112 agregado → 112 + 13.44 = 125.44", () => {
+    expect(calcularTotalesLinea({ montoLinea: 112, ...politicaIva(true) })).toEqual({ base: 100, iva: 12, total: 112 });
+    expect(calcularTotalesLinea({ montoLinea: 112, ...politicaIva(false) })).toEqual({ base: 112, iva: 13.44, total: 125.44 });
+  });
+
+  it("ambos modos mantienen base + IVA = total exacto para miles de montos", () => {
+    let semilla = 777;
+    for (let i = 0; i < 3000; i++) {
+      semilla = (semilla * 1103515245 + 12345) & 0x7fffffff;
+      const monto = (semilla % 5_000_000) / 100;
+      for (const incluye of [true, false]) {
+        const t = calcularTotalesLinea({ montoLinea: monto, ...politicaIva(incluye) });
+        expect(Number((t.base + t.iva).toFixed(2)), `${monto} ${incluye}`).toBe(t.total);
+      }
+    }
   });
 });

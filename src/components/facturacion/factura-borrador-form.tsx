@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { calcularTotalLineas, firmaLineas, formatearMonto, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
+import { calcularTotalLineas, etiquetaTratamientoIva, firmaPreview, formatearMonto, lineaDifiereDeTarifa } from "@/lib/facturacion/ui-logica";
 
 /**
  * FACT-1-UI — formulario de Borrador COMPARTIDO entre:
@@ -15,6 +15,10 @@ import { calcularTotalLineas, firmaLineas, formatearMonto, lineaDifiereDeTarifa 
  * FACT-2: al CREAR hay un paso de «Previsualizar» (POST .../facturas/preview,
  * sin escritura) y «Guardar borrador» solo se habilita con una vista previa
  * vigente. Al EDITAR el flujo no cambia. Aquí no existe ninguna acción FEL.
+ *
+ * TRATAMIENTO DE IVA POR VIAJE: cada línea tiene su propio selector («IVA incluido» / «Agregar IVA»). Se muestra
+ * preseleccionado «IVA incluido» (el caso más común) y se puede cambiar viaje por viaje: una misma factura puede
+ * mezclarlos. Cambiar el de CUALQUIER viaje invalida la vista previa. Nada se infiere del cliente, la ruta ni la tarifa.
  */
 
 export type LineaBorrador = {
@@ -24,6 +28,8 @@ export type LineaBorrador = {
   placa: string | null;
   tarifaComercial: number | null;
   montoAsignado: number;
+  /** Tratamiento de IVA de ESTA línea: true = ya incluido en la tarifa; false = se agrega. */
+  precioIncluyeIva: boolean;
   moneda?: string;
 };
 
@@ -32,8 +38,8 @@ type PreviewApi = {
   cantidadViajes: number;
   borrador: {
     moneda: string;
-    politica: { porcentajeIva: number; precioIncluyeIva: boolean };
-    lineas: { planId: number; codigo: string; fechaPlan: string; descripcion: string; montoAsignado: number; base: number; iva: number; total: number }[];
+    porcentajeIva: number;
+    lineas: { planId: number; codigo: string; fechaPlan: string; descripcion: string; montoAsignado: number; precioIncluyeIva: boolean; base: number; iva: number; total: number }[];
     subtotal: number;
     iva: number;
     total: number;
@@ -92,12 +98,15 @@ export function FacturaBorradorForm({
   // Vista previa (solo al crear). Su huella debe coincidir con la de las líneas actuales para poder guardar.
   const [preview, setPreview] = useState<{ datos: PreviewApi; firma: string } | null>(null);
   const [previsualizando, setPrevisualizando] = useState(false);
-  const firmaActual = useMemo(() => firmaLineas(lineas), [lineas]);
+  const firmaActual = useMemo(() => firmaPreview({ clienteId, lineas }), [clienteId, lineas]);
   const requierePreview = facturaId == null;
   const previewVigente = preview != null && preview.firma === firmaActual;
 
   function setMonto(planId: number, monto: number) {
     setLineas((prev) => prev.map((l) => (l.planId === planId ? { ...l, montoAsignado: monto } : l)));
+  }
+  function setTratamientoIva(planId: number, precioIncluyeIva: boolean) {
+    setLineas((prev) => prev.map((l) => (l.planId === planId ? { ...l, precioIncluyeIva } : l)));
   }
   function quitarLinea(planId: number) {
     setLineas((prev) => prev.filter((l) => l.planId !== planId));
@@ -123,7 +132,7 @@ export function FacturaBorradorForm({
   function agregarViaje(v: ViajePendienteApi) {
     setLineas((prev) => [
       ...prev,
-      { planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, moneda: v.moneda },
+      { planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, precioIncluyeIva: true, moneda: v.moneda },
     ]);
     setPendientesCliente((prev) => prev.filter((p) => p.planId !== v.planId));
   }
@@ -140,7 +149,7 @@ export function FacturaBorradorForm({
       const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clienteId, planes: lineas.map((l) => ({ planId: l.planId, montoAsignado: l.montoAsignado })) }),
+        body: JSON.stringify({ clienteId, planes: lineas.map((l) => ({ planId: l.planId, montoAsignado: l.montoAsignado, precioIncluyeIva: l.precioIncluyeIva })) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -170,7 +179,7 @@ export function FacturaBorradorForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clienteId,
-          planes: lineas.map((l) => ({ planId: l.planId, montoAsignado: l.montoAsignado })),
+          planes: lineas.map((l) => ({ planId: l.planId, montoAsignado: l.montoAsignado, precioIncluyeIva: l.precioIncluyeIva })),
           numeroFactura: numeroFactura.trim() || null,
           fechaEmision: fechaEmision || null,
           observaciones: observaciones.trim() || null,
@@ -222,6 +231,7 @@ export function FacturaBorradorForm({
               <th className="px-2 py-1.5">Unidad</th>
               <th className="px-2 py-1.5">Tarifa comercial</th>
               <th className="px-2 py-1.5">Monto a facturar</th>
+              <th className="px-2 py-1.5">Tratamiento IVA (12 %)</th>
               <th className="px-2 py-1.5" />
             </tr>
           </thead>
@@ -244,19 +254,30 @@ export function FacturaBorradorForm({
                     {difiere ? <p className="mt-0.5 text-[10px] text-amber-600">Difiere de la tarifa comercial</p> : null}
                   </td>
                   <td className="px-2 py-1.5">
+                    <select
+                      aria-label={`Tratamiento de IVA del viaje ${l.codigo}`}
+                      className={inputCls}
+                      value={l.precioIncluyeIva ? "incluido" : "agregado"}
+                      onChange={(e) => setTratamientoIva(l.planId, e.target.value === "incluido")}
+                    >
+                      <option value="incluido">IVA incluido</option>
+                      <option value="agregado">Agregar IVA</option>
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
                     <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => quitarLinea(l.planId)}>Quitar</button>
                   </td>
                 </tr>
               );
             })}
             {!lineas.length ? (
-              <tr><td colSpan={6} className="px-3 py-4 text-center text-xs text-[var(--muted)]">Sin viajes en esta factura.</td></tr>
+              <tr><td colSpan={7} className="px-3 py-4 text-center text-xs text-[var(--muted)]">Sin viajes en esta factura.</td></tr>
             ) : null}
           </tbody>
           <tfoot>
             <tr className="border-t border-[var(--border)] font-medium">
-              <td colSpan={4} className="px-2 py-1.5 text-right text-xs text-[var(--muted)]">Total</td>
-              <td colSpan={2} className="px-2 py-1.5 text-sm text-[var(--text)]">{formatearMonto(total, monedaCodigo)}</td>
+              <td colSpan={4} className="px-2 py-1.5 text-right text-xs text-[var(--muted)]">Suma de tarifas (el total con IVA se calcula en la vista previa)</td>
+              <td colSpan={3} className="px-2 py-1.5 text-sm text-[var(--text)]">{formatearMonto(total, monedaCodigo)}</td>
             </tr>
           </tfoot>
         </table>
@@ -293,10 +314,7 @@ export function FacturaBorradorForm({
           <ul className="space-y-0.5 text-xs text-[var(--text)]">
             <li>Cliente: {preview.datos.cliente.nombre}{preview.datos.cliente.nit ? ` · NIT ${preview.datos.cliente.nit}` : ""}</li>
             <li>Moneda: {preview.datos.borrador.moneda} · Viajes: {preview.datos.cantidadViajes}</li>
-            <li>
-              IVA {preview.datos.borrador.politica.porcentajeIva} % — los montos se interpretan{" "}
-              {preview.datos.borrador.politica.precioIncluyeIva ? "CON el IVA incluido" : "SIN IVA (se suma aparte)"}
-            </li>
+            <li>IVA {preview.datos.borrador.porcentajeIva} % · cada viaje con su propio tratamiento (columna «IVA»)</li>
           </ul>
           <div className="table-scroll rounded border border-[var(--border)]">
             <table className="min-w-full text-left text-xs">
@@ -304,7 +322,8 @@ export function FacturaBorradorForm({
                 <tr>
                   <th className="px-2 py-1">Viaje</th>
                   <th className="px-2 py-1">Descripción</th>
-                  <th className="px-2 py-1 text-right">Precio</th>
+                  <th className="px-2 py-1 text-right">Tarifa</th>
+                  <th className="px-2 py-1">Tratamiento</th>
                   <th className="px-2 py-1 text-right">Base</th>
                   <th className="px-2 py-1 text-right">IVA</th>
                   <th className="px-2 py-1 text-right">Total</th>
@@ -316,6 +335,7 @@ export function FacturaBorradorForm({
                     <td className="px-2 py-1 font-mono">{l.codigo}</td>
                     <td className="px-2 py-1">{l.descripcion}</td>
                     <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.montoAsignado, preview.datos.borrador.moneda)}</td>
+                    <td className="whitespace-nowrap px-2 py-1">{etiquetaTratamientoIva(l.precioIncluyeIva)}</td>
                     <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.base, preview.datos.borrador.moneda)}</td>
                     <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.iva, preview.datos.borrador.moneda)}</td>
                     <td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(l.total, preview.datos.borrador.moneda)}</td>
@@ -323,9 +343,9 @@ export function FacturaBorradorForm({
                 ))}
               </tbody>
               <tfoot className="border-t border-[var(--border)] font-medium">
-                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">Subtotal</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.subtotal, preview.datos.borrador.moneda)}</td></tr>
-                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">IVA</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.iva, preview.datos.borrador.moneda)}</td></tr>
-                <tr><td colSpan={5} className="px-2 py-1 text-right text-[var(--muted)]">TOTAL</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.total, preview.datos.borrador.moneda)}</td></tr>
+                <tr><td colSpan={6} className="px-2 py-1 text-right text-[var(--muted)]">Subtotal</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.subtotal, preview.datos.borrador.moneda)}</td></tr>
+                <tr><td colSpan={6} className="px-2 py-1 text-right text-[var(--muted)]">IVA (suma del IVA de cada línea)</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.iva, preview.datos.borrador.moneda)}</td></tr>
+                <tr><td colSpan={6} className="px-2 py-1 text-right text-[var(--muted)]">TOTAL</td><td className="whitespace-nowrap px-2 py-1 text-right">{formatearMonto(preview.datos.borrador.total, preview.datos.borrador.moneda)}</td></tr>
               </tfoot>
             </table>
           </div>

@@ -11,19 +11,23 @@ import Decimal from "decimal.js";
  * (nunca se recalcula el IVA sobre el gran total): lo que ve el usuario por
  * línea siempre suma exactamente al pie del documento.
  *
- * DECISIÓN DE NEGOCIO PENDIENTE (Contabilidad): si `tarifa_comercial` /
- * `monto_asignado` incluye IVA. Históricamente en Milenium el precio incluye
- * el IVA 12 %, pero NO está confirmado para las tarifas de esta plataforma.
- * Por eso la política vive AQUÍ, en un único lugar y como dato, y los
- * cálculos la reciben por parámetro: cambiarla no toca el resto del flujo.
+ * TRATAMIENTO DE IVA — decisión por LÍNEA/VIAJE (confirmado por Contabilidad): la mayoría de las tarifas YA incluyen el
+ * IVA 12 %, pero hay viajes cuya tarifa lleva el IVA AGREGADO, y una MISMA factura puede mezclar ambos. Todavía no se
+ * conoce la regla de negocio que decide cuál corresponde, así que NO se infiere (ni por cliente, ruta, tarifa, viaje
+ * o cotización): quien factura lo elige explícitamente por viaje y se congela en
+ * `fact_factura_viajes.precio_incluye_iva` junto con `porcentaje_iva`, `base_monto`, `iva_monto` y `total_linea`.
+ * Aquí solo vive el porcentaje de esta fase y las fórmulas, que reciben la política por parámetro.
  */
 
 export type PoliticaIva = { porcentajeIva: number; precioIncluyeIva: boolean };
 
-export const POLITICA_IVA_FACTURACION: Readonly<PoliticaIva> = Object.freeze({
-  porcentajeIva: 12,
-  precioIncluyeIva: true,
-});
+/** IVA vigente en Guatemala para esta fase. */
+export const PORCENTAJE_IVA_FASE1 = 12;
+
+/** Política de UNA factura: el porcentaje de la fase + el tratamiento elegido explícitamente. */
+export function politicaIva(precioIncluyeIva: boolean): PoliticaIva {
+  return { porcentajeIva: PORCENTAJE_IVA_FASE1, precioIncluyeIva };
+}
 
 export type TotalesLinea = { base: number; iva: number; total: number };
 export type TotalesFactura = { subtotal: number; iva: number; total: number };
@@ -68,21 +72,24 @@ export function calcularTotalesLinea(input: { montoLinea: number | string } & Po
   return { base: base.toNumber(), iva: iva.toNumber(), total: base.plus(iva).toNumber() };
 }
 
-/** Totales del documento = suma de líneas ya desglosadas (ver cabecera). */
-export function calcularTotalesFactura(input: { montosLinea: (number | string)[] } & PoliticaIva): TotalesFactura {
-  validarPolitica(input);
+export type LineaParaTotales = { montoLinea: number | string; precioIncluyeIva: boolean };
+
+/**
+ * Totales del documento = SUMA de las líneas ya desglosadas, cada una con SU PROPIA política. Nunca se recalcula el
+ * IVA globalmente sobre el total agregado: subtotal = Σ base, IVA = Σ IVA de línea, total = Σ total de línea.
+ */
+export function calcularTotalesFactura(input: { lineas: LineaParaTotales[]; porcentajeIva: number }): TotalesFactura & { lineas: TotalesLinea[] } {
+  const pct = validarPolitica({ porcentajeIva: input.porcentajeIva, precioIncluyeIva: true });
   let subtotal = new Decimal(0);
   let iva = new Decimal(0);
   let total = new Decimal(0);
-  for (const montoLinea of input.montosLinea) {
-    const l = calcularTotalesLinea({
-      montoLinea,
-      porcentajeIva: input.porcentajeIva,
-      precioIncluyeIva: input.precioIncluyeIva,
-    });
-    subtotal = subtotal.plus(l.base);
-    iva = iva.plus(l.iva);
-    total = total.plus(l.total);
+  const lineas: TotalesLinea[] = [];
+  for (const l of input.lineas) {
+    const t = calcularTotalesLinea({ montoLinea: l.montoLinea, porcentajeIva: pct.toNumber(), precioIncluyeIva: l.precioIncluyeIva });
+    lineas.push(t);
+    subtotal = subtotal.plus(t.base);
+    iva = iva.plus(t.iva);
+    total = total.plus(t.total);
   }
-  return { subtotal: subtotal.toNumber(), iva: iva.toNumber(), total: total.toNumber() };
+  return { subtotal: subtotal.toNumber(), iva: iva.toNumber(), total: total.toNumber(), lineas };
 }

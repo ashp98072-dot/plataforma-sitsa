@@ -6,6 +6,7 @@ import {
   evaluarPlanFacturable,
   MENSAJE_MONEDA_NO_SOPORTADA,
   normalizarMoneda,
+  tratamientoEncabezado,
   type PlanParaFactura,
 } from "./borrador-calculo";
 
@@ -125,25 +126,68 @@ describe("moneda en la elegibilidad del viaje", () => {
   });
 });
 
-describe("construirBorrador", () => {
-  it("una línea por viaje, cantidad 1, con desglose y totales (1000 con IVA → 892.86 + 107.14)", () => {
-    const r = construirBorrador([{ plan: PLAN, montoAsignado: 1000 }]);
+const L = (plan: PlanParaFactura, montoAsignado: number, precioIncluyeIva: boolean) => ({ plan, montoAsignado, precioIncluyeIva });
+const PLAN2: PlanParaFactura = { ...PLAN, id: 2, codigo: "PLAN-2", destino: "Cobán", fechaPlan: "2026-08-28" };
+
+describe("construirBorrador — política de IVA POR LÍNEA", () => {
+  it("1) una línea con IVA INCLUIDO: 1000 → 892.86 + 107.14 = 1000 (cantidad 1, descripción y ruta congeladas)", () => {
+    const r = construirBorrador([L(PLAN, 1000, true)]);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const b = r.borrador;
     expect(b.lineas).toHaveLength(1);
     expect(b.lineas[0]).toMatchObject({
-      planId: 1, codigo: "PLAN-1", cantidad: 1, montoAsignado: 1000, base: 892.86, iva: 107.14, total: 1000,
-      descripcion: "Servicio de transporte – Guatemala → Xela – 27/08/2026", rutaCodigo: "RUTA-01",
+      planId: 1, codigo: "PLAN-1", cantidad: 1, montoAsignado: 1000, precioIncluyeIva: true, porcentajeIva: 12,
+      base: 892.86, iva: 107.14, total: 1000, descripcion: "Servicio de transporte – Guatemala → Xela – 27/08/2026", rutaCodigo: "RUTA-01",
     });
-    expect(b).toMatchObject({ moneda: "GTQ", subtotal: 892.86, iva: 107.14, total: 1000 });
+    expect(b).toMatchObject({ moneda: "GTQ", porcentajeIva: 12, precioIncluyeIva: true, subtotal: 892.86, iva: 107.14, total: 1000 });
   });
 
-  it("dos viajes del mismo cliente se agrupan: el total es la suma exacta", () => {
-    const r = construirBorrador([
-      { plan: PLAN, montoAsignado: 1000 },
-      { plan: { ...PLAN, id: 2, codigo: "PLAN-2", destino: "Cobán" }, montoAsignado: 500.5 },
-    ]);
+  it("2) una línea con IVA AGREGADO: 1000 → 1000 + 120 = 1120", () => {
+    const r = construirBorrador([L(PLAN, 1000, false)]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.borrador.lineas[0]).toMatchObject({ precioIncluyeIva: false, porcentajeIva: 12, base: 1000, iva: 120, total: 1120 });
+    expect(r.borrador).toMatchObject({ precioIncluyeIva: false, subtotal: 1000, iva: 120, total: 1120 });
+  });
+
+  it("3) MEZCLA en una misma factura: Q100 incluido + Q100 agregado → subtotal 189.29, IVA 22.71, total 212.00", () => {
+    const r = construirBorrador([L(PLAN, 100, true), L(PLAN2, 100, false)]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const [a, b] = r.borrador.lineas;
+    expect([a.precioIncluyeIva, a.base, a.iva, a.total]).toEqual([true, 89.29, 10.71, 100]);
+    expect([b.precioIncluyeIva, b.base, b.iva, b.total]).toEqual([false, 100, 12, 112]);
+    expect(r.borrador).toMatchObject({ subtotal: 189.29, iva: 22.71, total: 212 });
+    // el documento es la SUMA de las líneas, nunca un IVA recalculado sobre el total agregado
+    expect(r.borrador.subtotal).toBe(Number((a.base + b.base).toFixed(2)));
+    expect(r.borrador.iva).toBe(Number((a.iva + b.iva).toFixed(2)));
+    expect(r.borrador.total).toBe(Number((a.total + b.total).toFixed(2)));
+    expect(Number((r.borrador.subtotal + r.borrador.iva).toFixed(2))).toBe(r.borrador.total);
+  });
+
+  it("11) el encabezado NO finge una sola política cuando hay mezcla: precioIncluyeIva = null; con todas iguales, true/false", () => {
+    const mezcla = construirBorrador([L(PLAN, 100, true), L(PLAN2, 100, false)]);
+    const todasIncluidas = construirBorrador([L(PLAN, 100, true), L(PLAN2, 100, true)]);
+    const todasAgregadas = construirBorrador([L(PLAN, 100, false), L(PLAN2, 100, false)]);
+    expect(mezcla.ok && mezcla.borrador.precioIncluyeIva).toBeNull();
+    expect(todasIncluidas.ok && todasIncluidas.borrador.precioIncluyeIva).toBe(true);
+    expect(todasAgregadas.ok && todasAgregadas.borrador.precioIncluyeIva).toBe(false);
+  });
+
+  it("cambiar SOLO una línea recalcula solo esa línea y los totales", () => {
+    const antes = construirBorrador([L(PLAN, 100, true), L(PLAN2, 100, true)]);
+    const despues = construirBorrador([L(PLAN, 100, true), L(PLAN2, 100, false)]);
+    expect(antes.ok && despues.ok).toBe(true);
+    if (!antes.ok || !despues.ok) return;
+    expect(despues.borrador.lineas[0]).toEqual(antes.borrador.lineas[0]); // la línea 1 no cambia
+    expect(despues.borrador.lineas[1].total).toBe(112);
+    expect(antes.borrador.total).toBe(200);
+    expect(despues.borrador.total).toBe(212);
+  });
+
+  it("dos viajes del mismo cliente se agrupan: el total es la suma exacta (ambos con IVA incluido)", () => {
+    const r = construirBorrador([L(PLAN, 1000, true), L(PLAN2, 500.5, true)]);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.borrador.lineas).toHaveLength(2);
@@ -153,31 +197,23 @@ describe("construirBorrador", () => {
   });
 
   it("una factura SOLO en USD se bloquea (defensa en profundidad: nunca se calcula IVA sobre otra moneda)", () => {
-    const r = construirBorrador([{ plan: { ...PLAN, monedaRaw: "USD" }, montoAsignado: 1000 }]);
-    expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+    expect(construirBorrador([L({ ...PLAN, monedaRaw: "USD" }, 1000, true)])).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
   });
 
   it("mezclar GTQ con USD también se bloquea", () => {
-    const r = construirBorrador([
-      { plan: PLAN, montoAsignado: 1000 },
-      { plan: { ...PLAN, id: 2, codigo: "PLAN-2", monedaRaw: "USD" }, montoAsignado: 100 },
-    ]);
-    expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
+    expect(construirBorrador([L(PLAN, 1000, true), L({ ...PLAN2, monedaRaw: "USD" }, 100, false)])).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
   });
 
   it("moneda ausente en un viaje cuenta como GTQ (no mezcla con otro GTQ explícito)", () => {
-    const r = construirBorrador([
-      { plan: { ...PLAN, monedaRaw: null }, montoAsignado: 10 },
-      { plan: { ...PLAN, id: 2, codigo: "PLAN-2", monedaRaw: "GTQ" }, montoAsignado: 10 },
-    ]);
-    expect(r.ok).toBe(true);
+    expect(construirBorrador([L({ ...PLAN, monedaRaw: null }, 10, true), L({ ...PLAN2, monedaRaw: "GTQ" }, 10, true)]).ok).toBe(true);
   });
 
-  it("el snapshot previo manda sobre los datos vivos del viaje (editar el borrador no refresca lo congelado)", () => {
+  it("9) el snapshot previo manda sobre los datos vivos del viaje (editar el borrador no refresca lo congelado)", () => {
     const r = construirBorrador([
       {
         plan: { ...PLAN, destino: "Destino NUEVO", rutaCodigo: "RUTA-NUEVA" },
         montoAsignado: 1000,
+        precioIncluyeIva: true,
         snapshotPrevio: {
           fechaPlan: "2026-08-27", rutaCodigo: "RUTA-01", origen: "Guatemala", destino: "Xela",
           descripcion: "Servicio de transporte – Guatemala → Xela – 27/08/2026",
@@ -191,10 +227,13 @@ describe("construirBorrador", () => {
       expect(r.borrador.lineas[0].descripcion).toContain("Xela");
     }
   });
+});
 
-  it("usa la política recibida (precio SIN IVA suma el IVA aparte)", () => {
-    const r = construirBorrador([{ plan: PLAN, montoAsignado: 1000 }], { porcentajeIva: 12, precioIncluyeIva: false });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.borrador).toMatchObject({ subtotal: 1000, iva: 120, total: 1120 });
+describe("tratamientoEncabezado", () => {
+  it("true/false si todas coinciden; null con mezcla o sin líneas", () => {
+    expect(tratamientoEncabezado([true, true])).toBe(true);
+    expect(tratamientoEncabezado([false])).toBe(false);
+    expect(tratamientoEncabezado([true, false])).toBeNull();
+    expect(tratamientoEncabezado([])).toBeNull();
   });
 });

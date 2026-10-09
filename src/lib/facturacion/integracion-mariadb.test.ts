@@ -211,14 +211,14 @@ describe.skipIf(!PUERTO)("MariaDB real — D–I: crear, leer, editar, cancelar,
   it("D) crear un borrador REAL con dos viajes (una sola transacción, auditada)", async () => {
     p1 = await crearPlan({ codigo: "D-1", tarifa_comercial: 1000, fecha_plan: "2026-08-27" });
     p2 = await crearPlan({ codigo: "D-2", tarifa_comercial: 500.5, fecha_plan: "2026-08-28", lugar_descarga_historico: null, ruta_codigo_historico: "RUTA-02", lugar_descarga_id: 12 });
-    const r = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p1 }, { planId: p2 }], observaciones: "prueba" });
+    const r = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p1, precioIncluyeIva: true }, { planId: p2, precioIncluyeIva: true }], observaciones: "prueba" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     facturaId = r.facturaId;
     expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [facturaId])).toBe(2);
     const aud = await filas("SELECT usuario, accion, modulo, detalle FROM auditoria WHERE accion = 'crear_factura' ORDER BY id DESC LIMIT 1");
     expect(aud[0]).toMatchObject({ usuario: "facturador-a", modulo: "facturacion" });
-    expect(String(aud[0].detalle)).toContain("viajes: D-1, D-2");
+    expect(String(aud[0].detalle)).toContain("viajes: D-1 (IVA incluido), D-2 (IVA incluido)");
     expect(String(aud[0].detalle)).not.toContain("1234567-8");
   });
 
@@ -263,7 +263,7 @@ describe.skipIf(!PUERTO)("MariaDB real — D–I: crear, leer, editar, cancelar,
     p3 = await crearPlan({ codigo: "F-3", tarifa_comercial: 300, fecha_plan: "2026-08-29" });
     // p1 se conserva (con su ruta/destino/tarifa vivos ya cambiados), p2 sale, p3 entra
     const r = await actualizarFacturaBorrador(actorA, facturaId, {
-      clienteId: 20, planes: [{ planId: p1, montoAsignado: 900 }, { planId: p3 }], numeroFactura: "BORR-1", observaciones: "editado",
+      clienteId: 20, planes: [{ planId: p1, montoAsignado: 900, precioIncluyeIva: true }, { planId: p3, precioIncluyeIva: true }], numeroFactura: "BORR-1", observaciones: "editado",
     });
     expect(r.ok).toBe(true);
     const d = await obtenerFactura(E1, facturaId);
@@ -285,14 +285,14 @@ describe.skipIf(!PUERTO)("MariaDB real — D–I: crear, leer, editar, cancelar,
     expect((await filas("SELECT estado_admin FROM fact_facturas WHERE id = ?", [facturaId]))[0].estado_admin).toBe("Anulada");
     const lista = await listarViajesPendientes(E1, { pageSize: 200 });
     for (const p of [p1, p3]) expect(lista.items.map((i) => i.planId)).toContain(p);
-    const otra = await crearFactura(actorB, { clienteId: 20, planes: [{ planId: p1 }, { planId: p3 }] });
+    const otra = await crearFactura(actorB, { clienteId: 20, planes: [{ planId: p1, precioIncluyeIva: true }, { planId: p3, precioIncluyeIva: true }] });
     expect(otra.ok).toBe(true);
   });
 
   it("la vista previa REAL no escribe nada (ni facturas, ni líneas, ni auditoría)", async () => {
     const p = await crearPlan({ codigo: "PREV-1" });
     const antes = await conteo("SELECT (SELECT COUNT(*) FROM fact_facturas) + (SELECT COUNT(*) FROM fact_factura_viajes) + (SELECT COUNT(*) FROM auditoria) AS n");
-    const r = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: p }] });
+    const r = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: true }] });
     expect(r.ok).toBe(true);
     expect(await conteo("SELECT (SELECT COUNT(*) FROM fact_facturas) + (SELECT COUNT(*) FROM fact_factura_viajes) + (SELECT COUNT(*) FROM auditoria) AS n")).toBe(antes);
   });
@@ -349,7 +349,7 @@ describe.skipIf(!PUERTO)("MariaDB real — fecha_emision llega como YYYY-MM-DD (
   describe("emitir (emitirFactura lee fecha_emision con su propia consulta)", () => {
     const borrador = async (codigo: string, fecha: string | null): Promise<number> => {
       const plan = await crearPlan({ codigo });
-      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan }], numeroFactura: `NUM-${codigo}`, fechaEmision: fecha });
+      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], numeroFactura: `NUM-${codigo}`, fechaEmision: fecha });
       expect(c.ok).toBe(true);
       return c.ok ? c.facturaId : 0;
     };
@@ -393,16 +393,232 @@ describe.skipIf(!PUERTO)("MariaDB real — fecha_emision llega como YYYY-MM-DD (
 
   it("editar un borrador con fecha de emisión la conserva como YYYY-MM-DD de ida y vuelta", async () => {
     const plan = await crearPlan({ codigo: "FECHA-EDIT" });
-    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan }], fechaEmision: "2026-08-27" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], fechaEmision: "2026-08-27" });
     expect(c.ok).toBe(true);
     if (!c.ok) return;
     const leida = (await obtenerFactura(E1, c.facturaId))!;
     expect(leida.factura.fechaEmision).toBe("2026-08-27");
     // el formulario reenvía exactamente lo que recibió
-    const e = await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 20, planes: [{ planId: plan }], fechaEmision: leida.factura.fechaEmision });
+    const e = await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], fechaEmision: leida.factura.fechaEmision });
     expect(e.ok).toBe(true);
     expect((await obtenerFactura(E1, c.facturaId))?.factura.fechaEmision).toBe("2026-08-27");
     expect(String((await filas("SELECT DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS f FROM fact_facturas WHERE id = ?", [c.facturaId]))[0].f)).toBe("2026-08-27");
+  });
+});
+
+describe.skipIf(!PUERTO)("MariaDB real — tratamiento de IVA POR LÍNEA (incluido en la tarifa / agregado a la tarifa, incluso mezclados)", () => {
+  const cabecera = async (id: number) =>
+    (await filas("SELECT precio_incluye_iva, porcentaje_iva, subtotal, iva_monto, monto_total, estado_admin FROM fact_facturas WHERE id = ?", [id]))[0];
+  const lineasDb = async (id: number) =>
+    (await filas("SELECT plan_id, monto_asignado, precio_incluye_iva, porcentaje_iva, base_monto, iva_monto, total_linea, descripcion FROM fact_factura_viajes WHERE factura_id = ? ORDER BY plan_id", [id]))
+      .map((l) => ({ plan: Number(l.plan_id), m: Number(l.monto_asignado), incluye: l.precio_incluye_iva == null ? null : Number(l.precio_incluye_iva), pct: l.porcentaje_iva == null ? null : Number(l.porcentaje_iva), base: Number(l.base_monto), iva: Number(l.iva_monto), total: Number(l.total_linea), d: String(l.descripcion) }));
+  const inc = (planId: number, montoAsignado?: number) => ({ planId, precioIncluyeIva: true, ...(montoAsignado != null ? { montoAsignado } : {}) });
+  const agr = (planId: number, montoAsignado?: number) => ({ planId, precioIncluyeIva: false, ...(montoAsignado != null ? { montoAsignado } : {}) });
+
+  it("1) una línea con IVA INCLUIDO: persiste precio_incluye_iva=1 y porcentaje_iva=12 en la línea; 1000 → 892.86 + 107.14 = 1000", async () => {
+    const p = await crearPlan({ codigo: "IVA-INC", tarifa_comercial: 1000 });
+    const r = await crearFactura(actorA, { clienteId: 20, planes: [inc(p)] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((await lineasDb(r.facturaId))[0]).toMatchObject({ incluye: 1, pct: 12, m: 1000, base: 892.86, iva: 107.14, total: 1000 });
+    const c = await cabecera(r.facturaId);
+    expect([Number(c.precio_incluye_iva), Number(c.porcentaje_iva), Number(c.subtotal), Number(c.iva_monto), Number(c.monto_total)]).toEqual([1, 12, 892.86, 107.14, 1000]);
+  });
+
+  it("2) una línea con IVA AGREGADO: persiste precio_incluye_iva=0 y porcentaje_iva=12; 1000 → 1000 + 120 = 1120", async () => {
+    const p = await crearPlan({ codigo: "IVA-AGR", tarifa_comercial: 1000 });
+    const r = await crearFactura(actorA, { clienteId: 20, planes: [agr(p)] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect((await lineasDb(r.facturaId))[0]).toMatchObject({ incluye: 0, pct: 12, m: 1000, base: 1000, iva: 120, total: 1120 });
+    const c = await cabecera(r.facturaId);
+    expect([Number(c.precio_incluye_iva), Number(c.subtotal), Number(c.iva_monto), Number(c.monto_total)]).toEqual([0, 1000, 120, 1120]);
+  });
+
+  it("3/4/5/11) FACTURA MIXTA Q100 incluido + Q100 agregado: preview y base real coinciden — 89.29+10.71=100 y 100+12=112 → subtotal 189.29, IVA 22.71, total 212; encabezado NULL", async () => {
+    const a = await crearPlan({ codigo: "IVA-MIX-1", tarifa_comercial: 100, fecha_plan: "2026-08-27" });
+    const b = await crearPlan({ codigo: "IVA-MIX-2", tarifa_comercial: 100, fecha_plan: "2026-08-28" });
+    const prev = await previsualizarFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)] });
+    expect(prev.ok).toBe(true);
+    if (!prev.ok) return;
+    expect(prev.preview.borrador).toMatchObject({ subtotal: 189.29, iva: 22.71, total: 212, precioIncluyeIva: null });
+    const r = await crearFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ls = await lineasDb(r.facturaId);
+    expect(ls.map((l) => [l.incluye, l.pct, l.m, l.base, l.iva, l.total])).toEqual([[1, 12, 100, 89.29, 10.71, 100], [0, 12, 100, 100, 12, 112]]);
+    const c = await cabecera(r.facturaId);
+    expect([Number(c.subtotal), Number(c.iva_monto), Number(c.monto_total), Number(c.porcentaje_iva)]).toEqual([189.29, 22.71, 212, 12]);
+    expect(c.precio_incluye_iva).toBeNull(); // 11) el resumen NO finge una sola política
+    // la lectura: cada línea con SU tratamiento; el encabezado sin política única
+    const d = await obtenerFactura(E1, r.facturaId);
+    expect(d?.factura).toMatchObject({ precioIncluyeIva: null, subtotal: 189.29, iva: 22.71, montoTotal: 212, porcentajeIva: 12 });
+    expect(d?.viajes.map((v) => [v.precioIncluyeIva, v.porcentajeIva, v.base, v.iva, v.total])).toEqual([[true, 12, 89.29, 10.71, 100], [false, 12, 100, 12, 112]]);
+    expect(Number((Number(c.subtotal) + Number(c.iva_monto)).toFixed(2))).toBe(Number(c.monto_total));
+  });
+
+  it("encabezado: 1 si todas las líneas son «incluido», 0 si todas son «agregado», NULL con mezcla", async () => {
+    const casos: [boolean[], number | null][] = [[[true, true], 1], [[false, false], 0], [[true, false], null], [[false, true], null]];
+    for (const [flags, esperado] of casos) {
+      const ps = [await crearPlan({ codigo: `IVA-ENC-${flags.join("")}-1` }), await crearPlan({ codigo: `IVA-ENC-${flags.join("")}-2` })];
+      const r = await crearFactura(actorA, { clienteId: 20, planes: ps.map((planId, i) => ({ planId, precioIncluyeIva: flags[i] })) });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      const v = (await cabecera(r.facturaId)).precio_incluye_iva;
+      expect(v == null ? null : Number(v), flags.join()).toBe(esperado);
+    }
+  });
+
+  it("la vista previa y crear dan EXACTAMENTE los mismos importes en todas las combinaciones (varias líneas con redondeo)", async () => {
+    for (const flags of [[true, true, true], [false, false, false], [true, false, true], [false, true, false]]) {
+      const tarifas = [500.5, 33.33, 0.05];
+      const ps = [] as number[];
+      for (let i = 0; i < 3; i++) ps.push(await crearPlan({ codigo: `IVA-EQ-${flags.join("")}-${i}`, tarifa_comercial: tarifas[i] }));
+      const planes = ps.map((planId, i) => ({ planId, precioIncluyeIva: flags[i] }));
+      const prev = await previsualizarFactura(actorA, { clienteId: 20, planes });
+      expect(prev.ok).toBe(true);
+      if (!prev.ok) return;
+      const c = await crearFactura(actorA, { clienteId: 20, planes });
+      expect(c.ok).toBe(true);
+      if (!c.ok) return;
+      const cab = await cabecera(c.facturaId);
+      expect([Number(cab.subtotal), Number(cab.iva_monto), Number(cab.monto_total)]).toEqual([prev.preview.borrador.subtotal, prev.preview.borrador.iva, prev.preview.borrador.total]);
+      expect((await lineasDb(c.facturaId)).map((l) => [l.incluye === 1, l.base, l.iva, l.total])).toEqual(prev.preview.borrador.lineas.map((l) => [l.precioIncluyeIva, l.base, l.iva, l.total]));
+      expect(Number((Number(cab.subtotal) + Number(cab.iva_monto)).toFixed(2))).toBe(Number(cab.monto_total));
+    }
+  });
+
+  it("6/7/9) editar: conservar cada política no cambia nada; cambiar SOLO una línea recalcula esa línea y los totales; el snapshot fiscal y los textos quedan estables", async () => {
+    const a = await crearPlan({ codigo: "IVA-ED-1", tarifa_comercial: 100 });
+    const b = await crearPlan({ codigo: "IVA-ED-2", tarifa_comercial: 100, fecha_plan: "2026-08-28" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)] });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    const id = c.facturaId;
+    const original = await lineasDb(id);
+    expect(Number((await cabecera(id)).monto_total)).toBe(212);
+
+    // 6) conservar (aunque la tarifa viva y el destino vivo cambien después)
+    await admin.query("UPDATE tms_planes_viaje SET tarifa_comercial = 9999, lugar_descarga_historico = 'Destino NUEVO' WHERE id IN (?, ?)", [a, b]);
+    expect((await actualizarFacturaBorrador(actorA, id, { clienteId: 20, planes: [inc(a, 100), agr(b, 100)] })).ok).toBe(true);
+    expect(await lineasDb(id)).toEqual(original); // 9) mismo snapshot fiscal y mismos textos
+    expect(Number((await cabecera(id)).monto_total)).toBe(212);
+
+    // 7) cambiar SOLO la línea 2: agregado → incluido
+    expect((await actualizarFacturaBorrador(actorA, id, { clienteId: 20, planes: [inc(a, 100), inc(b, 100)] })).ok).toBe(true);
+    let ls = await lineasDb(id);
+    expect(ls[0]).toEqual(original[0]); // la línea 1 no cambió
+    expect(ls[1]).toMatchObject({ incluye: 1, base: 89.29, iva: 10.71, total: 100 });
+    let cab = await cabecera(id);
+    expect([Number(cab.precio_incluye_iva), Number(cab.subtotal), Number(cab.iva_monto), Number(cab.monto_total)]).toEqual([1, 178.58, 21.42, 200]);
+
+    // 7b) ahora cambiar SOLO la línea 1: incluido → agregado
+    expect((await actualizarFacturaBorrador(actorA, id, { clienteId: 20, planes: [agr(a, 100), inc(b, 100)] })).ok).toBe(true);
+    ls = await lineasDb(id);
+    expect(ls[0]).toMatchObject({ incluye: 0, base: 100, iva: 12, total: 112 });
+    cab = await cabecera(id);
+    expect([cab.precio_incluye_iva, Number(cab.subtotal), Number(cab.iva_monto), Number(cab.monto_total)]).toEqual([null, 189.29, 22.71, 212]);
+    expect((await lineasDb(id)).map((l) => l.d)).toEqual(original.map((l) => l.d)); // textos congelados intactos
+    expect(Number((Number(cab.subtotal) + Number(cab.iva_monto)).toFixed(2))).toBe(Number(cab.monto_total));
+  });
+
+  it("compatibilidad: un borrador anterior (líneas con precio_incluye_iva NULL) se lee sin romper y se edita eligiendo el tratamiento de cada línea", async () => {
+    const plan = await crearPlan({ codigo: "IVA-LEG", tarifa_comercial: 750 });
+    const [f] = await admin.query<mysql.ResultSetHeader>(`INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, estado_admin, creado_por) VALUES (${E1}, 20, 750, 'Borrador', 1)`);
+    await admin.query("INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, 750)", [f.insertId, plan]);
+    const antes = await obtenerFactura(E1, f.insertId);
+    expect(antes?.factura).toMatchObject({ precioIncluyeIva: null, porcentajeIva: null, subtotal: null });
+    expect(antes?.viajes[0]).toMatchObject({ precioIncluyeIva: null, porcentajeIva: null, base: null, iva: null, total: null });
+    expect((await actualizarFacturaBorrador(actorA, f.insertId, { clienteId: 20, planes: [agr(plan)] })).ok).toBe(true);
+    expect((await lineasDb(f.insertId))[0]).toMatchObject({ incluye: 0, pct: 12, base: 750, iva: 90, total: 840 });
+  });
+
+  it("10) una factura EMITIDA no puede cambiar el tratamiento de ninguna línea (409) y emitir tampoco lo altera", async () => {
+    const a = await crearPlan({ codigo: "IVA-EMI-1", tarifa_comercial: 100 });
+    const b = await crearPlan({ codigo: "IVA-EMI-2", tarifa_comercial: 100, fecha_plan: "2026-08-28" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)], numeroFactura: "NUM-IVA-MIX", fechaEmision: "2026-08-27" });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    const antesL = await lineasDb(c.facturaId);
+    const antesC = await cabecera(c.facturaId);
+    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    expect(await lineasDb(c.facturaId)).toEqual(antesL);
+    const emitida = await cabecera(c.facturaId);
+    expect([emitida.precio_incluye_iva, emitida.porcentaje_iva, emitida.subtotal, emitida.iva_monto, emitida.monto_total]).toEqual([antesC.precio_incluye_iva, antesC.porcentaje_iva, antesC.subtotal, antesC.iva_monto, antesC.monto_total]);
+    for (const planes of [[agr(a), agr(b)], [inc(a), inc(b)], [agr(a), agr(b)]]) {
+      expect(await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 20, planes })).toMatchObject({ ok: false, status: 409 });
+    }
+    expect(await lineasDb(c.facturaId)).toEqual(antesL);
+    const despues = await cabecera(c.facturaId);
+    expect([despues.precio_incluye_iva, despues.subtotal, despues.iva_monto, despues.monto_total]).toEqual([antesC.precio_incluye_iva, antesC.subtotal, antesC.iva_monto, antesC.monto_total]);
+  });
+
+  it("12) dos sesiones con tratamientos DISTINTOS sobre el mismo viaje (10 rondas): solo una crea el vínculo, queda SU tratamiento, la otra recibe 409", async () => {
+    for (let i = 0; i < 10; i++) {
+      const plan = await crearPlan({ codigo: `IVA-CC-${i}`, tarifa_comercial: 1000 });
+      const [a, b] = await Promise.all([
+        crearFactura(actorA, { clienteId: 20, planes: [inc(plan)] }),
+        crearFactura(actorB, { clienteId: 20, planes: [agr(plan)] }),
+      ]);
+      expect([a.ok, b.ok].filter(Boolean), `ronda ${i}`).toHaveLength(1);
+      const ganadora = a.ok ? a : b;
+      const perdedora = a.ok ? b : a;
+      if (!perdedora.ok) { expect(perdedora.status).toBe(409); expect(perdedora.error).toContain("ya está vinculado a otra factura"); }
+      if (ganadora.ok) {
+        const l = (await lineasDb(ganadora.facturaId))[0];
+        expect([l.incluye, l.total]).toEqual(a.ok ? [1, 1000] : [0, 1120]);
+      }
+      expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [plan])).toBe(1);
+    }
+  });
+
+  it("12b) dos sesiones con selecciones MIXTAS que se traslapan (10 rondas): una gana completa; la otra no deja escrituras parciales", async () => {
+    for (let i = 0; i < 10; i++) {
+      const [a, b, c] = [await crearPlan({ codigo: `IVA-MX-${i}-a`, tarifa_comercial: 100 }), await crearPlan({ codigo: `IVA-MX-${i}-b`, tarifa_comercial: 100 }), await crearPlan({ codigo: `IVA-MX-${i}-c`, tarifa_comercial: 100 })];
+      const [r1, r2] = await Promise.all([
+        crearFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)] }),
+        crearFactura(actorB, { clienteId: 20, planes: [agr(b), inc(c)] }),
+      ]);
+      expect([r1.ok, r2.ok].filter(Boolean), `ronda ${i}`).toHaveLength(1);
+      const perdedor = r1.ok ? r2 : r1;
+      if (!perdedor.ok) { expect(perdedor.status).toBe(409); expect(perdedor.error).toContain("ya está vinculado a otra factura"); }
+      expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id IN (?, ?, ?)", [a, b, c]), `ronda ${i}`).toBe(2);
+    }
+  });
+
+  it("13) multiempresa: con cualquier tratamiento un viaje de otra empresa sigue sin existir", async () => {
+    const ajeno = await crearPlan({ codigo: "IVA-AJENO", empresa_id: E2, cliente_id: 601, lugar_carga_id: null, lugar_descarga_id: null });
+    for (const linea of [inc(ajeno), agr(ajeno)]) {
+      expect(await previsualizarFactura(actorA, { clienteId: 20, planes: [linea] })).toMatchObject({ ok: false, status: 404 });
+      expect(await crearFactura(actorA, { clienteId: 20, planes: [linea] })).toMatchObject({ ok: false, status: 404 });
+    }
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [ajeno])).toBe(0);
+  });
+
+  it("sin tratamiento (o no booleano) en alguna línea el servidor responde 400 y no escribe nada", async () => {
+    const p = await crearPlan({ codigo: "IVA-SIN-1" });
+    const q = await crearPlan({ codigo: "IVA-SIN-2" });
+    const antes = await conteo("SELECT (SELECT COUNT(*) FROM fact_facturas) + (SELECT COUNT(*) FROM fact_factura_viajes) AS n");
+    for (const valor of [undefined, null, "true", 1]) {
+      const datos = { clienteId: 20, planes: [inc(p), { planId: q, precioIncluyeIva: valor }] } as never;
+      expect(await previsualizarFactura(actorA, datos)).toMatchObject({ ok: false, status: 400 });
+      expect(await crearFactura(actorA, datos)).toMatchObject({ ok: false, status: 400 });
+    }
+    expect(await conteo("SELECT (SELECT COUNT(*) FROM fact_facturas) + (SELECT COUNT(*) FROM fact_factura_viajes) AS n")).toBe(antes);
+  });
+
+  it("11) en TODA la base: subtotal + IVA = total en cabeceras y líneas; el encabezado solo declara una política si TODAS sus líneas la comparten", async () => {
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_facturas WHERE subtotal IS NOT NULL AND ROUND(subtotal + iva_monto, 2) <> monto_total")).toBe(0);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE base_monto IS NOT NULL AND ROUND(base_monto + iva_monto, 2) <> total_linea")).toBe(0);
+    // el resumen del encabezado nunca contradice a las líneas
+    expect(await conteo(
+      `SELECT COUNT(*) AS n FROM fact_facturas f WHERE f.precio_incluye_iva IS NOT NULL AND EXISTS (
+         SELECT 1 FROM fact_factura_viajes v WHERE v.factura_id = f.id AND v.precio_incluye_iva IS NOT NULL AND v.precio_incluye_iva <> f.precio_incluye_iva)`)).toBe(0);
+    // documento = suma de sus líneas
+    expect(await conteo(
+      `SELECT COUNT(*) AS n FROM fact_facturas f JOIN (SELECT factura_id, SUM(base_monto) b, SUM(iva_monto) i, SUM(total_linea) t FROM fact_factura_viajes WHERE base_monto IS NOT NULL GROUP BY factura_id) s
+         ON s.factura_id = f.id WHERE f.subtotal IS NOT NULL AND (f.subtotal <> s.b OR f.iva_monto <> s.i OR f.monto_total <> s.t)`)).toBe(0);
+    expect(await conteo("SELECT COUNT(DISTINCT precio_incluye_iva) AS n FROM fact_factura_viajes WHERE precio_incluye_iva IS NOT NULL")).toBe(2);
   });
 });
 
@@ -418,8 +634,8 @@ describe.skipIf(!PUERTO)("MariaDB real — J/K: dos sesiones, mismo viaje y viaj
     for (let i = 0; i < 20; i++) {
       const plan = await crearPlan({ codigo: `J-${i}` });
       const [a, b] = await Promise.all([
-        crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan }] }),
-        crearFactura(actorB, { clienteId: 20, planes: [{ planId: plan }] }),
+        crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }] }),
+        crearFactura(actorB, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }] }),
       ]);
       expect([a.ok, b.ok].filter(Boolean), `ronda ${i}`).toHaveLength(1);
       const perdedor = a.ok ? b : a;
@@ -440,7 +656,7 @@ describe.skipIf(!PUERTO)("MariaDB real — J/K: dos sesiones, mismo viaje y viaj
     await c1.query("SELECT id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? FOR UPDATE", [plan, E1]);
 
     let terminada = false;
-    const esperando = crearFactura(actorB, { clienteId: 20, planes: [{ planId: plan }] }).then((r) => { terminada = true; return r; });
+    const esperando = crearFactura(actorB, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }] }).then((r) => { terminada = true; return r; });
     await new Promise((r) => setTimeout(r, 700));
     expect(terminada, "la segunda sesión debería estar bloqueada esperando el FOR UPDATE").toBe(false);
 
@@ -470,8 +686,8 @@ describe.skipIf(!PUERTO)("MariaDB real — J/K: dos sesiones, mismo viaje y viaj
     for (let i = 0; i < 10; i++) {
       const [a, b, c] = [await crearPlan({ codigo: `K-${i}-a` }), await crearPlan({ codigo: `K-${i}-b` }), await crearPlan({ codigo: `K-${i}-c` })];
       const [r1, r2] = await Promise.all([
-        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a }, { planId: b }, { planId: c }] }),
-        crearFactura(actorB, { clienteId: 20, planes: [{ planId: c }, { planId: b }, { planId: a }] }),
+        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a, precioIncluyeIva: true }, { planId: b, precioIncluyeIva: true }, { planId: c, precioIncluyeIva: true }] }),
+        crearFactura(actorB, { clienteId: 20, planes: [{ planId: c, precioIncluyeIva: true }, { planId: b, precioIncluyeIva: true }, { planId: a, precioIncluyeIva: true }] }),
       ]);
       expect([r1.ok, r2.ok].filter(Boolean), `ronda ${i}`).toHaveLength(1);
       const perdedor = r1.ok ? r2 : r1;
@@ -491,8 +707,8 @@ describe.skipIf(!PUERTO)("MariaDB real — J/K: dos sesiones, mismo viaje y viaj
     for (let i = 0; i < 10; i++) {
       const [a, b, c] = [await crearPlan({ codigo: `K2-${i}-a` }), await crearPlan({ codigo: `K2-${i}-b` }), await crearPlan({ codigo: `K2-${i}-c` })];
       const [r1, r2] = await Promise.all([
-        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a }, { planId: b }] }),
-        crearFactura(actorB, { clienteId: 20, planes: [{ planId: b }, { planId: c }] }),
+        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a, precioIncluyeIva: true }, { planId: b, precioIncluyeIva: true }] }),
+        crearFactura(actorB, { clienteId: 20, planes: [{ planId: b, precioIncluyeIva: true }, { planId: c, precioIncluyeIva: true }] }),
       ]);
       expect([r1.ok, r2.ok].filter(Boolean), `ronda ${i}`).toHaveLength(1);
       const perdedorK2 = r1.ok ? r2 : r1;
@@ -514,8 +730,8 @@ describe.skipIf(!PUERTO)("MariaDB real — J/K: dos sesiones, mismo viaje y viaj
     for (let i = 0; i < 30; i++) {
       const [a, b] = [await crearPlan({ codigo: `L-${i}-a` }), await crearPlan({ codigo: `L-${i}-b` })];
       const [r1, r2] = await Promise.all([
-        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a }] }),
-        crearFactura(actorB, { clienteId: 20, planes: [{ planId: b }] }),
+        crearFactura(actorA, { clienteId: 20, planes: [{ planId: a, precioIncluyeIva: true }] }),
+        crearFactura(actorB, { clienteId: 20, planes: [{ planId: b, precioIncluyeIva: true }] }),
       ]);
       expect(r1.ok, `ronda ${i}: ${r1.ok ? "" : r1.error}`).toBe(true);
       expect(r2.ok, `ronda ${i}: ${r2.ok ? "" : r2.error}`).toBe(true);
@@ -585,7 +801,7 @@ describe.skipIf(!PUERTO)("MariaDB real — «Viajes por facturar» == lo que el 
     const listados = new Set(lista.items.map((i) => i.planId));
     const todos: [string, number, boolean][] = [...casos.map((c) => [c.nombre, ids.get(c.nombre)!, c.facturable] as [string, number, boolean]), ["destino huérfano", huerfano, false]];
     for (const [nombre, id, esperado] of todos) {
-      const prev = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: id }] });
+      const prev = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: id, precioIncluyeIva: true }] });
       expect(listados.has(id), `listado: ${nombre}`).toBe(esperado);
       expect(prev.ok, `servidor: ${nombre}${prev.ok ? "" : " → " + prev.error}`).toBe(esperado);
     }
@@ -593,11 +809,11 @@ describe.skipIf(!PUERTO)("MariaDB real — «Viajes por facturar» == lo que el 
 
   it("USD y EUR: el servidor responde 409 con el mensaje exacto y la creación real también se bloquea", async () => {
     for (const n of ["moneda USD", "moneda EUR"]) {
-      const r = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: ids.get(n)! }] });
+      const r = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: ids.get(n)!, precioIncluyeIva: true }] });
       expect(r).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
       expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [ids.get(n)!])).toBe(0);
     }
-    const mezcla = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: ids.get("base")! }, { planId: ids.get("moneda USD")! }] });
+    const mezcla = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: ids.get("base")!, precioIncluyeIva: true }, { planId: ids.get("moneda USD")!, precioIncluyeIva: false }] });
     expect(mezcla).toEqual({ ok: false, status: 409, error: MENSAJE_MONEDA_NO_SOPORTADA });
   });
 
@@ -613,14 +829,17 @@ describe.skipIf(!PUERTO)("MariaDB real — «Viajes por facturar» == lo que el 
     const ajeno = await crearPlan({ codigo: "M-ajeno", empresa_id: E2, cliente_id: 601, lugar_carga_id: null, lugar_descarga_id: null });
     const lista = await listarViajesPendientes(E1, { pageSize: 200 });
     expect(lista.items.map((i) => i.planId)).not.toContain(ajeno);
-    const r = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: ajeno }] });
+    const r = await previsualizarFactura(actorA, { clienteId: 20, planes: [{ planId: ajeno, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(404);
-    const rc = await previsualizarFactura(actorA, { clienteId: 30, planes: [{ planId: ajeno }] }); // cliente de la otra empresa
+    const rc = await previsualizarFactura(actorA, { clienteId: 30, planes: [{ planId: ajeno, precioIncluyeIva: true }] }); // cliente de la otra empresa
     expect(rc.ok).toBe(false);
     if (!rc.ok) expect(rc.status).toBe(404);
     const propia = await listarViajesPendientes(E2, { pageSize: 200 });
-    expect(propia.items.map((i) => i.planId)).toEqual([ajeno]);
+    // la empresa 8 ve SUS viajes (y solo los suyos): ninguno de la empresa 7
+    const deE2 = new Set((await filas("SELECT id FROM tms_planes_viaje WHERE empresa_id = ?", [E2])).map((r) => Number(r.id)));
+    expect(propia.items.map((i) => i.planId)).toContain(ajeno);
+    for (const it of propia.items) expect(deE2.has(it.planId), `plan ${it.planId} no es de la empresa 8`).toBe(true);
   });
 
   it("filtro «ruta o destino» encuentra el nombre del destino de CATÁLOGO (el que se muestra) y no encuentra uno que no se muestra", async () => {

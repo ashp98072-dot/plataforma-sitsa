@@ -113,7 +113,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("crearFactura — validación e integridad", () => {
   it("1) solo un viaje Cerrado puede facturarse", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, estado: "En ruta" } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("no está Cerrado"); }
     expect(conn.commit).not.toHaveBeenCalled();
@@ -121,27 +121,27 @@ describe("crearFactura — validación e integridad", () => {
 
   it("2) el plan debe pertenecer a la MISMA empresa (no se encuentra si pertenece a otra)", async () => {
     mockConnQuery({ plan: null }); // simula que WHERE empresa_id=? no lo encontró
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(404);
   });
 
   it("3) todos los viajes deben pertenecer al MISMO cliente (vía el puente clientes.tms_cliente_id)", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, cliente_id: 999 } }); // otro tms_clientes.id
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(400); expect(r.error).toContain("no pertenece al cliente"); }
   });
 
   it("4) un viaje ya vinculado a OTRA factura viva → 409", async () => {
     mockConnQuery({ vinculoExistente: { factura_id: 999 } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("ya está vinculado"); }
   });
 
   it("5) [defensa UNIQUE] el INSERT en fact_factura_viajes usa el MISMO plan_id ya validado bajo FOR UPDATE — el UNIQUE(plan_id) es la segunda capa de la misma garantía", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const lockCall = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM fact_factura_viajes WHERE plan_id = ?"));
     const insertCall = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_factura_viajes"));
     expect(lockCall?.[1]).toEqual([1]);
@@ -149,14 +149,14 @@ describe("crearFactura — validación e integridad", () => {
   });
 
   it("6) monto_total se calcula SERVER-SIDE (suma real de monto_asignado, nunca un valor enviado por el cliente)", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 250 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 250, precioIncluyeIva: true }] });
     const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
     expect(insertFactura?.[1]).toEqual(expect.arrayContaining([250])); // monto_total = 250, no otro valor inventado
   });
 
   it("7) FACT-2: tarifa_comercial null → el viaje NO es facturable (409), nunca se factura en cero ni se inventa el monto", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, tarifa_comercial: null } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("tarifa comercial válida"); }
     expect(conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"))).toBeUndefined();
@@ -164,7 +164,7 @@ describe("crearFactura — validación e integridad", () => {
   });
 
   it("8) monto_asignado distinto de tarifa_comercial queda AUDITADO explícitamente", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 800 }] }); // tarifa real es 1000
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 800, precioIncluyeIva: true }] }); // tarifa real es 1000
     const auditoria = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
     expect(auditoria.detalle).toContain("Montos ajustados");
     expect(auditoria.detalle).toContain("tarifa_comercial Q1000");
@@ -172,20 +172,20 @@ describe("crearFactura — validación e integridad", () => {
   });
 
   it("25) multiempresa: nunca confía en un empresa_id ajeno — el plan se busca SIEMPRE con el empresa_id del actor", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const planCall = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_planes_viaje WHERE id = ?"));
     expect(planCall?.[1]).toEqual([1, 7]);
   });
 
   it("cliente sin puente TMS (tms_cliente_id NULL) → rechazado, nunca deja pasar una comparación incorrecta", async () => {
     mockConnQuery({ cliente: { ...CLIENTE, tms_cliente_id: null } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("no está vinculado a TMS");
   });
 
   it("crea siempre como Borrador", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
     expect(String(insertFactura?.[0])).toContain("'Borrador'");
   });
@@ -194,14 +194,14 @@ describe("crearFactura — validación e integridad", () => {
 describe("actualizarFacturaBorrador", () => {
   it("9) Borrador es editable — reaplica TODAS las validaciones al cambiar viajes", async () => {
     mockConnQuery({ factura: { id: 1, estado_admin: "Borrador", cliente_id: 20 } });
-    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(true);
     expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("DELETE FROM fact_factura_viajes WHERE factura_id = ?"), [1]);
   });
 
   it("10) una factura Emitida queda CONGELADA — PATCH rechazado", async () => {
     mockConnQuery({ factura: { id: 1, estado_admin: "Emitida", cliente_id: 20 } });
-    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(409);
   });
@@ -260,6 +260,14 @@ describe("emitirFactura", () => {
       await emitirFactura(actor, 1, {});
       const lock = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM fact_facturas WHERE id = ? AND empresa_id = ?"));
       expect(String(lock?.[0])).toContain("DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision");
+    });
+
+    it("10) emitir NO modifica el tratamiento de IVA ni los importes: el UPDATE solo toca número, fecha y estado", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      await emitirFactura(actor, 1, {});
+      const sql = String(update()?.[0]);
+      expect(sql).not.toMatch(/precio_incluye_iva|porcentaje_iva|subtotal|iva_monto|monto_total|moneda/);
+      expect(sql).toContain("SET numero_factura = ?, fecha_emision = ?, estado_admin = 'Emitida'");
     });
 
     it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: usa exactamente «2026-08-27» en el UPDATE y en la auditoría", async () => {
@@ -348,7 +356,7 @@ describe("[18/19] saldo y estado financiero derivados (nunca guardados)", () => 
     // La propia ausencia de una columna "saldo"/"estado_financiero" en los
     // INSERT/UPDATE de fact_facturas ya lo demuestra: ningún INSERT/UPDATE
     // de esta suite escribe esas columnas.
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     for (const call of conn.execute.mock.calls) {
       expect(String(call[0])).not.toMatch(/\bsaldo\b|estado_financiero/i);
     }
@@ -486,13 +494,13 @@ describe("HOTFIX PRE-MERGE PR #113 — Hallazgo 1: el puente clientes↔TMS nunc
 
   it("2) asegurarVinculosTmsClientes falla → crearFactura rechaza (nunca crea una factura con el puente roto)", async () => {
     vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_NO_SUCH_TABLE"));
-    await expect(crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_NO_SUCH_TABLE");
+    await expect(crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] })).rejects.toThrow("ER_NO_SUCH_TABLE");
     expect(getConnection).not.toHaveBeenCalled();
   });
 
   it("3) asegurarVinculosTmsClientes falla → actualizarFacturaBorrador rechaza", async () => {
     vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_ACCESS_DENIED_ERROR"));
-    await expect(actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_ACCESS_DENIED_ERROR");
+    await expect(actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] })).rejects.toThrow("ER_ACCESS_DENIED_ERROR");
     expect(getConnection).not.toHaveBeenCalled();
   });
 
