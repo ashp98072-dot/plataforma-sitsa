@@ -89,6 +89,8 @@ function leer(sql: string, params: unknown[]): Fila[] {
   }
   if (sql.includes("FROM fact_factura_viajes WHERE factura_id = ?")) return db.lineasPrevias;
   if (sql.includes("FROM fact_facturas WHERE id = ? AND empresa_id = ?")) return db.facturaBorrador ? [db.facturaBorrador] : [];
+  // FACT-4: ¿el borrador ya guarda líneas? Estos casos son el modelo anterior (una línea implícita por viaje).
+  if (sql.includes("SELECT modelo_lineas FROM fact_facturas")) return [{ modelo_lineas: 0 }];
   throw new Error(`Consulta inesperada: ${sql}`);
 }
 
@@ -730,7 +732,7 @@ describe("fecha_emision llega como YYYY-MM-DD (nunca «Thu Aug 27»)", () => {
     vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("COUNT(*)") ? [{ total: 1 }] : [filaFactura("2026-08-27")])) as never);
     await listarFacturas(EMPRESA, {});
     await obtenerFactura(EMPRESA, 5);
-    const selects = vi.mocked(query).mock.calls.map((c) => String(c[0])).filter((s) => s.includes("FROM fact_facturas f"));
+    const selects = vi.mocked(query).mock.calls.map((c) => String(c[0])).filter((s) => s.includes("FROM fact_facturas f") && s.includes("fecha_emision"));
     expect(selects.length).toBeGreaterThanOrEqual(2);
     for (const s of selects.filter((x) => !x.includes("COUNT(*)"))) {
       expect(s).toContain("DATE_FORMAT(f.fecha_emision, '%Y-%m-%d') AS fecha_emision");

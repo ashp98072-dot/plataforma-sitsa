@@ -84,6 +84,8 @@ function mockConnQuery(o: Overrides = {}) {
     if (sql.includes("FROM fact_factura_viajes ffv") && sql.includes("INNER JOIN tms_planes_viaje")) {
       return [o.lineasEmitir ?? [{ plan_id: 1, codigo: "PLAN-1", estado: "Cerrado" }]];
     }
+    // FACT-4: ¿el borrador ya guarda líneas? En estos casos es el modelo anterior (una línea implícita por viaje).
+    if (sql.includes("SELECT modelo_lineas FROM fact_facturas")) return [[{ modelo_lineas: 0 }]];
     throw new Error(`Consulta inesperada: ${sql}`);
   });
 }
