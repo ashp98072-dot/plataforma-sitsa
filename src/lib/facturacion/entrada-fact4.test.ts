@@ -10,7 +10,7 @@ vi.mock("@/lib/facturacion/contexto-factura", () => ({
 
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { fact4Disponible, leerRetencionIvaCliente, listarEntidadesEmisoras } from "@/lib/facturacion/contexto-factura";
-import { resolverEntradaFact4, fact4CamposSchema } from "./entrada-fact4";
+import { resolverEntradaFact4, fact4CamposSchema, retencionVigenteParaEdicion } from "./entrada-fact4";
 import { z } from "zod";
 
 const LINEA = { planIds: [1, 2], cantidad: 2, descripcion: "Flete", precioUnitario: 500, clasificacion: "SERVICIO" as const, precioIncluyeIva: true };
@@ -104,6 +104,30 @@ describe("resolverEntradaFact4 — retención de IVA (precarga, permiso, congela
     vi.mocked(leerRetencionIvaCliente).mockResolvedValue(0);
     const r = await resolverEntradaFact4({ ...base, entrada: { lineas: [LINEA], entidadId: 1, condicionPago: "CREDITO" } });
     expect(r).toMatchObject({ ok: true, datos: { retencionIvaPct: 0, retencionIvaClientePct: 0 } });
+  });
+});
+
+describe("retencionVigenteParaEdicion — la retención congelada solo vale para el MISMO cliente", () => {
+  const borrador = (clienteId: number, aplicadaPct: number, modeloLineas = true) => ({ factura: { clienteId }, contabilidad: { modeloLineas, retencionIva: { aplicadaPct } } });
+  it("mismo cliente y borrador con líneas → la congelada", () => {
+    expect(retencionVigenteParaEdicion(borrador(1, 15), 1)).toBe(15);
+    expect(retencionVigenteParaEdicion(borrador(1, 0), 1)).toBe(0);
+  });
+  it("cliente distinto → null (se compara contra el cliente nuevo)", () => {
+    expect(retencionVigenteParaEdicion(borrador(1, 15), 2)).toBeNull();
+  });
+  it("borrador anterior a FACT-4 o inexistente → null", () => {
+    expect(retencionVigenteParaEdicion(borrador(1, 0, false), 1)).toBeNull();
+    expect(retencionVigenteParaEdicion(null, 1)).toBeNull();
+  });
+  it("con el cliente distinto, resolverEntradaFact4 pide el permiso aunque el valor coincida con el congelado", async () => {
+    vi.mocked(leerRetencionIvaCliente).mockResolvedValue(30); // cliente nuevo configurado en 30
+    const vigente = retencionVigenteParaEdicion(borrador(1, 15), 2);
+    const r = await resolverEntradaFact4({
+      ...base, clienteId: 2, retencionVigente: vigente,
+      entrada: { lineas: [LINEA], entidadId: 1, condicionPago: "CREDITO", retencionIvaPct: 15 },
+    });
+    expect(r).toMatchObject({ ok: false, status: 403 });
   });
 });
 

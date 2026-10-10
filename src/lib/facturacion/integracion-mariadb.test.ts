@@ -63,7 +63,8 @@ import {
 import { MENSAJE_MONEDA_NO_SOPORTADA } from "./borrador-calculo";
 import { generarPdfFacturaDemo, LEYENDA_NO_FISCAL, MENSAJE_ANULADA_SIN_DETALLE } from "./factura-demo-pdf";
 import { fact4Disponible, guardarRetencionIvaCliente, leerRetencionIvaCliente } from "./contexto-factura";
-import { resolverEntradaFact4 } from "./entrada-fact4";
+import { resolverEntradaFact4, retencionVigenteParaEdicion } from "./entrada-fact4";
+import { requireTenantFacturacion } from "@/lib/tenant";
 import { proponerPartidaVenta } from "./poliza-venta";
 
 const RAIZ = process.cwd();
@@ -1645,6 +1646,39 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/c
     await admin.query("UPDATE cont_cuentas_bancarias SET alias = 'Monetaria Q MON', activa = 1 WHERE id = ?", [bancoMON]);
   });
 
+  it("FK COMPUESTA: la BASE rechaza un banco de OTRA entidad o de OTRA empresa en la factura (SQL directo), y acepta el correcto y el crédito sin banco", async () => {
+    const ins = (empresa: number, entidad: number | null, banco: number | null) =>
+      admin.query<mysql.ResultSetHeader>(
+        `INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, estado_admin, creado_por, entidad_id, condicion_pago, cuenta_bancaria_id)
+         VALUES (?, 20, 1, 'Borrador', 1, ?, ?, ?)`,
+        [empresa, entidad, banco == null ? "CREDITO" : "CONTADO", banco],
+      );
+    // banco de la entidad KT + factura de la entidad MON → FK compuesta lo rechaza (ER_NO_REFERENCED_ROW_2)
+    await expect(ins(E1, entMON, bancoKT)).rejects.toMatchObject({ errno: 1452 });
+    // banco de OTRA empresa + factura de la empresa 7 → rechazado
+    await expect(ins(E1, entMON, bancoE2)).rejects.toMatchObject({ errno: 1452 });
+    // banco sin entidad: la FK (MATCH SIMPLE) no se evaluaría, lo impide el CHECK
+    await expect(ins(E1, null, bancoMON)).rejects.toMatchObject({ errno: 4025 });
+    // banco correcto (misma empresa y entidad) → acepta
+    const [ok] = await ins(E1, entMON, bancoMON);
+    expect(ok.insertId).toBeGreaterThan(0);
+    // CRÉDITO con banco NULL → acepta (con y sin entidad: facturas anteriores a FACT-4)
+    await expect(ins(E1, entMON, null)).resolves.toBeDefined();
+    await expect(ins(E1, null, null)).resolves.toBeDefined();
+    // UPDATE cruzado (cambiar solo la entidad de una factura con banco) también lo rechaza la base
+    await expect(admin.query("UPDATE fact_facturas SET entidad_id = ? WHERE id = ?", [entKT, ok.insertId])).rejects.toMatchObject({ errno: 1452 });
+    await expect(admin.query("UPDATE fact_facturas SET cuenta_bancaria_id = ? WHERE id = ?", [bancoKT, ok.insertId])).rejects.toMatchObject({ errno: 1452 });
+    // el catálogo de bancos no se puede borrar mientras una factura lo referencia
+    await expect(admin.query("DELETE FROM cont_cuentas_bancarias WHERE id = ?", [bancoMON])).rejects.toMatchObject({ errno: 1451 });
+    // el UNIQUE destino existe y la FK anterior de una sola columna ya no está
+    expect(await filas("SHOW INDEX FROM cont_cuentas_bancarias WHERE Key_name = 'uq_cont_cb_ambito' AND Non_unique = 0")).toHaveLength(3);
+    const fks = await filas(
+      `SELECT CONSTRAINT_NAME AS n FROM information_schema.REFERENTIAL_CONSTRAINTS
+       WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'fact_facturas' AND REFERENCED_TABLE_NAME = 'cont_cuentas_bancarias'`,
+    );
+    expect(fks.map((r) => r.n)).toEqual(["fk_fact_factura_banco_ambito"]);
+  });
+
   it("al CONTADO sin entidad explícita, la entidad sale del banco elegido", async () => {
     const p = await crearPlan({ codigo: "F4-DER" });
     const r = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], condicionPago: "CONTADO", cuentaBancariaId: bancoKT, retencionIvaPct: 0 });
@@ -1711,6 +1745,74 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/c
          VALUES (${c.facturaId}, 99, 1, 'x', 10, 10, 'OTRO', 1, 12, 8.93, 1.07, 10)`,
       ),
     ).rejects.toMatchObject({ errno: 4025 });
+  });
+
+  it("CAMBIO DE CLIENTE y retención (base real): congelada 15 del cliente A, cliente B en 30 → sin permiso 403 y cero mutaciones; con permiso 15 aplicado / 30 configurado; sin override usa 30", async () => {
+    await guardarRetencionIvaCliente(E1, 20, 0, 3);
+    await guardarRetencionIvaCliente(E1, 21, 30, 3);
+    const planA = await crearPlan({ codigo: "F4-CC-A", tarifa_comercial: 3000 });
+    const c = await crearFactura(actorA, {
+      clienteId: 20, planes: planes([planA]), lineas: [linea([planA], { precioUnitario: 3000 })],
+      entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 15, retencionIvaClientePct: 0,
+    });
+    expect(c).toMatchObject({ ok: true });
+    if (!c.ok) return;
+    const antes = await obtenerFactura(E1, c.facturaId);
+    expect(antes?.contabilidad.retencionIva).toMatchObject({ aplicadaPct: 15, clientePct: 0, monto: 48.21 });
+    const vigente = retencionVigenteParaEdicion(antes, 21);
+    expect(vigente).toBeNull(); // el 15 congelado era del cliente A
+
+    const planB = await crearPlan({ codigo: "F4-CC-B", cliente_id: 502, tarifa_comercial: 3000 });
+    const entrada = { lineas: [linea([planB], { precioUnitario: 3000 })], entidadId: entMON, condicionPago: "CREDITO" as const };
+    const guard = (permiso: boolean) =>
+      vi.mocked(requireTenantFacturacion).mockResolvedValueOnce(
+        (permiso ? { empresa: { id: E1 }, session: { id: 3, username: "x" } } : { error: new Response(null, { status: 403 }) }) as never,
+      );
+
+    // B) payload 15 (el congelado) con el cliente nuevo en 30 y SIN permiso → 403; nada se modifica
+    guard(false);
+    const sinPermiso = await resolverEntradaFact4({ slug: "e7", empresaId: E1, clienteId: 21, retencionVigente: vigente, entrada: { ...entrada, retencionIvaPct: 15 } });
+    expect(sinPermiso).toMatchObject({ ok: false, status: 403 });
+    const huella = async () => JSON.stringify(await filas(`SELECT cliente_id, monto_total, retencion_iva_pct, retencion_iva_cliente_pct, retencion_iva_monto FROM fact_facturas WHERE id = ${c.facturaId}`));
+    expect(JSON.parse(await huella())[0]).toMatchObject({ cliente_id: 20, retencion_iva_pct: 15, retencion_iva_cliente_pct: 0 });
+
+    // C) mismo caso CON permiso → permitido: 15 aplicado y 30 como configurado del cliente nuevo
+    guard(true);
+    const conPermiso = await resolverEntradaFact4({ slug: "e7", empresaId: E1, clienteId: 21, retencionVigente: vigente, entrada: { ...entrada, retencionIvaPct: 15 } });
+    expect(conPermiso).toMatchObject({ ok: true, datos: { retencionIvaPct: 15, retencionIvaClientePct: 30 } });
+    if (!conPermiso.ok) return;
+    const u = await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 21, planes: planes([planB]), ...conPermiso.datos });
+    expect(u).toMatchObject({ ok: true });
+    expect((await obtenerFactura(E1, c.facturaId))?.contabilidad.retencionIva).toMatchObject({ aplicadaPct: 15, clientePct: 30, monto: 48.21 });
+
+    // D) cambia de cliente SIN override → usa la configurada del cliente nuevo (30), sin pedir permiso
+    const planC = await crearPlan({ codigo: "F4-CC-C", tarifa_comercial: 3000 });
+    const d = await crearFactura(actorA, {
+      clienteId: 20, planes: planes([planC]), lineas: [linea([planC], { precioUnitario: 3000 })],
+      entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 15, retencionIvaClientePct: 0,
+    });
+    if (!d.ok) throw new Error(d.error);
+    const planD = await crearPlan({ codigo: "F4-CC-D", cliente_id: 502, tarifa_comercial: 3000 });
+    const llamadasPermiso = vi.mocked(requireTenantFacturacion).mock.calls.length;
+    const sinOverride = await resolverEntradaFact4({
+      slug: "e7", empresaId: E1, clienteId: 21, retencionVigente: retencionVigenteParaEdicion(await obtenerFactura(E1, d.facturaId), 21),
+      entrada: { lineas: [linea([planD], { precioUnitario: 3000 })], entidadId: entMON, condicionPago: "CREDITO" },
+    });
+    expect(sinOverride).toMatchObject({ ok: true, datos: { retencionIvaPct: 30, retencionIvaClientePct: 30 } });
+    expect(vi.mocked(requireTenantFacturacion).mock.calls.length).toBe(llamadasPermiso);
+    if (sinOverride.ok) {
+      expect(await actualizarFacturaBorrador(actorA, d.facturaId, { clienteId: 21, planes: planes([planD]), ...sinOverride.datos })).toMatchObject({ ok: true });
+      expect((await obtenerFactura(E1, d.facturaId))?.contabilidad.retencionIva).toMatchObject({ aplicadaPct: 30, clientePct: 30, monto: 96.43 });
+    }
+
+    // A) MISMO cliente: reenviar la congelada (30) aunque el perfil actual del cliente 21 siga en 30 o cambie → sin permiso
+    await guardarRetencionIvaCliente(E1, 21, 15, 3);
+    const mismo = await resolverEntradaFact4({
+      slug: "e7", empresaId: E1, clienteId: 21, retencionVigente: retencionVigenteParaEdicion(await obtenerFactura(E1, d.facturaId), 21),
+      entrada: { lineas: [linea([planD], { precioUnitario: 3000 })], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 30 },
+    });
+    expect(mismo).toMatchObject({ ok: true, datos: { retencionIvaPct: 30, retencionIvaClientePct: 15 } });
+    await guardarRetencionIvaCliente(E1, 21, 0, 3);
   });
 
   it("editar el borrador: reemplaza líneas y viajes en una transacción; un payload del modelo anterior sobre un borrador con líneas se rechaza", async () => {

@@ -55,12 +55,29 @@ export type ResultadoEntradaFact4 =
 
 const falla = (error: string, status = 400): ResultadoEntradaFact4 => ({ ok: false, error, status });
 
+/**
+ * Retención «ya congelada» de un borrador que se edita: reenviarla NO exige el permiso de cambio, pero SOLO si
+ *  - el borrador ya está en el modelo de líneas (su retención fue una decisión explícita, no el 0 por defecto de una factura
+ *    anterior a FACT-4), y
+ *  - el cliente NO cambia. Si cambia de cliente, la retención congelada pertenecía al cliente anterior: se compara contra la
+ *    configuración del cliente NUEVO (null = no hay excepción).
+ */
+export function retencionVigenteParaEdicion(
+  actual: { factura: { clienteId: number }; contabilidad: { modeloLineas: boolean; retencionIva: { aplicadaPct: number } } } | null,
+  clienteIdNuevo: number,
+): number | null {
+  if (!actual) return null;
+  if (actual.factura.clienteId !== clienteIdNuevo) return null;
+  if (!actual.contabilidad.modeloLineas) return null;
+  return actual.contabilidad.retencionIva.aplicadaPct;
+}
+
 export async function resolverEntradaFact4(args: {
   slug: string;
   empresaId: number;
   clienteId: number;
   entrada: EntradaFact4;
-  /** Retención ya congelada en el borrador que se edita: reenviarla no exige el permiso de cambio. */
+  /** Retención ya congelada del MISMO cliente en el borrador que se edita (ver `retencionVigenteParaEdicion`). */
   retencionVigente?: number | null;
 }): Promise<ResultadoEntradaFact4> {
   const e = args.entrada;

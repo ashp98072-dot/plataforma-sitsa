@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { actualizarFacturaBorrador, obtenerFactura } from "@/lib/facturacion/facturas";
-import { fact4CamposSchema, resolverEntradaFact4 } from "@/lib/facturacion/entrada-fact4";
+import { fact4CamposSchema, resolverEntradaFact4, retencionVigenteParaEdicion } from "@/lib/facturacion/entrada-fact4";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -56,11 +56,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
 
-  // Reenviar la retención que el borrador ya tiene congelada no exige el permiso de cambio (lo exige cambiarla).
+  // Reenviar la retención que el borrador ya tiene congelada no exige el permiso de cambio (lo exige cambiarla), pero solo
+  // mientras el cliente sea el MISMO: si cambia de cliente se compara contra la configuración del cliente nuevo.
   let retencionVigente: number | null = null;
   if (d.retencionIvaPct != null) {
-    const actual = await obtenerFactura(guard.empresa.id, facturaId);
-    retencionVigente = actual?.contabilidad.retencionIva.aplicadaPct ?? null;
+    retencionVigente = retencionVigenteParaEdicion(await obtenerFactura(guard.empresa.id, facturaId), d.clienteId);
   }
   const fact4 = await resolverEntradaFact4({
     slug,

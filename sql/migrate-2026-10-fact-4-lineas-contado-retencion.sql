@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_bancarias (
   activa TINYINT(1) NOT NULL DEFAULT 1,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_cont_cuenta_bancaria (empresa_id, entidad_id, cuenta_id),
+  -- Destino de la FK compuesta de fact_facturas: una factura solo puede apuntar a un banco de SU empresa y SU entidad.
+  UNIQUE KEY uq_cont_cb_ambito (empresa_id, entidad_id, id),
   CONSTRAINT fk_cont_cb_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_cont_cb_cuenta FOREIGN KEY (empresa_id, entidad_id, cuenta_id) REFERENCES cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -67,11 +69,19 @@ ALTER TABLE fact_facturas
   -- No reduce Ventas ni IVA por pagar; es informativo hasta que exista la póliza (después de la certificación FEL).
   ADD COLUMN IF NOT EXISTS retencion_iva_monto DECIMAL(14,2) NOT NULL DEFAULT 0;
 
+-- Repetible por nombre: garantiza el UNIQUE destino de la FK compuesta aunque cont_cuentas_bancarias ya existiera.
+ALTER TABLE cont_cuentas_bancarias
+  ADD UNIQUE INDEX IF NOT EXISTS uq_cont_cb_ambito (empresa_id, entidad_id, id);
+
+-- INTEGRIDAD DE ÁMBITO (FK compuesta): (empresa_id, entidad_id, cuenta_bancaria_id) de la factura debe existir como
+-- (empresa_id, entidad_id, id) en cont_cuentas_bancarias. Una venta a CRÉDITO deja cuenta_bancaria_id en NULL y la FK
+-- (MATCH SIMPLE) no se evalúa. Como con entidad_id NULL la FK tampoco se evaluaría, el CHECK impide un banco sin entidad.
 ALTER TABLE fact_facturas
   ADD CONSTRAINT fk_fact_factura_entidad FOREIGN KEY IF NOT EXISTS (empresa_id, entidad_id)
     REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
-  ADD CONSTRAINT fk_fact_factura_cuenta_bancaria FOREIGN KEY IF NOT EXISTS (cuenta_bancaria_id)
-    REFERENCES cont_cuentas_bancarias(id) ON DELETE RESTRICT;
+  ADD CONSTRAINT fk_fact_factura_banco_ambito FOREIGN KEY IF NOT EXISTS (empresa_id, entidad_id, cuenta_bancaria_id)
+    REFERENCES cont_cuentas_bancarias(empresa_id, entidad_id, id) ON DELETE RESTRICT,
+  ADD CONSTRAINT IF NOT EXISTS ck_fact_factura_banco_entidad CHECK (cuenta_bancaria_id IS NULL OR entidad_id IS NOT NULL);
 
 -- ───────────────────────── 5. Líneas de factura (agrupables) y su trazabilidad a viajes ──────────────────────────
 -- La LÍNEA es la unidad fiscal/visual (cantidad × precio unitario = valor). Varios viajes pueden alimentar una línea y un
