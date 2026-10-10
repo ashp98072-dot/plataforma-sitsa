@@ -32,6 +32,11 @@ import { formatearMonto } from "@/lib/facturacion/ui-logica";
  * teléfono del emisor, condiciones de pago de la factura y leyenda tributaria. El código de cliente es el único dato no
  * congelado que se lee (`clientes.codigo`, filtrado por empresa); no es un dato fiscal del snapshot.
  *
+ * FACTURA ANULADA (FACT-3): también tiene PDF demo. Sus líneas salen del histórico que se conserva al anular
+ * (`fact_factura_viajes_anuladas`, solo su fotografía; nunca datos vivos) y el documento lleva la marca «ANULADA» muy
+ * visible, además de «DEMO — DOCUMENTO NO FISCAL». Una factura anulada ANTES de FACT-3 perdió sus líneas y no se
+ * reconstruye: responde 409 con el motivo.
+ *
  * LOGO OBLIGATORIO: la factura siempre muestra el logo de la empresa emisora (`empresas.logo_url` de la empresa del guard,
  * nunca una ruta del cliente ni el logo de otra empresa). Si falta, el archivo no existe, no es legible por PDFKit o su
  * ruta apunta al directorio de otra empresa, NO se genera el PDF (409): no hay respaldo silencioso a solo texto.
@@ -43,6 +48,9 @@ import { formatearMonto } from "@/lib/facturacion/ui-logica";
 export const LEYENDA_NO_FISCAL = "DEMO — DOCUMENTO NO FISCAL";
 export const TEXTO_PENDIENTE_FEL = "PENDIENTE FEL";
 export const TEXTO_PENDIENTE_DEFINIR = "Pendiente de definir";
+export const MARCA_ANULADA = "ANULADA";
+export const MENSAJE_ANULADA_SIN_DETALLE =
+  "Esta factura se anuló antes de que se conservara el histórico de sus viajes: no hay detalle que mostrar y no se reconstruye con datos vivos.";
 export const MENSAJE_SIN_LOGO = "Esta empresa no tiene un logo válido configurado para la factura.";
 
 export type EmisorDemo = {
@@ -76,8 +84,8 @@ export type FacturaDemo = {
   emisor: EmisorDemo;
   /** «BORRADOR #12 (sin número)» o el número de la factura Emitida; es el «No. interno» y el correlativo interno. */
   numero: string;
-  estado: "Borrador" | "Emitida";
-  /** «Fecha de emisión» / «Fecha del borrador (sin emitir)». */
+  estado: "Borrador" | "Emitida" | "Anulada";
+  /** «Fecha de emisión» / «Fecha del borrador (sin emitir)» / «Fecha de anulación». */
   etiquetaFecha: string;
   /** YYYY-MM-DD */
   fecha: string;
@@ -98,6 +106,8 @@ export type ResultadoFacturaDemo =
   | { ok: false; status: 404 | 409; error: string };
 
 const aCentavos = (n: number): number => Math.round(n * 100);
+/** «YYYY-MM-DD» → «DD/MM/YYYY». */
+const fmtFecha = (iso: string): string => iso.split("-").reverse().join("/");
 const MENSAJE_SIN_SNAPSHOT =
   "Esta factura es anterior al desglose de IVA por línea: no tiene el snapshot fiscal de cada viaje, así que no se puede generar el PDF demo sin recalcularla.";
 
@@ -117,8 +127,10 @@ export function prepararFacturaDemo(
 ): ResultadoFacturaDemo {
   if (!detalle) return { ok: false, status: 404, error: "Factura no encontrada." };
   const { factura: f, viajes } = detalle;
-  if (f.estadoAdmin === "Anulada") return { ok: false, status: 409, error: "Una factura Anulada no tiene PDF demo." };
-  if (!viajes.length) return { ok: false, status: 409, error: "La factura no tiene viajes." };
+  const anulada = f.estadoAdmin === "Anulada";
+  if (!viajes.length) {
+    return { ok: false, status: 409, error: anulada ? MENSAJE_ANULADA_SIN_DETALLE : "La factura no tiene viajes." };
+  }
 
   if (f.subtotal == null || f.iva == null || f.porcentajeIva == null) return { ok: false, status: 409, error: MENSAJE_SIN_SNAPSHOT };
   const lineas: LineaDemo[] = [];
@@ -152,14 +164,27 @@ export function prepararFacturaDemo(
   }
 
   const emitida = f.estadoAdmin === "Emitida";
+  // Una anulada conserva el número y la fecha que tenía; si nunca los tuvo, la fecha mostrada es la de la anulación.
+  const fechaAnulacion = detalle.anulacion?.fecha ? detalle.anulacion.fecha.slice(0, 10) : null;
+  const numero = anulada
+    ? (f.numeroFactura ?? `ANULADA #${f.id} (sin número)`)
+    : emitida && f.numeroFactura ? f.numeroFactura : `BORRADOR #${f.id} (sin número)`;
+  const etiquetaFecha = anulada
+    ? (f.fechaEmision ? "Fecha de emisión" : fechaAnulacion ? "Fecha de anulación" : "Fecha de generación")
+    : emitida && f.fechaEmision ? "Fecha de emisión" : "Fecha del borrador (sin emitir)";
+  const fecha = anulada
+    ? (f.fechaEmision ?? fechaAnulacion ?? fechaGeneracion)
+    : emitida && f.fechaEmision ? f.fechaEmision : fechaGeneracion;
   return {
     ok: true,
     factura: {
       emisor,
-      numero: emitida && f.numeroFactura ? f.numeroFactura : `BORRADOR #${f.id} (sin número)`,
-      estado: emitida ? "Emitida" : "Borrador",
-      etiquetaFecha: emitida && f.fechaEmision ? "Fecha de emisión" : "Fecha del borrador (sin emitir)",
-      fecha: emitida && f.fechaEmision ? f.fechaEmision : fechaGeneracion,
+      numero,
+      estado: anulada ? "Anulada" : emitida ? "Emitida" : "Borrador",
+      etiquetaFecha: anulada && detalle.anulacion?.fecha && f.fechaEmision
+        ? `${etiquetaFecha} · anulada el ${fmtFecha(detalle.anulacion.fecha.slice(0, 10))}`
+        : etiquetaFecha,
+      fecha,
       moneda: f.moneda,
       cliente: { nombre: f.cliente, nit: f.clienteNit, direccion: f.clienteDireccion, codigo: complementos.clienteCodigo },
       condiciones: complementos.condiciones,
@@ -277,17 +302,18 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
     });
 
     const totalPaginas = paginas.length;
+    const anulada = f.estado === "Anulada";
     const [anio, mes, dia] = f.fecha.split("-");
 
     const dibujarPagina = (indice: number) => {
       const ultima = indice === totalPaginas - 1;
 
-      // Franja NO FISCAL (arriba, fuera del marco del documento)
+      // Franja NO FISCAL (arriba, fuera del marco del documento); roja y con «ANULADA» si la factura está anulada
       doc.save();
-      doc.rect(M, Y_FRANJA, ANCHO, 15).fillAndStroke("#fef3c7", "#b45309");
+      doc.rect(M, Y_FRANJA, ANCHO, 15).fillAndStroke(anulada ? "#b91c1c" : "#fef3c7", anulada ? "#7f1d1d" : "#b45309");
       doc.restore();
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#92400e");
-      texto(LEYENDA_NO_FISCAL, M, Y_FRANJA + 3.5, { width: ANCHO, align: "center" });
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(anulada ? "#ffffff" : "#92400e");
+      texto(anulada ? `${MARCA_ANULADA} — ${LEYENDA_NO_FISCAL}` : LEYENDA_NO_FISCAL, M, Y_FRANJA + 3.5, { width: ANCHO, align: "center" });
 
       // ── Encabezado izquierdo: razón social, LOGO (obligatorio), dirección, teléfono, NIT ─────────────────────────────
       const wIzq = 304;
@@ -332,7 +358,7 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
       texto("DOCUMENTO TRIBUTARIO ELECTRÓNICO", X_DTE, y + 4, { width: W_DTE, align: "center" });
       y += 16;
       serif(true).fontSize(9);
-      texto("FACTURA DEMO", X_DTE, y + 3.5, { width: W_DTE, align: "center" });
+      texto(anulada ? `FACTURA DEMO — ${MARCA_ANULADA}` : "FACTURA DEMO", X_DTE, y + 3.5, { width: W_DTE, align: "center" });
       y += 15;
       serif().fontSize(8.5);
       texto("SERIE:", X_DTE + 24, y + 4.5);
@@ -473,13 +499,22 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
     const generado = formatearTimestampVisible(ahoraLocal());
     for (let i = 0; i < rango.count; i++) {
       doc.switchToPage(rango.start + i);
+      const yCentro = (Y_DETALLE + Y_FIN_DETALLE) / 2;
       doc.save();
       doc.fillColor("#b91c1c").fillOpacity(0.07);
-      doc.rotate(-35, { origin: [doc.page.width / 2, (Y_DETALLE + Y_FIN_DETALLE) / 2] });
-      doc.font("Helvetica-Bold").fontSize(58).text("DEMO - NO FISCAL", 0, (Y_DETALLE + Y_FIN_DETALLE) / 2 - 30, { width: doc.page.width, align: "center", lineBreak: false });
+      doc.rotate(-35, { origin: [doc.page.width / 2, yCentro] });
+      // Una anulada lleva «ANULADA» enorme en el centro y el aviso DEMO más pequeño debajo (ambos legibles).
+      if (anulada) {
+        doc.fillOpacity(0.2);
+        doc.font("Helvetica-Bold").fontSize(112).text(MARCA_ANULADA, 0, yCentro - 70, { width: doc.page.width, align: "center", lineBreak: false });
+        doc.fillOpacity(0.08);
+        doc.font("Helvetica-Bold").fontSize(34).text("DEMO - NO FISCAL", 0, yCentro + 55, { width: doc.page.width, align: "center", lineBreak: false });
+      } else {
+        doc.font("Helvetica-Bold").fontSize(58).text("DEMO - NO FISCAL", 0, yCentro - 30, { width: doc.page.width, align: "center", lineBreak: false });
+      }
       doc.restore();
       doc.font("Helvetica").fontSize(7.5).fillColor("#6b7280").text(
-        `${LEYENDA_NO_FISCAL} · Página ${i + 1} de ${rango.count} · Generado el ${generado} (Guatemala)`,
+        `${anulada ? `${MARCA_ANULADA} · ` : ""}${LEYENDA_NO_FISCAL} · Página ${i + 1} de ${rango.count} · Generado el ${generado} (Guatemala)`,
         M, Y_PIE_DEMO, { width: ANCHO, align: "center", lineBreak: false },
       );
     }

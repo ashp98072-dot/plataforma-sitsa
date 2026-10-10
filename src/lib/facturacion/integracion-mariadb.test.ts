@@ -55,10 +55,11 @@ import {
   obtenerFactura,
   obtenerKpisFacturacion,
   previsualizarFactura,
+  registrarPago,
   type ActorFacturacion,
 } from "./facturas";
 import { MENSAJE_MONEDA_NO_SOPORTADA } from "./borrador-calculo";
-import { generarPdfFacturaDemo, LEYENDA_NO_FISCAL } from "./factura-demo-pdf";
+import { generarPdfFacturaDemo, LEYENDA_NO_FISCAL, MENSAJE_ANULADA_SIN_DETALLE } from "./factura-demo-pdf";
 
 const RAIZ = process.cwd();
 const E1 = 7; // empresa de la sesión
@@ -68,6 +69,8 @@ const actorB: ActorFacturacion = { empresaId: E1, usuarioId: 4, usuario: "factur
 
 let admin: Connection;
 let seq = 0;
+/** Factura Anulada con el comportamiento ANTERIOR a FACT-3 (sus líneas ya se habían borrado). */
+let legacyAnuladaId = 0;
 
 const sqlArchivo = (rel: string) => readFileSync(join(RAIZ, rel), "utf8");
 
@@ -205,6 +208,64 @@ describe.skipIf(!PUERTO)("MariaDB real — A/B/C: preflight, migración e idempo
       cliente: "Comercial X", // sin snapshot → nombre vivo
     });
     expect(d?.viajes[0]).toMatchObject({ montoAsignado: 750, descripcion: null, base: null, iva: null, total: null, cantidad: 1, codigo: "LEGACY-1" });
+  });
+
+  it("FACT-3 A) el preflight se ejecuta; la tabla del histórico AÚN no existe y UNIQUE(plan_id) sigue vigente", async () => {
+    expect(await filas("SHOW TABLES LIKE 'fact_factura_viajes_anuladas'")).toHaveLength(0);
+    await expect(ejecutarArchivo("sql/preflight-2026-10-fact-3-anuladas-historico.sql")).resolves.toBeDefined();
+    expect(await filas("SHOW INDEX FROM fact_factura_viajes WHERE Key_name = 'uq_factviaje_plan' AND Non_unique = 0")).toHaveLength(1);
+  });
+
+  it("datos ANTERIORES a FACT-3: una factura Anulada que ya perdió sus líneas con el comportamiento viejo", async () => {
+    const [f] = await admin.query<mysql.ResultSetHeader>(
+      `INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, subtotal, iva_monto, porcentaje_iva, moneda, estado_admin, creado_por)
+       VALUES (${E1}, 20, 212.00, 189.29, 22.71, 12, 'GTQ', 'Anulada', 1)`,
+    );
+    legacyAnuladaId = f.insertId;
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [legacyAnuladaId])).toBe(0);
+  });
+
+  it("FACT-3 B) la migración crea la tabla del histórico con sus columnas, FKs e índices", async () => {
+    await expect(ejecutarArchivo("sql/migrate-2026-10-fact-3-anuladas-historico.sql")).resolves.toBeDefined();
+    const cols = await columnas("fact_factura_viajes_anuladas");
+    for (const c of ["factura_id", "plan_id", "monto_asignado", "codigo_viaje_snapshot", "fecha_viaje_snapshot", "ruta_codigo_snapshot", "origen_snapshot",
+      "destino_snapshot", "descripcion", "cantidad", "precio_incluye_iva", "porcentaje_iva", "base_monto", "iva_monto", "total_linea", "linea_creada_en", "anulada_en", "anulada_por"]) {
+      expect(cols, c).toContain(c);
+    }
+    const fks = await filas(
+      `SELECT CONSTRAINT_NAME AS nombre, DELETE_RULE AS regla, REFERENCED_TABLE_NAME AS tabla
+       FROM information_schema.REFERENTIAL_CONSTRAINTS
+       WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'fact_factura_viajes_anuladas' ORDER BY CONSTRAINT_NAME`,
+    );
+    expect(fks.map((r) => [r.nombre, r.regla, r.tabla])).toEqual([
+      ["fk_factviajeanul_factura", "CASCADE", "fact_facturas"],
+      ["fk_factviajeanul_plan", "SET NULL", "tms_planes_viaje"],
+    ]);
+    // UNIQUE(factura_id, plan_id) sí; UNIQUE(plan_id) a propósito NO (un viaje puede estar en varias anuladas)
+    const unicos = await filas("SHOW INDEX FROM fact_factura_viajes_anuladas WHERE Non_unique = 0 AND Key_name <> 'PRIMARY'");
+    expect(unicos.map((r) => r.Column_name)).toEqual(["factura_id", "plan_id"]);
+  });
+
+  it("FACT-3 C) ejecutar la migración por SEGUNDA vez es inocua: misma tabla, mismos datos, UNIQUE(plan_id) activo intacto", async () => {
+    const antes = await columnas("fact_factura_viajes_anuladas");
+    const facturas = await conteo("SELECT COUNT(*) AS n FROM fact_facturas");
+    const activas = await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes");
+    await expect(ejecutarArchivo("sql/migrate-2026-10-fact-3-anuladas-historico.sql")).resolves.toBeDefined();
+    expect(await columnas("fact_factura_viajes_anuladas")).toEqual(antes);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_facturas")).toBe(facturas);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes")).toBe(activas);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas")).toBe(0);
+    expect(await filas("SHOW INDEX FROM fact_factura_viajes WHERE Key_name = 'uq_factviaje_plan' AND Non_unique = 0")).toHaveLength(1);
+    // el esquema de fact_factura_viajes NO cambió con FACT-3 (nada de columnas «activo»)
+    expect(await columnas("fact_factura_viajes")).not.toContain("activo");
+  });
+
+  it("la Anulada ANTERIOR a FACT-3 sigue sin detalle: la migración no la reconstruye ni inventa líneas", async () => {
+    const d = await obtenerFactura(E1, legacyAnuladaId);
+    expect(d?.factura).toMatchObject({ estadoAdmin: "Anulada", montoTotal: 212, subtotal: 189.29, iva: 22.71 });
+    expect(d?.viajes).toEqual([]);
+    expect(d?.anulacion).toBeNull(); // sin auditoría de anulación para esa factura sintética
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas WHERE factura_id = ?", [legacyAnuladaId])).toBe(0);
   });
 });
 
@@ -940,6 +1001,244 @@ describe.skipIf(!PUERTO)("MariaDB real — columna «Unidad» de Viajes pendient
   });
 });
 
+describe.skipIf(!PUERTO)("MariaDB real — FACT-3: la factura anulada conserva su detalle y sus viajes se liberan", () => {
+  const actorE2: ActorFacturacion = { empresaId: E2, usuarioId: 9, usuario: "facturador-e2" };
+  const sinId = <T extends { id: number }>(v: T): Omit<T, "id"> => { const { id, ...resto } = v; void id; return resto; };
+  const activas = (planId: number) => conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [planId]);
+  const historicas = (facturaId: number) => conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas WHERE factura_id = ?", [facturaId]);
+  let planes: number[] = [];
+  let facturaId = 0;
+  let previa: Awaited<ReturnType<typeof obtenerFactura>> = null;
+  let anulada: Awaited<ReturnType<typeof obtenerFactura>> = null;
+  let otraFacturaId = 0;
+
+  it("1-3) un borrador con varios viajes (IVA mixto) se anula y SIGUE mostrando todas sus líneas, importes, cliente y observaciones", async () => {
+    await admin.query("UPDATE clientes SET razon_social = 'Cliente X, S.A.', nit = '1234567-8', direccion = 'Zona 1' WHERE id = 20");
+    planes = [
+      await crearPlan({ codigo: "AN-1", tarifa_comercial: 100, fecha_plan: "2026-09-01" }),
+      await crearPlan({ codigo: "AN-2", tarifa_comercial: 100, fecha_plan: "2026-09-02" }),
+      await crearPlan({ codigo: "AN-3", tarifa_comercial: 250.5, fecha_plan: "2026-09-03" }),
+    ];
+    const c = await crearFactura(actorA, {
+      clienteId: 20,
+      planes: [{ planId: planes[0], precioIncluyeIva: true }, { planId: planes[1], precioIncluyeIva: false }, { planId: planes[2], precioIncluyeIva: true }],
+      observaciones: "obs de la factura anulada",
+    });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    facturaId = c.facturaId;
+    previa = await obtenerFactura(E1, facturaId);
+    expect(previa?.viajes).toHaveLength(3);
+
+    const r = await anularFactura(actorA, facturaId);
+    expect(r.ok).toBe(true);
+    anulada = await obtenerFactura(E1, facturaId);
+    expect(anulada?.factura).toMatchObject({
+      estadoAdmin: "Anulada", observaciones: "obs de la factura anulada", cliente: "Cliente X, S.A.", clienteNit: "1234567-8",
+      clienteDireccion: "Zona 1", montoTotal: previa?.factura.montoTotal, subtotal: previa?.factura.subtotal, iva: previa?.factura.iva, porcentajeIva: 12,
+    });
+    // las TRES líneas, con descripción congelada y base/IVA/total por línea, idénticas a las del borrador
+    expect(anulada?.viajes).toHaveLength(3);
+    expect(anulada?.viajes.map(sinId)).toEqual(previa?.viajes.map(sinId));
+    expect(anulada?.viajes.map((v) => [v.codigo, v.precioIncluyeIva, v.base, v.iva, v.total])).toEqual([
+      ["AN-1", true, 89.29, 10.71, 100], ["AN-2", false, 100, 12, 112], ["AN-3", true, 223.66, 26.84, 250.5],
+    ]);
+    // quién y cuándo anuló (de la auditoría)
+    expect(anulada?.anulacion?.usuario).toBe("facturador-a");
+    expect(anulada?.anulacion?.fecha).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    // estado de las tablas: histórico completo; ningún vínculo ACTIVO
+    expect(await historicas(facturaId)).toBe(3);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [facturaId])).toBe(0);
+    const aud = await filas("SELECT detalle FROM auditoria WHERE accion = 'anular_factura' ORDER BY id DESC LIMIT 1");
+    expect(String(aud[0].detalle)).toContain("3 línea(s) conservadas");
+  });
+
+  it("4) esos viajes vuelven a «Viajes pendientes» (y a las notificaciones/KPI que usan la misma condición)", async () => {
+    const lista = await listarViajesPendientes(E1, { pageSize: 200 });
+    for (const p of planes) expect(lista.items.map((i) => i.planId)).toContain(p);
+    for (const p of planes) expect(await activas(p)).toBe(0);
+  });
+
+  it("5-6) esos viajes se facturan en OTRA factura y la anulada original queda intacta, aunque cambien cliente, ruta y tarifa vivos", async () => {
+    await admin.query("UPDATE tms_planes_viaje SET tarifa_comercial = 9999, lugar_descarga_historico = 'DESTINO NUEVO', ruta_codigo_historico = 'RUTA-NUEVA' WHERE id IN (?, ?, ?)", planes);
+    await admin.query("UPDATE clientes SET razon_social = 'Razón NUEVA', nit = '0000000-0', direccion = 'Otra zona' WHERE id = 20");
+    const otra = await crearFactura(actorB, { clienteId: 20, planes: planes.map((planId) => ({ planId, precioIncluyeIva: true })) });
+    expect(otra.ok).toBe(true);
+    if (!otra.ok) return;
+    otraFacturaId = otra.facturaId;
+    // la nueva toma los datos vivos de ahora; la anulada NO cambia ni en una coma
+    const nueva = await obtenerFactura(E1, otraFacturaId);
+    expect(nueva?.factura).toMatchObject({ cliente: "Razón NUEVA", montoTotal: 29997 });
+    expect(nueva?.viajes.map((v) => v.destino)).toEqual(["DESTINO NUEVO", "DESTINO NUEVO", "DESTINO NUEVO"]);
+    expect(await obtenerFactura(E1, facturaId)).toEqual(anulada);
+    expect(await historicas(facturaId)).toBe(3);
+    for (const p of planes) expect(await activas(p)).toBe(1);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [otraFacturaId])).toBe(3);
+    await admin.query("UPDATE clientes SET razon_social = 'Cliente X, S.A.', nit = '1234567-8', direccion = 'Zona 1' WHERE id = 20");
+  });
+
+  it("9-11) una Anulada NO se puede editar, emitir ni recibir pagos, y nada cambia (ni reintentando la anulación)", async () => {
+    const huella = async () => JSON.stringify([
+      await filas("SELECT estado_admin, numero_factura, fecha_emision, monto_total, subtotal, iva_monto, observaciones FROM fact_facturas WHERE id = ?", [facturaId]),
+      await filas("SELECT plan_id, base_monto, iva_monto, total_linea, descripcion FROM fact_factura_viajes_anuladas WHERE factura_id = ? ORDER BY id", [facturaId]),
+      await conteo("SELECT COUNT(*) AS n FROM fact_pagos WHERE factura_id = ?", [facturaId]),
+      await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [facturaId]),
+    ]);
+    const antes = await huella();
+    const editar = await actualizarFacturaBorrador(actorA, facturaId, { clienteId: 20, planes: [{ planId: planes[0], precioIncluyeIva: true }], observaciones: "cambio" });
+    expect(editar).toMatchObject({ ok: false, status: 409 });
+    const emitir = await emitirFactura(actorA, facturaId, { numeroFactura: "F-ANUL-1", fechaEmision: "2026-10-09" });
+    expect(emitir).toMatchObject({ ok: false, status: 409 });
+    const pago = await registrarPago(actorA, facturaId, { fechaPago: "2026-10-09", monto: 10 });
+    expect(pago).toMatchObject({ ok: false, status: 409 });
+    const otraVez = await anularFactura(actorA, facturaId);
+    expect(otraVez).toMatchObject({ ok: false, status: 409 });
+    expect(await huella()).toBe(antes);
+  });
+
+  it("12) dos facturas ACTIVAS no pueden usar el mismo plan_id; el histórico de la anulada convive con la activa del mismo viaje", async () => {
+    // por la aplicación
+    const dup = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: planes[0], precioIncluyeIva: true }] });
+    expect(dup).toMatchObject({ ok: false, status: 409 });
+    // por SQL directo: UNIQUE(plan_id) sigue siendo una garantía real de base de datos
+    await expect(
+      admin.query("INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, 1)", [facturaId, planes[0]]),
+    ).rejects.toMatchObject({ code: "ER_DUP_ENTRY" });
+    expect(await filas("SHOW INDEX FROM fact_factura_viajes WHERE Key_name = 'uq_factviaje_plan' AND Non_unique = 0")).toHaveLength(1);
+    // el mismo viaje está en el histórico de la anulada Y activo en la nueva
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas WHERE plan_id = ?", [planes[0]])).toBe(1);
+    expect(await activas(planes[0])).toBe(1);
+    // el histórico no es «facturación viva»: nada impide anular también la nueva y que el viaje vuelva a quedar libre
+    expect((await anularFactura(actorB, otraFacturaId)).ok).toBe(true);
+    for (const p of planes) expect(await activas(p)).toBe(0);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas WHERE plan_id = ?", [planes[0]])).toBe(2);
+    const lista = await listarViajesPendientes(E1, { pageSize: 200 });
+    for (const p of planes) expect(lista.items.map((i) => i.planId)).toContain(p);
+  });
+
+  it("13) multiempresa: la empresa 8 no ve el detalle de la anulada de la 7 ni puede anular/consultar sus facturas", async () => {
+    expect(await obtenerFactura(E2, facturaId)).toBeNull();
+    expect(await obtenerFactura(E2, otraFacturaId)).toBeNull();
+    const total = await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas");
+    const intento = await anularFactura(actorE2, otraFacturaId);
+    expect(intento).toMatchObject({ ok: false, status: 404 });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas")).toBe(total);
+    // el PDF de la anulada tampoco es alcanzable desde la otra empresa
+    const pdf = await generarPdfFacturaDemo({ id: E2, nombre: "Empresa 8", logoUrl: null }, facturaId);
+    expect(pdf).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+  });
+
+  it("14a) doble anulación simultánea (reintentos): exactamente una copia del detalle y una sola anulación", async () => {
+    for (let ronda = 0; ronda < 8; ronda++) {
+      const p1 = await crearPlan({ codigo: `DA-${ronda}-1` });
+      const p2 = await crearPlan({ codigo: `DA-${ronda}-2` });
+      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p1, precioIncluyeIva: true }, { planId: p2, precioIncluyeIva: false }] });
+      expect(c.ok).toBe(true);
+      if (!c.ok) return;
+      const [a, b] = await Promise.all([anularFactura(actorA, c.facturaId), anularFactura(actorB, c.facturaId)]);
+      expect([a.ok, b.ok].filter(Boolean), `ronda ${ronda}`).toHaveLength(1);
+      const perdedora = a.ok ? b : a;
+      expect(perdedora).toMatchObject({ ok: false, status: 409 });
+      expect(await historicas(c.facturaId)).toBe(2);
+      expect(await activas(p1)).toBe(0);
+      expect(await activas(p2)).toBe(0);
+      // reintento tardío: sigue siendo 409 y no duplica nada
+      expect(await anularFactura(actorA, c.facturaId)).toMatchObject({ ok: false, status: 409 });
+      expect(await historicas(c.facturaId)).toBe(2);
+    }
+  });
+
+  it("14b) anular mientras otra sesión factura el MISMO viaje (rondas): nunca dos activos, nunca se pierde el detalle, sin deadlock", async () => {
+    const deadlockAntes = await ultimoDeadlock();
+    let creadasDespues = 0;
+    let rechazadas = 0;
+    for (let ronda = 0; ronda < 20; ronda++) {
+      const p = await crearPlan({ codigo: `AV-${ronda}` });
+      const f1 = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: true }] });
+      expect(f1.ok).toBe(true);
+      if (!f1.ok) return;
+      const [anula, nueva] = await Promise.all([
+        anularFactura(actorA, f1.facturaId),
+        crearFactura(actorB, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: false }] }),
+      ]);
+      expect(anula.ok, `ronda ${ronda}: anular`).toBe(true); // la anulación nunca falla por la otra sesión
+      expect(await activas(p), `ronda ${ronda}`).toBeLessThanOrEqual(1);
+      expect(await historicas(f1.facturaId), `ronda ${ronda}: detalle conservado`).toBe(1);
+      if (nueva.ok) {
+        creadasDespues++;
+        expect(Number((await filas("SELECT factura_id FROM fact_factura_viajes WHERE plan_id = ?", [p]))[0].factura_id)).toBe(nueva.facturaId);
+      } else {
+        rechazadas++;
+        expect(nueva.status).toBe(409); // «ya vinculado»/concurrencia: nunca un 500
+        expect(await activas(p)).toBe(0);
+      }
+    }
+    expect(creadasDespues + rechazadas).toBe(20);
+    expect(await ultimoDeadlock()).toBe(deadlockAntes);
+  });
+
+  it("14c) anular vs editar el mismo borrador en paralelo: o se anula con el detalle completo, o la edición gana y se anula después; nunca queda a medias", async () => {
+    for (let ronda = 0; ronda < 10; ronda++) {
+      const p1 = await crearPlan({ codigo: `AE-${ronda}-1` });
+      const p2 = await crearPlan({ codigo: `AE-${ronda}-2` });
+      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p1, precioIncluyeIva: true }] });
+      expect(c.ok).toBe(true);
+      if (!c.ok) return;
+      const [anula, edita] = await Promise.all([
+        anularFactura(actorA, c.facturaId),
+        actualizarFacturaBorrador(actorB, c.facturaId, { clienteId: 20, planes: [{ planId: p1, precioIncluyeIva: true }, { planId: p2, precioIncluyeIva: true }] }),
+      ]);
+      expect(anula.ok, `ronda ${ronda}`).toBe(true);
+      const hist = await historicas(c.facturaId);
+      // la edición pudo ganar (2 líneas) o perder (409 y 1 línea): el detalle conservado coincide con lo que había al anular
+      expect(hist).toBe(edita.ok ? 2 : 1);
+      if (!edita.ok) expect(edita.status).toBe(409);
+      expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [c.facturaId])).toBe(0);
+      expect(await activas(p1)).toBe(0);
+      expect(await activas(p2)).toBe(0);
+    }
+  });
+
+  it("15) integridad referencial: borrar un viaje conserva su línea histórica (plan_id = NULL, con su fotografía) y borrar la factura se lleva su histórico", async () => {
+    const pv = await crearPlan({ codigo: "FK-1", tarifa_comercial: 300 });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pv, precioIncluyeIva: true }] });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    expect((await anularFactura(actorA, c.facturaId)).ok).toBe(true);
+    await admin.query("DELETE FROM tms_planes_viaje WHERE id = ?", [pv]); // permitido: la anulada ya no lo retiene
+    const d = await obtenerFactura(E1, c.facturaId);
+    expect(d?.viajes).toHaveLength(1);
+    expect(d?.viajes[0]).toMatchObject({ codigo: "FK-1", total: 300, planId: 0 });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes_anuladas WHERE factura_id = ? AND plan_id IS NULL", [c.facturaId])).toBe(1);
+    await admin.query("DELETE FROM fact_facturas WHERE id = ?", [c.facturaId]);
+    expect(await historicas(c.facturaId)).toBe(0);
+  });
+
+  it("una Emitida (sin pagos) también conserva su detalle al anularse; con pagos NO se puede anular y no se toca nada", async () => {
+    const pe = await crearPlan({ codigo: "EM-1", tarifa_comercial: 500 });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pe, precioIncluyeIva: true }], numeroFactura: "F-FACT3-1", fechaEmision: "2026-10-01" });
+    expect(c.ok).toBe(true);
+    if (!c.ok) return;
+    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    expect((await registrarPago(actorA, c.facturaId, { fechaPago: "2026-10-02", monto: 100 })).ok).toBe(true);
+    const conPagos = await anularFactura(actorA, c.facturaId);
+    expect(conPagos).toMatchObject({ ok: false, status: 409 });
+    expect(await historicas(c.facturaId)).toBe(0);
+    expect(await activas(pe)).toBe(1);
+
+    const pf = await crearPlan({ codigo: "EM-2", tarifa_comercial: 700 });
+    const c2 = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pf, precioIncluyeIva: false }], numeroFactura: "F-FACT3-2", fechaEmision: "2026-10-03" });
+    expect(c2.ok).toBe(true);
+    if (!c2.ok) return;
+    expect((await emitirFactura(actorA, c2.facturaId, {})).ok).toBe(true);
+    expect((await anularFactura(actorA, c2.facturaId)).ok).toBe(true);
+    const d = await obtenerFactura(E1, c2.facturaId);
+    expect(d?.factura).toMatchObject({ estadoAdmin: "Anulada", numeroFactura: "F-FACT3-2", fechaEmision: "2026-10-03", montoTotal: 784 });
+    expect(d?.viajes.map((v) => [v.codigo, v.base, v.iva, v.total])).toEqual([["EM-2", 700, 84, 784]]);
+    expect(await activas(pf)).toBe(0);
+  });
+});
+
 describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congelado en la base", () => {
   // El logo es OBLIGATORIO: cada empresa usa un archivo real de su propio directorio dentro de un `uploads` temporal.
   const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
@@ -1028,7 +1327,7 @@ describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congela
     if (ok.ok) expect((ok.buffer.toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("Emitida: lleva su número y fecha de emisión y SIGUE marcada como NO FISCAL; Anulada → 409", async () => {
+  it("Emitida: lleva su número y fecha de emisión y SIGUE marcada como NO FISCAL; la Anulada ahora SÍ tiene PDF, con su detalle y la marca ANULADA", async () => {
     const p = await crearPlan({ codigo: "PDF-E", tarifa_comercial: 500.5 });
     const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: false }], numeroFactura: "F-PDF-1", fechaEmision: "2026-08-27" });
     expect(c.ok).toBe(true);
@@ -1045,7 +1344,25 @@ describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congela
     expect(b.ok).toBe(true);
     if (!b.ok) return;
     expect((await anularFactura(actorA, b.facturaId)).ok).toBe(true);
-    expect(await generarPdfFacturaDemo(empresa1, b.facturaId)).toMatchObject({ ok: false, status: 409 });
+    // 7-8) el PDF de la Anulada sale de su histórico: las líneas originales + la marca ANULADA + DEMO NO FISCAL
+    let r: Awaited<ReturnType<typeof generarPdfFacturaDemo>> | null = null;
+    const ta = await textoPdf(async () => { r = await generarPdfFacturaDemo(empresa1, b.facturaId); });
+    expect(r).toMatchObject({ ok: true, nombreArchivo: `factura-demo-${b.facturaId}.pdf` });
+    expect(ta).toContain("PDF-X");
+    expect(ta).toContain("FACTURA DEMO — ANULADA");
+    expect(ta).toContain(`ANULADA — ${LEYENDA_NO_FISCAL}`);
+    expect(ta).toContain("DEMO - NO FISCAL");
+    expect(ta).toContain("Q1,000.00"); // el viaje conserva su importe congelado
+    // el PDF de la anulada no cambia si luego cambian los datos vivos del viaje
+    await admin.query("UPDATE tms_planes_viaje SET codigo = 'RENOMBRADO', tarifa_comercial = 1 WHERE id = ?", [pb]);
+    const t2 = await textoPdf(() => generarPdfFacturaDemo(empresa1, b.facturaId));
+    expect(t2).toContain("PDF-X");
+    expect(t2).not.toContain("RENOMBRADO");
+  });
+
+  it("la Anulada ANTERIOR a FACT-3 (sin líneas conservadas) no genera PDF: 409 con su motivo, sin reconstruirla", async () => {
+    expect(legacyAnuladaId).toBeGreaterThan(0);
+    expect(await generarPdfFacturaDemo(empresa1, legacyAnuladaId)).toEqual({ ok: false, status: 409, error: MENSAJE_ANULADA_SIN_DETALLE });
   });
 
   it("una factura ANTERIOR al desglose por línea (sin snapshot fiscal) no genera PDF: no se inventan importes", async () => {
