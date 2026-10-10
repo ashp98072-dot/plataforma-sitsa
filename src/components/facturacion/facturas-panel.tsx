@@ -54,6 +54,7 @@ type FacturaViajeLinea = {
   descripcion: string | null; precioIncluyeIva: boolean | null; base: number | null; iva: number | null; total: number | null;
 };
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
+type AnulacionFactura = { fecha: string; usuario: string | null };
 type ClienteCat = { clienteId: number; nombre: string };
 
 type Props = {
@@ -135,7 +136,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
 
   // --- Detalle expandible (Fase G) ---
   const [expandido, setExpandido] = useState<number | null>(null);
-  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[] } | null>(null);
+  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion?: AnulacionFactura | null } | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [editandoBorrador, setEditandoBorrador] = useState(false);
   const [confirmandoEmitir, setConfirmandoEmitir] = useState(false);
@@ -386,6 +387,11 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                 <li>Cliente: {detalle.factura.cliente}</li>
                                 <li>Fecha emisión: {detalle.factura.fechaEmision ?? "—"}</li>
                                 <li>Estado: {detalle.factura.estadoAdmin}</li>
+                                {detalle.factura.estadoAdmin === "Anulada" ? (
+                                  <li className="font-semibold text-rose-600">
+                                    Anulada{detalle.anulacion ? ` el ${detalle.anulacion.fecha}${detalle.anulacion.usuario ? ` por ${detalle.anulacion.usuario}` : ""}` : ""} · documento inmutable
+                                  </li>
+                                ) : null}
                                 {detalle.factura.clienteNit ? <li>NIT: {detalle.factura.clienteNit}</li> : null}
                                 {detalle.factura.subtotal != null && detalle.factura.iva != null ? (
                                   <>
@@ -405,17 +411,19 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                   Editar borrador
                                 </button>
                               ) : null}
-                              {detalle.factura.estadoAdmin !== "Anulada" ? (
-                                <a
-                                  href={`/api/empresas/${slug}/facturacion/facturas/${detalle.factura.id}/pdf-demo`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="mt-2 ml-2 inline-block rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text)] hover:underline"
-                                  title="Representación de prueba para validar el formato. No es un documento fiscal."
-                                >
-                                  Ver PDF demo
-                                </a>
-                              ) : null}
+                              <a
+                                href={`/api/empresas/${slug}/facturacion/facturas/${detalle.factura.id}/pdf-demo`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 ml-2 inline-block rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text)] hover:underline"
+                                title={
+                                  detalle.factura.estadoAdmin === "Anulada"
+                                    ? "Representación de prueba con la marca ANULADA, desde el detalle conservado al anular. No es un documento fiscal."
+                                    : "Representación de prueba para validar el formato. No es un documento fiscal."
+                                }
+                              >
+                                Ver PDF demo
+                              </a>
                             </div>
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>
@@ -431,7 +439,16 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                     ) : null}
                                   </li>
                                 ))}
-                                {!detalle.viajes.length ? <li className="text-[var(--muted)]">Sin viajes.</li> : null}
+                                {!detalle.viajes.length ? (
+                                  <li className="text-[var(--muted)]">
+                                    {detalle.factura.estadoAdmin === "Anulada"
+                                      ? "Esta factura se anuló antes de que se conservara el histórico de sus viajes: no hay detalle disponible."
+                                      : "Sin viajes."}
+                                  </li>
+                                ) : null}
+                                {detalle.factura.estadoAdmin === "Anulada" && detalle.viajes.length ? (
+                                  <li className="pt-1 text-[11px] text-[var(--muted)]">Detalle histórico conservado. Estos viajes quedaron libres y pueden facturarse de nuevo.</li>
+                                ) : null}
                               </ul>
                             </div>
                             <div>
@@ -519,7 +536,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                             confirmandoAnular ? (
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
                                 <p className="font-semibold text-rose-600">Confirmar: {etiquetaAnular(detalle.factura.estadoAdmin).toLowerCase()}</p>
-                                <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse.</p>
+                                <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse y la factura anulada conservará su detalle.</p>
                                 {errorAnular ? <p className="text-rose-500">{errorAnular}</p> : null}
                                 <div className="flex gap-2 pt-1">
                                   <button type="button" disabled={anulando} className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void anular(f.id)}>

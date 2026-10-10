@@ -17,6 +17,8 @@ import {
   descripcionVisible,
   generarPdfFacturaDemo,
   LEYENDA_NO_FISCAL,
+  MARCA_ANULADA,
+  MENSAJE_ANULADA_SIN_DETALLE,
   MENSAJE_SIN_LOGO,
   prepararFacturaDemo,
   renderizarFacturaDemo,
@@ -118,6 +120,7 @@ function detalle(lineas: Detalle["viajes"], over: Partial<Detalle["factura"]> = 
     },
     viajes: lineas,
     pagos: [],
+    anulacion: null,
   } as Detalle;
 }
 
@@ -354,10 +357,12 @@ describe("PDF demo — snapshots y validaciones", () => {
     if (!r.ok) expect(r.error).toContain("anterior al desglose de IVA por línea");
   });
 
-  it("Anulada → 409; inexistente → 404; sin viajes → 409", () => {
-    expect(prepararFacturaDemo(detalle([INCLUIDO(1)], { estadoAdmin: "Anulada" }), EMISOR, "2026-10-09")).toMatchObject({ ok: false, status: 409 });
+  it("inexistente → 404; sin viajes → 409; una Anulada SIN líneas conservadas (anulada antes de FACT-3) → 409 con su motivo", () => {
     expect(prepararFacturaDemo(null, EMISOR, "2026-10-09")).toMatchObject({ ok: false, status: 404 });
-    expect(prepararFacturaDemo(detalle([], { subtotal: 0, iva: 0 }), EMISOR, "2026-10-09")).toMatchObject({ ok: false, status: 409 });
+    const sin = prepararFacturaDemo(detalle([], { subtotal: 0, iva: 0 }), EMISOR, "2026-10-09");
+    expect(sin).toMatchObject({ ok: false, status: 409, error: "La factura no tiene viajes." });
+    const anuladaSinDetalle = prepararFacturaDemo(detalle([], { estadoAdmin: "Anulada", subtotal: 189.29, iva: 22.71, montoTotal: 212 }), EMISOR, "2026-10-09");
+    expect(anuladaSinDetalle).toEqual({ ok: false, status: 409, error: MENSAJE_ANULADA_SIN_DETALLE });
   });
 
   it("Borrador: «BORRADOR #id (sin número)» y la fecha mostrada es la de generación; Emitida: su número y su fecha de emisión (DÍA / MES / AÑO)", async () => {
@@ -373,6 +378,74 @@ describe("PDF demo — snapshots y validaciones", () => {
     expect(te.slice(te.indexOf("DÍA"), te.indexOf("DÍA") + 6)).toEqual(["DÍA", "MES", "AÑO", "27", "08", "2026"]);
     expect(te[te.indexOf("No. INTERNO:") + 1]).toBe("F-0001");
     expect(te[te.indexOf("CORRELATIVO INTERNO:") + 1]).toBe("F-0001");
+  });
+});
+
+describe("PDF demo — factura ANULADA (FACT-3): desde su histórico, con la marca ANULADA", () => {
+  const ANULACION = { fecha: "2026-10-09 14:05", usuario: "facturador-a" };
+  const anulada = (lineas: Detalle["viajes"], over: Partial<Detalle["factura"]> = {}): Detalle =>
+    ({ ...detalle(lineas, { estadoAdmin: "Anulada", ...over }), anulacion: ANULACION }) as Detalle;
+
+  it("7) el PDF de una Anulada muestra TODAS las líneas originales y su total, tal como se congelaron", async () => {
+    const { spy, factura } = await renderizar(anulada([INCLUIDO(1), AGREGADO(2), INCLUIDO(3)]));
+    const ts = textos(spy);
+    for (const n of [1, 2, 3]) expect(ts).toContain(`DEMO-${n}`);
+    expect(ts).toContain("SERVICIO DE TRANSPORTE - BODEGA CENTRAL A DESTINO 2 - 02/09/2026");
+    expect(ts).toContain("Q312.00"); // 100 + 112 + 100
+    expect(ts).toContain("TRESCIENTOS DOCE CON 00/100");
+    // cálculos internos intactos (no se recalcula con datos vivos)
+    expect(factura.lineas.map((l) => [l.base, l.iva, l.total])).toEqual([[89.29, 10.71, 100], [100, 12, 112], [89.29, 10.71, 100]]);
+    expect([factura.subtotal, factura.iva, factura.total]).toEqual([278.58, 33.42, 312]);
+    expect(factura.estado).toBe("Anulada");
+  });
+
+  it("8) lleva la marca ANULADA muy visible (franja roja, banda del documento, marca de agua y pie) además de DEMO — NO FISCAL", async () => {
+    const { spy } = await renderizar(anulada([INCLUIDO(1)]));
+    const ts = textos(spy);
+    expect(MARCA_ANULADA).toBe("ANULADA");
+    expect(ts).toContain(`ANULADA — ${LEYENDA_NO_FISCAL}`); // franja superior
+    expect(ts).toContain("FACTURA DEMO — ANULADA"); // banda del bloque tributario
+    expect(ts).toContain("ANULADA"); // marca de agua
+    expect(ts).toContain("DEMO - NO FISCAL"); // sigue la marca de agua DEMO
+    expect(ts.some((t) => t.startsWith(`ANULADA · ${LEYENDA_NO_FISCAL} · Página 1 de 1`))).toBe(true);
+  });
+
+  it("una factura NO anulada nunca lleva la marca ANULADA", async () => {
+    for (const d of [detalle([INCLUIDO(1)]), detalle([INCLUIDO(1)], { estadoAdmin: "Emitida", numeroFactura: "F-1", fechaEmision: "2026-08-27" })]) {
+      vi.restoreAllMocks();
+      const { spy } = await renderizar(d);
+      expect(todo(spy)).not.toMatch(/ANULADA/);
+    }
+  });
+
+  it("conserva su número y fecha de emisión si los tenía; si nunca los tuvo, muestra la fecha de anulación", async () => {
+    const conNumero = await renderizar(anulada([INCLUIDO(1)], { numeroFactura: "F-0007", fechaEmision: "2026-08-27" }));
+    expect(conNumero.factura).toMatchObject({ numero: "F-0007", fecha: "2026-08-27", estado: "Anulada" });
+    expect(conNumero.factura.etiquetaFecha).toBe("Fecha de emisión · anulada el 09/10/2026");
+    vi.restoreAllMocks();
+    const borrador = await renderizar(anulada([INCLUIDO(1)]));
+    expect(borrador.factura).toMatchObject({ numero: "ANULADA #12 (sin número)", fecha: "2026-10-09", etiquetaFecha: "Fecha de anulación" });
+    const ts = textos(borrador.spy);
+    expect(ts[ts.indexOf("No. INTERNO:") + 1]).toBe("ANULADA #12 (sin número)");
+    expect(ts).toContain("Fecha de anulación");
+  });
+
+  it("se valida igual que cualquier factura: totales que no cuadran con sus líneas conservadas → 409", () => {
+    const r = prepararFacturaDemo(anulada([INCLUIDO(1), AGREGADO(2)], { montoTotal: 999 }), EMISOR, "2026-10-09");
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    if (!r.ok) expect(r.error).toContain("no coinciden con la suma de sus líneas");
+  });
+
+  it("generarPdfFacturaDemo devuelve el PDF de una Anulada (ya no 409), con la empresa del guard y su logo", async () => {
+    vi.mocked(obtenerFactura).mockResolvedValue(anulada([INCLUIDO(1), AGREGADO(2)]));
+    const spy = espiarTexto();
+    const r = await generarPdfFacturaDemo({ id: 7, nombre: "Empresa 7", logoUrl: "empresas/7/logo.png" }, 12);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.nombreArchivo).toBe("factura-demo-12.pdf");
+    expect(r.buffer.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(textos(spy)).toContain("FACTURA DEMO — ANULADA");
+    expect(vi.mocked(obtenerFactura).mock.calls[0]).toEqual([7, 12]);
   });
 });
 
@@ -558,13 +631,14 @@ describe("PDF demo — LOGO OBLIGATORIO de la empresa emisora", () => {
     expect(dibujos.map((i) => i.opciones.fit)).toEqual([[132, 100], [288, 58]]); // cuadrado / apaisado
   });
 
-  it("el orden de los errores no revela el estado del logo: factura inexistente → 404 y Anulada → 409 de la factura, aunque falte el logo", async () => {
+  it("el orden de los errores no revela el estado del logo: inexistente → 404 y una factura inválida → su 409, aunque falte el logo", async () => {
     vi.mocked(obtenerFactura).mockResolvedValue(null);
     expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12)).toEqual({ ok: false, status: 404, error: "Factura no encontrada." });
+    vi.mocked(obtenerFactura).mockResolvedValue(detalle([], { estadoAdmin: "Anulada", subtotal: 100, iva: 12, montoTotal: 112 }));
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12)).toEqual({ ok: false, status: 409, error: MENSAJE_ANULADA_SIN_DETALLE });
+    // una Anulada VÁLIDA sí exige logo, como cualquier otra
     vi.mocked(obtenerFactura).mockResolvedValue(detalle([INCLUIDO(1)], { estadoAdmin: "Anulada" }));
-    const r = await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    if (!r.ok) expect(r.error).toContain("Anulada");
+    expect(await generarPdfFacturaDemo({ ...empresa7, logoUrl: null }, 12)).toEqual(sinLogo);
   });
 
   it("renderizar con un logo que PDFKit no puede leer FALLA (nunca cae a encabezado solo de texto)", async () => {
@@ -597,6 +671,25 @@ describe.skipIf(!process.env.FACT_DEMO_PDF_SALIDA)("PDF demo de ejemplo (datos s
     mkdirSync(dirname(salida), { recursive: true });
     writeFileSync(salida, buf);
     expect(buf.length).toBeGreaterThan(1000);
+  });
+
+  it.skipIf(!process.env.FACT_DEMO_PDF_SALIDA_ANULADA)("escribe también el ejemplo de una factura ANULADA (con su detalle y la marca ANULADA)", async () => {
+    const logo = readFileSync(join(process.cwd(), "docs", "ejemplos", "logo-demo-empresa.png"));
+    const d = {
+      ...detalle(
+        [
+          linea(1, { fechaPlan: "2026-09-01", codigo: "DEMO-A", descripcion: "Servicio de transporte – Bodega Central Guatemala → Quetzaltenango – 01/09/2026" }),
+          linea(2, { fechaPlan: "2026-09-02", codigo: "DEMO-B", precioIncluyeIva: false, base: 100, iva: 12, total: 112, descripcion: "Servicio de transporte – Bodega Central Guatemala → Cobán – 02/09/2026" }),
+        ],
+        { estadoAdmin: "Anulada", cliente: "Cliente Demo Uno, S.A.", clienteNit: "1234567-8", clienteDireccion: "Zona 1, Ciudad de Guatemala", observaciones: "Factura anulada de prueba (datos sintéticos)" },
+      ),
+      anulacion: { fecha: "2026-10-09 14:05", usuario: "facturador-demo" },
+    } as Detalle;
+    const m = prepararFacturaDemo(d, EMISOR, "2026-10-09", COMPLETOS);
+    if (!m.ok) throw new Error(m.error);
+    const salida = String(process.env.FACT_DEMO_PDF_SALIDA_ANULADA);
+    mkdirSync(dirname(salida), { recursive: true });
+    writeFileSync(salida, await renderizarFacturaDemo(m.factura, logo));
   });
 
   it.skipIf(!process.env.FACT_DEMO_PDF_SALIDA_LARGO)("escribe también una versión LARGA (varias páginas) para revisar los saltos de página", async () => {

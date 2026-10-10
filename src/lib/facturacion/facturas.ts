@@ -222,6 +222,22 @@ function esDuplicadoNumeroFactura(e: unknown): boolean {
   return err?.code === "ER_DUP_ENTRY" || err?.errno === 1062;
 }
 
+/** MariaDB: la tabla no existe (el código de FACT-3 se desplegó antes de aplicar sql/migrate-2026-10-fact-3-…). */
+function esTablaInexistente(e: unknown): boolean {
+  const err = e as { code?: string; errno?: number };
+  return err?.code === "ER_NO_SUCH_TABLE" || err?.errno === 1146;
+}
+
+/**
+ * FACT-3 — histórico de las líneas de una factura ANULADA. `fact_factura_viajes` contiene SOLO vínculos ACTIVOS (un viaje
+ * a lo sumo en una fila viva: UNIQUE(plan_id) y todos sus lectores —viajes pendientes, reportes TMS, notificaciones,
+ * limpiezas— dependen de eso). Al anular, la línea (con su fotografía fiscal) se COPIA aquí y recién entonces se borra la
+ * activa, en la misma transacción: el viaje queda libre y la factura conserva su detalle.
+ */
+const TABLA_LINEAS_ANULADAS = "fact_factura_viajes_anuladas";
+const MENSAJE_FALTA_MIGRACION_FACT3 =
+  "No se puede anular: falta aplicar la migración FACT-3 (tabla fact_factura_viajes_anuladas). La factura NO se modificó.";
+
 const mapFactura = (r: RowDataPacket): Factura => {
   const montoTotal = Number(r.monto_total);
   const totalPagado = Number(r.total_pagado ?? 0);
@@ -299,17 +315,17 @@ export async function listarFacturas(empresaId: number, filtros: FiltrosFacturas
   return { items: rows.map(mapFactura), totalReal: Number(countRows[0]?.total ?? 0), page, pageSize };
 }
 
-export async function obtenerFactura(
-  empresaId: number,
-  facturaId: number,
-): Promise<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[] } | null> {
-  const rows = await query<RowDataPacket[]>(
-    `${FACTURA_SELECT} WHERE f.id = ? AND f.empresa_id = ? LIMIT 1`,
-    [facturaId, empresaId],
-  );
-  if (!rows[0]) return null;
-  const [viajesRows, pagosRows] = await Promise.all([
-    query<RowDataPacket[]>(
+/** Quién y cuándo anuló la factura, tomado de la auditoría (`anular_factura`). `fecha` = «YYYY-MM-DD HH:MM». */
+export type AnulacionFactura = { fecha: string; usuario: string | null };
+
+/**
+ * Líneas de la factura. Una factura ANULADA lee SIEMPRE su histórico (`fact_factura_viajes_anuladas`, solo su fotografía:
+ * nunca datos vivos del viaje); el resto, sus vínculos activos. La factura ya fue buscada por empresa_id: aquí no hay
+ * otra forma de llegar a las líneas de otra empresa.
+ */
+async function leerLineasFactura(facturaId: number, anulada: boolean): Promise<RowDataPacket[]> {
+  if (!anulada) {
+    return query<RowDataPacket[]>(
       // Se prefiere SIEMPRE la fotografía de la línea; el dato vivo del viaje solo rellena filas anteriores a FACT-2.
       `SELECT ffv.id, ffv.plan_id, COALESCE(ffv.codigo_viaje_snapshot, p.codigo) AS codigo,
               DATE_FORMAT(COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan), '%Y-%m-%d') AS fecha_plan,
@@ -321,18 +337,62 @@ export async function obtenerFactura(
        WHERE ffv.factura_id = ?
        ORDER BY COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan), ffv.id`,
       [facturaId],
-    ),
+    );
+  }
+  try {
+    return await query<RowDataPacket[]>(
+      `SELECT h.id, h.plan_id, h.codigo_viaje_snapshot AS codigo,
+              DATE_FORMAT(h.fecha_viaje_snapshot, '%Y-%m-%d') AS fecha_plan,
+              h.monto_asignado, h.descripcion, h.ruta_codigo_snapshot, h.origen_snapshot,
+              h.destino_snapshot, h.cantidad, h.precio_incluye_iva, h.porcentaje_iva,
+              h.base_monto, h.iva_monto, h.total_linea
+       FROM ${TABLA_LINEAS_ANULADAS} h
+       WHERE h.factura_id = ?
+       ORDER BY h.fecha_viaje_snapshot, h.id`,
+      [facturaId],
+    );
+  } catch (e) {
+    if (esTablaInexistente(e)) return []; // código desplegado antes de la migración: se ve como antes (sin detalle)
+    throw e;
+  }
+}
+
+export async function obtenerFactura(
+  empresaId: number,
+  facturaId: number,
+): Promise<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion: AnulacionFactura | null } | null> {
+  const rows = await query<RowDataPacket[]>(
+    `${FACTURA_SELECT} WHERE f.id = ? AND f.empresa_id = ? LIMIT 1`,
+    [facturaId, empresaId],
+  );
+  if (!rows[0]) return null;
+  const anulada = String(rows[0].estado_admin) === "Anulada";
+  const [viajesRows, pagosRows, anulacionRows] = await Promise.all([
+    leerLineasFactura(facturaId, anulada),
     query<RowDataPacket[]>(
       `SELECT id, DATE_FORMAT(fecha_pago, '%Y-%m-%d') AS fecha_pago, monto, referencia, medio_pago,
               observaciones, registrado_por, creado_en
        FROM fact_pagos WHERE factura_id = ? AND empresa_id = ? ORDER BY fecha_pago, id`,
       [facturaId, empresaId],
     ),
+    anulada
+      ? query<RowDataPacket[]>(
+          // La auditoría es por empresa; «Factura #12 anulada…» no coincide con «#123» (sigue un espacio).
+          `SELECT usuario, DATE_FORMAT(creado_en, '%Y-%m-%d %H:%i') AS cuando
+           FROM auditoria
+           WHERE empresa_id = ? AND modulo = 'facturacion' AND accion = 'anular_factura' AND detalle LIKE ?
+           ORDER BY id DESC LIMIT 1`,
+          [empresaId, `Factura #${facturaId} anulada%`],
+        )
+      : Promise.resolve([] as RowDataPacket[]),
   ]);
   return {
     factura: mapFactura(rows[0]),
+    anulacion: anulacionRows[0]
+      ? { fecha: String(anulacionRows[0].cuando), usuario: anulacionRows[0].usuario != null ? String(anulacionRows[0].usuario) : null }
+      : null,
     viajes: viajesRows.map((r) => ({
-      id: Number(r.id), planId: Number(r.plan_id), codigo: String(r.codigo),
+      id: Number(r.id), planId: r.plan_id != null ? Number(r.plan_id) : 0, codigo: r.codigo != null ? String(r.codigo) : "—",
       fechaPlan: String(r.fecha_plan), montoAsignado: Number(r.monto_asignado),
       descripcion: r.descripcion != null ? String(r.descripcion) : null,
       rutaCodigo: r.ruta_codigo_snapshot != null ? String(r.ruta_codigo_snapshot) : null,
@@ -363,9 +423,11 @@ const SQL_MONEDA_GTQ = `(p.tarifa_moneda_historico IS NULL OR UPPER(TRIM(p.tarif
 
 /**
  * (Ajuste A) Solo viajes genuinamente libres: Cerrado y sin NINGUNA fila
- * en fact_factura_viajes — como anular BORRA esa fila, "sin fila" es
- * siempre sinónimo de "nunca facturado o la factura que lo tenía se
- * anuló". Esta es la única fuente para armar una factura NUEVA.
+ * en fact_factura_viajes — como anular BORRA esa fila (FACT-3: antes copia
+ * la línea a fact_factura_viajes_anuladas, que NO participa de esta
+ * condición), "sin fila" es siempre sinónimo de "nunca facturado o la
+ * factura que lo tenía se anuló". Esta es la única fuente para armar una
+ * factura NUEVA.
  *
  * HOTFIX PRE-MERGE PR #114 (Hallazgo 1): `cli.id IS NOT NULL` se agrega
  * AQUÍ (una sola vez, compartido por listado/COUNT/KPI — todos usan este
@@ -1072,7 +1134,28 @@ export async function emitirFactura(
   });
 }
 
+const ERROR_CONCURRENCIA_ANULAR: { ok: false; error: string; status: number } = {
+  ok: false,
+  error: "Otro usuario está modificando esta factura o sus viajes en este momento. Actualiza la pantalla y vuelve a intentar.",
+  status: 409,
+};
+
+/**
+ * Anula una factura (Borrador o Emitida sin pagos): conserva su detalle en el histórico y libera sus viajes, todo en una
+ * transacción. READ COMMITTED (igual que crear/editar): con REPEATABLE READ el `INSERT … SELECT` de la copia tomaría
+ * bloqueos compartidos sobre las filas leídas —entre ellas el viaje— y podría interbloquearse con otra factura que esté
+ * tomando ese mismo viaje. El bloqueo de la fila de la factura serializa anulaciones/ediciones/emisiones/pagos.
+ */
 export async function anularFactura(actor: ActorFacturacion, facturaId: number): Promise<ResultadoSimple> {
+  try {
+    return await anularFacturaTx(actor, facturaId);
+  } catch (err) {
+    if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA_ANULAR;
+    throw err;
+  }
+}
+
+async function anularFacturaTx(actor: ActorFacturacion, facturaId: number): Promise<ResultadoSimple> {
   return tx(async (conn) => {
     const [facturaRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, estado_admin FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
@@ -1104,21 +1187,50 @@ export async function anularFactura(actor: ActorFacturacion, facturaId: number):
     if (!upd.affectedRows) {
       return { ok: false, error: "La factura ya fue modificada por otra solicitud. Actualiza la pantalla.", status: 409 };
     }
-    // Libera los viajes de inmediato — mismo criterio ya usado en todo el
-    // proyecto: borrar la relación (nunca marcarla "inactiva") para que
-    // el UNIQUE(plan_id) siga siendo una garantía real.
-    await conn.execute(`DELETE FROM fact_factura_viajes WHERE factura_id = ?`, [facturaId]);
+    // 1) CONSERVA el detalle: copia cada línea activa (con su fotografía fiscal) al histórico de anuladas. Las líneas
+    //    anteriores a FACT-2 sin código/fecha congelados los toman del viaje en ESTE momento (lo mismo que mostraba la
+    //    pantalla); nada más se infiere. Si la tabla no existe, NO se anula: borrar sin copiar sería perder el detalle.
+    let copiadas: number;
+    try {
+      const [ins] = await conn.execute<ResultSetHeader>(
+        `INSERT INTO ${TABLA_LINEAS_ANULADAS}
+           (factura_id, plan_id, monto_asignado, codigo_viaje_snapshot, fecha_viaje_snapshot, ruta_codigo_snapshot,
+            origen_snapshot, destino_snapshot, descripcion, cantidad, precio_incluye_iva, porcentaje_iva,
+            base_monto, iva_monto, total_linea, linea_creada_en, anulada_por)
+         SELECT ffv.factura_id, ffv.plan_id, ffv.monto_asignado,
+                COALESCE(ffv.codigo_viaje_snapshot, p.codigo), COALESCE(ffv.fecha_viaje_snapshot, p.fecha_plan),
+                ffv.ruta_codigo_snapshot, ffv.origen_snapshot, ffv.destino_snapshot, ffv.descripcion, ffv.cantidad,
+                ffv.precio_incluye_iva, ffv.porcentaje_iva, ffv.base_monto, ffv.iva_monto, ffv.total_linea,
+                ffv.creado_en, ?
+         FROM fact_factura_viajes ffv
+         LEFT JOIN tms_planes_viaje p ON p.id = ffv.plan_id
+         WHERE ffv.factura_id = ?`,
+        [actor.usuarioId, facturaId],
+      );
+      copiadas = Number(ins.affectedRows ?? 0);
+    } catch (err) {
+      if (esTablaInexistente(err)) return { ok: false, error: MENSAJE_FALTA_MIGRACION_FACT3, status: 503 };
+      throw err;
+    }
+
+    // 2) LIBERA los viajes: se borra el vínculo ACTIVO (nunca se marca «inactivo») para que UNIQUE(plan_id) siga siendo
+    //    una garantía real de base de datos; el histórico vive en la otra tabla y no participa de esa restricción.
+    const [del] = await conn.execute<ResultSetHeader>(`DELETE FROM fact_factura_viajes WHERE factura_id = ?`, [facturaId]);
+    if (Number(del.affectedRows ?? 0) !== copiadas) {
+      // No debería ocurrir (la factura está bloqueada FOR UPDATE); si ocurre, se deshace todo: nunca liberar sin copiar.
+      throw new Error(`Anulación inconsistente de la factura #${facturaId}: ${copiadas} línea(s) copiadas y ${del.affectedRows} borradas.`);
+    }
 
     await registrarAuditoriaTx(conn, {
       empresaId: actor.empresaId,
       usuario: actor.usuario,
       modulo: "facturacion",
       accion: "anular_factura",
-      detalle: `Factura #${facturaId} anulada · viajes liberados para nueva facturación`,
+      detalle: `Factura #${facturaId} anulada · ${copiadas} línea(s) conservadas en el histórico · viajes liberados para nueva facturación`,
     });
 
     return { ok: true };
-  });
+  }, { readCommitted: true });
 }
 
 export type PagoInput = { fechaPago: string; monto: number; referencia?: string | null; medioPago?: string | null; observaciones?: string | null };
