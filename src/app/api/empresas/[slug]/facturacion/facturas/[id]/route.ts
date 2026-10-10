@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { actualizarFacturaBorrador, obtenerFactura } from "@/lib/facturacion/facturas";
+import { fact4CamposSchema, resolverEntradaFact4 } from "@/lib/facturacion/entrada-fact4";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -19,6 +20,7 @@ const editarSchema = z.object({
   numeroFactura: z.string().trim().max(60).optional().nullable(),
   fechaEmision: z.string().regex(FECHA_RE).optional().nullable(),
   observaciones: z.string().trim().max(2000).optional().nullable(),
+  ...fact4CamposSchema,
 });
 
 function idValido(id: string): number | null {
@@ -54,6 +56,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
 
+  // Reenviar la retención que el borrador ya tiene congelada no exige el permiso de cambio (lo exige cambiarla).
+  let retencionVigente: number | null = null;
+  if (d.retencionIvaPct != null) {
+    const actual = await obtenerFactura(guard.empresa.id, facturaId);
+    retencionVigente = actual?.contabilidad.retencionIva.aplicadaPct ?? null;
+  }
+  const fact4 = await resolverEntradaFact4({
+    slug,
+    empresaId: guard.empresa.id,
+    clienteId: d.clienteId,
+    entrada: d,
+    retencionVigente,
+  });
+  if (!fact4.ok) return NextResponse.json({ error: fact4.error }, { status: fact4.status });
+
   const resultado = await actualizarFacturaBorrador(
     { empresaId: guard.empresa.id, usuarioId: guard.session.id, usuario: guard.session.username },
     facturaId,
@@ -63,6 +80,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       numeroFactura: d.numeroFactura ?? null,
       fechaEmision: d.fechaEmision ?? null,
       observaciones: d.observaciones ?? null,
+      ...fact4.datos,
     },
   );
   if (!resultado.ok) {

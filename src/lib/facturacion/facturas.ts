@@ -4,6 +4,18 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import { resolverUnidadViaje } from "@/lib/facturacion/unidad-viaje";
+import { esEsquemaPendiente, MENSAJE_FALTA_MIGRACION_FACT4 } from "@/lib/facturacion/contexto-factura";
+import { calcularRetencionIva } from "@/lib/facturacion/poliza-venta";
+import {
+  calcularLineasFactura,
+  CONDICIONES_PAGO,
+  esRetencionIvaValida,
+  type ClasificacionLinea,
+  type CondicionPago,
+  type LineaFacturaCalculada,
+  type LineaFacturaEntrada,
+  type ResultadoLineas,
+} from "@/lib/facturacion/lineas-factura";
 import {
   construirBorrador,
   EQUIVALENTES_GTQ,
@@ -357,10 +369,151 @@ async function leerLineasFactura(facturaId: number, anulada: boolean): Promise<R
   }
 }
 
+/** FACT-4 — línea de factura tal como se muestra: cantidad × precio unitario = valor, con los viajes de origen. */
+export type FacturaLineaDetalle = {
+  id: number;
+  orden: number;
+  cantidad: number;
+  descripcion: string;
+  precioUnitario: number;
+  /** Lo capturado: ROUND(cantidad × precioUnitario, 2). */
+  valor: number;
+  /** null en facturas anteriores a FACT-4 (nunca se clasificaron). */
+  clasificacion: ClasificacionLinea | null;
+  precioIncluyeIva: boolean | null;
+  porcentajeIva: number | null;
+  base: number | null;
+  iva: number | null;
+  total: number | null;
+  viajes: { planId: number | null; codigo: string }[];
+};
+
+/** Decisiones de contabilidad congeladas en la factura (FACT-4). Nada de esto genera asientos todavía. */
+export type ContabilidadFactura = {
+  /** true = las líneas guardadas son la fuente de los totales; false = modelo anterior (línea implícita por viaje). */
+  modeloLineas: boolean;
+  entidadId: number | null;
+  entidadNombre: string | null;
+  condicionPago: CondicionPago | null;
+  cuentaBancaria: CuentaBancariaSnapshot | null;
+  /** `monto` = retención congelada (IVA × %); `netoCobrar` = total − retención. Regla confirmada por Contabilidad. */
+  retencionIva: { aplicadaPct: number; clientePct: number | null; monto: number };
+  /** true si la migración FACT-4 aún no está aplicada (todo lo anterior queda en sus valores por defecto). */
+  esquemaPendiente: boolean;
+};
+
+const CONTABILIDAD_POR_DEFECTO: ContabilidadFactura = {
+  modeloLineas: false, entidadId: null, entidadNombre: null, condicionPago: null, cuentaBancaria: null,
+  retencionIva: { aplicadaPct: 0, clientePct: null, monto: 0 }, esquemaPendiente: false,
+};
+
+async function leerContabilidadFactura(empresaId: number, facturaId: number): Promise<ContabilidadFactura> {
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT f.entidad_id, e.nombre AS entidad_nombre, f.modelo_lineas, f.condicion_pago, f.cuenta_bancaria_snapshot,
+              f.retencion_iva_pct, f.retencion_iva_cliente_pct, f.retencion_iva_monto
+       FROM fact_facturas f
+       LEFT JOIN cont_entidades e ON e.empresa_id = f.empresa_id AND e.id = f.entidad_id
+       WHERE f.id = ? AND f.empresa_id = ? LIMIT 1`,
+      [facturaId, empresaId],
+    );
+    const r = rows[0];
+    if (!r) return CONTABILIDAD_POR_DEFECTO;
+    let snap: CuentaBancariaSnapshot | null = null;
+    if (r.cuenta_bancaria_snapshot != null) {
+      try { snap = JSON.parse(String(r.cuenta_bancaria_snapshot)) as CuentaBancariaSnapshot; } catch { snap = null; }
+    }
+    const cond = r.condicion_pago != null ? String(r.condicion_pago) : null;
+    return {
+      modeloLineas: Number(r.modelo_lineas ?? 0) === 1,
+      entidadId: r.entidad_id != null ? Number(r.entidad_id) : null,
+      entidadNombre: r.entidad_nombre != null ? String(r.entidad_nombre) : null,
+      condicionPago: cond === "CREDITO" || cond === "CONTADO" ? cond : null,
+      cuentaBancaria: snap,
+      retencionIva: {
+        aplicadaPct: Number(r.retencion_iva_pct ?? 0),
+        clientePct: r.retencion_iva_cliente_pct != null ? Number(r.retencion_iva_cliente_pct) : null,
+        monto: Number(r.retencion_iva_monto ?? 0),
+      },
+      esquemaPendiente: false,
+    };
+  } catch (e) {
+    if (esEsquemaPendiente(e)) return { ...CONTABILIDAD_POR_DEFECTO, esquemaPendiente: true };
+    throw e;
+  }
+}
+
+async function leerLineasGuardadas(facturaId: number): Promise<FacturaLineaDetalle[]> {
+  const [lineas, vinculos] = await Promise.all([
+    query<RowDataPacket[]>(
+      `SELECT id, orden, cantidad, descripcion, precio_unitario, valor, clasificacion, precio_incluye_iva, porcentaje_iva,
+              base_monto, iva_monto, total_linea
+       FROM fact_factura_lineas WHERE factura_id = ? ORDER BY orden, id`,
+      [facturaId],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT lv.linea_id, lv.plan_id, lv.codigo_viaje_snapshot
+       FROM fact_factura_linea_viajes lv
+       INNER JOIN fact_factura_lineas l ON l.id = lv.linea_id
+       WHERE l.factura_id = ? ORDER BY lv.id`,
+      [facturaId],
+    ),
+  ]);
+  const porLinea = new Map<number, { planId: number | null; codigo: string }[]>();
+  for (const v of vinculos) {
+    const k = Number(v.linea_id);
+    const lista = porLinea.get(k) ?? [];
+    lista.push({ planId: v.plan_id != null ? Number(v.plan_id) : null, codigo: v.codigo_viaje_snapshot != null ? String(v.codigo_viaje_snapshot) : "—" });
+    porLinea.set(k, lista);
+  }
+  return lineas.map((r) => ({
+    id: Number(r.id),
+    orden: Number(r.orden),
+    cantidad: Number(r.cantidad),
+    descripcion: String(r.descripcion),
+    precioUnitario: Number(r.precio_unitario),
+    valor: Number(r.valor),
+    clasificacion: r.clasificacion === "BIEN" ? "BIEN" : r.clasificacion === "SERVICIO" ? "SERVICIO" : null,
+    precioIncluyeIva: r.precio_incluye_iva != null ? Number(r.precio_incluye_iva) === 1 : null,
+    porcentajeIva: r.porcentaje_iva != null ? Number(r.porcentaje_iva) : null,
+    base: r.base_monto != null ? Number(r.base_monto) : null,
+    iva: r.iva_monto != null ? Number(r.iva_monto) : null,
+    total: r.total_linea != null ? Number(r.total_linea) : null,
+    viajes: porLinea.get(Number(r.id)) ?? [],
+  }));
+}
+
+/** Facturas anteriores a FACT-4: una línea implícita por viaje (solo lectura; nada de esto se guarda). */
+function lineasImplicitas(viajes: FacturaViajeLinea[]): FacturaLineaDetalle[] {
+  return viajes.map((v, i) => ({
+    id: v.id,
+    orden: i + 1,
+    cantidad: v.cantidad,
+    descripcion: v.descripcion ?? `Viaje ${v.codigo}`,
+    precioUnitario: v.montoAsignado,
+    valor: v.montoAsignado,
+    clasificacion: null,
+    precioIncluyeIva: v.precioIncluyeIva,
+    porcentajeIva: v.porcentajeIva,
+    base: v.base,
+    iva: v.iva,
+    total: v.total,
+    viajes: [{ planId: v.planId || null, codigo: v.codigo }],
+  }));
+}
+
 export async function obtenerFactura(
   empresaId: number,
   facturaId: number,
-): Promise<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion: AnulacionFactura | null } | null> {
+): Promise<{
+  factura: Factura;
+  viajes: FacturaViajeLinea[];
+  pagos: PagoFactura[];
+  anulacion: AnulacionFactura | null;
+  /** Líneas de la factura: las guardadas (FACT-4) o, en facturas anteriores, una implícita por viaje. */
+  lineas: FacturaLineaDetalle[];
+  contabilidad: ContabilidadFactura;
+} | null> {
   const rows = await query<RowDataPacket[]>(
     `${FACTURA_SELECT} WHERE f.id = ? AND f.empresa_id = ? LIMIT 1`,
     [facturaId, empresaId],
@@ -386,12 +539,8 @@ export async function obtenerFactura(
         )
       : Promise.resolve([] as RowDataPacket[]),
   ]);
-  return {
-    factura: mapFactura(rows[0]),
-    anulacion: anulacionRows[0]
-      ? { fecha: String(anulacionRows[0].cuando), usuario: anulacionRows[0].usuario != null ? String(anulacionRows[0].usuario) : null }
-      : null,
-    viajes: viajesRows.map((r) => ({
+  const contabilidad = await leerContabilidadFactura(empresaId, facturaId);
+  const viajes: FacturaViajeLinea[] = viajesRows.map((r) => ({
       id: Number(r.id), planId: r.plan_id != null ? Number(r.plan_id) : 0, codigo: r.codigo != null ? String(r.codigo) : "—",
       fechaPlan: String(r.fecha_plan), montoAsignado: Number(r.monto_asignado),
       descripcion: r.descripcion != null ? String(r.descripcion) : null,
@@ -404,7 +553,18 @@ export async function obtenerFactura(
       base: r.base_monto != null ? Number(r.base_monto) : null,
       iva: r.iva_monto != null ? Number(r.iva_monto) : null,
       total: r.total_linea != null ? Number(r.total_linea) : null,
-    })),
+  }));
+  // Las líneas guardadas sobreviven a la anulación (no participan de UNIQUE(plan_id)); el detalle de viajes de una
+  // anulada viene de su histórico (FACT-3).
+  const lineas = contabilidad.modeloLineas ? await leerLineasGuardadas(facturaId) : lineasImplicitas(viajes);
+  return {
+    factura: mapFactura(rows[0]),
+    anulacion: anulacionRows[0]
+      ? { fecha: String(anulacionRows[0].cuando), usuario: anulacionRows[0].usuario != null ? String(anulacionRows[0].usuario) : null }
+      : null,
+    viajes,
+    lineas,
+    contabilidad,
     pagos: pagosRows.map((r) => ({
       id: Number(r.id), fechaPago: String(r.fecha_pago), monto: Number(r.monto),
       referencia: r.referencia != null ? String(r.referencia) : null,
@@ -613,10 +773,31 @@ export type LineaFacturaInput = {
   /**
    * Tratamiento de IVA de ESTA línea, elegido explícitamente por quien factura: `true` = el IVA ya está incluido en
    * la tarifa; `false` = el IVA se agrega a la tarifa. Obligatorio por línea (nunca se infiere ni se asume en el
-   * servidor): una misma factura puede mezclar ambos.
+   * servidor): una misma factura puede mezclar ambos. (FACT-4: con `lineas` el tratamiento vive en la línea de
+   * factura y este valor solo siembra el texto/monto por defecto del viaje.)
    */
   precioIncluyeIva: boolean;
 };
+/**
+ * FACT-4 — lo que se decide al preparar la factura y se CONGELA con ella. Todo es opcional para los llamadores internos
+ * anteriores a FACT-4 (que siguen produciendo el modelo anterior: una línea implícita por viaje); el borde HTTP
+ * (rutas) siempre envía líneas, condición de pago, entidad y retención.
+ */
+export type DatosFacturaFact4 = {
+  /** Líneas preparadas (agrupables). Presente = modelo de líneas: los totales salen de ellas, no de los viajes. */
+  lineas?: LineaFacturaEntrada[];
+  /** Entidad contable emisora (libro). NULL si la empresa no tiene entidades configuradas. */
+  entidadId?: number | null;
+  /** CREDITO | CONTADO. No depende del tipo de documento FEL. */
+  condicionPago?: CondicionPago | null;
+  /** Solo CONTADO: cuenta bancaria (cont_cuentas_bancarias.id) donde se recibe el pago. */
+  cuentaBancariaId?: number | null;
+  /** Retención de IVA APLICADA a esta factura (0/15/30), ya autorizada por el caller. */
+  retencionIvaPct?: number | null;
+  /** Retención configurada para el cliente al preparar la factura (auditoría de cambios). */
+  retencionIvaClientePct?: number | null;
+};
+
 export type DatosFactura = {
   clienteId: number;
   planes: LineaFacturaInput[];
@@ -624,7 +805,7 @@ export type DatosFactura = {
   numeroFactura?: string | null;
   fechaEmision?: string | null;
   observaciones?: string | null;
-};
+} & DatosFacturaFact4;
 
 type SqlArg = string | number | null;
 /** Ejecuta una lectura. En transacción usa la conexión (permite FOR UPDATE); en preview usa el pool, sin transacción. */
@@ -820,7 +1001,11 @@ const ERROR_VIAJE_YA_VINCULADO: { ok: false; error: string; status: number } = {
   status: 409,
 };
 
-async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b: BorradorCalculado): Promise<boolean> {
+/**
+ * Inserta las filas de viaje del documento. `conFiscal`: en el modelo anterior cada viaje lleva su desglose de IVA; en el
+ * modelo de líneas (FACT-4) el desglose fiscal vive en la LÍNEA y aquí quedan en NULL (monto_asignado = monto del viaje).
+ */
+async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b: BorradorCalculado, conFiscal = true): Promise<boolean> {
   for (const l of b.lineas) {
     try {
       await conn.execute(
@@ -831,8 +1016,9 @@ async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           facturaId, l.planId, l.montoAsignado, l.codigo, l.fechaPlan, l.rutaCodigo,
-          l.origen, l.destino, l.descripcion, l.cantidad, l.precioIncluyeIva ? 1 : 0, l.porcentajeIva,
-          l.base, l.iva, l.total,
+          l.origen, l.destino, l.descripcion, l.cantidad,
+          conFiscal ? (l.precioIncluyeIva ? 1 : 0) : null, conFiscal ? l.porcentajeIva : null,
+          conFiscal ? l.base : null, conFiscal ? l.iva : null, conFiscal ? l.total : null,
         ],
       );
     } catch (err) {
@@ -844,11 +1030,171 @@ async function insertarLineasBorrador(conn: PoolConnection, facturaId: number, b
   return true;
 }
 
+/** Fotografía de la cuenta bancaria elegida (se congela en la factura; no depende de cambios posteriores del catálogo). */
+export type CuentaBancariaSnapshot = {
+  cuentaBancariaId: number;
+  entidadId: number;
+  entidadNombre: string;
+  banco: string;
+  alias: string;
+  referencia: string | null;
+  moneda: string;
+  cuentaContableId: number;
+  cuentaContableCodigo: string;
+  cuentaContableNombre: string;
+};
+
 export type PreviewFactura = {
   cliente: { id: number; nombre: string; nit: string | null; direccion: string | null };
   cantidadViajes: number;
+  /** Viajes y sus textos congelados. Con líneas, sus totales son los de las líneas. */
   borrador: BorradorCalculado;
+  /** FACT-4 — líneas calculadas (null en el modelo anterior). */
+  lineas: LineaFacturaCalculada[] | null;
+  entidadId: number | null;
+  condicionPago: CondicionPago | null;
+  cuentaBancaria: CuentaBancariaSnapshot | null;
+  retencionIva: { aplicadaPct: number | null; clientePct: number | null; monto: number | null; netoCobrar: number | null };
 };
+
+/** ¿Este payload usa algo de FACT-4 (y por tanto requiere el esquema nuevo)? */
+export function usaFact4(d: DatosFacturaFact4): boolean {
+  return d.lineas != null || d.entidadId != null || d.condicionPago != null || d.cuentaBancariaId != null
+    || d.retencionIvaPct != null || d.retencionIvaClientePct != null;
+}
+
+type ContextoFact4 =
+  | {
+      ok: true;
+      entidadId: number | null;
+      condicionPago: CondicionPago | null;
+      cuentaBancariaId: number | null;
+      cuentaBancaria: CuentaBancariaSnapshot | null;
+      retencionIvaPct: number;
+      retencionIvaClientePct: number | null;
+    }
+  | { ok: false; error: string; status: number };
+
+const rechazo = (error: string): { ok: false; error: string; status: number } => ({ ok: false, error, status: 400 });
+
+/**
+ * Valida y resuelve entidad emisora, condición de pago y cuenta bancaria, y la retención de IVA. Con `leer` de una
+ * transacción o del pool. Nada de esto crea asientos ni calcula retención: solo decide qué se congela.
+ *  - CONTADO exige una cuenta bancaria ACTIVA de la empresa (cuenta contable y entidad activas) en la MISMA moneda y, si
+ *    se indicó entidad, de ESA entidad; CRÉDITO no lleva banco.
+ *  - La entidad, si se indica, debe ser una entidad ACTIVA de la empresa; si no se indica y hay banco, se deriva de él.
+ */
+async function resolverContextoFact4(leer: Lector, empresaId: number, d: DatosFacturaFact4, moneda: string): Promise<ContextoFact4> {
+  if (d.retencionIvaPct != null && !esRetencionIvaValida(d.retencionIvaPct)) return rechazo("La retención de IVA debe ser 0, 15 o 30 %.");
+  if (d.retencionIvaClientePct != null && !esRetencionIvaValida(d.retencionIvaClientePct)) return rechazo("La retención de IVA configurada del cliente no es válida.");
+  const condicion = d.condicionPago ?? null;
+  if (condicion != null && !(CONDICIONES_PAGO as readonly string[]).includes(condicion)) return rechazo("La condición de pago debe ser CRÉDITO o CONTADO.");
+
+  // Con líneas (modelo FACT-4) la condición de pago es obligatoria: no se guarda una factura sin ella.
+  if (d.lineas != null && condicion == null) return rechazo("La condición de pago (CRÉDITO o CONTADO) es obligatoria.");
+
+  let entidadId = d.entidadId ?? null;
+  let cuentaBancaria: CuentaBancariaSnapshot | null = null;
+
+  if (condicion === "CREDITO" && d.cuentaBancariaId != null) return rechazo("Una venta a crédito no lleva cuenta bancaria.");
+  if (condicion !== "CONTADO" && d.cuentaBancariaId != null) return rechazo("La cuenta bancaria solo aplica a ventas al contado.");
+  if (condicion === "CONTADO") {
+    if (d.cuentaBancariaId == null) return rechazo("Elige la cuenta bancaria donde se recibe el pago al contado.");
+    const rows = await leer(
+      `SELECT b.id, b.entidad_id, e.nombre AS entidad_nombre, b.banco, b.alias, b.referencia, b.moneda, b.cuenta_id,
+              c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre
+       FROM cont_cuentas_bancarias b
+       INNER JOIN cont_entidades e ON e.empresa_id = b.empresa_id AND e.id = b.entidad_id
+       INNER JOIN cont_cuentas c ON c.empresa_id = b.empresa_id AND c.entidad_id = b.entidad_id AND c.id = b.cuenta_id
+       WHERE b.id = ? AND b.empresa_id = ? AND b.activa = 1 AND e.activa = 1 AND c.activa = 1 LIMIT 1`,
+      [d.cuentaBancariaId, empresaId],
+    );
+    const r = rows[0];
+    if (!r) return rechazo("La cuenta bancaria seleccionada no es válida.");
+    if (entidadId != null && Number(r.entidad_id) !== entidadId) return rechazo("La cuenta bancaria no pertenece a la entidad emisora seleccionada.");
+    if (String(r.moneda).toUpperCase() !== moneda) return rechazo(`La cuenta bancaria es en ${String(r.moneda)} y la factura en ${moneda}.`);
+    entidadId = Number(r.entidad_id);
+    cuentaBancaria = {
+      cuentaBancariaId: Number(r.id),
+      entidadId: Number(r.entidad_id),
+      entidadNombre: String(r.entidad_nombre),
+      banco: String(r.banco),
+      alias: String(r.alias),
+      referencia: r.referencia != null ? String(r.referencia) : null,
+      moneda: String(r.moneda),
+      cuentaContableId: Number(r.cuenta_id),
+      cuentaContableCodigo: String(r.cuenta_codigo),
+      cuentaContableNombre: String(r.cuenta_nombre),
+    };
+  }
+
+  if (entidadId != null && cuentaBancaria == null) {
+    const rows = await leer("SELECT id FROM cont_entidades WHERE id = ? AND empresa_id = ? AND activa = 1 LIMIT 1", [entidadId, empresaId]);
+    if (!rows[0]) return rechazo("La entidad emisora no es válida.");
+  }
+
+  // La entidad emisora es obligatoria con CRÉDITO y con CONTADO (al contado puede derivarse del banco).
+  if (entidadId == null) return rechazo("La entidad emisora es obligatoria.");
+
+  return {
+    ok: true,
+    entidadId,
+    condicionPago: condicion,
+    cuentaBancariaId: cuentaBancaria?.cuentaBancariaId ?? null,
+    cuentaBancaria,
+    retencionIvaPct: d.retencionIvaPct ?? 0,
+    retencionIvaClientePct: d.retencionIvaClientePct ?? null,
+  };
+}
+
+/** Calcula las líneas si el payload las trae (modelo FACT-4); null si es el modelo anterior. */
+function calcularModeloLineas(datos: DatosFacturaFact4, planIds: number[]): ResultadoLineas | null {
+  if (datos.lineas == null) return null;
+  return calcularLineasFactura({ lineas: datos.lineas, planIdsFactura: planIds });
+}
+
+/** Con líneas, los totales del encabezado SON los de las líneas; los de los viajes solo siembran los textos. */
+function conTotalesDeLineas(b: BorradorCalculado, lc: Extract<ResultadoLineas, { ok: true }> | null): BorradorCalculado {
+  if (!lc) return b;
+  return { ...b, subtotal: lc.subtotal, iva: lc.iva, total: lc.total, porcentajeIva: lc.porcentajeIva, precioIncluyeIva: lc.precioIncluyeIva };
+}
+
+async function insertarLineasFactura(
+  conn: PoolConnection,
+  facturaId: number,
+  lc: Extract<ResultadoLineas, { ok: true }>,
+  codigosPorPlan: Map<number, string>,
+): Promise<void> {
+  for (const l of lc.lineas) {
+    const [r] = await conn.execute<ResultSetHeader>(
+      `INSERT INTO fact_factura_lineas
+         (factura_id, orden, cantidad, descripcion, precio_unitario, valor, clasificacion, precio_incluye_iva, porcentaje_iva,
+          base_monto, iva_monto, total_linea)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [facturaId, l.orden, l.cantidad, l.descripcion, l.precioUnitario, l.valor, l.clasificacion, l.precioIncluyeIva ? 1 : 0, l.porcentajeIva, l.base, l.iva, l.total],
+    );
+    const lineaId = Number(r.insertId);
+    for (const planId of l.planIds) {
+      await conn.execute(
+        `INSERT INTO fact_factura_linea_viajes (linea_id, plan_id, codigo_viaje_snapshot) VALUES (?, ?, ?)`,
+        [lineaId, planId, codigosPorPlan.get(planId) ?? null],
+      );
+    }
+  }
+}
+
+/** Resumen auditable en el modelo de líneas: totales de las líneas y los viajes de origen (sin el desglose por viaje). */
+function detalleViajesLineas(b: BorradorCalculado): string {
+  return ` · ${b.moneda} · subtotal ${b.subtotal} · IVA ${b.iva} (${b.porcentajeIva} %) · viajes: ${b.lineas.map((l) => l.codigo).join(", ")}`;
+}
+
+function detalleLineas(lc: Extract<ResultadoLineas, { ok: true }> | null, ctx: Extract<ContextoFact4, { ok: true }> | null): string {
+  if (!lc) return "";
+  const partes = [`${lc.lineas.length} línea(s)`];
+  if (ctx?.condicionPago) partes.push(ctx.condicionPago === "CONTADO" ? "CONTADO" : "CRÉDITO");
+  if (ctx?.retencionIvaPct) partes.push(`retención IVA ${ctx.retencionIvaPct} %${ctx.retencionIvaClientePct != null && ctx.retencionIvaClientePct !== ctx.retencionIvaPct ? ` (cliente: ${ctx.retencionIvaClientePct} %)` : ""}`);
+  return ` · ${partes.join(" · ")}`;
+}
 
 /**
  * Vista previa del borrador: valida y recalcula EN EL SERVIDOR exactamente igual que `crearFactura`, pero SIN
@@ -857,31 +1203,57 @@ export type PreviewFactura = {
  */
 export async function previsualizarFactura(
   actor: ActorFacturacion,
-  datos: { clienteId: number; planes: LineaFacturaInput[] },
+  datos: { clienteId: number; planes: LineaFacturaInput[] } & DatosFacturaFact4,
 ): Promise<{ ok: true; preview: PreviewFactura } | { ok: false; error: string; status: number }> {
-  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
-  const cliente = await leerClienteFactura(lectorPool, actor.empresaId, datos.clienteId);
-  if (!cliente) return { ok: false, error: "Cliente no encontrado.", status: 404 };
-  if (cliente.tmsClienteId == null) return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
+  if (datos.lineas == null && !tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
+  try {
+    const cliente = await leerClienteFactura(lectorPool, actor.empresaId, datos.clienteId);
+    if (!cliente) return { ok: false, error: "Cliente no encontrado.", status: 404 };
+    if (cliente.tmsClienteId == null) return { ok: false, error: MENSAJE_CLIENTE_SIN_TMS, status: 409 };
 
-  const validacion = await validarPlanesParaFactura(
-    lectorPool, actor.empresaId, cliente.tmsClienteId, datos.planes, null, false,
-  );
-  if (!validacion.ok) return validacion;
-  const calculo = construirBorrador(validacion.lineas);
-  if (!calculo.ok) return calculo;
-  return {
-    ok: true,
-    preview: {
-      cliente: { id: cliente.id, nombre: cliente.nombre, nit: cliente.nit, direccion: cliente.direccion },
-      cantidadViajes: calculo.borrador.lineas.length,
-      borrador: calculo.borrador,
-    },
-  };
+    const validacion = await validarPlanesParaFactura(
+      lectorPool, actor.empresaId, cliente.tmsClienteId, datos.planes, null, false,
+    );
+    if (!validacion.ok) return validacion;
+    const modelo = datos.lineas != null;
+    const calculo = construirBorrador(modelo ? validacion.lineas.map((l) => ({ ...l, precioIncluyeIva: true })) : validacion.lineas);
+    if (!calculo.ok) return calculo;
+    const lc = calcularModeloLineas(datos, validacion.lineas.map((l) => l.plan.id));
+    if (lc && !lc.ok) return lc;
+    const contexto = usaFact4(datos) ? await resolverContextoFact4(lectorPool, actor.empresaId, datos, calculo.borrador.moneda) : null;
+    if (contexto && !contexto.ok) return contexto;
+    return {
+      ok: true,
+      preview: {
+        cliente: { id: cliente.id, nombre: cliente.nombre, nit: cliente.nit, direccion: cliente.direccion },
+        cantidadViajes: calculo.borrador.lineas.length,
+        borrador: conTotalesDeLineas(calculo.borrador, lc && lc.ok ? lc : null),
+        lineas: lc && lc.ok ? lc.lineas : null,
+        entidadId: contexto?.entidadId ?? null,
+        condicionPago: contexto?.condicionPago ?? null,
+        cuentaBancaria: contexto?.cuentaBancaria ?? null,
+        retencionIva: (() => {
+          const bp = conTotalesDeLineas(calculo.borrador, lc && lc.ok ? lc : null);
+          const monto = contexto ? calcularRetencionIva(bp.iva, contexto.retencionIvaPct) : null;
+          return {
+            aplicadaPct: contexto?.retencionIvaPct ?? null,
+            clientePct: contexto?.retencionIvaClientePct ?? null,
+            monto,
+            netoCobrar: monto != null ? Number((bp.total - monto).toFixed(2)) : null,
+          };
+        })(),
+      },
+    };
+  } catch (err) {
+    if (usaFact4(datos) && esEsquemaPendiente(err)) return { ok: false, error: MENSAJE_FALTA_MIGRACION_FACT4, status: 503 };
+    throw err;
+  }
 }
 
+const COLUMNAS_FACT4 = "entidad_id, modelo_lineas, condicion_pago, cuenta_bancaria_id, cuenta_bancaria_snapshot, retencion_iva_pct, retencion_iva_cliente_pct, retencion_iva_monto";
+
 export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura): Promise<ResultadoFactura> {
-  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
+  if (datos.lineas == null && !tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — nunca silenciado: un fallo de
   // schema/vínculo/DB/permisos aquí debe rechazar la operación completa,
   // no dejar pasar una factura que "parece válida" con un puente roto.
@@ -899,24 +1271,38 @@ export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura)
 
       const validacion = await validarPlanesParaFactura(lectorTx(conn), actor.empresaId, cliente.tmsClienteId, datos.planes, null, true);
       if (!validacion.ok) return validacion;
-      const calculo = construirBorrador(validacion.lineas);
+      const modelo = datos.lineas != null;
+      const calculo = construirBorrador(modelo ? validacion.lineas.map((l) => ({ ...l, precioIncluyeIva: true })) : validacion.lineas);
       if (!calculo.ok) return calculo;
-      const b = calculo.borrador;
+      const lc = calcularModeloLineas(datos, validacion.lineas.map((l) => l.plan.id));
+      if (lc && !lc.ok) return lc;
+      const ctx = usaFact4(datos) ? await resolverContextoFact4(lectorTx(conn), actor.empresaId, datos, calculo.borrador.moneda) : null;
+      if (ctx && !ctx.ok) return ctx;
+      const b = conTotalesDeLineas(calculo.borrador, lc && lc.ok ? lc : null);
 
       let facturaId: number;
       try {
-        const [insertFactura] = await conn.execute<ResultSetHeader>(
-          `INSERT INTO fact_facturas
-            (empresa_id, cliente_id, numero_factura, fecha_emision, monto_total, moneda, subtotal, iva_monto,
-             porcentaje_iva, precio_incluye_iva, cliente_nombre_snapshot, cliente_nit_snapshot,
-             cliente_direccion_snapshot, estado_admin, observaciones, creado_por)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Borrador', ?, ?)`,
-          [
-            actor.empresaId, datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null,
-            b.total, b.moneda, b.subtotal, b.iva, b.porcentajeIva, resumenIvaEncabezado(b),
-            cliente.nombre, cliente.nit, cliente.direccion, datos.observaciones ?? null, actor.usuarioId,
-          ],
-        );
+        const base = [
+          actor.empresaId, datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null,
+          b.total, b.moneda, b.subtotal, b.iva, b.porcentajeIva, resumenIvaEncabezado(b),
+          cliente.nombre, cliente.nit, cliente.direccion,
+        ];
+        const cierre = [datos.observaciones ?? null, actor.usuarioId];
+        const sql = ctx && ctx.ok
+          ? `INSERT INTO fact_facturas
+              (empresa_id, cliente_id, numero_factura, fecha_emision, monto_total, moneda, subtotal, iva_monto,
+               porcentaje_iva, precio_incluye_iva, cliente_nombre_snapshot, cliente_nit_snapshot,
+               cliente_direccion_snapshot, estado_admin, observaciones, creado_por, ${COLUMNAS_FACT4})
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Borrador', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          : `INSERT INTO fact_facturas
+              (empresa_id, cliente_id, numero_factura, fecha_emision, monto_total, moneda, subtotal, iva_monto,
+               porcentaje_iva, precio_incluye_iva, cliente_nombre_snapshot, cliente_nit_snapshot,
+               cliente_direccion_snapshot, estado_admin, observaciones, creado_por)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Borrador', ?, ?)`;
+        const extra = ctx && ctx.ok
+          ? [ctx.entidadId, modelo ? 1 : 0, ctx.condicionPago, ctx.cuentaBancariaId, ctx.cuentaBancaria ? JSON.stringify(ctx.cuentaBancaria) : null, ctx.retencionIvaPct, ctx.retencionIvaClientePct, calcularRetencionIva(b.iva, ctx.retencionIvaPct)]
+          : [];
+        const [insertFactura] = await conn.execute<ResultSetHeader>(sql, [...base, ...cierre, ...extra]);
         facturaId = Number(insertFactura.insertId);
       } catch (err) {
         if (esDuplicadoNumeroFactura(err)) {
@@ -925,20 +1311,33 @@ export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura)
         throw err;
       }
 
-      if (!(await insertarLineasBorrador(conn, facturaId, b))) return ERROR_VIAJE_YA_VINCULADO;
+      if (!(await insertarLineasBorrador(conn, facturaId, b, !modelo))) return ERROR_VIAJE_YA_VINCULADO;
+      if (lc && lc.ok) await insertarLineasFactura(conn, facturaId, lc, new Map(b.lineas.map((l) => [l.planId, l.codigo])));
 
       await registrarAuditoriaTx(conn, {
         empresaId: actor.empresaId,
         usuario: actor.usuario,
         modulo: "facturacion",
         accion: "crear_factura",
-        detalle: `Factura #${facturaId} (Borrador) · cliente ${cliente.nombre} · ${b.lineas.length} viaje(s) · monto total Q${b.total}${detalleBorrador(b)}${detalleAjustesMonto(b.lineas)}`,
+        detalle: `Factura #${facturaId} (Borrador) · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}`,
       });
 
       return { ok: true, facturaId };
     }, { readCommitted: true });
   } catch (err) {
     if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
+    if (usaFact4(datos) && esEsquemaPendiente(err)) return { ok: false, error: MENSAJE_FALTA_MIGRACION_FACT4, status: 503 };
+    throw err;
+  }
+}
+
+/** ¿La factura ya guarda líneas (FACT-4)? Tolera que el esquema aún no exista. */
+async function facturaTieneLineas(conn: PoolConnection, facturaId: number): Promise<boolean> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>("SELECT modelo_lineas FROM fact_facturas WHERE id = ? LIMIT 1", [facturaId]);
+    return Number(rows[0]?.modelo_lineas ?? 0) === 1;
+  } catch (err) {
+    if (esEsquemaPendiente(err)) return false;
     throw err;
   }
 }
@@ -948,7 +1347,7 @@ export async function actualizarFacturaBorrador(
   facturaId: number,
   datos: DatosFactura,
 ): Promise<ResultadoFactura> {
-  if (!tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
+  if (datos.lineas == null && !tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — igual que en crearFactura:
   // nunca silenciado.
   await asegurarSchemaClientes();
@@ -964,6 +1363,11 @@ export async function actualizarFacturaBorrador(
       if (!factura) return { ok: false, error: "Factura no encontrada.", status: 404 };
       if (String(factura.estado_admin) !== "Borrador") {
         return { ok: false, error: "Solo se puede editar una factura en Borrador.", status: 409 };
+      }
+      const modelo = datos.lineas != null;
+      // Un borrador que ya tiene líneas no puede volver al modelo anterior: se editaría sin sus líneas.
+      if (!modelo && (await facturaTieneLineas(conn, facturaId))) {
+        return { ok: false, error: "Esta factura se prepara por líneas: envía las líneas al editarla.", status: 400 };
       }
 
       const cliente = await leerClienteFactura(lectorTx(conn), actor.empresaId, datos.clienteId);
@@ -995,10 +1399,14 @@ export async function actualizarFacturaBorrador(
       // El tratamiento de IVA de CADA línea es el que llega (la UI manda el congelado si no lo cambió): cada línea se
       // recalcula con el suyo y los totales son la suma. Los textos congelados se conservan. Solo un Borrador llega aquí.
       const calculo = construirBorrador(
-        validacion.lineas.map((l) => ({ ...l, snapshotPrevio: previas.get(l.plan.id) ?? null })),
+        validacion.lineas.map((l) => ({ ...l, precioIncluyeIva: modelo ? true : l.precioIncluyeIva, snapshotPrevio: previas.get(l.plan.id) ?? null })),
       );
       if (!calculo.ok) return calculo;
-      const b = calculo.borrador;
+      const lc = calcularModeloLineas(datos, validacion.lineas.map((l) => l.plan.id));
+      if (lc && !lc.ok) return lc;
+      const ctx = usaFact4(datos) ? await resolverContextoFact4(lectorTx(conn), actor.empresaId, datos, calculo.borrador.moneda) : null;
+      if (ctx && !ctx.ok) return ctx;
+      const b = conTotalesDeLineas(calculo.borrador, lc && lc.ok ? lc : null);
 
       const mismoCliente = Number(factura.cliente_id) === datos.clienteId && factura.cliente_nombre_snapshot != null;
       const snapCliente = mismoCliente
@@ -1009,24 +1417,32 @@ export async function actualizarFacturaBorrador(
           }
         : { nombre: cliente.nombre, nit: cliente.nit, direccion: cliente.direccion };
 
-      // Reemplaza el conjunto de viajes por completo, dentro de la MISMA
-      // transacción — sin ventana donde un viaje quede "huérfano" o libre
-      // para otra factura mientras se reconstruye la lista.
+      // Reemplaza el conjunto de viajes (y, en el modelo de líneas, sus líneas) por completo, dentro de la MISMA
+      // transacción — sin ventana donde un viaje quede "huérfano" o libre para otra factura mientras se reconstruye.
       await conn.execute(`DELETE FROM fact_factura_viajes WHERE factura_id = ?`, [facturaId]);
-      if (!(await insertarLineasBorrador(conn, facturaId, b))) return ERROR_VIAJE_YA_VINCULADO;
+      if (modelo) await conn.execute(`DELETE FROM fact_factura_lineas WHERE factura_id = ?`, [facturaId]);
+      if (!(await insertarLineasBorrador(conn, facturaId, b, !modelo))) return ERROR_VIAJE_YA_VINCULADO;
+      if (lc && lc.ok) await insertarLineasFactura(conn, facturaId, lc, new Map(b.lineas.map((l) => [l.planId, l.codigo])));
 
       try {
+        const extraSet = ctx && ctx.ok
+          ? `, entidad_id = ?, modelo_lineas = ?, condicion_pago = ?, cuenta_bancaria_id = ?, cuenta_bancaria_snapshot = ?,
+               retencion_iva_pct = ?, retencion_iva_cliente_pct = ?, retencion_iva_monto = ?`
+          : "";
+        const extra = ctx && ctx.ok
+          ? [ctx.entidadId, modelo ? 1 : 0, ctx.condicionPago, ctx.cuentaBancariaId, ctx.cuentaBancaria ? JSON.stringify(ctx.cuentaBancaria) : null, ctx.retencionIvaPct, ctx.retencionIvaClientePct, calcularRetencionIva(b.iva, ctx.retencionIvaPct)]
+          : [];
         await conn.execute(
           `UPDATE fact_facturas
            SET cliente_id = ?, numero_factura = ?, fecha_emision = ?, monto_total = ?, moneda = ?, subtotal = ?,
                iva_monto = ?, porcentaje_iva = ?, precio_incluye_iva = ?, cliente_nombre_snapshot = ?,
-               cliente_nit_snapshot = ?, cliente_direccion_snapshot = ?, observaciones = ?,
+               cliente_nit_snapshot = ?, cliente_direccion_snapshot = ?, observaciones = ?${extraSet},
                actualizado_por = ?, actualizado_en = NOW()
            WHERE id = ? AND empresa_id = ? AND estado_admin = 'Borrador'`,
           [
             datos.clienteId, datos.numeroFactura ?? null, datos.fechaEmision ?? null, b.total, b.moneda, b.subtotal,
             b.iva, b.porcentajeIva, resumenIvaEncabezado(b), snapCliente.nombre,
-            snapCliente.nit, snapCliente.direccion, datos.observaciones ?? null,
+            snapCliente.nit, snapCliente.direccion, datos.observaciones ?? null, ...extra,
             actor.usuarioId, facturaId, actor.empresaId,
           ],
         );
@@ -1042,13 +1458,14 @@ export async function actualizarFacturaBorrador(
         usuario: actor.usuario,
         modulo: "facturacion",
         accion: "editar_factura_borrador",
-        detalle: `Factura #${facturaId} (Borrador) editada · cliente ${cliente.nombre} · ${b.lineas.length} viaje(s) · monto total Q${b.total}${detalleBorrador(b)}${detalleAjustesMonto(b.lineas)}`,
+        detalle: `Factura #${facturaId} (Borrador) editada · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}`,
       });
 
       return { ok: true, facturaId };
     }, { readCommitted: true });
   } catch (err) {
     if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA;
+    if (usaFact4(datos) && esEsquemaPendiente(err)) return { ok: false, error: MENSAJE_FALTA_MIGRACION_FACT4, status: 503 };
     throw err;
   }
 }

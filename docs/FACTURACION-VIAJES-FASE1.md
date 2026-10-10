@@ -301,3 +301,89 @@ Representación visual para que Contabilidad valide el **formato** antes de inte
 **Limpiezas administrativas**: no requieren cambios: borrar `fact_facturas` arrastra su histórico (`CASCADE`) y borrar `tms_planes_viaje` no se bloquea (`SET NULL`). Sus conteos de vista previa no incluyen la tabla nueva (pendiente menor, no funcional).
 
 **Verificación**: pruebas unitarias (orden copiar→borrar, tabla ausente → 503 sin cambios, inconsistencia → rollback, lectura del histórico, multiempresa) y contra **MariaDB real** (preflight, migración e idempotencia; borrador con varios viajes → anular → detalle completo; viajes de vuelta en pendientes; reutilizados en otra factura con la anulada intacta aunque cambien cliente/ruta/tarifa vivos; editar/emitir/pagar/anular de nuevo → 409; `UNIQUE(plan_id)` por aplicación y por SQL directo; multiempresa; doble anulación y anular-vs-facturar-vs-editar en rondas, sin deadlock; FKs; PDF de la anulada con sus líneas y la marca ANULADA; anulada previa → 409).
+
+
+## 19. FACT-4 — líneas de factura agrupables, condición de pago, banco y retención de IVA (preconfiguración contable)
+
+> **Estado: IMPLEMENTADO + VERIFICADO TÉCNICAMENTE (compilación, ESLint de lo tocado, pruebas unitarias y contra MariaDB real desechable). NO probado por Contabilidad, NO aprobado para producción.** Esta fase **no** integra FEL/INFILE, **no** genera asientos ni pólizas, **no** toca saldos y **no** ejecuta SQL en producción. La migración es una **propuesta** para revisión.
+
+### 19.1 Referencia funcional y grado de certeza (regla del proyecto: Milenium es la referencia; Mónaco y KT son entidades parametrizables de un mismo motor)
+
+| Regla | Referencia en Milenium (ver `FACTURACION-CONTABILIDAD-MILENIUM-DISCOVERY.md`) | Estado | Qué se implementó |
+|---|---|---|---|
+| La factura **no tiene viajes**: tiene líneas de servicio con descripción libre; la agrupación es del facturador | `f06/f07`, §C | CONFIRMADO | Líneas editables/agrupables; **sin** regla automática de agrupación |
+| Descarga: línea aparte **o** integrada en la descripción del flete (decide el facturador) | §C.1 | CONFIRMADO | Botón «+ Descarga» (opcional); nace con precio 0 y exige capturarlo |
+| `valor = cantidad × precio unitario` | §C, oct-2026 | CONFIRMADO | El servidor recalcula `valor = ROUND(cant × precio, 2)` |
+| Crédito/contado es **independiente** del documento FEL (mismo documento para ambos) | `f06.CREDIT`, `DIASCR` | CONFIRMADO | `condicion_pago` CREDITO\|CONTADO en la factura |
+| Venta a crédito → **D Clientes**; al contado → **D Bancos** (cuenta según el banco que recibe) | §K | CONFIRMADO (Contabilidad) | Solo se **congela** la decisión y el banco; **no** se asienta |
+| Póliza automática **después** de certificar FEL | §K | CONFIRMADO (Contabilidad) | **Sin implementar** (depende de FEL) |
+| Ventas distingue **SERVICIOS / BIENES** | — | CONFIRMADO (Contabilidad) | `clasificacion` SERVICIO\|BIEN por línea (sin cuentas en código) |
+| Facturas y notas de crédito afectan IVA; recibos no | — | CONFIRMADO (Contabilidad) | Fuera de alcance de esta fase |
+| Retención de IVA por cliente: **15 % o 30 %**, configurable, visible al preparar la factura, se registra al inicio y la constancia se verifica después | documento `E` / `RETIVA` (cc05), 87 % = 15 % | CONFIRMADO (Contabilidad) | `retencion_iva_pct` 0\|15\|30 por cliente; precarga; congelada en la factura |
+| Asiento con retención (Q3,000 IVA incl., 15 %): **D Retención IVA 48.21 + D Cliente/Banco 2,951.79 / H Ventas 2,678.57 + H IVA por pagar 321.43** | co03 | CONFIRMADO (Contabilidad) | `poliza-venta.ts`: propuesta **pura** (no escribe); cuadra al centavo |
+| La retención **no** reduce Ventas ni IVA por pagar | — | CONFIRMADO (Contabilidad) | Va al DEBE en su propio rol `RETENCION_IVA` |
+| ISR retenido por clientes | Milenium no lo calcula en ventas | **PENDIENTE CONTABILIDAD** | **No implementado** |
+| Anulación de factura certificada y contabilizada → reverso contable automático | — | CONFIRMADO (Contabilidad) | Solo **diseño** (§19.8); no implementado |
+| Cuentas de ventas/IVA/clientes/bancos/retención por entidad | parametrización por serie/cuenta | CONFIRMADO (regla) | **Ningún número de cuenta en código**: roles resueltos por parametrización (a construir) |
+
+### 19.2 Modelo de datos (aditivo; ver `sql/migrate-2026-10-fact-4-lineas-contado-retencion.sql`)
+
+- **`fact_factura_lineas`** (nueva): una fila por línea de la factura: `orden`, `cantidad`, `descripcion`, `precio_unitario`, `valor`, `clasificacion`, `precio_incluye_iva`, `porcentaje_iva`, `base_monto`, `iva_monto`, `total_linea`. `UNIQUE(factura_id, orden)`, FK `factura_id` → `fact_facturas` **CASCADE**.
+- **`fact_factura_linea_viajes`** (nueva): **trazabilidad línea → viaje** (`linea_id`, `plan_id`, `codigo_viaje_snapshot`). `UNIQUE(linea_id, plan_id)`; **no** hay `UNIQUE(plan_id)` (un viaje puede estar en flete **y** descarga). FK `plan_id` → `tms_planes_viaje` **SET NULL**: el código congelado basta y borrar un viaje nunca bloquea.
+- **`fact_facturas`** (columnas nuevas): `entidad_id` (FK compuesta a `cont_entidades(empresa_id,id)`), `modelo_lineas`, `condicion_pago`, `cuenta_bancaria_id` (FK a `cont_cuentas_bancarias`), `cuenta_bancaria_snapshot` (JSON congelado), `retencion_iva_pct`, `retencion_iva_cliente_pct` (qué tenía el cliente al preparar la factura → auditoría de cambios) y `retencion_iva_monto` (**congelado**: `ROUND(IVA × %, 2)`).
+- **`cont_cuentas_bancarias`** (nueva): catálogo de bancos por empresa/entidad; la cuenta contable es una FK compuesta `(empresa_id, entidad_id, cuenta_id)` → `cont_cuentas`, de modo que **una cuenta de otra entidad no se puede colgar de un banco** (probado contra la base). Sin números de cuenta en el código.
+- **`fact_entidad_config`** (nueva): `plantilla_factura` por entidad (`CODIGO_DESCRIPCION_TOTAL` = formato KT/Milenium; `CANTIDAD_DESCRIPCION_UNITARIO_VALOR` = formato Mónaco). Sin fila → la plantilla por defecto.
+- **`fact_cliente_perfil.retencion_iva_pct`**: columna tipada (0\|15\|30), **no** dentro del JSON del cuestionario (para validarla y consultarla).
+
+**`fact_factura_viajes` NO cambia** y su `UNIQUE(plan_id)` sigue siendo la defensa de base de datos contra doble facturación. En el modelo de líneas las columnas fiscales por viaje quedan en `NULL` (los totales viven en las líneas: no hay doble verdad). Al anular, `fact_factura_viajes` se vacía como en FACT-3 (viajes libres) pero **las líneas y su tabla puente sobreviven** (no participan de `UNIQUE(plan_id)`).
+
+### 19.3 Compatibilidad y despliegue
+
+- **LECTURAS** (listado, detalle, PDF demo): las facturas anteriores a FACT-4 se leen igual (`lineas` implícitas por viaje, `modeloLineas=false`, retención 0) y **degradan con gracia** si la migración aún no está aplicada (`esquemaPendiente=true`).
+- **ESCRITURAS (crear / editar / vista previa) — SIN FALLBACK SILENCIOSO**: desde esta fase **exigen** líneas y condición de pago (y entidad emisora). Si la migración FACT-4 **no** está aplicada, el servidor responde **503** (`Falta aplicar la migración FACT-4…`) **antes** de leer o escribir nada —con payload FACT-4 **y** con el payload del modelo anterior—; con la migración aplicada, un payload del modelo anterior (sin líneas/condición) es **400**. Nunca se guarda una factura con el modelo viejo, que perdería líneas agrupadas, condición de pago, entidad, banco, clasificación y retención. La pantalla, ante `fact4Disponible=false` (o si no pudo leer el contexto), **no ofrece ningún formulario**: muestra el bloqueo («falta aplicar la migración FACT-4… No se guardó nada») y, si fue un error de lectura, «Reintentar». El formulario anterior (un viaje = una línea) ya no es alcanzable desde la interfaz. Los llamadores internos de la capa `facturas.ts` (pruebas anteriores) conservan el modelo anterior; el **único** borde HTTP es el que aplica esta regla.
+- **Orden requerido**: preflight → respaldo → migración (idempotente; sin `UPDATE`/`DELETE`; sin tocar filas) → desplegar el código. Desplegar el código **antes** de la migración es seguro (no se corrompe nada) pero **bloquea crear/editar facturas** hasta aplicarla.
+- La migración **no** inserta bancos ni plantillas: Contabilidad los da de alta (hay plantillas de `INSERT` comentadas). Mientras no haya bancos, **CONTADO no se puede guardar** (la pantalla lo explica).
+
+### 19.4 Interfaz — «Preparar líneas de factura»
+
+Viajes seleccionados → **líneas** → factura. Columnas siempre visibles: **Cantidad | Descripción | Precio unitario | Valor**, más Tipo (Servicio/Bien), tratamiento de IVA y los **viajes de origen** (código). Acciones: marcar varias líneas → **Agrupar en una línea** (exige mismo IVA y misma clasificación; mismo precio → suma cantidades, distinto → cantidad 1 y precio = suma), **Desagrupar**, **+ Descarga**, reordenar ↑↓, quitar línea, quitar/agregar viaje. Aviso si algún viaje quedó **sin línea** (no se puede guardar). Selector de **entidad emisora** (si hay más de una), **Condición de pago** CRÉDITO/CONTADO y, al contado, **cuenta bancaria** (solo las activas, de la entidad y la moneda de la factura). **Retención de IVA** 0/15/30 precargada del cliente y visible; **solo se cambia con el permiso «Editar requisitos de clientes»** (el mismo que edita el requisito en el cliente; no se creó otro permiso). La vista previa muestra líneas, totales, retención (informativa) y «a cobrar». **No hay ninguna acción FEL ni contable.**
+
+La retención del cliente se edita en **Facturación → Clientes** (selector junto al cuestionario; solo se envía si cambió).
+
+### 19.5 Seguridad y multiempresa
+
+Montos, valores, IVA y retención **siempre se recalculan en el servidor**; entidad, banco y cliente se validan **por `empresa_id`** (un banco/entidad de otra empresa, inactivo, de otra moneda o de otra entidad se rechaza con 400 sin escribir). La retención solo puede diferir de la del cliente con permiso (403 si no); reenviar la retención ya congelada de un borrador no requiere el permiso. El contexto (`GET …/facturas/contexto`) no expone números de cuenta contable.
+
+### 19.6 Parametrización por entidad (qué es dato y qué es código)
+
+Es **dato** (por entidad): plantilla de factura, bancos y su cuenta contable, y —cuando se construya— cuentas de Clientes/IVA por pagar/Ventas servicios/Ventas bienes/Retención IVA/Anticipos/Tránsito, series FEL, tipos y numeración de póliza, políticas de crédito. Es **código** (común): líneas, cálculo de IVA, retención, validaciones y la propuesta de partida por **roles** (`CLIENTES`, `BANCOS`, `RETENCION_IVA`, `VENTAS_SERVICIOS`, `VENTAS_BIENES`, `IVA_POR_PAGAR`). Nada del motor pregunta «¿es Mónaco?».
+
+### 19.7 Retención de IVA — fórmula implementada
+
+`base = total/1.12` (suma de las bases por línea) · `iva = total − base` · `retención = ROUND(iva × %, 2)` (0, 15 o 30) · `cliente|banco = total − retención`. DEBE = HABER = total. Q3,000 IVA incluido al 15 % → 48.21 / 2,951.79 / 2,678.57 / 321.43; al 30 % → 96.43 / 2,903.57. Probado en unitarias y contra la base real (valor congelado aunque el cliente cambie después).
+
+### 19.8 Anulación — diseño del reverso (NO implementado)
+
+Cuando exista la póliza (después de FEL), anular una factura **certificada y contabilizada** debe generar **un solo reverso exacto**: mismas cuentas y montos del asiento original con DEBE/HABER invertidos, fecha del documento de anulación, y vínculo al original. **Idempotencia**: el asiento llevará una **referencia de origen única** `(empresa_id, entidad_id, origen_tipo='FACTURA', origen_id, evento)` con `evento ∈ {EMISION, REVERSO_ANULACION}` bajo `UNIQUE`, de modo que reintentos (red, doble clic, reproceso) no dupliquen; el reverso se arma **desde el asiento guardado**, nunca recalculando con datos vivos (por eso hoy se congelan líneas, retención y banco). Una factura sin póliza (aún no certificada) se anula como hoy, sin reverso. La anulación actual de FACT-3 **no cambia** en esta fase.
+
+### 19.9 No incluido / pendientes
+
+FEL/INFILE reales; pólizas y asientos reales; ISR retenido por clientes; nota de crédito contable; cierres; libro de IVA; **UI para administrar bancos y plantillas por entidad** (hoy alta manual); logo y datos del emisor por **entidad** (hoy por empresa); días de crédito y complemento de factura cambiaria en el PDF de Mónaco (su plantilla ya tiene las 4 columnas, pero la adenda completa no); liquidación mensual del IVA retenido contra IVA por pagar.
+
+### 19.10 Preguntas abiertas (para Contabilidad / negocio)
+
+1. **Acceso a entidades**: ¿qué facturadores pueden emitir por Mónaco y cuáles por KT? Hoy cualquiera con «crear factura» ve todas las entidades **activas** de la empresa (`cont_entidad_usuarios` existe pero no se aplicó aquí).
+2. **Días de crédito**: ¿por cliente, por factura o por entidad? (no se congelan todavía).
+3. **Base de la retención**: se implementó sobre el **IVA total de la factura** (ejemplo confirmado). ¿Hay topes/mínimos (p. ej. por monto) o bienes vs. servicios con distinto tratamiento?
+4. **Clasificación por defecto**: hoy toda línea nace SERVICIO y el facturador cambia a BIEN. ¿Debe derivarse de algo (tipo de servicio/artículo)?
+5. **Código de artículo en KT** (formato «Código/Descripción/Total»): la plantilla usa los códigos de los viajes de la línea; ¿es lo correcto para KT?
+6. **Quién administra** bancos y plantillas por entidad (pantalla propia vs. alta asistida).
+7. **Logo y datos fiscales del emisor** por entidad (hoy por empresa).
+8. **Retención con constancia**: ¿se registra el cobro de la retención contra la factura (documento tipo `E` de Milenium) en una fase posterior, y quién verifica la constancia?
+
+### 19.11 Verificación (qué se verificó y qué no)
+
+- **Compilación**: `npx tsc --noEmit` limpio. **Lint**: sin errores nuevos en lo tocado (los 3 `react-hooks/set-state-in-effect` de `facturacion-client.tsx` son preexistentes). `git diff --check` limpio.
+- **Unitarias**: líneas (22), partida de venta (10), entrada HTTP/retención/permiso (15), ruta de contexto, PUT del cliente (retención 0/15/30 y permiso), más las suites existentes.
+- **MariaDB real desechable (opt-in, `FACT_TEST_DB_PORT`)**: preflight, migración e idempotencia; datos anteriores intactos; 3 viajes → 1 línea + descarga con trazabilidad y `UNIQUE(plan_id)` vigente (también por SQL directo); **migración ausente** → `fact4Disponible=false`, el borde HTTP real responde 503 con payload FACT-4 y con el anterior y no hay mutación parcial (el borrador previo queda igual); tras migrar, 400 al payload anterior; entidad obligatoria en CRÉDITO y CONTADO; clasificación SERVICIO/BIEN congelada; puente línea↔viaje y PDF de la anulada; validaciones; contado/crédito/banco (otra empresa, inactivo, otra entidad, otra moneda); snapshot del banco congelado; retención 15/30 % con el ejemplo confirmado; editar (reemplaza líneas, rechaza payload anterior); anular conserva líneas; PDF por plantilla de entidad; multiempresa; y una **mutación** (quitar el filtro de empresa/activo del banco) que la suite detecta.
+- **No verificado**: prueba manual en navegador con datos reales, contra la base de producción, ni validación por Contabilidad de las reglas marcadas arriba.

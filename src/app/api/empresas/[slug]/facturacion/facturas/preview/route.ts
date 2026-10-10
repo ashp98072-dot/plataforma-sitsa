@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { previsualizarFactura } from "@/lib/facturacion/facturas";
+import { fact4CamposSchema, resolverEntradaFact4 } from "@/lib/facturacion/entrada-fact4";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -18,6 +19,7 @@ const previewSchema = z.object({
     )
     .min(1)
     .max(200),
+  ...fact4CamposSchema,
 });
 
 /**
@@ -36,9 +38,17 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
 
+  const fact4 = await resolverEntradaFact4({
+    slug,
+    empresaId: guard.empresa.id,
+    clienteId: parsed.data.clienteId,
+    entrada: parsed.data,
+  });
+  if (!fact4.ok) return NextResponse.json({ error: fact4.error }, { status: fact4.status });
+
   const resultado = await previsualizarFactura(
     { empresaId: guard.empresa.id, usuarioId: guard.session.id, usuario: guard.session.username },
-    { clienteId: parsed.data.clienteId, planes: parsed.data.planes },
+    { clienteId: parsed.data.clienteId, planes: parsed.data.planes, ...fact4.datos },
   );
   if (!resultado.ok) {
     return NextResponse.json({ error: resultado.error }, { status: resultado.status });

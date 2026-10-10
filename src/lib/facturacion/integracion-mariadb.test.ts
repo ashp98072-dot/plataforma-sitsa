@@ -43,6 +43,8 @@ vi.mock("@/lib/db", async () => {
   };
 });
 
+vi.mock("@/lib/tenant", () => ({ requireTenantFacturacion: vi.fn(async () => ({ error: new Response(null, { status: 403 }) })) }));
+
 import { getPool } from "@/lib/db";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import {
@@ -60,6 +62,9 @@ import {
 } from "./facturas";
 import { MENSAJE_MONEDA_NO_SOPORTADA } from "./borrador-calculo";
 import { generarPdfFacturaDemo, LEYENDA_NO_FISCAL, MENSAJE_ANULADA_SIN_DETALLE } from "./factura-demo-pdf";
+import { fact4Disponible, guardarRetencionIvaCliente, leerRetencionIvaCliente } from "./contexto-factura";
+import { resolverEntradaFact4 } from "./entrada-fact4";
+import { proponerPartidaVenta } from "./poliza-venta";
 
 const RAIZ = process.cwd();
 const E1 = 7; // empresa de la sesión
@@ -130,7 +135,8 @@ beforeAll(async () => {
   await admin.query(`USE ${DB_NAME}`);
 
   const schema = sqlArchivo("sql/schema.sql");
-  for (const t of ["empresas", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes"]) {
+  // cont_entidades / cont_cuentas (C2B ya aplicado en producción): FACT-4 les referencia con FKs compuestas.
+  for (const t of ["empresas", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes", "cont_entidades", "cont_cuentas"]) {
     await admin.query(extraerCreate(schema, t));
   }
   // El código de la app completa columnas de `clientes` (rtu, condicion_credito…) con su propio asegurador.
@@ -1379,5 +1385,453 @@ describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congela
     const antes = await huella();
     await generarPdfFacturaDemo(empresa1, mixtaId);
     expect(await huella()).toBe(antes);
+  });
+});
+
+describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/crédito, banco y retención de IVA", () => {
+  const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const empresa1 = { id: E1, nombre: "Empresa 7", logoUrl: `empresas/${E1}/logo.png` };
+  let uploadsTemporal = "";
+  let uploadDirOriginal: string | undefined;
+  const textoPdf = async (fn: () => Promise<unknown>): Promise<string> => {
+    const spy = vi.spyOn(PDFDocument.prototype, "text");
+    try { await fn(); return spy.mock.calls.map((c) => String(c[0])).join("\n"); } finally { spy.mockRestore(); }
+  };
+
+  // Entidades, cuentas contables y bancos de prueba (ids se llenan en beforeAll).
+  let entKT = 0, entMON = 0, entE2 = 0;
+  let bancoMON = 0, bancoKT = 0, bancoE2 = 0, bancoInactivo = 0, bancoUSD = 0;
+  let legacyBorradorId = 0;
+
+  beforeAll(async () => {
+    uploadDirOriginal = process.env.UPLOAD_DIR;
+    uploadsTemporal = mkdtempSync(join(tmpdir(), "fact4-real-uploads-"));
+    process.env.UPLOAD_DIR = uploadsTemporal;
+    mkdirSync(dirname(join(uploadsTemporal, `empresas/${E1}/logo.png`)), { recursive: true });
+    writeFileSync(join(uploadsTemporal, `empresas/${E1}/logo.png`), PNG_1X1);
+
+    const insEnt = async (empresa: number, codigo: string, nombre: string) =>
+      (await admin.query<mysql.ResultSetHeader>("INSERT INTO cont_entidades (empresa_id, codigo, nombre) VALUES (?, ?, ?)", [empresa, codigo, nombre]))[0].insertId;
+    entKT = await insEnt(E1, "KT", "Kuiqtrans");
+    entMON = await insEnt(E1, "MON", "Logiservicios Mónaco");
+    entE2 = await insEnt(E2, "OTRA", "Entidad de otra empresa");
+  }, 30_000);
+
+  afterAll(() => {
+    if (uploadDirOriginal === undefined) delete process.env.UPLOAD_DIR; else process.env.UPLOAD_DIR = uploadDirOriginal;
+    rmSync(uploadsTemporal, { recursive: true, force: true });
+  });
+
+  const linea = (planIds: number[], over: Partial<{ cantidad: number; descripcion: string; precioUnitario: number; clasificacion: "SERVICIO" | "BIEN"; precioIncluyeIva: boolean }> = {}) => ({
+    planIds, cantidad: 1, descripcion: "Servicio de transporte", precioUnitario: 1000, clasificacion: "SERVICIO" as const, precioIncluyeIva: true, ...over,
+  });
+  const planes = (ids: number[]) => ids.map((planId) => ({ planId, precioIncluyeIva: true }));
+
+  it("ANTES de la migración: el modelo anterior sigue funcionando y lo nuevo falla con 503 sin tocar nada", async () => {
+    expect(await filas("SHOW TABLES LIKE 'fact_factura_lineas'")).toHaveLength(0);
+    const p0 = await crearPlan({ codigo: "F4-LEG" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: planes([p0]) });
+    expect(c).toMatchObject({ ok: true });
+    if (c.ok) legacyBorradorId = c.facturaId;
+    const pn = await crearPlan({ codigo: "F4-NUEVO" });
+    const antes = await conteo("SELECT COUNT(*) AS n FROM fact_facturas");
+    const r = await crearFactura(actorA, { clienteId: 20, planes: planes([pn]), lineas: [linea([pn])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(r).toMatchObject({ ok: false, status: 503 });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_facturas")).toBe(antes);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [pn])).toBe(0);
+    // borde HTTP (resolverEntradaFact4) con la base REAL sin migración: bloquea con 503, con payload FACT-4 y con el anterior
+    expect(await fact4Disponible()).toBe(false);
+    for (const entrada of [
+      { lineas: [linea([pn])], entidadId: 1, condicionPago: "CREDITO" as const },
+      {},
+    ]) {
+      expect(await resolverEntradaFact4({ slug: "e7", empresaId: E1, clienteId: 20, entrada })).toMatchObject({ ok: false, status: 503 });
+    }
+    // el borrador anterior NO cambió (no hubo mutación parcial)
+    const [antesBorrador] = await filas(`SELECT monto_total, estado_admin FROM fact_facturas WHERE id = ${legacyBorradorId}`);
+    expect([Number(antesBorrador.monto_total), antesBorrador.estado_admin]).toEqual([1000, "Borrador"]);
+    // la lectura tolera el esquema pendiente
+    const d = await obtenerFactura(E1, legacyBorradorId);
+    expect(d?.contabilidad).toMatchObject({ modeloLineas: false, esquemaPendiente: true });
+    expect(d?.lineas).toHaveLength(1);
+  });
+
+  it("A) el preflight de FACT-4 se ejecuta sin error y confirma las bases (entidades, cuentas y UNIQUE(plan_id))", async () => {
+    await expect(ejecutarArchivo("sql/preflight-2026-10-fact-4-lineas-contado-retencion.sql")).resolves.toBeDefined();
+    expect(await filas("SHOW INDEX FROM cont_entidades WHERE Key_name = 'uq_cont_entidad_empresa_id'")).not.toHaveLength(0);
+    expect(await filas("SHOW INDEX FROM cont_cuentas WHERE Key_name = 'uq_cont_cuenta_ambito'")).not.toHaveLength(0);
+  });
+
+  it("B) la migración se ejecuta sin error y crea tablas, columnas y FKs previstas", async () => {
+    await expect(ejecutarArchivo("sql/migrate-2026-10-fact-4-lineas-contado-retencion.sql")).resolves.toBeDefined();
+    for (const t of ["cont_cuentas_bancarias", "fact_entidad_config", "fact_factura_lineas", "fact_factura_linea_viajes"]) {
+      expect(await filas(`SHOW TABLES LIKE '${t}'`), t).toHaveLength(1);
+    }
+    const f = await columnas("fact_facturas");
+    for (const c of ["entidad_id", "modelo_lineas", "condicion_pago", "cuenta_bancaria_id", "cuenta_bancaria_snapshot", "retencion_iva_pct", "retencion_iva_cliente_pct", "retencion_iva_monto"]) {
+      expect(f, c).toContain(c);
+    }
+    expect(await columnas("fact_cliente_perfil")).toContain("retencion_iva_pct");
+    const fks = await filas(
+      `SELECT CONSTRAINT_NAME AS n, DELETE_RULE AS r FROM information_schema.REFERENTIAL_CONSTRAINTS
+       WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME IN ('fact_factura_lineas', 'fact_factura_linea_viajes') ORDER BY CONSTRAINT_NAME`,
+    );
+    const porNombre = new Map(fks.map((r) => [String(r.n), String(r.r)]));
+    expect(porNombre.get("fk_factlinea_factura")).toBe("CASCADE");
+    // el vínculo a viaje se pone en NULL si el viaje desaparece: nunca bloquea ni borra la línea
+    expect([...porNombre.values()]).toContain("SET NULL");
+  });
+
+  it("C) ejecutar la migración por SEGUNDA vez es inocuo y UNIQUE(plan_id) de fact_factura_viajes sigue vigente", async () => {
+    const antesF = await columnas("fact_facturas");
+    const antesL = await columnas("fact_factura_lineas");
+    const facturas = await conteo("SELECT COUNT(*) AS n FROM fact_facturas");
+    await expect(ejecutarArchivo("sql/migrate-2026-10-fact-4-lineas-contado-retencion.sql")).resolves.toBeDefined();
+    expect(await columnas("fact_facturas")).toEqual(antesF);
+    expect(await columnas("fact_factura_lineas")).toEqual(antesL);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_facturas")).toBe(facturas);
+    expect(await filas("SHOW INDEX FROM fact_factura_viajes WHERE Key_name = 'uq_factviaje_plan' AND Non_unique = 0")).toHaveLength(1);
+    // las tablas de líneas NO llevan UNIQUE(plan_id) (un viaje puede estar en flete + descarga)
+    const u = await filas("SHOW INDEX FROM fact_factura_linea_viajes WHERE Non_unique = 0 AND Key_name <> 'PRIMARY'");
+    expect(u.map((r) => r.Column_name)).toEqual(["linea_id", "plan_id"]);
+  });
+
+  it("tras la migración: fact4Disponible=true y el borde HTTP acepta el payload FACT-4 pero sigue rechazando el anterior (400)", async () => {
+    expect(await fact4Disponible()).toBe(true);
+    const ok = await resolverEntradaFact4({
+      slug: "e7", empresaId: E1, clienteId: 20, entrada: { lineas: [linea([1])], entidadId: entMON, condicionPago: "CREDITO" },
+    });
+    expect(ok).toMatchObject({ ok: true, datos: { entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 } });
+    expect(await resolverEntradaFact4({ slug: "e7", empresaId: E1, clienteId: 20, entrada: {} })).toMatchObject({ ok: false, status: 400 });
+  });
+
+  it("la factura anterior a FACT-4 sobrevive intacta: modelo anterior, una línea implícita por viaje, sin retención", async () => {
+    const d = await obtenerFactura(E1, legacyBorradorId);
+    expect(d?.contabilidad).toMatchObject({
+      modeloLineas: false, condicionPago: null, cuentaBancaria: null, esquemaPendiente: false,
+      retencionIva: { aplicadaPct: 0, monto: 0 },
+    });
+    expect(d?.lineas).toHaveLength(1);
+    expect(d?.lineas[0]).toMatchObject({ cantidad: 1, clasificacion: null, viajes: [{ codigo: "F4-LEG" }] });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas")).toBe(0);
+  });
+
+  it("alta manual de cuentas bancarias y plantilla por entidad (lo que haría Contabilidad con las plantillas del SQL)", async () => {
+    const cuenta = async (empresa: number, entidad: number, codigo: string, nombre: string, activa = 1) =>
+      (await admin.query<mysql.ResultSetHeader>(
+        "INSERT INTO cont_cuentas (empresa_id, entidad_id, codigo, nombre, tipo, nivel, activa) VALUES (?, ?, ?, ?, 'ACTIVO', 3, ?)",
+        [empresa, entidad, codigo, nombre, activa],
+      ))[0].insertId;
+    const banco = async (empresa: number, entidad: number, cuentaId: number, b: string, alias: string, moneda = "GTQ", activa = 1) =>
+      (await admin.query<mysql.ResultSetHeader>(
+        "INSERT INTO cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, referencia, moneda, activa) VALUES (?, ?, ?, ?, ?, '***1234', ?, ?)",
+        [empresa, entidad, cuentaId, b, alias, moneda, activa],
+      ))[0].insertId;
+    bancoMON = await banco(E1, entMON, await cuenta(E1, entMON, "1.1.2.01", "Bancos MON"), "Banco Industrial", "Monetaria Q MON");
+    bancoKT = await banco(E1, entKT, await cuenta(E1, entKT, "1.1.2.01", "Bancos KT"), "BAM", "Monetaria Q KT");
+    bancoE2 = await banco(E2, entE2, await cuenta(E2, entE2, "1.1.2.01", "Bancos E2"), "Banrural", "Otra empresa");
+    bancoInactivo = await banco(E1, entMON, await cuenta(E1, entMON, "1.1.2.02", "Bancos MON inactivo"), "G&T", "Cerrada", "GTQ", 0);
+    bancoUSD = await banco(E1, entMON, await cuenta(E1, entMON, "1.1.2.03", "Bancos MON USD"), "Banco Industrial", "Dólares", "USD");
+    // composite FK: una cuenta contable de OTRA entidad no puede colgarse a un banco de esta (rechazado por la base)
+    const ajena = await cuenta(E1, entKT, "1.1.2.99", "Cuenta de KT");
+    await expect(
+      admin.query("INSERT INTO cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, moneda) VALUES (?, ?, ?, 'X', 'Cruzada', 'GTQ')", [E1, entMON, ajena]),
+    ).rejects.toMatchObject({ code: "ER_NO_REFERENCED_ROW_2" });
+    await admin.query(
+      "INSERT INTO fact_entidad_config (empresa_id, entidad_id, plantilla_factura) VALUES (?, ?, 'CANTIDAD_DESCRIPCION_UNITARIO_VALOR')",
+      [E1, entMON],
+    );
+  });
+
+  it("3 viajes → UNA línea (3 × precio) + una línea de DESCARGA: totales de las líneas, trazabilidad viaje→línea y UNIQUE(plan_id) intacto", async () => {
+    const a = await crearPlan({ codigo: "F4-A" });
+    const b = await crearPlan({ codigo: "F4-B" });
+    const c = await crearPlan({ codigo: "F4-C" });
+    const lineas = [
+      linea([a, b, c], { cantidad: 3, precioUnitario: 1000, descripcion: "3 servicios de transporte Guatemala – Xela" }),
+      linea([a, b, c], { cantidad: 3, precioUnitario: 100, descripcion: "Descarga", precioIncluyeIva: false }),
+    ];
+    // preview: no escribe
+    const antes = await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas");
+    const pv = await previsualizarFactura(actorA, { clienteId: 20, planes: planes([a, b, c]), lineas, entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(pv).toMatchObject({ ok: true });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas")).toBe(antes);
+    if (!pv.ok) return;
+    // 3×1000 con IVA incluido (3000) + 3×100 con IVA agregado (300 + 36 = 336) = 3,336.00
+    expect(pv.preview.borrador.total).toBe(3336);
+    expect(pv.preview.lineas?.map((l) => [l.valor, l.base, l.iva, l.total])).toEqual([[3000, 2678.57, 321.43, 3000], [300, 300, 36, 336]]);
+
+    const r = await crearFactura(actorA, { clienteId: 20, planes: planes([a, b, c]), lineas, entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0, retencionIvaClientePct: 0 });
+    expect(r).toMatchObject({ ok: true });
+    if (!r.ok) return;
+    const d = await obtenerFactura(E1, r.facturaId);
+    expect(d?.factura.montoTotal).toBe(3336);
+    expect(d?.contabilidad).toMatchObject({ modeloLineas: true, entidadId: entMON, entidadNombre: "Logiservicios Mónaco", condicionPago: "CREDITO", cuentaBancaria: null });
+    expect(d?.lineas.map((l) => [l.orden, l.cantidad, l.precioUnitario, l.valor, l.clasificacion])).toEqual([[1, 3, 1000, 3000, "SERVICIO"], [2, 3, 100, 300, "SERVICIO"]]);
+    // trazabilidad: ambas líneas conocen sus 3 viajes (por código congelado)
+    for (const l of d!.lineas) expect(l.viajes.map((v) => v.codigo).sort()).toEqual(["F4-A", "F4-B", "F4-C"]);
+    // los viajes siguen reservados una sola vez (UNIQUE(plan_id)) y sin desglose fiscal duplicado en el modelo de líneas
+    const viajes = await filas(`SELECT plan_id, base_monto, iva_monto, total_linea FROM fact_factura_viajes WHERE factura_id = ${r.facturaId} ORDER BY plan_id`);
+    expect(viajes).toHaveLength(3);
+    expect(viajes.every((v) => v.base_monto == null && v.iva_monto == null && v.total_linea == null)).toBe(true);
+    const [enc] = await filas(`SELECT subtotal, iva_monto, monto_total FROM fact_facturas WHERE id = ${r.facturaId}`);
+    expect([Number(enc.subtotal), Number(enc.iva_monto), Number(enc.monto_total)]).toEqual([2978.57, 357.43, 3336]);
+    // un viaje ya facturado no se puede usar en otra factura (aunque ahora haya líneas)
+    const dup = await crearFactura(actorB, { clienteId: 20, planes: planes([a]), lineas: [linea([a])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(dup).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it("validaciones del servidor: viaje sin línea, línea sin viaje de la factura, precio 0 (descarga sin capturar) y condición inválida → 400, sin escribir", async () => {
+    const x = await crearPlan({ codigo: "F4-V1" });
+    const y = await crearPlan({ codigo: "F4-V2" });
+    const antes = await conteo("SELECT COUNT(*) AS n FROM fact_facturas");
+    const casos: [string, Parameters<typeof crearFactura>[1]][] = [
+      ["viaje sin línea", { clienteId: 20, planes: planes([x, y]), lineas: [linea([x])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 }],
+      ["línea con un viaje ajeno a la factura", { clienteId: 20, planes: planes([x]), lineas: [linea([x, y])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 }],
+      ["precio unitario 0", { clienteId: 20, planes: planes([x]), lineas: [linea([x], { precioUnitario: 0 })], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 }],
+      ["retención 10 %", { clienteId: 20, planes: planes([x]), lineas: [linea([x])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 10 }],
+      ["entidad de OTRA empresa", { clienteId: 20, planes: planes([x]), lineas: [linea([x])], entidadId: entE2, condicionPago: "CREDITO", retencionIvaPct: 0 }],
+    ];
+    for (const [nombre, datos] of casos) {
+      const r = await crearFactura(actorA, datos);
+      expect(r, nombre).toMatchObject({ ok: false, status: 400 });
+    }
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_facturas")).toBe(antes);
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id IN (?, ?)", [x, y])).toBe(0);
+  });
+
+  it("CRÉDITO y CONTADO exigen entidad emisora: sin entidad (y sin banco que la derive) → 400 y nada se guarda", async () => {
+    const p = await crearPlan({ codigo: "F4-SINENT" });
+    const credito = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(credito).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("entidad emisora") });
+    const sinCondicion = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], entidadId: entMON, retencionIvaPct: 0 });
+    expect(sinCondicion).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("condición de pago") });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [p])).toBe(0);
+    // CRÉDITO congela la condición y no lleva banco
+    const ok = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], entidadId: entKT, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(ok).toMatchObject({ ok: true });
+    if (ok.ok) {
+      const [f] = await filas(`SELECT entidad_id, condicion_pago, cuenta_bancaria_id, cuenta_bancaria_snapshot FROM fact_facturas WHERE id = ${ok.facturaId}`);
+      expect([f.entidad_id, f.condicion_pago, f.cuenta_bancaria_id, f.cuenta_bancaria_snapshot]).toEqual([entKT, "CREDITO", null, null]);
+    }
+  });
+
+  it("CONTADO: exige banco ACTIVO de la empresa, misma moneda y de la entidad emisora; CRÉDITO no lleva banco; el snapshot queda congelado", async () => {
+    const p = await crearPlan({ codigo: "F4-CON" });
+    const base = { clienteId: 20, planes: planes([p]), lineas: [linea([p])], retencionIvaPct: 0 };
+    const rechazos: [string, Parameters<typeof crearFactura>[1]][] = [
+      ["contado sin banco", { ...base, entidadId: entMON, condicionPago: "CONTADO" }],
+      ["banco de otra empresa", { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoE2 }],
+      ["banco inactivo", { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoInactivo }],
+      ["banco de OTRA entidad", { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoKT }],
+      ["banco en otra moneda", { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoUSD }],
+      ["crédito con banco", { ...base, entidadId: entMON, condicionPago: "CREDITO", cuentaBancariaId: bancoMON }],
+      ["banco inexistente", { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: 987654 }],
+    ];
+    for (const [nombre, datos] of rechazos) {
+      expect(await crearFactura(actorA, datos), nombre).toMatchObject({ ok: false, status: 400 });
+    }
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [p])).toBe(0);
+
+    const ok = await crearFactura(actorA, { ...base, entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoMON });
+    expect(ok).toMatchObject({ ok: true });
+    if (!ok.ok) return;
+    const d = await obtenerFactura(E1, ok.facturaId);
+    expect(d?.contabilidad).toMatchObject({ condicionPago: "CONTADO", cuentaBancaria: { cuentaBancariaId: bancoMON, banco: "Banco Industrial", alias: "Monetaria Q MON", moneda: "GTQ" } });
+    // lo que cambie después en el catálogo de bancos NO altera la factura
+    await admin.query("UPDATE cont_cuentas_bancarias SET alias = 'RENOMBRADA', activa = 0 WHERE id = ?", [bancoMON]);
+    const d2 = await obtenerFactura(E1, ok.facturaId);
+    expect(d2?.contabilidad.cuentaBancaria?.alias).toBe("Monetaria Q MON");
+    await admin.query("UPDATE cont_cuentas_bancarias SET alias = 'Monetaria Q MON', activa = 1 WHERE id = ?", [bancoMON]);
+  });
+
+  it("al CONTADO sin entidad explícita, la entidad sale del banco elegido", async () => {
+    const p = await crearPlan({ codigo: "F4-DER" });
+    const r = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], condicionPago: "CONTADO", cuentaBancariaId: bancoKT, retencionIvaPct: 0 });
+    expect(r).toMatchObject({ ok: true });
+    if (r.ok) expect((await obtenerFactura(E1, r.facturaId))?.contabilidad).toMatchObject({ entidadId: entKT, entidadNombre: "Kuiqtrans" });
+  });
+
+  it("RETENCIÓN IVA 15 %: Q3,000 con IVA incluido → retención 48.21 y a cobrar 2,951.79; la partida propuesta cuadra; CONGELADA aunque el cliente cambie", async () => {
+    await guardarRetencionIvaCliente(E1, 20, 15, 3);
+    expect(await leerRetencionIvaCliente(E1, 20)).toBe(15);
+    const p = await crearPlan({ codigo: "F4-RET", tarifa_comercial: 3000 });
+    const datos = { clienteId: 20, planes: planes([p]), lineas: [linea([p], { precioUnitario: 3000 })], entidadId: entMON, condicionPago: "CREDITO" as const, retencionIvaPct: 15, retencionIvaClientePct: 15 };
+    const pv = await previsualizarFactura(actorA, datos);
+    expect(pv).toMatchObject({ ok: true, preview: { retencionIva: { aplicadaPct: 15, clientePct: 15, monto: 48.21, netoCobrar: 2951.79 } } });
+    const r = await crearFactura(actorA, datos);
+    expect(r).toMatchObject({ ok: true });
+    if (!r.ok) return;
+    const [enc] = await filas(`SELECT retencion_iva_pct, retencion_iva_cliente_pct, retencion_iva_monto, monto_total FROM fact_facturas WHERE id = ${r.facturaId}`);
+    expect([enc.retencion_iva_pct, enc.retencion_iva_cliente_pct, Number(enc.retencion_iva_monto), Number(enc.monto_total)]).toEqual([15, 15, 48.21, 3000]);
+
+    // partida propuesta desde lo guardado (sin escribir asientos): DEBE = HABER = 3,000.00
+    const d = await obtenerFactura(E1, r.facturaId);
+    const partida = proponerPartidaVenta({
+      lineas: d!.lineas.map((l) => ({ clasificacion: l.clasificacion, base: l.base!, iva: l.iva!, total: l.total! })),
+      condicionPago: d!.contabilidad.condicionPago, retencionIvaPct: d!.contabilidad.retencionIva.aplicadaPct,
+    });
+    expect(partida).toMatchObject({ ok: true, partida: { retencionIva: 48.21, netoCobrar: 2951.79, totalDebe: 3000, totalHaber: 3000 } });
+    expect(await conteo("SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'cont_asientos'")).toBe(0);
+
+    // si después el cliente pasa a 30 %, la factura ya creada conserva 15 % / 48.21
+    await guardarRetencionIvaCliente(E1, 20, 30, 3);
+    const d2 = await obtenerFactura(E1, r.facturaId);
+    expect(d2?.contabilidad.retencionIva).toEqual({ aplicadaPct: 15, clientePct: 15, monto: 48.21 });
+    // y una factura nueva con 30 % lleva 96.43 (321.43 × 0.30)
+    const p2 = await crearPlan({ codigo: "F4-RET30", tarifa_comercial: 3000 });
+    const r30 = await crearFactura(actorA, { ...datos, planes: planes([p2]), lineas: [linea([p2], { precioUnitario: 3000 })], retencionIvaPct: 30, retencionIvaClientePct: 30 });
+    expect(r30).toMatchObject({ ok: true });
+    if (r30.ok) expect((await obtenerFactura(E1, r30.facturaId))?.contabilidad.retencionIva).toMatchObject({ aplicadaPct: 30, monto: 96.43 });
+    await guardarRetencionIvaCliente(E1, 20, 0, 3);
+  });
+
+  it("SERVICIO / BIEN: cada línea congela su clasificación y no cambia al recalcular otras líneas ni al reeditar", async () => {
+    const a = await crearPlan({ codigo: "F4-CL1" });
+    const b = await crearPlan({ codigo: "F4-CL2" });
+    const c = await crearFactura(actorA, {
+      clienteId: 20, planes: planes([a, b]), entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0,
+      lineas: [linea([a], { clasificacion: "SERVICIO", descripcion: "Flete" }), linea([b], { clasificacion: "BIEN", descripcion: "Tarimas", precioIncluyeIva: false })],
+    });
+    expect(c).toMatchObject({ ok: true });
+    if (!c.ok) return;
+    const guardado = await filas(`SELECT orden, clasificacion FROM fact_factura_lineas WHERE factura_id = ${c.facturaId} ORDER BY orden`);
+    expect(guardado.map((r) => [r.orden, r.clasificacion])).toEqual([[1, "SERVICIO"], [2, "BIEN"]]);
+    // una clasificación inválida no entra (rechazada por el servidor)
+    const p3 = await crearPlan({ codigo: "F4-CL3" });
+    const mala = await crearFactura(actorA, {
+      clienteId: 20, planes: planes([p3]), entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0,
+      lineas: [{ ...linea([p3]), clasificacion: "OTRO" as never }],
+    });
+    expect(mala).toMatchObject({ ok: false, status: 400 });
+    // y la base lo defiende aunque alguien escriba por SQL directo (CHECK)
+    await expect(
+      admin.query(
+        `INSERT INTO fact_factura_lineas (factura_id, orden, cantidad, descripcion, precio_unitario, valor, clasificacion, precio_incluye_iva, porcentaje_iva, base_monto, iva_monto, total_linea)
+         VALUES (${c.facturaId}, 99, 1, 'x', 10, 10, 'OTRO', 1, 12, 8.93, 1.07, 10)`,
+      ),
+    ).rejects.toMatchObject({ errno: 4025 });
+  });
+
+  it("editar el borrador: reemplaza líneas y viajes en una transacción; un payload del modelo anterior sobre un borrador con líneas se rechaza", async () => {
+    const a = await crearPlan({ codigo: "F4-E1" });
+    const b = await crearPlan({ codigo: "F4-E2" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: planes([a, b]), lineas: [linea([a, b], { cantidad: 2 })], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(c).toMatchObject({ ok: true });
+    if (!c.ok) return;
+    const u = await actualizarFacturaBorrador(actorA, c.facturaId, {
+      clienteId: 20, planes: planes([a, b]),
+      lineas: [linea([a], { descripcion: "Flete A", precioUnitario: 400 }), linea([b], { descripcion: "Flete B", precioUnitario: 600 }), linea([a, b], { descripcion: "Descarga", precioUnitario: 50 })],
+      entidadId: entMON, condicionPago: "CONTADO", cuentaBancariaId: bancoMON, retencionIvaPct: 0,
+    });
+    expect(u).toMatchObject({ ok: true });
+    const d = await obtenerFactura(E1, c.facturaId);
+    expect(d?.lineas.map((l) => [l.orden, l.descripcion, l.valor])).toEqual([[1, "Flete A", 400], [2, "Flete B", 600], [3, "Descarga", 50]]);
+    expect(d?.factura.montoTotal).toBe(1050);
+    expect(d?.contabilidad.condicionPago).toBe("CONTADO");
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas WHERE factura_id = ?", [c.facturaId])).toBe(3);
+    // sin filas huérfanas en la tabla puente
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_linea_viajes lv LEFT JOIN fact_factura_lineas l ON l.id = lv.linea_id WHERE l.id IS NULL")).toBe(0);
+    // payload del modelo anterior sobre un borrador que YA tiene líneas → rechazado, no se pierden las líneas
+    const legacy = await actualizarFacturaBorrador(actorA, c.facturaId, { clienteId: 20, planes: planes([a, b]) });
+    expect(legacy).toMatchObject({ ok: false, status: 400 });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas WHERE factura_id = ?", [c.facturaId])).toBe(3);
+  });
+
+  it("emitir y anular: la factura anulada CONSERVA sus líneas y su condición/retención; sus viajes quedan libres", async () => {
+    const a = await crearPlan({ codigo: "F4-AN1" });
+    const c = await crearFactura(actorA, {
+      clienteId: 20, planes: planes([a]), lineas: [linea([a], { precioUnitario: 1120 })],
+      entidadId: entKT, condicionPago: "CREDITO", retencionIvaPct: 15, retencionIvaClientePct: 0, numeroFactura: "F4-1", fechaEmision: "2026-09-10",
+    });
+    expect(c).toMatchObject({ ok: true });
+    if (!c.ok) return;
+    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    expect((await anularFactura(actorA, c.facturaId)).ok).toBe(true);
+    const d = await obtenerFactura(E1, c.facturaId);
+    expect(d?.factura.estadoAdmin).toBe("Anulada");
+    expect(d?.lineas).toHaveLength(1);
+    expect(d?.lineas[0]).toMatchObject({ valor: 1120, viajes: [{ codigo: "F4-AN1" }] });
+    expect(d?.contabilidad).toMatchObject({ modeloLineas: true, condicionPago: "CREDITO", retencionIva: { aplicadaPct: 15, clientePct: 0, monto: 18 } });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [a])).toBe(0);
+    // la asociación línea↔viaje para auditoría sobrevive en la tabla puente (código congelado + plan)
+    const puente = await filas(
+      `SELECT lv.plan_id, lv.codigo_viaje_snapshot FROM fact_factura_linea_viajes lv
+       INNER JOIN fact_factura_lineas l ON l.id = lv.linea_id WHERE l.factura_id = ${c.facturaId}`,
+    );
+    expect(puente.map((r) => [Number(r.plan_id), r.codigo_viaje_snapshot])).toEqual([[a, "F4-AN1"]]);
+    // y la anulada genera su PDF desde las líneas finales (modelo de líneas), con la marca ANULADA
+    let pdf: Awaited<ReturnType<typeof generarPdfFacturaDemo>> | null = null;
+    const tAn = await textoPdf(async () => { pdf = await generarPdfFacturaDemo(empresa1, c.facturaId); });
+    expect(pdf).toMatchObject({ ok: true });
+    expect(tAn).toContain("ANULADA");
+    expect(tAn).toContain("Q1,120.00");
+    // el viaje liberado se puede facturar otra vez
+    const otra = await crearFactura(actorB, { clienteId: 20, planes: planes([a]), lineas: [linea([a])], entidadId: entKT, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(otra).toMatchObject({ ok: true });
+  });
+
+  it("un viaje no puede quedar ACTIVO en dos facturas ni por SQL directo (UNIQUE(plan_id) sigue siendo la defensa)", async () => {
+    const a = await crearPlan({ codigo: "F4-UQ" });
+    const c1 = await crearFactura(actorA, { clienteId: 20, planes: planes([a]), lineas: [linea([a])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(c1).toMatchObject({ ok: true });
+    const [otra] = await admin.query<mysql.ResultSetHeader>(
+      `INSERT INTO fact_facturas (empresa_id, cliente_id, monto_total, estado_admin, creado_por) VALUES (${E1}, 20, 1, 'Borrador', 1)`,
+    );
+    await expect(
+      admin.query("INSERT INTO fact_factura_viajes (factura_id, plan_id, monto_asignado) VALUES (?, ?, 1)", [otra.insertId, a]),
+    ).rejects.toMatchObject({ code: "ER_DUP_ENTRY" });
+  });
+
+  it("PDF por entidad: Mónaco (plantilla Cantidad | Descripción | Precio unitario | Valor) y KT (Código | Descripción | Total) con el MISMO motor", async () => {
+    await admin.query("UPDATE clientes SET razon_social = 'Cliente X, S.A.', nit = '1234567-8', direccion = 'Zona 1', codigo = '0000020' WHERE id = 20");
+    const a = await crearPlan({ codigo: "F4-PDF-A" });
+    const b = await crearPlan({ codigo: "F4-PDF-B" });
+    const lineas = [linea([a, b], { cantidad: 2, precioUnitario: 500, descripcion: "2 servicios de transporte Guatemala – Quetzaltenango" })];
+    const mon = await crearFactura(actorA, { clienteId: 20, planes: planes([a, b]), lineas, entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(mon).toMatchObject({ ok: true });
+    if (!mon.ok) return;
+    let r: Awaited<ReturnType<typeof generarPdfFacturaDemo>> | null = null;
+    const tMon = await textoPdf(async () => { r = await generarPdfFacturaDemo(empresa1, mon.facturaId); });
+    expect(r).toMatchObject({ ok: true });
+    for (const v of ["CANTIDAD", "DESCRIPCIÓN", "PRECIO UNITARIO", "VALOR", "Q500.00", "Q1,000.00", "2 SERVICIOS DE TRANSPORTE GUATEMALA - QUETZALTENANGO", LEYENDA_NO_FISCAL]) {
+      expect(tMon, v).toContain(v);
+    }
+    expect(tMon).not.toMatch(/^CÓDIGO$/m); // (el «CÓDIGO CLIENTE:» del encabezado no es la columna)
+
+    const c = await crearPlan({ codigo: "F4-PDF-C" });
+    const kt = await crearFactura(actorA, { clienteId: 20, planes: planes([c]), lineas: [linea([c], { descripcion: "Servicio KT" })], entidadId: entKT, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(kt).toMatchObject({ ok: true });
+    if (!kt.ok) return;
+    const tKt = await textoPdf(() => generarPdfFacturaDemo(empresa1, kt.facturaId));
+    expect(tKt).toMatch(/^CÓDIGO$/m);
+    expect(tKt).not.toContain("PRECIO UNITARIO");
+    expect(tKt).toContain("SERVICIO KT");
+  });
+
+  it("MULTIEMPRESA: otra empresa no ve, no edita ni usa lo de la empresa 7 (facturas, líneas, bancos y entidades)", async () => {
+    const p = await crearPlan({ codigo: "F4-MT" });
+    const c = await crearFactura(actorA, { clienteId: 20, planes: planes([p]), lineas: [linea([p])], entidadId: entMON, condicionPago: "CREDITO", retencionIvaPct: 0 });
+    expect(c).toMatchObject({ ok: true });
+    if (!c.ok) return;
+    const otro: ActorFacturacion = { empresaId: E2, usuarioId: 9, usuario: "otra" };
+    expect(await obtenerFactura(E2, c.facturaId)).toBeNull();
+    expect(await actualizarFacturaBorrador(otro, c.facturaId, { clienteId: 30, planes: planes([p]), lineas: [linea([p])], entidadId: entE2, condicionPago: "CREDITO", retencionIvaPct: 0 }))
+      .toMatchObject({ ok: false });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_lineas WHERE factura_id = ?", [c.facturaId])).toBe(1);
+    // la empresa 7 no puede usar el banco ni la entidad de la 8
+    const q = await crearPlan({ codigo: "F4-MT2" });
+    expect(await crearFactura(actorA, { clienteId: 20, planes: planes([q]), lineas: [linea([q])], entidadId: entE2, condicionPago: "CREDITO", retencionIvaPct: 0 })).toMatchObject({ ok: false, status: 400 });
+    expect(await crearFactura(actorA, { clienteId: 20, planes: planes([q]), lineas: [linea([q])], condicionPago: "CONTADO", cuentaBancariaId: bancoE2, retencionIvaPct: 0 })).toMatchObject({ ok: false, status: 400 });
+    expect(await conteo("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE plan_id = ?", [q])).toBe(0);
+  });
+
+  it("MUTACIÓN: sin la validación de entidad/banco por empresa la prueba anterior detectaría el cruce (se verifica la consulta real con ids de otra empresa)", async () => {
+    const filasBanco = await filas(
+      `SELECT b.id FROM cont_cuentas_bancarias b WHERE b.id = ? AND b.empresa_id = ?`, [bancoE2, E1],
+    );
+    expect(filasBanco).toHaveLength(0);
+    const cruzada = await filas(`SELECT id FROM cont_cuentas_bancarias WHERE id = ?`, [bancoE2]);
+    expect(cruzada).toHaveLength(1); // el banco existe: solo el filtro por empresa lo oculta
   });
 });

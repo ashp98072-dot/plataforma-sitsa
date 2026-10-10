@@ -10,6 +10,12 @@ vi.mock("@/lib/clientes/schema", () => ({
 }));
 vi.mock("@/lib/facturacion/schema", () => ({ asegurarSchemaFacturacion: vi.fn(async () => undefined) }));
 vi.mock("@/lib/clientes/repository", () => ({ obtenerCliente: vi.fn(async () => ({ id: 5, nombre: "Cliente" })) }));
+vi.mock("@/lib/facturacion/contexto-factura", () => ({
+  leerRetencionIvaCliente: vi.fn(async () => 15),
+  guardarRetencionIvaCliente: vi.fn(async () => undefined),
+  esEsquemaPendiente: vi.fn(() => false),
+  MENSAJE_FALTA_MIGRACION_FACT4: "Falta aplicar la migración FACT-4.",
+}));
 vi.mock("@/lib/facturacion/repository", () => ({
   obtenerPerfilEmpresa: vi.fn(async () => ({ respuestas: {}, completadoPct: 0 })),
   guardarPerfilEmpresa: vi.fn(async () => ({ completadoPct: 10 })),
@@ -22,6 +28,7 @@ import { getSession } from "@/lib/session";
 import { obtenerEmpresaPorSlug, empresasParaUsuario } from "@/lib/empresas";
 import { permisosEfectivos } from "@/lib/permisos";
 import { guardarPerfilCliente, guardarPerfilEmpresa } from "@/lib/facturacion/repository";
+import { guardarRetencionIvaCliente } from "@/lib/facturacion/contexto-factura";
 import {
   CATALOGO_PERMISOS, VERSION_PERMISOS, adaptarPermisosLegacy, cambiarAccion, normalizarMatriz, tieneAccionCatalogo,
 } from "@/lib/permisos-catalogo";
@@ -257,6 +264,31 @@ describe("backend: guard de los endpoints (403 sin permiso, aunque la pestaña e
     sesion(ROL, [V2, verFact, p("facturacion_clientes_requisitos", { puedeVer: true, puedeEditar: true })]);
     expect((await putCliente(put(), ctxCliente)).status).toBe(200);
     expect(guardarPerfilCliente).toHaveBeenCalledOnce();
+  });
+
+  it("FACT-4: la retención de IVA del cliente (0/15/30) se guarda con el MISMO permiso «Editar requisitos de clientes»", async () => {
+    sesion(ROL, [V2, verFact, p("facturacion_clientes_requisitos", { puedeVer: true })]);
+    expect((await putCliente(put({ respuestas: {}, retencionIvaPct: 30 }), ctxCliente)).status).toBe(403);
+    expect(guardarRetencionIvaCliente).not.toHaveBeenCalled();
+    sesion(ROL, [V2, verFact, p("facturacion_clientes_requisitos", { puedeVer: true, puedeEditar: true })]);
+    expect((await putCliente(put({ respuestas: {}, retencionIvaPct: 30 }), ctxCliente)).status).toBe(200);
+    expect(guardarRetencionIvaCliente).toHaveBeenCalledWith(7, 5, 30, 3);
+  });
+
+  it("FACT-4: solo 0, 15 o 30; cualquier otro valor es 400 y no guarda nada", async () => {
+    sesion("Admin", [], false);
+    for (const v of [10, 12, 25, -15, "15", null]) {
+      expect((await putCliente(put({ respuestas: {}, retencionIvaPct: v }), ctxCliente)).status, String(v)).toBe(400);
+    }
+    expect(guardarPerfilCliente).not.toHaveBeenCalled();
+    expect(guardarRetencionIvaCliente).not.toHaveBeenCalled();
+  });
+
+  it("FACT-4: omitir retencionIvaPct NO la modifica (el cuestionario se guarda igual que antes)", async () => {
+    sesion("Admin", [], false);
+    expect((await putCliente(put({ respuestas: { a: "b" } }), ctxCliente)).status).toBe(200);
+    expect(guardarPerfilCliente).toHaveBeenCalledOnce();
+    expect(guardarRetencionIvaCliente).not.toHaveBeenCalled();
   });
 
   it("emitir factura sin ver configuración: el guard de emitir pasa y el de configuración no", async () => {

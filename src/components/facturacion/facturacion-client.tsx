@@ -108,6 +108,9 @@ export function FacturacionClient({
   const [resumen, setResumen] = useState<ResumenCliente[]>([]);
   const [clienteId, setClienteId] = useState<number | null>(null);
   const [clienteNombre, setClienteNombre] = useState("");
+  // FACT-4: retención de IVA del cliente (0/15/30). Solo se envía si cambió respecto de lo cargado.
+  const [retencionIvaPct, setRetencionIvaPct] = useState(0);
+  const [retencionIvaInicial, setRetencionIvaInicial] = useState(0);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -183,6 +186,8 @@ export function FacturacionClient({
         setRespuestas(data.respuestas ?? {});
         setCompletadoPct(Number(data.completadoPct ?? 0));
         setClienteNombre(data.cliente?.nombre ?? "");
+        setRetencionIvaPct(Number(data.retencionIvaPct ?? 0));
+        setRetencionIvaInicial(Number(data.retencionIvaPct ?? 0));
         setClienteId(id);
       } finally {
         setLoading(false);
@@ -219,11 +224,16 @@ export function FacturacionClient({
       const res = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ respuestas }),
+        body: JSON.stringify(
+          tab === "clientes" && retencionIvaPct !== retencionIvaInicial
+            ? { respuestas, retencionIvaPct }
+            : { respuestas },
+        ),
       });
       const data = await res.json();
       setMsg(data.mensaje || data.error || "");
       if (res.ok) {
+        if (tab === "clientes") setRetencionIvaInicial(retencionIvaPct);
         setCompletadoPct(Number(data.completadoPct ?? completadoPct));
         if (tab === "clientes") await cargarResumen();
       }
@@ -467,6 +477,25 @@ export function FacturacionClient({
               style={{ width: `${completadoPct}%` }}
             />
           </div>
+          {tab === "clientes" && !loading ? (
+            <label className="flex max-w-xs flex-col gap-1 text-xs text-[var(--muted)]">
+              Retención de IVA que practica este cliente
+              <select
+                aria-label="Retención de IVA del cliente"
+                className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]"
+                value={retencionIvaPct}
+                disabled={!puedeGuardar}
+                onChange={(e) => setRetencionIvaPct(Number(e.target.value))}
+              >
+                <option value={0}>No aplica (0 %)</option>
+                <option value={15}>15 %</option>
+                <option value={30}>30 %</option>
+              </select>
+              <span className="text-[10px]">
+                Se precarga al preparar una factura de este cliente. La constancia de retención se verifica después.
+              </span>
+            </label>
+          ) : null}
           {loading ? (
             <p className="text-sm text-[var(--muted)]">Cargando formulario…</p>
           ) : (
