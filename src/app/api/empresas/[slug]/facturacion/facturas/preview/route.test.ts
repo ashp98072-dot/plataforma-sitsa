@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantFacturacion: vi.fn() }));
 vi.mock("@/lib/facturacion/facturas", () => ({ previsualizarFactura: vi.fn() }));
+vi.mock("@/lib/facturacion/contexto-factura", () => ({
+  fact4Disponible: vi.fn(),
+  leerRetencionIvaCliente: vi.fn(),
+  listarEntidadesEmisoras: vi.fn(),
+  MENSAJE_FALTA_MIGRACION_FACT4: "Falta aplicar la migración FACT-4.",
+}));
 
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { previsualizarFactura } from "@/lib/facturacion/facturas";
@@ -17,16 +23,32 @@ function post(body: unknown) {
   );
 }
 
+
+/** FACT-4: desde esta fase toda creación/edición/vista previa lleva líneas y condición de pago. */
+const F4 = {
+  lineas: [{ planIds: [1], cantidad: 1, descripcion: "Servicio de transporte", precioUnitario: 100, clasificacion: "SERVICIO", precioIncluyeIva: true }],
+  condicionPago: "CREDITO",
+};
+const DATOS_F4 = { lineas: F4.lineas, entidadId: 1, condicionPago: "CREDITO", cuentaBancariaId: null, retencionIvaPct: 0, retencionIvaClientePct: 0 };
+async function fact4Listo() {
+  const c = await import("@/lib/facturacion/contexto-factura");
+  vi.mocked(c.fact4Disponible).mockResolvedValue(true);
+  vi.mocked(c.leerRetencionIvaCliente).mockResolvedValue(0);
+  vi.mocked(c.listarEntidadesEmisoras).mockResolvedValue([{ id: 1, codigo: "MON", nombre: "Mónaco" }]);
+  return c;
+}
+
 const PREVIEW = {
   cliente: { id: 20, nombre: "Cliente X", nit: null, direccion: null },
   cantidadViajes: 1,
   borrador: { moneda: "GTQ", porcentajeIva: 12, precioIncluyeIva: true, lineas: [], subtotal: 892.86, iva: 107.14, total: 1000 },
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.resetAllMocks();
   vi.mocked(requireTenantFacturacion).mockResolvedValue(guardOk);
-  vi.mocked(previsualizarFactura).mockResolvedValue({ ok: true, preview: PREVIEW } as Awaited<ReturnType<typeof previsualizarFactura>>);
+  await fact4Listo();
+  vi.mocked(previsualizarFactura).mockResolvedValue({ ok: true, preview: PREVIEW } as unknown as Awaited<ReturnType<typeof previsualizarFactura>>);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,18 +68,40 @@ describe("POST /facturacion/facturas/preview — permisos", () => {
   });
 });
 
+describe("POST /facturacion/facturas/preview — FACT-4: sin fallback silencioso", () => {
+  it("migración ausente → 503 explícito y NO se calcula nada (ni con payload FACT-4 ni con el anterior)", async () => {
+    const c = await import("@/lib/facturacion/contexto-factura");
+    vi.mocked(c.fact4Disponible).mockResolvedValue(false);
+    for (const body of [
+      { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }], ...F4 },
+      { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] },
+    ]) {
+      const res = await post(body);
+      expect(res.status).toBe(503);
+      expect((await res.json()).error).toContain("migración FACT-4");
+    }
+    expect(previsualizarFactura).not.toHaveBeenCalled();
+  });
+
+  it("con la migración aplicada, un payload del modelo anterior (sin líneas ni condición de pago) → 400, no se degrada", async () => {
+    const res = await post({ clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
+    expect(res.status).toBe(400);
+    expect(previsualizarFactura).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /facturacion/facturas/preview — contrato", () => {
   it("16) la empresa y el usuario salen de la SESIÓN, nunca del cuerpo (un empresaId ajeno enviado se ignora)", async () => {
-    const res = await post({ clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }], empresaId: 999, usuario: "otro" });
+    const res = await post({ clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }], ...F4, empresaId: 999, usuario: "otro" });
     expect(res.status).toBe(200);
     expect(previsualizarFactura).toHaveBeenCalledWith(
       { empresaId: 7, usuarioId: 3, usuario: "facturador1" },
-      { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] },
+      { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }], ...DATOS_F4 },
     );
   });
 
   it("responde 200 con la vista previa calculada por el servidor y sin caché", async () => {
-    const res = await post({ clienteId: 20, planes: [{ planId: 1, montoAsignado: 1000, precioIncluyeIva: true }] });
+    const res = await post({ clienteId: 20, planes: [{ planId: 1, montoAsignado: 1000, precioIncluyeIva: true }], ...F4 });
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await res.json()).toEqual(PREVIEW);
@@ -65,15 +109,15 @@ describe("POST /facturacion/facturas/preview — contrato", () => {
 
   it("propaga el rechazo de negocio con su código (p. ej. 409 viaje ya facturado)", async () => {
     vi.mocked(previsualizarFactura).mockResolvedValue({ ok: false, error: "El viaje PLAN-1 ya está vinculado a otra factura.", status: 409 });
-    const res = await post({ clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
+    const res = await post({ clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }], ...F4 });
     expect(res.status).toBe(409);
     expect((await res.json()).error).toContain("ya está vinculado");
   });
 
   it("15b) el tratamiento de IVA de CADA línea llega TAL CUAL al cálculo (mezcla incluida)", async () => {
     const planes = [{ planId: 1, precioIncluyeIva: true }, { planId: 2, montoAsignado: 100, precioIncluyeIva: false }];
-    await post({ clienteId: 20, planes });
-    expect(previsualizarFactura).toHaveBeenCalledWith(expect.anything(), { clienteId: 20, planes });
+    await post({ clienteId: 20, planes, ...F4 });
+    expect(previsualizarFactura).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ clienteId: 20, planes }));
   });
 
   it("valida el cuerpo: sin viajes, ids inválidos, montos negativos o JSON roto → 400 sin llamar al servicio", async () => {

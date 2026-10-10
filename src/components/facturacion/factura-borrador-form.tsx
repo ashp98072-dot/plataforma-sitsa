@@ -31,6 +31,9 @@ export type LineaBorrador = {
   /** Tratamiento de IVA de ESTA línea: true = ya incluido en la tarifa; false = se agrega. */
   precioIncluyeIva: boolean;
   moneda?: string;
+  /** FACT-4: textos del viaje (para sugerir la descripción de la línea). Opcionales. */
+  origen?: string | null;
+  destino?: string | null;
 };
 
 type PreviewApi = {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { crearFactura, listarFacturas, type EstadoAdminFactura } from "@/lib/facturacion/facturas";
+import { fact4CamposSchema, resolverEntradaFact4 } from "@/lib/facturacion/entrada-fact4";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -21,6 +22,8 @@ const crearSchema = z.object({
   numeroFactura: z.string().trim().max(60).optional().nullable(),
   fechaEmision: z.string().regex(FECHA_RE).optional().nullable(),
   observaciones: z.string().trim().max(2000).optional().nullable(),
+  // FACT-4: líneas agrupables, condición de pago, banco, entidad y retención. Todo opcional por compatibilidad.
+  ...fact4CamposSchema,
 });
 
 /** FACT-1 — lectura: facturacion:ver. Nunca requiere tms:ver. */
@@ -60,6 +63,9 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
 
+  const fact4 = await resolverEntradaFact4({ slug, empresaId: guard.empresa.id, clienteId: d.clienteId, entrada: d });
+  if (!fact4.ok) return NextResponse.json({ error: fact4.error }, { status: fact4.status });
+
   const resultado = await crearFactura(
     { empresaId: guard.empresa.id, usuarioId: guard.session.id, usuario: guard.session.username },
     {
@@ -68,6 +74,7 @@ export async function POST(req: Request, ctx: Ctx) {
       numeroFactura: d.numeroFactura ?? null,
       fechaEmision: d.fechaEmision ?? null,
       observaciones: d.observaciones ?? null,
+      ...fact4.datos,
     },
   );
   if (!resultado.ok) {

@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { FacturaBorradorForm, type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -52,6 +53,21 @@ type Factura = {
 type FacturaViajeLinea = {
   id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number;
   descripcion: string | null; precioIncluyeIva: boolean | null; base: number | null; iva: number | null; total: number | null;
+  origen: string | null; destino: string | null;
+};
+// FACT-4 — líneas de factura y decisiones de contabilidad congeladas (mismas formas que obtenerFactura).
+type FacturaLineaDetalle = {
+  id: number; orden: number; cantidad: number; descripcion: string; precioUnitario: number; valor: number;
+  clasificacion: "SERVICIO" | "BIEN" | null; precioIncluyeIva: boolean | null; porcentajeIva: number | null;
+  base: number | null; iva: number | null; total: number | null;
+  viajes: { planId: number | null; codigo: string }[];
+};
+type ContabilidadFactura = {
+  modeloLineas: boolean; entidadId: number | null; entidadNombre: string | null;
+  condicionPago: "CREDITO" | "CONTADO" | null;
+  cuentaBancaria: { cuentaBancariaId: number; banco: string; alias: string; referencia: string | null; entidadNombre: string } | null;
+  retencionIva: { aplicadaPct: number; clientePct: number | null; monto: number };
+  esquemaPendiente: boolean;
 };
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
 type AnulacionFactura = { fecha: string; usuario: string | null };
@@ -136,7 +152,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
 
   // --- Detalle expandible (Fase G) ---
   const [expandido, setExpandido] = useState<number | null>(null);
-  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion?: AnulacionFactura | null } | null>(null);
+  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion?: AnulacionFactura | null; lineas: FacturaLineaDetalle[]; contabilidad: ContabilidadFactura } | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [editandoBorrador, setEditandoBorrador] = useState(false);
   const [confirmandoEmitir, setConfirmandoEmitir] = useState(false);
@@ -365,11 +381,17 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                         // desalineado con la fila expandida.
                         <p className="text-xs text-[var(--muted)]">Cargando…</p>
                       ) : editandoBorrador ? (
-                        <FacturaBorradorForm
+                        <FacturaFormulario
                           slug={slug}
                           clienteId={detalle.factura.clienteId}
                           clienteNombre={detalle.factura.cliente}
                           facturaId={detalle.factura.id}
+                          detalle={{
+                            moneda: detalle.factura.moneda,
+                            viajes: detalle.viajes.map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva, origen: v.origen, destino: v.destino })),
+                            lineas: detalle.lineas,
+                            contabilidad: detalle.contabilidad,
+                          }}
                           lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva ?? true, moneda: detalle.factura.moneda }))}
                           numeroFacturaInicial={detalle.factura.numeroFactura}
                           fechaEmisionInicial={detalle.factura.fechaEmision}
@@ -400,6 +422,22 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                     <li>IVA{detalle.factura.porcentajeIva != null ? ` (${detalle.factura.porcentajeIva} %)` : ""}: {formatearMonto(detalle.factura.iva, detalle.factura.moneda)}</li>
                                   </>
                                 ) : null}
+                                {detalle.contabilidad?.condicionPago ? (
+                                  <li>
+                                    Condición de pago: {detalle.contabilidad.condicionPago === "CONTADO" ? "Contado" : "Crédito"}
+                                    {detalle.contabilidad.cuentaBancaria ? ` · ${detalle.contabilidad.cuentaBancaria.banco} ${detalle.contabilidad.cuentaBancaria.alias}` : ""}
+                                  </li>
+                                ) : null}
+                                {detalle.contabilidad?.entidadNombre ? <li>Entidad emisora: {detalle.contabilidad.entidadNombre}</li> : null}
+                                {detalle.contabilidad?.modeloLineas ? (
+                                  <li>
+                                    Retención de IVA: {detalle.contabilidad.retencionIva.aplicadaPct} %
+                                    {detalle.contabilidad.retencionIva.aplicadaPct ? ` · ${formatearMonto(detalle.contabilidad.retencionIva.monto, detalle.factura.moneda)}` : ""}
+                                    {detalle.contabilidad.retencionIva.clientePct != null && detalle.contabilidad.retencionIva.clientePct !== detalle.contabilidad.retencionIva.aplicadaPct
+                                      ? ` (configurada del cliente: ${detalle.contabilidad.retencionIva.clientePct} %)`
+                                      : ""}
+                                  </li>
+                                ) : null}
                                 <li>Monto total: {formatearMonto(detalle.factura.montoTotal, detalle.factura.moneda)}</li>
                                 <li>Total pagado: {formatearMonto(detalle.factura.totalPagado, detalle.factura.moneda)}</li>
                                 <li>Saldo: {formatearMonto(detalle.factura.saldo, detalle.factura.moneda)}</li>
@@ -426,7 +464,36 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               </a>
                             </div>
                             <div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. {detalle.contabilidad?.modeloLineas ? "Líneas de factura y viajes" : "Viajes"}</p>
+                              {detalle.contabilidad?.modeloLineas && detalle.lineas?.length ? (
+                                <div className="table-scroll mt-1 rounded border border-[var(--border)]">
+                                  <table className="min-w-full text-left text-[11px]">
+                                    <thead className="bg-[var(--thead)] uppercase text-[var(--muted)]">
+                                      <tr>
+                                        <th className="px-1.5 py-1">Cant.</th>
+                                        <th className="px-1.5 py-1">Descripción</th>
+                                        <th className="px-1.5 py-1 text-right">Precio unit.</th>
+                                        <th className="px-1.5 py-1 text-right">Valor</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {detalle.lineas.map((l) => (
+                                        <tr key={l.id} className="border-t border-[var(--border)] align-top">
+                                          <td className="px-1.5 py-1">{l.cantidad}</td>
+                                          <td className="px-1.5 py-1">
+                                            {l.descripcion}
+                                            <span className="block text-[var(--muted)]">
+                                              {l.clasificacion === "BIEN" ? "Bien" : "Servicio"} · {l.precioIncluyeIva == null ? "IVA —" : etiquetaTratamientoIva(l.precioIncluyeIva)} · Viajes: {l.viajes.map((v) => v.codigo).join(", ") || "—"}
+                                            </span>
+                                          </td>
+                                          <td className="whitespace-nowrap px-1.5 py-1 text-right">{formatearMonto(l.precioUnitario, detalle.factura.moneda)}</td>
+                                          <td className="whitespace-nowrap px-1.5 py-1 text-right">{formatearMonto(l.valor, detalle.factura.moneda)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : null}
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.viajes.map((v) => (
                                   <li key={v.id}>

@@ -121,7 +121,7 @@ function detalle(lineas: Detalle["viajes"], over: Partial<Detalle["factura"]> = 
     viajes: lineas,
     pagos: [],
     anulacion: null,
-  } as Detalle;
+  } as unknown as Detalle;
 }
 
 const INCLUIDO = (n: number) => linea(n);

@@ -6,6 +6,7 @@ import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { obtenerFactura } from "@/lib/facturacion/facturas";
 import { obtenerPerfilEmpresa } from "@/lib/facturacion/repository";
+import { leerPlantillaEntidad, PLANTILLA_POR_DEFECTO, type PlantillaFactura } from "@/lib/facturacion/contexto-factura";
 import { totalEnLetras } from "@/lib/facturacion/numero-letras";
 import { formatearMonto } from "@/lib/facturacion/ui-logica";
 
@@ -36,6 +37,11 @@ import { formatearMonto } from "@/lib/facturacion/ui-logica";
  * (`fact_factura_viajes_anuladas`, solo su fotografía; nunca datos vivos) y el documento lleva la marca «ANULADA» muy
  * visible, además de «DEMO — DOCUMENTO NO FISCAL». Una factura anulada ANTES de FACT-3 perdió sus líneas y no se
  * reconstruye: responde 409 con el motivo.
+ *
+ * PLANTILLA POR ENTIDAD (FACT-4): la factura puede tener LÍNEAS guardadas (cantidad, precio unitario, valor, viajes de
+ * origen). Cómo se REPRESENTAN lo decide la entidad emisora (`fact_entidad_config.plantilla_factura`), no el código por
+ * empresa: `CODIGO_DESCRIPCION_TOTAL` (formato KT/Milenium) o `CANTIDAD_DESCRIPCION_UNITARIO_VALOR` (formato de factura
+ * cambiaria). Sin configuración se usa la primera. Los datos y las validaciones son los mismos.
  *
  * LOGO OBLIGATORIO: la factura siempre muestra el logo de la empresa emisora (`empresas.logo_url` de la empresa del guard,
  * nunca una ruta del cliente ni el logo de otra empresa). Si falta, el archivo no existe, no es legible por PDFKit o su
@@ -71,9 +77,15 @@ export type ComplementosDemo = {
 
 export type LineaDemo = {
   fecha: string;
+  /** Código(s) de los viajes de origen, separados por coma. */
   codigo: string;
   descripcion: string;
+  /** Monto capturado de la línea (= `valor`). */
   tarifa: number;
+  cantidad: number;
+  precioUnitario: number;
+  /** ROUND(cantidad × precioUnitario, 2): con IVA incluido o antes de IVA según `precioIncluyeIva`. */
+  valor: number;
   precioIncluyeIva: boolean;
   base: number;
   iva: number;
@@ -99,6 +111,8 @@ export type FacturaDemo = {
   subtotal: number;
   iva: number;
   total: number;
+  /** Representación elegida por la entidad emisora. */
+  plantilla: PlantillaFactura;
 };
 
 export type ResultadoFacturaDemo =
@@ -111,9 +125,19 @@ const fmtFecha = (iso: string): string => iso.split("-").reverse().join("/");
 const MENSAJE_SIN_SNAPSHOT =
   "Esta factura es anterior al desglose de IVA por línea: no tiene el snapshot fiscal de cada viaje, así que no se puede generar el PDF demo sin recalcularla.";
 
-type DetalleFactura = NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>;
+type DetalleFactura = Omit<NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>, "lineas" | "contabilidad"> &
+  Partial<Pick<NonNullable<Awaited<ReturnType<typeof obtenerFactura>>>, "lineas" | "contabilidad">>;
 
 const SIN_COMPLEMENTOS: ComplementosDemo = { clienteCodigo: null, condiciones: null, leyendaTributaria: null };
+
+/** Una línea implícita por viaje para facturas sin líneas guardadas (el modelo anterior). */
+function lineasDeViajes(viajes: DetalleFactura["viajes"]): NonNullable<DetalleFactura["lineas"]> {
+  return viajes.map((v, i) => ({
+    id: v.id, orden: i + 1, cantidad: v.cantidad, descripcion: v.descripcion ?? "", precioUnitario: v.montoAsignado, valor: v.montoAsignado,
+    clasificacion: null, precioIncluyeIva: v.precioIncluyeIva, porcentajeIva: v.porcentajeIva, base: v.base, iva: v.iva, total: v.total,
+    viajes: [{ planId: v.planId || null, codigo: v.codigo }],
+  }));
+}
 
 /**
  * PURA (sin DB). Valida y arma el modelo del PDF a partir de lo congelado. `fechaGeneracion` (YYYY-MM-DD) solo se usa como
@@ -124,28 +148,37 @@ export function prepararFacturaDemo(
   emisor: EmisorDemo,
   fechaGeneracion: string,
   complementos: ComplementosDemo = SIN_COMPLEMENTOS,
+  plantilla: PlantillaFactura = PLANTILLA_POR_DEFECTO,
 ): ResultadoFacturaDemo {
   if (!detalle) return { ok: false, status: 404, error: "Factura no encontrada." };
   const { factura: f, viajes } = detalle;
   const anulada = f.estadoAdmin === "Anulada";
-  if (!viajes.length) {
+  // Líneas guardadas (FACT-4) o, en el modelo anterior, una por viaje: el resto de las validaciones es el mismo.
+  const lineasOrigen = detalle.lineas ?? lineasDeViajes(viajes);
+  if (!lineasOrigen.length) {
     return { ok: false, status: 409, error: anulada ? MENSAJE_ANULADA_SIN_DETALLE : "La factura no tiene viajes." };
   }
 
   if (f.subtotal == null || f.iva == null || f.porcentajeIva == null) return { ok: false, status: 409, error: MENSAJE_SIN_SNAPSHOT };
   const lineas: LineaDemo[] = [];
-  for (const v of viajes) {
-    if (v.base == null || v.iva == null || v.total == null || v.precioIncluyeIva == null || v.descripcion == null) {
+  const fechaPorPlan = new Map(viajes.map((v) => [v.planId, v.fechaPlan]));
+  for (const v of lineasOrigen) {
+    const etiqueta = v.viajes.map((x) => x.codigo).join(", ") || `#${v.orden}`;
+    if (v.base == null || v.iva == null || v.total == null || v.precioIncluyeIva == null || !v.descripcion) {
       return { ok: false, status: 409, error: MENSAJE_SIN_SNAPSHOT };
     }
     if (aCentavos(v.base) + aCentavos(v.iva) !== aCentavos(v.total)) {
-      return { ok: false, status: 409, error: `La línea del viaje ${v.codigo} no cuadra (base + IVA ≠ total); no se genera el PDF.` };
+      return { ok: false, status: 409, error: `La línea ${etiqueta} no cuadra (base + IVA ≠ total); no se genera el PDF.` };
     }
+    const primerPlan = v.viajes.find((x) => x.planId != null)?.planId ?? null;
     lineas.push({
-      fecha: v.fechaPlan,
-      codigo: v.codigo,
+      fecha: (primerPlan != null ? fechaPorPlan.get(primerPlan) : undefined) ?? viajes[0]?.fechaPlan ?? "",
+      codigo: etiqueta,
       descripcion: v.descripcion,
-      tarifa: v.montoAsignado,
+      tarifa: v.valor,
+      cantidad: v.cantidad,
+      precioUnitario: v.precioUnitario,
+      valor: v.valor,
       precioIncluyeIva: v.precioIncluyeIva,
       base: v.base,
       iva: v.iva,
@@ -195,6 +228,7 @@ export function prepararFacturaDemo(
       subtotal: f.subtotal,
       iva: f.iva,
       total: f.montoTotal,
+      plantilla,
     },
   };
 }
@@ -238,12 +272,12 @@ const Y_QR = 672;
 const H_QR = 40;
 const Y_PIE_FEL = 720;
 const Y_PIE_DEMO = 772;
-const X_COD = M + 8;
-const W_COD = 112;
-const X_DESC = M + 128;
-const W_DESC = 330;
-const X_TOT = X_DESC + W_DESC + 8;
-const W_TOT = DER - 8 - X_TOT;
+/** Columnas del detalle por plantilla (puntos). Todas caben en el marco de ANCHO. */
+const COLUMNAS: Record<PlantillaFactura, { x1: number; w1: number; xd: number; wd: number; xu: number | null; wu: number; xv: number; wv: number; encabezados: [string, string, string, string | null] }> = {
+  CODIGO_DESCRIPCION_TOTAL: { x1: M + 8, w1: 112, xd: M + 128, wd: 330, xu: null, wu: 0, xv: M + 128 + 330 + 8, wv: DER - 8 - (M + 128 + 330 + 8), encabezados: ["CÓDIGO", "DESCRIPCIÓN", "TOTAL", null] },
+  CANTIDAD_DESCRIPCION_UNITARIO_VALOR: { x1: M + 8, w1: 54, xd: M + 70, wd: 280, xu: M + 358, wu: 92, xv: M + 458, wv: DER - 8 - (M + 458), encabezados: ["CANTIDAD", "DESCRIPCIÓN", "PRECIO UNITARIO", "VALOR"] },
+};
+const cantidadVisible = (c: number): string => (Number.isInteger(c) ? String(c) : c.toFixed(2));
 
 /** `logo` es OBLIGATORIO y ya viene validado (ver `cargarLogoEmpresa`); si PDFKit no pudiera dibujarlo, el render falla. */
 export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promise<Buffer> {
@@ -276,16 +310,19 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
     };
 
     // ── Paginación del detalle (se mide antes de dibujar para saber cuál es la última página) ───────────────────────
+    const col = COLUMNAS[f.plantilla] ?? COLUMNAS[PLANTILLA_POR_DEFECTO];
+    const conUnitario = col.xu != null;
     const filas = f.lineas.map((l) => ({
-      codigo: l.codigo,
+      codigo: conUnitario ? cantidadVisible(l.cantidad) : l.codigo,
       descripcion: descripcionVisible(l.descripcion),
-      total: moneda(l.total),
+      unitario: moneda(l.precioUnitario),
+      total: conUnitario ? moneda(l.valor) : moneda(l.total),
     }));
     serif().fontSize(8.5);
     const MAX_LINEAS_FILA = 4;
     const altoLinea = doc.currentLineHeight(true);
     const medidas = filas.map((fila) => {
-      const h = doc.heightOfString(textoPdf(fila.descripcion), { width: W_DESC });
+      const h = doc.heightOfString(textoPdf(fila.descripcion), { width: col.wd });
       const lineas = Math.min(MAX_LINEAS_FILA, Math.max(1, Math.round(h / altoLinea)));
       return lineas * altoLinea + 5;
     });
@@ -423,9 +460,10 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
       // ── Encabezado de la tabla: CÓDIGO | DESCRIPCIÓN | TOTAL ──────────────────────────────────────────────────────
       banda(M, Y_TABLA_ENC, ANCHO, H_TABLA_ENC);
       serif().fontSize(8.5).fillColor(NEGRO);
-      texto("CÓDIGO", X_COD, Y_TABLA_ENC + 4.5);
-      texto("DESCRIPCIÓN", X_DESC, Y_TABLA_ENC + 4.5, { width: W_DESC, align: "center" });
-      texto("TOTAL", X_TOT, Y_TABLA_ENC + 4.5, { width: W_TOT, align: "right" });
+      texto(col.encabezados[0], col.x1, Y_TABLA_ENC + 4.5, conUnitario ? { width: col.w1, align: "center" } : {});
+      texto(col.encabezados[1], col.xd, Y_TABLA_ENC + 4.5, { width: col.wd, align: "center" });
+      if (conUnitario && col.xu != null) texto(col.encabezados[2], col.xu, Y_TABLA_ENC + 4.5, { width: col.wu, align: "right" });
+      texto(col.encabezados[conUnitario ? 3 : 2] ?? "TOTAL", col.xv, Y_TABLA_ENC + 4.5, { width: col.wv, align: "right" });
 
       // ── Detalle: una fila por viaje (código, descripción congelada, total de la línea) ──────────────────────────────
       let yFila = Y_DETALLE + 5;
@@ -433,9 +471,10 @@ export async function renderizarFacturaDemo(f: FacturaDemo, logo: Buffer): Promi
         const fila = filas[i];
         const hFila = medidas[i];
         serif().fontSize(8.5).fillColor(NEGRO);
-        doc.text(textoPdf(fila.codigo), X_COD, yFila, { width: W_COD, lineBreak: false, ellipsis: true });
-        doc.text(textoPdf(fila.descripcion), X_DESC, yFila, { width: W_DESC, height: hFila - 5, ellipsis: true });
-        doc.text(fila.total, X_TOT, yFila, { width: W_TOT, align: "right", lineBreak: false });
+        doc.text(textoPdf(fila.codigo), col.x1, yFila, { width: col.w1, lineBreak: false, ellipsis: true, align: conUnitario ? "center" : "left" });
+        doc.text(textoPdf(fila.descripcion), col.xd, yFila, { width: col.wd, height: hFila - 5, ellipsis: true });
+        if (conUnitario && col.xu != null) doc.text(fila.unitario, col.xu, yFila, { width: col.wu, align: "right", lineBreak: false });
+        doc.text(fila.total, col.xv, yFila, { width: col.wv, align: "right", lineBreak: false });
         yFila += hFila;
       }
 
@@ -599,12 +638,15 @@ export async function generarPdfFacturaDemo(
     direccion: textoDe(r.direccion_fiscal),
     telefono: null, // la plataforma todavía no modela el teléfono del emisor
   };
+  const condicion = detalle?.contabilidad?.condicionPago ?? null;
   const complementos: ComplementosDemo = {
     clienteCodigo: detalle ? await leerCodigoCliente(empresa.id, detalle.factura.clienteId) : null,
-    condiciones: null, // la factura no congela condiciones de pago todavía
+    // Condición congelada en la factura (FACT-4). Los días de crédito aún no se congelan: no se inventan.
+    condiciones: condicion === "CONTADO" ? "CONTADO" : condicion === "CREDITO" ? "CRÉDITO" : null,
     leyendaTributaria: null, // sin dato modelado
   };
-  const modelo = prepararFacturaDemo(detalle, emisor, ahoraLocal().slice(0, 10), complementos);
+  const plantilla = await leerPlantillaEntidad(empresa.id, detalle?.contabilidad?.entidadId ?? null);
+  const modelo = prepararFacturaDemo(detalle, emisor, ahoraLocal().slice(0, 10), complementos, plantilla);
   if (!modelo.ok) return modelo;
   // El logo es obligatorio. Se valida DESPUÉS de la factura (una factura ajena o inexistente sigue siendo 404 y no revela el
   // estado del logo) y siempre con el de la empresa del guard.

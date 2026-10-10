@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FacturaBorradorForm, type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
 import { calcularTotalPaginas, evaluarSeleccion, formatearMonto } from "@/lib/facturacion/ui-logica";
 
 /**
@@ -142,9 +143,9 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
   if (creando && clienteSeleccionado) {
     const lineas: LineaBorrador[] = Array.from(seleccion.values())
       .sort((a, b) => a.fechaPlan.localeCompare(b.fechaPlan))
-      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, precioIncluyeIva: true, moneda: v.moneda })); // «IVA incluido» preseleccionado (caso más común); se cambia por viaje
+      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, precioIncluyeIva: true, moneda: v.moneda, origen: v.origen, destino: v.destino })); // «IVA incluido» preseleccionado (caso más común); se cambia por viaje
     return (
-      <FacturaBorradorForm
+      <FacturaFormulario
         slug={slug}
         clienteId={clienteSeleccionado.id}
         clienteNombre={clienteSeleccionado.nombre}
