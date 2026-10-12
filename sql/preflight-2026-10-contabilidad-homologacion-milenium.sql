@@ -1,5 +1,5 @@
 -- PREFLIGHT DE SOLO LECTURA — Homologación contable Milenium → plataforma (KT / MÓNACO).
--- Solo SELECT. No hay INSERT/UPDATE/DELETE/ALTER/DDL ni SET que modifique datos. Se puede ejecutar en producción
+-- Solo SELECT (y WITH … SELECT). No hay INSERT/UPDATE/DELETE/ALTER/DDL ni SET que modifique datos. Se puede ejecutar en producción
 -- con un usuario de solo lectura. Revisar el resultado ANTES de pensar en ejecutar
 -- sql/propuesta-2026-10-contabilidad-homologacion-milenium.sql (que NO se ejecuta sin autorización explícita).
 --
@@ -25,32 +25,56 @@ FROM cont_cuentas WHERE empresa_id = 1 GROUP BY empresa_id, entidad_id ORDER BY 
 SELECT id, empresa_id, entidad_id, codigo, nombre, tipo, nivel, activa
 FROM cont_cuentas WHERE empresa_id = 1 ORDER BY entidad_id, codigo;
 
--- ───────────────────────── 3. Colisiones con la propuesta de homologación ────────────────────────────────────────
--- Para cada código que la propuesta insertaría, ¿ya existe en esa entidad? Esperado: ya_existe_id NULL en todas las filas
--- (no hay colisión). Si algo aparece, NO ejecutar la propuesta sin revisarlo (la clave única es empresa+entidad+código).
-SELECT p.entidad_id, p.codigo, p.rol_propuesto, c.id AS ya_existe_id, c.nombre AS nombre_existente, c.activa AS activa_existente
-FROM (
-  SELECT 1 AS entidad_id, '11203001' AS codigo, 'CLIENTES' AS rol_propuesto
-  UNION ALL SELECT 1, '21401001', 'IVA_POR_PAGAR'
-  UNION ALL SELECT 1, '41101003', 'VENTAS_SERVICIOS'
-  UNION ALL SELECT 1, '11302005', 'RETENCION_IVA'
-  UNION ALL SELECT 1, '21302001', 'ANTICIPOS'
-  UNION ALL SELECT 1, '11101002', 'TRANSITO_BANCARIO'
-  UNION ALL SELECT 1, '41501002', 'DEVOLUCIONES_VENTAS'
-  UNION ALL SELECT 1, '11103002', 'BANCO (Banco Industrial)'
-  UNION ALL SELECT 1, '11103001', 'BANCO (G&T Continental)'
-  UNION ALL SELECT 1, '11103004', 'BANCO (Banco Industrial, fondo operativo)'
-  UNION ALL SELECT 2, '11203001', 'CLIENTES'
-  UNION ALL SELECT 2, '21401001', 'IVA_POR_PAGAR'
-  UNION ALL SELECT 2, '41101003', 'VENTAS_SERVICIOS'
-  UNION ALL SELECT 2, '11302005', 'RETENCION_IVA'
-  UNION ALL SELECT 2, '21302001', 'ANTICIPOS'
-  UNION ALL SELECT 2, '11101002', 'TRANSITO_BANCARIO'
-  UNION ALL SELECT 2, '41501002', 'DEVOLUCIONES_VENTAS'
-  UNION ALL SELECT 2, '11103002', 'BANCO (Banco Industrial)'
-) p
-LEFT JOIN cont_cuentas c ON c.empresa_id = 1 AND c.entidad_id = p.entidad_id AND c.codigo = p.codigo
-ORDER BY p.entidad_id, p.codigo;
+-- ───────────────────────── 3. Colisiones con el inventario propuesto (COMPUERTA de la carga futura) ───────────────
+-- Para cada cuenta del inventario (sql/propuesta-…-homologacion-milenium.sql §1) muestra lo propuesto contra lo que YA
+-- existe en esa entidad: entidad, código, nombre/nivel propuestos y nombre/tipo/nivel/activa existentes. El `tipo` propuesto
+-- es PENDIENTE (aprobación de Contabilidad), por eso solo se muestra el existente.
+-- Esperado hoy: «SIN COLISION» en las 18 filas (la única cuenta de KT es la de prueba 32234) y la fila final «APTO».
+-- REGLA: la carga autorizada exige 0 colisiones. Cualquier fila distinta de «SIN COLISION» DETIENE la carga: no se
+-- actualiza, no se ignora y no se «absorbe» una cuenta existente (ni siquiera una idéntica; se resuelve a mano).
+WITH propuesta AS (
+  SELECT 1 AS entidad_id, '11203001' AS codigo, 'CLIENTES LOCALES' AS nombre, 5 AS nivel, 'CLIENTES' AS rol_propuesto
+  UNION ALL SELECT 1, '21401001', 'IVA POR PAGAR',                          5, 'IVA_POR_PAGAR'
+  UNION ALL SELECT 1, '41101003', 'VENTAS DE SERVICIOS',                    5, 'VENTAS_SERVICIOS'
+  UNION ALL SELECT 1, '11302005', 'RETENCIONES DE IVA',                     5, 'RETENCION_IVA'
+  UNION ALL SELECT 1, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL',      5, 'ANTICIPOS'
+  UNION ALL SELECT 1, '11101002', 'TRASLADO EN TRANSITO',                   5, 'TRANSITO_BANCARIO'
+  UNION ALL SELECT 1, '41501002', 'DEV. SOBRE VENTAS VARIAS',               5, 'DEVOLUCIONES_VENTAS'
+  UNION ALL SELECT 1, '11103002', 'BANCO INDUSTRIAL, S. A.',                5, 'BANCOS'
+  UNION ALL SELECT 1, '11103001', 'G&T CONTINENTAL',                        5, 'BANCOS'
+  UNION ALL SELECT 1, '11103004', 'BANCO INDUSTRIAL (FONDO OPERATIVO)',     5, 'BANCOS'
+  UNION ALL SELECT 2, '11203001', 'CLIENTES LOCALES',                       5, 'CLIENTES'
+  UNION ALL SELECT 2, '21401001', 'IVA POR PAGAR',                          5, 'IVA_POR_PAGAR'
+  UNION ALL SELECT 2, '41101003', 'VENTAS DE SERVICIOS',                    5, 'VENTAS_SERVICIOS'
+  UNION ALL SELECT 2, '11302005', 'RETENCIONES DE IVA',                     5, 'RETENCION_IVA'
+  UNION ALL SELECT 2, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL',      5, 'ANTICIPOS'
+  UNION ALL SELECT 2, '11101002', 'TRASLADO EN TRANSITO',                   5, 'TRANSITO_BANCARIO'
+  UNION ALL SELECT 2, '41501002', 'DEV. SOBRE VENTAS VARIAS',               5, 'DEVOLUCIONES_VENTAS'
+  UNION ALL SELECT 2, '11103002', 'BANCO INDUSTRIAL, S. A.',                5, 'BANCOS'
+),
+comparacion AS (
+  SELECT p.entidad_id, p.codigo, p.rol_propuesto,
+         p.nombre AS nombre_propuesto, p.nivel AS nivel_propuesto, 'PENDIENTE APROBACION' AS tipo_propuesto,
+         c.id AS existente_id, c.nombre AS nombre_existente, c.tipo AS tipo_existente,
+         c.nivel AS nivel_existente, c.activa AS activa_existente,
+         CASE
+           WHEN c.id IS NULL THEN 'SIN COLISION'
+           WHEN c.nombre = p.nombre AND c.nivel = p.nivel AND c.activa = 1
+             THEN 'COLISION: ya existe, igual en nombre/nivel/activa (tipo por validar) - DETENER'
+           ELSE 'COLISION: ya existe y DIFIERE (nombre/nivel/activa) - DETENER'
+         END AS resultado
+  FROM propuesta p
+  LEFT JOIN cont_cuentas c ON c.empresa_id = 1 AND c.entidad_id = p.entidad_id AND c.codigo = p.codigo
+)
+SELECT entidad_id, codigo, rol_propuesto, nombre_propuesto, nivel_propuesto, tipo_propuesto,
+       existente_id, nombre_existente, tipo_existente, nivel_existente, activa_existente, resultado
+FROM comparacion
+UNION ALL
+SELECT NULL, 'TOTAL', NULL, NULL, COUNT(*), NULL, NULL, NULL, NULL, NULL, NULL,
+       CASE WHEN SUM(resultado <> 'SIN COLISION') = 0
+            THEN 'APTO: 0 colisiones' ELSE CONCAT('NO APTO: ', SUM(resultado <> 'SIN COLISION'), ' colision(es)') END
+FROM comparacion
+ORDER BY entidad_id IS NULL, entidad_id, codigo;
 
 -- ───────────────────────── 4. Cuenta de prueba KT «32234 / safdasf» ──────────────────────────────────────────────
 -- 4a. La fila. Esperado: 0 o 1 fila.
