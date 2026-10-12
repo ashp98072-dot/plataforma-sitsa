@@ -86,7 +86,8 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
   // de un requerimiento con facturas ya confirmado fallaría por «factura duplicada» en vez de devolver la creación original.
   const clave = id === undefined ? datos.clave_idempotencia ?? null : null;
   if (clave !== null && !claveValidaCompra(clave)) throw new ErrorCompra("La clave de envío no es válida.");
-  const huella = clave ? huellaRequerimiento(datos) : null;
+  // El solicitante efectivo es el usuario autenticado (`usuarioId`, el que se persiste en solicitante_usuario_id), nunca un dato del cliente.
+  const huella = clave ? huellaRequerimiento(datos, usuarioId) : null;
   let claveEfectiva = clave;
   if (clave) {
     const previa = await buscarRequerimientoPorClave((sql, params) => query<RowDataPacket[]>(sql, params), empresaId, clave, huella!);

@@ -42,6 +42,7 @@ import { crearRequerimientoSchema } from "./requerimiento-schema";
 const EMPRESA_A = 9301;
 const EMPRESA_B = 9302;
 const USUARIO = 9401;
+const OTRO_USUARIO = 9402;
 const ids = { entidad: { [EMPRESA_A]: 0, [EMPRESA_B]: 0 } as Record<number, number>, proveedor: { [EMPRESA_A]: 0, [EMPRESA_B]: 0 } as Record<number, number> };
 
 async function contar(empresa: number, clave: string) {
@@ -58,8 +59,8 @@ const cuerpo = (empresa: number, extra: Record<string, unknown> = {}, lineaExtra
   lineas: [{ fecha: "2026-10-01", proveedor_id: ids.proveedor[empresa], vehiculo_id: null, repuesto_descripcion: "Filtro de aire", metodo_pago: "Transferencia", condicion_pago: "Contado", total: "10.25", ...lineaExtra }],
   ...extra,
 });
-const crear = (empresa: number, extra: Record<string, unknown> = {}, lineaExtra: Record<string, unknown> = {}) =>
-  guardarRequerimiento(empresa, USUARIO, "prueba", crearRequerimientoSchema.parse(cuerpo(empresa, extra, lineaExtra)), false);
+const crear = (empresa: number, extra: Record<string, unknown> = {}, lineaExtra: Record<string, unknown> = {}, usuario = USUARIO) =>
+  guardarRequerimiento(empresa, usuario, `prueba${usuario}`, crearRequerimientoSchema.parse(cuerpo(empresa, extra, lineaExtra)), false);
 
 async function limpiar() {
   const pool = getPool();
@@ -79,10 +80,12 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — Compras`, () => {
       const [prov] = await pool.query("SELECT id FROM compras_proveedores WHERE empresa_id = ? ORDER BY id LIMIT 1", [e]);
       ids.proveedor[e] = Number((prov as { id: number }[])[0].id);
     }
-    await pool.query(
-      "INSERT IGNORE INTO usuarios (id, username, nombre, password_hash, salt, rol_global, activo, acceso_todas_empresas) VALUES (?, ?, 'Operador Prueba', 'x', 'x', 'Operaciones', 1, 1)",
-      [USUARIO, `compras${USUARIO}`],
-    );
+    for (const u of [USUARIO, OTRO_USUARIO]) {
+      await pool.query(
+        "INSERT IGNORE INTO usuarios (id, username, nombre, password_hash, salt, rol_global, activo, acceso_todas_empresas) VALUES (?, ?, 'Operador Prueba', 'x', 'x', 'Operaciones', 1, 1)",
+        [u, `compras${u}`],
+      );
+    }
   });
   beforeEach(limpiar);
   afterAll(async () => {
@@ -155,6 +158,34 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — Compras`, () => {
     const r = await Promise.all(Array.from({ length: 6 }, (_, i) => crear(EMPRESA_A, { clave_idempotencia: `real-compras-claves-dist-${i}-x` })));
     expect(new Set(r.map(x => x.id)).size).toBe(6);
     expect(await contarEmpresa(EMPRESA_A)).toBe(6);
+  });
+
+  it("misma clave + mismo contenido + OTRO usuario autenticado → 409 y no recupera el requerimiento ajeno", async () => {
+    const clave = "real-compras-otro-usuario1";
+    const original = await crear(EMPRESA_A, { clave_idempotencia: clave });
+    const error = await crear(EMPRESA_A, { clave_idempotencia: clave }, {}, OTRO_USUARIO).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCompra);
+    expect((error as ErrorCompra).status).toBe(409);
+    expect(await crear(EMPRESA_A, { clave_idempotencia: clave })).toEqual(original); // el mismo usuario sigue recuperándola
+    expect(await contar(EMPRESA_A, clave)).toBe(1);
+  });
+
+  it("CONCURRENCIA real con la misma clave y dos usuarios distintos → una fila; el segundo usuario recibe 409", async () => {
+    const clave = "real-compras-dos-usuarios-c";
+    const r = await Promise.allSettled([
+      ...Array.from({ length: 4 }, () => crear(EMPRESA_A, { clave_idempotencia: clave })),
+      ...Array.from({ length: 4 }, () => crear(EMPRESA_A, { clave_idempotencia: clave }, {}, OTRO_USUARIO)),
+    ]);
+    expect(await contar(EMPRESA_A, clave)).toBe(1);
+    const [fila] = (await getPool().query("SELECT solicitante_usuario_id AS u FROM compras_requerimientos WHERE empresa_id = ? AND clave_idempotencia = ?", [EMPRESA_A, clave]))[0] as { u: number }[];
+    const ganador = Number(fila.u);
+    const rechazadas = r.filter((x): x is PromiseRejectedResult => x.status === "rejected");
+    const resueltas = r.filter(x => x.status === "fulfilled");
+    // El usuario ganador recupera su creación en sus 4 peticiones; las 4 del otro usuario son 409.
+    expect(resueltas).toHaveLength(4);
+    expect(rechazadas).toHaveLength(4);
+    for (const x of rechazadas) expect((x.reason as ErrorCompra).status).toBe(409);
+    expect([USUARIO, OTRO_USUARIO]).toContain(ganador);
   });
 
   it("sin clave (legado) → cada envío crea un requerimiento", async () => {

@@ -96,8 +96,8 @@ const linea = { fecha: "2026-10-01", proveedor_id: 3, vehiculo_id: null, repuest
 const payload = (extra: Record<string, unknown> = {}) => ({
   fecha_requerimiento: "2026-10-01", entidad_requirente_id: 4, requirente_usuario_id: 9, observaciones: "Urgente", lineas: [linea], ...extra,
 });
-const crear = (extra: Record<string, unknown> = {}, empresa = 1) =>
-  guardarRequerimiento(empresa, 8, "registrador", crearRequerimientoSchema.parse(payload(extra)), false);
+const crear = (extra: Record<string, unknown> = {}, empresa = 1, usuario = 8) =>
+  guardarRequerimiento(empresa, usuario, `usuario${usuario}`, crearRequerimientoSchema.parse(payload(extra)), false);
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -168,6 +168,50 @@ describe("Idempotencia de creación — Requerimientos de Compras", () => {
     }
     expect(filas).toHaveLength(1);
     expect(intentos).toBe(1);
+  });
+
+  it("S1. misma empresa + misma clave + MISMO usuario + mismo contenido → la creación original", async () => {
+    const a = await crear({ clave_idempotencia: CLAVE }, 1, 8);
+    const b = await crear({ clave_idempotencia: CLAVE }, 1, 8);
+    expect(b).toEqual(a);
+    expect(filas).toHaveLength(1);
+  });
+
+  it("S2. misma empresa + misma clave + mismo contenido + OTRO usuario autenticado → 409, no recupera el requerimiento ajeno", async () => {
+    const original = await crear({ clave_idempotencia: CLAVE }, 1, 8);
+    const error = await crear({ clave_idempotencia: CLAVE }, 1, 9).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCompra);
+    expect((error as ErrorCompra).status).toBe(409);
+    expect((error as ErrorCompra).message).toBe(MENSAJE_CONFLICTO_IDEMPOTENCIA);
+    expect(filas).toHaveLength(1);
+    expect(filas[0].id).toBe(original.id);
+    expect(intentos).toBe(1);
+  });
+
+  it("S3. concurrencia con la misma clave y dos usuarios distintos: una sola fila; el otro usuario recibe 409", async () => {
+    const resultados = await Promise.allSettled([crear({ clave_idempotencia: CLAVE }, 1, 8), crear({ clave_idempotencia: CLAVE }, 1, 9)]);
+    expect(filas).toHaveLength(1);
+    const rechazadas = resultados.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(rechazadas).toHaveLength(1);
+    expect((rechazadas[0].reason as ErrorCompra).status).toBe(409);
+    expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
+  });
+
+  it("S4. la clave en OTRA empresa con otro usuario sigue siendo independiente", async () => {
+    const a = await crear({ clave_idempotencia: CLAVE }, 1, 8);
+    const b = await crear({ clave_idempotencia: CLAVE }, 2, 9);
+    expect(b.id).not.toBe(a.id);
+    expect(filas).toHaveLength(2);
+  });
+
+  it("S5. con facturas: el mismo usuario recupera la original; otro usuario con la misma clave recibe 409 (no «factura duplicada»)", async () => {
+    const conFactura = { lineas: [{ ...linea, serie_factura: "C", numero_factura: "3003" }] };
+    const original = await crear({ clave_idempotencia: CLAVE, ...conFactura }, 1, 8);
+    expect(await crear({ clave_idempotencia: CLAVE, ...conFactura }, 1, 8)).toEqual(original);
+    const error = await crear({ clave_idempotencia: CLAVE, ...conFactura }, 1, 9).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ErrorCompra);
+    expect((error as ErrorCompra).message).toBe(MENSAJE_CONFLICTO_IDEMPOTENCIA);
+    expect(filas).toHaveLength(1);
   });
 
   it("C. clave DISTINTA + mismo contenido → dos creaciones legítimas", async () => {

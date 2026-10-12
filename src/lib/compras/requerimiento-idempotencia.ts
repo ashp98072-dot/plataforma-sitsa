@@ -41,14 +41,19 @@ type EntradaHuellaCompra = {
 };
 
 /**
- * Contenido funcional de un Requerimiento de Compras (ya validado/normalizado por zod): cabecera, observaciones, total y
- * líneas EN ORDEN (la posición se persiste como `orden`). Excluye `id`, código, timestamps, snapshots derivados del servidor
- * (proveedor, banco, cuenta, nombres) y la propia clave. Solo se guarda el hash.
+ * Contenido funcional de un Requerimiento de Compras (ya validado/normalizado por zod): SOLICITANTE efectivo, cabecera,
+ * observaciones, total y líneas EN ORDEN (la posición se persiste como `orden`). Excluye `id`, código, timestamps,
+ * snapshots derivados del servidor (proveedor, banco, cuenta, nombres) y la propia clave. Solo se guarda el hash.
+ *
+ * `solicitanteUsuarioId` es el usuario AUTENTICADO que crea (el mismo que se persiste en `solicitante_usuario_id`): lo pone el
+ * servidor desde la sesión, nunca el cliente. Forma parte de la lista blanca para que la misma clave con el mismo contenido
+ * pero OTRO usuario no recupere el requerimiento ajeno (resultaría 409, como una reutilización con otro contenido).
  */
-export function huellaRequerimiento(datos: EntradaHuellaCompra): string {
+export function huellaRequerimiento(datos: EntradaHuellaCompra, solicitanteUsuarioId: number): string {
   const total = importeCompra(datos.lineas.reduce((suma, l) => suma + centavosCompra(l.total), 0));
   return huellaDe({
     v: VERSION_HUELLA, tipo: "compra",
+    solicitante_usuario_id: entero(solicitanteUsuarioId),
     fecha_requerimiento: texto(datos.fecha_requerimiento),
     entidad_requirente_id: entero(datos.entidad_requirente_id),
     requirente_usuario_id: entero(datos.requirente_usuario_id),

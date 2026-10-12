@@ -9,7 +9,8 @@ const base = (extra: Record<string, unknown> = {}) => ({
   fecha_requerimiento: "2026-10-01", entidad_requirente_id: 4, requirente_usuario_id: 9, observaciones: "Urgente",
   lineas: [linea, { ...linea, repuesto_descripcion: "Aceite 15W40", total: "80", observaciones: "Marca indicada" }], ...extra,
 });
-const huella = (extra: Record<string, unknown> = {}) => huellaRequerimiento(crearRequerimientoSchema.parse(base(extra)));
+const USUARIO = 8;
+const huella = (extra: Record<string, unknown> = {}, usuario = USUARIO) => huellaRequerimiento(crearRequerimientoSchema.parse(base(extra)), usuario);
 
 describe("huellaRequerimiento — contenido funcional estable", () => {
   it("es determinista: mismo contenido → misma huella (formato numérico, espacios y propiedades en otro orden no cuentan)", () => {
@@ -20,7 +21,7 @@ describe("huellaRequerimiento — contenido funcional estable", () => {
         { observaciones: " Marca indicada ", total: "80.00", repuesto_descripcion: "Aceite 15W40", condicion_pago: "Contado", metodo_pago: "Transferencia", proveedor_id: 3, fecha: "2026-10-01" },
       ],
       observaciones: "  Urgente ", requirente_usuario_id: 9, entidad_requirente_id: 4, fecha_requerimiento: "2026-10-01",
-    }));
+    }), USUARIO);
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -42,6 +43,16 @@ describe("huellaRequerimiento — contenido funcional estable", () => {
       { lineas: [...base().lineas].reverse() },
     ];
     for (const v of variantes) expect(huella(v), JSON.stringify(v).slice(0, 80)).not.toBe(original);
+  });
+
+  it("el SOLICITANTE efectivo forma parte de la huella: mismo contenido y otro usuario → otra huella", () => {
+    expect(huella({}, 8)).toBe(huella({}, 8));
+    expect(huella({}, 9)).not.toBe(huella({}, 8));
+  });
+
+  it("el solicitante sale del servidor: un campo `solicitante_usuario_id` enviado en el payload no es aceptado (esquema estricto)", () => {
+    expect(crearRequerimientoSchema.safeParse(base({ solicitante_usuario_id: 99 })).success).toBe(false);
+    expect(crearRequerimientoSchema.safeParse(base({ solicitante_nombre: "Otro" })).success).toBe(false);
   });
 
   it("observaciones vacías / null / solo espacios / ausentes son lo mismo; encargado null = ausente", () => {

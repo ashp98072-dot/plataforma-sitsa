@@ -18,7 +18,7 @@
 --
 -- QUÉ ES `clave_idempotencia`: token aleatorio que genera el formulario por intento de creación (NO se deriva de
 -- fecha/proveedor/monto/concepto: dos requerimientos legítimos iguales deben poder coexistir).
--- QUÉ ES `huella_idempotencia`: SHA-256 (hex) del contenido funcional enviado (cabecera, observaciones, total y líneas en
+-- QUÉ ES `huella_idempotencia`: SHA-256 (hex) del contenido funcional (solicitante efectivo —el usuario autenticado—, cabecera, observaciones, total y líneas en
 -- orden); distingue un reintento idéntico (mismo registro) de una reutilización de la clave con otro contenido (HTTP 409).
 --
 -- COMPATIBILIDAD DE DESPLIEGUE: la aplicación tolera que estas columnas todavía no existan (opera en modo legado, sin

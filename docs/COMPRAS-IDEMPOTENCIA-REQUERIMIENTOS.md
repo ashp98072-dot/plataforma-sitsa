@@ -29,10 +29,14 @@ huella SHA-256 del contenido funcional). Adaptaciones propias de Compras:
 | Respuesta de reintento | 200 | 201 y mismo cuerpo `{ id, codigo, version }` (código y versión vigentes) |
 | Frontend | `useRef` + estado | `crearEnvioUnico()` (guard síncrono + clave perezosa en un `useState`, compatible con el arnés de hooks de las pruebas existentes). La clave **no se reinicia** tras el éxito: el formulario queda bloqueado (`completado`) mientras navega, y un envío tardío recuperaría el mismo requerimiento |
 
-Huella (`src/lib/compras/requerimiento-idempotencia.ts`): `fecha_requerimiento`, `entidad_requirente_id`,
-`requirente_usuario_id`, `encargado_compras_usuario_id`, `observaciones`, total derivado y **líneas en orden** (unidad, fecha,
-serie/número de factura, proveedor, repuesto, método y condición de pago, total, observaciones de línea). Excluye id, código,
-timestamps, snapshots del servidor (proveedor, banco, cuenta, nombres) y la propia clave. Solo se guarda el hash.
+Huella (`src/lib/compras/requerimiento-idempotencia.ts`, lista blanca funcional): **solicitante efectivo**
+(`solicitante_usuario_id`: el usuario autenticado que recibe `guardarRequerimiento` y el que se persiste en la fila; lo pone el
+servidor desde la sesión, el esquema estricto rechaza cualquier campo de solicitante en el payload), `fecha_requerimiento`,
+`entidad_requirente_id`, `requirente_usuario_id`, `encargado_compras_usuario_id`, `observaciones`, total derivado y **líneas en
+orden** (unidad, fecha, serie/número de factura, proveedor, repuesto, método y condición de pago, total, observaciones de
+línea). Excluye id, código, timestamps, snapshots del servidor (proveedor, banco, cuenta, nombres) y la propia clave. Solo se
+guarda el hash. Misma empresa + misma clave + mismo contenido pero **otro usuario autenticado → 409** (nunca recupera el
+requerimiento ajeno). El algoritmo permanece en `v1`: esta migración/PR aún no se usa en producción.
 
 ## 3. Exportaciones
 
