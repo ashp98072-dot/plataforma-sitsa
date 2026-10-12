@@ -145,7 +145,7 @@ describe("índice persistente de frescura", () => {
   it("Map libera una ejecución fallida y permite un intento posterior", async () => {
     db.query.mockRejectedValueOnce(new Error("lectura fallida"));
     await expect(sincronizarVacacionesEmpleadosActivos(1)).rejects.toThrow("lectura fallida");
-    await expect(sincronizarVacacionesEmpleadosActivos(1)).resolves.toEqual({ empleados: 0, errores: 0 });
+    await expect(sincronizarVacacionesEmpleadosActivos(1)).resolves.toEqual({ empleados: 0, sincronizados: 0, errores: 0 });
     expect(db.query).toHaveBeenCalledTimes(3);
   });
   it("Map comparte trabajo simultáneo pero no conserva Promise resuelta", async () => {
@@ -156,7 +156,62 @@ describe("índice persistente de frescura", () => {
     terminar(); await Promise.all([a, b]); expect(db.query).toHaveBeenCalledTimes(2);
     empleados.push({ empresa: 1, id: 1 });
     await marcarVacacionesDirty(asConn(conexion()), 1, 1);
-    expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 1, errores: 0 });
+    expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 1, sincronizados: 1, errores: 0 });
     expect(db.query).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("rollout controlado con batch, estado y motor reales (DB simulada)", () => {
+  it("claim de otro worker no se cuenta como sincronizado", async () => {
+    empleados.push({ empresa: 1, id: 1 }); locks.add("rrhh-vac-sync:1:1");
+    expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 1, sincronizados: 0, errores: 0 });
+    expect(filas.has("1:1")).toBe(false);
+  });
+  function instrumentar(fallidos = new Set<number>()) {
+    const motores: number[] = [];
+    let activos = 0; let maxActivos = 0;
+    db.getConnection.mockImplementation(async () => {
+      const conn = conexion(); const consulta = conn.query.getMockImplementation()!;
+      conn.beginTransaction.mockImplementation(async () => { activos++; maxActivos = Math.max(maxActivos, activos); });
+      conn.commit.mockImplementation(async () => { activos--; });
+      conn.rollback.mockImplementation(async () => { activos--; });
+      conn.query.mockImplementation(async (sql, params = []) => {
+        if (sql.includes("SELECT fecha_alta")) {
+          const empleadoId = Number(params[0]); motores.push(empleadoId);
+          await Promise.resolve(); // da oportunidad al event loop; detecta paralelización accidental
+          if (fallidos.has(empleadoId)) throw new Error("fallo simulado de empleado");
+        }
+        return consulta(sql, params);
+      });
+      return conn;
+    });
+    return { motores, maxActivos: () => maxActivos };
+  }
+  function activosIniciales() {
+    for (let id = 1; id <= 104; id++) empleados.push({ empresa: 1, id });
+  }
+  it("104 candidatos iniciales seriales; segunda ejecución dos SELECT y cero motores", async () => {
+    activosIniciales(); const observacion = instrumentar();
+    expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 104, sincronizados: 104, errores: 0 });
+    expect(observacion.motores).toEqual(Array.from({ length: 104 }, (_, i) => i + 1));
+    expect(observacion.maxActivos()).toBe(1);
+    expect([...filas.values()].every((s) => s.dirty === 0 && s.ultima_sync_fecha === "2026-10-12")).toBe(true);
+    db.query.mockClear(); db.getConnection.mockClear(); observacion.motores.length = 0;
+    expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 0, sincronizados: 0, errores: 0 });
+    expect(db.query).toHaveBeenCalledTimes(2); expect(db.getConnection).not.toHaveBeenCalled();
+    expect(observacion.motores).toEqual([]);
+  });
+  it("error individual no corta lote, queda pendiente y reejecución procesa solo el fallido", async () => {
+    activosIniciales(); const fallidos = new Set([50]); const observacion = instrumentar(fallidos);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 104, sincronizados: 103, errores: 1 });
+      expect(observacion.motores.at(-1)).toBe(104); expect(observacion.maxActivos()).toBe(1);
+      expect(filas.get("1:50")).toMatchObject({ dirty: 1, ultima_sync_fecha: null });
+      expect(await candidatosVacaciones(1)).toEqual([50]);
+      fallidos.clear(); observacion.motores.length = 0;
+      expect(await sincronizarVacacionesEmpleadosActivos(1)).toEqual({ empleados: 1, sincronizados: 1, errores: 0 });
+      expect(observacion.motores).toEqual([50]); expect(await candidatosVacaciones(1)).toEqual([]);
+    } finally { log.mockRestore(); }
   });
 });

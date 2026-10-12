@@ -1,7 +1,9 @@
 # RRHH rendimiento Fase 2: índice persistente de frescura
 
 Base: 9598e796545bebc54f2caf0f7be419000ec510db; Fase 1 / PR #439 mergeado.
-No se ejecutó SQL ni se consultó/modificó producción. Migración propuesta para MariaDB 11.8.9.
+El agente no ejecutó SQL ni consultó/modificó producción. El operador confirmó después
+la migración aplicada y validada en MariaDB 11.8.9: tabla inicialmente vacía,
+104 activos, 0 frescos, 104 pendientes, sin duplicados; GET_LOCK=1 / RELEASE_LOCK=1.
 
 ## Fuente de verdad y consumidores
 
@@ -106,12 +108,13 @@ se leyeron en la transacción del motor, no la política nueva leída después d
   existente distinta: comparar SHOW CREATE TABLE; DETENER ante diferencias.
 - No existe prueba suficiente de coherencia/frescura de los saldos para certificarlos
   únicamente contando filas. NO marcar fresh con backfill optimista.
-- SQL backfill separado OPCIONAL lee empleados e inicializa solo filas dirty del índice.
-  No evita la primera pasada. NO fue ejecutado.
+- SQL backfill histórico separado lee empleados e inicializa solo filas dirty del índice.
+  No evita la primera pasada. NO fue ejecutado y NO se debe ejecutar en este rollout.
 - Preparar BD antes de desplegar. No ocultar ausencia de tabla con fallback silencioso.
-- Primera pasada inevitable: efectuar una invocación controlada del batch antes de
-  habilitar tráfico/polling. Usa loop serial existente, no reconstrucción especial.
-  Si se omite este paso, el primer GET hará la primera pasada; documentado, no encubierto.
+- Primera pasada inevitable: ejecutar el POST administrativo indicado abajo, con tráfico
+  y polling suspendidos operativamente. Usa el loop serial existente.
+  Si se omite la ventana, un GET podría ganar la carrera; el endpoint por sí solo
+  NO bloquea ni cambia alertas/notificaciones.
 - Reinicios/redeploys ese mismo día conservan frescura. Al cambiar el día vuelven elegibles
   los activos según el requisito diario; no se promete cero motores cada nuevo día.
 - SQL manual sobre fuentes debe ejecutar también, con autorización y misma transacción:
@@ -137,13 +140,14 @@ El ahorro es persistencia entre procesos EN EL MISMO DÍA, no paralelismo masivo
 
 ## Riesgos/validación
 
-Validación física de FK/DDL/GET_LOCK y rollout requieren revisión y autorización posteriores;
-los tests locales usan mocks, no prueban un servidor MariaDB real.
+La validación física de tabla/GET_LOCK fue informada como exitosa por el operador.
+La inicialización todavía NO fue ejecutada. Los tests locales usan mocks,
+no prueban un servidor MariaDB real.
 Una conexión perdida recupera el lock cuando MariaDB detecta su cierre; no se configura
 un timeout/lease arbitrario que permita doble worker activo.
 Los errores por empleado siguen aislados/registrados; errores batch se propagan.
 No hay UX/polling/TMS/Facturación/Contabilidad/FEL modificados.
-### Validación local final
+### Validación anterior al ajuste de rollout (HEAD d4ad17e)
 
 - Dirigidas Vacaciones + wiring empleados + limpieza: **504/504**, sin fallos.
 - Suite relevante (`vitest run src/lib/rrhh src/lib/admin src/app/api/empresas`):
@@ -165,10 +169,10 @@ No hay UX/polling/TMS/Facturación/Contabilidad/FEL modificados.
   admin resync aun fresh, dos workers, desconexión/recuperación simulada,
   destrucción de conexión si RELEASE_LOCK falla, aislamiento por empresa,
   105 fresh y 2 dirty, FIFO/histórico y rollback de mutaciones.
-- No hubo SQL ni conexión de pruebas a producción. DDL y named locks fueron
-  revisados y probados con mocks/contratos: aprobación física en MariaDB sigue pendiente.
+- No hubo SQL ni conexión de pruebas a producción por el agente. La validación física
+  posterior fue realizada e informada por el operador, no por las pruebas locales.
 
-### Inventario del PR (23 archivos)
+### Inventario del PR (25 archivos)
 
 Documentación y SQL propuesto:
 
@@ -189,6 +193,7 @@ Implementación e invalidación:
 - `src/lib/admin/limpiar-modulo.ts`
 - `src/app/api/empresas/[slug]/rrhh/incidencias/route.ts`
 - `src/app/api/empresas/[slug]/rrhh/incidencias/anexo/route.ts`
+- `src/app/api/admin/vacaciones/inicializar-sync/route.ts`
 
 Pruebas y fixture transaccional:
 
@@ -201,6 +206,104 @@ Pruebas y fixture transaccional:
 - `src/lib/rrhh/vacaciones-reparacion.test.ts`
 - `src/lib/rrhh/vacaciones.test.ts`
 - `src/lib/rrhh/vacaciones-registro-bd.testutil.ts`
+- `src/app/api/admin/vacaciones/inicializar-sync/route.test.ts`
 
 Sin UI/permisos/dependencias/lockfile/TMS/catálogos de nómina.
 El checkout original, sus modificaciones y untracked quedaron preservados.
+
+## Inicialización administrativa controlada (corrección de rollout)
+
+Se eligió un endpoint porque el repositorio ya tiene operaciones manuales de Admin
+en `src/app/api/admin/limpiar-modulo/route.ts`. No requiere instalar tsx,
+resolver aliases de TS fuera de Next ni cargar otro motor/otra conexión de scripts.
+
+`POST /api/admin/vacaciones/inicializar-sync`:
+
+- Sesión autenticada y rol global **Admin**; no basta un permiso de vacaciones.
+  Es el mismo alcance administrativo global del patrón existente.
+- JSON estricto con `empresaId` numérico positivo y confirmación exacta
+  `INICIALIZAR VACACIONES EMPRESA <id>`. Empresa debe existir y estar activa.
+  No toma la empresa elegida en la sesión ni usa un fallback.
+- Llama únicamente `sincronizarVacacionesEmpleadosActivos(empresa.id)`.
+  Motor, generación, CAS, named locks, Map y loop serial son los de la PR.
+- Sin GET, UI, tarea programada, build hook ni invocación al importar.
+  No cambia permisos existentes ni flags de frescura por su cuenta.
+- Respuesta privada/no-store:
+  `{empresaId,candidatos,sincronizados,errores,omitidos}`.
+  `candidatos` es el campo legado `empleados` del batch.
+  El único cambio funcional del batch es sumar el contador `sincronizados`
+  cuando el helper central devuelve true; mantiene `empleados` y `errores`.
+- `sincronizados` cuenta motores terminados y confirmados, NO certifica ausencia
+  de invalidaciones concurrentes ni equivale a reparar históricos protegidos.
+  `omitidos` cuenta locks ocupados/rechecks ya fresh. Revisar pendientes al terminar.
+- Un error individual no detiene siguientes empleados; errores parciales devuelven
+  HTTP 200 con `errores > 0`. Un fallo del batch devuelve 500 seguro, sin stack.
+  Nunca interpretar HTTP 200 por sí solo como inicialización completa.
+- Cada repetición vuelve a leer estado. Si todos fresh: batch **2 SELECT / 0 motores**.
+  El endpoint además verifica sesión y empresa; el lookup de empresa puede añadir
+  un SELECT en frío según la caché existente. No confundirlo con queries del batch.
+
+### Procedimiento exacto (para operador; NO ejecutado aquí)
+
+Precondición indispensable: ventana de mantenimiento que impida tráfico normal
+y polling a alertas/notificaciones, incluyendo pestañas abiertas. Mantener acceso
+exclusivo del operador al POST administrativo (por proxy/infraestructura existente).
+Obtener una sesión Admin válida antes de la ventana. No abrir la aplicación normal
+para disparar el POST: puede iniciar la campana. No se añadió una barrera automática.
+
+1. **Migración BD ya aplicada y verificada** por el operador. No ejecutar migrate
+   otra vez, ni backfill. 104 pendientes iniciales no se convierten en fresh con SQL.
+2. **Desplegar el código** en esa ventana, sin usuarios/polling. Build/deploy no
+   dispara el motor ni inicializa nada automáticamente.
+3. **Ejecutar inmediatamente la inicialización**, con sesión Admin y empresa explícita.
+   Ejemplo empresa 1; reemplazar solo el host por el del despliegue:
+
+   ```sh
+   curl --fail-with-body --request POST \
+     'https://<HOST>/api/admin/vacaciones/inicializar-sync' \
+     --cookie /ruta/segura/sesion-admin.cookies \
+     --header 'Content-Type: application/json' \
+     --data '{"empresaId":1,"confirmacion":"INICIALIZAR VACACIONES EMPRESA 1"}'
+   ```
+
+   El archivo de cookies pertenece al operador, no se guarda en repo ni se imprime.
+   Esperar el fin de la respuesta. El timeout del proxy/hosting debe permitir la
+   pasada serial; no existe garantía de duración ni se simula un background job.
+   Si se corta la conexión/timeout, verificar pendientes y reintentar: commits
+   individuales completados conservan frescura; la tarea puede seguir en curso.
+4. **Verificar frescos/pendientes** con SOLO el bloque B del preflight existente
+   (la tabla ya existe). Los conteos allí son globales; para empresa específica,
+   en la subconsulta `clasificacion` agregar `AND e.empresa_id = 1` al WHERE de activos.
+   No basta contar filas ni solo dirty: comprobar fecha, fingerprint y fecha_alta.
+   Sin errores/concurrencia se esperan 104 frescos y 0 pendientes para esta empresa.
+   Repetir el mismo POST: se esperan candidatos=0, sincronizados=0, errores=0,
+   omitidos=0; el batch solo realiza 2 SELECT. Si hubo un fallo, diagnosticarlo y
+   repetir; seleccionará únicamente los pendientes, sin reprocesar los frescos.
+5. **Habilitar/continuar tráfico normal** solo después de confirmar pendientes=0.
+   Si cambia el día Guatemala durante la ventana, repetir antes de habilitar.
+
+Este mecanismo NO es la resync administrada forzada: esa sigue ejecutando el motor
+aun fresh en su flujo original. Inicializar es idempotente por el índice.
+
+Pruebas de rollout añadidas: batch/estado/motor reales con BD simulada para 104
+candidatos, máximo una transacción de empleado a la vez, segunda pasada 2 SELECT
+y cero motores, fallo intermedio con continuación hasta empleado 104, fallido
+dirty/pendiente y reejecución únicamente de ese ID. Tests del endpoint cubren
+401/403, empresa y confirmación, JSON, empresa inactiva, conteos/errores seguros,
+sin GET y sin ejecución al cargar el módulo.
+
+### Validación del ajuste de rollout
+
+- Puntuales iniciales de endpoint/batch: 39/39.
+- Dirigidas finales Vacaciones + wiring + limpieza + endpoint: **522/522**.
+- Suite relevante final (`vitest run src/lib/rrhh src/lib/admin src/app/api/empresas
+  src/app/api/admin/vacaciones`): **3104 pass / 14 fail / 13 skip**.
+  Los 14 fallos coinciden por archivo/test/mensaje con el baseline registrado:
+  programacion-tc (7), programacion-viajes-tercerizados (1), regreso-opcional (6).
+  No se repitió la suite completa ni se modificó TMS.
+- TypeScript, ESLint dirigido sin warnings, diff-check y build: PASS.
+  Build mantiene advertencias previas fuera del alcance.
+- Corrección limitada a seis archivos: este documento, `vacaciones.ts`,
+  `vacaciones.test.ts`, `vacaciones-sync-estado.test.ts`, nuevo POST y su test.
+  Sin cambios en schema/migración/preflight/backfill, CAS, FIFO ni motor individual.
+- Ningún POST ejecutado contra producción, ningún backfill ni SQL ejecutado por el agente.

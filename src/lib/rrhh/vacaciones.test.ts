@@ -76,7 +76,7 @@ describe("acumulación crítica de vacaciones", () => {
     const primero = await sincronizarVacacionesEmpleadosActivos(901);
     const segundo = await sincronizarVacacionesEmpleadosActivos(901);
 
-    expect(primero).toEqual({ empleados: 2, errores: 0 });
+    expect(primero).toEqual({ empleados: 2, sincronizados: 2, errores: 0 });
     expect(segundo).toEqual(primero);
     expect(db.query).toHaveBeenCalledTimes(4);
     expect(db.getConnection).toHaveBeenCalledTimes(4);

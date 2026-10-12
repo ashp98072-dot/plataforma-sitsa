@@ -75,6 +75,7 @@ export async function contarDiasHabiles(
 
 type ResultadoSincronizacionEmpresa = {
   empleados: number;
+  sincronizados: number;
   errores: number;
 };
 
@@ -100,9 +101,10 @@ export async function sincronizarVacacionesEmpleadosActivos(
   const promesa = (async () => {
     const empleados = await candidatosVacaciones(empresaId);
     let errores = 0;
+    let sincronizados = 0;
     for (const empleado of empleados) {
       try {
-        await sincronizarCandidatoVacaciones(empresaId, empleado, sincronizarPeriodosVacacionesEnConexion);
+        if (await sincronizarCandidatoVacaciones(empresaId, empleado, sincronizarPeriodosVacacionesEnConexion)) sincronizados += 1;
       } catch (error) {
         errores += 1;
         console.error(
@@ -111,7 +113,7 @@ export async function sincronizarVacacionesEmpleadosActivos(
         );
       }
     }
-    return { empleados: empleados.length, errores };
+    return { empleados: empleados.length, sincronizados, errores };
   })();
 
   sincronizacionesEmpresa.set(empresaId, promesa);
