@@ -9,6 +9,7 @@ import { dibujarFirmas, moneda } from "@/lib/tms/fondos-solicitud-pdf";
 import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { HEADERS_PDF_GASTOS, WEIGHT_PDF_GASTOS } from "@/lib/tms/gastos-solicitud-pdf";
 import { obtenerGasto, type GastoOperativo } from "@/lib/tms/gastos";
+import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
 
 /**
  * GASTOS-ADMINISTRATIVO-1 (Fase 5) — PDF individual de UN gasto operativo
@@ -224,6 +225,9 @@ function construirPdf(
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
       .text(`TOTAL: ${moneda(total)}`, { width: pageWidth, align: "right" });
+
+    // Observaciones del gasto (el mismo campo de BD que ya exporta el Excel). Sin texto, no se dibuja.
+    dibujarObservacionesPdf(doc, gasto.observaciones, pageWidth, marginL, pageBottom);
 
     // Firmas — SIEMPRE al final, reutilizando dibujarFirmas() de Fondos tal cual.
     dibujarFirmas(doc, pageWidth, marginL, pageBottom, {

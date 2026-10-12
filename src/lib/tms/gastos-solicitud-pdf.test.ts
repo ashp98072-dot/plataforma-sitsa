@@ -71,3 +71,28 @@ describe("generarPdfSolicitudGastos", () => {
     expect(repeticiones).toBe(paginas);
   });
 });
+
+describe("generarPdfSolicitudGastos — Observaciones por gasto", () => {
+  it("lista las observaciones UNA vez por gasto (aunque tenga varias líneas), con su código, y sin tocar el TOTAL", async () => {
+    const spy = vi.spyOn(PDFDocument.prototype, "text");
+    const filas = [
+      gasto({ id: 12, lineaId: 1, observaciones: "Con factura.\nPendiente de reintegro." }),
+      gasto({ id: 12, lineaId: 2, observaciones: "Con factura.\nPendiente de reintegro.", total: 100 }),
+      gasto({ id: 13, observaciones: null }),
+      gasto({ id: 14, observaciones: "  " }),
+    ];
+    await generarPdfSolicitudGastos({ empresaNombre: "SITSA", filas: filas as never });
+    const textos = spy.mock.calls.map((c) => String(c[0]));
+    expect(textos.filter((t) => t === "OBSERVACIONES:")).toHaveLength(1);
+    expect(textos.filter((t) => t === "Con factura.\nPendiente de reintegro.")).toHaveLength(1);
+    expect(textos.some((t) => t.startsWith("GASTO-000012 · 01/09/2026"))).toBe(true);
+    expect(textos.some((t) => t.startsWith("GASTO-000013"))).toBe(false);
+    expect(textos).toContain("TOTAL: Q 700.00");
+  });
+
+  it("sin observaciones en ningún gasto no dibuja el bloque", async () => {
+    const spy = vi.spyOn(PDFDocument.prototype, "text");
+    await generarPdfSolicitudGastos({ empresaNombre: "SITSA", filas: [gasto()] as never });
+    expect(spy.mock.calls.map((c) => String(c[0]))).not.toContain("OBSERVACIONES:");
+  });
+});

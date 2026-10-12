@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
+import { CLAVE_ENVIO_REGEX } from "@/lib/idempotencia/clave-envio";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO, crearGasto, listarGastos } from "@/lib/tms/gastos";
 import { CONFIG_GASTOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
 
@@ -70,6 +71,8 @@ const schema = z.object({
   numeroCuentaPago: z.string().max(80).nullable().optional(),
   tieneFactura: z.boolean().optional(),
   observaciones: z.string().max(300).nullable().optional(),
+  // Clave de envío (idempotencia): OPCIONAL en la primera ventana de despliegue; el frontend nuevo siempre la envía.
+  claveIdempotencia: z.string().regex(CLAVE_ENVIO_REGEX, "La clave de envío no es válida.").optional(),
   /**
    * GASTOS-ADMINISTRATIVO-1 (Fase 3) — TODOS opcionales, mismo criterio
    * que crearGasto (Fase 2): la UI actual (Fase 4, todavía no

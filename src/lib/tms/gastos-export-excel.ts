@@ -4,6 +4,7 @@ import { formatearFechaVisible } from "@/lib/rrhh/dates";
 import { resumirViaticosPorEstado, type FilaAgregadaGasto, type FilaGastoDetalle, type FilaRentabilidadViaje, type FilaSolicitudFondoReporte, type FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
 import type { SolicitudFondo } from "@/lib/tms/fondos";
 import type { GastoOperativo } from "@/lib/tms/gastos";
+import { alturaFilaExcel, observacionesVisibles } from "@/lib/tms/observaciones-export";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — reutiliza el exportador genérico
@@ -176,7 +177,7 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Solicitudes de fondo", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
-  const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud"];
+  const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud", "Observaciones"];
   ws.addRow(headers);
   const header = ws.getRow(1);
   header.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -192,16 +193,25 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
       f.cantidad, f.descripcion ?? "—", f.monto, f.total,
       f.requirenteNombre ?? "—", f.solicitanteNombre ?? "—", f.autorizanteNombre ?? "—",
       f.fechaAutorizacion ? formatearFechaVisible(f.fechaAutorizacion) : "—", f.totalSolicitud,
+      // Observaciones de la cabecera (mismo campo de BD); vacío si no hay: no se inventa texto.
+      observacionesVisibles(f.observaciones) ?? "",
     ]);
   }
 
-  ws.autoFilter = { from: "A1", to: `S${Math.max(1, filas.length + 1)}` };
-  ws.columns = [18,14,14,14,26,20,24,20,14,26,12,40,16,16,24,24,24,18,18].map((width) => ({ width }));
+  const COL_OBSERVACIONES = 20;
+  const ANCHO_OBSERVACIONES = 40;
+  ws.autoFilter = { from: "A1", to: `T${Math.max(1, filas.length + 1)}` };
+  ws.columns = [18,14,14,14,26,20,24,20,14,26,12,40,16,16,24,24,24,18,18,ANCHO_OBSERVACIONES].map((width) => ({ width }));
   ws.getColumn(11).numFmt = "0.00";
   for (const col of [13, 14, 19]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
   ws.getColumn(12).alignment = { vertical: "top", wrapText: true };
   for (let i = 2; i <= filas.length + 1; i++) {
-    for (let col = 1; col <= headers.length; col++) ws.getRow(i).getCell(col).alignment = { vertical: "top" };
+    for (let col = 1; col <= headers.length; col++) {
+      ws.getRow(i).getCell(col).alignment = col === COL_OBSERVACIONES ? { vertical: "top", wrapText: true } : { vertical: "top" };
+    }
+    // Texto completo y saltos de línea: altura suficiente para las líneas estimadas (solo cuando hay más de una).
+    const alto = alturaFilaExcel(filas[i - 2].observaciones, ANCHO_OBSERVACIONES);
+    if (alto) ws.getRow(i).height = alto;
   }
 
   return Buffer.from(await wb.xlsx.writeBuffer());
@@ -257,17 +267,39 @@ export async function exportarGastoOperativoExcel(gasto: GastoOperativo): Promis
 }
 
 export async function exportarSolicitudFondoExcel(solicitud: SolicitudFondo): Promise<Buffer> {
+  // Observaciones de la cabecera (mismo campo de BD) como última columna, repetida en cada línea igual que en el Excel de
+  // Gastos; vacía si no hay. La fila TOTAL y las 13 columnas existentes no cambian.
+  const observaciones = observacionesVisibles(solicitud.observaciones) ?? "";
   const buffer = await tablaAExcel({
     sheetName: `Solicitud ${solicitud.codigo}`.slice(0, 31),
-    headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"],
+    headers: ["Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)", "Observaciones"],
     rows: [
       ...solicitud.lineas.map((l) => [
         formatearFechaVisible(solicitud.fechaRequerimiento), l.fechaViaje ? formatearFechaVisible(l.fechaViaje) : "",
         l.empleadoNombre ?? "", l.cuenta ?? "", l.metodoPago ?? "", l.cargo ?? "", l.placa ?? "", l.clienteNombre ?? "",
-        l.categoria, String(l.cantidad), l.descripcion ?? "", money(l.monto), money(l.cantidad * l.monto),
+        l.categoria, String(l.cantidad), l.descripcion ?? "", money(l.monto), money(l.cantidad * l.monto), observaciones,
       ]),
-      ["", "", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total)],
+      ["", "", "", "", "", "", "", "", "", "", "", "TOTAL", money(solicitud.total), ""],
     ],
   });
-  return encabezadoIndividual(buffer, solicitud.entidadRequirenteNombre, "SOLICITUD DE FONDO", solicitud.codigo);
+  return encabezadoIndividual(await ajustarObservacionesFondo(buffer, 14), solicitud.entidadRequirenteNombre, "SOLICITUD DE FONDO", solicitud.codigo);
+}
+
+/**
+ * tablaAExcel (genérico) escribe texto plano sin ajuste. Aquí se activa `wrapText` en la columna de observaciones y se fija
+ * una altura de fila suficiente para el texto completo y sus saltos de línea (según el ancho real que dejó tablaAExcel).
+ */
+async function ajustarObservacionesFondo(buffer: Buffer, columna: number): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(new Uint8Array(buffer).buffer);
+  const ws = wb.worksheets[0];
+  const ancho = ws.getColumn(columna).width ?? 40;
+  ws.eachRow((fila, numero) => {
+    if (numero === 1) return;
+    const celda = fila.getCell(columna);
+    celda.alignment = { vertical: "top", wrapText: true };
+    const alto = alturaFilaExcel(typeof celda.value === "string" ? celda.value : null, ancho);
+    if (alto) fila.height = alto;
+  });
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }

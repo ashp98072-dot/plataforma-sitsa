@@ -1,6 +1,8 @@
 import PDFDocument from "pdfkit";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
+import { codigoGasto } from "@/lib/tms/gastos";
+import { dibujarObservacionesPorRegistroPdf, observacionesVisibles, type ObservacionRegistro } from "@/lib/tms/observaciones-export";
 import type { FilaGastoDetalle } from "@/lib/tms/reportes-gastos";
 
 export const HEADERS_PDF_GASTOS = [
@@ -27,6 +29,26 @@ function filaPdf(fila: FilaGastoDetalle): string[] {
     fila.descripcion ?? "—",
     moneda(fila.total),
   ];
+}
+
+/**
+ * Una entrada por GASTO con observaciones (un gasto con varias líneas repite el mismo texto en cada fila: se lista una vez).
+ * El código sale del id con la misma regla que el código persistido (GASTO-######).
+ */
+function observacionesDeGastos(filas: FilaGastoDetalle[]): ObservacionRegistro[] {
+  const vistos = new Set<number>();
+  const registros: ObservacionRegistro[] = [];
+  for (const fila of filas) {
+    if (vistos.has(fila.id)) continue;
+    vistos.add(fila.id);
+    const texto = observacionesVisibles(fila.observaciones);
+    if (!texto) continue;
+    registros.push({
+      etiqueta: `${codigoGasto(fila.id)} · ${formatearFechaVisible(fila.fechaSolicitud) || "—"} · ${fila.empleadoNombre ?? "—"}`,
+      texto,
+    });
+  }
+  return registros;
 }
 
 export function generarPdfSolicitudGastos(opts: {
@@ -76,6 +98,9 @@ export function generarPdfSolicitudGastos(opts: {
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
       .text(`TOTAL: ${moneda(total)}`, { width: pageWidth, align: "right" });
+
+    // Observaciones por gasto (el mismo campo de BD que ya exporta el Excel); sin texto, no se dibuja nada.
+    dibujarObservacionesPorRegistroPdf(doc, observacionesDeGastos(opts.filas), pageWidth, marginL, pageBottom);
 
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {

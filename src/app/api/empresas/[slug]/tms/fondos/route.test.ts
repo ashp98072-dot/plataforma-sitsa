@@ -19,6 +19,7 @@ vi.mock("@/lib/tms/fondos", () => ({
 import { requireTenantGastos } from "@/lib/tenant";
 import { crearSolicitudFondo, listarSolicitudesFondo } from "@/lib/tms/fondos";
 import { GET, POST } from "./route";
+import { ConflictoIdempotencia } from "@/lib/tms/idempotencia-envio";
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 
@@ -127,5 +128,40 @@ describe("POST /tms/fondos — acepta las categorías compartidas nuevas (GASTOS
     const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, categoria: "Categoría inventada" }] }), ctx);
     expect(res.status).toBe(400);
     expect(crearSolicitudFondo).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * IDEMPOTENCIA (PR A) — la clave de envío es OPCIONAL en el backend (ventana de despliegue): sin ella el POST se comporta
+ * como siempre; con ella se valida el formato y se pasa a crearSolicitudFondo; una reutilización con otro contenido es 409.
+ */
+describe("POST /tms/fondos — claveIdempotencia", () => {
+  const CLAVE = "3f2a9c1e-7b64-4d0a-9e51-2c8f6a1b0d33";
+
+  it("con clave válida la pasa a crearSolicitudFondo junto con el resto del contenido", async () => {
+    vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: CLAVE, lineas: [lineaBase] }), ctx);
+    expect(res.status).toBe(200);
+    expect(crearSolicitudFondo).toHaveBeenCalledWith(7, expect.objectContaining({ claveIdempotencia: CLAVE }), "ops1");
+  });
+
+  it("sin clave sigue funcionando (compatibilidad con frontend anterior en caché)", async () => {
+    vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
+    const res = await POST(postReq({ ...bodyBase, lineas: [lineaBase] }), ctx);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(crearSolicitudFondo).mock.calls[0][1]).not.toHaveProperty("claveIdempotencia");
+  });
+
+  it("clave con formato inválido → 400 sin llegar a crearSolicitudFondo", async () => {
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: "x'; DROP TABLE y;--", lineas: [lineaBase] }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearSolicitudFondo).not.toHaveBeenCalled();
+  });
+
+  it("misma clave con contenido distinto → 409 con el mensaje de conflicto (no un 500)", async () => {
+    vi.mocked(crearSolicitudFondo).mockRejectedValue(new ConflictoIdempotencia());
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: CLAVE, lineas: [lineaBase] }), ctx);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("ya se registró con datos distintos");
   });
 });

@@ -72,7 +72,8 @@ describe("27) las 4 pantallas: resumen visible, errores estructurados y limpieza
   const plan = leer("src/app/e/[slug]/programacion/plan-form.tsx");
   for (const [nombre, src] of [["Solicitudes de fondo", fondos], ["Gastos", gastos], ["Requerimientos de compra", compras], ["Programación", plan]] as const) {
     it(`${nombre}: usa leerErroresRespuesta, pinta <ErroresFormulario> y deja json.error como respaldo`, () => {
-      expect(src).toContain("leerErroresRespuesta(data");
+      // Gastos delega el POST/PATCH + comprobante en enviarGasto y lee la respuesta como `r.data`.
+      expect(src).toMatch(/leerErroresRespuesta\((data|r\.data)/);
       expect(src).toContain("<ErroresFormulario errores={errores} />");
       expect(src).toMatch(/setError\((leidos|delServidor)\.errores?\.?length \? "" : leidos\.mensaje\)|setError\(delServidor\.length \? "" : leidos\.mensaje\)/);
     });
@@ -85,7 +86,7 @@ describe("27) las 4 pantallas: resumen visible, errores estructurados y limpieza
     expect(fondos).not.toContain("lineasValidas");
     expect(fondos).toContain("indicesLlenos(lineas, LINEA_VACIA)");
     expect(fondos).toContain('remapearLineas(leidos.errores, "lineas", lineasPantalla)');
-    expect(gastos).toMatch(/setErrores\(\[\]\);\n\s+const gastoId/);
+    expect(gastos).toMatch(/setErrores\(\[\]\);\n\s+if \(r\.fase === "comprobante"\)/);
     expect(gastos).not.toContain("Cada línea adicional necesita categoría");
   });
   it("Programación: 'Parada N' del servidor se traduce al número de pantalla (las filas en blanco no se envían)", () => {
