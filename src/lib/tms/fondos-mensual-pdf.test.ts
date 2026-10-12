@@ -178,3 +178,33 @@ describe("generarPdfMensualSolicitudesFondo", () => {
     expect(t).toContain("TOTAL GENERAL DEL MES: Q 0.00");
   });
 });
+
+describe("generarPdfMensualSolicitudesFondo — Observaciones por solicitud", () => {
+  const OBS_A = "Viaje a Puerto Barrios.\nCobrar anticipo en ventanilla 2.";
+  const OBS_B = "Reposición de caja chica.";
+
+  it("cada solicitud con observaciones dibuja su bloque (texto completo) después de su TOTAL SOLICITUD y antes de sus firmas", async () => {
+    const spy = espiarTexto();
+    await generar([
+      linea({ lineaId: 1, solicitudId: 10, solicitudCodigo: "FONDO-000010", observaciones: OBS_A }),
+      linea({ lineaId: 2, solicitudId: 10, solicitudCodigo: "FONDO-000010", observaciones: OBS_A }),
+      linea({ lineaId: 3, solicitudId: 11, solicitudCodigo: "FONDO-000011", observaciones: OBS_B, totalSolicitud: 900 }),
+      linea({ lineaId: 4, solicitudId: 12, solicitudCodigo: "FONDO-000012", observaciones: null, totalSolicitud: 300 }),
+    ]);
+    const t = textos(spy);
+    // Una solicitud con dos líneas imprime sus observaciones UNA vez; la sin observaciones no dibuja bloque.
+    expect(t.filter((x) => x === "OBSERVACIONES:")).toHaveLength(2);
+    expect(t.filter((x) => x === OBS_A)).toHaveLength(1);
+    expect(t.filter((x) => x === OBS_B)).toHaveLength(1);
+    const iTotal10 = t.indexOf("TOTAL SOLICITUD: Q 600.00");
+    const iObsA = t.indexOf(OBS_A);
+    expect(iObsA).toBeGreaterThan(iTotal10);
+    expect(t.indexOf("FIRMA DEL REQUIRIENTE", iObsA)).toBeGreaterThan(iObsA);
+  });
+
+  it("sin observaciones en ninguna solicitud el PDF no contiene el bloque", async () => {
+    const spy = espiarTexto();
+    await generar([linea()]);
+    expect(textos(spy)).not.toContain("OBSERVACIONES:");
+  });
+});

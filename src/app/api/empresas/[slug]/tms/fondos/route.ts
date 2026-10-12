@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
+import { CLAVE_ENVIO_REGEX } from "@/lib/idempotencia/clave-envio";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { ESTADOS_FONDO, crearSolicitudFondo, listarSolicitudesFondo } from "@/lib/tms/fondos";
 import { CONFIG_FONDOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
@@ -67,6 +68,8 @@ const schema = z.object({
   solicitanteUsuarioId: z.number().int().positive(),
   fechaRequerimiento: z.string().min(1),
   observaciones: z.string().max(300).nullable().optional(),
+  // Clave de envío (idempotencia): OPCIONAL en la primera ventana de despliegue; el frontend nuevo siempre la envía.
+  claveIdempotencia: z.string().regex(CLAVE_ENVIO_REGEX, "La clave de envío no es válida.").optional(),
   lineas: z.array(lineaSchema).min(1).max(40),
 });
 

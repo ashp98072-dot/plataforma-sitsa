@@ -87,28 +87,30 @@ describe("Solicitud de Fondo — Excel", () => {
   it("código en las últimas 3 columnas de la fila del título (celda propia, no columna de datos); título sin código", async () => {
     const ws = await hoja(await exportarSolicitudFondoExcel(solicitud as never));
     expect(ws.getCell("A2").value).toBe("SOLICITUD DE FONDO");
-    expect(ws.getCell("K2").value).toBe(CODIGO_FONDO);
-    expect(ws.getCell("K2").isMerged).toBe(true);
-    expect(ws.getCell("M2").isMerged).toBe(true);
-    expect(ws.getCell("K2").font?.bold).toBe(true);
-    expect(ws.getCell("K2").alignment?.horizontal).toBe("right");
+    // Con la columna final «Observaciones» (14 columnas) el código ocupa las últimas 3: L2:N2.
+    expect(ws.getCell("L2").value).toBe(CODIGO_FONDO);
+    expect(ws.getCell("L2").isMerged).toBe(true);
+    expect(ws.getCell("N2").isMerged).toBe(true);
+    expect(ws.getCell("L2").font?.bold).toBe(true);
+    expect(ws.getCell("L2").alignment?.horizontal).toBe("right");
     expect(ws.getCell("A2").isMerged).toBe(true);
-    expect(ws.getCell("J2").isMerged).toBe(true); // título A2:J2 y código K2:M2 no se pisan
+    expect(ws.getCell("K2").isMerged).toBe(true); // título A2:K2 y código L2:N2 no se pisan
     expect(String(ws.getCell("A2").value)).not.toContain("FONDO-");
     expect(ws.getCell("A1").value).toBe("Kuiqtrans");
-    expect(ws.getCell("M1").isMerged).toBe(true); // la fila de empresa sigue combinada en todo el ancho
+    expect(ws.getCell("N1").isMerged).toBe(true); // la fila de empresa sigue combinada en todo el ancho
   });
   it("la tabla, el total y los encabezados quedan igual (mismas filas)", async () => {
     const ws = await hoja(await exportarSolicitudFondoExcel(solicitud as never));
-    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)"]);
+    // Las 13 columnas previas no cambian; «Observaciones» se agrega al final.
+    expect(ws.getRow(4).values).toEqual([undefined, "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Categoría", "Cantidad", "Descripción", "Valor", "Subtotal (Q)", "Observaciones"]);
     expect(ws.getRow(5).getCell(13).value).toBe("200.00");
-    expect(ws.getRow(6).values).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "", "TOTAL", "200.00"]);
+    expect((ws.getRow(6).values as unknown[]).slice(0, 14)).toEqual([undefined, "", "", "", "", "", "", "", "", "", "", "", "TOTAL", "200.00"]);
     expect(ws.getCell("A3").value).toBeNull(); // fila separadora vacía como antes
     expect(ws.name).toBe(`Solicitud ${CODIGO_FONDO}`);
   });
   it("usa solicitud.codigo tal cual (código distinto del id → se ve el código)", async () => {
     const ws = await hoja(await exportarSolicitudFondoExcel({ ...solicitud, id: 77, codigo: "FONDO-009999" } as never));
-    expect(ws.getCell("K2").value).toBe("FONDO-009999");
+    expect(ws.getCell("L2").value).toBe("FONDO-009999");
   });
 });
 

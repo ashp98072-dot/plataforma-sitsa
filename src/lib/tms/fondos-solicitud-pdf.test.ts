@@ -560,3 +560,83 @@ describe("generarPdfSolicitudFondoAutorizada — las 3 firmas reales (correcció
     expect(textos).toContain("Heber Sitan");
   });
 });
+
+/**
+ * OBSERVACIONES en el PDF individual de Solicitud de fondo — el MISMO campo `observaciones` de la cabecera; no son las
+ * «Notas» fijas del pie. Vacío/null => no se dibuja bloque ni se inventa texto.
+ */
+describe("generarPdfSolicitudFondoAutorizada — Observaciones", () => {
+  const OBS = "Entregar en bodega central.\nConfirmar con el piloto antes de salir.";
+  const textosDe = (spy: ReturnType<typeof espiarTexto>) => spy.mock.calls.map((c) => String(c[0]));
+
+  async function generar(sobre: Partial<Record<string, unknown>> = {}) {
+    vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ estado: "Autorizada", ...sobre }) as never);
+    const spy = espiarTexto();
+    const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    return { spy, textos: textosDe(spy), r };
+  }
+
+  it("dibuja el bloque OBSERVACIONES con el texto completo y sus saltos de línea, entre el TOTAL y las firmas", async () => {
+    const { textos } = await generar({ observaciones: OBS });
+    const iTotal = textos.findIndex((t) => t.startsWith("TOTAL:"));
+    const iTitulo = textos.indexOf("OBSERVACIONES:");
+    const iFirma = textos.indexOf("FIRMA DEL REQUIRIENTE");
+    expect(iTotal).toBeGreaterThan(-1);
+    expect(iTitulo).toBeGreaterThan(iTotal);
+    expect(textos[iTitulo + 1]).toBe(OBS); // texto íntegro, con el \n original
+    expect(iFirma).toBeGreaterThan(iTitulo + 1);
+    expect(textos.filter((t) => t === OBS)).toHaveLength(1);
+  });
+
+  it.each([null, "", "   \n  "])("sin observaciones (%j) no dibuja el bloque ni inventa texto", async (valor) => {
+    const { textos } = await generar({ observaciones: valor });
+    expect(textos).not.toContain("OBSERVACIONES:");
+  });
+
+  it("las Notas fijas del pie siguen presentes y no se confunden con las observaciones", async () => {
+    const { textos } = await generar({ observaciones: OBS });
+    expect(textos).toContain("Notas:");
+    expect(textos).toContain("OBSERVACIONES:");
+  });
+
+  it("el TOTAL no cambia al agregar observaciones", async () => {
+    const sin = (await generar({ observaciones: null })).textos.find((t) => t.startsWith("TOTAL:"));
+    vi.restoreAllMocks();
+    vi.mocked(query).mockResolvedValue([] as never);
+    const con = (await generar({ observaciones: OBS })).textos.find((t) => t.startsWith("TOTAL:"));
+    expect(con).toBe(sin);
+  });
+
+  it("300 caracteres (máximo del campo) se dibujan completos, sin recorte ni elipsis", async () => {
+    const largo = Array.from({ length: 30 }, (_, i) => `punto${String(i).padStart(2, "0")}`).join(" ").padEnd(300, "x").slice(0, 300);
+    const { textos } = await generar({ observaciones: largo });
+    expect(textos).toContain(largo);
+    expect(textos.some((t) => t.endsWith("…"))).toBe(false);
+  });
+
+  it("con tablas de distinto largo (incluida la zona del pie) el bloque no se parte y las 3 firmas siguen presentes", async () => {
+    for (const n of [1, 6, 9, 11, 12, 13, 14, 16, 20, 28]) {
+      vi.restoreAllMocks();
+      vi.mocked(query).mockResolvedValue([] as never);
+      vi.mocked(existsSync).mockReturnValue(false);
+      const lineas = Array.from({ length: n }, (_, i) => linea({ id: i + 1 }));
+      vi.mocked(obtenerSolicitudFondo).mockResolvedValue(solicitud({ estado: "Autorizada", observaciones: OBS, lineas }) as never);
+      const spy = espiarTexto();
+      const paginas = vi.spyOn(PDFDocument.prototype, "addPage");
+      const r = await generarPdfSolicitudFondoAutorizada(7, 1, "SITSA");
+      expect(r.ok).toBe(true);
+      const textos = textosDe(spy);
+      const iTitulo = textos.indexOf("OBSERVACIONES:");
+      expect(iTitulo, `n=${n}`).toBeGreaterThan(-1);
+      expect(textos[iTitulo + 1], `n=${n}`).toBe(OBS);
+      // Sin salto de página entre el título y su texto (el bloque va entero en una página).
+      const ordenTitulo = spy.mock.invocationCallOrder[iTitulo];
+      const ordenTexto = spy.mock.invocationCallOrder[iTitulo + 1];
+      expect(paginas.mock.invocationCallOrder.some((o) => o > ordenTitulo && o < ordenTexto), `n=${n}`).toBe(false);
+      for (const f of ["FIRMA DEL REQUIRIENTE", "FIRMA DEL SOLICITANTE", "FIRMA DEL AUTORIZANTE"]) {
+        expect(textos.filter((t) => t === f), `${f} n=${n}`).toHaveLength(1);
+      }
+    }
+  });
+});

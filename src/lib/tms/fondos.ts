@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
@@ -10,6 +11,15 @@ import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
 import { CAMPOS_DOMINIO_FONDOS } from "@/lib/tms/validacion-fondos-gastos";
 import { ErrorDominioFormulario, conLinea } from "@/lib/validacion-formulario";
+import {
+  INDICE_CLAVE_FONDOS,
+  TABLA_FONDOS,
+  buscarCreacionPorClave,
+  esDuplicadoDeClave,
+  huellaSolicitudFondo,
+  lectorDeConexion,
+  normalizarClaveIdempotencia,
+} from "@/lib/tms/idempotencia-envio";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
@@ -396,6 +406,12 @@ export type SolicitudFondoInput = {
   solicitanteUsuarioId?: number | null;
   fechaRequerimiento: string;
   observaciones?: string | null;
+  /**
+   * Clave de envío (idempotencia), OPCIONAL durante la primera ventana de despliegue: sin ella se crea como siempre; con
+   * ella, un reintento con el mismo contenido devuelve la creación original y con otro contenido responde 409.
+   * Ver src/lib/tms/idempotencia-envio.ts.
+   */
+  claveIdempotencia?: string | null;
   lineas: LineaFondoInput[];
 };
 
@@ -429,8 +445,21 @@ export async function crearSolicitudFondo(
   }
   const total = calcularTotal(input.lineas);
 
+  // IDEMPOTENCIA — la consulta previa va ANTES de abrir la transacción y de las validaciones de referencias: reintentar una
+  // creación ya confirmada debe devolverla aunque, entretanto, el requirente/solicitante haya dejado de estar activo.
+  const clave = normalizarClaveIdempotencia(input.claveIdempotencia);
+  const huella = clave ? huellaSolicitudFondo(input) : null;
+  let claveEfectiva = clave;
+  if (clave) {
+    const previa = await buscarCreacionPorClave((sql, params) => query<RowDataPacket[]>(sql, params), TABLA_FONDOS, empresaId, clave, huella!);
+    if (previa.tipo === "existente") return recuperarSolicitudCreada(empresaId, previa.id);
+    // Migración sin aplicar: se crea en modo legado (sin protección) en vez de fallar la operación.
+    if (previa.tipo === "sin_soporte") claveEfectiva = null;
+  }
+
   const conn = await getPool().getConnection();
   let solicitudId = 0;
+  let reutilizadaId: number | null = null;
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — copias físicas de firma escritas
   // dentro de este intento; si algo falla y se hace rollback, se borran
   // (best-effort) para no dejar archivos huérfanos sin fila que los
@@ -456,11 +485,14 @@ export async function crearSolicitudFondo(
     const r = await executeConn(conn,
       `INSERT INTO tms_solicitudes_fondo
         (empresa_id, codigo, entidad_requirente_id, entidad_requirente_nombre, requirente_empleado_id, requirente_nombre, requirente_usuario_id,
-         fecha_requerimiento, total, observaciones, creado_por, solicitante_usuario_id, solicitante_nombre)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         fecha_requerimiento, total, observaciones, creado_por, solicitante_usuario_id, solicitante_nombre${claveEfectiva ? ", clave_idempotencia, huella_idempotencia" : ""})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${claveEfectiva ? ", ?, ?" : ""})`,
       [
         empresaId,
-        "", // se completa abajo con un código estable derivado del id, mismo criterio que clientes.codigo
+        // Marcador ÚNICO por transacción (mismo criterio que crearGasto): se reemplaza abajo por FONDO-<id>. Un marcador
+        // común ("") hacía que dos creaciones simultáneas de la misma empresa compitieran por el UNIQUE (empresa_id, codigo)
+        // y terminaran en deadlock — verificado contra MariaDB con peticiones concurrentes.
+        `TMP-${randomBytes(12).toString("hex")}`,
         entidadRequirente?.id ?? null,
         entidadRequirente?.nombre ?? null,
         input.requirenteEmpleadoId ?? null,
@@ -472,6 +504,7 @@ export async function crearSolicitudFondo(
         creadoPor ?? null,
         solicitanteId,
         solicitanteUsuario?.nombre ?? solicitanteLegado?.nombre ?? null,
+        ...(claveEfectiva ? [claveEfectiva, huella] : []),
       ],
     );
     solicitudId = Number(r.insertId);
@@ -547,11 +580,23 @@ export async function crearSolicitudFondo(
   } catch (error) {
     await conn.rollback();
     for (const relative of archivosFirmaEscritos) borrarUpload(relative);
-    throw error;
+    // CONCURRENCIA — otra petición con la MISMA clave confirmó primero y el UNIQUE (empresa_id, clave) rechazó este INSERT:
+    // tras el rollback se relee (instantánea nueva) y se devuelve esa creación; si el contenido difiere, 409.
+    if (claveEfectiva && esDuplicadoDeClave(error, INDICE_CLAVE_FONDOS)) {
+      const previa = await buscarCreacionPorClave(lectorDeConexion(conn), TABLA_FONDOS, empresaId, claveEfectiva, huella!);
+      if (previa.tipo !== "existente") throw error;
+      reutilizadaId = previa.id;
+    } else {
+      throw error;
+    }
   } finally {
     conn.release();
   }
-  const creada = await obtenerSolicitudFondo(empresaId, solicitudId);
+  return recuperarSolicitudCreada(empresaId, reutilizadaId ?? solicitudId);
+}
+
+async function recuperarSolicitudCreada(empresaId: number, id: number): Promise<SolicitudFondo> {
+  const creada = await obtenerSolicitudFondo(empresaId, id);
   if (!creada) throw new Error("No se pudo crear la solicitud de fondo.");
   return creada;
 }

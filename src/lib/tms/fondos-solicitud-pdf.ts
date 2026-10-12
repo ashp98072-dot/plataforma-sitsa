@@ -8,6 +8,7 @@ import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
+import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
 
 /**
  * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — PDF formal de UNA solicitud de
@@ -284,6 +285,9 @@ function construirPdf(
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
       .text(`TOTAL: ${moneda(total)}`, { width: pageWidth, align: "right" });
+
+    // Observaciones de la solicitud (el mismo campo de BD; distinto de las «Notas» fijas del pie). Sin texto, no se dibuja.
+    dibujarObservacionesPdf(doc, solicitud.observaciones, pageWidth, marginL, pageBottom);
 
     // §4/§5 Firmas — SIEMPRE al final del documento completo (nunca entre líneas).
     dibujarFirmas(doc, pageWidth, marginL, pageBottom, {
