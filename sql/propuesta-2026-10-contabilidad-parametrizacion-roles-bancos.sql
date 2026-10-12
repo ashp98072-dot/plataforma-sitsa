@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
 --   CLIENTES → 11203001 · IVA_POR_PAGAR → 21401001 · VENTAS_SERVICIOS → 41101003 · RETENCION_IVA → 11302005
 --   ANTICIPOS → 21302001 · TRANSITO_BANCARIO → 11101002 · DEVOLUCIONES_VENTAS → 41501002
 -- Cada cuenta debe existir en ESA entidad, estar ACTIVA y tener el tipo esperado del rol; si una no cumple, la fila NO se
--- inserta, el conteo no llega a 14 y el cierre es ROLLBACK. Un rol ya existente hace fallar el INSERT (UNIQUE).
+-- inserta, `roles_encontrados` no llega a 14 y el cierre es ROLLBACK. Un rol ya existente hace fallar el INSERT (UNIQUE)
+-- y además `roles_previos` > 0 impide confirmar. La compuerta NO usa ROW_COUNT().
 DROP TEMPORARY TABLE IF EXISTS esperado_roles;
 CREATE TEMPORARY TABLE esperado_roles (
   entidad_id INT NOT NULL,
@@ -79,6 +80,14 @@ INSERT INTO esperado_roles (entidad_id, rol, codigo, tipo) VALUES
 
 START TRANSACTION;
 
+-- Roles que YA existían para estas entidades/roles ANTES de insertar (dentro de la transacción). Si hay alguno, la carga
+-- NO se confirma: no se «absorbe» ni se actualiza nada (falla cerrado).
+SET @roles_previos := (
+  SELECT COUNT(*)
+  FROM esperado_roles e
+  JOIN cont_cuentas_rol r ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol
+);
+
 INSERT INTO cont_cuentas_rol (empresa_id, entidad_id, rol, cuenta_id, activa)
 SELECT 1, e.entidad_id, e.rol, c.id, 1
 FROM esperado_roles e
@@ -86,9 +95,22 @@ JOIN cont_cuentas c
   ON c.empresa_id = 1 AND c.entidad_id = e.entidad_id AND c.codigo = e.codigo
  AND c.activa = 1 AND c.tipo = e.tipo
 ORDER BY e.entidad_id, e.rol;
-SET @insertadas := ROW_COUNT();   -- -1 si el INSERT falló (p. ej. rol duplicado)
 
--- Verificación EXACTA: cada rol esperado apunta a la cuenta (entidad, código) esperada, activa y del tipo esperado.
+-- VERIFICACIÓN DIRECTA (sin ROW_COUNT(): en phpMyAdmin/Hostinger devolvió 0 tras un INSERT correcto y provocó un
+-- ROLLBACK equivocado). Se cuenta lo que REALMENTE existe en la tabla, dentro de esta misma transacción:
+--   roles_encontrados = roles esperados que existen con: empresa 1, entidad correcta, rol correcto, rol activo,
+--   y cuenta_id = la cuenta (empresa 1, ESA entidad, código esperado) ACTIVA y del TIPO esperado.
+SET @roles_esperados := (SELECT COUNT(*) FROM esperado_roles);
+SET @roles_encontrados := (
+  SELECT COUNT(*)
+  FROM esperado_roles e
+  JOIN cont_cuentas_rol r
+    ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol AND r.activa = 1
+  JOIN cont_cuentas c
+    ON c.id = r.cuenta_id AND c.empresa_id = 1 AND c.entidad_id = e.entidad_id
+   AND c.codigo = e.codigo AND c.activa = 1 AND c.tipo = e.tipo
+);
+-- diferencias = roles esperados ausentes o apuntando a otra cuenta / cuenta inactiva / otro tipo / rol inactivo.
 SET @diferencias := (
   SELECT COUNT(*)
   FROM esperado_roles e
@@ -98,11 +120,12 @@ SET @diferencias := (
      OR c.empresa_id <> 1 OR c.entidad_id <> e.entidad_id OR c.codigo <> e.codigo
      OR c.activa <> 1 OR c.tipo <> e.tipo OR r.activa <> 1
 );
-SET @esperadas := (SELECT COUNT(*) FROM esperado_roles);
-SET @cierre := IF(@esperadas = 14 AND @insertadas = 14 AND @diferencias = 0, 'COMMIT', 'ROLLBACK');
+SET @cierre := IF(@roles_esperados = 14 AND @roles_previos = 0 AND @roles_encontrados = 14 AND @diferencias = 0,
+                  'COMMIT', 'ROLLBACK');
 PREPARE cierre FROM @cierre; EXECUTE cierre; DEALLOCATE PREPARE cierre;
 
-SELECT @esperadas AS roles_esperados, @insertadas AS roles_insertados, @diferencias AS diferencias, @cierre AS cierre,
+SELECT @roles_esperados AS roles_esperados, @roles_previos AS roles_previos, @roles_encontrados AS roles_encontrados,
+       @diferencias AS diferencias, @cierre AS cierre,
        IF(@cierre = 'COMMIT', 'CARGA CONFIRMADA', 'REVERTIDO: no se cambio nada') AS resultado;
 
 -- Estado final (solo lectura)

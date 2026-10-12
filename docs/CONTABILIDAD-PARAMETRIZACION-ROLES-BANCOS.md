@@ -3,6 +3,7 @@
 > **Fase de PROPUESTA.** No ejecuta SQL en producción, no genera pólizas, no toca FEL, facturas, pagos, retenciones ni `registrarAsiento`.
 > **Archivos:** `sql/preflight-2026-10-contabilidad-parametrizacion-roles-bancos.sql` (solo lectura) y `sql/propuesta-2026-10-contabilidad-parametrizacion-roles-bancos.sql` (propuesto, **no ejecutado**).
 > **Base:** `main` = `1a4b170a`; producción informada por el responsable: `cont_cuentas` con 10 cuentas homologadas en KT y 8 en MONACO (cuenta de prueba eliminada). `empresa_id = 1`, entidad 1 = KT, entidad 2 = MONACO.
+> **Preflight:** todas las consultas usan el esquema explícito `u611730801_Plataforma` (`TABLE_SCHEMA = '…'` y tablas calificadas, también dentro del SQL dinámico); ninguna depende de `DATABASE()` ni del esquema activo de la sesión.
 > **Regla:** un motor común; las diferencias son **datos por entidad**. Nada de `if MONACO` / `if KT`. **Mismo código no significa misma fila:** todo se resuelve por `empresa_id + entidad_id + codigo`.
 
 ## 1. Estructura existente
@@ -53,7 +54,7 @@ Mismo mapeo en ambas entidades, **filas distintas** de `cont_cuentas` (ids disti
 | `VENTAS_BIENES` | — | **PENDIENTE CONTABILIDAD** (rol confirmado; **sin código**) | — | ✗ | ✗ |
 | `BANCOS` | — | **no es un rol fijo**: se resuelve por `cont_cuentas_bancarias` | — | — | — |
 
-**Carga (propuesta §2):** 14 filas (7 + 7) con patrón *falla cerrado*: cada cuenta debe existir en esa entidad, estar **activa** y tener el **tipo esperado**; `INSERT` simple (un rol existente hace fallar); verificación exacta; `COMMIT` solo si insertó 14 y hay 0 diferencias, si no `ROLLBACK`.
+**Carga (propuesta §2):** 14 filas (7 + 7) con patrón *falla cerrado*: cada cuenta debe existir en esa entidad, estar **activa** y tener el **tipo esperado**; `INSERT` simple (un rol existente hace fallar). **La confirmación NO usa `ROW_COUNT()`** (en phpMyAdmin/Hostinger devolvió 0 tras un `INSERT` correcto y revirtió por error): dentro de la misma transacción se cuentan los roles realmente presentes mediante un `JOIN` directo (`esperado_roles` ↔ `cont_cuentas_rol` ↔ `cont_cuentas`: empresa, entidad, rol, cuenta por código, cuenta activa, tipo esperado, rol activo). `COMMIT` solo si `roles_esperados = 14`, `roles_previos = 0`, `roles_encontrados = 14` y `diferencias = 0`; si no, `ROLLBACK`. El resultado reporta esas cinco cifras más `cierre` y `resultado`.
 
 ## 4. Bancos
 
@@ -80,8 +81,8 @@ Mismo mapeo en ambas entidades, **filas distintas** de `cont_cuentas` (ids disti
 ## 6. Verificación (local, base desechable; no hay checks de GitHub)
 
 Preflight y propuesta se ejecutaron **solo** en una MariaDB 10.4 desechable con el esquema del repositorio y la carga de 18 cuentas:
-- **Preflight:** sin errores; 18 cuentas `OK`; «cont_cuentas_rol NO existe todavía»; 14 roles «SIN CONFIGURAR»; `VENTAS_BIENES` «PENDIENTE»; compuerta «APTO»; sin una sola sentencia de escritura.
-- **Propuesta:** carga limpia → `COMMIT` (7 + 7 roles); segunda ejecución → error de duplicado y `ROLLBACK` (sin duplicar); con una cuenta inactiva → `ROLLBACK` y 0 roles.
+- **Preflight (esquema explícito `u611730801_Plataforma`, también con otra base activa en la sesión):** sin errores; 18 cuentas `OK`; «cont_cuentas_rol NO existe todavía»; 14 roles «SIN CONFIGURAR»; `VENTAS_BIENES` «PENDIENTE»; compuerta «APTO»; sin una sola sentencia de escritura.
+- **Propuesta:** carga limpia → `COMMIT` (14 esperados, 14 encontrados, 0 diferencias; 7 + 7 roles); segunda ejecución → `ROLLBACK` sin duplicar ni tocar las 14 filas; con una cuenta inactiva → `ROLLBACK` y 0 roles.
 - **Integridad por SQL directo:** FK compuesta rechaza cuenta de KT en MONACO y de MONACO en KT (acepta la de la misma entidad); `UNIQUE` rechaza duplicado; `CHECK` rechaza `VENTAS_BIENES` y roles inventados; `RESTRICT` rechaza borrar una cuenta en uso.
 - **Bancos:** el preflight detectó banco+alias repetido, misma referencia en varias entidades y una referencia con número largo.
 
