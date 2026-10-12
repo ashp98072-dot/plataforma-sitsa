@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLAVE_ENVIO_REGEX, crearGuardEnvio, nuevaClaveEnvio } from "./clave-envio";
+import { CLAVE_ENVIO_REGEX, crearEnvioUnico, crearGuardEnvio, nuevaClaveEnvio } from "./clave-envio";
 
 describe("nuevaClaveEnvio", () => {
   it("genera claves válidas y distintas en cada llamada", () => {
@@ -69,5 +69,28 @@ describe("crearGuardEnvio — un solo envío en vuelo", () => {
     liberar();
     await primera;
     expect(tarea).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("crearEnvioUnico — guard + clave del intento lógico", () => {
+  it("la clave es estable entre llamadas hasta reiniciarla", () => {
+    const envio = crearEnvioUnico();
+    const a = envio.clave();
+    expect(a).toMatch(CLAVE_ENVIO_REGEX);
+    expect(envio.clave()).toBe(a);
+    envio.reiniciarClave();
+    expect(envio.clave()).not.toBe(a);
+  });
+
+  it("conserva la clave si el envío falla (respuesta incierta) y mantiene el guard de un solo envío", async () => {
+    const envio = crearEnvioUnico();
+    const usadas: string[] = [];
+    const intento = (falla: boolean) => envio.ejecutar(async () => { usadas.push(envio.clave()); if (falla) throw new Error("red caída"); return "ok"; });
+    await expect(intento(true)).rejects.toThrow("red caída");
+    expect(envio.enVuelo).toBe(false);
+    expect(await intento(false)).toEqual({ omitido: false, valor: "ok" });
+    expect(usadas[1]).toBe(usadas[0]);
+    const [a, b] = await Promise.all([intento(false), intento(false)]);
+    expect([a.omitido, b.omitido].sort()).toEqual([false, true]);
   });
 });

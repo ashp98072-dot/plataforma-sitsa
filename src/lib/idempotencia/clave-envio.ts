@@ -48,3 +48,28 @@ export function crearGuardEnvio() {
 }
 
 export type GuardEnvio = ReturnType<typeof crearGuardEnvio>;
+
+/**
+ * Guard de envío único + clave de envío del intento lógico, en UN solo objeto estable (un `useState(() => …)` lo conserva
+ * entre renders sin necesitar `useRef`). La clave se genera perezosamente al primer envío y se CONSERVA mientras el intento
+ * siga incierto (red caída, timeout, 5xx, validación); solo `reiniciarClave()` la descarta (nuevo registro).
+ */
+export function crearEnvioUnico() {
+  const guard = crearGuardEnvio();
+  let clave: string | null = null;
+  return {
+    get enVuelo() {
+      return guard.enVuelo;
+    },
+    ejecutar: guard.ejecutar,
+    /** Clave del intento actual: la misma en cada llamada hasta `reiniciarClave()`. */
+    clave(): string {
+      return (clave ??= nuevaClaveEnvio());
+    },
+    reiniciarClave() {
+      clave = null;
+    },
+  };
+}
+
+export type EnvioUnico = ReturnType<typeof crearEnvioUnico>;

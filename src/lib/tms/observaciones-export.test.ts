@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alturaFilaExcel, lineasEstimadas, observacionesVisibles } from "./observaciones-export";
+import { alturaFilaExcel, dividirTextoEnBloques, lineasEstimadas, observacionesVisibles } from "./observaciones-export";
 
 describe("observacionesVisibles", () => {
   it("vacío / null / solo espacios o saltos => null (no se inventa texto)", () => {
@@ -28,5 +28,41 @@ describe("lineasEstimadas / alturaFilaExcel", () => {
 
   it("nunca supera el máximo de Excel (409 pt)", () => {
     expect(alturaFilaExcel("x\n".repeat(200), 40)).toBe(409);
+  });
+});
+
+describe("dividirTextoEnBloques", () => {
+  const unir = (b: string[]) => b.join("\n");
+
+  it("texto corto → un solo bloque idéntico", () => {
+    expect(dividirTextoEnBloques("hola\nmundo", 140, 25)).toEqual(["hola\nmundo"]);
+    expect(dividirTextoEnBloques("", 140, 25)).toEqual([""]);
+  });
+
+  it("respeta los saltos de línea y no supera el máximo de líneas por bloque", () => {
+    const texto = Array.from({ length: 60 }, (_, i) => `línea ${i}`).join("\n");
+    const bloques = dividirTextoEnBloques(texto, 140, 25);
+    expect(bloques.length).toBe(3);
+    for (const b of bloques) expect(b.split("\n").length).toBeLessThanOrEqual(25);
+    expect(unir(bloques)).toBe(texto);
+  });
+
+  it("una línea lógica más larga que un bloque se parte (preferentemente en espacios) sin perder caracteres", () => {
+    const texto = "palabra ".repeat(1250).trim();
+    const bloques = dividirTextoEnBloques(texto, 140, 25);
+    expect(bloques.length).toBeGreaterThan(1);
+    for (const b of bloques) expect(b.length).toBeLessThanOrEqual(140 * 25);
+    expect(bloques.join(" ")).toBe(texto);
+  });
+
+  it("sin espacios (cadena continua) también se parte sin perder nada", () => {
+    const texto = "x".repeat(10000);
+    const bloques = dividirTextoEnBloques(texto, 140, 25);
+    expect(bloques.join("")).toBe(texto);
+    for (const b of bloques) expect(b.length).toBeLessThanOrEqual(140 * 25);
+  });
+
+  it("normaliza CRLF", () => {
+    expect(dividirTextoEnBloques("a\r\nb\rc", 140, 25)).toEqual(["a\nb\nc"]);
   });
 });
