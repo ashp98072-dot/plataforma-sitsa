@@ -26,51 +26,51 @@ SELECT id, empresa_id, entidad_id, codigo, nombre, tipo, nivel, activa
 FROM cont_cuentas WHERE empresa_id = 1 ORDER BY entidad_id, codigo;
 
 -- ───────────────────────── 3. Colisiones con el inventario propuesto (COMPUERTA de la carga futura) ───────────────
--- Para cada cuenta del inventario (sql/propuesta-…-homologacion-milenium.sql §1) muestra lo propuesto contra lo que YA
--- existe en esa entidad: entidad, código, nombre/nivel propuestos y nombre/tipo/nivel/activa existentes. El `tipo` propuesto
--- es PENDIENTE (aprobación de Contabilidad), por eso solo se muestra el existente.
+-- Para cada cuenta del inventario (sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql) muestra lo propuesto contra
+-- lo que YA existe en esa entidad: entidad, código, nombre/tipo/nivel propuestos y nombre/tipo/nivel/activa existentes.
+-- El `tipo` propuesto sale del diccionario TIPO_CTA 1-5 APROBADO por Contabilidad (2026-10-12).
 -- Esperado hoy: «SIN COLISION» en las 18 filas (la única cuenta de KT es la de prueba 32234) y la fila final «APTO».
 -- REGLA: la carga autorizada exige 0 colisiones. Cualquier fila distinta de «SIN COLISION» DETIENE la carga: no se
 -- actualiza, no se ignora y no se «absorbe» una cuenta existente (ni siquiera una idéntica; se resuelve a mano).
 WITH propuesta AS (
-  SELECT 1 AS entidad_id, '11203001' AS codigo, 'CLIENTES LOCALES' AS nombre, 5 AS nivel, 'CLIENTES' AS rol_propuesto
-  UNION ALL SELECT 1, '21401001', 'IVA POR PAGAR',                          5, 'IVA_POR_PAGAR'
-  UNION ALL SELECT 1, '41101003', 'VENTAS DE SERVICIOS',                    5, 'VENTAS_SERVICIOS'
-  UNION ALL SELECT 1, '11302005', 'RETENCIONES DE IVA',                     5, 'RETENCION_IVA'
-  UNION ALL SELECT 1, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL',      5, 'ANTICIPOS'
-  UNION ALL SELECT 1, '11101002', 'TRASLADO EN TRANSITO',                   5, 'TRANSITO_BANCARIO'
-  UNION ALL SELECT 1, '41501002', 'DEV. SOBRE VENTAS VARIAS',               5, 'DEVOLUCIONES_VENTAS'
-  UNION ALL SELECT 1, '11103002', 'BANCO INDUSTRIAL, S. A.',                5, 'BANCOS'
-  UNION ALL SELECT 1, '11103001', 'G&T CONTINENTAL',                        5, 'BANCOS'
-  UNION ALL SELECT 1, '11103004', 'BANCO INDUSTRIAL (FONDO OPERATIVO)',     5, 'BANCOS'
-  UNION ALL SELECT 2, '11203001', 'CLIENTES LOCALES',                       5, 'CLIENTES'
-  UNION ALL SELECT 2, '21401001', 'IVA POR PAGAR',                          5, 'IVA_POR_PAGAR'
-  UNION ALL SELECT 2, '41101003', 'VENTAS DE SERVICIOS',                    5, 'VENTAS_SERVICIOS'
-  UNION ALL SELECT 2, '11302005', 'RETENCIONES DE IVA',                     5, 'RETENCION_IVA'
-  UNION ALL SELECT 2, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL',      5, 'ANTICIPOS'
-  UNION ALL SELECT 2, '11101002', 'TRASLADO EN TRANSITO',                   5, 'TRANSITO_BANCARIO'
-  UNION ALL SELECT 2, '41501002', 'DEV. SOBRE VENTAS VARIAS',               5, 'DEVOLUCIONES_VENTAS'
-  UNION ALL SELECT 2, '11103002', 'BANCO INDUSTRIAL, S. A.',                5, 'BANCOS'
+  SELECT 1 AS entidad_id, '11203001' AS codigo, 'CLIENTES LOCALES' AS nombre, 'Activo' AS tipo, 5 AS nivel, 'CLIENTES' AS rol_propuesto
+  UNION ALL SELECT 1, '21401001', 'IVA POR PAGAR', 'Pasivo', 5, 'IVA_POR_PAGAR'
+  UNION ALL SELECT 1, '41101003', 'VENTAS DE SERVICIOS', 'Ingreso', 5, 'VENTAS_SERVICIOS'
+  UNION ALL SELECT 1, '11302005', 'RETENCIONES DE IVA', 'Activo', 5, 'RETENCION_IVA'
+  UNION ALL SELECT 1, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL', 'Pasivo', 5, 'ANTICIPOS'
+  UNION ALL SELECT 1, '11101002', 'TRASLADO EN TRANSITO', 'Activo', 5, 'TRANSITO_BANCARIO'
+  UNION ALL SELECT 1, '41501002', 'DEV. SOBRE VENTAS VARIAS', 'Ingreso', 5, 'DEVOLUCIONES_VENTAS'
+  UNION ALL SELECT 1, '11103002', 'BANCO INDUSTRIAL, S. A.', 'Activo', 5, 'BANCOS'
+  UNION ALL SELECT 1, '11103001', 'G&T CONTINENTAL', 'Activo', 5, 'BANCOS'
+  UNION ALL SELECT 1, '11103004', 'BANCO INDUSTRIAL (FONDO OPERATIVO)', 'Activo', 5, 'BANCOS'
+  UNION ALL SELECT 2, '11203001', 'CLIENTES LOCALES', 'Activo', 5, 'CLIENTES'
+  UNION ALL SELECT 2, '21401001', 'IVA POR PAGAR', 'Pasivo', 5, 'IVA_POR_PAGAR'
+  UNION ALL SELECT 2, '41101003', 'VENTAS DE SERVICIOS', 'Ingreso', 5, 'VENTAS_SERVICIOS'
+  UNION ALL SELECT 2, '11302005', 'RETENCIONES DE IVA', 'Activo', 5, 'RETENCION_IVA'
+  UNION ALL SELECT 2, '21302001', 'ANTICIPO DE CLIENTES MONEDA LOCAL', 'Pasivo', 5, 'ANTICIPOS'
+  UNION ALL SELECT 2, '11101002', 'TRASLADO EN TRANSITO', 'Activo', 5, 'TRANSITO_BANCARIO'
+  UNION ALL SELECT 2, '41501002', 'DEV. SOBRE VENTAS VARIAS', 'Ingreso', 5, 'DEVOLUCIONES_VENTAS'
+  UNION ALL SELECT 2, '11103002', 'BANCO INDUSTRIAL, S. A.', 'Activo', 5, 'BANCOS'
 ),
 comparacion AS (
   SELECT p.entidad_id, p.codigo, p.rol_propuesto,
-         p.nombre AS nombre_propuesto, p.nivel AS nivel_propuesto, 'PENDIENTE APROBACION' AS tipo_propuesto,
+         p.nombre AS nombre_propuesto, p.tipo AS tipo_propuesto, p.nivel AS nivel_propuesto,
          c.id AS existente_id, c.nombre AS nombre_existente, c.tipo AS tipo_existente,
          c.nivel AS nivel_existente, c.activa AS activa_existente,
          CASE
            WHEN c.id IS NULL THEN 'SIN COLISION'
-           WHEN c.nombre = p.nombre AND c.nivel = p.nivel AND c.activa = 1
-             THEN 'COLISION: ya existe, igual en nombre/nivel/activa (tipo por validar) - DETENER'
-           ELSE 'COLISION: ya existe y DIFIERE (nombre/nivel/activa) - DETENER'
+           WHEN c.nombre = p.nombre AND c.tipo = p.tipo AND c.nivel = p.nivel AND c.activa = 1
+             THEN 'COLISION: ya existe e IGUAL en nombre/tipo/nivel/activa - DETENER'
+           ELSE 'COLISION: ya existe y DIFIERE (nombre/tipo/nivel/activa) - DETENER'
          END AS resultado
   FROM propuesta p
   LEFT JOIN cont_cuentas c ON c.empresa_id = 1 AND c.entidad_id = p.entidad_id AND c.codigo = p.codigo
 )
-SELECT entidad_id, codigo, rol_propuesto, nombre_propuesto, nivel_propuesto, tipo_propuesto,
+SELECT entidad_id, codigo, rol_propuesto, nombre_propuesto, tipo_propuesto, nivel_propuesto,
        existente_id, nombre_existente, tipo_existente, nivel_existente, activa_existente, resultado
 FROM comparacion
 UNION ALL
-SELECT NULL, 'TOTAL', NULL, NULL, COUNT(*), NULL, NULL, NULL, NULL, NULL, NULL,
+SELECT NULL, 'TOTAL', NULL, NULL, NULL, COUNT(*), NULL, NULL, NULL, NULL, NULL,
        CASE WHEN SUM(resultado <> 'SIN COLISION') = 0
             THEN 'APTO: 0 colisiones' ELSE CONCAT('NO APTO: ', SUM(resultado <> 'SIN COLISION'), ' colision(es)') END
 FROM comparacion
