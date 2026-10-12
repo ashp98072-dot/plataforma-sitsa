@@ -133,7 +133,7 @@ Porcentaje observado (retención ÷ IVA de la factura, 3 613 retenciones KT y 51
 |---|---|---|
 | **15 %** | 2 950 (81.6 %) | 486 (95.3 %) |
 | **30 %** | 311 (8.6 %) | 23 (4.5 %) |
-| **80 %** | **340 (9.4 %)** | 0 |
+| **80 %** (hallazgo histórico) | **340 (9.4 %)** | 0 |
 | otros (10 %, 24 %, 60 %) | 10 | 1 |
 
 ### D) Contado con retención — `[CONFIRMADO]`
@@ -156,17 +156,17 @@ Igual que (C): factura `D CLIENTES` (contado) + `C/E` retención `D 11302005` + 
 | Crédito | D CLIENTES · H VENTAS · H IVA | D CLIENTES · H IVA · H VENTAS | **No** |
 | Contado | D BANCO · H VENTAS · H IVA | D **CLIENTES** · H IVA · H VENTAS, y el banco entra por recibo→tránsito→depósito o depósito directo | **Sí** |
 | Retención | D RETENCIÓN IVA + D CLIENTE/BANCO neto · H VENTAS · H IVA, **en el mismo asiento** | D `11302005` / H CLIENTES en una póliza **posterior** (mediana 4–6 días); la factura va completa | **Sí** (momento y n.º de pólizas; **mismas cuentas y mismo neto**) |
-| % retención | 0 %, 15 % o 30 % | 15 % y 30 % + 80 % (340 casos KT) | **Sí** |
+| % retención | 0 %, 15 % o 30 % (implementado en FACT-4; **no** confirmado como conjunto definitivo) | 15 % y 30 % + 80 % (340 casos KT) y otros: **hallazgo histórico**; vigencia futura **pendiente** | **Sí** (diferencia de datos; la regla futura está pendiente) |
 | Anulación | Reverso contable exacto automático | Anulada = sin póliza; certificada = nota de crédito con cuenta de devoluciones | **Sí** |
 | Ventas | SERVICIOS y BIENES separadas | Una sola cuenta de ventas de servicios en `f10` | **Sí** (falta cuenta de bienes) |
 
 ## 5. Contradicciones y decisiones pendientes (no se cambió código)
 
-> **Actualizado 2026-10-12:** los puntos 1-5 fueron respondidos por Contabilidad; ver **§14** (contado condicionado a pago confirmado; retención esperada vs. verificada; 80 % válido; reverso sí; VENTAS_BIENES sin código). El texto de abajo se conserva como registro de la contradicción original.
+> **Actualizado 2026-10-12:** los puntos 1-5 recibieron respuesta de Contabilidad; ver **§14** (contado condicionado a pago confirmado; retención esperada vs. verificada con **porcentaje por cliente — los valores vigentes siguen PENDIENTES**; reverso sí; VENTAS_BIENES sin código). El texto de abajo se conserva como registro de la contradicción original.
 
 1. **CONTADO** — `[PENDIENTE CONTABILIDAD]` ¿La plataforma postea **D BANCO** directo en la factura (regla confirmada) o replica Milenium (D CLIENTES + cobro por tránsito)? Con la regla confirmada, el banco se carga sin pasar por CLIENTES ni TRASLADO EN TRANSITO, y la cartera nace ya cobrada.
 2. **Momento de la retención** — `[PENDIENTE CONTABILIDAD]` Milenium la asienta cuando llega la **constancia** (días después). La regla confirmada la incluye en el asiento de la venta ("registrada inicialmente, constancia verificada después"). Hay que definir si la póliza de la factura ya lleva D RETENCIÓN IVA o si se genera al registrar la constancia.
-3. **Porcentajes** — 340 retenciones KT al **80 %** del IVA (2021-2026; 107 en 2022 y 13 en 2025) no encajan en 0/15/30. `[PENDIENTE CONTABILIDAD]` ¿Agente especial? ¿Error de captura? ¿Retención parcial?
+3. **Porcentajes** — **hallazgo histórico confirmado en los datos:** 340 retenciones KT al **80 %** del IVA (2021-2026; 107 en 2022 y 13 en 2025) y algunas otras al 10 %, 24 % o 60 %, además de 15 % y 30 %. Contabilidad confirmó que el porcentaje **depende del cliente**; **no** confirmó que el 80 % siga vigente ni qué porcentajes admite el sistema nuevo. `[PENDIENTE CONTABILIDAD]`
 4. **Anulación** — `[PENDIENTE CONTABILIDAD]` Si la cuenta de reverso debe ser VENTAS/IVA (exacto) o DEVOLUCIONES + IVA (como la nota de crédito de Milenium); y qué ocurre con facturas anuladas **antes** de la póliza.
 5. **Ventas de bienes** — `[PENDIENTE CONTABILIDAD]` Milenium no tiene cuenta; hay que definirla por entidad. Hasta entonces el motor debe **rechazar** una línea BIEN, no usar la de servicios.
 6. **Facturas exentas** — 283 pólizas KT (2017-2019) con `D CLIENTES / H CLIENTES`: tratamiento histórico anómalo; la plataforma no modela exención en esta fase. `[PENDIENTE CONTABILIDAD]`
@@ -209,7 +209,7 @@ Reglas: conservar el código real; no inventar; no mezclar entidades; `empresa_i
 | `NOMBRE_CTA` | `nombre` | **CONFIRMADO** (Windows-1252 → Unicode; las bancarias **sin** número) |
 | empresa 01 / 08+00 | `entidad_id` 1 / 2 | **CONFIRMADO** (C2) |
 | `NIVEL_CTA` | `nivel` | **CONFIRMADO** (verbatim) |
-| `TIPO_CTA` | `tipo` | **INFERENCIA fuerte — PENDIENTE CONTABILIDAD (bloqueante)** |
+| `TIPO_CTA` | `tipo` | **CONFIRMADO por Contabilidad** (2026-10-12; §14.1) |
 | `LINACTIVA_` | `activa` (invertido) | **CONFIRMADO** (100 % activas) |
 | `MULTIP_CTA` | (sin columna) | futuro: naturaleza — **PENDIENTE** |
 | `LARGO_CTA`/prefijo | (sin columna) | futuro: padre — **PENDIENTE** (derivable con certeza) |
@@ -284,7 +284,7 @@ No hay cuentas en moneda extranjera con movimiento (la `11104003` «AHORRO DOLAR
 > **Estado 2026-10-12:** las preguntas 1-5 fueron respondidas en parte (ver §14). Quedan abiertas las marcadas al final de §14.
 
 1. **Contado:** ¿D BANCO directo en la factura (regla confirmada) o D CLIENTES + cobro (Milenium)? ¿El «banco» debe pasar por TRASLADO EN TRANSITO (depósito posterior)?
-2. **Retención:** ¿en el asiento de la venta o al registrar la constancia? ¿qué hacer con las retenciones al **80 %**?
+2. **Retención:** ¿en el asiento de la venta o al registrar la constancia? ¿**qué porcentajes están vigentes** (15 %, 30 %, ¿80 %?, otros) y cómo se decide el de cada cliente?
 3. **Anulación:** ¿reverso exacto (VENTAS/IVA) o nota de crédito (DEVOLUCIONES)? ¿facturas anuladas sin póliza → nada que revertir?
 4. **VENTAS_BIENES:** ¿qué cuenta, por entidad?
 5. **Tipo y naturaleza:** ¿se aprueba el diccionario `TIPO_CTA` 1-5 y `MULTIP_CTA` ±1 de §3.2? ¿nivel 5 = cuenta de movimiento?
@@ -311,12 +311,17 @@ No ejecuta SQL en ningún entorno real (la carga de 18 cuentas es una **propuest
 | 1 | **Tipos** | `TIPO_CTA` 1 → Activo · 2 → Pasivo · 3 → Capital · 4 → Ingreso · 5 → Gasto («van de cajón siempre») | Aprobado. **Desbloquea** el SQL ejecutable de las 18 cuentas (`sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`, propuesto, no ejecutado) |
 | 2 | **Contado / crédito** | CRÉDITO → D CLIENTES. CONTADO → D BANCOS **directo**, **pero** solo si el pago está **realmente confirmado** y se puede ver/confirmar en el estado de cuenta | **Resuelve la contradicción §5.1** a favor de D BANCO, **condicionada** a «pago confirmado». Seleccionar CONTADO **no basta**. Sin confirmación → **no** se genera una póliza falsa de banco. Diseño en `CONTABILIDAD-DISENO-PAGO-RETENCION-REVERSO.md` §2 |
 | 3 | **Retención IVA** | Se **calcula desde el inicio**; después se **verifica en SAT** si el cliente realmente emitió la retención | Resuelve §5.2: separar **(A) retención esperada/calculada** de **(B) constancia confirmada/verificada**. La póliza debe preservar % esperado, monto, estado de verificación y constancia/SAT. Diseño §3 |
-| 4 | **Porcentajes** | 15 %, 30 % y **80 %** del IVA son válidos; el % depende del cliente (se reconoce por comportamiento/antigüedad); **no** limitar para siempre a 0/15/30 | **Corrige FACT-4** (hoy 0/15/30 en aplicación). **DEUDA TÉCNICA / BLOQUEANTE** para la siguiente fase. Resuelve §5.3 (los 340 casos al 80 % son legítimos). Diseño §4 |
+| 4 | **Porcentajes** | **Confirmado por Contabilidad:** el porcentaje **depende del cliente** y se reconoce por antigüedad/comportamiento («es complicado determinar qué cliente está sujeto a qué porcentaje»). **NO confirmado:** que el 80 % siga vigente, que sea correcto, que deba aceptarse cualquier entero 0-100 ni que los 340 casos históricos sean legítimos | FACT-4 hoy soporta solo 0/15/30; **Milenium histórico demuestra que ese conjunto cerrado es insuficiente** (80 % y otros existen). **FACT-5 queda bloqueada hasta confirmar:** (a) porcentajes vigentes permitidos, (b) si puede ser cualquier entero 0-100, (c) si hay decimales, (d) quién autoriza/configura el porcentaje del cliente. Hasta entonces **no se cambia código**. Diseño §4 (propuesta) |
 | 5 | **Anulación / reverso** | Factura con registro contable que se anula → **se reversa el registro**, aunque sea días o meses después; la **nota de crédito** también debe producir el efecto contable | Resuelve §5.4: **no** es «nota de crédito en lugar de reverso». Diseñar asiento original + **reverso idempotente** + nota de crédito (cuando corresponda fiscalmente) + vínculo entre ambos. Diseño §5 |
 | 6 | **Ventas de bienes** | Se puede crear una cuenta específica **VENTA DE BIENES**, separada de VENTAS DE SERVICIOS; **sin código** | Rol `VENTAS_BIENES` **confirmado**; **código PENDIENTE CONTABILIDAD**. No inventar; **no** usar `41101001`/`41101002` automáticamente. Fuera del SQL |
-| 7 | **«Nivel 5»** | La respuesta fue sobre **clasificación contable** (1 activo, 2 pasivo, 3 capital, 4 ingresos, 5 gastos, **6 otros gastos, 7 otros ingresos**), no sobre nivel jerárquico | «Nivel 5 = cuenta de movimiento» queda **NO CONFIRMADA**; no se usa como restricción de pólizas. Ver observación sobre 6 y 7 abajo |
+| 7 | **«Nivel 5»** | La pregunta fue interpretada como **clasificación contable**, no como nivel jerárquico. Contabilidad enumeró «usualmente» 1 activo, 2 pasivo, 3 capital, 4 ingresos, 5 gastos, y mencionó 6 «otros gastos» y 7 «otros ingresos» **«en otras nomenclaturas»** | «Nivel 5 = cuenta de movimiento» queda **NO CONFIRMADA**; no se usa como restricción de pólizas. Las clases 6 y 7 se mencionaron como posible **otra nomenclatura**: **no** se afirma que la plataforma deba adoptarlas (ver observación abajo) |
 
-**Observación sobre las clases 6 y 7.** Milenium solo usa `TIPO_CTA` 1-5; sus «otros gastos» y «otros ingresos» viven dentro de los tipos 5 y 4 (prefijos `8…` y `9…`). La plataforma tiene exactamente 5 tipos. La lista de Contabilidad (1-7) sugiere una clasificación con dos clases más. **No bloquea** las 18 cuentas (todas son 1, 2 o 4), pero hay que decidir **antes de importar el catálogo completo** si se amplía el conjunto de `tipo` (6 Otros gastos, 7 Otros ingresos) o se mantienen dentro de 4 y 5.
+**Observación sobre las clases 6 y 7.** Milenium (lo observado) solo usa `TIPO_CTA` 1-5; sus «otros gastos» y «otros ingresos» viven dentro de los tipos 5 y 4 (prefijos `8…` y `9…`). La plataforma tiene 5 tipos. Contabilidad mencionó las clases 6 y 7 como posible nomenclatura distinta, **no** como decisión para la plataforma. **No bloquea** las 18 cuentas (todas son 1, 2 o 4). Si algún día se importa el catálogo completo, **ampliar o no el conjunto de `tipo`** (o mantener esas cuentas dentro de 4 y 5) sigue **PENDIENTE**: no es una decisión tomada.
+
+**Certeza sobre los porcentajes de retención** (para no confundir evidencia con regla):
+- **CONFIRMADO POR DATOS:** Milenium histórico contiene retenciones al 15 %, 30 % y 80 % (340 casos KT) y algunos otros valores (10 %, 24 %, 60 %).
+- **CONFIRMADO POR CONTABILIDAD:** el porcentaje depende del cliente y debe poder identificarse/configurarse por cliente.
+- **PENDIENTE CONTABILIDAD:** qué porcentajes estarán permitidos en el sistema nuevo, si el 80 % sigue vigente, si basta cualquier entero 0-100, si existen decimales y quién lo autoriza.
 
 **Qué NO cambia:** todos los hallazgos históricos de §2-§4 (qué hace Milenium); el inventario de 10 + 8 cuentas; el patrón falla-cerrado; la cuenta de prueba `32234` (no se toca); FACT-4 (no se modificó en esta fase).
 
@@ -325,9 +330,9 @@ No ejecuta SQL en ningún entorno real (la carga de 18 cuentas es una **propuest
 2. **CONTADO sin pago confirmado:** ¿la venta (ventas + IVA) se contabiliza contra CLIENTES mientras no haya pago, o no se genera póliza hasta confirmarlo? (el IVA se debe declarar al certificar la factura).
 3. **Evidencia de «pago confirmado»:** ¿depósito/boleta con referencia, conciliación bancaria, confirmación manual de un responsable? ¿pagos parciales?
 4. **Retención no verificada / rechazada:** ¿qué asiento corrige una retención esperada que SAT no confirma? ¿plazo de verificación?
-5. **% de retención:** ¿entero 0-100 o decimales? ¿hay tope? ¿lo define Contabilidad o Operaciones, y con qué respaldo?
+5. **% de retención:** ¿qué porcentajes están vigentes (15, 30, ¿80?, otros)? ¿cualquier entero 0-100? ¿decimales? ¿tope? ¿quién autoriza/configura el porcentaje del cliente y con qué respaldo?
 6. **Reverso:** fecha contable (la de la anulación vs. la original), período cerrado, y cuándo aplica nota de crédito parcial vs. total.
-7. **Naturaleza formal** (`MULTIP_CTA`), clases 6 y 7, y si se importa el catálogo completo (con padre/naturaleza).
+7. **Naturaleza formal** (`MULTIP_CTA`); si se importa el catálogo completo (con padre/naturaleza) y, en ese caso, si se amplía el conjunto de `tipo` (las clases 6 y 7 se mencionaron solo como posible otra nomenclatura).
 8. **Bancos:** confirmar los de KT y Mónaco (`11103006`, `11101001`, registro duplicado) y alias/últimos 4 dígitos.
 9. **Cuenta de prueba `32234`:** ¿desactivar o eliminar (previo preflight en producción)?
 

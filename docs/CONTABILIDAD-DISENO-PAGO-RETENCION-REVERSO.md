@@ -12,11 +12,11 @@
 | Contado | D BANCO **solo si el pago está confirmado**; visible en estado de cuenta | No existe «pago confirmado»: `fact_pagos` no tiene banco, estado ni confirmación | **FACT-6** |
 | Crédito | D CLIENTES | Nada (regla simple) | CONT-P2 |
 | Retención | Calcular desde el inicio; **verificar después en SAT** | Solo existe la **esperada** congelada en la factura; no hay constancia/verificación | **FACT-7** |
-| Porcentaje | 15 %, 30 % y **80 %**; depende del cliente; no limitar a 0/15/30 | Validación **hardcode 0/15/30** en ≥ 9 puntos de la aplicación | **FACT-5 (bloqueante)** |
+| Porcentaje | El porcentaje **depende del cliente** (confirmado). **No** confirmado: qué valores están vigentes ni si el 80 % sigue vigente; Milenium histórico trae 15 %, 30 %, 80 % y otros | Validación **hardcode 0/15/30** en ≥ 9 puntos de la aplicación (insuficiente frente a la evidencia histórica) | **FACT-5: BLOQUEADA hasta confirmar** los valores permitidos (§4.2) |
 | Anulación | Si hay registro contable, **reversarlo** (aunque sea meses después); la nota de crédito también produce efecto | `cont_asientos` no tiene origen/idempotencia ni vínculo original↔reverso | **CONT-P1** |
 | Ventas de bienes | Cuenta separada «VENTA DE BIENES» | Rol sin cuenta: falta **código** | Contabilidad |
 
-**Orden sugerido:** FACT-5 (porcentaje configurable) → CONT-P1 (columnas de origen/reverso en asientos) → FACT-6 (pago confirmado) → FACT-7 (retención verificada) → CONT-P2 (póliza de venta automática **después** de FEL) → CONT-P3 (cobro, retención verificada, reverso y nota de crédito). Ninguna emite pólizas reales hasta que la anterior esté aprobada.
+**Orden sugerido:** FACT-5 (porcentaje configurable por cliente; **antes, confirmar valores permitidos**) → CONT-P1 (columnas de origen/reverso en asientos) → FACT-6 (pago confirmado) → FACT-7 (retención verificada) → CONT-P2 (póliza de venta automática **después** de FEL) → CONT-P3 (cobro, retención verificada, reverso y nota de crédito). Ninguna emite pólizas reales hasta que la anterior esté aprobada.
 
 ## 1. Punto de partida (qué existe hoy)
 
@@ -103,10 +103,12 @@ CREATE TABLE fact_factura_retencion_iva (        -- una fila por factura con ret
 ### 3.3 Qué pasa si la verificación difiere `[PENDIENTE CONTABILIDAD]`
 Si SAT no confirma, o el monto/porcentaje de la constancia difiere: ¿se **reclasifica** (D CLIENTES / H RETENCION_IVA por lo no reconocido) y se reclama al cliente?, ¿plazo de verificación?, ¿qué ocurre con la liquidación mensual del IVA? El diseño reserva `asiento_ajuste_id` y el estado, **sin** fijar el asiento.
 
-## 4. Porcentaje de retención configurable (80 %) — DEUDA TÉCNICA / BLOQUEANTE
+## 4. Porcentaje de retención configurable por cliente — DEUDA TÉCNICA (FACT-5 bloqueada hasta confirmar)
 
 ### 4.1 Hallazgo
-FACT-4 limita la retención a **0, 15 o 30** en la aplicación; Contabilidad confirmó que **80 %** (y otros por cliente) es válido. La **base de datos no lo impide**: ambas columnas son `TINYINT UNSIGNED` (0-255) **sin** `CHECK`. El bloqueo está en código:
+**Certeza.** `CONFIRMADO POR DATOS`: Milenium histórico contiene retenciones al 15 %, 30 % y 80 % (340 casos KT) y algunos otros valores. `CONFIRMADO POR CONTABILIDAD`: el porcentaje **depende del cliente** (se reconoce por antigüedad/comportamiento) y debe poder configurarse por cliente. `PENDIENTE CONTABILIDAD`: qué porcentajes admitirá el sistema nuevo y si el **80 % sigue vigente**; Contabilidad **no** confirmó que el 80 % sea correcto ni que los 340 casos sean legítimos.
+
+FACT-4 limita la retención a **0, 15 o 30** en la aplicación; la evidencia histórica muestra que ese **conjunto cerrado es insuficiente**. La **base de datos no lo impide**: ambas columnas son `TINYINT UNSIGNED` (0-255) **sin** `CHECK`. El bloqueo está en código:
 
 | Archivo | Qué hace hoy |
 |---|---|
@@ -120,14 +122,21 @@ FACT-4 limita la retención a **0, 15 o 30** en la aplicación; Contabilidad con
 | `src/components/facturacion/facturacion-client.tsx` | `<option>` 0/15/30 **hardcodeados** |
 | `src/components/facturacion/factura-lineas-form.tsx` | cae a `[0, 15, 30]` si el contexto no trae lista |
 
-### 4.2 Diseño propuesto `[DISEÑO]` (fase FACT-5)
-1. **Una sola regla de validación** (`validarPorcentajeRetencionIva`): número finito, `0 ≤ pct ≤ 100`. **Recomendado: enteros 0-100** (la columna actual los soporta: **sin migración**). Decimales (p. ej. 12.5) requerirían `DECIMAL(5,2)` → migración aditiva, solo si Contabilidad lo pide.
-2. **Quitar el conjunto cerrado**: ninguna constante 0/15/30 en validación. Los valores habituales (15, 30, 80) pasan a ser **sugerencias** de la interfaz (atajos), no restricciones.
+### 4.2 Antes de implementar FACT-5 hay que confirmar (PENDIENTE CONTABILIDAD)
+
+- **(a)** qué porcentajes están **vigentes y permitidos**;
+- **(b)** si puede ser **cualquier entero 0-100**;
+- **(c)** si existen **decimales**;
+- **(d)** **quién autoriza/configura** el porcentaje de cada cliente y con qué respaldo.
+
+### 4.3 Propuesta de diseño (NO aprobada; depende de las respuestas anteriores)
+1. **Una sola regla de validación** (`validarPorcentajeRetencionIva`), alimentada por una **fuente de valores permitidos** (lista configurable por empresa/entidad **o** rango), según lo que Contabilidad confirme en (a)-(c). **Opción técnica** si se aprueba «cualquier entero»: número finito, `0 ≤ pct ≤ 100`; la columna actual lo soporta **sin migración**. Decimales (p. ej. 12.5) requerirían `DECIMAL(5,2)` → migración aditiva, solo si Contabilidad lo confirma. **0-100 es una propuesta, no un requisito.**
+2. **Quitar el conjunto cerrado hardcodeado**: ninguna constante 0/15/30 en el código de validación; los valores vigentes vendrían de configuración. Los valores históricos (15, 30, 80) solo serían **sugerencias** de la interfaz **si** Contabilidad los confirma como vigentes.
 3. **Seguridad:** el porcentaje por cliente solo lo cambia quien tiene `editar_requisitos`; el override por factura sigue exigiendo el mismo permiso (ya implementado) y queda congelado con la factura. **Auditoría** de cada cambio de cliente: usuario, fecha, valor anterior y nuevo.
 4. **Lectura honesta:** `leerRetencionIvaCliente` debe **fallar** (no devolver 0) ante un valor fuera de rango.
-5. **Cálculo:** `retención = ROUND(IVA × pct / 100, 2)` half-up, siempre `0 ≤ retención ≤ IVA ≤ total`; el neto `total − retención` nunca negativo. Ejemplo 80 %: total Q3,000.00 IVA incl. → IVA 321.43 → retención **257.14** → neto **2,742.86**; DEBE = HABER = 3,000.00.
-6. **Pruebas mínimas:** 0, 15, 30, **80**, 100, 101, −1, 12.5 (según se decida), NaN/texto, cliente A→B, y la partida cuadrada al centavo con 80 %.
-7. **Datos existentes:** las facturas FACT-4 con 0/15/30 siguen válidas; no hay migración de datos.
+5. **Cálculo:** `retención = ROUND(IVA × pct / 100, 2)` half-up, siempre `0 ≤ retención ≤ IVA ≤ total`; el neto `total − retención` nunca negativo. **Ejemplo matemático/histórico, NO regla futura aprobada** (80 %): total Q3,000.00 IVA incl. → IVA 321.43 → retención **257.14** → neto **2,742.86**; DEBE = HABER = 3,000.00.
+6. **Pruebas mínimas:** los porcentajes que finalmente se confirmen (hoy 0, 15, 30 y, **si** se confirma, 80), más límites (100, 101, −1), 12.5 (según se decida), NaN/texto, cliente A→B, y la partida cuadrada al centavo con cada porcentaje vigente.
+7. **Datos existentes:** las facturas FACT-4 con 0/15/30 siguen válidas; no hay migración de datos. Las retenciones históricas de Milenium (incluidas las del 80 %) **no** se importan ni se reinterpretan en esta fase.
 8. **Por antigüedad del cliente:** Contabilidad dijo que se «reconoce por comportamiento/antigüedad». Se mantiene **manual por cliente** (no se infiere automáticamente); el origen del valor puede registrarse como nota de auditoría.
 
 ## 5. Reverso contable
@@ -180,7 +189,7 @@ VENTAS_BIENES: código de cuenta (Contabilidad) ──> habilita líneas BIEN en
 2. **CONTADO sin confirmar:** opción A (diferida) o B (CLIENTES + cobro) — §2.3.1.
 3. **Evidencia de pago confirmado**, pagos parciales y moneda — §2.3.
 4. **Retención no verificada/rechazada o con diferencia:** asiento de ajuste y plazo — §3.3.
-5. **Porcentaje:** ¿enteros o decimales?, ¿tope?, ¿quién lo define y con qué respaldo? — §4.2.
+5. **Porcentaje:** qué valores están **vigentes** (15, 30, ¿80?, otros), si basta **cualquier entero 0-100**, si hay **decimales**, tope y **quién lo autoriza/configura** — §4.2.
 6. **Reverso:** fecha contable, período cerrado, nota de crédito parcial vs. total, cuentas de la NC — §5.
-7. **Naturaleza formal**, clases 6 «otros gastos» y 7 «otros ingresos» (¿se amplía el conjunto de `tipo`?), «nivel 5» como regla (no confirmada).
+7. **Naturaleza formal**; si se importa el catálogo completo y, en ese caso, si se amplía el conjunto de `tipo` (las clases 6 «otros gastos» y 7 «otros ingresos» se mencionaron solo como posible otra nomenclatura, **no** como decisión); «nivel 5» como regla (no confirmada).
 8. **Bancos** a cargar en `cont_cuentas_bancarias` y la cuenta de prueba `32234`.
