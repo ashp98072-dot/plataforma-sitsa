@@ -548,7 +548,8 @@ describe("Transaccionalidad: revalidación bajo bloqueo, huella del preview y RO
     const iPrimeraEscritura = bd.ejecutadas.findIndex((s) => /^(INSERT|UPDATE|DELETE)/.test(s));
     expect(iLock).toBeGreaterThanOrEqual(0);
     expect(iPrimeraEscritura).toBeGreaterThan(iLock);
-    expect(bd.ejecutadas.some((s) => /^(UPDATE|DELETE|INSERT)\s.*\b(incidencias|vacaciones |evidencias_incidencias|empleados)\b/.test(s) && !s.includes("saldos_vacaciones") && !s.includes("detalle_consumo") && !s.includes("auditoria"))).toBe(false);
+    // Revisar el DESTINO de escritura; INSERT sync SELECT empleados no modifica empleados.
+    expect(bd.ejecutadas.some((s) => /^(?:UPDATE|DELETE FROM|INSERT INTO)\s+(incidencias|vacaciones|evidencias_incidencias|empleados)\b/.test(s))).toBe(false);
   });
 });
 

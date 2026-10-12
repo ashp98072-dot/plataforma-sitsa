@@ -941,6 +941,10 @@ export async function limpiarModuloEmpresa(opts: {
       default:
         throw new Error("Módulo no soportado.");
     }
+    if (["rrhh", "rrhh_vacaciones", "rrhh_incidencias"].includes(opts.modulo)) {
+      const { invalidarVacacionesEmpresaEnConexion } = await import("@/lib/rrhh/vacaciones-sync-estado");
+      await invalidarVacacionesEmpresaEnConexion(conn, opts.empresaId);
+    }
     const detalleArchivos = archivosDetectados.size
       ? ` archivos_fisicos_detectados: ${archivosDetectados.size};`
       : "";

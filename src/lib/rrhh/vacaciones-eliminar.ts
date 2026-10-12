@@ -3,6 +3,7 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { getPool } from "@/lib/db";
 import { toIsoDate } from "./dates";
 import { sincronizarPeriodosVacacionesEnConexion } from "./vacaciones";
+import { marcarVacacionesDirty } from "./vacaciones-sync-estado";
 
 /**
  * RRHH VACACIONES — ELIMINAR UN REGISTRO Y DEVOLVER EL SALDO.
@@ -66,6 +67,7 @@ export async function eliminarRegistroVacaciones(empresaId: number, incidenciaId
   try {
     await conn.beginTransaction();
     const res = await ejecutar(conn, empresaId, incidenciaId, usuario);
+    await marcarVacacionesDirty(conn, empresaId, res.empleadoId);
     await conn.commit();
     return res;
   } catch (e) {

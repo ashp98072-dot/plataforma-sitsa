@@ -9,6 +9,8 @@ const db = vi.hoisted(() => {
     release: vi.fn(),
     execute,
     query: vi.fn(async (sql: string) => {
+      if (sql.includes("GET_LOCK")) return [[{ adquirido: 1 }]];
+      if (sql.includes("SELECT s.*")) return [[{ dirty: 1, generacion: "0", ultima_sync_fecha: null, fecha_alta: "2025-01-01" }]];
       if (sql.includes("SELECT fecha_alta")) {
         return [[{ fecha_alta: "2025-01-01" }]];
       }
@@ -70,14 +72,14 @@ describe("acumulación crítica de vacaciones", () => {
     expect(dias).toBeLessThan(8);
   });
 
-  it("sincroniza automáticamente todos los empleados activos una vez al día", async () => {
+  it("cada llamada posterior vuelve a revisar el índice persistente", async () => {
     const primero = await sincronizarVacacionesEmpleadosActivos(901);
     const segundo = await sincronizarVacacionesEmpleadosActivos(901);
 
     expect(primero).toEqual({ empleados: 2, errores: 0 });
     expect(segundo).toEqual(primero);
-    expect(db.query).toHaveBeenCalledTimes(1);
-    expect(db.getConnection).toHaveBeenCalledTimes(2);
-    expect(db.connection.commit).toHaveBeenCalledTimes(2);
+    expect(db.query).toHaveBeenCalledTimes(4);
+    expect(db.getConnection).toHaveBeenCalledTimes(4);
+    expect(db.connection.commit).toHaveBeenCalledTimes(4);
   });
 });
