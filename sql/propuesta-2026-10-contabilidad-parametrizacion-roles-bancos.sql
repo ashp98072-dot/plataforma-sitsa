@@ -13,6 +13,9 @@
 --   §5  Endurecimientos opcionales (únicos de alias, triggers de cuenta activa)                    [COMENTADO]
 --
 -- No genera pólizas, no toca facturas, pagos, retenciones, FEL ni registrarAsiento, no hace UPDATE/DELETE.
+-- ESQUEMA EXPLÍCITO: todas las referencias a tablas (CREATE, INSERT, SELECT, JOIN, FOREIGN KEY, tabla temporal y los
+-- bloques comentados) van como `u611730801_Plataforma.<tabla>`. El script apunta inequívocamente a esa base aunque la sesión esté
+-- parada en otro esquema (phpMyAdmin/Hostinger); no depende de un USE. En una base de pruebas, reemplazar el nombre.
 -- Mismo código ≠ misma fila: TODO se resuelve por empresa_id + entidad_id + codigo (KT y MONACO tienen cuentas distintas
 -- con códigos iguales).
 
@@ -27,7 +30,7 @@
 --     confirmado. BANCOS tampoco es un rol fijo: se resuelve por cont_cuentas_bancarias.
 --   · La cuenta INACTIVA no se puede impedir con una FK: lo cubren la carga (§2, solo cuentas activas), el resolvedor
 --     (siempre JOIN … activa = 1) y el preflight §7; trigger opcional en §5.
-CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
+CREATE TABLE IF NOT EXISTS u611730801_Plataforma.cont_cuentas_rol (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   entidad_id INT NOT NULL,
@@ -39,9 +42,9 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
   UNIQUE KEY uq_cont_cuentas_rol (empresa_id, entidad_id, rol),
   KEY idx_cont_cuentas_rol_cuenta (empresa_id, entidad_id, cuenta_id),
   CONSTRAINT fk_cont_rol_entidad FOREIGN KEY (empresa_id, entidad_id)
-    REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT,
+    REFERENCES u611730801_Plataforma.cont_entidades(empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_cont_rol_cuenta FOREIGN KEY (empresa_id, entidad_id, cuenta_id)
-    REFERENCES cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT,
+    REFERENCES u611730801_Plataforma.cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT,
   CONSTRAINT ck_cont_rol_valido CHECK (rol IN (
     'CLIENTES', 'IVA_POR_PAGAR', 'VENTAS_SERVICIOS', 'RETENCION_IVA', 'ANTICIPOS', 'TRANSITO_BANCARIO', 'DEVOLUCIONES_VENTAS'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -53,8 +56,8 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
 -- Cada cuenta debe existir en ESA entidad, estar ACTIVA y tener el tipo esperado del rol; si una no cumple, la fila NO se
 -- inserta, `roles_encontrados` no llega a 14 y el cierre es ROLLBACK. Un rol ya existente hace fallar el INSERT (UNIQUE)
 -- y además `roles_previos` > 0 impide confirmar. La compuerta NO usa ROW_COUNT().
-DROP TEMPORARY TABLE IF EXISTS esperado_roles;
-CREATE TEMPORARY TABLE esperado_roles (
+DROP TEMPORARY TABLE IF EXISTS u611730801_Plataforma.esperado_roles;
+CREATE TEMPORARY TABLE u611730801_Plataforma.esperado_roles (
   entidad_id INT NOT NULL,
   rol        VARCHAR(40) NOT NULL,
   codigo     VARCHAR(40) NOT NULL,
@@ -62,7 +65,7 @@ CREATE TEMPORARY TABLE esperado_roles (
   PRIMARY KEY (entidad_id, rol)
 ) DEFAULT CHARSET=utf8mb4;
 
-INSERT INTO esperado_roles (entidad_id, rol, codigo, tipo) VALUES
+INSERT INTO u611730801_Plataforma.esperado_roles (entidad_id, rol, codigo, tipo) VALUES
   (1, 'CLIENTES',            '11203001', 'Activo'),
   (1, 'IVA_POR_PAGAR',       '21401001', 'Pasivo'),
   (1, 'VENTAS_SERVICIOS',    '41101003', 'Ingreso'),
@@ -84,14 +87,14 @@ START TRANSACTION;
 -- NO se confirma: no se «absorbe» ni se actualiza nada (falla cerrado).
 SET @roles_previos := (
   SELECT COUNT(*)
-  FROM esperado_roles e
-  JOIN cont_cuentas_rol r ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol
+  FROM u611730801_Plataforma.esperado_roles e
+  JOIN u611730801_Plataforma.cont_cuentas_rol r ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol
 );
 
-INSERT INTO cont_cuentas_rol (empresa_id, entidad_id, rol, cuenta_id, activa)
+INSERT INTO u611730801_Plataforma.cont_cuentas_rol (empresa_id, entidad_id, rol, cuenta_id, activa)
 SELECT 1, e.entidad_id, e.rol, c.id, 1
-FROM esperado_roles e
-JOIN cont_cuentas c
+FROM u611730801_Plataforma.esperado_roles e
+JOIN u611730801_Plataforma.cont_cuentas c
   ON c.empresa_id = 1 AND c.entidad_id = e.entidad_id AND c.codigo = e.codigo
  AND c.activa = 1 AND c.tipo = e.tipo
 ORDER BY e.entidad_id, e.rol;
@@ -100,22 +103,22 @@ ORDER BY e.entidad_id, e.rol;
 -- ROLLBACK equivocado). Se cuenta lo que REALMENTE existe en la tabla, dentro de esta misma transacción:
 --   roles_encontrados = roles esperados que existen con: empresa 1, entidad correcta, rol correcto, rol activo,
 --   y cuenta_id = la cuenta (empresa 1, ESA entidad, código esperado) ACTIVA y del TIPO esperado.
-SET @roles_esperados := (SELECT COUNT(*) FROM esperado_roles);
+SET @roles_esperados := (SELECT COUNT(*) FROM u611730801_Plataforma.esperado_roles);
 SET @roles_encontrados := (
   SELECT COUNT(*)
-  FROM esperado_roles e
-  JOIN cont_cuentas_rol r
+  FROM u611730801_Plataforma.esperado_roles e
+  JOIN u611730801_Plataforma.cont_cuentas_rol r
     ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol AND r.activa = 1
-  JOIN cont_cuentas c
+  JOIN u611730801_Plataforma.cont_cuentas c
     ON c.id = r.cuenta_id AND c.empresa_id = 1 AND c.entidad_id = e.entidad_id
    AND c.codigo = e.codigo AND c.activa = 1 AND c.tipo = e.tipo
 );
 -- diferencias = roles esperados ausentes o apuntando a otra cuenta / cuenta inactiva / otro tipo / rol inactivo.
 SET @diferencias := (
   SELECT COUNT(*)
-  FROM esperado_roles e
-  LEFT JOIN cont_cuentas_rol r ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol
-  LEFT JOIN cont_cuentas c ON c.id = r.cuenta_id
+  FROM u611730801_Plataforma.esperado_roles e
+  LEFT JOIN u611730801_Plataforma.cont_cuentas_rol r ON r.empresa_id = 1 AND r.entidad_id = e.entidad_id AND r.rol = e.rol
+  LEFT JOIN u611730801_Plataforma.cont_cuentas c ON c.id = r.cuenta_id
   WHERE r.id IS NULL
      OR c.empresa_id <> 1 OR c.entidad_id <> e.entidad_id OR c.codigo <> e.codigo
      OR c.activa <> 1 OR c.tipo <> e.tipo OR r.activa <> 1
@@ -130,10 +133,10 @@ SELECT @roles_esperados AS roles_esperados, @roles_previos AS roles_previos, @ro
 
 -- Estado final (solo lectura)
 SELECT r.entidad_id, r.rol, c.codigo AS cuenta_codigo, c.nombre AS cuenta_nombre, c.tipo, r.activa
-FROM cont_cuentas_rol r JOIN cont_cuentas c ON c.id = r.cuenta_id
+FROM u611730801_Plataforma.cont_cuentas_rol r JOIN u611730801_Plataforma.cont_cuentas c ON c.id = r.cuenta_id
 WHERE r.empresa_id = 1 ORDER BY r.entidad_id, r.rol;
 
-DROP TEMPORARY TABLE IF EXISTS esperado_roles;
+DROP TEMPORARY TABLE IF EXISTS u611730801_Plataforma.esperado_roles;
 
 -- ═════════════════════════════ §3. BANCOS — COMENTADO / BLOQUEADO ═══════════════════════════════════════════════════
 -- BLOQUEADO hasta que el responsable confirme, POR BANCO: (a) que sigue operativo, (b) alias, (c) moneda y (d) los
@@ -144,23 +147,23 @@ DROP TEMPORARY TABLE IF EXISTS esperado_roles;
 -- puede repetirse (queda UNA fila; un segundo alias no es posible sobre la misma cuenta).
 --
 -- KT — candidatos (Milenium, con movimiento hasta 2026):
--- INSERT INTO cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, referencia, moneda, activa)
+-- INSERT INTO u611730801_Plataforma.cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, referencia, moneda, activa)
 -- SELECT 1, 1, c.id, 'Banco Industrial', '<ALIAS A CONFIRMAR>', '***<ULTIMOS_4>', 'GTQ', 1
---   FROM cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103002' AND c.activa = 1
+--   FROM u611730801_Plataforma.cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103002' AND c.activa = 1
 -- UNION ALL
 -- SELECT 1, 1, c.id, 'G&T Continental',   '<ALIAS A CONFIRMAR>', '***<ULTIMOS_4>', 'GTQ', 1
---   FROM cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103001' AND c.activa = 1
+--   FROM u611730801_Plataforma.cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103001' AND c.activa = 1
 -- UNION ALL
 -- SELECT 1, 1, c.id, 'Banco Industrial',  '<ALIAS A CONFIRMAR: fondo operativo>', '***<ULTIMOS_4>', 'GTQ', 1
---   FROM cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103004' AND c.activa = 1;
+--   FROM u611730801_Plataforma.cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 1 AND c.codigo = '11103004' AND c.activa = 1;
 --
 -- KT — 11103006 G&T CONTINENTAL: SIN movimiento desde 2023-06 y NO homologada en cont_cuentas. PENDIENTE confirmar si
 -- sigue activa; si sí, primero homologar la cuenta y luego dar de alta el banco. NO se incluye.
 --
 -- MONACO — único banco con movimiento:
--- INSERT INTO cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, referencia, moneda, activa)
+-- INSERT INTO u611730801_Plataforma.cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, referencia, moneda, activa)
 -- SELECT 1, 2, c.id, 'Banco Industrial', '<ALIAS A CONFIRMAR>', '***<ULTIMOS_4>', 'GTQ', 1
---   FROM cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 2 AND c.codigo = '11103002' AND c.activa = 1;
+--   FROM u611730801_Plataforma.cont_cuentas c WHERE c.empresa_id = 1 AND c.entidad_id = 2 AND c.codigo = '11103002' AND c.activa = 1;
 --
 -- Verificación posterior (esperado 0 filas): SELECT … del preflight §6.4-§6.5 y §7.
 
@@ -173,14 +176,14 @@ DROP TEMPORARY TABLE IF EXISTS esperado_roles;
 
 -- ═════════════════════════════ §5. ENDURECIMIENTOS OPCIONALES — COMENTADO ═══════════════════════════════════════════
 -- (a) Evitar un mismo banco+alias repetido dentro de una entidad (hoy no hay UNIQUE; el preflight §6.4 lo detecta):
--- ALTER TABLE cont_cuentas_bancarias
+-- ALTER TABLE u611730801_Plataforma.cont_cuentas_bancarias
 --   ADD UNIQUE INDEX IF NOT EXISTS uq_cont_cb_alias (empresa_id, entidad_id, banco, alias);
 -- (b) Impedir en la propia base un rol ACTIVO sobre cuenta inactiva (requiere privilegio TRIGGER; si el hosting no lo
 --     permite, lo cubre el resolvedor con JOIN … activa = 1):
 -- DELIMITER //
--- CREATE TRIGGER trg_cont_rol_cuenta_activa_i BEFORE INSERT ON cont_cuentas_rol FOR EACH ROW
+-- CREATE TRIGGER trg_cont_rol_cuenta_activa_i BEFORE INSERT ON u611730801_Plataforma.cont_cuentas_rol FOR EACH ROW
 -- BEGIN
---   IF NEW.activa = 1 AND (SELECT activa FROM cont_cuentas WHERE id = NEW.cuenta_id) <> 1 THEN
+--   IF NEW.activa = 1 AND (SELECT activa FROM u611730801_Plataforma.cont_cuentas WHERE id = NEW.cuenta_id) <> 1 THEN
 --     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'La cuenta del rol esta inactiva';
 --   END IF;
 -- END//
