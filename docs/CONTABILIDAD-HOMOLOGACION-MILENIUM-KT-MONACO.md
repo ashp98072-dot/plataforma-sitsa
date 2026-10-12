@@ -2,7 +2,11 @@
 
 > **Fase:** discovery + propuesta. **No** ejecuta SQL, **no** crea cuentas, **no** genera pólizas, **no** modifica FACT-4 ni producción.
 > **Referencia funcional:** Milenium (copia local `Milenium2000`, datos hasta 2026-05-27). **Alcance:** `empresa_id = 1`, entidad 1 = KT / KuiqTrans, entidad 2 = MONACO / Logiservicios Mónaco.
-> **Archivos asociados:** `sql/preflight-2026-10-contabilidad-homologacion-milenium.sql` (solo lectura) y `sql/propuesta-2026-10-contabilidad-homologacion-milenium.sql` (**inventario y patrón de carga, sin ningún `INSERT` ejecutable**: bloqueado por la aprobación del `tipo`).
+> **Archivos asociados:** `sql/preflight-2026-10-contabilidad-homologacion-milenium.sql` (solo lectura; compuerta de colisiones), `sql/propuesta-2026-10-contabilidad-homologacion-milenium.sql` (inventario, pendientes, bancos y diseño de roles; sin `INSERT` ejecutable) y **`sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`** (carga ejecutable de 18 cuentas — **propuesta, NO ejecutada**).
+> **Diseño de la siguiente fase:** `docs/CONTABILIDAD-DISENO-PAGO-RETENCION-REVERSO.md`.
+
+> ### Actualización 2026-10-12 — respuestas directas de Contabilidad
+> Este documento nació como discovery. Contabilidad respondió después las preguntas abiertas; **§14 resume las 7 decisiones y su efecto**. Donde el texto de §1–§13 diga «pendiente» sobre un punto ya respondido, **manda §14**. Los hallazgos históricos de Milenium (§2–§4) no cambian.
 
 ## 0. Método y límites
 
@@ -20,7 +24,7 @@
 4. **La plataforma ya soporta** empresa, entidad, código, nombre, tipo, nivel y activa en `cont_cuentas`. **No soporta** cuenta padre, naturaleza, movimiento/agrupación, ni parametrización por rol (§6). **No se creó un catálogo paralelo.**
 5. La jerarquía y la naturaleza **sí se pueden derivar con certeza** del catálogo (`LARGO_CTA` por nivel 1·2·4·6·8; `MULTIP_CTA` ↔ tipo), lo que desbloquea el diseño de importación cuando Contabilidad lo apruebe (§3.2).
 6. La cuenta de prueba KT `32234 / safdasf` se revisó con un preflight de solo lectura (§7). Mónaco no tiene cuentas.
-7. El inventario propuesto es de **10 cuentas KT y 8 Mónaco** con entidad, código, nombre y nivel **confirmados** (§8). **La fila de `cont_cuentas` aún no está aprobada:** el `tipo` (traducción de `TIPO_CTA`) es inferencia pendiente de Contabilidad, así que **no hay `INSERT` ejecutable** en la propuesta; la carga queda comentada y bloqueada (§8).
+7. El inventario propuesto es de **10 cuentas KT y 8 Mónaco** (§8). **Contabilidad aprobó el diccionario `TIPO_CTA` 1-5 (2026-10-12)**, de modo que la fila de `cont_cuentas` queda completa y existe un **SQL ejecutable propuesto** (`sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`, falla cerrado, **no ejecutado**). Siguen fuera `VENTAS_BIENES` (falta el código) y los bancos (§14).
 
 ## 2. Mapas contables por entidad
 
@@ -91,8 +95,8 @@ Los 43 códigos solo-KT incluyen cuentas de **partes relacionadas** (p. ej. «LO
 |---|---|---|
 | **Longitud del código** | 8 caracteres en el 100 % de las cuentas de las 3 bases. Se conserva como texto (hay ceros iniciales) | **CONFIRMADO** |
 | **Jerarquía** | `LARGO_CTA` = 1, 2, 4, 6, 8 para los niveles 1–5. El código de cada nivel es el **prefijo + ceros**; el padre es el ancestro de nivel anterior cuyo prefijo coincide. **0 excepciones y 0 cuentas sin padre único** en las 3 bases (p. ej. `11203001` → `11203000` → `11200000` → `11000000` → `10000000`) | **CONFIRMADO** |
-| **Cuentas de movimiento** | Las cuentas con movimiento en pólizas son de **nivel 5** (KT 283, Mónaco 126), más 1 de nivel 4 por entidad (en KT, `93010100 INTERESES`). `CTACOM_CTA` es `false` en el 100 % (no discrimina) | **INFERENCIA** (nivel 5 = movimiento; excepción nivel 4) |
-| **Tipo (`TIPO_CTA`)** | 1 = ACTIVO, 2 = PASIVO, 3 = INVERSIÓN DE LOS ACCIONISTAS (capital), 4 = INGRESOS (ventas y otros ingresos), 5 = COSTOS Y GASTOS (costo de ventas, administración, otros gastos). Verificado contra los nombres de las 8 cuentas de nivel 1 y los prefijos de código | **INFERENCIA fuerte** → **PENDIENTE CONTABILIDAD** (aprobación del diccionario) |
+| **Cuentas de movimiento** | Las cuentas con movimiento en pólizas son de **nivel 5** (KT 283, Mónaco 126), más 1 de nivel 4 por entidad (en KT, `93010100 INTERESES`). `CTACOM_CTA` es `false` en el 100 % (no discrimina) | **INFERENCIA — NO CONFIRMADA** (Contabilidad interpretó la pregunta como *clasificación* 1-7, no como nivel jerárquico; **no** se usa nivel 5 como restricción; ver §14.7) |
+| **Tipo (`TIPO_CTA`)** | 1 = ACTIVO, 2 = PASIVO, 3 = INVERSIÓN DE LOS ACCIONISTAS (capital), 4 = INGRESOS (ventas y otros ingresos), 5 = COSTOS Y GASTOS (costo de ventas, administración, otros gastos). Verificado contra los nombres de las 8 cuentas de nivel 1 y los prefijos de código | **CONFIRMADO por Contabilidad (2026-10-12):** 1 Activo · 2 Pasivo · 3 Capital · 4 Ingreso · 5 Gasto («van de cajón siempre») |
 | **Naturaleza (`MULTIP_CTA`)** | `1` en tipos 1 y 5; `-1` en tipos 2, 3 y 4, **sin una sola excepción** en las 3 bases. Es la naturaleza deudora/acreedora esperada | **INFERENCIA fuerte** → **PENDIENTE CONTABILIDAD** |
 | **Activa (`LINACTIVA_`)** | `false` (activa) en el 100 % | **CONFIRMADO** (dato); significado de «inactiva» pendiente |
 | **Cuenta alterna (`CODALT_CTA`)** | vacío en el 100 % | **CONFIRMADO** |
@@ -129,7 +133,7 @@ Porcentaje observado (retención ÷ IVA de la factura, 3 613 retenciones KT y 51
 |---|---|---|
 | **15 %** | 2 950 (81.6 %) | 486 (95.3 %) |
 | **30 %** | 311 (8.6 %) | 23 (4.5 %) |
-| **80 %** | **340 (9.4 %)** | 0 |
+| **80 %** (hallazgo histórico) | **340 (9.4 %)** | 0 |
 | otros (10 %, 24 %, 60 %) | 10 | 1 |
 
 ### D) Contado con retención — `[CONFIRMADO]`
@@ -152,15 +156,17 @@ Igual que (C): factura `D CLIENTES` (contado) + `C/E` retención `D 11302005` + 
 | Crédito | D CLIENTES · H VENTAS · H IVA | D CLIENTES · H IVA · H VENTAS | **No** |
 | Contado | D BANCO · H VENTAS · H IVA | D **CLIENTES** · H IVA · H VENTAS, y el banco entra por recibo→tránsito→depósito o depósito directo | **Sí** |
 | Retención | D RETENCIÓN IVA + D CLIENTE/BANCO neto · H VENTAS · H IVA, **en el mismo asiento** | D `11302005` / H CLIENTES en una póliza **posterior** (mediana 4–6 días); la factura va completa | **Sí** (momento y n.º de pólizas; **mismas cuentas y mismo neto**) |
-| % retención | 0 %, 15 % o 30 % | 15 % y 30 % + 80 % (340 casos KT) | **Sí** |
+| % retención | 0 %, 15 % o 30 % (implementado en FACT-4; **no** confirmado como conjunto definitivo) | 15 % y 30 % + 80 % (340 casos KT) y otros: **hallazgo histórico**; vigencia futura **pendiente** | **Sí** (diferencia de datos; la regla futura está pendiente) |
 | Anulación | Reverso contable exacto automático | Anulada = sin póliza; certificada = nota de crédito con cuenta de devoluciones | **Sí** |
 | Ventas | SERVICIOS y BIENES separadas | Una sola cuenta de ventas de servicios en `f10` | **Sí** (falta cuenta de bienes) |
 
 ## 5. Contradicciones y decisiones pendientes (no se cambió código)
 
+> **Actualizado 2026-10-12:** los puntos 1-5 recibieron respuesta de Contabilidad; ver **§14** (contado condicionado a pago confirmado; retención esperada vs. verificada con **porcentaje por cliente — los valores vigentes siguen PENDIENTES**; reverso sí; VENTAS_BIENES sin código). El texto de abajo se conserva como registro de la contradicción original.
+
 1. **CONTADO** — `[PENDIENTE CONTABILIDAD]` ¿La plataforma postea **D BANCO** directo en la factura (regla confirmada) o replica Milenium (D CLIENTES + cobro por tránsito)? Con la regla confirmada, el banco se carga sin pasar por CLIENTES ni TRASLADO EN TRANSITO, y la cartera nace ya cobrada.
 2. **Momento de la retención** — `[PENDIENTE CONTABILIDAD]` Milenium la asienta cuando llega la **constancia** (días después). La regla confirmada la incluye en el asiento de la venta ("registrada inicialmente, constancia verificada después"). Hay que definir si la póliza de la factura ya lleva D RETENCIÓN IVA o si se genera al registrar la constancia.
-3. **Porcentajes** — 340 retenciones KT al **80 %** del IVA (2021-2026; 107 en 2022 y 13 en 2025) no encajan en 0/15/30. `[PENDIENTE CONTABILIDAD]` ¿Agente especial? ¿Error de captura? ¿Retención parcial?
+3. **Porcentajes** — **hallazgo histórico confirmado en los datos:** 340 retenciones KT al **80 %** del IVA (2021-2026; 107 en 2022 y 13 en 2025) y algunas otras al 10 %, 24 % o 60 %, además de 15 % y 30 %. Contabilidad confirmó que el porcentaje **depende del cliente**; **no** confirmó que el 80 % siga vigente ni qué porcentajes admite el sistema nuevo. `[PENDIENTE CONTABILIDAD]`
 4. **Anulación** — `[PENDIENTE CONTABILIDAD]` Si la cuenta de reverso debe ser VENTAS/IVA (exacto) o DEVOLUCIONES + IVA (como la nota de crédito de Milenium); y qué ocurre con facturas anuladas **antes** de la póliza.
 5. **Ventas de bienes** — `[PENDIENTE CONTABILIDAD]` Milenium no tiene cuenta; hay que definirla por entidad. Hasta entonces el motor debe **rechazar** una línea BIEN, no usar la de servicios.
 6. **Facturas exentas** — 283 pólizas KT (2017-2019) con `D CLIENTES / H CLIENTES`: tratamiento histórico anómalo; la plataforma no modela exención en esta fase. `[PENDIENTE CONTABILIDAD]`
@@ -195,7 +201,7 @@ Igual que (C): factura `D CLIENTES` (contado) + `C/E` retención `D 11302005` + 
 
 ## 8. Homologación propuesta (Milenium → `cont_cuentas`)
 
-Reglas: conservar el código real; no inventar; no mezclar entidades; `empresa_id = 1`; KT `entidad_id = 1`; MONACO `entidad_id = 2`; `nivel` = `NIVEL_CTA`; `activa = 1`; `tipo`: **bloqueado** hasta que Contabilidad apruebe el diccionario de §3.2 (no se usa ningún valor provisional).
+Reglas: conservar el código real; no inventar; no mezclar entidades; `empresa_id = 1`; KT `entidad_id = 1`; MONACO `entidad_id = 2`; `nivel` = `NIVEL_CTA`; `activa = 1`; `tipo` = diccionario `TIPO_CTA` 1-5 **aprobado por Contabilidad** (§3.2, §14.1).
 
 | Campo Milenium | Campo plataforma | Estado |
 |---|---|---|
@@ -203,7 +209,7 @@ Reglas: conservar el código real; no inventar; no mezclar entidades; `empresa_i
 | `NOMBRE_CTA` | `nombre` | **CONFIRMADO** (Windows-1252 → Unicode; las bancarias **sin** número) |
 | empresa 01 / 08+00 | `entidad_id` 1 / 2 | **CONFIRMADO** (C2) |
 | `NIVEL_CTA` | `nivel` | **CONFIRMADO** (verbatim) |
-| `TIPO_CTA` | `tipo` | **INFERENCIA fuerte — PENDIENTE CONTABILIDAD (bloqueante)** |
+| `TIPO_CTA` | `tipo` | **CONFIRMADO por Contabilidad** (2026-10-12; §14.1) |
 | `LINACTIVA_` | `activa` (invertido) | **CONFIRMADO** (100 % activas) |
 | `MULTIP_CTA` | (sin columna) | futuro: naturaleza — **PENDIENTE** |
 | `LARGO_CTA`/prefijo | (sin columna) | futuro: padre — **PENDIENTE** (derivable con certeza) |
@@ -214,33 +220,34 @@ Reglas: conservar el código real; no inventar; no mezclar entidades; `empresa_i
 |---|---|
 | Entidad, código, nombre, nivel | **CONFIRMADO** (catálogo `co01` de cada entidad) |
 | Rol observado (qué cuenta usa Milenium para cada función) | **CONFIRMADO** (`f10` + pólizas reales) |
-| `tipo` (traducción `TIPO_CTA` → Activo/Pasivo/Capital/Ingreso/Gasto) | **PENDIENTE CONTABILIDAD — BLOQUEANTE** (inferencia fuerte, no aprobada) |
-| Naturaleza formal (`MULTIP_CTA`) | **PENDIENTE CONTABILIDAD** |
-| «Nivel 5 = cuenta de movimiento» como regla | **PENDIENTE CONTABILIDAD** |
+| `tipo` (traducción `TIPO_CTA` → Activo/Pasivo/Capital/Ingreso/Gasto) | **CONFIRMADO por Contabilidad** (2026-10-12) |
+| Naturaleza formal (`MULTIP_CTA`) | **PENDIENTE CONTABILIDAD** (no preguntada aún; no bloquea la carga: no se almacena) |
+| «Nivel 5 = cuenta de movimiento» como regla | **NO CONFIRMADA** (no se usa como restricción) |
 
-Por tanto **las cuentas están identificadas, pero la fila productiva de `cont_cuentas` todavía no está completamente aprobada.** `cont_cuentas.tipo` es `NOT NULL`: sin la aprobación no existe un `INSERT` válido, y **no se escribe ningún valor provisional**.
+Con el diccionario aprobado, **la fila de `cont_cuentas` está completa** (entidad, código, nombre, tipo, nivel, activa) para las 18 cuentas. El `nivel` se guarda verbatim y es solo informativo: **no** implica «cuenta de movimiento».
 
-**Inventario propuesto** (entidad, código, nombre, nivel — **sin `tipo`**; el detalle y la evidencia están en la sección 1 de `sql/propuesta-2026-10-contabilidad-homologacion-milenium.sql`, un `SELECT` de solo lectura):
+**Inventario a cargar** (entidad, código, nombre, **tipo aprobado**, nivel; el SQL ejecutable es `sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`):
 
-| Código | Nombre | Rol observado | KT | Mónaco |
-|---|---|---|---|---|
-| `11203001` | CLIENTES LOCALES | CLIENTES | ✔ | ✔ |
-| `21401001` | IVA POR PAGAR | IVA_POR_PAGAR | ✔ | ✔ |
-| `41101003` | VENTAS DE SERVICIOS | VENTAS_SERVICIOS | ✔ | ✔ |
-| `11302005` | RETENCIONES DE IVA | RETENCION_IVA | ✔ | ✔ |
-| `21302001` | ANTICIPO DE CLIENTES MONEDA LOCAL | ANTICIPOS | ✔ | ✔ |
-| `11101002` | TRASLADO EN TRANSITO | TRANSITO_BANCARIO | ✔ | ✔ |
-| `41501002` | DEV. SOBRE VENTAS VARIAS | DEVOLUCIONES_VENTAS | ✔ | ✔ |
-| `11103002` | BANCO INDUSTRIAL, S. A. | BANCOS | ✔ | ✔ |
-| `11103001` | G&T CONTINENTAL | BANCOS | ✔ | — |
-| `11103004` | BANCO INDUSTRIAL (FONDO OPERATIVO) | BANCOS | ✔ | — |
+| Código | Nombre | Tipo (TIPO_CTA) | Rol observado | KT | Mónaco |
+|---|---|---|---|---|---|
+| `11203001` | CLIENTES LOCALES | Activo (1) | CLIENTES | ✔ | ✔ |
+| `21401001` | IVA POR PAGAR | Pasivo (2) | IVA_POR_PAGAR | ✔ | ✔ |
+| `41101003` | VENTAS DE SERVICIOS | Ingreso (4) | VENTAS_SERVICIOS | ✔ | ✔ |
+| `11302005` | RETENCIONES DE IVA | Activo (1) | RETENCION_IVA | ✔ | ✔ |
+| `21302001` | ANTICIPO DE CLIENTES MONEDA LOCAL | Pasivo (2) | ANTICIPOS | ✔ | ✔ |
+| `11101002` | TRASLADO EN TRANSITO | Activo (1) | TRANSITO_BANCARIO | ✔ | ✔ |
+| `41501002` | DEV. SOBRE VENTAS VARIAS | Ingreso (4) | DEVOLUCIONES_VENTAS | ✔ | ✔ |
+| `11103002` | BANCO INDUSTRIAL, S. A. | Activo (1) | BANCOS | ✔ | ✔ |
+| `11103001` | G&T CONTINENTAL | Activo (1) | BANCOS | ✔ | — |
+| `11103004` | BANCO INDUSTRIAL (FONDO OPERATIVO) | Activo (1) | BANCOS | ✔ | — |
 
-Total: **KT 10, Mónaco 8** (más la cuenta de prueba de KT, intacta). Lo pendiente (§2) está comentado. No se propone jerarquía (ancestros niveles 1–4) porque `cont_cuentas` no tiene `padre`: importar el árbol completo es la **siguiente decisión** (§9).
+Total: **KT 10, Mónaco 8** (más la cuenta de prueba de KT, intacta). Lo pendiente (§2) queda fuera. No se propone jerarquía (ancestros niveles 1–4) porque `cont_cuentas` no tiene `padre`: importar el árbol completo es la **siguiente decisión** (§9).
 
-**Carga futura — falla cerrado.** Cuando Contabilidad apruebe el diccionario, se generará el SQL ejecutable definitivo y se revisará de nuevo. Patrón obligatorio (documentado, comentado, en la sección 2 de la propuesta):
-1. Ejecutar primero el preflight (§3): exigir **0 colisiones** («SIN COLISION» en todas las filas; muestra entidad, código, nombre/nivel propuestos y nombre/tipo/nivel/activa existentes).
-2. `INSERT` simple, **sin** `IGNORE` y **sin** `ON DUPLICATE KEY UPDATE`: ante un duplicado la sentencia falla; no se actualiza ni se ignora nada en silencio. Una cuenta existente, aunque sea idéntica, **detiene** la carga y se resuelve a mano.
-3. Dentro de una transacción, con verificación exacta posterior (entidad, código, nombre, tipo, nivel, activa); `COMMIT` solo si no hay diferencias.
+**Carga — falla cerrado** (`sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`, propuesta, **no ejecutada**):
+1. Ejecutar primero el preflight (§3): exigir **0 colisiones** («SIN COLISION» ×18 y «APTO»; muestra entidad, código, nombre/tipo/nivel propuestos y nombre/tipo/nivel/activa existentes).
+2. `INSERT` simple, **sin** `IGNORE` y **sin** `ON DUPLICATE KEY UPDATE`: ante un duplicado la sentencia falla; no se actualiza ni se ignora nada en silencio. Una cuenta existente, aunque sea idéntica, **detiene** la carga (resultado `ROLLBACK`).
+3. Transacción con verificación exacta (entidad, código, nombre, tipo, nivel, activa) contra una tabla temporal `esperado`; `COMMIT` solo si el `INSERT` insertó exactamente 18 filas **y** hay 0 diferencias; si no, `ROLLBACK` (cierre con sentencia preparada, sin `DELIMITER` ni procedimientos).
+4. Probado **solo** en una MariaDB 10.4 desechable: carga limpia → `COMMIT` (KT 11 = 10 + la de prueba, Mónaco 8; la cuenta `32234` intacta); segunda ejecución → error de duplicado y `ROLLBACK`; colisión con nombre/tipo distinto → `ROLLBACK` y nada insertado.
 
 ## 9. Parametrización por roles (diseño; no migrar todavía)
 
@@ -274,8 +281,10 @@ No hay cuentas en moneda extranjera con movimiento (la `11104003` «AHORRO DOLAR
 
 ## 11. Preguntas para Contabilidad
 
+> **Estado 2026-10-12:** las preguntas 1-5 fueron respondidas en parte (ver §14). Quedan abiertas las marcadas al final de §14.
+
 1. **Contado:** ¿D BANCO directo en la factura (regla confirmada) o D CLIENTES + cobro (Milenium)? ¿El «banco» debe pasar por TRASLADO EN TRANSITO (depósito posterior)?
-2. **Retención:** ¿en el asiento de la venta o al registrar la constancia? ¿qué hacer con las retenciones al **80 %**?
+2. **Retención:** ¿en el asiento de la venta o al registrar la constancia? ¿**qué porcentajes están vigentes** (15 %, 30 %, ¿80 %?, otros) y cómo se decide el de cada cliente?
 3. **Anulación:** ¿reverso exacto (VENTAS/IVA) o nota de crédito (DEVOLUCIONES)? ¿facturas anuladas sin póliza → nada que revertir?
 4. **VENTAS_BIENES:** ¿qué cuenta, por entidad?
 5. **Tipo y naturaleza:** ¿se aprueba el diccionario `TIPO_CTA` 1-5 y `MULTIP_CTA` ±1 de §3.2? ¿nivel 5 = cuenta de movimiento?
@@ -287,10 +296,47 @@ No hay cuentas en moneda extranjera con movimiento (la `11104003` «AHORRO DOLAR
 
 ## 12. Qué NO hace esta fase
 
-No inserta ni modifica cuentas (la propuesta no contiene ningún `INSERT` ejecutable); no escribe ningún valor de `tipo`; no desactiva ni elimina la cuenta de prueba; no migra ni crea tablas; no toca FACT-4, bancos, plantillas ni producción; no genera pólizas ni asientos; no implementa FEL; no importa el catálogo completo; no escribe en Milenium.
+No ejecuta SQL en ningún entorno real (la carga de 18 cuentas es una **propuesta** `sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`); no desactiva ni elimina la cuenta de prueba; no carga `VENTAS_BIENES` ni bancos; no migra ni crea tablas; no toca FACT-4, plantillas ni producción; no genera pólizas ni asientos; no implementa FEL; no importa el catálogo completo; no escribe en Milenium.
 
 ## 13. Verificación
 
 - **Preflight** (100 % solo lectura: únicamente `SELECT` / `WITH … SELECT`) y **propuesta** (único contenido ejecutable: un `SELECT` de inventario; todo `INSERT`/DDL está en comentarios) ejecutados **solo** en una MariaDB 10.4 desechable local, con el esquema de `sql/schema.sql` y las migraciones del repositorio: sin error. Con la cuenta de prueba sembrada, la compuerta de colisiones devuelve «SIN COLISION» en las 18 filas y «APTO: 0 colisiones»; con una cuenta propuesta ya existente (idéntica o con nombre/nivel distinto) devuelve la colisión y «NO APTO».
 - Sin `INSERT`, `UPDATE`, `DELETE`, `ALTER` ni DDL ejecutables en ninguno de los dos archivos; sin números de cuenta bancaria.
 - Cifras de Milenium reproducibles con las lecturas de §0 (solo lectura). **No** se verificó contra producción ni con Contabilidad: todo lo marcado INFERENCIA/PENDIENTE sigue abierto.
+
+## 14. Decisiones de Contabilidad (2026-10-12) y efecto
+
+| # | Tema | Decisión confirmada | Efecto en este discovery / siguiente fase |
+|---|---|---|---|
+| 1 | **Tipos** | `TIPO_CTA` 1 → Activo · 2 → Pasivo · 3 → Capital · 4 → Ingreso · 5 → Gasto («van de cajón siempre») | Aprobado. **Desbloquea** el SQL ejecutable de las 18 cuentas (`sql/homologacion-2026-10-contabilidad-cuentas-kt-monaco.sql`, propuesto, no ejecutado) |
+| 2 | **Contado / crédito** | CRÉDITO → D CLIENTES. CONTADO → D BANCOS **directo**, **pero** solo si el pago está **realmente confirmado** y se puede ver/confirmar en el estado de cuenta | **Resuelve la contradicción §5.1** a favor de D BANCO, **condicionada** a «pago confirmado». Seleccionar CONTADO **no basta**. Sin confirmación → **no** se genera una póliza falsa de banco. Diseño en `CONTABILIDAD-DISENO-PAGO-RETENCION-REVERSO.md` §2 |
+| 3 | **Retención IVA** | Se **calcula desde el inicio**; después se **verifica en SAT** si el cliente realmente emitió la retención | Resuelve §5.2: separar **(A) retención esperada/calculada** de **(B) constancia confirmada/verificada**. La póliza debe preservar % esperado, monto, estado de verificación y constancia/SAT. Diseño §3 |
+| 4 | **Porcentajes** | **Confirmado por Contabilidad:** el porcentaje **depende del cliente** y se reconoce por antigüedad/comportamiento («es complicado determinar qué cliente está sujeto a qué porcentaje»). **NO confirmado:** que el 80 % siga vigente, que sea correcto, que deba aceptarse cualquier entero 0-100 ni que los 340 casos históricos sean legítimos | FACT-4 hoy soporta solo 0/15/30; **Milenium histórico demuestra que ese conjunto cerrado es insuficiente** (80 % y otros existen). **FACT-5 queda bloqueada hasta confirmar:** (a) porcentajes vigentes permitidos, (b) si puede ser cualquier entero 0-100, (c) si hay decimales, (d) quién autoriza/configura el porcentaje del cliente. Hasta entonces **no se cambia código**. Diseño §4 (propuesta) |
+| 5 | **Anulación / reverso** | Factura con registro contable que se anula → **se reversa el registro**, aunque sea días o meses después; la **nota de crédito** también debe producir el efecto contable | Resuelve §5.4: **no** es «nota de crédito en lugar de reverso». Diseñar asiento original + **reverso idempotente** + nota de crédito (cuando corresponda fiscalmente) + vínculo entre ambos. Diseño §5 |
+| 6 | **Ventas de bienes** | Se puede crear una cuenta específica **VENTA DE BIENES**, separada de VENTAS DE SERVICIOS; **sin código** | Rol `VENTAS_BIENES` **confirmado**; **código PENDIENTE CONTABILIDAD**. No inventar; **no** usar `41101001`/`41101002` automáticamente. Fuera del SQL |
+| 7 | **«Nivel 5»** | La pregunta fue interpretada como **clasificación contable**, no como nivel jerárquico. Contabilidad enumeró «usualmente» 1 activo, 2 pasivo, 3 capital, 4 ingresos, 5 gastos, y mencionó 6 «otros gastos» y 7 «otros ingresos» **«en otras nomenclaturas»** | «Nivel 5 = cuenta de movimiento» queda **NO CONFIRMADA**; no se usa como restricción de pólizas. Las clases 6 y 7 se mencionaron como posible **otra nomenclatura**: **no** se afirma que la plataforma deba adoptarlas (ver observación abajo) |
+
+**Observación sobre las clases 6 y 7.** Milenium (lo observado) solo usa `TIPO_CTA` 1-5; sus «otros gastos» y «otros ingresos» viven dentro de los tipos 5 y 4 (prefijos `8…` y `9…`). La plataforma tiene 5 tipos. Contabilidad mencionó las clases 6 y 7 como posible nomenclatura distinta, **no** como decisión para la plataforma. **No bloquea** las 18 cuentas (todas son 1, 2 o 4). Si algún día se importa el catálogo completo, **ampliar o no el conjunto de `tipo`** (o mantener esas cuentas dentro de 4 y 5) sigue **PENDIENTE**: no es una decisión tomada.
+
+**Certeza sobre los porcentajes de retención** (para no confundir evidencia con regla):
+- **CONFIRMADO POR DATOS:** Milenium histórico contiene retenciones al 15 %, 30 % y 80 % (340 casos KT) y algunos otros valores (10 %, 24 %, 60 %).
+- **CONFIRMADO POR CONTABILIDAD:** el porcentaje depende del cliente y debe poder identificarse/configurarse por cliente.
+- **PENDIENTE CONTABILIDAD:** qué porcentajes estarán permitidos en el sistema nuevo, si el 80 % sigue vigente, si basta cualquier entero 0-100, si existen decimales y quién lo autoriza.
+
+**Qué NO cambia:** todos los hallazgos históricos de §2-§4 (qué hace Milenium); el inventario de 10 + 8 cuentas; el patrón falla-cerrado; la cuenta de prueba `32234` (no se toca); FACT-4 (no se modificó en esta fase).
+
+**Pendientes contables que siguen abiertos**
+1. **Código de VENTAS_BIENES** por entidad.
+2. **CONTADO sin pago confirmado:** ¿la venta (ventas + IVA) se contabiliza contra CLIENTES mientras no haya pago, o no se genera póliza hasta confirmarlo? (el IVA se debe declarar al certificar la factura).
+3. **Evidencia de «pago confirmado»:** ¿depósito/boleta con referencia, conciliación bancaria, confirmación manual de un responsable? ¿pagos parciales?
+4. **Retención no verificada / rechazada:** ¿qué asiento corrige una retención esperada que SAT no confirma? ¿plazo de verificación?
+5. **% de retención:** ¿qué porcentajes están vigentes (15, 30, ¿80?, otros)? ¿cualquier entero 0-100? ¿decimales? ¿tope? ¿quién autoriza/configura el porcentaje del cliente y con qué respaldo?
+6. **Reverso:** fecha contable (la de la anulación vs. la original), período cerrado, y cuándo aplica nota de crédito parcial vs. total.
+7. **Naturaleza formal** (`MULTIP_CTA`); si se importa el catálogo completo (con padre/naturaleza) y, en ese caso, si se amplía el conjunto de `tipo` (las clases 6 y 7 se mencionaron solo como posible otra nomenclatura).
+8. **Bancos:** confirmar los de KT y Mónaco (`11103006`, `11101001`, registro duplicado) y alias/últimos 4 dígitos.
+9. **Cuenta de prueba `32234`:** ¿desactivar o eliminar (previo preflight en producción)?
+
+## 15. Verificación de la actualización (2026-10-12)
+
+- `sql/homologacion-…-cuentas-kt-monaco.sql`, el preflight y la propuesta se ejecutaron **solo** en una MariaDB 10.4 desechable local: carga limpia → `COMMIT` (18 filas, cuenta de prueba intacta); segunda ejecución y colisión con nombre/tipo distinto → error + `ROLLBACK` sin cambios; el preflight devuelve «APTO» antes de la carga, «IGUAL» ×18 después y «DIFIERE» ante un tipo distinto.
+- **No** se ejecutó SQL en producción, **no** se modificó FACT-4 ni código de la aplicación, **no** se generaron pólizas.
