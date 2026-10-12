@@ -17,6 +17,15 @@ import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { CAMPOS_DOMINIO_GASTOS } from "@/lib/tms/validacion-fondos-gastos";
 import { ErrorDominioFormulario, conLinea, type EstadoDominio } from "@/lib/validacion-formulario";
+import {
+  INDICE_CLAVE_GASTOS,
+  TABLA_GASTOS,
+  buscarCreacionPorClave,
+  esDuplicadoDeClave,
+  huellaGasto,
+  lectorDeConexion,
+  normalizarClaveIdempotencia,
+} from "@/lib/tms/idempotencia-envio";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — gastos operativos asociados
@@ -537,6 +546,12 @@ export type GastoOperativoInput = {
   requirenteUsuarioId?: number | null;
   solicitanteUsuarioId?: number | null;
   /**
+   * Clave de envío (idempotencia), OPCIONAL en la primera ventana de despliegue: sin ella se crea como siempre; con ella,
+   * un reintento con el mismo contenido devuelve el gasto original y con otro contenido responde 409. Solo aplica al
+   * crear (la edición actúa sobre un id existente y no crea registros). Ver src/lib/tms/idempotencia-envio.ts.
+   */
+  claveIdempotencia?: string | null;
+  /**
    * GASTOS-MULTIPLES-LINEAS-1 — `undefined` = modo cabecera (comportamiento
    * idéntico al actual, sin filas en tms_gasto_operativo_lineas); un
    * array con ≥1 elementos = modo líneas (replace-all transaccional en
@@ -792,9 +807,22 @@ export async function crearGasto(
     normalizarDestinoPago(input.metodoPago, input.numeroCuentaPago);
   }
 
+  // IDEMPOTENCIA — la consulta previa va ANTES de abrir la transacción y de validar referencias: reintentar una creación ya
+  // confirmada (p. ej. tras fallar la subida del comprobante) debe devolver ese gasto aunque cambie el estado del catálogo.
+  const clave = normalizarClaveIdempotencia(input.claveIdempotencia);
+  const huella = clave ? huellaGasto(input) : null;
+  let claveEfectiva = clave;
+  if (clave) {
+    const previa = await buscarCreacionPorClave((sql, params) => query<RowDataPacket[]>(sql, params), TABLA_GASTOS, empresaId, clave, huella!);
+    if (previa.tipo === "existente") return recuperarGastoCreado(empresaId, previa.id);
+    // Migración sin aplicar: se crea en modo legado (sin protección) en vez de fallar la operación.
+    if (previa.tipo === "sin_soporte") claveEfectiva = null;
+  }
+
   const conn = await getPool().getConnection();
   const archivosFirmaEscritos: string[] = [];
   let insertId = 0;
+  let reutilizadoId: number | null = null;
   let codigo = "";
   // La columna `codigo` es NOT NULL + UNIQUE (empresa_id, codigo): se inserta un marcador único y se reemplaza por GASTO-<id> antes
   // de confirmar (el id solo se conoce tras el INSERT). Único por conexión/transacción: no choca con inserciones concurrentes.
@@ -812,8 +840,8 @@ export async function crearGasto(
           observaciones, creado_por,
           entidad_requirente_id, entidad_requirente_nombre,
           requirente_empleado_id, requirente_nombre, requirente_usuario_id,
-          solicitante_usuario_id, solicitante_nombre, codigo, estado)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente')`,
+          solicitante_usuario_id, solicitante_nombre, codigo, estado${claveEfectiva ? ", clave_idempotencia, huella_idempotencia" : ""})
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente'${claveEfectiva ? ", ?, ?" : ""})`,
       [
         empresaId,
         input.fechaSolicitud,
@@ -839,6 +867,7 @@ export async function crearGasto(
         input.solicitanteUsuarioId ?? null,
         solicitanteUsuario?.nombre ?? null,
         codigoTemporal,
+        ...(claveEfectiva ? [claveEfectiva, huella] : []),
       ],
     );
     insertId = Number(r.insertId);
@@ -897,11 +926,23 @@ export async function crearGasto(
   } catch (error) {
     await conn.rollback();
     for (const relative of archivosFirmaEscritos) borrarUpload(relative);
-    throw error;
+    // CONCURRENCIA — otra petición con la MISMA clave confirmó primero y el UNIQUE (empresa_id, clave) rechazó este INSERT:
+    // tras el rollback se relee (instantánea nueva) y se devuelve ese gasto; si el contenido difiere, 409.
+    if (claveEfectiva && esDuplicadoDeClave(error, INDICE_CLAVE_GASTOS)) {
+      const previa = await buscarCreacionPorClave(lectorDeConexion(conn), TABLA_GASTOS, empresaId, claveEfectiva, huella!);
+      if (previa.tipo !== "existente") throw error;
+      reutilizadoId = previa.id;
+    } else {
+      throw error;
+    }
   } finally {
     conn.release();
   }
-  const creado = await obtenerGasto(empresaId, insertId);
+  return recuperarGastoCreado(empresaId, reutilizadoId ?? insertId);
+}
+
+async function recuperarGastoCreado(empresaId: number, id: number): Promise<GastoOperativo> {
+  const creado = await obtenerGasto(empresaId, id);
   if (!creado) throw new Error("No se pudo crear el gasto.");
   return creado;
 }

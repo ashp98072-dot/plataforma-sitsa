@@ -15,6 +15,7 @@ import { FondoLineasClient, type DetalleLineasFondo } from "@/components/tms/fon
 import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
 import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
+import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -128,6 +129,11 @@ export default function FondosPage() {
   const [fechaRequerimiento, setFechaRequerimiento] = useState(new Date().toISOString().slice(0, 10));
   const [observaciones, setObservaciones] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>([{ ...LINEA_VACIA }]);
+  // Doble envío: la bandera `enVuelo` del guard es síncrona (un `useState` solo se vería en el siguiente render); `guardando`
+  // solo pinta el botón. La clave identifica ESTA creación y se reutiliza en cada reintento hasta que se confirme.
+  const [guardEnvio] = useState(() => crearGuardEnvio());
+  const [guardando, setGuardando] = useState(false);
+  const claveEnvioRef = useRef<string | null>(null);
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [cacheLineas] = useState(() => new Map<string, DetalleLineasFondo>());
@@ -179,6 +185,7 @@ export default function FondosPage() {
   }
 
   function cerrarFormulario() {
+    claveEnvioRef.current = null;
     setMostrarForm(false);
     setErrores([]);
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
@@ -193,6 +200,7 @@ export default function FondosPage() {
    * precargar el formulario, para no perder las líneas ya guardadas.
    */
   async function abrirEditar(s: SolicitudFondo) {
+    claveEnvioRef.current = null;
     setError("");
     const res = await fetch(`/api/empresas/${slug}/tms/fondos/${s.id}`);
     const data = await res.json().catch(() => ({}));
@@ -223,7 +231,21 @@ export default function FondosPage() {
     setMostrarForm(true);
   }
 
+  /** Punto de entrada del botón: un solo envío en vuelo; el botón se rehabilita siempre al terminar (éxito o error). */
   async function guardar() {
+    await guardEnvio.ejecutar(async () => {
+      setGuardando(true);
+      try {
+        await guardarSolicitud();
+      } catch {
+        setError("No se pudo contactar al servidor. Revisa tu conexión y vuelve a intentar.");
+      } finally {
+        setGuardando(false);
+      }
+    });
+  }
+
+  async function guardarSolicitud() {
     setError(""); setMsg(""); setErrores([]);
     if (!entidadRequirenteId) { setError("Selecciona la empresa requirente."); return; }
     if (!requirenteUsuarioId && !(editandoId && !requirenteHistorico.id)) { setError("Selecciona un requirente de Operaciones."); return; }
@@ -276,6 +298,7 @@ export default function FondosPage() {
             solicitanteUsuarioId: Number(solicitanteUsuarioId),
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
+            claveIdempotencia: (claveEnvioRef.current ??= nuevaClaveEnvio()),
             lineas: lineasPayload,
           }),
         });
@@ -285,6 +308,8 @@ export default function FondosPage() {
       const delServidor = remapearLineas(leidos.errores, "lineas", lineasPantalla);
       setErrores(delServidor);
       setError(delServidor.length ? "" : leidos.mensaje);
+      // 409 de idempotencia: la creación ya existe con otros datos; se refresca el listado para que la vea antes de reintentar.
+      if (res.status === 409) await cargar();
       return;
     }
     setErrores([]);
@@ -489,8 +514,14 @@ export default function FondosPage() {
             <textarea className={`${inputCls} mt-0.5 w-full`} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} />
           </label>
           <ErroresFormulario errores={errores} />
-          <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">
-            {editandoId ? "Guardar cambios" : "Crear solicitud"}
+          <button
+            type="button"
+            onClick={() => void guardar()}
+            disabled={guardando}
+            aria-busy={guardando}
+            className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {guardando ? "Guardando…" : editandoId ? "Guardar cambios" : "Crear solicitud"}
           </button>
         </div>
       ) : null}

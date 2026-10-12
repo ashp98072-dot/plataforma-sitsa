@@ -15,6 +15,8 @@ import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-con
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
+import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
+import { enviarGasto } from "@/lib/tms/gastos-envio-cliente";
 
 type Gasto = {
   id: number;
@@ -210,6 +212,11 @@ export default function GastosPage() {
   // Clave de campo del servidor para "Línea 1" (los campos de arriba): `lineas.0.x` en modo líneas, `x` en modo cabecera.
   const campoL1 = (campo: string) => (lineasAdicionales.length > 0 ? `lineas.0.${campo}` : campo);
   const [comprobante, setComprobante] = useState<File | null>(null);
+  // Doble envío: la bandera `enVuelo` del guard es síncrona; `guardando` solo pinta el botón. La clave identifica ESTA
+  // creación y se conserva entre reintentos (también si falla la subida del comprobante) hasta que todo se confirme.
+  const [guardEnvio] = useState(() => crearGuardEnvio());
+  const [guardando, setGuardando] = useState(false);
+  const claveEnvioRef = useRef<string | null>(null);
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
   /** GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón que motivoRechazo en fondos/page.tsx: un input por fila, por id. */
@@ -254,6 +261,7 @@ export default function GastosPage() {
   }, [cargar]);
 
   function nuevo() {
+    claveEnvioRef.current = null;
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setForm(FORM_VACIO);
     setLineasAdicionales([]);
@@ -333,7 +341,21 @@ export default function GastosPage() {
     }));
   }
 
+  /** Punto de entrada del botón: un solo envío en vuelo; el botón se rehabilita siempre al terminar (éxito o error). */
   async function guardar() {
+    await guardEnvio.ejecutar(async () => {
+      setGuardando(true);
+      try {
+        await guardarGasto();
+      } catch {
+        setError("No se pudo contactar al servidor. Revisa tu conexión y vuelve a intentar.");
+      } finally {
+        setGuardando(false);
+      }
+    });
+  }
+
+  async function guardarGasto() {
     setError(""); setMsg(""); setErrores([]);
     // Categoría y monto (de "Línea 1" y de cada línea adicional) los valida el SERVIDOR y responde por línea y campo
     // («Línea 2 — Monto: debe ser mayor que Q0.»); aquí ya no se corta con un mensaje genérico. El número de línea del
@@ -375,24 +397,28 @@ export default function GastosPage() {
       setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
     }
     if (comprobante && comprobante.size > MAX_UPLOAD_BYTES) { setError("El comprobante supera el máximo de 50 MB."); return; }
-    const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
-    const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const leidos = leerErroresRespuesta(data, "No se pudo guardar.");
+    // Solo al CREAR se manda la clave de envío (la edición actúa sobre un id existente y no crea registros). Si el comprobante falla tras
+    // crear, la clave se conserva y el reintento recupera el MISMO gasto en vez de crear otro (ver enviarGasto).
+    const clave = editandoId ? "" : (claveEnvioRef.current ??= nuevaClaveEnvio());
+    const r = await enviarGasto({ fetchFn: fetch, slug, editandoId, payload, claveIdempotencia: clave, comprobante });
+    if (r.fase === "crear") {
+      const leidos = leerErroresRespuesta(r.data, "No se pudo guardar.");
       setErrores(leidos.errores);
       setError(leidos.errores.length ? "" : leidos.mensaje);
+      // 409 de idempotencia: el gasto ya existe con otros datos; se refresca el listado para que lo vea antes de reintentar.
+      if (r.status === 409) await cargar();
       return;
     }
     setErrores([]);
-    const gastoId = editandoId ?? data.gasto?.id;
-    if (comprobante && gastoId) {
-      const archivos = new FormData(); archivos.set("file", comprobante);
-      const subida = await fetch(`/api/empresas/${slug}/tms/gastos/${gastoId}/comprobante`, { method: "POST", body: archivos });
-      const subidaData = await subida.json().catch(() => ({}));
-      if (!subida.ok) { setError(`${data.mensaje ?? "Gasto guardado."} ${subidaData.error ?? "No se pudo adjuntar el comprobante."}`); await cargar(); return; }
+    if (r.fase === "comprobante") {
+      const subidaError = typeof r.subidaData.error === "string" ? r.subidaData.error : "No se pudo adjuntar el comprobante.";
+      const guardado = typeof r.data.mensaje === "string" ? r.data.mensaje : "Gasto guardado.";
+      setError(`${guardado} ${subidaError} Vuelve a presionar Guardar para reintentar la carga del comprobante; no se creará otro gasto.`);
+      await cargar();
+      return;
     }
-    setMsg(comprobante ? "Gasto y comprobante guardados." : (data.mensaje ?? "Guardado."));
+    claveEnvioRef.current = null;
+    setMsg(comprobante ? "Gasto y comprobante guardados." : (typeof r.data.mensaje === "string" ? r.data.mensaje : "Guardado."));
     setMostrarForm(false);
     await cargar();
   }
@@ -661,7 +687,15 @@ export default function GastosPage() {
           </div>
           <div className="flex gap-2">
             <ErroresFormulario errores={errores} />
-            <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
+            <button
+              type="button"
+              onClick={() => void guardar()}
+              disabled={guardando}
+              aria-busy={guardando}
+              className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {guardando ? "Guardando…" : "Guardar"}
+            </button>
             <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
           </div>
         </div>

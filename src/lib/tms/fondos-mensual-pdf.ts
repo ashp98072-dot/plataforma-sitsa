@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { dibujarFirmas, firmaHistorica, moneda, type FirmaSnapshot, type PdfDoc } from "@/lib/tms/fondos-solicitud-pdf";
+import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
 import { etiquetaMes } from "@/lib/tms/reportes-mes";
 import type { ResumenMensualFondos, SolicitudFondoAgrupada } from "@/lib/tms/reportes-gastos";
 
@@ -102,6 +103,9 @@ function dibujarBloqueSolicitud(
   doc.moveDown(0.3);
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
     .text(`TOTAL SOLICITUD: ${moneda(g.totalSolicitud)}`, { width: pageWidth, align: "right" });
+
+  // Observaciones de ESTA solicitud (mismo campo de BD que el PDF individual). Sin texto, no se dibuja.
+  dibujarObservacionesPdf(doc, g.observaciones, pageWidth, marginL, pageBottom);
 
   // FONDOS-AUTORIZAR-PERMISO-1 — el bloque FIRMA DEL AUTORIZANTE SOLO usa
   // al usuario que realizó una autorización VÁLIDA: si la solicitud no
