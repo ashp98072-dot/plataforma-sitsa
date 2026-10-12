@@ -2,8 +2,12 @@
 -- MIGRACIÓN — IDEMPOTENCIA DE CREACIÓN: Solicitudes de Fondo y Gastos operativos (PR A)
 -- Archivo: sql/migrate-2026-10-operaciones-idempotencia-fondos-gastos.sql
 --
--- PROPUESTA PARA REVISIÓN. NO se ejecuta desde la aplicación ni desde este PR. Correr MANUALMENTE y solo tras autorización
--- explícita, DESPUÉS de revisar el resultado de sql/preflight-2026-10-operaciones-idempotencia-fondos-gastos.sql.
+-- NO se ejecuta desde la aplicación ni desde este PR. Se corre MANUALMENTE y solo tras autorización explícita, DESPUÉS de
+-- revisar el resultado de sql/preflight-2026-10-operaciones-idempotencia-fondos-gastos.sql.
+--
+-- ESTADO (2026-10-12): YA FUE APLICADA MANUALMENTE EN PRODUCCIÓN y validada (MariaDB 11.8.9-MariaDB-log): 2 columnas nuevas y
+-- UNIQUE correcto en ambas tablas, y 0 filas históricas con clave. No volver a ejecutarla salvo para un entorno nuevo
+-- (es idempotente: reejecutarla no cambia nada).
 --
 -- QUÉ HACE (aditivo, sin tocar datos):
 --   * tms_solicitudes_fondo  : + clave_idempotencia VARCHAR(64) NULL, + huella_idempotencia CHAR(64) NULL,

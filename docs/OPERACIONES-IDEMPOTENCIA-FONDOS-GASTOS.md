@@ -1,7 +1,12 @@
 # Operaciones — idempotencia de creación y observaciones en exportaciones (PR A: Fondos y Gastos)
 
-Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** en la rama; **no probado en producción** ni aprobado. La migración es una
-**propuesta** (no se ejecuta desde la aplicación ni desde este PR).
+Estado (actualizado 2026-10-12):
+
+| Componente | Estado |
+|---|---|
+| Código de este PR | **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** en la rama. **No desplegado**, sin merge, sin prueba manual en navegador y **no aprobado para producción**. |
+| Migración de idempotencia | **APLICADA manualmente en producción y VALIDADA** (ver §7). Fue una ejecución manual fuera de este PR; el PR no ejecuta SQL. |
+| Fondos 77/78 | Diagnosticado con limitación: **#78 ya no existe** (ver §8). Sin restauración ni corrección histórica. |
 
 Alcance de esta PR: Solicitudes de Fondo y Solicitudes de Gastos. Requerimientos de Compras va en una PR aparte (PR B) y
 reutiliza `src/lib/idempotencia/clave-envio.ts`.
@@ -70,16 +75,61 @@ otra cosa y se conservan. El bloque no se parte entre páginas y las firmas cons
   `sql/preflight-2026-10-operaciones-idempotencia-fondos-gastos.sql`, `sql/diagnostico-2026-10-fondos-77-78-duplicado.sql`,
   `sql/diagnostico-2026-10-posibles-duplicados-fondos-gastos.sql`.
 
-## 5. Orden de despliegue sugerido
+## 5. Orden de despliegue
 
 1. Revisar y aprobar el PR.
-2. Ejecutar el preflight (solo lectura) y, con autorización, la migración. El orden respecto del código no es crítico (el
-   código tolera la ausencia de las columnas), pero la protección solo existe cuando ambas cosas están aplicadas.
-3. Desplegar el código.
-4. En una PR posterior, volver obligatoria la clave en el backend.
+2. ~~Ejecutar el preflight y la migración.~~ **Hecho en producción** (§7): la migración ya está aplicada y validada.
+3. Desplegar el código de este PR. Hasta entonces las columnas existen pero el código vigente no las usa (no hay cambio de
+   comportamiento); la protección empieza cuando el código nuevo esté desplegado.
+4. En una PR posterior, volver obligatoria la clave en el backend (cuando el frontend nuevo esté desplegado).
 
 ## 6. Qué NO resuelve
 
-- Duplicados **históricos** (p. ej. Fondos 77 y 78): solo hay consultas de revisión de solo lectura; no se corrige ni elimina nada.
+- Duplicados **históricos** (p. ej. Fondos 77 y 78): solo hay consultas de revisión de solo lectura; no se corrige ni elimina nada (§8).
 - Dos envíos genuinamente distintos con las mismas datos y claves distintas se conservan como registros legítimos (por diseño).
 - La edición (`PATCH`) no usa clave: actúa sobre un id existente y no crea registros. Tampoco cambia la semántica de concurrencia de la edición (fuera de alcance).
+
+## 7. Producción — migración aplicada y validada
+
+La migración `sql/migrate-2026-10-operaciones-idempotencia-fondos-gastos.sql` **ya fue aplicada manualmente en producción** y
+validada (informado por el responsable; este PR no la ejecutó ni ejecutó ningún otro SQL).
+
+| Verificación | Resultado |
+|---|---|
+| Motor | MariaDB `11.8.9-MariaDB-log` |
+| `tms_solicitudes_fondo` — columnas nuevas | 2 (`clave_idempotencia`, `huella_idempotencia`) |
+| `tms_solicitudes_fondo` — `UNIQUE uq_fondo_empresa_clave` | OK |
+| `tms_solicitudes_fondo` — históricos con clave ≠ NULL | **0** |
+| `tms_gastos_operativos` — columnas nuevas | 2 |
+| `tms_gastos_operativos` — `UNIQUE uq_gastos_empresa_clave` | OK |
+| `tms_gastos_operativos` — históricos con clave ≠ NULL | **0** |
+
+La migración fue **aditiva** y **no modificó registros históricos** (todas las filas existentes quedaron con clave `NULL`).
+La protección de idempotencia **todavía no está activa**: depende de desplegar el código de este PR.
+
+## 8. Fondos 77 y 78 — resultado del diagnóstico y limitaciones
+
+Evidencia observada en producción (informada por el responsable):
+
+| Fuente | #77 | #78 |
+|---|---|---|
+| Solicitud (`tms_solicitudes_fondo`) | existe (luego **autorizada**) | **ya no existe**: fue eliminada manualmente **antes** del diagnóstico |
+| Líneas | las que sobreviven pertenecen **solo** a #77 | — |
+| Firma `SOLICITAR_FONDO` | 2026-10-12 18:24:17 | 2026-10-12 18:24:17 |
+| Firma `REQUERIR_FONDO` | 2026-10-12 18:24:17 | 2026-10-12 18:24:17 |
+| Auditoría | crear 18:24:17; editar 18:27:02 | crear 18:24:17 |
+
+**Interpretación (acotada):** hay evidencia **muy fuerte** de que #77 y #78 correspondieron a un doble envío (creación y firmas
+en el mismo segundo). **No** se afirma igualdad exacta del detalle ni de la cabecera, porque #78 ya no existe y no puede
+compararse directamente; #77 además fue editada después.
+
+**Qué se decidió:**
+
+- **NO** restaurar #78.
+- **NO** borrar auditoría ni firmas de #78: se conservan como evidencia histórica.
+- **NO** ejecutar más SQL de corrección histórica.
+
+**Qué hace `sql/diagnostico-2026-10-fondos-77-78-duplicado.sql` con #78 ausente** (solo lectura, sin cambios): la consulta de
+cabeceras muestra solo #77; las comparaciones campo a campo y el resumen (que unen #77 con #78) **no devuelven filas**; las
+consultas de firmas y auditoría **sí** siguen mostrando la evidencia de #78. Un resultado vacío de esas comparaciones se debe a
+que #78 no existe, **no** a que los registros fueran distintos.

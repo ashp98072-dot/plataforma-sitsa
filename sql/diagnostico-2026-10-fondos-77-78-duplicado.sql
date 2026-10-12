@@ -7,6 +7,12 @@
 -- es del negocio y se haría aparte, con autorización explícita.
 --
 -- ESQUEMA EXPLÍCITO: tablas calificadas `u611730801_Plataforma.<tabla>`; no depende de DATABASE(). Sin ROW_COUNT().
+--
+-- ESTADO REAL (2026-10-12): #78 YA FUE ELIMINADA manualmente en producción ANTES de este diagnóstico; #77 existe (y fue
+-- autorizada). Con #78 ausente: la consulta 1 muestra solo #77; las consultas 2 y 7 (que unen #77 con #78) NO devuelven filas
+-- (no significa «distintas»: significa que #78 no existe); las consultas 5 y 6 (firmas y auditoría) siguen mostrando la evidencia
+-- de #78. NO restaurar #78 y NO borrar su auditoría ni sus firmas: se conservan como evidencia histórica. NO ejecutar SQL de
+-- corrección histórica. No se puede afirmar igualdad exacta del detalle, solo la evidencia de simultaneidad (firmas y auditoría).
 -- id es la PK global de tms_solicitudes_fondo: 77 y 78 identifican una única fila cada uno (la empresa se muestra abajo).
 -- =====================================================================
 
