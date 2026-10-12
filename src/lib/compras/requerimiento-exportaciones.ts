@@ -5,6 +5,7 @@ import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { formatearFechaVisible, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { moneda } from "@/lib/tms/fondos-solicitud-pdf";
+import { dividirTextoEnBloques, lineasEstimadas } from "@/lib/tms/observaciones-export";
 import type { DetalleCompra } from "./requerimiento-schema";
 import type { FirmaCompraReporte, FirmasCompraReporte } from "./requerimiento-firma-reporte";
 
@@ -166,12 +167,19 @@ export async function requerimientoCompraExcel(d: DetalleCompra, empresaNombre: 
     row.height = Math.max(22, size * 1.6);
     return row;
   };
+  // Celdas combinadas: Excel NO autoajusta su altura, así que se calcula. La estimación respeta los saltos de línea (`\n`) y,
+  // si el texto no cabe en una fila (Excel limita la altura a 409 pt), se continúa en filas siguientes: nunca se recorta.
+  const ANCHO_TEXTO_EXCEL = 140;
+  const LINEAS_MAX_POR_FILA = 25;
   const texto = (valor: string, opts: { bold?: boolean } = {}) => {
-    const row = ws.addRow([valor]);
-    ws.mergeCells(row.number, 1, row.number, COLUMNAS_TABLA_COMPRA);
-    row.font = { name: "Arial", size: 10, bold: Boolean(opts.bold) };
-    row.alignment = { horizontal: "left", vertical: "top", wrapText: true };
-    row.height = Math.max(18, Math.ceil(valor.length / 140) * 14);
+    let row!: ExcelJS.Row;
+    for (const bloque of dividirTextoEnBloques(valor, ANCHO_TEXTO_EXCEL, LINEAS_MAX_POR_FILA)) {
+      row = ws.addRow([bloque]);
+      ws.mergeCells(row.number, 1, row.number, COLUMNAS_TABLA_COMPRA);
+      row.font = { name: "Arial", size: 10, bold: Boolean(opts.bold) };
+      row.alignment = { horizontal: "left", vertical: "top", wrapText: true };
+      row.height = Math.max(18, lineasEstimadas(bloque, ANCHO_TEXTO_EXCEL) * 14);
+    }
     return row;
   };
 

@@ -13,6 +13,7 @@ import { DocumentosPendientesClient, subirPendientesCompra, type DocumentoPendie
 import { RequerimientoDecisionClient, formatearTimestampCompra } from "@/components/compras/requerimiento-decision-client";
 import { FacturaEstadoLinea } from "@/components/compras/factura-estado-linea";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS } from "@/lib/compras/factura-compra";
+import { crearEnvioUnico } from "@/lib/idempotencia/clave-envio";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = ProveedorPickerOpt;
@@ -59,6 +60,12 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [guardando, setGuardando] = useState(false);
   const [conflicto, setConflicto] = useState(false);
+  // Doble envío: la bandera `enVuelo` del guard es SÍNCRONA (un `useState` solo se vería en el siguiente render: dos eventos
+  // en el mismo tick pasarían ambos); `guardando` solo pinta el botón. La clave identifica ESTA creación y se conserva en los
+  // reintentos con respuesta incierta (red caída, timeout, 5xx). No se reinicia tras el éxito: el formulario queda bloqueado
+  // (`completado`) mientras navega al detalle, y un envío tardío reutilizaría la clave y recuperaría el mismo requerimiento.
+  const [envio] = useState(() => crearEnvioUnico());
+  const [completado, setCompletado] = useState(false);
   // FACTURAS DUPLICADAS — claves de línea cuya factura YA existe en la BD (la consulta con debounce vive en <FacturaEstadoLinea>).
   const [existentes, setExistentes] = useState<Record<string, boolean>>({});
   const marcarExistente = (clave: string, duplicada: boolean) => setExistentes(a => (Boolean(a[clave]) === duplicada ? a : { ...a, [clave]: duplicada }));
@@ -80,15 +87,20 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   };
   // Duplicados dentro del propio formulario (proveedor + serie + número normalizados): se recalcula en cada render, al instante.
   const repetidas = indicesFacturasRepetidas(lineas);
+  /** Punto de entrada del formulario: un solo envío en vuelo (Enter + clic, doble clic, reintentos rápidos). */
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
+    if (completado) return; // ya confirmado: el formulario solo espera la navegación al detalle
+    await envio.ejecutar(() => enviarRequerimiento());
+  }
+  async function enviarRequerimiento() {
     setErrores([]);
     if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError(""); setErrores([{ campo: "requirente_usuario_id", etiqueta: "Requirente", mensaje: "selecciona un requirente de Operaciones." }]); return; }
     // El proveedor de cada línea lo valida el servidor junto con el resto de campos ("Línea 2 — Proveedor: …"): se listan todos a la vez.
     if (repetidas.size) { setError(MSG_FACTURAS_REPETIDAS); return; }
     setGuardando(true); setError("");
     try {
-      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : {}), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key" && campo !== "documentosPendientes"))) }) });
+      const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : { clave_idempotencia: envio.clave() }), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key" && campo !== "documentosPendientes"))) }) });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         if (r.status === 409) setConflicto(true);
@@ -97,13 +109,14 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
         setError(leidos.errores.length ? "" : leidos.mensaje);
         return;
       }
+      setCompletado(true); // creación/edición confirmada: el formulario ya no admite otro envío mientras navega
       const fallidos = await subirPendientesCompra(slug, data.id, lineas);
       if (fallidos) window.alert(`El requerimiento fue ${detalle ? "actualizado" : "creado"} correctamente, pero algunos documentos no pudieron subirse. Puede agregarlos desde el detalle.`);
       router.push(`/e/${slug}/compras/requerimientos/${data.id}`); router.refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar."); }
     finally { setGuardando(false); }
   }
-  const deshabilitado = !editable || guardando || conflicto;
+  const deshabilitado = !editable || guardando || conflicto || completado;
   const bloqueoFactura = repetidas.size > 0 || Object.values(existentes).some(Boolean);
   const total = lineas.reduce((sum, l) => sum + (Number.isFinite(Number(l.total)) ? Number(l.total) : 0), 0);
   return <main className="space-y-5 p-6"><h1 className="text-2xl font-semibold">{detalle?.codigo ?? "Nuevo requerimiento de compra"}</h1>{detalle && <p>Estado: {detalle.estado} · Versión: {detalle.version}</p>}

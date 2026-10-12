@@ -20,6 +20,36 @@ export function lineasEstimadas(texto: string, ancho: number): number {
   return texto.replace(/\r\n?/g, "\n").split("\n").reduce((suma, tramo) => suma + Math.max(1, Math.ceil(tramo.length / porLinea)), 0);
 }
 
+/**
+ * Divide un texto en bloques que ocupen como máximo `maxLineas` líneas de `ancho` caracteres (respeta los saltos de línea).
+ * Sirve para volcar textos largos a filas de Excel de altura acotada sin recortar nada: el texto concatenado con `\n` equivale al
+ * original salvo, a lo sumo, el espacio donde se partió una línea lógica demasiado larga.
+ */
+export function dividirTextoEnBloques(texto: string, ancho: number, maxLineas: number): string[] {
+  const porLinea = Math.max(1, Math.floor(ancho));
+  const capacidad = porLinea * Math.max(1, Math.floor(maxLineas));
+  const bloques: string[] = [];
+  let actual: string[] = [];
+  let usadas = 0;
+  const emitir = () => { if (actual.length) { bloques.push(actual.join("\n")); actual = []; usadas = 0; } };
+  for (const logica of texto.replace(/\r\n?/g, "\n").split("\n")) {
+    let resto = logica;
+    while (resto.length > capacidad) {
+      emitir();
+      const corte = resto.lastIndexOf(" ", capacidad);
+      const hasta = corte > capacidad / 2 ? corte : capacidad;
+      bloques.push(resto.slice(0, hasta));
+      resto = resto.slice(hasta).replace(/^ /, "");
+    }
+    const necesarias = Math.max(1, Math.ceil(resto.length / porLinea));
+    if (usadas + necesarias > maxLineas) emitir();
+    actual.push(resto);
+    usadas += necesarias;
+  }
+  emitir();
+  return bloques.length ? bloques : [""];
+}
+
 const ALTURA_LINEA_EXCEL = 15;
 const ALTURA_MAXIMA_EXCEL = 409;
 

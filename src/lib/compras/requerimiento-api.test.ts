@@ -79,3 +79,32 @@ it("catálogos conserva requisito TMS de empresa aunque crear esté permitido", 
   m.tenant.mockResolvedValue({ empresa: { id: 1, modulos: ["rrhh"] }, session: { id: 8, rol: "Operaciones" } });
   expect((await comprasCatalogosGet("a")).status).toBe(403); expect(m.catalogos).not.toHaveBeenCalled();
 });
+
+const CLAVE_ENVIO = "3f2a9c1e-7b64-4d0a-9e51-2c8f6a1b0d33";
+it("POST con clave de envío la entrega a guardarRequerimiento y responde 201 (creación o reintento idempotente)", async () => {
+  const res = await requerimientoGuardar(request({ ...payload, clave_idempotencia: CLAVE_ENVIO }), "a");
+  expect(res.status).toBe(201);
+  expect(m.guardar.mock.calls[0][3].clave_idempotencia).toBe(CLAVE_ENVIO);
+  expect(m.guardar.mock.calls[0][5]).toBeUndefined(); // creación: sin id
+});
+it("POST sin clave sigue funcionando (frontend anterior en caché) y no la inventa", async () => {
+  const res = await requerimientoGuardar(request(), "a");
+  expect(res.status).toBe(201);
+  expect(m.guardar.mock.calls[0][3]).not.toHaveProperty("clave_idempotencia");
+});
+it.each(["corta", "con espacios y símbolos ñ 1234", "x'; DROP TABLE y;--"])("POST con clave inválida %j → 400 con errores estructurados, sin guardar", async clave => {
+  const res = await requerimientoGuardar(request({ ...payload, clave_idempotencia: clave }), "a");
+  expect(res.status).toBe(400);
+  expect(m.guardar).not.toHaveBeenCalled();
+});
+it("PATCH rechaza clave_idempotencia (la edición no crea registros; esquema estricto)", async () => {
+  const res = await requerimientoGuardar(request({ ...payload, version: 2, clave_idempotencia: CLAVE_ENVIO }), "a", "12");
+  expect(res.status).toBe(400);
+  expect(m.guardar).not.toHaveBeenCalled();
+});
+it("misma clave con contenido distinto → 409 con el mensaje de conflicto (no un 500)", async () => {
+  m.guardar.mockRejectedValue(new ErrorCompra("Esta operación ya se registró con datos distintos a los que envías ahora. Revisa el listado antes de volver a intentarlo.", 409));
+  const res = await requerimientoGuardar(request({ ...payload, clave_idempotencia: CLAVE_ENVIO }), "a");
+  expect(res.status).toBe(409);
+  expect((await res.json()).error).toContain("ya se registró con datos distintos");
+});

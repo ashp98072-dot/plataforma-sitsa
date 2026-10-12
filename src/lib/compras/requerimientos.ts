@@ -13,6 +13,8 @@ import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { capturarFirmaRolCompraTx } from "./requerimiento-firmas-captura";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS, mensajeFacturaDuplicadaServidor, normalizarFacturaCompra } from "./factura-compra";
 import { adquirirLocksFacturas, buscarFacturaExistente, liberarLocksFacturas } from "./facturas-duplicadas";
+import { MENSAJE_CONFLICTO_IDEMPOTENCIA, esDuplicadoDeClave, lectorDeConexion } from "@/lib/tms/idempotencia-envio";
+import { INDICE_CLAVE_COMPRAS, buscarRequerimientoPorClave, claveValidaCompra, huellaRequerimiento } from "./requerimiento-idempotencia";
 
 export class ErrorCompra extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -80,6 +82,20 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
   // la misma por proveedor + serie normalizada + número normalizado; sin número no hay control. Vale para líneas nuevas y editadas.
   const repetidas = indicesFacturasRepetidas(datos.lineas);
   if (repetidas.size) throw new ErrorCompra(`${MSG_FACTURAS_REPETIDAS} (líneas ${[...repetidas].map(i => i + 1).join(", ")})`, 409);
+  // IDEMPOTENCIA (solo al CREAR) — la búsqueda por clave va ANTES de los locks de facturas y de sus validaciones: un reintento
+  // de un requerimiento con facturas ya confirmado fallaría por «factura duplicada» en vez de devolver la creación original.
+  const clave = id === undefined ? datos.clave_idempotencia ?? null : null;
+  if (clave !== null && !claveValidaCompra(clave)) throw new ErrorCompra("La clave de envío no es válida.");
+  // El solicitante efectivo es el usuario autenticado (`usuarioId`, el que se persiste en solicitante_usuario_id), nunca un dato del cliente.
+  const huella = clave ? huellaRequerimiento(datos, usuarioId) : null;
+  let claveEfectiva = clave;
+  if (clave) {
+    const previa = await buscarRequerimientoPorClave((sql, params) => query<RowDataPacket[]>(sql, params), empresaId, clave, huella!);
+    if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+    if (previa.tipo === "existente") return previa.resultado;
+    // Migración sin aplicar: se crea en modo legado (sin protección) en vez de fallar la operación.
+    if (previa.tipo === "sin_soporte") claveEfectiva = null;
+  }
   const conn = await getPool().getConnection();
   const rutasFirmas: string[] = [];
   const locksFacturas: string[] = [];
@@ -94,6 +110,13 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       if (!bloqueo.ok) throw new ErrorCompra("No se pudo validar las facturas porque hay otra operación en curso para el mismo proveedor. Intenta de nuevo.", 409);
     }
     await conn.beginTransaction();
+    // IDEMPOTENCIA — segunda comprobación, ya con el lock de facturas y dentro de la transacción: la petición que esperó al
+    // ganador ve su creación confirmada (instantánea posterior a la liberación del lock) y la devuelve en vez de fallar.
+    if (claveEfectiva) {
+      const previa = await buscarRequerimientoPorClave(lectorDeConexion(conn), empresaId, claveEfectiva, huella!);
+      if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+      if (previa.tipo === "existente") { await conn.rollback(); return previa.resultado; }
+    }
     let antes: RowDataPacket | undefined;
     let existentes: RowDataPacket[] = [];
     if (id !== undefined) {
@@ -191,10 +214,11 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       const [result] = await conn.execute<ResultSetHeader>(`INSERT INTO compras_requerimientos
         (empresa_id, codigo, fecha_requerimiento, entidad_requirente_id, entidad_requirente_nombre,
          requirente_usuario_id, requirente_nombre, solicitante_usuario_id, solicitante_nombre, estado, total, observaciones, creado_por,
-         encargado_compras_usuario_id, encargado_compras_nombre)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?, ?, ?)`,
+         encargado_compras_usuario_id, encargado_compras_nombre${claveEfectiva ? ", clave_idempotencia, huella_idempotencia" : ""})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?, ?, ?${claveEfectiva ? ", ?, ?" : ""})`,
       [empresaId, `TMP-${randomUUID()}`, datos.fecha_requerimiento, datos.entidad_requirente_id, entidades[0].nombre,
-        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId, encargadoId, encargadoNombre]);
+        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId, encargadoId, encargadoNombre,
+        ...(claveEfectiva ? [claveEfectiva, huella] : [])]);
       id = result.insertId;
       codigo = `RC-${datos.fecha_requerimiento.slice(0, 4)}-${String(id).padStart(6, "0")}`;
       await conn.execute(`UPDATE compras_requerimientos SET codigo = ? WHERE empresa_id = ? AND id = ?`, [codigo, empresaId, id]);
@@ -240,6 +264,14 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
   } catch (error) {
     try { await conn.rollback(); } catch { /* Conservar el error original. */ }
+    // CONCURRENCIA — otra petición con la MISMA clave confirmó primero y el UNIQUE (empresa_id, clave) rechazó este INSERT:
+    // tras el rollback se relee (instantánea nueva); misma huella => se devuelve esa creación; otra => 409. Solo el índice de la
+    // clave cuenta como reintento; un duplicado de código o de factura sigue su camino normal.
+    if (claveEfectiva && esDuplicadoDeClave(error, INDICE_CLAVE_COMPRAS)) {
+      const previa = await buscarRequerimientoPorClave(lectorDeConexion(conn), empresaId, claveEfectiva, huella!);
+      if (previa.tipo === "existente") return previa.resultado;
+      if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+    }
     // Red de seguridad del UNIQUE de BD (sql/migrate-2026-09-compras-facturas-unicas.sql): solo ese índice se traduce; otros ER_DUP_ENTRY se propagan.
     if (esDuplicadoFacturaUnica(error)) throw new ErrorCompra(MSG_FACTURA_UNICA_BD, 409);
     throw error;
