@@ -2,11 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
 import {
-  calcularSaldoTotalDisponible,
+  crearLecturaVacacionesEmpleado,
   contarDiasHabiles,
   listarVacaciones,
-  obtenerHistorialPeriodos,
-  obtenerPeriodosDisponibles,
   registrarIncidenciaSinSaldo,
 } from "@/lib/rrhh/vacaciones";
 import { registrarVacaciones } from "@/lib/rrhh/vacaciones-registro";
@@ -41,9 +39,9 @@ const filtrosSchema = z.object({
   .refine((v) => !v.soloResumen || v.empleadoId, { message: "soloResumen requiere empleadoId." });
 
 /** Historial completo de períodos (ADITIVO): si falla no rompe la respuesta de saldo/registro (y la clave `historial` simplemente se omite). */
-async function historialSeguro(empresaId: number, empleadoId: number) {
+async function historialSeguro(lectura: ReturnType<typeof crearLecturaVacacionesEmpleado>) {
   try {
-    return await obtenerHistorialPeriodos(empresaId, empleadoId);
+    return await lectura.obtenerHistorialPeriodos();
   } catch (error) {
     console.error("[vacaciones] historial de períodos:", error);
     return null;
@@ -67,11 +65,13 @@ export async function GET(req: Request, ctx: Ctx) {
   }
   const { empleadoId, tipo, desde, hasta, soloResumen } = parsed.data;
 
-  if (soloResumen && empleadoId) {
+  const lectura = empleadoId ? crearLecturaVacacionesEmpleado(guard.empresa.id, empleadoId) : null;
+
+  if (soloResumen && empleadoId && lectura) {
     try {
-      const saldo = await calcularSaldoTotalDisponible(guard.empresa.id, empleadoId);
-      const periodos = await obtenerPeriodosDisponibles(guard.empresa.id, empleadoId);
-      return NextResponse.json({ saldo, periodos, historial: (await historialSeguro(guard.empresa.id, empleadoId)) ?? undefined });
+      const saldo = await lectura.calcularSaldoTotalDisponible();
+      const periodos = await lectura.obtenerPeriodosDisponibles();
+      return NextResponse.json({ saldo, periodos, historial: (await historialSeguro(lectura)) ?? undefined });
     } catch {
       return NextResponse.json({
         saldo: null,
@@ -83,17 +83,11 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const vacaciones = await listarVacaciones(guard.empresa.id, { empleadoId, tipo, desde, hasta });
 
-  if (empleadoId) {
+  if (empleadoId && lectura) {
     try {
-      const saldo = await calcularSaldoTotalDisponible(
-        guard.empresa.id,
-        empleadoId,
-      );
-      const periodos = await obtenerPeriodosDisponibles(
-        guard.empresa.id,
-        empleadoId,
-      );
-      return NextResponse.json({ vacaciones, saldo, periodos, historial: (await historialSeguro(guard.empresa.id, empleadoId)) ?? undefined });
+      const saldo = await lectura.calcularSaldoTotalDisponible();
+      const periodos = await lectura.obtenerPeriodosDisponibles();
+      return NextResponse.json({ vacaciones, saldo, periodos, historial: (await historialSeguro(lectura)) ?? undefined });
     } catch {
       return NextResponse.json({
         vacaciones,

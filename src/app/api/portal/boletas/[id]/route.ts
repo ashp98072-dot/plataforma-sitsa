@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
-import { obtenerPeriodo, listarLineas } from "@/lib/rrhh/planillas";
+import { obtenerPeriodo, listarLineasEmpleadoPorPeriodos } from "@/lib/rrhh/planillas";
 
 const ESTADOS_VISIBLES_COLABORADOR = ["Cerrada", "Pagada"];
 
@@ -26,7 +26,7 @@ export async function GET(
     return NextResponse.json({ error: "Boleta no encontrada." }, { status: 404 });
   }
 
-  const lineas = await listarLineas(session.empresaId, periodoId);
+  const lineas = await listarLineasEmpleadoPorPeriodos(session.empresaId, session.empleadoId, [periodoId]);
   const propia = lineas.find((l) => l.empleadoId === session.empleadoId);
   if (!propia) {
     return NextResponse.json({ error: "Boleta no encontrada." }, { status: 404 });

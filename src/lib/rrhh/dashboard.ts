@@ -238,8 +238,8 @@ export async function obtenerSituacionEmpleadosHoy(
 
 /**
  * Resumen gerencial mensual (altas, bajas y costo de nómina) de los
- * últimos `meses` calendario, incluyendo el mes actual (parcial si aún
- * no termina). No toca obtenerEstadisticasDashboard (ese sigue siendo
+ * últimos `meses` calendario, incluyendo el mes actual completo, como
+ * las consultas originales. No toca obtenerEstadisticasDashboard (ese sigue siendo
  * el snapshot "de hoy").
  */
 export async function obtenerResumenGerencial(
@@ -268,25 +268,44 @@ export async function obtenerResumenGerencial(
       return null;
     });
 
-  const resultados = await Promise.all(
-    rangos.map(async ({ mes, desde, hasta }) => {
-      const [altasRows, bajasRows, costoRows, bitacoraRows] = await Promise.all([
-        consultaSegura(
-          "altas",
-          `SELECT COUNT(*) AS total FROM empleados
-           WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?`,
-          [empresaId, desde, hasta],
-        ),
-        consultaSegura(
-          "bajas",
-          `SELECT COUNT(*) AS total FROM empleados
+  if (!rangos.length) return [];
+  const desde = rangos[0].desde;
+  const hasta = rangos[rangos.length - 1].hasta;
+  // Un batch fallido recupera únicamente su indicador, con aislamiento por mes.
+  const consultarIndicador = async (
+    nombre: string,
+    sqlBatch: string,
+    sqlMensual: string,
+    empresaParams: number[],
+  ): Promise<(RowDataPacket[] | null)[]> => {
+    const rows = await consultaSegura(nombre, sqlBatch, [...empresaParams, desde, hasta]);
+    if (rows !== null) {
+      return rangos.map(({ mes }) => {
+        const delMes = rows.filter((row) => row.mes === mes);
+        // SUM sin GROUP BY devuelve una fila de ceros para un mes vacío.
+        return nombre === "costoNomina" && !delMes.length
+          ? [{ total: 0, costo_registrado: 0 } as RowDataPacket]
+          : delMes;
+      });
+    }
+    return Promise.all(rangos.map((rango) =>
+      consultaSegura(nombre, sqlMensual, [...empresaParams, rango.desde, rango.hasta]),
+    ));
+  };
+  const indicadores = await Promise.all([
+    consultarIndicador("altas", `SELECT DATE_FORMAT(fecha_alta, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?
+           GROUP BY DATE_FORMAT(fecha_alta, '%Y-%m')`,
+      `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?`, [empresaId]),
+    consultarIndicador("bajas", `SELECT DATE_FORMAT(fecha_egreso, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
            WHERE empresa_id = ? AND estado = 'Baja'
-             AND fecha_egreso BETWEEN ? AND ?`,
-          [empresaId, desde, hasta],
-        ),
-        consultaSegura(
-          "costoNomina",
-          `SELECT COALESCE(SUM(l.neto), 0) AS total,
+             AND fecha_egreso BETWEEN ? AND ?
+           GROUP BY DATE_FORMAT(fecha_egreso, '%Y-%m')`,
+      `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND estado = 'Baja'
+             AND fecha_egreso BETWEEN ? AND ?`, [empresaId]),
+    consultarIndicador("costoNomina", `SELECT DATE_FORMAT(p.fecha_inicio, '%Y-%m') AS mes, COALESCE(SUM(l.neto), 0) AS total,
                   COALESCE(SUM(COALESCE(l.sueldo_base, 0) + COALESCE(l.bono_incentivo, 0)
                     + COALESCE(l.bono_herramientas, 0) + COALESCE(l.otros_ingresos, 0)
                     + COALESCE(l.igss_patronal, 0)), 0) AS costo_registrado
@@ -294,34 +313,45 @@ export async function obtenerResumenGerencial(
            INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id
            WHERE l.empresa_id = ? AND p.empresa_id = ?
              AND p.estado IN ('Cerrada', 'Pagada')
-             AND p.fecha_inicio BETWEEN ? AND ?`,
-          [empresaId, empresaId, desde, hasta],
-        ),
-        consultaSegura(
-          "bitacoraLegal",
-          `SELECT tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
+             AND p.fecha_inicio BETWEEN ? AND ?
+           GROUP BY DATE_FORMAT(p.fecha_inicio, '%Y-%m')`,
+      `SELECT COALESCE(SUM(l.neto), 0) AS total,
+                  COALESCE(SUM(COALESCE(l.sueldo_base, 0) + COALESCE(l.bono_incentivo, 0)
+                    + COALESCE(l.bono_herramientas, 0) + COALESCE(l.otros_ingresos, 0)
+                    + COALESCE(l.igss_patronal, 0)), 0) AS costo_registrado
+           FROM rrhh_planilla_lineas l
+           INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id
+           WHERE l.empresa_id = ? AND p.empresa_id = ?
+             AND p.estado IN ('Cerrada', 'Pagada')
+             AND p.fecha_inicio BETWEEN ? AND ?`, [empresaId, empresaId]),
+    consultarIndicador("bitacoraLegal", `SELECT DATE_FORMAT(fecha, '%Y-%m') AS mes, tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
            WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
              AND tipo IN ('Amonestacion', 'Suspension', 'Despido')
-           GROUP BY tipo`,
-          [empresaId, desde, hasta],
-        ),
-      ]);
-      const bitacoraPorTipo = new Map<string, number>(
-        (bitacoraRows ?? []).map((r) => [String(r.tipo), Number(r.total ?? 0)]),
-      );
-      return {
-        mes,
-        altas: altasRows ? Number(altasRows[0]?.total ?? 0) : null,
-        bajas: bajasRows ? Number(bajasRows[0]?.total ?? 0) : null,
-        costoNomina: Number(costoRows?.[0]?.total ?? 0),
-        netoNomina: costoRows?.length ? Number(costoRows[0].total) : null,
-        costoRegistrado: costoRows?.length ? Number(costoRows[0].costo_registrado) : null,
-        amonestaciones: bitacoraRows ? bitacoraPorTipo.get("Amonestacion") ?? 0 : null,
-        suspensiones: bitacoraRows ? bitacoraPorTipo.get("Suspension") ?? 0 : null,
-        despidos: bitacoraRows ? bitacoraPorTipo.get("Despido") ?? 0 : null,
-      };
-    }),
-  );
-
+           GROUP BY DATE_FORMAT(fecha, '%Y-%m'), tipo`,
+      `SELECT tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
+           WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
+             AND tipo IN ('Amonestacion', 'Suspension', 'Despido')
+           GROUP BY tipo`, [empresaId]),
+  ]);
+  const resultados = rangos.map(({ mes }, indice) => {
+    const [altasRows, bajasRows, costoRows, bitacoraRows] = indicadores.map((rows) => rows[indice]);
+    const altasMes = altasRows?.[0];
+    const bajasMes = bajasRows?.[0];
+    const costoMes = costoRows?.[0];
+    const bitacoraPorTipo = new Map<string, number>(
+      (bitacoraRows ?? []).map((r) => [String(r.tipo), Number(r.total ?? 0)]),
+    );
+    return {
+      mes,
+      altas: altasRows ? Number(altasMes?.total ?? 0) : null,
+      bajas: bajasRows ? Number(bajasMes?.total ?? 0) : null,
+      costoNomina: Number(costoMes?.total ?? 0),
+      netoNomina: costoRows?.length ? Number(costoMes?.total) : null,
+      costoRegistrado: costoRows?.length ? Number(costoMes?.costo_registrado) : null,
+      amonestaciones: bitacoraRows ? bitacoraPorTipo.get("Amonestacion") ?? 0 : null,
+      suspensiones: bitacoraRows ? bitacoraPorTipo.get("Suspension") ?? 0 : null,
+      despidos: bitacoraRows ? bitacoraPorTipo.get("Despido") ?? 0 : null,
+    };
+  });
   return resultados;
 }

@@ -602,8 +602,12 @@ export default function EmpleadosPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial remota existente
     void cargar();
+  }, [cargar]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- catálogo remoto inicial por empresa
     void cargarSupervisores();
-  }, [cargar, cargarSupervisores]);
+  }, [cargarSupervisores]);
 
   useEffect(() => {
     if (!entrevistaId || entrevistaCargada.current === entrevistaId) return;

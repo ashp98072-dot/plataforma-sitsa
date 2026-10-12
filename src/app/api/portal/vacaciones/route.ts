@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import {
-  calcularSaldoTotalDisponible,
-  obtenerPeriodosDisponibles,
+  crearLecturaVacacionesEmpleado,
 } from "@/lib/rrhh/vacaciones";
 import {
   crearSolicitudVacaciones,
@@ -21,9 +20,10 @@ export async function GET() {
     return NextResponse.json({ error: "No autenticado." }, { status: 401 });
   }
 
+  const lectura = crearLecturaVacacionesEmpleado(session.empresaId, session.empleadoId);
   const [saldo, periodos, solicitudes] = await Promise.all([
-    calcularSaldoTotalDisponible(session.empresaId, session.empleadoId),
-    obtenerPeriodosDisponibles(session.empresaId, session.empleadoId),
+    lectura.calcularSaldoTotalDisponible(),
+    lectura.obtenerPeriodosDisponibles(),
     listarSolicitudesPorEmpleado(session.empresaId, session.empleadoId),
   ]);
 

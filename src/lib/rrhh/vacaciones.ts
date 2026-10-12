@@ -375,6 +375,25 @@ export async function sincronizarPeriodosVacaciones(
   }
 }
 
+/** Crear dentro de cada request/render. Nunca guardar este lector en estado global.
+ * La transacción habitual termina antes de las lecturas; no se comparte conexión.
+ * Los helpers públicos individuales conservan su sincronización para otros consumidores.
+ */
+export function crearLecturaVacacionesEmpleado(empresaId: number, idEmpleado: number) {
+  let sincronizacion: Promise<ResultadoSincronizacionPeriodos> | undefined;
+  let periodos: Promise<PeriodoVacaciones[]> | undefined;
+  const sincronizar = () => sincronizacion ??= sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  const obtenerPeriodos = () => periodos ??= sincronizar().then(() => leerPeriodosDisponibles(empresaId, idEmpleado));
+  return {
+    obtenerPeriodosDisponibles: obtenerPeriodos,
+    calcularSaldoTotalDisponible: async () => {
+      const disponibles = await obtenerPeriodos();
+      return Math.round(disponibles.reduce((s, p) => s + p.diasDisponibles, 0) * 100) / 100;
+    },
+    obtenerHistorialPeriodos: async () => leerHistorialPeriodos(empresaId, idEmpleado, await sincronizar()),
+  };
+}
+
 export type PeriodoVacaciones = {
   id: number;
   anioLaboral: number;
@@ -389,6 +408,10 @@ export async function obtenerPeriodosDisponibles(
   idEmpleado: number,
 ): Promise<PeriodoVacaciones[]> {
   await sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  return leerPeriodosDisponibles(empresaId, idEmpleado);
+}
+
+async function leerPeriodosDisponibles(empresaId: number, idEmpleado: number): Promise<PeriodoVacaciones[]> {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, anio_laboral, periodo_inicio, periodo_fin,
             dias_otorgados, dias_disponibles
@@ -460,6 +483,14 @@ export async function obtenerHistorialPeriodos(
   idEmpleado: number,
 ): Promise<HistorialVacaciones> {
   const sync = await sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  return leerHistorialPeriodos(empresaId, idEmpleado, sync);
+}
+
+async function leerHistorialPeriodos(
+  empresaId: number,
+  idEmpleado: number,
+  sync: ResultadoSincronizacionPeriodos,
+): Promise<HistorialVacaciones> {
   const [empRows, rows] = await Promise.all([
     query<RowDataPacket[]>(
       "SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1",

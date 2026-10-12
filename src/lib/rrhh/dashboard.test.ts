@@ -10,9 +10,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-28T12:00:00Z"));
   vi.mocked(query).mockImplementation(async (sql) => {
-    if (sql.includes("rrhh_planilla_lineas")) return rows([{ total: "1800.50", costo_registrado: "2250.75" }]);
-    if (sql.includes("rrhh_bitacora_legal")) return rows([{ tipo: "Amonestacion", total: 3 }]);
-    return rows([{ total: 2 }]);
+    if (sql.includes("rrhh_planilla_lineas")) return rows([{ mes: "2026-08", total: "1800.50", costo_registrado: "2250.75" }]);
+    if (sql.includes("rrhh_bitacora_legal")) return rows([{ mes: "2026-08", tipo: "Amonestacion", total: 3 }]);
+    return rows([{ mes: "2026-08", total: 2 }]);
   });
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -51,7 +51,7 @@ describe("dashboard mensual RRHH", () => {
     expect(llamada[0]).not.toMatch(/l\.(descuentos|igss_laboral|isr)/);
   });
   it("un mes sin nómina es cero, no un error", async () => {
-    vi.mocked(query).mockResolvedValue(rows([{ total: 0, costo_registrado: 0 }]));
+    vi.mocked(query).mockResolvedValue(rows([{ mes: "2026-08", total: 0, costo_registrado: 0 }]));
     const [r] = await obtenerResumenGerencial(7, 1);
     expect(r.netoNomina).toBe(0);
     expect(r.costoRegistrado).toBe(0);
@@ -60,7 +60,7 @@ describe("dashboard mensual RRHH", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.mocked(query).mockImplementation(async (sql) => {
       if (sql.includes("rrhh_planilla_lineas")) throw new Error("database unavailable");
-      return rows([{ total: 2 }]);
+      return rows([{ mes: "2026-08", total: 2 }]);
     });
     const [r] = await obtenerResumenGerencial(7, 1);
     expect(r.netoNomina).toBeNull();
@@ -78,7 +78,7 @@ describe("dashboard mensual RRHH", () => {
     const meses = await obtenerResumenGerencial(7, 3);
     expect(meses.map((r) => r.mes)).toEqual(["2023-12", "2024-01", "2024-02"]);
     const llamadas = vi.mocked(query).mock.calls.filter(([sql]) => sql.includes("rrhh_planilla_lineas"));
-    expect(llamadas[2][1]).toEqual([7, 7, "2024-02-01", "2024-02-29"]);
+    expect(llamadas[0][1]).toEqual([7, 7, "2023-12-01", "2024-02-29"]);
     expect(vi.mocked(query).mock.calls.every(([sql]) => sql.trimStart().startsWith("SELECT"))).toBe(true);
   });
 });
