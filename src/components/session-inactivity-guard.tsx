@@ -56,6 +56,8 @@ export function SessionInactivityGuard() {
     const humanKey = activityStorageKey(activeKind);
     const pingKey = activityPingStorageKey(activeKind);
     const confirmationKey = activityConfirmationStorageKey(activeKind);
+    let pendingHumanAt: number | null = null;
+    let disposed = false;
 
     async function logout() {
       if (loggingOut.current) return;
@@ -70,6 +72,7 @@ export function SessionInactivityGuard() {
     }
 
     function applyServerTime(data: ActivityResponse, broadcast = true): boolean {
+      if (disposed) return false;
       const next = confirmedClockAfterResponse(
         confirmedClock.current,
         data,
@@ -82,7 +85,7 @@ export function SessionInactivityGuard() {
     }
 
     async function validateOnly() {
-      if (validationInFlight.current || loggingOut.current) return;
+      if (validationInFlight.current || activityInFlight.current || loggingOut.current) return;
       validationInFlight.current = true;
       try {
         const response = await fetch(endpoints.activity, {
@@ -95,13 +98,23 @@ export function SessionInactivityGuard() {
       } catch {
         // Mantener el último estado confirmado; validar no renueva la sesión.
       } finally {
-        validationInFlight.current = false;
+        if (!disposed) {
+          validationInFlight.current = false;
+          const humanAt = pendingHumanAt;
+          pendingHumanAt = null;
+          if (humanAt != null) void registerHumanActivity(humanAt);
+        }
       }
     }
 
-    async function registerHumanActivity() {
+    async function registerHumanActivity(humanAt = Date.now()) {
       const now = Date.now();
-      localStorage.setItem(humanKey, String(now));
+      // Conservar instante de la interacción real, incluso si esperamos un GET.
+      localStorage.setItem(humanKey, String(humanAt));
+      if (validationInFlight.current && !loggingOut.current) {
+        pendingHumanAt = humanAt;
+        return;
+      }
       if (
         loggingOut.current ||
         !canStartHumanActivityRequest({
@@ -131,7 +144,7 @@ export function SessionInactivityGuard() {
       } catch {
         // Una falla de red no equivale a actividad aceptada por el servidor.
       } finally {
-        activityInFlight.current = false;
+        if (!disposed) activityInFlight.current = false;
         try {
           if (!confirmed && numberFromStorage(pingKey) === now) {
             localStorage.removeItem(pingKey);
@@ -182,6 +195,8 @@ export function SessionInactivityGuard() {
     void validateOnly();
 
     return () => {
+      disposed = true;
+      pendingHumanAt = null;
       window.clearInterval(timer);
       window.removeEventListener("pointerdown", onHumanEvent);
       window.removeEventListener("keydown", onHumanEvent);

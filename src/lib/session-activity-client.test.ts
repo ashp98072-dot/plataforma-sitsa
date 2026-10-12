@@ -40,19 +40,20 @@ describe("session inactivity client policy", () => {
     expect(shouldSendActivityPing(now, now + ACTIVITY_PING_THROTTLE_MS)).toBe(true);
   });
 
-  it("GET en curso no pierde actividad humana y solo admite un POST", () => {
+  it("GET o POST en curso impide otro HTTP; guard agrupa actividad pendiente", () => {
     expect(
       canStartHumanActivityRequest({
         validationInFlight: true,
         activityInFlight: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       canStartHumanActivityRequest({
         validationInFlight: true,
         activityInFlight: true,
       }),
     ).toBe(false);
+    expect(canStartHumanActivityRequest({ validationInFlight: false, activityInFlight: false })).toBe(true);
   });
 
   it("solo acepta pointer, teclado o touch confiables como actividad humana", () => {
