@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { registrarAuditoria } from "@/lib/auditoria";
-import { execute, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
+import { marcarVacacionesDirty } from "@/lib/rrhh/vacaciones-sync-estado";
+import type { ResultSetHeader } from "mysql2/promise";
 import { requireTenantRrhh } from "@/lib/tenant";
 import { contarDiasHabiles } from "@/lib/rrhh/vacaciones";
 
@@ -70,7 +72,11 @@ export async function POST(req: Request, ctx: Ctx) {
     d.fechaInicio,
     d.fechaFin,
   );
-  const result = await execute(
+  const conn = await getPool().getConnection();
+  let result: ResultSetHeader;
+  try {
+    await conn.beginTransaction();
+    [result] = await conn.execute<ResultSetHeader>(
     `INSERT INTO incidencias (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
      VALUES (?, ?, ?, ?, ?, ?)`,
     [
@@ -81,7 +87,13 @@ export async function POST(req: Request, ctx: Ctx) {
       d.fechaFin,
       diasHabiles,
     ],
-  );
+    );
+    if (["Vacaciones", "A cuenta de Vacaciones"].includes(d.tipo)) await marcarVacacionesDirty(conn, guard.empresa.id, d.empleadoId);
+    await conn.commit();
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally { conn.release(); }
 
   await registrarAuditoria({
     empresaId: guard.empresa.id,

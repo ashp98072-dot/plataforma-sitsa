@@ -220,6 +220,8 @@ export async function reemplazarSerieEnConexion(
   };
   for (const k of Object.keys(antes) as (keyof typeof antes)[]) if (antes[k] !== despues[k]) throw fallo(`cambió ${k}${typeof antes[k] === "number" ? ` (${antes[k]} → ${despues[k]})` : ""}.`);
 
+  const { marcarVacacionesDirty } = await import("./vacaciones-sync-estado");
+  await marcarVacacionesDirty(conn, empresaId, idEmpleado);
   // 4) auditoría (misma transacción)
   await registrarAuditoriaTx(conn, { empresaId, usuario: op.usuario, accion: op.accion, modulo: "rrhh", detalle: JSON.stringify(op.detalle) });
 }

@@ -22,6 +22,8 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const TIPOS = ["Vacaciones", "A cuenta de Vacaciones"];
 
 export class BdVac {
+  sync: Record<string, { dirty: number; generacion: number }> = {};
+  private fotoSync: typeof this.sync | null = null;
   t: Tablas = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], configuracion: [] };
   feriados: string[] = [];
   ejecutadas: string[] = [];
@@ -31,6 +33,7 @@ export class BdVac {
   private seq = { saldo: 0, inc: 0, vac: 0, det: 0 };
 
   reiniciar(t: Partial<Tablas> = {}): void {
+    this.sync = {}; this.fotoSync = null;
     this.t = { empleados: [], saldos: [], incidencias: [], vacaciones: [], detalle: [], auditoria: [], evidencias: [], configuracion: [], ...clon(t) };
     this.feriados = []; this.ejecutadas = []; this.eventos = []; this.fallarSi = null; this.foto = null;
     const max = (xs: { id: number }[], base: number) => Math.max(base, ...xs.map((x) => x.id));
@@ -45,9 +48,9 @@ export class BdVac {
     return {
       query: (sql: string, params?: unknown[]) => this.query(sql, params),
       execute: (sql: string, params?: unknown[]) => this.execute(sql, params),
-      beginTransaction: async () => { this.eventos.push("BEGIN"); this.foto = clon(this.t); },
-      commit: async () => { this.eventos.push("COMMIT"); this.foto = null; },
-      rollback: async () => { this.eventos.push("ROLLBACK"); if (this.foto) this.t = this.foto; this.foto = null; },
+      beginTransaction: async () => { this.eventos.push("BEGIN"); this.foto = clon(this.t); this.fotoSync = clon(this.sync); },
+      commit: async () => { this.eventos.push("COMMIT"); this.foto = null; this.fotoSync = null; },
+      rollback: async () => { this.eventos.push("ROLLBACK"); if (this.foto) this.t = this.foto; if (this.fotoSync) this.sync = this.fotoSync; this.foto = null; this.fotoSync = null; },
       release: () => { this.eventos.push("RELEASE"); },
     };
   }
@@ -215,6 +218,12 @@ export class BdVac {
   private escribir(sql: string, p: unknown[]): { insertId: number; affectedRows: number } {
     const t = this.t;
     const ok = (insertId = 0, affectedRows = 1) => ({ insertId, affectedRows });
+    if (sql.startsWith("INSERT INTO rrhh_vacaciones_sync_estado")) {
+      if (!t.empleados.some((e) => e.empresa_id === p[0] && e.id === p[1])) return ok(0, 0);
+      const key = `${p[0]}:${p[1]}`;
+      this.sync[key] = { dirty: 1, generacion: (this.sync[key]?.generacion ?? 0) + 1 };
+      return ok();
+    }
     if (sql.startsWith("INSERT IGNORE INTO saldos_vacaciones")) {
       const [empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles] = p as [number, number, number, string, string, number, number];
       if (t.saldos.some((s) => s.id_empleado === id_empleado && s.periodo_inicio === periodo_inicio && s.periodo_fin === periodo_fin)) return ok(0, 0);

@@ -2,6 +2,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
+import { marcarVacacionesDirty } from "./vacaciones-sync-estado";
 import {
   obtenerFeriadosEnRango,
   registrarVacacionesFifoEnConexion,
@@ -203,6 +204,7 @@ export async function registrarVacaciones(input: EntradaRegistro): Promise<Resul
       }
       desglose.push({ periodoInicio: p.inicio, periodoFin: p.fin, diasTomados: tomado, diasRestantes: restante });
     }
+    await marcarVacacionesDirty(conn, input.empresaId, input.idEmpleado);
     // Recalcula el estado actual (vencimiento y tope de 30): idempotente; nunca aumenta saldo.
     await sincronizarPeriodosVacacionesEnConexion(conn, input.empresaId, input.idEmpleado);
     await registrarAuditoriaTx(conn as PoolConnection, {

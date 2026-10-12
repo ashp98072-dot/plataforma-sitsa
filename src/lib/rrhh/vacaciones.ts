@@ -1,9 +1,10 @@
 import { differenceInYears, format, parseISO } from "date-fns";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
-import { hoyLocal, toIsoDate } from "./dates";
+import { toIsoDate } from "./dates";
 import { contarEvidenciasPorIncidencia } from "./evidencias";
 import { obtenerPoliticaConConsulta, obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
+import { candidatosVacaciones, marcarVacacionesDirty, sincronizarCandidatoVacaciones } from "./vacaciones-sync-estado";
 import {
   MAX_PERIODOS_VIGENTES,
   analizarTraslapes,
@@ -74,6 +75,7 @@ export async function contarDiasHabiles(
 
 type ResultadoSincronizacionEmpresa = {
   empleados: number;
+  sincronizados: number;
   errores: number;
 };
 
@@ -82,51 +84,43 @@ type ResultadoSincronizacionEmpresa = {
  * que RRHH abra primero la ficha de cada uno. La campana y el panel de
  * alertas llaman esta función antes de consultar quién alcanzó 15 días.
  *
- * Se deduplica por empresa y día de Guatemala para que el polling de la
- * campana siga siendo barato: como máximo se recalcula una vez al día por
- * proceso de servidor. Las promesas concurrentes comparten el mismo trabajo.
+ * Solo se deduplica trabajo EN CURSO. Cada nueva petición revisa el índice
+ * persistente: nuevas invalidaciones y políticas no quedan ocultas por el Map.
  */
 const sincronizacionesEmpresa = new Map<
   number,
-  { fecha: string; promesa: Promise<ResultadoSincronizacionEmpresa> }
+  Promise<ResultadoSincronizacionEmpresa>
 >();
 
 export async function sincronizarVacacionesEmpleadosActivos(
   empresaId: number,
 ): Promise<ResultadoSincronizacionEmpresa> {
-  const fecha = hoyLocal();
   const vigente = sincronizacionesEmpresa.get(empresaId);
-  if (vigente?.fecha === fecha) return vigente.promesa;
+  if (vigente) return vigente;
 
   const promesa = (async () => {
-    const empleados = await query<RowDataPacket[]>(
-      `SELECT id
-       FROM empleados
-       WHERE empresa_id = ? AND estado = 'Activo' AND fecha_alta IS NOT NULL
-       ORDER BY id`,
-      [empresaId],
-    );
+    const empleados = await candidatosVacaciones(empresaId);
     let errores = 0;
+    let sincronizados = 0;
     for (const empleado of empleados) {
       try {
-        await sincronizarPeriodosVacaciones(empresaId, Number(empleado.id));
+        if (await sincronizarCandidatoVacaciones(empresaId, empleado, sincronizarPeriodosVacacionesEnConexion)) sincronizados += 1;
       } catch (error) {
         errores += 1;
         console.error(
-          `[vacaciones] No se pudo sincronizar empleado ${Number(empleado.id)}:`,
+          `[vacaciones] No se pudo sincronizar empleado ${empleado}:`,
           error,
         );
       }
     }
-    return { empleados: empleados.length, errores };
+    return { empleados: empleados.length, sincronizados, errores };
   })();
 
-  sincronizacionesEmpresa.set(empresaId, { fecha, promesa });
+  sincronizacionesEmpresa.set(empresaId, promesa);
   try {
     return await promesa;
-  } catch (error) {
-    sincronizacionesEmpresa.delete(empresaId);
-    throw error;
+  } finally {
+    if (sincronizacionesEmpresa.get(empresaId) === promesa) sincronizacionesEmpresa.delete(empresaId);
   }
 }
 
@@ -722,6 +716,7 @@ export async function registrarVacacionesFifoEnConexion(
     restante -= tomar;
   }
 
+  await marcarVacacionesDirty(conn, input.empresaId, input.idEmpleado);
   return {
     ok: true,
     mensaje: "Vacaciones registradas (FIFO).",
@@ -821,9 +816,10 @@ export async function registrarIncidenciaSinSaldo(input: {
   fechaFin: string;
   dias: number;
 }): Promise<{ ok: boolean; mensaje: string; incidenciaId: number | null }> {
+  const conn = await getPool().getConnection();
   try {
-    const pool = getPool();
-    const [r] = await pool.execute<ResultSetHeader>(
+    await conn.beginTransaction();
+    const [r] = await conn.execute<ResultSetHeader>(
       `INSERT INTO incidencias
         (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -836,16 +832,21 @@ export async function registrarIncidenciaSinSaldo(input: {
         input.dias,
       ],
     );
+    if (["Vacaciones", "A cuenta de Vacaciones"].includes(input.tipo)) await marcarVacacionesDirty(conn, input.empresaId, input.idEmpleado);
+    await conn.commit();
     return {
       ok: true,
       mensaje: `${input.tipo} registrado.`,
       incidenciaId: Number(r.insertId),
     };
   } catch (err) {
+    await conn.rollback();
     return {
       ok: false,
       mensaje: err instanceof Error ? err.message : "Error al registrar",
       incidenciaId: null,
     };
+  } finally {
+    conn.release();
   }
 }
