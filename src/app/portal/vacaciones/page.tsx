@@ -2,9 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import {
-  calcularSaldoTotalDisponible,
-  obtenerHistorialPeriodos,
-  obtenerPeriodosDisponibles,
+  crearLecturaVacacionesEmpleado,
 } from "@/lib/rrhh/vacaciones";
 import { listarSolicitudesPorEmpleado } from "@/lib/rrhh/solicitudes-vacaciones";
 import SolicitarVacacionesForm from "./solicitar-form";
@@ -23,13 +21,14 @@ export default async function VacacionesPage() {
     redirect("/portal/login");
   }
 
+  const lectura = crearLecturaVacacionesEmpleado(session.empresaId, session.empleadoId);
   const [saldo, periodos, solicitudes, equipo, historial] = await Promise.all([
-    calcularSaldoTotalDisponible(session!.empresaId, session!.empleadoId),
-    obtenerPeriodosDisponibles(session!.empresaId, session!.empleadoId),
+    lectura.calcularSaldoTotalDisponible(),
+    lectura.obtenerPeriodosDisponibles(),
     listarSolicitudesPorEmpleado(session!.empresaId, session!.empleadoId),
     listarEquipoVacaciones(session!.empresaId, session!.empleadoId),
     // Historial completo (aditivo): si falla, el portal sigue mostrando saldo y desglose vigente.
-    obtenerHistorialPeriodos(session!.empresaId, session!.empleadoId).catch(() => null),
+    lectura.obtenerHistorialPeriodos().catch(() => null),
   ]);
 
   return (

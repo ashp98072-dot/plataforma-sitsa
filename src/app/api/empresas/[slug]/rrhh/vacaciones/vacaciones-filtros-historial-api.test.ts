@@ -5,6 +5,11 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/tenant", () => ({ requireTenantRrhh: m.requireTenantRrhh }));
 vi.mock("@/lib/rrhh/vacaciones", () => ({
+  crearLecturaVacacionesEmpleado: (empresa: number, empleado: number) => ({
+    calcularSaldoTotalDisponible: () => m.calcularSaldoTotalDisponible(empresa, empleado),
+    obtenerPeriodosDisponibles: () => m.obtenerPeriodosDisponibles(empresa, empleado),
+    obtenerHistorialPeriodos: async () => null,
+  }),
   listarVacaciones: m.listarVacaciones, calcularSaldoTotalDisponible: m.calcularSaldoTotalDisponible, obtenerPeriodosDisponibles: m.obtenerPeriodosDisponibles,
   contarDiasHabiles: vi.fn(), registrarIncidenciaSinSaldo: vi.fn(), registrarVacacionesFifo: vi.fn(),
 }));

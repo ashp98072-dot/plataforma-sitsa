@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("@/lib/rrhh/colaborador-session", () => ({ getColaboradorSession: vi.fn() }));
-vi.mock("@/lib/rrhh/vacaciones", () => ({ calcularSaldoTotalDisponible: vi.fn(), obtenerPeriodosDisponibles: vi.fn() }));
+vi.mock("@/lib/rrhh/vacaciones", () => ({ crearLecturaVacacionesEmpleado: vi.fn(() => ({ calcularSaldoTotalDisponible: vi.fn(), obtenerPeriodosDisponibles: vi.fn() })) }));
 vi.mock("@/lib/rrhh/solicitudes-vacaciones", () => ({ crearSolicitudVacaciones: vi.fn(), listarSolicitudesPorEmpleado: vi.fn() }));
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import { crearSolicitudVacaciones, listarSolicitudesPorEmpleado } from "@/lib/rrhh/solicitudes-vacaciones";
