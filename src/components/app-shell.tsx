@@ -2,7 +2,7 @@
 
 import { usePathname, useSearchParams } from "next/navigation";
 import { tienePermisoBase } from "@/lib/permisos-catalogo";
-import { enlaceSidebarActivo } from "@/lib/sidebar-activo";
+import { NAV_PENDING_FALLBACK_MS, debeMarcarNavegacionPendiente, enlaceSidebarActivo } from "@/lib/sidebar-activo";
 import { useEffect, useMemo, useState } from "react";
 import { mapaDominios } from "@/lib/dominios";
 import {
@@ -176,16 +176,19 @@ export function AppShell({
     return () => window.clearTimeout(t);
   }, [pathname]);
 
-  // Quitar indicador al completar (pathname o ?tab= de Flota vía nuevo RSC).
+  // Quitar indicador al completar la navegación. La señal es la URL confirmada por el router (pathname Y query): en cambios
+  // solo de `?tab=` (Flota) el slot `children` del layout NO cambia de identidad, así que depender solo de él dejaba el
+  // indicador activo hasta el respaldo de 8 s.
+  const queryActual = searchParams.toString();
   useEffect(() => {
     const t = window.setTimeout(() => setNavPending(false), 0);
     return () => window.clearTimeout(t);
-  }, [pathname, children]);
+  }, [pathname, queryActual, children]);
 
   // Seguridad: no dejar la barra colgada si la nav se cancela.
   useEffect(() => {
     if (!navPending) return;
-    const t = window.setTimeout(() => setNavPending(false), 8000);
+    const t = window.setTimeout(() => setNavPending(false), NAV_PENDING_FALLBACK_MS);
     return () => window.clearTimeout(t);
   }, [navPending]);
 
@@ -804,7 +807,7 @@ export function AppShell({
                             href={l.href}
                             onNavigate={() => {
                               setMenuOpen(false);
-                              if (!active) setNavPending(true);
+                              if (debeMarcarNavegacionPendiente(pathname, l.href, active)) setNavPending(true);
                             }}
                             className={[
                               "rounded-md px-2.5 py-1.5 text-sm",
