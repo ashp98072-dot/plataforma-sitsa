@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RowDataPacket } from "mysql2";
 vi.mock("@/lib/db",()=>({query:vi.fn()}));
 import { query } from "@/lib/db";
-import { obtenerResumenGerencial } from "./dashboard";
+import { obtenerResumenGerencial, type ResumenMensual } from "./dashboard";
 type Fixture={empresa:number;fecha:string;estado?:string;neto?:number;tipo?:string;costo?:number};
 let altas:Fixture[], bajas:Fixture[], nomina:Fixture[], bitacora:Fixture[];
 beforeEach(()=>{
@@ -28,12 +28,13 @@ beforeEach(()=>{
       const group=grouped.get(key)??{mes,tipo:r.tipo,total:0,costo_registrado:0};
       group.total+=dataset===nomina?r.neto??0:1;group.costo_registrado+=r.costo??0;grouped.set(key,group);
     }
+    if (dataset === nomina && !grouped.size && !sql.includes("GROUP BY DATE_FORMAT")) return [{total:0,costo_registrado:0}] as RowDataPacket[];
     return [...grouped.values()] as RowDataPacket[];
   });
 });
-afterEach(()=>vi.useRealTimers());
+afterEach(()=>{vi.useRealTimers();vi.restoreAllMocks();});
 // Referencia por mes: mismo rango y reglas del algoritmo anterior, sin agrupar seis meses.
-function anterior(meses:string[]){return meses.map(mes=>{
+function anterior(meses:string[]): ResumenMensual[]{return meses.map(mes=>{
   const registros=(xs:Fixture[])=>xs.filter(r=>r.empresa===7&&r.fecha.slice(0,7)===mes);
   const lineas=registros(nomina).filter(r=>["Cerrada","Pagada"].includes(r.estado!));
   const neto=lineas.reduce((s,r)=>s+(r.neto??0),0);
@@ -59,3 +60,43 @@ it("mes sin datos rellena ceros, fallo de consulta conserva null",async()=>{
   expect((await obtenerResumenGerencial(7,1))[0]).toEqual({mes:"2026-01",altas:null,bajas:null,
     costoNomina:0,netoNomina:null,costoRegistrado:null,amonestaciones:null,suspensiones:null,despidos:null});
 });
+
+const mesesFallback=["2025-08","2025-09","2025-10","2025-11","2025-12","2026-01"];
+for (const indicador of ["nomina", "altas", "bajas", "bitacora"] as const) {
+  for (const fallaMensual of [false, true]) {
+    it(`fallback aislado de ${indicador}, fallo mensual=${fallaMensual}: DTO de main y otros batches únicos`, async()=>{
+      vi.spyOn(console,"error").mockImplementation(()=>{});
+      const original=vi.mocked(query).getMockImplementation()!;
+      const pertenece=(sql:string)=>indicador==="nomina"?sql.includes("rrhh_planilla_lineas"):
+        indicador==="bitacora"?sql.includes("rrhh_bitacora_legal"):
+        sql.includes("FROM empleados") && (indicador==="bajas"?sql.includes("fecha_egreso"):sql.includes("fecha_alta"));
+      vi.mocked(query).mockImplementation(async(sql,p=[])=>{
+        if(pertenece(sql)&&(sql.includes("GROUP BY DATE_FORMAT") || (fallaMensual && p.at(-2)==="2025-12-01"))) throw new Error("SQL");
+        return original(sql,p);
+      });
+      const esperado=anterior(mesesFallback);
+      if(fallaMensual){
+        const mes=esperado[4];
+        if(indicador==="nomina") Object.assign(mes,{costoNomina:0,netoNomina:null,costoRegistrado:null});
+        else if(indicador==="bitacora") Object.assign(mes,{amonestaciones:null,suspensiones:null,despidos:null});
+        else mes[indicador]=null;
+      }
+      expect(await obtenerResumenGerencial(7)).toEqual(esperado);
+      expect(query).toHaveBeenCalledTimes(10);
+      const llamadas=vi.mocked(query).mock.calls;
+      expect(llamadas.filter(([sql])=>sql.includes("GROUP BY DATE_FORMAT"))).toHaveLength(4);
+      const mensuales=llamadas.filter(([sql])=>!sql.includes("GROUP BY DATE_FORMAT"));
+      expect(mensuales).toHaveLength(6);
+      for(const [sql,p] of mensuales){
+        expect(pertenece(sql)).toBe(true);
+        expect(p?.slice(0,-2)).toEqual(indicador==="nomina"?[7,7]:[7]);
+        if(indicador==="nomina")expect(sql).toContain("p.estado IN ('Cerrada', 'Pagada')");
+      }
+      expect(mensuales.map(([,p])=>p?.slice(-2))).toEqual([
+        ["2025-08-01","2025-08-31"],["2025-09-01","2025-09-30"],
+        ["2025-10-01","2025-10-31"],["2025-11-01","2025-11-30"],
+        ["2025-12-01","2025-12-31"],["2026-01-01","2026-01-31"],
+      ]);
+    });
+  }
+}

@@ -271,15 +271,41 @@ export async function obtenerResumenGerencial(
   if (!rangos.length) return [];
   const desde = rangos[0].desde;
   const hasta = rangos[rangos.length - 1].hasta;
-  const [altasRows, bajasRows, costoRows, bitacoraRows] = await Promise.all([
-    consultaSegura("altas", `SELECT DATE_FORMAT(fecha_alta, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
+  // Un batch fallido recupera únicamente su indicador, con aislamiento por mes.
+  const consultarIndicador = async (
+    nombre: string,
+    sqlBatch: string,
+    sqlMensual: string,
+    empresaParams: number[],
+  ): Promise<(RowDataPacket[] | null)[]> => {
+    const rows = await consultaSegura(nombre, sqlBatch, [...empresaParams, desde, hasta]);
+    if (rows !== null) {
+      return rangos.map(({ mes }) => {
+        const delMes = rows.filter((row) => row.mes === mes);
+        // SUM sin GROUP BY devuelve una fila de ceros para un mes vacío.
+        return nombre === "costoNomina" && !delMes.length
+          ? [{ total: 0, costo_registrado: 0 } as RowDataPacket]
+          : delMes;
+      });
+    }
+    return Promise.all(rangos.map((rango) =>
+      consultaSegura(nombre, sqlMensual, [...empresaParams, rango.desde, rango.hasta]),
+    ));
+  };
+  const indicadores = await Promise.all([
+    consultarIndicador("altas", `SELECT DATE_FORMAT(fecha_alta, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
            WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?
-           GROUP BY DATE_FORMAT(fecha_alta, '%Y-%m')`, [empresaId, desde, hasta]),
-    consultaSegura("bajas", `SELECT DATE_FORMAT(fecha_egreso, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
+           GROUP BY DATE_FORMAT(fecha_alta, '%Y-%m')`,
+      `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND fecha_alta BETWEEN ? AND ?`, [empresaId]),
+    consultarIndicador("bajas", `SELECT DATE_FORMAT(fecha_egreso, '%Y-%m') AS mes, COUNT(*) AS total FROM empleados
            WHERE empresa_id = ? AND estado = 'Baja'
              AND fecha_egreso BETWEEN ? AND ?
-           GROUP BY DATE_FORMAT(fecha_egreso, '%Y-%m')`, [empresaId, desde, hasta]),
-    consultaSegura("costoNomina", `SELECT DATE_FORMAT(p.fecha_inicio, '%Y-%m') AS mes, COALESCE(SUM(l.neto), 0) AS total,
+           GROUP BY DATE_FORMAT(fecha_egreso, '%Y-%m')`,
+      `SELECT COUNT(*) AS total FROM empleados
+           WHERE empresa_id = ? AND estado = 'Baja'
+             AND fecha_egreso BETWEEN ? AND ?`, [empresaId]),
+    consultarIndicador("costoNomina", `SELECT DATE_FORMAT(p.fecha_inicio, '%Y-%m') AS mes, COALESCE(SUM(l.neto), 0) AS total,
                   COALESCE(SUM(COALESCE(l.sueldo_base, 0) + COALESCE(l.bono_incentivo, 0)
                     + COALESCE(l.bono_herramientas, 0) + COALESCE(l.otros_ingresos, 0)
                     + COALESCE(l.igss_patronal, 0)), 0) AS costo_registrado
@@ -288,26 +314,40 @@ export async function obtenerResumenGerencial(
            WHERE l.empresa_id = ? AND p.empresa_id = ?
              AND p.estado IN ('Cerrada', 'Pagada')
              AND p.fecha_inicio BETWEEN ? AND ?
-           GROUP BY DATE_FORMAT(p.fecha_inicio, '%Y-%m')`, [empresaId, empresaId, desde, hasta]),
-    consultaSegura("bitacoraLegal", `SELECT DATE_FORMAT(fecha, '%Y-%m') AS mes, tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
+           GROUP BY DATE_FORMAT(p.fecha_inicio, '%Y-%m')`,
+      `SELECT COALESCE(SUM(l.neto), 0) AS total,
+                  COALESCE(SUM(COALESCE(l.sueldo_base, 0) + COALESCE(l.bono_incentivo, 0)
+                    + COALESCE(l.bono_herramientas, 0) + COALESCE(l.otros_ingresos, 0)
+                    + COALESCE(l.igss_patronal, 0)), 0) AS costo_registrado
+           FROM rrhh_planilla_lineas l
+           INNER JOIN rrhh_planilla_periodos p ON p.id = l.periodo_id
+           WHERE l.empresa_id = ? AND p.empresa_id = ?
+             AND p.estado IN ('Cerrada', 'Pagada')
+             AND p.fecha_inicio BETWEEN ? AND ?`, [empresaId, empresaId]),
+    consultarIndicador("bitacoraLegal", `SELECT DATE_FORMAT(fecha, '%Y-%m') AS mes, tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
            WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
              AND tipo IN ('Amonestacion', 'Suspension', 'Despido')
-           GROUP BY DATE_FORMAT(fecha, '%Y-%m'), tipo`, [empresaId, desde, hasta]),
+           GROUP BY DATE_FORMAT(fecha, '%Y-%m'), tipo`,
+      `SELECT tipo, COUNT(*) AS total FROM rrhh_bitacora_legal
+           WHERE empresa_id = ? AND fecha BETWEEN ? AND ?
+             AND tipo IN ('Amonestacion', 'Suspension', 'Despido')
+           GROUP BY tipo`, [empresaId]),
   ]);
-  const resultados = rangos.map(({ mes }) => {
-    const altasMes = altasRows?.find((r) => r.mes === mes);
-    const bajasMes = bajasRows?.find((r) => r.mes === mes);
-    const costoMes = costoRows?.find((r) => r.mes === mes);
+  const resultados = rangos.map(({ mes }, indice) => {
+    const [altasRows, bajasRows, costoRows, bitacoraRows] = indicadores.map((rows) => rows[indice]);
+    const altasMes = altasRows?.[0];
+    const bajasMes = bajasRows?.[0];
+    const costoMes = costoRows?.[0];
     const bitacoraPorTipo = new Map<string, number>(
-      (bitacoraRows ?? []).filter((r) => r.mes === mes).map((r) => [String(r.tipo), Number(r.total ?? 0)]),
+      (bitacoraRows ?? []).map((r) => [String(r.tipo), Number(r.total ?? 0)]),
     );
     return {
       mes,
       altas: altasRows ? Number(altasMes?.total ?? 0) : null,
       bajas: bajasRows ? Number(bajasMes?.total ?? 0) : null,
       costoNomina: Number(costoMes?.total ?? 0),
-      netoNomina: costoRows !== null ? Number(costoMes?.total ?? 0) : null,
-      costoRegistrado: costoRows !== null ? Number(costoMes?.costo_registrado ?? 0) : null,
+      netoNomina: costoRows?.length ? Number(costoMes?.total) : null,
+      costoRegistrado: costoRows?.length ? Number(costoMes?.costo_registrado) : null,
       amonestaciones: bitacoraRows ? bitacoraPorTipo.get("Amonestacion") ?? 0 : null,
       suspensiones: bitacoraRows ? bitacoraPorTipo.get("Suspension") ?? 0 : null,
       despidos: bitacoraRows ? bitacoraPorTipo.get("Despido") ?? 0 : null,

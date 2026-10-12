@@ -28,7 +28,7 @@ El esquema definido en `planillas.ts` incluye `uq_plan_linea(periodo_id,id_emple
 
 ## Dashboard
 
-Sólo se consolida el bloque gerencial en cuatro GROUP BY mes: altas, bajas, nómina y bitácora. Los meses vacíos se completan en JS. Se conservan empresa, estados, fórmula de costo, clasificación de bitácora, orden de meses y valores cero/null de los indicadores. Ante fallo de una consulta agregada, ese indicador queda no disponible para los meses del rango.
+Sólo se consolida el bloque gerencial en cuatro GROUP BY mes: altas, bajas, nómina y bitácora. Los meses vacíos se completan en JS. Se conservan empresa, estados, fórmula de costo, clasificación de bitácora, orden de meses y valores cero/null de los indicadores. Si un batch falla, sólo ese indicador ejecuta las seis consultas mensuales originales mediante consultaSegura. Cada fallo mensual conserva el null/0 de main únicamente para ese mes; los otros batches exitosos no se repiten. El camino normal mantiene 4 consultas gerenciales y 13 en el dashboard. Con un batch fallido se intentan 10 gerenciales (4 batches +6 mensuales), 19 en el dashboard; con N batches fallidos son 4+6N y 13+6N respectivamente (máximo 28 y 37).
 
 **Main incluye el mes actual completo**, confirmado por código y tests. Se conserva por indicación explícita del usuario; limitarlo a hoy sería otra PR funcional. Se corrigió el comentario que describía el comportamiento como parcial. La zona de Guatemala y los límites de meses siguen calculándose con el mismo código. Las columnas de fecha del esquema son DATE. No se tocan estadísticas diarias ni situación.
 
