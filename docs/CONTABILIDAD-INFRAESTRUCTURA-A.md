@@ -2,6 +2,14 @@
 
 Base: main `1b182dbd824aa0194fcad5abeb6b3c22c1ca5514`.
 
+Corrección de #447: producción MariaDB 11.8.9-MariaDB-log ya tiene
+`cont_cuentas_rol` desde 2026-10-12, con 14 configuraciones (7 por entidad), sin huérfanos.
+`cont_eventos` no existe. Se reutilizará la tabla, sin cambiar ninguna de sus filas ni collation.
+El operador confirmó nombre/definición exacta del CHECK histórico: `ck_cont_rol_valido`,
+longitud física 126, siete roles en orden CLIENTES/IVA_POR_PAGAR/VENTAS_SERVICIOS/RETENCION_IVA/
+TRANSITO_BANCARIO/ANTICIPOS/DEVOLUCIONES_VENTAS. VENTAS_BIENES se agrega al final.
+No se ejecutó la corrección en producción; requiere preflight y autorización antes de aplicar.
+
 ## Alcance
 
 Infraestructura sin callers en facturación, pagos o UI. No certifica/emite facturas, no confirma bancos,
@@ -11,7 +19,8 @@ Sin backfill: asientos históricos no reciben eventos y configuración futura no
 ## Contratos
 
 - `cont_cuentas_rol`: UNIQUE empresa/entidad/rol y FKs compuestas a entidad/cuenta.
-  CLIENTES, IVA_POR_PAGAR, RETENCION_IVA, VENTAS_SERVICIOS y VENTAS_BIENES.
+  ANTICIPOS, CLIENTES, DEVOLUCIONES_VENTAS, IVA_POR_PAGAR, RETENCION_IVA,
+  TRANSITO_BANCARIO, VENTAS_SERVICIOS y VENTAS_BIENES.
   No hay seeds. VENTAS_BIENES válido sin fila: resolvedor falla explícitamente hasta configurar.
 - `resolverCuentaPorRol(input, conn?)`: JOIN por empresa/entidad, valida entidad/configuración/cuenta activas;
   no fallback ni código contable fijo. Con conexión usa FOR UPDATE, sin ella solo lectura del pool.
@@ -47,29 +56,46 @@ Permisos e identidad deben validarse por guard del servidor antes de cualquier f
 
 ## SQL manual propuesto
 
-1. `sql/preflight-2026-10-contabilidad-infraestructura-a.sql` (solo SELECT/SHOW).
-2. `sql/migrate-2026-10-contabilidad-infraestructura-a.sql` (solo CREATE TABLE IF NOT EXISTS).
+1. `sql/preflight-2026-10-contabilidad-infraestructura-a.sql` (bloque de lectura de metadata/datos).
+2. `sql/migrate-2026-10-contabilidad-infraestructura-a.sql` (DDL condicional guardado).
 3. `sql/verify-2026-10-contabilidad-infraestructura-a.sql` (solo SELECT/SHOW).
 
-Objetivo MariaDB 11.8.9; InnoDB / utf8mb4_unicode_ci para tablas nuevas, claves ASCII binarias.
+Objetivo MariaDB 11.8.9; InnoDB / utf8mb4_uca1400_ai_ci para tablas nuevas, claves ASCII binarias.
+No convierte la collation de la tabla existente.
 JSON puede aparecer físicamente como LONGTEXT en MariaDB: no convertir.
 Preflight verifica DB elegida, versión, checks/FKs ON, padres, engines, tipos INT signed,
 índices únicos compuestos, collations, huérfanos y DDL existentes.
 Las FKs usan columnas numéricas: las collations de texto padre no se fuerzan ni se modifican.
-Sin information_schema obligatorio: revisar SHOW CREATE de tablas cont_* para colisiones de nombres.
-Si falta evidencia, DETENER; no inferir que la ausencia de permisos significa ausencia de constraints.
+Compuerta automática usa information_schema y devuelve SHOW CREATE explícito de la tabla existente:
+valida columnas/posiciones/defaults, PK/UNIQUE/índice, dos FK RESTRICT, CHECK único conocido,
+engine/collation, tipos signed, datos y colisiones. Roles/activa inesperados, constraints adicionales,
+triggers o metadata inaccesible => DETENER. No inferir ausencia de permisos como ausencia de constraints.
+No asumir disponibilidad del permiso: comprobarlo con el preflight; no retirar la compuerta.
 
-Si una tabla ya existe, ejecutar los bloques condicionales comentados del preflight y comparar DDL/datos.
+Si una tabla ya existe, el preflight devuelve automáticamente su DDL y filas para comparación.
 IF NOT EXISTS NO comprueba compatibilidad ni modifica CHECKs existentes.
-La propuesta antigua de roles contiene ANTICIPOS/TRANSITO_BANCARIO/DEVOLUCIONES_VENTAS y excluye VENTAS_BIENES:
-si fue aplicada, DETENER y diseñar una migración separada aprobada; no perder filas ni quitar roles automáticamente.
-APLICAR solo si nuevas tablas ausentes y padres compatibles; NOOP si ambas idénticas;
-una instalación parcialmente creada solo puede completarse tras verificar exactamente la tabla presente.
+La tabla productiva contiene ANTICIPOS/TRANSITO_BANCARIO/DEVOLUCIONES_VENTAS, que deben conservarse.
+El upgrade solicitado ampliará únicamente el CHECK de roles para agregar VENTAS_BIENES,
+con verificación del DDL histórico en la propia ejecución. No se convertirá collation ni se añadirá configuración.
+APTO_NUEVO: ambas tablas ausentes y padres compatibles.
+APTO_COMPATIBILIDAD: tabla histórica exactamente verificada, siete roles válidos, eventos ausente.
+NOOP: ocho roles admitidos y tabla de eventos exactamente compatible.
+DETENER: estructura/datos inesperados, colisiones o evidencia insuficiente.
+El CHECK se compara tras normalizar únicamente espacios/backticks/mayúsculas; se conserva el orden.
+No se permite otro conjunto de roles ni nombre de CHECK. Una tabla con ocho roles pero eventos ausente
+(ejecución DDL interrumpida) devuelve DETENER y exige revisión/recuperación explícita, no reparación automática.
+La variante histórica espera exactamente un CHECK de rol: ausencia de CHECK activa no se finge como uno existente;
+cualquier CHECK adicional desconocido detiene. Valores activa fuera de 0/1 también detienen.
 Conteos vacíos esperados en primera instalación; si ya había configuración, registrar y comparar conteos antes/después.
 La migración no carga cuentas, datos ni eventos.
 
 Rollback operativo: no activar callers o revertir aplicación; conservar tablas/datos.
-No DROP, DELETE de históricos ni reversos improvisados.
+No DROP TABLE ni DELETE de históricos. Único DROP: reemplazo de ck_cont_rol_valido en un solo ALTER.
+DDL produce commits implícitos: ejecutar en ventana sin modificación de esquema/configuración.
+No envolverlo en una transacción de negocio ni prometer rollback de todo el bloque.
+BEGIN NOT ATOMIC/SIGNAL detiene el bloque antes de DDL si no coincide la compuerta.
+No crea procedimientos persistentes. DELIMITER es directiva del cliente (mysql/phpMyAdmin);
+mysql2 envía el bloque completo quitando únicamente esas directivas.
 
 ## Validación local y reproducción
 
@@ -78,15 +104,21 @@ La suite DB fija host 127.0.0.1, puerto 3407, root local y base aleatoria prefij
 no lee .env ni usa la conexión de la app. Crea únicamente fixtures sintéticos, sin DROP final.
 Prueba preflight, migrate dos veces, verify, ausencia de seeds, FK/CHECK, writer real,
 rollback externo, dos intentos concurrentes iguales, conflicto de huella, claves diferentes y aislamiento.
-La versión local disponible es MariaDB 10.4.32, NO 11.8.9: preflight físico real del objetivo sigue pendiente.
+Corrección probada en MariaDB 11.8.9 oficial local desechable, descargado de archive.mariadb.org.
+No es la BD productiva: 14 filas de prueba sintéticas reproducen la variante física confirmada.
+Upgrade compara todas las columnas/valores/timestamps antes/después, índices (sin estadísticas variables),
+FK y collation; segunda ejecución NOOP. Instalación nueva permite los ocho roles sin seeds.
+La habilitación de VENTAS_BIENES se prueba con un INSERT de fixture seguido de rollback; no queda configurado.
+Casos de drift: CHECK renombrado/diferente, columna/índice/FK inesperados, activa inválida y colisión,
+todos rechazados antes de crear cont_eventos o alterar el CHECK.
 Pruebas unitarias sin puerto siguen ejecutándose; suite DB se omite explícitamente si no se habilita.
 
-Resultado dirigido: 222/222 en Contabilidad + APIs manuales; incluye 6 casos DB reales.
+Resultado dirigido de esta corrección: 240/240 en Contabilidad + APIs manuales; incluye 15 casos DB reales.
 TypeScript, ESLint dirigido y diff-check limpios.
-Build exitoso con Next 16.3.6; warnings en configuración/middleware y cuatro accesos
-filesystem en módulos no modificados. Sin cambios para silenciarlos.
+Build anterior exitoso con Next 16.3.6 (HEAD 9f73cb78); no se repite en este delta de
+catálogo/SQL/tests/docs sin cambios de UI/endpoints/escritor. TypeScript sí se revalida.
 El escritor conserva la compuerta existente `exigirEsquemaC2b`, que consulta information_schema:
-el preflight propuesto no lo requiere, pero los futuros callers deben verificar que el usuario de aplicación
+la compuerta de migración también requiere esos metadatos, y los futuros callers deben verificar que el usuario de aplicación
 pueda ejecutar esa compuerta. No se elimina ni debilita en este PR.
 
 ## Blockers conservados

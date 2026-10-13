@@ -2146,8 +2146,8 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   entidad_id INT NOT NULL,
-  cuenta_id INT NOT NULL,
   rol VARCHAR(40) NOT NULL,
+  cuenta_id INT NOT NULL,
   activa TINYINT(1) NOT NULL DEFAULT 1,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -2155,9 +2155,8 @@ CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
   KEY idx_cont_cuentas_rol_cuenta (empresa_id, entidad_id, cuenta_id),
   CONSTRAINT fk_cont_rol_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
   CONSTRAINT fk_cont_rol_cuenta FOREIGN KEY (empresa_id, entidad_id, cuenta_id) REFERENCES cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
-  CONSTRAINT ck_cont_rol_valido CHECK (rol IN ('CLIENTES','IVA_POR_PAGAR','RETENCION_IVA','VENTAS_SERVICIOS','VENTAS_BIENES')),
-  CONSTRAINT ck_cont_rol_activa CHECK (activa IN (0,1))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  CONSTRAINT ck_cont_rol_valido CHECK (rol IN ('CLIENTES','IVA_POR_PAGAR','VENTAS_SERVICIOS','RETENCION_IVA','TRANSITO_BANCARIO','ANTICIPOS','DEVOLUCIONES_VENTAS','VENTAS_BIENES'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 CREATE TABLE IF NOT EXISTS cont_eventos (
   id INT AUTO_INCREMENT PRIMARY KEY,
@@ -2191,6 +2190,6 @@ CREATE TABLE IF NOT EXISTS cont_eventos (
     (tipo_evento = 'RETENCION_NO_EMITIDA' AND evento_origen_id IS NOT NULL)),
   CONSTRAINT ck_cont_evento_huella CHECK (huella REGEXP '^[0-9a-f]{64}$'),
   CONSTRAINT ck_cont_evento_snapshot CHECK (JSON_VALID(datos_snapshot) AND JSON_VALUE(datos_snapshot, '$.version') IS NOT NULL AND JSON_VALUE(datos_snapshot, '$.version') = 1)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

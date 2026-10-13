@@ -5,7 +5,7 @@ vi.mock("@/lib/db", () => ({ getPool: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { resolverCuentaPorRol } from "./cuentas-rol";
+import { resolverCuentaPorRol, ROLES_CONTABLES } from "./cuentas-rol";
 import { registrarAsientoTx } from "./asientos";
 import { registrarEventoContableTx } from "./eventos";
 import { crearSnapshotContable, huellaContable, serializarCanonico } from "./evento-snapshot";
@@ -31,6 +31,14 @@ beforeEach(() => {
 it("resuelve cuenta tipada en ámbito exacto sin código hardcodeado", async () => {
   expect(await resolverCuentaPorRol({ empresaId: 7, entidadId: 9, rol: "CLIENTES" }, conn)).toMatchObject({ id: 1, codigo: "DATO" });
   expect(c.query).toHaveBeenCalledWith(expect.stringContaining("FOR UPDATE"), [7, 9, "CLIENTES"]);
+});
+it.each(ROLES_CONTABLES)("resuelve %s preservando los siete roles productivos", async rol => {
+  expect(await resolverCuentaPorRol({ empresaId: 7, entidadId: 9, rol }, conn)).toMatchObject({ id: 1, codigo: "DATO", rol });
+  expect(c.query).toHaveBeenCalledWith(expect.stringContaining("FOR UPDATE"), [7, 9, rol]);
+});
+it("catálogo contiene exactamente los ocho roles aprobados, sin duplicados", () => {
+  expect(ROLES_CONTABLES).toEqual(["ANTICIPOS", "CLIENTES", "DEVOLUCIONES_VENTAS", "IVA_POR_PAGAR", "RETENCION_IVA", "TRANSITO_BANCARIO", "VENTAS_SERVICIOS", "VENTAS_BIENES"]);
+  expect(new Set(ROLES_CONTABLES).size).toBe(8);
 });
 it.each(["CLIENTES", "VENTAS_BIENES"] as const)("rol válido %s sin configuración falla sin fallback", async rol => {
   c.query.mockResolvedValue([[]]);

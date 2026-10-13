@@ -2,7 +2,7 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { z } from "zod";
 
-export const ROLES_CONTABLES = ["CLIENTES", "IVA_POR_PAGAR", "RETENCION_IVA", "VENTAS_SERVICIOS", "VENTAS_BIENES"] as const;
+export const ROLES_CONTABLES = ["ANTICIPOS", "CLIENTES", "DEVOLUCIONES_VENTAS", "IVA_POR_PAGAR", "RETENCION_IVA", "TRANSITO_BANCARIO", "VENTAS_SERVICIOS", "VENTAS_BIENES"] as const;
 export type RolContable = typeof ROLES_CONTABLES[number];
 export class ConfiguracionContableInvalida extends Error { readonly status = 409; }
 const entrada = z.object({ empresaId: z.number().int().positive(), entidadId: z.number().int().positive(), rol: z.enum(ROLES_CONTABLES) });
