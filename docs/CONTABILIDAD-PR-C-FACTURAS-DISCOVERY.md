@@ -107,9 +107,6 @@ En todos los casos el asiento original **permanece intacto**: la corrección es 
 Permiso administrativo (opcional, a proponer entonces): «reintentar contabilización» — solo ejecuta la misma transacción
 idempotente; no permite crear asientos manuales ni evita la comprobación del registro FEL.
 
-Permiso administrativo (opcional, a proponer entonces): «reintentar contabilización» — solo ejecuta la misma transacción
-idempotente; no permite crear asientos manuales.
-
 ## 7. UX
 
 Sin cambios: mostrar «Estado contable» hoy solo diría «Factura aún no certificada» en todas. Se activará con el hito.
