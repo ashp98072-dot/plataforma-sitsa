@@ -118,6 +118,26 @@ agregar("tms", nueva("tms","gestionar","Gestionar datos operativos",E));
 agregar("reciclaje", nueva("reciclaje","gestionar","Gestionar reciclaje",E));
 agregar("tarimas", nueva("tarimas","gestionar","Gestionar tarimas",E));
 agregar("cms", nueva("cms","publicar","Editar / publicar contenido",E));
+// CONTROL DE ENTREGA DE DOCUMENTOS (PR 1): filas propias (ver PERMISOS_ENTREGA en permisos-shared.ts), `editar` = puede actuar. Ninguna se concede por rol:
+// se asignan manualmente. Las de área inicial viven en su módulo (activarlas activa su Ver); las transversales en un módulo propio de Operaciones.
+agregar("gastos",
+  { ...accion("fondos_entrega_emitir","entrega_fondos","Control de entrega de solicitudes de fondo por Operaciones",E),
+    descripcion: "Entregar el expediente desde Operaciones y recibir sus devoluciones (con firma)." },
+  { ...accion("gastos_entrega_emitir","entrega_gastos","Control de entrega de gastos operativos por Operaciones",E),
+    descripcion: "Entregar el expediente desde Operaciones y recibir sus devoluciones (con firma)." });
+agregar("compras_requerimientos",
+  { ...accion("compras_entrega_emitir","entrega_compras","Control de entrega de requerimientos por Compras",E),
+    descripcion: "Entregar el expediente desde Compras y recibir sus devoluciones (con firma)." });
+CATALOGO_PERMISOS.push({ id: "documentos_entregas", label: "Control de entrega de documentos", area: "operaciones", acciones: [
+  accion("documentos_entregas","ver","Ver","puedeVer"),
+  { ...accion("entregas_area_tesoreria","area_tesoreria","Actuar por Tesorería (recibir / entregar)",E),
+    descripcion: "Solicitudes de fondo y requerimientos de compra." },
+  { ...accion("entregas_area_contabilidad","area_contabilidad","Actuar por Contabilidad (recibir / devolver)",E),
+    descripcion: "Solicitudes de fondo, gastos operativos y requerimientos de compra." },
+  { ...accion("entregas_presencial","presencial","Registrar recepción presencial",E),
+    descripcion: "Para quien recibe sin usuario del sistema: nombre y firma dibujada en el dispositivo." },
+  { ...accion("entregas_anular","anular","Anular entregas pendientes de otras personas",E) },
+] });
 
 export const ACCIONES_NUEVAS = CATALOGO_PERMISOS.flatMap(m => m.acciones.filter(a => a.legacy));
 const flag = (permisos: PermisoModulo[], moduloId: string, campo: FlagPermiso) =>

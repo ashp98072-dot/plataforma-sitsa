@@ -104,6 +104,41 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tms/viaticos.ts, src/lib/tms/cierre-viaje.ts y
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
+/**
+ * CONTROL DE ENTREGA DE DOCUMENTOS (PR 1 — base común, ver src/lib/entregas/): filas propias de usuario_modulo (sin SQL),
+ * acción `editar` = puede actuar. NINGÚN rol las trae por defecto (decisión de negocio: asignación manual desde Usuarios);
+ * Admin conserva el bypass administrativo del sistema. Todas viven dentro de TMS (Fondos, Gastos y Compras dependen de "tms").
+ *   - documentos_entregas: base «Ver» del grupo en la matriz (activar una acción la activa).
+ *   - fondos/gastos/compras_entrega_emitir: actuar por el área INICIAL del módulo (Operaciones / Compras).
+ *   - entregas_area_tesoreria / entregas_area_contabilidad: actuar por esas áreas en los tres módulos.
+ *   - entregas_presencial: registrar recepciones presenciales (persona sin usuario, firma dibujada).
+ *   - entregas_anular: anular entregas pendientes emitidas por otra persona.
+ */
+export const PERMISOS_ENTREGA = [
+  "documentos_entregas",
+  "fondos_entrega_emitir",
+  "gastos_entrega_emitir",
+  "compras_entrega_emitir",
+  "entregas_area_tesoreria",
+  "entregas_area_contabilidad",
+  "entregas_presencial",
+  "entregas_anular",
+] as const;
+export type PermisoEntrega = (typeof PERMISOS_ENTREGA)[number];
+export function esPermisoEntrega(m: string): m is PermisoEntrega {
+  return (PERMISOS_ENTREGA as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_ENTREGA: Record<PermisoEntrega, string> = {
+  documentos_entregas: "Control de entrega de documentos",
+  fondos_entrega_emitir: "Control de entrega: Operaciones (Solicitudes de fondo)",
+  gastos_entrega_emitir: "Control de entrega: Operaciones (Gastos operativos)",
+  compras_entrega_emitir: "Control de entrega: Compras (Requerimientos)",
+  entregas_area_tesoreria: "Control de entrega: actuar por Tesorería",
+  entregas_area_contabilidad: "Control de entrega: actuar por Contabilidad",
+  entregas_presencial: "Control de entrega: recepción presencial",
+  entregas_anular: "Control de entrega: anular entregas de otros",
+};
+
 export const PLATAFORMA_PERMISIBLES = [
   "cotizaciones",
   "proveedor_portales",
@@ -256,6 +291,8 @@ export const PLATAFORMA_PERMISIBLES = [
   // reparte completo a varios roles y se lo habría dado a todos). Ningún rol lo trae por defecto; un Admin lo asigna desde Usuarios. Sin él, solo la empresa propietaria
   // edita un vehículo; con él, además, los vehículos compartidos accesibles desde la empresa activa (la propiedad nunca cambia). Gatea sobre el módulo de empresa "flota".
   "flota_vehiculos_otras_empresas",
+  // CONTROL DE ENTREGA DE DOCUMENTOS: ver PERMISOS_ENTREGA arriba (ningún rol por defecto).
+  ...PERMISOS_ENTREGA,
 ] as const;
 
 /** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
@@ -346,6 +383,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
+  if (esPermisoEntrega(m)) return "tms";
   if (m === "flota_combustible" || m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
     m === "viaticos" ||
@@ -400,6 +438,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "gastos_autorizar") return "Solicitudes de fondo: autorizar y rechazar";
   if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
   if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
+  if (esPermisoEntrega(modulo)) return LABEL_PERMISO_ENTREGA[modulo];
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -476,6 +515,7 @@ export const GRUPOS_PERMISOS: {
       "viaticos_liquidar",
       "viaticos_comprobantes",
       "viajes_cerrar",
+      ...PERMISOS_ENTREGA,
     ],
   },
   {
@@ -845,7 +885,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "gastos_autorizar" &&
       p.modulo !== "gastos_operativos_autorizar" &&
       p.modulo !== "flota_combustible" &&
-      p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS
+      p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS &&
+      !esPermisoEntrega(p.modulo)
     ) {
       out.add(p.modulo);
     }
