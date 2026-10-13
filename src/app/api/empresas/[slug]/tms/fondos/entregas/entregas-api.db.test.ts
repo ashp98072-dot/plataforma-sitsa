@@ -10,9 +10,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
  * Ejecuta los handlers REALES + el servicio común REAL; solo se sustituye la puerta de sesión (`requireTenantEntregas`) para
  * elegir quién opera y en qué empresa. Peticiones concurrentes verdaderas.
  *
- * EJECUTAR CON `--no-file-parallelism` junto a src/lib/entregas/entregas.db.test.ts: ambos archivos comparten la misma base y,
- * en paralelo, dos emisiones de documentos distintos (de cualquier empresa) pueden interbloquearse por los bloqueos de rango del
- * servicio común (ver docs/FONDOS-CONTROL-ENTREGA.md, «Hallazgo en la base común»). Es un deadlock real, no del test.
+ * EJECUTAR CON `--no-file-parallelism` junto a los demás archivos `*.db.test.ts`: comparten la misma base desechable y sus datos de
+ * prueba no deben mezclarse. (El deadlock entre emisiones de documentos distintos que antes aparecía al correrlos en paralelo ya
+ * está corregido en el servicio: ver docs/FONDOS-CONTROL-ENTREGA.md y src/lib/entregas/entregas-concurrencia.db.test.ts.)
  */
 const PUERTO = process.env.ENTREGAS_DB_PORT;
 const ESQUEMA = process.env.ENTREGAS_DB_SCHEMA ?? "u611730801_Plataforma";

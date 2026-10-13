@@ -48,7 +48,7 @@ La puerta de los endpoints acepta además «ver Solicitudes de fondo» solo para
 - Imagen de la firma de entrega en el PDF.
 - Gastos y Compras (PR 3 y PR 4).
 
-## Hallazgo en la base común (PR #445) — requiere decisión
+## Hallazgo en la base común (PR #445) — CORREGIDO en esta PR
 
 Dos emisiones **simultáneas de documentos distintos** (incluso de empresas distintas) pueden interbloquearse:
 `registrarEntrega` hace `SELECT … FOR UPDATE` de las entregas del documento (rango vacío) y luego `INSERT`; con REPEATABLE READ ambos
@@ -62,13 +62,44 @@ Reproducción mínima (MariaDB 10.4 desechable, 20 rondas de dos transacciones c
 | `READ COMMITTED` | 0 / 20 |
 | Lectura sin bloqueo (tras bloquear la fila del documento) | 0 / 20 |
 
-Impacto: poco frecuente (ventana de milisegundos entre la lectura y el INSERT), pero real; el usuario vería un error y reintentaría.
+Con el servicio real, en la primera ronda de 6 emisiones simultáneas de documentos distintos fallaban 5 por deadlock.
 
-**No se cambió el servicio común** (la instrucción es reportar antes de tocar la arquitectura común). En esta PR solo hay una
-mitigación en la capa HTTP de Fondos: `conReintentoPorDeadlock` reintenta hasta 3 veces (seguro: emitir es idempotente por clave y
-las demás acciones reconocen su repetición). Corrección de raíz propuesta, en una PR aparte: en `registrarEntrega` y `cerrarEntrega`,
-leer las entregas del documento **sin** `FOR UPDATE` (la fila del documento ya serializa a los emisores) y/o ejecutar la transacción
-en `READ COMMITTED`.
+### Corrección (aprobada) — `src/lib/entregas/entregas.ts`, `registrarEntrega`
+
+Se quitaron los dos `FOR UPDATE` sobre **filas que pueden no existir** de `documento_entregas`, ambos tomaban bloqueos de hueco
+compartidos entre documentos y empresas:
+
+1. la lectura del **historial** del documento (`… WHERE empresa_id = ? AND modulo = ? AND entidad_id = ? ORDER BY id`);
+2. la **relectura de la clave** de idempotencia (`… WHERE empresa_id = ? AND clave_idempotencia = ?`). La instrucción original
+   solo mencionaba el historial; se comprobó que quitar solo ese **no** basta (20/20 rondas seguían interbloqueándose por el hueco de
+   `uq_de_empresa_clave`), así que esta lectura también pasa a ser no bloqueante. Sigue releyéndose bajo el bloqueo del documento.
+
+Se **mantiene**: `FOR UPDATE` de la fila del documento origen, los UNIQUE de clave y de pendiente (garantía final), y el
+`FOR UPDATE` al cerrar (recibir/rechazar/anular). No se cambió el aislamiento.
+
+**Por qué sigue siendo seguro.** La fila del documento serializa las emisiones del MISMO documento, y la primera lectura no
+bloqueante de la transacción (la relectura de la clave) toma su instantánea DESPUÉS de obtener ese bloqueo, así que ve todo lo que
+confirmaron emisiones anteriores. Una entrega pendiente siempre aparece en esa lectura (solo las emisiones la crean y están
+serializadas), de modo que nunca se emite una segunda ni se calcula una custodia futura: si un cierre concurrente aún no confirmó,
+la nueva emisión ve la pendiente y se rechaza (409 «pendiente», o 403 de permiso de área, porque esa validación precede a la de
+pendiente); tras la recepción confirmada, un nuevo intento válido emite desde la nueva custodia. Una carrera de la misma clave contra
+otro documento termina en `ER_DUP_ENTRY` y se resuelve como antes (original si la huella coincide, 409 si no).
+
+### Evidencia (BD desechable, concurrencia real con Promise.all, `entregas-concurrencia.db.test.ts`, 30 rondas por escenario)
+
+| Escenario | Antes | Después |
+|---|---|---|
+| A. 6 documentos distintos, misma empresa (180 emisiones) | falla desde la ronda 0 (5/6 por deadlock) | 0 deadlocks, 180/180 creadas |
+| B. 3+3 documentos, dos empresas (180 emisiones) | falla desde la ronda 0 | 0 deadlocks, 180/180 creadas |
+| C. mismo documento, claves distintas (6 por ronda) | — | una gana, 5 × 409; 1 EMITIDA, 1 firma |
+| D. misma clave (6 por ronda) | — | 1 entrega, 1 firma, las 6 devuelven la original |
+| E. recibir vs nueva emisión del mismo documento | — | nunca dos pendientes ni custodia incorrecta; Operaciones nunca emite |
+| F. misma clave en documentos distintos | — | una gana, la otra 409 |
+
+### Reintento HTTP
+
+`conReintentoPorDeadlock` se conserva como **defensa** ante deadlocks transitorios del motor (máx. 3 intentos, solo
+`ER_LOCK_DEADLOCK`/1213, con pausa aleatoria). Ya no es la solución del deadlock conocido.
 
 ## Verificación
 

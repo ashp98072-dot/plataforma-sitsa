@@ -36,11 +36,12 @@ export async function leerFirmaFormulario(form: FormData, usuarioIdSesion: numbe
 }
 
 /**
- * Reintento ante un DEADLOCK de InnoDB (`ER_LOCK_DEADLOCK`, 1213). Mitigación en la capa HTTP de Fondos: el servicio común toma
- * bloqueos de rango (`SELECT … FOR UPDATE` sobre `documento_entregas`) y dos emisiones simultáneas de documentos DISTINTOS pueden
- * interbloquearse; el motor revierte una de ellas por completo (y el servicio compensa la imagen), así que repetir la llamada
- * es seguro: emitir es idempotente por clave y recibir/rechazar/anular reconocen su propia repetición. Máximo 3 intentos.
- * La corrección de raíz (READ COMMITTED / lecturas sin bloqueo de rango) corresponde al servicio común y se propone aparte.
+ * Defensa ante un deadlock TRANSITORIO de InnoDB (`ER_LOCK_DEADLOCK`, 1213). NO es la solución del deadlock conocido: ese se
+ * corrigió de raíz en el servicio común (`registrarEntrega` ya no toma bloqueos de rango sobre `documento_entregas`; ver
+ * docs/FONDOS-CONTROL-ENTREGA.md). Esto solo cubre interbloqueos legítimos y ocasionales del motor: el motor revierte una de
+ * las transacciones por completo (y el servicio compensa la imagen), así que repetir la llamada es seguro: emitir es
+ * idempotente por clave y recibir/rechazar/anular reconocen su propia repetición. Máximo 3 intentos, con pausa aleatoria, y
+ * SOLO para este error: cualquier otro (negocio, validación, infraestructura) se propaga sin reintentar.
  */
 export async function conReintentoPorDeadlock<T>(operacion: () => Promise<T>, intentos = 3): Promise<T> {
   for (let intento = 1; ; intento++) {

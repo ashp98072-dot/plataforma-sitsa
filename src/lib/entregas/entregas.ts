@@ -337,10 +337,15 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
     const { id, repetida } = await conImagenCompensada(imagen, () => enTransaccion(async (conn) => {
       const documento = await bloquearDocumento(conn, empresaId, modulo, entidadId);
       if (!documento) throw error(MENSAJES_ENTREGA.documentoNoEncontrado, 404);
-      // Con el documento ya bloqueado, otra petición con la MISMA clave pudo haber terminado mientras esperábamos: lectura
-      // con bloqueo (ve lo último confirmado, no la instantánea) para responder la original en vez de «pendiente existente».
+      // Con el documento ya bloqueado, otra petición con la MISMA clave pudo haber terminado mientras esperábamos: se relee la
+      // clave para responder la original en vez de «pendiente existente». Es la PRIMERA lectura no bloqueante de la transacción,
+      // así que su instantánea se toma DESPUÉS de obtener el bloqueo del documento y ve todo lo confirmado por emisiones
+      // anteriores del mismo documento. Va SIN `FOR UPDATE`: un bloqueo sobre una clave inexistente toma un bloqueo de hueco en
+      // `uq_de_empresa_clave` que se comparte con emisiones de otros documentos y las interbloquea al insertar. La garantía de
+      // fondo sigue siendo el UNIQUE (empresa_id, clave_idempotencia): una carrera con otro documento termina en ER_DUP_ENTRY y
+      // se resuelve más abajo (original si la huella coincide, 409 si no).
       const [mismaClave] = await conn.query<RowDataPacket[]>(
-        "SELECT id, huella_idempotencia FROM documento_entregas WHERE empresa_id = ? AND clave_idempotencia = ? LIMIT 1 FOR UPDATE",
+        "SELECT id, huella_idempotencia FROM documento_entregas WHERE empresa_id = ? AND clave_idempotencia = ? LIMIT 1",
         [empresaId, clave],
       );
       if (mismaClave[0]) {
@@ -349,9 +354,14 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
       }
       if (!documento.admiteEntrega) throw error(MENSAJES_ENTREGA.estadoNoAdmitido, 409);
 
+      // Historial del documento SIN `FOR UPDATE`: la fila del documento (bloqueada arriba) ya serializa las emisiones del MISMO
+      // documento y la lectura ocurre DESPUÉS de ese bloqueo, así que ve todo lo confirmado por emisiones anteriores. Un
+      // `FOR UPDATE` sobre un rango vacío toma bloqueos de hueco que se comparten con emisiones de OTROS documentos (o empresas) y
+      // las interbloquea al insertar (ER_LOCK_DEADLOCK). Cerrar una entrega concurrentemente solo puede dejarnos ver la entrega
+      // aún pendiente (409), nunca una custodia futura: una pendiente en esta lectura siempre bloquea la nueva emisión.
       const [filas] = await conn.query<RowDataPacket[]>(
         `SELECT id, estado, etapa_destino FROM documento_entregas
-         WHERE empresa_id = ? AND modulo = ? AND entidad_id = ? ORDER BY id FOR UPDATE`,
+         WHERE empresa_id = ? AND modulo = ? AND entidad_id = ? ORDER BY id`,
         [empresaId, modulo, entidadId],
       );
       const custodia = calcularCustodia(modulo, filas.map((f) => ({
