@@ -90,6 +90,13 @@ describe("bloqueos (nunca un fallback)", () => {
     const b = bloqueo(ev({ certificacion: null }));
     expect(b).toMatchObject({ codigo: "FACTURA_NO_CERTIFICADA", mensaje: "Factura aún no certificada." });
   });
+  it("«Emitida» (estado operativo) NUNCA sustituye a la certificación: ninguna otra pista de la factura la reemplaza", () => {
+    // Número y fecha digitados, factura Emitida, importes y entidad correctos: sin registro FEL certificado, sigue bloqueada.
+    const f = factura({ estadoAdmin: "Emitida", certificacion: null, fechaEmision: "2026-10-14" });
+    expect(bloqueo(evaluarContabilizacionFactura(f, ROLES_PRODUCTIVOS)).codigo).toBe("FACTURA_NO_CERTIFICADA");
+    // Con certificación, el estado operativo sigue siendo un requisito adicional, no la fuente de la verdad fiscal.
+    expect(lista(evaluarContabilizacionFactura(factura(), ROLES_PRODUCTIVOS)).estado).toBe("LISTA");
+  });
   it("Borrador y Anulada no generan un asiento normal", () => {
     expect(bloqueo(ev({ estadoAdmin: "Borrador" })).codigo).toBe("FACTURA_NO_EMITIDA");
     expect(bloqueo(ev({ estadoAdmin: "Anulada" })).codigo).toBe("FACTURA_ANULADA");

@@ -50,7 +50,14 @@ export const MENSAJES_BLOQUEO_FACTURA: Record<CodigoBloqueoFactura, string> = {
   SIN_LINEAS: "La factura no tiene líneas.",
 };
 
-/** Resultado del hito REAL de certificación. Hoy no existe: `null` en toda factura. */
+/**
+ * Resultado del hito REAL de certificación. Hoy no existe: `null` en toda factura.
+ *
+ * CONTRATO: debe derivarse SIEMPRE de un registro FEL real (futuro `fel_documentos.estado = 'CERTIFICADO'`, leído dentro de la
+ * transacción de reconocimiento y bajo la misma empresa/factura), con su UUID/autorización/serie/número y fecha de
+ * certificación. NUNCA se construye a partir de `fact_facturas.estado_admin`, del número digitado ni de otro dato de la factura:
+ * `estado_admin = 'Emitida'` es un estado operativo y no es prueba de certificación.
+ */
 export type CertificacionFactura = { certificadaEn: string; referencia: string };
 
 export type FacturaContabilizable = {
@@ -58,6 +65,7 @@ export type FacturaContabilizable = {
   empresaId: number;
   /** `fact_facturas.entidad_id` (NULL en facturas anteriores a FACT-4). */
   entidadId: number | null;
+  /** Estado OPERATIVO de la factura. Nunca prueba de certificación: la certificación viene de `certificacion` (registro FEL). */
   estadoAdmin: "Borrador" | "Emitida" | "Anulada";
   certificacion: CertificacionFactura | null;
   moneda: string;

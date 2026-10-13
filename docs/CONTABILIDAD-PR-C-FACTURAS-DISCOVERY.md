@@ -54,9 +54,10 @@ Estado: **DISCOVERY + PREPARACIÓN INERTE.** Resultado: **NO existe hoy un hito 
 
 ## 5. Qué falta para activar PR C
 
-1. **El hito FEL real** (bloqueo principal): certificación con INFILE (FEL-2…FEL-4 del plan): modelo `fel_documentos` con estado
-   `CERTIFICADO`, UUID/serie/número de autorización, fecha de certificación y su vínculo a `fact_facturas`; proveedor real con
-   sandbox y credenciales de TEST, clasificación CERTIFICADO/RECHAZADO/INCIERTO y recuperación sin doble certificación.
+1. **El hito FEL real** (bloqueo principal): certificación con INFILE (FEL-2…FEL-4 del plan): modelo FEL **separado** de
+   `estado_admin` (`fel_documentos` con estado `CERTIFICADO`, UUID/serie/número de autorización, fecha de certificación y su vínculo
+   a `fact_facturas`); proveedor real con sandbox y credenciales de TEST, clasificación CERTIFICADO/RECHAZADO/INCIERTO y
+   recuperación sin doble certificación. Ver §6.1: `estado_admin` nunca será la fuente de verdad fiscal.
 2. **Decisión de negocio sobre retenciones** (esperada vs. constancia SAT; ajuste `Dr CLIENTES / Cr RETENCION_IVA`) — PR C las bloquea.
 3. **Cuenta `VENTAS_BIENES`** configurada por Contabilidad para cada entidad que venda bienes.
 4. **Regla de anulación contable** (mismo período / posterior / período cerrado / fecha del reverso / nota de crédito).
@@ -64,16 +65,47 @@ Estado: **DISCOVERY + PREPARACIÓN INERTE.** Resultado: **NO existe hoy un hito 
 
 ## 6. Propuesta mínima para cerrar el hito (cuando FEL exista)
 
-Patrón seguro, sin transacción distribuida y **sin mantener una transacción de BD abierta durante la llamada HTTP**:
+### 6.1 Dos conceptos que NO se mezclan
 
-1. `Emitir` (UI) → servicio FEL: persiste el **intento** (`fel_intentos`) con clave idempotente y llama al certificador **fuera** de toda transacción.
-2. El resultado `CERTIFICADO` se **persiste** (UUID, autorización, fecha) en `fel_documentos`.
-3. **Transacción DB idempotente de reconocimiento** (única): `SELECT … FOR UPDATE` de la factura (empresa/entidad) → marca
-   `estado_admin='Emitida'` + número certificado → `evaluarContabilizacionFactura` → `registrarEventoContableTx(FACTURA_EMITIDA)`
-   (evento + asiento + líneas + auditoría) → commit. Si el evaluador **bloquea**, la factura queda certificada pero «contabilización
-   bloqueada» con su motivo (el documento fiscal no se deshace); un reintento administrativo idempotente la reconoce cuando se
-   resuelva el bloqueo (misma clave ⇒ nunca dos asientos).
-4. Una factura contabilizada **nunca** se corrige mutando el asiento: reverso/NC.
+| Concepto | Dónde vive | Para qué sirve |
+|---|---|---|
+| **Estado administrativo / operativo** | `fact_facturas.estado_admin` (`Borrador`/`Emitida`/`Anulada`) | Flujo interno: editar, bloquear edición, listar, registrar pagos. **No es prueba de certificación.** |
+| **Estado fiscal (FEL)** | modelo FEL **separado**: `fel_documentos.estado = 'CERTIFICADO'` + UUID + autorización + serie/número certificados + fecha de certificación | **Única fuente de verdad fiscal** y, por tanto, de la contabilización. |
+
+Reglas, desde ahora y para cuando exista FEL:
+
+- `estado_admin = 'Emitida'` **nunca** será prueba ni criterio suficiente para generar `FACTURA_EMITIDA`. Puede **actualizarse o
+  sincronizarse** como estado operativo si el diseño FEL lo requiere, pero el asiento jamás depende de él.
+- La transacción de reconocimiento contable **debe comprobar** que existe el registro FEL `CERTIFICADO` **bajo la misma empresa y
+  la misma factura** (y entidad) antes de generar el evento; sin él, no hay asiento aunque el estado administrativo diga «Emitida».
+- El evaluador (`evaluarContabilizacionFactura`) recibe la `certificacion` **derivada de ese registro FEL real** (lectura dentro de
+  la misma transacción), nunca un objeto armado a partir de `estado_admin`, del número digitado o de cualquier dato de la factura.
+
+### 6.2 Patrón transaccional (sin transacción distribuida y sin transacción abierta durante la llamada HTTP)
+
+1. Acción de emitir → servicio FEL: persiste el **intento** (`fel_intentos`) con clave idempotente y llama al certificador **fuera**
+   de toda transacción de BD.
+2. El resultado `CERTIFICADO` se **persiste** en `fel_documentos` (UUID, autorización, serie/número, fecha de certificación).
+3. **Transacción DB idempotente de reconocimiento** (única): `SELECT … FOR UPDATE` de la factura (empresa/entidad) → **lee el
+   `fel_documentos` CERTIFICADO de esa empresa/factura** → (opcional) sincroniza `estado_admin` como estado operativo →
+   `evaluarContabilizacionFactura` con la certificación leída → `registrarEventoContableTx(FACTURA_EMITIDA)` (evento + asiento +
+   líneas + auditoría) → commit. Si el evaluador **bloquea**, el documento fiscal queda certificado (no se deshace) y la factura
+   queda «contabilización bloqueada» con su motivo; un reintento idempotente la reconoce al resolverse el bloqueo (misma clave ⇒
+   nunca dos asientos).
+4. Una factura contabilizada **nunca** se corrige mutando ni borrando el asiento: reverso/nota de crédito.
+
+### 6.3 El modelo FEL debe soportar después (sin mutar el asiento original)
+
+- **Notas de crédito FEL** (documento fiscal propio, certificado, con su evento contable `NOTA_CREDITO`).
+- **Anulación** del documento certificado (según contrato del certificador y regla de período).
+- **Refacturación** (documento nuevo que sustituye al anulado/corregido).
+- **Relación original ↔ correctivo** (`documento_origen`): una nota de crédito o una refacturación apuntan al documento FEL original.
+
+En todos los casos el asiento original **permanece intacto**: la corrección es un **asiento nuevo** (reverso/NC) vinculado por
+`evento_origen_id`, jamás un `UPDATE`/`DELETE` del asiento de la venta.
+
+Permiso administrativo (opcional, a proponer entonces): «reintentar contabilización» — solo ejecuta la misma transacción
+idempotente; no permite crear asientos manuales ni evita la comprobación del registro FEL.
 
 Permiso administrativo (opcional, a proponer entonces): «reintentar contabilización» — solo ejecuta la misma transacción
 idempotente; no permite crear asientos manuales.
