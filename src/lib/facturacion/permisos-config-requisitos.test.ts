@@ -69,6 +69,7 @@ describe("catálogo: acciones de Configuración empresa / Requisitos clientes", 
     expect(fact.label).toBe("Facturación clientes");
     expect(fact.acciones.map((a) => a.id)).toEqual([
       "ver", "crear", "editar", "emitir", "anular", "pagos",
+      "ver_confirmaciones_bancarias", "confirmar_banco", "anular_confirmacion",
       "ver_empresa", "editar_empresa", "ver_requisitos", "editar_requisitos",
     ]);
     expect(fact.acciones.filter((a) => a.id.endsWith("_empresa") || a.id.endsWith("_requisitos")).map((a) => a.label)).toEqual([
@@ -135,6 +136,14 @@ describe("dependencias (mismo mecanismo central, #411)", () => {
   });
 });
 
+describe("confirmaciones bancarias: grants independientes", () => {
+  it.each(["ver_confirmaciones_bancarias","confirmar_banco","anular_confirmacion"] as const)("pagos/emitir/TMS no concede %s; grant explícito sí", async accion => {
+    sesion("AuxiliarOperaciones", [V2, verFact, p("facturacion_pagos", {puedeVer:true}), p("facturacion_emitir", {puedeVer:true}), p("tms", {puedeVer:true,puedeCrear:true})]);
+    expect((await requireTenantFacturacion("kt", accion)).error?.status).toBe(403);
+    sesion("AuxiliarOperaciones", [V2, verFact, p("facturacion_"+accion, {puedeVer:true})]);
+    expect((await requireTenantFacturacion("kt", accion)).error).toBeUndefined();
+  });
+});
 describe("capacidadesFacturacion — fuente de verdad: permisos, no rol", () => {
   const sinNada = { verEmpresa: false, editarEmpresa: false, verClientes: false, editarClientes: false };
   it("Admin: todo", () => {

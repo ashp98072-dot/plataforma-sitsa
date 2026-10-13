@@ -98,6 +98,11 @@ agregar("viaticos",
 agregar("programacion", accion("viajes_cerrar","cerrar","Cerrar administrativamente",E), nueva("programacion","exportar","Exportar reportes", "puedeVer"));
 agregar("cotizaciones", nueva("cotizaciones","estado","Cambiar estado / marcar enviada",E));
 agregar("facturacion", nueva("facturacion","emitir","Emitir factura",E), nueva("facturacion","anular","Anular factura",E), nueva("facturacion","pagos","Registrar pago",C));
+// Sin equivalencias legacy: pagar/emitir NO concede confirmación bancaria.
+agregar("facturacion",
+  accion("facturacion_ver_confirmaciones_bancarias","ver_confirmaciones_bancarias","Ver confirmaciones bancarias","puedeVer"),
+  accion("facturacion_confirmar_banco","confirmar_banco","Confirmar ingreso bancario","puedeVer"),
+  accion("facturacion_anular_confirmacion","anular_confirmacion","Anular confirmación bancaria","puedeVer"));
 // FACTURACION-PERMISOS-CONFIG-REQUISITOS: «Configuración empresa» y «Requisitos clientes» dejan de depender del ROL (alcanceFacturacion) y pasan a ser acciones
 // asignables, independientes de emitir/anular/pagar («Emitir factura» solo es borrador -> emitida; nunca edita NIT, razón social, FEL ni configuración).
 // Cada sección usa una fila propia (VARCHAR(40)) con dos flags: ver = puedeVer, editar = puedeEditar. Sin fila explícita NO hay acceso (a diferencia de `nueva`, no hay
