@@ -28,3 +28,15 @@ it("schema y migrate contienen exactamente el mismo contrato nuevo", () => {
     expect(s).toContain(m.slice(i, m.indexOf(";", i) + 1));
   }
 });
+it.each(["preflight", "migrate", "verify"])("%s asocia CHECK por TABLE_CONSTRAINTS, sin cc.TABLE_NAME", nombre => {
+  const s = sinComentarios(leer(nombre + "-2026-10-contabilidad-infraestructura-a.sql"));
+  const referencias = [...s.matchAll(/\b(FROM|JOIN)\s+information_schema\.CHECK_CONSTRAINTS\b/gi)];
+  expect(referencias.length).toBeGreaterThan(0);
+  for (const r of referencias) expect(r[1].toUpperCase()).toBe("JOIN");
+  expect(s).not.toMatch(/\b(?:cc|CHECK_CONSTRAINTS)\s*\.\s*TABLE_NAME\b/i);
+  const compacto = s.replace(/\s+/g, "");
+  expect(compacto).toContain("cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA");
+  expect(compacto).toContain("cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME");
+  expect(compacto).toContain("tc.CONSTRAINT_TYPE='CHECK'");
+  expect(s).toMatch(/tc\.TABLE_NAME\s*(?:=|IN)/);
+});

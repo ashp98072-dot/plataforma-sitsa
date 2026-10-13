@@ -71,6 +71,11 @@ valida columnas/posiciones/defaults, PK/UNIQUE/índice, dos FK RESTRICT, CHECK �
 engine/collation, tipos signed, datos y colisiones. Roles/activa inesperados, constraints adicionales,
 triggers o metadata inaccesible => DETENER. No inferir ausencia de permisos como ausencia de constraints.
 No asumir disponibilidad del permiso: comprobarlo con el preflight; no retirar la compuerta.
+Compatibilidad Hostinger: la relación CHECK/tabla proviene exclusivamente de TABLE_CONSTRAINTS
+(`tc.CONSTRAINT_SCHEMA`, `tc.TABLE_NAME`, `tc.CONSTRAINT_TYPE='CHECK'`).
+Se une CHECK_CONSTRAINTS por schema + nombre para obtener la definición;
+no se filtra ni consulta `CHECK_CONSTRAINTS.TABLE_NAME`. Aplica a 1 CHECK de roles y 5 de eventos,
+incluida la consulta explícita de verificación.
 
 Si una tabla ya existe, el preflight devuelve automáticamente su DDL y filas para comparación.
 IF NOT EXISTS NO comprueba compatibilidad ni modifica CHECKs existentes.
@@ -111,9 +116,14 @@ FK y collation; segunda ejecución NOOP. Instalación nueva permite los ocho rol
 La habilitación de VENTAS_BIENES se prueba con un INSERT de fixture seguido de rollback; no queda configurado.
 Casos de drift: CHECK renombrado/diferente, columna/índice/FK inesperados, activa inválida y colisión,
 todos rechazados antes de crear cont_eventos o alterar el CHECK.
+Regresión Hostinger: vista local de CHECK metadata sin columna TABLE_NAME; el acceso por schema/nombre
+funciona, el patrón anterior falla, y los scripts corregidos completan upgrade, verificación y NOOP
+preservando 14 filas. La metadata real no se modifica.
 Pruebas unitarias sin puerto siguen ejecutándose; suite DB se omite explícitamente si no se habilita.
 
-Resultado dirigido de esta corrección: 240/240 en Contabilidad + APIs manuales; incluye 15 casos DB reales.
+Resultado dirigido anterior (HEAD 4a41f98f): 240/240 Contabilidad + APIs manuales; 15 casos DB reales.
+Delta Hostinger: 23/23 SQL/DB dirigidos (7 contratos estáticos y 16 casos DB reales),
+incluyendo upgrade histórico, preservación de 14 filas y NOOP con metadata CHECK sin TABLE_NAME.
 TypeScript, ESLint dirigido y diff-check limpios.
 Build anterior exitoso con Next 16.3.6 (HEAD 9f73cb78); no se repite en este delta de
 catálogo/SQL/tests/docs sin cambios de UI/endpoints/escritor. TypeScript sí se revalida.

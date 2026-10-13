@@ -180,4 +180,27 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       const [tables] = await c.query<RowDataPacket[]>("SHOW TABLES LIKE 'cont_eventos'"); expect(tables).toHaveLength(0);
     } finally { await c.end(); }
   });
+  it("Hostinger: CHECK metadata sin TABLE_NAME permite upgrade y NOOP mediante TABLE_CONSTRAINTS", async () => {
+    const c = await instanciaHistorica();
+    try {
+      // Vista sintética omite completamente TABLE_NAME. No modifica information_schema.
+      await c.query("CREATE VIEW hostinger_checks AS SELECT CONSTRAINT_SCHEMA,CONSTRAINT_NAME,CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS");
+      const [columnas] = await c.query<RowDataPacket[]>("SHOW COLUMNS FROM hostinger_checks");
+      expect(columnas.map(r => r.Field)).not.toContain("TABLE_NAME");
+      await expect(c.query("SELECT * FROM hostinger_checks WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='cont_cuentas_rol'")).rejects.toThrow("Unknown column");
+      const [checks] = await c.query<RowDataPacket[]>("SELECT * FROM hostinger_checks WHERE CONSTRAINT_SCHEMA=DATABASE() AND CONSTRAINT_NAME='ck_cont_rol_valido'");
+      expect(checks).toHaveLength(1);
+      const sinTablaCheck = (nombre: string) => ejecutable(nombre).replaceAll("information_schema.CHECK_CONSTRAINTS", "hostinger_checks");
+      const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
+      const [pre] = await c.query(sinTablaCheck("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "APTO_COMPATIBILIDAD" });
+      await c.query(sinTablaCheck("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      const [noOp] = await c.query(sinTablaCheck("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      expect(resultado(noOp,"resultado_migracion")).toMatchObject({ resultado_migracion: "NOOP" });
+      const [post] = await c.query(sinTablaCheck("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      expect(resultado(post,"resultado_preflight")).toMatchObject({ resultado_preflight: "NOOP" });
+      const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
+      await c.query(sinTablaCheck("verify-2026-10-contabilidad-infraestructura-a.sql"));
+    } finally { await c.end(); }
+  });
 });

@@ -7,6 +7,14 @@ SHOW FULL COLUMNS FROM cont_eventos;
 SHOW INDEX FROM cont_cuentas_rol;
 SHOW INDEX FROM cont_eventos;
 SHOW TABLE STATUS WHERE Name IN ('cont_cuentas_rol','cont_eventos');
+-- La asociación a tabla proviene de TABLE_CONSTRAINTS, nunca de cc.TABLE_NAME (Hostinger).
+SELECT tc.TABLE_NAME, cc.CONSTRAINT_NAME, cc.CHECK_CLAUSE
+FROM information_schema.TABLE_CONSTRAINTS tc
+JOIN information_schema.CHECK_CONSTRAINTS cc
+  ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+WHERE tc.CONSTRAINT_SCHEMA=DATABASE() AND tc.TABLE_NAME IN ('cont_cuentas_rol','cont_eventos')
+  AND tc.CONSTRAINT_TYPE='CHECK'
+ORDER BY tc.TABLE_NAME, cc.CONSTRAINT_NAME;
 SELECT COUNT(*) AS configuraciones FROM cont_cuentas_rol;
 SELECT COUNT(*) AS eventos FROM cont_eventos;
 -- Comparar TODAS las filas/campos con SELECT preflight, no solo conteos (producción previa = 14).

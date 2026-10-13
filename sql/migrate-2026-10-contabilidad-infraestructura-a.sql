@@ -76,11 +76,14 @@ BEGIN NOT ATOMIC
     WHERE r.DELETE_RULE='RESTRICT' AND r.UPDATE_RULE='RESTRICT' AND r.MATCH_OPTION='NONE' AND
       ((f.CONSTRAINT_NAME='fk_cont_rol_entidad' AND f.REFERENCED_TABLE_NAME='cont_entidades' AND cols='empresa_id,entidad_id' AND destino='empresa_id,id')
        OR (f.CONSTRAINT_NAME='fk_cont_rol_cuenta' AND f.REFERENCED_TABLE_NAME='cont_cuentas' AND cols='empresa_id,entidad_id,cuenta_id' AND destino='empresa_id,entidad_id,id')))=2
-    AND (SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=esquema AND TABLE_NAME='cont_cuentas_rol')=1
+    AND (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS tc
+      JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+      WHERE tc.CONSTRAINT_SCHEMA=esquema AND tc.TABLE_NAME='cont_cuentas_rol' AND tc.CONSTRAINT_TYPE='CHECK')=1
     AND NOT EXISTS (SELECT 1 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=esquema AND EVENT_OBJECT_TABLE='cont_cuentas_rol')
     THEN
-      SELECT LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),'')) INTO ck FROM information_schema.CHECK_CONSTRAINTS
-        WHERE CONSTRAINT_SCHEMA=esquema AND TABLE_NAME='cont_cuentas_rol' AND CONSTRAINT_NAME='ck_cont_rol_valido';
+      SELECT LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),'')) INTO ck FROM information_schema.TABLE_CONSTRAINTS tc
+        JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+        WHERE tc.CONSTRAINT_SCHEMA=esquema AND tc.TABLE_NAME='cont_cuentas_rol' AND tc.CONSTRAINT_TYPE='CHECK' AND cc.CONSTRAINT_NAME='ck_cont_rol_valido';
       IF ck='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')' THEN SET rol_estado='HISTORICO';
       ELSEIF ck='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')' THEN SET rol_estado='ACTUAL'; END IF;
     END IF;
@@ -142,19 +145,22 @@ BEGIN NOT ATOMIC
       (f.CONSTRAINT_NAME='fk_cont_evento_origen' AND f.REFERENCED_TABLE_NAME='cont_eventos' AND cols='empresa_id,entidad_id,factura_id,evento_origen_id' AND destino='empresa_id,entidad_id,factura_id,id') OR
       (f.CONSTRAINT_NAME='fk_cont_evento_actor' AND f.REFERENCED_TABLE_NAME='usuarios' AND cols='creado_por' AND destino='id')
     ))=5
-    AND (SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=esquema AND TABLE_NAME='cont_eventos')=5
+    AND (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS tc
+      JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+      WHERE tc.CONSTRAINT_SCHEMA=esquema AND tc.TABLE_NAME='cont_eventos' AND tc.CONSTRAINT_TYPE='CHECK')=5
     AND NOT EXISTS (SELECT 1 FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=esquema AND EVENT_OBJECT_TABLE='cont_eventos')
     INTO eventos_ok;
   END IF;
 
   IF n_eventos=1 AND eventos_ok THEN
-    SELECT COUNT(*)=5 INTO eventos_ok FROM information_schema.CHECK_CONSTRAINTS
-      WHERE CONSTRAINT_SCHEMA=esquema AND TABLE_NAME='cont_eventos' AND (
-        (CONSTRAINT_NAME='datos_snapshot' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='json_valid(datos_snapshot)') OR
-        (CONSTRAINT_NAME='ck_cont_evento_tipo' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='tipo_eventoin(''factura_emitida'',''cobro_confirmado'',''retencion_no_emitida'')') OR
-        (CONSTRAINT_NAME='ck_cont_evento_origen' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='tipo_evento=''factura_emitida''andevento_origen_idisnullortipo_evento=''retencion_no_emitida''andevento_origen_idisnotnull') OR
-        (CONSTRAINT_NAME='ck_cont_evento_huella' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='huellaregexp''^[0-9a-f]{64}$''') OR
-        (CONSTRAINT_NAME='ck_cont_evento_snapshot' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='json_valid(datos_snapshot)andjson_value(datos_snapshot,''$.version'')isnotnullandjson_value(datos_snapshot,''$.version'')=1'));
+    SELECT COUNT(*)=5 INTO eventos_ok FROM information_schema.TABLE_CONSTRAINTS tc
+      JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
+      WHERE tc.CONSTRAINT_SCHEMA=esquema AND tc.TABLE_NAME='cont_eventos' AND tc.CONSTRAINT_TYPE='CHECK' AND (
+        (cc.CONSTRAINT_NAME='datos_snapshot' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='json_valid(datos_snapshot)') OR
+        (cc.CONSTRAINT_NAME='ck_cont_evento_tipo' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='tipo_eventoin(''factura_emitida'',''cobro_confirmado'',''retencion_no_emitida'')') OR
+        (cc.CONSTRAINT_NAME='ck_cont_evento_origen' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='tipo_evento=''factura_emitida''andevento_origen_idisnullortipo_evento=''retencion_no_emitida''andevento_origen_idisnotnull') OR
+        (cc.CONSTRAINT_NAME='ck_cont_evento_huella' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='huellaregexp''^[0-9a-f]{64}$''') OR
+        (cc.CONSTRAINT_NAME='ck_cont_evento_snapshot' AND LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),''))='json_valid(datos_snapshot)andjson_value(datos_snapshot,''$.version'')isnotnullandjson_value(datos_snapshot,''$.version'')=1'));
   END IF;
   IF n_eventos=1 AND eventos_ok THEN
     IF EXISTS (SELECT 1 FROM cont_eventos ev
