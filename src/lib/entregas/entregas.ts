@@ -157,34 +157,65 @@ function validarFirma(firma: FirmaEntregaInput | null | undefined, soloDibujada:
   return firma;
 }
 
-/** Copia física INDEPENDIENTE de la firma (mismo patrón que Fondos): se escribe antes de la transacción y se compensa. */
+/**
+ * Copia física INDEPENDIENTE de la firma (mismo patrón que Fondos): se escribe antes de la transacción.
+ *
+ * PROPIEDAD DEL ARCHIVO: apenas esta función devuelve, el archivo existe en disco y el LLAMADOR es su dueño: debe pasarlo
+ * INMEDIATAMENTE a `conImagenCompensada`, que lo borra en cualquier salida que no termine en commit usando esa imagen.
+ * Por eso nada que pueda lanzar va después de `guardarUpload` (el SHA-256 se calcula antes).
+ */
 async function guardarImagenFirma(empresaId: number, prefijo: string, firma: FirmaEntregaInput): Promise<ImagenFirmaInterna> {
+  const sha256 = sha256Hex(firma.imagen.bytes);
   const guardada = await guardarUpload(empresaId, "firmas", prefijo, {
     name: firma.imagen.original || "firma.png",
     size: firma.imagen.bytes.byteLength,
     arrayBuffer: async () => firma.imagen.bytes,
   });
-  return { relative: guardada.relative, original: guardada.original, mime: "image/png", size: guardada.size, sha256: sha256Hex(firma.imagen.bytes) };
+  return { relative: guardada.relative, original: guardada.original, mime: "image/png", size: guardada.size, sha256 };
 }
 
 type ResultadoTx<T> = { valor: T; imagenUsada: boolean };
 
-/** Transacción con compensación de la imagen: se borra si no hubo commit o si la operación terminó siendo una repetición. */
-async function enTransaccion<T>(imagen: ImagenFirmaInterna | null, fn: (conn: PoolConnection) => Promise<ResultadoTx<T>>): Promise<T> {
-  let conservarImagen = false;
-  const conn = await getPool().getConnection();
+/**
+ * Compensación del archivo temporal. `fn` abarca TODO lo que ocurre entre guardar la imagen y el commit (incluida la obtención
+ * de la conexión y cualquier lectura previa). La imagen se conserva ÚNICAMENTE si `fn` terminó sin error (commit hecho) y
+ * reportó `imagenUsada = true`; en cualquier otro caso (error de infraestructura, rollback, repetición, 404/409) se borra.
+ * Lo que ocurra DESPUÉS del commit queda fuera a propósito: la firma ya referencia el archivo y debe conservarse.
+ * `borrarUpload` tolera archivos inexistentes, y este es su único punto de borrado (un solo dueño).
+ */
+async function conImagenCompensada<T>(imagen: ImagenFirmaInterna | null, fn: () => Promise<ResultadoTx<T>>): Promise<T> {
+  let conservar = false;
+  try {
+    const r = await fn();
+    conservar = r.imagenUsada;
+    return r.valor;
+  } finally {
+    if (imagen && !conservar) borrarUpload(imagen.relative);
+  }
+}
+
+/** Transacción: la conexión se libera solo si se obtuvo; rollback solo si se abrió; el error original siempre prevalece. */
+async function enTransaccion<T>(fn: (conn: PoolConnection) => Promise<ResultadoTx<T>>): Promise<ResultadoTx<T>> {
+  const conn = await getPool().getConnection(); // si falla, no hay nada que liberar ni revertir
+  let abierta = false;
   try {
     await conn.beginTransaction();
+    abierta = true;
     const r = await fn(conn);
     await conn.commit();
-    conservarImagen = r.imagenUsada;
-    return r.valor;
+    abierta = false;
+    return r;
   } catch (e) {
-    await conn.rollback();
+    if (abierta) {
+      try {
+        await conn.rollback();
+      } catch {
+        // conexión rota: se libera abajo y el error original es el que se propaga
+      }
+    }
     throw e;
   } finally {
     conn.release();
-    if (imagen && !conservarImagen) borrarUpload(imagen.relative);
   }
 }
 
@@ -303,7 +334,7 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
 
   const imagen = await guardarImagenFirma(empresaId, `firma_entrega_${modulo.toLowerCase()}_${entidadId}`, firma);
   try {
-    const { id, repetida } = await enTransaccion(imagen, async (conn) => {
+    const { id, repetida } = await conImagenCompensada(imagen, () => enTransaccion(async (conn) => {
       const documento = await bloquearDocumento(conn, empresaId, modulo, entidadId);
       if (!documento) throw error(MENSAJES_ENTREGA.documentoNoEncontrado, 404);
       // Con el documento ya bloqueado, otra petición con la MISMA clave pudo haber terminado mientras esperábamos: lectura
@@ -353,7 +384,7 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
           `${ETIQUETA_AREA[origen]} -> ${ETIQUETA_AREA[destino]} (${modo}).`,
       });
       return { valor: { id: nuevaId, repetida: false }, imagenUsada: true };
-    });
+    }));
     return { entrega: (await obtenerEntrega(empresaId, id))!, repetida };
   } catch (e) {
     // Carrera con la MISMA clave: la otra petición ganó el UNIQUE. Se devuelve la original (o 409 si el contenido difiere).
@@ -380,26 +411,24 @@ type OperacionCierre<T> = {
 };
 
 async function cerrarEntrega<T>(op: OperacionCierre<T>): Promise<Entrega> {
-  // Reintento ya aplicado: se responde sin copiar imagen ni abrir transacción.
-  const actual = await obtenerEntrega(op.empresaId, op.entregaId);
-  if (!actual) {
-    if (op.imagen) borrarUpload(op.imagen.relative);
-    throw error(MENSAJES_ENTREGA.entregaNoEncontrada, 404);
-  }
-  if (op.esRepeticion(actual)) {
-    if (op.imagen) borrarUpload(op.imagen.relative);
-    return actual;
-  }
-  await enTransaccion(op.imagen, async (conn) => {
-    const e = await leerEntregaConn(conn, op.empresaId, op.entregaId, true);
-    if (!e) throw error(MENSAJES_ENTREGA.entregaNoEncontrada, 404);
-    if (op.esRepeticion(e)) return { valor: null, imagenUsada: false };
-    op.validar(e);
-    if (e.estado !== "EMITIDA") throw error(MENSAJES_ENTREGA.noPendiente, 409);
-    await op.aplicar(conn, e);
-    return { valor: null, imagenUsada: true };
+  // `op.imagen` (si hay) YA está en disco: todo lo anterior al commit va dentro de `conImagenCompensada`, incluida la lectura
+  // previa, de modo que un error de infraestructura en cualquier paso también borra el archivo.
+  const previa = await conImagenCompensada(op.imagen, async (): Promise<ResultadoTx<Entrega | null>> => {
+    // Reintento ya aplicado: se responde sin abrir transacción (y el archivo temporal se borra).
+    const actual = await obtenerEntrega(op.empresaId, op.entregaId);
+    if (!actual) throw error(MENSAJES_ENTREGA.entregaNoEncontrada, 404);
+    if (op.esRepeticion(actual)) return { valor: actual, imagenUsada: false };
+    return enTransaccion<Entrega | null>(async (conn) => {
+      const e = await leerEntregaConn(conn, op.empresaId, op.entregaId, true);
+      if (!e) throw error(MENSAJES_ENTREGA.entregaNoEncontrada, 404);
+      if (op.esRepeticion(e)) return { valor: null, imagenUsada: false };
+      op.validar(e);
+      if (e.estado !== "EMITIDA") throw error(MENSAJES_ENTREGA.noPendiente, 409);
+      await op.aplicar(conn, e);
+      return { valor: null, imagenUsada: true };
+    });
   });
-  return (await obtenerEntrega(op.empresaId, op.entregaId))!;
+  return previa ?? (await obtenerEntrega(op.empresaId, op.entregaId))!;
 }
 
 /** UPDATE condicionado al estado EMITIDA: si otra transacción la cerró antes, 0 filas → 409 (nunca se pisa un cierre). */
