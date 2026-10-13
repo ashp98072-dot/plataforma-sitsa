@@ -3,6 +3,7 @@ import { ahoraLocal, formatearFechaVisible, formatearTimestampVisible } from "@/
 import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { dibujarFirmas, firmaHistorica, moneda, type FirmaSnapshot, type PdfDoc } from "@/lib/tms/fondos-solicitud-pdf";
 import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
+import { CONTROL_ENTREGA_VACIO, cargarControlEntregaPdf, dibujarControlEntregaPdf, type ControlEntregaPdf } from "@/lib/tms/fondos-control-entrega-pdf";
 import { etiquetaMes } from "@/lib/tms/reportes-mes";
 import type { ResumenMensualFondos, SolicitudFondoAgrupada } from "@/lib/tms/reportes-gastos";
 
@@ -63,6 +64,7 @@ function dibujarBloqueSolicitud(
   g: SolicitudFondoAgrupada,
   empresaNombre: string,
   firmas: FirmasSolicitud,
+  controlEntrega: ControlEntregaPdf,
   pageWidth: number,
   marginL: number,
   pageBottom: () => number,
@@ -121,6 +123,8 @@ function dibujarBloqueSolicitud(
     imagenSolicitante: firmas.solicitante?.imagen ?? null,
     imagenAutorizante: autorizada ? (firmas.autorizante?.imagen ?? null) : null,
   });
+  // CONTROL DE ENTREGA — versión COMPACTA en texto (sin imágenes de firma); se omite si la solicitud no tiene entregas.
+  dibujarControlEntregaPdf(doc, controlEntrega, pageWidth, marginL, pageBottom, { compacto: true });
 }
 
 function dibujarResumenMes(
@@ -155,9 +159,15 @@ export async function generarPdfMensualSolicitudesFondo(
   periodo: { anio: number; mes: number },
 ): Promise<Buffer> {
   const firmasPorSolicitud = new Map<number, FirmasSolicitud>();
+  const controlPorSolicitud = new Map<number, ControlEntregaPdf>();
   await Promise.all(
     grupos.map(async (g) => {
-      firmasPorSolicitud.set(g.solicitudId, await firmasDeSolicitud(empresaId, g.solicitudId));
+      const [firmas, control] = await Promise.all([
+        firmasDeSolicitud(empresaId, g.solicitudId),
+        cargarControlEntregaPdf(empresaId, g.solicitudId),
+      ]);
+      firmasPorSolicitud.set(g.solicitudId, firmas);
+      controlPorSolicitud.set(g.solicitudId, control);
     }),
   );
 
@@ -187,7 +197,12 @@ export async function generarPdfMensualSolicitudesFondo(
 
     grupos.forEach((g, i) => {
       if (i > 0) doc.addPage();
-      dibujarBloqueSolicitud(doc, g, empresaNombre, firmasPorSolicitud.get(g.solicitudId) ?? { requirente: null, solicitante: null, autorizante: null }, pageWidth, marginL, pageBottom);
+      dibujarBloqueSolicitud(
+        doc, g, empresaNombre,
+        firmasPorSolicitud.get(g.solicitudId) ?? { requirente: null, solicitante: null, autorizante: null },
+        controlPorSolicitud.get(g.solicitudId) ?? CONTROL_ENTREGA_VACIO,
+        pageWidth, marginL, pageBottom,
+      );
     });
 
     if (grupos.length > 0) doc.addPage();

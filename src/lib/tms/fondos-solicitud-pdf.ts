@@ -9,6 +9,7 @@ import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { dibujarCodigoDocumentoPdf } from "@/lib/documentos-encabezado";
 import { obtenerSolicitudFondo, type SolicitudFondo } from "@/lib/tms/fondos";
 import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
+import { cargarControlEntregaPdf, dibujarControlEntregaPdf, type ControlEntregaPdf } from "@/lib/tms/fondos-control-entrega-pdf";
 
 /**
  * SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — PDF formal de UNA solicitud de
@@ -160,10 +161,12 @@ export async function generarPdfSolicitudFondoAutorizada(
   // real de sus líneas, aunque ese valor llegara a desalinearse).
   const total = solicitud.lineas.reduce((acc, l) => acc + l.cantidad * l.monto, 0);
 
-  const [firmaSolicitante, firmaRequirente, firmaAutorizante] = await Promise.all([
+  const [firmaSolicitante, firmaRequirente, firmaAutorizante, controlEntrega] = await Promise.all([
     firmaHistorica(empresaId, solicitud.id, "SOLICITAR_FONDO"),
     firmaHistorica(empresaId, solicitud.id, "REQUERIR_FONDO"),
     firmaHistorica(empresaId, solicitud.id, "AUTORIZAR_FONDO"),
+    // CONTROL DE ENTREGA (PR 2): sección accesoria; sin entregas (o si no se puede leer) el documento queda exactamente igual.
+    cargarControlEntregaPdf(empresaId, solicitud.id),
   ]);
 
   // §1/§2/§3/§4 del ticket — el snapshot INMUTABLE de firmas_electronicas
@@ -187,6 +190,7 @@ export async function generarPdfSolicitudFondoAutorizada(
     imagenSolicitante: firmaSolicitante?.imagen ?? null,
     imagenRequirente: firmaRequirente?.imagen ?? null,
     imagenAutorizante: firmaAutorizante?.imagen ?? null,
+    controlEntrega,
   });
   return { ok: true, buffer, nombreArchivo: `solicitud-fondo-${solicitud.codigo}.pdf` };
 }
@@ -198,6 +202,7 @@ type DatosFirmasPdf = {
   imagenSolicitante: { buffer: Buffer; mime: string } | null;
   imagenRequirente: { buffer: Buffer; mime: string } | null;
   imagenAutorizante: { buffer: Buffer; mime: string } | null;
+  controlEntrega: ControlEntregaPdf;
 };
 
 function construirPdf(
@@ -298,6 +303,9 @@ function construirPdf(
       imagenSolicitante: firmas.imagenSolicitante,
       imagenAutorizante: firmas.imagenAutorizante,
     });
+
+    // CONTROL DE ENTREGA — recibidas + la pendiente (rechazadas/anuladas solo como nota); se omite si no hay entregas.
+    dibujarControlEntregaPdf(doc, firmas.controlEntrega, pageWidth, marginL, pageBottom);
 
     // §7 Notas al pie
     dibujarNotas(doc, pageWidth, pageBottom);
