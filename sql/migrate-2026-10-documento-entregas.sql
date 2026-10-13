@@ -21,19 +21,27 @@
 --   * Una sola entrega EMITIDA (pendiente) por documento: columna generada `pendiente_documento` + UNIQUE.
 --   * Idempotencia de la emisión: UNIQUE (empresa_id, clave_idempotencia); clave y huella obligatorias (tabla nueva).
 --   * Firma de emisión obligatoria (FK a firmas_electronicas); RECIBIDA exige firma de recepción.
---   * Coherencia por estado/modo (CHECK): datos de recepción solo en RECIBIDA; datos de cierre solo en RECHAZADA/ANULADA;
---     PRESENCIAL sin usuario receptor y con usuario operador; SISTEMA con usuario receptor; receptor distinto del emisor.
+--   * Coherencia por estado/modo (CHECK), con TODOS los campos de cada grupo:
+--       - recepción (recibido_por_usuario_id/nombre/rol, recibido_en, firma_recepcion_id, observaciones_recepcion,
+--         recepcion_operada_por_usuario_id/nombre): TODOS NULL salvo en RECIBIDA;
+--         RECIBIDA+SISTEMA  : receptor con usuario (id, nombre, rol), fecha y firma; sin operador;
+--         RECIBIDA+PRESENCIAL: receptor SIN usuario (solo nombre; el rol no se exige), fecha y firma, y operador (id + nombre);
+--       - cierre (cerrado_por_usuario_id/nombre, cerrado_en, motivo_cierre): los 4 obligatorios en RECHAZADA/ANULADA y los 4 NULL
+--         en EMITIDA/RECIBIDA;
+--       - RECHAZADA solo en modo SISTEMA; receptor distinto del emisor; firma de recepción distinta de la de emisión.
+--   * Snapshot de nombre y rol del emisor obligatorios (siempre es un usuario; usuarios.rol_global es NOT NULL).
 --
 -- PERMISOS: se agregan como filas de usuario_modulo (VARCHAR(40), ya existente) — NO requieren SQL. Ningún rol los recibe.
 --
 -- ESQUEMA EXPLÍCITO: califica `u611730801_Plataforma.<tabla>` (no depende del esquema activo de la sesión de
 -- phpMyAdmin/Hostinger). En otra base (pruebas), reemplazar el nombre del esquema en todo el archivo.
 --
--- REQUISITOS: MariaDB con CHECK aplicado (>= 10.2.1; producción 11.8) e InnoDB. firmas_electronicas con columnas de imagen
--- (sql/propuesta-2026-08-firma-electronica-viaticos-imagen.sql, ya aplicada) y usuario_id NULL (diseño original).
+-- REQUISITOS: MariaDB >= 10.2.1 (CHECK aplicado, columnas generadas PERSISTENT) e InnoDB. firmas_electronicas con columnas de
+-- imagen (sql/propuesta-2026-08-firma-electronica-viaticos-imagen.sql) y usuario_id NULL (diseño original). NADA de esto se ha
+-- probado todavía en producción: solo en una MariaDB 10.4 desechable. El preflight comprueba cada requisito antes de migrar.
 --
--- IDEMPOTENTE: CREATE TABLE IF NOT EXISTS; reejecutarla no falla ni cambia nada (si la tabla ya existe, no la altera:
--- revisar con el script de verificación).
+-- IDEMPOTENTE: CREATE TABLE IF NOT EXISTS; reejecutarla no falla ni cambia nada. OJO: si la tabla ya existe NO la altera (no
+-- actualiza CHECK ni columnas); por eso sql/verificar-2026-10-documento-entregas.sql compara definiciones, no solo conteos.
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS u611730801_Plataforma.documento_entregas (
@@ -51,7 +59,7 @@ CREATE TABLE IF NOT EXISTS u611730801_Plataforma.documento_entregas (
   -- Emisión (siempre un usuario del sistema; nombre/rol son snapshot: el rol puede cambiar después)
   emitido_por_usuario_id INT NOT NULL,
   emitido_por_nombre VARCHAR(200) NOT NULL,
-  emitido_por_rol VARCHAR(40) NULL,
+  emitido_por_rol VARCHAR(40) NOT NULL,
   emitido_en DATETIME NOT NULL,
   firma_emision_id INT NOT NULL,
   observaciones_emision VARCHAR(1000) NULL,
@@ -96,15 +104,22 @@ CREATE TABLE IF NOT EXISTS u611730801_Plataforma.documento_entregas (
   CONSTRAINT chk_de_estado CHECK (estado IN ('EMITIDA', 'RECIBIDA', 'RECHAZADA', 'ANULADA')),
   CONSTRAINT chk_de_recepcion CHECK (
     (estado = 'RECIBIDA'
-      AND recibido_en IS NOT NULL AND firma_recepcion_id IS NOT NULL AND recibido_por_nombre IS NOT NULL
-      AND ((modo = 'SISTEMA' AND recibido_por_usuario_id IS NOT NULL AND recepcion_operada_por_usuario_id IS NULL)
-        OR (modo = 'PRESENCIAL' AND recibido_por_usuario_id IS NULL AND recepcion_operada_por_usuario_id IS NOT NULL)))
+      AND recibido_por_nombre IS NOT NULL AND recibido_en IS NOT NULL AND firma_recepcion_id IS NOT NULL
+      AND ((modo = 'SISTEMA'
+            AND recibido_por_usuario_id IS NOT NULL AND recibido_por_rol IS NOT NULL
+            AND recepcion_operada_por_usuario_id IS NULL AND recepcion_operada_por_nombre IS NULL)
+        OR (modo = 'PRESENCIAL'
+            AND recibido_por_usuario_id IS NULL
+            AND recepcion_operada_por_usuario_id IS NOT NULL AND recepcion_operada_por_nombre IS NOT NULL)))
     OR (estado <> 'RECIBIDA'
-      AND recibido_en IS NULL AND firma_recepcion_id IS NULL AND recibido_por_usuario_id IS NULL
-      AND recibido_por_nombre IS NULL AND recepcion_operada_por_usuario_id IS NULL)),
+      AND recibido_por_usuario_id IS NULL AND recibido_por_nombre IS NULL AND recibido_por_rol IS NULL
+      AND recibido_en IS NULL AND firma_recepcion_id IS NULL AND observaciones_recepcion IS NULL
+      AND recepcion_operada_por_usuario_id IS NULL AND recepcion_operada_por_nombre IS NULL)),
   CONSTRAINT chk_de_cierre CHECK (
-    (estado IN ('RECHAZADA', 'ANULADA') AND cerrado_en IS NOT NULL AND cerrado_por_usuario_id IS NOT NULL AND motivo_cierre IS NOT NULL)
-    OR (estado IN ('EMITIDA', 'RECIBIDA') AND cerrado_en IS NULL AND cerrado_por_usuario_id IS NULL AND motivo_cierre IS NULL)),
+    (estado IN ('RECHAZADA', 'ANULADA')
+      AND cerrado_por_usuario_id IS NOT NULL AND cerrado_por_nombre IS NOT NULL AND cerrado_en IS NOT NULL AND motivo_cierre IS NOT NULL)
+    OR (estado IN ('EMITIDA', 'RECIBIDA')
+      AND cerrado_por_usuario_id IS NULL AND cerrado_por_nombre IS NULL AND cerrado_en IS NULL AND motivo_cierre IS NULL)),
   CONSTRAINT chk_de_rechazo_sistema CHECK (estado <> 'RECHAZADA' OR modo = 'SISTEMA'),
   CONSTRAINT chk_de_receptor_no_emisor CHECK (recibido_por_usuario_id IS NULL OR recibido_por_usuario_id <> emitido_por_usuario_id),
   CONSTRAINT chk_de_firmas_distintas CHECK (firma_recepcion_id IS NULL OR firma_recepcion_id <> firma_emision_id),

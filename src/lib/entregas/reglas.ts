@@ -23,8 +23,8 @@ export type ActorEntrega = {
   /** usuarios.username: lo que se escribe en `auditoria.usuario`, igual que el resto de la app. */
   username: string;
   nombre: string;
-  /** Rol del sistema (usuarios.rol_global). No es un cargo formal. */
-  rol: string | null;
+  /** Rol del sistema (usuarios.rol_global, NOT NULL en el modelo). No es un cargo formal. */
+  rol: string;
   esAdmin: boolean;
   permisos: PermisoModulo[];
 };

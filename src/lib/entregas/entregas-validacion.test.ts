@@ -32,6 +32,10 @@ import type { ActorEntrega } from "./reglas";
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).buffer;
 const firma = (origen: "GUARDADA" | "DIBUJADA" = "DIBUJADA", bytes: ArrayBuffer = PNG): FirmaEntregaInput => ({ origen, imagen: { bytes, original: "firma.png" } });
 const actor: ActorEntrega = { usuarioId: 7, username: "op", nombre: "Operador", rol: "Operaciones", esAdmin: false, permisos: [] as PermisoModulo[] };
+const matriz = (...modulos: string[]): PermisoModulo[] => [
+  { modulo: "permisos_acciones_v2", puedeVer: true, puedeCrear: false, puedeEditar: false, puedeEliminar: false },
+  ...modulos.map((modulo) => ({ modulo, puedeVer: true, puedeCrear: false, puedeEditar: true, puedeEliminar: false })),
+];
 const CLAVE = "clave_valida_123456";
 const base = { empresaId: 1, actor, modulo: "FONDOS" as const, entidadId: 10, destino: "TESORERIA" as const, modo: "SISTEMA" as const, claveIdempotencia: CLAVE, firma: firma() };
 
@@ -71,6 +75,27 @@ describe("registrarEntrega — validación previa", () => {
   });
   it("observaciones demasiado largas → 400 (no se truncan en silencio)", async () => {
     await rechaza(registrarEntrega({ ...base, observaciones: "x".repeat(1001) }), "Las observaciones no puede exceder 1000 caracteres.");
+  });
+  it("identidad incompleta (sin nombre, usuario o rol) → 403 antes de tocar la base", async () => {
+    await rechaza(registrarEntrega({ ...base, actor: { ...actor, nombre: " " } }), MENSAJES_ENTREGA.identidadIncompleta, 403);
+    await rechaza(registrarEntrega({ ...base, actor: { ...actor, rol: "" } }), MENSAJES_ENTREGA.identidadIncompleta, 403);
+    await rechaza(registrarEntrega({ ...base, actor: { ...actor, usuarioId: 0 } }), MENSAJES_ENTREGA.identidadIncompleta, 403);
+    await rechaza(confirmarRecepcion({ empresaId: 1, actor: { ...actor, rol: "" }, entregaId: 5, firma: firma() }), MENSAJES_ENTREGA.identidadIncompleta, 403);
+  });
+  it("modo PRESENCIAL sin entregas_presencial → 403 antes de tocar la base o escribir la imagen (aunque tenga el área de origen)", async () => {
+    const soloArea = { ...actor, permisos: matriz("fondos_entrega_emitir") };
+    await rechaza(registrarEntrega({ ...base, actor: soloArea, modo: "PRESENCIAL" }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
+    await rechaza(registrarEntrega({ ...base, actor, modo: "PRESENCIAL" }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
+  });
+  it("la compuerta presencial solo aplica a PRESENCIAL: SISTEMA no la exige, y con el permiso (o Admin) PRESENCIAL la supera", async () => {
+    const alcanzaLaBase = async (input: Parameters<typeof registrarEntrega>[0]) => {
+      await expect(registrarEntrega(input)).rejects.toThrow("no debe tocar la base");
+      expect(tocado.db).toBeGreaterThan(0); // superó TODAS las validaciones previas y llegó a la base (mock)
+      tocado.db = 0; tocado.upload = 0;
+    };
+    await alcanzaLaBase({ ...base, actor: { ...actor, permisos: matriz("fondos_entrega_emitir") }, modo: "SISTEMA" });
+    await alcanzaLaBase({ ...base, actor: { ...actor, permisos: matriz("fondos_entrega_emitir", "entregas_presencial") }, modo: "PRESENCIAL" });
+    await alcanzaLaBase({ ...base, actor: { ...actor, esAdmin: true }, modo: "PRESENCIAL" });
   });
 });
 

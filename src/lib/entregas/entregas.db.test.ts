@@ -390,6 +390,37 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — control de entrega
     await imagenesConsistentes();
   });
 
+  it("modo PRESENCIAL al registrar exige entregas_presencial: sin él 403, sin entrega, sin firma y sin imagen", async () => {
+    // `ops` tiene el permiso del área de origen (fondos_entrega_emitir) pero NO entregas_presencial.
+    await esperar(emitir(actores.ops, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "PRESENCIAL" }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
+    await esperar(emitir(actores.sinPermisos, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "PRESENCIAL" }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
+    expect(await contar("SELECT COUNT(*) AS n FROM documento_entregas WHERE empresa_id = ?", [EMPRESA_A])).toBe(0);
+    expect(await contar("SELECT COUNT(*) AS n FROM firmas_electronicas WHERE empresa_id = ?", [EMPRESA_A])).toBe(0);
+    expect(await contar("SELECT COUNT(*) AS n FROM auditoria WHERE empresa_id = ? AND modulo = 'documento_entregas'", [EMPRESA_A])).toBe(0);
+    expect(archivos.guardados).toEqual([]); // ni siquiera se copió la imagen
+    // El mismo documento sigue disponible: SISTEMA con ese mismo actor funciona sin entregas_presencial.
+    const sis = await emitir(actores.ops, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "SISTEMA" });
+    expect(sis.entrega).toMatchObject({ modo: "SISTEMA", estado: "EMITIDA" });
+    await anularEntrega({ empresaId: EMPRESA_A, actor: actores.ops, entregaId: sis.entrega.id, motivo: "prueba" });
+    // Con entregas_presencial (además del área de origen) se permite; sin el área de origen sigue siendo 403.
+    const presencial = await emitir(actores.operadorPresencial, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "PRESENCIAL" });
+    expect(presencial.entrega).toMatchObject({ modo: "PRESENCIAL", estado: "EMITIDA", emitidoPorUsuarioId: U.operadorPresencial });
+    await anularEntrega({ empresaId: EMPRESA_A, actor: actores.operadorPresencial, entregaId: presencial.entrega.id, motivo: "prueba" });
+    const soloPresencial = { ...actores.operadorPresencial, permisos: matriz("entregas_presencial") };
+    await esperar(emitir(soloPresencial, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "PRESENCIAL" }), MENSAJES_ENTREGA.sinPermisoArea, 403);
+    // Admin conserva el bypass.
+    const admin: ActorEntrega = { ...actores.ops, usuarioId: U.ops2, username: "e_ops2", permisos: [], esAdmin: true, rol: "Admin" };
+    expect((await emitir(admin, "FONDOS", doc.fondo.A, "TESORERIA", { modo: "PRESENCIAL" })).entrega.modo).toBe("PRESENCIAL");
+    await imagenesConsistentes();
+  });
+
+  it("identidad incompleta (sin nombre o rol) → 403 antes de tocar archivos o base", async () => {
+    await esperar(emitir({ ...actores.ops, nombre: "  " }, "FONDOS", doc.fondo.A, "TESORERIA"), MENSAJES_ENTREGA.identidadIncompleta, 403);
+    await esperar(emitir({ ...actores.ops, rol: "" }, "FONDOS", doc.fondo.A, "TESORERIA"), MENSAJES_ENTREGA.identidadIncompleta, 403);
+    expect(archivos.guardados).toEqual([]);
+    expect(await contar("SELECT COUNT(*) AS n FROM documento_entregas WHERE empresa_id = ?", [EMPRESA_A])).toBe(0);
+  });
+
   it("bandeja «por recibir»: solo SISTEMA, de sus áreas, no emitidas por él", async () => {
     const f = (await emitir(actores.ops, "FONDOS", doc.fondo.A, "CONTABILIDAD")).entrega;
     const g = (await emitir(actores.ops, "GASTOS", doc.gasto, "CONTABILIDAD")).entrega;
@@ -407,7 +438,7 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — control de entrega
     const base = () => ({
       empresa_id: EMPRESA_A, modulo: "FONDOS", entidad_tipo: "SOLICITUD_FONDO", entidad_id: doc.fondo.A, etapa_origen: "OPERACIONES",
       etapa_destino: "TESORERIA", modo: "SISTEMA", estado: "EMITIDA", emitido_por_usuario_id: U.ops, emitido_por_nombre: "x",
-      emitido_en: new Date(), firma_emision_id: firmaId, clave_idempotencia: clave(), huella_idempotencia: "a".repeat(64),
+      emitido_por_rol: "JefeOperaciones", emitido_en: new Date(), firma_emision_id: firmaId, clave_idempotencia: clave(), huella_idempotencia: "a".repeat(64),
     } as Record<string, unknown>);
     const insertar = (datos: Record<string, unknown>) =>
       getPool().query(`INSERT INTO documento_entregas (${Object.keys(datos).join(", ")}) VALUES (${Object.keys(datos).map(() => "?").join(", ")})`, Object.values(datos) as never);
@@ -425,8 +456,8 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — control de entrega
     });
     it("misma clave en la misma empresa choca con uq_de_empresa_clave", async () => {
       const b = base();
-      await insertar({ ...b, estado: "ANULADA", cerrado_por_usuario_id: U.ops, cerrado_en: new Date(), motivo_cierre: "x" });
-      await expect(insertar({ ...b, estado: "ANULADA", cerrado_por_usuario_id: U.ops, cerrado_en: new Date(), motivo_cierre: "x" }))
+      await insertar({ ...b, estado: "ANULADA", cerrado_por_usuario_id: U.ops, cerrado_por_nombre: "x", cerrado_en: new Date(), motivo_cierre: "x" });
+      await expect(insertar({ ...b, estado: "ANULADA", cerrado_por_usuario_id: U.ops, cerrado_por_nombre: "x", cerrado_en: new Date(), motivo_cierre: "x" }))
         .rejects.toMatchObject({ code: "ER_DUP_ENTRY", message: expect.stringContaining("uq_de_empresa_clave") });
     });
     it.each([
@@ -438,14 +469,14 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — control de entrega
       ["estado desconocido", "chk_de_estado", { estado: "PERDIDA" }],
       ["RECIBIDA sin firma de recepción", "chk_de_recepcion", { estado: "RECIBIDA", recibido_por_usuario_id: U.tes, recibido_por_nombre: "x", recibido_en: new Date() }],
       ["datos de recepción en una EMITIDA", "chk_de_recepcion", { recibido_en: new Date() }],
-      ["receptor = emisor", "chk_de_receptor_no_emisor", { estado: "RECIBIDA", recibido_por_usuario_id: U.ops, recibido_por_nombre: "x", recibido_en: new Date(), firma_recepcion_id: -1 }],
+      ["receptor = emisor", "chk_de_receptor_no_emisor", { estado: "RECIBIDA", recibido_por_usuario_id: U.ops, recibido_por_nombre: "x", recibido_por_rol: "JefeOperaciones", recibido_en: new Date(), firma_recepcion_id: -1 }],
       ["PRESENCIAL recibida con usuario receptor", "chk_de_recepcion", { modo: "PRESENCIAL", estado: "RECIBIDA", recibido_por_usuario_id: U.tes, recibido_por_nombre: "x", recibido_en: new Date(), firma_recepcion_id: -1, recepcion_operada_por_usuario_id: U.ops }],
       ["PRESENCIAL recibida sin operador", "chk_de_recepcion", { modo: "PRESENCIAL", estado: "RECIBIDA", recibido_por_nombre: "x", recibido_en: new Date(), firma_recepcion_id: -1 }],
-      ["RECHAZADA sin motivo", "chk_de_cierre", { estado: "RECHAZADA", cerrado_por_usuario_id: U.tes, cerrado_en: new Date() }],
-      ["RECHAZADA presencial", "chk_de_rechazo_sistema", { modo: "PRESENCIAL", estado: "RECHAZADA", cerrado_por_usuario_id: U.tes, cerrado_en: new Date(), motivo_cierre: "x" }],
+      ["RECHAZADA sin motivo", "chk_de_cierre", { estado: "RECHAZADA", cerrado_por_usuario_id: U.tes, cerrado_por_nombre: "x", cerrado_en: new Date() }],
+      ["RECHAZADA presencial", "chk_de_rechazo_sistema", { modo: "PRESENCIAL", estado: "RECHAZADA", cerrado_por_usuario_id: U.tes, cerrado_por_nombre: "x", cerrado_en: new Date(), motivo_cierre: "x" }],
       ["cierre en una EMITIDA", "chk_de_cierre", { motivo_cierre: "x" }],
       ["huella corta", "chk_de_huella", { huella_idempotencia: "abc" }],
-      ["misma firma para emitir y recibir", "chk_de_firmas_distintas", { estado: "RECIBIDA", recibido_por_usuario_id: U.tes, recibido_por_nombre: "x", recibido_en: new Date(), firma_recepcion_id: 0 }],
+      ["misma firma para emitir y recibir", "chk_de_firmas_distintas", { estado: "RECIBIDA", recibido_por_usuario_id: U.tes, recibido_por_nombre: "x", recibido_por_rol: "Contabilidad", recibido_en: new Date(), firma_recepcion_id: 0 }],
     ] as [string, string, Record<string, unknown>][])("CHECK rechaza: %s (%s)", async (_n, restriccion, cambio) => {
       const datos = { ...base(), ...cambio } as Record<string, unknown>;
       if (datos.firma_recepcion_id === -1) datos.firma_recepcion_id = firma2;
@@ -453,6 +484,74 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA}) — control de entrega
       // MariaDB: errno 4025 «CONSTRAINT `x` failed» (mysql2 no tiene nombre propio para ese código).
       await expect(insertar(datos)).rejects.toMatchObject({ errno: 4025, message: expect.stringContaining(`CONSTRAINT \`${restriccion}\` failed`) });
     });
+    /** Cierre completo válido para RECHAZADA/ANULADA. */
+    const cierre = (): Record<string, unknown> => ({ cerrado_por_usuario_id: U.tes, cerrado_por_nombre: "Tere", cerrado_en: new Date(), motivo_cierre: "motivo" });
+    /** Recepción completa válida por modo (para RECIBIDA). */
+    const recepcion = (modo: "SISTEMA" | "PRESENCIAL"): Record<string, unknown> => modo === "SISTEMA"
+      ? { modo, estado: "RECIBIDA", recibido_por_usuario_id: U.tes, recibido_por_nombre: "Tere", recibido_por_rol: "Contabilidad", recibido_en: new Date(), firma_recepcion_id: firma2 }
+      : { modo, estado: "RECIBIDA", recibido_por_nombre: "Juan Pérez", recibido_en: new Date(), firma_recepcion_id: firma2,
+          recepcion_operada_por_usuario_id: U.operadorPresencial, recepcion_operada_por_nombre: "Pedro" };
+    const rechaza = (datos: Record<string, unknown>, restriccion: string) =>
+      expect(insertar({ ...base(), ...datos })).rejects.toMatchObject({ errno: 4025, message: expect.stringContaining(`CONSTRAINT \`${restriccion}\` failed`) });
+
+    it("estados válidos completos se aceptan (las restricciones no son más estrictas de la cuenta)", async () => {
+      await insertar({ ...base(), ...recepcion("SISTEMA") });
+      await insertar({ ...base(), ...recepcion("PRESENCIAL") }); // sin recibido_por_rol: no se exige en presencial
+      await insertar({ ...base(), ...recepcion("SISTEMA"), observaciones_recepcion: "con observaciones" });
+      await insertar({ ...base(), estado: "RECHAZADA", ...cierre() });
+      await insertar({ ...base(), estado: "ANULADA", ...cierre() });
+      await insertar({ ...base(), modo: "PRESENCIAL", estado: "ANULADA", ...cierre() });
+      expect(await contar("SELECT COUNT(*) AS n FROM documento_entregas WHERE empresa_id = ? AND entidad_id = ?", [EMPRESA_A, doc.fondo.A])).toBe(6);
+    });
+
+    const CAMPOS_RECEPCION = ["recibido_por_usuario_id", "recibido_por_nombre", "recibido_por_rol", "recibido_en", "firma_recepcion_id",
+      "observaciones_recepcion", "recepcion_operada_por_usuario_id", "recepcion_operada_por_nombre"] as const;
+    const VALOR_RECEPCION = (): Record<(typeof CAMPOS_RECEPCION)[number], unknown> => ({
+      recibido_por_usuario_id: U.tes, recibido_por_nombre: "Tere", recibido_por_rol: "Contabilidad", recibido_en: new Date(), firma_recepcion_id: firma2,
+      observaciones_recepcion: "obs", recepcion_operada_por_usuario_id: U.operadorPresencial, recepcion_operada_por_nombre: "Pedro",
+    });
+    it.each(
+      (["EMITIDA", "RECHAZADA", "ANULADA"] as const).flatMap((estado) => CAMPOS_RECEPCION.map((campo) => [estado, campo] as const)),
+    )("fuera de RECIBIDA (%s) NINGÚN campo de recepción admite valor: %s", async (estado, campo) => {
+      const cerrado = estado === "EMITIDA" ? {} : cierre();
+      await rechaza({ estado, ...cerrado, [campo]: VALOR_RECEPCION()[campo] }, "chk_de_recepcion");
+    });
+
+    it.each([
+      ["SISTEMA sin recibido_por_usuario_id", "SISTEMA", { recibido_por_usuario_id: null }],
+      ["SISTEMA sin recibido_por_nombre", "SISTEMA", { recibido_por_nombre: null }],
+      ["SISTEMA sin recibido_por_rol", "SISTEMA", { recibido_por_rol: null }],
+      ["SISTEMA sin recibido_en", "SISTEMA", { recibido_en: null }],
+      ["SISTEMA sin firma de recepción", "SISTEMA", { firma_recepcion_id: null }],
+      ["SISTEMA con operador (id)", "SISTEMA", { recepcion_operada_por_usuario_id: U.operadorPresencial }],
+      ["SISTEMA con operador (nombre)", "SISTEMA", { recepcion_operada_por_nombre: "Pedro" }],
+      ["PRESENCIAL con usuario receptor", "PRESENCIAL", { recibido_por_usuario_id: U.tes }],
+      ["PRESENCIAL sin nombre del receptor", "PRESENCIAL", { recibido_por_nombre: null }],
+      ["PRESENCIAL sin recibido_en", "PRESENCIAL", { recibido_en: null }],
+      ["PRESENCIAL sin firma de recepción", "PRESENCIAL", { firma_recepcion_id: null }],
+      ["PRESENCIAL sin operador (id)", "PRESENCIAL", { recepcion_operada_por_usuario_id: null }],
+      ["PRESENCIAL sin operador (nombre)", "PRESENCIAL", { recepcion_operada_por_nombre: null }],
+    ] as [string, "SISTEMA" | "PRESENCIAL", Record<string, unknown>][])("RECIBIDA incompleta o incoherente: %s", async (_n, modo, cambio) => {
+      await rechaza({ ...recepcion(modo), ...cambio }, "chk_de_recepcion");
+    });
+
+    it.each([
+      ...(["RECHAZADA", "ANULADA"] as const).flatMap((estado) =>
+        (["cerrado_por_usuario_id", "cerrado_por_nombre", "cerrado_en", "motivo_cierre"] as const).map((campo) =>
+          [`${estado} sin ${campo}`, estado, { [campo]: null }] as [string, string, Record<string, unknown>])),
+      ...(["EMITIDA", "RECIBIDA"] as const).flatMap((estado) =>
+        (["cerrado_por_usuario_id", "cerrado_por_nombre", "cerrado_en", "motivo_cierre"] as const).map((campo) =>
+          [`${estado} con ${campo}`, estado, { [campo]: cierre()[campo] }] as [string, string, Record<string, unknown>])),
+    ])("cierre completo o ausente: %s", async (_n, estado, cambio) => {
+      const datos = estado === "RECIBIDA" ? recepcion("SISTEMA") : estado === "EMITIDA" ? {} : { estado, ...cierre() };
+      await rechaza({ ...datos, ...cambio }, "chk_de_cierre");
+    });
+
+    it("el snapshot del emisor es obligatorio (nombre y rol)", async () => {
+      await expect(insertar({ ...base(), emitido_por_rol: null })).rejects.toMatchObject({ errno: 1048 });
+      await expect(insertar({ ...base(), emitido_por_nombre: null })).rejects.toMatchObject({ errno: 1048 });
+    });
+
     it("FK: empresa, usuario y firma deben existir; la firma no se puede borrar mientras la use una entrega", async () => {
       await expect(insertar({ ...base(), empresa_id: 999999 })).rejects.toMatchObject({ code: "ER_NO_REFERENCED_ROW_2" });
       await expect(insertar({ ...base(), emitido_por_usuario_id: 999999 })).rejects.toMatchObject({ code: "ER_NO_REFERENCED_ROW_2" });

@@ -70,7 +70,7 @@ export type Entrega = {
   estado: EstadoEntrega;
   emitidoPorUsuarioId: number;
   emitidoPorNombre: string;
-  emitidoPorRol: string | null;
+  emitidoPorRol: string;
   emitidoEn: Date;
   firmaEmisionId: number;
   observacionesEmision: string | null;
@@ -96,6 +96,7 @@ export const MENSAJES_ENTREGA = {
   parNoPermitido: "Esa entrega no está permitida desde el área que tiene el documento.",
   sinPermisoArea: "No tiene permiso para actuar por esa área.",
   sinPermisoPresencial: "No tiene permiso para registrar recepciones presenciales.",
+  identidadIncompleta: "No se pudo determinar el nombre o el rol del usuario que opera.",
   sinPermisoAnular: "Solo quien emitió la entrega (o quien tenga permiso de anular) puede anularla.",
   propiaEntrega: "No puede recibir ni rechazar una entrega que usted mismo emitió.",
   noPendiente: "La entrega ya no está pendiente.",
@@ -134,6 +135,13 @@ function idPositivo(valor: unknown): number {
   const n = Number(valor);
   if (!Number.isInteger(n) || n <= 0) throw error(MENSAJES_ENTREGA.datosInvalidos);
   return n;
+}
+
+/** La identidad llega de la sesión; el snapshot de nombre y rol es obligatorio en la entrega (columnas NOT NULL). */
+function validarActor(actor: ActorEntrega): void {
+  if (!Number.isInteger(actor?.usuarioId) || actor.usuarioId <= 0 || !actor.username?.trim() || !actor.nombre?.trim() || !actor.rol?.trim()) {
+    throw error(MENSAJES_ENTREGA.identidadIncompleta, 403);
+  }
 }
 
 function validarFirma(firma: FirmaEntregaInput | null | undefined, soloDibujada: boolean): FirmaEntregaInput {
@@ -197,7 +205,7 @@ function mapear(f: RowDataPacket): Entrega {
     estado: String(f.estado) as EstadoEntrega,
     emitidoPorUsuarioId: Number(f.emitido_por_usuario_id),
     emitidoPorNombre: String(f.emitido_por_nombre),
-    emitidoPorRol: strONull(f.emitido_por_rol),
+    emitidoPorRol: String(f.emitido_por_rol),
     emitidoEn: new Date(f.emitido_en),
     firmaEmisionId: Number(f.firma_emision_id),
     observacionesEmision: strONull(f.observaciones_emision),
@@ -282,6 +290,10 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
   const observaciones = texto(input.observaciones, MAX_OBSERVACIONES_ENTREGA, "Las observaciones");
   const firma = validarFirma(input.firma, false);
   const { actor, modulo, destino, modo } = input;
+  validarActor(actor);
+  // Modo PRESENCIAL exige el permiso explícito (además del permiso del área de origen, que se valida con la custodia ya bloqueada).
+  // SISTEMA no lo requiere. Antes de copiar la imagen o abrir la base.
+  if (modo === "PRESENCIAL" && !puedeOperarPresencial(actor)) throw error(MENSAJES_ENTREGA.sinPermisoPresencial, 403);
   const def = DEFINICIONES_ENTREGA[modulo];
   const huella = huellaEntrega({ modulo, entidadId, destino, modo, observaciones, emisorUsuarioId: actor.usuarioId });
 
@@ -320,7 +332,7 @@ export async function registrarEntrega(input: RegistrarEntregaInput): Promise<{ 
       if (!parEntrega(modulo, origen, destino)) throw error(MENSAJES_ENTREGA.parNoPermitido, 409);
 
       const firmaCreada = await crearFirmaInterna(conn, {
-        empresaId, usuarioId: actor.usuarioId, empleadoId: null, nombreFirmante: actor.nombre, rolFirmante: actor.rol ?? "",
+        empresaId, usuarioId: actor.usuarioId, empleadoId: null, nombreFirmante: actor.nombre, rolFirmante: actor.rol,
         accion: ACCION_FIRMA_ENTREGAR, modulo: def.moduloFirma, entidadTipo: def.entidadTipo, entidadId,
         valoresRelevantes: { documentoCodigo: documento.codigo, origen, destino, modo, observaciones, claveIdempotencia: clave },
         imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: firma.origen, ip: input.ip ?? null, userAgent: input.userAgent ?? null,
@@ -421,6 +433,7 @@ export async function confirmarRecepcion(input: ConfirmarRecepcionInput): Promis
   const observaciones = texto(input.observaciones, MAX_OBSERVACIONES_ENTREGA, "Las observaciones");
   const firma = validarFirma(input.firma, false);
   const { actor } = input;
+  validarActor(actor);
   const esRepeticion = (e: Entrega) =>
     e.estado === "RECIBIDA" && e.modo === "SISTEMA" && e.recibidoPorUsuarioId === actor.usuarioId && e.observacionesRecepcion === observaciones;
 
@@ -437,7 +450,7 @@ export async function confirmarRecepcion(input: ConfirmarRecepcionInput): Promis
     aplicar: async (conn, e) => {
       const def = DEFINICIONES_ENTREGA[e.modulo];
       const f = await crearFirmaInterna(conn, {
-        empresaId, usuarioId: actor.usuarioId, empleadoId: null, nombreFirmante: actor.nombre, rolFirmante: actor.rol ?? "",
+        empresaId, usuarioId: actor.usuarioId, empleadoId: null, nombreFirmante: actor.nombre, rolFirmante: actor.rol,
         accion: ACCION_FIRMA_RECIBIR, modulo: def.moduloFirma, entidadTipo: def.entidadTipo, entidadId: e.entidadId,
         valoresRelevantes: { entregaId: e.id, documentoCodigo: e.documentoCodigo, origen: e.etapaOrigen, destino: e.etapaDestino, modo: e.modo, observaciones },
         imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: firma.origen, ip: input.ip ?? null, userAgent: input.userAgent ?? null,
@@ -478,6 +491,7 @@ export async function registrarRecepcionPresencial(input: RecepcionPresencialInp
   const observaciones = texto(input.observaciones, MAX_OBSERVACIONES_ENTREGA, "Las observaciones");
   const firma = validarFirma(input.firma, true);
   const { actor } = input;
+  validarActor(actor);
   if (!puedeOperarPresencial(actor)) throw error(MENSAJES_ENTREGA.sinPermisoPresencial, 403);
   const esRepeticion = (e: Entrega) =>
     e.estado === "RECIBIDA" && e.modo === "PRESENCIAL" && e.recepcionOperadaPorUsuarioId === actor.usuarioId &&
@@ -528,6 +542,7 @@ export async function rechazarRecepcion(input: CierreSinFirmaInput): Promise<Ent
   const motivo = texto(input.motivo, MAX_MOTIVO_ENTREGA, "El motivo");
   if (!motivo) throw error(MENSAJES_ENTREGA.motivoRequerido);
   const { actor } = input;
+  validarActor(actor);
   return cerrarEntrega({
     empresaId, entregaId, imagen: null,
     esRepeticion: (e) => e.estado === "RECHAZADA" && e.cerradoPorUsuarioId === actor.usuarioId && e.motivoCierre === motivo,
@@ -556,6 +571,7 @@ export async function anularEntrega(input: CierreSinFirmaInput): Promise<Entrega
   const motivo = texto(input.motivo, MAX_MOTIVO_ENTREGA, "El motivo");
   if (!motivo) throw error(MENSAJES_ENTREGA.motivoRequerido);
   const { actor } = input;
+  validarActor(actor);
   return cerrarEntrega({
     empresaId, entregaId, imagen: null,
     esRepeticion: (e) => e.estado === "ANULADA" && e.cerradoPorUsuarioId === actor.usuarioId && e.motivoCierre === motivo,

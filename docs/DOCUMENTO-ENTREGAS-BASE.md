@@ -1,6 +1,8 @@
 # Control de entrega de documentos — Base común (PR 1)
 
-Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** contra una MariaDB desechable. **No probado en producción, no aprobado para producción.**
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** contra una MariaDB 10.4 **desechable local**. **Nada de esto se ha ejecutado ni
+verificado en producción** (MariaDB 11.8): preflight, migración y verificación posterior están **PENDIENTES** y se corren a mano, con
+autorización. **No probado en producción, no aprobado para producción.**
 Alcance de este PR: librería común + esquema propuesto + permisos. **Sin UI, sin conectar Fondos/Gastos/Compras, sin ejecutar SQL real.**
 
 ## 1. Qué es
@@ -29,10 +31,11 @@ Una tabla nueva; no altera ninguna existente ni crea filas. Ver `sql/migrate-202
 - Documento: `modulo`, `entidad_tipo`, `entidad_id`, `documento_codigo` (snapshot). Referencia polimórfica: la existencia y la empresa se
   validan en la aplicación con `SELECT … FOR UPDATE` filtrado por `empresa_id`.
 - Etapas: `etapa_origen`, `etapa_destino`; `modo` (`SISTEMA` | `PRESENCIAL`); `estado` (`EMITIDA` | `RECIBIDA` | `RECHAZADA` | `ANULADA`).
-- Emisión: usuario/nombre/rol (snapshot), `emitido_en`, `firma_emision_id` **NOT NULL**, observaciones.
+- Emisión: usuario/nombre/rol (snapshot, los tres **NOT NULL**: `usuarios.rol_global` es NOT NULL), `emitido_en`, `firma_emision_id`
+  **NOT NULL**, observaciones.
 - Recepción: usuario/nombre/rol del receptor, `recibido_en`, `firma_recepcion_id`, observaciones; en presencial, además el usuario
-  que operó el dispositivo. **No hay documento de identidad ni campo de cargo**: se usa nombre + rol del sistema.
-- Cierre sin recepción: `cerrado_por_*`, `cerrado_en`, `motivo_cierre`.
+  que operó el dispositivo (id + nombre). **No hay documento de identidad ni campo de cargo**: se usa nombre + rol del sistema.
+- Cierre sin recepción: `cerrado_por_usuario_id`, `cerrado_por_nombre`, `cerrado_en`, `motivo_cierre`.
 - Idempotencia: `clave_idempotencia` + `huella_idempotencia` (ambas obligatorias).
 - `pendiente_documento`: columna generada `PERSISTENT` = `'MODULO:id'` solo si `estado = 'EMITIDA'`.
 
@@ -43,14 +46,30 @@ Una tabla nueva; no altera ninguna existente ni crea filas. Ver `sql/migrate-202
 | Una sola entrega pendiente por documento | `UNIQUE (empresa_id, pendiente_documento)` |
 | Emisión idempotente por empresa | `UNIQUE (empresa_id, clave_idempotencia)` |
 | Firma de emisión siempre presente; RECIBIDA exige firma de recepción distinta | `NOT NULL` + FK + `chk_de_recepcion` + `chk_de_firmas_distintas` |
-| Datos de recepción solo en RECIBIDA; de cierre solo en RECHAZADA/ANULADA | `chk_de_recepcion`, `chk_de_cierre` |
-| SISTEMA: receptor con usuario; PRESENCIAL: sin usuario y con operador | `chk_de_recepcion` |
+| Fuera de RECIBIDA, **los 8 campos de recepción son NULL** (`recibido_por_usuario_id/nombre/rol`, `recibido_en`, `firma_recepcion_id`, `observaciones_recepcion`, `recepcion_operada_por_usuario_id/nombre`) | `chk_de_recepcion` |
+| RECIBIDA + SISTEMA: receptor con usuario, nombre, **rol**, fecha y firma; **sin** operador (id ni nombre) | `chk_de_recepcion` |
+| RECIBIDA + PRESENCIAL: **sin** usuario receptor, con nombre, fecha y firma, y operador (id **y** nombre); el rol del receptor no se exige | `chk_de_recepcion` |
+| RECHAZADA/ANULADA: los 4 campos de cierre (usuario, **nombre**, fecha, motivo) obligatorios; en EMITIDA/RECIBIDA los 4 son NULL | `chk_de_cierre` |
 | Nadie recibe su propia entrega | `chk_de_receptor_no_emisor` |
 | Solo el receptor en el sistema rechaza (nunca presencial) | `chk_de_rechazo_sistema` |
 | Enumeraciones y coherencia módulo/entidad, origen ≠ destino | `chk_de_modulo/entidad_tipo/etapas/modo/estado` |
 | Una firma no se borra mientras la use una entrega | FK `RESTRICT` a `firmas_electronicas` |
 
-Con MariaDB 10.4 (desechable) y 11.8 (producción) los CHECK se aplican; se comprobaron 16 violaciones por SQL directo.
+Los CHECK se probaron por SQL directo **solo en MariaDB 10.4 desechable** (inserciones incoherentes rechazadas con el nombre de la
+restricción esperada, y estados completos válidos aceptados). **En MariaDB 11.8 de producción NO se han ejecutado**: el repositorio
+tiene otras migraciones con columnas `PERSISTENT` y CHECK, pero eso es un precedente, no una prueba de esta migración. Hasta correr el
+preflight y la verificación posterior en producción, su comportamiento allí es una **suposición**, no un hecho.
+
+Qué valida cada script (todos de solo lectura salvo la migración):
+
+- **Preflight** (`sql/preflight-…`): compuerta conservadora con 12 condiciones (MariaDB ≥ 10.2, las 7 tablas, las 7 InnoDB, `id` de
+  `empresas`/`usuarios`/`firmas_electronicas` `int` con signo y PRIMARY, `firmas_electronicas.usuario_id` NULL, las 20 columnas que
+  inserta la firma y su longitud, las 5 de auditoría, las 13 de los adaptadores, `documento_entregas` inexistente, y ningún nombre de
+  restricción/índice nuevo ocupado). Cualquier diferencia → `DETENER`.
+- **Verificación** (`sql/verificar-…`): compara **definiciones**, no solo conteos: tipo, longitud y nulabilidad de las 33 columnas;
+  `pendiente_documento` generada y almacenada con la expresión esperada; columnas de cada UNIQUE/índice en su orden; las 21 restricciones
+  por nombre (y ninguna de más); destino de cada FK y `ON DELETE RESTRICT`; y el contenido de los CHECK críticos. Detecta una tabla
+  creada con una definición anterior (`CREATE TABLE IF NOT EXISTS` no la actualiza).
 
 ## 4. Estrategia de concurrencia
 
@@ -96,6 +115,8 @@ existentes), con acciones `ENTREGAR_DOCUMENTO` y `RECIBIR_DOCUMENTO`, método `F
 - Presencial: firma **dibujada obligatoria**; el firmante no tiene usuario (`usuario_id` NULL en la firma; único cambio de código
   compartido: `DatosFirmaInterna.usuarioId: number | null`, la columna ya era nullable). Operador del dispositivo en el payload firmado
   y en la entrega.
+- **Registrar** una entrega en modo `PRESENCIAL` exige además el permiso `entregas_presencial` (403 antes de copiar la imagen o
+  tocar la base); `SISTEMA` no lo exige. Admin conserva el bypass. El permiso del área de origen se valida siempre.
 
 ## 8. Qué NO hace este PR
 
@@ -109,15 +130,17 @@ quedan sin entregas; el PDF mostrará casillas en blanco), ni ejecución de SQL 
 | Compilación (`tsc --noEmit`) | ✅ |
 | ESLint (archivos tocados) | ✅ |
 | `git diff --check` | ✅ |
-| Pruebas unitarias nuevas | ✅ 32 |
-| Pruebas contra MariaDB 10.4 desechable (schema.sql + migraciones previas + esta) | ✅ 33 (3 corridas estables) |
-| Preflight → migración → migración repetida → verificación posterior (desechable) | ✅ `LISTO PARA MIGRAR` / `ESTRUCTURA OK` |
+| Pruebas unitarias nuevas | ✅ 35 |
+| Pruebas contra MariaDB 10.4 **desechable** (schema.sql + migraciones previas + esta) | ✅ 90 (3 corridas estables) |
+| Preflight → migración → migración repetida → verificación posterior, en la desechable | ✅ `LISTO PARA MIGRAR` / `ESTRUCTURA OK` |
+| La compuerta del preflight y la de la verificación **detienen** ante incompatibilidades (probadas en una copia desechable) | ✅ |
 | Suite completa | 21 fallos preexistentes (mismos 10 archivos que `main`) |
+| **Preflight / migración / verificación en MariaDB 11.8 de producción** | ⏳ **PENDIENTE** (manual, con autorización) |
 | Probado en producción / aprobado para producción | ❌ No |
 
 ## 10. Para producción (cuando se autorice, en este orden)
 
 1. `sql/preflight-2026-10-documento-entregas.sql` (solo lectura) → revisar `LISTO PARA MIGRAR`.
 2. `sql/migrate-2026-10-documento-entregas.sql` (manual, autorizado).
-3. `sql/verificar-2026-10-documento-entregas.sql` → `ESTRUCTURA OK` (33 columnas, 3 UNIQUE, 7 FK, 11 CHECK).
+3. `sql/verificar-2026-10-documento-entregas.sql` → `ESTRUCTURA OK` (compara definiciones: 33 columnas, 3 UNIQUE, 7 FK, 11 CHECK).
 4. Asignar permisos manualmente desde Usuarios.
