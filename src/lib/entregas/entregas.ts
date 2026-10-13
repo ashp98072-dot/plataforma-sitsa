@@ -9,6 +9,7 @@ import { ConflictoIdempotencia, esDuplicadoDeClave, huellaDe } from "@/lib/tms/i
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 import { bloquearDocumento } from "./adaptadores";
+import { validarEvidencia } from "./evidencia";
 import {
   ACCION_FIRMA_ENTREGAR,
   ACCION_FIRMA_RECIBIR,
@@ -58,6 +59,9 @@ export type FirmaEntregaInput = {
   imagen: { bytes: ArrayBuffer; original: string };
 };
 
+/** Constancia firmada y escaneada de una recepción presencial (PDF, JPG o PNG). Los bytes se validan por su formato real. */
+export type EvidenciaEntregaInput = { bytes: ArrayBuffer; original: string };
+
 export type Entrega = {
   id: number;
   empresaId: number;
@@ -105,6 +109,8 @@ export const MENSAJES_ENTREGA = {
   firmaRequerida: "La firma es obligatoria.",
   firmaInvalida: "La firma debe ser una imagen PNG válida de hasta 1 MB.",
   firmaDibujadaRequerida: "La recepción presencial requiere la firma dibujada de quien recibe.",
+  evidenciaRequerida: "Adjunta la constancia firmada (PDF, JPG o PNG) o dibuja la firma de quien recibe.",
+  evidenciaOFirma: "Envía la constancia firmada o la firma dibujada, no ambas.",
   motivoRequerido: "Indique el motivo.",
   nombreRequerido: "Indique el nombre de quien recibe.",
   claveRequerida: "La clave de envío es obligatoria y debe ser válida.",
@@ -172,6 +178,23 @@ async function guardarImagenFirma(empresaId: number, prefijo: string, firma: Fir
     arrayBuffer: async () => firma.imagen.bytes,
   });
   return { relative: guardada.relative, original: guardada.original, mime: "image/png", size: guardada.size, sha256 };
+}
+
+/**
+ * Copia física de la constancia firmada escaneada (subdirectorio «evidencias»). Mismo contrato de propiedad que
+ * `guardarImagenFirma`: el llamador la entrega de inmediato a `conImagenCompensada`. El nombre se genera (no se confía en el del
+ * cliente) con la extensión del formato REAL; `guardarUpload` agrega marca de tiempo y azar, así que nunca pisa otro archivo.
+ */
+async function guardarEvidenciaEscaneada(
+  empresaId: number, entregaId: number, evidencia: EvidenciaEntregaInput, mime: string, extension: string,
+): Promise<ImagenFirmaInterna> {
+  const sha256 = sha256Hex(evidencia.bytes);
+  const guardada = await guardarUpload(empresaId, "evidencias", `constancia_firmada_${entregaId}`, {
+    name: `constancia-firmada-${entregaId}${extension}`,
+    size: evidencia.bytes.byteLength,
+    arrayBuffer: async () => evidencia.bytes,
+  });
+  return { relative: guardada.relative, original: guardada.original, mime, size: guardada.size, sha256 };
 }
 
 type ResultadoTx<T> = { valor: T; imagenUsada: boolean };
@@ -516,8 +539,12 @@ export type RecepcionPresencialInput = {
   /** Persona que recibe y no tiene usuario. No se pide documento de identidad (decisión de negocio). */
   nombreReceptor: string;
   observaciones?: string | null;
-  /** Obligatoriamente DIBUJADA por quien recibe. */
-  firma: FirmaEntregaInput;
+  /**
+   * Evidencia PRINCIPAL: la constancia impresa, firmada a mano y escaneada (PDF/JPG/PNG). Alternativa: `firma` DIBUJADA por quien
+   * recibe en el dispositivo. Exactamente UNA de las dos.
+   */
+  evidencia?: EvidenciaEntregaInput | null;
+  firma?: FirmaEntregaInput | null;
   ip?: string | null;
   userAgent?: string | null;
 };
@@ -528,7 +555,11 @@ export async function registrarRecepcionPresencial(input: RecepcionPresencialInp
   const nombre = texto(input.nombreReceptor, MAX_NOMBRE_PRESENCIAL, "El nombre");
   if (!nombre) throw error(MENSAJES_ENTREGA.nombreRequerido);
   const observaciones = texto(input.observaciones, MAX_OBSERVACIONES_ENTREGA, "Las observaciones");
-  const firma = validarFirma(input.firma, true);
+  if (input.firma != null && input.evidencia != null) throw error(MENSAJES_ENTREGA.evidenciaOFirma);
+  if (input.firma == null && input.evidencia == null) throw error(MENSAJES_ENTREGA.evidenciaRequerida);
+  const firma = input.firma != null ? validarFirma(input.firma, true) : null;
+  let formatoEvidencia: ReturnType<typeof validarEvidencia> | null = null;
+  if (input.evidencia != null) formatoEvidencia = validarEvidencia(input.evidencia.bytes);
   const { actor } = input;
   validarActor(actor);
   if (!puedeOperarPresencial(actor)) throw error(MENSAJES_ENTREGA.sinPermisoPresencial, 403);
@@ -537,7 +568,10 @@ export async function registrarRecepcionPresencial(input: RecepcionPresencialInp
     e.recibidoPorNombre === nombre && e.observacionesRecepcion === observaciones;
 
   await precheckEntrega(empresaId, entregaId, esRepeticion);
-  const imagen = await guardarImagenFirma(empresaId, `firma_recepcion_presencial_${entregaId}`, firma);
+  const imagen = firma
+    ? await guardarImagenFirma(empresaId, `firma_recepcion_presencial_${entregaId}`, firma)
+    : await guardarEvidenciaEscaneada(empresaId, entregaId, input.evidencia!, formatoEvidencia!.mime, formatoEvidencia!.extension);
+  const escaneada = firma === null;
   return cerrarEntrega({
     empresaId, entregaId, imagen, esRepeticion,
     validar: (e) => {
@@ -553,8 +587,9 @@ export async function registrarRecepcionPresencial(input: RecepcionPresencialInp
         valoresRelevantes: {
           entregaId: e.id, documentoCodigo: e.documentoCodigo, origen: e.etapaOrigen, destino: e.etapaDestino, modo: e.modo,
           observaciones, operadorUsuarioId: actor.usuarioId, operadorNombre: actor.nombre,
+          evidencia: escaneada ? { tipo: "CONSTANCIA_FIRMADA_ESCANEADA", mime: imagen.mime } : null,
         },
-        imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: "DIBUJADA", ip: input.ip ?? null, userAgent: input.userAgent ?? null,
+        imagen, metodo: "FIRMA_MANUSCRITA", origenFirma: escaneada ? "ESCANEADA" : "DIBUJADA", ip: input.ip ?? null, userAgent: input.userAgent ?? null,
       });
       await actualizarSiEmitida(conn,
         `UPDATE documento_entregas SET estado = 'RECIBIDA', recibido_por_usuario_id = NULL, recibido_por_nombre = ?, recibido_por_rol = NULL,
@@ -564,7 +599,7 @@ export async function registrarRecepcionPresencial(input: RecepcionPresencialInp
       await registrarAuditoriaTx(conn, {
         empresaId, usuario: actor.username, accion: "entrega_recibir_presencial", modulo: "documento_entregas",
         detalle: `Entrega #${e.id} de ${e.modulo} #${e.entidadId} recibida en forma presencial por ${nombre} ` +
-          `(${ETIQUETA_AREA[e.etapaDestino]}); operó ${actor.nombre}.`,
+          `(${ETIQUETA_AREA[e.etapaDestino]}); operó ${actor.nombre}; ${escaneada ? "con constancia firmada escaneada" : "con firma dibujada"}.`,
       });
     },
   });

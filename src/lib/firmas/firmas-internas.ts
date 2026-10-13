@@ -95,7 +95,7 @@ export type DatosFirmaInterna = {
    * plantilla). Va DENTRO de payload_canonico (no columna nueva, no SQL)
    * — `null`/ausente para firmas sin imagen o previas a este campo.
    */
-  origenFirma?: "GUARDADA" | "DIBUJADA" | null;
+  origenFirma?: "GUARDADA" | "DIBUJADA" | "ESCANEADA" | null;
   ip?: string | null;
   userAgent?: string | null;
 };

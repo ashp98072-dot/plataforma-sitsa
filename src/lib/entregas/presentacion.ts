@@ -70,11 +70,25 @@ export type EntregaDto = {
   cerradoEn: string | null;
   motivoCierre: string | null;
   acciones: AccionesEntrega;
+  /**
+   * Constancia PDF disponible: `PREVIA` (presencial pendiente: para imprimir y firmar) o `FINAL` (recibida). En modo SISTEMA no hay
+   * constancia previa; RECHAZADA/ANULADA no generan constancia.
+   */
+  constancia: "PREVIA" | "FINAL" | null;
+  /** Hay constancia firmada escaneada adjunta (solo recepción presencial). */
+  tieneEvidencia: boolean;
 };
+
+/** Qué constancia PDF corresponde a una entrega según estado y modo. */
+export function constanciaDisponible(e: Pick<Entrega, "estado" | "modo">): "PREVIA" | "FINAL" | null {
+  if (e.estado === "RECIBIDA") return "FINAL";
+  if (e.estado === "EMITIDA" && e.modo === "PRESENCIAL") return "PREVIA";
+  return null;
+}
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
-export function aDto(e: Entrega, actor: ActorEntrega): EntregaDto {
+export function aDto(e: Entrega, actor: ActorEntrega, extra: { tieneEvidencia?: boolean } = {}): EntregaDto {
   return {
     id: e.id,
     modulo: e.modulo,
@@ -100,6 +114,8 @@ export function aDto(e: Entrega, actor: ActorEntrega): EntregaDto {
     cerradoEn: iso(e.cerradoEn),
     motivoCierre: e.motivoCierre,
     acciones: accionesDisponibles(actor, e),
+    constancia: constanciaDisponible(e),
+    tieneEvidencia: Boolean(extra.tieneEvidencia),
   };
 }
 

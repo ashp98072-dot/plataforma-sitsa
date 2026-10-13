@@ -4,6 +4,7 @@ import { leerDocumento } from "@/lib/entregas/adaptadores";
 import { ETIQUETA_AREA, type AreaEntrega, type ModoEntrega } from "@/lib/entregas/catalogo";
 import { listarEntregasDocumento, registrarEntrega } from "@/lib/entregas/entregas";
 import { conReintentoPorDeadlock, idDeRuta, leerFirmaFormulario, respuestaFalloOperacion, respuestaNoEncontrada, texto } from "@/lib/entregas/http";
+import { idsConEvidencia } from "@/lib/entregas/evidencia";
 import { aDto, opcionesRegistro } from "@/lib/entregas/presentacion";
 import { calcularCustodia } from "@/lib/entregas/reglas";
 
@@ -29,11 +30,13 @@ export async function GET(_req: Request, ctx: Ctx) {
 
     const entregas = await listarEntregasDocumento(guard.empresa.id, "FONDOS", id);
     const { area, pendiente } = calcularCustodia("FONDOS", entregas);
+    // Constancias escaneadas adjuntas (solo recepciones presenciales): una consulta para todo el historial.
+    const conEvidencia = await idsConEvidencia(guard.empresa.id, entregas.filter((e) => e.estado === "RECIBIDA" && e.modo === "PRESENCIAL").map((e) => e.id));
     return NextResponse.json({
       documento: { codigo: documento.codigo, estado: documento.estado },
       custodia: { area, etiqueta: ETIQUETA_AREA[area] },
       pendiente: pendiente ? aDto(pendiente, guard.actor) : null,
-      entregas: entregas.map((e) => aDto(e, guard.actor)),
+      entregas: entregas.map((e) => aDto(e, guard.actor, { tieneEvidencia: conEvidencia.has(e.id) })),
       registrar: opcionesRegistro(guard.actor, "FONDOS", area, Boolean(pendiente), documento.estado),
     });
   } catch (error) {
