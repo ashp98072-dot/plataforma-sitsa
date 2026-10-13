@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
+import { query } from "@/lib/db";
 import { DEFINICIONES_ENTREGA, type ModuloEntrega } from "./catalogo";
 
 /**
@@ -43,6 +44,24 @@ export async function bloquearDocumento(
 ): Promise<DocumentoEntrega | null> {
   const adaptador = ADAPTADORES[modulo];
   const [filas] = await conn.query<RowDataPacket[]>(adaptador.sql, [entidadId, empresaId]);
+  const fila = filas[0];
+  if (!fila) return null;
+  return {
+    id: Number(fila.id),
+    codigo: fila.codigo != null ? String(fila.codigo) : null,
+    estado: fila.estado != null ? String(fila.estado) : null,
+    admiteEntrega: adaptador.admite(fila),
+  };
+}
+
+/**
+ * Lectura SIN bloqueo (consultas de pantalla: historial y opciones de «Registrar entrega»). Mismo SELECT del adaptador, siempre
+ * con `empresa_id`; `null` si el documento no existe en esa empresa. Registrar/cerrar entregas sigue usando `bloquearDocumento`
+ * dentro de su transacción: esta lectura nunca decide una escritura.
+ */
+export async function leerDocumento(empresaId: number, modulo: ModuloEntrega, entidadId: number): Promise<DocumentoEntrega | null> {
+  const adaptador = ADAPTADORES[modulo];
+  const filas = await query<RowDataPacket[]>(adaptador.sql.replace(" FOR UPDATE", ""), [entidadId, empresaId]);
   const fila = filas[0];
   if (!fila) return null;
   return {

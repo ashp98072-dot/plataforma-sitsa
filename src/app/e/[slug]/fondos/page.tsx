@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
@@ -16,6 +16,9 @@ import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-
 import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
+import { EntregasPorRecibir, HistorialEntregas, RegistrarEntregaModal } from "@/components/tms/fondo-entregas";
+import { opcionesRegistro, type ResumenEntregaDocumento } from "@/lib/entregas/presentacion";
+import { areasRecepcionDelActor, type ActorEntrega } from "@/lib/entregas/reglas";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -92,8 +95,19 @@ export default function FondosPage() {
   // el botón solo se muestra a quien tiene el permiso propio
   // "gastos_autorizar" (editar). El endpoint vuelve a validarlo en el
   // servidor — ocultar el botón NO es la única defensa.
-  const { permisos } = useEmpresaSession();
+  const { permisos, rol, username } = useEmpresaSession();
   const puedeAutorizar = tienePermiso(permisos, "gastos_autorizar", "editar");
+  // CONTROL DE ENTREGA (PR 2) — solo para decidir qué ofrecer: el servidor vuelve a validar permisos, custodia y estado en cada
+  // acción. Se usan las MISMAS reglas comunes (src/lib/entregas) que el servicio; no hay una copia de las reglas en la pantalla.
+  const actorEntrega = useMemo<ActorEntrega>(
+    () => ({ usuarioId: -1, username, nombre: username, rol, esAdmin: rol === "Admin", permisos }),
+    [username, rol, permisos],
+  );
+  const puedeRecibirEntregas = areasRecepcionDelActor(actorEntrega).FONDOS.length > 0;
+  const [resumenEntregas, setResumenEntregas] = useState<Record<number, ResumenEntregaDocumento>>({});
+  const [versionEntregas, setVersionEntregas] = useState(0);
+  const [entregaExpandida, setEntregaExpandida] = useState<number | null>(null);
+  const [registrandoEntregaId, setRegistrandoEntregaId] = useState<number | null>(null);
   const [confirmandoAutorizacionId, setConfirmandoAutorizacionId] = useState<number | null>(null);
   const [autorizandoId, setAutorizandoId] = useState<number | null>(null);
   const bloqueoAutorizacion = useRef<number | null>(null);
@@ -179,6 +193,24 @@ export default function FondosPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
+
+  // Resumen de entrega de TODA la página en una sola consulta (sin polling): al cargar el listado y tras cada acción de entrega.
+  useEffect(() => {
+    const ids = solicitudes.map((s) => s.id);
+    if (!ids.length) return;
+    let vigente = true;
+    fetch(`/api/empresas/${slug}/tms/fondos/entregas/resumen?ids=${ids.join(",")}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { resumen?: Record<number, ResumenEntregaDocumento> } | null) => { if (vigente && d?.resumen) setResumenEntregas(d.resumen); })
+      .catch(() => undefined);
+    return () => { vigente = false; };
+  }, [slug, solicitudes, versionEntregas]);
+
+  function alCambiarEntrega(mensaje: string) {
+    setMsg(mensaje);
+    setRegistrandoEntregaId(null);
+    setVersionEntregas((v) => v + 1);
+  }
 
   function totalForm(): number {
     return lineas.reduce((s, l) => s + (Number(l.cantidad) || 1) * (Number(l.monto) || 0), 0);
@@ -405,6 +437,8 @@ export default function FondosPage() {
       ) : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
 
+      {puedeRecibirEntregas ? <EntregasPorRecibir slug={slug} version={versionEntregas} onCambio={alCambiarEntrega} /> : null}
+
       {mostrarForm ? (
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
@@ -536,6 +570,15 @@ export default function FondosPage() {
                   {s.estado}
                 </span>
                 {" "}· Q{s.total.toLocaleString("es-GT", { minimumFractionDigits: 2 })}
+                {resumenEntregas[s.id]?.pendiente ? (
+                  <>
+                    {" "}· <span className="rounded border border-amber-500/60 px-1.5 py-0.5 text-[11px] text-amber-300">
+                      {resumenEntregas[s.id]!.pendiente!.texto}{resumenEntregas[s.id]!.pendiente!.modo === "PRESENCIAL" ? " (presencial)" : ""}
+                    </span>
+                  </>
+                ) : resumenEntregas[s.id] && resumenEntregas[s.id]!.total > 0 ? (
+                  <span className="text-xs text-[var(--muted)]"> · En {resumenEntregas[s.id]!.custodiaEtiqueta}</span>
+                ) : null}
               </div>
               <div className="flex items-center gap-2 text-xs">
                 <button type="button" onClick={() => setExpandido(expandido === s.id ? null : s.id)} className="text-[var(--accent)]">
@@ -570,16 +613,54 @@ export default function FondosPage() {
                 {s.estado === "Autorizada" ? (
                   <button type="button" onClick={() => void cambiarEstado(s.id, "liquidar")} className="rounded bg-[var(--accent)] px-2 py-1 text-white">Liquidar</button>
                 ) : null}
+                {(() => {
+                  // CONTROL DE ENTREGA: «Registrar entrega» solo si el usuario puede actuar por el área que tiene la custodia, el
+                  // documento admite entregas y no hay una pendiente; «Entregas» abre el historial (ver estado, anular, recepción presencial).
+                  const r = resumenEntregas[s.id];
+                  if (!r) return null;
+                  const opciones = opcionesRegistro(actorEntrega, "FONDOS", r.custodia, Boolean(r.pendiente), s.estado);
+                  return (
+                    <>
+                      {opciones.permitido ? (
+                        <button type="button" onClick={() => setRegistrandoEntregaId(s.id)} className="rounded border border-[var(--accent)] px-2 py-1 text-[var(--accent)]">Registrar entrega</button>
+                      ) : null}
+                      {r.total > 0 || opciones.permitido ? (
+                        <button type="button" onClick={() => setEntregaExpandida(entregaExpandida === s.id ? null : s.id)} className="text-[var(--accent)]">
+                          {entregaExpandida === s.id ? "Ocultar entregas" : "Entregas"}
+                        </button>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             </div>
             {s.motivoRechazo ? <p className="mt-1 text-xs text-red-300">Motivo de rechazo: {s.motivoRechazo}</p> : null}
             {expandido === s.id ? (
               <FondoLineasClient key={`${slug}/${s.id}`} slug={slug} id={s.id} cache={cacheLineas} />
             ) : null}
+            {entregaExpandida === s.id ? (
+              <HistorialEntregas slug={slug} solicitudId={s.id} version={versionEntregas} onCambio={alCambiarEntrega} />
+            ) : null}
           </div>
         ))}
         {!solicitudesFiltradas.length && !loading ? <p className="text-[var(--muted)]">Sin solicitudes con este filtro.</p> : null}
       </div>
+      {(() => {
+        const s = registrandoEntregaId !== null ? solicitudes.find((x) => x.id === registrandoEntregaId) : undefined;
+        const r = s ? resumenEntregas[s.id] : undefined;
+        if (!s || !r) return null;
+        const opciones = opcionesRegistro(actorEntrega, "FONDOS", r.custodia, Boolean(r.pendiente), s.estado);
+        if (!opciones.permitido) return null;
+        return (
+          <RegistrarEntregaModal
+            slug={slug}
+            solicitud={{ id: s.id, codigo: s.codigo }}
+            opciones={opciones}
+            onCerrar={() => setRegistrandoEntregaId(null)}
+            onHecho={(m) => { setEntregaExpandida(s.id); alCambiarEntrega(m); }}
+          />
+        );
+      })()}
       <AutorizacionConfirmacionModal
         abierto={confirmandoAutorizacionId !== null}
         mensaje="¿Está seguro de que desea autorizar esta solicitud de fondo?"

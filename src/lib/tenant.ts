@@ -32,6 +32,8 @@ import {
   type FlotaSubmodulo,
   type RrhhSubmodulo,
 } from "./permisos";
+import { actorDesdeSesion, puedeUsarEntregas } from "./entregas/actor";
+import type { ActorEntrega } from "./entregas/reglas";
 
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
@@ -796,6 +798,36 @@ export async function requireTenantGastosAutorizar(
     };
   }
   return { session, empresa };
+}
+
+/**
+ * CONTROL DE ENTREGA DE DOCUMENTOS (PR 2) — puerta de los endpoints de entregas. Resuelve empresa, usuario, nombre, rol y
+ * permisos SIEMPRE desde la sesión del servidor y devuelve el `actor` que consumen los servicios de `src/lib/entregas`.
+ *
+ * Exige que la empresa tenga TMS (Fondos/Gastos/Compras viven ahí) y que el usuario tenga alguna razón para usarlo (alguna fila de
+ * entrega, o —si el endpoint lo acepta— ver Solicitudes de fondo). Qué puede hacer en cada área lo decide el servicio con las
+ * reglas comunes: aquí NO se duplican. Admin conserva el bypass administrativo del sistema.
+ */
+export async function requireTenantEntregas(
+  slug: string,
+  opciones: { aceptaGastosVer?: boolean } = {},
+): Promise<(Ok & { actor: ActorEntrega }) | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  const esAdmin = session.rol === "Admin";
+  if (!esAdmin) {
+    const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+    if (empresaMods.length && !empresaMods.includes("tms")) {
+      return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+    }
+  }
+  const permisos = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!puedeUsarEntregas(permisos, esAdmin, opciones)) {
+    return { error: NextResponse.json({ error: "Sin permiso para el control de entrega de documentos." }, { status: 403 }) };
+  }
+  return { session, empresa, actor: actorDesdeSesion(session, permisos) };
 }
 
 /** Autorizar o rechazar Gastos operativos, sin fallback al permiso general. */
