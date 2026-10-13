@@ -14,6 +14,9 @@ BEGIN NOT ATOMIC
   DECLARE padres_ok BOOLEAN DEFAULT FALSE;
   DECLARE estado VARCHAR(30) DEFAULT 'DETENER';
   DECLARE ck TEXT;
+  DECLARE roles_csv TEXT;
+  DECLARE check_historico BOOLEAN DEFAULT FALSE;
+  DECLARE check_actual BOOLEAN DEFAULT FALSE;
   SET @sitsa_conta_a_resultado = NULL;
   IF esquema IS NULL OR VERSION() NOT LIKE '%MariaDB%' OR @@foreign_key_checks <> 1 OR @@check_constraint_checks <> 1 THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'DETENER: BD/MariaDB/FK/CHECK no verificados';
@@ -85,8 +88,13 @@ BEGIN NOT ATOMIC
       SELECT LOWER(REPLACE(REPLACE(REPLACE(REPLACE(cc.CHECK_CLAUSE,'`',''),' ',''),CHAR(10),''),CHAR(13),'')) INTO ck FROM information_schema.TABLE_CONSTRAINTS tc
         JOIN information_schema.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA=tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME=tc.CONSTRAINT_NAME
         WHERE tc.CONSTRAINT_SCHEMA=esquema AND tc.TABLE_NAME='cont_cuentas_rol' AND tc.CONSTRAINT_TYPE='CHECK' AND cc.CONSTRAINT_NAME='ck_cont_rol_valido';
-      IF ck='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')' THEN SET rol_estado='HISTORICO';
-      ELSEIF ck='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')' THEN SET rol_estado='ACTUAL'; END IF;
+      IF ck REGEXP '^rolin[(]''[a-z_]+''(,''[a-z_]+'')*[)]$' THEN
+        SET roles_csv=REPLACE(SUBSTRING(ck,7,CHAR_LENGTH(ck)-7),'''','');
+        SET check_historico=(FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=7);
+        SET check_actual=(FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND FIND_IN_SET('ventas_bienes', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=8);
+      END IF;
+      IF check_historico THEN SET rol_estado='HISTORICO';
+      ELSEIF check_actual THEN SET rol_estado='ACTUAL'; END IF;
     END IF;
     IF rol_estado='HISTORICO' AND EXISTS (SELECT 1 FROM cont_cuentas_rol WHERE rol='VENTAS_BIENES') THEN SET rol_estado='DESCONOCIDO'; END IF;
     IF rol_estado IN ('HISTORICO','ACTUAL') THEN

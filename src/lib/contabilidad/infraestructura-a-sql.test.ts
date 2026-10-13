@@ -63,3 +63,13 @@ it.each(["preflight", "migrate", "verify"])("%s asocia CHECK por TABLE_CONSTRAIN
   expect(compacto).toContain("tc.CONSTRAINT_TYPE='CHECK'");
   expect(s).toMatch(/tc\.TABLE_NAME\s*(?:=|IN)/);
 });
+it.each(["preflight", "migrate"])("%s compara conjunto exacto de roles, no orden textual", nombre => {
+  const s = sinComentarios(leer(nombre + "-2026-10-contabilidad-infraestructura-a.sql"));
+  expect(s).not.toMatch(/\b(?:ck|check_rol)\s*=\s*'rolin/i);
+  expect(s).toContain("REGEXP '^rolin[(]");
+  for (const rol of ["clientes","iva_por_pagar","ventas_servicios","retencion_iva","anticipos","transito_bancario","devoluciones_ventas","ventas_bienes"]) {
+    expect(s).toContain("FIND_IN_SET('"+rol+"', roles_csv)>0");
+  }
+  expect(s).toContain("CHAR_LENGTH(REPLACE(roles_csv,',',''))=7");
+  expect(s).toContain("CHAR_LENGTH(REPLACE(roles_csv,',',''))=8");
+});

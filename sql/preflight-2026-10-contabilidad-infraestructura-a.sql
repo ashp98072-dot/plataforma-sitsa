@@ -139,14 +139,25 @@ metadata AS (
         AND tc.CONSTRAINT_TYPE='CHECK' AND cc.CONSTRAINT_NAME='ck_cont_rol_valido' LIMIT 1) AS check_rol
   FROM contexto
 ),
-variante AS (
+check_tokens AS (
   SELECT metadata.*,
-    CASE WHEN n_roles=0 THEN 'AUSENTE'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')' THEN 'HISTORICO'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')' THEN 'ACTUAL'
-      ELSE 'DESCONOCIDO' END AS variante_roles,
-    (check_rol IN ('rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')','rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')')) AS roles_check_ok
+    CASE WHEN check_rol REGEXP '^rolin[(]''[a-z_]+''(,''[a-z_]+'')*[)]$'
+      THEN REPLACE(SUBSTRING(check_rol,7,CHAR_LENGTH(check_rol)-7),'''','')
+      ELSE NULL END AS roles_csv
   FROM metadata
+),
+check_semantico AS (
+  SELECT check_tokens.*, COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=7),0) AS check_historico,
+    COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND FIND_IN_SET('ventas_bienes', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=8),0) AS check_actual FROM check_tokens
+),
+variante AS (
+  SELECT check_semantico.*,
+    CASE WHEN n_roles=0 THEN 'AUSENTE'
+      WHEN roles_tabla_ok AND check_historico THEN 'HISTORICO'
+      WHEN roles_tabla_ok AND check_actual THEN 'ACTUAL'
+      ELSE 'DESCONOCIDO' END AS variante_roles,
+    (check_historico OR check_actual) AS roles_check_ok
+  FROM check_semantico
 ),
 datos AS (
   SELECT variante.*, (NOT EXISTS (SELECT 1 FROM cont_cuentas_rol r
@@ -299,14 +310,25 @@ metadata AS (
         AND tc.CONSTRAINT_TYPE='CHECK' AND cc.CONSTRAINT_NAME='ck_cont_rol_valido' LIMIT 1) AS check_rol
   FROM contexto
 ),
-variante AS (
+check_tokens AS (
   SELECT metadata.*,
-    CASE WHEN n_roles=0 THEN 'AUSENTE'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')' THEN 'HISTORICO'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')' THEN 'ACTUAL'
-      ELSE 'DESCONOCIDO' END AS variante_roles,
-    (check_rol IN ('rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')','rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')')) AS roles_check_ok
+    CASE WHEN check_rol REGEXP '^rolin[(]''[a-z_]+''(,''[a-z_]+'')*[)]$'
+      THEN REPLACE(SUBSTRING(check_rol,7,CHAR_LENGTH(check_rol)-7),'''','')
+      ELSE NULL END AS roles_csv
   FROM metadata
+),
+check_semantico AS (
+  SELECT check_tokens.*, COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=7),0) AS check_historico,
+    COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND FIND_IN_SET('ventas_bienes', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=8),0) AS check_actual FROM check_tokens
+),
+variante AS (
+  SELECT check_semantico.*,
+    CASE WHEN n_roles=0 THEN 'AUSENTE'
+      WHEN roles_tabla_ok AND check_historico THEN 'HISTORICO'
+      WHEN roles_tabla_ok AND check_actual THEN 'ACTUAL'
+      ELSE 'DESCONOCIDO' END AS variante_roles,
+    (check_historico OR check_actual) AS roles_check_ok
+  FROM check_semantico
 ),
 datos AS (
   SELECT variante.*, (NOT EXISTS (SELECT 1 FROM cont_cuentas_rol r
@@ -462,14 +484,25 @@ metadata AS (
         AND tc.CONSTRAINT_TYPE='CHECK' AND cc.CONSTRAINT_NAME='ck_cont_rol_valido' LIMIT 1) AS check_rol
   FROM contexto
 ),
-variante AS (
+check_tokens AS (
   SELECT metadata.*,
-    CASE WHEN n_roles=0 THEN 'AUSENTE'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')' THEN 'HISTORICO'
-      WHEN roles_tabla_ok AND check_rol='rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')' THEN 'ACTUAL'
-      ELSE 'DESCONOCIDO' END AS variante_roles,
-    (check_rol IN ('rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'')','rolin(''clientes'',''iva_por_pagar'',''ventas_servicios'',''retencion_iva'',''transito_bancario'',''anticipos'',''devoluciones_ventas'',''ventas_bienes'')')) AS roles_check_ok
+    CASE WHEN check_rol REGEXP '^rolin[(]''[a-z_]+''(,''[a-z_]+'')*[)]$'
+      THEN REPLACE(SUBSTRING(check_rol,7,CHAR_LENGTH(check_rol)-7),'''','')
+      ELSE NULL END AS roles_csv
   FROM metadata
+),
+check_semantico AS (
+  SELECT check_tokens.*, COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=7),0) AS check_historico,
+    COALESCE((FIND_IN_SET('clientes', roles_csv)>0 AND FIND_IN_SET('iva_por_pagar', roles_csv)>0 AND FIND_IN_SET('ventas_servicios', roles_csv)>0 AND FIND_IN_SET('retencion_iva', roles_csv)>0 AND FIND_IN_SET('transito_bancario', roles_csv)>0 AND FIND_IN_SET('anticipos', roles_csv)>0 AND FIND_IN_SET('devoluciones_ventas', roles_csv)>0 AND FIND_IN_SET('ventas_bienes', roles_csv)>0 AND 1+CHAR_LENGTH(roles_csv)-CHAR_LENGTH(REPLACE(roles_csv,',',''))=8),0) AS check_actual FROM check_tokens
+),
+variante AS (
+  SELECT check_semantico.*,
+    CASE WHEN n_roles=0 THEN 'AUSENTE'
+      WHEN roles_tabla_ok AND check_historico THEN 'HISTORICO'
+      WHEN roles_tabla_ok AND check_actual THEN 'ACTUAL'
+      ELSE 'DESCONOCIDO' END AS variante_roles,
+    (check_historico OR check_actual) AS roles_check_ok
+  FROM check_semantico
 ),
 datos AS (
   SELECT variante.*, (TRUE) AS roles_datos_ok, (TRUE) AS eventos_datos_ok FROM variante

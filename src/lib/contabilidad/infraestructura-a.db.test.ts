@@ -123,11 +123,11 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
     for (const name of ["cont_entidades", "cont_cuentas", "cont_asientos", "cont_asiento_detalle", "cont_cxc", "cont_cxp"]) await c.query(tabla(name));
     await c.query("CREATE TABLE fact_facturas (id INT PRIMARY KEY,empresa_id INT NOT NULL,entidad_id INT NULL) ENGINE=InnoDB");
     await c.query("INSERT INTO empresas VALUES (7); INSERT INTO usuarios VALUES (4); INSERT INTO cont_entidades (id,empresa_id,codigo,nombre,activa) VALUES (1,7,'A','A',1),(2,7,'B','B',1)");
-    const historicos = ["CLIENTES","IVA_POR_PAGAR","VENTAS_SERVICIOS","RETENCION_IVA","TRANSITO_BANCARIO","ANTICIPOS","DEVOLUCIONES_VENTAS"];
+    const historicos = ["CLIENTES","IVA_POR_PAGAR","VENTAS_SERVICIOS","RETENCION_IVA","ANTICIPOS","TRANSITO_BANCARIO","DEVOLUCIONES_VENTAS"];
     const nuevo = tabla("cont_cuentas_rol");
-    await c.query(nuevo.replace(",'VENTAS_BIENES'", ""));
+    await c.query(nuevo.replace(",'VENTAS_BIENES'", "").replace("'TRANSITO_BANCARIO','ANTICIPOS'", "'ANTICIPOS','TRANSITO_BANCARIO'"));
     const [checks] = await c.query<RowDataPacket[]>("SELECT CHECK_CLAUSE,LENGTH(CHECK_CLAUSE) AS longitud FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND CONSTRAINT_NAME='ck_cont_rol_valido'");
-    expect(checks[0]).toMatchObject({ CHECK_CLAUSE: "`rol` in ('CLIENTES','IVA_POR_PAGAR','VENTAS_SERVICIOS','RETENCION_IVA','TRANSITO_BANCARIO','ANTICIPOS','DEVOLUCIONES_VENTAS')", longitud: 126 });
+    expect(checks[0]).toMatchObject({ CHECK_CLAUSE: "`rol` in ('CLIENTES','IVA_POR_PAGAR','VENTAS_SERVICIOS','RETENCION_IVA','ANTICIPOS','TRANSITO_BANCARIO','DEVOLUCIONES_VENTAS')", longitud: 126 });
     for (const entidad of [1,2]) for (const [i,rol] of historicos.entries()) {
       const id = (entidad-1)*7+i+1;
       await c.query("INSERT INTO cont_cuentas (id,empresa_id,entidad_id,codigo,nombre,tipo,nivel,activa) VALUES (?,7,?,?,'Fixture','Activo',1,1)", [id, entidad, "F"+id]);
@@ -139,7 +139,7 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
     const arrays = res as unknown[][];
     return arrays.flat().find(r => r && typeof r==="object" && clave in r) as Record<string, unknown> | undefined;
   }
-  it("upgrade exacto de producción preserva las 14 filas, FK/índices/collation y repite NOOP", async () => {
+  it("Hostinger histórico real ANTICIPOS antes de TRANSITO: APTO_COMPATIBILIDAD/HISTORICO, 14 filas intactas, luego NOOP", async () => {
     const c = await instanciaHistorica();
     try {
       const [antes] = await c.query<RowDataPacket[]>("SELECT * FROM cont_cuentas_rol ORDER BY id");
@@ -171,6 +171,55 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       await c.query("INSERT INTO cont_cuentas_rol (empresa_id,entidad_id,cuenta_id,rol) VALUES (7,1,1,'VENTAS_BIENES')");
       await c.rollback();
       const [sinSeed] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(sinSeed).toEqual(antes);
+    } finally { await c.end(); }
+  });
+  it.each([
+    ["CLIENTES","IVA_POR_PAGAR","VENTAS_SERVICIOS","RETENCION_IVA","TRANSITO_BANCARIO","ANTICIPOS","DEVOLUCIONES_VENTAS"],
+    ["DEVOLUCIONES_VENTAS","TRANSITO_BANCARIO","ANTICIPOS","RETENCION_IVA","VENTAS_SERVICIOS","IVA_POR_PAGAR","CLIENTES"],
+  ].map(roles => ({ roles })))("mismo conjunto histórico en orden alterno da HISTORICO y migrate válido %j", async ({ roles }) => {
+    const c = await instanciaHistorica();
+    try {
+      await c.query("ALTER TABLE cont_cuentas_rol DROP CONSTRAINT ck_cont_rol_valido, ADD CONSTRAINT ck_cont_rol_valido CHECK (rol IN (" + roles.map(r => "'"+r+"'").join(",") + "))");
+      const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
+      const [pre] = await preflight(c);
+      expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "APTO_COMPATIBILIDAD", variante_roles: "HISTORICO", roles_check_ok: 1 });
+      await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      const [noOp] = await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      expect(resultado(noOp,"resultado_migracion")).toMatchObject({ resultado_migracion: "NOOP" });
+      const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
+    } finally { await c.end(); }
+  });
+  it("mismo conjunto actual de ocho roles en orden inverso sigue NOOP", async () => {
+    const c = await instanciaHistorica();
+    try {
+      await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
+      const roles = [...ROLES_CONTABLES].reverse();
+      await c.query("ALTER TABLE cont_cuentas_rol DROP CONSTRAINT ck_cont_rol_valido, ADD CONSTRAINT ck_cont_rol_valido CHECK (rol IN (" + roles.map(r => "'"+r+"'").join(",") + "))");
+      const [pre] = await preflight(c); expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "NOOP", variante_roles: "ACTUAL" });
+      const [m] = await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
+      expect(resultado(m,"resultado_migracion")).toMatchObject({ resultado_migracion: "NOOP" });
+      const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
+    } finally { await c.end(); }
+  });
+  it.each(["falta rol", "rol duplicado", "rol desconocido extra", "otra expresión"])("CHECK semánticamente incompatible %s detiene preflight y migrate", async caso => {
+    const c = await instanciaHistorica();
+    try {
+      const roles = ["CLIENTES","IVA_POR_PAGAR","VENTAS_SERVICIOS","RETENCION_IVA","ANTICIPOS","TRANSITO_BANCARIO","DEVOLUCIONES_VENTAS"];
+      if (caso==="falta rol") roles.pop();
+      if (caso==="rol duplicado") roles.push("CLIENTES");
+      if (caso==="rol desconocido extra") roles.push("INVENTADO");
+      const expresion = caso==="otra expresión" ? "rol IS NOT NULL" : "rol IN (" + roles.map(r => "'"+r+"'").join(",") + ")";
+      // Fixture SOLO local: permite representar un CHECK al que faltan roles de los datos históricos.
+      await c.query("SET check_constraint_checks=OFF");
+      try { await c.query("ALTER TABLE cont_cuentas_rol DROP CONSTRAINT ck_cont_rol_valido, ADD CONSTRAINT ck_cont_rol_valido CHECK ("+expresion+")"); }
+      finally { await c.query("SET check_constraint_checks=ON"); }
+      const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
+      const [pre] = await preflight(c);
+      expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "DETENER", variante_roles: "DESCONOCIDO", roles_check_ok: 0 });
+      await expect(c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"))).rejects.toThrow("DETENER");
+      const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
+      const [tablas] = await c.query("SHOW TABLES LIKE 'cont_eventos'"); expect(tablas).toHaveLength(0);
     } finally { await c.end(); }
   });
   it.each(["nombre CHECK", "columna", "índice", "FK", "CHECK diferente", "datos inválidos", "colisión"])("drift %s detiene antes de ALTER/crear eventos", async caso => {

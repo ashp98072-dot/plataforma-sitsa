@@ -7,7 +7,8 @@ Corrección de #447: producción MariaDB 11.8.9-MariaDB-log ya tiene
 `cont_eventos` no existe. Se reutilizará la tabla, sin cambiar ninguna de sus filas ni collation.
 El operador confirmó nombre/definición exacta del CHECK histórico: `ck_cont_rol_valido`,
 longitud física 126, siete roles en orden CLIENTES/IVA_POR_PAGAR/VENTAS_SERVICIOS/RETENCION_IVA/
-TRANSITO_BANCARIO/ANTICIPOS/DEVOLUCIONES_VENTAS. VENTAS_BIENES se agrega al final.
+ANTICIPOS/TRANSITO_BANCARIO/DEVOLUCIONES_VENTAS. La compatibilidad depende del conjunto,
+no del orden del IN. VENTAS_BIENES se agrega al final del ALTER diseñado.
 No se ejecutó la corrección en producción; requiere preflight y autorización antes de aplicar.
 
 ## Alcance
@@ -97,7 +98,10 @@ APTO_NUEVO: ambas tablas ausentes y padres compatibles.
 APTO_COMPATIBILIDAD: tabla histórica exactamente verificada, siete roles válidos, eventos ausente.
 NOOP: ocho roles admitidos y tabla de eventos exactamente compatible.
 DETENER: estructura/datos inesperados, colisiones o evidencia insuficiente.
-El CHECK se compara tras normalizar únicamente espacios/backticks/mayúsculas; se conserva el orden.
+El CHECK se normaliza en espacios/backticks/mayúsculas y debe coincidir con la expresión
+cerrada `rol IN ('token',...)`, sin operadores ni expresiones adicionales. Se extraen tokens:
+FIND_IN_SET exige cada rol permitido y la cardinalidad exacta exige 7 (histórico) u 8 (actual).
+El orden no importa; roles faltantes, duplicados, extras/desconocidos o expresiones distintas detienen.
 No se permite otro conjunto de roles ni nombre de CHECK. Una tabla con ocho roles pero eventos ausente
 (ejecución DDL interrumpida) devuelve DETENER y exige revisión/recuperación explícita, no reparación automática.
 La variante histórica espera exactamente un CHECK de rol: ausencia de CHECK activa no se finge como uno existente;
@@ -142,6 +146,11 @@ Resultado dirigido anterior (HEAD 4a41f98f): 240/240 Contabilidad + APIs manuale
 Delta Hostinger: 23/23 SQL/DB dirigidos (7 contratos estáticos y 16 casos DB reales),
 incluyendo upgrade histórico, preservación de 14 filas y NOOP con metadata CHECK sin TABLE_NAME.
 Delta cliente/phpMyAdmin: 27/27 (9 estáticos y 18 DB, incluyendo 2 tests con PHP/mysqli real).
+Delta conjunto de roles: 36/36 (11 estáticos y 25 DB, incluidos ambos tests mysqli).
+El orden histórico real Hostinger ANTICIPOS antes de TRANSITO_BANCARIO produce
+APTO_COMPATIBILIDAD/HISTORICO. Dos órdenes históricos alternos y el actual invertido son válidos;
+faltante, duplicado, desconocido extra y otra expresión producen DETENER.
+Upgrade preserva exactamente las 14 filas sintéticas; segunda ejecución NOOP.
 HISTORICO/APTO_COMPATIBILIDAD, ACTUAL/NOOP, NUEVO/APTO_NUEVO y drift/DETENER intactos.
 Los tests mysqli necesitan CONTA_A_TEST_PHP apuntando a un PHP local con extensión mysqli;
 si falta, se omiten explícitamente. En esta validación se ejecutaron ambos.
