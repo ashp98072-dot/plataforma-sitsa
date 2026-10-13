@@ -59,7 +59,11 @@ export type ImagenFirmaInterna = {
 
 export type DatosFirmaInterna = {
   empresaId: number;
-  usuarioId: number;
+  /**
+   * NULL solo para un firmante SIN usuario del sistema: recepción presencial del control de entrega
+   * (src/lib/entregas/entregas.ts). La columna ya es `usuario_id INT NULL` — no requiere SQL.
+   */
+  usuarioId: number | null;
   /** NULL en este ticket: los firmantes (Jefe/Gerente Operaciones, Facturador) son usuarios de staff, no colaboradores del Portal. */
   empleadoId: number | null;
   nombreFirmante: string;
