@@ -14,6 +14,7 @@ BEGIN NOT ATOMIC
   DECLARE padres_ok BOOLEAN DEFAULT FALSE;
   DECLARE estado VARCHAR(30) DEFAULT 'DETENER';
   DECLARE ck TEXT;
+  SET @sitsa_conta_a_resultado = NULL;
   IF esquema IS NULL OR VERSION() NOT LIKE '%MariaDB%' OR @@foreign_key_checks <> 1 OR @@check_constraint_checks <> 1 THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'DETENER: BD/MariaDB/FK/CHECK no verificados';
   END IF;
@@ -233,6 +234,9 @@ CREATE TABLE IF NOT EXISTS cont_eventos (
   CONSTRAINT ck_cont_evento_snapshot CHECK (JSON_VALID(datos_snapshot) AND JSON_VALUE(datos_snapshot, '$.version') IS NOT NULL AND JSON_VALUE(datos_snapshot, '$.version') = 1)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
   END IF;
-  SELECT estado AS resultado_migracion;
+  SET @sitsa_conta_a_resultado = estado;
 END//
 DELIMITER ;
+-- SELECT fuera del bloque: no deja result sets internos pendientes en mysqli/phpMyAdmin.
+SELECT COALESCE(@sitsa_conta_a_resultado, 'ERROR_NO_COMPLETADA') AS resultado_migracion;
+SET @sitsa_conta_a_resultado = NULL;

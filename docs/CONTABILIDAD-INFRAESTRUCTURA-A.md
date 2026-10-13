@@ -56,7 +56,7 @@ Permisos e identidad deben validarse por guard del servidor antes de cualquier f
 
 ## SQL manual propuesto
 
-1. `sql/preflight-2026-10-contabilidad-infraestructura-a.sql` (bloque de lectura de metadata/datos).
+1. `sql/preflight-2026-10-contabilidad-infraestructura-a.sql` (SELECT/CTE y SHOW independientes).
 2. `sql/migrate-2026-10-contabilidad-infraestructura-a.sql` (DDL condicional guardado).
 3. `sql/verify-2026-10-contabilidad-infraestructura-a.sql` (solo SELECT/SHOW).
 
@@ -66,11 +66,22 @@ JSON puede aparecer físicamente como LONGTEXT en MariaDB: no convertir.
 Preflight verifica DB elegida, versión, checks/FKs ON, padres, engines, tipos INT signed,
 índices únicos compuestos, collations, huérfanos y DDL existentes.
 Las FKs usan columnas numéricas: las collations de texto padre no se fuerzan ni se modifican.
-Compuerta automática usa information_schema y devuelve SHOW CREATE explícito de la tabla existente:
+La consulta gate usa information_schema; las salidas SHOW/filas son sentencias independientes:
 valida columnas/posiciones/defaults, PK/UNIQUE/índice, dos FK RESTRICT, CHECK único conocido,
 engine/collation, tipos signed, datos y colisiones. Roles/activa inesperados, constraints adicionales,
 triggers o metadata inaccesible => DETENER. No inferir ausencia de permisos como ausencia de constraints.
 No asumir disponibilidad del permiso: comprobarlo con el preflight; no retirar la compuerta.
+El preflight no usa DELIMITER, BEGIN, IF, SIGNAL, DECLARE, SET ni variables de usuario.
+PASO 0 devuelve presencia de tablas. Ejecutar exactamente UNA consulta de PASO 1:
+1A HISTORICO cuando roles existe/eventos ausente (producción previa a migración, activa por defecto);
+1B ACTUAL cuando ambas existen (alternativa comentada, copiar su SELECT/CTE para ejecutar);
+1C NUEVO cuando ambas están ausentes (alternativa comentada, sin referencias a tablas ausentes).
+Cada consulta devuelve una fila con resultado_preflight, variante_roles y flags diagnósticos.
+SQL estático resuelve nombres de tablas antes de evaluar CASE: no es seguro esconder una tabla ausente
+en una rama CASE. Por eso los modos son explícitos, no se ejecutan como lote ni se omite validación de datos.
+Los tests seleccionan la variante según la presencia de tablas, igual que el operador tras PASO 0.
+Luego PASO 2 estructura y PASO 3 filas, cada sentencia por separado y solo para tablas existentes.
+Errores de permisos/SQL/cliente (incluido #2014) NO se interpretan como DETENER de la consulta.
 Compatibilidad Hostinger: la relación CHECK/tabla proviene exclusivamente de TABLE_CONSTRAINTS
 (`tc.CONSTRAINT_SCHEMA`, `tc.TABLE_NAME`, `tc.CONSTRAINT_TYPE='CHECK'`).
 Se une CHECK_CONSTRAINTS por schema + nombre para obtener la definición;
@@ -99,8 +110,14 @@ No DROP TABLE ni DELETE de históricos. Único DROP: reemplazo de ck_cont_rol_va
 DDL produce commits implícitos: ejecutar en ventana sin modificación de esquema/configuración.
 No envolverlo en una transacción de negocio ni prometer rollback de todo el bloque.
 BEGIN NOT ATOMIC/SIGNAL detiene el bloque antes de DDL si no coincide la compuerta.
-No crea procedimientos persistentes. DELIMITER es directiva del cliente (mysql/phpMyAdmin);
-mysql2 envía el bloque completo quitando únicamente esas directivas.
+No crea procedimientos persistentes. La migración mantiene DELIMITER/BEGIN NOT ATOMIC y sus guardas;
+pero ya no emite un result set dentro del bloque. Captura su estado en una variable SOLO de sesión,
+lo devuelve con SELECT independiente después del END y la limpia al final.
+No cambia FOREIGN_KEY_CHECKS. Si el bloque falla, no se informa éxito (ERROR_NO_COMPLETADA).
+mysqli local demostró que incluso un único SELECT interno deja more_results pendiente y siguiente
+query falla #2014. El bloque corregido no deja resultados pendientes y la siguiente consulta funciona.
+DELIMITER es directiva del cliente; mysql2 envía SQL quitando únicamente esas directivas.
+Verificación manual del cliente Hostinger sigue pendiente; no se ejecutó ninguna consulta allí.
 
 ## Validación local y reproducción
 
@@ -124,6 +141,10 @@ Pruebas unitarias sin puerto siguen ejecutándose; suite DB se omite explícitam
 Resultado dirigido anterior (HEAD 4a41f98f): 240/240 Contabilidad + APIs manuales; 15 casos DB reales.
 Delta Hostinger: 23/23 SQL/DB dirigidos (7 contratos estáticos y 16 casos DB reales),
 incluyendo upgrade histórico, preservación de 14 filas y NOOP con metadata CHECK sin TABLE_NAME.
+Delta cliente/phpMyAdmin: 27/27 (9 estáticos y 18 DB, incluyendo 2 tests con PHP/mysqli real).
+HISTORICO/APTO_COMPATIBILIDAD, ACTUAL/NOOP, NUEVO/APTO_NUEVO y drift/DETENER intactos.
+Los tests mysqli necesitan CONTA_A_TEST_PHP apuntando a un PHP local con extensión mysqli;
+si falta, se omiten explícitamente. En esta validación se ejecutaron ambos.
 TypeScript, ESLint dirigido y diff-check limpios.
 Build anterior exitoso con Next 16.3.6 (HEAD 9f73cb78); no se repite en este delta de
 catálogo/SQL/tests/docs sin cambios de UI/endpoints/escritor. TypeScript sí se revalida.

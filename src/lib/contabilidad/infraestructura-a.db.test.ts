@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import mysql, { type PoolConnection, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,16 @@ const snapshot = { version: 1, versionCalculo: "INFRA_A", origen: { tipo: "FACTU
 const sql = (name: string) => readFileSync("sql/" + name, "utf8").replaceAll("\r\n", "\n");
 // DELIMITER es instrucción del cliente mysql/phpMyAdmin, no del servidor mysql2.
 const ejecutable = (name: string) => sql(name).replace(/^DELIMITER.*$/gm, "").replaceAll("END//", "END;");
+async function preflight(c: mysql.Connection | PoolConnection, sinTablaCheck = false) {
+  const [tablas] = await c.query<RowDataPacket[]>("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('cont_cuentas_rol','cont_eventos')");
+  const mode = !tablas.some(t => t.TABLE_NAME==="cont_cuentas_rol") ? "NUEVO" : tablas.some(t => t.TABLE_NAME==="cont_eventos") ? "ACTUAL" : "HISTORICO";
+  const archivo = sql("preflight-2026-10-contabilidad-infraestructura-a.sql");
+  const fragmento = archivo.split("INICIO_GATE_"+mode)[1].split("FIN_GATE_"+mode)[0].replace(/--[^\n]*/g, "").trim();
+  const consulta = sinTablaCheck ? fragmento.replaceAll("information_schema.CHECK_CONSTRAINTS","hostinger_checks") : fragmento;
+  const resultadoGate = await c.query<RowDataPacket[]>(consulta);
+  expect(resultadoGate[0]).toHaveLength(1);
+  return resultadoGate;
+}
 const tabla = (name: string) => {
   const contenido = sql("schema.sql");
   const inicio = contenido.indexOf("CREATE TABLE IF NOT EXISTS " + name + " (");
@@ -41,7 +52,7 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       await c.query("CREATE TABLE fact_facturas (id INT PRIMARY KEY, empresa_id INT NOT NULL, entidad_id INT NULL) ENGINE=InnoDB; CREATE TABLE auditoria (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, usuario VARCHAR(100), accion VARCHAR(100), modulo VARCHAR(100), detalle TEXT) ENGINE=InnoDB");
       await c.query("INSERT INTO empresas VALUES (7),(8); INSERT INTO usuarios VALUES (4); INSERT INTO cont_entidades (id,empresa_id,codigo,nombre,activa) VALUES (9,7,'A','A',1),(10,8,'B','B',1); INSERT INTO fact_facturas VALUES (5,7,9),(6,7,9),(7,8,10)");
       await c.query("INSERT INTO cont_cuentas (id,empresa_id,entidad_id,codigo,nombre,tipo,nivel,activa) VALUES (1,7,9,'D','D','Activo',1,1),(2,7,9,'H','H','Ingreso',1,1),(3,8,10,'D','D','Activo',1,1),(4,8,10,'H','H','Ingreso',1,1)");
-      await c.query(ejecutable("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      await preflight(c);
       await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
       await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
       await c.query(ejecutable("verify-2026-10-contabilidad-infraestructura-a.sql"));
@@ -134,7 +145,7 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       const [antes] = await c.query<RowDataPacket[]>("SELECT * FROM cont_cuentas_rol ORDER BY id");
       const [indicesAntes] = await c.query("SHOW INDEX FROM cont_cuentas_rol");
       const [fkAntes] = await c.query("SELECT CONSTRAINT_NAME,UPDATE_RULE,DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='cont_cuentas_rol' ORDER BY CONSTRAINT_NAME");
-      const [pre] = await c.query(ejecutable("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      const [pre] = await preflight(c);
       expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "APTO_COMPATIBILIDAD", variante_roles: "HISTORICO" });
       const [m] = await c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"));
       expect(resultado(m,"resultado_migracion")).toMatchObject({ resultado_migracion: "APTO_COMPATIBILIDAD" });
@@ -173,7 +184,7 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       if (caso==="datos inválidos") await c.query("UPDATE cont_cuentas_rol SET activa=2 WHERE id=1");
       if (caso==="colisión") await c.query("CREATE TABLE colision (id INT, CONSTRAINT ck_cont_evento_tipo CHECK (id>0)) ENGINE=InnoDB");
       const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
-      const [pre] = await c.query(ejecutable("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      const [pre] = await preflight(c);
       expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "DETENER" });
       await expect(c.query(ejecutable("migrate-2026-10-contabilidad-infraestructura-a.sql"))).rejects.toThrow("DETENER");
       const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
@@ -192,15 +203,75 @@ describe.skipIf(!port)("PR A / MariaDB desechable local", () => {
       expect(checks).toHaveLength(1);
       const sinTablaCheck = (nombre: string) => ejecutable(nombre).replaceAll("information_schema.CHECK_CONSTRAINTS", "hostinger_checks");
       const [antes] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id");
-      const [pre] = await c.query(sinTablaCheck("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      const [pre] = await preflight(c, true);
       expect(resultado(pre,"resultado_preflight")).toMatchObject({ resultado_preflight: "APTO_COMPATIBILIDAD" });
       await c.query(sinTablaCheck("migrate-2026-10-contabilidad-infraestructura-a.sql"));
       const [noOp] = await c.query(sinTablaCheck("migrate-2026-10-contabilidad-infraestructura-a.sql"));
       expect(resultado(noOp,"resultado_migracion")).toMatchObject({ resultado_migracion: "NOOP" });
-      const [post] = await c.query(sinTablaCheck("preflight-2026-10-contabilidad-infraestructura-a.sql"));
+      const [post] = await preflight(c, true);
       expect(resultado(post,"resultado_preflight")).toMatchObject({ resultado_preflight: "NOOP" });
       const [despues] = await c.query("SELECT * FROM cont_cuentas_rol ORDER BY id"); expect(despues).toEqual(antes);
       await c.query(sinTablaCheck("verify-2026-10-contabilidad-infraestructura-a.sql"));
+    } finally { await c.end(); }
+  });
+  it.skipIf(!process.env.CONTA_A_TEST_PHP)("mysqli ejecuta migrate sin resultados internos pendientes y siguiente query funciona", async () => {
+    const c = await instanciaHistorica();
+    try {
+      const [base] = await c.query<RowDataPacket[]>("SELECT DATABASE() AS nombre");
+      const php = `
+        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+        if (!preg_match('/^conta_a_test_[a-f0-9]+$/', $argv[2])) { throw new Exception("BD no desechable"); }
+        $db = new mysqli("127.0.0.1", "root", "", $argv[2], 3407);
+        $script = file_get_contents($argv[1]);
+        $partes = explode("END//", $script, 2);
+        $compound = preg_replace('/^DELIMITER.*$/m', '', $partes[0]) . "END";
+        $db->query($compound);
+        if ($db->more_results()) { throw new Exception("Resultados internos pendientes"); }
+        $probe = $db->query("SELECT 1 AS siguiente"); $probe->free();
+        $resto = preg_replace('/^DELIMITER.*$/m', '', $partes[1]);
+        $resto = preg_replace('/--[^\\n]*/', '', $resto);
+        foreach (explode(";", $resto) as $stmt) {
+          if (!trim($stmt)) { continue; }
+          $r = $db->query($stmt);
+          if ($r instanceof mysqli_result) { echo json_encode($r->fetch_assoc()); $r->free(); }
+          if ($db->more_results()) { throw new Exception("Resultados externos pendientes"); }
+        }
+      `;
+      const args = ["-r", php, "sql/migrate-2026-10-contabilidad-infraestructura-a.sql", String(base[0].nombre)];
+      const salida = execFileSync(process.env.CONTA_A_TEST_PHP!, args, { encoding: "utf8" });
+      expect(JSON.parse(salida)).toMatchObject({ resultado_migracion: "APTO_COMPATIBILIDAD" });
+      const repetida = execFileSync(process.env.CONTA_A_TEST_PHP!, args, { encoding: "utf8" });
+      expect(JSON.parse(repetida)).toMatchObject({ resultado_migracion: "NOOP" });
+      const [estado] = await preflight(c); expect(resultado(estado,"resultado_preflight")).toMatchObject({ resultado_preflight: "NOOP" });
+    } finally { await c.end(); }
+  });
+  it.skipIf(!process.env.CONTA_A_TEST_PHP)("mysqli ejecuta preflight histórico y SHOW independientes sin Commands out of sync", async () => {
+    const c = await instanciaHistorica();
+    try {
+      const [base] = await c.query<RowDataPacket[]>("SELECT DATABASE() AS nombre");
+      const php = `
+        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+        if (!preg_match('/^conta_a_test_[a-f0-9]+$/', $argv[2])) { throw new Exception("BD no desechable"); }
+        $db = new mysqli("127.0.0.1", "root", "", $argv[2], 3407);
+        $script = file_get_contents($argv[1]);
+        $script = preg_replace('~/\\*[\\s\\S]*?\\*/~', '', $script);
+        $script = preg_replace('/--[^\\n]*/', '', $script);
+        foreach (explode(";", $script) as $stmt) {
+          if (!trim($stmt)) { continue; }
+          $r = $db->query($stmt);
+          if ($r instanceof mysqli_result) {
+            $fila = $r->fetch_assoc();
+            if (isset($fila["resultado_preflight"])) { echo json_encode($fila); }
+            $r->free();
+          }
+          if ($db->more_results()) { throw new Exception("Resultados pendientes"); }
+        }
+        $probe = $db->query("SELECT 1 AS siguiente"); $probe->free();
+      `;
+      const salida = execFileSync(process.env.CONTA_A_TEST_PHP!, ["-r", php, "sql/preflight-2026-10-contabilidad-infraestructura-a.sql", String(base[0].nombre)], { encoding: "utf8" });
+      const gate = JSON.parse(salida);
+      expect(gate).toMatchObject({ resultado_preflight: "APTO_COMPATIBILIDAD", variante_roles: "HISTORICO" });
+      expect(Number(gate.roles_datos_ok)).toBe(1);
     } finally { await c.end(); }
   });
 });
