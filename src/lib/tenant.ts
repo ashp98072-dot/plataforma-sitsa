@@ -1232,7 +1232,7 @@ const MENSAJE_CONFIG_FACTURACION: Record<AccionConfigFacturacion, string> = {
 };
 export async function requireTenantFacturacion(
   slug: string,
-  accion: AccionPermiso | "emitir" | "anular" | "pagos" | AccionConfigFacturacion = "ver",
+  accion: AccionPermiso | "emitir" | "anular" | "pagos" | "ver_confirmaciones_bancarias" | "confirmar_banco" | "anular_confirmacion" | AccionConfigFacturacion = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -1263,7 +1263,7 @@ export async function requireTenantFacturacion(
     if (permitido) return { session, empresa };
     return { error: NextResponse.json({ error: MENSAJE_CONFIG_FACTURACION[accion as AccionConfigFacturacion] }, { status: 403 }) };
   }
-  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos"
+  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos" || accion === "ver_confirmaciones_bancarias" || accion === "confirmar_banco" || accion === "anular_confirmacion"
     ? tieneAccionCatalogo(perms, "facturacion", accion)
     : tienePermiso(perms, "facturacion", accion as AccionPermiso);
   if (tienePermisoBase(perms, "facturacion") && autorizado) {

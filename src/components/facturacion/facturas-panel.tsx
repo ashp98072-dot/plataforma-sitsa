@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
 import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
+import { ConfirmacionesBancariasPanel } from "@/components/facturacion/confirmaciones-bancarias-panel";
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -564,6 +565,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                             )
                           ) : null}
 
+                          <ConfirmacionesBancariasPanel key={`${slug}:${f.id}`} slug={slug} facturaId={f.id} />
                           {/* Fase J: pagos — solo Emitida. HOTFIX PR #114
                               (Hallazgo 3): con saldo 0 no se ofrece registrar
                               otro pago (acción imposible) — se informa
