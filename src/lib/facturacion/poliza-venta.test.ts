@@ -34,10 +34,12 @@ describe("regla CONFIRMADA: venta de Q3,000 con IVA incluido y retención del 15
     expect([p.totalDebe, p.totalHaber, p.retencionIva, p.netoCobrar]).toEqual([3000, 3000, 48.21, 2951.79]);
   });
 
-  it("al CONTADO: la contrapartida neta es el BANCO de la cuenta elegida (no Clientes)", () => {
-    const p = partida({ lineas: [l], condicionPago: "CONTADO", cuentaBancariaId: 7, retencionIvaPct: 15 });
-    expect(p.renglones[1]).toEqual({ rol: "BANCOS", lado: "DEBE", monto: 2951.79, cuentaBancariaId: 7 });
-    expect(p.renglones.some((r) => r.rol === "CLIENTES")).toBe(false);
+  it("al CONTADO: la contrapartida neta TAMBIÉN es CLIENTES (nunca el banco al emitir); idéntica a crédito", () => {
+    const contado = partida({ lineas: [l], condicionPago: "CONTADO", retencionIvaPct: 15 });
+    const credito = partida({ lineas: [l], condicionPago: "CREDITO", retencionIvaPct: 15 });
+    expect(contado.renglones[1]).toEqual({ rol: "CLIENTES", lado: "DEBE", monto: 2951.79 });
+    expect(contado).toEqual(credito);
+    expect(JSON.stringify(contado.renglones)).not.toMatch(/BANCO/);
   });
 
   it("la retención NO reduce Ventas ni el IVA por pagar: son los mismos con 0 %, 15 % y 30 %", () => {
@@ -118,9 +120,9 @@ describe("múltiples líneas con IVA incluido y agregado: la retención se calcu
 
 describe("validaciones", () => {
   const l = lineaIncluida(1120);
-  it("exige condición de pago, banco al contado, retención válida y líneas clasificadas", () => {
+  it("exige condición de pago, retención válida y líneas clasificadas; el contado NO exige cuenta bancaria", () => {
     expect(proponerPartidaVenta({ lineas: [l], condicionPago: null, retencionIvaPct: 0 })).toMatchObject({ ok: false });
-    expect(proponerPartidaVenta({ lineas: [l], condicionPago: "CONTADO", retencionIvaPct: 0 })).toMatchObject({ ok: false, error: expect.stringContaining("cuenta bancaria") });
+    expect(proponerPartidaVenta({ lineas: [l], condicionPago: "CONTADO", retencionIvaPct: 0 })).toMatchObject({ ok: true });
     expect(proponerPartidaVenta({ lineas: [l], condicionPago: "CREDITO", retencionIvaPct: 10 })).toMatchObject({ ok: false });
     expect(proponerPartidaVenta({ lineas: [{ ...l, clasificacion: null }], condicionPago: "CREDITO", retencionIvaPct: 0 })).toMatchObject({ ok: false, error: expect.stringContaining("SERVICIO o BIEN") });
     expect(proponerPartidaVenta({ lineas: [], condicionPago: "CREDITO", retencionIvaPct: 0 })).toMatchObject({ ok: false });
