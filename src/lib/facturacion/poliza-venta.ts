@@ -3,28 +3,31 @@ import type { CondicionPago, ClasificacionLinea } from "@/lib/facturacion/lineas
 import { esRetencionIvaValida } from "@/lib/facturacion/lineas-factura";
 
 /**
- * FACT-4 — PARTIDA de una venta (DEBE/HABER) calculada con la regla CONFIRMADA por Contabilidad. Función PURA: no escribe
- * asientos, no conoce números de cuenta ni entidades. Devuelve renglones por ROL; la cuenta contable de cada rol sale
- * después de la parametrización de la entidad emisora (válido por igual para Mónaco y KT; nada hardcodeado).
+ * PARTIDA de una venta (DEBE/HABER) — ÚNICA FUENTE DE VERDAD del cálculo de la póliza de venta. Función PURA: no escribe
+ * asientos, no conoce números de cuenta ni entidades. Devuelve renglones por ROL (los de `ROLES_CONTABLES`); la cuenta contable
+ * de cada rol sale de la parametrización de la entidad emisora (válido por igual para Mónaco y KT; nada hardcodeado).
  *
- * Regla confirmada (ejemplo: factura de Q3,000.00 con IVA incluido y retención del 15 %):
+ * REGLA CONFIRMADA (CONT PR C): al emitir/certificar, la contrapartida neta SIEMPRE es CLIENTES, también al CONTADO. El banco NO
+ * se carga con la venta: se registra después, solo cuando exista una confirmación bancaria CONFIRMADA (fact_pago_confirmaciones,
+ * PR D). Por eso la condición de pago ya no cambia la partida y no existe un rol BANCOS aquí.
+ *
+ * Ejemplo (factura de Q3,000.00 con IVA incluido y retención del 15 %):
  *   base           = total / 1.12                      → 2,678.57   (suma de las bases de las líneas)
  *   iva            = total − base                      →   321.43
  *   retención IVA  = iva × porcentaje de retención     →    48.21   (0 %, 15 % o 30 %; half-up a 2 decimales)
- *   cliente|banco  = total − retención                 → 2,951.79
- *   DEBE:  Retención IVA 48.21 · Clientes (crédito) o Banco (contado) 2,951.79      = 3,000.00
- *   HABER: Ventas 2,678.57 · IVA por pagar 321.43                                     = 3,000.00
- * - La retención NO reduce Ventas ni el IVA por pagar de la factura: va en el DEBE, en su propia cuenta.
- * - Crédito: la contrapartida neta es CLIENTES. Contado: es el BANCO de la cuenta bancaria elegida en la factura.
+ *   clientes       = total − retención                 → 2,951.79
+ *   DEBE:  Retención IVA 48.21 · Clientes 2,951.79                                  = 3,000.00
+ *   HABER: Ventas 2,678.57 · IVA por pagar 321.43                                    = 3,000.00
+ * - La retención NO reduce Ventas ni el IVA por pagar de la factura: va en el DEBE, en su propia cuenta. La AUTOMATIZACIÓN
+ *   contable de facturas con retención sigue bloqueada (ver src/lib/contabilidad/factura-emitida.ts); este cálculo existe para
+ *   la propuesta y para cuando la regla de retención esté definida.
  * - Ventas se separa por clasificación de línea: SERVICIOS y BIENES.
  *
- * El momento de generar la póliza (DESPUÉS de que FEL certifique), su idempotencia y su reversión por anulación NO se
- * implementan aquí (ver docs/FACTURACION-VIAJES-FASE1.md §19).
+ * El MOMENTO de generar la póliza (certificación FEL), su idempotencia y su reversión por anulación NO se implementan aquí.
  */
 
 export type RolCuentaVenta =
   | "CLIENTES"
-  | "BANCOS"
   | "RETENCION_IVA"
   | "VENTAS_SERVICIOS"
   | "VENTAS_BIENES"
@@ -34,8 +37,6 @@ export type RenglonPartidaVenta = {
   rol: RolCuentaVenta;
   lado: "DEBE" | "HABER";
   monto: number;
-  /** Solo BANCOS: cuenta bancaria elegida en la factura (cont_cuentas_bancarias.id). */
-  cuentaBancariaId?: number;
 };
 
 export type PartidaVentaPropuesta = {
@@ -44,7 +45,7 @@ export type PartidaVentaPropuesta = {
   totalHaber: number;
   /** Retención de IVA calculada (0 si no aplica). */
   retencionIva: number;
-  /** Lo que realmente se cobra al cliente/banco: total − retención. */
+  /** Lo que queda a cargo del cliente (CLIENTES): total − retención. */
   netoCobrar: number;
 };
 
@@ -59,8 +60,8 @@ export function calcularRetencionIva(iva: number, porcentaje: number): number {
 
 export type EntradaPartidaVenta = {
   lineas: { clasificacion: ClasificacionLinea | null; base: number; iva: number; total: number }[];
+  /** Informativa y OBLIGATORIA: no cambia la partida (CRÉDITO y CONTADO van a CLIENTES), pero una venta debe declararla. */
   condicionPago: CondicionPago | null;
-  cuentaBancariaId?: number | null;
   retencionIvaPct: number;
 };
 
@@ -70,9 +71,6 @@ export function proponerPartidaVenta(
   if (!e.lineas.length) return { ok: false, error: "La venta no tiene líneas." };
   if (e.condicionPago !== "CREDITO" && e.condicionPago !== "CONTADO") {
     return { ok: false, error: "La condición de pago (CRÉDITO o CONTADO) es obligatoria." };
-  }
-  if (e.condicionPago === "CONTADO" && e.cuentaBancariaId == null) {
-    return { ok: false, error: "Una venta al contado requiere la cuenta bancaria donde se recibe el pago." };
   }
   if (!esRetencionIvaValida(e.retencionIvaPct)) return { ok: false, error: "La retención de IVA debe ser 0, 15 o 30 %." };
 
@@ -99,11 +97,8 @@ export function proponerPartidaVenta(
 
   const renglones: RenglonPartidaVenta[] = [];
   if (retencion.gt(0)) renglones.push({ rol: "RETENCION_IVA", lado: "DEBE", monto: retencion.toNumber() });
-  renglones.push(
-    e.condicionPago === "CONTADO"
-      ? { rol: "BANCOS", lado: "DEBE", monto: neto.toNumber(), cuentaBancariaId: e.cuentaBancariaId ?? undefined }
-      : { rol: "CLIENTES", lado: "DEBE", monto: neto.toNumber() },
-  );
+  // CRÉDITO y CONTADO: siempre CLIENTES (el banco entra solo con una confirmación bancaria, PR D).
+  renglones.push({ rol: "CLIENTES", lado: "DEBE", monto: neto.toNumber() });
   if (ventasServicios.gt(0)) renglones.push({ rol: "VENTAS_SERVICIOS", lado: "HABER", monto: ventasServicios.toNumber() });
   if (ventasBienes.gt(0)) renglones.push({ rol: "VENTAS_BIENES", lado: "HABER", monto: ventasBienes.toNumber() });
   if (iva.gt(0)) renglones.push({ rol: "IVA_POR_PAGAR", lado: "HABER", monto: iva.toNumber() });
