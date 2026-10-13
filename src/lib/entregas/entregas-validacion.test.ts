@@ -28,6 +28,7 @@ import {
   type FirmaEntregaInput,
 } from "./entregas";
 import type { ActorEntrega } from "./reglas";
+import { MAX_EVIDENCIA_BYTES, MENSAJE_EVIDENCIA_INVALIDA } from "./evidencia";
 
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]).buffer;
 const firma = (origen: "GUARDADA" | "DIBUJADA" = "DIBUJADA", bytes: ArrayBuffer = PNG): FirmaEntregaInput => ({ origen, imagen: { bytes, original: "firma.png" } });
@@ -119,11 +120,48 @@ describe("recepción / rechazo / anulación — validación previa", () => {
   it("presencial: firma DIBUJADA obligatoria (la guardada no vale), nombre obligatorio, permiso explícito", async () => {
     const conPermiso = { ...actor, esAdmin: true };
     await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "Ana", firma: firma("GUARDADA") }), MENSAJES_ENTREGA.firmaDibujadaRequerida);
-    await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "Ana", firma: null as never }), MENSAJES_ENTREGA.firmaDibujadaRequerida);
+    // Sin evidencia ni firma: se pide la constancia firmada o la firma dibujada.
+    await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "Ana", firma: null as never }), MENSAJES_ENTREGA.evidenciaRequerida);
+    await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "Ana" }), MENSAJES_ENTREGA.evidenciaRequerida);
     await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "   ", firma: firma() }), MENSAJES_ENTREGA.nombreRequerido);
     await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor: conPermiso, entregaId: 5, nombreReceptor: "x".repeat(201), firma: firma() }), "El nombre no puede exceder 200 caracteres.");
     await rechaza(registrarRecepcionPresencial({ empresaId: 1, actor, entregaId: 5, nombreReceptor: "Ana", firma: firma() }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
   });
+  describe("recepción presencial con constancia firmada escaneada (evidencia)", () => {
+    const bytesDe = (cabecera: number[], total = 64) => { const u = new Uint8Array(total); u.set(cabecera); return u.buffer; };
+    const PDF = () => bytesDe([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]);
+    const PNG_ESCANEO = () => bytesDe([137, 80, 78, 71, 13, 10, 26, 10]);
+    const JPEG = () => bytesDe([0xff, 0xd8, 0xff, 0xe0]);
+    const evidencia = (bytes: ArrayBuffer, original = "escaneo.pdf") => ({ bytes, original });
+    const admin = { ...actor, esAdmin: true };
+    const base = { empresaId: 1, actor: admin, entregaId: 5, nombreReceptor: "Juan Pérez" };
+
+    it("exactamente una: evidencia Y firma dibujada juntas => 400", async () => {
+      await rechaza(registrarRecepcionPresencial({ ...base, evidencia: evidencia(PDF()), firma: firma() }), MENSAJES_ENTREGA.evidenciaOFirma);
+    });
+    it("archivo inválido => 400: texto, extensión .pdf con bytes falsos, vacío y > 10 MB", async () => {
+      const texto = new TextEncoder().encode("esto no es un pdf").buffer as ArrayBuffer;
+      await rechaza(registrarRecepcionPresencial({ ...base, evidencia: evidencia(texto, "constancia.pdf") }), MENSAJE_EVIDENCIA_INVALIDA);
+      await rechaza(registrarRecepcionPresencial({ ...base, evidencia: evidencia(new ArrayBuffer(0)) }), MENSAJE_EVIDENCIA_INVALIDA);
+      const enorme = new Uint8Array(MAX_EVIDENCIA_BYTES + 1); enorme.set([0x25, 0x50, 0x44, 0x46, 0x2d]);
+      await rechaza(registrarRecepcionPresencial({ ...base, evidencia: evidencia(enorme.buffer) }), MENSAJE_EVIDENCIA_INVALIDA);
+      // Un ejecutable/HTML con extensión de imagen tampoco pasa: se decide por los bytes reales.
+      const html = new TextEncoder().encode("<html><script>alert(1)</script>").buffer as ArrayBuffer;
+      await rechaza(registrarRecepcionPresencial({ ...base, evidencia: evidencia(html, "constancia.png") }), MENSAJE_EVIDENCIA_INVALIDA);
+    });
+    it("sin entregas_presencial => 403 aun con un archivo válido, antes de escribir nada", async () => {
+      await rechaza(registrarRecepcionPresencial({ ...base, actor, evidencia: evidencia(PDF()) }), MENSAJES_ENTREGA.sinPermisoPresencial, 403);
+    });
+    it("PDF, PNG y JPEG válidos superan las validaciones previas y llegan a la base (mock)", async () => {
+      for (const bytes of [PDF(), PNG_ESCANEO(), JPEG()]) {
+        await expect(registrarRecepcionPresencial({ ...base, evidencia: evidencia(bytes) })).rejects.toThrow("no debe tocar la base");
+        expect(tocado.db).toBeGreaterThan(0);
+        expect(tocado.upload).toBe(0); // la copia al disco ocurre después del precheck de la entrega
+        tocado.db = 0; tocado.upload = 0;
+      }
+    });
+  });
+
   it("rechazar y anular exigen motivo", async () => {
     await rechaza(rechazarRecepcion({ empresaId: 1, actor, entregaId: 5, motivo: "  " }), MENSAJES_ENTREGA.motivoRequerido);
     await rechaza(anularEntrega({ empresaId: 1, actor, entregaId: 5, motivo: "" }), MENSAJES_ENTREGA.motivoRequerido);

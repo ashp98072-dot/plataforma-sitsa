@@ -48,7 +48,16 @@ function Modal({ titulo, onCerrar, children }: { titulo: string; onCerrar: () =>
   );
 }
 
-type RespuestaJson = { error?: string; mensaje?: string };
+type RespuestaJson = { error?: string; mensaje?: string; entrega?: { id: number } };
+
+/** URL de la constancia PDF y de la evidencia escaneada de una entrega de Fondos (descarga autenticada, siempre por la API). */
+const urlConstancia = (slug: string, entregaId: number) => `/api/empresas/${slug}/tms/fondos/entregas/${entregaId}/constancia`;
+const urlEvidencia = (slug: string, entregaId: number) => `/api/empresas/${slug}/tms/fondos/entregas/${entregaId}/evidencia`;
+
+/** Formatos y tamaño de la constancia firmada escaneada (el servidor vuelve a validar el formato real). */
+const ACCEPT_EVIDENCIA = ".pdf,.jpg,.jpeg,.png,application/pdf,image/png,image/jpeg";
+const MAX_EVIDENCIA_MB = 10;
+const EXTENSIONES_EVIDENCIA = /\.(pdf|jpe?g|png)$/i;
 async function leerJson(res: Response): Promise<RespuestaJson> {
   return (await res.json().catch(() => ({}))) as RespuestaJson;
 }
@@ -74,6 +83,8 @@ export function RegistrarEntregaModal({
   const claveRef = useRef<string | null>(null);
   const firmaRef = useRef<FirmaEntregaHandle>(null);
   const [firmaLista, setFirmaLista] = useState(false);
+  // Entrega PRESENCIAL emitida: queda EMITIDA/pendiente; se ofrece la constancia para imprimir y firmar a mano.
+  const [listo, setListo] = useState<{ entregaId: number | null; mensaje: string } | null>(null);
 
   async function emitir() {
     await guard.ejecutar(async () => {
@@ -90,13 +101,32 @@ export function RegistrarEntregaModal({
         const data = await leerJson(res);
         if (!res.ok) { setError(data.error ?? "No se pudo registrar la entrega."); return; }
         claveRef.current = null;
-        onHecho(data.mensaje ?? "Entrega registrada.");
+        if (modo === "PRESENCIAL") setListo({ entregaId: data.entrega?.id ?? null, mensaje: data.mensaje ?? "Entrega registrada." });
+        else onHecho(data.mensaje ?? "Entrega registrada.");
       } catch {
         setError("No se pudo contactar al servidor. Revisa tu conexión y vuelve a intentar.");
       } finally {
         setEnviando(false);
       }
     });
+  }
+
+  if (listo) {
+    return (
+      <Modal titulo="Entrega presencial registrada" onCerrar={() => onHecho(listo.mensaje)}>
+        <p className="text-xs text-emerald-300">{listo.mensaje} La entrega queda pendiente de recepción (no está recibida).</p>
+        <p className="text-xs text-[var(--muted)]">
+          Descarga la constancia, imprímela y haz que la firme quien recibe. Después registra la recepción desde «Entregas»,
+          adjuntando la constancia firmada y escaneada.
+        </p>
+        <div className="flex flex-wrap gap-2 pt-1">
+          {listo.entregaId != null ? (
+            <a href={urlConstancia(slug, listo.entregaId)} className={botonPrimario}>Descargar constancia</a>
+          ) : null}
+          <button type="button" onClick={() => onHecho(listo.mensaje)} className={botonSecundario}>Cerrar</button>
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -116,7 +146,7 @@ export function RegistrarEntregaModal({
         </select>
       </label>
       {modo === "PRESENCIAL" ? (
-        <p className="text-[11px] text-amber-300">La recepción se registrará después, desde el historial, con el nombre y la firma dibujada de quien recibe.</p>
+        <p className="text-[11px] text-amber-300">Se generará una constancia para imprimir y firmar. La recepción se registrará después, desde el historial, con la constancia firmada y escaneada.</p>
       ) : null}
       <label className="block text-xs text-[var(--muted)]">Observaciones (opcional)
         <textarea className={`${inputCls} mt-0.5 w-full`} rows={2} maxLength={1000} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} disabled={enviando} />
@@ -235,17 +265,32 @@ function PresencialModal({ slug, entrega, onCerrar, onHecho }: { slug: string; e
   const [guard] = useState(() => crearGuardEnvio());
   const firmaRef = useRef<FirmaEntregaHandle>(null);
   const [firmaLista, setFirmaLista] = useState(false);
+  // Forma principal: constancia firmada y escaneada. Alternativa: firma dibujada en el dispositivo. Exactamente una.
+  const [forma, setForma] = useState<"ARCHIVO" | "DIBUJADA">("ARCHIVO");
+  const [archivo, setArchivo] = useState<File | null>(null);
+
+  function elegirArchivo(f: File | null) {
+    setError("");
+    if (f && !EXTENSIONES_EVIDENCIA.test(f.name)) { setArchivo(null); setError("El archivo debe ser PDF, JPG o PNG."); return; }
+    if (f && f.size > MAX_EVIDENCIA_MB * 1024 * 1024) { setArchivo(null); setError(`El archivo supera ${MAX_EVIDENCIA_MB} MB.`); return; }
+    setArchivo(f);
+  }
 
   async function registrar() {
     if (!nombre.trim()) { setError("Indica el nombre de quien recibe."); return; }
+    if (forma === "ARCHIVO" && !archivo) { setError("Adjunta la constancia firmada (PDF, JPG o PNG)."); return; }
     await guard.ejecutar(async () => {
       setEnviando(true); setError("");
       try {
         const fd = new FormData();
         fd.set("nombreReceptor", nombre.trim());
         fd.set("observaciones", observaciones.trim());
-        const errFirma = await firmaRef.current?.agregarA(fd);
-        if (errFirma) { setError(errFirma); return; }
+        if (forma === "ARCHIVO") {
+          fd.set("evidencia", archivo!, archivo!.name);
+        } else {
+          const errFirma = await firmaRef.current?.agregarA(fd);
+          if (errFirma) { setError(errFirma); return; }
+        }
         const res = await fetch(`/api/empresas/${slug}/tms/fondos/entregas/${entrega.id}/presencial`, { method: "POST", body: fd });
         const data = await leerJson(res);
         if (!res.ok) { setError(data.error ?? "No se pudo registrar la recepción."); return; }
@@ -261,7 +306,9 @@ function PresencialModal({ slug, entrega, onCerrar, onHecho }: { slug: string; e
   return (
     <Modal titulo="Registrar recepción presencial" onCerrar={enviando ? () => undefined : onCerrar}>
       <p className="text-xs text-[var(--muted)]">
-        {entrega.origenEtiqueta} → {entrega.destinoEtiqueta}. Quien recibe firma en este dispositivo; quedará registrado que tú lo operaste.
+        {entrega.origenEtiqueta} → {entrega.destinoEtiqueta}. Registra la recepción con la constancia impresa, firmada a mano y escaneada;
+        quedará registrado que tú la operaste.{" "}
+        <a href={urlConstancia(slug, entrega.id)} className="text-[var(--accent)] underline">Descargar constancia</a>
       </p>
       <label className="block text-xs text-[var(--muted)]">Nombre de quien recibe *
         <input className={`${inputCls} mt-0.5 w-full`} maxLength={200} value={nombre} onChange={(e) => setNombre(e.target.value)} disabled={enviando} />
@@ -269,10 +316,20 @@ function PresencialModal({ slug, entrega, onCerrar, onHecho }: { slug: string; e
       <label className="block text-xs text-[var(--muted)]">Observaciones (opcional)
         <textarea className={`${inputCls} mt-0.5 w-full`} rows={2} maxLength={1000} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} disabled={enviando} />
       </label>
-      <FirmaEntregaCampos slug={slug} sesionId={`presencial-${entrega.id}`} handleRef={firmaRef} onListaCambia={setFirmaLista} soloDibujada disabled={enviando} />
+      <div className="space-y-1 text-xs">
+        <label className="flex items-center gap-2"><input type="radio" checked={forma === "ARCHIVO"} onChange={() => setForma("ARCHIVO")} disabled={enviando} /> Adjuntar la constancia firmada y escaneada (recomendado)</label>
+        <label className="flex items-center gap-2"><input type="radio" checked={forma === "DIBUJADA"} onChange={() => setForma("DIBUJADA")} disabled={enviando} /> Firmar en este dispositivo (firma dibujada)</label>
+      </div>
+      {forma === "ARCHIVO" ? (
+        <label className="block text-xs text-[var(--muted)]">Constancia firmada (PDF, JPG o PNG, máx. {MAX_EVIDENCIA_MB} MB) *
+          <input type="file" accept={ACCEPT_EVIDENCIA} className={`${inputCls} mt-0.5 w-full`} disabled={enviando} onChange={(e) => elegirArchivo(e.target.files?.[0] ?? null)} />
+        </label>
+      ) : (
+        <FirmaEntregaCampos slug={slug} sesionId={`presencial-${entrega.id}`} handleRef={firmaRef} onListaCambia={setFirmaLista} soloDibujada disabled={enviando} />
+      )}
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
       <div className="flex gap-2 pt-1">
-        <button type="button" onClick={() => void registrar()} disabled={enviando || !firmaLista} aria-busy={enviando} className={botonPrimario}>{enviando ? "Registrando…" : "Registrar recepción"}</button>
+        <button type="button" onClick={() => void registrar()} disabled={enviando || (forma === "ARCHIVO" ? !archivo : !firmaLista)} aria-busy={enviando} className={botonPrimario}>{enviando ? "Registrando…" : "Registrar recepción"}</button>
         <button type="button" onClick={onCerrar} disabled={enviando} className={botonSecundario}>Cancelar</button>
       </div>
     </Modal>
@@ -334,8 +391,18 @@ export function HistorialEntregas({
               {e.estado === "RECHAZADA" ? "Rechazada" : "Anulada"} por {e.cerradoPor ?? "—"} · {fechaHora(e.cerradoEn)}. Motivo: {e.motivoCierre ?? "—"}
             </p>
           ) : null}
-          {e.acciones.presencial || e.acciones.anular ? (
-            <div className="flex flex-wrap gap-2 pt-1">
+          {e.constancia || e.acciones.presencial || e.acciones.anular || (e.estado === "RECIBIDA" && e.modo === "PRESENCIAL") ? (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              {e.constancia ? (
+                <a href={urlConstancia(slug, e.id)} className="rounded border border-[var(--border)] px-2 py-1">
+                  {e.constancia === "PREVIA" ? "Descargar constancia (para firma)" : "Descargar constancia"}
+                </a>
+              ) : null}
+              {e.estado === "RECIBIDA" && e.modo === "PRESENCIAL" ? (
+                e.tieneEvidencia
+                  ? <a href={urlEvidencia(slug, e.id)} target="_blank" rel="noopener noreferrer" className="rounded border border-[var(--border)] px-2 py-1">Ver evidencia</a>
+                  : <span className="text-[var(--muted)]">Sin evidencia adjunta</span>
+              ) : null}
               {e.acciones.presencial ? <button type="button" onClick={() => setAccion({ tipo: "presencial", entrega: e })} className="rounded border border-[var(--border)] px-2 py-1">Registrar recepción presencial</button> : null}
               {e.acciones.anular ? <button type="button" onClick={() => setAccion({ tipo: "anular", entrega: e })} className="rounded border border-red-500/50 px-2 py-1 text-red-300">Anular entrega</button> : null}
             </div>

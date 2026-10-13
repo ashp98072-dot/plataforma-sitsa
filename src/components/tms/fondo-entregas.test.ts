@@ -95,6 +95,20 @@ describe("componentes de entrega", () => {
     expect(PANEL).toContain('fd.set("claveIdempotencia"');
   });
 
+  it("constancias y evidencia: descarga por la API autenticada, nunca por una ruta pública", () => {
+    for (const texto of ["Descargar constancia", "Ver evidencia", "Sin evidencia adjunta", "/constancia", "/evidencia"]) {
+      expect(PANEL).toContain(texto);
+    }
+    expect(PANEL).not.toMatch(/\/uploads\//);
+    // Recepción presencial: archivo escaneado como forma principal y firma dibujada como alternativa (exactamente una).
+    expect(PANEL).toContain("ACCEPT_EVIDENCIA");
+    expect(PANEL).toContain('fd.set("evidencia"');
+    expect(PANEL).toContain('forma === "ARCHIVO"');
+    // Al emitir una entrega presencial se ofrece la constancia y NO se marca como recibida.
+    expect(PANEL).toContain("Entrega presencial registrada");
+    expect(PANEL).toContain("queda pendiente de recepción");
+  });
+
   it("no pide documento de identidad en la recepción presencial", () => {
     // Sin comentarios: el código documenta justamente que NO se pide.
     const codigo = PANEL.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -112,8 +126,8 @@ describe("componentes de entrega", () => {
 describe("endpoints de entregas de Fondos", () => {
   const rutas = archivosRuta("app/api/empresas/[slug]/tms/fondos").filter((p) => /entregas/.test(p));
 
-  it("existen las 7 rutas esperadas", () => {
-    expect(rutas.length).toBe(7);
+  it("existen las 9 rutas esperadas (incluye constancia y evidencia)", () => {
+    expect(rutas.length).toBe(9);
   });
 
   it("ninguna escribe en documento_entregas ni usa SQL: todo pasa por el servicio común", () => {
