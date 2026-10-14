@@ -1337,7 +1337,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       {/* Leyenda de la columna Liquidación (Fase 2): el color nunca es el único portador de significado. */}
       <p className="text-xs text-[var(--muted)]">
         <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: "var(--fila-pendiente-liquidar)", border: "1px solid var(--border)" }} />
-        Fila amarilla = reporte recibido / en ajuste, pendiente de liquidar. «—» = sin liquidación registrada.
+        Fila amarilla = viaje pendiente de liquidación (sin reporte, reporte recibido o en ajuste). Fondo normal = liquidado.
+        «—» = cerrado o cancelado sin liquidación registrada.
       </p>
 
       {/* Tabla */}
@@ -1423,7 +1424,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                 <Fragment key={p.id}>
                   <tr
                     className="fila-viaje border-t border-[var(--border)] align-top"
-                    data-liquidacion={claseFilaLiquidacion(p.liquidacion)}
+                    data-liquidacion={claseFilaLiquidacion(p.liquidacion, p.estado)}
                     data-seleccionada={seleccion.has(p.id) ? "true" : undefined}
                   >
                     {mostrarSel ? (
@@ -1464,11 +1465,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     </td>
                     <td className="px-2 py-1.5 text-xs">
                       {(() => {
-                        const bLiq = badgeLiquidacion(p.liquidacion);
+                        const bLiq = badgeLiquidacion(p.liquidacion, p.estado);
                         return bLiq ? (
                           <span title={bLiq.titulo} className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${bLiq.clase}`}>{bLiq.texto}</span>
                         ) : (
-                          <span className="text-[var(--muted)]" title="Sin liquidación registrada">—</span>
+                          <span className="text-[var(--muted)]" title="Cerrado o cancelado sin liquidación registrada (histórico)">—</span>
                         );
                       })()}
                     </td>

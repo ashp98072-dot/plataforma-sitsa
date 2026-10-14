@@ -10,7 +10,7 @@ tablas de Fase 1, ya instaladas). Continúa [Fase 1](TMS-LIQUIDACION-VIAJES-1-MO
 |---|---|
 | `POST /api/empresas/[slug]/tms/planes/[id]/reporte-recibido` (confirmación humana, idempotente, con advertencias reconocibles) | Liquidar / reabrir desde la UI (Fase 3), cargos (Fase 4) |
 | Permiso `viajes_confirmar_reporte` (fila propia, sin concesión por rol) + guard `requireTenantViajesConfirmarReporte` | **Cambio del cierre (Fase 5)**: el cierre normal, manual, masivo y por período NO consultan la liquidación |
-| Columna «Liquidación» + fila amarilla (REPORTE_RECIBIDO / EN_AJUSTE) + badge + leyenda en Planes/Viajes y reporte de viajes | Configurar la fecha de activación, facturación, fondos/gastos, cuadrilla real, FEL, contabilidad |
+| Columna «Liquidación» + fila amarilla para todo viaje activo **no liquidado** + badge + leyenda en Planes/Viajes y reporte de viajes | Configurar la fecha de activación, facturación, fondos/gastos, cuadrilla real, FEL, contabilidad |
 
 ## Endpoint
 
@@ -40,15 +40,33 @@ Mismo patrón que `viajes_cerrar`/`PERMISOS_ENTREGA`: id de fila ≤ 40 en `usua
 
 ## Reglas de UI (Planes/Viajes)
 
-- **Fila amarilla = fondo COMPLETO del `<tr>`** para `REPORTE_RECIBIDO` y `EN_AJUSTE`; el color del **texto no cambia**. `LIQUIDADO` y «sin liquidación»
-  = superficie normal del tema + badge/«—». Sin registro **nunca** se muestra «Liquidado» (históricos intactos).
-- **Sin blanco literal en oscuro**: «blanco» es `--card` (blanco en claro; tarjeta oscura en oscuro). Tokens nuevos `--fila-pendiente-liquidar`
-  (`#fffadc` claro / `#2b2714` oscuro), `--fila-hover`, `--accion-reporte`. Contraste verificado por prueba: texto ≥ 7:1, secundario ≥ 4.5:1, enlace ≥ 4.5:1.
-- **Hover y selección** son capas independientes del fondo (`background-image` y `box-shadow` inset en la primera celda): siguen visibles sobre el amarillo.
-- **El color no es el único portador**: badge de texto («Reporte recibido», «En ajuste», «Liquidado») con contraste ≥ 4.5:1, columna «Liquidación» y leyenda.
-- **Acción «Confirmar reporte»**: solo en la vista operativa, con permiso, sin liquidación y viaje no cerrado/cancelado; diálogo con observación opcional y
-  advertencias (se vuelve a enviar reconociéndolas). La vista de reportes es de consulta: muestra color/badge, sin acciones.
-- El badge existente «Pendiente de cierre» (llegada registrada) **no se reutiliza ni se modifica** en esta fase.
+**Regla de negocio (ajuste final): todo viaje que todavía NO está liquidado inicia con fila amarilla.** Al pasar a `LIQUIDADO` la fila vuelve a la
+superficie normal del tema.
+
+| Situación del viaje | Fila | Badge de texto |
+|---|---|---|
+| Activo (Programado/Cargado/En ruta/Descargado) **sin liquidación registrada** | amarillo | **Pendiente** |
+| `REPORTE_RECIBIDO` | amarillo | Reporte recibido |
+| `EN_AJUSTE` | amarillo | En ajuste |
+| `LIQUIDADO` | superficie normal del tema | Liquidado |
+| `Cerrado`/`Cancelado` **sin** liquidación registrada (histórico / no aplica) | superficie normal | «—» |
+
+El último caso se mantiene a propósito: un viaje ya cerrado o cancelado sin liquidación es histórico (decisión 0B: no se marca «liquidado» ni
+«pendiente» el pasado, sin backfill). Si el negocio quiere ver también los cerrados históricos en amarillo, es un cambio de una función
+(`estaPendienteDeLiquidacion`).
+
+- **Fondo COMPLETO del `<tr>`**; el color del **texto principal no cambia**.
+- **«Blanco» = `--card`** (blanco en claro; tarjeta oscura en oscuro). Nunca blanco literal en oscuro.
+- **Tokens** (por tema): `--fila-pendiente-liquidar` = `#fff3bf` (claro) / `#3a3218` (oscuro); `--fila-hover`; `--accion-reporte`; y
+  `--fila-pendiente-muted` / `--fila-pendiente-accent`, que **solo dentro de la fila amarilla** ajustan el texto secundario y el enlace de acento para
+  conservar ≥ 4.5:1 (`#526079` / `#1d5f96` en claro; `#93a4b8` / `#5ea8e0` en oscuro).
+- **Contraste** verificado por prueba sobre la fila: texto ≥ 7:1 (≈ 16:1 claro, ≈ 10.9:1 oscuro); secundario, acento y «Confirmar reporte» ≥ 4.5:1.
+- **Hover y selección** son capas independientes del fondo (`background-image` y `box-shadow` inset en la primera celda).
+- **El color no es el único portador**: badge de texto con contraste ≥ 4.5:1, columna «Liquidación» y leyenda «Fila amarilla = viaje pendiente de
+  liquidación».
+- **Acción «Confirmar reporte»**: solo en la vista operativa, con permiso, sin liquidación y viaje no cerrado/cancelado; la vista de reportes es de
+  consulta (color/badge sin acciones).
+- El badge existente «Pendiente de cierre» (llegada registrada) **no se reutiliza ni se modifica**.
 
 ## Qué NO cambia
 
@@ -60,6 +78,6 @@ sistema se comporta exactamente como antes; esta fase no la configura.
 - La nueva consulta de la lista (`liquidacionesDePlanes`) es una lectura por empresa en lote y tolerante (sin tablas ⇒ «—»); no altera filtros, KPIs ni
   exportaciones.
 - **Verificación visual:** el contraste y las reglas CSS están verificados por prueba; no se hizo una revisión visual en navegador con datos reales.
-- En modo oscuro el enlace de acento (`--accent`) sobre la fila amarilla baja de ≈3.0:1 a ≈2.6:1 (ya era bajo sobre la tarjeta); es un hallazgo del tema
-  existente, no se corrigió aquí.
+- El enlace de acento y el texto secundario se ajustan **solo dentro de la fila amarilla** (tokens por tema) para conservar el contraste; fuera de ella
+  el tema no cambia (el acento oscuro normal sobre la tarjeta ya era ≈3.0:1: hallazgo del tema existente, no corregido aquí).
 - El texto exacto de las advertencias y de la leyenda es propuesta; pendiente de confirmación con Operaciones (D01/D04).

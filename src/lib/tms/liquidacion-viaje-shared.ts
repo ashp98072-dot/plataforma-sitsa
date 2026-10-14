@@ -73,19 +73,41 @@ export type AdvertenciaReporte = { codigo: CodigoAdvertenciaReporte; mensaje: st
 /** Resumen de la liquidación VIGENTE que viaja en cada fila de Planes/Viajes (null = sin liquidación registrada). */
 export type ResumenLiquidacionFila = { estado: EstadoLiquidacionViaje; version: number };
 
-/** Clase visual de la fila: «pendiente» = amarillo (REPORTE_RECIBIDO y EN_AJUSTE); lo demás, superficie normal del tema. */
-export function claseFilaLiquidacion(l: ResumenLiquidacionFila | null | undefined): "pendiente" | "normal" {
-  return l && esPendienteDeLiquidar(l.estado) ? "pendiente" : "normal";
+/**
+ * ¿El viaje todavía debe liquidarse? Todo viaje ACTIVO (ni Cerrado ni Cancelado) cuya liquidación no está LIQUIDADO:
+ * sin liquidación registrada, REPORTE_RECIBIDO o EN_AJUSTE. Un viaje Cerrado/Cancelado SIN liquidación es histórico o no
+ * aplica: no se pinta «pendiente» (nunca se infiere «liquidado» ni «pendiente» del pasado).
+ */
+export function estaPendienteDeLiquidacion(
+  l: ResumenLiquidacionFila | null | undefined,
+  estadoPlan: string,
+): boolean {
+  if (l) return esPendienteDeLiquidar(l.estado);
+  return !(ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(estadoPlan);
+}
+
+/** Clase visual de la fila: «pendiente» = amarillo (viaje por liquidar); lo demás, superficie normal del tema. */
+export function claseFilaLiquidacion(
+  l: ResumenLiquidacionFila | null | undefined,
+  estadoPlan: string,
+): "pendiente" | "normal" {
+  return estaPendienteDeLiquidacion(l, estadoPlan) ? "pendiente" : "normal";
 }
 
 export type BadgeLiquidacion = { texto: string; clase: string; titulo: string } | null;
 
 /**
- * Badge de TEXTO de la columna «Liquidación» (el color nunca es el único portador de significado). Sin liquidación = null:
- * la UI muestra «—». Clases con texto blanco y contraste ≥ 4.5:1 (700 de la paleta) también sobre la fila amarilla.
+ * Badge de TEXTO de la columna «Liquidación» (el color nunca es el único portador de significado). Clases con texto blanco y
+ * contraste ≥ 4.5:1. null = «—» (viaje Cerrado/Cancelado sin liquidación registrada: histórico/no aplica).
  */
-export function badgeLiquidacion(l: ResumenLiquidacionFila | null | undefined): BadgeLiquidacion {
-  if (!l) return null;
+export function badgeLiquidacion(
+  l: ResumenLiquidacionFila | null | undefined,
+  estadoPlan: string,
+): BadgeLiquidacion {
+  if (!l) {
+    if (!estaPendienteDeLiquidacion(null, estadoPlan)) return null;
+    return { texto: "Pendiente", clase: "bg-slate-600", titulo: "Viaje pendiente de liquidación (sin reporte recibido)." };
+  }
   if (l.estado === "REPORTE_RECIBIDO") return { texto: "Reporte recibido", clase: "bg-amber-700", titulo: "Reporte del piloto recibido; pendiente de liquidar." };
   if (l.estado === "EN_AJUSTE") return { texto: "En ajuste", clase: "bg-orange-700", titulo: "Liquidación reabierta para ajustes; pendiente de liquidar de nuevo." };
   return { texto: "Liquidado", clase: "bg-emerald-700", titulo: "Viaje liquidado." };

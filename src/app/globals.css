@@ -16,7 +16,10 @@
   --input: #0b1217;
   --thead: #0d1522;
   /* LIQUIDACIÓN (Fase 2): fondo COMPLETO de fila «pendiente de liquidar». Oscuro: amarillo atenuado; nunca blanco literal. */
-  --fila-pendiente-liquidar: #2b2714;
+  --fila-pendiente-liquidar: #3a3218;
+  /* Dentro de la fila amarilla el enlace de acento se aclara (sobre #3a3218 el --accent normal baja a 2.2:1). */
+  --fila-pendiente-accent: #5ea8e0;
+  --fila-pendiente-muted: #93a4b8;
   --fila-hover: rgba(255, 255, 255, 0.06);
   --accion-reporte: #fbbf24;
   --nav-hover: rgba(255, 255, 255, 0.05);
@@ -40,8 +43,11 @@
   --panel: #e8eef5;
   --input: #ffffff;
   --thead: #e8eef5;
-  /* LIQUIDACIÓN (Fase 2): claro = amarillo muy suave (texto 17:1, muted 4.5:1). Blanco = la superficie normal --card. */
-  --fila-pendiente-liquidar: #fffadc;
+  /* LIQUIDACIÓN (Fase 2): claro = amarillo suave. Blanco = la superficie normal --card. El texto secundario se oscurece dentro de
+     la fila amarilla para conservar ≥ 4.5:1 sobre #fff3bf. */
+  --fila-pendiente-liquidar: #fff3bf;
+  --fila-pendiente-accent: #1d5f96;
+  --fila-pendiente-muted: #526079;
   --fila-hover: rgba(15, 23, 42, 0.05);
   --accion-reporte: #92400e;
   --nav-hover: rgba(15, 23, 42, 0.06);
@@ -107,6 +113,9 @@ option {
 }
 .fila-viaje[data-liquidacion="pendiente"] {
   background-color: var(--fila-pendiente-liquidar);
+  /* Solo ajusta los tonos de texto SECUNDARIO/enlace para el contraste; el color del texto principal no cambia. */
+  --muted: var(--fila-pendiente-muted);
+  --accent: var(--fila-pendiente-accent);
 }
 .fila-viaje:hover {
   background-image: linear-gradient(var(--fila-hover), var(--fila-hover));
