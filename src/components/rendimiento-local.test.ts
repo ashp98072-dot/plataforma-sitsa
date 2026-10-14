@@ -74,6 +74,7 @@ function harness(base: boolean) {
     return exports;
   };
   modules["@/lib/session-activity-client"] = load("src/lib/session-activity-client.ts");
+  if (!base) modules["@/lib/session-navigation"] = load("src/lib/session-navigation.ts");
   return { load, effects, callbacks, store, events, prefetch, nav, activityKey: (modules["@/lib/session-activity-client"] as { activityStorageKey: (kind: string) => string }).activityStorageKey("staff"), opened: () => { opened = true; }, Marker };
 }
 

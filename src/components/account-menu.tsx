@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { labelRol } from "@/lib/permisos-shared";
+import { cerrarSesion } from "@/lib/session-navigation";
+export { cerrarSesion } from "@/lib/session-navigation";
 
 /**
  * MENÚ DE CUENTA — reemplaza los botones sueltos del pie del sidebar (Mi firma / Cambiar empresa / Salir) por un único
@@ -22,12 +24,6 @@ export function opcionesMenuCuenta(slug: string, dominioEmpresa: boolean): Opcio
     ...(!dominioEmpresa ? [{ key: "empresa" as const, label: "Cambiar empresa", href: "/select-empresa" }] : []),
     { key: "salir", label: "Salir", peligro: true },
   ];
-}
-
-/** Misma lógica de salida que tenía el sidebar: POST /api/auth/logout y luego /login. */
-export async function cerrarSesion(fetchFn: typeof fetch, irA: (ruta: string) => void): Promise<void> {
-  await fetchFn("/api/auth/logout", { method: "POST" });
-  irA("/login");
 }
 
 export const inicialesUsuario = (username: string) => (username.trim().charAt(0) || "?").toUpperCase();
@@ -54,9 +50,11 @@ export function AccountMenu({
   rol: string;
   dominioEmpresa: boolean;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   const [abierto, setAbierto] = useState(false);
+  const [pendiente, setPendiente] = useState<"salir" | "empresa" | null>(null);
+  const enCurso = useRef<"salir" | "empresa" | null>(null);
+  const [error, setError] = useState("");
   const contenedorRef = useRef<HTMLDivElement>(null);
   const botonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -64,9 +62,35 @@ export function AccountMenu({
 
   // Cerrar al navegar.
   useEffect(() => {
-    const t = window.setTimeout(() => setAbierto(false), 0);
+    const t = window.setTimeout(() => {
+      setAbierto(false);
+      if (enCurso.current !== "salir") {
+        enCurso.current = null;
+        setPendiente(null);
+      }
+    }, 0);
     return () => window.clearTimeout(t);
   }, [pathname]);
+
+  // Respaldo solo para Link cancelado; nunca libera un POST de logout pendiente.
+  useEffect(() => {
+    if (pendiente !== "empresa") return;
+    const t = window.setTimeout(() => { enCurso.current = null; setPendiente(null); }, 8000);
+    return () => window.clearTimeout(t);
+  }, [pendiente]);
+
+  async function salir() {
+    if (enCurso.current) return;
+    enCurso.current = "salir";
+    setPendiente("salir");
+    setError("");
+    try { await cerrarSesion(fetch, (ruta) => window.location.replace(ruta)); }
+    catch {
+      enCurso.current = null;
+      setPendiente(null);
+      setError("No se pudo cerrar sesión. Intenta nuevamente.");
+    }
+  }
 
   // Abierto: clic fuera cierra; foco a la primera opción.
   useEffect(() => {
@@ -114,10 +138,11 @@ export function AccountMenu({
   const item = "block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--nav-hover)] focus:bg-[var(--nav-hover)] focus:outline-none";
 
   return (
-    <div ref={contenedorRef} className="relative" onKeyDown={abierto ? alTeclear : undefined}>
+    <div ref={contenedorRef} className="relative" aria-busy={pendiente !== null} onKeyDown={abierto ? alTeclear : undefined}>
       <button
         ref={botonRef}
         type="button"
+        disabled={pendiente !== null}
         aria-haspopup="menu"
         aria-expanded={abierto}
         aria-controls="menu-cuenta"
@@ -133,7 +158,7 @@ export function AccountMenu({
         className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-2 text-[var(--text)] sm:px-2.5 sm:py-1.5"
       >
         <IconEngrane />
-        <span className="hidden max-w-[10rem] truncate text-sm sm:inline">{username}</span>
+        {pendiente ? <span role="status" className="text-sm">{pendiente === "salir" ? "Saliendo…" : "Cambiando empresa…"}</span> : <span className="hidden max-w-[10rem] truncate text-sm sm:inline">{username}</span>}
       </button>
 
       {abierto ? (
@@ -156,23 +181,29 @@ export function AccountMenu({
             </div>
           </div>
           <div className="pt-1">
+            {error ? <p role="alert" className="px-3 py-2 text-sm text-[var(--danger)]">{error}</p> : null}
             {opciones.map((o) =>
               o.key === "salir" ? (
                 <div key={o.key} className="mt-1 border-t border-[var(--border)] pt-1">
                   <button
                     type="button"
                     role="menuitem"
+                    disabled={pendiente !== null}
                     className={`${item} text-[var(--danger)]`}
-                    onClick={() => {
-                      cerrar();
-                      void cerrarSesion(fetch, (ruta) => router.push(ruta));
-                    }}
+                    onClick={() => void salir()}
                   >
-                    {o.label}
+                    {pendiente === "salir" ? "Saliendo…" : o.label}
                   </button>
                 </div>
               ) : (
-                <Link key={o.key} href={o.href} prefetch={false} role="menuitem" className={item} onClick={() => cerrar()}>
+                <Link key={o.key} href={o.href} prefetch={false} role="menuitem" className={item} aria-disabled={pendiente !== null} onClick={() => cerrar()}
+                  onNavigate={(event) => {
+                    if (enCurso.current) { event.preventDefault(); return; }
+                    if (o.key === "empresa") {
+                      enCurso.current = "empresa";
+                      setPendiente("empresa");
+                    }
+                  }}>
                   {o.label}
                 </Link>
               ),

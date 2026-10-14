@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
+import { actividadStaff, cerrarSesion, reiniciarSalidaStaff } from "@/lib/session-navigation";
 import {
   SESSION_ENDPOINTS,
   activityConfirmationStorageKey,
@@ -46,6 +47,7 @@ export function SessionInactivityGuard() {
   useEffect(() => {
     if (!kind) return;
     const activeKind = kind;
+    if (activeKind === "staff") reiniciarSalidaStaff();
     owner.current ||= globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     loggingOut.current = false;
     validationInFlight.current = false;
@@ -62,6 +64,11 @@ export function SessionInactivityGuard() {
     async function logout() {
       if (loggingOut.current) return;
       loggingOut.current = true;
+      if (activeKind === "staff") {
+        try { await cerrarSesion(fetch, (ruta) => window.location.replace(ruta)); }
+        catch { window.location.replace(endpoints.login); } // Sesión expirada: el servidor ya la rechaza, aunque falle la red.
+        return;
+      }
       try {
         await fetch(endpoints.logout, { method: "POST", credentials: "same-origin" });
       } catch {
@@ -132,11 +139,15 @@ export function SessionInactivityGuard() {
       activityInFlight.current = true;
       let confirmed = false;
       try {
-        const response = await fetch(endpoints.activity, {
+        const init: RequestInit = {
           method: "POST",
           credentials: "same-origin",
           cache: "no-store",
-        });
+        };
+        const response = activeKind === "staff"
+          ? await actividadStaff(fetch, init)
+          : await fetch(endpoints.activity, init);
+        if (!response) return;
         if (response.status === 401) return void logout();
         if (response.ok) {
           confirmed = applyServerTime((await response.json()) as ActivityResponse);
