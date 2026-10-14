@@ -18,7 +18,8 @@ const bodySchema = z
  * LIQUIDACIÓN DE VIAJES, FASE 3 — liquidar (`REPORTE_RECIBIDO → LIQUIDADO`) o liquidar nuevamente (`EN_AJUSTE → LIQUIDADO`).
  *
  * Permiso EXPLÍCITO `viajes_liquidar:editar` (requireTenantViajesLiquidar), nunca por rol y distinto de `viajes_cerrar` y de
- * `viajes_confirmar_reporte`. NO cierra el viaje, NO factura, NO crea cargos y NO mueve fondos/gastos. Guarda en el evento una
+ * `viajes_confirmar_reporte`. SECUENCIA: solo un viaje CERRADO puede liquidarse (409 `PLAN_NO_CERRADO` si sigue abierto); el
+ * servidor lo valida bajo el lock del plan. NO cierra el viaje, NO factura, NO crea cargos y NO mueve fondos/gastos. Guarda en el evento una
  * fotografía operativa inmutable. Concurrencia: `expectedVersion` (409 si cambió). Réplica segura solo donde el dominio la
  * define (mismo actor, versión + 1): responde 200 con `idempotente: true` y sin evento nuevo.
  */

@@ -4,6 +4,8 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorDominioFormulario, type EstadoDominio } from "@/lib/validacion-formulario";
 import {
   ESTADOS_PLAN_SIN_LIQUIDACION,
+  ESTADOS_PLAN_SIN_REAPERTURA,
+  motivoPlanNoLiquidable,
   MOTIVO_REAPERTURA_MAX,
   MOTIVO_REAPERTURA_MIN,
   OBSERVACION_LIQUIDACION_MAX,
@@ -38,6 +40,7 @@ import { construirSnapshotOperativo } from "./liquidacion-viaje-snapshot";
 export type CodigoErrorLiquidacion =
   | "NO_ENCONTRADO"
   | "PLAN_NO_ADMITE"
+  | "PLAN_NO_CERRADO"
   | "ESTADO_NO_PERMITE"
   | "CONFLICTO_VERSION"
   | "SOLICITUD_INVALIDA";
@@ -152,6 +155,24 @@ function exigirPlanAdmite(plan: FilaPlan): void {
   }
 }
 
+/**
+ * LIQUIDAR / RE-LIQUIDAR exige el viaje CERRADO (secuencia real: reporte → ajustes/cargos → cerrar → liquidar). Validación
+ * definitiva del servidor, bajo el lock del plan; ocultar el botón en la UI no basta.
+ */
+function exigirPlanCerrado(plan: FilaPlan): void {
+  const motivo = motivoPlanNoLiquidable(plan.estado);
+  if (!motivo) return;
+  if (plan.estado === "Cancelado") throw new ErrorLiquidacionViaje("PLAN_NO_ADMITE", motivo);
+  throw new ErrorLiquidacionViaje("PLAN_NO_CERRADO", motivo);
+}
+
+/** Reabrir: permitido con el viaje Cerrado (la liquidación ocurre ya cerrado) o abierto (datos previos a esta regla); no Cancelado. */
+function exigirPlanReabrible(plan: FilaPlan): void {
+  if ((ESTADOS_PLAN_SIN_REAPERTURA as readonly string[]).includes(plan.estado)) {
+    throw new ErrorLiquidacionViaje("PLAN_NO_ADMITE", `Un viaje "${plan.estado}" ya no admite cambios de liquidación.`);
+  }
+}
+
 async function leerLiquidacionTx(c: PoolConnection, empresaId: number, planId: number): Promise<LiquidacionViaje | null> {
   const [r] = await c.query<FilaLiq[]>(
     `SELECT ${COLS_LIQ} FROM tms_viaje_liquidaciones WHERE empresa_id = ? AND plan_id = ? FOR UPDATE`,
@@ -220,12 +241,14 @@ export async function confirmarReporteRecibido(
   }
   return transaccion(async (c) => {
     const plan = await bloquearPlan(c, actor.empresaId, entrada.planId);
-    exigirPlanAdmite(plan);
     const actual = await leerLiquidacionTx(c, actor.empresaId, entrada.planId);
+    // Réplica ANTES de la regla de estado del plan: con la secuencia real el viaje puede cerrarse estando en REPORTE_RECIBIDO,
+    // y un reintento posterior debe devolver la misma liquidación (no un error).
     if (actual) {
       if (actual.estado === "REPORTE_RECIBIDO") return { liquidacion: actual, evento: null, idempotente: true };
       throw new ErrorLiquidacionViaje("ESTADO_NO_PERMITE", `El viaje ya tiene una liquidación en estado ${actual.estado}.`);
     }
+    exigirPlanAdmite(plan);
     await c.execute(
       `INSERT INTO tms_viaje_liquidaciones (empresa_id, plan_id, estado, version, reporte_recibido_en, reporte_recibido_por)
        VALUES (?, ?, 'REPORTE_RECIBIDO', 1, NOW(), ?)`,
@@ -243,6 +266,8 @@ export async function confirmarReporteRecibido(
  * `REPORTE_RECIBIDO → LIQUIDADO` (evento LIQUIDADO) o `EN_AJUSTE → LIQUIDADO` (evento RELIQUIDADO). Exige la versión que el
  * usuario vio (`versionEsperada`): una versión vieja es CONFLICTO_VERSION. Réplica idempotente: mismo actor, versión + 1.
  *
+ * REGLA DE SECUENCIA: solo un viaje CERRADO puede pasar a LIQUIDADO/RELIQUIDADO (PLAN_NO_CERRADO si está abierto).
+ *
  * FASE 3: al liquidar/re-liquidar el evento guarda en `snapshot_json` una fotografía OPERATIVA inmutable del viaje
  * (liquidacion-viaje-snapshot.ts; solo lectura, bajo el lock del plan). La liquidación NO modifica Programación, no cierra el
  * viaje y no crea costos, cargos ni facturación.
@@ -258,7 +283,7 @@ export async function liquidarViaje(
   }
   return transaccion(async (c) => {
     const plan = await bloquearPlan(c, actor.empresaId, entrada.planId);
-    exigirPlanAdmite(plan);
+    exigirPlanCerrado(plan);
     const actual = await leerLiquidacionTx(c, actor.empresaId, entrada.planId);
     if (!actual) throw new ErrorLiquidacionViaje("NO_ENCONTRADO", "El viaje no tiene un reporte recibido que liquidar.", 404);
     if (actual.estado === "LIQUIDADO" && actual.version === esperada + 1 && actual.liquidadoPor === actor.usuarioId) {
@@ -329,7 +354,7 @@ export async function reabrirLiquidacion(
   }
   return transaccion(async (c) => {
     const plan = await bloquearPlan(c, actor.empresaId, entrada.planId);
-    exigirPlanAdmite(plan);
+    exigirPlanReabrible(plan);
     const actual = await leerLiquidacionTx(c, actor.empresaId, entrada.planId);
     if (!actual) throw new ErrorLiquidacionViaje("NO_ENCONTRADO", "El viaje no tiene una liquidación que reabrir.", 404);
     if (actual.estado === "EN_AJUSTE" && actual.version === esperada + 1 && actual.reabiertoPor === actor.usuarioId) {

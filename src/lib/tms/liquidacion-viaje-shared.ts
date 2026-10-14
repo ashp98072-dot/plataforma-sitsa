@@ -14,8 +14,31 @@ export type EstadoLiquidacionViaje = (typeof ESTADOS_LIQUIDACION_VIAJE)[number];
 export const TIPOS_EVENTO_LIQUIDACION = ["REPORTE_RECIBIDO", "LIQUIDADO", "REABIERTO", "RELIQUIDADO"] as const;
 export type TipoEventoLiquidacion = (typeof TIPOS_EVENTO_LIQUIDACION)[number];
 
-/** Estados del plan que NO admiten transiciones de liquidación (el cierre es final; lo cancelado no se liquida). */
+/**
+ * Estados del plan que NO admiten CONFIRMAR el reporte (el reporte se recibe antes del cierre; lo cancelado no se liquida).
+ * Ojo: esto NO decide cuándo se puede LIQUIDAR (ver ESTADO_PLAN_LIQUIDABLE) ni REABRIR (ver ESTADOS_PLAN_SIN_REAPERTURA).
+ */
 export const ESTADOS_PLAN_SIN_LIQUIDACION = ["Cerrado", "Cancelado"] as const;
+
+/**
+ * Secuencia real de Operaciones: viaje realizado → reporte recibido → ajustes/cargos → CERRAR → LIQUIDAR → facturación/reportes.
+ * Solo un viaje CERRADO puede pasar a LIQUIDADO / RELIQUIDADO (la validación definitiva es del servidor).
+ */
+export const ESTADO_PLAN_LIQUIDABLE = "Cerrado" as const;
+
+/** Estados desde los que NO se puede reabrir una liquidación. Un viaje Cerrado SÍ (la liquidación ocurre ya cerrado). */
+export const ESTADOS_PLAN_SIN_REAPERTURA = ["Cancelado"] as const;
+
+/** null si el viaje puede liquidarse según su estado operativo; si no, el motivo legible. */
+export function motivoPlanNoLiquidable(estadoPlan: string): string | null {
+  if (estadoPlan === ESTADO_PLAN_LIQUIDABLE) return null;
+  if (estadoPlan === "Cancelado") return "Un viaje cancelado no se liquida.";
+  return `El viaje debe estar Cerrado antes de liquidarse (estado actual: ${estadoPlan}).`;
+}
+
+export function puedeLiquidarSegunPlan(estadoPlan: string): boolean {
+  return motivoPlanNoLiquidable(estadoPlan) === null;
+}
 
 export const MOTIVO_REAPERTURA_MIN = 5;
 export const MOTIVO_REAPERTURA_MAX = 500;
@@ -200,18 +223,22 @@ export type SnapshotEventoLiquidacion = {
 };
 
 export type AccionesLiquidacionFila = {
-  /** Confirmar reporte (Fase 2): sin liquidación registrada. */
+  /** Confirmar reporte (Fase 2): sin liquidación registrada y viaje aún no cerrado/cancelado. */
   confirmarReporte: boolean;
-  /** «Liquidar viaje» (REPORTE_RECIBIDO) o «Liquidar nuevamente» (EN_AJUSTE). */
+  /** «Liquidar viaje» (REPORTE_RECIBIDO) o «Liquidar nuevamente» (EN_AJUSTE): SOLO con el viaje Cerrado. */
   liquidar: boolean;
   etiquetaLiquidar: "Liquidar viaje" | "Liquidar nuevamente" | null;
-  /** «Reabrir liquidación» (LIQUIDADO). */
+  /** «Reabrir liquidación» (LIQUIDADO). La liquidación ocurre con el viaje ya Cerrado, que permanece Cerrado. */
   reabrir: boolean;
+  /** Hay liquidación pendiente pero el viaje sigue abierto: se informa «cerrar primero»; no se ofrece liquidar. */
+  requiereCierre: boolean;
 };
 
 /**
- * Acciones de liquidación ofrecidas en una fila de la vista operativa. Cerrado/Cancelado y la vista de consulta no admiten
- * ninguna; sin liquidación solo se puede confirmar el reporte (nunca liquidar). Cada acción exige SU permiso, separado del cierre.
+ * Acciones de liquidación de una fila de la vista operativa. Cada acción exige SU permiso, separado del cierre.
+ *  - Sin liquidación: solo confirmar reporte (con el viaje abierto); nunca liquidar.
+ *  - REPORTE_RECIBIDO / EN_AJUSTE: liquidar / liquidar nuevamente SOLO si el viaje está Cerrado; abierto ⇒ `requiereCierre`.
+ *  - LIQUIDADO: reabrir (el viaje sigue Cerrado). Cancelado y la vista de consulta: ninguna.
  */
 export function accionesLiquidacionFila(entrada: {
   estadoPlan: string;
@@ -221,12 +248,17 @@ export function accionesLiquidacionFila(entrada: {
   puedeReabrir: boolean;
   soloConsulta: boolean;
 }): AccionesLiquidacionFila {
-  const ninguna: AccionesLiquidacionFila = { confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false };
+  const ninguna: AccionesLiquidacionFila = { confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false, requiereCierre: false };
   if (entrada.soloConsulta) return ninguna;
-  if ((ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(entrada.estadoPlan)) return ninguna;
+  if ((ESTADOS_PLAN_SIN_REAPERTURA as readonly string[]).includes(entrada.estadoPlan)) return ninguna; // Cancelado
+  const cerrado = puedeLiquidarSegunPlan(entrada.estadoPlan);
   const l = entrada.liquidacion;
-  if (!l) return { ...ninguna, confirmarReporte: entrada.puedeConfirmarReporte };
-  if (l.estado === "REPORTE_RECIBIDO") return { ...ninguna, liquidar: entrada.puedeLiquidar, etiquetaLiquidar: entrada.puedeLiquidar ? "Liquidar viaje" : null };
-  if (l.estado === "EN_AJUSTE") return { ...ninguna, liquidar: entrada.puedeLiquidar, etiquetaLiquidar: entrada.puedeLiquidar ? "Liquidar nuevamente" : null };
-  return { ...ninguna, reabrir: entrada.puedeReabrir }; // LIQUIDADO
+  if (!l) {
+    // Sin reporte: solo se confirma con el viaje abierto (un Cerrado sin reporte no se liquida: decisión de negocio abierta).
+    return cerrado ? ninguna : { ...ninguna, confirmarReporte: entrada.puedeConfirmarReporte };
+  }
+  if (l.estado === "LIQUIDADO") return { ...ninguna, reabrir: entrada.puedeReabrir };
+  const etiqueta = l.estado === "EN_AJUSTE" ? "Liquidar nuevamente" : "Liquidar viaje";
+  if (!cerrado) return { ...ninguna, requiereCierre: true };
+  return { ...ninguna, liquidar: entrada.puedeLiquidar, etiquetaLiquidar: entrada.puedeLiquidar ? etiqueta : null };
 }
