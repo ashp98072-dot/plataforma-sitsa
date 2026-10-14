@@ -6,6 +6,7 @@ import type { FilaResultadoEdicionRapida } from "@/lib/tms/edicion-rapida-schema
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { textoResumenCargos, type ResumenCargosPlan } from "@/lib/tms/cargos-adicionales-shared";
 import { ModalCargosViaje } from "@/components/tms/cargos-viaje-modal";
+import { CerradosPendientesCargos } from "./cerrados-pendientes-cargos";
 import {
   agregarAuxiliar,
   confirmarPerdida,
@@ -113,6 +114,10 @@ export function EdicionRapida({
   // propio guardado inmediato y auditoría: NO forman parte del borrador/validación/motivo de esta tabla.
   const [resumenCargos, setResumenCargos] = useState<Record<string, ResumenCargosPlan>>({});
   const [cargosAbierto, setCargosAbierto] = useState<{ id: number; codigo: string } | null>(null);
+  // Dos vistas del MISMO panel: viajes activos (los de Programación) y Cerrados pendientes de liquidación. El componente sigue
+  // montado al cambiar de vista (la de activos solo se oculta), de modo que el borrador no se pierde.
+  const [vista, setVista] = useState<"activos" | "cerrados">("activos");
+  const [refrescarCerrados, setRefrescarCerrados] = useState(0);
   const idsCargos = useMemo(() => filas.map((f) => f.plan.id).join(","), [filas]);
   const cargarResumenCargos = useCallback(async () => {
     if (!idsCargos) {
@@ -236,6 +241,32 @@ export function EdicionRapida({
 
   return (
     <section aria-label="Edición rápida" className="space-y-3 rounded-xl border border-[var(--accent)]/60 bg-[var(--card)] p-3">
+      <div role="tablist" aria-label="Vista de Ajustes rápidos" className="flex gap-2 text-xs">
+        {([
+          ["activos", "Viajes activos"],
+          ["cerrados", "Cerrados pendientes de liquidación"],
+        ] as const).map(([id, texto]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={vista === id}
+            onClick={() => setVista(id)}
+            className={`rounded border px-3 py-1.5 ${vista === id ? "border-[var(--accent)] bg-[var(--accent)]/20 font-semibold" : "border-[var(--border)]"}`}
+          >
+            {texto}
+          </button>
+        ))}
+      </div>
+      {vista === "cerrados" ? (
+        <CerradosPendientesCargos
+          slug={slug}
+          puedeGestionarCargos={puedeGestionarCargos}
+          refrescarClave={refrescarCerrados}
+          onAbrirCargos={setCargosAbierto}
+        />
+      ) : null}
+      <div hidden={vista !== "activos"} className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
         <label className="min-w-[260px] flex-1 text-xs text-[var(--muted)]">
           Motivo del cambio
@@ -503,6 +534,7 @@ export function EdicionRapida({
           </tbody>
         </table>
       </div>
+      </div>
       {cargosAbierto ? (
         <ModalCargosViaje
           slug={slug}
@@ -510,7 +542,10 @@ export function EdicionRapida({
           codigo={cargosAbierto.codigo}
           puedeEditar={puedeGestionarCargos}
           onClose={() => setCargosAbierto(null)}
-          onCambio={() => void cargarResumenCargos()}
+          onCambio={() => {
+            void cargarResumenCargos();
+            setRefrescarCerrados((n) => n + 1);
+          }}
         />
       ) : null}
     </section>

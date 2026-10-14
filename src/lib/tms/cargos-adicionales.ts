@@ -410,6 +410,92 @@ export async function resumenCargosDePlanes(empresaId: number, planIds: number[]
   return mapa;
 }
 
+// ───────────────────── Cerrados pendientes de liquidación (vista de Ajustes rápidos) ─────────────────────
+
+/** Máximo de filas de la vista «Cerrados pendientes de liquidación» (acotada: nunca el histórico Cerrado completo). */
+export const LIMITE_CERRADOS_PENDIENTES = 200;
+/** Ventana de los LIQUIDADO que se pueden consultar (solo lectura de cargos: están bloqueados). */
+export const DIAS_LIQUIDADOS_RECIENTES = 30;
+
+export type CerradoPendienteCargos = {
+  planId: number;
+  codigo: string;
+  fechaPlan: string;
+  cliente: string | null;
+  ruta: string;
+  tarifaComercial: string | null;
+  moneda: string;
+  estadoLiquidacion: EstadoLiquidacionViaje;
+  versionLiquidacion: number;
+  cargos: { cantidad: number; total: string };
+  /** true si los cargos pueden modificarse (la misma regla que aplica el servidor al mutar). */
+  editable: boolean;
+};
+
+export type ListaCerradosPendientes = { filas: CerradoPendienteCargos[]; truncado: boolean; limite: number; diasLiquidados: number };
+
+/**
+ * Viajes `Cerrado` que todavía requieren trabajo comercial/de liquidación: `REPORTE_RECIBIDO` y `EN_AJUSTE`; opcionalmente los
+ * `LIQUIDADO` de los últimos DIAS_LIQUIDADOS_RECIENTES días (cargos bloqueados). Se parte de la TABLA DE LIQUIDACIONES (solo
+ * existen filas para viajes con reporte confirmado), así que un Cerrado sin liquidación o ya antiguo y liquidado NO aparece.
+ * Acotado por empresa y por LIMITE_CERRADOS_PENDIENTES. Solo lectura, sin locks. Sin tablas aún ⇒ lista vacía.
+ */
+export async function listarCerradosPendientesLiquidacion(
+  empresaId: number,
+  opciones: { incluirLiquidados?: boolean } = {},
+): Promise<ListaCerradosPendientes> {
+  const vacia: ListaCerradosPendientes = { filas: [], truncado: false, limite: LIMITE_CERRADOS_PENDIENTES, diasLiquidados: DIAS_LIQUIDADOS_RECIENTES };
+  const incluir = opciones.incluirLiquidados === true;
+  try {
+    const [rows] = await getPool().query<(RowDataPacket & {
+      id: number; codigo: string; fecha_plan: string; cliente: string | null; ruta_codigo: string | null; origen: string | null;
+      destino: string | null; tarifa_comercial: string | null; moneda: string | null; liq_estado: EstadoLiquidacionViaje; liq_version: number;
+    })[]>(
+      `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan, c.nombre AS cliente,
+              p.ruta_codigo_historico AS ruta_codigo, lc.nombre AS origen, COALESCE(p.lugar_descarga_historico, ld.nombre) AS destino,
+              p.tarifa_comercial, p.tarifa_moneda_historico AS moneda, l.estado AS liq_estado, l.version AS liq_version
+         FROM tms_viaje_liquidaciones l
+         INNER JOIN tms_planes_viaje p ON p.empresa_id = l.empresa_id AND p.id = l.plan_id
+         LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+         LEFT JOIN tms_lugares lc ON lc.id = p.lugar_carga_id AND lc.empresa_id = p.empresa_id
+         LEFT JOIN tms_lugares ld ON ld.id = p.lugar_descarga_id AND ld.empresa_id = p.empresa_id
+        WHERE l.empresa_id = ? AND p.estado = 'Cerrado'
+          AND (l.estado IN ('REPORTE_RECIBIDO', 'EN_AJUSTE')
+               OR (? = 1 AND l.estado = 'LIQUIDADO' AND l.liquidado_en >= (NOW() - INTERVAL ${DIAS_LIQUIDADOS_RECIENTES} DAY)))
+        ORDER BY p.fecha_plan DESC, p.id DESC
+        LIMIT ${LIMITE_CERRADOS_PENDIENTES + 1}`,
+      [empresaId, incluir ? 1 : 0],
+    );
+    const truncado = rows.length > LIMITE_CERRADOS_PENDIENTES;
+    const visibles = truncado ? rows.slice(0, LIMITE_CERRADOS_PENDIENTES) : rows;
+    const resumen = await resumenCargosDePlanes(empresaId, visibles.map((r) => Number(r.id)));
+    return {
+      truncado,
+      limite: LIMITE_CERRADOS_PENDIENTES,
+      diasLiquidados: DIAS_LIQUIDADOS_RECIENTES,
+      filas: visibles.map((r) => {
+        const cargos = resumen.get(Number(r.id));
+        return {
+          planId: Number(r.id),
+          codigo: String(r.codigo),
+          fechaPlan: String(r.fecha_plan),
+          cliente: r.cliente ?? null,
+          ruta: r.origen || r.destino ? `${r.origen || "—"} → ${r.destino || "—"}` : (r.ruta_codigo ?? ""),
+          tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial).toFixed(2) : null,
+          moneda: r.moneda && String(r.moneda).trim() ? String(r.moneda) : "GTQ",
+          estadoLiquidacion: r.liq_estado,
+          versionLiquidacion: Number(r.liq_version),
+          cargos: { cantidad: cargos?.cantidad ?? 0, total: cargos?.total ?? "0.00" },
+          editable: evaluarEdicionCargos("Cerrado", r.liq_estado).editable,
+        };
+      }),
+    };
+  } catch (e) {
+    if (sinTabla(e)) return vacia;
+    throw e;
+  }
+}
+
 export type VistaCargosPlan = {
   plan: { id: number; codigo: string; estado: string; tarifaComercial: string | null; moneda: string };
   liquidacion: { estado: EstadoLiquidacionViaje; version: number } | null;

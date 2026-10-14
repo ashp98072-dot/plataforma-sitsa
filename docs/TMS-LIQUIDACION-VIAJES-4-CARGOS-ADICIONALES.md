@@ -20,7 +20,7 @@ base real. Sin IVA, sin FEL, sin líneas de factura, sin cambios al cierre.
 | `Cerrado` | sin liquidación registrada (histórico) | **editables** (no está liquidado) |
 | `Cerrado` | `EN_AJUSTE` | **editables** |
 | cualquiera | `LIQUIDADO` (incluye RELIQUIDADO = versión > 1) | **bloqueados** — reabrir la liquidación primero |
-| `Cancelado` | cualquiera | **bloqueados** (*supuesto a confirmar*: un viaje cancelado no se factura) |
+| `Cancelado` | cualquiera | **bloqueados** (confirmado) |
 
 «RELIQUIDADO» no es un estado propio del modelo: es `LIQUIDADO` con versión > 1 (el evento sí se llama `RELIQUIDADO`).
 
@@ -40,7 +40,7 @@ base real. Sin IVA, sin FEL, sin líneas de factura, sin cambios al cierre.
 - **Endpoints** (empresa y usuario salen de la sesión; esquemas `strict`):
   `GET/POST /tms/planes/[id]/cargos`, `PATCH /tms/planes/[id]/cargos/[cargoId]`, `POST …/anular`, `POST …/reactivar`,
   `GET /tms/planes/cargos-resumen?ids=…` (una consulta, sin N+1, máx. 500).
-- **UI** en Programación → Ajustes rápidos: columna **«Cargos»** con «Cargos: n · Q total» y botón que abre el panel (agregar, editar,
+- **UI** en Programación → Ajustes rápidos (vistas «Viajes activos» y «Cerrados pendientes de liquidación», ver más abajo): columna **«Cargos»** con «Cargos: n · Q total» y botón que abre el panel (agregar, editar,
   anular con motivo, reactivar, historial, creado/actualizado por/en). Los cargos guardan **de inmediato y con su propia auditoría**; no
   entran al borrador/validación/motivo de la tabla.
 - **Totales:** «**Total comercial preliminar**» = tarifa base + cargos vigentes (Decimal, nunca float). No es «total factura»: no incluye IVA
@@ -78,13 +78,31 @@ Opciones para la fase de facturación (**no decididas, no implementadas**):
 
 Esta fase deja los cargos listos (tabla propia, estado vigente, `activo`, `version`, snapshot) para cualquiera de las tres.
 
-## Pregunta de negocio abierta que afecta a la UI
+## Ubicación de los cargos en viajes Cerrados (DECIDIDO)
 
-**Programación ya no lista viajes `Cerrado`** (`perteneceAlTableroProgramacion`: el historial vive en Planes / Viajes) y **Ajustes rápidos
-solo muestra las filas visibles de Programación**. Por la regla confirmada, los cargos deben poder editarse con el viaje `Cerrado` y la
-liquidación en `REPORTE_RECIBIDO` o `EN_AJUSTE`, pero esos viajes **no aparecen en Ajustes rápidos**. El servidor ya lo permite (probado);
-falta decidir dónde se operan: (a) también en Planes / Viajes junto a «Liquidar viaje» (recomendado: ahí viven los viajes cerrados y la
-acción de liquidar), (b) hacer que Ajustes rápidos incluya los cerrados pendientes de liquidar, o (c) ambas. **No se asumió.**
+**Una sola ubicación operativa: Programación → Ajustes rápidos.** No hay un segundo panel de cargos en Planes / Viajes, y la lista normal de
+Programación **no** vuelve a incluir los Cerrados (`perteneceAlTableroProgramacion` no cambió).
+
+Ajustes rápidos tiene dos vistas del **mismo** panel:
+
+| Vista | Qué muestra | Origen de datos |
+|---|---|---|
+| **Viajes activos** | los viajes visibles de Programación (como antes), con la columna «Cargos» | la lista de Programación, sin cambios |
+| **Cerrados pendientes de liquidación** | solo viajes `Cerrado` que aún requieren trabajo comercial/de liquidación | `GET /tms/planes/cargos-cerrados-pendientes`, **solo al abrir la pestaña** |
+
+Filtros exactos de la vista de cerrados (`listarCerradosPendientesLiquidacion`):
+- Se parte de `tms_viaje_liquidaciones` (solo existen filas para viajes con reporte confirmado) unido a `tms_planes_viaje` por
+  `(empresa_id, id)`; todos los catálogos se unen acotados por `empresa_id`.
+- `p.estado = 'Cerrado'` **y** `l.estado IN ('REPORTE_RECIBIDO', 'EN_AJUSTE')`.
+- Opcional (`?incluirLiquidados=1`, casilla en la UI): también `LIQUIDADO` con `liquidado_en` de los **últimos 30 días**, con los cargos
+  **bloqueados** (solo consulta; para modificarlos se reabre la liquidación). Más antiguos no aparecen.
+- Orden `fecha_plan DESC, id DESC`, **máximo 200 filas** (consulta con `LIMIT 201` para marcar `truncado`).
+- No aparecen: viajes abiertos, Cerrados sin liquidación registrada (histórico), Cancelados, ni el histórico completo.
+
+La vista de cerrados **no** ofrece editar personal, unidad, tarifa ni viáticos (esos viajes están cerrados): solo abre el panel de cargos.
+El borrador de la vista de activos se conserva al cambiar de pestaña (la vista solo se oculta).
+
+**Cancelado = cargos bloqueados** (confirmado). Un eventual «cargo por cancelación» se diseñará explícitamente; no se asume.
 
 ## Despliegue (NO ejecutado)
 

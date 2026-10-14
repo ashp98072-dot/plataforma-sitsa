@@ -236,3 +236,54 @@ describe("Cargos adicionales · Fase 4 · UI (Ajustes rápidos)", () => {
     );
   });
 });
+
+describe("Cargos adicionales · Fase 4 · vista «Cerrados pendientes de liquidación»", () => {
+  const lib = leer("src/lib/tms/cargos-adicionales.ts");
+  const ruta = leer("src/app/api/empresas/[slug]/tms/planes/cargos-cerrados-pendientes/route.ts");
+  const vista = leer("src/app/e/[slug]/programacion/cerrados-pendientes-cargos.tsx");
+  const tabla = leer("src/app/e/[slug]/programacion/edicion-rapida.tsx");
+  const cliente = leer("src/app/e/[slug]/programacion/programacion-client.tsx");
+
+  it("filtros exactos: parte de la tabla de liquidaciones, Cerrado, REPORTE_RECIBIDO/EN_AJUSTE, LIQUIDADO solo opcional y reciente, con LIMIT", () => {
+    const sql = lib.slice(lib.indexOf("export async function listarCerradosPendientesLiquidacion"));
+    expect(sql).toMatch(/FROM tms_viaje_liquidaciones l\s+INNER JOIN tms_planes_viaje p ON p\.empresa_id = l\.empresa_id AND p\.id = l\.plan_id/);
+    expect(sql).toMatch(/WHERE l\.empresa_id = \? AND p\.estado = 'Cerrado'/);
+    expect(sql).toMatch(/l\.estado IN \('REPORTE_RECIBIDO', 'EN_AJUSTE'\)/);
+    expect(sql).toMatch(/\? = 1 AND l\.estado = 'LIQUIDADO' AND l\.liquidado_en >= \(NOW\(\) - INTERVAL \$\{DIAS_LIQUIDADOS_RECIENTES\} DAY\)/);
+    expect(sql).toMatch(/LIMIT \$\{LIMITE_CERRADOS_PENDIENTES \+ 1\}/);
+    // Todos los JOIN a catálogos van acotados por empresa.
+    const joins = sql.match(/LEFT JOIN \w+ \w+ ON [^\n]+/g) ?? [];
+    expect(joins.length).toBe(3);
+    for (const j of joins) expect(j, j).toMatch(/empresa_id = p\.empresa_id/);
+  });
+
+  it("endpoint: solo lectura, empresa de la sesión, parámetro opcional único", () => {
+    expect(ruta).toMatch(/requireTenantProgramacionOTms\(slug, "ver"\)/);
+    expect(ruta).toMatch(/listarCerradosPendientesLiquidacion\(guard\.empresa\.id, \{ incluirLiquidados \}\)/);
+    expect(ruta).not.toMatch(/export async function (POST|PATCH|PUT|DELETE)/);
+    expect(ruta).not.toMatch(/searchParams\.get\("(empresa|empresaId|planId)"\)/);
+  });
+
+  it("la lista normal de Programación NO cambia: los Cerrados siguen fuera y esta vista no se carga con ella", () => {
+    expect(cliente).toMatch(/export function perteneceAlTableroProgramacion\(estado: string\): boolean \{\s*return estado !== "Cerrado";/);
+    expect(cliente).not.toMatch(/cargos-cerrados-pendientes|CerradosPendientesCargos/);
+    // La vista se carga solo al abrir la pestaña (render condicional), no al montar Ajustes rápidos.
+    expect(tabla).toMatch(/\{vista === "cerrados" \? \(\s*<CerradosPendientesCargos/);
+    expect(vista).toMatch(/cargos-cerrados-pendientes/);
+    expect(vista).not.toMatch(/\/tms\/planes\?|\/tms\/planes`/);
+  });
+
+  it("dos vistas del mismo panel: activos y cerrados pendientes; el borrador de activos se conserva (solo se oculta)", () => {
+    expect(tabla).toMatch(/Viajes activos/);
+    expect(tabla).toMatch(/Cerrados pendientes de liquidación/);
+    expect(tabla).toMatch(/<div hidden=\{vista !== "activos"\}/);
+    // Los cargos se operan en el MISMO panel (ModalCargosViaje), sin un segundo panel en Planes/Viajes.
+    expect(tabla.match(/<ModalCargosViaje/g)?.length).toBe(1);
+    expect(leer("src/app/e/[slug]/planes/planes-viajes-client.tsx")).not.toMatch(/ModalCargosViaje|cargos-viaje-modal/);
+  });
+
+  it("la vista de cerrados no ofrece editar personal, unidad, tarifa ni viáticos", () => {
+    expect(vista).not.toMatch(/<select|<input type="text"|cambiar\(|editarRecursos|viatico/i);
+    expect(vista).toMatch(/Aquí solo se\s+gestionan cargos/);
+  });
+});

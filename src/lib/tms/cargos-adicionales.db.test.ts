@@ -20,6 +20,7 @@ import {
   crearCargoAdicional,
   editarCargoAdicional,
   listarCargosPlan,
+  listarCerradosPendientesLiquidacion,
   listarEventosCargosPlan,
   obtenerVistaCargosPlan,
   reactivarCargoAdicional,
@@ -359,6 +360,82 @@ describe.skipIf(!port)("Cargos adicionales Fase 4 / MariaDB 11.8.9 SOLO LOCAL", 
         expect(enBD).toBe(0);
       }
     }
+  });
+
+  // ─────────────────────── vista «Cerrados pendientes de liquidación» ───────────────────────
+  it("trae SOLO Cerrado + REPORTE_RECIBIDO/EN_AJUSTE: ni abiertos, ni Cerrados sin liquidación, ni Cancelados, ni el histórico", async () => {
+    const pendiente = await cerradoConReporte({ empresa: 7 });
+    const enAjuste = await cerradoConReporte();
+    await liquidarViaje(L(B), { planId: enAjuste, versionEsperada: (await leerLiquidacionPlan(7, enAjuste))!.version });
+    await reabrirLiquidacion(L(A), { planId: enAjuste, versionEsperada: (await leerLiquidacionPlan(7, enAjuste))!.version, motivo: "Falta cargo" });
+    // Ruido que NO debe aparecer:
+    const abiertoConReporte = await plan();
+    await confirmarReporteRecibido(L(A), { planId: abiertoConReporte });
+    const abiertoSinNada = await plan({ estado: "En ruta" });
+    const cerradoSinLiquidacion = await plan({ estado: "Cerrado" }); // histórico
+    const cancelado = await plan({ estado: "Cancelado" });
+    const liquidado = await cerradoConReporte();
+    await liquidarViaje(L(B), { planId: liquidado, versionEsperada: (await leerLiquidacionPlan(7, liquidado))!.version });
+    await nuevo(pendiente, { monto: "40" });
+
+    const lista = await listarCerradosPendientesLiquidacion(7);
+    const ids = lista.filas.map((f) => f.planId);
+    expect(ids).toContain(pendiente);
+    expect(ids).toContain(enAjuste);
+    for (const fuera of [abiertoConReporte, abiertoSinNada, cerradoSinLiquidacion, cancelado, liquidado]) expect(ids, `plan ${fuera}`).not.toContain(fuera);
+    expect(lista.filas.every((f) => ["REPORTE_RECIBIDO", "EN_AJUSTE"].includes(f.estadoLiquidacion))).toBe(true);
+    expect(lista.filas.every((f) => f.editable)).toBe(true);
+    expect(lista.filas.find((f) => f.planId === pendiente)).toMatchObject({ cargos: { cantidad: 1, total: "40.00" }, estadoLiquidacion: "REPORTE_RECIBIDO", moneda: "GTQ" });
+    expect(lista.truncado).toBe(false);
+  });
+
+  it("LIQUIDADO solo con incluirLiquidados, dentro de la ventana de 30 días, con cargos bloqueados", async () => {
+    const reciente = await cerradoConReporte();
+    await liquidarViaje(L(B), { planId: reciente, versionEsperada: (await leerLiquidacionPlan(7, reciente))!.version });
+    const antiguo = await cerradoConReporte();
+    await liquidarViaje(L(B), { planId: antiguo, versionEsperada: (await leerLiquidacionPlan(7, antiguo))!.version });
+    await holder.pool!.execute("UPDATE tms_viaje_liquidaciones SET liquidado_en = NOW() - INTERVAL 45 DAY WHERE plan_id = ?", [antiguo]);
+
+    expect((await listarCerradosPendientesLiquidacion(7)).filas.map((f) => f.planId)).not.toContain(reciente);
+    const con = await listarCerradosPendientesLiquidacion(7, { incluirLiquidados: true });
+    const fila = con.filas.find((f) => f.planId === reciente);
+    expect(fila).toMatchObject({ estadoLiquidacion: "LIQUIDADO", editable: false });
+    expect(con.filas.map((f) => f.planId)).not.toContain(antiguo); // histórico fuera de la ventana: no aparece
+  });
+
+  it("aislamiento por empresa y acotado por límite", async () => {
+    const mia = await cerradoConReporte({ empresa: 7 });
+    const ajena = await plan({ empresa: 8 });
+    await confirmarReporteRecibido({ empresaId: 8, usuarioId: 6, usuario: "carla" }, { planId: ajena });
+    await cerrarPlan(ajena);
+    expect((await listarCerradosPendientesLiquidacion(8)).filas.map((f) => f.planId)).toEqual([ajena]);
+    expect((await listarCerradosPendientesLiquidacion(7)).filas.map((f) => f.planId)).toContain(mia);
+    expect((await listarCerradosPendientesLiquidacion(7)).filas.map((f) => f.planId)).not.toContain(ajena);
+    expect((await listarCerradosPendientesLiquidacion(999)).filas).toEqual([]);
+  });
+
+  it("límite: con más pendientes que el máximo devuelve solo los más recientes y marca truncado", async () => {
+    const { LIMITE_CERRADOS_PENDIENTES } = await import("./cargos-adicionales");
+    // Empresa dedicada para no depender del resto de la suite.
+    await holder.pool!.execute("INSERT IGNORE INTO empresas VALUES (9)");
+    const total = LIMITE_CERRADOS_PENDIENTES + 5;
+    for (let i = 0; i < total; i++) {
+      const id = sigPlan++;
+      await holder.pool!.execute(
+        "INSERT INTO tms_planes_viaje (id, empresa_id, codigo, estado, fecha_plan, tarifa_comercial) VALUES (?, 9, ?, 'Cerrado', ?, 10)",
+        [id, `L-${id}`, `2026-09-${String((i % 28) + 1).padStart(2, "0")}`],
+      );
+      await holder.pool!.execute(
+        "INSERT INTO tms_viaje_liquidaciones (empresa_id, plan_id, estado, version, reporte_recibido_por, reporte_recibido_en) VALUES (9, ?, 'REPORTE_RECIBIDO', 1, 4, NOW())",
+        [id],
+      );
+    }
+    const lista = await listarCerradosPendientesLiquidacion(9);
+    expect(lista.filas.length).toBe(LIMITE_CERRADOS_PENDIENTES);
+    expect(lista.truncado).toBe(true);
+    // Orden: más recientes primero.
+    const fechas = lista.filas.map((f) => f.fechaPlan);
+    expect([...fechas].sort().reverse()).toEqual(fechas);
   });
 
   // ───────────────────────────────────── alcance ─────────────────────────────────────
