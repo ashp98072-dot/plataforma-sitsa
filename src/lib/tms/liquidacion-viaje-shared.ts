@@ -59,3 +59,49 @@ export const ETIQUETA_ESTADO_LIQUIDACION: Record<EstadoLiquidacionViaje, string>
 export function esPendienteDeLiquidar(estado: EstadoLiquidacionViaje | null | undefined): boolean {
   return estado === "REPORTE_RECIBIDO" || estado === "EN_AJUSTE";
 }
+
+// ───────────────────────────── FASE 2: reporte recibido + presentación en Planes/Viajes ─────────────────────────────
+
+/** Advertencias NO bloqueantes al confirmar el reporte (decisión D02: advertir, no bloquear; el usuario las reconoce). */
+export const ADVERTENCIAS_REPORTE = {
+  SIN_SALIDA_REGISTRADA: "El piloto no tiene salida registrada para este viaje.",
+  SIN_LLEGADA_REGISTRADA: "El piloto todavía no ha registrado la llegada de este viaje.",
+} as const;
+export type CodigoAdvertenciaReporte = keyof typeof ADVERTENCIAS_REPORTE;
+export type AdvertenciaReporte = { codigo: CodigoAdvertenciaReporte; mensaje: string };
+
+/** Resumen de la liquidación VIGENTE que viaja en cada fila de Planes/Viajes (null = sin liquidación registrada). */
+export type ResumenLiquidacionFila = { estado: EstadoLiquidacionViaje; version: number };
+
+/** Clase visual de la fila: «pendiente» = amarillo (REPORTE_RECIBIDO y EN_AJUSTE); lo demás, superficie normal del tema. */
+export function claseFilaLiquidacion(l: ResumenLiquidacionFila | null | undefined): "pendiente" | "normal" {
+  return l && esPendienteDeLiquidar(l.estado) ? "pendiente" : "normal";
+}
+
+export type BadgeLiquidacion = { texto: string; clase: string; titulo: string } | null;
+
+/**
+ * Badge de TEXTO de la columna «Liquidación» (el color nunca es el único portador de significado). Sin liquidación = null:
+ * la UI muestra «—». Clases con texto blanco y contraste ≥ 4.5:1 (700 de la paleta) también sobre la fila amarilla.
+ */
+export function badgeLiquidacion(l: ResumenLiquidacionFila | null | undefined): BadgeLiquidacion {
+  if (!l) return null;
+  if (l.estado === "REPORTE_RECIBIDO") return { texto: "Reporte recibido", clase: "bg-amber-700", titulo: "Reporte del piloto recibido; pendiente de liquidar." };
+  if (l.estado === "EN_AJUSTE") return { texto: "En ajuste", clase: "bg-orange-700", titulo: "Liquidación reabierta para ajustes; pendiente de liquidar de nuevo." };
+  return { texto: "Liquidado", clase: "bg-emerald-700", titulo: "Viaje liquidado." };
+}
+
+/**
+ * ¿Se ofrece «Confirmar reporte» en la fila? Solo en la vista operativa, con permiso, sin liquidación registrada y mientras
+ * el viaje no esté Cerrado/Cancelado. NO depende de la llegada (solo advierte, ver ADVERTENCIAS_REPORTE) ni toca el cierre.
+ */
+export function puedeOfrecerConfirmarReporte(entrada: {
+  estadoPlan: string;
+  liquidacion: ResumenLiquidacionFila | null | undefined;
+  tienePermiso: boolean;
+  soloConsulta: boolean;
+}): boolean {
+  if (entrada.soloConsulta || !entrada.tienePermiso) return false;
+  if ((ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(entrada.estadoPlan)) return false;
+  return entrada.liquidacion == null;
+}

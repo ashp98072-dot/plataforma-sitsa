@@ -1,6 +1,8 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
+import { liquidacionesDePlanes } from "@/lib/tms/liquidacion-viaje";
+import type { ResumenLiquidacionFila } from "@/lib/tms/liquidacion-viaje-shared";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
 import { pilotoExtraDePlanes } from "@/lib/tms/piloto-extra";
 import {
@@ -98,6 +100,11 @@ export type PlanReporte = {
   regresoReal?: string | null;
   /** El cierre fue manual (sin llegada física). Solo puede ser true si estado = Cerrado. */
   cierreManual?: boolean;
+  /**
+   * LIQUIDACIÓN DE VIAJES (Fase 2) — liquidación VIGENTE del viaje, dimensión SEPARADA de `estado`. null = «sin liquidación
+   * registrada» (incluye todo el histórico): NUNCA se infiere «liquidado». Solo lectura; no interviene en el cierre.
+   */
+  liquidacion?: ResumenLiquidacionFila | null;
   kmSalida: number | null;
   kmLlegada: number | null;
   kmRecorridos: number | null;
@@ -753,12 +760,14 @@ export async function obtenerReporteViajes(
   }
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap, extraMap, cierreManualIds] = await Promise.all([
+  const [paradasMap, auxMap, extraMap, cierreManualIds, liquidacionMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanesReporte(planIds),
     // Piloto extra de todos los viajes del reporte en UNA consulta.
     pilotoExtraDePlanes(planIds),
     planesConCierreManual(empresaId, rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id))),
+    // Liquidación vigente en UNA consulta (tolerante: sin tablas ⇒ mapa vacío ⇒ «—»). Solo informativa.
+    liquidacionesDePlanes(empresaId, planIds),
   ]);
 
   return rows.map((r) => {
@@ -804,6 +813,7 @@ export async function obtenerReporteViajes(
       horaLlegada,
       regresoReal: horaLlegada,
       cierreManual: cierreManualIds.has(id),
+      liquidacion: liquidacionMap.get(id) ?? null,
       kmSalida,
       kmLlegada,
       kmRecorridos: calcularKmRecorridos(kmSalida, kmLlegada),

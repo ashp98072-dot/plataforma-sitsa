@@ -9,12 +9,18 @@ vi.mock("@/lib/db", () => ({
     if (!holder.pool) throw new Error("Sin conexión local fixture");
     return holder.pool;
   },
+  // Mismo contrato que `query` de @/lib/db: devuelve solo las filas.
+  query: async (texto: string, params: unknown[] = []) => {
+    if (!holder.pool) throw new Error("Sin conexión local fixture");
+    return (await holder.pool.query(texto, params))[0];
+  },
 }));
 
 import {
   configurarFechaActivacionLiquidacion,
   confirmarReporteRecibido,
   leerLiquidacionPlan,
+  liquidacionesDePlanes,
   liquidarViaje,
   listarEventosLiquidacion,
   obtenerFechaActivacionLiquidacion,
@@ -22,6 +28,7 @@ import {
   type ActorLiquidacion,
 } from "./liquidacion-viaje";
 import { liquidacionExigidaParaPlan } from "./liquidacion-viaje-shared";
+import { confirmarReporteOperativo, evaluarAdvertenciasReporte } from "./liquidacion-viaje-reporte";
 
 /**
  * Fase 1 de liquidación contra MariaDB 11.8.9 DESECHABLE. Se OMITE salvo que exista LIQ_TEST_DB_PORT (3399 o 3407, solo
@@ -66,6 +73,8 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
           estado VARCHAR(40) NOT NULL, fecha_plan DATE NOT NULL, tarifa_comercial DECIMAL(12,2) NULL,
           UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id)) ENGINE=InnoDB;
         CREATE TABLE auditoria(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, usuario VARCHAR(100), accion VARCHAR(100), modulo VARCHAR(100), detalle TEXT) ENGINE=InnoDB;
+        CREATE TABLE flota_viajes(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, plan_id INT NULL,
+          estado VARCHAR(20) NOT NULL DEFAULT 'abierto', km_salida INT NULL, km_llegada INT NULL) ENGINE=InnoDB;
         CREATE TABLE tms_solicitud_fondo_lineas(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
         CREATE TABLE tms_gastos_operativos(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
         CREATE TABLE tms_plan_cuadrilla(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
@@ -385,5 +394,103 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
       ON p.empresa_id=e.empresa_id AND p.plan_id=e.plan_id AND p.version=e.version-1 WHERE e.version>1 AND p.id IS NULL`)).toEqual([]);
     expect(await sql(`SELECT l.id FROM tms_viaje_liquidaciones l JOIN tms_viaje_liquidacion_eventos e
       ON e.empresa_id=l.empresa_id AND e.plan_id=l.plan_id AND e.version=l.version WHERE e.estado_despues<>l.estado`)).toEqual([]);
+  });
+
+  // ───────────────────────────── FASE 2: reporte recibido desde Planes/Viajes ─────────────────────────────
+  const viajeFisico = async (planId: number, estado: "abierto" | "cerrado", empresa = 7) =>
+    holder.pool!.execute("INSERT INTO flota_viajes (empresa_id, plan_id, estado, km_salida, km_llegada) VALUES (?, ?, ?, 100, ?)", [empresa, planId, estado, estado === "cerrado" ? 180 : null]);
+
+  it("F2-1. advertencias: sin salida, sin llegada y sin advertencias; Cerrado/Cancelado y otra empresa fallan sin advertir", async () => {
+    const p = await plan();
+    expect((await evaluarAdvertenciasReporte(7, p)).map((a) => a.codigo)).toEqual(["SIN_SALIDA_REGISTRADA"]);
+    await viajeFisico(p, "abierto");
+    expect((await evaluarAdvertenciasReporte(7, p)).map((a) => a.codigo)).toEqual(["SIN_LLEGADA_REGISTRADA"]);
+    await holder.pool!.execute("UPDATE flota_viajes SET estado = 'cerrado', km_llegada = 150 WHERE plan_id = ?", [p]);
+    expect(await evaluarAdvertenciasReporte(7, p)).toEqual([]);
+    const cerrado = await plan({ estado: "Cerrado" });
+    expect(await codigo(evaluarAdvertenciasReporte(7, cerrado))).toBe("PLAN_NO_ADMITE");
+    expect(await codigo(evaluarAdvertenciasReporte(8, p))).toBe("NO_ENCONTRADO");
+    // Un viaje físico de OTRA empresa con el mismo plan_id no cuenta.
+    const q = await plan();
+    await viajeFisico(q, "cerrado", 8);
+    expect((await evaluarAdvertenciasReporte(7, q)).map((a) => a.codigo)).toEqual(["SIN_SALIDA_REGISTRADA"]);
+  });
+
+  it("F2-2. advertencias NO bloquean: sin reconocerlas no se escribe nada; reconocidas, confirma y quedan en el evento", async () => {
+    const p = await plan();
+    const antesPlan = await filaPlan(p);
+    const sin = await confirmarReporteOperativo(A, { planId: p, observacion: "Reporte en papel" });
+    expect(sin).toMatchObject({ ok: false, advertencias: [{ codigo: "SIN_SALIDA_REGISTRADA" }] });
+    expect(await leerLiquidacionPlan(7, p)).toBeNull();
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(0);
+
+    const con = await confirmarReporteOperativo(A, { planId: p, observacion: "Reporte en papel", reconocerAdvertencias: true });
+    expect(con.ok).toBe(true);
+    const ev = await listarEventosLiquidacion(7, p);
+    expect(ev).toHaveLength(1);
+    expect(ev[0].detalle).toBe("Reporte en papel [Advertencias reconocidas: SIN_SALIDA_REGISTRADA]");
+    expect((await leerLiquidacionPlan(7, p))).toMatchObject({ estado: "REPORTE_RECIBIDO", version: 1 });
+    // El estado operativo del viaje no cambia: confirmar el reporte NO cierra ni liquida.
+    expect(await filaPlan(p)).toEqual(antesPlan);
+  });
+
+  it("F2-3. sin advertencias confirma directo; la réplica es idempotente y no vuelve a advertir ni a escribir", async () => {
+    const p = await plan();
+    await viajeFisico(p, "cerrado");
+    const r = await confirmarReporteOperativo(A, { planId: p });
+    expect(r).toMatchObject({ ok: true, resultado: { idempotente: false, liquidacion: { estado: "REPORTE_RECIBIDO" } } });
+    expect((await listarEventosLiquidacion(7, p))[0].detalle).toBeNull();
+    const otra = await confirmarReporteOperativo(B, { planId: p });
+    expect(otra).toMatchObject({ ok: true, resultado: { idempotente: true } });
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
+    // Replay sobre un viaje SIN salida con liquidación existente: tampoco pide reconocer nada.
+    const q = await plan();
+    await confirmarReporteOperativo(A, { planId: q, reconocerAdvertencias: true });
+    expect(await confirmarReporteOperativo(B, { planId: q })).toMatchObject({ ok: true, resultado: { idempotente: true } });
+  });
+
+  it("F2-4. el reporte recibido no toca flota_viajes, fondos, cuadrilla, facturación ni contabilidad", async () => {
+    const p = await plan();
+    await viajeFisico(p, "abierto");
+    await holder.pool!.execute("INSERT INTO tms_solicitud_fondo_lineas (plan_id) VALUES (?)", [p]);
+    const tablas = ["flota_viajes", "tms_solicitud_fondo_lineas", "tms_gastos_operativos", "tms_plan_cuadrilla", "fact_factura_viajes", "fel_documentos", "cont_eventos"];
+    const foto = async () => JSON.stringify(await Promise.all(tablas.map((t) => sql(`SELECT * FROM ${t} ORDER BY id`))));
+    const antes = await foto();
+    await confirmarReporteOperativo(A, { planId: p, reconocerAdvertencias: true });
+    expect(await foto()).toBe(antes);
+  });
+
+  it("F2-5. concurrencia: doble clic de «Confirmar reporte» deja una fila y un evento", async () => {
+    const p = await plan();
+    await viajeFisico(p, "cerrado");
+    const r = await Promise.all([
+      confirmarReporteOperativo(A, { planId: p }),
+      confirmarReporteOperativo(A, { planId: p }),
+      confirmarReporteOperativo(B, { planId: p }),
+    ]);
+    expect(r.every((x) => x.ok)).toBe(true);
+    expect(await conteo("tms_viaje_liquidaciones", "plan_id = ?", [p])).toBe(1);
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
+  });
+
+  it("F2-6. liquidacionesDePlanes: estado vigente por empresa; el viaje sin fila no aparece (jamás «liquidado»)", async () => {
+    const reportado = await plan();
+    const liquidado = await plan();
+    const enAjuste = await plan();
+    const historico = await plan({ estado: "Cerrado", fecha: "2026-01-05" });
+    const ajeno = await plan({ empresa: 8 });
+    await confirmarReporteRecibido(A, { planId: reportado });
+    await confirmarReporteRecibido(A, { planId: liquidado });
+    await liquidarViaje(A, { planId: liquidado, versionEsperada: 1 });
+    await confirmarReporteRecibido(A, { planId: enAjuste });
+    await liquidarViaje(A, { planId: enAjuste, versionEsperada: 1 });
+    await reabrirLiquidacion(A, { planId: enAjuste, versionEsperada: 2, motivo: "motivo valido" });
+    await confirmarReporteRecibido(OTRA, { planId: ajeno });
+    const m = await liquidacionesDePlanes(7, [reportado, liquidado, enAjuste, historico, ajeno]);
+    expect(m.get(reportado)).toEqual({ estado: "REPORTE_RECIBIDO", version: 1 });
+    expect(m.get(liquidado)).toEqual({ estado: "LIQUIDADO", version: 2 });
+    expect(m.get(enAjuste)).toEqual({ estado: "EN_AJUSTE", version: 3 });
+    expect(m.has(historico)).toBe(false);
+    expect(m.has(ajeno)).toBe(false); // otra empresa
   });
 });

@@ -87,7 +87,7 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
     expect(t.match(/INSERT INTO tms_viaje_liquidacion_eventos/g)).toHaveLength(1);
   });
 
-  it("el cierre (normal, manual, masivo, período) y su UI/API no consultan la liquidación en Fase 1", () => {
+  it("el cierre (normal, manual, masivo, período) y sus rutas NO consultan la liquidación (el gate es Fase 5)", () => {
     for (const f of [
       "src/lib/tms/cierre-viaje.ts",
       "src/lib/tms/cierre-viaje-shared.ts",
@@ -98,27 +98,38 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
       "src/app/api/empresas/[slug]/tms/planes/[id]/cerrar/route.ts",
       "src/app/api/empresas/[slug]/tms/planes/cerrar-masivo/route.ts",
       "src/app/api/empresas/[slug]/tms/planes/cerrar-masivo-periodo/route.ts",
-      "src/app/e/[slug]/planes/planes-viajes-client.tsx",
+      "src/app/api/empresas/[slug]/tms/planes/candidatos-cierre/route.ts",
     ]) {
       expect(leer(f), f).not.toMatch(/liquidacion-viaje|tms_viaje_liquidaci|tms_liquidacion_config/);
     }
   });
 
-  it("nadie fuera del módulo lo importa: no hay endpoints ni UI productivos en Fase 1", () => {
+  it("importadores PERMITIDOS (Fase 2): solo el endpoint de reporte recibido, Planes/Viajes y el armado de la lista", () => {
     let salida = "";
     try {
-      salida = execFileSync("git", ["grep", "--untracked", "-lE", "liquidacion-viaje(-shared)?[\"']", "--", "src"], { encoding: "utf8" });
+      salida = execFileSync("git", ["grep", "--untracked", "-lE", "liquidacion-viaje(-shared|-reporte)?[\"']", "--", "src"], { encoding: "utf8" });
     } catch (e) {
       if ((e as { status?: number }).status !== 1) throw e;
     }
-    const importadores = salida.split("\n").filter(Boolean).filter((p) => !/liquidacion-viaje(\.db)?(\.test)?\.ts$|liquidacion-viaje-shared/.test(p));
+    const permitidos = new Set([
+      "src/app/api/empresas/[slug]/tms/planes/[id]/reporte-recibido/route.ts",
+      "src/app/e/[slug]/planes/planes-viajes-client.tsx",
+      "src/lib/tms/reportes-viajes.ts",
+      "src/lib/tms/liquidacion-viaje-reporte.ts",
+    ]);
+    const importadores = salida
+      .split("\n")
+      .filter(Boolean)
+      .filter((p) => !/liquidacion-viaje[^/]*\.ts$/.test(p))
+      .filter((p) => !permitidos.has(p) && !/\.test\.tsx?$/.test(p));
     expect(importadores).toEqual([]);
   });
 
-  it("no se declararon ni concedieron permisos nuevos (el patrón exige catálogo solo con UI/API)", () => {
-    for (const f of ["src/lib/permisos-shared.ts", "src/lib/permisos-catalogo.ts", "src/lib/permisos.ts"]) {
-      expect(leer(f), f).not.toMatch(/viajes_confirmar_reporte|viajes_liquidar|viajes_liquidacion_|viajes_cargos_aprobar/);
+  it("permisos: solo viajes_confirmar_reporte está declarado (el resto llega con su fase) y ningún rol lo trae por defecto", () => {
+    for (const f of ["src/lib/permisos-shared.ts", "src/lib/permisos-catalogo.ts"]) {
+      expect(leer(f), f).not.toMatch(/viajes_liquidar|viajes_liquidacion_|viajes_cargos_aprobar|viajes_reabrir/);
     }
+    expect(leer("src/lib/permisos-shared.ts")).toMatch(/PERMISOS_LIQUIDACION_VIAJE = \["viajes_confirmar_reporte"\] as const/);
   });
 });
 
