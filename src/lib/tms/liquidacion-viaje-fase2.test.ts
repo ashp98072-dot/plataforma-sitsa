@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   badgeLiquidacion,
   claseFilaLiquidacion,
+  esPendienteDeLiquidar,
+  estaPendienteDeLiquidacion,
   puedeOfrecerConfirmarReporte,
 } from "./liquidacion-viaje-shared";
 import {
@@ -23,21 +25,43 @@ const leer = (p: string) => readFileSync(p, "utf8").replaceAll("\r\n", "\n");
 
 // ───────────────────────────── presentación (colores/badges) ─────────────────────────────
 describe("Liquidación Fase 2 · presentación", () => {
-  it("amarillo solo para REPORTE_RECIBIDO y EN_AJUSTE; LIQUIDADO y sin registro = superficie normal", () => {
-    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 })).toBe("pendiente");
-    expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 })).toBe("pendiente");
-    expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 2 })).toBe("normal");
-    expect(claseFilaLiquidacion(null)).toBe("normal");
-    expect(claseFilaLiquidacion(undefined)).toBe("normal");
+  it("mapeo final: todo viaje ACTIVO no liquidado es amarillo; solo LIQUIDADO vuelve a la superficie normal", () => {
+    // sin liquidación registrada (viaje activo)
+    for (const estado of ["Programado", "Cargado", "En ruta", "Descargado"]) {
+      expect(claseFilaLiquidacion(null, estado), estado).toBe("pendiente");
+      expect(claseFilaLiquidacion(undefined, estado), estado).toBe("pendiente");
+      expect(badgeLiquidacion(null, estado)?.texto, estado).toBe("Pendiente");
+    }
+    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")).toBe("pendiente");
+    expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "Descargado")).toBe("pendiente");
+    expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Descargado")).toBe("normal");
+    expect(badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")?.texto).toBe("Reporte recibido");
+    expect(badgeLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "En ruta")?.texto).toBe("En ajuste");
+    expect(badgeLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Descargado")?.texto).toBe("Liquidado");
   });
 
-  it("badge de TEXTO por estado; sin liquidación no hay badge (la UI muestra «—», nunca «Liquidado»)", () => {
-    expect(badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 })?.texto).toBe("Reporte recibido");
-    expect(badgeLiquidacion({ estado: "EN_AJUSTE", version: 3 })?.texto).toBe("En ajuste");
-    expect(badgeLiquidacion({ estado: "LIQUIDADO", version: 2 })?.texto).toBe("Liquidado");
-    expect(badgeLiquidacion(null)).toBeNull();
-    // Reporte recibido y En ajuste se distinguen por texto Y por color.
-    expect(badgeLiquidacion({ estado: "EN_AJUSTE", version: 3 })?.clase).not.toBe(badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 })?.clase);
+  it("Cerrado/Cancelado SIN liquidación (histórico / no aplica) no se pintan «pendientes» ni «liquidados»: fondo normal y «—»", () => {
+    for (const estado of ["Cerrado", "Cancelado"]) {
+      expect(claseFilaLiquidacion(null, estado), estado).toBe("normal");
+      expect(badgeLiquidacion(null, estado), estado).toBeNull();
+    }
+    // Con liquidación registrada manda su estado aunque el viaje esté cerrado.
+    expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Cerrado")).toBe("normal");
+    expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "Cerrado")).toBe("pendiente");
+  });
+
+  it("los tres estados pendientes se distinguen por TEXTO y por clase de badge (el color no es el único indicador)", () => {
+    const t = [badgeLiquidacion(null, "En ruta"), badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta"), badgeLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "En ruta")];
+    expect(new Set(t.map((b) => b?.texto)).size).toBe(3);
+    expect(new Set(t.map((b) => b?.clase)).size).toBe(3);
+  });
+
+  it("amarillo = pendiente de liquidar para los tres estados; LIQUIDADO no", () => {
+    expect(esPendienteDeLiquidar("REPORTE_RECIBIDO")).toBe(true);
+    expect(esPendienteDeLiquidar("EN_AJUSTE")).toBe(true);
+    expect(esPendienteDeLiquidar("LIQUIDADO")).toBe(false);
+    expect(estaPendienteDeLiquidacion(null, "Programado")).toBe(true);
+    expect(estaPendienteDeLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Programado")).toBe(false);
   });
 
   const f = { liquidacion: null, tienePermiso: true, soloConsulta: false };
@@ -63,7 +87,7 @@ describe("Liquidación Fase 2 · presentación", () => {
     expect(cuerpo.slice(inicio, fin)).not.toMatch(/liquidaci/i);
   });
 
-  it("tokens CSS: claro y oscuro definen fondo, hover y acción; el texto sobre la fila amarilla cumple contraste", () => {
+  it("tokens CSS: amarillo #FFF3BF (claro) y #3A3218 (oscuro) y contraste accesible sobre la fila pendiente", () => {
     const css = leer("src/app/globals.css");
     const bloque = (sel: string) => {
       const i = css.indexOf(sel);
@@ -77,18 +101,37 @@ describe("Liquidación Fase 2 · presentación", () => {
       const [x, y] = [luz(a), luz(b)].sort((p, q) => q - p);
       return (x + 0.05) / (y + 0.05);
     };
+    const esperado: Record<string, string> = { '[data-theme="dark"]': "#3a3218", '[data-theme="light"]': "#fff3bf" };
     for (const tema of ['[data-theme="dark"]', '[data-theme="light"]']) {
       const b = bloque(tema);
       const tok = (n: string) => new RegExp(`--${n}:\\s*(#[0-9a-fA-F]{6})`).exec(b)?.[1];
       const fila = tok("fila-pendiente-liquidar");
-      expect(fila, `${tema} --fila-pendiente-liquidar`).toBeTruthy();
+      expect(fila?.toLowerCase(), `${tema} --fila-pendiente-liquidar`).toBe(esperado[tema]);
       expect(b).toMatch(/--fila-hover:/);
       expect(b).toMatch(/--accion-reporte:/);
-      expect(ratio(tok("text")!, fila!)).toBeGreaterThanOrEqual(7); // texto principal
-      expect(ratio(tok("muted")!, fila!)).toBeGreaterThanOrEqual(4.5); // texto secundario de 10 px
-      expect(ratio(tok("accion-reporte")!, fila!)).toBeGreaterThanOrEqual(4.5); // enlace «Confirmar reporte»
-      // «Blanco literal» solo en el tema claro y solo como la superficie normal (--card), nunca como fondo del tema oscuro.
-      if (tema.includes("dark")) expect(fila!.toLowerCase()).not.toBe("#ffffff");
+      expect(ratio(tok("text")!, fila!), `${tema} texto`).toBeGreaterThanOrEqual(7); // texto principal (sin cambio de color)
+      // El texto secundario (10 px) y el enlace de acento se ajustan SOLO dentro de la fila pendiente.
+      expect(ratio(tok("fila-pendiente-muted")!, fila!), `${tema} muted`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tok("fila-pendiente-accent")!, fila!), `${tema} acento`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(tok("accion-reporte")!, fila!), `${tema} «Confirmar reporte»`).toBeGreaterThanOrEqual(4.5);
+      // Visible sin ser chillón: se distingue de la superficie normal pero con luminosidad suave.
+      expect(fila!.toLowerCase()).not.toBe("#ffffff");
+    }
+    // La superficie «liquidado» es la normal del tema: blanco en claro, nunca blanco literal en oscuro.
+    expect(bloque('[data-theme="light"]')).toMatch(/--card:\s*#ffffff/i);
+    expect(bloque('[data-theme="dark"]')).not.toMatch(/--card:\s*#ffffff/i);
+  });
+
+  it("badges de texto blanco con contraste ≥ 4.5:1 (700/600 de la paleta) y claras sobre la fila clara", () => {
+    const luz = (h: string) => {
+      const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    };
+    const blancoSobre = (h: string) => 1.05 / (luz(h) + 0.05);
+    const paleta: Record<string, string> = { "bg-slate-600": "#475569", "bg-amber-700": "#b45309", "bg-orange-700": "#c2410c", "bg-emerald-700": "#047857" };
+    for (const b of [badgeLiquidacion(null, "En ruta"), badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta"),
+      badgeLiquidacion({ estado: "EN_AJUSTE", version: 1 }, "En ruta"), badgeLiquidacion({ estado: "LIQUIDADO", version: 2 }, "En ruta")]) {
+      expect(blancoSobre(paleta[b!.clase]), b!.texto).toBeGreaterThanOrEqual(4.5);
     }
   });
 
@@ -96,11 +139,17 @@ describe("Liquidación Fase 2 · presentación", () => {
     const css = leer("src/app/globals.css");
     expect(css).toMatch(/\.fila-viaje\s*\{[^}]*background-color:\s*var\(--card\)/);
     expect(css).toMatch(/\.fila-viaje\[data-liquidacion="pendiente"\]\s*\{[^}]*background-color:\s*var\(--fila-pendiente-liquidar\)/);
+    // El ajuste de contraste solo toca texto secundario/enlace, nunca --text.
+    const regla = /\.fila-viaje\[data-liquidacion="pendiente"\]\s*\{([^}]*)\}/.exec(css)![1];
+    expect(regla).toMatch(/--muted:\s*var\(--fila-pendiente-muted\)/);
+    expect(regla).toMatch(/--accent:\s*var\(--fila-pendiente-accent\)/);
+    expect(regla).not.toMatch(/--text:|(^|[^-])color:/);
     expect(css).toMatch(/\.fila-viaje:hover\s*\{[^}]*background-image:/);
     expect(css).toMatch(/\.fila-viaje\[data-seleccionada="true"\]\s*>\s*td:first-child\s*\{[^}]*box-shadow:/);
     const c = leer("src/app/e/[slug]/planes/planes-viajes-client.tsx");
     expect(c).toMatch(/className="fila-viaje /);
-    expect(c).toMatch(/data-liquidacion=\{claseFilaLiquidacion\(p\.liquidacion\)\}/);
+    expect(c).toMatch(/data-liquidacion=\{claseFilaLiquidacion\(p\.liquidacion, p\.estado\)\}/);
+    expect(c).toMatch(/Fila amarilla = viaje pendiente de liquidación/);
     expect(c).toMatch(/data-seleccionada=\{seleccion\.has\(p\.id\) \? "true" : undefined\}/);
     // El color de TEXTO no se cambia por estado de liquidación: la clase de la fila no incluye text-*.
     expect(c).not.toMatch(/className="fila-viaje[^"]*text-/);
