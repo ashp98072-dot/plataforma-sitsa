@@ -2,6 +2,7 @@ import { differenceInYears, format, parseISO } from "date-fns";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { toIsoDate } from "./dates";
+import { contarDiasVacacionesCalendario, diasCalendarioInclusivos } from "./vacaciones-calendario";
 import { contarEvidenciasPorIncidencia } from "./evidencias";
 import { obtenerPoliticaConConsulta, obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
 import { candidatosVacaciones, marcarVacacionesDirty, sincronizarCandidatoVacaciones } from "./vacaciones-sync-estado";
@@ -58,19 +59,9 @@ export async function contarDiasHabiles(
   fInicio: string,
   fFin: string,
 ): Promise<number> {
-  const inicio = toDate(fInicio);
-  const fin = toDate(fFin);
-  if (inicio > fin) return 0;
+  diasCalendarioInclusivos(fInicio, fFin);
   const feriados = await obtenerFeriadosEnRango(empresaId, fInicio, fFin);
-  let dias = 0;
-  const dia = new Date(inicio);
-  while (dia <= fin) {
-    const fechaStr = toIso(dia);
-    const weekdayPy = (dia.getDay() + 6) % 7;
-    if (weekdayPy !== 6 && !feriados.has(fechaStr)) dias += 1;
-    dia.setDate(dia.getDate() + 1);
-  }
-  return dias;
+  return contarDiasVacacionesCalendario(fInicio, fFin, feriados);
 }
 
 type ResultadoSincronizacionEmpresa = {
@@ -609,7 +600,7 @@ export async function registrarVacacionesFifoEnConexion(
   input: VacacionesFifoInput,
 ): Promise<ResultadoVacacionesFifo> {
   const diasATomar = input.diasATomar;
-  if (diasATomar <= 0) {
+  if (!Number.isFinite(diasATomar) || diasATomar <= 0) {
     return {
       ok: false,
       mensaje: "Los días a descontar deben ser mayores que cero.",
