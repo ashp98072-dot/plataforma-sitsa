@@ -97,7 +97,8 @@ describe.skipIf(!port)("RRHH · justificación de faltas y comprobantes / MariaD
         CREATE TABLE empleados(id INT PRIMARY KEY, empresa_id INT NOT NULL, codigo VARCHAR(40) NULL, nombre VARCHAR(200) NOT NULL,
           estado VARCHAR(20) NOT NULL DEFAULT 'Activo', fecha_alta DATE NOT NULL, hora_entrada_teorica VARCHAR(10) NULL,
           hora_salida_teorica VARCHAR(10) NULL, tipo_horario VARCHAR(30) NULL, puesto VARCHAR(120) NULL,
-          categoria_ops VARCHAR(80) NULL, fecha_nacimiento DATE NULL, KEY idx_e (empresa_id)) ENGINE=InnoDB;
+          categoria_ops VARCHAR(80) NULL, fecha_nacimiento DATE NULL, KEY idx_e (empresa_id),
+          UNIQUE KEY uq_emp_empresa_id (empresa_id, id)) ENGINE=InnoDB;
         CREATE TABLE sesiones_trabajo(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, id_empleado INT NOT NULL,
           fecha_jornada DATE NOT NULL, entrada_at DATETIME NULL, salida_at DATETIME NULL, comentarios_rrhh TEXT NULL) ENGINE=InnoDB;
         CREATE TABLE marcaje_evidencias(id INT AUTO_INCREMENT PRIMARY KEY, sesion_id INT NOT NULL, tipo VARCHAR(20) NOT NULL) ENGINE=InnoDB;
@@ -235,14 +236,86 @@ describe.skipIf(!port)("RRHH · justificación de faltas y comprobantes / MariaD
     expect((await obtenerReporteAsistencias(8, FECHA, FECHA)).find((f) => f.idEmpleado === e8)).toMatchObject({ estadoEntrada: "Falta", justificacion: null });
   });
 
-  it("impacto en planilla: informado, NO modificado (la ausencia confirmada sigue CONFIRMADA)", async () => {
+  it("planilla: justificar NO elimina ni cambia la ausencia/descuento (CONFIRMADA sigue CONFIRMADA, también tras editar y revertir)", async () => {
     const e = await empleado({ nombre: "Con Ausencia" });
     await holder.pool!.execute("INSERT INTO rrhh_asistencia_ausencias (empresa_id, empleado_id, fecha, estado, planilla_periodo_id) VALUES (7, ?, ?, 'CONFIRMADA', NULL)", [e, FECHA]);
+    const antes = await sql("SELECT * FROM rrhh_asistencia_ausencias ORDER BY id");
     const ctx = await obtenerContextoJustificacion(7, e, FECHA);
     expect(ctx).toMatchObject({ justificable: true, planilla: { ausenciaConfirmada: true, aplicadaEnPlanilla: false } });
+
+    const { justificacion: j } = await justificarFalta(A, { empleadoId: e, fecha: FECHA, tipo: "Permiso con goce" });
+    expect(await sql("SELECT * FROM rrhh_asistencia_ausencias ORDER BY id")).toEqual(antes);
+    await editarJustificacion(A, { id: j.id, versionEsperada: 1, tipo: "Médico" });
+    await revertirJustificacion(A, { id: j.id, versionEsperada: 2, motivo: "Se retira la justificación" });
+    expect(await sql("SELECT * FROM rrhh_asistencia_ausencias ORDER BY id")).toEqual(antes);
+    // Ninguna tabla de planilla/incidencias/marcajes fue creada ni escrita por la justificación.
+    const tablas = (await sql<RowDataPacket>("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?", [database])).map((t) => String(t.TABLE_NAME));
+    expect(tablas.filter((t) => /descuento|planilla/i.test(t))).toEqual([]);
+    expect(await conteo("incidencias", "id_empleado = ?", [e])).toBe(0);
+    expect(await conteo("sesiones_trabajo", "id_empleado = ?", [e])).toBe(0);
+  });
+
+  // ───────────────────────────── FK TENANT-SAFE ─────────────────────────────
+  it("la FK de empleado es COMPUESTA (empresa_id, empleado_id) → empleados(empresa_id, id) y no solo por id", async () => {
+    const cols = await sql<RowDataPacket>(
+      `SELECT ORDINAL_POSITION, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'rrhh_asistencia_justificaciones' AND CONSTRAINT_NAME = 'fk_asist_just_empleado'
+        ORDER BY ORDINAL_POSITION`,
+      [database],
+    );
+    expect(cols.map((c) => [Number(c.ORDINAL_POSITION), c.COLUMN_NAME, c.REFERENCED_TABLE_NAME, c.REFERENCED_COLUMN_NAME])).toEqual([
+      [1, "empresa_id", "empleados", "empresa_id"],
+      [2, "empleado_id", "empleados", "id"],
+    ]);
+    const reglas = await sql<RowDataPacket>(
+      "SELECT CONSTRAINT_NAME, UPDATE_RULE, DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = 'rrhh_asistencia_justificaciones' ORDER BY CONSTRAINT_NAME",
+      [database],
+    );
+    expect(reglas.map((r) => [r.CONSTRAINT_NAME, r.UPDATE_RULE, r.DELETE_RULE])).toEqual([
+      ["fk_asist_just_empleado", "RESTRICT", "CASCADE"],
+      ["fk_asist_just_empresa", "RESTRICT", "CASCADE"],
+    ]);
+  });
+
+  it("la BD IMPIDE una fila con empresa A y empleado de la empresa B, aunque la aplicación omitiera la validación", async () => {
+    const e7 = await empleado({ nombre: "Pertenece a 7" });
+    const insertar = (empresa: number, emp: number) =>
+      holder.pool!.execute(
+        "INSERT INTO rrhh_asistencia_justificaciones (empresa_id, empleado_id, fecha, tipo, creado_por) VALUES (?, ?, ?, 'Médico', 'x')",
+        [empresa, emp, "2026-09-18"],
+      );
+    await expect(insertar(8, e7)).rejects.toMatchObject({ errno: 1452 }); // FK compuesta: (8, e7) no existe en empleados
+    await expect(insertar(7, 999999)).rejects.toMatchObject({ errno: 1452 });
+    await insertar(7, e7); // el par correcto sí entra
+    expect(await conteo("rrhh_asistencia_justificaciones", "empleado_id = ?", [e7])).toBe(1);
+    // Cambiar la empresa de un empleado con justificaciones está bloqueado (ON UPDATE RESTRICT en la FK compuesta).
+    await expect(holder.pool!.execute("UPDATE empleados SET empresa_id = 8 WHERE id = ?", [e7])).rejects.toMatchObject({ errno: 1451 });
+  });
+
+  it("borrar un empleado elimina sus justificaciones (política CASCADE, igual que rrhh_asistencia_ausencias)", async () => {
+    const e = await empleado({ nombre: "Se Elimina" });
     await justificarFalta(A, { empleadoId: e, fecha: FECHA, tipo: "Médico" });
-    const aus = await sql("SELECT estado, planilla_periodo_id FROM rrhh_asistencia_ausencias WHERE empleado_id = ?", [e]);
-    expect(aus).toEqual([expect.objectContaining({ estado: "CONFIRMADA", planilla_periodo_id: null })]);
+    expect(await conteo("rrhh_asistencia_justificaciones", "empleado_id = ?", [e])).toBe(1);
+    await holder.pool!.execute("DELETE FROM empleados WHERE id = ?", [e]);
+    expect(await conteo("rrhh_asistencia_justificaciones", "empleado_id = ?", [e])).toBe(0);
+  });
+
+  it("sin el índice UNIQUE (empresa_id, id) en empleados la migración FALLA completa (no deja tabla parcial ni débil)", async () => {
+    const base = `${database}_sinindice`;
+    const c = await mysql.createConnection({ host: "127.0.0.1", port, user: "root", password: "", multipleStatements: true });
+    try {
+      await c.query(`CREATE DATABASE ${base} CHARACTER SET utf8mb4`);
+      await c.query(`USE ${base}`);
+      await c.query(`
+        CREATE TABLE empresas(id INT PRIMARY KEY) ENGINE=InnoDB;
+        CREATE TABLE empleados(id INT PRIMARY KEY, empresa_id INT NOT NULL) ENGINE=InnoDB;`);
+      const ddl = readFileSync("sql/migrate-2026-10-rrhh-justificaciones-faltas.sql", "utf8");
+      await expect(c.query(ddl)).rejects.toMatchObject({ errno: expect.any(Number) });
+      const [t] = await c.query<RowDataPacket[]>("SHOW TABLES LIKE 'rrhh_asistencia_justificaciones'");
+      expect(t).toHaveLength(0);
+    } finally {
+      await c.end(); // Sin DROP: base desechable recuperable (nombre único por corrida).
+    }
   });
 
   // ───────────────────────────── comprobantes de cumpleaños ─────────────────────────────

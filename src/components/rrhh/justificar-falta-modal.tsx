@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AVISO_PLANILLA_JUSTIFICACION,
   MOTIVO_REVERSION_MIN,
   OBSERVACION_JUSTIFICACION_MAX,
   TIPOS_JUSTIFICACION,
@@ -41,6 +42,7 @@ type Contexto = {
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]";
 const EXT_ACEPTADAS = ".jpg,.jpeg,.png,.webp,.pdf";
+const AVISO_PLANILLA = AVISO_PLANILLA_JUSTIFICACION;
 
 export function JustificarFaltaModal({
   slug, empleadoId, codigo, nombre, fecha, fechaUi, estadoActual, puedeCrear, puedeEditar, onClose, onCambio,
@@ -201,10 +203,14 @@ export function JustificarFaltaModal({
           <p className="text-xs text-amber-300">Este día no es una falta; no se puede justificar.</p>
         ) : null}
 
+        {/* Regla vigente: la justificación documenta/audita la razón; NO cambia el descuento de planilla. */}
+        <p className="text-xs text-[var(--muted)]" data-aviso-planilla="siempre">
+          {AVISO_PLANILLA}
+        </p>
         {ctx?.planilla.ausenciaConfirmada ? (
-          <p className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-xs text-amber-300">
-            Esta falta tiene una ausencia confirmada para planilla{ctx.planilla.aplicadaEnPlanilla ? " ya aplicada a un período" : ""}.
-            Justificarla NO modifica ese descuento automáticamente: la justificación solo identifica la falta como justificada.
+          <p className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-xs text-amber-300" data-aviso-planilla="ausencia-confirmada">
+            Esta falta tiene una ausencia confirmada para planilla{ctx.planilla.aplicadaEnPlanilla ? " ya aplicada a un período" : ""}.{" "}
+            {AVISO_PLANILLA}
           </p>
         ) : null}
 

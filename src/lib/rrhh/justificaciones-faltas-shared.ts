@@ -33,6 +33,12 @@ export const TIPOS_JUSTIFICACION = [
 ] as const;
 export type TipoJustificacion = (typeof TIPOS_JUSTIFICACION)[number];
 
+/**
+ * Regla vigente de planilla: justificar una falta documenta/audita la razón; NO elimina ni cambia el descuento de planilla.
+ * (Con goce/sin goce, pagar/no pagar, o anular la ausencia son una fase aparte si RRHH lo solicita.)
+ */
+export const AVISO_PLANILLA_JUSTIFICACION = "Esta justificación no modifica automáticamente el descuento en planilla.";
+
 export const OBSERVACION_JUSTIFICACION_MAX = 500;
 export const MOTIVO_REVERSION_MIN = 5;
 export const MOTIVO_REVERSION_MAX = 300;

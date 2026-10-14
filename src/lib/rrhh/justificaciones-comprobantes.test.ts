@@ -48,6 +48,7 @@ import { GET as getComp, POST as postComp } from "../../app/api/empresas/[slug]/
 import { DELETE as delComp, GET as getCompDoc } from "../../app/api/empresas/[slug]/rrhh/cumpleanios/comprobantes/[docId]/route";
 import { TIPOS_INCIDENCIA } from "./periodos";
 import {
+  AVISO_PLANILLA_JUSTIFICACION,
   TIPOS_JUSTIFICACION,
   esFilaFalta,
   validarMotivoReversion,
@@ -248,7 +249,7 @@ describe("Justificación y comprobantes · alcance (arquitectura)", () => {
     for (const t of ["Empleado:", "Código:", "Fecha:", "Estado actual:", "Tipo / motivo", "Observación", "Evidencia"]) expect(modalJust).toContain(t);
     expect(modalJust).toMatch(/ocupadoRef\.current/);
     expect(modalJust).toMatch(/Confirmar reversión/);
-    expect(modalJust).toMatch(/NO modifica ese descuento automáticamente/);
+    expect(modalJust).toMatch(/AVISO_PLANILLA_JUSTIFICACION/); // texto único: «Esta justificación no modifica automáticamente el descuento en planilla.»
   });
 
   it("la justificación NO inserta marcajes ni toca incidencias, ausencias, vacaciones ni planilla", () => {
@@ -289,5 +290,67 @@ describe("Justificación y comprobantes · alcance (arquitectura)", () => {
       expect(s, f).not.toMatch(/(^|;)\s*(DROP|TRUNCATE|ALTER|DELETE|UPDATE|INSERT|CREATE)\b/im);
     }
     expect(leer("sql/schema.sql")).toMatch(/CREATE TABLE IF NOT EXISTS rrhh_asistencia_justificaciones/);
+  });
+
+  it("FK TENANT-SAFE: el empleado se referencia por (empresa_id, id), nunca solo por id; sin ALTER a empleados", () => {
+    const sql = leer("sql/migrate-2026-10-rrhh-justificaciones-faltas.sql").replace(/--[^\n]*/g, "");
+    expect(sql).toMatch(/FOREIGN KEY \(empresa_id, empleado_id\)\s+REFERENCES empleados\(empresa_id, id\)/);
+    expect(sql).not.toMatch(/FOREIGN KEY \(empleado_id\)/);
+    expect(sql).not.toMatch(/ALTER TABLE/i);
+    // schema.sql refleja la misma FK compuesta.
+    const schema = leer("sql/schema.sql");
+    const bloque = schema.slice(schema.indexOf("CREATE TABLE IF NOT EXISTS rrhh_asistencia_justificaciones"));
+    expect(bloque).toMatch(/FOREIGN KEY \(empresa_id, empleado_id\)\s+REFERENCES empleados\(empresa_id, id\)/);
+    expect(bloque).not.toMatch(/FOREIGN KEY \(empleado_id\)/);
+    // El índice padre que exige existe en el schema de empleados (UNIQUE empresa_id, id).
+    const emp = schema.slice(schema.indexOf("CREATE TABLE IF NOT EXISTS empleados"), schema.indexOf("CREATE TABLE IF NOT EXISTS rrhh_vacaciones_sync_estado"));
+    expect(emp).toMatch(/UNIQUE KEY \w+ \(empresa_id, id\)/);
+  });
+
+  it("preflight/verify resistentes al contexto: base explícita, sin DATABASE() en filtros, guarda y decisión que DETIENE", () => {
+    for (const f of ["preflight", "verify"]) {
+      const s = leer(`sql/${f}-2026-10-rrhh-justificaciones-faltas.sql`);
+      const sinComentarios = s.replace(/--[^\n]*/g, "");
+      // Toda consulta a information_schema filtra por el literal de la base, nunca por DATABASE() ni por variables de sesión.
+      expect(sinComentarios, f).not.toMatch(/(TABLE_SCHEMA|CONSTRAINT_SCHEMA|SCHEMA_NAME)\s*=\s*DATABASE\(\)/i);
+      expect(sinComentarios, f).not.toMatch(/\bSET @/i);
+      for (const m of sinComentarios.matchAll(/(TABLE_SCHEMA|CONSTRAINT_SCHEMA|SCHEMA_NAME)\s*=\s*'([^']+)'/g)) {
+        expect(m[2], f).toBe("u611730801_Plataforma");
+      }
+      // Todo SHOW usa nombre calificado.
+      for (const m of sinComentarios.matchAll(/SHOW (CREATE TABLE|INDEX FROM|TABLES FROM)\s+(\S+)/gi)) {
+        expect(m[2], f).toMatch(/^u611730801_Plataforma/);
+      }
+      expect(s, f).toMatch(/Para otra instalación: |Para otra instalación,/);
+    }
+    const pre = leer("sql/preflight-2026-10-rrhh-justificaciones-faltas.sql");
+    expect(pre).toMatch(/decision_contexto/);
+    expect(pre).toMatch(/DETENER: selecciona la base u611730801_Plataforma/);
+    expect(pre).toMatch(/UNIQUE \(empresa_id, id\)/);
+    expect(pre).toMatch(/THEN 'OK' ELSE 'DETENER' END AS decision/);
+    const ver = leer("sql/verify-2026-10-rrhh-justificaciones-faltas.sql");
+    expect(ver).toMatch(/decision_fk_tenant/);
+    expect(ver).toMatch(/KEY_COLUMN_USAGE/);
+    // El verify no se limita a «detectar cruces»: comprueba la estructura y deja la auditoría de datos para lo que el schema no impide.
+    expect(ver).toMatch(/ya IMPIDEN el cruce de tenant/);
+  });
+
+  it("planilla: la regla vigente está explícita (modal, doc) y no hay lógica nueva de planilla", () => {
+    expect(AVISO_PLANILLA_JUSTIFICACION).toBe("Esta justificación no modifica automáticamente el descuento en planilla.");
+    // El modal lo muestra SIEMPRE (no solo cuando hay ausencia confirmada).
+    expect(modalJust).toMatch(/data-aviso-planilla="siempre"/);
+    expect(modalJust).toMatch(/AVISO_PLANILLA_JUSTIFICACION/);
+    expect(modalJust).toMatch(/data-aviso-planilla="ausencia-confirmada"/);
+    // Documentación.
+    const doc = leer("docs/RRHH-JUSTIFICACION-FALTAS-Y-COMPROBANTES-CUMPLEANIOS.md");
+    expect(doc).toContain(AVISO_PLANILLA_JUSTIFICACION);
+    expect(doc).toMatch(/NO elimina ni cambia automáticamente el descuento de planilla/);
+    // Nada de planilla en la capa de justificación; sin con goce/sin goce como regla, ni incidencia artificial.
+    for (const f of ["src/lib/rrhh/justificaciones-faltas.ts", "src/lib/rrhh/justificaciones-faltas-mapa.ts", "src/lib/rrhh/justificaciones-faltas-shared.ts"]) {
+      expect(leer(f), f).not.toMatch(/from "\.\/(planilla|descuentos|vacaciones)/);
+      expect(leer(f), f).not.toMatch(/\bINSERT INTO incidencias\b/i);
+    }
+    const planilla = leer("src/lib/rrhh/planilla-faltas.ts");
+    expect(planilla).not.toMatch(/justificaciones/); // planilla-faltas.ts no se tocó ni consulta justificaciones
   });
 });

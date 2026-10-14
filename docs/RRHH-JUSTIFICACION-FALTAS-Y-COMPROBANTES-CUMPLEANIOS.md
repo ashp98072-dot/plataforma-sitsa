@@ -57,7 +57,7 @@ en ninguna base real.
   de varios años, independientes. El listado cuenta los del **año consultado** en UNA consulta agrupada.
 - **Excel:** una sola columna nueva **«Comprobante» = Sí/No**; sin archivos ni URLs.
 
-## 3. ¿Hace falta SQL?
+## 3. ¿Hace falta SQL? y aislamiento por empresa (FK tenant-safe)
 
 | Parte | SQL | Motivo |
 |---|---|---|
@@ -65,8 +65,46 @@ en ninguna base real.
 | Comprobantes de cumpleaños | **No** | Se reutiliza `documentos_empleados` + storage privado existente; solo cambia el valor de `tipo_documento`. |
 
 Archivos: `sql/migrate-2026-10-rrhh-justificaciones-faltas.sql`, `preflight-…`, `verify-…` y `sql/schema.sql`. Solo `CREATE TABLE IF NOT
-EXISTS`; sin datos, sin ALTER, sin DROP. **No ejecutado.** Las lecturas toleran la tabla ausente (el reporte sigue como antes),
-pero **justificar** falla hasta aplicar la migración.
+EXISTS`; sin datos, **sin ALTER (ni índices nuevos) a `empleados`**, sin DROP. **No ejecutado.** Las lecturas toleran la tabla ausente
+(el reporte sigue como antes), pero **justificar** falla hasta aplicar la migración.
+
+### Discovery de índices de `empleados` [CONFIRMADO en el repositorio]
+
+- `sql/schema.sql` declara en `empleados`: `UNIQUE KEY uq_emp_empresa_codigo (empresa_id, codigo)` y
+  **`UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id)`**.
+- Las migraciones `migrate-2026-08-operaciones-multas.sql` (`uq_multas_empleado_empresa_id`) y
+  `migrate-2026-09-rutas-personal-tarifario.sql` (`uq_ruta_personal_empresa_id`) agregan ese mismo UNIQUE `(empresa_id, id)`.
+- Los preflights de `tms_plan_cuadrilla` y `rrhh_vacaciones_sync_estado` documentan que **en producción** el índice es
+  `uq_multas_empleado_empresa_id` (mismo orden de columnas, distinto nombre) y que ya hay FKs compuestas aplicadas contra él.
+
+### Decisión: FK COMPUESTA
+
+```sql
+CONSTRAINT fk_asist_just_empleado FOREIGN KEY (empresa_id, empleado_id)
+  REFERENCES empleados(empresa_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+```
+
+- Una fila con `empresa_id = A` y un `empleado_id` de la empresa B es **estructuralmente imposible** (error 1452), aunque una
+  escritura futura omita la validación de la aplicación. Probado en BD (también el `UPDATE` de la empresa del empleado: bloqueado).
+- **El índice padre no se asume:** el preflight exige un UNIQUE `(empresa_id, id)` en `empleados` (cualquier nombre) y **DETIENE** si
+  no existe. La migración **no** agrega ese índice. Si faltara, el `CREATE TABLE` falla completo y no queda una tabla parcial ni con
+  una FK más débil (probado en BD). La alternativa mínima segura en ese caso es crear primero ese UNIQUE en una migración propia y
+  aprobada (no se hace aquí).
+- **ON DELETE CASCADE** (empleado): igual que `rrhh_asistencia_ausencias`; la limpieza administrativa de empleados
+  (`limpiar-modulo.ts`) borra empleados sin listar las tablas de asistencia y depende de ese CASCADE. RESTRICT la rompería.
+- **verify:** ya no se limita a buscar cruces que la estructura impide: comprueba que la FK compuesta existe (`KEY_COLUMN_USAGE`,
+  decisión `decision_fk_tenant`), los CHECKs y deja la auditoría de datos solo para lo que se pudo colar con restricciones
+  deshabilitadas o que el schema no puede expresar.
+
+### Scripts resistentes al contexto de phpMyAdmin
+
+- `preflight` y `verify` **no dependen de la base seleccionada ni de variables de sesión**: toda consulta a `information_schema`
+  filtra por el literal `'u611730801_Plataforma'` (nunca `DATABASE()`), y todo `SHOW` usa nombre calificado
+  (`u611730801_Plataforma.tabla`). Ejecutarlos con `information_schema` seleccionada devuelve la lectura de la base destino o un
+  resultado vacío / «DETENER», no una falsa lectura de `information_schema`.
+- El preflight incluye una **guarda de contexto** (`decision_contexto`): compara la base seleccionada con la esperada y dice
+  «DETENER: selecciona la base u611730801_Plataforma…» antes de la migración (que usa nombres sin esquema para poder probarse).
+- Para otra instalación: reemplazar **todas** las apariciones del literal (una prueba verifica que no haya otro literal).
 
 ## 4. Impacto en incidencias, descuentos, planillas (comportamiento documentado, NO modificado)
 
@@ -76,14 +114,16 @@ pero **justificar** falla hasta aplicar la migración.
 | Incidencias / `registrarIncidenciaFalta` | Sin cambios; no se crea incidencia. |
 | Resumen de incidencias (`obtenerResumenIncidenciasDetallado`) | **Sin cambios**: sigue contando la ausencia como falta. |
 | Tomar asistencia / `rrhh_asistencia_ausencias` | Sin cambios; una ausencia CONFIRMADA sigue CONFIRMADA. |
-| **Descuentos de planilla** | **Sin cambios: justificar NO elimina un descuento.** `planilla-faltas.ts` solo se salta una falta si una *incidencia* cubre el día. |
+| **Descuentos de planilla** | **Sin cambios: justificar NO elimina ni cambia automáticamente el descuento de planilla.** `planilla-faltas.ts` solo se salta una falta si una *incidencia* cubre el día. |
 | Vacaciones | Sin efecto (por eso `Vacaciones`/`A cuenta de Vacaciones` no son motivos). |
 | «3 tardanzas = 1 falta» | No existe en el repositorio. |
 
-El modal **avisa** cuando la falta tiene una ausencia confirmada para planilla (y si ya fue aplicada a un período) para que RRHH sepa
-que la justificación no la anula. **Decisión de negocio pendiente** (no implementada): si una justificación ACTIVA de ciertos tipos
-(p. ej. «Permiso con goce», «Médico») debe evitar el descuento. Opciones: que `planilla-faltas.ts` consulte
-`rrhh_asistencia_justificaciones`, o que «Tomar asistencia» no confirme la ausencia de un día justificado.
+**Regla vigente:** justificar una falta documenta/audita la razón. **NO elimina ni cambia automáticamente el descuento de planilla.**
+El modal muestra **siempre** el texto «Esta justificación no modifica automáticamente el descuento en planilla.» y, cuando la falta
+tiene una ausencia confirmada para planilla (y si ya fue aplicada a un período), lo repite en un aviso destacado. No se agregó
+lógica nueva de planilla ni «con goce / sin goce», «pagar / no pagar», eliminación automática de la ausencia ni incidencia
+artificial: eso sería una fase aparte **si RRHH lo solicita** (opciones: que `planilla-faltas.ts` consulte
+`rrhh_asistencia_justificaciones`, o que «Tomar asistencia» no confirme la ausencia de un día justificado).
 
 ## 5. Permisos (reutilizados; sin permisos nuevos)
 
@@ -128,3 +168,11 @@ de control; si el INSERT falla se borra el archivo para no dejar huérfanos.
   en planilla informado y NO modificado, JPG/JPEG/PNG/WebP/PDF, rechazo de formato/contenido/vacío/tamaño, años 2026 vs 2027,
   documentos de otra empresa y de otro tipo no accesibles.
 - Verificado con mutación (sin la revalidación de falta real y sin la validación de extensión fallan pruebas).
+- **FK tenant-safe (BD):** estructura compuesta (`KEY_COLUMN_USAGE`), `INSERT` con empresa A + empleado de B rechazado (1452), cambio
+  de empresa del empleado bloqueado, CASCADE al borrar el empleado, y migración que **falla completa** sin el UNIQUE
+  `(empresa_id, id)` en `empleados` (sin tabla parcial).
+- **Planilla:** la ausencia CONFIRMADA queda idéntica tras justificar, editar y revertir; no se crean tablas/filas de planilla,
+  incidencias ni marcajes; el aviso «Esta justificación no modifica automáticamente el descuento en planilla.» está en el modal y en
+  este documento (prueba de arquitectura).
+- **Scripts SQL:** una prueba verifica que `preflight`/`verify` solo usan el literal de la base destino (sin `DATABASE()` ni variables
+  de sesión), con `SHOW` calificados y decisión que DETIENE.
