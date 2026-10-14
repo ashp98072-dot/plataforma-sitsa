@@ -3,6 +3,8 @@ import { execute, query } from "@/lib/db";
 import { calcularEstadoAsistenciaSync } from "./asistencia-estado";
 import { obtenerMinutosTolerancia } from "./config";
 import { obtenerFeriadosEnRango } from "./vacaciones";
+import { mapaJustificacionesActivas } from "./justificaciones-faltas-mapa";
+import { ESTADO_FALTA_JUSTIFICADA, type JustificacionResumen } from "./justificaciones-faltas-shared";
 
 function formatearFechaVisible(fechaIso: string): string {
   const [y, m, d] = fechaIso.slice(0, 10).split("-");
@@ -182,13 +184,17 @@ export type FilaReporteAsistencia = {
   tipoHorario: string;
   fotoEntradaId: number | null;
   fotoSalidaId: number | null;
+  /** Id del empleado (solo informativo para acciones sobre la fila, p. ej. justificar una falta). */
+  idEmpleado?: number;
+  /** Justificación ACTIVA de la falta (capa sobre la ausencia real; la fila sigue siendo una falta). */
+  justificacion?: JustificacionResumen | null;
 };
 
 export async function obtenerReporteAsistencias(
   empresaId: number,
   fechaInicio: string,
   fechaFin: string,
-  filtros?: { tipo?: string; horario?: string },
+  filtros?: { tipo?: string; horario?: string; empleadoId?: number },
 ): Promise<FilaReporteAsistencia[]> {
   const tolerancia = await obtenerMinutosTolerancia(empresaId);
 
@@ -214,8 +220,8 @@ export async function obtenerReporteAsistencias(
   const empleados = await query<RowDataPacket[]>(
     `SELECT id, codigo, nombre, fecha_alta,
             hora_entrada_teorica, hora_salida_teorica, tipo_horario
-     FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre ASC`,
-    [empresaId],
+     FROM empleados WHERE empresa_id = ? AND estado = 'Activo'${filtros?.empleadoId ? " AND id = ?" : ""} ORDER BY nombre ASC`,
+    filtros?.empleadoId ? [empresaId, filtros.empleadoId] : [empresaId],
   );
 
   const sesionesPorDia = new Map<string, RowDataPacket>();
@@ -242,10 +248,11 @@ export async function obtenerReporteAsistencias(
     }
   }
 
-  const [diasLaborables, incidencias, enRuta] = await Promise.all([
+  const [diasLaborables, incidencias, enRuta, justificaciones] = await Promise.all([
     generarDiasLaborables(empresaId, fechaInicio, fechaFin),
     mapaIncidenciasPorEmpleadoFecha(empresaId, fechaInicio, fechaFin),
     setEnRuta(empresaId, fechaInicio, fechaFin),
+    mapaJustificacionesActivas(empresaId, fechaInicio, fechaFin),
   ]);
 
   const resultado: FilaReporteAsistencia[] = [];
@@ -349,6 +356,8 @@ export async function obtenerReporteAsistencias(
             fotoSalidaId: null,
           });
         } else {
+          // Ausencia real: una justificación ACTIVA es una CAPA (la fila sigue siendo una falta, no se inventa marcaje).
+          const just = justificaciones.get(clave) ?? null;
           resultado.push({
             idSesion: 0,
             fecha,
@@ -357,13 +366,15 @@ export async function obtenerReporteAsistencias(
             nombre,
             horaEntrada: null,
             horaSalida: null,
-            estadoEntrada: "Falta",
+            estadoEntrada: just ? ESTADO_FALTA_JUSTIFICADA : "Falta",
             estadoSalida: "—",
             comentarios: "",
-            motivo: "Falta",
+            motivo: just ? `${ESTADO_FALTA_JUSTIFICADA}: ${just.tipo}` : "Falta",
             tipoHorario,
             fotoEntradaId: null,
             fotoSalidaId: null,
+            idEmpleado: idEmp,
+            justificacion: just,
           });
         }
       }

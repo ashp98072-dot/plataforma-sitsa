@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
+import { esFilaFalta } from "@/lib/rrhh/justificaciones-faltas-shared";
+import { JustificarFaltaModal } from "@/components/rrhh/justificar-falta-modal";
 
 type Fila = {
   fecha: string;
@@ -17,6 +21,8 @@ type Fila = {
   tipoHorario: string;
   fotoEntradaId: number | null;
   fotoSalidaId: number | null;
+  idEmpleado?: number;
+  justificacion?: { id: number; tipo: string } | null;
 };
 
 const PERIODOS = [
@@ -41,6 +47,13 @@ export default function ReportesPage() {
   const [filas, setFilas] = useState<Fila[]>([]);
   const [rango, setRango] = useState({ desde: "", hasta: "" });
   const [loading, setLoading] = useState(false);
+  // Justificación de faltas: doble clic sobre una fila «Falta» (o el botón «Justificar»). Los permisos solo habilitan controles;
+  // el servidor los vuelve a exigir.
+  const { rol, permisos } = useEmpresaSession();
+  const puedeCrearJustificacion = rol === "Admin" || tienePermiso(permisos, "incidencias", "crear");
+  const puedeEditarJustificacion = rol === "Admin" || tienePermiso(permisos, "incidencias", "editar");
+  const [justificando, setJustificando] = useState<Fila | null>(null);
+  const abreJustificacion = (f: Fila) => esFilaFalta(f) && f.idEmpleado != null;
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -136,6 +149,7 @@ export default function ReportesPage() {
           {[
             "Todos",
             "Falta",
+            "Falta justificada",
             "Retraso",
             "En Ruta",
             "Vacaciones",
@@ -194,13 +208,16 @@ export default function ReportesPage() {
               <th className="px-2 py-2">Est. sal.</th>
               <th className="px-2 py-2">Motivo</th>
               <th className="px-2 py-2">Fotografías</th>
+              <th className="px-2 py-2">Acción</th>
             </tr>
           </thead>
           <tbody>
             {filas.map((f, i) => (
               <tr
                 key={`${f.codigo}-${f.fecha}-${i}`}
-                className="border-t border-[var(--border)]"
+                className={`border-t border-[var(--border)] ${abreJustificacion(f) ? "cursor-pointer hover:bg-[var(--accent)]/10" : ""}`}
+                onDoubleClick={abreJustificacion(f) ? () => setJustificando(f) : undefined}
+                title={abreJustificacion(f) ? (f.justificacion ? "Doble clic para ver la justificación" : "Doble clic para justificar") : undefined}
               >
                 <td className="px-2 py-1.5">{f.fechaUi || f.fecha}</td>
                 <td className="px-2 py-1.5">{f.codigo}</td>
@@ -235,11 +252,38 @@ export default function ReportesPage() {
                     {!f.fotoEntradaId && !f.fotoSalidaId ? "—" : null}
                   </div>
                 </td>
+                <td className="px-2 py-1.5">
+                  {abreJustificacion(f) ? (
+                    <button
+                      type="button"
+                      onClick={() => setJustificando(f)}
+                      className="rounded border border-[var(--border)] px-2 py-0.5 text-[11px] hover:border-[var(--accent)]"
+                      aria-label={`${f.justificacion ? "Ver justificación" : "Justificar"} de ${f.nombre} del ${f.fechaUi || f.fecha}`}
+                    >
+                      {f.justificacion ? "Ver justificación" : "Justificar"}
+                    </button>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {justificando && justificando.idEmpleado != null ? (
+        <JustificarFaltaModal
+          slug={slug}
+          empleadoId={justificando.idEmpleado}
+          codigo={justificando.codigo}
+          nombre={justificando.nombre}
+          fecha={justificando.fecha}
+          fechaUi={justificando.fechaUi || justificando.fecha}
+          estadoActual={justificando.estadoEntrada}
+          puedeCrear={puedeCrearJustificacion}
+          puedeEditar={puedeEditarJustificacion}
+          onClose={() => setJustificando(null)}
+          onCambio={() => void cargar()}
+        />
+      ) : null}
     </div>
   );
 }

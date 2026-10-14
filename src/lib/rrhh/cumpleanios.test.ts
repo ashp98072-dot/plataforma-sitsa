@@ -38,7 +38,7 @@ const leer = (p: string) => readFileSync(p, "utf8");
 const ctx = { params: Promise.resolve({ slug: "acme" }) };
 const emp = (o: Partial<CumpleaniosEmpleado> = {}): CumpleaniosEmpleado => ({
   id: 1, codigo: "E-001", nombre: "Ana Pérez", puesto: "Piloto", area: "Operaciones", estado: "Activo",
-  fecha: "2026-10-05", dia: 5, edad: 36, ...o,
+  fecha: "2026-10-05", dia: 5, edad: 36, comprobantes: 0, ...o,
 });
 const listado = (empleados: CumpleaniosEmpleado[] = [emp()]) => ({
   mes: 10, anio: 2026, nombreMes: "Octubre", incluirInactivos: false, total: empleados.length, truncado: false, empleados,
@@ -127,7 +127,7 @@ describe("Cumpleaños · endpoint (tenant, permiso, parámetros)", () => {
 
   it("Excel: nombre sugerido, columnas exactas y solo datos no sensibles", async () => {
     m.listar.mockResolvedValue(listado([
-      emp({ id: 1, codigo: "E-001", nombre: "Ana Pérez", dia: 5, fecha: "2026-10-05", edad: 36, puesto: "Piloto", area: "Operaciones" }),
+      emp({ id: 1, codigo: "E-001", nombre: "Ana Pérez", dia: 5, fecha: "2026-10-05", edad: 36, puesto: "Piloto", area: "Operaciones", comprobantes: 2 }),
       emp({ id: 2, codigo: "E-002", nombre: "Luis Gómez", dia: 20, fecha: "2026-10-20", edad: 41, puesto: "Contador", area: "Administración" }),
     ]));
     const r = await GET(new Request("http://x/api?mes=10&anio=2026&formato=xlsx"), ctx);
@@ -138,15 +138,20 @@ describe("Cumpleaños · endpoint (tenant, permiso, parámetros)", () => {
     await wb.xlsx.load(Buffer.from(await r.arrayBuffer()) as unknown as ArrayBuffer);
     const ws = wb.worksheets[0];
     const filas = ws.getSheetValues().slice(1).map((f) => (f as unknown[]).slice(1));
-    expect(filas[0]).toEqual(["Código", "Empleado", "Fecha de cumpleaños", "Edad que cumple", "Puesto", "Área"]);
-    expect(filas[1]).toEqual(["E-001", "Ana Pérez", "05/10/2026", "36", "Piloto", "Operaciones"]);
-    expect(filas[2]).toEqual(["E-002", "Luis Gómez", "20/10/2026", "41", "Contador", "Administración"]);
-    expect(ws.columnCount).toBe(6);
+    expect(filas[0]).toEqual(["Código", "Empleado", "Fecha de cumpleaños", "Edad que cumple", "Puesto", "Área", "Comprobante"]);
+    // «Comprobante» es solo Sí/No: sin archivos, sin rutas ni URLs.
+    expect(filas[1]).toEqual(["E-001", "Ana Pérez", "05/10/2026", "36", "Piloto", "Operaciones", "Sí"]);
+    expect(filas[2]).toEqual(["E-002", "Luis Gómez", "20/10/2026", "41", "Contador", "Administración", "No"]);
+    expect(ws.columnCount).toBe(7);
   });
 
-  it("filas de Excel: exactamente 6 columnas y fecha dd/mm/aaaa", () => {
-    const filas = filasExcelCumpleanios([emp({ edad: null })]);
-    expect(filas).toEqual([["E-001", "Ana Pérez", "05/10/2026", "", "Piloto", "Operaciones"]]);
+  it("filas de Excel: 6 columnas pedidas + Comprobante (Sí/No) y fecha dd/mm/aaaa", () => {
+    const filas = filasExcelCumpleanios([emp({ edad: null }), emp({ id: 2, comprobantes: 3 })]);
+    expect(filas).toEqual([
+      ["E-001", "Ana Pérez", "05/10/2026", "", "Piloto", "Operaciones", "No"],
+      ["E-001", "Ana Pérez", "05/10/2026", "36", "Piloto", "Operaciones", "Sí"],
+    ]);
+    expect(JSON.stringify(filas)).not.toMatch(/http|\/api\/|uploads|empresas\//);
   });
 });
 
