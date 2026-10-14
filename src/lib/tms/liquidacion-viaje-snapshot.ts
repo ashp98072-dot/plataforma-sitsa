@@ -1,3 +1,4 @@
+import Decimal from "decimal.js";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import {
   CONCEPTOS_NO_DISPONIBLES_SNAPSHOT,
@@ -111,6 +112,26 @@ export async function construirSnapshotOperativo(
     [planId, empresaId],
   );
 
+  // Cargos adicionales VIGENTES (Fase 4). Bajo el lock del plan (toda mutación de cargos lo toma primero) el snapshot es
+  // coherente con el evento. Sin tabla instalada ⇒ null; nunca falla la liquidación por esto.
+  let cargos: SnapshotOperativoViaje["cargos"] = null;
+  try {
+    const [cargosRows] = await conexion.query<(RowDataPacket & { id: number; concepto: string; monto: string; observacion: string | null })[]>(
+      `SELECT id, concepto, monto, observacion FROM tms_viaje_cargos_adicionales
+        WHERE empresa_id = ? AND plan_id = ? AND activo = 1 ORDER BY id`,
+      [empresaId, planId],
+    );
+    const vigentes = cargosRows.map((c) => ({
+      cargoId: Number(c.id),
+      concepto: String(c.concepto),
+      monto: new Decimal(String(c.monto)).toFixed(2),
+      observacion: texto(c.observacion),
+    }));
+    cargos = { vigentes, total: vigentes.reduce((s, c) => s.plus(c.monto), new Decimal(0)).toFixed(2), ivaPendiente: true };
+  } catch (e) {
+    if ((e as { errno?: number }).errno !== 1146) throw e; // ER_NO_SUCH_TABLE: cargos aún no instalados
+  }
+
   // Auxiliares: la tabla de varios auxiliares manda; si no tiene filas, el auxiliar singular legado (misma regla que Programación).
   const auxiliares = auxRows.length
     ? auxRows.map((a) => ({ personalId: Number(a.personal_id), nombre: String(a.nombre) }))
@@ -180,6 +201,7 @@ export async function construirSnapshotOperativo(
           horaLlegada: texto(f.hora_llegada),
         }
       : null,
+    cargos,
     noDisponible: [...CONCEPTOS_NO_DISPONIBLES_SNAPSHOT],
   };
 }

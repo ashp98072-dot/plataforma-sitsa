@@ -102,6 +102,8 @@ agregar("programacion", accion("viajes_confirmar_reporte","confirmar_reporte","C
 agregar("programacion",
   accion("viajes_liquidar","liquidar","Liquidar viajes",E),
   accion("viajes_reabrir_liquidacion","reabrir_liquidacion","Reabrir liquidación de viajes",E));
+// LIQUIDACIÓN DE VIAJES (Fase 4): cargos adicionales facturables; fila propia, ningún rol la trae por defecto.
+agregar("programacion", accion("viajes_cargos_adicionales","cargos_adicionales","Gestionar cargos adicionales facturables del viaje",E));
 agregar("cotizaciones", nueva("cotizaciones","estado","Cambiar estado / marcar enviada",E));
 agregar("facturacion", nueva("facturacion","emitir","Emitir factura",E), nueva("facturacion","anular","Anular factura",E), nueva("facturacion","pagos","Registrar pago",C));
 // Sin equivalencias legacy: pagar/emitir NO concede confirmación bancaria.

@@ -146,8 +146,15 @@ const LABEL_PERMISO_ENTREGA: Record<PermisoEntrega, string> = {
  *   - viajes_confirmar_reporte: confirmar que el piloto entregó su reporte (REPORTE_RECIBIDO). No cierra ni liquida.
  *   - viajes_liquidar: liquidar / liquidar nuevamente (Fase 3). No cierra, no factura, no crea cargos ni mueve fondos.
  *   - viajes_reabrir_liquidacion: reabrir una liquidación (LIQUIDADO → EN_AJUSTE) con motivo (Fase 3). Permiso aparte de liquidar.
+ *   - viajes_cargos_adicionales: crear/editar/anular/reactivar cargos adicionales FACTURABLES del viaje (Fase 4). Es un permiso
+ *     COMERCIAL aparte: no da cerrar, liquidar ni editar la programación; ver cargos solo requiere poder ver el viaje.
  */
-export const PERMISOS_LIQUIDACION_VIAJE = ["viajes_confirmar_reporte", "viajes_liquidar", "viajes_reabrir_liquidacion"] as const;
+export const PERMISOS_LIQUIDACION_VIAJE = [
+  "viajes_confirmar_reporte",
+  "viajes_liquidar",
+  "viajes_reabrir_liquidacion",
+  "viajes_cargos_adicionales",
+] as const;
 export type PermisoLiquidacionViaje = (typeof PERMISOS_LIQUIDACION_VIAJE)[number];
 export function esPermisoLiquidacionViaje(m: string): m is PermisoLiquidacionViaje {
   return (PERMISOS_LIQUIDACION_VIAJE as readonly string[]).includes(m);
@@ -156,6 +163,7 @@ const LABEL_PERMISO_LIQUIDACION_VIAJE: Record<PermisoLiquidacionViaje, string> =
   viajes_confirmar_reporte: "Viajes: confirmar reporte recibido",
   viajes_liquidar: "Viajes: liquidar",
   viajes_reabrir_liquidacion: "Viajes: reabrir liquidación",
+  viajes_cargos_adicionales: "Viajes: cargos adicionales facturables",
 };
 
 export const PLATAFORMA_PERMISIBLES = [

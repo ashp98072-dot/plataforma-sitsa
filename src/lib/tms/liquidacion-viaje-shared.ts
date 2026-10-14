@@ -160,7 +160,7 @@ export const OBSERVACION_LIQUIDACION_MAX = 500;
  * Fotografía OPERATIVA inmutable que se guarda en `snapshot_json` del evento LIQUIDADO/RELIQUIDADO: cómo estaba operado el
  * viaje en ese momento (evidencia histórica; NO es una fuente mutable ni reemplaza a Programación). Solo datos que existen
  * físicamente hoy; lo que no existe se lista en `noDisponible`. Sin datos sensibles innecesarios (no incluye teléfonos ni
- * documentos de identidad de la cuadrilla), sin costos y sin cargos.
+ * documentos de identidad de la cuadrilla), sin costos; incluye los cargos adicionales VIGENTES (Fase 4, opcional).
  */
 export type SnapshotOperativoViaje = {
   version: 1;
@@ -191,13 +191,23 @@ export type SnapshotOperativoViaje = {
     horaSalida: string | null;
     horaLlegada: string | null;
   } | null;
+  /**
+   * Cargos adicionales VIGENTES (activos) al liquidar (Fase 4). Campo OPCIONAL y aditivo: los snapshots anteriores no lo traen
+   * (`undefined`); `null` = la tabla de cargos aún no está instalada. Solo conceptos y montos del cliente — nunca costos
+   * internos — y SIN tratamiento de IVA (pendiente de definición de negocio/fiscal).
+   */
+  cargos?: {
+    vigentes: { cargoId: number; concepto: string; monto: string; observacion: string | null }[];
+    total: string;
+    ivaPendiente: true;
+  } | null;
   /** Conceptos que NO existen físicamente en el modelo actual (no se inventan). */
   noDisponible: string[];
 };
 
 export const CONCEPTOS_NO_DISPONIBLES_SNAPSHOT = [
   "costos reales (combustible, viáticos, gastos): módulos aparte, fuera de la Fase 3",
-  "cargos adicionales: Fase 4",
+  "tratamiento de IVA de los cargos adicionales: pendiente de definición de negocio/fiscal",
   "incidencias estructuradas",
   "cuadrilla real distinta de la registrada en el viaje",
   "kilometraje confirmado por Operaciones (solo el registrado por el piloto en Flota)",

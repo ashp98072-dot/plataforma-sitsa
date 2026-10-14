@@ -664,7 +664,7 @@ export async function requireTenantViajesConfirmarReporte(
  */
 async function requireTenantFilaLiquidacionViaje(
   slug: string,
-  fila: "viajes_liquidar" | "viajes_reabrir_liquidacion",
+  fila: "viajes_liquidar" | "viajes_reabrir_liquidacion" | "viajes_cargos_adicionales",
   accion: AccionPermiso,
   mensajeSinPermiso: string,
 ): Promise<Ok | Fail> {
@@ -699,6 +699,11 @@ export function requireTenantViajesLiquidar(slug: string, accion: AccionPermiso 
 
 export function requireTenantViajesReabrirLiquidacion(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
   return requireTenantFilaLiquidacionViaje(slug, "viajes_reabrir_liquidacion", accion, "Sin permiso para reabrir la liquidación de viajes.");
+}
+
+/** Fase 4 — cargos adicionales facturables: permiso EXPLÍCITO `viajes_cargos_adicionales`, separado de liquidar, reabrir y cerrar. */
+export function requireTenantViajesCargosAdicionales(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_cargos_adicionales", accion, "Sin permiso para gestionar cargos adicionales.");
 }
 
 /**

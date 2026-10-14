@@ -1569,6 +1569,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           tarifasPorRuta={tarifasPorRuta}
           onPendientesChange={setPendientesRapida}
           onGuardado={cargar}
+          puedeGestionarCargos={tienePermiso(permisos, "viajes_cargos_adicionales", "editar")}
         />
       ) : null}
 

@@ -120,6 +120,9 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
       "src/app/e/[slug]/planes/planes-viajes-client.tsx",
       "src/lib/tms/reportes-viajes.ts",
       "src/lib/tms/liquidacion-viaje-reporte.ts",
+      // Fase 4: los cargos reutilizan los tipos/estados de la liquidación (solo lectura del estado; no la modifican).
+      "src/lib/tms/cargos-adicionales.ts",
+      "src/lib/tms/cargos-adicionales-shared.ts",
     ]);
     const importadores = salida
       .split("\n")
@@ -134,7 +137,7 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
       expect(leer(f), f).not.toMatch(/viajes_cargos_aprobar|viajes_liquidacion_config|viajes_liquidacion_reabrir/);
     }
     expect(leer("src/lib/permisos-shared.ts")).toMatch(
-      /PERMISOS_LIQUIDACION_VIAJE = \["viajes_confirmar_reporte", "viajes_liquidar", "viajes_reabrir_liquidacion"\] as const/,
+      /PERMISOS_LIQUIDACION_VIAJE = \[\s*"viajes_confirmar_reporte",\s*"viajes_liquidar",\s*"viajes_reabrir_liquidacion",\s*"viajes_cargos_adicionales",?\s*\] as const/,
     );
   });
 

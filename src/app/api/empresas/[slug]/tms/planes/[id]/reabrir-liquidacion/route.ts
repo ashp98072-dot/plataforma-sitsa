@@ -18,8 +18,8 @@ const bodySchema = z
  * LIQUIDACIÓN DE VIAJES, FASE 3 — reabrir una liquidación (`LIQUIDADO → EN_AJUSTE`) con motivo obligatorio (≥ 5 caracteres).
  *
  * Permiso EXPLÍCITO `viajes_reabrir_liquidacion:editar`, separado de `viajes_liquidar`. La liquidación anterior permanece en el
- * historial append-only; después debe liquidarse de nuevo. No admite viajes Cerrado/Cancelado. NO cierra, NO factura, NO crea
- * cargos y NO mueve fondos/gastos.
+ * historial append-only; después debe liquidarse de nuevo. Un viaje Cerrado conserva su cierre (la liquidación entra en ajuste y el
+ * viaje NO se reabre); solo Cancelado no admite la reapertura. NO cierra, NO factura, NO crea cargos y NO mueve fondos/gastos.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
