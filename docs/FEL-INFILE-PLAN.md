@@ -11,6 +11,7 @@ Estado: **PLAN. No implementado.** Las fases FEL-3 en adelante **no pueden empez
 - **Criterio de salida:** documentación oficial, sandbox y credenciales de **TEST** en poder del responsable; decisiones de negocio firmadas.
 
 ### FEL-2 — Modelo + dominio + proveedor mock (sin red)
+- **Estado: FEL-2A IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (PR abierto, sin merge, SQL sin ejecutar).** Cubre modelo, dominio, idempotencia, MOCK, mapper y pruebas; ver [FEL-2A-MODELO-DOMINIO-MOCK.md](FEL-2A-MODELO-DOMINIO-MOCK.md). **Pendiente (FEL-2B):** `fact_viajes_facturacion_externa` y su exclusión en `listarViajesPendientes`/`crearFactura`. **INFILE NO integrado; MOCK ≠ sandbox.**
 - Migración manual propuesta con preflight (`fel_emisores`, `fel_emisor_ambientes`, `fel_documentos`, `fel_intentos`, `fact_viajes_facturacion_externa`; columnas y `UNIQUE (empresa_id, id[, entidad_id])` aditivos en `fact_facturas`); reconciliar `schema.sql`. El orden: claves y columnas de `fact_facturas` → tablas FEL → tabla de facturación externa.
 - `src/lib/fel`: tipos, estados, `FelProvider`, mapper `Factura → DTO` (con fixtures sintéticos), servicio con el protocolo de idempotencia (§7), redacción de logs, cifrado con `FEL_CREDENTIALS_KEY`.
 - Proveedor `MOCK` determinista: reproduce `CERTIFICADO`, `RECHAZADO`, `INCIERTO` (timeout/respuesta perdida), y en consulta `CERTIFICADO`, `PENDIENTE`, `NO_ENCONTRADO`, `INCIERTO`, `ERROR_CONFIG`.
