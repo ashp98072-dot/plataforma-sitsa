@@ -14,7 +14,7 @@ vi.mock("@/lib/db", () => ({
 import { cifrarSecretoFel } from "./credenciales";
 import type { FelProvider, ResultadoCertificar } from "./provider";
 import { MockFelProvider, type OpcionesMockFel } from "./providers/mock";
-import { crearServicioFel, obtenerCertificacionFactura, obtenerDocumentoFel, type ActorFel, type ResultadoFel } from "./servicio";
+import { crearServicioFel, obtenerCertificacionFactura, obtenerDocumentoFel, tieneAnulacionIncierta, type ActorFel, type ResultadoFel } from "./servicio";
 
 /**
  * FEL-2A contra MariaDB 11.8.9 DESECHABLE. Se OMITE salvo que exista FEL_TEST_DB_PORT (3399 o 3407, solo local).
@@ -613,48 +613,207 @@ describe.skipIf(!port)("FEL-2A / MariaDB 11.8.9 SOLO LOCAL", () => {
     expect(bad.resultado).toBe("BLOQUEADO");
   });
 
-  it("anulación fiscal: solo ANULADO con respuesta válida; INCIERTO/RECHAZADO dejan CERTIFICADO; factura intacta", async () => {
+  // ── Anulación: operación IRREVERSIBLE. Ante incertidumbre NO se reenvía (no existe aún un contrato de consulta de
+  //    anulación; consultar() no tiene estado ANULADO). Reconciliar queda bloqueado hasta conocer el contrato (FEL-3).
+  const MOTIVO = "Error de captura";
+  const anular = (svc: ReturnType<typeof servicio>, documentoId: number, k = clave()) =>
+    svc.anularDocumento(actor, { documentoId, motivo: MOTIVO, claveSolicitud: k });
+  const certificado = async (mock: MockFelProvider, svc = servicio(mock)) => {
     const f = await factura();
+    return { f, d: doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() })), svc };
+  };
+
+  it("D. anulación: solo ANULADO con respuesta válida; exactamente una vez, réplica idempotente, factura intacta", async () => {
     const mock = mockCon();
-    const svc = servicio(mock);
-    const d = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
+    const { f, d, svc } = await certificado(mock);
     const antesFac = await sql("SELECT * FROM fact_facturas WHERE id = ?", [f]);
-    mock.programar({ anular: "INCIERTO" });
-    expect(doc(await svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: clave() })).estado).toBe("CERTIFICADO");
-    mock.programar({ anular: "RECHAZA" });
-    expect(doc(await svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: clave() })).estado).toBe("CERTIFICADO");
-    mock.programar({ anular: "LANZA_EXCEPCION" });
-    expect(doc(await svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: clave() })).estado).toBe("CERTIFICADO");
-    mock.programar({ anular: "ANULA" });
     const k = clave();
-    const ok = doc(await svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: k }));
+    const ok = doc(await anular(svc, d.documentoId, k));
     expect(ok.estado).toBe("ANULADO");
     expect(ok.identidad?.autorizacion).toBe(d.identidad?.autorizacion);
-    // Réplica idempotente: sin segunda llamada ni segunda auditoría.
-    const llamadas = mock.llamadas.anular;
-    expect(doc(await svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: k })).estado).toBe("ANULADO");
-    expect(mock.llamadas.anular).toBe(llamadas);
+    expect(mock.llamadas.anular).toBe(1);
+    // Réplica (misma clave) y otra solicitud (otra clave): sin segunda llamada ni segunda auditoría.
+    expect(doc(await anular(svc, d.documentoId, k)).estado).toBe("ANULADO");
+    expect(doc(await anular(svc, d.documentoId)).estado).toBe("ANULADO");
+    expect(mock.llamadas.anular).toBe(1);
     expect(await conteo("auditoria", "accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR'", [d.documentoId])).toBe(1);
     expect(await sql("SELECT * FROM fact_facturas WHERE id = ?", [f])).toEqual(antesFac);
-    // Un documento no certificado no se anula.
-    const fp = await factura();
-    const inc = doc(await servicio(mockCon({ certificar: "TIMEOUT_ANTES_DE_PROCESAR" })).solicitarCertificacion(actor, { facturaId: fp, claveSolicitud: clave() }));
-    await expect(svc.anularDocumento(actor, { documentoId: inc.documentoId, motivo: "Error de captura", claveSolicitud: clave() })).rejects.toMatchObject({ codigoFel: "ESTADO_NO_PERMITE" });
+    expect(await tieneAnulacionIncierta(7, d.documentoId)).toBe(false);
   });
 
-  it("anulación concurrente: una sola transición efectiva", async () => {
+  it("anulación: un ANULADO sin fecha de anulación válida NO anula (se trata como incierto)", async () => {
     const f = await factura();
+    const malo = {
+      nombre: "MOCK", requiereCredenciales: false,
+      certificar: async () => ({ tipo: "CERTIFICADO", autorizacion: "AUT-X", serie: "S", numero: String(Date.now()), fechaCertificacion: "2026-10-13T10:00:00.000Z" }) as ResultadoCertificar,
+      consultar: async () => ({ tipo: "INCIERTO" as const }),
+      anular: async () => ({ tipo: "ANULADO", fechaAnulacion: "no-es-fecha" }) as never,
+    } satisfies FelProvider;
+    const svc = servicio(malo);
+    const d = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
+    expect(await anular(svc, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect((await documentoRaw(d.documentoId)).estado).toBe("CERTIFICADO");
+  });
+
+  it("A. anulación procesada remotamente + respuesta perdida: sigue CERTIFICADO, intento INCIERTO y NO se reenvía", async () => {
+    const mock = mockCon({ anular: "PROCESA_Y_PIERDE_RESPUESTA" });
+    const { d, svc } = await certificado(mock);
+    const r = await anular(svc, d.documentoId);
+    expect(r).toMatchObject({ resultado: "ANULACION_INCIERTA", codigo: "MOCK_RESPUESTA_PERDIDA" });
+    expect(mock.remoto.get(d.referenciaEmisor)!.estado).toBe("ANULADO"); // el «proveedor» sí anuló
+    const raw = await documentoRaw(d.documentoId);
+    expect(raw.estado).toBe("CERTIFICADO"); // localmente NO se asume nada
+    expect(raw.anulado_en).toBeNull();
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR' AND estado = 'INCIERTO'", [d.documentoId])).toBe(1);
+    expect(await tieneAnulacionIncierta(7, d.documentoId)).toBe(true);
+    // Segundo intento (misma y otra clave, y aun con el escenario ya «sano»): NO llama a anular() otra vez.
+    mock.programar({ anular: "ANULA" });
+    expect(await anular(svc, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect(await anular(svc, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect(mock.llamadas.anular).toBe(1);
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR'", [d.documentoId])).toBe(1);
+    // Ningún otro camino la reenvía: reintentar/reconciliar un CERTIFICADO es idempotente y no llama al proveedor.
+    await svc.reintentarDocumento(actor, { documentoId: d.documentoId, claveSolicitud: clave() });
+    await svc.reconciliarDocumento(actor, d.documentoId);
+    expect(mock.llamadas.anular).toBe(1);
+    expect(mock.llamadas.consultar).toBe(0);
+    expect((await documentoRaw(d.documentoId)).estado).toBe("CERTIFICADO");
+    // La refacturación sigue bloqueada: el original no está anulado ni corregido.
+    const f2 = await factura();
+    await expect(svc.solicitarRefacturacion(actor, { documentoOrigenId: d.documentoId, nuevaFacturaId: f2, claveSolicitud: clave() }))
+      .rejects.toMatchObject({ codigoFel: "ESTADO_NO_PERMITE" });
+    expect(await conteo("auditoria", "accion = 'fel_anulacion_incierta' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
+  });
+
+  it.each([
+    ["INCIERTO del proveedor", { anular: "INCIERTO" as const }, undefined, "MOCK_TIMEOUT"],
+    ["excepción", { anular: "LANZA_EXCEPCION" as const }, undefined, "EXCEPCION_PROVEEDOR"],
+    ["ERROR_CONFIG devuelto al enviar", { anular: "ERROR_CONFIG" as const }, undefined, "MOCK_CONFIG"],
+    ["timeout del servicio", { anular: "ANULA" as const }, 40, "TIMEOUT_SERVICIO"],
+  ])("B. anulación con %s: incierta, documento CERTIFICADO y sin segundo envío automático", async (_n, escenario, timeoutMs, codigo) => {
+    const mock = mockCon(escenario);
+    let envios = 0; // el envoltorio cuenta las llamadas en vuelo (el contador del MOCK solo cuenta las que terminan)
+    const original = mock.anular.bind(mock);
+    mock.anular = async (s) => {
+      envios += 1;
+      if (timeoutMs) await new Promise((r) => setTimeout(r, 400)); // más lento que el timeout del servicio
+      return original(s);
+    };
+    const svc = servicio(mock, timeoutMs ? { timeoutProveedorMs: timeoutMs } : {});
+    const f = await factura();
+    const d = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
+    const r = await anular(svc, d.documentoId);
+    expect(r).toMatchObject({ resultado: "ANULACION_INCIERTA", codigo });
+    expect((await documentoRaw(d.documentoId)).estado).toBe("CERTIFICADO");
+    expect(envios).toBe(1);
+    expect(await anular(svc, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect(await anular(svc, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect(envios).toBe(1);
+    expect(await tieneAnulacionIncierta(7, d.documentoId)).toBe(true);
+  });
+
+  it("anulación RECHAZADA definitiva: sigue CERTIFICADO, no es incierta y una nueva solicitud puede reintentar", async () => {
+    const mock = mockCon({ anular: "RECHAZA" });
+    const { d, svc } = await certificado(mock);
+    expect(doc(await anular(svc, d.documentoId)).estado).toBe("CERTIFICADO");
+    expect(await tieneAnulacionIncierta(7, d.documentoId)).toBe(false);
+    mock.programar({ anular: "ANULA" });
+    expect(doc(await anular(svc, d.documentoId)).estado).toBe("ANULADO");
+    expect(mock.llamadas.anular).toBe(2);
+  });
+
+  it("C. intento ANULAR ENVIANDO huérfano: ventana vigente = en proceso; vencida = INCIERTO sin reenviar", async () => {
+    const mock = mockCon();
+    const { d } = await certificado(mock);
+    const cae = servicio(mock, { simularCaidaDespuesDeEnviar: () => { throw new Error("proceso caído"); } });
+    await expect(anular(cae, d.documentoId)).rejects.toThrow("proceso caído");
+    expect(mock.llamadas.anular).toBe(1);
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR' AND estado = 'ENVIANDO'", [d.documentoId])).toBe(1);
+    // Ventana vigente: otro proceso no envía.
+    const r1 = await anular(servicio(mock), d.documentoId);
+    expect(r1).toMatchObject({ resultado: "DOCUMENTO", enProceso: true });
+    expect(mock.llamadas.anular).toBe(1);
+    // Ventana vencida: el huérfano pasa a INCIERTO y NO se reenvía.
+    const vencido = servicio(mock, { ventanaPendienteMs: 0 });
+    const r2 = await anular(vencido, d.documentoId);
+    expect(r2).toMatchObject({ resultado: "ANULACION_INCIERTA", codigo: "VENTANA_VENCIDA" });
+    expect(mock.llamadas.anular).toBe(1);
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR' AND estado = 'INCIERTO'", [d.documentoId])).toBe(1);
+    expect(await conteo("fel_intentos", "documento_id = ? AND tipo = 'ANULAR' AND estado = 'ENVIANDO'", [d.documentoId])).toBe(0);
+    expect(await anular(vencido, d.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    expect(mock.llamadas.anular).toBe(1);
+    expect((await documentoRaw(d.documentoId)).estado).toBe("CERTIFICADO");
+  });
+
+  it("E. dos anulaciones concurrentes mientras una está en vuelo: una sola llamada efectiva", async () => {
+    const mock = mockCon();
+    const { d } = await certificado(mock);
+    let liberar!: () => void;
+    const compuerta = new Promise<void>((r) => { liberar = r; });
+    let enVuelo!: () => void;
+    const iniciada = new Promise<void>((r) => { enVuelo = r; });
+    let envios = 0;
+    const original = mock.anular.bind(mock);
+    mock.anular = async (s) => {
+      envios += 1;
+      enVuelo();
+      await compuerta;
+      return original(s);
+    };
+    const svc = servicio(mock);
+    const primera = anular(svc, d.documentoId);
+    await iniciada; // TX1 de la primera ya confirmó su intento ENVIANDO
+    const segunda = await anular(svc, d.documentoId);
+    const tercera = await anular(svc, d.documentoId);
+    expect(segunda).toMatchObject({ resultado: "DOCUMENTO", enProceso: true });
+    expect(tercera).toMatchObject({ resultado: "DOCUMENTO", enProceso: true });
+    expect(envios).toBe(1);
+    liberar();
+    expect(doc(await primera).estado).toBe("ANULADO");
+    expect(envios).toBe(1);
+    expect(mock.llamadas.anular).toBe(1);
+    expect(await conteo("auditoria", "accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
+  });
+
+  it("anulación concurrente simultánea (sin compuerta): una sola transición efectiva y una sola llamada", async () => {
+    const mock = mockCon();
+    const { d, svc } = await certificado(mock);
+    const r = await Promise.all(Array.from({ length: 6 }, () => anular(svc, d.documentoId)));
+    expect(r.every((x) => x.resultado === "DOCUMENTO")).toBe(true);
+    expect((await documentoRaw(d.documentoId)).estado).toBe("ANULADO");
+    expect(mock.llamadas.anular).toBe(1);
+    expect(await conteo("auditoria", "accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
+  });
+
+  it("F. la certificación conserva su protocolo: reconciliar un INCIERTO sigue funcionando junto a una anulación incierta", async () => {
+    const mock = mockCon({ anular: "PROCESA_Y_PIERDE_RESPUESTA" });
+    const svc = servicio(mock);
+    const { d: anulando } = await certificado(mock, svc);
+    expect(await anular(svc, anulando.documentoId)).toMatchObject({ resultado: "ANULACION_INCIERTA" });
+    // Otro documento: certificó pero se perdió la respuesta → consulta y recupera (sin tocar el protocolo de anulación).
+    mock.programar({ certificar: "PROCESA_Y_PIERDE_RESPUESTA" });
+    const f = await factura();
+    const a = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
+    expect(a.estado).toBe("INCIERTO");
+    const b = doc(await svc.reconciliarDocumento(actor, a.documentoId));
+    expect(b.estado).toBe("CERTIFICADO");
+    expect(mock.llamadas.certificar).toBe(2);
+    expect(mock.llamadas.consultar).toBe(1);
+    // Y certificar de nuevo el documento con anulación incierta es una réplica idempotente (sigue CERTIFICADO).
+    const repl = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
+    expect(repl.documentoId).toBe(a.documentoId);
+    expect(mock.llamadas.certificar).toBe(2);
+    expect(mock.llamadas.anular).toBe(1);
+  });
+
+  it("anular un documento no certificado se rechaza", async () => {
     const mock = mockCon();
     const svc = servicio(mock);
-    const d = doc(await svc.solicitarCertificacion(actor, { facturaId: f, claveSolicitud: clave() }));
-    const r = await Promise.all([
-      svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: clave() }),
-      svc.anularDocumento(actor, { documentoId: d.documentoId, motivo: "Error de captura", claveSolicitud: clave() }),
-    ]);
-    expect(r.map((x) => doc(x).estado).every((e) => e === "ANULADO" || e === "CERTIFICADO")).toBe(true);
-    expect((await documentoRaw(d.documentoId)).estado).toBe("ANULADO");
-    expect(await conteo("auditoria", "accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
-    expect(mock.llamadas.anular).toBeLessThanOrEqual(2);
+    const fp = await factura();
+    const inc = doc(await servicio(mockCon({ certificar: "TIMEOUT_ANTES_DE_PROCESAR" })).solicitarCertificacion(actor, { facturaId: fp, claveSolicitud: clave() }));
+    await expect(anular(svc, inc.documentoId)).rejects.toMatchObject({ codigoFel: "ESTADO_NO_PERMITE" });
+    expect(mock.llamadas.anular).toBe(0);
   });
 
   it("refacturación: original → anulación → FACTURA nueva con origen trazable; el original no se borra ni cambia", async () => {

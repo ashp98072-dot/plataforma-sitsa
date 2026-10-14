@@ -59,6 +59,7 @@ Pedir por escrito (y guardar la versión/fecha de cada documento recibido). **Ni
 - [ ] Tipos de DTE soportados y su código (FACT, FCAM, notas de crédito/débito, exportación, otros)
 - [ ] Operación de **certificación**: request/response, campos devueltos (autorización, serie, número, fecha, XML, PDF)
 - [ ] Operación de **anulación**: payload, plazos, condiciones, respuesta
+- [ ] **Consulta del estado de una anulación** (por qué identificador, cómo responde «anulado», «no anulado», «en proceso» y «desconocido») y si la anulación es **idempotente** ante un reenvío; sin esto una anulación incierta **no puede reconciliarse ni reenviarse** (FEL-2A la deja bloqueada)
 - [ ] Operación de **consulta/estado** (por qué identificador: UUID del emisor, autorización, referencia propia) y **cómo responde cuando el documento NO existe** (código HTTP, cuerpo, código de error) y cuando está **en proceso**; sin esto no se puede declarar `NO_ENCONTRADO` ni habilitar un reenvío seguro
 - [ ] ¿La consulta puede tener **consistencia eventual** (cuánto debe esperarse tras el envío antes de que «no existe» sea confiable)?
 - [ ] ¿Se puede **reutilizar la misma referencia** tras un rechazo definitivo, o hay que enviar una nueva?

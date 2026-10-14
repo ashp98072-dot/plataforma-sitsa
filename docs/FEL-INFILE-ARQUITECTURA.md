@@ -361,6 +361,9 @@ La lista de tipos soportados por INFILE y su código exacto son **A CONFIRMAR**;
 
 ## 10. Anulaciones
 
+> **Actualización FEL-2A.** Una anulación incierta (timeout, excepción, `INCIERTO`, intento huérfano) **no se reenvía automáticamente**: es irreversible y `consultar()` no tiene estado `ANULADO`. Se registra como intento `ANULAR` `INCIERTO` con el documento aún `CERTIFICADO` y queda bloqueada hasta conocer el contrato de reconciliación del proveedor (FEL-3). Los estados `ANULACION_PENDIENTE/INCIERTA` de esta sección quedan como diseño futuro. Ver [FEL-2A §4.1](FEL-2A-MODELO-DOMINIO-MOCK.md).
+
+
 Separar:
 - **Anular factura interna** (hoy): sin FEL o `Borrador`; sin pagos; libera viajes. Se conserva.
 - **Anular FEL certificada:** una factura con documento `CERTIFICADA` **no** puede quedar «Anulada» solo en BD.

@@ -90,6 +90,17 @@ describe("FEL-2A · proveedor MOCK determinista y sin red", () => {
     expect((await m.consultar({ contexto: ctx, referenciaEmisor: "c" })).tipo).toBe("CERTIFICADO");
   });
 
+  it("anulación: el MOCK reproduce «procesó y perdió la respuesta» (el remoto queda ANULADO, la respuesta es INCIERTO)", async () => {
+    const m = new MockFelProvider({ anular: "PROCESA_Y_PIERDE_RESPUESTA" });
+    await m.certificar({ contexto: ctx, referenciaEmisor: "z", tipo: "FACTURA", dto });
+    const r = await m.anular({ contexto: ctx, referenciaEmisor: "z", autorizacion: "A", motivo: "motivo de prueba" });
+    expect(r.tipo).toBe("INCIERTO");
+    expect(m.remoto.get("z")?.estado).toBe("ANULADO");
+    // La consulta de certificación NO expone ANULADO: el contrato neutral no puede reconciliar una anulación.
+    const c = await m.consultar({ contexto: ctx, referenciaEmisor: "z" });
+    expect(["CERTIFICADO", "PENDIENTE", "NO_ENCONTRADO", "RECHAZADO", "INCIERTO", "ERROR_CONFIG"]).toContain(c.tipo);
+  });
+
   it("el remoto idempotente no duplica certificaciones; el no idempotente las cuenta (peor caso)", async () => {
     const ok = new MockFelProvider();
     await ok.certificar({ contexto: ctx, referenciaEmisor: "x", tipo: "FACTURA", dto });
@@ -234,6 +245,16 @@ describe("FEL-2A · arquitectura: sin contabilidad, sin UI productiva, sin tocar
       expect(t, f).not.toMatch(/@\/lib\/facturacion|emitirFactura|anularFactura/);
       expect(t, f).not.toMatch(/UPDATE\s+fact_facturas|INSERT\s+INTO\s+fact_facturas|DELETE\s+FROM\s+(fact_|fel_)/i);
     }
+  });
+
+  it("anulación: una sola llamada a proveedor.anular() y nunca se reintenta dentro del servicio", () => {
+    const t = leerFuente("src/lib/fel/servicio.ts");
+    expect(t.match(/\.anular\(/g)).toHaveLength(1);
+    // La política conservadora no depende de un estado ANULADO del contrato de consulta (no existe).
+    const prov = leerFuente("src/lib/fel/provider.ts");
+    const bloque = prov.slice(prov.indexOf("export type ResultadoConsulta"), prov.indexOf("export type ResultadoAnulacion"));
+    expect(bloque).toContain("NO_ENCONTRADO");
+    expect(bloque).not.toContain("ANULADO");
   });
 
   it("documento_origen_id es inmutable: ningún UPDATE lo asigna y nada borra documentos FEL", () => {

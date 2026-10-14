@@ -29,7 +29,7 @@ export type EscenarioCertificar =
   | "LANZA_EXCEPCION";
 
 export type EscenarioConsulta = "SEGUN_ESTADO_REMOTO" | "INCIERTO" | "ERROR_CONFIG" | "LANZA_EXCEPCION";
-export type EscenarioAnular = "ANULA" | "RECHAZA" | "INCIERTO" | "ERROR_CONFIG" | "LANZA_EXCEPCION";
+export type EscenarioAnular = "ANULA" | "RECHAZA" | "INCIERTO" | "PROCESA_Y_PIERDE_RESPUESTA" | "ERROR_CONFIG" | "LANZA_EXCEPCION";
 
 type Programable<T> = T | ((referencia: string, llamada: number) => T);
 type RegistroRemoto = { estado: "CERTIFICADO" | "PENDIENTE" | "ANULADO"; identidad: IdentidadFiscal };
@@ -154,6 +154,12 @@ export class MockFelProvider implements FelProvider {
         return { tipo: "RECHAZADO", codigo: "MOCK_ANULACION_RECHAZADA", mensaje: "Anulación rechazada (simulado)." };
       case "INCIERTO":
         return { tipo: "INCIERTO", codigo: "MOCK_TIMEOUT", mensaje: "Tiempo de espera agotado (simulado)." };
+      case "PROCESA_Y_PIERDE_RESPUESTA": {
+        // El «certificador» SÍ anula, pero la respuesta no llega: el peor caso de una operación irreversible.
+        const r = this.remoto.get(s.referenciaEmisor);
+        if (r && r.estado === "CERTIFICADO") r.estado = "ANULADO";
+        return { tipo: "INCIERTO", codigo: "MOCK_RESPUESTA_PERDIDA", mensaje: "Conexión cortada antes de la respuesta (simulado)." };
+      }
       case "ERROR_CONFIG":
         return { tipo: "ERROR_CONFIG", codigo: "MOCK_CONFIG", mensaje: "Configuración inválida (simulado)." };
       case "LANZA_EXCEPCION":

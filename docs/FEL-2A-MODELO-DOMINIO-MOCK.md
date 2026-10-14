@@ -73,8 +73,9 @@ se trata como `INCIERTO`). Excepción, timeout del servicio, `ERROR_CONFIG` al e
 - **Nota de crédito/débito**: documento propio con `documento_origen_id`, `factura_id` = el de la factura original, mismo emisor/
   ambiente. Origen debe ser una `FACTURA` **CERTIFICADA** de la misma empresa; el origen **no se modifica**. Los importes los aporta
   el llamador (qué se corrige y cuánto es decisión pendiente). Notas parciales múltiples son legítimas (claves distintas).
-- **Anulación**: solo desde `CERTIFICADO` y **solo** con respuesta `ANULADO` del proveedor. `INCIERTO/RECHAZADO/ERROR_CONFIG/excepción`
-  dejan el documento `CERTIFICADO`. **No** toca `fact_facturas.estado_admin` ni libera viajes.
+- **Anulación** (operación **irreversible**): solo desde `CERTIFICADO` y **solo** con respuesta `ANULADO` válida del proveedor
+  (con fecha de anulación interpretable). **No** toca `fact_facturas.estado_admin` ni libera viajes. Ver §4.1: una anulación
+  incierta **no se reenvía automáticamente**.
 - **Refacturación**: no existe un tipo mágico. Es una `FACTURA` **nueva** (otra `fact_facturas`, misma empresa y entidad) con
   `documento_origen_id` = el original. Regla **provisional** de FEL-2A (a confirmar con negocio/contador): el original debe estar
   `ANULADO` o tener una nota de crédito `CERTIFICADA`. Cadena trazable por `documento_origen_id`; el original no se borra.
@@ -91,6 +92,30 @@ se trata como `INCIERTO`). Excepción, timeout del servicio, `ERROR_CONFIG` al e
 Reglas: `INCIERTO` o `PENDIENTE` **nunca** se reenvía a ciegas: se consulta primero. `PENDIENTE` con intento `ENVIANDO` vigente ⇒
 «en proceso» (no hay segundo envío); vencida la ventana (5 min por defecto) se trata como `INCIERTO` y se consulta (caída entre TX1
 y TX2). El reenvío tras `NO_ENCONTRADO` reutiliza referencia y DTO congelado. Sin `GET_LOCK`: row locks + `UNIQUE`.
+
+### 4.1 Anulación incierta (política conservadora)
+
+> **Una anulación incierta NO se reenvía automáticamente hasta conocer el contrato de reconciliación del proveedor.**
+
+`consultar()` **no** tiene estado `ANULADO` y el contrato real de INFILE no está confirmado, así que FEL-2A **no** inventa una
+consulta de anulación: la deja **bloqueada explícitamente hasta FEL-3**. No hay cambio de esquema: la incertidumbre se representa con
+`fel_intentos` (`tipo = 'ANULAR'`).
+
+| Situación | Estado del documento | Intento `ANULAR` | Resultado del servicio |
+|---|---|---|---|
+| Respuesta `ANULADO` válida | `ANULADO` (una sola vez) | `ANULADO` | `DOCUMENTO` |
+| Respuesta `RECHAZADO` (definitivo) | `CERTIFICADO` | `RECHAZADO` | `DOCUMENTO`; una nueva solicitud puede reintentar |
+| `INCIERTO`, excepción, timeout, `ERROR_CONFIG` devuelto al enviar, o `ANULADO` sin fecha válida | **`CERTIFICADO`** | `INCIERTO` (o `ERROR_CONFIG`) | `ANULACION_INCIERTA` |
+| Intento `ENVIANDO` huérfano con ventana vencida | **`CERTIFICADO`** | pasa a `INCIERTO` (`VENTANA_VENCIDA`) | `ANULACION_INCIERTA`, **sin** reenviar |
+| Intento `ENVIANDO` vigente | `CERTIFICADO` | `ENVIANDO` | `DOCUMENTO` con `enProceso`; no se envía |
+
+Distinción inequívoca: «documento `CERTIFICADO` localmente **+** existe un intento `ANULAR` en `INCIERTO`/`ERROR_CONFIG`/`ENVIANDO`»
+(`tieneAnulacionIncierta(empresaId, documentoId)`). Mientras exista, `anularDocumento()` (con cualquier clave) devuelve
+`ANULACION_INCIERTA` y **no** llama a `proveedor.anular()`; `reintentarDocumento`/`reconciliarDocumento` sobre un `CERTIFICADO` no
+envían ni consultan. La refacturación sigue bloqueada (el original no está `ANULADO` ni corregido). **No hay hoy ruta automática de
+salida**: resolverla requerirá (a) una capacidad opcional y neutral de consulta de anulación en el proveedor o (b) una conciliación
+manual auditada, ambas dependientes del contrato real (FEL-3). Una respuesta tardía `ANULADO` válida del envío original sí se
+registra (el documento sigue `CERTIFICADO` y la respuesta es válida).
 
 ## 5. Invariantes que la BD **no** puede garantizar (aplicación + verify)
 
@@ -141,7 +166,7 @@ preflight/verify son obligatorios. Reversión (si se aprobara): las 4 tablas est
 ## 11. Pendiente real antes de INFILE (FEL-3)
 
 Todo [DATOS FALTANTES §A y §B](FEL-INFILE-DATOS-FALTANTES.md) sigue **sin resolverse**. Adicionalmente FEL-2A deja abiertas estas
-decisiones: estados de `estado_admin` desde los que se puede certificar (hoy solo `Borrador`, según ARQUITECTURA §5); regla de
+decisiones: contrato de reconciliación de **anulaciones** del proveedor (hoy una anulación incierta queda bloqueada, §4.1); estados de `estado_admin` desde los que se puede certificar (hoy solo `Borrador`, según ARQUITECTURA §5); regla de
 refacturación (§3.2); qué cliente/campo manda para el receptor; contrato de consulta de INFILE (cómo responde «no existe» y la
 consistencia eventual) para habilitar `NO_ENCONTRADO` real; columnas fiscales adicionales de `fel_emisor_ambientes` (afiliación IVA,
 establecimiento, frases, dirección) y de `fel_documentos` (XML/PDF) que se agregan **aditivamente** cuando exista la documentación.

@@ -72,6 +72,11 @@ export type ResumenDocumentoFel = {
 
 export type ResultadoFel =
   | { resultado: "ERROR_CONFIG"; codigo: string; mensaje: string }
+  /**
+   * Existe una anulación cuyo resultado EXTERNO se desconoce. El documento sigue CERTIFICADO localmente. NO se reenvía
+   * automáticamente: la reconciliación depende del contrato de consulta de anulación del proveedor (no definido: FEL-3).
+   */
+  | { resultado: "ANULACION_INCIERTA"; documento: ResumenDocumentoFel; codigo: string | null; mensaje: string }
   | { resultado: "BLOQUEADO"; bloqueos: BloqueoFel[] }
   | { resultado: "DOCUMENTO"; documento: ResumenDocumentoFel; idempotente: boolean; enProceso: boolean };
 
@@ -293,6 +298,24 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
     return resolverAmbiente(c, empresaId, entidadId, Number(e.id), e.modo);
   }
 
+  const MENSAJE_ANULACION_INCIERTA =
+    "Hay una anulación con resultado desconocido. No se reenvía automáticamente: requiere reconciliación manual con el proveedor.";
+
+  /** Resultado de una anulación incierta previa (cerrada INCIERTO/ERROR_CONFIG), o null si no existe. */
+  async function anulacionIncierta(c: PoolConnection, empresaId: number, documentoId: number) {
+    const [r] = await c.query<(RowDataPacket & { codigo: string | null })[]>(
+      `SELECT codigo FROM fel_intentos WHERE empresa_id = ? AND documento_id = ? AND tipo = 'ANULAR'
+          AND estado IN ('INCIERTO', 'ERROR_CONFIG') ORDER BY id DESC LIMIT 1`,
+      [empresaId, documentoId],
+    );
+    return r[0] ? { codigo: r[0].codigo } : null;
+  }
+
+  const planAnulacionIncierta = (doc: FilaDoc, codigo: string | null): Plan => ({
+    accion: "RETORNAR",
+    resultado: { resultado: "ANULACION_INCIERTA", documento: resumen(doc), codigo, mensaje: MENSAJE_ANULACION_INCIERTA },
+  });
+
   async function buscarPorClave(c: PoolConnection, empresaId: number, clave: string) {
     const [r] = await c.query<FilaIntentoClave[]>(
       "SELECT id, documento_id, huella_solicitud, tipo FROM fel_intentos WHERE empresa_id = ? AND clave_solicitud = ?",
@@ -445,8 +468,11 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
     } catch {
       raw = sinRespuesta("EXCEPCION_PROVEEDOR", MENSAJE_EXCEPCION);
     }
+    if (opciones.simularCaidaDespuesDeEnviar) await opciones.simularCaidaDespuesDeEnviar();
     const r = raw as ResultadoAnulacion | null;
-    const tipo = r?.tipo === "ANULADO" || r?.tipo === "RECHAZADO" || r?.tipo === "ERROR_CONFIG" ? r.tipo : "INCIERTO";
+    // ANULADO solo es válido con fecha de anulación interpretable; cualquier otra forma es incertidumbre, no éxito.
+    const anuladoValido = r?.tipo === "ANULADO" && !!r.fechaAnulacion && !Number.isNaN(new Date(r.fechaAnulacion).getTime());
+    const tipo = anuladoValido ? "ANULADO" : r?.tipo === "RECHAZADO" || r?.tipo === "ERROR_CONFIG" ? r.tipo : "INCIERTO";
     return transaccion(async (c) => {
       const doc = (await cargarDoc(c, actor.empresaId, plan.documentoId))!;
       const detalle = { codigo: r && "codigo" in r ? r.codigo : undefined, mensaje: r && "mensaje" in r ? r.mensaje : undefined };
@@ -462,6 +488,11 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
         await auditar(c, actor, "fel_anulado", { documentoId: doc.id, facturaId: doc.factura_id });
       }
       const final = (await cargarDoc(c, actor.empresaId, plan.documentoId, false))!;
+      if (final.estado === "CERTIFICADO" && (tipo === "INCIERTO" || tipo === "ERROR_CONFIG")) {
+        // El documento sigue CERTIFICADO localmente y la anulación externa es desconocida: queda registrada, sin reenvío.
+        await auditar(c, actor, "fel_anulacion_incierta", { documentoId: doc.id, facturaId: doc.factura_id, motivo: detalle.codigo ?? tipo });
+        return { resultado: "ANULACION_INCIERTA", documento: resumen(final), codigo: detalle.codigo ?? null, mensaje: MENSAJE_ANULACION_INCIERTA };
+      }
       return { resultado: "DOCUMENTO", documento: resumen(final), idempotente: false, enProceso: false };
     });
   }
@@ -681,9 +712,17 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
       }
       if (doc.estado === "ANULADO") return devolver(doc, true);
       if (doc.estado !== "CERTIFICADO") throw new ErrorFel("ESTADO_NO_PERMITE", "Solo un documento CERTIFICADO puede anularse.");
+      // Una anulación es IRREVERSIBLE: ante cualquier incertidumbre NO se reenvía (ni aquí ni en otra solicitud).
       const abierto = await intentoAbierto(c, actor.empresaId, Number(doc.id), "ANULAR");
       if (abierto && !abierto.vencido) return devolver(doc, true, true);
-      if (abierto) await cerrarIntento(c, abierto.id, "INCIERTO", { codigo: "VENTANA_VENCIDA", mensaje: "La anulación quedó sin respuesta registrada." });
+      if (abierto) {
+        // Huérfano (caída entre TX1 y TX2): el proveedor pudo haber anulado. Queda INCIERTO y NO se vuelve a enviar.
+        await cerrarIntento(c, abierto.id, "INCIERTO", { codigo: "VENTANA_VENCIDA", mensaje: "La anulación quedó sin respuesta registrada." });
+        await auditar(c, actor, "fel_anulacion_incierta", { documentoId: doc.id, facturaId: doc.factura_id, motivo: "VENTANA_VENCIDA" });
+        return planAnulacionIncierta(doc, "VENTANA_VENCIDA");
+      }
+      const previaIncierta = await anulacionIncierta(c, actor.empresaId, Number(doc.id));
+      if (previaIncierta) return planAnulacionIncierta(doc, previaIncierta.codigo);
       const cfg = await resolverAmbiente(c, actor.empresaId, Number(doc.entidad_id), Number(doc.emisor_id), doc.ambiente);
       if ("error" in cfg) return { accion: "RETORNAR", resultado: cfg.resultado };
       const intentoId = await crearIntento(c, actor, Number(doc.id), "ANULAR", previa ? null : entrada.claveSolicitud, previa ? null : huella);
@@ -798,4 +837,14 @@ export async function obtenerCertificacionFactura(empresaId: number, facturaId: 
     [empresaId, facturaId],
   );
   return r[0] ? resumen(r[0]) : null;
+}
+
+/** true si el documento tiene una anulación con resultado externo desconocido o en vuelo (sigue CERTIFICADO; no se reenvía). */
+export async function tieneAnulacionIncierta(empresaId: number, documentoId: number): Promise<boolean> {
+  const [r] = await getPool().query<RowDataPacket[]>(
+    `SELECT 1 FROM fel_intentos WHERE empresa_id = ? AND documento_id = ? AND tipo = 'ANULAR'
+        AND estado IN ('ENVIANDO', 'INCIERTO', 'ERROR_CONFIG') LIMIT 1`,
+    [empresaId, documentoId],
+  );
+  return r.length > 0;
 }
