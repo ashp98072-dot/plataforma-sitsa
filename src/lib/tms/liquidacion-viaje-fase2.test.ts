@@ -26,14 +26,14 @@ const leer = (p: string) => readFileSync(p, "utf8").replaceAll("\r\n", "\n");
 
 // ───────────────────────────── presentación (colores/badges) ─────────────────────────────
 describe("Liquidación Fase 2 · presentación", () => {
-  it("mapeo final: todo viaje ACTIVO no liquidado es amarillo; solo LIQUIDADO vuelve a la superficie normal", () => {
+  it("mapeo visual: sin reporte y en ajuste son amarillos; reporte recibido y liquidado tienen fondo normal", () => {
     // sin liquidación registrada (viaje activo)
     for (const estado of ["Programado", "Cargado", "En ruta", "Descargado"]) {
       expect(claseFilaLiquidacion(null, estado), estado).toBe("pendiente");
       expect(claseFilaLiquidacion(undefined, estado), estado).toBe("pendiente");
       expect(badgeLiquidacion(null, estado)?.texto, estado).toBe("Pendiente");
     }
-    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")).toBe("pendiente");
+    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")).toBe("normal");
     expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "Descargado")).toBe("pendiente");
     expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Descargado")).toBe("normal");
     expect(badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")?.texto).toBe("Reporte recibido");
@@ -51,18 +51,32 @@ describe("Liquidación Fase 2 · presentación", () => {
     expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "Cerrado")).toBe("pendiente");
   });
 
-  it("los tres estados pendientes se distinguen por TEXTO y por clase de badge (el color no es el único indicador)", () => {
+  it("sin reporte, reporte recibido y en ajuste se distinguen por TEXTO y clase de badge", () => {
     const t = [badgeLiquidacion(null, "En ruta"), badgeLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta"), badgeLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "En ruta")];
     expect(new Set(t.map((b) => b?.texto)).size).toBe(3);
     expect(new Set(t.map((b) => b?.clase)).size).toBe(3);
   });
 
-  it("amarillo = pendiente de liquidar para los tres estados; LIQUIDADO no", () => {
+  it("pendiente de liquidar conserva su significado funcional, separado del fondo visual", () => {
     expect(esPendienteDeLiquidar("REPORTE_RECIBIDO")).toBe(true);
     expect(esPendienteDeLiquidar("EN_AJUSTE")).toBe(true);
     expect(esPendienteDeLiquidar("LIQUIDADO")).toBe(false);
     expect(estaPendienteDeLiquidacion(null, "Programado")).toBe(true);
     expect(estaPendienteDeLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Programado")).toBe(false);
+  });
+
+  it("confirmar, liquidar, reabrir y reliquidar producen la secuencia visual esperada", () => {
+    const estados = [null, { estado: "REPORTE_RECIBIDO", version: 1 }, { estado: "LIQUIDADO", version: 2 }, { estado: "EN_AJUSTE", version: 3 }, { estado: "LIQUIDADO", version: 4 }] as const;
+    expect(estados.map(l => claseFilaLiquidacion(l, "En ruta"))).toEqual(["pendiente", "normal", "normal", "pendiente", "normal"]);
+    expect(estados.map(l => badgeLiquidacion(l, "En ruta")?.texto)).toEqual(["Pendiente", "Reporte recibido", "Liquidado", "En ajuste", "Liquidado"]);
+  });
+
+  it("todos los estados operativos activos conservan el mismo mapeo visual", () => {
+    for (const estadoPlan of ["Programado", "Cargado", "En ruta", "Descargado"]) {
+      expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, estadoPlan)).toBe("normal");
+      expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, estadoPlan)).toBe("pendiente");
+      expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 4 }, estadoPlan)).toBe("normal");
+    }
   });
 
   it("textos del modal para Operaciones: advertencia clara, no bloquea y el botón dice «de todas formas»", () => {
@@ -164,7 +178,8 @@ describe("Liquidación Fase 2 · presentación", () => {
     const c = leer("src/app/e/[slug]/planes/planes-viajes-client.tsx");
     expect(c).toMatch(/className="fila-viaje /);
     expect(c).toMatch(/data-liquidacion=\{claseFilaLiquidacion\(p\.liquidacion, p\.estado\)\}/);
-    expect(c).toMatch(/Fila amarilla = viaje pendiente de liquidación/);
+    expect(c).toContain("Fila amarilla = requiere una acción pendiente (sin reporte confirmado o en ajuste)");
+    expect(c).toContain("Fondo normal = reporte recibido, liquidado o histórico cerrado/cancelado sin liquidación");
     expect(c).toMatch(/data-seleccionada=\{seleccion\.has\(p\.id\) \? "true" : undefined\}/);
     // El color de TEXTO no se cambia por estado de liquidación: la clase de la fila no incluye text-*.
     expect(c).not.toMatch(/className="fila-viaje[^"]*text-/);
