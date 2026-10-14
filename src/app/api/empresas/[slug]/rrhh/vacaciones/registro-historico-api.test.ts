@@ -26,10 +26,23 @@ const HUELLA = "a".repeat(64);
 beforeEach(() => {
   vi.resetAllMocks();
   m.requireTenantRrhh.mockResolvedValue({ empresa: { id: 7 }, session: { username: "rrhh.ana" } });
+  m.contarDiasHabiles.mockResolvedValue(5);
   m.registrarVacaciones.mockResolvedValue({ ok: true, mensaje: "Vacaciones históricas registradas (FIFO en la fecha de la vacación).", desglose: [], incidenciaId: 55, historico: true, plan: { huella: HUELLA } });
 });
 
 describe("POST /rrhh/vacaciones (se extiende el endpoint actual, sin crear uno paralelo)", () => {
+  it("571148 manipulados nunca llegan a FIFO; se recalcula 1 para el lunes", async () => {
+    m.contarDiasHabiles.mockResolvedValue(1);
+    const r=await POST(post({...base,fechaInicio:"2026-06-01",fechaFin:"2026-06-01",diasHabiles:571148}),ctx);
+    expect(r.status).toBe(200);
+    expect(m.registrarVacaciones).toHaveBeenCalledWith(expect.objectContaining({diasATomar:1}));
+  });
+  it("fechas inválidas/invertidas y cálculo imposible no registran",async()=>{
+    for(const [fechaInicio,fechaFin] of [["01/06/2026","01/06/2026"],["2026-02-30","2026-03-01"],["2026-06-02","2026-06-01"]])expect((await POST(post({...base,fechaInicio,fechaFin}),ctx)).status).toBe(400);
+    m.contarDiasHabiles.mockResolvedValue(571148);
+    expect((await POST(post({...base,fechaInicio:"2026-06-01",fechaFin:"2026-06-01"}),ctx)).status).toBe(400);
+    expect(m.registrarVacaciones).not.toHaveBeenCalled();
+  });
   it("exige RRHH · Vacaciones · crear y usa la empresa y el usuario de la SESIÓN", async () => {
     m.requireTenantRrhh.mockResolvedValue({ error: NextResponse.json({ error: "Sin permiso" }, { status: 403 }) });
     expect((await POST(post(base), ctx)).status).toBe(403);

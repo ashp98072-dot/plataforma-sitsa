@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { diasCalendarioInclusivos, RangoVacacionesInvalido, validarDiasCalculados } from "@/lib/rrhh/vacaciones-calendario";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
 import {
@@ -116,14 +117,20 @@ export async function POST(req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "vacaciones", "crear");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json());
+  const parsed = schema.safeParse(await req.json().catch(()=>null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   const d = parsed.data;
-  const dias =
-    d.diasHabiles ??
-    (await contarDiasHabiles(guard.empresa.id, d.fechaInicio, d.fechaFin));
+  let dias: number;
+  try {
+    diasCalendarioInclusivos(d.fechaInicio,d.fechaFin);
+    dias = validarDiasCalculados(d.fechaInicio,d.fechaFin,await contarDiasHabiles(guard.empresa.id,d.fechaInicio,d.fechaFin));
+    if(dias<=0)return NextResponse.json({error:"El rango de fechas no tiene días hábiles."},{status:400});
+  } catch(e) {
+    if(e instanceof RangoVacacionesInvalido)return NextResponse.json({error:e.message},{status:400});
+    return NextResponse.json({error:"No se pudo calcular los días."},{status:500});
+  }
 
   if (TIPOS_CON_SALDO.has(d.tipo)) {
     // Registro normal sin cambios; si la fecha de inicio cae en un período que HOY está Vencido es un registro HISTÓRICO (ver vacaciones-registro.ts).

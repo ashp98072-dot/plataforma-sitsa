@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
 import { contarDiasHabiles } from "@/lib/rrhh/vacaciones";
 import { previsualizarRegistro } from "@/lib/rrhh/vacaciones-registro";
+import { diasCalendarioInclusivos, RangoVacacionesInvalido, validarDiasCalculados } from "@/lib/rrhh/vacaciones-calendario";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -28,10 +29,12 @@ export async function GET(req: Request, ctx: Ctx) {
   const d = parsed.data;
   if (d.fechaFin < d.fechaInicio) return NextResponse.json({ error: "La fecha de fin no puede ser anterior a la de inicio." }, { status: 400 });
   try {
-    const dias = d.diasHabiles ?? (await contarDiasHabiles(guard.empresa.id, d.fechaInicio, d.fechaFin));
+    diasCalendarioInclusivos(d.fechaInicio,d.fechaFin);
+    const dias = validarDiasCalculados(d.fechaInicio,d.fechaFin,await contarDiasHabiles(guard.empresa.id,d.fechaInicio,d.fechaFin));
     const r = await previsualizarRegistro(guard.empresa.id, d.empleadoId, d.fechaInicio, d.fechaFin, dias);
     return NextResponse.json({ ...r, diasHabiles: dias }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
+    if(error instanceof RangoVacacionesInvalido)return NextResponse.json({error:error.message},{status:400});
     console.error("[vacaciones/preview-historico]", error);
     return NextResponse.json({ error: "No se pudo calcular la vista previa." }, { status: 500 });
   }

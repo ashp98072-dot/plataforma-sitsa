@@ -1,4 +1,6 @@
 "use client";
+import { hoyLocal } from "@/lib/rrhh/dates";
+import { diasCalendarioInclusivos, diasPreviewActual, puedeRegistrarRango, type CalculoVacaciones } from "@/lib/rrhh/vacaciones-calendario";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
@@ -77,12 +79,15 @@ export default function VacacionesPage() {
   const [filtroHasta, setFiltroHasta] = useState("");
   const [errorFiltros, setErrorFiltros] = useState("");
   const [fechaInicio, setFechaInicio] = useState(
-    new Date().toISOString().slice(0, 10),
+    hoyLocal(),
   );
   const [fechaFin, setFechaFin] = useState(
-    new Date().toISOString().slice(0, 10),
+    hoyLocal(),
   );
-  const [dias, setDias] = useState("1");
+  const [calculo, setCalculo] = useState<CalculoVacaciones|null>(null);
+  const claveCalculo = JSON.stringify([slug,fechaInicio,fechaFin]);
+  const diasCalculados = diasPreviewActual(calculo,claveCalculo,fechaInicio,fechaFin);
+  const dias = diasCalculados===null ? "" : String(diasCalculados);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   // Registro HISTÓRICO: vista previa del consumo en la fecha de la vacación (no el saldo de hoy) y decisión explícita de RRHH cuando se requiere.
@@ -168,16 +173,21 @@ export default function VacacionesPage() {
   }
 
   useEffect(() => {
-    if (!fechaInicio || !fechaFin) return;
+    try { diasCalendarioInclusivos(fechaInicio,fechaFin); } catch { return; }
+    const controller = new AbortController();
+    let vigente = true;
     const t = setTimeout(async () => {
-      const res = await fetch(
+      try {
+        const res = await fetch(
         `/api/empresas/${slug}/rrhh/vacaciones/dias-habiles?inicio=${fechaInicio}&fin=${fechaFin}`,
+        {signal:controller.signal,cache:"no-store"},
       );
       const data = await res.json();
-      if (res.ok && typeof data.dias === "number") setDias(String(data.dias));
+        if (vigente && res.ok && typeof data.dias === "number") setCalculo({clave:claveCalculo,dias:data.dias});
+      } catch { /* Sin respuesta válida no hay cálculo utilizable ni envío. */ }
     }, 300);
-    return () => clearTimeout(t);
-  }, [slug, fechaInicio, fechaFin]);
+    return () => {vigente=false;controller.abort();clearTimeout(t);};
+  }, [slug, fechaInicio, fechaFin, claveCalculo]);
 
   // Vista previa del registro histórico: solo cuando el tipo descuenta saldo. No limita las fechas del formulario por períodos vigentes.
   useEffect(() => {
@@ -204,8 +214,8 @@ export default function VacacionesPage() {
     ev.preventDefault();
     setError("");
     setMsg("");
-    const diasNum = Number(dias);
-    if (!Number.isFinite(diasNum) || diasNum <= 0) {
+    const diasNum = diasPreviewActual(calculo,claveCalculo,fechaInicio,fechaFin);
+    if (!puedeRegistrarRango(diasNum,saldo,tipo==="Vacaciones"||tipo==="A cuenta de Vacaciones",!!previa?.esHistorico)) {
       setError("Días hábiles inválidos.");
       return;
     }
@@ -227,7 +237,6 @@ export default function VacacionesPage() {
         empleadoId,
         fechaInicio,
         fechaFin,
-        diasHabiles: diasNum,
         tipo,
         ...(plan?.requiereDecision && decisionAcepta ? { decision: { huella: plan.huella, motivo: decisionMotivo.trim() } } : {}),
       }),
@@ -268,6 +277,7 @@ export default function VacacionesPage() {
 
   const usaSaldo =
     tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones";
+  const superaSaldo = usaSaldo && !previa?.esHistorico && saldo!==null && diasCalculados!==null && diasCalculados>saldo;
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
@@ -336,9 +346,10 @@ export default function VacacionesPage() {
           Días hábiles
           <input
             className={`${input} mt-1 w-full`}
-            value={dias}
-            onChange={(e) => setDias(e.target.value)}
+            value={diasCalculados===null || superaSaldo ? "—" : dias}
+            readOnly
           />
+          {superaSaldo ? <span className="text-xs text-red-300">El rango supera el saldo disponible. Revisa las fechas.</span> : null}
         </label>
         <label className="text-sm text-[var(--muted)]">
           Desde
@@ -346,7 +357,7 @@ export default function VacacionesPage() {
             type="date"
             className={`${input} mt-1 w-full`}
             value={fechaInicio}
-            onChange={(e) => setFechaInicio(e.target.value)}
+            onChange={(e) => {setCalculo(null);setPrevia(null);setFechaInicio(e.target.value);}}
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
@@ -355,11 +366,11 @@ export default function VacacionesPage() {
             type="date"
             className={`${input} mt-1 w-full`}
             value={fechaFin}
-            onChange={(e) => setFechaFin(e.target.value)}
+            onChange={(e) => {setCalculo(null);setPrevia(null);setFechaFin(e.target.value);}}
           />
         </label>
         <div className="flex items-end">
-          <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
+          <button disabled={!empleadoId||!puedeRegistrarRango(diasCalculados,saldo,usaSaldo,!!previa?.esHistorico)} className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-50">
             {usaSaldo ? "Registrar (descuenta saldo)" : "Registrar permiso"}
           </button>
         </div>
