@@ -1587,6 +1587,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                                   Reabrir liquidación
                                 </button>
                               ) : null}
+                              {accLiq.requiereCierre ? (
+                                <span className="text-[10px] text-[var(--muted)]" title="La liquidación se realiza con el viaje ya cerrado.">
+                                  Cerrar el viaje para liquidar
+                                </span>
+                              ) : null}
                             </>
                           );
                         })()}

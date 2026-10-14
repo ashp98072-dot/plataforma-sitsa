@@ -55,6 +55,13 @@ async function plan(delta: { empresa?: number; estado?: string; fecha?: string; 
   return id;
 }
 const filaPlan = async (id: number) => (await sql("SELECT * FROM tms_planes_viaje WHERE id = ?", [id]))[0];
+/** Secuencia real: el viaje se CIERRA (lo hace el cierre existente, no este módulo) y luego se liquida. */
+const cerrarPlan = (id: number) => holder.pool!.execute("UPDATE tms_planes_viaje SET estado = 'Cerrado' WHERE id = ? AND estado <> 'Cancelado'", [id]);
+/** Liquida cerrando antes el viaje (la liquidación exige viaje Cerrado). Las pruebas de la regla usan el dominio directo. */
+const liquidar: typeof liquidarViaje = async (actor, entrada) => {
+  await cerrarPlan(entrada.planId);
+  return liquidarViaje(actor, entrada);
+};
 const codigo = (p: Promise<unknown>) => p.then(() => "OK", (e: { codigoLiquidacion?: string }) => e.codigoLiquidacion ?? "ERROR");
 
 describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCAL", () => {
@@ -128,13 +135,13 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     expect(c).toMatchObject({ evento: "REPORTE_RECIBIDO", idempotente: false, liquidacion: { estado: "REPORTE_RECIBIDO", version: 1, reporteRecibidoPor: 4 } });
     expect(c.liquidacion.liquidadoEn).toBeNull();
 
-    const l = await liquidarViaje(B, { planId: p, versionEsperada: 1 });
+    const l = await liquidar(B, { planId: p, versionEsperada: 1 });
     expect(l).toMatchObject({ evento: "LIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 2, liquidadoPor: 5 } });
 
     const r = await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "  Falta cargo de espera  " });
     expect(r).toMatchObject({ evento: "REABIERTO", liquidacion: { estado: "EN_AJUSTE", version: 3, reabiertoPor: 4, liquidadoPor: 5 } });
 
-    const rl = await liquidarViaje(B, { planId: p, versionEsperada: 3 });
+    const rl = await liquidar(B, { planId: p, versionEsperada: 3 });
     expect(rl).toMatchObject({ evento: "RELIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 4, liquidadoPor: 5, reabiertoPor: 4 } });
 
     const ev = await listarEventosLiquidacion(7, p);
@@ -147,10 +154,21 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     expect(ev[0].detalle).toBe("Reporte completo");
     expect(ev[2].detalle).toBe("Falta cargo de espera");
     expect(ev[0].snapshot).toEqual({ planEstado: "Programado", fechaPlan: "2026-10-14", tarifaComercial: "100.00" });
-    // El estado operativo del viaje NO se modifica en ningún momento.
-    expect(await filaPlan(p)).toEqual(antesPlan);
+    // El módulo NO modifica el plan: lo único que cambió es el estado por el cierre previo que hace la propia prueba.
+    expect(await filaPlan(p)).toEqual({ ...antesPlan, estado: "Cerrado" });
     // Auditoría: una por transición.
     expect(await conteo("auditoria", "accion LIKE 'liquidacion_viaje_%' AND detalle LIKE ?", [`Plan #${p} %`])).toBe(4);
+  });
+
+  it("confirmar sigue siendo idempotente aunque el viaje ya se haya cerrado (REPORTE_RECIBIDO + Cerrado)", async () => {
+    const p = await plan();
+    await confirmarReporteRecibido(A, { planId: p });
+    await cerrarPlan(p);
+    expect(await confirmarReporteRecibido(B, { planId: p })).toMatchObject({ idempotente: true, evento: null, liquidacion: { version: 1 } });
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
+    // Sin liquidación previa, un viaje Cerrado NO acepta confirmar reporte (comportamiento sin cambios).
+    const q = await plan({ estado: "Cerrado" });
+    expect(await codigo(confirmarReporteRecibido(A, { planId: q }))).toBe("PLAN_NO_ADMITE");
   });
 
   it("confirmar es idempotente: segunda confirmación no crea evento ni cambia la versión", async () => {
@@ -164,7 +182,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("7. la reapertura exige motivo (≥ 5, ≤ 500) y no deja rastro si se rechaza", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     for (const motivo of ["", "    ", "abcd", " a b "]) {
       expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo }))).toBe("SOLICITUD_INVALIDA");
     }
@@ -180,30 +198,95 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
 
   it("transiciones inválidas: solo se reabre LIQUIDADO, solo se liquida REPORTE_RECIBIDO/EN_AJUSTE, y sin versión no hay operación", async () => {
     const p = await plan();
-    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1 }))).toBe("NO_ENCONTRADO"); // sin reporte
-    expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 1, motivo: "motivo valido" }))).toBe("NO_ENCONTRADO");
+    // Abierto y sin reporte: primero manda la regla de secuencia (el viaje debe estar Cerrado).
+    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1 }))).toBe("PLAN_NO_CERRADO");
+    // Cerrado pero sin reporte recibido (nunca se liquida desde «sin liquidación»).
+    const sinReporte = await plan({ estado: "Cerrado" });
+    expect(await codigo(liquidarViaje(A, { planId: sinReporte, versionEsperada: 1 }))).toBe("NO_ENCONTRADO");
+    expect(await codigo(reabrirLiquidacion(A, { planId: sinReporte, versionEsperada: 1, motivo: "motivo valido" }))).toBe("NO_ENCONTRADO");
     await confirmarReporteRecibido(A, { planId: p });
     expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 1, motivo: "motivo valido" }))).toBe("ESTADO_NO_PERMITE");
-    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 0 }))).toBe("SOLICITUD_INVALIDA");
-    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1.5 }))).toBe("SOLICITUD_INVALIDA");
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    expect(await codigo(liquidar(A, { planId: p, versionEsperada: 0 }))).toBe("SOLICITUD_INVALIDA");
+    expect(await codigo(liquidar(A, { planId: p, versionEsperada: 1.5 }))).toBe("SOLICITUD_INVALIDA");
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     expect(await codigo(confirmarReporteRecibido(A, { planId: p }))).toBe("ESTADO_NO_PERMITE");
-    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 2 }))).toBe("ESTADO_NO_PERMITE"); // ya liquidado
+    expect(await codigo(liquidar(B, { planId: p, versionEsperada: 2 }))).toBe("ESTADO_NO_PERMITE"); // ya liquidado
     await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" });
     expect(await codigo(reabrirLiquidacion(B, { planId: p, versionEsperada: 3, motivo: "otra vez" }))).toBe("ESTADO_NO_PERMITE"); // ya en ajuste
   });
 
-  it("viajes Cerrado/Cancelado no admiten transiciones (el cierre es final) y no pierden su liquidación", async () => {
+  it("secuencia: liquidar exige viaje CERRADO (servidor); reabrir sí procede con el viaje Cerrado; Cancelado no admite nada", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
-    await holder.pool!.execute("UPDATE tms_planes_viaje SET estado = 'Cerrado' WHERE id = ?", [p]);
-    expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" }))).toBe("PLAN_NO_ADMITE");
-    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 2 }))).toBe("PLAN_NO_ADMITE");
+    // Abierto (cualquier estado operativo no cerrado): NO se liquida y no se escribe nada.
+    for (const estado of ["Programado", "Cargado", "En ruta", "Descargado"]) {
+      await holder.pool!.execute("UPDATE tms_planes_viaje SET estado = ? WHERE id = ?", [estado, p]);
+      expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1 })), estado).toBe("PLAN_NO_CERRADO");
+    }
+    expect(await leerLiquidacionPlan(7, p)).toMatchObject({ estado: "REPORTE_RECIBIDO", version: 1 });
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
+    // Cerrado: procede.
+    await cerrarPlan(p);
+    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1 }))).toBe("OK");
     expect((await leerLiquidacionPlan(7, p))!.estado).toBe("LIQUIDADO");
+    // Reabrir con el viaje Cerrado: la liquidación pasa a EN_AJUSTE y el viaje PERMANECE Cerrado.
+    expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" }))).toBe("OK");
+    expect((await filaPlan(p)).estado).toBe("Cerrado");
+    expect((await leerLiquidacionPlan(7, p))!.estado).toBe("EN_AJUSTE");
+    // Cancelado no admite liquidar ni reabrir ni confirmar.
     const cancelado = await plan({ estado: "Cancelado" });
     expect(await codigo(confirmarReporteRecibido(A, { planId: cancelado }))).toBe("PLAN_NO_ADMITE");
     expect(await leerLiquidacionPlan(7, cancelado)).toBeNull();
+    await holder.pool!.execute("UPDATE tms_planes_viaje SET estado = 'Cancelado' WHERE id = ?", [p]);
+    expect(await codigo(reabrirLiquidacion(A, { planId: p, versionEsperada: 3, motivo: "motivo valido" }))).toBe("PLAN_NO_ADMITE");
+    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 3 }))).toBe("PLAN_NO_ADMITE");
+  });
+
+  it("EN_AJUSTE con el viaje abierto NO se re-liquida (datos previos a la regla); al cerrarse sí", async () => {
+    const p = await plan();
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
+    await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" });
+    await holder.pool!.execute("UPDATE tms_planes_viaje SET estado = 'En ruta' WHERE id = ?", [p]); // dato legado: viaje abierto
+    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 3 }))).toBe("PLAN_NO_CERRADO");
+    expect((await leerLiquidacionPlan(7, p))).toMatchObject({ estado: "EN_AJUSTE", version: 3 });
+    // También con la liquidación LIQUIDADA en un viaje abierto (legado) se puede reabrir.
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(3);
+    await cerrarPlan(p);
+    expect(await liquidar(B, { planId: p, versionEsperada: 3 })).toMatchObject({ evento: "RELIQUIDADO", liquidacion: { version: 4 } });
+  });
+
+  it("carrera cierre vs liquidación: la validación se hace bajo el lock del plan (lee el estado ya confirmado)", async () => {
+    const p = await plan({ estado: "En ruta" });
+    await confirmarReporteRecibido(A, { planId: p });
+    // 1) Otra transacción mantiene el plan bloqueado y lo CIERRA antes de confirmar: la liquidación espera y procede.
+    const c1 = await holder.pool!.getConnection();
+    try {
+      await c1.beginTransaction();
+      await c1.query("SELECT estado FROM tms_planes_viaje WHERE id = ? FOR UPDATE", [p]);
+      const liquidando = liquidarViaje(A, { planId: p, versionEsperada: 1 });
+      await new Promise((r) => setTimeout(r, 150));
+      await c1.query("UPDATE tms_planes_viaje SET estado = 'Cerrado' WHERE id = ?", [p]);
+      await c1.commit();
+      expect(await liquidando).toMatchObject({ liquidacion: { estado: "LIQUIDADO", version: 2 } });
+    } finally {
+      c1.release();
+    }
+    // 2) Otra transacción libera el lock SIN cerrar: la liquidación se rechaza.
+    const q = await plan({ estado: "En ruta" });
+    await confirmarReporteRecibido(A, { planId: q });
+    const c2 = await holder.pool!.getConnection();
+    try {
+      await c2.beginTransaction();
+      await c2.query("SELECT estado FROM tms_planes_viaje WHERE id = ? FOR UPDATE", [q]);
+      const liquidando = codigo(liquidarViaje(A, { planId: q, versionEsperada: 1 }));
+      await new Promise((r) => setTimeout(r, 150));
+      await c2.commit();
+      expect(await liquidando).toBe("PLAN_NO_CERRADO");
+    } finally {
+      c2.release();
+    }
+    expect((await leerLiquidacionPlan(7, q))!.estado).toBe("REPORTE_RECIBIDO");
   });
 
   // ───────────────────────────────────── aislamiento y modelo ─────────────────────────────────────
@@ -211,7 +294,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
     expect(await codigo(confirmarReporteRecibido(OTRA, { planId: p }))).toBe("NO_ENCONTRADO");
-    expect(await codigo(liquidarViaje(OTRA, { planId: p, versionEsperada: 1 }))).toBe("NO_ENCONTRADO");
+    expect(await codigo(liquidar(OTRA, { planId: p, versionEsperada: 1 }))).toBe("NO_ENCONTRADO");
     expect(await codigo(reabrirLiquidacion(OTRA, { planId: p, versionEsperada: 1, motivo: "motivo valido" }))).toBe("NO_ENCONTRADO");
     expect(await leerLiquidacionPlan(8, p)).toBeNull();
     expect(await listarEventosLiquidacion(8, p)).toEqual([]);
@@ -284,7 +367,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("10c. dos liquidaciones simultáneas de actores distintos: una gana y la otra recibe conflicto/estado", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    const r = await Promise.allSettled([liquidarViaje(A, { planId: p, versionEsperada: 1 }), liquidarViaje(B, { planId: p, versionEsperada: 1 })]);
+    const r = await Promise.allSettled([liquidar(A, { planId: p, versionEsperada: 1 }), liquidar(B, { planId: p, versionEsperada: 1 })]);
     expect(r.filter((x) => x.status === "fulfilled")).toHaveLength(1);
     const rechazo = r.find((x) => x.status === "rejected") as PromiseRejectedResult;
     expect(["CONFLICTO_VERSION", "ESTADO_NO_PERMITE"]).toContain(rechazo.reason.codigoLiquidacion);
@@ -295,7 +378,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("10d. doble clic del MISMO actor al liquidar: una transición y la réplica es idempotente", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    const r = await Promise.all([liquidarViaje(A, { planId: p, versionEsperada: 1 }), liquidarViaje(A, { planId: p, versionEsperada: 1 })]);
+    const r = await Promise.all([liquidar(A, { planId: p, versionEsperada: 1 }), liquidar(A, { planId: p, versionEsperada: 1 })]);
     expect(r.filter((x) => x.idempotente)).toHaveLength(1);
     expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ? AND tipo = 'LIQUIDADO'", [p])).toBe(1);
     expect((await leerLiquidacionPlan(7, p))!.version).toBe(2);
@@ -304,7 +387,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("10e. reapertura concurrente por dos actores: una sola reapertura efectiva", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     const r = await Promise.allSettled([
       reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo de A" }),
       reabrirLiquidacion(B, { planId: p, versionEsperada: 2, motivo: "motivo de B" }),
@@ -317,22 +400,22 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("10f. relíquido con versión vieja se rechaza; con la versión vigente procede", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" });
-    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 2 }))).toBe("CONFLICTO_VERSION");
-    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 1 }))).toBe("CONFLICTO_VERSION");
+    expect(await codigo(liquidar(B, { planId: p, versionEsperada: 2 }))).toBe("CONFLICTO_VERSION");
+    expect(await codigo(liquidar(B, { planId: p, versionEsperada: 1 }))).toBe("CONFLICTO_VERSION");
     expect((await leerLiquidacionPlan(7, p))).toMatchObject({ estado: "EN_AJUSTE", version: 3 });
-    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 3 }))).toBe("OK");
+    expect(await codigo(liquidar(B, { planId: p, versionEsperada: 3 }))).toBe("OK");
     expect((await leerLiquidacionPlan(7, p))).toMatchObject({ estado: "LIQUIDADO", version: 4 });
   });
 
   it("10g. carrera de liquidar vs reabrir con la misma versión: exactamente una transición", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" });
     const r = await Promise.allSettled([
-      liquidarViaje(B, { planId: p, versionEsperada: 3 }),
+      liquidar(B, { planId: p, versionEsperada: 3 }),
       reabrirLiquidacion(A, { planId: p, versionEsperada: 3, motivo: "otro motivo" }),
     ]);
     expect(r.filter((x) => x.status === "fulfilled")).toHaveLength(1);
@@ -374,15 +457,16 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     const tablas = ["tms_solicitud_fondo_lineas", "tms_gastos_operativos", "tms_plan_cuadrilla", "fact_factura_viajes", "fel_documentos", "cont_eventos"];
     const foto = async () => JSON.stringify(await Promise.all(tablas.map((t) => sql(`SELECT * FROM ${t} ORDER BY id`))));
     const antesTablas = await foto();
-    const antesPlan = await filaPlan(p);
     await confirmarReporteRecibido(A, { planId: p });
+    await cerrarPlan(p); // el cierre es otro flujo; aquí solo se prepara la secuencia
+    const antesPlan = await filaPlan(p);
     await liquidarViaje(A, { planId: p, versionEsperada: 1 });
     await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "motivo valido" });
     await liquidarViaje(A, { planId: p, versionEsperada: 3 });
     expect(await foto()).toBe(antesTablas);
+    // Liquidar/reabrir/re-liquidar NO modifican el plan (ni su estado Cerrado ni cierre_*/tarifa).
     expect(await filaPlan(p)).toEqual(antesPlan);
-    // El viaje sigue «Programado»: ni cierra ni cambia por estar LIQUIDADO.
-    expect((await filaPlan(p)).estado).toBe("Programado");
+    expect((await filaPlan(p)).estado).toBe("Cerrado");
   });
 
   it("segunda migración es NOOP: conserva liquidaciones, eventos y configuración", async () => {
@@ -497,9 +581,9 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     const ajeno = await plan({ empresa: 8 });
     await confirmarReporteRecibido(A, { planId: reportado });
     await confirmarReporteRecibido(A, { planId: liquidado });
-    await liquidarViaje(A, { planId: liquidado, versionEsperada: 1 });
+    await liquidar(A, { planId: liquidado, versionEsperada: 1 });
     await confirmarReporteRecibido(A, { planId: enAjuste });
-    await liquidarViaje(A, { planId: enAjuste, versionEsperada: 1 });
+    await liquidar(A, { planId: enAjuste, versionEsperada: 1 });
     await reabrirLiquidacion(A, { planId: enAjuste, versionEsperada: 2, motivo: "motivo valido" });
     await confirmarReporteRecibido(OTRA, { planId: ajeno });
     const m = await liquidacionesDePlanes(7, [reportado, liquidado, enAjuste, historico, ajeno]);
@@ -543,13 +627,13 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("F3-1. liquidar guarda un snapshot operativo con los datos existentes (y sin datos sensibles ni costos)", async () => {
     const p = await completo();
     await confirmarReporteRecibido(A, { planId: p });
-    const r = await liquidarViaje(B, { planId: p, versionEsperada: 1, observacion: "  Todo conforme  " });
+    const r = await liquidar(B, { planId: p, versionEsperada: 1, observacion: "  Todo conforme  " });
     expect(r).toMatchObject({ evento: "LIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 2 } });
     const ev = await eventoDe(p, "LIQUIDADO");
     expect(ev.detalle).toBe("Todo conforme");
     const o = ev.snapshot!.operativo!;
     expect(o.version).toBe(1);
-    expect(o.plan).toMatchObject({ id: p, codigo: `PLAN-${p}`, fechaPlan: "2026-10-14", estado: "Programado", tipoViaje: "Propio", referenciaCliente: "REF-9" });
+    expect(o.plan).toMatchObject({ id: p, codigo: `PLAN-${p}`, fechaPlan: "2026-10-14", estado: "Cerrado", tipoViaje: "Propio", referenciaCliente: "REF-9" });
     expect(o.cliente.nombre).toBe("Cliente Fase3");
     expect(o.ruta).toEqual({ codigo: "RUTA-1", origen: "Bodega Origen", destino: "Destino Catalogo" });
     expect(o.tarifa).toEqual({ comercial: "1500.00", tarifaId: 77, nombre: "Tarifa std", montoCatalogo: "1400.00", moneda: "GTQ" });
@@ -588,8 +672,9 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
       await sql("SELECT * FROM tms_plan_pilotos_adicionales WHERE plan_id = ?", [p]),
       await sql("SELECT * FROM flota_viajes WHERE plan_id = ?", [p]),
     ]);
-    const antes = await foto();
     await confirmarReporteRecibido(A, { planId: p });
+    await cerrarPlan(p);
+    const antes = await foto();
     await liquidarViaje(A, { planId: p, versionEsperada: 1 });
     expect(await foto()).toBe(antes);
     const original = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND tipo = 'LIQUIDADO'", [p]))[0].snapshot_json;
@@ -603,11 +688,11 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("F3-3. reapertura + reliquidación: nuevo snapshot, motivo preservado y evento anterior intacto", async () => {
     const p = await completo();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     const v2 = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND version = 2", [p]))[0].snapshot_json;
     await reabrirLiquidacion(B, { planId: p, versionEsperada: 2, motivo: "Corregir tarifa del viaje" });
     await holder.pool!.execute("UPDATE tms_planes_viaje SET tarifa_comercial = 1800 WHERE id = ?", [p]);
-    const r = await liquidarViaje(A, { planId: p, versionEsperada: 3, observacion: "Tarifa corregida" });
+    const r = await liquidar(A, { planId: p, versionEsperada: 3, observacion: "Tarifa corregida" });
     expect(r).toMatchObject({ evento: "RELIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 4 } });
     const rel = await eventoDe(p, "RELIQUIDADO");
     expect(rel.snapshot!.operativo!.tarifa.comercial).toBe("1800.00");
@@ -626,7 +711,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     await holder.pool!.execute("INSERT INTO tms_clientes VALUES (?, 8, 'Cliente De Otra Empresa')", [900000 + p]);
     await holder.pool!.execute("UPDATE tms_planes_viaje SET cliente_id = ? WHERE id = ?", [900000 + p, p]);
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     const o = (await eventoDe(p, "LIQUIDADO")).snapshot!.operativo!;
     expect(o.cliente.nombre).toBeNull();
     const crudo = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ?", [p])).map((x) => x.snapshot_json).join("");
@@ -641,7 +726,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
       [p],
     );
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     const o = (await eventoDe(p, "LIQUIDADO")).snapshot!.operativo!;
     expect(o.plan.tipoViaje).toBe("Tercerizado");
     expect(o.tercerizado).toEqual({
@@ -656,7 +741,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("F3-6. observación de liquidación: ≤ 500 caracteres y sin efecto en la versión si se rechaza", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1, observacion: "x".repeat(501) }))).toBe("SOLICITUD_INVALIDA");
+    expect(await codigo(liquidar(A, { planId: p, versionEsperada: 1, observacion: "x".repeat(501) }))).toBe("SOLICITUD_INVALIDA");
     expect((await leerLiquidacionPlan(7, p))!.version).toBe(1);
     expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
   });
@@ -665,7 +750,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     const p = await completo();
     await confirmarReporteRecibido(A, { planId: p });
     const actores = [A, B, { empresaId: 7, usuarioId: 6, usuario: "carla" }];
-    const r = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => liquidarViaje(actores[i % 3], { planId: p, versionEsperada: 1 })));
+    const r = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => liquidar(actores[i % 3], { planId: p, versionEsperada: 1 })));
     const efectivas = r.filter((x) => x.status === "fulfilled" && !x.value.idempotente);
     expect(efectivas).toHaveLength(1);
     for (const x of r) {
@@ -678,7 +763,7 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
   it("F3-8. reabrir: réplica del mismo actor es idempotente y la versión obsoleta se rechaza sin evento", async () => {
     const p = await plan();
     await confirmarReporteRecibido(A, { planId: p });
-    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await liquidar(A, { planId: p, versionEsperada: 1 });
     const r = await Promise.all([
       reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajustar viaticos" }),
       reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajustar viaticos" }),
@@ -687,11 +772,11 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ? AND tipo = 'REABIERTO'", [p])).toBe(1);
     expect(await codigo(reabrirLiquidacion(B, { planId: p, versionEsperada: 2, motivo: "otro motivo" }))).toBe("CONFLICTO_VERSION");
     expect(await codigo(reabrirLiquidacion(B, { planId: p, versionEsperada: 3, motivo: "otro motivo" }))).toBe("ESTADO_NO_PERMITE");
-    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 2 }))).toBe("CONFLICTO_VERSION");
+    expect(await codigo(liquidar(B, { planId: p, versionEsperada: 2 }))).toBe("CONFLICTO_VERSION");
     expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(3);
   });
 
-  it("F3-9. liquidar no toca cierre, facturación, fondos/gastos, FEL ni contabilidad (y el viaje sigue sin cerrarse)", async () => {
+  it("F3-9. liquidar no toca cierre, facturación, fondos/gastos, FEL ni contabilidad (el cierre es prerrequisito, no efecto)", async () => {
     const p = await completo();
     await holder.pool!.execute("INSERT INTO tms_solicitud_fondo_lineas (plan_id) VALUES (?)", [p]);
     await holder.pool!.execute("INSERT INTO tms_gastos_operativos (plan_id) VALUES (?)", [p]);
@@ -699,11 +784,12 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     const foto = async () => JSON.stringify(await Promise.all(tablas.map((t) => sql(`SELECT * FROM ${t} ORDER BY id`))));
     const antes = await foto();
     await confirmarReporteRecibido(A, { planId: p });
+    await cerrarPlan(p);
+    const planAntes = await filaPlan(p);
     await liquidarViaje(A, { planId: p, versionEsperada: 1 });
     await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajuste de prueba" });
     await liquidarViaje(A, { planId: p, versionEsperada: 3 });
     expect(await foto()).toBe(antes);
-    const fila = await filaPlan(p);
-    expect(fila.estado).toBe("Programado");
+    expect(await filaPlan(p)).toEqual(planAntes);
   });
 });

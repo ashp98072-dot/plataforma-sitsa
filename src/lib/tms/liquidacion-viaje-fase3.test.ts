@@ -4,6 +4,8 @@ import {
   accionesLiquidacionFila,
   badgeLiquidacion,
   claseFilaLiquidacion,
+  motivoPlanNoLiquidable,
+  puedeLiquidarSegunPlan,
 } from "./liquidacion-viaje-shared";
 import {
   PERMISOS_LIQUIDACION_VIAJE,
@@ -85,32 +87,61 @@ describe("Liquidación Fase 3 · acciones de la fila", () => {
 
   it("sin liquidación: solo confirmar reporte (nunca liquidar)", () => {
     const a = accionesLiquidacionFila({ ...todos, estadoPlan: "En ruta", liquidacion: null });
-    expect(a).toEqual({ confirmarReporte: true, liquidar: false, etiquetaLiquidar: null, reabrir: false });
+    expect(a).toEqual({ confirmarReporte: true, liquidar: false, etiquetaLiquidar: null, reabrir: false, requiereCierre: false });
   });
 
-  it("REPORTE_RECIBIDO → «Liquidar viaje»; EN_AJUSTE → «Liquidar nuevamente»; LIQUIDADO → «Reabrir liquidación»", () => {
-    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "En ruta", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }))
-      .toEqual({ confirmarReporte: false, liquidar: true, etiquetaLiquidar: "Liquidar viaje", reabrir: false });
-    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "En ruta", liquidacion: { estado: "EN_AJUSTE", version: 3 } }))
-      .toEqual({ confirmarReporte: false, liquidar: true, etiquetaLiquidar: "Liquidar nuevamente", reabrir: false });
-    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Descargado", liquidacion: { estado: "LIQUIDADO", version: 2 } }))
-      .toEqual({ confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: true });
+  const SIN = { confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false, requiereCierre: false };
+
+  it("secuencia: sin liquidación solo confirma reporte (con el viaje abierto); nunca liquida", () => {
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "En ruta", liquidacion: null })).toEqual({ ...SIN, confirmarReporte: true });
+    // Un Cerrado sin reporte no ofrece nada (decisión de negocio abierta; no se inventa una acción).
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Cerrado", liquidacion: null })).toEqual(SIN);
   });
 
-  it("sin permiso no hay acción; Cerrado/Cancelado y la vista de consulta no admiten ninguna", () => {
+  it("REPORTE_RECIBIDO / EN_AJUSTE con el viaje ABIERTO: NO se ofrece liquidar ni liquidar nuevamente (solo «cerrar primero»)", () => {
+    for (const estadoPlan of ["Programado", "Cargado", "En ruta", "Descargado"]) {
+      expect(accionesLiquidacionFila({ ...todos, estadoPlan, liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }), estadoPlan)
+        .toEqual({ ...SIN, requiereCierre: true });
+      expect(accionesLiquidacionFila({ ...todos, estadoPlan, liquidacion: { estado: "EN_AJUSTE", version: 3 } }), estadoPlan)
+        .toEqual({ ...SIN, requiereCierre: true });
+    }
+  });
+
+  it("viaje CERRADO: REPORTE_RECIBIDO → «Liquidar viaje»; EN_AJUSTE → «Liquidar nuevamente»; LIQUIDADO → «Reabrir liquidación»", () => {
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Cerrado", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }))
+      .toEqual({ ...SIN, liquidar: true, etiquetaLiquidar: "Liquidar viaje" });
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Cerrado", liquidacion: { estado: "EN_AJUSTE", version: 3 } }))
+      .toEqual({ ...SIN, liquidar: true, etiquetaLiquidar: "Liquidar nuevamente" });
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Cerrado", liquidacion: { estado: "LIQUIDADO", version: 2 } }))
+      .toEqual({ ...SIN, reabrir: true });
+    // Datos previos a la regla: LIQUIDADO en un viaje abierto sí puede reabrirse.
+    expect(accionesLiquidacionFila({ ...todos, estadoPlan: "En ruta", liquidacion: { estado: "LIQUIDADO", version: 2 } }))
+      .toEqual({ ...SIN, reabrir: true });
+  });
+
+  it("regla pura de secuencia: solo «Cerrado» es liquidable", () => {
+    expect(puedeLiquidarSegunPlan("Cerrado")).toBe(true);
+    for (const e of ["Programado", "Cargado", "En ruta", "Descargado", "Cancelado"]) expect(puedeLiquidarSegunPlan(e), e).toBe(false);
+    expect(motivoPlanNoLiquidable("Cerrado")).toBeNull();
+    expect(motivoPlanNoLiquidable("En ruta")).toContain("debe estar Cerrado");
+    expect(motivoPlanNoLiquidable("Cancelado")).toContain("cancelado");
+  });
+
+  it("sin permiso no hay acción; Cancelado y la vista de consulta no admiten ninguna", () => {
     const sin = { puedeConfirmarReporte: false, puedeLiquidar: false, puedeReabrir: false, soloConsulta: false };
     for (const liq of [null, { estado: "REPORTE_RECIBIDO" as const, version: 1 }, { estado: "LIQUIDADO" as const, version: 2 }, { estado: "EN_AJUSTE" as const, version: 3 }]) {
-      expect(accionesLiquidacionFila({ ...sin, estadoPlan: "En ruta", liquidacion: liq })).toEqual({ confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false });
-      for (const estadoPlan of ["Cerrado", "Cancelado"]) {
-        expect(accionesLiquidacionFila({ ...todos, estadoPlan, liquidacion: liq })).toEqual({ confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false });
+      for (const estadoPlan of ["En ruta", "Cerrado"]) {
+        const a = accionesLiquidacionFila({ ...sin, estadoPlan, liquidacion: liq });
+        expect({ ...a, requiereCierre: false }, `${estadoPlan}/${liq?.estado}`).toEqual(SIN);
       }
-      expect(accionesLiquidacionFila({ ...todos, soloConsulta: true, estadoPlan: "En ruta", liquidacion: liq }).liquidar).toBe(false);
+      expect(accionesLiquidacionFila({ ...todos, estadoPlan: "Cancelado", liquidacion: liq })).toEqual(SIN);
+      expect(accionesLiquidacionFila({ ...todos, soloConsulta: true, estadoPlan: "Cerrado", liquidacion: liq })).toEqual(SIN);
     }
     // Con solo liquidar: no ve reabrir; con solo reabrir: no ve liquidar.
     const soloLiquidar = { ...sin, puedeLiquidar: true };
-    expect(accionesLiquidacionFila({ ...soloLiquidar, estadoPlan: "En ruta", liquidacion: { estado: "LIQUIDADO", version: 2 } }).reabrir).toBe(false);
+    expect(accionesLiquidacionFila({ ...soloLiquidar, estadoPlan: "Cerrado", liquidacion: { estado: "LIQUIDADO", version: 2 } }).reabrir).toBe(false);
     const soloReabrir = { ...sin, puedeReabrir: true };
-    expect(accionesLiquidacionFila({ ...soloReabrir, estadoPlan: "En ruta", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }).liquidar).toBe(false);
+    expect(accionesLiquidacionFila({ ...soloReabrir, estadoPlan: "Cerrado", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }).liquidar).toBe(false);
   });
 
   it("la semántica visual vigente (#458) no cambia: amarillo = sin reporte confirmado o en ajuste; reporte recibido y liquidado = normal", () => {
@@ -148,6 +179,7 @@ describe("Liquidación Fase 3 · acciones de la fila", () => {
     expect(m).toContain("permanece en el historial");
     expect(m).toContain("En ajuste");
     expect(m).toMatch(/expectedVersion: l\.version/);
+    expect(m).toContain("motivoPlanNoLiquidable(vista.vistaPrevia.plan.estado)"); // el modal tampoco ofrece liquidar un viaje abierto
   });
 });
 
@@ -261,6 +293,10 @@ describe("Liquidación Fase 3 · POST /liquidar", () => {
     expect((await c.json()).error).toContain("cambió");
     holder.liquidar.mockRejectedValueOnce(new ErrorLiquidacionViaje("ESTADO_NO_PERMITE", "El viaje ya está liquidado."));
     expect((await post("5", { expectedVersion: 2 })).status).toBe(409);
+    holder.liquidar.mockRejectedValueOnce(new ErrorLiquidacionViaje("PLAN_NO_CERRADO", "El viaje debe estar Cerrado antes de liquidarse (estado actual: En ruta)."));
+    const abierto = await post("5", { expectedVersion: 1 });
+    expect(abierto.status).toBe(409);
+    expect((await abierto.json()).error).toContain("debe estar Cerrado");
     holder.liquidar.mockRejectedValueOnce(new ErrorLiquidacionViaje("NO_ENCONTRADO", "Viaje no encontrado.", 404));
     expect((await post("5", { expectedVersion: 1 })).status).toBe(404);
     holder.liquidar.mockRejectedValueOnce(new Error("SELECT secreto FROM x"));

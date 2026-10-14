@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { EventoLiquidacionViaje, LiquidacionViaje } from "@/lib/tms/liquidacion-viaje";
-import type { SnapshotOperativoViaje } from "@/lib/tms/liquidacion-viaje-shared";
+import { motivoPlanNoLiquidable, type SnapshotOperativoViaje } from "@/lib/tms/liquidacion-viaje-shared";
 
 /**
  * LIQUIDACIÓN DE VIAJES, FASE 3 — modales de «Liquidar viaje» / «Liquidar nuevamente» y «Reabrir liquidación», más el
@@ -94,7 +94,8 @@ export function ModalLiquidarViaje({
   const l = vista?.liquidacion ?? null;
   const reliquidar = l?.estado === "EN_AJUSTE";
   const titulo = reliquidar ? "Liquidar nuevamente" : "Liquidar viaje";
-  const puede = !!vista && !!l && vista.vistaPrevia != null && (l.estado === "REPORTE_RECIBIDO" || l.estado === "EN_AJUSTE");
+  const motivoNoCerrado = vista?.vistaPrevia ? motivoPlanNoLiquidable(vista.vistaPrevia.plan.estado) : null;
+  const puede = !!vista && !!l && vista.vistaPrevia != null && (l.estado === "REPORTE_RECIBIDO" || l.estado === "EN_AJUSTE") && !motivoNoCerrado;
 
   async function liquidar() {
     if (!l || enviando) return;
@@ -126,7 +127,9 @@ export function ModalLiquidarViaje({
       {!vista && !errorLectura ? <p className="text-xs text-[var(--muted)]">Cargando resumen…</p> : null}
       {errorLectura ? <p className="text-xs text-rose-500">{errorLectura}</p> : null}
       {vista && !puede && !errorLectura ? (
-        <p className="text-xs text-amber-400">Este viaje no está pendiente de liquidar (estado actual: {l?.estado ?? "sin reporte recibido"}). Recarga la lista.</p>
+        <p className="text-xs text-amber-400">
+          {motivoNoCerrado ?? `Este viaje no está pendiente de liquidar (estado actual: ${l?.estado ?? "sin reporte recibido"}). Recarga la lista.`}
+        </p>
       ) : null}
       {puede && vista?.vistaPrevia ? (
         <>
