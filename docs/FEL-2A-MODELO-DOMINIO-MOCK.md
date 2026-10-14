@@ -49,7 +49,7 @@ Verificado en el DDL de `main` (migraciones `fact-1/2/4`, `contabilidad-*`, `con
 - **`fel_documentos`** (verdad fiscal): FKs compuestas que incluyen `empresa_id` a la factura (`empresa, entidad, id`), al emisor
   (`empresa, emisor, entidad`), al ambiente+proveedor (`empresa, emisor, ambiente, proveedor`) y al documento origen (`empresa,
   emisor, id`). `ON DELETE/UPDATE RESTRICT` en todo: un documento certificado nunca se borra por cascada. CHECKs: `CERTIFICADO/ANULADO`
-  exigen autorización+serie+número+fecha; los demás estados no pueden traerlos; `ANULADO` exige fecha y motivo; notas exigen origen.
+  exigen autorización+serie+número+fecha; los demás estados no pueden traerlos; `ANULADO` exige `anulado_en` (fecha fiscal confirmada por el proveedor, UTC; la hora local de proceso queda en `actualizado_en`, en `finalizado_en` del intento y en la auditoría) y motivo; notas exigen origen.
   `UNIQUE (empresa, ambiente, autorizacion)` y `(empresa, emisor, ambiente, serie, numero)`.
 - **`fel_intentos`**: un envío/consulta/anulación por fila (`ENVIANDO` → resultado, se cierra una sola vez). Sin secretos ni XML;
   respuesta redactada y acotada.
@@ -103,7 +103,7 @@ consulta de anulación: la deja **bloqueada explícitamente hasta FEL-3**. No ha
 
 | Situación | Estado del documento | Intento `ANULAR` | Resultado del servicio |
 |---|---|---|---|
-| Respuesta `ANULADO` válida | `ANULADO` (una sola vez) | `ANULADO` | `DOCUMENTO` |
+| Respuesta `ANULADO` válida | `ANULADO` (una sola vez); `anulado_en` = **`fechaAnulacion` confirmada por el proveedor** (UTC), no la hora local | `ANULADO` | `DOCUMENTO` |
 | Respuesta `RECHAZADO` (definitivo) | `CERTIFICADO` | `RECHAZADO` | `DOCUMENTO`; una nueva solicitud puede reintentar |
 | `INCIERTO`, excepción, timeout, `ERROR_CONFIG` devuelto al enviar, o `ANULADO` sin fecha válida | **`CERTIFICADO`** | `INCIERTO` (o `ERROR_CONFIG`) | `ANULACION_INCIERTA` |
 | Intento `ENVIANDO` huérfano con ventana vencida | **`CERTIFICADO`** | pasa a `INCIERTO` (`VENTANA_VENCIDA`) | `ANULACION_INCIERTA`, **sin** reenviar |

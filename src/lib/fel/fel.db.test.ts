@@ -642,6 +642,31 @@ describe.skipIf(!port)("FEL-2A / MariaDB 11.8.9 SOLO LOCAL", () => {
     expect(await tieneAnulacionIncierta(7, d.documentoId)).toBe(false);
   });
 
+  it("D2. anulado_en es la fecha FISCAL confirmada por el proveedor (no CURRENT_TIMESTAMP) y no cambia en réplicas", async () => {
+    const FECHA_PROVEEDOR = "2025-01-02T03:04:05.000Z"; // lejana: imposible confundirla con la hora local del servidor
+    const mock = mockCon({ ahora: () => new Date(FECHA_PROVEEDOR) });
+    const { d, svc } = await certificado(mock);
+    const leer = async () =>
+      (await sql("SELECT estado, DATE_FORMAT(anulado_en, '%Y-%m-%d %H:%i:%s') AS anulado_en, version, actualizado_en FROM fel_documentos WHERE id = ?", [d.documentoId]))[0];
+    const antesLocal = Date.now();
+    const k = clave();
+    expect(doc(await anular(svc, d.documentoId, k)).estado).toBe("ANULADO");
+    const a = await leer();
+    expect(a.estado).toBe("ANULADO");
+    expect(a.anulado_en).toBe("2025-01-02 03:04:05"); // EXACTAMENTE la fecha del proveedor (UTC)
+    // La hora local de SITSA sí queda en el intento y en actualizado_en, distinta de la fecha fiscal.
+    const [intento] = await sql("SELECT finalizado_en FROM fel_intentos WHERE documento_id = ? AND tipo = 'ANULAR'", [d.documentoId]);
+    expect(new Date(intento.finalizado_en).getTime()).toBeGreaterThanOrEqual(antesLocal - 5000);
+    expect(new Date(a.actualizado_en).getTime()).toBeGreaterThanOrEqual(antesLocal - 5000);
+    // Réplicas (misma clave y otra clave) no alteran anulado_en ni la versión.
+    await anular(svc, d.documentoId, k);
+    await anular(svc, d.documentoId);
+    expect(await leer()).toEqual(a);
+    // La auditoría registra la fecha del proveedor.
+    const [aud] = await sql("SELECT detalle FROM auditoria WHERE accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`]);
+    expect(String(aud.detalle)).toContain("2025-01-02 03:04:05");
+  });
+
   it("anulación: un ANULADO sin fecha de anulación válida NO anula (se trata como incierto)", async () => {
     const f = await factura();
     const malo = {
@@ -777,11 +802,12 @@ describe.skipIf(!port)("FEL-2A / MariaDB 11.8.9 SOLO LOCAL", () => {
   });
 
   it("anulación concurrente simultánea (sin compuerta): una sola transición efectiva y una sola llamada", async () => {
-    const mock = mockCon();
+    const mock = mockCon({ ahora: () => new Date("2025-06-07T08:09:10.000Z") });
     const { d, svc } = await certificado(mock);
     const r = await Promise.all(Array.from({ length: 6 }, () => anular(svc, d.documentoId)));
     expect(r.every((x) => x.resultado === "DOCUMENTO")).toBe(true);
     expect((await documentoRaw(d.documentoId)).estado).toBe("ANULADO");
+    expect((await sql("SELECT DATE_FORMAT(anulado_en, '%Y-%m-%d %H:%i:%s') AS f FROM fel_documentos WHERE id = ?", [d.documentoId]))[0].f).toBe("2025-06-07 08:09:10");
     expect(mock.llamadas.anular).toBe(1);
     expect(await conteo("auditoria", "accion = 'fel_anulado' AND detalle LIKE ?", [`%"documentoId":${d.documentoId},%`])).toBe(1);
   });

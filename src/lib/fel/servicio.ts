@@ -473,6 +473,9 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
     // ANULADO solo es válido con fecha de anulación interpretable; cualquier otra forma es incertidumbre, no éxito.
     const anuladoValido = r?.tipo === "ANULADO" && !!r.fechaAnulacion && !Number.isNaN(new Date(r.fechaAnulacion).getTime());
     const tipo = anuladoValido ? "ANULADO" : r?.tipo === "RECHAZADO" || r?.tipo === "ERROR_CONFIG" ? r.tipo : "INCIERTO";
+    // Fecha FISCAL de la anulación = la confirmada por el proveedor (UTC, como `fecha_certificacion`). La hora local en que
+    // SITSA procesó la respuesta queda en `actualizado_en`, en `finalizado_en` del intento y en la auditoría.
+    const fechaAnulacionProveedor = anuladoValido ? aDatetimeUtc((r as { fechaAnulacion: string }).fechaAnulacion) : null;
     return transaccion(async (c) => {
       const doc = (await cargarDoc(c, actor.empresaId, plan.documentoId))!;
       const detalle = { codigo: r && "codigo" in r ? r.codigo : undefined, mensaje: r && "mensaje" in r ? r.mensaje : undefined };
@@ -480,12 +483,14 @@ export function crearServicioFel(opciones: OpcionesServicioFel) {
       // La anulación fiscal SOLO se registra con una respuesta ANULADO válida del proveedor y desde CERTIFICADO.
       if (tipo === "ANULADO" && doc.estado === "CERTIFICADO") {
         await c.execute(
-          `UPDATE fel_documentos SET estado = 'ANULADO', anulado_en = CURRENT_TIMESTAMP, anulado_por = ?, motivo_anulacion = ?,
+          `UPDATE fel_documentos SET estado = 'ANULADO', anulado_en = ?, anulado_por = ?, motivo_anulacion = ?,
                   ultimo_codigo = NULL, ultimo_mensaje = NULL, version = version + 1
             WHERE empresa_id = ? AND id = ? AND estado = 'CERTIFICADO'`,
-          [actor.usuarioId, plan.motivo, actor.empresaId, doc.id],
+          [fechaAnulacionProveedor, actor.usuarioId, plan.motivo, actor.empresaId, doc.id],
         );
-        await auditar(c, actor, "fel_anulado", { documentoId: doc.id, facturaId: doc.factura_id });
+        await auditar(c, actor, "fel_anulado", {
+          documentoId: doc.id, facturaId: doc.factura_id, fechaAnulacionProveedor,
+        });
       }
       const final = (await cargarDoc(c, actor.empresaId, plan.documentoId, false))!;
       if (final.estado === "CERTIFICADO" && (tipo === "INCIERTO" || tipo === "ERROR_CONFIG")) {
