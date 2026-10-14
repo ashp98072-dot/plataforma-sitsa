@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ADVERTENCIAS_REPORTE,
   badgeLiquidacion,
   claseFilaLiquidacion,
   esPendienteDeLiquidar,
@@ -62,6 +63,20 @@ describe("Liquidación Fase 2 · presentación", () => {
     expect(esPendienteDeLiquidar("LIQUIDADO")).toBe(false);
     expect(estaPendienteDeLiquidacion(null, "Programado")).toBe(true);
     expect(estaPendienteDeLiquidacion({ estado: "LIQUIDADO", version: 2 }, "Programado")).toBe(false);
+  });
+
+  it("textos del modal para Operaciones: advertencia clara, no bloquea y el botón dice «de todas formas»", () => {
+    expect(ADVERTENCIAS_REPORTE.SIN_SALIDA_REGISTRADA).toBe(
+      "Este viaje no tiene salida registrada por el piloto. Puede confirmar el reporte de todas formas.",
+    );
+    expect(ADVERTENCIAS_REPORTE.SIN_LLEGADA_REGISTRADA).toBe(
+      "Este viaje no tiene llegada registrada por el piloto. Puede confirmar el reporte de todas formas.",
+    );
+    const c = leer("src/app/e/[slug]/planes/planes-viajes-client.tsx");
+    expect(c).toContain('reporteAdvertencias.length ? "Confirmar reporte de todas formas" : "Confirmar reporte"');
+    expect(c).not.toContain("Reconocer advertencias y confirmar");
+    // Sin advertencias el flujo normal no cambia: se envía reconocerAdvertencias=false hasta que el servidor advierta.
+    expect(c).toMatch(/confirmarReporte\(reporteAdvertencias\.length > 0\)/);
   });
 
   const f = { liquidacion: null, tienePermiso: true, soloConsulta: false };

@@ -64,8 +64,8 @@ export function esPendienteDeLiquidar(estado: EstadoLiquidacionViaje | null | un
 
 /** Advertencias NO bloqueantes al confirmar el reporte (decisión D02: advertir, no bloquear; el usuario las reconoce). */
 export const ADVERTENCIAS_REPORTE = {
-  SIN_SALIDA_REGISTRADA: "El piloto no tiene salida registrada para este viaje.",
-  SIN_LLEGADA_REGISTRADA: "El piloto todavía no ha registrado la llegada de este viaje.",
+  SIN_SALIDA_REGISTRADA: "Este viaje no tiene salida registrada por el piloto. Puede confirmar el reporte de todas formas.",
+  SIN_LLEGADA_REGISTRADA: "Este viaje no tiene llegada registrada por el piloto. Puede confirmar el reporte de todas formas.",
 } as const;
 export type CodigoAdvertenciaReporte = keyof typeof ADVERTENCIAS_REPORTE;
 export type AdvertenciaReporte = { codigo: CodigoAdvertenciaReporte; mensaje: string };
