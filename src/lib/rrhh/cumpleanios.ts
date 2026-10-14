@@ -1,10 +1,12 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { contarDocumentosPorTipo } from "./documentos-por-tipo";
 import {
   MAX_FILAS_CUMPLEANIOS,
   edadQueCumple,
   fechaCumpleanios,
   nombreMes,
+  tipoDocumentoComprobanteCumpleanios,
   type CumpleaniosEmpleado,
   type FechaCumpleanios,
   type ListadoCumpleanios,
@@ -68,7 +70,15 @@ export async function listarCumpleaniosDelMes(
       fecha: fecha.iso,
       dia: fecha.dia,
       edad: edadQueCumple(f.fecha_nacimiento, anio),
+      comprobantes: 0,
     });
+  }
+  // Comprobantes del AÑO consultado (UNA consulta agrupada); sin tabla de documentos aún ⇒ todos «Sin comprobante».
+  try {
+    const cuenta = await contarDocumentosPorTipo(empresaId, empleados.map((e) => e.id), tipoDocumentoComprobanteCumpleanios(anio));
+    for (const e of empleados) e.comprobantes = cuenta.get(e.id) ?? 0;
+  } catch (e) {
+    if ((e as { errno?: number }).errno !== 1146) throw e;
   }
   return { mes, anio, nombreMes: nombreMes(mes), incluirInactivos, total: empleados.length, truncado, empleados };
 }

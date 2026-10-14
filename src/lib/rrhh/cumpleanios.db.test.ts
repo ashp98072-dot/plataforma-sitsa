@@ -44,6 +44,9 @@ describe.skipIf(!port)("RRHH · Cumpleaños por mes / MariaDB 11.8.9 SOLO LOCAL"
           puesto VARCHAR(120) NULL, categoria_ops VARCHAR(80) NULL, estado VARCHAR(20) NOT NULL DEFAULT 'Activo',
           fecha_nacimiento DATE NULL, dpi VARCHAR(20) NULL, nit VARCHAR(20) NULL, igss VARCHAR(30) NULL,
           direccion VARCHAR(255) NULL, telefono VARCHAR(40) NULL, KEY idx_emp_empresa (empresa_id)) ENGINE=InnoDB;
+        CREATE TABLE documentos_empleados(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, id_empleado INT NOT NULL,
+          tipo_documento VARCHAR(100) NULL, ruta_archivo VARCHAR(500) NOT NULL, nombre_original VARCHAR(255) NULL,
+          subido_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, subido_por VARCHAR(100) NULL) ENGINE=InnoDB;
       `);
     } finally {
       await c.end();
@@ -141,7 +144,7 @@ describe.skipIf(!port)("RRHH · Cumpleaños por mes / MariaDB 11.8.9 SOLO LOCAL"
     const texto = JSON.stringify(l);
     expect(texto).not.toMatch(/2999 99999|1234567-8|IGSS-SECRETO|Zona 1 secreta|5555-0000/);
     for (const e of l.empleados) {
-      expect(Object.keys(e).sort()).toEqual(["area", "codigo", "dia", "edad", "estado", "fecha", "id", "nombre", "puesto"].sort());
+      expect(Object.keys(e).sort()).toEqual(["area", "codigo", "comprobantes", "dia", "edad", "estado", "fecha", "id", "nombre", "puesto"].sort());
     }
   });
 

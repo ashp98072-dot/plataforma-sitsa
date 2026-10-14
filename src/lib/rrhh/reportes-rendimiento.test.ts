@@ -23,6 +23,8 @@ beforeEach(() => {
     ];
     if (sql.includes("FROM incidencias")) return [{ id: 20, id_empleado: 3, tipo: "Vacaciones", fecha_inicio: "2026-09-23", fecha_fin: "2026-09-26" }];
     if (sql.includes("FROM marcajes_en_ruta")) return [{ id_empleado: 4, fecha_inicio: "2026-09-24", fecha_fin: "2026-09-24" }];
+    // Justificaciones de faltas (capa opcional): sin justificaciones el reporte es idéntico al histórico.
+    if (sql.includes("FROM rrhh_asistencia_justificaciones")) return [];
     throw new Error(`Query no prevista: ${sql}`);
   });
 });
@@ -39,7 +41,7 @@ describe("filtro temprano de horario equivalente al filtro histórico", () => {
         expect(actual).toEqual(esperado);
         expect(JSON.stringify(actual)).toBe(JSON.stringify(esperado));
         expect(actual.length).toBe(esperado.length);
-        expect(db.query).toHaveBeenCalledTimes(8);
+        expect(db.query).toHaveBeenCalledTimes(10); // 2 reportes × 5 consultas fijas (incluye justificaciones; sin N+1)
         for (const [, params] of db.query.mock.calls) expect(params[0]).toBe(7);
       });
     }

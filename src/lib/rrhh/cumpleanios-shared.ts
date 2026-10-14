@@ -68,6 +68,8 @@ export type CumpleaniosEmpleado = {
   fecha: string;
   dia: number;
   edad: number | null;
+  /** Cantidad de comprobantes (tarjeta/vale entregado) de ESTE año; 0 = sin comprobante. */
+  comprobantes: number;
 };
 
 export type ListadoCumpleanios = {
@@ -89,15 +91,23 @@ export type ResumenCumpleanios = {
   proximos: { id: number; nombre: string; dia: number; fecha: string }[];
 };
 
+/** Prefijo y tipo (`documentos_empleados.tipo_documento`) del comprobante de cumpleaños de un AÑO (empresa + empleado + año). */
+export const PREFIJO_COMPROBANTE_CUMPLEANIOS = "Comprobante de cumpleaños ";
+export function tipoDocumentoComprobanteCumpleanios(anio: number): string {
+  return `${PREFIJO_COMPROBANTE_CUMPLEANIOS}${anio}`;
+}
+
 /** Nombre de archivo sugerido: `Cumpleanios_Octubre_2026.xlsx` (sin tildes ni eñes). */
 export function nombreArchivoCumpleanios(mes: number, anio: number): string {
   const mesAscii = nombreMes(mes).normalize("NFD").replace(/[̀-ͯ]/g, "");
   return `Cumpleanios_${mesAscii}_${anio}.xlsx`;
 }
 
-export const ENCABEZADOS_CUMPLEANIOS = ["Código", "Empleado", "Fecha de cumpleaños", "Edad que cumple", "Puesto", "Área"] as const;
+export const ENCABEZADOS_CUMPLEANIOS = [
+  "Código", "Empleado", "Fecha de cumpleaños", "Edad que cumple", "Puesto", "Área", "Comprobante",
+] as const;
 
-/** Filas del Excel: solo las 6 columnas pedidas, sin datos sensibles. */
+/** Filas del Excel: las columnas pedidas + «Comprobante» (Sí/No), sin datos sensibles, sin archivos ni URLs. */
 export function filasExcelCumpleanios(empleados: CumpleaniosEmpleado[]): string[][] {
   return empleados.map((e) => [
     e.codigo,
@@ -106,5 +116,6 @@ export function filasExcelCumpleanios(empleados: CumpleaniosEmpleado[]): string[
     e.edad == null ? "" : String(e.edad),
     e.puesto,
     e.area,
+    e.comprobantes > 0 ? "Sí" : "No",
   ]);
 }

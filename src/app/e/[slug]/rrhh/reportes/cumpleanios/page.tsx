@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { MESES_ES, type ListadoCumpleanios } from "@/lib/rrhh/cumpleanios-shared";
+import { MESES_ES, type CumpleaniosEmpleado, type ListadoCumpleanios } from "@/lib/rrhh/cumpleanios-shared";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tienePermiso } from "@/lib/permisos-shared";
+import { ComprobantesCumpleaniosModal } from "@/components/rrhh/comprobantes-cumpleanios-modal";
 
 const input = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
@@ -31,6 +34,12 @@ export default function CumpleaniosPage() {
   const [datos, setDatos] = useState<(ListadoCumpleanios & { empresa?: string }) | null>(null);
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
+  // Comprobantes: los permisos solo habilitan controles; el servidor los vuelve a exigir.
+  const { rol, permisos } = useEmpresaSession();
+  const puedeAdjuntar = rol === "Admin" || tienePermiso(permisos, "empleados", "editar") || tienePermiso(permisos, "empleados", "crear");
+  const puedeEliminar = rol === "Admin" || tienePermiso(permisos, "empleados", "eliminar");
+  const [comprobantes, setComprobantes] = useState<CumpleaniosEmpleado | null>(null);
+  const [refresco, setRefresco] = useState(0);
 
   const consulta = useCallback(
     (formato: "json" | "xlsx") =>
@@ -68,7 +77,7 @@ export default function CumpleaniosPage() {
       }
     })();
     return () => controller.abort();
-  }, [consulta]);
+  }, [consulta, refresco]);
 
   const anios = Array.from({ length: 5 }, (_, i) => actual.anio - 1 + i);
   const mostrarEstado = datos?.incluirInactivos === true;
@@ -140,6 +149,7 @@ export default function CumpleaniosPage() {
               <th className="px-2 py-2">Edad que cumple</th>
               <th className="px-2 py-2">Puesto</th>
               <th className="px-2 py-2">Área</th>
+              <th className="px-2 py-2">Comprobante</th>
               {mostrarEstado ? <th className="px-2 py-2">Estado</th> : null}
             </tr>
           </thead>
@@ -152,12 +162,25 @@ export default function CumpleaniosPage() {
                 <td className="px-2 py-1.5">{e.edad ?? "—"}</td>
                 <td className="px-2 py-1.5">{e.puesto || "—"}</td>
                 <td className="px-2 py-1.5">{e.area || "—"}</td>
+                <td className="whitespace-nowrap px-2 py-1.5">
+                  <span className={e.comprobantes ? "" : "text-[var(--muted)]"}>
+                    {e.comprobantes === 0 ? "Sin comprobante" : e.comprobantes === 1 ? "1 archivo" : `${e.comprobantes} archivos`}
+                  </span>{" "}
+                  <button
+                    type="button"
+                    onClick={() => setComprobantes(e)}
+                    className="rounded border border-[var(--border)] px-2 py-0.5 text-[11px] hover:border-[var(--accent)]"
+                    aria-label={`${puedeAdjuntar ? "Ver o adjuntar" : "Ver"} comprobante de ${e.nombre}`}
+                  >
+                    {puedeAdjuntar ? "Ver / Adjuntar" : "Ver"}
+                  </button>
+                </td>
                 {mostrarEstado ? <td className="px-2 py-1.5">{e.estado}</td> : null}
               </tr>
             ))}
             {datos && !datos.empleados.length ? (
               <tr>
-                <td colSpan={mostrarEstado ? 7 : 6} className="px-3 py-6 text-center text-[var(--muted)]">
+                <td colSpan={mostrarEstado ? 8 : 7} className="px-3 py-6 text-center text-[var(--muted)]">
                   Nadie cumple años en {MESES_ES[datos.mes - 1].toLowerCase()}.
                 </td>
               </tr>
@@ -165,6 +188,20 @@ export default function CumpleaniosPage() {
           </tbody>
         </table>
       </div>
+      {comprobantes ? (
+        <ComprobantesCumpleaniosModal
+          slug={slug}
+          empleadoId={comprobantes.id}
+          codigo={comprobantes.codigo}
+          nombre={comprobantes.nombre}
+          fechaUi={fechaVisible(comprobantes.fecha)}
+          anio={datos?.anio ?? anio}
+          puedeAdjuntar={puedeAdjuntar}
+          puedeEliminar={puedeEliminar}
+          onClose={() => setComprobantes(null)}
+          onCambio={() => setRefresco((n) => n + 1)}
+        />
+      ) : null}
     </div>
   );
 }
