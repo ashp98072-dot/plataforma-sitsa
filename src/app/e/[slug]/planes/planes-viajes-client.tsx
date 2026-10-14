@@ -1277,7 +1277,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
               <div role="alert" className="rounded border border-amber-700/60 bg-amber-950/20 px-2 py-1.5 text-xs text-amber-300">
                 <p className="font-medium">Advertencias (no bloquean):</p>
                 <ul className="list-disc pl-5">{reporteAdvertencias.map((a) => <li key={a.codigo}>{a.mensaje}</li>)}</ul>
-                <p className="mt-1">Si confirmas, quedarán registradas como reconocidas.</p>
+                <p className="mt-1">Si confirma, la advertencia quedará registrada junto con la confirmación.</p>
               </div>
             ) : null}
             {reporteError ? <p className="text-xs text-rose-500">{reporteError}</p> : null}
@@ -1291,7 +1291,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                 disabled={enviandoReporte}
                 onClick={() => void confirmarReporte(reporteAdvertencias.length > 0)}
               >
-                {enviandoReporte ? "Confirmando…" : reporteAdvertencias.length ? "Reconocer advertencias y confirmar" : "Confirmar reporte"}
+                {enviandoReporte ? "Confirmando…" : reporteAdvertencias.length ? "Confirmar reporte de todas formas" : "Confirmar reporte"}
               </button>
             </div>
           </div>

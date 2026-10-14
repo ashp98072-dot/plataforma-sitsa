@@ -30,6 +30,10 @@ tablas de Fase 1, ya instaladas). Continúa [Fase 1](TMS-LIQUIDACION-VIAJES-1-MO
 Las advertencias (decisión D02: **advertir, no bloquear**) las calcula el servidor leyendo `flota_viajes` (solo lectura): `SIN_SALIDA_REGISTRADA`,
 `SIN_LLEGADA_REGISTRADA`. Confirmar el reporte **no** equivale a llegada, no cierra, no liquida y no modifica `tms_planes_viaje`.
 
+Textos para Operaciones (los pilotos aún no registran salida/llegada en el sistema): «Este viaje no tiene salida registrada por el piloto. Puede
+confirmar el reporte de todas formas.» / «Este viaje no tiene llegada registrada por el piloto. Puede confirmar el reporte de todas formas.»; el botón
+del modal con advertencias dice «Confirmar reporte de todas formas». La falta de salida/llegada **nunca** bloquea; la advertencia reconocida queda en el evento.
+
 ## Permiso (patrón real del repositorio)
 
 Mismo patrón que `viajes_cerrar`/`PERMISOS_ENTREGA`: id de fila ≤ 40 en `usuario_modulo.modulo`; `PERMISOS_LIQUIDACION_VIAJE` en `permisos-shared.ts`
