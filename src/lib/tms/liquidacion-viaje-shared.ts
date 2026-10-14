@@ -55,7 +55,7 @@ export const ETIQUETA_ESTADO_LIQUIDACION: Record<EstadoLiquidacionViaje, string>
   EN_AJUSTE: "En ajuste",
 };
 
-/** Estados que se muestran como «pendiente de liquidar» (amarillo en la UI de la Fase 2). */
+/** Estados pendientes de liquidar; no determina por sí solo el color visual de la fila. */
 export function esPendienteDeLiquidar(estado: EstadoLiquidacionViaje | null | undefined): boolean {
   return estado === "REPORTE_RECIBIDO" || estado === "EN_AJUSTE";
 }
@@ -86,11 +86,12 @@ export function estaPendienteDeLiquidacion(
   return !(ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(estadoPlan);
 }
 
-/** Clase visual de la fila: «pendiente» = amarillo (viaje por liquidar); lo demás, superficie normal del tema. */
+/** Amarillo = sin reporte confirmado o en ajuste; reporte recibido/liquidado = superficie normal. */
 export function claseFilaLiquidacion(
   l: ResumenLiquidacionFila | null | undefined,
   estadoPlan: string,
 ): "pendiente" | "normal" {
+  if (l?.estado === "REPORTE_RECIBIDO") return "normal";
   return estaPendienteDeLiquidacion(l, estadoPlan) ? "pendiente" : "normal";
 }
 
