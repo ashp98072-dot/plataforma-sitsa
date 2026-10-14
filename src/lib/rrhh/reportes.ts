@@ -259,6 +259,13 @@ export async function obtenerReporteAsistencias(
     const hSal = String(emp.hora_salida_teorica || "17:00:00");
     const tipoHorario = String(emp.tipo_horario || "Fijo");
 
+    // El horario es constante para todas las filas del empleado. Filtrar antes
+    // de construir la matriz conserva la comparación histórica (case-sensitive).
+    if (filtros?.horario && filtros.horario !== "Todos") {
+      const variable = tipoHorario.includes("Variable");
+      if (filtros.horario === "Variable" ? !variable : variable) continue;
+    }
+
     for (const fecha of diasLaborables) {
       if (fecha < fechaAlta) continue;
       const clave = `${idEmp}|${fecha}`;
@@ -377,15 +384,6 @@ export async function obtenerReporteAsistencias(
         r.estadoEntrada.includes(filtros.tipo!),
     );
   }
-  if (filtros?.horario && filtros.horario !== "Todos") {
-    const h = filtros.horario;
-    filtrado = filtrado.filter((r) =>
-      h === "Variable"
-        ? r.tipoHorario.includes("Variable")
-        : !r.tipoHorario.includes("Variable"),
-    );
-  }
-
   return filtrado;
 }
 
