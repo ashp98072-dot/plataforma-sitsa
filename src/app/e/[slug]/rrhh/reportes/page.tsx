@@ -92,6 +92,13 @@ export default function ReportesPage() {
           >
             Resumen incidencias
           </Link>
+          {" · "}
+          <Link
+            href={`/e/${slug}/rrhh/reportes/cumpleanios`}
+            className="text-[var(--accent)] underline"
+          >
+            Cumpleaños por mes
+          </Link>
         </p>
       </div>
 
