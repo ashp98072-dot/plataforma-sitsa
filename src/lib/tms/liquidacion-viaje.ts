@@ -1,5 +1,5 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
-import { getPool } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorDominioFormulario, type EstadoDominio } from "@/lib/validacion-formulario";
 import {
@@ -8,6 +8,8 @@ import {
   MOTIVO_REAPERTURA_MIN,
   OBSERVACION_REPORTE_MAX,
   normalizarFechaIso,
+  type CodigoAdvertenciaReporte,
+  type ResumenLiquidacionFila,
   type EstadoLiquidacionViaje,
   type TipoEventoLiquidacion,
 } from "./liquidacion-viaje-shared";
@@ -190,11 +192,22 @@ function validarVersionEsperada(v: unknown): number {
  */
 export async function confirmarReporteRecibido(
   actor: ActorLiquidacion,
-  entrada: { planId: number; observacion?: string | null },
+  entrada: { planId: number; observacion?: string | null; advertenciasReconocidas?: CodigoAdvertenciaReporte[] },
 ): Promise<ResultadoTransicionLiquidacion> {
-  const observacion = (entrada.observacion ?? "").trim() || null;
-  if (observacion && observacion.length > OBSERVACION_REPORTE_MAX) {
+  const observacionLimpia = (entrada.observacion ?? "").trim() || null;
+  if (observacionLimpia && observacionLimpia.length > OBSERVACION_REPORTE_MAX) {
     throw new ErrorLiquidacionViaje("SOLICITUD_INVALIDA", `La observación no puede superar ${OBSERVACION_REPORTE_MAX} caracteres.`, 400);
+  }
+  // Las advertencias reconocidas quedan en el evento (D02). El detalle es VARCHAR(500): nunca se trunca una observación en silencio.
+  const reconocidas = [...new Set(entrada.advertenciasReconocidas ?? [])];
+  const sufijo = reconocidas.length ? `[Advertencias reconocidas: ${reconocidas.join(", ")}]` : "";
+  const observacion = [observacionLimpia, sufijo].filter(Boolean).join(" ") || null;
+  if (observacion && observacion.length > OBSERVACION_REPORTE_MAX) {
+    throw new ErrorLiquidacionViaje(
+      "SOLICITUD_INVALIDA",
+      `La observación es demasiado larga (máximo ${OBSERVACION_REPORTE_MAX - sufijo.length - 1} caracteres con advertencias reconocidas).`,
+      400,
+    );
   }
   return transaccion(async (c) => {
     const plan = await bloquearPlan(c, actor.empresaId, entrada.planId);
@@ -390,4 +403,33 @@ export async function configurarFechaActivacionLiquidacion(
     });
     return { anterior, actual };
   });
+}
+
+/**
+ * Liquidación VIGENTE de varios viajes en UNA consulta (sin N+1), acotada por empresa, para la tabla de Planes/Viajes.
+ * Lectura tolerante: si las tablas de Fase 1 aún no existen en este entorno devuelve un mapa vacío (la pantalla muestra «—» y
+ * sigue funcionando); cualquier otro error se propaga. Nunca infiere «liquidado»: viaje sin fila = ausente del mapa.
+ */
+export async function liquidacionesDePlanes(
+  empresaId: number,
+  planIds: number[],
+  conexion?: Pick<PoolConnection, "query">,
+): Promise<Map<number, ResumenLiquidacionFila>> {
+  const ids = [...new Set(planIds.filter((id) => Number.isInteger(id) && id > 0))];
+  const mapa = new Map<number, ResumenLiquidacionFila>();
+  if (!ids.length) return mapa;
+  const sql = `SELECT plan_id, estado, version FROM tms_viaje_liquidaciones
+        WHERE empresa_id = ? AND plan_id IN (${ids.map(() => "?").join(",")})`;
+  const params = [empresaId, ...ids];
+  try {
+    // Mismo helper `query` del resto de las lecturas de reportes (planesConCierreManual, etc.) cuando no se inyecta conexión.
+    const rows = conexion
+      ? (await conexion.query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number })[]>(sql, params))[0]
+      : await query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number })[]>(sql, params);
+    for (const r of rows ?? []) mapa.set(Number(r.plan_id), { estado: r.estado, version: Number(r.version) });
+  } catch (e) {
+    if ((e as { errno?: number }).errno === 1146) return new Map(); // ER_NO_SUCH_TABLE: migración aún no aplicada
+    throw e;
+  }
+  return mapa;
 }

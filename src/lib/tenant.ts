@@ -619,6 +619,45 @@ export async function requireTenantViajesCerrar(
 }
 
 /**
+ * LIQUIDACIÓN DE VIAJES (Fase 2) — confirmar que el piloto entregó su reporte. Permiso EXPLÍCITO `viajes_confirmar_reporte:editar`,
+ * independiente del rol y de `viajes_cerrar` (quien confirma no necesariamente liquida ni cierra). Mismo patrón que
+ * requireTenantViajesCerrar; exige que la empresa tenga el módulo TMS.
+ */
+export async function requireTenantViajesConfirmarReporte(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viajes_confirmar_reporte", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para confirmar el reporte recibido de viajes." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
  * Corrección de matriz de permisos — Programación deja de depender
  * exclusivamente de "tms": mismo patrón que requireTenantViajesCerrar
  * (permiso propio, permisosEfectivos ya trae el default por rol —

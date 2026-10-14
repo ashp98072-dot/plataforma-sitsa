@@ -139,6 +139,21 @@ const LABEL_PERMISO_ENTREGA: Record<PermisoEntrega, string> = {
   entregas_anular: "Control de entrega: anular entregas de otros",
 };
 
+/**
+ * LIQUIDACIÓN DE VIAJES (TMS): filas propias dentro de "programacion" (mismo patrón que `viajes_cerrar` y PERMISOS_ENTREGA),
+ * `editar` = puede actuar. NINGUNA se concede por rol: se asignan manualmente desde Usuarios. FASE 2 solo declara la que tiene
+ * endpoint/UI; las demás (liquidar, reabrir, cargos, configuración) se declararán con su fase.
+ *   - viajes_confirmar_reporte: confirmar que el piloto entregó su reporte (REPORTE_RECIBIDO). No cierra ni liquida.
+ */
+export const PERMISOS_LIQUIDACION_VIAJE = ["viajes_confirmar_reporte"] as const;
+export type PermisoLiquidacionViaje = (typeof PERMISOS_LIQUIDACION_VIAJE)[number];
+export function esPermisoLiquidacionViaje(m: string): m is PermisoLiquidacionViaje {
+  return (PERMISOS_LIQUIDACION_VIAJE as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_LIQUIDACION_VIAJE: Record<PermisoLiquidacionViaje, string> = {
+  viajes_confirmar_reporte: "Viajes: confirmar reporte recibido",
+};
+
 export const PLATAFORMA_PERMISIBLES = [
   "cotizaciones",
   "proveedor_portales",
@@ -293,6 +308,8 @@ export const PLATAFORMA_PERMISIBLES = [
   "flota_vehiculos_otras_empresas",
   // CONTROL DE ENTREGA DE DOCUMENTOS: ver PERMISOS_ENTREGA arriba (ningún rol por defecto).
   ...PERMISOS_ENTREGA,
+  // LIQUIDACIÓN DE VIAJES: ver PERMISOS_LIQUIDACION_VIAJE arriba (ningún rol por defecto).
+  ...PERMISOS_LIQUIDACION_VIAJE,
 ] as const;
 
 /** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
@@ -384,6 +401,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
   if (esPermisoEntrega(m)) return "tms";
+  if (esPermisoLiquidacionViaje(m)) return "tms";
   if (m === "flota_combustible" || m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
     m === "viaticos" ||
@@ -439,6 +457,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
   if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
   if (esPermisoEntrega(modulo)) return LABEL_PERMISO_ENTREGA[modulo];
+  if (esPermisoLiquidacionViaje(modulo)) return LABEL_PERMISO_LIQUIDACION_VIAJE[modulo];
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -515,6 +534,7 @@ export const GRUPOS_PERMISOS: {
       "viaticos_liquidar",
       "viaticos_comprobantes",
       "viajes_cerrar",
+      ...PERMISOS_LIQUIDACION_VIAJE,
       ...PERMISOS_ENTREGA,
     ],
   },
@@ -886,7 +906,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "gastos_operativos_autorizar" &&
       p.modulo !== "flota_combustible" &&
       p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS &&
-      !esPermisoEntrega(p.modulo)
+      !esPermisoEntrega(p.modulo) &&
+      !esPermisoLiquidacionViaje(p.modulo)
     ) {
       out.add(p.modulo);
     }

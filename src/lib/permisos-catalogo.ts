@@ -96,6 +96,8 @@ agregar("viaticos",
   accion("viaticos_liquidar","liquidar","Liquidar",E),
   accion("viaticos_comprobantes","comprobantes","Descargar comprobantes", "puedeVer"));
 agregar("programacion", accion("viajes_cerrar","cerrar","Cerrar administrativamente",E), nueva("programacion","exportar","Exportar reportes", "puedeVer"));
+// LIQUIDACIÓN DE VIAJES (Fase 2): fila propia, `editar` = puede actuar; ningún rol la trae por defecto (ver PERMISOS_LIQUIDACION_VIAJE).
+agregar("programacion", accion("viajes_confirmar_reporte","confirmar_reporte","Confirmar reporte recibido del viaje",E));
 agregar("cotizaciones", nueva("cotizaciones","estado","Cambiar estado / marcar enviada",E));
 agregar("facturacion", nueva("facturacion","emitir","Emitir factura",E), nueva("facturacion","anular","Anular factura",E), nueva("facturacion","pagos","Registrar pago",C));
 // Sin equivalencias legacy: pagar/emitir NO concede confirmación bancaria.

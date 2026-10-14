@@ -15,6 +15,10 @@
   --panel: #1e293b;
   --input: #0b1217;
   --thead: #0d1522;
+  /* LIQUIDACIÓN (Fase 2): fondo COMPLETO de fila «pendiente de liquidar». Oscuro: amarillo atenuado; nunca blanco literal. */
+  --fila-pendiente-liquidar: #2b2714;
+  --fila-hover: rgba(255, 255, 255, 0.06);
+  --accion-reporte: #fbbf24;
   --nav-hover: rgba(255, 255, 255, 0.05);
   --nav-active: rgba(255, 255, 255, 0.1);
   --nav-text-strong: #ffffff;
@@ -36,6 +40,10 @@
   --panel: #e8eef5;
   --input: #ffffff;
   --thead: #e8eef5;
+  /* LIQUIDACIÓN (Fase 2): claro = amarillo muy suave (texto 17:1, muted 4.5:1). Blanco = la superficie normal --card. */
+  --fila-pendiente-liquidar: #fffadc;
+  --fila-hover: rgba(15, 23, 42, 0.05);
+  --accion-reporte: #92400e;
   --nav-hover: rgba(15, 23, 42, 0.06);
   --nav-active: rgba(29, 95, 150, 0.12);
   --nav-text-strong: #0f172a;
@@ -87,4 +95,22 @@ textarea::placeholder {
 option {
   color: var(--text);
   background-color: var(--input);
+}
+
+/*
+ * PLANES / VIAJES — fila de viaje (LIQUIDACIÓN, Fase 2). El fondo COMPLETO de la fila indica el estado; el color del texto
+ * NO cambia. «normal» = superficie del tema (blanco en claro, tarjeta oscura en oscuro: nunca blanco literal en oscuro).
+ * Hover y selección son capas independientes del fondo para que sigan visibles sobre la fila amarilla.
+ */
+.fila-viaje {
+  background-color: var(--card);
+}
+.fila-viaje[data-liquidacion="pendiente"] {
+  background-color: var(--fila-pendiente-liquidar);
+}
+.fila-viaje:hover {
+  background-image: linear-gradient(var(--fila-hover), var(--fila-hover));
+}
+.fila-viaje[data-seleccionada="true"] > td:first-child {
+  box-shadow: inset 4px 0 0 var(--accent);
 }

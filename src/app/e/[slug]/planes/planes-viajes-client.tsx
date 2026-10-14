@@ -18,6 +18,13 @@ import {
   resumenSeleccion,
   type GrupoPlanes,
 } from "./planes-agrupacion";
+import {
+  badgeLiquidacion,
+  claseFilaLiquidacion,
+  puedeOfrecerConfirmarReporte,
+  type AdvertenciaReporte,
+  type ResumenLiquidacionFila,
+} from "@/lib/tms/liquidacion-viaje-shared";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
@@ -140,6 +147,8 @@ type PlanReporte = {
   horaCarga: string | null;
   estado: string;
   pendienteCierre: boolean;
+  /** Liquidación VIGENTE (Fase 2), dimensión separada de `estado`. Ausente/null = sin liquidación registrada. */
+  liquidacion?: ResumenLiquidacionFila | null;
   cerradoPor: string | null;
   cerradoEn: string | null;
   clienteId: number | null;
@@ -433,6 +442,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const searchParams = useSearchParams();
   const { permisos } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
+  // LIQUIDACIÓN (Fase 2): permiso propio y SEPARADO del cierre; la confirmación del reporte no cierra ni liquida.
+  const puedeConfirmarReporte = tienePermiso(permisos, "viajes_confirmar_reporte", "editar");
   const esReporte = modo === "reporte";
 
   // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link desde Programación
@@ -532,6 +543,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
   const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
 
+  // Selección de viajes (checkbox). Declarada ANTES de `cargar`, que la limpia en cada carga.
+  const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const cargar = useCallback(async (paginaSolicitada = page) => {
     setLoading(true);
     setError("");
@@ -670,7 +683,6 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   // "Cerrar seleccionados"/"Cierre manual masivo" se CONSERVA sin cambios: solo cierra lo marcado con checkbox
   // EN ESTA PÁGINA — es un concepto separado de "Cerrar elegibles del período" (más abajo), que ignora la
   // selección y resuelve TODO el período server-side (ver PLANES-CIERRE-PERIODO).
-  const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const [togglesGrupo, setTogglesGrupo] = useState<Record<string, boolean>>({});
   const [masivo, setMasivo] = useState<{ tipo: "NORMAL" | "MANUAL"; clave: string } | null>(null);
   const [motivoMasivo, setMotivoMasivo] = useState("");
@@ -685,6 +697,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     // Cambiar de Día/Semana/Mes cambia por completo las claves de grupo — una selección vieja podría quedar
     // referida a un grupo que ya no existe con ese formato; se limpia por seguridad (mismo criterio que ya
     // aplica cargar() al cambiar cualquier otro filtro operativo).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSeleccion(new Set());
   }, [modoAgrupacion]);
 
@@ -738,6 +751,49 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       setErrorManual("Error de conexión.");
     } finally {
       setEnviandoManual(false);
+    }
+  }
+
+  // LIQUIDACIÓN (Fase 2) — «Confirmar reporte recibido». Las advertencias (sin salida/llegada del piloto) NO bloquean: el servidor
+  // responde 409 ADVERTENCIAS sin escribir y se vuelve a enviar reconociéndolas.
+  const [reportePlan, setReportePlan] = useState<{ planId: number; codigo: string } | null>(null);
+  const [reporteObs, setReporteObs] = useState("");
+  const [reporteAdvertencias, setReporteAdvertencias] = useState<AdvertenciaReporte[]>([]);
+  const [reporteError, setReporteError] = useState("");
+  const [enviandoReporte, setEnviandoReporte] = useState(false);
+
+  function abrirConfirmarReporte(p: { id: number; codigo: string }) {
+    setReportePlan({ planId: p.id, codigo: p.codigo });
+    setReporteObs("");
+    setReporteAdvertencias([]);
+    setReporteError("");
+  }
+
+  async function confirmarReporte(reconocerAdvertencias: boolean) {
+    if (!reportePlan || enviandoReporte) return;
+    setEnviandoReporte(true);
+    setReporteError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${reportePlan.planId}/reporte-recibido`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ observacion: reporteObs.trim() || undefined, reconocerAdvertencias }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.codigo === "ADVERTENCIAS" && Array.isArray(data.advertencias)) {
+        setReporteAdvertencias(data.advertencias as AdvertenciaReporte[]);
+        return;
+      }
+      if (!res.ok) {
+        setReporteError(data.error ?? "No se pudo confirmar el reporte.");
+        return;
+      }
+      setReportePlan(null);
+      await cargar();
+    } catch {
+      setReporteError("Error de conexión.");
+    } finally {
+      setEnviandoReporte(false);
     }
   }
 
@@ -973,6 +1029,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
     "Evid.", "Tarifa usada", "Tarifa", "Estado",
+    // LIQUIDACIÓN (Fase 2): dimensión separada del estado del viaje; «—» = sin liquidación registrada (incluye el histórico).
+    "Liquidación",
     // Fase D — Facturación (FACT-1). "Tarifa" (arriba) sigue siendo el
     // valor comercial PROGRAMADO — "Monto fact." es el snapshot real
     // usado en la factura; no siempre coinciden (ver th title).
@@ -1196,6 +1254,50 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
+      {reportePlan ? (
+        <div role="dialog" aria-modal="true" aria-label="Confirmar reporte recibido" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
+            <h2 className="text-base font-semibold">Confirmar reporte recibido</h2>
+            <p>
+              Viaje <span className="font-mono">{reportePlan.codigo}</span>. Confirmas que el piloto entregó su reporte. El viaje quedará
+              «pendiente de liquidar»; esto <strong>no</strong> lo cierra ni lo liquida.
+            </p>
+            <label className="block text-xs text-[var(--muted)]">
+              Observación (opcional)
+              <textarea
+                className={`${inputCls} mt-1 block w-full`}
+                rows={2}
+                maxLength={400}
+                value={reporteObs}
+                onChange={(e) => setReporteObs(e.target.value)}
+                disabled={enviandoReporte}
+              />
+            </label>
+            {reporteAdvertencias.length ? (
+              <div role="alert" className="rounded border border-amber-700/60 bg-amber-950/20 px-2 py-1.5 text-xs text-amber-300">
+                <p className="font-medium">Advertencias (no bloquean):</p>
+                <ul className="list-disc pl-5">{reporteAdvertencias.map((a) => <li key={a.codigo}>{a.mensaje}</li>)}</ul>
+                <p className="mt-1">Si confirmas, quedarán registradas como reconocidas.</p>
+              </div>
+            ) : null}
+            {reporteError ? <p className="text-xs text-rose-500">{reporteError}</p> : null}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" disabled={enviandoReporte} onClick={() => setReportePlan(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                disabled={enviandoReporte}
+                onClick={() => void confirmarReporte(reporteAdvertencias.length > 0)}
+              >
+                {enviandoReporte ? "Confirmando…" : reporteAdvertencias.length ? "Reconocer advertencias y confirmar" : "Confirmar reporte"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {resultadoMasivo ? (
         <section aria-label="Resultado del cierre masivo" className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)]">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1231,6 +1333,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           </label>
         </div>
       ) : null}
+
+      {/* Leyenda de la columna Liquidación (Fase 2): el color nunca es el único portador de significado. */}
+      <p className="text-xs text-[var(--muted)]">
+        <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: "var(--fila-pendiente-liquidar)", border: "1px solid var(--border)" }} />
+        Fila amarilla = reporte recibido / en ajuste, pendiente de liquidar. «—» = sin liquidación registrada.
+      </p>
 
       {/* Tabla */}
       <section className="overflow-x-auto rounded-xl border border-[var(--border)]">
@@ -1313,7 +1421,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
               const acc = accionesViaje(modo, p, puedeCerrarViaje);
               return (
                 <Fragment key={p.id}>
-                  <tr className="border-t border-[var(--border)] bg-[var(--card)] align-top">
+                  <tr
+                    className="fila-viaje border-t border-[var(--border)] align-top"
+                    data-liquidacion={claseFilaLiquidacion(p.liquidacion)}
+                    data-seleccionada={seleccion.has(p.id) ? "true" : undefined}
+                  >
                     {mostrarSel ? (
                       <td className="px-2 py-1.5 text-xs">
                         <input
@@ -1349,6 +1461,16 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(p.tarifaComercial)}</td>
                     <td className="px-2 py-1.5 text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badge.clase}`}>{badge.texto}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {(() => {
+                        const bLiq = badgeLiquidacion(p.liquidacion);
+                        return bLiq ? (
+                          <span title={bLiq.titulo} className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${bLiq.clase}`}>{bLiq.texto}</span>
+                        ) : (
+                          <span className="text-[var(--muted)]" title="Sin liquidación registrada">—</span>
+                        );
+                      })()}
                     </td>
                     {(() => {
                       const bFact = badgeFacturacion(p.estadoFacturacion);
@@ -1389,6 +1511,16 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         {acc.cierreManual ? (
                           <button type="button" className="text-rose-500 hover:underline" onClick={() => abrirCierreManual(p.id)}>
                             Cierre manual
+                          </button>
+                        ) : null}
+                        {puedeOfrecerConfirmarReporte({
+                          estadoPlan: p.estado,
+                          liquidacion: p.liquidacion,
+                          tienePermiso: puedeConfirmarReporte,
+                          soloConsulta: esReporte,
+                        }) ? (
+                          <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => abrirConfirmarReporte(p)}>
+                            Confirmar reporte
                           </button>
                         ) : null}
                       </div>
