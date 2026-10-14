@@ -2,7 +2,14 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { registrarAuditoria } from "@/lib/auditoria";
 import { cerrarViaje, cerrarViajeManual } from "@/lib/tms/cierre-viaje";
-import { motivoNoCierreManual, motivoNoCierreNormal, puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import {
+  MENSAJE_REPORTE_NO_RECIBIDO,
+  motivoNoCierreManual,
+  motivoNoCierreNormal,
+  puedeCerrarManualmente,
+  puedeCerrarNormalmente,
+  reporteRecibidoParaCierre,
+} from "@/lib/tms/cierre-viaje-shared";
 import { resolverPeriodoPlanes, type AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 import { obtenerCandidatosCierre, type FiltrosReporteViajes } from "@/lib/tms/reportes-viajes";
 
@@ -48,18 +55,28 @@ export async function cerrarViajesMasivo(opts: {
   const errores: ItemCierreMasivoConMotivo[] = [];
 
   // Solo viajes de ESTA empresa: un id ajeno o inexistente nunca aparece aquí.
-  const filas = ids.length
-    ? await query<RowDataPacket[]>(
-        `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
-                EXISTS (
-                  SELECT 1 FROM flota_viajes fv
-                  WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-                ) AS llegada_registrada
-         FROM tms_planes_viaje p
-         WHERE p.empresa_id = ? AND p.id IN (${ids.map(() => "?").join(",")})`,
-        [opts.empresaId, ...ids],
-      )
-    : [];
+  // `estado_liquidacion` (solo informativo para elegibilidad/mensajes; cerrarViaje/cerrarViajeManual lo REVALIDAN bajo lock):
+  // sin fila de liquidación = NULL = reporte no recibido. Sin la tabla aún (migración no aplicada) = NULL para todos.
+  const sqlFilas = (conLiquidacion: boolean) =>
+    `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
+            EXISTS (
+              SELECT 1 FROM flota_viajes fv
+              WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
+            ) AS llegada_registrada,
+            ${conLiquidacion
+              ? "(SELECT l.estado FROM tms_viaje_liquidaciones l WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id LIMIT 1)"
+              : "NULL"} AS estado_liquidacion
+     FROM tms_planes_viaje p
+     WHERE p.empresa_id = ? AND p.id IN (${ids.map(() => "?").join(",")})`;
+  let filas: RowDataPacket[] = [];
+  if (ids.length) {
+    try {
+      filas = await query<RowDataPacket[]>(sqlFilas(true), [opts.empresaId, ...ids]);
+    } catch (e) {
+      if ((e as { errno?: number }).errno !== 1146) throw e;
+      filas = await query<RowDataPacket[]>(sqlFilas(false), [opts.empresaId, ...ids]);
+    }
+  }
   const porId = new Map(filas.map((f) => [Number(f.id), f]));
 
   for (const id of ids) {
@@ -73,9 +90,11 @@ export async function cerrarViajesMasivo(opts: {
     // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0` (Q0.00 capturado explícitamente SÍ cuenta).
     const tieneTarifa = f.tarifa_comercial != null;
     // Elegibilidad recalculada en servidor con el MISMO criterio puro que usa la pantalla.
+    // REQUISITO DE SECUENCIA: sin REPORTE_RECIBIDO el viaje se OMITE con su motivo (nunca se cierra ni aborta el lote).
+    const reporteRecibido = reporteRecibidoParaCierre(f.estado_liquidacion == null ? null : String(f.estado_liquidacion));
     const motivoNo = opts.tipo === "NORMAL"
-      ? motivoNoCierreNormal(estado, Number(f.llegada_registrada) === 1, tieneTarifa)
-      : motivoNoCierreManual(estado, tieneTarifa);
+      ? motivoNoCierreNormal(estado, Number(f.llegada_registrada) === 1, tieneTarifa, reporteRecibido)
+      : motivoNoCierreManual(estado, tieneTarifa, reporteRecibido);
     if (motivoNo) {
       omitidos.push({ id, codigo, motivo: motivoNo });
       continue;
@@ -175,17 +194,23 @@ export async function cerrarViajesMasivoPorPeriodo(opts: {
   });
   // PLANES-TARIFA-CIERRE-1 — la resolución FRESCA al confirmar también aplica la tarifa (nunca confía
   // solamente en la vista previa): un candidato sin tarifa jamás entra en `ids`.
-  const ids = candidatos
-    .filter((c) => (opts.tipo === "NORMAL"
-      ? puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null)
-      : puedeCerrarManualmente(c.estado, c.tarifaComercial != null)))
-    .map((c) => c.id);
+  // REQUISITO DE SECUENCIA — un candidato elegible por estado/llegada/tarifa pero SIN REPORTE_RECIBIDO no se cierra: se
+  // devuelve en `omitidos` con su motivo (detalle útil) y cuenta en `solicitados`. Los demás criterios siguen filtrando como
+  // siempre (no entran a `ids`). Cada cierre revalida además la liquidación bajo lock (cierre-viaje.ts).
+  const elegiblesPorEstado = (c: (typeof candidatos)[number]) => opts.tipo === "NORMAL"
+    ? puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null, true)
+    : puedeCerrarManualmente(c.estado, c.tarifaComercial != null, true);
+  const conEstadoElegible = candidatos.filter(elegiblesPorEstado);
+  const ids = conEstadoElegible.filter((c) => c.reporteRecibido).map((c) => c.id);
 
   const grupo = `${opts.agrupacion} ${periodo.clave}`;
   const codigoPorId = new Map(candidatos.map((c) => [c.id, c.codigo]));
   const cerrados: ItemCierreMasivo[] = [];
-  const omitidos: ItemCierreMasivoConMotivo[] = [];
+  const omitidos: ItemCierreMasivoConMotivo[] = conEstadoElegible
+    .filter((c) => !c.reporteRecibido)
+    .map((c) => ({ id: c.id, codigo: c.codigo, motivo: MENSAJE_REPORTE_NO_RECIBIDO }));
   const errores: ItemCierreMasivoConMotivo[] = [];
+  const sinReporte = omitidos.length;
 
   for (let i = 0; i < ids.length; i += MAX_PLANES_CIERRE_MASIVO) {
     const lote = ids.slice(i, i + MAX_PLANES_CIERRE_MASIVO);
@@ -223,12 +248,12 @@ export async function cerrarViajesMasivoPorPeriodo(opts: {
       usuario: opts.usuario,
       accion: "cierre_masivo_viajes_periodo",
       modulo: "tms",
-      detalle: `Cierre masivo ${opts.tipo} · ${grupo} · solicitados ${ids.length} · cerrados ${cerrados.length} · omitidos ${omitidos.length} · errores ${errores.length}`
+      detalle: `Cierre masivo ${opts.tipo} · ${grupo} · solicitados ${ids.length + sinReporte} · cerrados ${cerrados.length} · omitidos ${omitidos.length} (sin reporte recibido ${sinReporte}) · errores ${errores.length}`
         + `${opts.tipo === "MANUAL" ? ` · motivo común: ${(opts.motivo ?? "").trim()}${opts.comentario?.trim() ? ` · comentario: ${opts.comentario.trim()}` : ""}` : ""}`,
     });
   } catch (e) {
     console.error("auditoría resumen del cierre masivo por período", e);
   }
 
-  return { tipo: opts.tipo, solicitados: ids.length, cerrados, omitidos, errores, agrupacion: opts.agrupacion, valor: periodo.clave, etiqueta: periodo.etiqueta };
+  return { tipo: opts.tipo, solicitados: ids.length + sinReporte, cerrados, omitidos, errores, agrupacion: opts.agrupacion, valor: periodo.clave, etiqueta: periodo.etiqueta };
 }

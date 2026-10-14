@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agruparPlanes,
   elegibilidadCierre,
+  faltaReporteParaCierre,
   esSeleccionable,
   fechaVisible,
   grupoAbierto,
@@ -14,7 +15,11 @@ import {
 import { accionesViaje } from "./planes-viajes-client";
 
 // PLANES-TARIFA-CIERRE-1 — tarifaComercial: 500 por defecto (CON tarifa); los tests "sin tarifa" la pasan explícitamente como null.
-const p = (id: number, fechaPlan: string, estado: string, pendienteCierre = false, tarifaComercial: number | null = 500): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre, tarifaComercial });
+// REQUISITO DE SECUENCIA — reporte RECIBIDO por defecto (solo REPORTE_RECIBIDO habilita el cierre); los tests "sin reporte" lo pasan null.
+const p = (
+  id: number, fechaPlan: string, estado: string, pendienteCierre = false, tarifaComercial: number | null = 500,
+  liquidacion: { estado: string } | null = { estado: "REPORTE_RECIBIDO" },
+): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre, tarifaComercial, liquidacion });
 
 const planes: PlanAgrupable[] = [
   p(1, "2026-09-22", "Cerrado"),
@@ -170,52 +175,52 @@ describe("elegibilidad: la UI coincide con el backend", () => {
 
 describe('corrección de la inconsistencia: "Cerrar viaje" normal solo si cerrarViaje() lo admitiría (todos CON tarifa)', () => {
   it("Programado con llegada (pendienteCierre) YA NO muestra 'Cerrar viaje' pero conserva Cierre manual", () => {
-    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true, tarifaComercial: 500 }, true);
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.cerrar).toBe(false);
     expect(a.cierreManual).toBe(true);
   });
   it("Descargado sí muestra 'Cerrar viaje' (el backend lo admite aunque el listado no lo marque pendiente)", () => {
-    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500 }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(true);
   });
   it("En ruta sin llegada: sin 'Cerrar viaje' (solo manual); con llegada: sí", () => {
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false, tarifaComercial: 500 }, true).cerrar).toBe(false);
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500 }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(false);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(true);
   });
 });
 
 /** PLANES-TARIFA-CIERRE-1 (7-10, 29-33) — accionesViaje respeta tarifa; UI test 29-37 se cubren en el bloque de inspección de código más abajo. */
 describe("accionesViaje — tarifa (PLANES-TARIFA-CIERRE-1)", () => {
   it("Descargado SIN tarifa (null) -> ni cerrar ni cierreManual, y faltaTarifa=true", () => {
-    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, true);
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.cerrar).toBe(false);
     expect(a.cierreManual).toBe(false);
     expect(a.faltaTarifa).toBe(true);
   });
 
   it("Programado SIN tarifa -> cierreManual false, faltaTarifa true (el estado SÍ admitiría manual si tuviera tarifa)", () => {
-    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: null }, true);
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.cierreManual).toBe(false);
     expect(a.faltaTarifa).toBe(true);
   });
 
   it("Cerrado SIN tarifa -> faltaTarifa false (el estado de todos modos no admitiría ningún cierre, no es 'culpa' de la tarifa)", () => {
-    const a = accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: null }, true);
+    const a = accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.faltaTarifa).toBe(false);
   });
 
   it("Q0.00 (tarifaComercial = 0, no null) se comporta como CON tarifa", () => {
-    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 0 }, true);
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 0, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.cerrar).toBe(true);
     expect(a.faltaTarifa).toBe(false);
   });
 
   it("modo reporte: faltaTarifa siempre false (sin acciones operativas)", () => {
-    const a = accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, true);
+    const a = accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.faltaTarifa).toBe(false);
   });
 
   it("sin permiso viajes_cerrar:editar: faltaTarifa siempre false", () => {
-    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null }, false);
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, false);
     expect(a.faltaTarifa).toBe(false);
   });
 });
@@ -283,7 +288,7 @@ describe("pantalla (código fuente): selección, botones separados y reporte sin
     expect(src).toContain("if (esReporte) return planes.map((p) => ({ kind: \"plan\" as const, p }))");
     expect(src).toContain("{mostrarSel && it.abierto ? (");
     expect(src).toContain("{!esReporte ? (");
-    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true, tarifaComercial: 500 }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false, faltaTarifa: false });
+    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false, faltaTarifa: false, faltaReporte: false });
   });
 
   it("regresión: cierre individual, cierre manual individual, Ver detalle, Programación y PDF siguen en cada fila", () => {
@@ -545,5 +550,61 @@ describe("PLANES-SEPARAR-CERRADOS — pestañas Pendientes/Activos vs Viajes cer
     expect(idxFiltrosFin).toBeGreaterThan(-1);
     expect(idxFiltrosFin).toBeLessThan(idxPestañas);
     expect(idxPestañas).toBeLessThan(idxAgruparPor);
+  });
+});
+
+/**
+ * REQUISITO DE SECUENCIA (UI) — sin REPORTE_RECIBIDO la acción «Cerrar viaje» se muestra DESHABILITADA con
+ * «Confirme primero la recepción del reporte.» (el servidor manda); con REPORTE_RECIBIDO funciona como siempre.
+ */
+describe("cierre de viaje — requiere REPORTE_RECIBIDO (UI)", () => {
+  const MSG = "Confirme primero la recepción del reporte.";
+
+  it("accionesViaje: elegible por estado pero sin reporte -> cerrar/cierreManual false y faltaReporte true", () => {
+    for (const liquidacion of [null, undefined, { estado: "EN_AJUSTE" }, { estado: "LIQUIDADO" }]) {
+      const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion }, true);
+      expect(a.cerrar, JSON.stringify(liquidacion)).toBe(false);
+      expect(a.cierreManual).toBe(false);
+      expect(a.faltaReporte).toBe(true);
+    }
+    const manual = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true);
+    expect(manual).toMatchObject({ cerrar: false, cierreManual: false, faltaReporte: true });
+  });
+
+  it("con REPORTE_RECIBIDO: cerrar/cierreManual como siempre y sin aviso", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a).toMatchObject({ cerrar: true, faltaReporte: false });
+    const m = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(m).toMatchObject({ cierreManual: true, faltaReporte: false });
+  });
+
+  it("no hay aviso de reporte donde el viaje no podría cerrarse de todos modos (Cerrado, Cancelado, sin permiso, modo reporte)", () => {
+    for (const estado of ["Cerrado", "Cancelado"]) {
+      expect(accionesViaje("operativo", { estado, pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true).faltaReporte, estado).toBe(false);
+    }
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, false).faltaReporte).toBe(false);
+    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true).faltaReporte).toBe(false);
+    // Sin tarifa el motivo visible es la tarifa (no se acumula el aviso de reporte).
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: null }, true)).toMatchObject({ faltaTarifa: true, faltaReporte: false });
+  });
+
+  it("elegibilidadCierre/esSeleccionable/faltaReporteParaCierre: sin reporte no es seleccionable para cierre masivo", () => {
+    const sin = p(1, "d", "Descargado", false, 500, null);
+    const con = p(2, "d", "Descargado", false, 500, { estado: "REPORTE_RECIBIDO" });
+    expect(elegibilidadCierre(sin, true)).toEqual({ normal: false, manual: false });
+    expect(esSeleccionable(sin, true)).toBe(false);
+    expect(faltaReporteParaCierre(sin, true)).toBe(true);
+    expect(esSeleccionable(con, true)).toBe(true);
+    expect(faltaReporteParaCierre(con, true)).toBe(false);
+    expect(agruparPlanes([sin, con], "DIA")[0]).toMatchObject({ total: 2, cerrables: 1 });
+  });
+
+  it("pantalla: botón «Cerrar viaje» deshabilitado con el mensaje (no se oculta en silencio)", () => {
+    const src = readFileSync("src/app/e/[slug]/planes/planes-viajes-client.tsx", "utf8");
+    expect(src).toMatch(/acc\.faltaReporte \? \(\s*<button\s+type="button"\s+disabled\s+title=\{MENSAJE_CONFIRMAR_REPORTE_PRIMERO\}/);
+    expect(src).toMatch(/data-cierre-deshabilitado="reporte-no-recibido"/);
+    expect(MSG).toBe("Confirme primero la recepción del reporte.");
+    const shared = readFileSync("src/lib/tms/cierre-viaje-shared.ts", "utf8");
+    expect(shared).toContain(`MENSAJE_CONFIRMAR_REPORTE_PRIMERO = "${MSG}"`);
   });
 });

@@ -87,18 +87,29 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
     expect(t.match(/INSERT INTO tms_viaje_liquidacion_eventos/g)).toHaveLength(1);
   });
 
-  it("el cierre (normal, manual, masivo, período) y sus rutas NO consultan la liquidación (el gate es Fase 5)", () => {
+  it("el cierre exige REPORTE_RECIBIDO: SOLO LEE la liquidación (nunca la escribe) y no usa liquidar/reabrir ni la configuración", () => {
+    // Secuencia confirmada: reporte → cerrar → liquidar. El cierre consulta la liquidación (lectura bajo lock) para exigir
+    // REPORTE_RECIBIDO, pero jamás la crea, modifica, liquida ni reabre; y no usa la fecha de activación (fase posterior).
     for (const f of [
       "src/lib/tms/cierre-viaje.ts",
       "src/lib/tms/cierre-viaje-shared.ts",
       "src/lib/tms/cierre-masivo.ts",
-      "src/lib/tms/cierre-manual-planes.ts",
-      "src/lib/tms/planes-periodo.ts",
-      "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "src/lib/tms/reportes-viajes.ts",
       "src/app/api/empresas/[slug]/tms/planes/[id]/cerrar/route.ts",
       "src/app/api/empresas/[slug]/tms/planes/cerrar-masivo/route.ts",
       "src/app/api/empresas/[slug]/tms/planes/cerrar-masivo-periodo/route.ts",
       "src/app/api/empresas/[slug]/tms/planes/candidatos-cierre/route.ts",
+    ]) {
+      // Sin comentarios: la documentación puede nombrar liquidarViaje/confirmarReporteRecibido (orden de locks).
+      const src = leer(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+      expect(src, f).not.toMatch(/(INSERT INTO|UPDATE|DELETE FROM)\s+tms_viaje_(liquidacion|cargo)/i);
+      expect(src, f).not.toMatch(/tms_liquidacion_config|fecha_activacion|liquidarViaje|reabrirLiquidacion|confirmarReporteRecibido/);
+    }
+    // Estos archivos ni siquiera mencionan la liquidación (no participan del requisito).
+    for (const f of [
+      "src/lib/tms/cierre-manual-planes.ts",
+      "src/lib/tms/planes-periodo.ts",
+      "src/app/api/empresas/[slug]/tms/planes/route.ts",
     ]) {
       expect(leer(f), f).not.toMatch(/liquidacion-viaje|tms_viaje_liquidaci|tms_liquidacion_config/);
     }

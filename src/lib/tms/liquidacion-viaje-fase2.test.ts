@@ -104,16 +104,22 @@ describe("Liquidación Fase 2 · presentación", () => {
     expect(puedeOfrecerConfirmarReporte({ ...f, estadoPlan: "En ruta", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } })).toBe(false);
   });
 
-  it("las acciones de CIERRE no cambian: accionesViaje ignora por completo la liquidación", () => {
+  it("las acciones de CIERRE dependen ÚNICAMENTE de REPORTE_RECIBIDO (secuencia: reporte → cerrar → liquidar)", () => {
     const base = { estado: "Descargado", pendienteCierre: true, tarifaComercial: 100 };
-    const sin = accionesViaje("operativo", base, true);
     const con = accionesViaje("operativo", { ...base, liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } } as never, true);
-    expect(con).toEqual(sin);
-    expect(sin.cerrar).toBe(true);
+    expect(con.cerrar).toBe(true);
+    expect(con.faltaReporte).toBe(false);
+    // Sin liquidación, o en una etapa posterior al cierre (EN_AJUSTE/LIQUIDADO): no se cierra; se muestra deshabilitado.
+    for (const liquidacion of [undefined, null, { estado: "EN_AJUSTE", version: 2 }, { estado: "LIQUIDADO", version: 2 }]) {
+      const sin = accionesViaje("operativo", { ...base, liquidacion } as never, true);
+      expect(sin.cerrar, JSON.stringify(liquidacion)).toBe(false);
+      expect(sin.faltaReporte).toBe(true);
+    }
     const cuerpo = leer("src/app/e/[slug]/planes/planes-viajes-client.tsx");
     const inicio = cuerpo.indexOf("export function accionesViaje");
     const fin = cuerpo.indexOf("\n}\n", inicio);
-    expect(cuerpo.slice(inicio, fin)).not.toMatch(/liquidaci/i);
+    // accionesViaje solo LEE el estado del reporte; no decide ni ejecuta liquidar/reabrir.
+    expect(cuerpo.slice(inicio, fin)).not.toMatch(/liquidar|reabrir/i);
   });
 
   it("tokens CSS: amarillo #FFF3BF (claro) y #3A3218 (oscuro) y contraste accesible sobre la fila pendiente", () => {

@@ -124,9 +124,9 @@ describe("GET /tms/planes/candidatos-cierre — filtros de vista (bloqueo 1)", (
 describe("GET /tms/planes/candidatos-cierre — respuesta mínima (8)", () => {
   it("cuenta elegibles NORMAL y MANUAL por separado, con el criterio puro compartido (todos CON tarifa)", async () => {
     vi.mocked(obtenerCandidatosCierre).mockResolvedValue([
-      { id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500 }, // normal
-      { id: 2, codigo: "VJ-2", estado: "Programado", llegadaRegistrada: false, tarifaComercial: 500 }, // manual
-      { id: 3, codigo: "VJ-3", estado: "Cerrado", llegadaRegistrada: false, tarifaComercial: 500 }, // ninguno
+      { id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }, // normal
+      { id: 2, codigo: "VJ-2", estado: "Programado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }, // manual
+      { id: 3, codigo: "VJ-3", estado: "Cerrado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }, // ninguno
     ]);
     const res = await get("agrupacion=MES&valor=2026-09");
     expect(res.status).toBe(200);
@@ -134,14 +134,14 @@ describe("GET /tms/planes/candidatos-cierre — respuesta mínima (8)", () => {
     expect(body).toEqual({
       periodo: { agrupacion: "MES", valor: "2026-09", etiqueta: "Septiembre 2026", desde: "2026-09-01", hasta: "2026-09-30" },
       total: 3,
-      normal: { elegibles: 1, ids: [1] },
-      manual: { elegibles: 1, ids: [2] },
+      normal: { elegibles: 1, ids: [1], sinReporte: 0 },
+      manual: { elegibles: 1, ids: [2], sinReporte: 0 },
     });
     expect(res.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   it("no expone cliente/piloto/tarifa/facturación de los candidatos (solo ids y conteos)", async () => {
-    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([{ id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500 }]);
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([{ id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }]);
     const body = await (await get("agrupacion=DIA&valor=2026-09-30")).json();
     const texto = JSON.stringify(body);
     expect(texto).not.toContain("cliente");
@@ -164,9 +164,9 @@ describe("GET /tms/planes/candidatos-cierre — respuesta mínima (8)", () => {
 describe("GET /tms/planes/candidatos-cierre — tarifa (PLANES-TARIFA-CIERRE-1)", () => {
   it("23/24/25) un candidato sin tarifa (null) se excluye de normal.elegibles Y manual.elegibles, pero sigue contando en total", async () => {
     vi.mocked(obtenerCandidatosCierre).mockResolvedValue([
-      { id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500 }, // normal, CON tarifa
-      { id: 2, codigo: "VJ-2", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: null }, // sería normal, pero SIN tarifa
-      { id: 3, codigo: "VJ-3", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null }, // sería manual, pero SIN tarifa
+      { id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }, // normal, CON tarifa
+      { id: 2, codigo: "VJ-2", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: null, reporteRecibido: true }, // sería normal, pero SIN tarifa
+      { id: 3, codigo: "VJ-3", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null, reporteRecibido: true }, // sería manual, pero SIN tarifa
     ]);
     const res = await get("agrupacion=MES&valor=2026-09");
     const body = await res.json();
@@ -178,8 +178,30 @@ describe("GET /tms/planes/candidatos-cierre — tarifa (PLANES-TARIFA-CIERRE-1)"
   });
 
   it("Q0.00 (tarifaComercial = 0, no null) SÍ cuenta como elegible", async () => {
-    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([{ id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 0 }]);
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([{ id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 0, reporteRecibido: true }]);
     const res = await get("agrupacion=MES&valor=2026-09");
     expect(await res.json()).toMatchObject({ normal: { elegibles: 1, ids: [1] } });
+  });
+});
+
+/**
+ * REQUISITO DE SECUENCIA — un candidato sin REPORTE_RECIBIDO nunca es elegible (ni normal ni manual); `sinReporte` informa
+ * cuántos quedan fuera SOLO por eso (elegibles por estado/llegada/tarifa), para el modal de confirmación.
+ */
+describe("GET /tms/planes/candidatos-cierre — reporte recibido (REQUISITO DE SECUENCIA)", () => {
+  it("sin REPORTE_RECIBIDO se excluye de normal/manual, cuenta en total y se informa en sinReporte", async () => {
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([
+      { id: 1, codigo: "VJ-1", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: true }, // normal
+      { id: 2, codigo: "VJ-2", estado: "Descargado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: false }, // sin reporte
+      { id: 3, codigo: "VJ-3", estado: "Programado", llegadaRegistrada: false, tarifaComercial: 500, reporteRecibido: false }, // manual sin reporte
+      { id: 4, codigo: "VJ-4", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null, reporteRecibido: false }, // sin tarifa: no cuenta como «sinReporte»
+      { id: 5, codigo: "VJ-5", estado: "Cerrado", llegadaRegistrada: true, tarifaComercial: 500, reporteRecibido: false }, // Cerrado: tampoco
+    ]);
+    const body = await (await get("agrupacion=MES&valor=2026-09")).json();
+    expect(body).toMatchObject({
+      total: 5,
+      normal: { elegibles: 1, ids: [1], sinReporte: 1 },
+      manual: { elegibles: 0, ids: [], sinReporte: 1 }, // solo VJ-3 (Programado, CON tarifa, sin reporte)
+    });
   });
 });

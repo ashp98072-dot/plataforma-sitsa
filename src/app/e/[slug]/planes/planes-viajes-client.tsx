@@ -6,7 +6,12 @@ import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import {
+  MENSAJE_CONFIRMAR_REPORTE_PRIMERO,
+  puedeCerrarManualmente,
+  puedeCerrarNormalmente,
+  reporteRecibidoParaCierre,
+} from "@/lib/tms/cierre-viaje-shared";
 import type { ResultadoCierreMasivo } from "@/lib/tms/cierre-masivo";
 import type { AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 import {
@@ -90,20 +95,25 @@ export type VistaPlanes = "ACTIVOS" | "CERRADOS";
  */
 export function accionesViaje(
   modo: ModoPlanesViajes,
-  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null },
+  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null; liquidacion?: { estado: string; version?: number } | null },
   puedeCerrarViaje: boolean,
-): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean; faltaTarifa: boolean } {
+): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean; faltaTarifa: boolean; faltaReporte: boolean } {
   const consulta = modo === "reporte";
   const historico = esExpedienteHistorico(p.estado);
   // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0`: Q0.00 capturado explícitamente SÍ cuenta como tarifa.
   const tieneTarifa = p.tarifaComercial != null;
   // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
   // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
-  const cerrar = !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa);
-  const cierreManual = !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado, tieneTarifa);
+  // REQUISITO DE SECUENCIA: solo con REPORTE_RECIBIDO (sin fila de liquidación = reporte no recibido). El servidor REVALIDA.
+  const reporteRecibido = reporteRecibidoParaCierre(p.liquidacion?.estado);
+  const cerrar = !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, reporteRecibido);
+  const cierreManual = !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado, tieneTarifa, reporteRecibido);
   // Sin tarifa, pero el estado SÍ admitiría algún cierre si la tuviera — distingue "falta tarifa" de
   // "el estado no lo permite" (nunca se muestra el aviso para un viaje que de todos modos no podría cerrarse).
-  const podriaConTarifa = puedeCerrarNormalmente(p.estado, p.pendienteCierre, true) || puedeCerrarManualmente(p.estado, true);
+  const podriaConTarifa = puedeCerrarNormalmente(p.estado, p.pendienteCierre, true, true) || puedeCerrarManualmente(p.estado, true, true);
+  // Elegible por estado/llegada/tarifa pero SIN reporte recibido: se muestra «Cerrar viaje» DESHABILITADO con su motivo.
+  const faltaReporte = !consulta && puedeCerrarViaje && !reporteRecibido && tieneTarifa
+    && (puedeCerrarNormalmente(p.estado, p.pendienteCierre, true, true) || puedeCerrarManualmente(p.estado, true, true));
   return {
     verDetalle: true,
     pdf: true,
@@ -111,6 +121,7 @@ export function accionesViaje(
     cerrar,
     cierreManual,
     faltaTarifa: !consulta && puedeCerrarViaje && !tieneTarifa && podriaConTarifa,
+    faltaReporte,
   };
 }
 
@@ -1556,6 +1567,18 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             Cerrar viaje
                           </button>
                         ) : null}
+                        {acc.faltaReporte ? (
+                          <button
+                            type="button"
+                            disabled
+                            title={MENSAJE_CONFIRMAR_REPORTE_PRIMERO}
+                            aria-label={`Cerrar viaje deshabilitado: ${MENSAJE_CONFIRMAR_REPORTE_PRIMERO}`}
+                            className="cursor-not-allowed text-[var(--muted)] opacity-60"
+                            data-cierre-deshabilitado="reporte-no-recibido"
+                          >
+                            Cerrar viaje
+                          </button>
+                        ) : null}
                         {acc.cierreManual ? (
                           <button type="button" className="text-rose-500 hover:underline" onClick={() => abrirCierreManual(p.id)}>
                             Cierre manual
@@ -1679,6 +1702,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             {acc.faltaTarifa ? (
                               <p className="mt-2 text-[11px] text-amber-500" title="Asigná una tarifa antes de cerrar este viaje.">
                                 Falta tarifa — asigná una tarifa antes de cerrar este viaje.
+                              </p>
+                            ) : null}
+                            {acc.faltaReporte ? (
+                              <p className="mt-2 text-[11px] text-amber-500" title={MENSAJE_CONFIRMAR_REPORTE_PRIMERO}>
+                                {MENSAJE_CONFIRMAR_REPORTE_PRIMERO}
                               </p>
                             ) : null}
                             {acc.cerrar ? (

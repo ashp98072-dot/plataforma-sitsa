@@ -1,10 +1,34 @@
 import type { RowDataPacket } from "mysql2";
-import type { ResultSetHeader } from "mysql2/promise";
+import type { PoolConnection, ResultSetHeader } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { ESTADOS_CIERRE_MANUAL } from "@/lib/tms/cierre-viaje-shared";
+import {
+  CODIGO_REPORTE_NO_RECIBIDO,
+  ESTADOS_CIERRE_MANUAL,
+  MENSAJE_REPORTE_NO_RECIBIDO,
+  reporteRecibidoParaCierre,
+} from "@/lib/tms/cierre-viaje-shared";
 
 export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
+
+/**
+ * REQUISITO DE SECUENCIA (ver cierre-viaje-shared.ts): solo se cierra un viaje cuya liquidación esté EXACTAMENTE en
+ * REPORTE_RECIBIDO. Se lee BAJO LOCK (`FOR UPDATE`) dentro de la MISMA transacción del cierre, cuando el plan ya está
+ * bloqueado (orden de locks plan → liquidación, igual que `liquidarViaje`/`confirmarReporteRecibido`, sin deadlocks). Sin fila
+ * (o sin tabla aún) = reporte no recibido. NO modifica ni crea la liquidación.
+ */
+async function reporteRecibidoBloqueado(conn: PoolConnection, empresaId: number, planId: number): Promise<boolean> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      "SELECT estado FROM tms_viaje_liquidaciones WHERE empresa_id = ? AND plan_id = ? FOR UPDATE",
+      [empresaId, planId],
+    );
+    return reporteRecibidoParaCierre(rows[0]?.estado == null ? null : String(rows[0].estado));
+  } catch (e) {
+    if ((e as { errno?: number }).errno === 1146) return false; // ER_NO_SUCH_TABLE: ningún reporte pudo registrarse
+    throw e;
+  }
+}
 
 /**
  * OPS-1 (corregido) — cierre administrativo del viaje.
@@ -23,6 +47,10 @@ export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
  * existe un registro de llegada real en flota_viajes para ese mismo
  * plan (fv.plan_id = p.id, fv.estado = 'cerrado') — si el piloto
  * todavía no ha regresado, no hay nada que cerrar.
+ *
+ * REQUISITO DE SECUENCIA (viaje realizado → REPORTE_RECIBIDO → ajustes/cargos → CERRAR → liquidar): tanto el cierre normal como
+ * el manual exigen que la liquidación del plan esté EXACTAMENTE en REPORTE_RECIBIDO (409 REPORTE_NO_RECIBIDO si no). Se valida aquí,
+ * bajo lock y dentro de la misma transacción — nunca solo en la UI. Ver docs/TMS-CIERRE-REQUIERE-REPORTE-RECIBIDO.md.
  *
  * OPS-5.2d: "Cargado" (definición aprobada del negocio: el vehículo ya
  * fue cargado/preparado pero TODAVÍA no ha salido) sigue exactamente el
@@ -55,7 +83,7 @@ export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 export type ResultadoCierreViaje =
   | { ok: true }
-  | { ok: false; error: string };
+  | { ok: false; error: string; codigo?: typeof CODIGO_REPORTE_NO_RECIBIDO };
 
 /**
  * Cierra administrativamente un plan/viaje. Requiere que el permiso
@@ -144,6 +172,13 @@ export async function cerrarViaje(
       };
     }
 
+    // REQUISITO DE SECUENCIA — el plan ya está bloqueado por el UPDATE; se revalida la liquidación bajo lock ANTES de
+    // comprometer. Si no está en REPORTE_RECIBIDO el UPDATE se deshace (rollback): el viaje NO queda cerrado.
+    if (!(await reporteRecibidoBloqueado(conn, empresaId, planId))) {
+      await conn.rollback();
+      return { ok: false, error: MENSAJE_REPORTE_NO_RECIBIDO, codigo: CODIGO_REPORTE_NO_RECIBIDO };
+    }
+
     // PROGRAMACION-VIAJES-TERCERIZADOS-1 (sección 22) — registrar tipo_viaje
     // también al cerrar, igual que al crear/editar. Esta lectura es
     // exclusivamente para la auditoría, nunca decide si se puede cerrar
@@ -206,7 +241,7 @@ export async function cerrarViaje(
 
 export type ResultadoCierreManual =
   | { ok: true; flotaViajeCerrado: boolean }
-  | { ok: false; error: string };
+  | { ok: false; error: string; codigo?: typeof CODIGO_REPORTE_NO_RECIBIDO };
 
 /**
  * Estados canónicos ya existentes en el modelo (tms_planes_viaje.estado)
@@ -268,6 +303,13 @@ export async function cerrarViajeManual(opts: {
     if (plan.tarifa_comercial == null) {
       await conn.rollback();
       return { ok: false, error: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." };
+    }
+
+    // REQUISITO DE SECUENCIA — también el cierre MANUAL exige REPORTE_RECIBIDO (manual solo omite la llegada física). Se lee
+    // bajo lock con el plan ya bloqueado (plan → liquidación) y ANTES de tocar flota_viajes: un rechazo no escribe nada.
+    if (!(await reporteRecibidoBloqueado(conn, opts.empresaId, opts.planId))) {
+      await conn.rollback();
+      return { ok: false, error: MENSAJE_REPORTE_NO_RECIBIDO, codigo: CODIGO_REPORTE_NO_RECIBIDO };
     }
 
     // Buscar flota_viajes asociado — puede no existir (caso crítico del
