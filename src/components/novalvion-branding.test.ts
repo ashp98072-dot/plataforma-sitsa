@@ -12,7 +12,7 @@ const leer = (p: string) => readFileSync(p, "utf8").replace(/\r\n/g, "\n");
 const login = leer("src/app/login/page.tsx");
 const layout = leer("src/app/layout.tsx");
 const shell = leer("src/components/app-shell.tsx");
-const selector = leer("src/app/select-empresa/page.tsx");
+const selector = leer("src/app/select-empresa/select-empresa-client.tsx");
 
 describe("assets de marca", () => {
   it("logo horizontal e icono existen bajo public/branding (no bajo public/brands de las empresas)", () => {

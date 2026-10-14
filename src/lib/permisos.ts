@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import { cache } from "react";
 import { getPool, query } from "@/lib/db";
 import type { RolGlobal } from "@/lib/roles";
 import { adaptarPermisosLegacy, normalizarMatriz } from "@/lib/permisos-catalogo";
@@ -99,8 +100,10 @@ async function permisosEfectivosUncached(
   return adaptarPermisosLegacy(data, rol);
 }
 
-/** Lectura vigente: evita permisos obsoletos entre procesos/instancias. */
-export const permisosEfectivos = permisosEfectivosUncached;
+/** Dedup exclusivamente dentro del render RSC, por usuario + rol. Sin TTL ni caché entre requests.
+ * En Route Handlers (sin dispatcher RSC) se mantiene la lectura vigente en cada llamada.
+ */
+export const permisosEfectivos = cache(permisosEfectivosUncached);
 
 export async function guardarPermisosUsuario(
   usuarioId: number,

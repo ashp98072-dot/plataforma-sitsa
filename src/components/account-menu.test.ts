@@ -37,7 +37,7 @@ describe("opciones del menú de cuenta", () => {
     await cerrarSesion(fetchFn as unknown as typeof fetch, irA);
     expect(fetchFn).toHaveBeenCalledWith("/api/auth/logout", { method: "POST" });
     expect(irA).toHaveBeenCalledWith("/login");
-    expect(menu).toContain("void cerrarSesion(fetch, (ruta) => router.push(ruta))");
+    expect(menu).toContain("await cerrarSesion(fetch, (ruta) => window.location.replace(ruta))");
   });
   it("iniciales del avatar", () => {
     expect(inicialesUsuario("walter")).toBe("W");
@@ -63,13 +63,13 @@ describe("account-menu.tsx — contenido y accesibilidad", () => {
     expect(menu).toContain('e.key === "Escape"');
     expect(menu).toContain('document.addEventListener("mousedown", alPulsar)');
     expect(menu).toContain("onClick={() => cerrar()}");
-    expect(menu).toMatch(/setAbierto\(false\), 0\);[\s\S]{0,80}\}, \[pathname\]\);/);
+    expect(menu).toMatch(/setAbierto\(false\);[\s\S]*?\}, 0\);[\s\S]{0,80}\}, \[pathname\]\);/);
   });
   it("navegación por teclado (flechas/Home/End) sin librería de dropdown", () => {
     expect(menu).toContain('"ArrowDown"');
     expect(menu).toContain('"Home"');
     const imports = menu.match(/^import .+ from "(.+)";$/gm) ?? [];
-    expect(imports.every((l) => /"(next\/link|next\/navigation|react|@\/lib\/permisos-shared)"/.test(l))).toBe(true);
+    expect(imports.every((l) => /"(next\/link|next\/navigation|react|@\/lib\/permisos-shared|@\/lib\/session-navigation)"/.test(l))).toBe(true);
   });
   it("en móvil solo el icono (el nombre se oculta bajo sm)", () => {
     expect(menu).toContain('className="hidden max-w-[10rem] truncate text-sm sm:inline">{username}</span>');
