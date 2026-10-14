@@ -3,7 +3,6 @@ import { query } from "@/lib/db";
 import {
   MAX_FILAS_CUMPLEANIOS,
   edadQueCumple,
-  esBisiesto,
   fechaCumpleanios,
   nombreMes,
   type CumpleaniosEmpleado,
@@ -50,7 +49,7 @@ export async function listarCumpleaniosDelMes(
        FROM empleados
       WHERE empresa_id = ? AND fecha_nacimiento IS NOT NULL AND MONTH(fecha_nacimiento) = ?
         ${incluirInactivos ? "" : "AND estado = 'Activo'"}
-      ORDER BY ${mes === 2 && !esBisiesto(anio) ? "LEAST(DAY(fecha_nacimiento), 28)" : "DAY(fecha_nacimiento)"} ASC, nombre ASC, id ASC
+      ORDER BY DAY(fecha_nacimiento) ASC, nombre ASC, id ASC
       LIMIT ${MAX_FILAS_CUMPLEANIOS + 1}`,
     [empresaId, mes],
   );
@@ -69,11 +68,8 @@ export async function listarCumpleaniosDelMes(
       fecha: fecha.iso,
       dia: fecha.dia,
       edad: edadQueCumple(f.fecha_nacimiento, anio),
-      ajuste29Feb: fecha.ajuste29Feb,
     });
   }
-  // Con el ajuste del 29 de febrero el orden por día de nacimiento pudo cambiar: se reordena por día de celebración.
-  empleados.sort((a, b) => a.dia - b.dia || a.nombre.localeCompare(b.nombre, "es") || a.id - b.id);
   return { mes, anio, nombreMes: nombreMes(mes), incluirInactivos, total: empleados.length, truncado, empleados };
 }
 
@@ -93,21 +89,18 @@ export async function resumenCumpleaniosDelMes(
   const total = Number(conteo?.n ?? 0);
   const esMesActual = hoyIso.startsWith(`${anio}-${String(mes).padStart(2, "0")}-`);
   const diaHoy = esMesActual ? Number(hoyIso.slice(8, 10)) : 1;
-  // 29 de febrero en año no bisiesto se celebra el 28: el día efectivo se calcula en SQL para ordenar/filtrar con exactitud.
-  const diaSql = mes === 2 && !esBisiesto(anio) ? "LEAST(DAY(fecha_nacimiento), 28)" : "DAY(fecha_nacimiento)";
   const max = Math.max(1, Math.min(10, Math.trunc(limite)));
   const filas = total === 0
     ? []
     : await query<FilaCumple[]>(
         `SELECT id, nombre, DATE_FORMAT(fecha_nacimiento, '%Y-%m-%d') AS fecha_nacimiento FROM empleados
-          WHERE ${filtro} AND ${diaSql} >= ?
-          ORDER BY ${diaSql} ASC, nombre ASC, id ASC LIMIT ${max}`,
+          WHERE ${filtro} AND DAY(fecha_nacimiento) >= ?
+          ORDER BY DAY(fecha_nacimiento) ASC, nombre ASC, id ASC LIMIT ${max}`,
         [empresaId, mes, diaHoy],
       );
   const proximos = filas
     .map((f) => ({ f, fecha: fechaCumpleanios(f.fecha_nacimiento, anio) }))
-    .filter((x): x is { f: FilaCumple; fecha: FechaCumpleanios } => x.fecha != null && x.fecha.dia >= diaHoy)
-    .sort((a, b) => a.fecha.dia - b.fecha.dia || t(a.f.nombre).localeCompare(t(b.f.nombre), "es") || Number(a.f.id) - Number(b.f.id))
+    .filter((x): x is { f: FilaCumple; fecha: FechaCumpleanios } => x.fecha != null)
     .slice(0, max)
     .map(({ f, fecha }) => ({ id: Number(f.id), nombre: t(f.nombre), dia: fecha.dia, fecha: fecha.iso }));
   return { mes, anio, nombreMes: nombreMes(mes), total, proximos };

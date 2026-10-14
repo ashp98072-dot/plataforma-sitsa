@@ -72,6 +72,8 @@ export default function CumpleaniosPage() {
 
   const anios = Array.from({ length: 5 }, (_, i) => actual.anio - 1 + i);
   const mostrarEstado = datos?.incluirInactivos === true;
+  // Solo se puede exportar un listado ya cargado, sin error y con al menos un empleado.
+  const puedeExportar = !cargando && !error && datos != null && datos.total > 0;
 
   return (
     <div className="space-y-6">
@@ -104,13 +106,21 @@ export default function CumpleaniosPage() {
           <input type="checkbox" checked={incluirInactivos} onChange={(e) => setIncluirInactivos(e.target.checked)} />
           Incluir bajas
         </label>
-        <a
-          href={consulta("xlsx")}
-          className="rounded bg-[#0d9488] px-3 py-1 text-sm text-white"
-          aria-disabled={cargando || !datos?.total}
-        >
-          Excel
-        </a>
+        {puedeExportar ? (
+          <a href={consulta("xlsx")} className="rounded bg-[#0d9488] px-3 py-1 text-sm text-white">
+            Excel
+          </a>
+        ) : (
+          // Deshabilitado de verdad (no es un enlace): mientras carga o si no hay empleados no inicia ninguna descarga.
+          <button
+            type="button"
+            disabled
+            title={cargando ? "Cargando el listado…" : "No hay empleados que exportar"}
+            className="cursor-not-allowed rounded bg-[#0d9488] px-3 py-1 text-sm text-white opacity-40"
+          >
+            Excel
+          </button>
+        )}
       </div>
 
       {error ? <p role="alert" className="text-sm text-rose-300">{error}</p> : null}
@@ -138,10 +148,7 @@ export default function CumpleaniosPage() {
               <tr key={e.id} className="border-t border-[var(--border)]">
                 <td className="px-2 py-1.5 font-mono">{e.codigo}</td>
                 <td className="px-2 py-1.5">{e.nombre}</td>
-                <td className="whitespace-nowrap px-2 py-1.5">
-                  {fechaVisible(e.fecha)}
-                  {e.ajuste29Feb ? <span className="ml-1 text-[10px] text-[var(--muted)]" title="Nació el 29 de febrero; en años no bisiestos se lista el 28">(nació 29/feb)</span> : null}
-                </td>
+                <td className="whitespace-nowrap px-2 py-1.5">{fechaVisible(e.fecha)}</td>
                 <td className="px-2 py-1.5">{e.edad ?? "—"}</td>
                 <td className="px-2 py-1.5">{e.puesto || "—"}</td>
                 <td className="px-2 py-1.5">{e.area || "—"}</td>

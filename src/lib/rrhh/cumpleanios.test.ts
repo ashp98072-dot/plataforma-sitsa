@@ -25,7 +25,6 @@ vi.mock("@/lib/rrhh/dates", () => ({ hoyLocal: () => "2026-10-14" }));
 
 import {
   edadQueCumple,
-  esBisiesto,
   fechaCumpleanios,
   filasExcelCumpleanios,
   nombreArchivoCumpleanios,
@@ -39,7 +38,7 @@ const leer = (p: string) => readFileSync(p, "utf8");
 const ctx = { params: Promise.resolve({ slug: "acme" }) };
 const emp = (o: Partial<CumpleaniosEmpleado> = {}): CumpleaniosEmpleado => ({
   id: 1, codigo: "E-001", nombre: "Ana Pérez", puesto: "Piloto", area: "Operaciones", estado: "Activo",
-  fecha: "2026-10-05", dia: 5, edad: 36, ajuste29Feb: false, ...o,
+  fecha: "2026-10-05", dia: 5, edad: 36, ...o,
 });
 const listado = (empleados: CumpleaniosEmpleado[] = [emp()]) => ({
   mes: 10, anio: 2026, nombreMes: "Octubre", incluirInactivos: false, total: empleados.length, truncado: false, empleados,
@@ -61,15 +60,14 @@ describe("Cumpleaños · reglas de fecha y edad (puras)", () => {
     expect(edadQueCumple(null, 2026)).toBeNull();
   });
 
-  it("29 de febrero: se celebra el 29 en años bisiestos y el 28 en los demás; el dato original no cambia", () => {
-    expect(esBisiesto(2024)).toBe(true);
-    expect(esBisiesto(2026)).toBe(false);
-    expect(esBisiesto(2100)).toBe(false);
-    expect(esBisiesto(2000)).toBe(true);
-    expect(fechaCumpleanios("2000-02-29", 2024)).toEqual({ iso: "2024-02-29", dia: 29, mes: 2, ajuste29Feb: false });
-    expect(fechaCumpleanios("2000-02-29", 2026)).toEqual({ iso: "2026-02-28", dia: 28, mes: 2, ajuste29Feb: true });
-    expect(fechaCumpleanios("1990-02-28", 2026)).toMatchObject({ iso: "2026-02-28", ajuste29Feb: false });
+  it("29 de febrero: se muestra su fecha REAL (29/feb) en cualquier año; no se convierte a 28/02 ni a 01/03", () => {
+    expect(fechaCumpleanios("2000-02-29", 2024)).toEqual({ iso: "2024-02-29", dia: 29, mes: 2 });
+    expect(fechaCumpleanios("2000-02-29", 2026)).toEqual({ iso: "2026-02-29", dia: 29, mes: 2 });
+    expect(fechaCumpleanios("1990-02-28", 2026)).toEqual({ iso: "2026-02-28", dia: 28, mes: 2 });
     expect(fechaCumpleanios("basura", 2026)).toBeNull();
+    // La edad sigue siendo año consultado − año de nacimiento, también para quien nació un 29/02.
+    expect(edadQueCumple("2000-02-29", 2026)).toBe(26);
+    expect(edadQueCumple("2000-02-29", 2024)).toBe(24);
   });
 
   it("mes/año: solo enteros válidos", () => {
@@ -159,7 +157,10 @@ describe("Cumpleaños · alcance (arquitectura)", () => {
   it("la consulta filtra por empresa + mes de nacimiento + estado y no selecciona datos sensibles", () => {
     expect(lib).toMatch(/WHERE empresa_id = \? AND fecha_nacimiento IS NOT NULL AND MONTH\(fecha_nacimiento\) = \?/);
     expect(lib).toMatch(/AND estado = 'Activo'/);
-    expect(lib).toMatch(/"DAY\(fecha_nacimiento\)"\} ASC, nombre ASC, id ASC/);
+    expect(lib).toMatch(/ORDER BY DAY\(fecha_nacimiento\) ASC, nombre ASC, id ASC/);
+    // Sin convención de celebración: el 29/feb no se traslada a otro día (ni en SQL ni en código).
+    expect(lib).not.toMatch(/LEAST\(|esBisiesto|ajuste29/);
+    expect(leer("src/lib/rrhh/cumpleanios-shared.ts")).not.toMatch(/esBisiesto|ajuste29|dia = 28/);
     const selects = lib.match(/SELECT[\s\S]*?FROM empleados/g) ?? [];
     expect(selects.length).toBeGreaterThanOrEqual(2);
     for (const s of selects) expect(s, s).not.toMatch(/\b(dpi|nit|igss|irtra|direccion|telefono|email|sueldo|cuenta_bancaria|contacto_emergencia)\b/i);
@@ -192,5 +193,16 @@ describe("Cumpleaños · alcance (arquitectura)", () => {
     expect(pagina).not.toMatch(/from "@\/lib\/rrhh\/cumpleanios"/); // la página de cliente no importa código de BD
     const sinComentarios = pagina.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
     expect(sinComentarios).not.toMatch(/dpi|\bnit\b|igss|telefono|direccion/i);
+    expect(sinComentarios).not.toMatch(/ajuste29|nació 29/);
+  });
+
+  it("el control Excel no inicia descargas mientras carga o si no hay empleados (deshabilitado de verdad)", () => {
+    const pagina = leer("src/app/e/[slug]/rrhh/reportes/cumpleanios/page.tsx");
+    expect(pagina).toMatch(/const puedeExportar = !cargando && !error && datos != null && datos\.total > 0;/);
+    // El enlace de descarga solo existe dentro de la rama «puedeExportar»; la otra rama es un <button disabled>.
+    expect(pagina).toMatch(/\{puedeExportar \? \(\s*<a href=\{consulta\("xlsx"\)\}/);
+    expect(pagina).toMatch(/<button\s+type="button"\s+disabled/);
+    expect(pagina).not.toMatch(/aria-disabled/);
+    expect(pagina.match(/consulta\("xlsx"\)/g)?.length).toBe(1);
   });
 });

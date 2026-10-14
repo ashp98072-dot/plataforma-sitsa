@@ -20,7 +20,7 @@ producción. **Sin SQL, sin migración, sin índice, sin columna nueva.** Solo l
 
 | Pieza | Archivo |
 |---|---|
-| Reglas puras (mes, año, edad, 29 de febrero, nombre de archivo, filas de Excel) | `src/lib/rrhh/cumpleanios-shared.ts` (seguro para cliente) |
+| Reglas puras (mes, año, edad, nombre de archivo, filas de Excel) | `src/lib/rrhh/cumpleanios-shared.ts` (seguro para cliente) |
 | Consultas (listado y resumen) | `src/lib/rrhh/cumpleanios.ts` |
 | Endpoint JSON/Excel | `GET /api/empresas/[slug]/rrhh/cumpleanios` |
 | Tarjeta del dashboard («Cumpleaños de octubre · X empleados · próximos») | `dashboard-rrhh/page.tsx` + `GET /rrhh/dashboard` (campo aditivo `cumpleanios`) |
@@ -44,10 +44,14 @@ Resumen del dashboard: un `COUNT(*)` con el mismo filtro (solo Activos) y como m
 
 - Filtra por **MES** de `fecha_nacimiento`, no por año. La fecha de cumpleaños se arma con el **año consultado**.
 - **Edad que cumple** = año consultado − año de nacimiento (`null` si el dato es incoherente, < 1).
-- **29 de febrero:** en año bisiesto se lista el 29; en año no bisiesto se lista el **28 de febrero** con la marca «(nació 29/feb)». Es
-  una convención para el listado; **el dato de la ficha no se modifica**. *(Supuesto a confirmar con RRHH: algunas empresas lo celebran
-  el 1 de marzo.)*
-- **Orden:** día de celebración ASC, luego nombre.
+- **29 de febrero (regla final):** quien nació un 29/02 **pertenece a febrero** y se muestra con su **fecha real, 29 de febrero**, en
+  cualquier año (también en años no bisiestos). **No se convierte a 28/02 ni a 01/03**: el listado identifica cumpleaños del mes, no
+  fija una fecha legal/operativa de celebración. La edad sigue siendo año consultado − año de nacimiento y `fecha_nacimiento` no se
+  modifica. En un febrero no bisiesto el listado puede mostrar «29/02/2026»: es la fecha real de nacimiento (día y mes) con el año
+  consultado, no una fecha de calendario existente.
+- **Orden:** `DAY(fecha_nacimiento)` real ASC, luego nombre (SQL; tanto en el listado como en el dashboard).
+- **Botón Excel:** solo se renderiza como enlace de descarga cuando el listado ya cargó, sin error y con al menos un empleado; en los
+  demás casos es un `<button disabled>` real (no inicia ninguna descarga).
 
 ### Datos que NO se exponen
 
@@ -83,10 +87,10 @@ SELECT empresa_id, COUNT(*) AS empleados, SUM(fecha_nacimiento IS NOT NULL) AS c
 
 ## Pruebas
 
-- Unitarias/endpoint (`cumpleanios.test.ts`): edad, 29 de febrero, año bisiesto, parámetros inválidos, mes/año por defecto, tenant de la
+- Unitarias/endpoint (`cumpleanios.test.ts`): edad, 29 de febrero (fecha real, sin conversión), parámetros inválidos, mes/año por defecto, tenant de la
   sesión, permiso, Excel (nombre y columnas exactas leyendo el libro), sin datos sensibles, arquitectura (consulta, sin migración,
   dashboard solo con resumen, página de cliente sin código de BD).
 - BD (`cumpleanios.db.test.ts`, MariaDB 11.8.9 desechable, datos sintéticos con DPI/NIT/IGSS de relleno que no deben aparecer): mes
-  actual y otro mes, orden por día y nombre, solo activos/incluir bajas, aislamiento por empresa, 29 de febrero (bisiesto y no), edad,
+  actual y otro mes, orden por día y nombre, solo activos/incluir bajas, aislamiento por empresa, 29 de febrero (bisiesto y no: siempre día 29), edad,
   resumen del dashboard (próximos, límite, mes distinto). Verificado con mutación (sin filtro de estado ni de empresa fallan 4 pruebas).
 - `dashboard/route.test.ts` se actualizó para mockear la sección nueva y cubrir que su falla no oculta el resto.

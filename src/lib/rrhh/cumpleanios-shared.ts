@@ -28,35 +28,25 @@ export function parseAnio(v: unknown): number | null {
   return Number.isInteger(n) && n >= ANIO_MINIMO && n <= ANIO_MAXIMO ? n : null;
 }
 
-export function esBisiesto(anio: number): boolean {
-  return (anio % 4 === 0 && anio % 100 !== 0) || anio % 400 === 0;
-}
-
 export type FechaCumpleanios = {
-  /** Fecha en la que se celebra en el año consultado (YYYY-MM-DD). */
+  /** Día y mes REALES de nacimiento con el año consultado (YYYY-MM-DD); es una etiqueta de listado, no una fecha de calendario. */
   iso: string;
   dia: number;
   mes: number;
-  /** true si nació un 29 de febrero y el año consultado no es bisiesto (se celebra el 28). */
-  ajuste29Feb: boolean;
 };
 
 /**
- * Fecha de cumpleaños en el año consultado. Quien nació un 29 de febrero cumple el 28 de febrero en los años no bisiestos
- * (convención usada para listar; el dato original de la ficha no se modifica). `null` si la fecha de nacimiento no es válida.
+ * Fecha de cumpleaños en el año consultado = día y mes REALES de nacimiento + año consultado. No se asume ninguna convención de
+ * celebración: quien nació un 29 de febrero se muestra como 29 de febrero aunque el año consultado no sea bisiesto (el listado
+ * identifica cumpleaños del mes, no una fecha legal/operativa). `null` si la fecha de nacimiento no es válida.
  */
 export function fechaCumpleanios(fechaNacimientoIso: string | null | undefined, anio: number): FechaCumpleanios | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(fechaNacimientoIso ?? ""));
   if (!m) return null;
   const mes = Number(m[2]);
-  let dia = Number(m[3]);
+  const dia = Number(m[3]);
   if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return null;
-  let ajuste29Feb = false;
-  if (mes === 2 && dia === 29 && !esBisiesto(anio)) {
-    dia = 28;
-    ajuste29Feb = true;
-  }
-  return { iso: `${anio}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`, dia, mes, ajuste29Feb };
+  return { iso: `${anio}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`, dia, mes };
 }
 
 /** Edad que cumple en el año consultado = año consultado − año de nacimiento. `null` si el dato no es coherente (< 1). */
@@ -78,7 +68,6 @@ export type CumpleaniosEmpleado = {
   fecha: string;
   dia: number;
   edad: number | null;
-  ajuste29Feb: boolean;
 };
 
 export type ListadoCumpleanios = {

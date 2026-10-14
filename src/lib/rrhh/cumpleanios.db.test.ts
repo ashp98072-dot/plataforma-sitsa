@@ -121,16 +121,16 @@ describe.skipIf(!port)("RRHH · Cumpleaños por mes / MariaDB 11.8.9 SOLO LOCAL"
     expect(r8.proximos.map((p) => p.nombre)).toEqual(["Otra Empresa Oct"]);
   });
 
-  it("29 de febrero: año bisiesto = 29; año no bisiesto = 28 y entra en el orden del 28; el dato no cambia", async () => {
+  it("29 de febrero: pertenece a febrero y conserva su día REAL (29) tanto en año bisiesto como no; orden por día real", async () => {
+    const esperado = [[1, "Primero Feb"], [28, "Veintiocho Feb"], [29, "Bisiesto Feb"]];
     const b = await listarCumpleaniosDelMes(7, 2, 2024);
-    expect(b.empleados.map((e) => [e.dia, e.nombre, e.ajuste29Feb])).toEqual([
-      [1, "Primero Feb", false], [28, "Veintiocho Feb", false], [29, "Bisiesto Feb", false],
-    ]);
-    const n = await listarCumpleaniosDelMes(7, 2, 2026);
-    expect(n.empleados.map((e) => [e.dia, e.nombre, e.ajuste29Feb])).toEqual([
-      [1, "Primero Feb", false], [28, "Bisiesto Feb", true], [28, "Veintiocho Feb", false],
-    ]);
-    expect(n.empleados.find((e) => e.nombre === "Bisiesto Feb")).toMatchObject({ fecha: "2026-02-28", edad: 26 });
+    expect(b.empleados.map((e) => [e.dia, e.nombre])).toEqual(esperado);
+    const n = await listarCumpleaniosDelMes(7, 2, 2026); // 2026 no es bisiesto: NO se convierte a 28/02 ni a 01/03
+    expect(n.empleados.map((e) => [e.dia, e.nombre])).toEqual(esperado);
+    expect(n.empleados.find((e) => e.nombre === "Bisiesto Feb")).toMatchObject({ dia: 29, fecha: "2026-02-29", edad: 26 });
+    expect(b.empleados.find((e) => e.nombre === "Bisiesto Feb")).toMatchObject({ dia: 29, fecha: "2024-02-29", edad: 24 });
+    // No aparece en marzo.
+    expect((await listarCumpleaniosDelMes(7, 3, 2026)).empleados.map((e) => e.nombre)).not.toContain("Bisiesto Feb");
     // La ficha no se modificó.
     const [f] = await holder.pool!.query<RowDataPacket[]>("SELECT DATE_FORMAT(fecha_nacimiento,'%Y-%m-%d') AS f FROM empleados WHERE nombre = 'Bisiesto Feb'");
     expect(f[0].f).toBe("2000-02-29");
@@ -141,7 +141,7 @@ describe.skipIf(!port)("RRHH · Cumpleaños por mes / MariaDB 11.8.9 SOLO LOCAL"
     const texto = JSON.stringify(l);
     expect(texto).not.toMatch(/2999 99999|1234567-8|IGSS-SECRETO|Zona 1 secreta|5555-0000/);
     for (const e of l.empleados) {
-      expect(Object.keys(e).sort()).toEqual(["area", "codigo", "dia", "edad", "estado", "fecha", "id", "ajuste29Feb", "nombre", "puesto"].sort());
+      expect(Object.keys(e).sort()).toEqual(["area", "codigo", "dia", "edad", "estado", "fecha", "id", "nombre", "puesto"].sort());
     }
   });
 
@@ -156,8 +156,8 @@ describe.skipIf(!port)("RRHH · Cumpleaños por mes / MariaDB 11.8.9 SOLO LOCAL"
     expect((await resumenCumpleaniosDelMes(7, 10, 2026, "2026-09-15", 1)).proximos).toHaveLength(1);
     // Sin cumpleaños: total 0 y sin próximos.
     expect(await resumenCumpleaniosDelMes(7, 12, 2026, "2026-12-01")).toMatchObject({ total: 0, proximos: [] });
-    // Febrero no bisiesto: el 29/feb cuenta como 28.
+    // Febrero no bisiesto: se ordena por día real y el 29/feb se muestra como 29 (sin inventar un 28/02 para esa persona).
     const feb = await resumenCumpleaniosDelMes(7, 2, 2026, "2026-02-10", 5);
-    expect(feb.proximos.map((p) => [p.dia, p.nombre])).toEqual([[28, "Bisiesto Feb"], [28, "Veintiocho Feb"]]);
+    expect(feb.proximos.map((p) => [p.dia, p.nombre])).toEqual([[28, "Veintiocho Feb"], [29, "Bisiesto Feb"]]);
   });
 });
