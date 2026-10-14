@@ -10,7 +10,7 @@ tablas de Fase 1, ya instaladas). Continúa [Fase 1](TMS-LIQUIDACION-VIAJES-1-MO
 |---|---|
 | `POST /api/empresas/[slug]/tms/planes/[id]/reporte-recibido` (confirmación humana, idempotente, con advertencias reconocibles) | Liquidar / reabrir desde la UI (Fase 3), cargos (Fase 4) |
 | Permiso `viajes_confirmar_reporte` (fila propia, sin concesión por rol) + guard `requireTenantViajesConfirmarReporte` | **Cambio del cierre (Fase 5)**: el cierre normal, manual, masivo y por período NO consultan la liquidación |
-| Columna «Liquidación» + fila amarilla para todo viaje activo **no liquidado** + badge + leyenda en Planes/Viajes y reporte de viajes | Configurar la fecha de activación, facturación, fondos/gastos, cuadrilla real, FEL, contabilidad |
+| Columna «Liquidación» + fila amarilla sin reporte confirmado o en ajuste + badge + leyenda en Planes/Viajes y reporte de viajes | Configurar la fecha de activación, facturación, fondos/gastos, cuadrilla real, FEL, contabilidad |
 
 ## Endpoint
 
@@ -44,13 +44,15 @@ Mismo patrón que `viajes_cerrar`/`PERMISOS_ENTREGA`: id de fila ≤ 40 en `usua
 
 ## Reglas de UI (Planes/Viajes)
 
-**Regla de negocio (ajuste final): todo viaje que todavía NO está liquidado inicia con fila amarilla.** Al pasar a `LIQUIDADO` la fila vuelve a la
-superficie normal del tema.
+**Regla visual: amarillo significa «requiere una acción pendiente»: viaje activo sin reporte confirmado o liquidación en ajuste.**
+Confirmar el reporte cambia amarillo a superficie normal; reabrir cambia normal a amarillo; reliquidar vuelve a normal.
+Esto no altera estados, transiciones ni la regla funcional de estar pendiente de liquidar: un reporte recibido aún puede estar pendiente de liquidar,
+pero no se pinta amarillo. No se implementa ninguna funcionalidad de Fase 3 en este ajuste.
 
 | Situación del viaje | Fila | Badge de texto |
 |---|---|---|
 | Activo (Programado/Cargado/En ruta/Descargado) **sin liquidación registrada** | amarillo | **Pendiente** |
-| `REPORTE_RECIBIDO` | amarillo | Reporte recibido |
+| `REPORTE_RECIBIDO` | superficie normal del tema | Reporte recibido |
 | `EN_AJUSTE` | amarillo | En ajuste |
 | `LIQUIDADO` | superficie normal del tema | Liquidado |
 | `Cerrado`/`Cancelado` **sin** liquidación registrada (histórico / no aplica) | superficie normal | «—» |
@@ -66,8 +68,8 @@ El último caso se mantiene a propósito: un viaje ya cerrado o cancelado sin li
   conservar ≥ 4.5:1 (`#526079` / `#1d5f96` en claro; `#93a4b8` / `#5ea8e0` en oscuro).
 - **Contraste** verificado por prueba sobre la fila: texto ≥ 7:1 (≈ 16:1 claro, ≈ 10.9:1 oscuro); secundario, acento y «Confirmar reporte» ≥ 4.5:1.
 - **Hover y selección** son capas independientes del fondo (`background-image` y `box-shadow` inset en la primera celda).
-- **El color no es el único portador**: badge de texto con contraste ≥ 4.5:1, columna «Liquidación» y leyenda «Fila amarilla = viaje pendiente de
-  liquidación».
+- **El color no es el único portador**: badge de texto con contraste ≥ 4.5:1, columna «Liquidación» y leyenda «Fila amarilla = requiere una acción
+  pendiente (sin reporte confirmado o en ajuste). Fondo normal = reporte recibido, liquidado o histórico cerrado/cancelado sin liquidación».
 - **Acción «Confirmar reporte»**: solo en la vista operativa, con permiso, sin liquidación y viaje no cerrado/cancelado; la vista de reportes es de
   consulta (color/badge sin acciones).
 - El badge existente «Pendiente de cierre» (llegada registrada) **no se reutiliza ni se modifica**.
@@ -84,4 +86,4 @@ sistema se comporta exactamente como antes; esta fase no la configura.
 - **Verificación visual:** el contraste y las reglas CSS están verificados por prueba; no se hizo una revisión visual en navegador con datos reales.
 - El enlace de acento y el texto secundario se ajustan **solo dentro de la fila amarilla** (tokens por tema) para conservar el contraste; fuera de ella
   el tema no cambia (el acento oscuro normal sobre la tarjeta ya era ≈3.0:1: hallazgo del tema existente, no corregido aquí).
-- El texto exacto de las advertencias y de la leyenda es propuesta; pendiente de confirmación con Operaciones (D01/D04).
+- La leyenda sigue la semántica visual confirmada: amarillo solo sin reporte confirmado o en ajuste. Este ajuste no modifica los textos ni el flujo de advertencias.
