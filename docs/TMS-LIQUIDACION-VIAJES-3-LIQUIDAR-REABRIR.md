@@ -90,7 +90,8 @@ Separadas entre sí y de `viajes_confirmar_reporte` y `viajes_cerrar` (prueba de
 - **Modal de reapertura**: motivo obligatorio (≥ 5); explica que vuelve a «En ajuste», que la liquidación anterior permanece en el historial y que
   deberá liquidarse de nuevo.
 - **Historial**: tabla (versión, evento, antes→después, usuario, fecha, detalle/motivo) en el detalle expandible del viaje.
-- La semántica visual aprobada **no cambia** (amarillo = no liquidado; `LIQUIDADO` = superficie normal; histórico cerrado/cancelado sin liquidación = «—»).
+- La semántica visual vigente (PR #458) **no cambia**: amarillo = sin reporte confirmado o en ajuste (requiere acción pendiente); fondo normal =
+  reporte recibido, liquidado o histórico cerrado/cancelado sin liquidación («—»).
 
 ## Riesgos / pendientes
 

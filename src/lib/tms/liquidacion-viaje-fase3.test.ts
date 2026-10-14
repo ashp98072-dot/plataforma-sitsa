@@ -113,9 +113,9 @@ describe("Liquidación Fase 3 · acciones de la fila", () => {
     expect(accionesLiquidacionFila({ ...soloReabrir, estadoPlan: "En ruta", liquidacion: { estado: "REPORTE_RECIBIDO", version: 1 } }).liquidar).toBe(false);
   });
 
-  it("la semántica visual aprobada no cambia", () => {
+  it("la semántica visual vigente (#458) no cambia: amarillo = sin reporte confirmado o en ajuste; reporte recibido y liquidado = normal", () => {
     expect(claseFilaLiquidacion(null, "En ruta")).toBe("pendiente");
-    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")).toBe("pendiente");
+    expect(claseFilaLiquidacion({ estado: "REPORTE_RECIBIDO", version: 1 }, "En ruta")).toBe("normal");
     expect(claseFilaLiquidacion({ estado: "EN_AJUSTE", version: 3 }, "En ruta")).toBe("pendiente");
     expect(claseFilaLiquidacion({ estado: "LIQUIDADO", version: 2 }, "En ruta")).toBe("normal");
     expect(claseFilaLiquidacion(null, "Cerrado")).toBe("normal");
