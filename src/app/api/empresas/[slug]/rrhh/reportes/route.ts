@@ -5,7 +5,6 @@ import {
   obtenerReporteAsistencias,
   obtenerResumenIncidenciasDetallado,
 } from "@/lib/rrhh/reportes";
-import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -61,6 +60,7 @@ export async function GET(req: Request, ctx: Ctx) {
     ]);
 
     if (formato === "xlsx") {
+      const { tablaAExcel } = await import("@/lib/rrhh/export-files");
       const buf = await tablaAExcel({
         sheetName: "Incidencias",
         headers,
@@ -75,6 +75,7 @@ export async function GET(req: Request, ctx: Ctx) {
       });
     }
     if (formato === "pdf") {
+      const { tablaAPdf } = await import("@/lib/rrhh/export-files");
       const buf = await tablaAPdf({
         title: "Resumen de incidencias",
         subtitle: tituloBase,
@@ -128,6 +129,7 @@ export async function GET(req: Request, ctx: Ctx) {
   ]);
 
   if (formato === "xlsx") {
+    const { tablaAExcel } = await import("@/lib/rrhh/export-files");
     const buf = await tablaAExcel({
       sheetName: "Asistencias",
       headers,
@@ -143,6 +145,7 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   if (formato === "pdf") {
+    const { tablaAPdf } = await import("@/lib/rrhh/export-files");
     const buf = await tablaAPdf({
       title: "Reporte de asistencias",
       subtitle: tituloBase,
