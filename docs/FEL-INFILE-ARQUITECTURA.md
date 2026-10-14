@@ -2,6 +2,8 @@
 
 Estado: **DISEÑO. No implementado.** Nada de lo que sigue conecta con INFILE ni ejecuta SQL. Todo lo marcado **A CONFIRMAR** depende de documentación oficial que aún no tenemos ([DATOS FALTANTES](FEL-INFILE-DATOS-FALTANTES.md)). Complementa [DISCOVERY](FEL-INFILE-DISCOVERY.md) y [PLAN](FEL-INFILE-PLAN.md).
 
+> **Reconciliación FEL-2A (2026-10-14).** El modelo, el dominio y el proveedor MOCK se implementaron adaptados a `main` real; el DDL de §6 es **conceptual** y fue superado donde difiere. Diferencias (entidad_id/moneda ya existen en `fact_facturas`, una sola clave aditiva `uq_factura_ambito`, estados `CERTIFICADO/RECHAZADO/INCIERTO/NO_ENCONTRADO/ANULADO`, proveedor por ambiente, `referencia_emisor` + `clave_solicitud`, `FEL_CREDENTIALS_KEY` sin respaldo en `AUTH_SECRET`, facturación externa diferida a FEL-2B): ver [FEL-2A-MODELO-DOMINIO-MOCK.md](FEL-2A-MODELO-DOMINIO-MOCK.md) §2. **INFILE sigue sin integrarse.**
+
 ## 0. Principios
 
 1. Una factura **no** está «emitida con FEL» hasta que el certificador confirmó el éxito y se guardó su autorización.
@@ -358,6 +360,9 @@ SITSA hoy **no distingue** tipos: todo es «factura». Los XML de Milenium solo 
 La lista de tipos soportados por INFILE y su código exacto son **A CONFIRMAR**; el diseño es extensible (columna `tipo_documento`, validadores por tipo).
 
 ## 10. Anulaciones
+
+> **Actualización FEL-2A.** Una anulación incierta (timeout, excepción, `INCIERTO`, intento huérfano) **no se reenvía automáticamente**: es irreversible y `consultar()` no tiene estado `ANULADO`. Se registra como intento `ANULAR` `INCIERTO` con el documento aún `CERTIFICADO` y queda bloqueada hasta conocer el contrato de reconciliación del proveedor (FEL-3). Los estados `ANULACION_PENDIENTE/INCIERTA` de esta sección quedan como diseño futuro. Ver [FEL-2A §4.1](FEL-2A-MODELO-DOMINIO-MOCK.md).
+
 
 Separar:
 - **Anular factura interna** (hoy): sin FEL o `Borrador`; sin pagos; libera viajes. Se conserva.

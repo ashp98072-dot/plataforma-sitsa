@@ -40,6 +40,12 @@ Estado: checklist. **No se inventó ningún valor.** Sección A = datos que falt
 - [ ] Viajes ya facturados en Milenium que hay que marcar en `fact_viajes_facturacion_externa` (criterio: por fecha de corte, por cliente o lista; quién autoriza el marcado y su reversión; formato de la referencia externa: serie/número/autorización)
 - [ ] Variable de entorno `FEL_CREDENTIALS_KEY` (la configura el responsable; nunca en git)
 
+### A5. Decisiones abiertas que dejó FEL-2A (sin resolver; ver [FEL-2A](FEL-2A-MODELO-DOMINIO-MOCK.md) §11)
+- [ ] Estados de `estado_admin` desde los que se puede certificar (hoy el dominio solo admite `Borrador`)
+- [ ] Regla de refacturación (hoy provisional: original `ANULADO` o con nota de crédito `CERTIFICADA`)
+- [ ] Qué se corrige y en cuánto en notas de crédito/débito (los importes los aporta el llamador)
+- [ ] Datos fiscales del emisor por ambiente (hoy solo `nit_emisor` y `nombre_fiscal`, vacíos): afiliación IVA, establecimiento, frases, dirección
+
 ## B. Checklist para solicitar a INFILE
 
 Pedir por escrito (y guardar la versión/fecha de cada documento recibido). **Ninguno de estos datos está asumido en el diseño.**
@@ -53,6 +59,7 @@ Pedir por escrito (y guardar la versión/fecha de cada documento recibido). **Ni
 - [ ] Tipos de DTE soportados y su código (FACT, FCAM, notas de crédito/débito, exportación, otros)
 - [ ] Operación de **certificación**: request/response, campos devueltos (autorización, serie, número, fecha, XML, PDF)
 - [ ] Operación de **anulación**: payload, plazos, condiciones, respuesta
+- [ ] **Consulta del estado de una anulación** (por qué identificador, cómo responde «anulado», «no anulado», «en proceso» y «desconocido») y si la anulación es **idempotente** ante un reenvío; sin esto una anulación incierta **no puede reconciliarse ni reenviarse** (FEL-2A la deja bloqueada)
 - [ ] Operación de **consulta/estado** (por qué identificador: UUID del emisor, autorización, referencia propia) y **cómo responde cuando el documento NO existe** (código HTTP, cuerpo, código de error) y cuando está **en proceso**; sin esto no se puede declarar `NO_ENCONTRADO` ni habilitar un reenvío seguro
 - [ ] ¿La consulta puede tener **consistencia eventual** (cuánto debe esperarse tras el envío antes de que «no existe» sea confiable)?
 - [ ] ¿Se puede **reutilizar la misma referencia** tras un rechazo definitivo, o hay que enviar una nueva?
