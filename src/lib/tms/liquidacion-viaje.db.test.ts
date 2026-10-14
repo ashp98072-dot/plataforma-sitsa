@@ -71,13 +71,29 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
         CREATE TABLE usuarios(id INT PRIMARY KEY, username VARCHAR(100)) ENGINE=InnoDB;
         CREATE TABLE tms_planes_viaje(id INT PRIMARY KEY, empresa_id INT NOT NULL, codigo VARCHAR(80) NOT NULL,
           estado VARCHAR(40) NOT NULL, fecha_plan DATE NOT NULL, tarifa_comercial DECIMAL(12,2) NULL,
+          tipo_viaje VARCHAR(20) NOT NULL DEFAULT 'Propio', referencia_cliente VARCHAR(160) NULL, cliente_id INT NULL,
+          lugar_carga_id INT NULL, lugar_descarga_id INT NULL, ruta_codigo_historico VARCHAR(40) NULL, lugar_descarga_historico VARCHAR(300) NULL,
+          tarifa_id INT NULL, tarifa_nombre_historico VARCHAR(120) NULL, tarifa_monto_historico DECIMAL(12,2) NULL, tarifa_moneda_historico VARCHAR(10) NULL,
+          unidad_id INT NULL, tc_vehiculo_id INT NULL, tc_placa_historica VARCHAR(40) NULL, tc_externo_placa VARCHAR(40) NULL,
+          piloto_id INT NULL, auxiliar_id INT NULL, piloto_externo_nombre VARCHAR(160) NULL, auxiliares_externos TEXT NULL,
+          unidad_externa_placa VARCHAR(40) NULL, unidad_externa_descripcion VARCHAR(160) NULL, transportista_externo VARCHAR(160) NULL,
           UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id)) ENGINE=InnoDB;
+        CREATE TABLE tms_clientes(id INT PRIMARY KEY, empresa_id INT NOT NULL, nombre VARCHAR(200) NOT NULL) ENGINE=InnoDB;
+        CREATE TABLE tms_lugares(id INT PRIMARY KEY, empresa_id INT NOT NULL, nombre VARCHAR(200) NOT NULL) ENGINE=InnoDB;
+        CREATE TABLE tms_unidades(id INT PRIMARY KEY, empresa_id INT NOT NULL, placa VARCHAR(40) NOT NULL) ENGINE=InnoDB;
+        CREATE TABLE tms_personal(id INT PRIMARY KEY, empresa_id INT NOT NULL, nombre VARCHAR(200) NOT NULL) ENGINE=InnoDB;
+        CREATE TABLE flota_vehiculos(id INT PRIMARY KEY, placa VARCHAR(40) NOT NULL) ENGINE=InnoDB;
+        CREATE TABLE tms_plan_auxiliares(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT NOT NULL, personal_id INT NOT NULL, orden TINYINT NOT NULL DEFAULT 1) ENGINE=InnoDB;
+        CREATE TABLE tms_plan_pilotos_adicionales(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, plan_id INT NOT NULL, personal_id INT NOT NULL, orden TINYINT NOT NULL DEFAULT 1) ENGINE=InnoDB;
         CREATE TABLE auditoria(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, usuario VARCHAR(100), accion VARCHAR(100), modulo VARCHAR(100), detalle TEXT) ENGINE=InnoDB;
         CREATE TABLE flota_viajes(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, plan_id INT NULL,
-          estado VARCHAR(20) NOT NULL DEFAULT 'abierto', km_salida INT NULL, km_llegada INT NULL) ENGINE=InnoDB;
+          estado VARCHAR(20) NOT NULL DEFAULT 'abierto', km_salida INT NULL, km_llegada INT NULL,
+          hora_salida DATETIME NULL, hora_llegada DATETIME NULL) ENGINE=InnoDB;
         CREATE TABLE tms_solicitud_fondo_lineas(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
         CREATE TABLE tms_gastos_operativos(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
-        CREATE TABLE tms_plan_cuadrilla(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
+        CREATE TABLE tms_plan_cuadrilla(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL DEFAULT 7, plan_id INT NOT NULL,
+          orden SMALLINT NOT NULL DEFAULT 1, tipo VARCHAR(10) NOT NULL DEFAULT 'EXTERNO', id_empleado INT NULL,
+          nombre VARCHAR(200) NOT NULL DEFAULT 'Cuadrilla', identificacion VARCHAR(100) NULL, telefono VARCHAR(50) NULL) ENGINE=InnoDB;
         CREATE TABLE fact_factura_viajes(id INT AUTO_INCREMENT PRIMARY KEY, plan_id INT) ENGINE=InnoDB;
         CREATE TABLE fel_documentos(id INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB;
         CREATE TABLE cont_eventos(id INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB;
@@ -492,5 +508,202 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     expect(m.get(enAjuste)).toEqual({ estado: "EN_AJUSTE", version: 3 });
     expect(m.has(historico)).toBe(false);
     expect(m.has(ajeno)).toBe(false); // otra empresa
+  });
+
+  // ───────────────────────────── FASE 3: liquidar / reabrir con snapshot operativo ─────────────────────────────
+  const completo = async (delta: { empresa?: number } = {}) => {
+    const e = delta.empresa ?? 7;
+    const base = sigPlan * 10; // ids de catálogos únicos por viaje
+    await holder.pool!.execute("INSERT INTO tms_clientes VALUES (?, ?, 'Cliente Fase3')", [base + 1, e]);
+    await holder.pool!.execute("INSERT INTO tms_lugares VALUES (?, ?, 'Bodega Origen'), (?, ?, 'Destino Catalogo')", [base + 2, e, base + 3, e]);
+    await holder.pool!.execute("INSERT INTO tms_unidades VALUES (?, ?, 'C-123ABC')", [base + 4, e]);
+    await holder.pool!.execute("INSERT INTO tms_personal VALUES (?, ?, 'Piloto Uno'), (?, ?, 'Aux Uno'), (?, ?, 'Piloto Extra')", [base + 5, e, base + 6, e, base + 7, e]);
+    await holder.pool!.execute("INSERT INTO flota_vehiculos VALUES (?, 'TC-999XYZ')", [base + 8]);
+    const p = await plan({ empresa: e, tarifa: 1500 });
+    await holder.pool!.execute(
+      `UPDATE tms_planes_viaje SET cliente_id = ?, lugar_carga_id = ?, lugar_descarga_id = ?, ruta_codigo_historico = 'RUTA-1', unidad_id = ?,
+              piloto_id = ?, tc_vehiculo_id = ?, referencia_cliente = 'REF-9', tarifa_id = 77, tarifa_nombre_historico = 'Tarifa std',
+              tarifa_monto_historico = 1400, tarifa_moneda_historico = 'GTQ' WHERE id = ?`,
+      [base + 1, base + 2, base + 3, base + 4, base + 5, base + 8, p],
+    );
+    await holder.pool!.execute("INSERT INTO tms_plan_auxiliares (plan_id, personal_id, orden) VALUES (?, ?, 1)", [p, base + 6]);
+    await holder.pool!.execute("INSERT INTO tms_plan_pilotos_adicionales (empresa_id, plan_id, personal_id) VALUES (?, ?, ?)", [e, p, base + 7]);
+    await holder.pool!.execute(
+      "INSERT INTO tms_plan_cuadrilla (empresa_id, plan_id, orden, tipo, id_empleado, nombre, identificacion, telefono) VALUES (?, ?, 1, 'INTERNO', 501, 'Ayudante Interno', NULL, NULL), (?, ?, 2, 'EXTERNO', NULL, 'Ayudante Externo', 'DPI-SECRETO-123', '5555-0000')",
+      [e, p, e, p],
+    );
+    await holder.pool!.execute(
+      "INSERT INTO flota_viajes (empresa_id, plan_id, estado, km_salida, km_llegada, hora_salida, hora_llegada) VALUES (?, ?, 'cerrado', 1000, 1250, '2026-10-14 06:30:00', '2026-10-14 18:10:00')",
+      [e, p],
+    );
+    return p;
+  };
+  const eventoDe = async (p: number, tipo: string) => (await listarEventosLiquidacion(7, p)).find((e) => e.tipo === tipo)!;
+
+  it("F3-1. liquidar guarda un snapshot operativo con los datos existentes (y sin datos sensibles ni costos)", async () => {
+    const p = await completo();
+    await confirmarReporteRecibido(A, { planId: p });
+    const r = await liquidarViaje(B, { planId: p, versionEsperada: 1, observacion: "  Todo conforme  " });
+    expect(r).toMatchObject({ evento: "LIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 2 } });
+    const ev = await eventoDe(p, "LIQUIDADO");
+    expect(ev.detalle).toBe("Todo conforme");
+    const o = ev.snapshot!.operativo!;
+    expect(o.version).toBe(1);
+    expect(o.plan).toMatchObject({ id: p, codigo: `PLAN-${p}`, fechaPlan: "2026-10-14", estado: "Programado", tipoViaje: "Propio", referenciaCliente: "REF-9" });
+    expect(o.cliente.nombre).toBe("Cliente Fase3");
+    expect(o.ruta).toEqual({ codigo: "RUTA-1", origen: "Bodega Origen", destino: "Destino Catalogo" });
+    expect(o.tarifa).toEqual({ comercial: "1500.00", tarifaId: 77, nombre: "Tarifa std", montoCatalogo: "1400.00", moneda: "GTQ" });
+    expect(o.unidad.placa).toBe("C-123ABC");
+    expect(o.tc).toEqual({ placa: "TC-999XYZ", origen: "INTERNO" });
+    expect(o.piloto.nombre).toBe("Piloto Uno");
+    expect(o.pilotosExtra.map((x) => x.nombre)).toEqual(["Piloto Extra"]);
+    expect(o.auxiliares.map((x) => x.nombre)).toEqual(["Aux Uno"]);
+    expect(o.cuadrilla).toEqual([
+      { tipo: "INTERNO", empleadoId: 501, nombre: "Ayudante Interno" },
+      { tipo: "EXTERNO", empleadoId: null, nombre: "Ayudante Externo" },
+    ]);
+    expect(o.tercerizado).toBeNull();
+    expect(o.viajeFisico).toEqual({ estado: "cerrado", kmSalida: 1000, kmLlegada: 1250, kmRecorridos: 250, horaSalida: "2026-10-14T06:30", horaLlegada: "2026-10-14T18:10" });
+    expect(o.noDisponible.length).toBeGreaterThan(0);
+    // Datos de la liquidación y trazabilidad.
+    expect(ev.snapshot!.liquidacion).toMatchObject({
+      version: 2, transicion: "LIQUIDADO", estadoAntes: "REPORTE_RECIBIDO", liquidadoPor: 5, liquidadoPorUsuario: "beto",
+      reporteRecibidoPor: 4, reaperturaPrevia: null,
+    });
+    expect(typeof ev.snapshot!.liquidacion!.reporteRecibidoEn).toBe("string");
+    // Sin datos sensibles innecesarios ni costos.
+    const crudo = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND tipo = 'LIQUIDADO'", [p]))[0].snapshot_json as string;
+    expect(crudo).not.toMatch(/DPI-SECRETO-123|5555-0000/);
+    const claves: string[] = [];
+    JSON.parse(crudo, function (k, v) { claves.push(k); return v; });
+    expect(claves.filter((k) => /identificacion|telefono|costo|monto_asignado|cargo/i.test(k))).toEqual([]);
+  });
+
+  it("F3-2. el snapshot es evidencia inmutable y liquidar NO modifica Programación (plan, auxiliares, cuadrilla, piloto extra)", async () => {
+    const p = await completo();
+    const foto = async () => JSON.stringify([
+      await sql("SELECT * FROM tms_planes_viaje WHERE id = ?", [p]),
+      await sql("SELECT * FROM tms_plan_auxiliares WHERE plan_id = ?", [p]),
+      await sql("SELECT * FROM tms_plan_cuadrilla WHERE plan_id = ?", [p]),
+      await sql("SELECT * FROM tms_plan_pilotos_adicionales WHERE plan_id = ?", [p]),
+      await sql("SELECT * FROM flota_viajes WHERE plan_id = ?", [p]),
+    ]);
+    const antes = await foto();
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    expect(await foto()).toBe(antes);
+    const original = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND tipo = 'LIQUIDADO'", [p]))[0].snapshot_json;
+    // Cambios posteriores en Programación NO alteran el snapshot ya guardado.
+    await holder.pool!.execute("UPDATE tms_planes_viaje SET tarifa_comercial = 9999 WHERE id = ?", [p]);
+    await holder.pool!.execute("UPDATE tms_personal SET nombre = 'Otro Nombre' WHERE nombre = 'Piloto Uno'");
+    await holder.pool!.execute("DELETE FROM tms_plan_cuadrilla WHERE plan_id = ?", [p]);
+    expect((await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND tipo = 'LIQUIDADO'", [p]))[0].snapshot_json).toBe(original);
+  });
+
+  it("F3-3. reapertura + reliquidación: nuevo snapshot, motivo preservado y evento anterior intacto", async () => {
+    const p = await completo();
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    const v2 = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND version = 2", [p]))[0].snapshot_json;
+    await reabrirLiquidacion(B, { planId: p, versionEsperada: 2, motivo: "Corregir tarifa del viaje" });
+    await holder.pool!.execute("UPDATE tms_planes_viaje SET tarifa_comercial = 1800 WHERE id = ?", [p]);
+    const r = await liquidarViaje(A, { planId: p, versionEsperada: 3, observacion: "Tarifa corregida" });
+    expect(r).toMatchObject({ evento: "RELIQUIDADO", liquidacion: { estado: "LIQUIDADO", version: 4 } });
+    const rel = await eventoDe(p, "RELIQUIDADO");
+    expect(rel.snapshot!.operativo!.tarifa.comercial).toBe("1800.00");
+    expect(rel.snapshot!.liquidacion).toMatchObject({
+      version: 4, transicion: "RELIQUIDADO", estadoAntes: "EN_AJUSTE",
+      reaperturaPrevia: { version: 3, actorId: 5, motivo: "Corregir tarifa del viaje" },
+    });
+    // La liquidación anterior y el evento REABIERTO permanecen sin cambios (append-only).
+    expect((await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? AND version = 2", [p]))[0].snapshot_json).toBe(v2);
+    expect((await eventoDe(p, "REABIERTO")).detalle).toBe("Corregir tarifa del viaje");
+    expect((await listarEventosLiquidacion(7, p)).map((e) => e.tipo)).toEqual(["REPORTE_RECIBIDO", "LIQUIDADO", "REABIERTO", "RELIQUIDADO"]);
+  });
+
+  it("F3-4. tenant-safe: un cliente/unidad de OTRA empresa referenciado por el viaje no se filtra al snapshot", async () => {
+    const p = await completo();
+    await holder.pool!.execute("INSERT INTO tms_clientes VALUES (?, 8, 'Cliente De Otra Empresa')", [900000 + p]);
+    await holder.pool!.execute("UPDATE tms_planes_viaje SET cliente_id = ? WHERE id = ?", [900000 + p, p]);
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    const o = (await eventoDe(p, "LIQUIDADO")).snapshot!.operativo!;
+    expect(o.cliente.nombre).toBeNull();
+    const crudo = (await sql("SELECT snapshot_json FROM tms_viaje_liquidacion_eventos WHERE plan_id = ?", [p])).map((x) => x.snapshot_json).join("");
+    expect(crudo).not.toContain("Cliente De Otra Empresa");
+  });
+
+  it("F3-5. viaje tercerizado: el snapshot incluye los datos externos y el TC externo", async () => {
+    const p = await plan({ tarifa: 800 });
+    await holder.pool!.execute(
+      `UPDATE tms_planes_viaje SET tipo_viaje = 'Tercerizado', piloto_externo_nombre = 'Piloto Ajeno', unidad_externa_placa = 'EXT-111',
+              unidad_externa_descripcion = 'Cabezal', transportista_externo = 'Transportes SA', tc_externo_placa = 'TCE-222' WHERE id = ?`,
+      [p],
+    );
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    const o = (await eventoDe(p, "LIQUIDADO")).snapshot!.operativo!;
+    expect(o.plan.tipoViaje).toBe("Tercerizado");
+    expect(o.tercerizado).toEqual({
+      pilotoExterno: "Piloto Ajeno", auxiliaresExternos: null, unidadExternaPlaca: "EXT-111", unidadExternaDescripcion: "Cabezal", transportistaExterno: "Transportes SA",
+    });
+    expect(o.unidad.placa).toBe("EXT-111");
+    expect(o.tc).toEqual({ placa: "TCE-222", origen: "EXTERNO" });
+    expect(o.piloto.nombre).toBe("Piloto Ajeno");
+    expect(o.viajeFisico).toBeNull(); // sin registro del piloto: no se inventa
+  });
+
+  it("F3-6. observación de liquidación: ≤ 500 caracteres y sin efecto en la versión si se rechaza", async () => {
+    const p = await plan();
+    await confirmarReporteRecibido(A, { planId: p });
+    expect(await codigo(liquidarViaje(A, { planId: p, versionEsperada: 1, observacion: "x".repeat(501) }))).toBe("SOLICITUD_INVALIDA");
+    expect((await leerLiquidacionPlan(7, p))!.version).toBe(1);
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(1);
+  });
+
+  it("F3-7. concurrencia: 6 liquidaciones simultáneas de 3 actores = una sola transición con UN snapshot", async () => {
+    const p = await completo();
+    await confirmarReporteRecibido(A, { planId: p });
+    const actores = [A, B, { empresaId: 7, usuarioId: 6, usuario: "carla" }];
+    const r = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => liquidarViaje(actores[i % 3], { planId: p, versionEsperada: 1 })));
+    const efectivas = r.filter((x) => x.status === "fulfilled" && !x.value.idempotente);
+    expect(efectivas).toHaveLength(1);
+    for (const x of r) {
+      if (x.status === "rejected") expect(["CONFLICTO_VERSION", "ESTADO_NO_PERMITE"]).toContain(x.reason.codigoLiquidacion);
+    }
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ? AND tipo = 'LIQUIDADO' AND snapshot_json IS NOT NULL", [p])).toBe(1);
+    expect((await leerLiquidacionPlan(7, p))).toMatchObject({ estado: "LIQUIDADO", version: 2 });
+  });
+
+  it("F3-8. reabrir: réplica del mismo actor es idempotente y la versión obsoleta se rechaza sin evento", async () => {
+    const p = await plan();
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    const r = await Promise.all([
+      reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajustar viaticos" }),
+      reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajustar viaticos" }),
+    ]);
+    expect(r.filter((x) => x.idempotente)).toHaveLength(1);
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ? AND tipo = 'REABIERTO'", [p])).toBe(1);
+    expect(await codigo(reabrirLiquidacion(B, { planId: p, versionEsperada: 2, motivo: "otro motivo" }))).toBe("CONFLICTO_VERSION");
+    expect(await codigo(reabrirLiquidacion(B, { planId: p, versionEsperada: 3, motivo: "otro motivo" }))).toBe("ESTADO_NO_PERMITE");
+    expect(await codigo(liquidarViaje(B, { planId: p, versionEsperada: 2 }))).toBe("CONFLICTO_VERSION");
+    expect(await conteo("tms_viaje_liquidacion_eventos", "plan_id = ?", [p])).toBe(3);
+  });
+
+  it("F3-9. liquidar no toca cierre, facturación, fondos/gastos, FEL ni contabilidad (y el viaje sigue sin cerrarse)", async () => {
+    const p = await completo();
+    await holder.pool!.execute("INSERT INTO tms_solicitud_fondo_lineas (plan_id) VALUES (?)", [p]);
+    await holder.pool!.execute("INSERT INTO tms_gastos_operativos (plan_id) VALUES (?)", [p]);
+    const tablas = ["tms_solicitud_fondo_lineas", "tms_gastos_operativos", "fact_factura_viajes", "fel_documentos", "cont_eventos"];
+    const foto = async () => JSON.stringify(await Promise.all(tablas.map((t) => sql(`SELECT * FROM ${t} ORDER BY id`))));
+    const antes = await foto();
+    await confirmarReporteRecibido(A, { planId: p });
+    await liquidarViaje(A, { planId: p, versionEsperada: 1 });
+    await reabrirLiquidacion(A, { planId: p, versionEsperada: 2, motivo: "Ajuste de prueba" });
+    await liquidarViaje(A, { planId: p, versionEsperada: 3 });
+    expect(await foto()).toBe(antes);
+    const fila = await filaPlan(p);
+    expect(fila.estado).toBe("Programado");
   });
 });

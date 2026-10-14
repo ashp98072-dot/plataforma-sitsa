@@ -6,13 +6,16 @@ import {
   ESTADOS_PLAN_SIN_LIQUIDACION,
   MOTIVO_REAPERTURA_MAX,
   MOTIVO_REAPERTURA_MIN,
+  OBSERVACION_LIQUIDACION_MAX,
   OBSERVACION_REPORTE_MAX,
   normalizarFechaIso,
+  type SnapshotEventoLiquidacion,
   type CodigoAdvertenciaReporte,
   type ResumenLiquidacionFila,
   type EstadoLiquidacionViaje,
   type TipoEventoLiquidacion,
 } from "./liquidacion-viaje-shared";
+import { construirSnapshotOperativo } from "./liquidacion-viaje-snapshot";
 
 /**
  * TMS — LIQUIDACIÓN DE VIAJES, FASE 1: modelo persistente mínimo, eventos auditables y activación por empresa.
@@ -74,7 +77,7 @@ export type EventoLiquidacionViaje = {
   estadoDespues: EstadoLiquidacionViaje;
   actorId: number;
   detalle: string | null;
-  snapshot: { planEstado: string; fechaPlan: string | null; tarifaComercial: string | null } | null;
+  snapshot: SnapshotEventoLiquidacion | null;
   creadoEn: string;
 };
 
@@ -161,9 +164,15 @@ async function insertarEvento(
   c: PoolConnection,
   actor: ActorLiquidacion,
   plan: FilaPlan,
-  e: { planId: number; version: number; tipo: TipoEventoLiquidacion; antes: EstadoLiquidacionViaje | null; despues: EstadoLiquidacionViaje; detalle: string | null },
+  e: {
+    planId: number; version: number; tipo: TipoEventoLiquidacion; antes: EstadoLiquidacionViaje | null;
+    despues: EstadoLiquidacionViaje; detalle: string | null;
+    /** Fotografía operativa y datos de la liquidación (solo LIQUIDADO/RELIQUIDADO). Se agregan al snapshot mínimo de siempre. */
+    snapshotExtra?: Pick<SnapshotEventoLiquidacion, "operativo" | "liquidacion">;
+  },
 ): Promise<void> {
-  const snapshot = JSON.stringify({ planEstado: plan.estado, fechaPlan: plan.fecha_plan, tarifaComercial: plan.tarifa_comercial });
+  const base: SnapshotEventoLiquidacion = { planEstado: plan.estado, fechaPlan: plan.fecha_plan, tarifaComercial: plan.tarifa_comercial };
+  const snapshot = JSON.stringify({ ...base, ...(e.snapshotExtra ?? {}) });
   await c.execute(
     `INSERT INTO tms_viaje_liquidacion_eventos
        (empresa_id, plan_id, version, tipo, estado_antes, estado_despues, actor_id, detalle, snapshot_json)
@@ -234,14 +243,19 @@ export async function confirmarReporteRecibido(
  * `REPORTE_RECIBIDO → LIQUIDADO` (evento LIQUIDADO) o `EN_AJUSTE → LIQUIDADO` (evento RELIQUIDADO). Exige la versión que el
  * usuario vio (`versionEsperada`): una versión vieja es CONFLICTO_VERSION. Réplica idempotente: mismo actor, versión + 1.
  *
- * NOTA: en Fase 1 la transición es solo del estado; los requisitos de negocio de la liquidación (tarifa, snapshot de
- * cuadrilla, advertencias, cargos) son de la Fase 3 y NO se evalúan aquí.
+ * FASE 3: al liquidar/re-liquidar el evento guarda en `snapshot_json` una fotografía OPERATIVA inmutable del viaje
+ * (liquidacion-viaje-snapshot.ts; solo lectura, bajo el lock del plan). La liquidación NO modifica Programación, no cierra el
+ * viaje y no crea costos, cargos ni facturación.
  */
 export async function liquidarViaje(
   actor: ActorLiquidacion,
-  entrada: { planId: number; versionEsperada: number },
+  entrada: { planId: number; versionEsperada: number; observacion?: string | null },
 ): Promise<ResultadoTransicionLiquidacion> {
   const esperada = validarVersionEsperada(entrada.versionEsperada);
+  const observacion = (entrada.observacion ?? "").trim() || null;
+  if (observacion && observacion.length > OBSERVACION_LIQUIDACION_MAX) {
+    throw new ErrorLiquidacionViaje("SOLICITUD_INVALIDA", `La observación no puede superar ${OBSERVACION_LIQUIDACION_MAX} caracteres.`, 400);
+  }
   return transaccion(async (c) => {
     const plan = await bloquearPlan(c, actor.empresaId, entrada.planId);
     exigirPlanAdmite(plan);
@@ -255,6 +269,21 @@ export async function liquidarViaje(
     }
     if (actual.estado === "LIQUIDADO") throw new ErrorLiquidacionViaje("ESTADO_NO_PERMITE", "El viaje ya está liquidado.");
     const tipo: TipoEventoLiquidacion = actual.estado === "EN_AJUSTE" ? "RELIQUIDADO" : "LIQUIDADO";
+    // Fotografía operativa (SOLO LECTURA, bajo el lock del plan): evidencia de cómo quedó el viaje al liquidar.
+    const operativo = await construirSnapshotOperativo(c, actor.empresaId, entrada.planId);
+    if (!operativo) throw new ErrorLiquidacionViaje("NO_ENCONTRADO", "Viaje no encontrado.", 404);
+    let reaperturaPrevia: NonNullable<SnapshotEventoLiquidacion["liquidacion"]>["reaperturaPrevia"] = null;
+    if (actual.estado === "EN_AJUSTE") {
+      const [rea] = await c.query<(RowDataPacket & { version: number; actor_id: number; detalle: string | null; creado_en: string })[]>(
+        `SELECT version, actor_id, detalle, DATE_FORMAT(creado_en, '${FMT_DT}') AS creado_en
+           FROM tms_viaje_liquidacion_eventos
+          WHERE empresa_id = ? AND plan_id = ? AND tipo = 'REABIERTO' ORDER BY version DESC LIMIT 1`,
+        [actor.empresaId, entrada.planId],
+      );
+      if (rea[0]) {
+        reaperturaPrevia = { version: Number(rea[0].version), actorId: Number(rea[0].actor_id), motivo: rea[0].detalle, creadoEn: rea[0].creado_en };
+      }
+    }
     const [r] = await c.execute<ResultSetHeader>(
       `UPDATE tms_viaje_liquidaciones
           SET estado = 'LIQUIDADO', version = version + 1, liquidado_en = NOW(), liquidado_por = ?
@@ -263,7 +292,20 @@ export async function liquidarViaje(
     );
     if (r.affectedRows !== 1) throw new ErrorLiquidacionViaje("CONFLICTO_VERSION", "La liquidación cambió durante la operación.");
     await insertarEvento(c, actor, plan, {
-      planId: entrada.planId, version: actual.version + 1, tipo, antes: actual.estado, despues: "LIQUIDADO", detalle: null,
+      planId: entrada.planId, version: actual.version + 1, tipo, antes: actual.estado, despues: "LIQUIDADO", detalle: observacion,
+      snapshotExtra: {
+        operativo,
+        liquidacion: {
+          version: actual.version + 1,
+          transicion: tipo === "RELIQUIDADO" ? "RELIQUIDADO" : "LIQUIDADO",
+          estadoAntes: actual.estado,
+          liquidadoPor: actor.usuarioId,
+          liquidadoPorUsuario: actor.usuario,
+          reporteRecibidoEn: actual.reporteRecibidoEn,
+          reporteRecibidoPor: actual.reporteRecibidoPor,
+          reaperturaPrevia,
+        },
+      },
     });
     return { liquidacion: (await leerLiquidacionTx(c, actor.empresaId, entrada.planId))!, evento: tipo, idempotente: false };
   });

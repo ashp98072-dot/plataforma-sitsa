@@ -142,16 +142,20 @@ const LABEL_PERMISO_ENTREGA: Record<PermisoEntrega, string> = {
 /**
  * LIQUIDACIÓN DE VIAJES (TMS): filas propias dentro de "programacion" (mismo patrón que `viajes_cerrar` y PERMISOS_ENTREGA),
  * `editar` = puede actuar. NINGUNA se concede por rol: se asignan manualmente desde Usuarios. FASE 2 solo declara la que tiene
- * endpoint/UI; las demás (liquidar, reabrir, cargos, configuración) se declararán con su fase.
+ * endpoint/UI; las demás (cargos, configuración) se declararán con su fase.
  *   - viajes_confirmar_reporte: confirmar que el piloto entregó su reporte (REPORTE_RECIBIDO). No cierra ni liquida.
+ *   - viajes_liquidar: liquidar / liquidar nuevamente (Fase 3). No cierra, no factura, no crea cargos ni mueve fondos.
+ *   - viajes_reabrir_liquidacion: reabrir una liquidación (LIQUIDADO → EN_AJUSTE) con motivo (Fase 3). Permiso aparte de liquidar.
  */
-export const PERMISOS_LIQUIDACION_VIAJE = ["viajes_confirmar_reporte"] as const;
+export const PERMISOS_LIQUIDACION_VIAJE = ["viajes_confirmar_reporte", "viajes_liquidar", "viajes_reabrir_liquidacion"] as const;
 export type PermisoLiquidacionViaje = (typeof PERMISOS_LIQUIDACION_VIAJE)[number];
 export function esPermisoLiquidacionViaje(m: string): m is PermisoLiquidacionViaje {
   return (PERMISOS_LIQUIDACION_VIAJE as readonly string[]).includes(m);
 }
 const LABEL_PERMISO_LIQUIDACION_VIAJE: Record<PermisoLiquidacionViaje, string> = {
   viajes_confirmar_reporte: "Viajes: confirmar reporte recibido",
+  viajes_liquidar: "Viajes: liquidar",
+  viajes_reabrir_liquidacion: "Viajes: reabrir liquidación",
 };
 
 export const PLATAFORMA_PERMISIBLES = [
