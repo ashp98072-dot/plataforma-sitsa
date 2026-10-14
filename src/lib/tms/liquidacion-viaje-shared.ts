@@ -127,3 +127,105 @@ export function puedeOfrecerConfirmarReporte(entrada: {
   if ((ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(entrada.estadoPlan)) return false;
   return entrada.liquidacion == null;
 }
+
+// ───────────────────────────── FASE 3: liquidar / reabrir ─────────────────────────────
+
+export const OBSERVACION_LIQUIDACION_MAX = 500;
+
+/**
+ * Fotografía OPERATIVA inmutable que se guarda en `snapshot_json` del evento LIQUIDADO/RELIQUIDADO: cómo estaba operado el
+ * viaje en ese momento (evidencia histórica; NO es una fuente mutable ni reemplaza a Programación). Solo datos que existen
+ * físicamente hoy; lo que no existe se lista en `noDisponible`. Sin datos sensibles innecesarios (no incluye teléfonos ni
+ * documentos de identidad de la cuadrilla), sin costos y sin cargos.
+ */
+export type SnapshotOperativoViaje = {
+  version: 1;
+  plan: { id: number; codigo: string; fechaPlan: string | null; estado: string; tipoViaje: string; referenciaCliente: string | null };
+  cliente: { id: number | null; nombre: string | null };
+  ruta: { codigo: string | null; origen: string | null; destino: string | null };
+  tarifa: { comercial: string | null; tarifaId: number | null; nombre: string | null; montoCatalogo: string | null; moneda: string | null };
+  unidad: { id: number | null; placa: string | null };
+  tc: { placa: string | null; origen: "INTERNO" | "EXTERNO" | null };
+  piloto: { personalId: number | null; nombre: string | null };
+  pilotosExtra: { personalId: number; nombre: string }[];
+  auxiliares: { personalId: number; nombre: string }[];
+  /** Cuadrilla REGISTRADA en el viaje al liquidar (programada/ajustada en Programación); NO es una «cuadrilla real» separada. */
+  cuadrilla: { tipo: "INTERNO" | "EXTERNO"; empleadoId: number | null; nombre: string }[];
+  tercerizado: {
+    pilotoExterno: string | null;
+    auxiliaresExternos: string | null;
+    unidadExternaPlaca: string | null;
+    unidadExternaDescripcion: string | null;
+    transportistaExterno: string | null;
+  } | null;
+  /** Último registro físico del piloto en Flota (km/horas); null si el piloto no registró nada. */
+  viajeFisico: {
+    estado: string | null;
+    kmSalida: number | null;
+    kmLlegada: number | null;
+    kmRecorridos: number | null;
+    horaSalida: string | null;
+    horaLlegada: string | null;
+  } | null;
+  /** Conceptos que NO existen físicamente en el modelo actual (no se inventan). */
+  noDisponible: string[];
+};
+
+export const CONCEPTOS_NO_DISPONIBLES_SNAPSHOT = [
+  "costos reales (combustible, viáticos, gastos): módulos aparte, fuera de la Fase 3",
+  "cargos adicionales: Fase 4",
+  "incidencias estructuradas",
+  "cuadrilla real distinta de la registrada en el viaje",
+  "kilometraje confirmado por Operaciones (solo el registrado por el piloto en Flota)",
+] as const;
+
+export type SnapshotEventoLiquidacion = {
+  planEstado: string;
+  fechaPlan: string | null;
+  tarifaComercial: string | null;
+  /** Solo en LIQUIDADO/RELIQUIDADO. */
+  operativo?: SnapshotOperativoViaje;
+  liquidacion?: {
+    version: number;
+    transicion: "LIQUIDADO" | "RELIQUIDADO";
+    estadoAntes: EstadoLiquidacionViaje;
+    liquidadoPor: number;
+    liquidadoPorUsuario: string;
+    reporteRecibidoEn: string;
+    reporteRecibidoPor: number;
+    /** Reapertura que originó esta re-liquidación (solo RELIQUIDADO): su motivo se preserva aquí y en el evento REABIERTO. */
+    reaperturaPrevia: { version: number; actorId: number; motivo: string | null; creadoEn: string } | null;
+  };
+};
+
+export type AccionesLiquidacionFila = {
+  /** Confirmar reporte (Fase 2): sin liquidación registrada. */
+  confirmarReporte: boolean;
+  /** «Liquidar viaje» (REPORTE_RECIBIDO) o «Liquidar nuevamente» (EN_AJUSTE). */
+  liquidar: boolean;
+  etiquetaLiquidar: "Liquidar viaje" | "Liquidar nuevamente" | null;
+  /** «Reabrir liquidación» (LIQUIDADO). */
+  reabrir: boolean;
+};
+
+/**
+ * Acciones de liquidación ofrecidas en una fila de la vista operativa. Cerrado/Cancelado y la vista de consulta no admiten
+ * ninguna; sin liquidación solo se puede confirmar el reporte (nunca liquidar). Cada acción exige SU permiso, separado del cierre.
+ */
+export function accionesLiquidacionFila(entrada: {
+  estadoPlan: string;
+  liquidacion: ResumenLiquidacionFila | null | undefined;
+  puedeConfirmarReporte: boolean;
+  puedeLiquidar: boolean;
+  puedeReabrir: boolean;
+  soloConsulta: boolean;
+}): AccionesLiquidacionFila {
+  const ninguna: AccionesLiquidacionFila = { confirmarReporte: false, liquidar: false, etiquetaLiquidar: null, reabrir: false };
+  if (entrada.soloConsulta) return ninguna;
+  if ((ESTADOS_PLAN_SIN_LIQUIDACION as readonly string[]).includes(entrada.estadoPlan)) return ninguna;
+  const l = entrada.liquidacion;
+  if (!l) return { ...ninguna, confirmarReporte: entrada.puedeConfirmarReporte };
+  if (l.estado === "REPORTE_RECIBIDO") return { ...ninguna, liquidar: entrada.puedeLiquidar, etiquetaLiquidar: entrada.puedeLiquidar ? "Liquidar viaje" : null };
+  if (l.estado === "EN_AJUSTE") return { ...ninguna, liquidar: entrada.puedeLiquidar, etiquetaLiquidar: entrada.puedeLiquidar ? "Liquidar nuevamente" : null };
+  return { ...ninguna, reabrir: entrada.puedeReabrir }; // LIQUIDADO
+}

@@ -176,7 +176,7 @@ describe("Liquidación Fase 2 · presentación", () => {
 // ───────────────────────────── permisos ─────────────────────────────
 describe("Liquidación Fase 2 · permisos (patrón real del repositorio)", () => {
   it("viajes_confirmar_reporte sigue el patrón de viajes_cerrar: fila propia, flag editar, módulo TMS", () => {
-    expect([...PERMISOS_LIQUIDACION_VIAJE]).toEqual(["viajes_confirmar_reporte"]);
+    expect([...PERMISOS_LIQUIDACION_VIAJE]).toEqual(["viajes_confirmar_reporte", "viajes_liquidar", "viajes_reabrir_liquidacion"]);
     expect(esPlataformaPermisible("viajes_confirmar_reporte")).toBe(true);
     expect(moduloEmpresaDelPermiso("viajes_confirmar_reporte")).toBe("tms");
     expect(labelPermiso("viajes_confirmar_reporte")).toBe("Viajes: confirmar reporte recibido");

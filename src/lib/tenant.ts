@@ -658,6 +658,50 @@ export async function requireTenantViajesConfirmarReporte(
 }
 
 /**
+ * LIQUIDACIÓN DE VIAJES (Fase 3) — guard común de las filas `viajes_liquidar` y `viajes_reabrir_liquidacion`: permiso EXPLÍCITO e
+ * independiente del rol, de `viajes_cerrar` y de `viajes_confirmar_reporte` (quien confirma, liquida, reabre y cierra no es
+ * necesariamente la misma persona). Mismo patrón que requireTenantViajesCerrar; exige el módulo TMS de la empresa.
+ */
+async function requireTenantFilaLiquidacionViaje(
+  slug: string,
+  fila: "viajes_liquidar" | "viajes_reabrir_liquidacion",
+  accion: AccionPermiso,
+  mensajeSinPermiso: string,
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+export function requireTenantViajesLiquidar(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_liquidar", accion, "Sin permiso para liquidar viajes.");
+}
+
+export function requireTenantViajesReabrirLiquidacion(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_reabrir_liquidacion", accion, "Sin permiso para reabrir la liquidación de viajes.");
+}
+
+/**
  * Corrección de matriz de permisos — Programación deja de depender
  * exclusivamente de "tms": mismo patrón que requireTenantViajesCerrar
  * (permiso propio, permisosEfectivos ya trae el default por rol —

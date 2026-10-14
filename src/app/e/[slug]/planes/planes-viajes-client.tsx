@@ -19,12 +19,14 @@ import {
   type GrupoPlanes,
 } from "./planes-agrupacion";
 import {
+  accionesLiquidacionFila,
   badgeLiquidacion,
   claseFilaLiquidacion,
-  puedeOfrecerConfirmarReporte,
   type AdvertenciaReporte,
   type ResumenLiquidacionFila,
 } from "@/lib/tms/liquidacion-viaje-shared";
+import type { EventoLiquidacionViaje } from "@/lib/tms/liquidacion-viaje";
+import { HistorialLiquidacion, ModalLiquidarViaje, ModalReabrirLiquidacion } from "@/components/tms/liquidacion-viaje-modales";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
@@ -444,6 +446,9 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
   // LIQUIDACIÓN (Fase 2): permiso propio y SEPARADO del cierre; la confirmación del reporte no cierra ni liquida.
   const puedeConfirmarReporte = tienePermiso(permisos, "viajes_confirmar_reporte", "editar");
+  // Fase 3: liquidar y reabrir son permisos propios, separados entre sí y de confirmar reporte y de cerrar.
+  const puedeLiquidar = tienePermiso(permisos, "viajes_liquidar", "editar");
+  const puedeReabrirLiquidacion = tienePermiso(permisos, "viajes_reabrir_liquidacion", "editar");
   const esReporte = modo === "reporte";
 
   // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link desde Programación
@@ -762,6 +767,28 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [reporteError, setReporteError] = useState("");
   const [enviandoReporte, setEnviandoReporte] = useState(false);
 
+  // LIQUIDACIÓN (Fase 3) — liquidar/reabrir (modales con resumen/motivo) e historial append-only en el detalle del viaje.
+  const [modalLiquidar, setModalLiquidar] = useState<{ planId: number; codigo: string } | null>(null);
+  const [modalReabrir, setModalReabrir] = useState<{ planId: number; codigo: string } | null>(null);
+  const [historialLiquidacion, setHistorialLiquidacion] = useState<Record<number, EventoLiquidacionViaje[]>>({});
+
+  async function cargarHistorialLiquidacion(planId: number) {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${planId}/liquidacion`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setHistorialLiquidacion((h) => ({ ...h, [planId]: (data.eventos ?? []) as EventoLiquidacionViaje[] }));
+    } catch {
+      /* el historial es informativo: un fallo no bloquea el detalle */
+    }
+  }
+
+  async function liquidacionActualizada(planId: number) {
+    setModalLiquidar(null);
+    setModalReabrir(null);
+    await cargar();
+    if (expandido === planId) void cargarHistorialLiquidacion(planId);
+  }
+
   function abrirConfirmarReporte(p: { id: number; codigo: string }) {
     setReportePlan({ planId: p.id, codigo: p.codigo });
     setReporteObs("");
@@ -800,6 +827,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   async function abrirDetalle(planId: number) {
     if (expandido === planId) { setExpandido(null); setConfirmandoCierre(null); return; }
     setExpandido(planId);
+    void cargarHistorialLiquidacion(planId);
     if (!evidenciasPorPlan[planId] || !bitacoraPorPlan[planId]) {
       setCargandoDetalle(true);
       try {
@@ -1254,6 +1282,25 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
+      {modalLiquidar ? (
+        <ModalLiquidarViaje
+          slug={slug}
+          planId={modalLiquidar.planId}
+          codigo={modalLiquidar.codigo}
+          onClose={() => setModalLiquidar(null)}
+          onDone={() => void liquidacionActualizada(modalLiquidar.planId)}
+        />
+      ) : null}
+      {modalReabrir ? (
+        <ModalReabrirLiquidacion
+          slug={slug}
+          planId={modalReabrir.planId}
+          codigo={modalReabrir.codigo}
+          onClose={() => setModalReabrir(null)}
+          onDone={() => void liquidacionActualizada(modalReabrir.planId)}
+        />
+      ) : null}
+
       {reportePlan ? (
         <div role="dialog" aria-modal="true" aria-label="Confirmar reporte recibido" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
@@ -1514,16 +1561,35 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             Cierre manual
                           </button>
                         ) : null}
-                        {puedeOfrecerConfirmarReporte({
-                          estadoPlan: p.estado,
-                          liquidacion: p.liquidacion,
-                          tienePermiso: puedeConfirmarReporte,
-                          soloConsulta: esReporte,
-                        }) ? (
-                          <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => abrirConfirmarReporte(p)}>
-                            Confirmar reporte
-                          </button>
-                        ) : null}
+                        {(() => {
+                          const accLiq = accionesLiquidacionFila({
+                            estadoPlan: p.estado,
+                            liquidacion: p.liquidacion,
+                            puedeConfirmarReporte,
+                            puedeLiquidar,
+                            puedeReabrir: puedeReabrirLiquidacion,
+                            soloConsulta: esReporte,
+                          });
+                          return (
+                            <>
+                              {accLiq.confirmarReporte ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => abrirConfirmarReporte(p)}>
+                                  Confirmar reporte
+                                </button>
+                              ) : null}
+                              {accLiq.liquidar ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => setModalLiquidar({ planId: p.id, codigo: p.codigo })}>
+                                  {accLiq.etiquetaLiquidar}
+                                </button>
+                              ) : null}
+                              {accLiq.reabrir ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => setModalReabrir({ planId: p.id, codigo: p.codigo })}>
+                                  Reabrir liquidación
+                                </button>
+                              ) : null}
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                   </tr>
@@ -1531,6 +1597,9 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <tr className="border-t border-[var(--border)] bg-[var(--panel)]">
                       <td colSpan={columnas.length} className="px-3 py-3">
                         <div className="mb-3"><Stepper p={p} /></div>
+                        {historialLiquidacion[p.id]?.length ? (
+                          <div className="mb-3"><HistorialLiquidacion eventos={historialLiquidacion[p.id]} /></div>
+                        ) : null}
                         <div className="grid gap-4 lg:grid-cols-3">
                           <div>
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">A. Datos generales</p>

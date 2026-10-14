@@ -104,15 +104,19 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
     }
   });
 
-  it("importadores PERMITIDOS (Fase 2): solo el endpoint de reporte recibido, Planes/Viajes y el armado de la lista", () => {
+  it("importadores PERMITIDOS (Fase 3): endpoints de liquidación, Planes/Viajes, modales y el armado de la lista", () => {
     let salida = "";
     try {
-      salida = execFileSync("git", ["grep", "--untracked", "-lE", "liquidacion-viaje(-shared|-reporte)?[\"']", "--", "src"], { encoding: "utf8" });
+      salida = execFileSync("git", ["grep", "--untracked", "-lE", "liquidacion-viaje(-shared|-reporte|-snapshot|-modales)?[\"']", "--", "src"], { encoding: "utf8" });
     } catch (e) {
       if ((e as { status?: number }).status !== 1) throw e;
     }
     const permitidos = new Set([
       "src/app/api/empresas/[slug]/tms/planes/[id]/reporte-recibido/route.ts",
+      "src/app/api/empresas/[slug]/tms/planes/[id]/liquidar/route.ts",
+      "src/app/api/empresas/[slug]/tms/planes/[id]/reabrir-liquidacion/route.ts",
+      "src/app/api/empresas/[slug]/tms/planes/[id]/liquidacion/route.ts",
+      "src/components/tms/liquidacion-viaje-modales.tsx",
       "src/app/e/[slug]/planes/planes-viajes-client.tsx",
       "src/lib/tms/reportes-viajes.ts",
       "src/lib/tms/liquidacion-viaje-reporte.ts",
@@ -125,12 +129,15 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
     expect(importadores).toEqual([]);
   });
 
-  it("permisos: solo viajes_confirmar_reporte está declarado (el resto llega con su fase) y ningún rol lo trae por defecto", () => {
+  it("permisos: solo los de las fases implementadas están declarados (cargos y configuración llegan con su fase)", () => {
     for (const f of ["src/lib/permisos-shared.ts", "src/lib/permisos-catalogo.ts"]) {
-      expect(leer(f), f).not.toMatch(/viajes_liquidar|viajes_liquidacion_|viajes_cargos_aprobar|viajes_reabrir/);
+      expect(leer(f), f).not.toMatch(/viajes_cargos_aprobar|viajes_liquidacion_config|viajes_liquidacion_reabrir/);
     }
-    expect(leer("src/lib/permisos-shared.ts")).toMatch(/PERMISOS_LIQUIDACION_VIAJE = \["viajes_confirmar_reporte"\] as const/);
+    expect(leer("src/lib/permisos-shared.ts")).toMatch(
+      /PERMISOS_LIQUIDACION_VIAJE = \["viajes_confirmar_reporte", "viajes_liquidar", "viajes_reabrir_liquidacion"\] as const/,
+    );
   });
+
 });
 
 describe("Liquidación de viajes · Fase 1 · SQL", () => {
