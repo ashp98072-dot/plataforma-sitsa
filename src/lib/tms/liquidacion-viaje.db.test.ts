@@ -660,7 +660,9 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     expect(crudo).not.toMatch(/DPI-SECRETO-123|5555-0000/);
     const claves: string[] = [];
     JSON.parse(crudo, function (k, v) { claves.push(k); return v; });
-    expect(claves.filter((k) => /identificacion|telefono|costo|monto_asignado|cargo/i.test(k))).toEqual([]);
+    expect(claves.filter((k) => /identificacion|telefono|costo|monto_asignado/i.test(k))).toEqual([]);
+    // Fase 4: el único rastro de «cargo» es el bloque aditivo `cargos` (vigentes del cliente), nunca costos internos.
+    expect([...new Set(claves.filter((k) => /cargo/i.test(k)))]).toEqual(["cargos"]);
   });
 
   it("F3-2. el snapshot es evidencia inmutable y liquidar NO modifica Programación (plan, auxiliares, cuadrilla, piloto extra)", async () => {
