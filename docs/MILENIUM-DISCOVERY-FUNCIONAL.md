@@ -14,6 +14,11 @@ Base: `main` = `27b82512` (incluye #466). Fecha: 2026-10-15.
   [`FACTURACION-CONTABILIDAD-MILENIUM-DISCOVERY`](FACTURACION-CONTABILIDAD-MILENIUM-DISCOVERY.md),
   [`CONTABILIDAD-HOMOLOGACION-MILENIUM-KT-MONACO`](CONTABILIDAD-HOMOLOGACION-MILENIUM-KT-MONACO.md),
   [`MILENIUM-INVENTARIO-FUNCIONAL`](MILENIUM-INVENTARIO-FUNCIONAL.md). **No se leyó ni se tocó ninguna copia de Milenium en esta fase.**
+- **Hecho confirmado directamente por el usuario (corrección PR #467):** Milenium **sí se usa hoy** para **control de pagos de planilla**,
+  **contabilidad general**, **libro diario**, **libro mayor**, **cuentas por cobrar** y **cuentas por pagar**; en términos generales es el
+  **ERP administrativo/contable principal**. Esto **prevalece** sobre cualquier inferencia de las auditorías previas. El detalle del flujo
+  de planilla (cálculo, conceptos, contabilización, bancos, descuentos, IGSS/ISR, relación con RRHH) **NO está levantado** y queda
+  **PENDIENTE de entrevista**.
 - **Etiquetas** (se mantienen separadas): **CONFIRMADO** (visto en datos/archivos de Milenium según esas auditorías, o en el código
   actual de `main`) · **INFERIDO** (deducido; puede estar equivocado) · **PENDIENTE** (solo lo pueden confirmar los usuarios,
   Contabilidad, TI o el proveedor).
@@ -33,8 +38,12 @@ Base: `main` = `27b82512` (incluye #466). Fecha: 2026-10-15.
 3. **Milenium sí hace, y la plataforma NO hace hoy:** emisión/certificación FEL (vía INFILE), notas de crédito, cobros con aplicaciones y
    recibos, retenciones, bancos y conciliación, cuentas por pagar completas, póliza automática de ventas, libros de IVA/ASISTE LIBROS y
    balances. Todo eso es **legalmente sensible** y **debe seguir en Milenium** mientras no exista un hito fiscal real en plataforma.
+   **Confirmado por el usuario:** Milenium es hoy el ERP administrativo/contable principal y se usa también para el **control de pagos de
+   planilla**, la contabilidad general, el libro diario y mayor, y las cuentas por cobrar y por pagar.
 4. **La plataforma ya cubre bien (y Milenium no tiene):** viajes, tarifas, cargos adicionales, liquidación, resumen comercial, fondos,
-   gastos, compras/requerimientos, proveedores, viáticos, RRHH, permisos y auditoría.
+   gastos, compras/requerimientos, proveedores, viáticos, permisos y auditoría. Además cubre **RRHH operativo** (empleados, asistencia,
+   vacaciones, incidencias, horas extra), lo cual **no significa** que haya sustituido el control de pagos de planilla ni su efecto
+   contable, que **siguen en Milenium** (§3, §5).
 5. **Hay una zona de duplicación real y peligrosa** (§8): la factura se **emite en Milenium** y su número se **digita** en la plataforma
    (`emitirFactura` exige `numeroFactura` manual); el cobro se registra en Milenium y se **vuelve a digitar** como pago/confirmación
    bancaria; y existen **dos «cuentas por cobrar» en la plataforma** (`fact_pagos` y `cont_cxc`) además de la de Milenium.
@@ -71,9 +80,12 @@ activar) · **No existe**.
 | Retenciones de IVA | Parcial | Mínimo | `retencion_iva_pct` por cliente (0/15/30, FACT-4) | Constancias, aplicación al cobro, reporte | Cálculo ≠ constancia real |
 | Bancos / conciliación | **No existe** | — | solo `cont_cuentas_bancarias` y confirmaciones | Movimientos, cheques, conciliación | — |
 | Activos fijos / Inventarios / Producción | Inventarios (4 tablas), flota | n/a | `inventario_*`, `flota_*` | — | Sin evidencia de uso en Milenium (KT) |
-| Planilla | Sí (RRHH) | Completo | `rrhh_*` | — | En el grupo la planilla vive en RRHH (INFERIDO) |
+| **RRHH operativo** (empleados, asistencia, vacaciones, incidencias, horas extra y procesos RRHH existentes) | Sí | **Completo** | `rrhh_*` | La función **monetaria/contable de planilla** (pago y póliza) **no está sustituida**: sigue en Milenium (uso confirmado por el usuario) | Confundir RRHH operativo con planilla de pagos |
 | Auditoría y permisos | Sí | **Completo** | `auditoria`, permisos granulares por módulo | — | Superior a Milenium |
 
+> **Aclaración (planilla).** Que la plataforma tenga RRHH operativo **no implica** que reemplace el control de pagos de planilla de
+> Milenium. La frontera entre cálculo, pago y contabilización está **PENDIENTE de entrevista**.
+>
 > **Correcciones a las auditorías anteriores.** «Sin FEL / sin IVA / sin líneas / sin retención / sin bancos» ya no es cierto: existen
 > líneas de factura, IVA por línea, retención por cliente, condición de pago, cuentas bancarias de entidad, confirmaciones bancarias,
 > roles contables, el dominio FEL con idempotencia y el evaluador de póliza. **Pero ninguno de ellos está conectado a una emisión real.**
@@ -84,6 +96,8 @@ Milenium organiza 14 módulos (Contabilidad, Bancos, Inventarios, Producción, F
 Fijos, Planilla, Mercadeo, Ejecución de proyectos, Proyectos de ventas, Requisiciones/Órdenes de compra, Utilitarios). Según la
 auditoría, **los realmente activos** (movimientos hasta 2026) son **Facturación FEL, Cuentas por cobrar, Contabilidad, Bancos y Cuentas
 por pagar**; Producción, Mercadeo, Proyectos, Despacho por ruteo, Activos fijos (KT) e Inventarios aparecen **sin datos**.
+**Planilla** no figura entre los módulos con movimientos en esa auditoría (no fue revisada), pero el **usuario confirmó su uso** para el
+control de pagos de planilla (fila 16): prevalece el dato del usuario.
 
 | # | Proceso en Milenium | Quién lo usa | De dónde vienen los datos | Resultado | Etiqueta |
 |---|---|---|---|---|---|
@@ -102,7 +116,8 @@ por pagar**; Producción, Mercadeo, Proyectos, Despacho por ruteo, Activos fijos
 | 13 | Requisiciones y órdenes de compra | PENDIENTE | Captura | Órdenes | CONFIRMADO (menú); sin datos relevantes en KT: INFERIDO |
 | 14 | Facturación recurrente automática | PENDIENTE | Meses/día por cliente (`cc01`) | Facturas por lote | CONFIRMADO (existe); uso PENDIENTE |
 | 15 | Comisiones de vendedores | PENDIENTE | `f02` | Reportes | CONFIRMADO (existe); uso PENDIENTE |
-| 16 | Planilla, Activos fijos, Inventarios, Producción | PENDIENTE | — | — | Sin uso observado (planilla vive en RRHH: INFERIDO) |
+| 16 | **Planilla — control de pagos de planilla** | PENDIENTE (quién y con qué frecuencia) | PENDIENTE (¿Milenium calcula salarios o recibe datos? ¿de RRHH, Excel, manual?) | PENDIENTE (pagos, póliza contable, relación con Bancos, IGSS/ISR) | **USO CONFIRMADO POR USUARIO:** «control de pagos de planilla». El detalle exacto del flujo sigue **PENDIENTE** |
+| 17 | Activos fijos, Inventarios, Producción | PENDIENTE | — | — | Sin uso observado en la auditoría (sin datos en KT) |
 
 ## 4. Fuente maestra por dato y puntos de duplicación (§8 del encargo)
 
@@ -122,6 +137,8 @@ Flujo objetivo: **Viaje → liquidación → documento por facturar → factura 
 | Fondos, gastos, requerimientos de compra | **Plataforma** | Contabilización posterior en Milenium (manual, INFERIDO) | Gasto autorizado sin póliza o duplicado |
 | Proveedores | Plataforma (`compras_proveedores`) y Milenium CxP | Dos catálogos | NIT/cuenta bancaria desalineados |
 | Catálogo de cuentas | **Milenium** (homologado: 10 KT / 8 Mónaco en plataforma) | `cont_cuentas` | Cuentas no homologadas |
+| RRHH operativo (empleados, asistencia, vacaciones, incidencias, horas extra) | **Plataforma** | PENDIENTE: si Milenium recibe o carga empleados/datos de RRHH para el pago de planilla | Empleados dados de alta en ambos sistemas |
+| Pago y contabilización de planilla | **Milenium** (uso confirmado por el usuario) | Datos de RRHH que alimenten el pago, si los hay | **Frontera definitiva: PENDIENTE de entrevista** |
 
 **Puntos de doble digitación identificados (INFERIDOS; validar en entrevistas):**
 D1 viaje → factura en Milenium · D2 número de factura Milenium → `fact_facturas` · D3 cobro en Milenium → `fact_pagos`/confirmación ·
@@ -156,12 +173,12 @@ requiere integración externa · **P3** contable/fiscal sensible, validación fu
 | 19 | **Referencia externa de factura** (serie/número/autorización de Milenium por viaje) | B | **P1** | Hoy se digita sin control; formalizarlo (con validación de duplicados) reduce D2 y evita volver a facturar un viaje ya facturado en Milenium. |
 | 20 | Catálogo de clientes (sincronización NIT/razón social) | B | **P2** | Reduce D6; requiere decidir maestro y canal de intercambio (archivo). |
 | 21 | Fondos / gastos / anticipos | C (ya cubierto) | **P2** | Plataforma es el maestro; falta el puente a la contabilidad (manual en Milenium). |
-| 22 | Planilla / RRHH | E | **P4** | Vive en RRHH; Milenium no es fuente (INFERIDO). |
+| 22 | **Planilla: control de pagos y su efecto contable** (RRHH operativo ya existe en plataforma) | A | **P4** | Milenium se usa actualmente para control de pagos de planilla; plataforma cubre RRHH operativo. La frontera entre cálculo/pago/contabilización debe levantarse en entrevista antes de cualquier migración (si luego se decide mover algo, pasaría a **P3**: monetario/contable sensible). |
 | 23 | Inventarios, Producción, Activos fijos, Mercadeo, Proyectos | E | **P4** | Sin datos/uso observado. |
 | 24 | Facturación recurrente, comisiones/vendedores, cheques posfechados | E | **P4** | Existen en Milenium; **uso PENDIENTE** de confirmar; no migrar sin evidencia. |
 | 25 | Seguridad de credenciales de INFILE en Milenium | A | **P4** | Riesgo conocido (llaves en claro); remediación es de TI, no de plataforma. |
 
-**Resumen por categoría (25 procesos):** A (mantener) 7 · B (integrar) 4 · C (replicar) 7 · D (migrar gradual) 3 · E (no tocar) 4.
+**Resumen por categoría (25 procesos):** A (mantener) 8 · B (integrar) 4 · C (replicar) 7 · D (migrar gradual) 3 · E (no tocar) 3.
 
 ## 6. Checklist de entrevista (usuarios de Milenium)
 
@@ -206,6 +223,16 @@ y la fecha. Las preguntas ya abiertas en las auditorías (P-1…P-15 y N-1…N-3
 - ¿Qué reportes contables se entregan al contador externo/auditor y en qué formato?
 - ¿Quién prepara el libro de ventas/ASISTE LIBROS y desde qué reporte? ¿Qué cierre mensual hacen?
 - ¿Aceptarían que plataforma **no** genere pólizas hasta una fecha de corte?
+
+**Planilla (uso confirmado por el usuario: control de pagos de planilla)**
+- ¿Qué parte exacta de la planilla se realiza en Milenium?
+- ¿Milenium calcula salarios o solo registra/paga?
+- ¿Cómo ingresan horas extra, ausencias, descuentos y bonificaciones?
+- ¿Se registra IGSS/ISR?
+- ¿Cómo se genera el pago?
+- ¿Qué póliza contable produce?
+- ¿Se relaciona con Bancos?
+- ¿Qué datos podrían provenir en el futuro del módulo RRHH de plataforma?
 
 **Clientes**
 - ¿Dónde se da de alta primero un cliente? ¿Quién valida el NIT? ¿Qué datos extra exige cada cliente en la factura?
