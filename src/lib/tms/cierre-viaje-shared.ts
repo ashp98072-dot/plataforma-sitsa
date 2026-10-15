@@ -13,9 +13,21 @@ export const MENSAJE_REPORTE_NO_RECIBIDO = "No se puede cerrar el viaje porque e
 /** Texto corto de la acción deshabilitada en pantalla. */
 export const MENSAJE_CONFIRMAR_REPORTE_PRIMERO = "Confirme primero la recepción del reporte.";
 
-/** ¿Esta liquidación habilita el cierre? Solo REPORTE_RECIBIDO; null/undefined (sin fila) y cualquier otro estado, no. */
-export function reporteRecibidoParaCierre(estadoLiquidacion: string | null | undefined): boolean {
-  return estadoLiquidacion === ESTADO_LIQUIDACION_REQUERIDA_PARA_CIERRE;
+/**
+ * ¿El reporte FUE RECIBIDO? (no «¿el estado actual es exactamente REPORTE_RECIBIDO?»). Habilita el cierre:
+ *   - la liquidación ACTUAL está en REPORTE_RECIBIDO; o
+ *   - existe el evento append-only `REPORTE_RECIBIDO` de ese plan (`eventoReporteRecibido`): fuente AUTORITATIVA para planes
+ *     heredados que ya avanzaron (EN_AJUSTE / LIQUIDADO) antes de exigir el cierre previo.
+ * Sin fila ni evento ⇒ NO. `EN_AJUSTE` o `LIQUIDADO` por sí solos NUNCA habilitan: sin el evento histórico no hay evidencia de
+ * que el reporte se haya recibido. Para planes nuevos el flujo sigue siendo REPORTE_RECIBIDO → Cerrar → Liquidar.
+ */
+export function reporteRecibidoParaCierre(estadoLiquidacion: string | null | undefined, eventoReporteRecibido = false): boolean {
+  return estadoLiquidacion === ESTADO_LIQUIDACION_REQUERIDA_PARA_CIERRE || eventoReporteRecibido === true;
+}
+
+/** Igual, desde el resumen de liquidación de una fila de la tabla (`reporteRecibido` = evento histórico, calculado en servidor). */
+export function reporteRecibidoDeLiquidacion(l: { estado: string; reporteRecibido?: boolean } | null | undefined): boolean {
+  return l ? reporteRecibidoParaCierre(l.estado, l.reporteRecibido === true) : false;
 }
 
 /**

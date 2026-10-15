@@ -18,7 +18,7 @@ import { accionesViaje } from "./planes-viajes-client";
 // REQUISITO DE SECUENCIA — reporte RECIBIDO por defecto (solo REPORTE_RECIBIDO habilita el cierre); los tests "sin reporte" lo pasan null.
 const p = (
   id: number, fechaPlan: string, estado: string, pendienteCierre = false, tarifaComercial: number | null = 500,
-  liquidacion: { estado: string } | null = { estado: "REPORTE_RECIBIDO" },
+  liquidacion: { estado: string; reporteRecibido?: boolean } | null = { estado: "REPORTE_RECIBIDO" },
 ): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre, tarifaComercial, liquidacion });
 
 const planes: PlanAgrupable[] = [
@@ -606,5 +606,29 @@ describe("cierre de viaje — requiere REPORTE_RECIBIDO (UI)", () => {
     expect(MSG).toBe("Confirme primero la recepción del reporte.");
     const shared = readFileSync("src/lib/tms/cierre-viaje-shared.ts", "utf8");
     expect(shared).toContain(`MENSAJE_CONFIRMAR_REPORTE_PRIMERO = "${MSG}"`);
+  });
+});
+
+describe("cierre de viaje — planes heredados (evidencia histórica de reporte recibido)", () => {
+  it("EN_AJUSTE/LIQUIDADO con reporteRecibido (evento) habilitan el cierre; sin él, no", () => {
+    for (const estado of ["EN_AJUSTE", "LIQUIDADO"]) {
+      const con = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3, reporteRecibido: true } }, true);
+      expect(con, estado).toMatchObject({ cerrar: true, faltaReporte: false });
+      const sin = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3, reporteRecibido: false } }, true);
+      expect(sin, estado).toMatchObject({ cerrar: false, faltaReporte: true });
+      const sinCampo = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3 } }, true);
+      expect(sinCampo.cerrar, estado).toBe(false); // el estado posterior por sí solo no habilita
+    }
+    const manual = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "EN_AJUSTE", version: 3, reporteRecibido: true } }, true);
+    expect(manual).toMatchObject({ cierreManual: true, faltaReporte: false });
+  });
+
+  it("elegibilidad y selección usan el mismo criterio", () => {
+    const heredado = p(1, "d", "Descargado", false, 500, { estado: "LIQUIDADO", reporteRecibido: true });
+    const invalido = p(2, "d", "Descargado", false, 500, { estado: "LIQUIDADO" });
+    expect(elegibilidadCierre(heredado, true)).toEqual({ normal: true, manual: false });
+    expect(esSeleccionable(heredado, true)).toBe(true);
+    expect(esSeleccionable(invalido, true)).toBe(false);
+    expect(faltaReporteParaCierre(invalido, true)).toBe(true);
   });
 });

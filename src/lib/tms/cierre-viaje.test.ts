@@ -31,6 +31,8 @@ let planUpdateAffectedRows: number;
 let liquidacion: { estado: string } | undefined;
 /** Si es un número, la consulta a tms_viaje_liquidaciones lanza ese errno (p. ej. 1146 = tabla ausente). */
 let errnoLiquidacion: number | undefined;
+/** ¿Existe el evento append-only REPORTE_RECIBIDO del plan? (evidencia histórica de planes heredados). */
+let eventoReporte: boolean;
 
 function cerrar(overrides: Partial<Parameters<typeof cerrarViajeManual>[0]> = {}) {
   return cerrarViajeManual({
@@ -49,9 +51,11 @@ beforeEach(() => {
   planUpdateAffectedRows = 1;
   liquidacion = { estado: "REPORTE_RECIBIDO" };
   errnoLiquidacion = undefined;
+  eventoReporte = false;
 
   conn.query.mockImplementation(async (sql: string) => {
     const s = String(sql);
+    if (s.includes("FROM tms_viaje_liquidacion_eventos")) return [eventoReporte ? [{ hay: 1 }] : []];
     if (s.includes("FROM tms_viaje_liquidaciones")) {
       if (errnoLiquidacion) throw Object.assign(new Error("tabla ausente"), { errno: errnoLiquidacion });
       return [liquidacion ? [liquidacion] : []];
@@ -619,7 +623,7 @@ describe("cerrarViaje (normal) — exige REPORTE_RECIBIDO", () => {
   });
 
   it.each(["PENDIENTE", "SIN_REPORTE", "EN_AJUSTE", "LIQUIDADO", "RELIQUIDADO", ""])(
-    "liquidación en %s NO habilita el cierre inicial (EN_AJUSTE/LIQUIDADO son etapas posteriores al cierre)",
+    "liquidación en %s SIN evento REPORTE_RECIBIDO NO habilita el cierre (el estado posterior por sí solo no basta)",
     async (estado) => {
       plan = { id: 10, estado: "Descargado", tarifa_comercial: 500 };
       liquidacion = { estado };
@@ -738,5 +742,77 @@ describe("cerrarViajeManual — exige REPORTE_RECIBIDO", () => {
     expect(await cerrarViajeManual({ empresaId: 7, planId: 10, usuario: "j", motivo: "Cierre administrativo del día" })).toMatchObject({ codigo: "REPORTE_NO_RECIBIDO" });
     liquidacion = { estado: "REPORTE_RECIBIDO" };
     expect(await cerrarViajeManual({ empresaId: 7, planId: 10, usuario: "j", motivo: "Cierre administrativo del día" })).toMatchObject({ ok: true });
+  });
+});
+
+/**
+ * COMPATIBILIDAD CON PLANES HEREDADOS — «el reporte FUE recibido»: liquidación actual REPORTE_RECIBIDO, o evidencia histórica
+ * append-only (evento REPORTE_RECIBIDO). EN_AJUSTE/LIQUIDADO por sí solos NO habilitan. El cierre solo LEE.
+ */
+describe("cierre — compatibilidad con planes heredados (evento histórico REPORTE_RECIBIDO)", () => {
+  const MSG = "No se puede cerrar el viaje porque el reporte aún no ha sido recibido.";
+
+  it.each(["EN_AJUSTE", "LIQUIDADO"])("%s CON evento REPORTE_RECIBIDO: el cierre normal procede (plan abierto heredado)", async (estado) => {
+    plan = { id: 587, estado: "Programado", tarifa_comercial: 500 };
+    // Programado no cierra por el camino normal; se usa Descargado (misma regla de reporte) para aislar el requisito.
+    plan = { id: 587, estado: "Descargado", tarifa_comercial: 500 };
+    liquidacion = { estado };
+    eventoReporte = true;
+    expect(await cerrarViaje(7, 587, "jefe")).toEqual({ ok: true });
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it.each(["EN_AJUSTE", "LIQUIDADO"])("%s SIN evento (fixture inválido): bloqueado con REPORTE_NO_RECIBIDO", async (estado) => {
+    plan = { id: 587, estado: "Descargado", tarifa_comercial: 500 };
+    liquidacion = { estado };
+    eventoReporte = false;
+    expect(await cerrarViaje(7, 587, "jefe")).toEqual({ ok: false, error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("REPORTE_RECIBIDO actual NO consulta el evento (la liquidación vigente basta)", async () => {
+    plan = { id: 10, estado: "Descargado", tarifa_comercial: 500 };
+    liquidacion = { estado: "REPORTE_RECIBIDO" };
+    expect(await cerrarViaje(7, 10, "jefe")).toEqual({ ok: true });
+    expect(conn.query.mock.calls.some(([sql]) => String(sql).includes("FROM tms_viaje_liquidacion_eventos"))).toBe(false);
+  });
+
+  it("sin fila de liquidación: bloqueado sin consultar eventos (sin liquidación no puede haber evento)", async () => {
+    plan = { id: 10, estado: "Descargado", tarifa_comercial: 500 };
+    liquidacion = undefined;
+    eventoReporte = true; // incluso si el mock «inventara» un evento, sin fila no habilita
+    expect(await cerrarViaje(7, 10, "jefe")).toMatchObject({ ok: false, codigo: "REPORTE_NO_RECIBIDO" });
+    expect(conn.query.mock.calls.some(([sql]) => String(sql).includes("FROM tms_viaje_liquidacion_eventos"))).toBe(false);
+  });
+
+  it("el evento se consulta acotado por empresa + plan + tipo, solo lectura y bajo el mismo orden (plan → liquidación → evento)", async () => {
+    plan = { id: 587, estado: "Descargado", tarifa_comercial: 500 };
+    liquidacion = { estado: "EN_AJUSTE" };
+    eventoReporte = true;
+    await cerrarViaje(42, 587, "jefe");
+    const llamadas = conn.query.mock.calls;
+    const iEvento = llamadas.findIndex(([sql]) => String(sql).includes("FROM tms_viaje_liquidacion_eventos"));
+    const iLiq = llamadas.findIndex(([sql]) => String(sql).includes("FROM tms_viaje_liquidaciones"));
+    expect(iLiq).toBeGreaterThanOrEqual(0);
+    expect(iLiq).toBeLessThan(iEvento);
+    const [sql, params] = llamadas[iEvento];
+    expect(String(sql)).toContain("empresa_id = ? AND plan_id = ? AND tipo = 'REPORTE_RECIBIDO'");
+    expect(params).toEqual([42, 587]);
+    // Nunca escribe liquidación ni eventos.
+    const todas = [...conn.query.mock.calls, ...conn.execute.mock.calls].map(([q]) => String(q));
+    expect(todas.some((q) => /(INSERT INTO|UPDATE|DELETE FROM)\s+tms_viaje_(liquidacion|cargo)/i.test(q))).toBe(false);
+  });
+
+  it("cierre MANUAL: EN_AJUSTE/LIQUIDADO con evento habilitan; sin evento no", async () => {
+    plan = { id: 587, estado: "Programado", tarifa_comercial: 500 };
+    liquidacion = { estado: "EN_AJUSTE" };
+    eventoReporte = true;
+    const m = { empresaId: 7, planId: 587, usuario: "jefe", motivo: "Regularización de viaje de prueba heredado" };
+    expect(await cerrarViajeManual(m)).toEqual({ ok: true, flotaViajeCerrado: false });
+    vi.clearAllMocks();
+    eventoReporte = false;
+    liquidacion = { estado: "LIQUIDADO" };
+    expect(await cerrarViajeManual(m)).toMatchObject({ ok: false, codigo: "REPORTE_NO_RECIBIDO" });
+    expect(conn.execute).not.toHaveBeenCalled();
   });
 });

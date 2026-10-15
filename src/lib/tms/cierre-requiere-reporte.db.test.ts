@@ -58,6 +58,34 @@ async function liquidacionDirecta(planId: number, estado: "EN_AJUSTE" | "LIQUIDA
     [planId, estado],
   );
 }
+/**
+ * Historial HEREDADO real (Fase 3 original: se liquidaba con el viaje abierto): liquidación vigente EN_AJUSTE/LIQUIDADO con la
+ * cadena append-only REPORTE_RECIBIDO v1 → LIQUIDADO v2 [→ REABIERTO v3], como la produce el flujo de la aplicación.
+ */
+async function historialHeredado(planId: number, final: "EN_AJUSTE" | "LIQUIDADO") {
+  const enAjuste = final === "EN_AJUSTE";
+  await holder.pool!.execute(
+    `INSERT INTO tms_viaje_liquidaciones (empresa_id, plan_id, estado, version, reporte_recibido_en, reporte_recibido_por, liquidado_en, liquidado_por, reabierto_en, reabierto_por)
+     VALUES (7, ?, ?, ?, NOW(), 4, NOW(), 5, ${enAjuste ? "NOW()" : "NULL"}, ${enAjuste ? "4" : "NULL"})`,
+    [planId, final, enAjuste ? 3 : 2],
+  );
+  const eventos: [number, string, string | null, string, number, string | null][] = [
+    [1, "REPORTE_RECIBIDO", null, "REPORTE_RECIBIDO", 4, null],
+    [2, "LIQUIDADO", "REPORTE_RECIBIDO", "LIQUIDADO", 5, null],
+    ...(enAjuste ? ([[3, "REABIERTO", "LIQUIDADO", "EN_AJUSTE", 4, "Prueba de liquidación antes de la regla"]] as [number, string, string | null, string, number, string | null][]) : []),
+  ];
+  for (const [version, tipo, antes, despues, actor, detalle] of eventos) {
+    await holder.pool!.execute(
+      `INSERT INTO tms_viaje_liquidacion_eventos (empresa_id, plan_id, version, tipo, estado_antes, estado_despues, actor_id, detalle, snapshot_json)
+       VALUES (7, ?, ?, ?, ?, ?, ?, ?, '{"planEstado":"Programado"}')`,
+      [planId, version, tipo, antes, despues, actor, detalle],
+    );
+  }
+}
+const huellaLiquidacion = async (planId: number) => ({
+  liquidacion: await sql("SELECT * FROM tms_viaje_liquidaciones WHERE plan_id = ?", [planId]),
+  eventos: await sql("SELECT * FROM tms_viaje_liquidacion_eventos WHERE plan_id = ? ORDER BY version", [planId]),
+});
 const totalFilas = async () => ({
   liquidaciones: await conteo("tms_viaje_liquidaciones"),
   eventos: await conteo("tms_viaje_liquidacion_eventos"),
@@ -151,7 +179,7 @@ describe.skipIf(!port)("Cierre de viaje exige REPORTE_RECIBIDO / MariaDB 11.8.9 
     expect(liqAntes).toMatchObject({ estado: "REPORTE_RECIBIDO", version: 1 });
   });
 
-  it("EN_AJUSTE y LIQUIDADO sobre un viaje abierto NO habilitan un cierre inicial", async () => {
+  it("EN_AJUSTE y LIQUIDADO sin evento REPORTE_RECIBIDO (fixture inválido) NO habilitan el cierre", async () => {
     for (const estado of ["EN_AJUSTE", "LIQUIDADO"] as const) {
       const p = await plan();
       await liquidacionDirecta(p, estado);
@@ -276,5 +304,77 @@ describe.skipIf(!port)("Cierre de viaje exige REPORTE_RECIBIDO / MariaDB 11.8.9 
     for (const t of ["fact_factura_viajes", "fel_documentos", "cont_eventos", "tms_solicitud_fondo_lineas", "tms_gastos_operativos"]) {
       expect(await conteo(t), t).toBe(0);
     }
+  });
+
+  // ───────────── COMPATIBILIDAD: planes heredados con evidencia histórica de reporte recibido ─────────────
+  it("plan 587 equivalente (Programado + EN_AJUSTE con REPORTE_RECIBIDO v1 → LIQUIDADO → REABIERTO): se cierra sin reescribir el historial", async () => {
+    const p = await plan({ estado: "Programado" });
+    await historialHeredado(p, "EN_AJUSTE");
+    const antes = await huellaLiquidacion(p);
+    const totalAntes = await totalFilas();
+    expect(antes.eventos.map((e) => [e.version, e.tipo])).toEqual([[1, "REPORTE_RECIBIDO"], [2, "LIQUIDADO"], [3, "REABIERTO"]]);
+
+    // Programado solo admite cierre MANUAL (motivo obligatorio); exige tarifa y ahora el reporte «fue recibido».
+    const r = await cerrarViajeManual({ empresaId: 7, planId: p, usuario: "jefe", motivo: "Regularización: viaje de prueba heredado" });
+    expect(r).toEqual({ ok: true, flotaViajeCerrado: false });
+    expect(await estadoPlan(p)).toBe("Cerrado");
+    expect(await sql("SELECT cerrado_por, cierre_manual FROM tms_planes_viaje WHERE id = ?", [p])).toEqual([{ cerrado_por: "jefe", cierre_manual: 1 }]);
+
+    // Historia intacta: ni una fila de liquidación/evento/cargo cambió ni se creó.
+    expect(await huellaLiquidacion(p)).toEqual(antes);
+    expect(await totalFilas()).toEqual(totalAntes);
+    expect(await conteo("auditoria", "accion = 'cerrar_viaje_manual' AND detalle LIKE ?", [`Plan #${p} %`])).toBe(1);
+  });
+
+  it("Descargado + LIQUIDADO con evento REPORTE_RECIBIDO: cierre normal permitido; liquidación y eventos intactos", async () => {
+    const p = await plan({ estado: "Descargado" });
+    await historialHeredado(p, "LIQUIDADO");
+    const antes = await huellaLiquidacion(p);
+    expect(await cerrarViaje(7, p, "jefe")).toEqual({ ok: true });
+    expect(await estadoPlan(p)).toBe("Cerrado");
+    expect(await huellaLiquidacion(p)).toEqual(antes);
+    expect((await leerLiquidacionPlan(7, p))?.estado).toBe("LIQUIDADO");
+  });
+
+  it("EN_AJUSTE/LIQUIDADO con la fila de liquidación pero SIN el evento REPORTE_RECIBIDO: bloqueado y sin cambios", async () => {
+    for (const estado of ["EN_AJUSTE", "LIQUIDADO"] as const) {
+      const p = await plan({ estado: "Descargado" });
+      await liquidacionDirecta(p, estado); // fila sin ningún evento (historia inexistente)
+      const antes = await huellaLiquidacion(p);
+      expect(await cerrarViaje(7, p, "jefe"), estado).toEqual({ ok: false, error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+      expect(await estadoPlan(p)).toBe("Descargado");
+      expect(await huellaLiquidacion(p)).toEqual(antes);
+    }
+  });
+
+  it("REPORTE_RECIBIDO actual sigue habilitando (flujo normal REPORTE_RECIBIDO → Cerrar → Liquidar)", async () => {
+    const p = await plan();
+    await confirmarReporteRecibido(actor(), { planId: p });
+    expect(await cerrarViaje(7, p, "jefe")).toEqual({ ok: true });
+  });
+
+  it("masivo: heredados con evento se cierran; sin evento o sin fila se omiten; otra empresa no aparece", async () => {
+    const heredado = await plan();
+    await historialHeredado(heredado, "EN_AJUSTE");
+    const invalido = await plan();
+    await liquidacionDirecta(invalido, "LIQUIDADO");
+    const sin = await plan();
+    const nuevo = await plan();
+    await confirmarReporteRecibido(actor(), { planId: nuevo });
+    const r = await cerrarViajesMasivo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", planIds: [heredado, invalido, sin, nuevo] });
+    expect(r.cerrados.map((c) => c.id)).toEqual([heredado, nuevo]);
+    expect(r.omitidos.map((o) => [o.id, o.motivo])).toEqual([[invalido, MSG], [sin, MSG]]);
+    expect(await estadoPlan(invalido)).toBe("Descargado");
+  });
+
+  it("la lista de Planes (liquidacionesDePlanes) informa reporteRecibido por evidencia histórica, no por el estado posterior", async () => {
+    const { liquidacionesDePlanes } = await import("./liquidacion-viaje");
+    const heredado = await plan();
+    await historialHeredado(heredado, "EN_AJUSTE");
+    const invalido = await plan();
+    await liquidacionDirecta(invalido, "EN_AJUSTE");
+    const m = await liquidacionesDePlanes(7, [heredado, invalido]);
+    expect(m.get(heredado)).toMatchObject({ estado: "EN_AJUSTE", reporteRecibido: true });
+    expect(m.get(invalido)).toMatchObject({ estado: "EN_AJUSTE", reporteRecibido: false });
   });
 });

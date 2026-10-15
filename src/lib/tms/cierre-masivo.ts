@@ -65,7 +65,11 @@ export async function cerrarViajesMasivo(opts: {
             ) AS llegada_registrada,
             ${conLiquidacion
               ? "(SELECT l.estado FROM tms_viaje_liquidaciones l WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id LIMIT 1)"
-              : "NULL"} AS estado_liquidacion
+              : "NULL"} AS estado_liquidacion,
+            ${conLiquidacion
+              ? `EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos ev
+                          WHERE ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO')`
+              : "0"} AS evento_reporte_recibido
      FROM tms_planes_viaje p
      WHERE p.empresa_id = ? AND p.id IN (${ids.map(() => "?").join(",")})`;
   let filas: RowDataPacket[] = [];
@@ -91,7 +95,11 @@ export async function cerrarViajesMasivo(opts: {
     const tieneTarifa = f.tarifa_comercial != null;
     // Elegibilidad recalculada en servidor con el MISMO criterio puro que usa la pantalla.
     // REQUISITO DE SECUENCIA: sin REPORTE_RECIBIDO el viaje se OMITE con su motivo (nunca se cierra ni aborta el lote).
-    const reporteRecibido = reporteRecibidoParaCierre(f.estado_liquidacion == null ? null : String(f.estado_liquidacion));
+    // «El reporte fue recibido»: liquidación actual REPORTE_RECIBIDO o evento histórico REPORTE_RECIBIDO (planes heredados).
+    const reporteRecibido = reporteRecibidoParaCierre(
+      f.estado_liquidacion == null ? null : String(f.estado_liquidacion),
+      Number(f.evento_reporte_recibido) === 1,
+    );
     const motivoNo = opts.tipo === "NORMAL"
       ? motivoNoCierreNormal(estado, Number(f.llegada_registrada) === 1, tieneTarifa, reporteRecibido)
       : motivoNoCierreManual(estado, tieneTarifa, reporteRecibido);

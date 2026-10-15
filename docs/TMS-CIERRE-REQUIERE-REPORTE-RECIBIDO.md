@@ -31,21 +31,30 @@ reporte ni liquidarse).
 
 ## 2. Regla implementada
 
-Un viaje solo pasa a `Cerrado` si su liquidación está **EXACTAMENTE** en `REPORTE_RECIBIDO`.
+Un viaje solo pasa a `Cerrado` si **el reporte FUE recibido** (no «el estado actual es exactamente `REPORTE_RECIBIDO`»):
 
-| Liquidación | ¿Habilita el cierre inicial? |
+1. la liquidación actual está en `REPORTE_RECIBIDO`; **o**
+2. existe el **evento append-only `REPORTE_RECIBIDO`** de ese plan (`tms_viaje_liquidacion_eventos`, `tipo = 'REPORTE_RECIBIDO'`),
+   que es la **fuente autoritativa** para planes heredados que ya avanzaron antes de exigir el cierre previo.
+
+| Liquidación / historia | ¿Habilita el cierre? |
 |---|---|
-| sin fila / tabla ausente | **No** (409 `REPORTE_NO_RECIBIDO`) |
-| `REPORTE_RECIBIDO` | **Sí** (sujeto a estado/llegada/tarifa de siempre) |
-| `EN_AJUSTE`, `LIQUIDADO` (cualquier otro valor) | **No** — son etapas posteriores al cierre |
+| sin fila ni evento / tabla ausente | **No** (409 `REPORTE_NO_RECIBIDO`) |
+| `REPORTE_RECIBIDO` actual | **Sí** (sujeto a estado/llegada/tarifa de siempre) |
+| `EN_AJUSTE` / `LIQUIDADO` **con** evento `REPORTE_RECIBIDO` | **Sí** (heredado: evidencia real de que el reporte se recibió) |
+| `EN_AJUSTE` / `LIQUIDADO` **sin** evento `REPORTE_RECIBIDO` (fixture inválido) | **No** — el estado posterior por sí solo no basta |
 
+Para planes **nuevos** el flujo sigue siendo `REPORTE_RECIBIDO → Cerrar → Liquidar` (#460 impide liquidar un viaje abierto, así que
+ningún plan nuevo llega a ese estado heredado). El cierre **no** modifica la liquidación ni crea eventos; no hay backfill ni fecha de
+activación.
 El reporte es el **último requisito**: Cancelado, ya Cerrado, sin tarifa y «llegada pendiente» conservan sus mensajes actuales.
 
 ## 3. Backend (servidor, dentro de la operación de cierre)
 
 - `cerrarViaje`: el `UPDATE` condicional (que ya bloquea la fila del plan) y, **antes de comprometer**, `SELECT … FROM
-  tms_viaje_liquidaciones … FOR UPDATE` en la misma transacción. Si no es `REPORTE_RECIBIDO`: `ROLLBACK` (el viaje NO queda
-  cerrado) y `{ ok: false, error, codigo: "REPORTE_NO_RECIBIDO" }`.
+  tms_viaje_liquidaciones … FOR UPDATE` en la misma transacción; si la liquidación actual no es `REPORTE_RECIBIDO`, se consulta el
+  evento histórico (`empresa_id + plan_id + tipo = 'REPORTE_RECIBIDO'`, solo lectura, evento inmutable). Sin ninguno de los dos:
+  `ROLLBACK` (el viaje NO queda cerrado) y `{ ok: false, error, codigo: "REPORTE_NO_RECIBIDO" }`.
 - `cerrarViajeManual`: con el plan ya bloqueado (`FOR UPDATE`) lee la liquidación bajo lock **antes de tocar `flota_viajes` o el
   plan**; un rechazo no escribe nada.
 - **Orden de locks:** plan → liquidación (→ flota en el manual), el mismo que `liquidarViaje`/`confirmarReporteRecibido`: sin
@@ -80,10 +89,15 @@ El reporte es el **último requisito**: Cancelado, ya Cerrado, sin tarifa y «ll
 
 1. **Impacto operativo inmediato:** todo viaje abierto necesita ahora su reporte confirmado (`viajes_confirmar_reporte`) antes de
    poder cerrarse, incluidos los «pendientes de cierre» de hoy. Conviene avisar a Operaciones y asignar el permiso.
-2. **Datos heredados:** un viaje ABIERTO que ya estuviera `LIQUIDADO`/`EN_AJUSTE` (solo posible con la Fase 3 anterior a exigir
-   cierre previo) quedaría bloqueado para cerrarse. Verificación de solo lectura propuesta (NO ejecutada):
+2. **Datos heredados (resuelto por compatibilidad):** un viaje ABIERTO `LIQUIDADO`/`EN_AJUSTE` creado con la Fase 3 anterior a
+   exigir cierre previo (p. ej. el plan 587: `Programado` + `EN_AJUSTE`, historia `REPORTE_RECIBIDO v1 → LIQUIDADO → REABIERTO`)
+   **sí se puede cerrar** porque tiene el evento `REPORTE_RECIBIDO`; se cierra con el flujo existente (Programado ⇒ cierre manual,
+   con motivo y tarifa) **sin reescribir la historia**. Solo quedaría bloqueado un caso con fila de liquidación pero SIN evento
+   (inconsistente; no lo produce la aplicación). Verificación de solo lectura propuesta (NO ejecutada):
    `SELECT p.id, p.codigo, p.estado, l.estado FROM tms_planes_viaje p JOIN tms_viaje_liquidaciones l ON l.empresa_id = p.empresa_id
-   AND l.plan_id = p.id WHERE p.estado NOT IN ('Cerrado','Cancelado') AND l.estado <> 'REPORTE_RECIBIDO';`
+   AND l.plan_id = p.id WHERE p.estado NOT IN ('Cerrado','Cancelado') AND l.estado <> 'REPORTE_RECIBIDO'
+   AND NOT EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos e WHERE e.empresa_id = l.empresa_id AND e.plan_id = l.plan_id
+   AND e.tipo = 'REPORTE_RECIBIDO');` (devuelve solo los que seguirían bloqueados)
 3. **Falla cerrada sin la migración de liquidación:** si el código se desplegara donde no existe `tms_viaje_liquidaciones`, nada
    podría cerrarse. La migración de la Fase 1 ya está aplicada en producción; verificar antes de desplegar.
 4. **Cierre manual también exige reporte** (el manual solo omite la llegada física, no el reporte). Si negocio quisiera una excepción,
@@ -103,3 +117,6 @@ El reporte es el **último requisito**: Cancelado, ya Cerrado, sin tarifa y «ll
   `flota_viajes`), masivo mixto, aislamiento por empresa, concurrencia confirmar-vs-cerrar y doble clic, y no escritura en
   facturación/FEL/contabilidad/fondos/gastos.
 - Verificado con mutación (sin el gate fallan 26 pruebas).
+- **Compatibilidad con planes heredados (BD):** `Programado + EN_AJUSTE` con historia `REPORTE_RECIBIDO v1 → LIQUIDADO v2 → REABIERTO v3`
+  (equivalente al plan 587) se cierra sin modificar liquidación ni eventos (huella idéntica antes/después), `Descargado + LIQUIDADO`
+  con evento, `EN_AJUSTE`/`LIQUIDADO` con fila pero sin evento bloqueados, masivo mixto y `liquidacionesDePlanes.reporteRecibido`.

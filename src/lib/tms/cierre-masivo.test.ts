@@ -36,6 +36,9 @@ let respaldo: string;
 /** Estado de liquidación por plan. Sin entrada = REPORTE_RECIBIDO (default); `null` = SIN fila de liquidación. */
 let liquidaciones: Map<number, string | null>;
 const estadoLiq = (id: number): string | null => (liquidaciones.has(id) ? liquidaciones.get(id)! : "REPORTE_RECIBIDO");
+/** Planes con el evento append-only REPORTE_RECIBIDO (evidencia histórica). Por defecto: todo plan con fila de liquidación lo tiene. */
+let sinEvento: Set<number>;
+const tieneEvento = (id: number): boolean => estadoLiq(id) != null && !sinEvento.has(id);
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 
 // PLANES-TARIFA-CIERRE-1 — tarifa_comercial: 500 por defecto (CON tarifa); los tests que necesitan "sin
@@ -52,12 +55,12 @@ const manual = (ids: number[], extra: Partial<Parameters<typeof cerrarViajesMasi
 
 beforeEach(() => {
   vi.resetAllMocks();
-  planes = []; flotas = []; fallar = new Set(); fallaAuditoria = new Set(); liquidaciones = new Map();
+  planes = []; flotas = []; fallar = new Set(); fallaAuditoria = new Set(); liquidaciones = new Map(); sinEvento = new Set();
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
     const s = String(sql);
     if (s.includes("p.id IN")) {
       const [emp, ...ids] = params as number[];
-      return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({ id: p.id, codigo: p.codigo, estado: p.estado, tarifa_comercial: p.tarifa_comercial, llegada_registrada: tieneLlegada(p) ? 1 : 0, estado_liquidacion: estadoLiq(p.id) }));
+      return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({ id: p.id, codigo: p.codigo, estado: p.estado, tarifa_comercial: p.tarifa_comercial, llegada_registrada: tieneLlegada(p) ? 1 : 0, estado_liquidacion: estadoLiq(p.id), evento_reporte_recibido: tieneEvento(p.id) ? 1 : 0 }));
     }
     throw new Error(`query inesperada: ${s}`);
   }) as never);
@@ -79,6 +82,11 @@ beforeEach(() => {
       const [id, emp] = params as number[];
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
       return [p ? [{ tipo_viaje: p.tipo_viaje }] : []];
+    }
+    if (s.includes("FROM tms_viaje_liquidacion_eventos")) {
+      const [emp, id] = params as number[];
+      const p = planes.find((x) => x.id === id && x.empresa_id === emp);
+      return [p && tieneEvento(id) ? [{ hay: 1 }] : []];
     }
     if (s.includes("FROM tms_viaje_liquidaciones")) {
       const [emp, id] = params as number[];
@@ -597,8 +605,8 @@ describe("cierre masivo — exige REPORTE_RECIBIDO por viaje (semántica parcial
   it("lote mixto NORMAL: cierra los que tienen REPORTE_RECIBIDO y omite (con motivo) los demás; nada se cierra por accidente", async () => {
     planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado"), plan(4, "Descargado"), plan(5, "Descargado")];
     liquidaciones.set(2, null); // sin fila
-    liquidaciones.set(3, "EN_AJUSTE"); // etapa posterior: no habilita un cierre inicial
-    liquidaciones.set(4, "LIQUIDADO");
+    liquidaciones.set(3, "EN_AJUSTE"); sinEvento.add(3); // etapa posterior SIN evento REPORTE_RECIBIDO: no habilita
+    liquidaciones.set(4, "LIQUIDADO"); sinEvento.add(4);
     const r = await normal([1, 2, 3, 4, 5]);
     expect(r.cerrados.map((c) => c.id)).toEqual([1, 5]);
     expect(r.omitidos).toEqual([
@@ -664,7 +672,7 @@ describe("cierre masivo — exige REPORTE_RECIBIDO por viaje (semántica parcial
       llamadas++;
       if (String(sql).includes("tms_viaje_liquidaciones")) throw Object.assign(new Error("no existe"), { errno: 1146 });
       const filas = (await original(sql, params as never)) as Record<string, unknown>[];
-      return filas.map((f) => ({ ...f, estado_liquidacion: null }));
+      return filas.map((f) => ({ ...f, estado_liquidacion: null, evento_reporte_recibido: 0 }));
     }) as never);
     const r = await normal([1]);
     expect(llamadas).toBe(2);
@@ -754,5 +762,39 @@ describe("cierre — todos los caminos pasan por el gate de REPORTE_RECIBIDO (ar
     expect(motivoNoCierreNormal("Cerrado", true, true, false)).toContain("ya fue cerrado");
     expect(motivoNoCierreNormal("En ruta", false, true, false)).toContain("no ha registrado la llegada");
     expect(motivoNoCierreNormal("Descargado", false, false, false)).toContain("tarifa");
+  });
+});
+
+/**
+ * COMPATIBILIDAD CON PLANES HEREDADOS — masivo: «el reporte fue recibido» = liquidación REPORTE_RECIBIDO o evento histórico.
+ */
+describe("cierre masivo — planes heredados con evento REPORTE_RECIBIDO", () => {
+  const MSG = "No se puede cerrar el viaje porque el reporte aún no ha sido recibido.";
+
+  it("EN_AJUSTE/LIQUIDADO con evento se cierran; sin evento (fixture inválido) o sin fila se omiten", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado"), plan(4, "Descargado"), plan(5, "Descargado")];
+    liquidaciones.set(1, "EN_AJUSTE"); // con evento
+    liquidaciones.set(2, "LIQUIDADO"); // con evento
+    liquidaciones.set(3, "EN_AJUSTE"); sinEvento.add(3); // fixture inválido
+    liquidaciones.set(4, null); // sin fila
+    // 5: REPORTE_RECIBIDO por defecto
+    const r = await normal([1, 2, 3, 4, 5]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 2, 5]);
+    expect(r.omitidos).toEqual([
+      { id: 3, codigo: "PLAN-3", motivo: MSG },
+      { id: 4, codigo: "PLAN-4", motivo: MSG },
+    ]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Cerrado", 3: "Descargado", 4: "Descargado", 5: "Cerrado" });
+  });
+
+  it("la pre-consulta y la revalidación bajo lock usan la misma fuente (evento append-only), siempre por empresa", async () => {
+    planes = [plan(1, "Descargado")];
+    liquidaciones.set(1, "LIQUIDADO");
+    await normal([1]);
+    const lecturas = conn.query.mock.calls.filter(([sql]) => String(sql).includes("FROM tms_viaje_liquidacion_eventos"));
+    expect(lecturas).toHaveLength(1);
+    expect(lecturas[0][1]).toEqual([7, 1]);
+    const pre = vi.mocked(query).mock.calls[0][0] as string;
+    expect(pre).toContain("ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO'");
   });
 });

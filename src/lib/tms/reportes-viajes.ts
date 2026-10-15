@@ -887,7 +887,7 @@ export type CandidatoCierre = {
   estado: string;
   llegadaRegistrada: boolean;
   tarifaComercial: number | null;
-  /** Liquidación EXACTAMENTE en REPORTE_RECIBIDO (requisito del cierre). Sin fila de liquidación = false. */
+  /** El reporte FUE recibido: liquidación REPORTE_RECIBIDO o evento histórico REPORTE_RECIBIDO. Sin fila ni evento = false. */
   reporteRecibido: boolean;
 };
 
@@ -896,8 +896,9 @@ export async function obtenerCandidatosCierre(
   filtros: FiltrosReporteViajes,
 ): Promise<CandidatoCierre[]> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros, { forzarRangoConSoloPendientes: true });
-  // `reporte_recibido`: la liquidación del plan está EXACTAMENTE en REPORTE_RECIBIDO (sin fila = 0). Si la tabla de
-  // liquidaciones aún no existe (migración no aplicada) ningún reporte pudo registrarse: 0 para todos.
+  // `reporte_recibido`: el reporte FUE recibido — liquidación actual en REPORTE_RECIBIDO o evento histórico append-only
+  // REPORTE_RECIBIDO del plan (sin fila ni evento = 0). Si las tablas de liquidación aún no existen (migración no aplicada)
+  // ningún reporte pudo registrarse: 0 para todos.
   const sqlCandidatos = (conLiquidacion: boolean) =>
     `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
             EXISTS (
@@ -905,8 +906,10 @@ export async function obtenerCandidatosCierre(
               WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
             ) AS llegada_registrada,
             ${conLiquidacion
-              ? `EXISTS (SELECT 1 FROM tms_viaje_liquidaciones l
-                          WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id AND l.estado = 'REPORTE_RECIBIDO')`
+              ? `(EXISTS (SELECT 1 FROM tms_viaje_liquidaciones l
+                          WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id AND l.estado = 'REPORTE_RECIBIDO')
+                  OR EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos ev
+                          WHERE ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO'))`
               : "0"} AS reporte_recibido
      FROM tms_planes_viaje p
      ${JOIN_FACTURACION}

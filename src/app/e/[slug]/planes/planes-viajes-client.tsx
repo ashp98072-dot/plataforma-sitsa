@@ -10,7 +10,7 @@ import {
   MENSAJE_CONFIRMAR_REPORTE_PRIMERO,
   puedeCerrarManualmente,
   puedeCerrarNormalmente,
-  reporteRecibidoParaCierre,
+  reporteRecibidoDeLiquidacion,
 } from "@/lib/tms/cierre-viaje-shared";
 import type { ResultadoCierreMasivo } from "@/lib/tms/cierre-masivo";
 import type { AgrupacionPlanes } from "@/lib/tms/planes-periodo";
@@ -95,7 +95,7 @@ export type VistaPlanes = "ACTIVOS" | "CERRADOS";
  */
 export function accionesViaje(
   modo: ModoPlanesViajes,
-  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null; liquidacion?: { estado: string; version?: number } | null },
+  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null; liquidacion?: { estado: string; version?: number; reporteRecibido?: boolean } | null },
   puedeCerrarViaje: boolean,
 ): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean; faltaTarifa: boolean; faltaReporte: boolean } {
   const consulta = modo === "reporte";
@@ -105,7 +105,7 @@ export function accionesViaje(
   // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
   // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
   // REQUISITO DE SECUENCIA: solo con REPORTE_RECIBIDO (sin fila de liquidación = reporte no recibido). El servidor REVALIDA.
-  const reporteRecibido = reporteRecibidoParaCierre(p.liquidacion?.estado);
+  const reporteRecibido = reporteRecibidoDeLiquidacion(p.liquidacion);
   const cerrar = !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, reporteRecibido);
   const cierreManual = !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado, tieneTarifa, reporteRecibido);
   // Sin tarifa, pero el estado SÍ admitiría algún cierre si la tuviera — distingue "falta tarifa" de

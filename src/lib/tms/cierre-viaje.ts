@@ -12,10 +12,12 @@ import {
 export { puedeCerrarManualmente } from "@/lib/tms/cierre-viaje-shared";
 
 /**
- * REQUISITO DE SECUENCIA (ver cierre-viaje-shared.ts): solo se cierra un viaje cuya liquidación esté EXACTAMENTE en
- * REPORTE_RECIBIDO. Se lee BAJO LOCK (`FOR UPDATE`) dentro de la MISMA transacción del cierre, cuando el plan ya está
- * bloqueado (orden de locks plan → liquidación, igual que `liquidarViaje`/`confirmarReporteRecibido`, sin deadlocks). Sin fila
- * (o sin tabla aún) = reporte no recibido. NO modifica ni crea la liquidación.
+ * REQUISITO DE SECUENCIA (ver cierre-viaje-shared.ts): el reporte debe HABERSE RECIBIDO — liquidación actual en
+ * REPORTE_RECIBIDO, o evento histórico append-only `REPORTE_RECIBIDO` del plan (planes heredados ya EN_AJUSTE/LIQUIDADO).
+ * La liquidación se lee BAJO LOCK (`FOR UPDATE`) dentro de la MISMA transacción del cierre, con el plan ya bloqueado (orden
+ * plan → liquidación, igual que `liquidarViaje`/`confirmarReporteRecibido`, sin deadlocks); el evento (inmutable) se consulta
+ * solo si la liquidación actual no basta, acotado por empresa + plan. Sin fila ni evento (o sin tablas aún) = reporte no
+ * recibido. NO modifica ni crea la liquidación ni eventos.
  */
 async function reporteRecibidoBloqueado(conn: PoolConnection, empresaId: number, planId: number): Promise<boolean> {
   try {
@@ -23,7 +25,14 @@ async function reporteRecibidoBloqueado(conn: PoolConnection, empresaId: number,
       "SELECT estado FROM tms_viaje_liquidaciones WHERE empresa_id = ? AND plan_id = ? FOR UPDATE",
       [empresaId, planId],
     );
-    return reporteRecibidoParaCierre(rows[0]?.estado == null ? null : String(rows[0].estado));
+    const estado = rows[0]?.estado == null ? null : String(rows[0].estado);
+    if (reporteRecibidoParaCierre(estado)) return true;
+    if (estado == null) return false; // sin liquidación no hay evento (FK): ningún reporte confirmado
+    const [eventos] = await conn.query<RowDataPacket[]>(
+      "SELECT 1 AS hay FROM tms_viaje_liquidacion_eventos WHERE empresa_id = ? AND plan_id = ? AND tipo = 'REPORTE_RECIBIDO' LIMIT 1",
+      [empresaId, planId],
+    );
+    return reporteRecibidoParaCierre(estado, eventos.length > 0);
   } catch (e) {
     if ((e as { errno?: number }).errno === 1146) return false; // ER_NO_SUCH_TABLE: ningún reporte pudo registrarse
     throw e;

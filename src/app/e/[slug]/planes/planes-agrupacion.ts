@@ -1,4 +1,4 @@
-import { puedeCerrarManualmente, puedeCerrarNormalmente, reporteRecibidoParaCierre } from "@/lib/tms/cierre-viaje-shared";
+import { puedeCerrarManualmente, puedeCerrarNormalmente, reporteRecibidoDeLiquidacion } from "@/lib/tms/cierre-viaje-shared";
 import { claveAgrupacion, resolverPeriodoPlanes, type AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 
 export type { AgrupacionPlanes };
@@ -18,8 +18,11 @@ export type PlanAgrupable = {
   estado: string;
   pendienteCierre: boolean;
   tarifaComercial: number | null;
-  /** Liquidación del viaje (null/ausente = sin fila = reporte NO recibido). Solo `REPORTE_RECIBIDO` habilita el cierre. */
-  liquidacion?: { estado: string } | null;
+  /**
+   * Liquidación del viaje (null/ausente = sin fila = reporte NO recibido). Habilita el cierre `REPORTE_RECIBIDO` actual o
+   * `reporteRecibido` (evento histórico, planes heredados); `EN_AJUSTE`/`LIQUIDADO` por sí solos no.
+   */
+  liquidacion?: { estado: string; reporteRecibido?: boolean } | null;
 };
 
 /**
@@ -36,7 +39,7 @@ export function elegibilidadCierre(
 ): { normal: boolean; manual: boolean } {
   if (!puedeCerrarViaje) return { normal: false, manual: false };
   const tieneTarifa = p.tarifaComercial != null;
-  const reporteRecibido = reporteRecibidoParaCierre(p.liquidacion?.estado);
+  const reporteRecibido = reporteRecibidoDeLiquidacion(p.liquidacion);
   return {
     normal: puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, reporteRecibido),
     manual: puedeCerrarManualmente(p.estado, tieneTarifa, reporteRecibido),
@@ -51,7 +54,7 @@ export function faltaReporteParaCierre(
   p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial" | "liquidacion">,
   puedeCerrarViaje: boolean,
 ): boolean {
-  if (!puedeCerrarViaje || reporteRecibidoParaCierre(p.liquidacion?.estado)) return false;
+  if (!puedeCerrarViaje || reporteRecibidoDeLiquidacion(p.liquidacion)) return false;
   const tieneTarifa = p.tarifaComercial != null;
   return puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, true) || puedeCerrarManualmente(p.estado, tieneTarifa, true);
 }
@@ -90,7 +93,7 @@ export function agruparPlanes<T extends PlanAgrupable>(planes: T[], modo: Agrupa
   return [...mapa.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
     .map(([clave, lista]) => {
-      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre, p.tarifaComercial != null, reporteRecibidoParaCierre(p.liquidacion?.estado))).length;
+      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre, p.tarifaComercial != null, reporteRecibidoDeLiquidacion(p.liquidacion))).length;
       const cerrados = lista.filter((p) => p.estado === "Cerrado").length;
       const etiqueta = resolverPeriodoPlanes(modo, clave)?.etiqueta ?? clave;
       return { clave, etiqueta, planes: lista, total: lista.length, cerrables, cerrados, otros: lista.length - cerrables - cerrados };

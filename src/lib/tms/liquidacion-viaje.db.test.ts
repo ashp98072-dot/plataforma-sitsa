@@ -587,9 +587,9 @@ describe.skipIf(!port)("Liquidación de viajes Fase 1 / MariaDB 11.8.9 SOLO LOCA
     await reabrirLiquidacion(A, { planId: enAjuste, versionEsperada: 2, motivo: "motivo valido" });
     await confirmarReporteRecibido(OTRA, { planId: ajeno });
     const m = await liquidacionesDePlanes(7, [reportado, liquidado, enAjuste, historico, ajeno]);
-    expect(m.get(reportado)).toEqual({ estado: "REPORTE_RECIBIDO", version: 1 });
-    expect(m.get(liquidado)).toEqual({ estado: "LIQUIDADO", version: 2 });
-    expect(m.get(enAjuste)).toEqual({ estado: "EN_AJUSTE", version: 3 });
+    expect(m.get(reportado)).toEqual({ estado: "REPORTE_RECIBIDO", version: 1, reporteRecibido: true });
+    expect(m.get(liquidado)).toEqual({ estado: "LIQUIDADO", version: 2, reporteRecibido: true }); // el evento REPORTE_RECIBIDO v1 existe
+    expect(m.get(enAjuste)).toEqual({ estado: "EN_AJUSTE", version: 3, reporteRecibido: true });
     expect(m.has(historico)).toBe(false);
     expect(m.has(ajeno)).toBe(false); // otra empresa
   });

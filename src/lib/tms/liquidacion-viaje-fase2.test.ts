@@ -249,15 +249,23 @@ describe("Liquidación Fase 2 · lectura para la tabla", () => {
     expect((await liquidacionesDePlanes(7, [1, 2], sinTabla as never)).size).toBe(0);
     const caida = { query: async () => { throw Object.assign(new Error("lost"), { errno: 2013 }); } };
     await expect(liquidacionesDePlanes(7, [1], caida as never)).rejects.toThrow("lost");
-    const ok = { query: async () => [[{ plan_id: 5, estado: "LIQUIDADO", version: 2 }]] };
-    const m = await liquidacionesDePlanes(7, [5, 6, 5], ok as never);
-    expect(m.get(5)).toEqual({ estado: "LIQUIDADO", version: 2 });
+    const ok = { query: async () => [[
+      { plan_id: 5, estado: "LIQUIDADO", version: 2, reporte_recibido: 1 },
+      { plan_id: 7, estado: "EN_AJUSTE", version: 3, reporte_recibido: 0 },
+      { plan_id: 8, estado: "REPORTE_RECIBIDO", version: 1, reporte_recibido: 1 },
+    ]] };
+    const m = await liquidacionesDePlanes(7, [5, 6, 5, 7, 8], ok as never);
+    // `reporteRecibido` = evidencia histórica (evento REPORTE_RECIBIDO) o estado actual REPORTE_RECIBIDO.
+    expect(m.get(5)).toEqual({ estado: "LIQUIDADO", version: 2, reporteRecibido: true });
+    expect(m.get(7)).toEqual({ estado: "EN_AJUSTE", version: 3, reporteRecibido: false }); // sin evento: NO habilita
+    expect(m.get(8)).toEqual({ estado: "REPORTE_RECIBIDO", version: 1, reporteRecibido: true });
     expect(m.has(6)).toBe(false); // sin fila: nunca «liquidado»
   });
 
   it("la consulta de la lista es por empresa y no altera el SQL del reporte/exportación", () => {
     const d = leer("src/lib/tms/liquidacion-viaje.ts");
-    expect(d).toMatch(/WHERE empresa_id = \? AND plan_id IN/);
+    expect(d).toMatch(/WHERE l\.empresa_id = \? AND l\.plan_id IN/);
+    expect(d).toMatch(/e\.empresa_id = l\.empresa_id AND e\.plan_id = l\.plan_id AND e\.tipo = 'REPORTE_RECIBIDO'/);
     const r = leer("src/lib/tms/reportes-viajes.ts");
     expect(r).toMatch(/liquidacionesDePlanes\(empresaId, planIds\)/);
     expect(r).toMatch(/liquidacion: liquidacionMap\.get\(id\) \?\? null/);
