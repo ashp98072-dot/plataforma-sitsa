@@ -147,10 +147,10 @@ Leyenda: ○ casi nada · ◐ parcial (estructura observada, **sin** regla confi
 | CXC-Q02 | ¿La fecha de la factura o la de vencimiento determina cada reporte? ¿cómo se define el crédito (por cliente, por factura)? | PEND |
 | CXC-Q03 | ¿Hay límite de crédito? ¿Bloquea la facturación o solo avisa? | PEND |
 | CXC-Q04 | ¿Qué tipos de aplicación reducen el saldo (pago, retención, NC, anticipo, descuento, ajuste)? ¿En qué orden se aplican? | PEND |
-| CXC-Q05 | ¿Varios pagos a una factura? ¿un pago a varias facturas? ¿cómo se distribuye? | PEND |
+| CXC-Q05 | ¿Varios pagos a una factura? ¿un pago a varias facturas? ¿cómo se distribuye? | **Parcial:** *un pago a varias facturas* = **CEM** (evidencia §4.6, CXC-E02). *Varios pagos a una factura* y *criterio de distribución*: PEND |
 | CXC-Q06 | ¿Cómo quedan los saldos a favor y los sobrepagos? ¿cuenta contable? | PEND |
-| CXC-Q07 | ¿Cómo se determina pendiente / parcial / pagada / vencida? ¿qué pasa con el valor `PAGADA`? | PEND |
-| CXC-Q08 | ¿Qué fecha manda en la antigüedad (emisión o vencimiento)? ¿rangos 0-30/31-60/…? ¿fecha de corte? | PEND |
+| CXC-Q07 | ¿Cómo se determina pendiente / parcial / pagada / vencida? ¿qué pasa con el valor `PAGADA`? | **Parcial:** una factura con saldo Q0.00 **deja de aparecer en el reporte de antigüedad** (CPU; **no** se afirma que Milenium la borre). «Vencida» = por fecha de vencimiento (CEM). Estados parcial/pagada como valor: PEND |
+| CXC-Q08 | ¿Qué fecha manda en la antigüedad (emisión o vencimiento)? ¿rangos 0-30/31-60/…? ¿fecha de corte? | **CONFIRMADO (CEM, §4.6 CXC-E03):** reporte «DETALLE DE ANTIGÜEDAD DE SALDOS», *«Antigüedad: Por fecha de vencimiento»*; rangos No vencido / 1–30 / 31–60 / 61–90 / 91 o más; existe **fecha de corte** distinta de la de impresión. **PEND:** cómo se calcula el vencimiento en facturas sin `DIASCR`, y si otros reportes usan otra base |
 | CXC-Q09 | ¿Se calcula mora o interés? ¿La «nota de cargo» (`D`) es eso? | PEND |
 | CXC-Q10 | ¿Cómo se revierte un recibo, una NC o una retención aplicada por error? ¿qué pasa con la póliza? | PEND |
 | CXC-Q11 | ¿Qué significan exactamente `R`, `E`, `C`, `D`, `A` y la serie `FL`? | PEND |
@@ -165,20 +165,81 @@ Importes **sintéticos de diseño** (no son datos de Milenium). La columna «Fó
 | CXC-02 | NORMAL | Factura Q10,000.00 | Recibo Q4,000.00 + **retención IVA** | *[por registrar: monto de la retención y saldo]* | Con la regla empírica «15 % del IVA» (INF): IVA = 10,000.00/1.12×0.12 = 1,071.43; retención = 160.71; saldo = 10,000.00 − 4,000.00 − 160.71 = **5,839.29** | PENDIENTE |
 | CXC-03 | NORMAL | Factura Q10,000.00 | Recibo por (total − retención) | *[estado final y saldo]* | saldo = **0.00** → ¿«cobrada»? (INF) | PENDIENTE |
 | CXC-04 | PARCIAL | Factura Q10,000.00 | 3 recibos: Q2,000 / Q3,000 / Q1,500 en fechas distintas | *[saldo tras cada uno]* | 10,000 − 6,500 = **3,500.00** | PENDIENTE |
-| CXC-05 | NORMAL | 3 facturas (Q5,000 / Q3,000 / Q2,000) | **Un** recibo de Q9,000 | *[cómo distribuye y qué saldo queda en cada una]* | ¿orden por antigüedad o elección manual? (PEND) | PENDIENTE |
+| CXC-05 | NORMAL | 3 facturas (Q5,000 / Q3,000 / Q2,000) | **Un** recibo de Q9,000 | *[cómo distribuye y qué saldo queda en cada una]* | ¿orden por antigüedad o elección manual? (PEND) | PARCIAL (un recibo → varias facturas CONFIRMADO en CXC-E02; criterio de distribución PEND) |
 | CXC-06 | BORDE | Factura Q10,000.00 | Recibo Q10,500.00 | *[¿lo permite? ¿saldo a favor? ¿cuenta?]* | PEND | PENDIENTE |
 | CXC-07 | CORRECCIÓN | Factura Q10,000.00 ya con recibo Q4,000 | NC parcial Q1,000 (IVA incluido) y NC total | *[saldo, póliza, IVA]* | 10,000 − 4,000 − 1,000 = **5,000.00** | PENDIENTE |
 | CXC-08 | NORMAL | Anticipo de cliente Q3,000 (tipo `A`) | Se aplica a una factura posterior de Q5,000 | *[saldo de la factura y del anticipo]* | 5,000 − 3,000 = **2,000.00** | PENDIENTE |
-| CXC-09 | REDONDEO | Factura 2026-07-15, `DIASCR`=30; corte 2026-10-15 | Antigüedad de saldos | *[rango en que cae]* | Vence 2026-08-14 → **62 días vencida** (rango 61-90) si manda el vencimiento; **92 días** (rango 91-120) si manda la emisión | PENDIENTE |
+| CXC-09 | REDONDEO | Factura 2026-07-15, `DIASCR`=30; corte 2026-10-15 | Antigüedad de saldos | *[rango en que cae]* | Vence 2026-08-14 → **62 días vencida** (rango 61-90) si manda el vencimiento; **92 días** (rango 91-120) si manda la emisión | PARCIAL (la base es el **vencimiento** → 62 días, rango 61-90; CONFIRMADO por CXC-E03; falta el caso numérico real) |
 | CXC-10 | CORRECCIÓN | Recibo Q4,000 aplicado a una factura | Anular/revertir el recibo | *[saldo restaurado, estado del recibo, póliza]* | saldo vuelve a 10,000.00 (INF) | PENDIENTE |
 | CXC-11 | CORRECCIÓN | Factura certificada con recibos | Anular la factura | *[¿lo impide? ¿qué pasa con aplicaciones y póliza?]* | PEND | PENDIENTE |
 | CXC-12 | NORMAL | Cheque posfechado Q2,500 | Consignación y caso de rechazo | *[efecto en saldo y póliza]* | PEND | PENDIENTE |
 | CXC-13 | NORMAL | Aplicación `E` por concepto distinto de retención (intereses, devolución) | Aplicar a una factura | *[efecto y póliza]* | PEND (ver §8.3) | PENDIENTE |
+| CXC-14 | NORMAL (CONFIRMADO) | Factura real a crédito 30 días, total Q14,400.00 (IVA incluido) | Emisión | Póliza `004`: D Clientes locales 14,400.00 / H IVA por pagar 1,542.86 / H Ventas de servicios 12,857.14 | base = 14,400.00 / 1.12 = 12,857.14; IVA = 1,542.86 (cuadra) — **válido para este caso, no regla universal** | **CONFIRMADA (caso)** |
+| CXC-15 | PARCIAL (CONFIRMADO) | Pago bancario Q701.12 (nota de crédito bancaria con abono a clientes) | Aplicar a 2 facturas: Q461.44 + Q239.68 | D Banco / H Clientes; saldo mostrado Q0.00 | 461.44 + 239.68 = 701.12 → saldo 0.00 | **CONFIRMADA (caso)** |
 
 ### 4.5 Entregable específico: **fórmula exacta del saldo de una factura**
-**Estado: NO CONFIRMADA.** Hipótesis a calibrar con CXC-01…CXC-08: `saldo = monto_total − Σ|aplicaciones| (recibos, retenciones, NC, anticipos)`.
+**Estado: NO CONFIRMADA como fórmula global.** Subconjunto con evidencia (CXC-E02/CXC-15): *pago aplicado a facturas por montos exactos →
+saldo Q0.00 cuando Σ aplicaciones = monto de la factura*. **Siguen sin confirmar:** retención real aplicada, nota de crédito parcial,
+anticipo, sobrepago, reverso de pago, factura anulada con aplicaciones, orden de aplicación y saldo a favor.
+Hipótesis a calibrar con CXC-01…CXC-08: `saldo = monto_total − Σ|aplicaciones| (recibos, retenciones, NC, anticipos)`.
 No escribir la fórmula definitiva hasta tener al menos **tres facturas reales** (una con retención, una con NC, una con varios pagos) cuyo
 saldo en Milenium coincida **al centavo**.
+
+### 4.6 Evidencia real consolidada (aportada el 2026-10-15)
+
+Etiqueta: **CEM** = visto en Milenium (pantalla/reporte/procedimiento de Contabilidad aportado); **CPU** = confirmado por usuario/Contabilidad.
+
+**CXC-E01 — Factura a crédito (póliza tipo `004 — CUENTA POR COBRAR`)** · CEM
+
+| Dato observado | Valor |
+|---|---|
+| Documento | Factura real a **crédito 30 días**, total **Q14,400.00** |
+| Póliza | **D** Clientes locales Q14,400.00 · **H** IVA por pagar Q1,542.86 · **H** Ventas de servicios Q12,857.14 |
+| Cuadre | 14,400.00 / 1.12 = 12,857.14 · IVA = 1,542.86 (12,857.14 + 1,542.86 = 14,400.00) |
+| Otros datos visibles | establecimiento, serie FEL, número FEL, autorización FEL, cliente, crédito 30 días, descripción, línea agrupada |
+| Descripción vs. línea | «12 servicios prestados», pero **cantidad = 1** y **total de línea = Q14,400.00** |
+
+Lectura (sin generalizar): **para este documento** el precio incluía IVA. **No** es regla universal para todos los documentos.
+**Consecuencia:** *no* se asume «1 viaje = 1 línea de factura»; la agrupación (12 servicios en 1 línea de cantidad 1) es una práctica real.
+Confirma además el tipo de póliza de ventas **004** en un caso real (CT-04 de §16 pasa de «dato agregado» a «caso confirmado»; la *intención* sigue PEND).
+
+**CXC-E02 — Cobro desde Bancos** · CEM (procedimiento documentado por Contabilidad)
+Ruta: **Bancos → Nota de Crédito Bancaria con Abono a Clientes.**
+1. Seleccionar la cuenta bancaria. 2. Colocar el **número de boleta** del estado de cuenta. 3. Colocar la **fecha** en que aparece el pago.
+4. Buscar el cliente. 5. Ingresar el **monto exacto**. 6. **Aplicar** el monto a las facturas. 7. Verificar **Banco / Clientes**.
+8. Colocar el **número de factura en «Explicación»**.
+
+| Hallazgo | Etiqueta |
+|---|---|
+| Existe **digitación manual** desde el estado de cuenta bancario | CEM |
+| El cobro **puede registrarse directamente desde Bancos** | CEM |
+| **Un mismo pago puede aplicarse a varias facturas** | CEM |
+| Contabilización observada: **D Banco / H Clientes** | CEM |
+| Ejemplo: pago total **Q701.12** aplicado a **Q461.44 + Q239.68 = Q701.12**; saldo final mostrado **Q0.00** | CEM |
+| El número de factura se anota a mano en «Explicación» (referencia **no estructurada**) | CEM |
+
+**CXC-E03 — Antigüedad de saldos** · CEM
+- Reporte real: **«DETALLE DE ANTIGÜEDAD DE SALDOS»**; texto expreso: **«Antigüedad: Por fecha de vencimiento»**.
+- Rangos visibles: **No vencido · 1–30 · 31–60 · 61–90 · 91 días o más**.
+- Existe **fecha de corte** del reporte. **No confundir** fecha de impresión con fecha de corte.
+
+**CXC-E04 — Facturas saldadas** · CPU (usuario/Contabilidad)
+- Cuando una factura queda con saldo **Q0.00**, **deja de aparecer en el reporte/consulta de antigüedad** utilizado.
+- **No** se afirma que Milenium borre la factura.
+- Contabilidad indicó que sería útil mantener un **historial del cliente**.
+
+**Propuesta de diseño (NO decisión aprobada)** — la CxC de la plataforma debe separar:
+
+| Vista | Contenido |
+|---|---|
+| **A. Cartera abierta** | Facturas con saldo > 0 |
+| **B. Historial del cliente** | Además: facturas pagadas (saldo 0), anuladas, pagos, aplicaciones, retenciones, notas de crédito (cuando existan), referencias bancarias y fechas. Una factura pagada **no desaparece** de la trazabilidad |
+
+Detalle técnico y campos soportados/no soportados: [`MILENIUM-M2-PREPARACION-CXC`](MILENIUM-M2-PREPARACION-CXC.md).
+
+**Qué sigue PENDIENTE en CxC (la fórmula global NO está cerrada):**
+retención real aplicada a una factura · nota de crédito parcial · anticipo · sobrepago · reverso de pago · factura anulada con aplicaciones ·
+orden de aplicación (¿por antigüedad, manual?) · saldo a favor · varios pagos a una misma factura · significado de `R/E/C/D/A`.
 
 ---
 
@@ -649,6 +710,9 @@ Facturación (f06/f07) ──f10──▶ póliza F/1  (D Clientes / H IVA / H V
 | D9 | Existe (o se puede crear) una cuenta separada de **ventas de bienes** (código pendiente) | CPU (Contabilidad) | 2026-10-12 |
 | D10 | Un solo motor común para KT y Mónaco; diferencias = **parametrización por entidad** | CPU | regla de proyecto |
 | D11 | No generar póliza contable hasta un **hito fiscal real** de certificación | CPU | PR C |
+| D12 | La **antigüedad de saldos** de Milenium se clasifica **por fecha de vencimiento** (rangos No vencido, 1–30, 31–60, 61–90, 91+) con **fecha de corte** propia | CEM | 2026-10-15 (reporte real) |
+| D13 | Una factura con saldo Q0.00 **deja de aparecer en la consulta/reporte de antigüedad** (no se afirma que se borre); Contabilidad desea **historial del cliente** | CPU | 2026-10-15 |
+| D14 | *Propuesta de diseño (pendiente de aprobación):* CxC de plataforma separa **cartera abierta** de **historial del cliente**; una factura pagada no desaparece de la trazabilidad | PROPUESTA | 2026-10-15 |
 
 ## 15. Pendientes (ordenados por lo que bloquea)
 
@@ -656,7 +720,7 @@ Facturación (f06/f07) ──f10──▶ póliza F/1  (D Clientes / H IVA / H V
 |---|---|---|---|
 | P1 | **Fórmula exacta del saldo de una factura** (CxC) | Cualquier vista de cartera/estado de cuenta | CXC-01…CXC-13 con facturas reales |
 | P2 | **Flujo de planilla completo** (cálculo / pago / póliza) | Cualquier decisión de RRHH ↔ Milenium | PLA-Q01…Q18, PLA-01…PLA-10 |
-| P3 | Fecha base de antigüedad y vencimiento | Estado de cuenta, antigüedad | CXC-Q02, Q08, CXC-09 |
+| P3 | ~~Fecha base de antigüedad~~ **cerrada** (vencimiento, CEM). **Sigue abierto:** cómo se **determina el vencimiento** (días de crédito congelados vs. vigentes) | Estado de cuenta, antigüedad | CXC-Q02 |
 | P4 | Mecánica de rangos de retención a proveedores | CxP | CXP-Q06, CXP-03 |
 | P5 | Semántica de `TIPOTR` y de `R/E/C/D/A` | Bancos y CxC | BAN-Q03, CXC-Q11 |
 | P6 | Método de redondeo del IVA (línea vs. total) | Cualquier cálculo fiscal | IMP-02, CON-02 |
@@ -678,6 +742,9 @@ Facturación (f06/f07) ──f10──▶ póliza F/1  (D Clientes / H IVA / H V
 | CT-05 | **AUD §8**: anulaciones en `f61`: 930 (KT) | **AUD §21**: «816 FEL en KT» | Probable diferencia de criterio (anulaciones vs. documentos); no usar cifras sin aclarar | ABIERTA |
 | CT-06 | **FCM §H.1** (Mónaco): retenciones 15 % (497), 30 % (23), 53 sin patrón | **RET** (KT): 15 / 30 / **80** %, y otros (340 casos) | Varía por entidad y cliente; ya confirmado «depende del cliente». Valores permitidos siguen PENDIENTE | ABIERTA |
 | CT-07 | **Plataforma `fact_pagos`**: saldo informativo de la factura | **Milenium**: saldo derivado de aplicaciones | No es contradicción de datos, sino de **fuente**: usar rótulo «registrado en plataforma» (M-1 §4) | CONOCIDA |
+| CT-08 | **Plataforma:** `saldo = monto_total − Σ fact_pagos`; la retención **esperada** se guarda pero **no reduce el saldo**; «Cobrado» exige pagos ≥ monto_total | **Milenium:** la retención aplicada es una **aplicación** que reduce el saldo (CEM, FCM §H.1) | Con cliente retenedor, la factura **no llegaría** a «Cobrado» en plataforma con el pago neto real. **No** igualar saldos hasta calibrar retención (M-2 §10) | ABIERTA |
+| CT-09 | **Plataforma:** un pago pertenece a **una** factura (`fact_pagos.factura_id`) | **Milenium:** un pago puede aplicarse a **varias** facturas (CXC-E02) | Hoy serían 2 filas con la misma referencia, **sin identificador de pago/lote** | ABIERTA |
+| CT-10 | **Plataforma:** dos medidas de «pendiente» en Facturación: `saldo` informado (`fact_pagos`) y `saldoPendiente` de confirmación bancaria (`fact_pago_confirmaciones`) | — | Definir **una** vista informativa (M-2 §8) | ABIERTA |
 
 ## 17. Fuente maestra por dato
 
