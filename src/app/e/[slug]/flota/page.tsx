@@ -1,26 +1,10 @@
-"use client";
-
-import { Suspense } from "react";
-import dynamic from "next/dynamic";
-
+import { redirect } from "next/navigation";
+import FlotaPageClient from "./flota-page-client";
 /**
- * Flota es un módulo muy grande. En Hostinger un SSR/HTML completo a veces
- * llega truncado (pantalla blanca con restos tipo n"]). Cargamos el cliente
- * solo en el browser; el shell de empresa ya viene del layout.
+ * Compatibilidad server-side. El resto conserva la carga cliente de Flota.
  */
-const FlotaClient = dynamic(() => import("./flota-client"), {
-  ssr: false,
-  loading: () => (
-    <p className="text-sm text-[var(--muted)]">Cargando flota…</p>
-  ),
-});
-
-export default function FlotaPage() {
-  return (
-    <Suspense
-      fallback={<p className="text-sm text-[var(--muted)]">Cargando flota…</p>}
-    >
-      <FlotaClient />
-    </Suspense>
-  );
+export default async function FlotaPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ tab?: string }> }) {
+  const [{ slug }, search] = await Promise.all([params, searchParams]);
+  if (search.tab === "combustible") redirect(`/e/${slug}/combustibles`);
+  return <FlotaPageClient />;
 }

@@ -414,7 +414,8 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (m === "multas") return "tms";
   if (esPermisoEntrega(m)) return "tms";
   if (esPermisoLiquidacionViaje(m)) return "tms";
-  if (m === "flota_combustible" || m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
+  if (m === "flota_combustible") return "tms";
+  if (m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
@@ -467,7 +468,7 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "gastos") return "Gastos operativos / Solicitudes de fondo";
   if (modulo === "gastos_autorizar") return "Solicitudes de fondo: autorizar y rechazar";
   if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
-  if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
+  if (modulo === "flota_combustible") return "Operaciones: Combustibles";
   if (esPermisoEntrega(modulo)) return LABEL_PERMISO_ENTREGA[modulo];
   if (esPermisoLiquidacionViaje(modulo)) return LABEL_PERMISO_LIQUIDACION_VIAJE[modulo];
   if (esPlataformaPermisible(modulo)) {
@@ -983,7 +984,4 @@ export const FLOTA_NAV: {
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },
   { sub: "flota_piloto", label: "Registrar viaje", path: "piloto" },
-  // FLOTA-COMBUSTIBLE-1 (Fase 2): revisión/aprobación de cargas de
-  // combustible del piloto.
-  { sub: "flota_combustible", label: "Combustible", path: "combustible" },
 ];

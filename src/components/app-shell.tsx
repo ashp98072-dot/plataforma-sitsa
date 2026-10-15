@@ -394,6 +394,9 @@ export function AppShell({
         key: "planes",
       });
     }
+    if (rol !== "Piloto" && modulos.includes("tms") && (isAdmin || tienePermisoBase(permisos, "flota_combustible"))) {
+      opsLinks.push({ href: `${base}/combustibles`, label: "Combustibles", key: "combustibles" });
+    }
     // Viáticos (VIAT-3): módulo propio, visible con CUALQUIERA de los tres
     // permisos de viáticos (viaticos/viaticos_autorizar/viaticos_pagar) —
     // "viaticos" no es un Modulo de empresa/rol (roles.ts), es un permiso

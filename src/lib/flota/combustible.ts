@@ -28,7 +28,11 @@ export type EstadoCargaCombustible = "PENDIENTE" | "APROBADO" | "RECHAZADO";
 
 export type CargaCombustible = {
   id: number;
-  viajeId: number;
+  viajeId: number | null;
+  vehiculoId?: number;
+  proveedorId?: number | null;
+  observaciones?: string | null;
+  proveedorNombre?: string | null;
   tipoCombustible: TipoCombustible;
   /** Número de vale del reporte de la gasolinera. `null` = carga histórica anterior a FLOTA-COMBUSTIBLE-2. */
   numeroVale: string | null;
@@ -65,7 +69,11 @@ type UploadLike = {
 function mapCarga(r: RowDataPacket): CargaCombustible {
   return {
     id: Number(r.id),
-    viajeId: Number(r.viaje_id),
+    viajeId: r.viaje_id == null ? null : Number(r.viaje_id),
+    vehiculoId: r.vehiculo_id == null ? undefined : Number(r.vehiculo_id),
+    proveedorId: r.proveedor_id == null ? null : Number(r.proveedor_id),
+    observaciones: r.observaciones == null ? null : String(r.observaciones),
+    proveedorNombre: r.proveedor_nombre == null ? null : String(r.proveedor_nombre),
     tipoCombustible: String(r.tipo_combustible) === "gasolina" ? "gasolina" : "diesel",
     numeroVale: r.numero_vale ? String(r.numero_vale) : null,
     // fecha_consumo es DATE — mysql2 lo devuelve como Date; toIsoDate()
@@ -266,12 +274,13 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.observaciones, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
             c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
             c.motivo_rechazo, c.creado_por, c.creado_at,
-            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa
+            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa, pr.nombre_comercial AS proveedor_nombre
      FROM flota_combustible_cargas c
      INNER JOIN flota_vehiculos v ON v.id = c.vehiculo_id
+     LEFT JOIN compras_proveedores pr ON pr.id = c.proveedor_id AND pr.empresa_id = c.empresa_id
      WHERE ${where}
      ORDER BY c.id DESC
      LIMIT 500`,

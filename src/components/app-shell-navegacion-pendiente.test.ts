@@ -252,11 +252,13 @@ describe("AppShell real — cambio de pestaña de Flota (mismo pathname)", () =>
     expect(shell.gris()).toBe(false);
   });
 
-  it("menús y permisos iguales: mismos enlaces (href y etiqueta) que en BASE", () => {
+  it("menús y permisos iguales salvo traslado aprobado de Combustibles a Operaciones", () => {
     if (!hasBase) return;
     const a = montar("base"); a.abrirGrupos();
     const b = montar("nuevo"); b.abrirGrupos();
-    const norm = (s: ReturnType<typeof montar>) => s.enlaces().map(l => `${l.href} | ${l.label}`);
+    const norm = (s: ReturnType<typeof montar>) => s.enlaces().filter(l => l.href !== "/e/a/combustibles" && l.href !== "/e/a/flota?tab=combustible").map(l => `${l.href} | ${l.label}`);
+    expect(b.enlaces().filter(l => l.href === "/e/a/combustibles")).toHaveLength(1);
+    expect(b.enlaces().some(l => l.href === "/e/a/flota?tab=combustible")).toBe(false);
     expect(norm(b)).toEqual(norm(a));
     expect(norm(b).length).toBeGreaterThan(10);
   });
