@@ -11,6 +11,8 @@ import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/date
 import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
+import { badgeLiquidacion } from "@/lib/tms/liquidacion-viaje-shared";
+import { ETIQUETA_SUBTOTAL_COMERCIAL } from "@/lib/tms/resumen-liquidacion-shared";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 
@@ -80,6 +82,12 @@ function filaExcel(p: PlanReporte): string[] {
     // PROGRAMACION-VEHICULO-SOLICITADO — al FINAL (no se mueve ninguna columna existente). Separado de
     // "Equipo asignado"/"Identificación vehículo" (la unidad REAL). Sin dato (históricos): "—".
     textoVehiculoSolicitado(p.vehiculoSolicitado),
+    // TMS FASE 5 — al FINAL (no se mueve ninguna columna existente). Columnas SEPARADAS: tarifa base («Valor del viaje»,
+    // arriba), cargos adicionales vigentes y subtotal comercial ANTES de impuestos (sin IVA; no es total de factura). Los
+    // costos internos/gastos no se exportan aquí ni intervienen en el subtotal.
+    p.cargosAdicionales?.total ?? "0.00",
+    p.subtotalComercial ?? "Pendiente",
+    badgeLiquidacion(p.liquidacion, p.estado)?.texto ?? "—",
   ];
 }
 
@@ -102,6 +110,7 @@ const HEADERS_EXCEL = [
   "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
   ETIQUETA_TC, "Origen TC",
   ETIQUETA_VEHICULO_SOLICITADO,
+  "Cargos adicionales", ETIQUETA_SUBTOTAL_COMERCIAL, "Estado liquidación",
 ];
 
 export async function GET(req: Request, ctx: Ctx) {

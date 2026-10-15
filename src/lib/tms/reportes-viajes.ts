@@ -3,6 +3,7 @@ import { query } from "@/lib/db";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { liquidacionesDePlanes } from "@/lib/tms/liquidacion-viaje";
 import type { ResumenLiquidacionFila } from "@/lib/tms/liquidacion-viaje-shared";
+import { resumenComercialDePlanes } from "@/lib/tms/resumen-liquidacion";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
 import { pilotoExtraDePlanes } from "@/lib/tms/piloto-extra";
 import {
@@ -105,6 +106,12 @@ export type PlanReporte = {
    * registrada» (incluye todo el histórico): NUNCA se infiere «liquidado». Solo lectura; no interviene en el cierre.
    */
   liquidacion?: ResumenLiquidacionFila | null;
+  /**
+   * TMS FASE 5 — cargos adicionales VIGENTES del viaje (cantidad y total, cadena decimal) y subtotal comercial = tarifa base +
+   * cargos, ANTES de impuestos (null sin tarifa). Costos internos/gastos NUNCA intervienen. No es «total factura»: sin IVA.
+   */
+  cargosAdicionales?: { cantidad: number; total: string };
+  subtotalComercial?: string | null;
   kmSalida: number | null;
   kmLlegada: number | null;
   kmRecorridos: number | null;
@@ -760,7 +767,7 @@ export async function obtenerReporteViajes(
   }
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap, extraMap, cierreManualIds, liquidacionMap] = await Promise.all([
+  const [paradasMap, auxMap, extraMap, cierreManualIds, liquidacionMap, comercialMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanesReporte(planIds),
     // Piloto extra de todos los viajes del reporte en UNA consulta.
@@ -768,6 +775,8 @@ export async function obtenerReporteViajes(
     planesConCierreManual(empresaId, rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id))),
     // Liquidación vigente en UNA consulta (tolerante: sin tablas ⇒ mapa vacío ⇒ «—»). Solo informativa.
     liquidacionesDePlanes(empresaId, planIds),
+    // Cargos adicionales vigentes + subtotal comercial en UNA consulta agrupada por plan (sin N+1; tolerante a tabla ausente).
+    resumenComercialDePlanes(empresaId, rows.map((r) => ({ id: Number(r.id), tarifaComercial: r.tarifa_comercial }))),
   ]);
 
   return rows.map((r) => {
@@ -814,6 +823,11 @@ export async function obtenerReporteViajes(
       regresoReal: horaLlegada,
       cierreManual: cierreManualIds.has(id),
       liquidacion: liquidacionMap.get(id) ?? null,
+      cargosAdicionales: {
+        cantidad: comercialMap.get(id)?.cargosCantidad ?? 0,
+        total: comercialMap.get(id)?.cargosTotal ?? "0.00",
+      },
+      subtotalComercial: comercialMap.get(id)?.subtotalComercial ?? null,
       kmSalida,
       kmLlegada,
       kmRecorridos: calcularKmRecorridos(kmSalida, kmLlegada),

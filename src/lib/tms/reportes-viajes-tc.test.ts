@@ -239,10 +239,12 @@ describe("exportación Excel de viajes", () => {
     expect(r.status).toBe(200);
     const arg = vi.mocked(tablaAExcel).mock.calls[0][0] as { headers: string[]; rows: string[][] };
     const i = arg.headers.indexOf("TC / Caja / Remolque");
-    // PROGRAMACION-VEHICULO-SOLICITADO agrega "Vehículo solicitado" DESPUÉS (las columnas TC no se mueven entre sí).
-    expect(i).toBe(arg.headers.length - 3);
+    // PROGRAMACION-VEHICULO-SOLICITADO agrega "Vehículo solicitado" DESPUÉS (las columnas TC no se mueven entre sí);
+    // TMS FASE 5 agrega al FINAL «Cargos adicionales», «Subtotal comercial» y «Estado liquidación» (nada se reubica).
+    expect(i).toBe(arg.headers.length - 6);
     expect(arg.headers[i + 1]).toBe("Origen TC");
-    expect(arg.headers.at(-1)).toBe("Vehículo solicitado");
+    expect(arg.headers[i + 2]).toBe("Vehículo solicitado");
+    expect(arg.headers.slice(-3)).toEqual(["Cargos adicionales", "Subtotal comercial (antes de impuestos)", "Estado liquidación"]);
     expect(arg.rows.map((f) => [f[i], f[i + 1]])).toEqual([["TC-456XYZ", "Propio"], ["TX-900", "Tercerizado"]]);
     expect(arg.rows.every((f) => f.length === arg.headers.length)).toBe(true);
   });

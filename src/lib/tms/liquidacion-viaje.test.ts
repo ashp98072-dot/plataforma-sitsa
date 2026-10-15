@@ -134,6 +134,10 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
       // Fase 4: los cargos reutilizan los tipos/estados de la liquidación (solo lectura del estado; no la modifican).
       "src/lib/tms/cargos-adicionales.ts",
       "src/lib/tms/cargos-adicionales-shared.ts",
+      // Fase 5: el resumen comercial lee el estado/snapshot de la liquidación (solo lectura) y el Excel muestra su estado.
+      "src/lib/tms/resumen-liquidacion.ts",
+      "src/lib/tms/resumen-liquidacion-shared.ts",
+      "src/app/api/empresas/[slug]/tms/reportes/viajes/export/route.ts",
     ]);
     const importadores = salida
       .split("\n")

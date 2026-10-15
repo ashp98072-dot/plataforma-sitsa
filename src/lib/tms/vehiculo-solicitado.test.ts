@@ -180,9 +180,11 @@ describe("reportes / exportaciones", () => {
     const r = await exportar(new Request("http://x/api/x/export?formato=xlsx&fechaDesde=2026-12-01&fechaHasta=2026-12-31"), { params: Promise.resolve({ slug: "kt" }) });
     expect(r.status).toBe(200);
     const arg = vi.mocked(tablaAExcel).mock.calls[0][0] as { headers: string[]; rows: string[][] };
-    expect(arg.headers.at(-1)).toBe("Vehículo solicitado");
+    // TMS FASE 5 agrega 3 columnas comerciales DESPUÉS (las columnas existentes no se reubican).
+    const iVs = arg.headers.indexOf("Vehículo solicitado");
+    expect(iVs).toBe(arg.headers.length - 4);
     expect(arg.headers.slice(0, 4)).toEqual(["Fecha", "Cliente", "Equipo asignado", "Identificación vehículo"]);
-    expect(arg.rows.map((f) => [f[3], f.at(-1)])).toEqual([["C-123ABC", "Camión 2.5 toneladas"], ["C-123ABC", "—"]]);
+    expect(arg.rows.map((f) => [f[3], f[iVs]])).toEqual([["C-123ABC", "Camión 2.5 toneladas"], ["C-123ABC", "—"]]);
     expect(arg.rows.every((f) => f.length === arg.headers.length)).toBe(true);
   });
   it("5) PDF historial: columna nueva al final del arreglo (índice 17), en el renglón de la unidad; no mueve las demás", () => {
