@@ -27,6 +27,12 @@ Base: `main` = `27b82512` (incluye #466). Fecha: 2026-10-15.
 - **Las auditorías previas son anteriores** a FACT-4, CONT PR A/B/C y FEL-2A. Esta fase **re-verificó** el estado de la plataforma en
   `main` y corrige lo que quedó desactualizado (§2).
 
+> **Actualización M-1b.** El levantamiento de procesos y cálculos (fichas, preguntas, casos de calibración, decisiones, pendientes,
+> contradicciones y fuente maestra) vive en [`MILENIUM-M1B-CALIBRACION-PROCESOS`](MILENIUM-M1B-CALIBRACION-PROCESOS.md). Allí se registra
+> una **alerta** que afecta a este documento: la plataforma **sí tiene un módulo de planillas** (cálculo de IGSS/ISR, faltas, horas extra,
+> autorización y marcado de pagos; CONFIRMADO EN CÓDIGO), por lo que «RRHH operativo» **no** debe leerse como «sin planilla»; el riesgo de
+> doble cálculo/pago con Milenium está **abierto** (contradicción CT-01, preguntas PLA-Q01/Q02).
+
 ## 1. Resumen ejecutivo
 
 1. **Milenium es un ERP contable de escritorio (Visual FoxPro 9) sobre archivos DBF compartidos; no se conoce ninguna API,
@@ -315,7 +321,7 @@ y la fecha. Las preguntas ya abiertas en las auditorías (P-1…P-15 y N-1…N-3
 | Fase | Contenido | Tipo | Prerrequisitos |
 |---|---|---|---|
 | **M-1 (esta)** | Mapa de procesos, clasificación, entrevistas | Documental | — |
-| **M-1b** | Ejecutar entrevistas (§6) y cerrar las preguntas de Contabilidad; confirmar usuarios reales por módulo | Operativa | Acceso a los usuarios |
+| **M-1b** | Ejecutar entrevistas (§6) y cerrar las preguntas de Contabilidad; confirmar usuarios reales por módulo. **Preparado:** [`MILENIUM-M1B-CALIBRACION-PROCESOS`](MILENIUM-M1B-CALIBRACION-PROCESOS.md) (fichas, preguntas y casos de calibración por módulo) | Operativa | Acceso a los usuarios |
 | **M-2** | Estado de cuenta, facturas pendientes/pagadas y reportes de facturación/cobranza **solo lectura**, con rótulo «documentos registrados en plataforma» | P1, bajo riesgo | Confirmación de formato con cobranza |
 | **M-3** | **Referencia externa de factura por viaje** (serie/número/autorización de Milenium) con control de duplicados y exclusión de «viajes pendientes» | P1 | Decisión de Contabilidad sobre campos y fecha de corte |
 | **M-4** | **Hoja de facturación por viaje** (exportación estructurada para captura en Milenium) — sin IVA ni «total factura» | P1 | Reglas de agrupación y descripción (P-C1…P-C3) |
