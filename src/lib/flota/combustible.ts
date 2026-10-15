@@ -28,7 +28,11 @@ export type EstadoCargaCombustible = "PENDIENTE" | "APROBADO" | "RECHAZADO";
 
 export type CargaCombustible = {
   id: number;
-  viajeId: number;
+  viajeId: number | null;
+  vehiculoId?: number;
+  proveedorId?: number | null;
+  observaciones?: string | null;
+  proveedorNombre?: string | null;
   tipoCombustible: TipoCombustible;
   /** Número de vale del reporte de la gasolinera. `null` = carga histórica anterior a FLOTA-COMBUSTIBLE-2. */
   numeroVale: string | null;
@@ -49,6 +53,8 @@ export type CargaCombustible = {
 
 /** Fase 2 (revisión de Operaciones): incluye placa/piloto para la bandeja de staff. */
 export type CargaCombustibleRevision = CargaCombustible & {
+  creadoPorUsuarioId?: number | null;
+  revisadoPorUsuarioId?: number | null;
   placa: string;
   pilotoNombre: string;
   revisadoPor: string | null;
@@ -65,7 +71,11 @@ type UploadLike = {
 function mapCarga(r: RowDataPacket): CargaCombustible {
   return {
     id: Number(r.id),
-    viajeId: Number(r.viaje_id),
+    viajeId: r.viaje_id == null ? null : Number(r.viaje_id),
+    vehiculoId: r.vehiculo_id == null ? undefined : Number(r.vehiculo_id),
+    proveedorId: r.proveedor_id == null ? null : Number(r.proveedor_id),
+    observaciones: r.observaciones == null ? null : String(r.observaciones),
+    proveedorNombre: r.proveedor_nombre == null ? null : String(r.proveedor_nombre),
     tipoCombustible: String(r.tipo_combustible) === "gasolina" ? "gasolina" : "diesel",
     numeroVale: r.numero_vale ? String(r.numero_vale) : null,
     // fecha_consumo es DATE — mysql2 lo devuelve como Date; toIsoDate()
@@ -212,6 +222,8 @@ export async function obtenerArchivoCargaCombustiblePorEmpresa(
 function mapCargaRevision(r: RowDataPacket): CargaCombustibleRevision {
   return {
     ...mapCarga(r),
+    creadoPorUsuarioId: r.creado_por_usuario_id == null ? null : Number(r.creado_por_usuario_id),
+    revisadoPorUsuarioId: r.revisado_por_usuario_id == null ? null : Number(r.revisado_por_usuario_id),
     placa: String(r.placa ?? "—"),
     pilotoNombre: String(r.piloto_nombre ?? "—"),
     revisadoPor: r.revisado_por ? String(r.revisado_por) : null,
@@ -266,12 +278,13 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
             c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
             c.motivo_rechazo, c.creado_por, c.creado_at,
-            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa
+            c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa, pr.nombre_comercial AS proveedor_nombre
      FROM flota_combustible_cargas c
      INNER JOIN flota_vehiculos v ON v.id = c.vehiculo_id
+     LEFT JOIN compras_proveedores pr ON pr.id = c.proveedor_id AND pr.empresa_id = c.empresa_id
      WHERE ${where}
      ORDER BY c.id DESC
      LIMIT 500`,
@@ -344,7 +357,11 @@ export async function revisarCargaCombustible(
   accion: "aprobar" | "rechazar",
   revisorUsername: string,
   motivoRechazo?: string,
+  revisorUsuarioId?: number,
 ): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  if (revisorUsuarioId != null && (!Number.isSafeInteger(revisorUsuarioId) || revisorUsuarioId <= 0)) {
+    return { ok: false, error: "Usuario revisor inválido.", status: 400 };
+  }
   if (accion === "rechazar" && !motivoRechazo?.trim()) {
     return { ok: false, error: "Indica el motivo del rechazo.", status: 400 };
   }
@@ -352,9 +369,9 @@ export async function revisarCargaCombustible(
   const ahora = ahoraLocal();
   const r = await execute(
     `UPDATE flota_combustible_cargas
-     SET estado = ?, revisado_por = ?, revisado_en = ?, motivo_rechazo = ?
+     SET estado = ?, revisado_por = ?, revisado_en = ?, motivo_rechazo = ?${revisorUsuarioId != null ? ", revisado_por_usuario_id = ?" : ""}
      WHERE id = ? AND empresa_id = ? AND estado = 'PENDIENTE'`,
-    [nuevoEstado, revisorUsername, ahora, accion === "rechazar" ? motivoRechazo!.trim() : null, cargaId, empresaId],
+    [nuevoEstado, revisorUsername, ahora, accion === "rechazar" ? motivoRechazo!.trim() : null, ...(revisorUsuarioId != null ? [revisorUsuarioId] : []), cargaId, empresaId],
   );
   if (!r.affectedRows) {
     return {

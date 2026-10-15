@@ -518,8 +518,7 @@ export async function requireTenantViaticosComprobantes(
 }
 
 /**
- * FLOTA-COMBUSTIBLE-1 (Fase 2) — revisar/aprobar/rechazar las cargas de
- * combustible que el piloto registra desde el Portal. Permiso propio y
+ * COMBUSTIBLES C-1 — captura, edición pendiente y revisión por Operaciones. Permiso propio y
  * explícito ("flota_combustible") — no es un FlotaSubmodulo (no se
  * reutiliza requireTenantFlota) a propósito: ese tipo se reparte por
  * completo ("...FLOTA_SUBMODULOS") a varios roles que nunca pidieron
@@ -527,8 +526,7 @@ export async function requireTenantViaticosComprobantes(
  * PLATAFORMA_PERMISIBLES, permisos-shared.ts). GerenteOperaciones/
  * JefeOperaciones lo traen por defecto ("los de operaciones son los que
  * autorizan", confirmado por el usuario); cualquier otro rol puede
- * recibirlo desde Usuarios. Gatea sobre el módulo de empresa "flota"
- * (Flota/Predios), igual que el resto de este archivo para ese dominio.
+ * recibirlo desde Usuarios. Gatea sobre el módulo de empresa "tms" (Operaciones), sin acceso completo a Flota.
  */
 export async function requireTenantFlotaCombustible(
   slug: string,
@@ -543,10 +541,10 @@ export async function requireTenantFlotaCombustible(
   const empresaMods = empresa.modulos.length
     ? empresa.modulos
     : modulosPorRol(session.rol);
-  if (empresaMods.length && !empresaMods.includes("flota")) {
+  if (empresaMods.length && !empresaMods.includes("tms")) {
     return {
       error: NextResponse.json(
-        { error: "Esta empresa no tiene el módulo Flota / Predios." },
+        { error: "Esta empresa no tiene el módulo Operaciones / TMS." },
         { status: 403 },
       ),
     };

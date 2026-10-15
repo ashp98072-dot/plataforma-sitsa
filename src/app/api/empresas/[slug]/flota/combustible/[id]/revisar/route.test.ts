@@ -25,6 +25,12 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /api/empresas/[slug]/flota/combustible/[id]/revisar", () => {
+  it("el ID del revisor sale de sesión, no del payload ni de un piloto", async () => {
+    const res = await POST(req({ accion: "aprobar", revisado_por_usuario_id: 999, piloto_nombre: "OPERACIONES" }), ctx);
+    expect(res.status).toBe(200);
+    expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "aprobar", "op1", undefined, 1);
+    expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ usuario: "op1", detalle: expect.stringContaining("usuario #1") }));
+  });
   it("exige flota_combustible:editar (distinto de :ver) ANTES de tocar la lib", async () => {
     vi.mocked(requireTenantFlotaCombustible).mockResolvedValue({
       error: new Response(null, { status: 403 }),
@@ -44,14 +50,14 @@ describe("POST /api/empresas/[slug]/flota/combustible/[id]/revisar", () => {
   it("aprobar delega en la lib con empresa/id/username correctos", async () => {
     const res = await POST(req({ accion: "aprobar" }), ctx);
     expect(res.status).toBe(200);
-    expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "aprobar", "op1", undefined);
+    expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "aprobar", "op1", undefined, 1);
     expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ accion: "aprobar_combustible" }));
   });
 
   it("rechazar con motivo lo propaga a la lib y a la auditoría", async () => {
     const res = await POST(req({ accion: "rechazar", motivo: "Vale ilegible" }), ctx);
     expect(res.status).toBe(200);
-    expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "rechazar", "op1", "Vale ilegible");
+    expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "rechazar", "op1", "Vale ilegible", 1);
     expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ accion: "rechazar_combustible" }));
   });
 

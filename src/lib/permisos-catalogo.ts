@@ -80,7 +80,7 @@ export const CATALOGO_PERMISOS: ModuloCatalogo[] = [
   modulo("flota_lecturas","Lecturas km","flota",[[C,"registrar","Registrar lectura"],[E,"gestionar","Gestionar lectura / evidencias"]]),
   modulo("flota_reportes","Reportes de Flota","flota",[]),
   modulo("flota_piloto","Viajes de Flota","flota",[[C,"registrar","Registrar viaje / evidencias"]]),
-  modulo("flota_combustible","Combustible","flota",[[E,"revisar","Revisar / aprobar / rechazar / conciliar"]]),
+  modulo("flota_combustible","Combustibles","operaciones",[[E,"revisar","Registrar / editar pendientes / revisar / conciliar"]]),
   modulo("facturacion","Facturación clientes","contabilidad",[[C,"crear","Crear factura borrador"],[E,"editar","Editar factura borrador"]]),
   modulo("contabilidad","Contabilidad","contabilidad",[[C,"registrar","Registrar datos contables"],[E,"gestionar","Gestionar datos contables"]]),
   modulo("cms","Sitio Web / CMS","sitio",[]),

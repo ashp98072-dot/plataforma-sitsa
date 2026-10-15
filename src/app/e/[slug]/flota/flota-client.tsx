@@ -66,18 +66,6 @@ const VehiculoDocumentos = dynamic(
   },
 );
 
-const CombustibleRevisionPanel = dynamic(
-  () =>
-    import("@/components/flota/combustible-revision").then(
-      (m) => m.CombustibleRevisionPanel,
-    ),
-  {
-    ssr: false,
-    loading: () => (
-      <p className="text-sm text-[var(--muted)]">Cargando combustible…</p>
-    ),
-  },
-);
 
 const TomarFotoButton = dynamic(
   () =>
@@ -4135,9 +4123,6 @@ export default function FlotaClient() {
         <InventarioEquipoPanel slug={slug} can={can} />
       ) : null}
 
-      {tab === "combustible" && can("flota_combustible") ? (
-        <CombustibleRevisionPanel slug={slug} can={can} />
-      ) : null}
 
       {tab === "compras" &&
       (can("flota_compras") || can("flota_servicios")) ? (

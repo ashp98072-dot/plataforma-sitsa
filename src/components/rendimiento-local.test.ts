@@ -112,7 +112,9 @@ it.skipIf(!hasBase)("medición sidebar Admin: cerrados 0; RRHH abierto 18; hover
     (element.props?.onClick as () => void)();
     await vi.advanceTimersByTimeAsync(50);
     expect(h.nav).toHaveBeenCalledOnce();
-    counts.push({ links: allLinks.length, rrhh: rrhhLinks.length, prefetch: h.prefetch.mock.calls.length });
+    // C-1 traslada Combustibles; comparar los demás enlaces, no su ubicación anterior.
+    const sinCombustible = allLinks.filter(l => !["/e/a/combustibles", "/e/a/flota?tab=combustible"].includes(String(l.props?.href)));
+    counts.push({ links: sinCombustible.length, rrhh: rrhhLinks.length, prefetch: h.prefetch.mock.calls.length });
   }
   expect(counts[0].links).toBe(counts[1].links);
   expect(counts[0].rrhh).toBe(counts[1].rrhh);
