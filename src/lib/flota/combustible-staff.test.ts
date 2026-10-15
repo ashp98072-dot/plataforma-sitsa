@@ -81,6 +81,38 @@ describe("captura staff C-1", () => {
   });
 });
 describe("validación y mapeo", () => {
+  it("estación usa nombre del servidor, no texto enviado, y filtra empresa/proveedor", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("FROM flota_combustible_estaciones") ? Promise.resolve([[{ id: 55, nombre: "Shell Roosevelt", activo: 1 }]]) : original(sql, params));
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, estacionId: 55, gasolinera: "Texto manipulado" }, file);
+    expect(m.query).toHaveBeenCalledWith(expect.stringContaining("WHERE empresa_id=? AND proveedor_id=? AND id=?"), [1, 3, 55]);
+    expect(m.execute.mock.calls[0][1][10]).toBe("Shell Roosevelt");
+    expect(m.execute.mock.calls[0][1][12]).toBe(55);
+  });
+  it.each(["ajena", "otro proveedor", "inactiva"])("rechaza estación %s antes de subir evidencia", async caso => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("FROM flota_combustible_estaciones") ? Promise.resolve([caso === "inactiva" ? [{ id: 55, nombre: "A", activo: 0 }] : []]) : original(sql, params));
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, estacionId: 55 }, file)).rejects.toThrow("estación");
+    expect(m.execute).not.toHaveBeenCalled(); expect(m.subir).not.toHaveBeenCalled();
+  });
+  it("histórico sin estación conserva texto y no confía en gasolinera del navegador", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("SELECT id, estado") ? Promise.resolve([[{ id: 11, estado, proveedor_id: 3, vehiculo_id: 7, estacion_id: null, gasolinera: "Texto histórico", ruta_relativa: "empresas/1/flota/viejo.pdf" }]]) : original(sql, params));
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, null, 11);
+    expect(m.execute.mock.calls[0][1][10]).toBe("Texto histórico");
+    expect(m.execute.mock.calls[0][1][12]).toBeNull();
+  });
+  it("edición mantiene estación inactiva y snapshot originales si no cambian", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => {
+      if (sql.includes("SELECT id, estado")) return Promise.resolve([[{ id: 11, estado, proveedor_id: 3, vehiculo_id: 7, estacion_id: 55, gasolinera: "Nombre original", ruta_relativa: "empresas/1/flota/viejo.pdf" }]]);
+      if (sql.includes("FROM flota_combustible_estaciones")) return Promise.resolve([[{ id: 55, nombre: "Nombre nuevo", activo: 0 }]]);
+      return original(sql, params);
+    });
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, null, 11);
+    expect(m.execute.mock.calls[0][1][10]).toBe("Nombre original");
+    expect(m.execute.mock.calls[0][1][12]).toBe(55);
+  });
   it("no acepta un registrador ficticio con ID 0", async () => {
     await expect(guardarCombustibleStaff(1, { usuarioId: 0, username: "op" }, input, file)).rejects.toThrow("Usuario registrador");
     expect(m.execute).not.toHaveBeenCalled();

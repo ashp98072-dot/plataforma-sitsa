@@ -33,6 +33,7 @@ export type CargaCombustible = {
   proveedorId?: number | null;
   observaciones?: string | null;
   proveedorNombre?: string | null;
+  estacionId?: number | null;
   tipoCombustible: TipoCombustible;
   /** Número de vale del reporte de la gasolinera. `null` = carga histórica anterior a FLOTA-COMBUSTIBLE-2. */
   numeroVale: string | null;
@@ -76,6 +77,7 @@ function mapCarga(r: RowDataPacket): CargaCombustible {
     proveedorId: r.proveedor_id == null ? null : Number(r.proveedor_id),
     observaciones: r.observaciones == null ? null : String(r.observaciones),
     proveedorNombre: r.proveedor_nombre == null ? null : String(r.proveedor_nombre),
+    estacionId: r.estacion_id == null ? null : Number(r.estacion_id),
     tipoCombustible: String(r.tipo_combustible) === "gasolina" ? "gasolina" : "diesel",
     numeroVale: r.numero_vale ? String(r.numero_vale) : null,
     // fecha_consumo es DATE — mysql2 lo devuelve como Date; toIsoDate()
@@ -278,7 +280,7 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.estacion_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
             c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
             c.motivo_rechazo, c.creado_por, c.creado_at,
             c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa, pr.nombre_comercial AS proveedor_nombre

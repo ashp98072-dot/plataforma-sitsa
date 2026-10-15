@@ -39,6 +39,7 @@ type Carga = {
   proveedorId?: number | null;
   observaciones?: string | null;
   proveedorNombre?: string | null;
+  estacionId?: number | null;
   creadoPor: string;
   creadoPorUsuarioId?: number | null;
   revisadoPorUsuarioId?: number | null;
