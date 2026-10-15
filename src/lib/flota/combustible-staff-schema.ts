@@ -7,6 +7,7 @@ const decimal = (escala: number, maximo: string) => z.string().trim().regex(/^\d
   .refine(v => { try { const n = new Decimal(v); return n.gt(0) && n.lte(maximo) && n.decimalPlaces() <= escala; } catch { return false; } }, "Valor fuera de rango o precisión.");
 export const combustibleStaffSchema = z.object({
   proveedorId: id,
+  estacionId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()).optional(),
   vehiculoId: id,
   viajeId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()),
   numeroVale: z.string().trim().min(1, "Indica el número de vale.").max(40),
