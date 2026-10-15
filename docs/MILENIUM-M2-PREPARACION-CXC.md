@@ -262,3 +262,91 @@ Depende de la calibración pendiente de CxC y del hito fiscal. **No** se diseña
 
 No crea tablas ni columnas; no ejecuta SQL; no modifica `fact_*` ni `cont_cxc`; no registra pagos ni aplicaciones; no calcula
 antigüedad; no integra con Milenium ni con INFILE; no define IVA, retenciones ni «total factura»; no cambia permisos.
+
+---
+
+## 14. M-2a implementado
+
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE en local** (tsc, ESLint, pruebas unitarias y de BD contra MariaDB 11.8.9 desechable).
+**No** probado manualmente en navegador; **no** aprobado para producción. **Sin migración, sin SQL de producción, sin escrituras.**
+
+### 14.1 Alcance
+Pestaña **«Cuentas por cobrar»** dentro de Facturación, con tres secciones —**Cartera abierta**, **Historial** y **Por cliente**— y exportación
+a Excel del conjunto filtrado. Rótulo permanente: «Saldo informativo — documentos registrados en plataforma. No es la cartera legal de
+Milenium.»
+
+| Pieza | Archivo |
+|---|---|
+| Lógica pura (saldo, estados, filtros, columnas) | `src/lib/facturacion/cuentas-por-cobrar-shared.ts` |
+| Servicio de lectura | `src/lib/facturacion/cuentas-por-cobrar.ts` |
+| Excel | `src/lib/facturacion/cuentas-por-cobrar-excel.ts` |
+| Rutas (solo `GET`, permiso `facturacion:ver`) | `src/app/api/empresas/[slug]/facturacion/cuentas-por-cobrar/{route,clientes/route,clientes/[clienteId]/route,export/route}.ts` |
+| UI | `src/components/facturacion/cuentas-por-cobrar-panel.tsx` + pestaña en `facturacion-client.tsx` |
+
+### 14.2 Reglas implementadas
+- **Fuente única:** `fact_facturas` + `fact_pagos`; `fact_pago_confirmaciones` solo como atributo. **`cont_cxc` no se lee ni se nombra.**
+- **Saldo informativo** = `monto_total − Σ fact_pagos.monto`. **No** resta retención esperada ni confirmaciones bancarias.
+- **Cartera abierta:** `estado_admin = Emitida` y saldo informativo > 0.
+- **Historial:** Emitidas (pendientes, parciales, pagadas) y Anuladas; la factura pagada **no desaparece**. El **Borrador no participa**.
+- **Estados derivados (no persistidos):** `ANULADA` · `SIN_PAGOS` (pagado ≤ 0) · `PARCIAL` (0 < pagado < total) · `PAGADA` (pagado ≥ total).
+- **Facturas anuladas:** estado `ANULADA`, **sin saldo** (no son cobrables) y excluidas de las sumas.
+- **Entidad:** columna y filtro; `entidad_id IS NULL` se muestra «Sin entidad» y **nunca** se asigna. Los **totales y resúmenes van por entidad**:
+  KT y Mónaco no se suman entre sí.
+- **Retención esperada y neto esperado:** columnas aparte, informativas; no tocan el saldo.
+- **Vencimiento:** «No disponible». **No** hay días vencidos, rangos de antigüedad ni estado «vencida».
+
+### 14.3 Consultas principales (sin N+1)
+| # | Consulta | Cuándo | Por página |
+|---|---|---|---|
+| 1 | Facturas + cliente + entidad + **pagos agregados por factura** (JOIN a un `GROUP BY factura_id`), `ORDER BY`, `LIMIT/OFFSET` | siempre | 1 |
+| 2 | Totales y conteo agrupados **por entidad** sobre el **mismo filtro** | siempre | 1 |
+| 3 | Pagos de las facturas de la página (`factura_id IN (…)`) → última referencia | siempre | 1 |
+| 4 | Confirmaciones bancarias de las facturas de la página | siempre | 1 |
+| 5 | Resumen de un cliente (agregado por entidad) · lista de pagos · lista de confirmaciones | vista por cliente | 3 |
+| 6 | Índice de clientes (agregado por cliente × entidad, ordenado por saldo) + conteo | vista «Por cliente» | 2 |
+
+La prueba de BD verifica que el **número de consultas no cambia** entre una página de 1 y de 100 facturas. Cada consulta lleva `empresa_id`
+(de la sesión) como primer predicado; la empresa **nunca** sale de la query string.
+
+### 14.4 Filtros y paginación
+`clienteId`, `entidad` (id o «sin»), `estado` (derivado), `estadoAdmin`, `fechaDesde/Hasta` (emisión), `numeroFactura` (contiene; comodines
+escapados), `textoCliente` (snapshot, nombre o razón social) y, en Historial, `alcance` = Todas / Abiertas / Pagadas / Anuladas.
+Parseo estricto: lo desconocido se ignora. **Paginación en backend** (`LIMIT/OFFSET`, 25 por defecto, máximo 100) con total exacto.
+La **exportación** ejecuta el mismo filtro **sin paginar** (tope 20 000; si lo excede responde 400 pidiendo acotar, nunca trunca).
+
+### 14.5 Campos
+| Campo | Estado en M-2a |
+|---|---|
+| cliente, factura, entidad, fecha emisión, monto original, total pagado, saldo informativo, estado, condición de pago | **Sí** |
+| retención esperada, neto esperado (aparte) | **Sí** (solo si la factura la tiene) |
+| último pago (fecha), referencia (último pago) | **Sí** |
+| confirmación bancaria (estado, monto, acreditación, referencia, cuenta) | **Sí**, como atributo |
+| fecha de vencimiento, días de crédito, días vencidos, rango de antigüedad | **No** (§6) |
+| retenciones reales, notas de crédito, anticipos, saldo a favor, reversos | **No** |
+| agrupación de un pago bancario en varias facturas (lote) | **No** (cada pago es de una factura) |
+
+### 14.6 Limitaciones y diferencias conocidas con Milenium
+1. **No es la cartera legal.** Solo cuenta documentos registrados en plataforma; facturas de Milenium no registradas no aparecen.
+2. **Retención real:** en Milenium reduce el saldo; aquí no (solo la esperada, aparte). Un cliente retenedor puede figurar «pendiente»
+   en plataforma aunque Milenium ya lo considere saldado (CT-08).
+3. **Un pago a varias facturas:** Milenium lo soporta; aquí son filas por factura sin lote (CT-09). Las referencias iguales se ven en
+   *Pagos asociados* del cliente.
+4. **Estado «PAGADA»** significa «Σ pagos ≥ total», no «Σ aplicaciones = total».
+5. **Confirmación bancaria ≠ pago:** se muestra aparte y no modifica nada (CT-10).
+6. **Sin antigüedad:** Milenium clasifica por fecha de vencimiento; aquí no existe ese dato (M-2b).
+7. Facturas **anteriores a FACT-4** pueden carecer de entidad y condición de pago (se muestran «Sin entidad» / «—»).
+
+### 14.7 Pruebas
+| Archivo | Cobertura |
+|---|---|
+| `cuentas-por-cobrar-shared.test.ts` | saldo (1000/400/1000), estados, cartera abierta, filtros estrictos, paginación, columnas de exportación, rótulos y **arquitectura** (sin `cont_cxc`, sin escrituras, solo GET, sin vencimiento inventado) |
+| `cuentas-por-cobrar.test.ts` | modelo base sin FACT-4 (sin `cont_entidades`, entidad «Sin entidad»), empresa como primer parámetro |
+| `cuentas-por-cobrar-rutas.test.ts` | 403 sin permiso en todas las rutas, empresa desde la sesión, filtros validados, cliente 400/404/200, exportación y tope, sin métodos de escritura |
+| `cuentas-por-cobrar.db.test.ts` (MariaDB 11.8.9 desechable, SQL real) | A saldo · B estados · C aislamiento empresa/entidad/«Sin entidad» · D `cont_cxc` no participa (cambiarlo no altera nada) · E confirmaciones · F retención esperada · G paginación · H anti N+1 · I historial · J filtros · K por cliente · L Excel exacto con rótulo · M **huella idéntica** de todas las tablas y ningún INSERT/UPDATE/DELETE |
+
+### 14.8 Rendimiento e índices (solo documentado; no se agregó nada)
+- La subconsulta de pagos agrega **todos** los pagos de la empresa (`GROUP BY factura_id`) en cada solicitud, igual que el listado de
+  facturas existente. Hoy `fact_pagos` solo tiene `idx_pagos_factura(factura_id)` y `idx_pagos_empresa(empresa_id)`.
+- **Sugerencia futura (requiere migración, NO aplicada):** índice compuesto `fact_pagos (empresa_id, factura_id)` (idealmente cubriendo
+  `monto` y `fecha_pago`) y, para antigüedad (M-2b), `fact_facturas (empresa_id, estado_admin, fecha_vencimiento)`.
+- Con volúmenes grandes de pagos, evaluar limitar la agregación a las facturas del filtro en vez de a toda la empresa.

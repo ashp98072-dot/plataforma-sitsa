@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CuestionarioFields } from "@/components/clientes/cuestionario-fields";
+import { CuentasPorCobrarPanel } from "@/components/facturacion/cuentas-por-cobrar-panel";
 import { FacturasPanel } from "@/components/facturacion/facturas-panel";
 import { ViajesPendientesPanel } from "@/components/facturacion/viajes-pendientes-panel";
 import { useEmpresaSession } from "@/lib/empresa-session";
@@ -20,7 +21,7 @@ type Props = {
   verClientes: boolean;
   editarClientes: boolean;
   /** Desde menú: Conta → empresa, Ops → clientes. */
-  vistaInicial?: "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda" | null;
+  vistaInicial?: "facturas" | "viajes-pendientes" | "cuentas-por-cobrar" | "empresa" | "clientes" | "ayuda" | null;
 };
 
 type KpisFacturacion = {
@@ -54,7 +55,7 @@ type ResumenCliente = {
   actualizadoAt: string | null;
 };
 
-type Tab = "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda";
+type Tab = "facturas" | "viajes-pendientes" | "cuentas-por-cobrar" | "empresa" | "clientes" | "ayuda";
 
 export function FacturacionClient({
   slug,
@@ -78,6 +79,7 @@ export function FacturacionClient({
     if (puedeVerFacturas) {
       list.push({ id: "facturas", label: "Facturas" });
       list.push({ id: "viajes-pendientes", label: "Viajes pendientes" });
+      list.push({ id: "cuentas-por-cobrar", label: "Cuentas por cobrar" });
     }
     if (verEmpresa) {
       list.push({ id: "empresa", label: "Configuración empresa" });
@@ -315,6 +317,8 @@ export function FacturacionClient({
           onCambio={() => void cargarKpi()}
         />
       ) : null}
+
+      {tab === "cuentas-por-cobrar" && puedeVerFacturas ? <CuentasPorCobrarPanel slug={slug} /> : null}
 
       {tab === "viajes-pendientes" && puedeVerFacturas ? (
         <ViajesPendientesPanel
