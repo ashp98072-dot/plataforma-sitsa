@@ -14,10 +14,10 @@ function request(fields: Record<string, string> = {}, evidencia = true) {
   if (evidencia) f.set("file", new File(["%PDF-1.7"], "vale.pdf", { type: "application/pdf" }));
   return new Request("http://localhost/x", { method: "POST", body: f });
 }
-it("POST exige editar antes de leer cuerpo", async () => {
+it("POST exige registrar antes de leer cuerpo", async () => {
   m.guard.mockResolvedValue({ error: new Response(null, { status: 403 }) });
   expect((await guardarCombustibleHttp(request(), "empresa")).status).toBe(403);
-  expect(m.guard).toHaveBeenCalledWith("empresa", "editar"); expect(m.guardar).not.toHaveBeenCalled();
+  expect(m.guard).toHaveBeenCalledWith("empresa", "registrar"); expect(m.guardar).not.toHaveBeenCalled();
 });
 it("empresa y registrador vienen del guard, nunca del navegador", async () => {
   expect((await guardarCombustibleHttp(request({ empresaId: "99", username: "otro", pilotoNombre: "falso", creado_por_usuario_id: "999", empleadoId: "0" }), "empresa")).status).toBe(201);
@@ -29,9 +29,10 @@ it.each(["proveedorId", "vehiculoId", "galones", "monto", "fechaConsumo", "numer
   expect((await guardarCombustibleHttp(request({ [campo]: "" }), "empresa")).status).toBe(400);
   expect(m.guardar).not.toHaveBeenCalled();
 });
-it("PATCH usa mismo guard y el id validado", async () => {
+it("PATCH exige editar_pendientes y el id validado", async () => {
   expect((await guardarCombustibleHttp(request(), "empresa", 5)).status).toBe(200);
   expect(m.guardar.mock.calls[0][4]).toBe(5);
+  expect(m.guard).toHaveBeenCalledWith("empresa", "editar_pendientes");
 });
 it("ID inválido no escribe", async () => {
   expect((await guardarCombustibleHttp(request(), "empresa", 0)).status).toBe(400);

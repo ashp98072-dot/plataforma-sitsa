@@ -34,6 +34,7 @@ import {
 } from "./permisos";
 import { actorDesdeSesion, puedeUsarEntregas } from "./entregas/actor";
 import type { ActorEntrega } from "./entregas/reglas";
+import { puedeCombustible, type AccionCombustible } from "./flota/combustible-permisos";
 
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
@@ -530,7 +531,7 @@ export async function requireTenantViaticosComprobantes(
  */
 export async function requireTenantFlotaCombustible(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionCombustible = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -551,10 +552,10 @@ export async function requireTenantFlotaCombustible(
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  if (!tienePermiso(perms, "flota_combustible", accion)) {
+  if (!puedeCombustible(perms, accion)) {
     return {
       error: NextResponse.json(
-        { error: `Sin permiso para ${accion} la revisión de combustible.` },
+        { error: `Sin permiso de Combustibles: ${accion}.` },
         { status: 403 },
       ),
     };

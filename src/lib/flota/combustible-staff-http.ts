@@ -7,7 +7,7 @@ import { combustibleStaffSchema } from "./combustible-staff-schema";
 import { guardarCombustibleStaff } from "./combustible-staff";
 
 export async function guardarCombustibleHttp(req: Request, slug: string, id?: number) {
-  const guard = await requireTenantFlotaCombustible(slug, "editar");
+  const guard = await requireTenantFlotaCombustible(slug, id == null ? "registrar" : "editar_pendientes");
   if (guard.error) return guard.error;
   if (id !== undefined && (!Number.isSafeInteger(id) || id <= 0)) return NextResponse.json({ error: "ID inválido." }, { status: 400 });
   try {

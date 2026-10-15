@@ -4,8 +4,7 @@ const read = (path: string) => readFileSync(path, "utf8");
 it("mantenimiento separado enlazado desde Combustibles, no incrustado en captura", () => {
   expect(read("src/components/flota/combustibles-client.tsx")).toContain("/combustibles/estaciones");
   const pagina = read("src/app/e/[slug]/combustibles/estaciones/page.tsx");
-  expect(pagina).toContain('requireTenantFlotaCombustible(slug, "ver")');
-  expect(pagina).toContain('"flota_combustible", "editar"');
+  expect(pagina).toContain('requireTenantFlotaCombustible(slug, "gestionar_estaciones")');
   const form = read("src/components/flota/combustible-registro.tsx");
   expect(form).toContain('name="estacionId"');
   expect(form).not.toContain('name="gasolinera"');
