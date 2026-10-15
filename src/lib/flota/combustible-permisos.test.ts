@@ -49,7 +49,7 @@ describe("acciones independientes de Combustibles", () => {
   });
   it("UI conecta capacidades distintas sin quitar consulta ni catálogo activo", () => {
     const panel = readFileSync("src/components/flota/combustible-revision.tsx", "utf8");
-    expect(panel).toContain("capacidades.registrar && <button");
+    expect(readFileSync("src/components/flota/combustibles-client.tsx", "utf8")).toContain("capacidades.registrar && <Link");
     expect(panel).toContain("const puedeEditar = capacidades.editar_pendientes");
     expect(panel).toContain("const puedeRevisar = capacidades.revisar");
     expect(panel).toContain("{puedeEditar && <button");

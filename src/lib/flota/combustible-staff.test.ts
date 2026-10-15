@@ -25,6 +25,30 @@ beforeEach(() => {
   m.subir.mockResolvedValue({ relative: "empresas/1/flota/nuevo.pdf", original: "vale.pdf", size: 10 });
 });
 describe("captura staff C-1", () => {
+  it("alta sin captura de viaje resuelve NULL, nunca undefined/0", async () => {
+    expect(combustibleStaffSchema.parse({ ...input, viajeId: undefined }).viajeId).toBeUndefined();
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: undefined }, file);
+    expect(m.execute.mock.calls[0][1][1]).toBeNull();
+    expect(m.query.mock.calls.some(c => c[0].includes("FROM flota_viajes"))).toBe(false);
+  });
+  it("editar omitiendo viaje preserva vínculo histórico del registro bloqueado", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("SELECT id, estado") ? Promise.resolve([[{ id: 11, estado, vehiculo_id: 7, viaje_id: 9, proveedor_id: 3, gasolinera: "Histórica", ruta_relativa: "empresas/1/flota/viejo.pdf" }]]) : original(sql, params));
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: undefined }, null, 11);
+    expect(m.execute.mock.calls[0][1][1]).toBe(9);
+    expect(m.execute.mock.calls[0][1][10]).toBe("Histórica");
+    expect(m.subir).not.toHaveBeenCalled();
+    expect(m.query).toHaveBeenCalledWith(expect.stringContaining("FROM flota_viajes WHERE empresa_id = ? AND id = ?"), [1, 9]);
+  });
+  it("cambiar unidad no borra silenciosamente el viaje histórico incompatible", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("SELECT id, estado") ? Promise.resolve([[{ id: 11, estado, vehiculo_id: 7, viaje_id: 9, proveedor_id: 3, ruta_relativa: "empresas/1/flota/viejo.pdf" }]]) : original(sql, params));
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: undefined, vehiculoId: 8 }, null, 11)).rejects.toThrow("Viaje no válido");
+    expect(m.execute).not.toHaveBeenCalled();
+  });
+  it("texto libre no es proveedor_id válido", () => {
+    expect(combustibleStaffSchema.safeParse({ ...input, proveedorId: "Shell manual" }).success).toBe(false);
+  });
   it("registra sin piloto ni viaje, PENDIENTE y precio Decimal", async () => {
     expect(await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)).toBe(11);
     const [sql, params] = m.execute.mock.calls[0];
