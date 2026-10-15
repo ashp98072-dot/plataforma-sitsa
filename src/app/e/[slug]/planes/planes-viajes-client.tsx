@@ -32,6 +32,7 @@ import {
 } from "@/lib/tms/liquidacion-viaje-shared";
 import type { EventoLiquidacionViaje } from "@/lib/tms/liquidacion-viaje";
 import { HistorialLiquidacion, ModalLiquidarViaje, ModalReabrirLiquidacion } from "@/components/tms/liquidacion-viaje-modales";
+import { ResumenLiquidacionViajeCard } from "@/components/tms/resumen-liquidacion-viaje";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
@@ -162,6 +163,9 @@ type PlanReporte = {
   pendienteCierre: boolean;
   /** Liquidación VIGENTE (Fase 2), dimensión separada de `estado`. Ausente/null = sin liquidación registrada. */
   liquidacion?: ResumenLiquidacionFila | null;
+  /** FASE 5 — cargos adicionales vigentes y subtotal comercial (tarifa + cargos, ANTES de impuestos; sin costos internos). */
+  cargosAdicionales?: { cantidad: number; total: string };
+  subtotalComercial?: string | null;
   cerradoPor: string | null;
   cerradoEn: string | null;
   clienteId: number | null;
@@ -1067,7 +1071,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     ...(mostrarSel ? ["Sel."] : []),
     "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
-    "Evid.", "Tarifa usada", "Tarifa", "Estado",
+    "Evid.", "Tarifa usada", "Tarifa", "Cargos", "Subtotal com.", "Estado",
     // LIQUIDACIÓN (Fase 2): dimensión separada del estado del viaje; «—» = sin liquidación registrada (incluye el histórico).
     "Liquidación",
     // Fase D — Facturación (FACT-1). "Tarifa" (arriba) sigue siendo el
@@ -1404,7 +1408,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
         <table className="min-w-[1400px] w-full text-left text-sm">
           <thead className="sticky top-0 z-10 bg-[var(--thead)] text-[var(--text)]">
             <tr>{columnas.map((c) => (
-              <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold" title={c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
+              <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold" title={c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Cargos" ? "Cargos adicionales vigentes al cliente." : c === "Subtotal com." ? "Subtotal comercial antes de impuestos: tarifa base + cargos adicionales vigentes. No es el total de la factura (IVA pendiente) ni incluye costos internos." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
                 {c}
               </th>
             ))}</tr>
@@ -1518,6 +1522,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="px-2 py-1.5 text-xs">{p.evidencias}</td>
                     <td className="px-2 py-1.5 text-xs" title={p.tarifaMontoSnapshot != null ? `Monto de la tarifa al armar el viaje: ${moneda(p.tarifaMontoSnapshot)}` : undefined}>{p.tarifaNombre ?? "—"}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(p.tarifaComercial)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs" data-testid="celda-cargos">
+                      {p.cargosAdicionales && p.cargosAdicionales.cantidad > 0 ? moneda(Number(p.cargosAdicionales.total)) : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs" data-testid="celda-subtotal-comercial">
+                      {p.subtotalComercial != null ? moneda(Number(p.subtotalComercial)) : "—"}
+                    </td>
                     <td className="px-2 py-1.5 text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badge.clase}`}>{badge.texto}</span>
                     </td>
@@ -1628,6 +1638,13 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         {historialLiquidacion[p.id]?.length ? (
                           <div className="mb-3"><HistorialLiquidacion eventos={historialLiquidacion[p.id]} /></div>
                         ) : null}
+                        <div className="mb-3">
+                          <ResumenLiquidacionViajeCard
+                            slug={slug}
+                            planId={p.id}
+                            version={`${p.estado}:${p.liquidacion?.estado ?? "-"}:${p.liquidacion?.version ?? 0}`}
+                          />
+                        </div>
                         <div className="grid gap-4 lg:grid-cols-3">
                           <div>
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">A. Datos generales</p>
