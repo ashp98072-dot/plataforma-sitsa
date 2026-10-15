@@ -31,14 +31,14 @@ describe("POST /api/empresas/[slug]/flota/combustible/[id]/revisar", () => {
     expect(revisarCargaCombustible).toHaveBeenCalledWith(7, 5, "aprobar", "op1", undefined, 1);
     expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({ usuario: "op1", detalle: expect.stringContaining("usuario #1") }));
   });
-  it("exige flota_combustible:editar (distinto de :ver) ANTES de tocar la lib", async () => {
+  it("exige la acción revisar ANTES de tocar la lib", async () => {
     vi.mocked(requireTenantFlotaCombustible).mockResolvedValue({
       error: new Response(null, { status: 403 }),
     } as Awaited<ReturnType<typeof requireTenantFlotaCombustible>>);
     const res = await POST(req({ accion: "aprobar" }), ctx);
     expect(res.status).toBe(403);
     expect(revisarCargaCombustible).not.toHaveBeenCalled();
-    expect(requireTenantFlotaCombustible).toHaveBeenCalledWith("prueba", "editar");
+    expect(requireTenantFlotaCombustible).toHaveBeenCalledWith("prueba", "revisar");
   });
 
   it("acción inválida -> 400, sin llamar a la lib", async () => {

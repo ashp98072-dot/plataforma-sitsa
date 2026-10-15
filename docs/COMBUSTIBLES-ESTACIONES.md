@@ -19,7 +19,7 @@ Catálogo independiente en `/e/[slug]/combustibles/estaciones`, enlazado desde C
 
 ## Seguridad/API
 
-GET `/api/empresas/[slug]/flota/combustible/estaciones` (filtros proveedorId, buscar, activo=1/0/todos) y catálogo: `flota_combustible:ver`. POST estaciones y PATCH estaciones/[id]: `flota_combustible:editar`. Guard existente exige módulo TMS. Sin grants nuevos. Tenant y actor vienen de sesión/guard, no del body. Auditoría transaccional existente; bloqueo proveedor→estación consistente con escritura de vales.
+GET `/api/empresas/[slug]/flota/combustible/estaciones` (filtros proveedorId, buscar, activo=1/0/todos), POST estaciones y PATCH estaciones/[id]: acción `gestionar_estaciones` de Combustibles. Catálogo activo para captura: `flota_combustible:ver`. Ver mapa y transición legacy en `COMBUSTIBLES-PERMISOS-GRANULARES.md`. Guard existente exige módulo TMS. Tenant y actor vienen de sesión/guard, no del body. Auditoría transaccional existente; bloqueo proveedor→estación consistente con escritura de vales.
 
 ## Despliegue manual
 

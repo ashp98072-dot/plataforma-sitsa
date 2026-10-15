@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CombustibleConciliacionView } from "./combustible-conciliacion";
 import { CombustibleRegistro, type ValeEditable } from "./combustible-registro";
+import type { CapacidadesCombustible } from "@/lib/flota/combustible-permisos";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 2) — bandeja de revisión de Operaciones:
@@ -27,7 +28,7 @@ import { CombustibleRegistro, type ValeEditable } from "./combustible-registro";
 
 type Props = {
   slug: string;
-  can: (sub: string, accion?: "ver" | "crear" | "editar" | "eliminar") => boolean;
+  capacidades: CapacidadesCombustible;
 };
 
 type Estado = "PENDIENTE" | "APROBADO" | "RECHAZADO";
@@ -200,7 +201,7 @@ function ResumenMensualView({ slug }: { slug: string }) {
   );
 }
 
-export function CombustibleRevisionPanel({ slug, can }: Props) {
+export function CombustibleRevisionPanel({ slug, capacidades }: Props) {
   const [registro, setRegistro] = useState<ValeEditable | "nuevo" | null>(null);
   const [vista, setVista] = useState<"bandeja" | "resumen" | "conciliacion">("bandeja");
   const [estado, setEstado] = useState<Estado>("PENDIENTE");
@@ -215,7 +216,8 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
   const [motivoPorId, setMotivoPorId] = useState<Record<number, string>>({});
   const abortRef = useRef<AbortController | null>(null);
 
-  const puedeRevisar = can("flota_combustible", "editar");
+  const puedeRevisar = capacidades.revisar;
+  const puedeEditar = capacidades.editar_pendientes;
 
   const cargar = useCallback(async () => {
     abortRef.current?.abort();
@@ -278,8 +280,8 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
       <p className="text-xs text-[var(--muted)]">
         Vales registrados por Operaciones e históricos del Portal. Solo lo Aprobado cuenta para el control mensual, por fecha de registro.
       </p>
-      {puedeRevisar && <button type="button" onClick={() => setRegistro("nuevo")} className="rounded bg-sky-700 px-3 py-2 text-white">Registrar vale</button>}
-      {registro && <CombustibleRegistro key={registro === "nuevo" ? "nuevo" : registro.id} slug={slug} vale={registro === "nuevo" ? undefined : registro} onCancel={() => setRegistro(null)} onSaved={() => { setRegistro(null); void cargar(); }} />}
+      {capacidades.registrar && <button type="button" onClick={() => setRegistro("nuevo")} className="rounded bg-sky-700 px-3 py-2 text-white">Registrar vale</button>}
+      {registro && (registro === "nuevo" ? capacidades.registrar : puedeEditar) && <CombustibleRegistro key={registro === "nuevo" ? "nuevo" : registro.id} slug={slug} vale={registro === "nuevo" ? undefined : registro} onCancel={() => setRegistro(null)} onSaved={() => { setRegistro(null); void cargar(); }} />}
 
       <div className="grid grid-cols-3 gap-2">
         <button
@@ -307,7 +309,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
 
       {vista === "resumen" ? <ResumenMensualView slug={slug} /> : null}
 
-      {vista === "conciliacion" ? <CombustibleConciliacionView slug={slug} puedeConciliar={puedeRevisar} /> : null}
+      {vista === "conciliacion" ? <CombustibleConciliacionView slug={slug} puedeConciliar={capacidades.conciliar} /> : null}
 
       {vista === "bandeja" ? (
         <>
@@ -358,7 +360,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
               <th className="px-2 py-2">Gasolinera</th>
               <th className="px-2 py-2">Foto</th>
               {estado === "RECHAZADO" ? <th className="px-2 py-2">Motivo</th> : null}
-              {puedeRevisar && estado === "PENDIENTE" ? <th className="px-2 py-2">Acciones</th> : null}
+              {(puedeRevisar || puedeEditar) && estado === "PENDIENTE" ? <th className="px-2 py-2">Acciones</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -386,10 +388,10 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
                   <a href={c.url} target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">Ver</a>
                 </td>
                 {estado === "RECHAZADO" ? <td className="px-2 py-2">{c.motivoRechazo ?? "—"}</td> : null}
-                {puedeRevisar && estado === "PENDIENTE" ? (
+                {(puedeRevisar || puedeEditar) && estado === "PENDIENTE" ? (
                   <td className="px-2 py-2">
-                    <button type="button" onClick={() => setRegistro(c)} className="mr-2 underline">Editar</button>
-                    <div className="flex flex-wrap items-center gap-2">
+                    {puedeEditar && <button type="button" onClick={() => setRegistro(c)} className="mr-2 underline">Editar</button>}
+                    {puedeRevisar && <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         className="rounded bg-emerald-700 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
@@ -412,7 +414,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
                       >
                         Rechazar
                       </button>
-                    </div>
+                    </div>}
                   </td>
                 ) : null}
               </tr>
@@ -420,7 +422,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
             {!loading && !items.length ? (
               <tr>
                 <td
-                  colSpan={15 + (estado === "RECHAZADO" ? 1 : 0) + (puedeRevisar && estado === "PENDIENTE" ? 1 : 0)}
+                  colSpan={15 + (estado === "RECHAZADO" ? 1 : 0) + ((puedeRevisar || puedeEditar) && estado === "PENDIENTE" ? 1 : 0)}
                   className="px-2 py-4 text-[var(--muted)]"
                 >
                   Sin registros con este filtro.

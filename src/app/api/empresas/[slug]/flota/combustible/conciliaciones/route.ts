@@ -150,7 +150,7 @@ export async function POST(
   const guard =
     await requireTenantFlotaCombustible(
       slug,
-      "editar",
+      "conciliar",
     );
 
   if (guard.error) {
