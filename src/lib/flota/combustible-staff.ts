@@ -42,6 +42,8 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
       anterior = actual.ruta_relativa ? String(actual.ruta_relativa) : null;
     }
     if (!proveedores[0].activo && (!actual || Number(actual.proveedor_id) !== datos.proveedorId)) throw new ErrorDominioFormulario("Proveedor inactivo.");
+    // La UI no captura IDs internos. Omitir preserva el vínculo obtenido del vale bloqueado, no del navegador.
+    const viajeId = datos.viajeId === undefined ? (actual?.viaje_id == null ? null : Number(actual.viaje_id)) : datos.viajeId;
     const estacionId = datos.estacionId === undefined ? (actual?.estacion_id == null ? null : Number(actual.estacion_id)) : datos.estacionId;
     // Texto histórico preservado; el navegador no decide el snapshot de una estación catalogada.
     let gasolinera = actual?.gasolinera ?? null;
@@ -54,15 +56,15 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
     }
     const vehiculo = await obtenerVehiculoAccesibleTx(conn, empresaId, datos.vehiculoId);
     if ((!actual || Number(actual.vehiculo_id) !== datos.vehiculoId) && (!vehiculo || !vehiculo.activo)) throw new ErrorDominioFormulario("Vehículo no disponible para esta empresa.");
-    if (datos.viajeId != null) {
-      const [viajes] = await conn.query<RowDataPacket[]>("SELECT id, vehiculo_id FROM flota_viajes WHERE empresa_id = ? AND id = ?", [empresaId, datos.viajeId]);
+    if (viajeId != null) {
+      const [viajes] = await conn.query<RowDataPacket[]>("SELECT id, vehiculo_id FROM flota_viajes WHERE empresa_id = ? AND id = ?", [empresaId, viajeId]);
       if (!viajes[0] || Number(viajes[0].vehiculo_id) !== datos.vehiculoId) throw new ErrorDominioFormulario("Viaje no válido para esta empresa y unidad.");
     }
     const [duplicados] = await conn.query<RowDataPacket[]>(`SELECT id FROM flota_combustible_cargas WHERE empresa_id = ? AND proveedor_id = ? AND UPPER(TRIM(numero_vale)) = UPPER(TRIM(?)) AND id <> ? LIMIT 1`, [empresaId, datos.proveedorId, datos.numeroVale, id ?? 0]);
     if (duplicados.length) throw new ErrorDominioFormulario("Ya existe un vale con ese proveedor y número en esta empresa.", 409);
     if (!file && !anterior) throw new ErrorDominioFormulario("Adjunta la evidencia del vale.");
     if (file) subida = await guardarUpload(empresaId, "flota", "combustible", file);
-    const valores = [datos.vehiculoId, datos.viajeId, datos.proveedorId, datos.numeroVale, datos.fechaConsumo, datos.tipoCombustible, datos.galones, datos.monto, precioCalculado(datos.monto, datos.galones), datos.km, gasolinera, datos.observaciones || null, estacionId];
+    const valores = [datos.vehiculoId, viajeId, datos.proveedorId, datos.numeroVale, datos.fechaConsumo, datos.tipoCombustible, datos.galones, datos.monto, precioCalculado(datos.monto, datos.galones), datos.km, gasolinera, datos.observaciones || null, estacionId];
     let cargaId = id;
     if (id == null) {
       const [result] = await conn.execute<import("mysql2").ResultSetHeader>(`INSERT INTO flota_combustible_cargas

@@ -202,7 +202,7 @@ function ResumenMensualView({ slug }: { slug: string }) {
 }
 
 export function CombustibleRevisionPanel({ slug, capacidades }: Props) {
-  const [registro, setRegistro] = useState<ValeEditable | "nuevo" | null>(null);
+  const [registro, setRegistro] = useState<ValeEditable | null>(null);
   const [vista, setVista] = useState<"bandeja" | "resumen" | "conciliacion">("bandeja");
   const [estado, setEstado] = useState<Estado>("PENDIENTE");
   const [desde, setDesde] = useState("");
@@ -280,8 +280,7 @@ export function CombustibleRevisionPanel({ slug, capacidades }: Props) {
       <p className="text-xs text-[var(--muted)]">
         Vales registrados por Operaciones e históricos del Portal. Solo lo Aprobado cuenta para el control mensual, por fecha de registro.
       </p>
-      {capacidades.registrar && <button type="button" onClick={() => setRegistro("nuevo")} className="rounded bg-sky-700 px-3 py-2 text-white">Registrar vale</button>}
-      {registro && (registro === "nuevo" ? capacidades.registrar : puedeEditar) && <CombustibleRegistro key={registro === "nuevo" ? "nuevo" : registro.id} slug={slug} vale={registro === "nuevo" ? undefined : registro} onCancel={() => setRegistro(null)} onSaved={() => { setRegistro(null); void cargar(); }} />}
+      {registro && puedeEditar && <CombustibleRegistro key={registro.id} slug={slug} vale={registro} onCancel={() => setRegistro(null)} onSaved={() => { setRegistro(null); void cargar(); }} />}
 
       <div className="grid grid-cols-3 gap-2">
         <button

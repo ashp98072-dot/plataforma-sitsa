@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { precioCalculado } from "@/lib/flota/combustible-staff-schema";
 import { estacionesDelProveedor, estacionAlCambiarProveedor, type EstacionOpcion } from "@/lib/flota/combustible-estaciones-ui";
+import { CatalogoSearchSelect, opcionesConHistorico } from "@/components/tms/catalogo-search-select";
 
 export type ValeEditable = {
   id: number; vehiculoId?: number; proveedorId?: number | null; viajeId: number | null;
@@ -22,6 +23,7 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
   const [vehiculoId, setVehiculoId] = useState(String(vale?.vehiculoId ?? ""));
   const [estacionId, setEstacionId] = useState(String(vale?.estacionId ?? ""));
   const estaciones = estacionesDelProveedor(catalogos.estaciones, proveedorId);
+  const proveedoresOpciones = opcionesConHistorico(catalogos.proveedores.map(p => ({ value: String(p.id), label: p.nombre })), String(vale?.proveedorId ?? ""), `Proveedor #${vale?.proveedorId}`);
   const enCurso = useRef(false);
   useEffect(() => {
     const ac = new AbortController();
@@ -37,6 +39,7 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
   return <form className="space-y-3 rounded border border-[var(--border)] p-4" onSubmit={async e => {
     e.preventDefault();
     if (enCurso.current) return;
+    if (!proveedorId) { setError("Selecciona un proveedor."); return; }
     enCurso.current = true; setGuardando(true); setError("");
     const form = new FormData(e.currentTarget);
     try {
@@ -50,11 +53,9 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
     <h2 className="font-semibold">{vale ? `Editar vale #${vale.id}` : "Registrar vale"}</h2>
     {error && <p role="alert" className="text-red-500">{error}</p>}
     <div className="grid gap-3 md:grid-cols-3">
-      <label>Proveedor<select className={input} name="proveedorId" required value={proveedorId} onChange={e => { setProveedorId(e.target.value); setEstacionId(estacionAlCambiarProveedor(catalogos.estaciones, e.target.value, estacionId)); }}>
-        <option value="">Seleccionar proveedor</option>
-        {vale?.proveedorId && !catalogos.proveedores.some(p => p.id === vale.proveedorId) && <option value={vale.proveedorId}>Proveedor histórico #{vale.proveedorId}</option>}
-        {catalogos.proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
-      </select></label>
+      <div><input type="hidden" name="proveedorId" value={proveedorId} />
+        <CatalogoSearchSelect label="Proveedor" placeholder="Buscar proveedor..." value={proveedorId} options={proveedoresOpciones} inputClassName={input} onChange={value => { setProveedorId(value); setEstacionId(estacionAlCambiarProveedor(catalogos.estaciones, value, estacionId)); }} />
+      </div>
       <label>Unidad / placa<select className={input} name="vehiculoId" required value={vehiculoId} onChange={e => setVehiculoId(e.target.value)}>
         <option value="">Seleccionar unidad</option>
         {vale?.vehiculoId && !catalogos.vehiculos.some(v => v.id === vale.vehiculoId) && <option value={vale.vehiculoId}>{vale.placa} · Histórico</option>}
@@ -72,7 +73,6 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
         {vale?.estacionId && String(vale.proveedorId) === proveedorId && !estaciones.some(e => e.id === vale.estacionId) && <option value={vale.estacionId}>{vale.gasolinera ?? `Estación #${vale.estacionId}`} · Histórico</option>}
         {estaciones.map(e => <option key={e.id} value={e.id}>{e.id === vale?.estacionId && vale.gasolinera ? vale.gasolinera : e.nombre}</option>)}
       </select>{!estacionId && vale?.gasolinera && <small>Texto histórico conservado: {vale.gasolinera}</small>}</label>
-      <label>ID de viaje Flota (opcional)<input className={input} name="viajeId" type="number" min="1" step="1" defaultValue={vale?.viajeId ?? ""} /><small>Solo trazabilidad; debe corresponder a esta unidad.</small></label>
       <label>Evidencia imagen/PDF<input className={input} name="file" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,application/pdf" required={!vale} /><small>{vale ? "Sin archivo nuevo se conserva el existente." : "Una evidencia obligatoria."}</small></label>
       <label>Observaciones<textarea className={input} name="observaciones" maxLength={1000} defaultValue={vale?.observaciones ?? ""} /></label>
     </div>

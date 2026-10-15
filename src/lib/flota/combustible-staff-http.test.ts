@@ -21,7 +21,8 @@ it("POST exige registrar antes de leer cuerpo", async () => {
 });
 it("empresa y registrador vienen del guard, nunca del navegador", async () => {
   expect((await guardarCombustibleHttp(request({ empresaId: "99", username: "otro", pilotoNombre: "falso", creado_por_usuario_id: "999", empleadoId: "0" }), "empresa")).status).toBe(201);
-  expect(m.guardar).toHaveBeenCalledWith(1, { usuarioId: 91, username: "op" }, expect.objectContaining({ viajeId: null }), expect.any(File), undefined);
+  expect(m.guardar).toHaveBeenCalledWith(1, { usuarioId: 91, username: "op" }, expect.objectContaining({ proveedorId: 3 }), expect.any(File), undefined);
+  expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("viajeId");
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("pilotoNombre");
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("creado_por_usuario_id");
 });

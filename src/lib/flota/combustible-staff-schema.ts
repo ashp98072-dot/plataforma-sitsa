@@ -9,7 +9,7 @@ export const combustibleStaffSchema = z.object({
   proveedorId: id,
   estacionId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()).optional(),
   vehiculoId: id,
-  viajeId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()),
+  viajeId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()).optional(),
   numeroVale: z.string().trim().min(1, "Indica el número de vale.").max(40),
   fechaConsumo: z.string().refine(esFechaCalendarioValida, "Fecha de consumo inválida."),
   tipoCombustible: z.enum(["diesel", "gasolina"]),
