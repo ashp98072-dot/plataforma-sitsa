@@ -485,15 +485,26 @@ export async function liquidacionesDePlanes(
   const ids = [...new Set(planIds.filter((id) => Number.isInteger(id) && id > 0))];
   const mapa = new Map<number, ResumenLiquidacionFila>();
   if (!ids.length) return mapa;
-  const sql = `SELECT plan_id, estado, version FROM tms_viaje_liquidaciones
-        WHERE empresa_id = ? AND plan_id IN (${ids.map(() => "?").join(",")})`;
+  // `reporte_recibido`: existe el evento append-only REPORTE_RECIBIDO del plan (evidencia histórica de que el reporte se
+  // recibió, aunque la liquidación ya esté EN_AJUSTE o LIQUIDADO). Solo informativo para la pantalla.
+  const sql = `SELECT l.plan_id, l.estado, l.version,
+        EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos e
+                 WHERE e.empresa_id = l.empresa_id AND e.plan_id = l.plan_id AND e.tipo = 'REPORTE_RECIBIDO') AS reporte_recibido
+        FROM tms_viaje_liquidaciones l
+        WHERE l.empresa_id = ? AND l.plan_id IN (${ids.map(() => "?").join(",")})`;
   const params = [empresaId, ...ids];
   try {
     // Mismo helper `query` del resto de las lecturas de reportes (planesConCierreManual, etc.) cuando no se inyecta conexión.
     const rows = conexion
-      ? (await conexion.query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number })[]>(sql, params))[0]
-      : await query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number })[]>(sql, params);
-    for (const r of rows ?? []) mapa.set(Number(r.plan_id), { estado: r.estado, version: Number(r.version) });
+      ? (await conexion.query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number; reporte_recibido?: number })[]>(sql, params))[0]
+      : await query<(RowDataPacket & { plan_id: number; estado: EstadoLiquidacionViaje; version: number; reporte_recibido?: number })[]>(sql, params);
+    for (const r of rows ?? []) {
+      mapa.set(Number(r.plan_id), {
+        estado: r.estado,
+        version: Number(r.version),
+        reporteRecibido: r.estado === "REPORTE_RECIBIDO" || Number(r.reporte_recibido) === 1,
+      });
+    }
   } catch (e) {
     if ((e as { errno?: number }).errno === 1146) return new Map(); // ER_NO_SUCH_TABLE: migración aún no aplicada
     throw e;

@@ -163,9 +163,9 @@ describe("Liquidación Fase 3 · acciones de la fila", () => {
     expect(c).toContain("<ModalLiquidarViaje");
     expect(c).toContain("<ModalReabrirLiquidacion");
     expect(c).toContain("<HistorialLiquidacion");
-    // accionesViaje (cierre) no menciona liquidación.
+    // accionesViaje (cierre) solo LEE si el reporte fue recibido; no liquida ni reabre.
     const i = c.indexOf("export function accionesViaje");
-    expect(c.slice(i, c.indexOf("\n}\n", i))).not.toMatch(/liquidaci/i);
+    expect(c.slice(i, c.indexOf("\n}\n", i))).not.toMatch(/liquidar|reabrir/i);
   });
 
   it("modales: resumen de lo que se congela, avisos de alcance y motivo obligatorio", () => {

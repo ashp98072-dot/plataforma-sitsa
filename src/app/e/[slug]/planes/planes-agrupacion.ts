@@ -1,4 +1,4 @@
-import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import { puedeCerrarManualmente, puedeCerrarNormalmente, reporteRecibidoDeLiquidacion } from "@/lib/tms/cierre-viaje-shared";
 import { claveAgrupacion, resolverPeriodoPlanes, type AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 
 export type { AgrupacionPlanes };
@@ -12,7 +12,18 @@ export type { AgrupacionPlanes };
  * (cierre-viaje-shared.ts); el servidor SIEMPRE vuelve a validar.
  */
 /** PLANES-TARIFA-CIERRE-1 — `tarifaComercial: number | null`; elegibilidadCierre exige `!== null`, nunca `> 0`. */
-export type PlanAgrupable = { id: number; fechaPlan: string; estado: string; pendienteCierre: boolean; tarifaComercial: number | null };
+export type PlanAgrupable = {
+  id: number;
+  fechaPlan: string;
+  estado: string;
+  pendienteCierre: boolean;
+  tarifaComercial: number | null;
+  /**
+   * Liquidación del viaje (null/ausente = sin fila = reporte NO recibido). Habilita el cierre `REPORTE_RECIBIDO` actual o
+   * `reporteRecibido` (evento histórico, planes heredados); `EN_AJUSTE`/`LIQUIDADO` por sí solos no.
+   */
+  liquidacion?: { estado: string; reporteRecibido?: boolean } | null;
+};
 
 /**
  * `pendienteCierre` del listado = no Cerrado/Cancelado Y existe llegada real
@@ -22,17 +33,34 @@ export type PlanAgrupable = { id: number; fechaPlan: string; estado: string; pen
  * PLANES-TARIFA-CIERRE-1 — sin tarifa (`tarifaComercial === null`), NINGÚN cierre es elegible, sin importar
  * estado/llegada — mismo criterio puro que el backend (cierre-viaje-shared.ts).
  */
-export function elegibilidadCierre(p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial">, puedeCerrarViaje: boolean): { normal: boolean; manual: boolean } {
+export function elegibilidadCierre(
+  p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial" | "liquidacion">,
+  puedeCerrarViaje: boolean,
+): { normal: boolean; manual: boolean } {
   if (!puedeCerrarViaje) return { normal: false, manual: false };
   const tieneTarifa = p.tarifaComercial != null;
+  const reporteRecibido = reporteRecibidoDeLiquidacion(p.liquidacion);
   return {
-    normal: puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa),
-    manual: puedeCerrarManualmente(p.estado, tieneTarifa),
+    normal: puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, reporteRecibido),
+    manual: puedeCerrarManualmente(p.estado, tieneTarifa, reporteRecibido),
   };
 }
 
+/**
+ * ¿El viaje sería elegible para cerrarse (estado/llegada/tarifa) pero NO tiene REPORTE_RECIBIDO? Entonces la acción de
+ * cierre se muestra DESHABILITADA con «Confirme primero la recepción del reporte.» (el servidor siempre revalida).
+ */
+export function faltaReporteParaCierre(
+  p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial" | "liquidacion">,
+  puedeCerrarViaje: boolean,
+): boolean {
+  if (!puedeCerrarViaje || reporteRecibidoDeLiquidacion(p.liquidacion)) return false;
+  const tieneTarifa = p.tarifaComercial != null;
+  return puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, true) || puedeCerrarManualmente(p.estado, tieneTarifa, true);
+}
+
 /** Un viaje se puede seleccionar si admite ALGUNO de los dos cierres (Cerrado/Cancelado/sin permiso/sin tarifa: nunca). */
-export function esSeleccionable(p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial">, puedeCerrarViaje: boolean): boolean {
+export function esSeleccionable(p: Pick<PlanAgrupable, "estado" | "pendienteCierre" | "tarifaComercial" | "liquidacion">, puedeCerrarViaje: boolean): boolean {
   const e = elegibilidadCierre(p, puedeCerrarViaje);
   return e.normal || e.manual;
 }
@@ -65,7 +93,7 @@ export function agruparPlanes<T extends PlanAgrupable>(planes: T[], modo: Agrupa
   return [...mapa.entries()]
     .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
     .map(([clave, lista]) => {
-      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre, p.tarifaComercial != null)).length;
+      const cerrables = lista.filter((p) => puedeCerrarNormalmente(p.estado, p.pendienteCierre, p.tarifaComercial != null, reporteRecibidoDeLiquidacion(p.liquidacion))).length;
       const cerrados = lista.filter((p) => p.estado === "Cerrado").length;
       const etiqueta = resolverPeriodoPlanes(modo, clave)?.etiqueta ?? clave;
       return { clave, etiqueta, planes: lista, total: lista.length, cerrables, cerrados, otros: lista.length - cerrables - cerrados };

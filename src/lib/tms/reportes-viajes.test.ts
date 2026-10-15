@@ -339,13 +339,13 @@ describe("PLANES-CIERRE-PERIODO — obtenerCandidatosCierre", () => {
 
   it("mapea id/codigo/estado/llegadaRegistrada/tarifaComercial (datos mínimos — nunca cliente/piloto/facturación)", async () => {
     vi.mocked(query).mockResolvedValue([
-      { id: 1, codigo: "VJ-001", estado: "Descargado", llegada_registrada: 1, tarifa_comercial: "500.00" },
-      { id: 2, codigo: "VJ-002", estado: "Programado", llegada_registrada: 0, tarifa_comercial: null },
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegada_registrada: 1, tarifa_comercial: "500.00", reporte_recibido: 1 },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegada_registrada: 0, tarifa_comercial: null, reporte_recibido: 0 },
     ] as unknown as Awaited<ReturnType<typeof query>>);
     const candidatos = await obtenerCandidatosCierre(7, { fechaDesde: "2026-09-01", fechaHasta: "2026-09-30" });
     expect(candidatos).toEqual([
-      { id: 1, codigo: "VJ-001", estado: "Descargado", llegadaRegistrada: true, tarifaComercial: 500 },
-      { id: 2, codigo: "VJ-002", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null },
+      { id: 1, codigo: "VJ-001", estado: "Descargado", llegadaRegistrada: true, tarifaComercial: 500, reporteRecibido: true },
+      { id: 2, codigo: "VJ-002", estado: "Programado", llegadaRegistrada: false, tarifaComercial: null, reporteRecibido: false },
     ]);
   });
 

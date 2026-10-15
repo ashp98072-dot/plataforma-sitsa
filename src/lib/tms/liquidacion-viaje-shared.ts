@@ -94,7 +94,15 @@ export type CodigoAdvertenciaReporte = keyof typeof ADVERTENCIAS_REPORTE;
 export type AdvertenciaReporte = { codigo: CodigoAdvertenciaReporte; mensaje: string };
 
 /** Resumen de la liquidación VIGENTE que viaja en cada fila de Planes/Viajes (null = sin liquidación registrada). */
-export type ResumenLiquidacionFila = { estado: EstadoLiquidacionViaje; version: number };
+export type ResumenLiquidacionFila = {
+  estado: EstadoLiquidacionViaje;
+  version: number;
+  /**
+   * El reporte FUE recibido: existe el evento append-only REPORTE_RECIBIDO del plan (aunque el estado actual sea EN_AJUSTE o
+   * LIQUIDADO). Solo informa; el cierre lo revalida en servidor. Ausente = no informado.
+   */
+  reporteRecibido?: boolean;
+};
 
 /**
  * ¿El viaje todavía debe liquidarse? Todo viaje ACTIVO (ni Cerrado ni Cancelado) cuya liquidación no está LIQUIDADO:

@@ -96,3 +96,39 @@ describe("POST /tms/planes/[id]/cerrar — cierre manual", () => {
     expect(cerrarViaje).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * REQUISITO DE SECUENCIA — sin REPORTE_RECIBIDO el cierre (normal o manual) responde 409 con `codigo: REPORTE_NO_RECIBIDO`.
+ * La regla vive en cierre-viaje.ts (servidor, bajo lock); el endpoint solo la traduce a HTTP sin exponer detalles.
+ */
+describe("POST /tms/planes/[id]/cerrar — REPORTE_NO_RECIBIDO", () => {
+  const MSG = "No se puede cerrar el viaje porque el reporte aún no ha sido recibido.";
+
+  it("cierre normal sin reporte -> 409 { error, codigo: 'REPORTE_NO_RECIBIDO' }", async () => {
+    vi.mocked(cerrarViaje).mockResolvedValue({ ok: false, error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+    const res = await POST(request(), ctx);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+  });
+
+  it("cierre manual sin reporte -> 409 con el mismo código", async () => {
+    vi.mocked(cerrarViajeManual).mockResolvedValue({ ok: false, error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+    const res = await POST(request({ manual: true, motivo: "Cambio operativo confirmado." }), ctx);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: MSG, codigo: "REPORTE_NO_RECIBIDO" });
+  });
+
+  it("los demás rechazos NO traen `codigo` (mensajes actuales sin cambio)", async () => {
+    vi.mocked(cerrarViaje).mockResolvedValue({ ok: false, error: "Este viaje ya fue cerrado." });
+    expect(await (await POST(request(), ctx)).json()).toEqual({ error: "Este viaje ya fue cerrado." });
+  });
+
+  it("empresa y usuario salen de la sesión (nunca del cuerpo); sin permiso -> 403 y la lib no se toca", async () => {
+    await POST(request({ empresaId: 999, usuario: "otro" }), ctx);
+    expect(cerrarViaje).toHaveBeenCalledWith(7, 10, "jefe.operaciones");
+    vi.mocked(cerrarViaje).mockClear();
+    vi.mocked(requireTenantViajesCerrar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantViajesCerrar>>);
+    expect((await POST(request(), ctx)).status).toBe(403);
+    expect(cerrarViaje).not.toHaveBeenCalled();
+  });
+});

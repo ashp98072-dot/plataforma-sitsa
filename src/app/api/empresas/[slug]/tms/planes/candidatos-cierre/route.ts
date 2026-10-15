@@ -67,15 +67,19 @@ export async function GET(req: Request, ctx: Ctx) {
 
   // PLANES-TARIFA-CIERRE-1 — un candidato sin tarifa NUNCA cuenta como elegible (ni normal ni manual), así el
   // modal de confirmación ya informa la cantidad REAL que podrá cerrarse.
-  const normalIds = candidatos.filter((c) => puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null)).map((c) => c.id);
-  const manualIds = candidatos.filter((c) => puedeCerrarManualmente(c.estado, c.tarifaComercial != null)).map((c) => c.id);
+  // REQUISITO DE SECUENCIA — sin REPORTE_RECIBIDO ningún candidato es elegible; `sinReporte` informa cuántos quedarían fuera
+  // solo por eso (elegibles por estado/llegada/tarifa) para que el modal lo muestre. La ejecución real lo vuelve a validar.
+  const normalIds = candidatos.filter((c) => puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null, c.reporteRecibido)).map((c) => c.id);
+  const manualIds = candidatos.filter((c) => puedeCerrarManualmente(c.estado, c.tarifaComercial != null, c.reporteRecibido)).map((c) => c.id);
+  const normalSinReporte = candidatos.filter((c) => !c.reporteRecibido && puedeCerrarNormalmente(c.estado, c.llegadaRegistrada, c.tarifaComercial != null, true)).length;
+  const manualSinReporte = candidatos.filter((c) => !c.reporteRecibido && puedeCerrarManualmente(c.estado, c.tarifaComercial != null, true)).length;
 
   return NextResponse.json(
     {
       periodo: { agrupacion, valor: periodo.clave, etiqueta: periodo.etiqueta, desde: periodo.desde, hasta: periodo.hasta },
       total: candidatos.length,
-      normal: { elegibles: normalIds.length, ids: normalIds },
-      manual: { elegibles: manualIds.length, ids: manualIds },
+      normal: { elegibles: normalIds.length, ids: normalIds, sinReporte: normalSinReporte },
+      manual: { elegibles: manualIds.length, ids: manualIds, sinReporte: manualSinReporte },
     },
     { headers: { "Cache-Control": "private, no-store" } },
   );

@@ -19,6 +19,9 @@ const bodySchema = z.object({
 });
 
 /**
+ * REQUISITO: el viaje debe tener su reporte CONFIRMADO (liquidación en REPORTE_RECIBIDO), tanto en el cierre normal como en
+ * el manual; si no, 409 con `codigo: "REPORTE_NO_RECIBIDO"`. La validación vive en cierre-viaje.ts (servidor, bajo lock).
+ *
  * OPS-1 — cierre administrativo del viaje: Descargado -> Cerrado.
  * Permiso EXPLÍCITO `viajes_cerrar:editar` (requireTenantViajesCerrar) —
  * NUNCA por rol (ni "JefeOperaciones" ni ningún otro nombre de rol es
@@ -57,13 +60,14 @@ export async function POST(req: Request, ctx: Ctx) {
       motivo: body.motivo,
       comentario: body.comentario ?? null,
     });
-    if (!r.ok) return NextResponse.json({ error: r.error }, { status: 409 });
+    if (!r.ok) return NextResponse.json({ error: r.error, ...(r.codigo ? { codigo: r.codigo } : {}) }, { status: 409 });
     return NextResponse.json({ mensaje: "Viaje cerrado manualmente." });
   }
 
   const r = await cerrarViaje(guard.empresa.id, planId, guard.session.username);
   if (!r.ok) {
-    return NextResponse.json({ error: r.error }, { status: 409 });
+    // `codigo: "REPORTE_NO_RECIBIDO"` (409): el viaje aún no tiene su reporte confirmado; se valida en servidor bajo lock.
+    return NextResponse.json({ error: r.error, ...(r.codigo ? { codigo: r.codigo } : {}) }, { status: 409 });
   }
   return NextResponse.json({ mensaje: "Viaje cerrado." });
 }

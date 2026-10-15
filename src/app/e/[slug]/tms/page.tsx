@@ -648,7 +648,7 @@ export default function TmsPage() {
                                     {cerrandoId === p.id ? "Cerrando…" : "Cerrar viaje"}
                                   </button>
                                 ) : null}
-                                {puedeCerrarViaje && puedeCerrarManualmente(p.estado, p.tarifa_comercial != null) ? (
+                                {puedeCerrarViaje && puedeCerrarManualmente(p.estado, p.tarifa_comercial != null, true /* esta pantalla no conoce el reporte: el servidor valida REPORTE_RECIBIDO y responde 409 REPORTE_NO_RECIBIDO */) ? (
                                   <button
                                     type="button"
                                     onClick={() => abrirCierreManual(p.id)}

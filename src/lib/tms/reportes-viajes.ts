@@ -881,31 +881,54 @@ function mapearFacturacionFila(
  * para que el caller decida elegibilidad con el MISMO criterio puro (`tarifa_comercial !== null`) que
  * cierre-viaje-shared.ts — nunca una segunda regla inventada sobre el monto.
  */
-export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean; tarifaComercial: number | null };
+export type CandidatoCierre = {
+  id: number;
+  codigo: string;
+  estado: string;
+  llegadaRegistrada: boolean;
+  tarifaComercial: number | null;
+  /** El reporte FUE recibido: liquidación REPORTE_RECIBIDO o evento histórico REPORTE_RECIBIDO. Sin fila ni evento = false. */
+  reporteRecibido: boolean;
+};
 
 export async function obtenerCandidatosCierre(
   empresaId: number,
   filtros: FiltrosReporteViajes,
 ): Promise<CandidatoCierre[]> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros, { forzarRangoConSoloPendientes: true });
-  const rows = await query<RowDataPacket[]>(
+  // `reporte_recibido`: el reporte FUE recibido — liquidación actual en REPORTE_RECIBIDO o evento histórico append-only
+  // REPORTE_RECIBIDO del plan (sin fila ni evento = 0). Si las tablas de liquidación aún no existen (migración no aplicada)
+  // ningún reporte pudo registrarse: 0 para todos.
+  const sqlCandidatos = (conLiquidacion: boolean) =>
     `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
             EXISTS (
               SELECT 1 FROM flota_viajes fv
               WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-            ) AS llegada_registrada
+            ) AS llegada_registrada,
+            ${conLiquidacion
+              ? `(EXISTS (SELECT 1 FROM tms_viaje_liquidaciones l
+                          WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id AND l.estado = 'REPORTE_RECIBIDO')
+                  OR EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos ev
+                          WHERE ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO'))`
+              : "0"} AS reporte_recibido
      FROM tms_planes_viaje p
      ${JOIN_FACTURACION}
      WHERE ${condiciones.join(" AND ")}
-     ORDER BY p.fecha_plan, p.id`,
-    params,
-  );
+     ORDER BY p.fecha_plan, p.id`;
+  let rows: RowDataPacket[];
+  try {
+    rows = await query<RowDataPacket[]>(sqlCandidatos(true), params);
+  } catch (e) {
+    if ((e as { errno?: number }).errno !== 1146) throw e;
+    rows = await query<RowDataPacket[]>(sqlCandidatos(false), params);
+  }
   return rows.map((r) => ({
     id: Number(r.id),
     codigo: String(r.codigo),
     estado: String(r.estado),
     llegadaRegistrada: Number(r.llegada_registrada) === 1,
     tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
+    reporteRecibido: Number(r.reporte_recibido) === 1,
   }));
 }
 
