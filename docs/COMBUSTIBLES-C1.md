@@ -19,6 +19,13 @@ Una sola fuente: `flota_combustible_cargas`; sin copiar registros, cambiar IDs o
 - `precio_por_galon = monto / galones`, calculado exclusivamente en servidor con Decimal y redondeo HALF_UP a 2 decimales.
   La UI muestra el mismo cálculo. No se usa precio manual para nuevas capturas staff ni conversiones a litros.
 - Las altas guardan `empleado_id` y `piloto_nombre` NULL, incluso si se indica un viaje. No se inventa un piloto.
+- Eje operacional: unidad + proveedor + vale + consumo + evidencia + actor de Operaciones + revisor. El piloto no es responsable sustituto.
+- `creado_por`/`revisado_por` conservan el username textual. Además se guardan `creado_por_usuario_id` y
+  `revisado_por_usuario_id` desde la sesión, siguiendo el patrón de referencia a `usuarios.id` ya usado en Compras y otros documentos.
+  La auditoría común (`registrarAuditoriaTx`/`registrarAuditoria`) sigue siendo la misma; no tiene campo global de usuario ID,
+  por lo que este ID también se incluye en el detalle sin alterar el modelo común. Una edición nunca reemplaza al creador original.
+  Los IDs nuevos son nullable para históricos y NO se reconstruyen desde empleados, pilotos o usernames antiguos.
+- La tabla distingue «Piloto histórico», «Registrado por» y «Revisado por»; el formulario no ofrece un selector de piloto.
 - Los históricos mantienen piloto/viaje/proveedor ausente y sus archivos. `viaje_id=NULL` nunca se convierte en 0.
 - Al editar un histórico pendiente sin proveedor, se debe seleccionar uno para guardar. Los registros aprobados/rechazados
   permanecen de solo lectura. Un proveedor/unidad inactivo ya seleccionado puede conservarse al editar; no se ofrece para altas.
@@ -55,17 +62,20 @@ la migración explícita C-1. No se recrea ninguna tabla existente.
    Incluye SHOW CREATE/COLUMNS/INDEX/STATUS, referencias, nulos, duplicados y fechas. SHOW CREATE descubre FK/CHECK no registrados en código.
 3. APLICAR solo si se confirma: InnoDB; viaje/empleado INT signed; piloto VARCHAR(120); demás columnas legacy necesarias
    (numero_vale, fecha_consumo, precio_por_galon y galones DECIMAL(12,3)); sin referencias rotas ni FK/CHECK incompatibles.
-   Si existe proveedor_id/observaciones con otro tipo o un esquema parcial no explicado: DETENER y revisar.
+   Revisar también SHOW CREATE de usuarios y los tipos de los campos de actor si existen.
+   Si existe proveedor_id/observaciones/creado_por_usuario_id/revisado_por_usuario_id con otro tipo o un esquema parcial no explicado: DETENER y revisar.
    Los duplicados históricos requieren diagnóstico, nunca borrado ni backfill automático.
 4. Con autorización explícita aparte: `sql/migrate-2026-10-combustibles-c1.sql`.
-   Agrega proveedor_id INT NULL, observaciones VARCHAR(1000) NULL y permite NULL en viaje/empleado/piloto.
+   Agrega proveedor_id INT NULL, observaciones VARCHAR(1000) NULL, creado_por_usuario_id INT NULL,
+   revisado_por_usuario_id INT NULL y permite NULL en viaje/empleado/piloto.
    No agrega UNIQUE/FK, no cambia collation/índices existentes ni ejecuta DML. Reejecutable sobre el contrato esperado.
 5. Ejecutar `sql/verificar-2026-10-combustibles-c1.sql`. Comparar conteos/IDs y definiciones; validar archivos por separado.
 6. Desplegar solo después del postcheck. No habilitar el código sobre el esquema antiguo.
 7. QA manual con usuarios ver/editar, otra empresa, alta sin viaje, edición pendiente, rechazo/aprobación,
    histórico del Portal, descarga, resumen mensual y conciliación con un archivo controlado.
 
-NOOP significa que ambos campos nuevos y las tres nullabilities ya tienen la definición objetivo; no basta que existan los nombres.
+NOOP significa que los cuatro campos nuevos y las tres nullabilities ya tienen la definición objetivo; no basta que existan los nombres.
+No se agregan FKs nuevas sin preflight físico aprobado ni se crea un maestro paralelo de personal/usuarios.
 No se promete validar archivos físicos con SQL. Si hay un archivo faltante, investigar antes de reemplazarlo.
 
 ## Pruebas reproducibles
@@ -81,7 +91,7 @@ No abre/usa las bases preexistentes del servidor local. El resto de pruebas usa 
 Pendiente: QA manual en navegador y preflight/postcheck productivos, exclusivamente por el operador autorizado.
 GitHub checks son independientes de estas verificaciones locales.
 
-## Validación local final
+## Validación local inicial (anterior al ajuste de trazabilidad de actores)
 
 - Dirigidas: **453/453**, incluidas tres pruebas reales contra MariaDB 11.8.9 desechable.
 - TypeScript: limpio. Build Next.js: exitoso (advertencias preexistentes de tracing/middleware).
@@ -102,7 +112,7 @@ GitHub checks son independientes de estas verificaciones locales.
 - No se ejecutó SQL productivo ni se modificaron datos productivos. QA manual y postcheck productivo siguen pendientes.
 - Los resultados anteriores son LOCALES, no una afirmación sobre checks de GitHub.
 
-## Inventario exacto del cambio (35 archivos)
+## Inventario exacto del cambio (37 archivos)
 
 ```text
 docs/COMBUSTIBLES-C1.md
@@ -110,6 +120,8 @@ sql/migrate-2026-10-combustibles-c1.sql
 sql/preflight-2026-10-combustibles-c1.sql
 sql/verificar-2026-10-combustibles-c1.sql
 src/app/api/empresas/[slug]/flota/combustible/[id]/route.ts
+src/app/api/empresas/[slug]/flota/combustible/[id]/revisar/route.test.ts
+src/app/api/empresas/[slug]/flota/combustible/[id]/revisar/route.ts
 src/app/api/empresas/[slug]/flota/combustible/catalogos/route.ts
 src/app/api/empresas/[slug]/flota/combustible/conciliaciones/route.ts
 src/app/api/empresas/[slug]/flota/combustible/resumen/route.ts
@@ -141,3 +153,16 @@ src/lib/permisos-shared.ts
 src/lib/tenant-combustible.test.ts
 src/lib/tenant.ts
 ```
+
+## Validación del ajuste funcional — control sin pilotos
+
+- Pruebas dirigidas **456/456**; incluyen tres pruebas contra MariaDB 11.8.9 desechable con la migración ampliada.
+- Se verifica: creador/revisor tomados de sesión (payload suplantado ignorado), creador inmutable al editar,
+  actores históricos NULL sin backfill, viaje NULL sin convertir a 0 y altas sin empleado/piloto aunque se indique viaje.
+- TypeScript, ESLint de los 13 archivos de este ajuste y diff-check: limpios. Build: exitoso.
+  La deuda de ocho errores de Flota documentada arriba no fue modificada.
+- Suite completa con cuatro workers: **10457 pass / 22 fail / 485 skip**, comparada con BASE
+  **10435 pass / 22 fail / 482 skip**. Los fallos coinciden por archivo, nombre y mensaje: cero regresiones nuevas.
+- La migración sigue sin ejecutarse en producción. Los nuevos IDs de usuario requieren revisar el preflight actualizado;
+  no se agregan FKs, seeds, backfill ni un catálogo paralelo de empleados. No hay bloqueos operacionales nuevos.
+- Ajuste sobre el mismo PR, sin merge. Resultados locales; QA manual y validación física productiva siguen pendientes.

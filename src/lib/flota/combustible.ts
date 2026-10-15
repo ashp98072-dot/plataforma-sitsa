@@ -53,6 +53,8 @@ export type CargaCombustible = {
 
 /** Fase 2 (revisión de Operaciones): incluye placa/piloto para la bandeja de staff. */
 export type CargaCombustibleRevision = CargaCombustible & {
+  creadoPorUsuarioId?: number | null;
+  revisadoPorUsuarioId?: number | null;
   placa: string;
   pilotoNombre: string;
   revisadoPor: string | null;
@@ -220,6 +222,8 @@ export async function obtenerArchivoCargaCombustiblePorEmpresa(
 function mapCargaRevision(r: RowDataPacket): CargaCombustibleRevision {
   return {
     ...mapCarga(r),
+    creadoPorUsuarioId: r.creado_por_usuario_id == null ? null : Number(r.creado_por_usuario_id),
+    revisadoPorUsuarioId: r.revisado_por_usuario_id == null ? null : Number(r.revisado_por_usuario_id),
     placa: String(r.placa ?? "—"),
     pilotoNombre: String(r.piloto_nombre ?? "—"),
     revisadoPor: r.revisado_por ? String(r.revisado_por) : null,
@@ -274,7 +278,7 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.observaciones, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
             c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
             c.motivo_rechazo, c.creado_por, c.creado_at,
             c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa, pr.nombre_comercial AS proveedor_nombre
@@ -353,7 +357,11 @@ export async function revisarCargaCombustible(
   accion: "aprobar" | "rechazar",
   revisorUsername: string,
   motivoRechazo?: string,
+  revisorUsuarioId?: number,
 ): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+  if (revisorUsuarioId != null && (!Number.isSafeInteger(revisorUsuarioId) || revisorUsuarioId <= 0)) {
+    return { ok: false, error: "Usuario revisor inválido.", status: 400 };
+  }
   if (accion === "rechazar" && !motivoRechazo?.trim()) {
     return { ok: false, error: "Indica el motivo del rechazo.", status: 400 };
   }
@@ -361,9 +369,9 @@ export async function revisarCargaCombustible(
   const ahora = ahoraLocal();
   const r = await execute(
     `UPDATE flota_combustible_cargas
-     SET estado = ?, revisado_por = ?, revisado_en = ?, motivo_rechazo = ?
+     SET estado = ?, revisado_por = ?, revisado_en = ?, motivo_rechazo = ?${revisorUsuarioId != null ? ", revisado_por_usuario_id = ?" : ""}
      WHERE id = ? AND empresa_id = ? AND estado = 'PENDIENTE'`,
-    [nuevoEstado, revisorUsername, ahora, accion === "rechazar" ? motivoRechazo!.trim() : null, cargaId, empresaId],
+    [nuevoEstado, revisorUsername, ahora, accion === "rechazar" ? motivoRechazo!.trim() : null, ...(revisorUsuarioId != null ? [revisorUsuarioId] : []), cargaId, empresaId],
   );
   if (!r.affectedRows) {
     return {

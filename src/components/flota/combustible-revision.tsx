@@ -39,6 +39,9 @@ type Carga = {
   proveedorId?: number | null;
   observaciones?: string | null;
   proveedorNombre?: string | null;
+  creadoPor: string;
+  creadoPorUsuarioId?: number | null;
+  revisadoPorUsuarioId?: number | null;
   placa: string;
   pilotoNombre: string;
   tipoCombustible: "diesel" | "gasolina";
@@ -343,7 +346,9 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
               <th className="px-2 py-2">Fecha consumo</th>
               <th className="px-2 py-2">Unidad</th>
               <th className="px-2 py-2">Proveedor</th>
-              <th className="px-2 py-2">Piloto</th>
+              <th className="px-2 py-2">Piloto histórico</th>
+              <th className="px-2 py-2">Registrado por</th>
+              <th className="px-2 py-2">Revisado por</th>
               <th className="px-2 py-2">Tipo</th>
               <th className="px-2 py-2">Galones</th>
               <th className="px-2 py-2">Precio/gal</th>
@@ -368,6 +373,8 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
                 <td className="px-2 py-2">{c.placa}</td>
                 <td className="px-2 py-2">{c.proveedorNombre ?? "Histórico sin proveedor"}</td>
                 <td className="px-2 py-2">{c.pilotoNombre}</td>
+                <td className="px-2 py-2">{c.creadoPor}{c.creadoPorUsuarioId != null ? ` (#${c.creadoPorUsuarioId})` : ""}</td>
+                <td className="px-2 py-2">{c.revisadoPor ?? "—"}{c.revisadoPorUsuarioId != null ? ` (#${c.revisadoPorUsuarioId})` : ""}</td>
                 <td className="px-2 py-2">{c.tipoCombustible === "diesel" ? "Diesel" : "Gasolina"}</td>
                 <td className="px-2 py-2">{c.galones}</td>
                 <td className="px-2 py-2">{c.precioGalon != null ? `Q${c.precioGalon.toFixed(2)}` : "No disponible"}</td>
@@ -412,7 +419,7 @@ export function CombustibleRevisionPanel({ slug, can }: Props) {
             {!loading && !items.length ? (
               <tr>
                 <td
-                  colSpan={13 + (estado === "RECHAZADO" ? 1 : 0) + (puedeRevisar && estado === "PENDIENTE" ? 1 : 0)}
+                  colSpan={15 + (estado === "RECHAZADO" ? 1 : 0) + (puedeRevisar && estado === "PENDIENTE" ? 1 : 0)}
                   className="px-2 py-4 text-[var(--muted)]"
                 >
                   Sin registros con este filtro.

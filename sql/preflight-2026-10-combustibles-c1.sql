@@ -8,6 +8,7 @@ SHOW TABLE STATUS LIKE 'flota_combustible_cargas';
 SHOW CREATE TABLE flota_vehiculos;
 SHOW CREATE TABLE flota_viajes;
 SHOW CREATE TABLE compras_proveedores;
+SHOW CREATE TABLE usuarios;
 -- SHOW CREATE incluye TODAS las FK físicas: revisar acciones/tipos antes de cambiar nullability.
 SELECT COUNT(*) AS registros, SUM(viaje_id IS NULL) AS sin_viaje,
  SUM(empleado_id IS NULL) AS sin_empleado, SUM(piloto_nombre IS NULL) AS sin_piloto,
@@ -25,7 +26,9 @@ SELECT COUNT(*) AS referencias_viaje_inexistente_o_ajeno FROM flota_combustible_
 LEFT JOIN flota_viajes v ON v.id=c.viaje_id AND v.empresa_id=c.empresa_id
 WHERE c.viaje_id IS NOT NULL AND v.id IS NULL;
 -- APLICAR: esquema histórico esperado (INT signed, piloto VARCHAR(120)), tablas InnoDB,
--- sin FK/CHECK incompatible y sin referencias rotas. proveedor_id/observaciones ausentes.
--- NOOP: proveedor_id INT NULL y observaciones VARCHAR(1000) NULL presentes, y los tres campos legacy nullable.
+-- sin FK/CHECK incompatible y sin referencias rotas. Campos nuevos ausentes.
+-- Si C-1 previo ya agregó proveedor/observaciones, puede completarse tras comprobar sus tipos exactos y los IDs aún ausentes.
+-- NOOP: proveedor_id/creado_por_usuario_id/revisado_por_usuario_id INT NULL y observaciones VARCHAR(1000) NULL,
+-- con los tres campos legacy nullable. Sin backfill de históricos ni atribución retroactiva de usuarios.
 -- DETENER: cualquier definición distinta/estado parcial no explicado, FK/CHECK incompatible o referencias rotas.
 -- Duplicados históricos: reportar/revisar, NO borrar/normalizar/backfill ni añadir UNIQUE en C-1.

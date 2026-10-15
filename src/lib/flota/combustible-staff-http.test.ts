@@ -5,7 +5,7 @@ vi.mock("./combustible-staff", () => ({ guardarCombustibleStaff: m.guardar }));
 import { guardarCombustibleHttp } from "./combustible-staff-http";
 beforeEach(() => {
   vi.resetAllMocks();
-  m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { username: "op" } });
+  m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { id: 91, username: "op" } });
   m.guardar.mockResolvedValue(5);
 });
 function request(fields: Record<string, string> = {}, evidencia = true) {
@@ -20,9 +20,10 @@ it("POST exige editar antes de leer cuerpo", async () => {
   expect(m.guard).toHaveBeenCalledWith("empresa", "editar"); expect(m.guardar).not.toHaveBeenCalled();
 });
 it("empresa y registrador vienen del guard, nunca del navegador", async () => {
-  expect((await guardarCombustibleHttp(request({ empresaId: "99", username: "otro", pilotoNombre: "falso" }), "empresa")).status).toBe(201);
-  expect(m.guardar).toHaveBeenCalledWith(1, "op", expect.objectContaining({ viajeId: null }), expect.any(File), undefined);
+  expect((await guardarCombustibleHttp(request({ empresaId: "99", username: "otro", pilotoNombre: "falso", creado_por_usuario_id: "999", empleadoId: "0" }), "empresa")).status).toBe(201);
+  expect(m.guardar).toHaveBeenCalledWith(1, { usuarioId: 91, username: "op" }, expect.objectContaining({ viajeId: null }), expect.any(File), undefined);
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("pilotoNombre");
+  expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("creado_por_usuario_id");
 });
 it.each(["proveedorId", "vehiculoId", "galones", "monto", "fechaConsumo", "numeroVale"])("400 por campo requerido %s", async campo => {
   expect((await guardarCombustibleHttp(request({ [campo]: "" }), "empresa")).status).toBe(400);

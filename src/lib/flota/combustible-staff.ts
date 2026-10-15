@@ -20,7 +20,8 @@ export async function catalogosCombustible(empresaId: number) {
 
 /** Bloqueo del proveedor serializa la detección preventiva de duplicados del mismo proveedor.
  * No sustituye un UNIQUE físico: escritores externos/SQL quedan fuera de esta garantía. */
-export async function guardarCombustibleStaff(empresaId: number, username: string, input: CombustibleStaffInput, file: Archivo | null, id?: number) {
+export async function guardarCombustibleStaff(empresaId: number, actor: { usuarioId: number; username: string }, input: CombustibleStaffInput, file: Archivo | null, id?: number) {
+  if (!Number.isSafeInteger(actor.usuarioId) || actor.usuarioId <= 0) throw new ErrorDominioFormulario("Usuario registrador inválido.");
   const datos = combustibleStaffSchema.parse(input);
   if (id == null && !file) throw new ErrorDominioFormulario("Adjunta la evidencia del vale.");
   const conn = await getPool().getConnection();
@@ -55,15 +56,15 @@ export async function guardarCombustibleStaff(empresaId: number, username: strin
     if (id == null) {
       const [result] = await conn.execute<import("mysql2").ResultSetHeader>(`INSERT INTO flota_combustible_cargas
         (vehiculo_id, viaje_id, proveedor_id, numero_vale, fecha_consumo, tipo_combustible, galones, monto, precio_por_galon, km, gasolinera, observaciones,
-         empresa_id, empleado_id, piloto_nombre, ruta_relativa, nombre_original, mime, tamano, estado, creado_por, creado_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'PENDIENTE', ?, ?)`,
-      [...valores, empresaId, subida!.relative, subida!.original, contentTypeFor(subida!.original), subida!.size, username, ahoraLocal()]);
+         empresa_id, empleado_id, piloto_nombre, ruta_relativa, nombre_original, mime, tamano, estado, creado_por, creado_por_usuario_id, creado_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'PENDIENTE', ?, ?, ?)`,
+      [...valores, empresaId, subida!.relative, subida!.original, contentTypeFor(subida!.original), subida!.size, actor.username, actor.usuarioId, ahoraLocal()]);
       cargaId = Number(result.insertId);
     } else {
       await conn.execute(`UPDATE flota_combustible_cargas SET vehiculo_id=?, viaje_id=?, proveedor_id=?, numero_vale=?, fecha_consumo=?, tipo_combustible=?, galones=?, monto=?, precio_por_galon=?, km=?, gasolinera=?, observaciones=?${subida ? ", ruta_relativa=?, nombre_original=?, mime=?, tamano=?" : ""} WHERE empresa_id=? AND id=? AND estado='PENDIENTE'`,
         [...valores, ...(subida ? [subida.relative, subida.original, contentTypeFor(subida.original), subida.size] : []), empresaId, id]);
     }
-    await registrarAuditoriaTx(conn, { empresaId, usuario: username, accion: id == null ? "registrar_combustible" : "editar_combustible", modulo: "flota_combustible", detalle: `Vale #${cargaId} · proveedor #${datos.proveedorId} · ${datos.numeroVale}` });
+    await registrarAuditoriaTx(conn, { empresaId, usuario: actor.username, accion: id == null ? "registrar_combustible" : "editar_combustible", modulo: "flota_combustible", detalle: `Vale #${cargaId} · proveedor #${datos.proveedorId} · ${datos.numeroVale} · usuario #${actor.usuarioId}` });
     await conn.commit();
     committed = true;
     // El archivo histórico se conserva: puede estar referenciado por snapshots/consultas anteriores.

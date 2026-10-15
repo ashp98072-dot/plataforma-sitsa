@@ -32,6 +32,7 @@ export async function POST(req: Request, ctx: Ctx) {
     accion,
     guard.session.username,
     motivoRechazo,
+    guard.session.id,
   );
   if (!resultado.ok) {
     return NextResponse.json({ error: resultado.error }, { status: resultado.status });
@@ -42,7 +43,7 @@ export async function POST(req: Request, ctx: Ctx) {
     usuario: guard.session.username,
     accion: accion === "aprobar" ? "aprobar_combustible" : "rechazar_combustible",
     modulo: "flota",
-    detalle: `Carga de combustible #${cargaId} ${accion === "aprobar" ? "aprobada" : "rechazada"}${motivoRechazo ? `: ${motivoRechazo}` : ""}`,
+    detalle: `Carga de combustible #${cargaId} ${accion === "aprobar" ? "aprobada" : "rechazada"} · usuario #${guard.session.id}${motivoRechazo ? `: ${motivoRechazo}` : ""}`,
   });
 
   return NextResponse.json({

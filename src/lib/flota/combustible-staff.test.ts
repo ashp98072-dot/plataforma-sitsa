@@ -26,48 +26,52 @@ beforeEach(() => {
 });
 describe("captura staff C-1", () => {
   it("registra sin piloto ni viaje, PENDIENTE y precio Decimal", async () => {
-    expect(await guardarCombustibleStaff(1, "op", input, file)).toBe(11);
+    expect(await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)).toBe(11);
     const [sql, params] = m.execute.mock.calls[0];
     expect(sql).toContain("NULL, NULL"); expect(sql).toContain("'PENDIENTE'");
     expect(params[1]).toBeNull(); expect(params[8]).toBe("29.68");
     expect(m.commit).toHaveBeenCalledOnce(); expect(m.auditar).toHaveBeenCalledOnce();
+    expect(sql).toContain("creado_por_usuario_id");
+    expect(params.slice(-3, -1)).toEqual(["op", 91]);
+    expect(m.auditar.mock.calls[0][1]).toMatchObject({ usuario: "op", detalle: expect.stringContaining("usuario #91") });
   });
   it("acepta viaje opcional de la misma empresa/unidad", async () => {
-    await guardarCombustibleStaff(1, "op", { ...input, viajeId: 9 }, file);
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: 9 }, file);
     expect(m.query).toHaveBeenCalledWith(expect.stringContaining("WHERE empresa_id = ? AND id = ?"), [1, 9]);
   });
   it.each(["proveedor", "vehiculo", "viaje"])("rechaza %s ajeno", async recurso => {
     if (recurso === "vehiculo") m.vehiculo.mockResolvedValue(null);
     else { const original = m.query.getMockImplementation()!; m.query.mockImplementation((sql, params) => sql.includes(recurso === "proveedor" ? "FROM compras_proveedores" : "FROM flota_viajes") ? Promise.resolve([[]]) : original(sql, params)); }
-    await expect(guardarCombustibleStaff(1, "op", { ...input, viajeId: recurso === "viaje" ? 9 : null }, file)).rejects.toThrow();
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: recurso === "viaje" ? 9 : null }, file)).rejects.toThrow();
     expect(m.execute).not.toHaveBeenCalled(); expect(m.subir).not.toHaveBeenCalled();
   });
   it("edita PENDIENTE conservando evidencia e identidad histórica", async () => {
-    await guardarCombustibleStaff(1, "op", input, null, 11);
+    await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, null, 11);
     expect(m.execute.mock.calls[0][0]).toContain("estado='PENDIENTE'");
     expect(m.execute.mock.calls[0][0]).not.toContain("empleado_id"); expect(m.subir).not.toHaveBeenCalled();
+    expect(m.execute.mock.calls[0][0]).not.toContain("creado_por");
   });
   it.each(["APROBADO", "RECHAZADO"])("no edita %s", async value => {
     estado = value;
-    await expect(guardarCombustibleStaff(1, "op", input, file, 11)).rejects.toMatchObject({ status: 409 });
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file, 11)).rejects.toMatchObject({ status: 409 });
     expect(m.execute).not.toHaveBeenCalled();
   });
   it("nuevo exige evidencia", async () => {
-    await expect(guardarCombustibleStaff(1, "op", input, null)).rejects.toThrow("evidencia");
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, null)).rejects.toThrow("evidencia");
   });
   it("duplicado preventivo dentro de empresa/proveedor", async () => {
     duplicado = true;
-    await expect(guardarCombustibleStaff(1, "op", input, file)).rejects.toMatchObject({ status: 409 });
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)).rejects.toMatchObject({ status: 409 });
     expect(m.subir).not.toHaveBeenCalled(); expect(m.query).toHaveBeenCalledWith(expect.stringContaining("UPPER(TRIM"), [1, 3, "A-1", 0]);
   });
   it("compensa el archivo si falla BD", async () => {
     m.execute.mockRejectedValue(new Error("fallo"));
-    await expect(guardarCombustibleStaff(1, "op", input, file)).rejects.toThrow("fallo");
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)).rejects.toThrow("fallo");
     expect(m.rollback).toHaveBeenCalledOnce(); expect(m.borrar).toHaveBeenCalledWith("empresas/1/flota/nuevo.pdf");
   });
   it("si falla upload no escribe ni borra evidencia anterior", async () => {
     m.subir.mockRejectedValue(new Error("upload"));
-    await expect(guardarCombustibleStaff(1, "op", input, file, 11)).rejects.toThrow("upload");
+    await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file, 11)).rejects.toThrow("upload");
     expect(m.execute).not.toHaveBeenCalled(); expect(m.borrar).not.toHaveBeenCalled();
   });
   it("catálogo mínimo sin datos bancarios ni credenciales", async () => {
@@ -77,11 +81,19 @@ describe("captura staff C-1", () => {
   });
 });
 describe("validación y mapeo", () => {
+  it("no acepta un registrador ficticio con ID 0", async () => {
+    await expect(guardarCombustibleStaff(1, { usuarioId: 0, username: "op" }, input, file)).rejects.toThrow("Usuario registrador");
+    expect(m.execute).not.toHaveBeenCalled();
+  });
   it.each(["proveedorId", "vehiculoId", "numeroVale", "fechaConsumo", "monto", "galones"])("exige %s", campo => expect(combustibleStaffSchema.safeParse({ ...input, [campo]: "" }).success).toBe(false));
   it.each(["abc", "NaN", "0", "-1", "1.1234"])("rechaza galones %s", galones => expect(combustibleStaffSchema.safeParse({ ...input, galones }).success).toBe(false));
   it("calcula con Decimal", () => expect(precioCalculado("100", "3")).toBe("33.33"));
   it("histórico sin proveedor y sin viaje conserva NULL, no viaje 0", async () => {
     m.query.mockResolvedValueOnce([{ id: 1, viaje_id: null, proveedor_id: null, vehiculo_id: 7 }]).mockResolvedValueOnce([]);
     expect((await listarCargasCombustibleRevision(1)).items[0]).toMatchObject({ viajeId: null, proveedorId: null });
+  });
+  it("listado conserva actor staff y ambos IDs sin sustituirlos por piloto", async () => {
+    m.query.mockResolvedValueOnce([{ id: 1, viaje_id: null, piloto_nombre: null, creado_por: "op", creado_por_usuario_id: 91, revisado_por: "revisor", revisado_por_usuario_id: 92 }]).mockResolvedValueOnce([]);
+    expect((await listarCargasCombustibleRevision(1)).items[0]).toMatchObject({ viajeId: null, pilotoNombre: "—", creadoPor: "op", creadoPorUsuarioId: 91, revisadoPor: "revisor", revisadoPorUsuarioId: 92 });
   });
 });

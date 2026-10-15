@@ -15,7 +15,7 @@ export async function guardarCombustibleHttp(req: Request, slug: string, id?: nu
     const input = combustibleStaffSchema.parse(Object.fromEntries(form.entries()));
     const archivo = form.get("file");
     const file = archivo instanceof File && archivo.size > 0 ? archivo : null;
-    const cargaId = await guardarCombustibleStaff(guard.empresa.id, guard.session.username, input, file, id);
+    const cargaId = await guardarCombustibleStaff(guard.empresa.id, { usuarioId: guard.session.id, username: guard.session.username }, input, file, id);
     return NextResponse.json({ id: cargaId }, { status: id == null ? 201 : 200 });
   } catch (error) {
     if (error instanceof ZodError) return NextResponse.json({ error: error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(" ") }, { status: 400 });

@@ -4,9 +4,12 @@
 -- DETENER ante FK/CHECK incompatible o campos preexistentes con definiciones distintas.
 -- Aditiva en datos: no elimina filas, no cambia IDs ni archivos ni hace backfill/seed.
 -- Reejecutable sobre el esquema objetivo; no crea UNIQUE ni modifica conciliaciones.
+-- Identidad estable de usuarios staff/revisor; jamás derivada del piloto. Históricos quedan NULL, sin backfill.
 ALTER TABLE flota_combustible_cargas
   ADD COLUMN IF NOT EXISTS proveedor_id INT NULL,
   ADD COLUMN IF NOT EXISTS observaciones VARCHAR(1000) NULL,
+  ADD COLUMN IF NOT EXISTS creado_por_usuario_id INT NULL,
+  ADD COLUMN IF NOT EXISTS revisado_por_usuario_id INT NULL,
   MODIFY COLUMN viaje_id INT NULL,
   MODIFY COLUMN empleado_id INT NULL,
   MODIFY COLUMN piloto_nombre VARCHAR(120) NULL;
