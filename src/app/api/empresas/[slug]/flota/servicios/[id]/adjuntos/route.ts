@@ -5,7 +5,6 @@ import { execute, query } from "@/lib/db";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
   asegurarSchemaFlota,
-  asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import {
