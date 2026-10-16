@@ -129,6 +129,13 @@ agregar("facturacion",
   { ...accion(FILA_FACTURACION_EMPRESA,"editar_empresa","Editar configuración de facturación de la empresa",E), requiere: "ver_empresa", grupo: "Configuración de la empresa" },
   { ...accion(FILA_FACTURACION_REQUISITOS,"ver_requisitos","Ver requisitos de facturación de clientes","puedeVer"), grupo: "Requisitos de clientes" },
   { ...accion(FILA_FACTURACION_REQUISITOS,"editar_requisitos","Editar requisitos de facturación de clientes",E), requiere: "ver_requisitos", grupo: "Requisitos de clientes" });
+// CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
+agregar("contabilidad",
+  { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },
+  { ...accion("cxp_facturas","cxp_registrar","Registrar facturas de proveedores (CxP)",E), requiere: "cxp_ver", grupo: "Cuentas por pagar" },
+  { ...accion("cxp_anular","cxp_anular","Anular facturas de proveedores (CxP)",E), grupo: "Cuentas por pagar" },
+  { ...accion("cxp_proveedor_fiscal","cxp_ver_fiscal","Ver configuración fiscal de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },
+  { ...accion("cxp_proveedor_fiscal","cxp_editar_fiscal","Editar configuración fiscal de proveedores (CxP)",E), requiere: "cxp_ver_fiscal", grupo: "Cuentas por pagar" });
 // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (fila propia `flota_vehiculos_otras_empresas`, flag editar). Activarla implica
 // «Ver vehículos» y quitar «Ver vehículos» la limpia (mismas dependencias que el resto de acciones, ver cambiarAccion). No es acceso global: solo habilita editar
 // vehículos de otras empresas que sean ACCESIBLES desde la empresa activa (propios o compartidos con ella); no amplía las operaciones solo-dueña.
