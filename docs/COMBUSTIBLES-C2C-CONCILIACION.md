@@ -12,7 +12,8 @@ Solo filas **canónicas** de C-2B (`VALIDA`/`ADVERTENCIA` y `duplicado_de_linea_
 ## Modelo (extiende C-2B; no hay tabla paralela)
 Columnas nuevas, todas NULL, en `flota_combustible_conciliacion_filas`: `estado_c2c`, `modo_c2c` (AUTO|MANUAL), `carga_vinculada_id`, `carga_sugerida_id`, `diferencias_c2c` (JSON por campo), `calculado_en`, `confirmado_por_usuario_id`, `confirmado_en`.
 `UNIQUE (empresa_id, carga_vinculada_id)` (MariaDB no tiene UNIQUE parcial; los NULL no chocan) ⇒ un vale ↔ máximo una fila; una sola columna ⇒ una fila ↔ máximo un vale. CHECKs de estados/modo/JSON y de que el vínculo solo exista con EXACTA/CON_DIFERENCIAS. FKs a `flota_combustible_cargas` y `usuarios`. `carga_combustible_id` (legacy) **no se reutiliza**.
-SQL: `sql/preflight-…`, `sql/migrate-…`, `sql/postcheck-2026-10-combustibles-c2c-conciliacion.sql` (aditiva, idempotente, sin DML/backfill).
+SQL: `sql/preflight-…`, `sql/migrate-…`, `sql/postcheck-2026-10-combustibles-c2c-conciliacion.sql`, generados por `scripts/generar-sql-c2c.py` con el mismo bloque de **auditoría contractual exacta** (18 objetos: 8 columnas, 3 índices, 4 CHECK, 3 FK; tipo, signo, nulabilidad, collation, orden de columnas, UNIQUE, cláusula CHECK y FK RESTRICT/RESTRICT; más C-2B FINAL, MariaDB 11.8.x e InnoDB).
+Estados: `CLEAN` (ninguno existe) → migrate aplica DDL determinista (sin `IF NOT EXISTS`); `FINAL` → NOOP; cualquier otro (parcial o definición distinta) → `DIVERGENTE`: SIGNAL antes de cualquier DDL. Tras el DDL se repite la auditoría en la misma sesión (exige FINAL) y se comparan conteos antes/después (sin DML). Postcheck exige FINAL y 0 vínculos duplicados/huérfanos.
 
 ## Estados
 `PENDIENTE`, `COINCIDENCIA_EXACTA`, `COINCIDENCIA_CON_DIFERENCIAS`, `SIN_VALE_INTERNO`, `AMBIGUA`, `DESCARTADA_MANUAL` (por fila) y `VALE_INTERNO_SIN_REPORTE` (vales sin fila; vista aparte). Separados de `estado_parseo`.
