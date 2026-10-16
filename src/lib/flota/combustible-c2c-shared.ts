@@ -1,4 +1,6 @@
 import Decimal from "decimal.js";
+import { normalizarIdentificador, normalizarPlacaImportada } from "./combustible-identificadores";
+export { normalizarPlacaImportada } from "./combustible-identificadores";
 
 /**
  * C-2C — conciliación controlada «reporte de proveedor (C-2B) ↔ vale interno». Parte PURA (sin BD).
@@ -31,11 +33,8 @@ export type Diferencia = {
   delta: string | null;
 };
 
-/** Conservadora: NFC, trim, espacios internos = uno, mayúsculas. NO quita ceros a la izquierda ni guiones. */
-/** Misma regla que `normalizarPlacaImportada` del parser C-2B (se replica aquí porque el parser importa node:crypto y este módulo lo usa el cliente; un test exige igualdad). */
-export const normalizarPlacaImportada = (s: string) => s.normalize("NFC").trim().replace(/\s+/g, " ").toUpperCase().replace(/[‐‑–—]/g, "-").replace(/\s*-\s*/g, "-");
-
-export const normalizarVale = (s: string | null | undefined) => String(s ?? "").normalize("NFC").trim().replace(/\s+/g, " ").toUpperCase();
+/** Conservadora: NFC, trim, espacios internos = uno, mayúsculas. NO quita ceros ni guiones. */
+export const normalizarVale = (s: string | null | undefined) => normalizarIdentificador(String(s ?? ""));
 
 export type DatosProveedor = { placaNormalizada: string; galones: string | null; precio: string | null; total: string | null; fechaReporte: string | null };
 export type DatosVale = { placa: string | null; galones: string | null; monto: string | null; precio: string | null; fechaConsumo: string | null };

@@ -3,6 +3,8 @@ import Decimal from "decimal.js";
 import { createHash } from "node:crypto";
 import { normalizarFechaExcel } from "./combustible-conciliacion";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
+import { normalizarIdentificador, normalizarPlacaImportada } from "./combustible-identificadores";
+export { normalizarIdentificador, normalizarPlacaImportada } from "./combustible-identificadores";
 export class ErrorArchivoProveedor extends Error {
   constructor(message: string, public readonly status: 400 | 413 = 400) { super(message); }
 }
@@ -21,8 +23,6 @@ export type FilaImportada = {
   raw: { direccion: string; tipo: number; formato: string; valor: unknown }[];
 };
 export type AnalisisImportacion = { filas: FilaImportada[]; resumen: ReturnType<typeof resumirImportacion> };
-export const normalizarIdentificador = (s: string) => s.normalize("NFC").trim().replace(/\s+/g, " ").toUpperCase();
-export const normalizarPlacaImportada = (s: string) => normalizarIdentificador(s).replace(/[‐‑–—]/g, "-").replace(/\s*-\s*/g, "-");
 const encabezado = (s: string) => s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 const aliases: Record<CampoImportacion, string[]> = {
   fecha: ["FECHA", "FECHAFACTURA", "FECHAREPORTE"], placa: ["PLACA", "PLACAS", "NODEPLACAS"],
