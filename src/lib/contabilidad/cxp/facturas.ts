@@ -4,12 +4,12 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCxp, esConflictoTransitorio, esErrorDuplicado } from "./errores";
 import { calcularIsrProveedor, ReglaIsrPendiente, type RegimenFiscal, type ResultadoIsr } from "./isr-proveedor";
-import { calcularSaldo, estadoFinanciero, type EstadoAdminCxp, type EstadoFinancieroCxp } from "./saldo";
+import type { EstadoAdminCxp } from "./saldo";
 import { documentoNormalizado, fechaIso, idPositivo, importe, textoOpcional } from "./validacion";
 
 /**
  * M-3A — Facturas de proveedor (CxP). Modelo propio (`cxp_facturas`); `cont_cxp` queda como histórico y `fact_facturas`/`fact_pagos` (clientes) no se tocan.
- * Todo cálculo (total, ISR, neto a pagar, saldo) lo hace el SERVIDOR; del cliente solo se aceptan los datos capturados del documento.
+ * Todo cálculo (total, ISR, neto a pagar) lo hace el SERVIDOR; del cliente solo se aceptan los datos capturados del documento.
  */
 export type Actor = { id: number; username: string };
 export type EntradaFactura = {
@@ -24,7 +24,6 @@ export type FacturaCxp = {
   id: number; empresaId: number; entidadId: number; proveedorId: number; proveedorNombre: string; tipoDocumento: string; serie: string; numero: string;
   fechaDocumento: string; fechaVencimiento: string | null; baseNeto: string; ivaMonto: string; totalDocumento: string; isrPorcentaje: string; isrMonto: string;
   totalNetoPagar: string; reglaIsr: string; regimenFiscal: string; sujetoIsr: boolean; observaciones: string | null; estadoAdmin: EstadoAdminCxp;
-  aplicado: string; saldo: string; estadoFinanciero: EstadoFinancieroCxp;
   creadoPor: number; creadoEn: string; anuladoPor: number | null; anuladoEn: string | null; motivoAnulacion: string | null;
 };
 
@@ -95,14 +94,14 @@ const SELECT = `SELECT x.id, x.empresa_id, x.entidad_id, x.proveedor_id, p.nombr
   FROM cxp_facturas x JOIN compras_proveedores p ON p.empresa_id = x.empresa_id AND p.id = x.proveedor_id`;
 
 /**
- * Punto de extensión de pagos: suma de aplicaciones VIGENTES por factura. En M-3A no existe el módulo de pagos, así que es siempre 0.00.
- * Cuando exista, solo cambia esta función (y el saldo/estado se derivan igual que hoy). No hay columna `saldo` que sincronizar.
+ * Punto de extensión de pagos: suma de aplicaciones VIGENTES por factura. En M-3A no existe el módulo de pagos, así que es siempre 0.00 y solo
+ * lo usa la anulación (no se anula con pagos). El SALDO no se expone en M-3A: su base (neto a pagar vs total) está pendiente de Contabilidad (ver saldo.ts).
  */
 export async function obtenerAplicado(_empresaId: number, _entidadId: number, ids: number[]): Promise<Map<number, string>> {
   return new Map(ids.map(id => [id, "0.00"]));
 }
 
-function mapear(r: RowDataPacket, aplicado: string): FacturaCxp {
+function mapear(r: RowDataPacket): FacturaCxp {
   const estadoAdmin = String(r.estado_admin) as EstadoAdminCxp;
   const totalNetoPagar = new Decimal(String(r.total_neto_pagar)).toFixed(2);
   return {
@@ -112,7 +111,6 @@ function mapear(r: RowDataPacket, aplicado: string): FacturaCxp {
     baseNeto: String(r.base_neto), ivaMonto: String(r.iva_monto), totalDocumento: String(r.total_documento), isrPorcentaje: String(r.isr_porcentaje),
     isrMonto: String(r.isr_monto), totalNetoPagar, reglaIsr: String(r.regla_isr), regimenFiscal: String(r.regimen_fiscal_snapshot),
     sujetoIsr: Number(r.sujeto_isr_snapshot) === 1, observaciones: r.observaciones == null ? null : String(r.observaciones), estadoAdmin,
-    aplicado, saldo: estadoAdmin === "ANULADA" ? "0.00" : calcularSaldo(totalNetoPagar, aplicado), estadoFinanciero: estadoFinanciero(estadoAdmin, totalNetoPagar, aplicado),
     creadoPor: Number(r.creado_por), creadoEn: String(r.creado_en), anuladoPor: r.anulado_por == null ? null : Number(r.anulado_por),
     anuladoEn: r.anulado_en == null ? null : String(r.anulado_en), motivoAnulacion: r.motivo_anulacion == null ? null : String(r.motivo_anulacion),
   };
@@ -131,10 +129,10 @@ export async function registrarFactura(empresaId: number, entidadId: number, act
     const calculo = calcularFactura(v.baseNeto, v.ivaMonto, cfg.regimenFiscal, cfg.sujetoIsr);
 
     const [dup] = await conn.query<RowDataPacket[]>(
-      `SELECT id, DATE_FORMAT(fecha_documento,'%Y-%m-%d') AS fecha FROM cxp_facturas
-        WHERE empresa_id = ? AND proveedor_id = ? AND serie_norm = ? AND numero_norm = ? AND estado_admin = 'REGISTRADA' LIMIT 1`,
+      `SELECT id, estado_admin, DATE_FORMAT(fecha_documento,'%Y-%m-%d') AS fecha FROM cxp_facturas
+        WHERE empresa_id = ? AND proveedor_id = ? AND serie_norm = ? AND numero_norm = ? ORDER BY id LIMIT 1`,
       [empresaId, v.proveedorId, v.serieNorm, v.numeroNorm]);
-    if (dup[0]) throw errorDuplicado(v, cfg.nombre, Number(dup[0].id), String(dup[0].fecha));
+    if (dup[0]) throw errorDuplicado(v, cfg.nombre, Number(dup[0].id), String(dup[0].fecha), String(dup[0].estado_admin) === "ANULADA");
 
     let id: number;
     try {
@@ -147,7 +145,7 @@ export async function registrarFactura(empresaId: number, entidadId: number, act
           calculo.regimenFiscal, calculo.sujetoIsr ? 1 : 0, v.observaciones, actor.id]);
       id = Number(r.insertId);
     } catch (e) {
-      if (esErrorDuplicado(e)) throw errorDuplicado(v, cfg.nombre, null, null);
+      if (esErrorDuplicado(e)) throw errorDuplicado(v, cfg.nombre, null, null, false);
       throw e;
     }
     await registrarAuditoriaTx(conn, {
@@ -166,17 +164,22 @@ export async function registrarFactura(empresaId: number, entidadId: number, act
   } finally { conn.release(); }
 }
 
-function errorDuplicado(v: Validada, proveedor: string, existenteId: number | null, fecha: string | null) {
+/**
+ * El documento (empresa + proveedor + serie + número) queda reservado EN TODOS LOS ESTADOS: una factura anulada NO libera su clave. Es la opción
+ * restrictiva y reversible (relajarla después no pierde datos; endurecerla con duplicados ya guardados sí sería imposible). PROVISIONAL hasta que
+ * Contabilidad confirme si una anulada debe poder volver a registrarse.
+ */
+function errorDuplicado(v: Validada, proveedor: string, existenteId: number | null, fecha: string | null, anulada: boolean) {
   const doc = `${v.serie ? `${v.serie} / ` : ""}${v.numero}`;
   const donde = existenteId ? ` (CxP #${existenteId}${fecha ? `, fecha ${fecha}` : ""})` : "";
-  return new ErrorCxp(`La factura ${doc} del proveedor ${proveedor} ya está registrada${donde}.`, 409, "FACTURA_DUPLICADA");
+  const nota = anulada ? " Está ANULADA y su número sigue reservado; consulta con Contabilidad cómo corregirla." : "";
+  return new ErrorCxp(`La factura ${doc} del proveedor ${proveedor} ya existe${donde}.${nota}`, 409, "FACTURA_DUPLICADA");
 }
 
 export async function obtenerFactura(empresaId: number, entidadId: number, id: number): Promise<FacturaCxp | null> {
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.id = ?`, [empresaId, entidadId, id]);
   if (!rows[0]) return null;
-  const aplicado = (await obtenerAplicado(empresaId, entidadId, [id])).get(id) ?? "0.00";
-  return mapear(rows[0], aplicado);
+  return mapear(rows[0]);
 }
 
 export type FiltrosFacturas = { proveedorId?: number; estado?: EstadoAdminCxp; desde?: string; hasta?: string; q?: string; page?: number; pageSize?: number };
@@ -191,11 +194,10 @@ export async function listarFacturas(empresaId: number, entidadId: number, f: Fi
   const desde = `FROM cxp_facturas x JOIN compras_proveedores p ON p.empresa_id = x.empresa_id AND p.id = x.proveedor_id WHERE ${w.join(" AND ")}`;
   const [tot] = await query<RowDataPacket[]>(`SELECT COUNT(*) AS n ${desde}`, p);
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE ${w.join(" AND ")} ORDER BY x.fecha_documento DESC, x.id DESC LIMIT ? OFFSET ?`, [...p, pageSize, (page - 1) * pageSize]);
-  const aplicado = await obtenerAplicado(empresaId, entidadId, rows.map(r => Number(r.id)));
-  return { total: Number(tot?.n ?? 0), page, pageSize, facturas: rows.map(r => mapear(r, aplicado.get(Number(r.id)) ?? "0.00")) };
+  return { total: Number(tot?.n ?? 0), page, pageSize, facturas: rows.map(mapear) };
 }
 
-/** Anulación con motivo. Sin borrados: la fila queda (ANULADA) y libera la clave de duplicado. Cuando existan pagos aplicados deberá rechazarse (ver obtenerAplicado). */
+/** Anulación con motivo. Sin borrados: la fila queda (ANULADA) y su clave de documento sigue reservada. Cuando existan pagos aplicados deberá rechazarse (ver obtenerAplicado). */
 export async function anularFactura(empresaId: number, entidadId: number, id: unknown, actor: Actor, motivoEntrada: unknown): Promise<FacturaCxp> {
   const facturaId = idPositivo(id, "Factura");
   const motivo = textoOpcional(motivoEntrada, 500, "Motivo");

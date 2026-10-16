@@ -91,7 +91,7 @@ describe("ámbito, entradas y errores", () => {
     m.registrar.mockRejectedValueOnce(new ErrorCxp("La factura A / 1 ya está registrada.", 409, "FACTURA_DUPLICADA"));
     const dup = await registrarFacturaHttp(req(undefined, {}), "e");
     expect(dup.status).toBe(409); expect(await dup.json()).toMatchObject({ codigo: "FACTURA_DUPLICADA" });
-    m.registrar.mockRejectedValueOnce(new ReglaIsrPendiente("pendiente"));
+    m.registrar.mockRejectedValueOnce(new ReglaIsrPendiente("BASE_SOBRE_TRAMO"));
     expect((await registrarFacturaHttp(req(undefined, {}), "e")).status).toBe(422);
     m.registrar.mockRejectedValueOnce(Object.assign(new Error("tabla"), { code: "ER_NO_SUCH_TABLE" }));
     const sin = await registrarFacturaHttp(req(undefined, {}), "e");

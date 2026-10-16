@@ -117,8 +117,8 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       expect(advertencias).toEqual([]);
       expect(factura).toMatchObject({
         proveedorNombre: "Repuestos Uno", tipoDocumento: "FACTURA", baseNeto: "10000.00", ivaMonto: "1200.00", totalDocumento: "11200.00", isrPorcentaje: "5.00", isrMonto: "500.00",
-        totalNetoPagar: "10700.00", saldo: "10700.00", aplicado: "0.00", estadoFinanciero: "PENDIENTE", estadoAdmin: "REGISTRADA", regimenFiscal: "GENERAL", sujetoIsr: true,
-        reglaIsr: "M3A_V1:TRAMO_5_PCT", fechaVencimiento: "2026-12-02", creadoPor: 91,
+        totalNetoPagar: "10700.00", estadoAdmin: "REGISTRADA", regimenFiscal: "GENERAL", sujetoIsr: true,
+        reglaIsr: "M3A_V2:TRAMO_5_PCT_EXACTO", fechaVencimiento: "2026-12-02", creadoPor: 91,
       });
       const aud = await q("SELECT * FROM auditoria WHERE accion='cxp_registrar_factura'");
       expect(JSON.parse(String(aud[0].detalle))).toMatchObject({ facturaId: factura.id, isr: "500.00", neto: "10700.00", usuarioId: 91, entidadId: E1 });
@@ -128,15 +128,22 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       const { factura } = await registrarFactura(1, E1, actor, { ...base, numero: "101", isrMonto: "0.00", totalNetoPagar: "1.00", estadoAdmin: "ANULADA", empresaId: 2 } as never);
       expect(factura).toMatchObject({ isrMonto: "500.00", totalNetoPagar: "10700.00", estadoAdmin: "REGISTRADA", empresaId: 1 });
     });
-    it("pequeño contribuyente: sin ISR; base bajo Q2,800: sin ISR; no sujeto: sin ISR", async () => {
+    it("pequeño contribuyente: sin ISR (aun bajo Q2,800); no sujeto: sin ISR", async () => {
       expect((await registrarFactura(1, E1, actor, { ...base, proveedorId: 4, numero: "1", baseNeto: "50000.00", ivaMonto: "0.00" })).factura)
-        .toMatchObject({ isrMonto: "0.00", totalNetoPagar: "50000.00", reglaIsr: "M3A_V1:PEQUENO_CONTRIBUYENTE_SIN_RETENCION" });
-      expect((await registrarFactura(1, E1, actor, { ...base, numero: "102", baseNeto: "2799.99", ivaMonto: "336.00" })).factura).toMatchObject({ isrMonto: "0.00", reglaIsr: "M3A_V1:BAJO_MINIMO_SIN_RETENCION" });
-      expect((await registrarFactura(1, E1, actor, { ...base, proveedorId: 6, numero: "1" })).factura).toMatchObject({ isrMonto: "0.00", reglaIsr: "M3A_V1:NO_SUJETO_ISR" });
+        .toMatchObject({ isrMonto: "0.00", totalNetoPagar: "50000.00", reglaIsr: "M3A_V2:PEQUENO_CONTRIBUYENTE_SIN_RETENCION" });
+      expect((await registrarFactura(1, E1, actor, { ...base, proveedorId: 4, numero: "2", baseNeto: "100.00", ivaMonto: "12.00" })).factura).toMatchObject({ isrMonto: "0.00" });
+      expect((await registrarFactura(1, E1, actor, { ...base, proveedorId: 6, numero: "1" })).factura).toMatchObject({ isrMonto: "0.00", reglaIsr: "M3A_V2:NO_SUJETO_ISR" });
     });
     it("advierte si el IVA no es el 12 % (sin bloquear)", async () => {
       const r = await registrarFactura(1, E1, actor, { ...base, numero: "103", baseNeto: "3000.00", ivaMonto: "100.00" });
       expect(r.advertencias).toHaveLength(1);
+    });
+    it("sujeto a ISR: base < Q2,800 y redondeo no confirmado se BLOQUEAN (422), sin escribir", async () => {
+      const antes = await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n);
+      for (const [b, motivo] of [["2799.99", "BASE_BAJO_MINIMO"], ["100.00", "BASE_BAJO_MINIMO"], ["2800.10", "REDONDEO"], ["3333.33", "REDONDEO"]]) {
+        await expect(registrarFactura(1, E1, actor, { ...base, numero: `blk-${b}`, baseNeto: b, ivaMonto: "0.00" })).rejects.toMatchObject({ status: 422, codigo: "REGLA_ISR_PENDIENTE", message: expect.stringMatching(motivo === "REDONDEO" ? /redondeo/ : /menor a Q2,800/) });
+      }
+      expect(await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n)).toBe(antes);
     });
     it("base ≥ Q30,000 (o en el hueco) para un sujeto de ISR: 422, nada se escribe", async () => {
       const antes = await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n);
@@ -154,7 +161,7 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       await expect(registrarFactura(1, E1, actor, { ...base, numero: "x2", fechaVencimiento: "2026-10-01" })).rejects.toMatchObject({ codigo: "VENCIMIENTO_INVALIDO" });
       await expect(registrarFactura(1, E1, actor, { ...base, numero: "x3", fechaDocumento: "2026-02-30" })).rejects.toMatchObject({ codigo: "FECHA_INVALIDA" });
     });
-    it("anti-duplicado empresa+proveedor+serie+número: variantes de formato chocan; otro proveedor/serie/ceros no", async () => {
+    it("anti-duplicado empresa+proveedor+serie+número (provisional, sin entidad): variantes de formato chocan; otro proveedor/serie/ceros no", async () => {
       await expect(registrarFactura(1, E1, actor, { ...base, serie: " a ", numero: "100" })).rejects.toMatchObject({ status: 409, codigo: "FACTURA_DUPLICADA" });
       await expect(registrarFactura(1, E1B, actor, { ...base })).rejects.toMatchObject({ codigo: "FACTURA_DUPLICADA" }); // misma factura en OTRA entidad de la misma empresa
       expect((await registrarFactura(1, E1, actor, { ...base, serie: "B" })).factura.id).toBeGreaterThan(0);
@@ -173,6 +180,11 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       expect(await obtenerFactura(1, E1, factura.id)).toMatchObject({ isrMonto: "500.00", regimenFiscal: "GENERAL", sujetoIsr: true });
       await expect(registrarFactura(1, E1, actor, { ...base, numero: "SNAP-2", baseNeto: "10000.00" })).resolves.toMatchObject({ factura: { isrMonto: "0.00", regimenFiscal: "PEQUENO_CONTRIBUYENTE" } });
       await guardarConfigFiscal(1, E1, 3, actor, { regimenFiscal: "GENERAL", sujetoIsr: true, cuentaProveedorId: 10, cuentaAnticipoId: 11, cuentaGastoId: 12 });
+    });
+    it("la factura NO expone saldo ni estado financiero (base del saldo pendiente de Contabilidad)", async () => {
+      const f = (await listarFacturas(1, E1, { pageSize: 1 })).facturas[0];
+      for (const k of ["saldo", "aplicado", "estadoFinanciero"]) expect(f).not.toHaveProperty(k);
+      expect(f).toHaveProperty("totalDocumento"); expect(f).toHaveProperty("totalNetoPagar"); expect(f).toHaveProperty("isrMonto");
     });
     it("previsualizar calcula sin escribir", async () => {
       const antes = await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n);
@@ -195,28 +207,30 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
   });
 
   describe("anulación y listado", () => {
-    it("exige motivo; anula con auditoría; saldo 0, estado ANULADA y libera la clave de duplicado", async () => {
+    it("exige motivo; anula con auditoría y estado ANULADA; la clave de documento NO se libera", async () => {
       const { factura } = await registrarFactura(1, E1, actor, { ...base, numero: "ANU-1" });
       await expect(anularFactura(1, E1, factura.id, actor, " ")).rejects.toMatchObject({ codigo: "MOTIVO_REQUERIDO" });
       const a = await anularFactura(1, E1, factura.id, actor, "Capturada por error");
-      expect(a).toMatchObject({ estadoAdmin: "ANULADA", estadoFinanciero: "ANULADA", saldo: "0.00", motivoAnulacion: "Capturada por error", anuladoPor: 91 });
+      expect(a).toMatchObject({ estadoAdmin: "ANULADA", motivoAnulacion: "Capturada por error", anuladoPor: 91 });
       await expect(anularFactura(1, E1, factura.id, actor, "otra vez")).rejects.toMatchObject({ status: 409, codigo: "YA_ANULADA" });
       const aud = await q("SELECT * FROM auditoria WHERE accion='cxp_anular_factura'");
       expect(JSON.parse(String(aud.at(-1)!.detalle))).toMatchObject({ facturaId: factura.id, motivo: "Capturada por error", despues: "ANULADA" });
-      expect((await registrarFactura(1, E1, actor, { ...base, numero: "ANU-1" })).factura.estadoAdmin).toBe("REGISTRADA"); // se puede volver a registrar
+      // La anulada NO libera su clave (provisional): el número sigue reservado y el mensaje lo dice.
+      await expect(registrarFactura(1, E1, actor, { ...base, numero: "ANU-1" })).rejects.toMatchObject({ status: 409, codigo: "FACTURA_DUPLICADA", message: expect.stringContaining("ANULADA") });
+      await expect(registrarFactura(1, E1B, actor, { ...base, numero: "ANU-1" })).rejects.toMatchObject({ codigo: "FACTURA_DUPLICADA" });
     });
     it("anular dos veces en paralelo: una sola gana", async () => {
       const { factura } = await registrarFactura(1, E1, actor, { ...base, numero: "ANU-2" });
       const res = await Promise.allSettled([anularFactura(1, E1, factura.id, actor, "motivo uno"), anularFactura(1, E1, factura.id, actor, "motivo dos")]);
       expect(res.filter(r => r.status === "fulfilled")).toHaveLength(1);
     });
-    it("lista con filtros y paginación; la anulada no cuenta como registrada", async () => {
+    it("lista con filtros y paginación", async () => {
       const todas = await listarFacturas(1, E1, { pageSize: 5 });
       expect(todas.facturas).toHaveLength(5); expect(todas.total).toBeGreaterThan(5);
       const anuladas = await listarFacturas(1, E1, { estado: "ANULADA" });
-      expect(anuladas.facturas.every(f => f.estadoAdmin === "ANULADA" && f.saldo === "0.00")).toBe(true);
+      expect(anuladas.facturas.every(f => f.estadoAdmin === "ANULADA")).toBe(true);
       expect((await listarFacturas(1, E1, { proveedorId: 4 })).facturas.every(f => f.proveedorId === 4)).toBe(true);
-      expect((await listarFacturas(1, E1, { q: "ANU-1" })).total).toBeGreaterThanOrEqual(2);
+      expect((await listarFacturas(1, E1, { q: "ANU-1" })).total).toBe(1);
       expect((await listarFacturas(1, E1, { desde: "2030-01-01" })).total).toBe(0);
     });
     it("cont_cxp (histórico) sigue exactamente igual", async () => {

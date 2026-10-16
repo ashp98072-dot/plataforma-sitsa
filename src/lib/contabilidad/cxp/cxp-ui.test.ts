@@ -10,7 +10,8 @@ describe("UI de Cuentas por pagar (M-3A)", () => {
     const html = renderToStaticMarkup(createElement(CxpClient, props));
     expect(html).toContain("Cuentas por pagar");
     expect(html).toMatch(/no genera pólizas/);
-    expect(html).toMatch(/Q30,000\.00 está pendiente/);
+    expect(html).toMatch(/sin regla confirmada/);
+    expect(html).not.toMatch(/Saldo/);
     expect(html).toContain("Seleccionar entidad");
   });
   it("no ofrece acciones ni tabs sin permiso", () => {

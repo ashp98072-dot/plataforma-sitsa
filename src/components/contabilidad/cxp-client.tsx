@@ -8,7 +8,7 @@ type Proveedor = { id: number; nombre: string; nit: string | null; activo: boole
 type Cuenta = { id: number; codigo: string; nombre: string; tipo: string };
 type Factura = {
   id: number; proveedorNombre: string; serie: string; numero: string; fechaDocumento: string; fechaVencimiento: string | null; baseNeto: string; ivaMonto: string;
-  totalDocumento: string; isrMonto: string; isrPorcentaje: string; totalNetoPagar: string; saldo: string; estadoFinanciero: string; estadoAdmin: string; motivoAnulacion: string | null;
+  totalDocumento: string; isrMonto: string; isrPorcentaje: string; totalNetoPagar: string; estadoAdmin: string; motivoAnulacion: string | null;
 };
 type Calculo = { totalDocumento: string; isrPorcentaje: string; isrMonto: string; totalNetoPagar: string; reglaIsr: string; advertencias: string[]; proveedorNombre: string };
 
@@ -45,7 +45,7 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
   }, [slug]);
   return <div className="space-y-4">
     <h1 className="text-2xl font-semibold">Cuentas por pagar</h1>
-    <p className="text-sm text-[var(--muted)]">Facturas de proveedores registradas en plataforma. Informativo: no genera pólizas ni sustituye aún a Milenium. La retención de ISR desde Q30,000.00 está pendiente de confirmación de Contabilidad.</p>
+    <p className="text-sm text-[var(--muted)]">Facturas de proveedores registradas en plataforma. Informativo: no genera pólizas ni sustituye aún a Milenium. Casos de ISR sin regla confirmada por Contabilidad (base menor a Q2,800.00 o mayor a Q29,999.00, redondeos) se bloquean hasta definirlos.</p>
     <label className="block text-sm">Libro contable (entidad)
       <select className={`${campo} ml-2`} value={entidadId} onChange={e => setEntidadId(e.target.value)} aria-label="Entidad">
         <option value="">Seleccionar entidad</option>{entidades.map(e => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}</option>)}
@@ -134,16 +134,16 @@ function Facturas({ slug, entidadId, puedeRegistrar, puedeAnular }: { slug: stri
       <select className={campo} aria-label="Estado" value={estado} onChange={e => setEstado(e.target.value)}><option value="">Todas</option><option value="REGISTRADA">Registradas</option><option value="ANULADA">Anuladas</option></select>
       <input className={campo} placeholder="Buscar proveedor o número" value={texto} onChange={e => setTexto(e.target.value)} />
     </div>
-    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Fecha", "Proveedor", "Documento", "Base", "IVA", "Total", "ISR", "Neto a pagar", "Saldo", "Estado", ""].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
+    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Fecha", "Proveedor", "Documento", "Base", "IVA", "Total", "ISR", "Neto a pagar", "Estado", ""].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
       <tbody>{lista?.facturas.map(x => <tr key={x.id} className="border-t border-[var(--border)] align-top">
         <td className="p-2">{x.fechaDocumento}</td><td>{x.proveedorNombre}</td><td>{x.serie ? `${x.serie}-` : ""}{x.numero}</td><td>{q(x.baseNeto)}</td><td>{q(x.ivaMonto)}</td><td>{q(x.totalDocumento)}</td>
-        <td>{q(x.isrMonto)}{Number(x.isrMonto) > 0 && <small className="block">{x.isrPorcentaje}%</small>}</td><td>{q(x.totalNetoPagar)}</td><td>{q(x.saldo)}</td>
-        <td>{x.estadoFinanciero}{x.motivoAnulacion && <small className="block">{x.motivoAnulacion}</small>}</td>
+        <td>{q(x.isrMonto)}{Number(x.isrMonto) > 0 && <small className="block">{x.isrPorcentaje}%</small>}</td><td>{q(x.totalNetoPagar)}</td>
+        <td>{x.estadoAdmin === "ANULADA" ? "Anulada" : "Registrada"}{x.motivoAnulacion && <small className="block">{x.motivoAnulacion}</small>}</td>
         <td>{puedeAnular && x.estadoAdmin === "REGISTRADA" && (anulando === x.id
           ? <span className="flex gap-1"><input className={campo} placeholder="Motivo" value={motivo} onChange={e => setMotivo(e.target.value)} /><button type="button" className={boton} disabled={busy || motivo.trim().length < 3} onClick={() => anular(x.id)}>Confirmar</button><button type="button" className={boton} onClick={() => setAnulando(null)}>Cancelar</button></span>
           : <button type="button" className={boton} onClick={() => { setAnulando(x.id); setMotivo(""); }}>Anular</button>)}</td>
       </tr>)}</tbody></table></div>
-    <p className="text-xs text-[var(--muted)]">{lista ? `${lista.total} facturas.` : "Cargando…"} El saldo se calcula (neto a pagar − pagos aplicados); los pagos a proveedores aún no existen.</p>
+    <p className="text-xs text-[var(--muted)]">{lista ? `${lista.total} facturas.` : "Cargando…"} Saldos y pagos a proveedores: pendientes de definición con Contabilidad.</p>
   </section>;
 }
 

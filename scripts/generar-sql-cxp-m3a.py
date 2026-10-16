@@ -46,7 +46,6 @@ COLUMNAS = [
     col(FA, "sujeto_isr_snapshot", "tinyint", "tinyint(1)", False),
     col(FA, "observaciones", "varchar", "varchar(500)", True, texto=1),
     col(FA, "estado_admin", "varchar", "varchar(12)", False, "'REGISTRADA'", texto=1),
-    col(FA, "clave_activa", "tinyint", "tinyint(1)", True, extra="STORED GENERATED", gen="if(`estado_admin` = 'REGISTRADA',1,NULL)"),
     col(FA, "creado_por", *INT, False),
     col(FA, "creado_en", "datetime", "datetime", False, "current_timestamp()"),
     col(FA, "anulado_por", *INT, True), col(FA, "anulado_en", "datetime", "datetime", True),
@@ -55,7 +54,7 @@ COLUMNAS = [
 INDICES = [
     [PF, "PRIMARY", "empresa_id,entidad_id,proveedor_id", 0], [PF, "idx_cxppf_proveedor", "empresa_id,proveedor_id", 1],
     [FA, "PRIMARY", "id", 0],
-    [FA, "uq_cxpf_documento", "empresa_id,proveedor_id,serie_norm,numero_norm,clave_activa", 0],
+    [FA, "uq_cxpf_documento", "empresa_id,proveedor_id,serie_norm,numero_norm", 0],
     [FA, "uq_cxpf_ambito", "empresa_id,entidad_id,id", 0],
     [FA, "idx_cxpf_listado", "empresa_id,entidad_id,estado_admin,fecha_documento", 1],
     [FA, "idx_cxpf_proveedor", "empresa_id,entidad_id,proveedor_id,fecha_documento", 1],
@@ -267,7 +266,7 @@ BEGIN NOT ATOMIC
   (SELECT COUNT(*) FROM cxp_proveedor_fiscal f JOIN cont_cuentas c ON c.empresa_id=f.empresa_id AND c.entidad_id=f.entidad_id AND c.id=f.cuenta_proveedor_id WHERE c.tipo<>'Pasivo'),
   (SELECT COUNT(*) FROM cxp_proveedor_fiscal f JOIN cont_cuentas c ON c.empresa_id=f.empresa_id AND c.entidad_id=f.entidad_id AND c.id=f.cuenta_anticipo_id WHERE c.tipo<>'Activo'),
   (SELECT COUNT(*) FROM cxp_proveedor_fiscal f JOIN cont_cuentas c ON c.empresa_id=f.empresa_id AND c.entidad_id=f.entidad_id AND c.id=f.cuenta_gasto_id WHERE c.tipo<>'Gasto'),
-  (SELECT COUNT(*) FROM cxp_facturas WHERE isr_porcentaje>0 AND isr_monto<>ROUND(base_neto*isr_porcentaje/100,2)),
+  (SELECT COUNT(*) FROM cxp_facturas WHERE isr_porcentaje>0 AND isr_monto*100<>base_neto*isr_porcentaje),
   (SELECT COUNT(*) FROM cxp_facturas WHERE isr_porcentaje=0 AND isr_monto<>0),
   (SELECT COUNT(*) FROM cxp_facturas f JOIN cxp_proveedor_fiscal p ON p.empresa_id=f.empresa_id AND p.entidad_id=f.entidad_id AND p.proveedor_id=f.proveedor_id
     JOIN compras_proveedores c ON c.empresa_id=p.empresa_id AND c.id=p.proveedor_id WHERE c.empresa_id<>f.empresa_id)

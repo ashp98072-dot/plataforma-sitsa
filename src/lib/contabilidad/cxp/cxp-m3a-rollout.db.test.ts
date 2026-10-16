@@ -72,7 +72,7 @@ describe.skipIf(!port)("CxP M-3A rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { tim
     await fixture(); expect(await estado()).toBe("CLEAN");
     const antes = await snapshot();
     const r = (await correr("migrate"))[0];
-    expect(r).toMatchObject({ estado_inicial: "CLEAN", estado_final: "FINAL", resultado: "APLICADO", objetos_presentes: "75", objetos_correctos: "75" });
+    expect(r).toMatchObject({ estado_inicial: "CLEAN", estado_final: "FINAL", resultado: "APLICADO", objetos_presentes: "74", objetos_correctos: "74" });
     expect(await estado()).toBe("FINAL");
     expect(await snapshot()).toEqual(antes);
     expect((await correr("postcheck"))[0]).toMatchObject({ estado_cxp_rollout: "FINAL", filas_cont_cxp_legacy: 1 });
@@ -97,8 +97,7 @@ describe.skipIf(!port)("CxP M-3A rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { tim
     ["columna con nulabilidad distinta", "ALTER TABLE cxp_facturas MODIFY fecha_documento DATE NULL"],
     ["default distinto", "ALTER TABLE cxp_facturas ALTER COLUMN iva_monto SET DEFAULT 1.00"],
     ["collation distinta", "ALTER TABLE cxp_facturas MODIFY numero VARCHAR(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL"],
-    ["columna generada distinta", "ALTER TABLE cxp_facturas DROP INDEX uq_cxpf_documento, MODIFY clave_activa TINYINT(1) GENERATED ALWAYS AS (IF(estado_admin = 'ANULADA', 1, NULL)) PERSISTENT, ADD UNIQUE KEY uq_cxpf_documento (empresa_id, proveedor_id, serie_norm, numero_norm, clave_activa)"],
-    ["índice UNIQUE con columnas erróneas", "ALTER TABLE cxp_facturas DROP INDEX uq_cxpf_documento, ADD UNIQUE KEY uq_cxpf_documento (empresa_id, serie_norm, numero_norm, clave_activa)"],
+    ["índice UNIQUE con columnas erróneas", "ALTER TABLE cxp_facturas DROP INDEX uq_cxpf_documento, ADD UNIQUE KEY uq_cxpf_documento (empresa_id, serie_norm, numero_norm)"],
     ["índice UNIQUE degradado a no único", "ALTER TABLE cxp_facturas DROP INDEX uq_cxpf_ambito, ADD KEY uq_cxpf_ambito (empresa_id, entidad_id, id)"],
     ["CHECK con cláusula distinta", "ALTER TABLE cxp_facturas DROP CONSTRAINT ck_cxpf_total, ADD CONSTRAINT ck_cxpf_total CHECK (total_documento >= base_neto + iva_monto)"],
     ["CHECK ausente", "ALTER TABLE cxp_proveedor_fiscal DROP CONSTRAINT ck_cxppf_pequeno"],
@@ -151,6 +150,10 @@ describe.skipIf(!port)("CxP M-3A rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { tim
       await fixture(); await script(sql("migrate")); await config(); await factura("10000.00", "5.00", "400.00");
       await expect(script(sql("postcheck"))).rejects.toThrow(/integridad/);
     });
+    it("ISR redondeado a la fuerza (sin regla de redondeo confirmada) también falla el postcheck", async () => {
+      await fixture(); await script(sql("migrate")); await config(); await factura("2800.10", "5.00", "140.01");
+      await expect(script(sql("postcheck"))).rejects.toThrow(/integridad/);
+    });
     it("ISR con porcentaje 0", async () => {
       await fixture(); await script(sql("migrate")); await config(); await factura("10000.00", "0.00", "100.00");
       await expect(script(sql("postcheck"))).rejects.toThrow(/integridad/);
@@ -163,17 +166,16 @@ describe.skipIf(!port)("CxP M-3A rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { tim
     });
   });
 
-  it("anti-duplicado: UNIQUE entre registradas; una ANULADA libera la clave", async () => {
+  it("anti-duplicado: el UNIQUE aplica a TODOS los estados (la anulada no libera la clave) y no incluye entidad (provisional)", async () => {
     await fixture(); await script(sql("migrate"));
     await db.query("INSERT INTO cxp_proveedor_fiscal(empresa_id,entidad_id,proveedor_id,regimen_fiscal,sujeto_isr,creado_por,actualizado_por) VALUES(1,5,3,'GENERAL',0,8,8)");
-    const ins = (estado = "REGISTRADA") => db.query(
-      `INSERT INTO cxp_facturas(empresa_id,entidad_id,proveedor_id,tipo_documento,serie,numero,serie_norm,numero_norm,fecha_documento,base_neto,iva_monto,total_documento,isr_monto,total_neto_pagar,regla_isr,regimen_fiscal_snapshot,sujeto_isr_snapshot,estado_admin,anulado_por,anulado_en,motivo_anulacion,creado_por)
-       VALUES(1,5,3,'FACTURA','A','10','A','10','2026-11-02',100,12,112,0,112,'x','GENERAL',0,?,?,?,?,8)`,
-      estado === "ANULADA" ? [estado, 8, "2026-11-03 10:00:00", "error de captura"] : [estado, null, null, null]);
+    const ins = (numero = "10") => db.query(
+      `INSERT INTO cxp_facturas(empresa_id,entidad_id,proveedor_id,tipo_documento,serie,numero,serie_norm,numero_norm,fecha_documento,base_neto,iva_monto,total_documento,isr_monto,total_neto_pagar,regla_isr,regimen_fiscal_snapshot,sujeto_isr_snapshot,creado_por)
+       VALUES(1,5,3,'FACTURA','A',?,'A',?,'2026-11-02',100,12,112,0,112,'x','GENERAL',0,8)`, [numero, numero]);
     await ins();
     await expect(ins()).rejects.toMatchObject({ code: "ER_DUP_ENTRY" });
     await db.query("UPDATE cxp_facturas SET estado_admin='ANULADA', anulado_por=8, anulado_en='2026-11-03 10:00:00', motivo_anulacion='error' WHERE numero='10'");
-    await ins(); // la clave quedó libre
-    await ins("ANULADA"); // varias anuladas con la misma clave no chocan
+    await expect(ins()).rejects.toMatchObject({ code: "ER_DUP_ENTRY" }); // anulada NO libera la clave
+    await ins("11"); // otro número sí
   });
 });
