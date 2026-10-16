@@ -4,7 +4,6 @@ import type { RowDataPacket } from "mysql2";
 import { execute, query, type SqlParams, type SqlValue } from "@/lib/db";
 import {
   asegurarInventarioEquipo,
-  invalidarCatalogoInventario,
   listarCatalogos,
   listarEquipo,
   resumenDesdeItems,
