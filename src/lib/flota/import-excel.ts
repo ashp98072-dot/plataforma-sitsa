@@ -190,7 +190,7 @@ export async function parsearExcelFlota(
   await wb.xlsx.load(buffer as unknown as ExcelJS.Buffer);
 
   const preferidas = ["Vehiculos", "VEHICULOS", "GENERAL", "ACTIVOS", "Hoja1"];
-  let ws =
+  const ws =
     preferidas.map((n) => wb.getWorksheet(n)).find(Boolean) ??
     wb.worksheets[0];
   if (!ws) return [];
