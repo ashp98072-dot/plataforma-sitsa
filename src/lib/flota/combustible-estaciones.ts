@@ -22,6 +22,12 @@ export async function listarEstaciones(empresaId: number, filtros: { proveedorId
   return rows.map(r => ({ id: Number(r.id), proveedorId: Number(r.proveedor_id), proveedorNombre: String(r.proveedor_nombre), nombre: String(r.nombre), direccion: r.direccion == null ? null : String(r.direccion), activo: Boolean(r.activo) }));
 }
 
+/** Proveedores ACTIVOS de la empresa para el selector del mantenimiento de estaciones (no depende del catálogo de vales ni de vehículos). */
+export async function listarProveedoresActivos(empresaId: number): Promise<{ id: number; nombre: string }[]> {
+  const rows = await query<RowDataPacket[]>("SELECT id, nombre_comercial AS nombre FROM compras_proveedores WHERE empresa_id=? AND activo=1 ORDER BY nombre_comercial, id", [empresaId]);
+  return rows.map(r => ({ id: Number(r.id), nombre: String(r.nombre) }));
+}
+
 export async function guardarEstacion(empresaId: number, actor: { usuarioId: number; username: string }, datos: Partial<z.infer<typeof estacionSchema>>, id?: number) {
   const cambios = id == null ? estacionSchema.parse(datos) : estacionPatchSchema.parse(datos);
   const conn = await getPool().getConnection();

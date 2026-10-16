@@ -7,13 +7,16 @@ vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: m.auditar }));
 vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: "empresas/1/flota/a.pdf", original: "a.pdf", size: 1 }), contentTypeFor: () => "application/pdf", validarRutaArchivoEmpresa: () => true, borrarUpload: vi.fn() }));
 import { guardarCombustibleStaff } from "./combustible-staff";
 import { combustibleStaffSchema } from "./combustible-staff-schema";
-const input = { proveedorId: 3, vehiculoId: 7, numeroVale: "A", fechaConsumo: "2026-10-15", tipoCombustible: "diesel" as const, galones: "1", monto: "30", km: null, gasolinera: "", observaciones: "" };
+const input = { estacionId: 55, vehiculoId: 7, numeroVale: "A", fechaConsumo: "2026-10-15", tipoCombustible: "diesel" as const, galones: "1", monto: "30", km: null, gasolinera: "", observaciones: "" };
 const actor = { usuarioId: 8, username: "op" };
 let actual: object;
 beforeEach(() => {
-  vi.resetAllMocks(); actual = { id: 11, estado: "PENDIENTE", vehiculo_id: 7, proveedor_id: 3, solicitud_fondo_linea_id: 42, ruta_relativa: "empresas/1/flota/a.pdf" };
+  vi.resetAllMocks(); actual = { id: 11, estado: "PENDIENTE", vehiculo_id: 7, proveedor_id: 3, estacion_id: 55, solicitud_fondo_linea_id: 42, ruta_relativa: "empresas/1/flota/a.pdf" };
   m.query.mockImplementation(async (sql: string) => {
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3, activo: 1 }]];
+    if (sql.includes("SELECT proveedor_id, estacion_id FROM flota_combustible_cargas")) return [[{ proveedor_id: 3, estacion_id: 55 }]];
+    if (sql.includes("SELECT proveedor_id FROM flota_combustible_estaciones")) return [[{ proveedor_id: 3 }]];
+    if (sql.includes("LOCK IN SHARE MODE")) return [[{ id: 55, nombre: "Shell Roosevelt", activo: 1 }]];
     if (sql.includes("SELECT id, estado")) return [[actual]];
     return [[]];
   });

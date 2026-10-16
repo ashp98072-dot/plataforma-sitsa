@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/session", () => ({ getSession: vi.fn(), createSessionToken: vi.fn(), setSessionCookie: vi.fn() }));
 vi.mock("@/lib/empresas", () => ({ obtenerEmpresaPorSlug: vi.fn(), empresasParaUsuario: vi.fn() }));
 vi.mock("@/lib/permisos", async original => ({ ...await original<typeof import("@/lib/permisos")>(), permisosEfectivos: vi.fn() }));
-const m = vi.hoisted(() => ({ guardar: vi.fn(), catalogos: vi.fn(), listar: vi.fn(), revisar: vi.fn(), archivo: vi.fn(), resumen: vi.fn(), guardarEstacion: vi.fn(), estaciones: vi.fn(), fondos: vi.fn() }));
+const m = vi.hoisted(() => ({ guardar: vi.fn(), catalogos: vi.fn(), listar: vi.fn(), revisar: vi.fn(), archivo: vi.fn(), resumen: vi.fn(), guardarEstacion: vi.fn(), estaciones: vi.fn(), proveedores: vi.fn(), fondos: vi.fn() }));
 vi.mock("./combustible-fondos", () => ({ buscarLineasFondoCombustible: m.fondos }));
 vi.mock("./combustible-staff", () => ({ guardarCombustibleStaff: m.guardar, catalogosCombustible: m.catalogos }));
 vi.mock("./combustible", () => ({ listarCargasCombustibleRevision: m.listar, revisarCargaCombustible: m.revisar, obtenerArchivoCargaCombustiblePorEmpresa: m.archivo, resumenCombustibleMensual: m.resumen }));
-vi.mock("./combustible-estaciones", async original => ({ ...await original<typeof import("./combustible-estaciones")>(), guardarEstacion: m.guardarEstacion, listarEstaciones: m.estaciones }));
+vi.mock("./combustible-estaciones", async original => ({ ...await original<typeof import("./combustible-estaciones")>(), guardarEstacion: m.guardarEstacion, listarEstaciones: m.estaciones, listarProveedoresActivos: m.proveedores }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn() }));
 vi.mock("./combustible-conciliacion-consultas", () => ({ listarConciliacionesCombustible: async () => [], obtenerConciliacionCombustible: async () => null, obtenerArchivoConciliacionCombustible: async () => null }));
 import { getSession } from "@/lib/session";
@@ -60,7 +60,7 @@ beforeEach(() => {
   vi.mocked(permisosEfectivos).mockResolvedValue(base);
   m.guardar.mockResolvedValue(5); m.catalogos.mockResolvedValue({ estaciones: [{ id: 55, proveedorId: 3, nombre: "Activa" }] });
   m.listar.mockResolvedValue({ items: [], resumen: {} }); m.revisar.mockResolvedValue({ ok: true });
-  m.archivo.mockResolvedValue(null); m.resumen.mockResolvedValue({}); m.estaciones.mockResolvedValue([]); m.guardarEstacion.mockResolvedValue(55);
+  m.archivo.mockResolvedValue(null); m.resumen.mockResolvedValue({}); m.estaciones.mockResolvedValue([]); m.proveedores.mockResolvedValue([]); m.guardarEstacion.mockResolvedValue(55);
 });
 describe("rutas HTTP con guard real, no guard simulado", () => {
   it("importaciones Ver consulta pero no importa; Conciliar permite preview/confirmar", async () => {

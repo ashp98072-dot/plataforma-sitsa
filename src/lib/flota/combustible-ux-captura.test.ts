@@ -39,8 +39,10 @@ describe("captura separada y buscador reutilizado", () => {
   it("formulario y mantenimiento reutilizan buscador sin modificar el componente compartido", () => {
     const form = readFileSync("src/components/flota/combustible-registro.tsx", "utf8");
     const estaciones = readFileSync("src/components/flota/combustible-estaciones-client.tsx", "utf8");
-    expect(form).toContain('<CatalogoSearchSelect label="Proveedor"');
-    expect(form).toContain('type="hidden" name="proveedorId" value={proveedorId}');
+    // Registrar vale: sin proveedor visible; unidad y estación en buscadores con valor oculto (el ID real, nunca el texto).
+    expect(form).not.toContain('label="Proveedor"'); expect(form).not.toContain('name="proveedorId"');
+    expect(form).toContain('<CatalogoSearchSelect label="Unidad / placa"'); expect(form).toContain('type="hidden" name="vehiculoId" value={vehiculoId}');
+    expect(form).toContain('<CatalogoSearchSelect label="Estación / gasolinera"'); expect(form).toContain('type="hidden" name="estacionId" value={estacionId}');
     expect(estaciones).toContain('label="Filtrar proveedor"');
     expect(estaciones).toContain('label="Proveedor"');
     expect(estaciones).toContain('type="hidden" name="proveedorId" value={proveedorEdicion}');
