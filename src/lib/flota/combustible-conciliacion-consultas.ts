@@ -230,7 +230,7 @@ export async function listarConciliacionesCombustible(
      FROM flota_combustible_conciliaciones c
      LEFT JOIN flota_combustible_conciliacion_filas f
        ON f.conciliacion_id = c.id AND f.empresa_id = c.empresa_id
-     WHERE c.empresa_id = ?
+     WHERE c.empresa_id = ? AND c.perfil_parser IS NULL
      GROUP BY c.id, c.nombre_original, c.hoja, c.subido_por, c.creado_at
      ORDER BY c.creado_at DESC, c.id DESC
      LIMIT ${LIMITE_HISTORIAL}`,
@@ -356,7 +356,7 @@ export async function obtenerConciliacionCombustible(
   const cabeceraRows = await query<RowDataPacket[]>(
     `SELECT id, nombre_original, hoja, subido_por, creado_at
      FROM flota_combustible_conciliaciones
-     WHERE id = ? AND empresa_id = ?
+     WHERE id = ? AND empresa_id = ? AND perfil_parser IS NULL
      LIMIT 1`,
     [conciliacionId, empresaId],
   );
@@ -430,7 +430,7 @@ export async function obtenerArchivoConciliacionCombustible(
   const rows = await query<RowDataPacket[]>(
     `SELECT ruta_relativa, nombre_original, mime
      FROM flota_combustible_conciliaciones
-     WHERE id = ? AND empresa_id = ?
+     WHERE id = ? AND empresa_id = ? AND perfil_parser IS NULL
      LIMIT 1`,
     [conciliacionId, empresaId],
   );

@@ -20,6 +20,11 @@ import { POST as revisar } from "@/app/api/empresas/[slug]/flota/combustible/[id
 import { GET as evidencia } from "@/app/api/empresas/[slug]/flota/combustible/[id]/vale/route";
 import { GET as catalogos } from "@/app/api/empresas/[slug]/flota/combustible/catalogos/route";
 import { GET as fondos } from "@/app/api/empresas/[slug]/flota/combustible/fondos/route";
+import { GET as importaciones, POST as confirmarImportacion } from "@/app/api/empresas/[slug]/flota/combustible/importaciones/route";
+import { POST as previewImportacion } from "@/app/api/empresas/[slug]/flota/combustible/importaciones/preview/route";
+import { GET as detalleImportacion } from "@/app/api/empresas/[slug]/flota/combustible/importaciones/[id]/route";
+const importMock = vi.hoisted(() => ({ listar: vi.fn(), detalle: vi.fn(), preview: vi.fn(), confirmar: vi.fn() }));
+vi.mock("./combustible-importaciones", () => ({ listarImportaciones: importMock.listar, detalleImportacion: importMock.detalle, previewImportacion: importMock.preview, confirmarImportacion: importMock.confirmar }));
 import { GET as resumen } from "@/app/api/empresas/[slug]/flota/combustible/resumen/route";
 import { POST as conciliar } from "@/app/api/empresas/[slug]/flota/combustible/conciliaciones/route";
 import { GET as historial } from "@/app/api/empresas/[slug]/flota/combustible/conciliaciones/route";
@@ -58,6 +63,22 @@ beforeEach(() => {
   m.archivo.mockResolvedValue(null); m.resumen.mockResolvedValue({}); m.estaciones.mockResolvedValue([]); m.guardarEstacion.mockResolvedValue(55);
 });
 describe("rutas HTTP con guard real, no guard simulado", () => {
+  it("importaciones Ver consulta pero no importa; Conciliar permite preview/confirmar", async () => {
+    importMock.listar.mockResolvedValue([]); importMock.detalle.mockResolvedValue(null);
+    expect((await importaciones(new Request("http://localhost/x"), ctx)).status).toBe(200);
+    expect((await detalleImportacion(new Request("http://localhost/x"), ctx)).status).toBe(404);
+    const req = () => { const f = new FormData(); f.set("proveedorId", "3"); f.set("file", new File(["PK"], "a.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })); f.set("token", "recibo"); return new Request("http://localhost/x", { method: "POST", body: f }); };
+    expect((await previewImportacion(req(), ctx)).status).toBe(403);
+    expect((await confirmarImportacion(req(), ctx)).status).toBe(403);
+    vi.mocked(permisosEfectivos).mockResolvedValue(cambiarAccion(base, "flota_combustible", "conciliar", true));
+    importMock.preview.mockResolvedValue({ token: "recibo" }); importMock.confirmar.mockResolvedValue({ id: 42 });
+    expect((await previewImportacion(req(), ctx)).status).toBe(200);
+    expect((await confirmarImportacion(req(), ctx)).status).toBe(201);
+    expect(importMock.confirmar).toHaveBeenCalledWith(7, 3, { id: 9, username: "op" }, expect.any(Buffer), expect.any(File), "recibo");
+    vi.mocked(empresasParaUsuario).mockResolvedValue([]);
+    expect((await previewImportacion(req(), ctx)).status).toBe(403);
+    expect((await importaciones(new Request("http://localhost/x"), ctx)).status).toBe(403);
+  });
   it.each(["ver", "registrar", "editar_pendientes", "revisar", "conciliar", "gestionar_estaciones"] as const)("Ver + %s permite únicamente su acción", async accion => {
     vi.mocked(permisosEfectivos).mockResolvedValue(cambiarAccion(base, "flota_combustible", accion, true));
     expect((await listar(new Request("http://localhost/x"), ctx)).status).toBe(200);
