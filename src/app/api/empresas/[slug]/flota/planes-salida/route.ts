@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
-  asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { buscarPlanesParaSalida } from "@/lib/tms/planes-salida";

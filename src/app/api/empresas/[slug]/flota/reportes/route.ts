@@ -5,7 +5,6 @@ import { requireTenantFlota } from "@/lib/tenant";
 import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 import { listarParadasDePlanes } from "@/lib/tms/paradas";
 import {
-  asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { hoyLocal } from "@/lib/rrhh/dates";
