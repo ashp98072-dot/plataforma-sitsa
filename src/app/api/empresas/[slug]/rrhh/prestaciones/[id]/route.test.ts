@@ -71,7 +71,9 @@ describe("PATCH rrhh/prestaciones/[id] — codigoConcepto", () => {
   });
 
   it("11. cambiar `tipo` sin enviar codigoConcepto NO cambia el código (COALESCE conserva el existente)", async () => {
-    const { codigoConcepto: _omitido, ...sinCodigo } = patchValido;
+    const sinCodigo: Partial<typeof patchValido> = { ...patchValido };
+    delete sinCodigo.codigoConcepto;
+    expect(sinCodigo).not.toHaveProperty("codigoConcepto");
     conn.query.mockResolvedValue([[filaAntes({ codigo_concepto: "COMISION" })], []]);
     const response = await PATCH(req("PATCH", { ...sinCodigo, tipo: "Nuevo label distinto" }), ctx);
     expect(response.status).toBe(200);

@@ -67,7 +67,9 @@ describe("POST rrhh/prestaciones — codigoConcepto obligatorio y validado", () 
   });
 
   it("4. sin codigoConcepto -> 400", async () => {
-    const { codigoConcepto: _omitido, ...sinCodigo } = bodyValido;
+    const sinCodigo: Partial<typeof bodyValido> = { ...bodyValido };
+    delete sinCodigo.codigoConcepto;
+    expect(sinCodigo).not.toHaveProperty("codigoConcepto");
     const response = await POST(req(sinCodigo), ctx);
     expect(response.status).toBe(400);
     expect(conn.beginTransaction).not.toHaveBeenCalled();
