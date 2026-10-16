@@ -162,6 +162,72 @@ describe.skipIf(!port)("C-2C rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { timeout
     expect(await estado()).toBe("DIVERGENTE");
   });
 
+  it("C-2B con objeto del mismo nombre pero definición incorrecta (columna) → C-2C DIVERGENTE y migrate se detiene antes de DDL", async () => {
+    await fixture();
+    await db.query("ALTER TABLE flota_combustible_conciliaciones MODIFY version_parser INT NULL"); // C-2B: debía ser SMALLINT
+    await correr("preflight");
+    const [r] = await db.query<RowDataPacket[]>("SELECT @c2b_estado b, @c2c_estado c");
+    expect(r[0]).toMatchObject({ b: "DIVERGENTE", c: "DIVERGENTE" });
+    await migrarFalla(/DIVERGENTE/);
+    const [c] = await db.query<RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_combustible_conciliacion_filas' AND COLUMN_NAME LIKE '%c2c'");
+    expect(c[0].n).toBe(0);
+  });
+  it("C-2B con índice del mismo nombre y columnas erróneas → C-2C DIVERGENTE", async () => {
+    await fixture();
+    await db.query("ALTER TABLE flota_combustible_conciliaciones DROP INDEX idx_fcci_perfil, ADD INDEX idx_fcci_perfil (empresa_id,id,perfil_parser)");
+    expect(await estado()).toBe("DIVERGENTE"); await migrarFalla(/DIVERGENTE/);
+  });
+  it("C-2B con FK del mismo nombre y reglas distintas → C-2C DIVERGENTE (aun con C-2C FINAL)", async () => {
+    await fixture(); await script(sql("migrate"));
+    await db.query("ALTER TABLE flota_combustible_conciliaciones DROP FOREIGN KEY fk_fcci_usuario");
+    await db.query("ALTER TABLE flota_combustible_conciliaciones ADD CONSTRAINT fk_fcci_usuario FOREIGN KEY (subido_por_usuario_id) REFERENCES usuarios(id) ON UPDATE RESTRICT ON DELETE CASCADE");
+    expect(await estado()).toBe("DIVERGENTE");
+    await expect(script(sql("postcheck"))).rejects.toThrow(/FINAL/);
+  });
+  it("el bloque C-2B del rollout C-2C es el de los scripts finales de C-2B", () => {
+    const b2b = (t: string) => t.split("-- BEGIN C2B CONTRACT AUDIT")[1].split("-- END C2B CONTRACT AUDIT")[0];
+    const lf = (t: string) => t.replace(/\r\n/g, "\n");
+    expect(lf(b2b(sql("preflight")))).toBe(lf(b2b(c2b)));
+  });
+
+  describe("postcheck: integridad lógica falla con SIGNAL", () => {
+    const vincular = (extra = "") => db.query(`UPDATE flota_combustible_conciliacion_filas SET carga_vinculada_id=1, estado_c2c='COINCIDENCIA_EXACTA', modo_c2c='AUTO'${extra} WHERE id=21`);
+    const falla = async (patron = /integridad/) => { await expect(script(sql("postcheck"))).rejects.toThrow(patron); };
+    it("estado sano (con vínculo válido) pasa y muestra los seis conteos", async () => {
+      await fixture(); await script(sql("migrate")); await vincular();
+      const r = (await correr("postcheck"))[0];
+      for (const k of ["vinculos_duplicados", "vinculos_huerfanos", "vinculos_de_otro_proveedor", "vinculos_en_filas_no_canonicas", "sugeridas_huerfanas", "sugeridas_de_otro_proveedor"]) expect(Number(r[k])).toBe(0);
+    });
+    it("vínculo a un vale de otro proveedor", async () => {
+      await fixture(); await script(sql("migrate")); await vincular();
+      await db.query("UPDATE flota_combustible_cargas SET proveedor_id=4 WHERE id=1"); await falla();
+    });
+    it("vínculo en fila no canónica", async () => {
+      await fixture(); await script(sql("migrate")); await vincular();
+      await db.query("UPDATE flota_combustible_conciliacion_filas SET estado_parseo='INVALIDA' WHERE id=21"); await falla();
+    });
+    it("vínculo a un vale de otra empresa (huérfano de tenant)", async () => {
+      await fixture(); await script(sql("migrate")); await vincular();
+      await db.query("UPDATE flota_combustible_cargas SET empresa_id=2 WHERE id=1"); await falla();
+    });
+    it("sugerida a un vale de otra empresa", async () => {
+      await fixture(); await script(sql("migrate"));
+      await db.query("UPDATE flota_combustible_conciliacion_filas SET carga_sugerida_id=2, estado_c2c='COINCIDENCIA_CON_DIFERENCIAS' WHERE id=21");
+      await db.query("UPDATE flota_combustible_cargas SET empresa_id=2 WHERE id=2"); await falla();
+    });
+    it("sugerida a un vale de otro proveedor", async () => {
+      await fixture(); await script(sql("migrate"));
+      await db.query("UPDATE flota_combustible_conciliacion_filas SET carga_sugerida_id=2, estado_c2c='COINCIDENCIA_CON_DIFERENCIAS' WHERE id=21");
+      await db.query("UPDATE flota_combustible_cargas SET proveedor_id=4 WHERE id=2"); await falla();
+    });
+    it("vale vinculado dos veces: el UNIQUE lo impide en la base (el conteo de duplicados queda como defensa)", async () => {
+      await fixture(); await script(sql("migrate")); await vincular();
+      await db.query(`INSERT INTO flota_combustible_conciliacion_filas(id,conciliacion_id,empresa_id,fila_excel,estado,motivo,creado_at,hoja_origen,estado_parseo,datos_importacion,origen_celdas,fingerprint,duplicado_previo)
+        VALUES(22,10,1,3,'DESCARTADA','x',NOW(),'H','VALIDA','{}','[]',REPEAT('e',64),0)`);
+      await expect(db.query("UPDATE flota_combustible_conciliacion_filas SET carga_vinculada_id=1, estado_c2c='COINCIDENCIA_EXACTA' WHERE id=22")).rejects.toMatchObject({ code: "ER_DUP_ENTRY" });
+    });
+  });
+
   it("bloque de auditoría idéntico en preflight, migrate y postcheck", () => {
     const bloque = (t: string) => t.split("-- BEGIN C2C CONTRACT AUDIT")[1].split("-- END C2C CONTRACT AUDIT")[0];
     expect(bloque(sql("migrate"))).toBe(bloque(sql("preflight")));

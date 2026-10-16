@@ -43,3 +43,5 @@ La línea de fondo se muestra como información solo vía **reporte → vale →
 
 ## Verificación
 Ver PR. Pendiente: aplicar preflight/migrate/postcheck en el entorno autorizado, prueba manual con datos reales y aprobación de negocio.
+
+Actualización de rollout: el preflight de C-2C incorpora VERBATIM el contrato C-2B de los scripts finales de C-2B y exige `@c2b_estado = FINAL` (si no, `DIVERGENTE`). El postcheck falla con SIGNAL si cualquiera de estos conteos es > 0: vínculos duplicados, huérfanos (o de otra empresa), de otro proveedor, en filas no canónicas, sugeridas huérfanas y sugeridas de otro proveedor; siempre muestra los seis.

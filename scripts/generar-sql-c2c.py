@@ -3,7 +3,11 @@ Uso: python scripts/generar-sql-c2c.py  (solo escribe archivos locales; no toca 
 import pathlib
 
 T = "flota_combustible_conciliacion_filas"
-AUDIT = r"""-- BEGIN C2C CONTRACT AUDIT (identico en preflight/migrate/postcheck; SELECT INTO solo asigna variables de sesion)
+_raiz = pathlib.Path(__file__).resolve().parent.parent / "sql"
+_c2b = (_raiz / "migrate-2026-10-combustibles-c2b-importaciones.sql").read_text(encoding="utf-8")
+# Contrato C-2B exacto, copiado VERBATIM de los scripts finales de C-2B (deja @c2b_estado = CLEAN|PARTIAL_HEADER_COMPLETE|FINAL|DIVERGENTE).
+C2B_AUDIT = "-- BEGIN C2B CONTRACT AUDIT" + _c2b.split("-- BEGIN C2B CONTRACT AUDIT")[1].split("-- END C2B CONTRACT AUDIT")[0] + "-- END C2B CONTRACT AUDIT" + chr(10)
+AUDIT_C2C = r"""-- BEGIN C2C CONTRACT AUDIT (identico en preflight/migrate/postcheck; SELECT INTO solo asigna variables de sesion)
 SELECT NULL,NULL,NULL,NULL INTO @c2c_estado,@c2c_esperados,@c2c_presentes,@c2c_correctos;
 WITH
 columnas_esperadas AS (
@@ -80,7 +84,7 @@ base AS (
  AND EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_combustible_conciliacion_filas' AND INDEX_NAME='uq_fccif_empresa_import_id')
  AND EXISTS(SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_combustible_conciliacion_filas' AND CONSTRAINT_NAME='fk_fccif_canonica')) ok
 )
-SELECT CASE WHEN NOT base.ok THEN 'DIVERGENTE'
+SELECT CASE WHEN NOT base.ok OR COALESCE(@c2b_estado,'')<>'FINAL' THEN 'DIVERGENTE'
  WHEN conteos.presentes=0 AND NOT EXISTS(SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_combustible_conciliacion_filas'
    AND INDEX_NAME IN ('fk_fccif_vinculo','fk_fccif_sugerida','fk_fccif_confirmo')) THEN 'CLEAN'
  WHEN conteos.esperados=18 AND conteos.presentes=18 AND conteos.correctos=18 THEN 'FINAL'
@@ -89,6 +93,7 @@ INTO @c2c_estado,@c2c_esperados,@c2c_presentes,@c2c_correctos
 FROM conteos CROSS JOIN base;
 -- END C2C CONTRACT AUDIT
 """
+AUDIT = C2B_AUDIT + AUDIT_C2C
 
 CONTEOS = """SELECT (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas),(SELECT COUNT(*) FROM flota_combustible_conciliaciones),
  (SELECT COUNT(*) FROM flota_combustible_cargas),(SELECT COUNT(*) FROM usuarios)
@@ -114,7 +119,7 @@ DELIMITER ;
 """
 
 RESUMEN = """SELECT DATABASE() base_objetivo,VERSION() version_servidor,@c2c_estado estado_c2c_rollout,@c2c_esperados objetos_esperados,@c2c_presentes objetos_presentes,@c2c_correctos objetos_correctos,
- @c2c_n_filas filas_c2b_total,@c2c_n_cargas vales_total,@c2c_vinculos filas_con_vinculo_o_sugerida,@c2c_sugeridas filas_con_sugerida,@c2c_vinculos_duplicados vinculos_duplicados,@c2c_vinculos_huerfanos vinculos_huerfanos;
+ @c2b_estado estado_c2b,@c2c_n_filas filas_c2b_total,@c2c_n_cargas vales_total,@c2c_vinculos filas_con_vinculo_o_sugerida,@c2c_sugeridas filas_con_sugerida,@c2c_vinculos_duplicados vinculos_duplicados,@c2c_vinculos_huerfanos vinculos_huerfanos;
 """
 
 PREFLIGHT = ("""-- C-2C - PREFLIGHT (SOLO LECTURA). NO ejecutado por la rama. Mismo estandar contractual que C-2B.
@@ -176,29 +181,37 @@ SELECT DATABASE() base_objetivo,VERSION() version_servidor,@c2c_inicial estado_i
  @c2c_n_filas filas_antes,@c2c_n_cargas vales_antes;
 """)
 
-POSTCHECK = ("""-- C-2C - POSTCHECK (SOLO LECTURA). Ejecutar tras la migracion. Exige FINAL; todos los conteos de problemas deben ser 0.
+POSTCHECK = ("""-- C-2C - POSTCHECK (SOLO LECTURA). Ejecutar tras la migracion. Exige FINAL y FALLA (SIGNAL) si cualquier conteo de integridad es > 0.
 -- Se GENERA con scripts/generar-sql-c2c.py (no editar a mano).
-""" + AUDIT + CONTEOS + DATOS + """DELIMITER $$
+""" + AUDIT + CONTEOS + """DELIMITER $$
 BEGIN NOT ATOMIC
  IF @c2c_estado IS NULL OR @c2c_estado<>'FINAL' THEN
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='DETENER: postcheck C2C exige FINAL (objetos, indices, CHECK y FK exactos)';
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='DETENER: postcheck C2C exige FINAL (C-2B y C-2C exactos: objetos, indices, CHECK y FK)';
  END IF;
- IF COALESCE(@c2c_vinculos_duplicados,0)+COALESCE(@c2c_vinculos_huerfanos,0)>0 THEN
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='DETENER: vinculos C2C duplicados u huerfanos';
+ SELECT (SELECT COUNT(*) FROM (SELECT empresa_id,carga_vinculada_id FROM flota_combustible_conciliacion_filas WHERE carga_vinculada_id IS NOT NULL GROUP BY empresa_id,carga_vinculada_id HAVING COUNT(*)>1) x),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas f LEFT JOIN flota_combustible_cargas c ON c.id=f.carga_vinculada_id WHERE f.carga_vinculada_id IS NOT NULL AND (c.id IS NULL OR c.empresa_id<>f.empresa_id)),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id
+    JOIN flota_combustible_cargas c ON c.id=f.carga_vinculada_id WHERE c.proveedor_id<>h.proveedor_id OR c.proveedor_id IS NULL),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas WHERE carga_vinculada_id IS NOT NULL AND (duplicado_de_linea_id IS NOT NULL OR estado_parseo IN ('INVALIDA','IGNORADA'))),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas f LEFT JOIN flota_combustible_cargas c ON c.id=f.carga_sugerida_id WHERE f.carga_sugerida_id IS NOT NULL AND (c.id IS NULL OR c.empresa_id<>f.empresa_id)),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id
+    JOIN flota_combustible_cargas c ON c.id=f.carga_sugerida_id WHERE c.proveedor_id<>h.proveedor_id OR c.proveedor_id IS NULL),
+  (SELECT COUNT(*) FROM flota_combustible_conciliacion_filas WHERE carga_vinculada_id IS NOT NULL OR carga_sugerida_id IS NOT NULL)
+ INTO @c2c_p_duplicados,@c2c_p_huerfanos,@c2c_p_otro_proveedor,@c2c_p_no_canonicas,@c2c_p_sugeridas_huerfanas,@c2c_p_sugeridas_otro_proveedor,@c2c_p_con_vinculo;
+ IF @c2c_p_duplicados+@c2c_p_huerfanos+@c2c_p_otro_proveedor+@c2c_p_no_canonicas+@c2c_p_sugeridas_huerfanas+@c2c_p_sugeridas_otro_proveedor>0 THEN
+  SELECT @c2c_p_duplicados vinculos_duplicados,@c2c_p_huerfanos vinculos_huerfanos,@c2c_p_otro_proveedor vinculos_de_otro_proveedor,@c2c_p_no_canonicas vinculos_en_filas_no_canonicas,
+   @c2c_p_sugeridas_huerfanas sugeridas_huerfanas,@c2c_p_sugeridas_otro_proveedor sugeridas_de_otro_proveedor;
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='DETENER: integridad logica C2C violada (ver conteos del SELECT anterior)';
  END IF;
 END$$
 DELIMITER ;
-""" + RESUMEN + """-- Integridad logica adicional (deben ser 0 siempre):
-SELECT COUNT(*) AS vinculos_de_otro_proveedor FROM flota_combustible_conciliacion_filas f
- JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id
- JOIN flota_combustible_cargas c ON c.id=f.carga_vinculada_id WHERE c.proveedor_id<>h.proveedor_id OR c.proveedor_id IS NULL;
-SELECT COUNT(*) AS vinculos_en_filas_no_canonicas FROM flota_combustible_conciliacion_filas
- WHERE carga_vinculada_id IS NOT NULL AND (duplicado_de_linea_id IS NOT NULL OR estado_parseo IN ('INVALIDA','IGNORADA'));
-SELECT COUNT(*) AS sugeridas_huerfanas FROM flota_combustible_conciliacion_filas f LEFT JOIN flota_combustible_cargas c ON c.id=f.carga_sugerida_id
- WHERE f.carga_sugerida_id IS NOT NULL AND (c.id IS NULL OR c.empresa_id<>f.empresa_id);
+SELECT DATABASE() base_objetivo,VERSION() version_servidor,@c2b_estado estado_c2b,@c2c_estado estado_c2c_rollout,@c2c_esperados objetos_esperados,@c2c_presentes objetos_presentes,@c2c_correctos objetos_correctos,
+ @c2c_n_filas filas_c2b_total,@c2c_n_cargas vales_total,@c2c_p_con_vinculo filas_con_vinculo_o_sugerida,
+ @c2c_p_duplicados vinculos_duplicados,@c2c_p_huerfanos vinculos_huerfanos,@c2c_p_otro_proveedor vinculos_de_otro_proveedor,@c2c_p_no_canonicas vinculos_en_filas_no_canonicas,
+ @c2c_p_sugeridas_huerfanas sugeridas_huerfanas,@c2c_p_sugeridas_otro_proveedor sugeridas_de_otro_proveedor;
 """)
 
-raiz = pathlib.Path(__file__).resolve().parent.parent / "sql"
+raiz = _raiz
 for nombre, texto in (("preflight", PREFLIGHT), ("migrate", MIGRATE), ("postcheck", POSTCHECK)):
-    (raiz / f"{nombre}-2026-10-combustibles-c2c-conciliacion.sql").write_text(texto, encoding="utf-8", newline="\n")
+    (raiz / f"{nombre}-2026-10-combustibles-c2c-conciliacion.sql").write_text(texto, encoding="utf-8", newline=chr(10))
     print("escrito", nombre)
