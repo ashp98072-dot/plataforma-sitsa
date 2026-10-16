@@ -198,7 +198,7 @@ export function VehiculoDocumentos({ slug, vehiculoId, can }: Props) {
             </label>
             {form.tipo === "Otro" ? (
               <label className="text-xs text-[var(--muted)]">
-                Título (para "Otro")
+                Título (para &quot;Otro&quot;)
                 <input
                   className={`${input} mt-1 block w-full`}
                   value={form.titulo}
