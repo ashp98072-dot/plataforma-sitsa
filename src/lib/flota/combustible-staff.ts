@@ -6,6 +6,7 @@ import { ahoraLocal } from "@/lib/rrhh/dates";
 import { borrarUpload, contentTypeFor, guardarUpload, validarRutaArchivoEmpresa } from "@/lib/uploads";
 import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 import { combustibleStaffSchema, precioCalculado, type CombustibleStaffInput } from "./combustible-staff-schema";
+import { validarLineaFondoCombustibleTx } from "./combustible-fondos";
 
 type Archivo = { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> };
 
@@ -35,13 +36,15 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
     if (!proveedores[0]) throw new ErrorDominioFormulario("Proveedor no disponible para esta empresa.");
     let actual: RowDataPacket | undefined;
     if (id != null) {
-      const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado, vehiculo_id, viaje_id, proveedor_id, estacion_id, gasolinera, ruta_relativa FROM flota_combustible_cargas WHERE empresa_id = ? AND id = ? FOR UPDATE", [empresaId, id]);
+      const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado, vehiculo_id, viaje_id, proveedor_id, estacion_id, gasolinera, ruta_relativa, solicitud_fondo_linea_id FROM flota_combustible_cargas WHERE empresa_id = ? AND id = ? FOR UPDATE", [empresaId, id]);
       actual = rows[0];
       if (!actual) throw new ErrorDominioFormulario("Vale no encontrado.", 404);
       if (actual.estado !== "PENDIENTE") throw new ErrorDominioFormulario("Solo se pueden editar vales pendientes.", 409);
       anterior = actual.ruta_relativa ? String(actual.ruta_relativa) : null;
     }
     if (!proveedores[0].activo && (!actual || Number(actual.proveedor_id) !== datos.proveedorId)) throw new ErrorDominioFormulario("Proveedor inactivo.");
+    const lineaFondoId = datos.solicitudFondoLineaId === undefined ? (actual?.solicitud_fondo_linea_id == null ? null : Number(actual.solicitud_fondo_linea_id)) : datos.solicitudFondoLineaId;
+    if (lineaFondoId != null) await validarLineaFondoCombustibleTx(conn, empresaId, lineaFondoId, datos.vehiculoId);
     // La UI no captura IDs internos. Omitir preserva el vínculo obtenido del vale bloqueado, no del navegador.
     const viajeId = datos.viajeId === undefined ? (actual?.viaje_id == null ? null : Number(actual.viaje_id)) : datos.viajeId;
     const estacionId = datos.estacionId === undefined ? (actual?.estacion_id == null ? null : Number(actual.estacion_id)) : datos.estacionId;
@@ -77,7 +80,9 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
       await conn.execute(`UPDATE flota_combustible_cargas SET vehiculo_id=?, viaje_id=?, proveedor_id=?, numero_vale=?, fecha_consumo=?, tipo_combustible=?, galones=?, monto=?, precio_por_galon=?, km=?, gasolinera=?, observaciones=?, estacion_id=?${subida ? ", ruta_relativa=?, nombre_original=?, mime=?, tamano=?" : ""} WHERE empresa_id=? AND id=? AND estado='PENDIENTE'`,
         [...valores, ...(subida ? [subida.relative, subida.original, contentTypeFor(subida.original), subida.size] : []), empresaId, id]);
     }
-    await registrarAuditoriaTx(conn, { empresaId, usuario: actor.username, accion: id == null ? "registrar_combustible" : "editar_combustible", modulo: "flota_combustible", detalle: `Vale #${cargaId} · proveedor #${datos.proveedorId} · ${datos.numeroVale} · usuario #${actor.usuarioId}` });
+    // Misma transacción que captura y auditoría; NULL explícito quita el vínculo, omitir lo conserva.
+    await conn.execute("UPDATE flota_combustible_cargas SET solicitud_fondo_linea_id=? WHERE empresa_id=? AND id=? AND estado='PENDIENTE'", [lineaFondoId, empresaId, cargaId!]);
+    await registrarAuditoriaTx(conn, { empresaId, usuario: actor.username, accion: id == null ? "registrar_combustible" : "editar_combustible", modulo: "flota_combustible", detalle: `Vale #${cargaId} · proveedor #${datos.proveedorId} · ${datos.numeroVale} · usuario #${actor.usuarioId} · línea fondo ${actual?.solicitud_fondo_linea_id ?? "sin vínculo"} -> ${lineaFondoId ?? "sin vínculo"}` });
     await conn.commit();
     committed = true;
     // El archivo histórico se conserva: puede estar referenciado por snapshots/consultas anteriores.

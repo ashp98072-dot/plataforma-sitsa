@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CombustibleConciliacionView } from "./combustible-conciliacion";
 import { CombustibleRegistro, type ValeEditable } from "./combustible-registro";
 import type { CapacidadesCombustible } from "@/lib/flota/combustible-permisos";
+import { ContextoFondo, ResumenLineaFondo } from "./combustible-fondo";
+import type { LineaFondoCombustible } from "@/lib/flota/combustible-fondos";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 2) — bandeja de revisión de Operaciones:
@@ -35,6 +37,8 @@ type Estado = "PENDIENTE" | "APROBADO" | "RECHAZADO";
 
 type Carga = {
   id: number;
+  solicitudFondoLineaId?: number | null;
+  fondo?: LineaFondoCombustible | null;
   viajeId: number | null;
   vehiculoId?: number;
   proveedorId?: number | null;
@@ -90,6 +94,11 @@ const PESTANAS: { estado: Estado; etiqueta: string }[] = [
 ];
 
 const input = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
+
+function ResumenLineaFondoDiferido({ slug, lineaId }: { slug: string; lineaId: number }) {
+  const [abierto, setAbierto] = useState(false);
+  return <details onToggle={e => setAbierto(e.currentTarget.open)}><summary>Resumen de línea de combustible</summary>{abierto && <ResumenLineaFondo slug={slug} lineaId={lineaId} />}</details>;
+}
 
 function mesActual() {
   const p = new Date();
@@ -370,7 +379,9 @@ export function CombustibleRevisionPanel({ slug, capacidades }: Props) {
                     anterior a este ticket no tiene numero_vale/fecha_consumo/
                     precio_por_galon; se muestra "No disponible" en vez de
                     inventar un valor o romper la tabla. */}
-                <td className="px-2 py-2">{c.numeroVale ?? "No disponible"}</td>
+                <td className="px-2 py-2">{c.numeroVale ?? "No disponible"}
+                  {c.fondo && <><ContextoFondo fondo={c.fondo} /><ResumenLineaFondoDiferido slug={slug} lineaId={c.fondo.id} /></>}
+                </td>
                 <td className="px-2 py-2">{c.fechaConsumo ?? "No disponible"}</td>
                 <td className="px-2 py-2">{c.placa}</td>
                 <td className="px-2 py-2">{c.proveedorNombre ?? "Histórico sin proveedor"}</td>

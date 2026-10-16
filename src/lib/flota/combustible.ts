@@ -3,6 +3,7 @@ import { execute, query } from "@/lib/db";
 import { ahoraLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { rangoMes } from "@/lib/rrhh/resumen-mensual";
 import { contentTypeFor, guardarUpload } from "@/lib/uploads";
+import { contextosFondosCombustible, type LineaFondoCombustible } from "./combustible-fondos";
 
 /**
  * FLOTA-COMBUSTIBLE-1 — control de combustible (Fase 1: captura del
@@ -28,6 +29,8 @@ export type EstadoCargaCombustible = "PENDIENTE" | "APROBADO" | "RECHAZADO";
 
 export type CargaCombustible = {
   id: number;
+  solicitudFondoLineaId?: number | null;
+  fondo?: LineaFondoCombustible | null;
   viajeId: number | null;
   vehiculoId?: number;
   proveedorId?: number | null;
@@ -224,6 +227,7 @@ export async function obtenerArchivoCargaCombustiblePorEmpresa(
 function mapCargaRevision(r: RowDataPacket): CargaCombustibleRevision {
   return {
     ...mapCarga(r),
+    solicitudFondoLineaId: r.solicitud_fondo_linea_id == null ? null : Number(r.solicitud_fondo_linea_id),
     creadoPorUsuarioId: r.creado_por_usuario_id == null ? null : Number(r.creado_por_usuario_id),
     revisadoPorUsuarioId: r.revisado_por_usuario_id == null ? null : Number(r.revisado_por_usuario_id),
     placa: String(r.placa ?? "—"),
@@ -280,7 +284,7 @@ export async function listarCargasCombustibleRevision(
   }
   const where = condiciones.join(" AND ");
   const rows = await query<RowDataPacket[]>(
-    `SELECT c.id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.estacion_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
+    `SELECT c.id, c.solicitud_fondo_linea_id, c.viaje_id, c.vehiculo_id, c.proveedor_id, c.estacion_id, c.observaciones, c.creado_por_usuario_id, c.revisado_por_usuario_id, c.tipo_combustible, c.numero_vale, c.fecha_consumo, c.galones,
             c.monto, c.precio_por_galon, c.km, c.gasolinera, c.nombre_original, c.estado,
             c.motivo_rechazo, c.creado_por, c.creado_at,
             c.revisado_por, c.revisado_en, c.piloto_nombre, v.placa, pr.nombre_comercial AS proveedor_nombre
@@ -303,7 +307,9 @@ export async function listarCargasCombustibleRevision(
     const e = String(r.estado);
     if (e === "PENDIENTE" || e === "APROBADO" || e === "RECHAZADO") resumen[e] = Number(r.n);
   }
-  return { items: rows.map(mapCargaRevision), resumen };
+  const items = rows.map(mapCargaRevision);
+  const contextos = await contextosFondosCombustible(empresaId, [...new Set(items.flatMap(c => c.solicitudFondoLineaId == null ? [] : [c.solicitudFondoLineaId]))]);
+  return { items: items.map(c => ({ ...c, fondo: c.solicitudFondoLineaId == null ? null : contextos.get(c.solicitudFondoLineaId) ?? null })), resumen };
 }
 
 /**

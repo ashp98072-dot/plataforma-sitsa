@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { precioCalculado } from "@/lib/flota/combustible-staff-schema";
 import { estacionesDelProveedor, estacionAlCambiarProveedor, type EstacionOpcion } from "@/lib/flota/combustible-estaciones-ui";
 import { CatalogoSearchSelect, opcionesConHistorico } from "@/components/tms/catalogo-search-select";
+import { FondoCombustibleSelector } from "./combustible-fondo";
+import type { LineaFondoCombustible } from "@/lib/flota/combustible-fondos";
 
 export type ValeEditable = {
   id: number; vehiculoId?: number; proveedorId?: number | null; viajeId: number | null;
@@ -10,6 +12,8 @@ export type ValeEditable = {
   galones: number; monto: number; km: number | null; gasolinera: string | null;
   observaciones?: string | null; placa: string;
   estacionId?: number | null;
+  solicitudFondoLineaId?: number | null;
+  fondo?: LineaFondoCombustible | null;
 };
 type Catalogos = { proveedores: { id: number; nombre: string }[]; vehiculos: { id: number; placa: string; descripcion?: string }[]; estaciones: EstacionOpcion[] };
 const input = "w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5";
@@ -22,6 +26,7 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
   const [proveedorId, setProveedorId] = useState(String(vale?.proveedorId ?? ""));
   const [vehiculoId, setVehiculoId] = useState(String(vale?.vehiculoId ?? ""));
   const [estacionId, setEstacionId] = useState(String(vale?.estacionId ?? ""));
+  const [lineaFondo, setLineaFondo] = useState(String(vale?.solicitudFondoLineaId ?? ""));
   const estaciones = estacionesDelProveedor(catalogos.estaciones, proveedorId);
   const proveedoresOpciones = opcionesConHistorico(catalogos.proveedores.map(p => ({ value: String(p.id), label: p.nombre })), String(vale?.proveedorId ?? ""), `Proveedor #${vale?.proveedorId}`);
   const enCurso = useRef(false);
@@ -76,6 +81,7 @@ export function CombustibleRegistro({ slug, vale, onSaved, onCancel }: { slug: s
       <label>Evidencia imagen/PDF<input className={input} name="file" type="file" accept="image/jpeg,image/png,image/webp,image/bmp,application/pdf" required={!vale} /><small>{vale ? "Sin archivo nuevo se conserva el existente." : "Una evidencia obligatoria."}</small></label>
       <label>Observaciones<textarea className={input} name="observaciones" maxLength={1000} defaultValue={vale?.observaciones ?? ""} /></label>
     </div>
+    <FondoCombustibleSelector slug={slug} value={lineaFondo} onChange={setLineaFondo} historico={vale?.fondo} />
     <button disabled={guardando} className="rounded bg-sky-700 px-3 py-2 text-white">{guardando ? "Guardando…" : "Guardar vale"}</button>{" "}
     <button type="button" disabled={guardando} onClick={onCancel}>Cancelar</button>
   </form>;

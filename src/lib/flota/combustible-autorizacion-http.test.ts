@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/session", () => ({ getSession: vi.fn(), createSessionToken: vi.fn(), setSessionCookie: vi.fn() }));
 vi.mock("@/lib/empresas", () => ({ obtenerEmpresaPorSlug: vi.fn(), empresasParaUsuario: vi.fn() }));
 vi.mock("@/lib/permisos", async original => ({ ...await original<typeof import("@/lib/permisos")>(), permisosEfectivos: vi.fn() }));
-const m = vi.hoisted(() => ({ guardar: vi.fn(), catalogos: vi.fn(), listar: vi.fn(), revisar: vi.fn(), archivo: vi.fn(), resumen: vi.fn(), guardarEstacion: vi.fn(), estaciones: vi.fn() }));
+const m = vi.hoisted(() => ({ guardar: vi.fn(), catalogos: vi.fn(), listar: vi.fn(), revisar: vi.fn(), archivo: vi.fn(), resumen: vi.fn(), guardarEstacion: vi.fn(), estaciones: vi.fn(), fondos: vi.fn() }));
+vi.mock("./combustible-fondos", () => ({ buscarLineasFondoCombustible: m.fondos }));
 vi.mock("./combustible-staff", () => ({ guardarCombustibleStaff: m.guardar, catalogosCombustible: m.catalogos }));
 vi.mock("./combustible", () => ({ listarCargasCombustibleRevision: m.listar, revisarCargaCombustible: m.revisar, obtenerArchivoCargaCombustiblePorEmpresa: m.archivo, resumenCombustibleMensual: m.resumen }));
 vi.mock("./combustible-estaciones", async original => ({ ...await original<typeof import("./combustible-estaciones")>(), guardarEstacion: m.guardarEstacion, listarEstaciones: m.estaciones }));
@@ -18,6 +19,7 @@ import { PATCH as editar } from "@/app/api/empresas/[slug]/flota/combustible/[id
 import { POST as revisar } from "@/app/api/empresas/[slug]/flota/combustible/[id]/revisar/route";
 import { GET as evidencia } from "@/app/api/empresas/[slug]/flota/combustible/[id]/vale/route";
 import { GET as catalogos } from "@/app/api/empresas/[slug]/flota/combustible/catalogos/route";
+import { GET as fondos } from "@/app/api/empresas/[slug]/flota/combustible/fondos/route";
 import { GET as resumen } from "@/app/api/empresas/[slug]/flota/combustible/resumen/route";
 import { POST as conciliar } from "@/app/api/empresas/[slug]/flota/combustible/conciliaciones/route";
 import { GET as historial } from "@/app/api/empresas/[slug]/flota/combustible/conciliaciones/route";
@@ -99,5 +101,26 @@ describe("rutas HTTP con guard real, no guard simulado", () => {
   it("TMS deshabilitado no se recupera por permisos completos", async () => {
     vi.mocked(obtenerEmpresaPorSlug).mockResolvedValue({ ...empresa, modulos: ["flota"] } as never);
     for (const w of writes) expect((await w.call()).status).toBe(403);
+  });
+  it.each(["registrar", "editar_pendientes"] as const)("catálogo de fondos admite %s sin conceder editar Fondos", async accion => {
+    vi.mocked(permisosEfectivos).mockResolvedValue(cambiarAccion(base, "flota_combustible", accion, true));
+    m.fondos.mockResolvedValue([]);
+    const res = await fondos(new Request("http://localhost/x?q=SF&empresa_id=999"), ctx);
+    expect(res.status).toBe(200); expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(m.fondos).toHaveBeenCalledWith(7, "SF", undefined);
+  });
+  it("solo ver no permite buscar nuevas asociaciones, sí resumen operativo", async () => {
+    m.fondos.mockResolvedValue([]);
+    expect((await fondos(new Request("http://localhost/x?q=SF"), ctx)).status).toBe(403);
+    expect((await fondos(new Request("http://localhost/x?lineaId=42"), ctx)).status).toBe(200);
+    expect(m.fondos).toHaveBeenCalledWith(7, "", 42);
+    expect((await fondos(new Request("http://localhost/x?lineaId=-1"), ctx)).status).toBe(400);
+  });
+  it("catálogo fondos respeta tenant y módulo sin fallback TMS/Gastos", async () => {
+    vi.mocked(permisosEfectivos).mockResolvedValue([p("tms", true), p("gastos", true)]);
+    expect((await fondos(new Request("http://localhost/x"), ctx)).status).toBe(403);
+    vi.mocked(obtenerEmpresaPorSlug).mockResolvedValue({ ...empresa, id: 8 } as never);
+    expect((await fondos(new Request("http://localhost/x?lineaId=42"), ctx)).status).toBe(403);
+    expect(m.fondos).not.toHaveBeenCalled();
   });
 });
