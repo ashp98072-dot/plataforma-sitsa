@@ -8,8 +8,10 @@ it("mantenimiento separado enlazado desde Combustibles, no incrustado en captura
   const form = read("src/components/flota/combustible-registro.tsx");
   expect(form).toContain('name="estacionId"');
   expect(form).not.toContain('name="gasolinera"');
-  expect(form).toContain("estacionesDelProveedor(catalogos.estaciones, proveedorId)");
-  expect(form).toContain("setEstacionId(estacionAlCambiarProveedor(");
+  // El proveedor ya no se captura: se deriva de la estación en el servidor.
+  expect(form).not.toContain('name="proveedorId"'); expect(form).not.toContain('label="Proveedor"');
+  expect(form).toContain('label="Estación / gasolinera"'); expect(form).toContain('label="Unidad / placa"');
+  expect(form).toContain("/combustibles/estaciones"); expect(form).toContain("MENSAJE_SIN_ESTACIONES");
   expect(form).toContain("Texto histórico conservado");
   expect(form).not.toContain("Nueva estación");
 });

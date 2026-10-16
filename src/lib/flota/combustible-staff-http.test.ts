@@ -10,7 +10,7 @@ beforeEach(() => {
 });
 function request(fields: Record<string, string> = {}, evidencia = true) {
   const f = new FormData();
-  for (const [k, v] of Object.entries({ proveedorId: "3", vehiculoId: "7", numeroVale: "V-1", fechaConsumo: "2026-10-15", tipoCombustible: "diesel", galones: "10.125", monto: "300.50", ...fields })) f.set(k, v);
+  for (const [k, v] of Object.entries({ estacionId: "55", vehiculoId: "7", numeroVale: "V-1", fechaConsumo: "2026-10-15", tipoCombustible: "diesel", galones: "10.125", monto: "300.50", ...fields })) f.set(k, v);
   if (evidencia) f.set("file", new File(["%PDF-1.7"], "vale.pdf", { type: "application/pdf" }));
   return new Request("http://localhost/x", { method: "POST", body: f });
 }
@@ -21,12 +21,13 @@ it("POST exige registrar antes de leer cuerpo", async () => {
 });
 it("empresa y registrador vienen del guard, nunca del navegador", async () => {
   expect((await guardarCombustibleHttp(request({ empresaId: "99", username: "otro", pilotoNombre: "falso", creado_por_usuario_id: "999", empleadoId: "0" }), "empresa")).status).toBe(201);
-  expect(m.guardar).toHaveBeenCalledWith(1, { usuarioId: 91, username: "op" }, expect.objectContaining({ proveedorId: 3 }), expect.any(File), undefined);
+  expect(m.guardar).toHaveBeenCalledWith(1, { usuarioId: 91, username: "op" }, expect.objectContaining({ estacionId: 55 }), expect.any(File), undefined);
+  expect(m.guardar.mock.calls[0][2].proveedorId).toBeUndefined(); // el proveedor lo deriva el servidor de la estación
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("viajeId");
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("pilotoNombre");
   expect(m.guardar.mock.calls[0][2]).not.toHaveProperty("creado_por_usuario_id");
 });
-it.each(["proveedorId", "vehiculoId", "galones", "monto", "fechaConsumo", "numeroVale"])("400 por campo requerido %s", async campo => {
+it.each(["vehiculoId", "galones", "monto", "fechaConsumo", "numeroVale"])("400 por campo requerido %s", async campo => {
   expect((await guardarCombustibleHttp(request({ [campo]: "" }), "empresa")).status).toBe(400);
   expect(m.guardar).not.toHaveBeenCalled();
 });

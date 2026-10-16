@@ -29,3 +29,18 @@ GET `/api/empresas/[slug]/flota/combustible/estaciones` (filtros proveedorId, bu
 4. Desplegar código después de migración verificada. No hay DDL en requests/build ni fallback que oculte una migración faltante.
 
 Sintaxis, reejecución, conservación de registros/textos y FK probadas en MariaDB **11.8.9 desechable**, no en producción. Esta rama no ejecuta SQL productivo. Verificación física y aplicación manual pendientes de autorización externa.
+
+## Ajuste posterior: guardado de estaciones y proveedor derivado del vale
+
+- **Proveedor del vale = proveedor de la estación.** El formulario de vales ya no pide proveedor; ver `COMBUSTIBLES-UX-CAPTURA.md` (sección «Ajuste posterior»). Los nuevos
+  vales exigen estación catalogada; los históricos sin estación se conservan tal cual. Esto reemplaza «Nuevos vales pueden no tener estación catalogada» y «Selector solo
+  ofrece estaciones activas del proveedor» de arriba.
+- **Guardado de estaciones — qué se verificó.** Con el esquema del repositorio (migración C-1 + Estaciones, MariaDB 11.8.9) el flujo completo *Nueva estación → proveedor →
+  nombre → dirección → Guardar* **guarda** (navegador real contra BD desechable y pruebas de servicio/HTTP). **No se pudo reproducir** el fallo observado en producción con ese
+  esquema; si la causa es el esquema físico de producción, **no se asume**: ver `sql/diagnostico-2026-10-combustibles-estaciones-guardado.sql` (solo lectura, NO ejecutado).
+- **Endurecimiento (sin cambiar permisos ni reglas):**
+  - el selector de proveedor del mantenimiento ya no depende de `/catalogos` (que exige «Ver» y consulta vehículos): `GET …/estaciones` devuelve `proveedores` activos;
+  - una respuesta no JSON/vacía ya no rompe la pantalla: se muestra «El servidor respondió N sin detalle…»; sin proveedores activos se avisa explícitamente;
+  - errores de dominio con su mensaje real (validación: «Indica el nombre de la estación.», «Selecciona un proveedor.»; proveedor inexistente/otra empresa/inactivo);
+  - errores de BD reconocibles con mensaje accionable: tabla/columna ausente → 503 «falta aplicar la migración de Estaciones…», FK 1452 → 409, dato largo → 400,
+    CHECK → 400, bloqueo/deadlock → 409; cualquier otro → 500 con **referencia de 8 caracteres** (también en el log del servidor) en lugar de un genérico mudo.

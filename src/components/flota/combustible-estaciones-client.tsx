@@ -4,6 +4,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Estacion } from "@/lib/flota/combustible-estaciones";
 import { CatalogoSearchSelect, opcionesConHistorico } from "@/components/tms/catalogo-search-select";
 const input = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5";
+/** Lee la respuesta sin romper con cuerpos vacíos/no JSON (p. ej. un 500 sin JSON): siempre devuelve un mensaje legible. */
+async function leer(res: Response): Promise<{ data: Record<string, unknown>; error: string | null }> {
+  const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (res.ok && data) return { data, error: null };
+  const mensaje = typeof data?.error === "string" ? data.error : `El servidor respondió ${res.status} sin detalle. Vuelve a intentar o avisa a Sistemas.`;
+  return { data: data ?? {}, error: mensaje };
+}
 export function CombustibleEstacionesClient({ slug, puedeEditar }: { slug: string; puedeEditar: boolean }) {
   const [items, setItems] = useState<Estacion[]>([]);
   const [proveedores, setProveedores] = useState<{ id: number; nombre: string }[]>([]);
@@ -17,9 +24,9 @@ export function CombustibleEstacionesClient({ slug, puedeEditar }: { slug: strin
     setCargando(true);
     try {
       const params = new URLSearchParams({ buscar, proveedorId: proveedor, activo });
-      const res = await fetch(`${base}/estaciones?${params}`, { signal }); const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "No se pudo cargar estaciones.");
-      if (!signal?.aborted) { setItems(data.items); setError(""); }
+      const res = await fetch(`${base}/estaciones?${params}`, { signal }); const { data, error: fallo } = await leer(res);
+      if (fallo) throw new Error(fallo);
+      if (!signal?.aborted) { setItems(data.items as Estacion[]); setProveedores(data.proveedores as { id: number; nombre: string }[]); setError(""); }
     } catch (e) { if (!signal?.aborted) setError(e instanceof Error ? e.message : "Error al cargar."); }
     finally { if (!signal?.aborted) setCargando(false); }
   }, [base, buscar, proveedor, activo]);
@@ -27,24 +34,19 @@ export function CombustibleEstacionesClient({ slug, puedeEditar }: { slug: strin
     const ac = new AbortController(); const timer = setTimeout(() => void cargar(ac.signal), 200);
     return () => { clearTimeout(timer); ac.abort(); };
   }, [cargar]);
-  useEffect(() => {
-    const ac = new AbortController();
-    fetch(`${base}/catalogos`, { signal: ac.signal }).then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d.error); setProveedores(d.proveedores); }).catch(e => { if (!ac.signal.aborted) setError(e.message); });
-    return () => ac.abort();
-  }, [base]);
   const guardar = async (body: object, id?: number) => {
     if (vuelo.current) return false;
     vuelo.current = true; setGuardando(true); setError("");
     try {
       const res = await fetch(`${base}/estaciones${id ? `/${id}` : ""}`, { method: id ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const d = await res.json(); if (!res.ok) throw new Error(d.error ?? "No se pudo guardar.");
+      const { error: fallo } = await leer(res); if (fallo) throw new Error(fallo);
       await cargar(); return true;
     } catch (e) { setError(e instanceof Error ? e.message : "Error al guardar."); return false; }
     finally { vuelo.current = false; setGuardando(false); }
   };
   const actual = edicion && edicion !== "nueva" ? edicion : null;
   const opcionesProveedor = proveedores.map(p => ({ value: String(p.id), label: p.nombre }));
-  const editar = (estacion: Estacion | "nueva") => { setEdicion(estacion); setProveedorEdicion(estacion === "nueva" ? "" : String(estacion.proveedorId)); };
+  const editar = (estacion: Estacion | "nueva") => { setError(""); setEdicion(estacion); setProveedorEdicion(estacion === "nueva" ? "" : String(estacion.proveedorId)); };
   return <section className="space-y-4 p-4"><h1 className="text-xl font-semibold">Estaciones de combustible</h1>
     <Link href={`/e/${slug}/combustibles`} prefetch={false}>Volver a Combustibles</Link>
     {error && <p role="alert" className="text-red-500">{error}</p>}
@@ -58,6 +60,7 @@ export function CombustibleEstacionesClient({ slug, puedeEditar }: { slug: strin
       if (!proveedorEdicion) { setError("Selecciona un proveedor."); return; }
       if (await guardar({ proveedorId: Number(f.get("proveedorId")), nombre: String(f.get("nombre")), direccion: String(f.get("direccion")) }, actual?.id)) setEdicion(null);
     }}><input type="hidden" name="proveedorId" value={proveedorEdicion} />
+      {proveedores.length === 0 && !cargando && <p role="status" className="basis-full text-xs text-amber-500">No hay proveedores activos. Registra o activa primero el proveedor en Compras → Proveedores.</p>}
       <CatalogoSearchSelect key={actual?.id ?? "nueva"} label="Proveedor" placeholder="Buscar proveedor..." value={proveedorEdicion} options={opcionesConHistorico(opcionesProveedor, String(actual?.proveedorId ?? ""), actual?.proveedorNombre ?? "")} inputClassName={input} onChange={setProveedorEdicion} />
       <label>Estación<input name="nombre" required maxLength={150} className={`${input} block`} defaultValue={actual?.nombre ?? ""} /></label>
       <label>Dirección / referencia<input name="direccion" maxLength={500} className={`${input} block`} defaultValue={actual?.direccion ?? ""} /></label>

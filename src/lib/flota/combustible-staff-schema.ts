@@ -6,7 +6,11 @@ const id = z.coerce.number().int().positive();
 const decimal = (escala: number, maximo: string) => z.string().trim().regex(/^\d+(?:\.\d+)?$/, "Importe inválido.")
   .refine(v => { try { const n = new Decimal(v); return n.gt(0) && n.lte(maximo) && n.decimalPlaces() <= escala; } catch { return false; } }, "Valor fuera de rango o precisión.");
 export const combustibleStaffSchema = z.object({
-  proveedorId: id,
+  /**
+   * Compatibilidad con clientes anteriores. El proveedor de un vale se DERIVA de la estación (`estacionId`) en el servidor: este
+   * valor ya no lo captura ningún formulario y, si llega, solo se contrasta (nunca se confía ni se persiste tal cual).
+   */
+  proveedorId: z.preprocess(v => v === "" || v == null ? undefined : v, id.optional()),
   estacionId: z.preprocess(v => v === "" || v == null ? null : v, id.nullable()).optional(),
   vehiculoId: id,
   solicitudFondoLineaId: z.preprocess(v => v === "" || v === null ? null : v, id.nullable()).optional(),
