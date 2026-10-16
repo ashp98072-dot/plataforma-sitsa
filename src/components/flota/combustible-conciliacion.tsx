@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
+import { CombustibleConciliacionProveedor } from "./combustible-conciliacion-proveedor";
 
 /**
  * FLOTA-COMBUSTIBLE-3 — subir el reporte .xlsx real de la gasolinera y
@@ -446,7 +447,7 @@ function HistorialConciliacionView({
 }
 
 export function CombustibleConciliacionView({ slug, puedeConciliar }: { slug: string; puedeConciliar: boolean }) {
-  const [sub, setSub] = useState<"nueva" | "historial">(puedeConciliar ? "nueva" : "historial");
+  const [sub, setSub] = useState<"nueva" | "historial" | "proveedor">(puedeConciliar ? "nueva" : "historial");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [procesando, setProcesando] = useState(false);
   const [err, setErr] = useState("");
@@ -498,7 +499,7 @@ export function CombustibleConciliacionView({ slug, puedeConciliar }: { slug: st
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         {puedeConciliar && <button
           type="button"
           onClick={() => setSub("nueva")}
@@ -519,7 +520,16 @@ export function CombustibleConciliacionView({ slug, puedeConciliar }: { slug: st
         >
           Historial
         </button>
+        <button
+          type="button"
+          onClick={() => setSub("proveedor")}
+          className={`rounded border p-2 text-center text-sm font-medium transition ${sub === "proveedor" ? "border-sky-500 bg-sky-950/20 text-sky-200" : "border-[var(--border)] hover:bg-[var(--input)]"}`}
+        >
+          Reportes de proveedor
+        </button>
       </div>
+
+      {sub === "proveedor" ? <CombustibleConciliacionProveedor slug={slug} puedeConciliar={puedeConciliar} /> : null}
 
       {sub === "historial" ? (
         <HistorialConciliacionView slug={slug} refrescarSenal={refrescarHistorial} detalleInicial={detalleAbrir} />
