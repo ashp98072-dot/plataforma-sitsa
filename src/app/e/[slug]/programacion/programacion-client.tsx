@@ -3,11 +3,11 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import type {
   DisponibilidadPersonal,
   EstadoDisponibilidad,
 } from "@/lib/operaciones/disponibilidad-personal";
-import PlanForm from "./plan-form";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { useEmpresaSession } from "@/lib/empresa-session";
@@ -16,10 +16,17 @@ import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { celdaPilotoImagen, mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 import { auxiliaresDeVista, pilotosDeVista, tieneAuxiliaresVista, tienePilotoVista } from "@/lib/tms/programacion-personal-vista";
 import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
-import { EdicionRapida, type FilaEdicionRapidaEntrada } from "./edicion-rapida";
+import type { FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 import { crearSecuenciaCargas } from "@/lib/tms/plan-form-cambios";
+
+const PlanForm = dynamic(() => import("./plan-form"), {
+  loading: () => <p>Cargando formulario…</p>,
+});
+const EdicionRapida = dynamic(() => import("./edicion-rapida").then((m) => m.EdicionRapida), {
+  loading: () => <p>Cargando edición rápida…</p>,
+});
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — tras CERRAR un viaje, Programación
