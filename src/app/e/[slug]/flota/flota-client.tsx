@@ -20,7 +20,7 @@ import { avisoEdicionOtraEmpresa, MENSAJE_SOLO_EMPRESA_DUENA } from "@/lib/flota
 import {
   estiloAlertaKm,
   kmPendienteServicio,
-} from "@/lib/flota/import-excel";
+} from "@/lib/flota/alertas-km";
 import { KM_INTERVALO_SERVICIO_DEFAULT } from "@/lib/flota/constants";
 import { etiquetaEmpresaVehiculo } from "@/lib/flota/empresas-alias";
 import {
