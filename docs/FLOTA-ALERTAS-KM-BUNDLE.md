@@ -2,7 +2,7 @@
 
 ## Alcance
 
-BASE inicial: `ce201191b2a6f01b923c273ec29a2710b604b776`.
+BASE actualizada y validada: `63531dbc44784463a0496919625e6550597eeb66`.
 Rama: `codex/flota-alertas-km-ligero`.
 
 Solo se trasladan `kmPendienteServicio` y `estiloAlertaKm` a
@@ -12,11 +12,12 @@ compatibles y su import original de ExcelJS para las operaciones Excel.
 No se modificaron rutas API, hooks, permisos, cálculos, textos, clases,
 estado, datos, dependencias, configuración, SQL ni migraciones.
 
-Durante la validación main avanzó a
-`63531dbc44784463a0496919625e6550597eeb66` mediante #485
-(Programación/Planes), sin solapamiento con los archivos de este ajuste.
-No se integró ese cambio en esta rama: la comparación corresponde a la BASE inicial,
-no a una nueva validación del código de #485.
+Main se incorporó con merge normal, sin rebase ni conflictos:
+`e570585aa1741aac093a2aa17c63b912a9152ebd`.
+Padres: `f96a97e4d736124496bed7ad36aadb8a259113b2` y
+`63531dbc44784463a0496919625e6550597eeb66`.
+Los 48 archivos de #485 (Programación/Planes) están idénticos a la nueva BASE.
+El diff de #487 sigue limitado a sus cinco archivos; cero commits detrás.
 
 ## Equivalencia
 
@@ -42,9 +43,9 @@ El default de 5000 continúa perteneciendo al caller.
 ## Bundle BASE / HEAD
 
 Build local Next 16.3.6, Node 24.18.0, npm 11.16.0.
-Se reutilizó el build BASE existente cuyo árbol Git coincide exactamente
-con BASE (`2b74d443dd0b4b814970383d1b34598f867c0ef7`).
-HEAD se compiló de nuevo con las mismas versiones de dependencias, sin .env productivo.
+BASE y HEAD se compilaron de nuevo en worktrees separados con las mismas
+versiones de dependencias, sin .env productivo. No se reutilizaron los
+artefactos de la comparación anterior para estas mediciones.
 
 Se inspeccionó
 `.next/server/app/e/[slug]/flota/page_client-reference-manifest.js`:
@@ -79,8 +80,8 @@ observados en Hostinger ni una medición de latencia productiva.
 
 - Nuevas: 25/25.
 - Dirigidas Flota (lib/componentes/página/API): 576 pass / 0 fail / 72 skip.
-- Completa BASE exacta: 10737 pass / 22 fail / 599 skip.
-- Completa HEAD: 10762 pass / 22 fail / 599 skip.
+- Completa BASE nueva exacta: 10815 pass / 22 fail / 599 skip.
+- Completa HEAD actualizado: 10840 pass / 22 fail / 599 skip.
 - Comando completo: `node node_modules/vitest/vitest.mjs run --maxWorkers=4 --reporter=json`.
 - Comparación de fallos por archivo + fullName + primera línea del mensaje:
   idénticos; cero nuevos y cero eliminados.
@@ -89,8 +90,12 @@ observados en Hostinger ni una medición de latencia productiva.
   `react-hooks/set-state-in-effect` en 529, 533, 590, 931, 946, 963, 974 y 994;
   comparación BASE/HEAD de regla, línea, columna, mensaje y severidad idéntica.
   No se intentó corregirlos ni deshabilitarlos.
-- Build: OK, con los cuatro warnings de tracing existentes fuera del alcance.
-- TypeScript independiente (`tsc --noEmit`) y diff-check: OK.
+- Builds BASE/HEAD: exit 0, con los cuatro warnings de tracing existentes fuera del alcance.
+- TypeScript independiente (`tsc --noEmit`) BASE/HEAD: exit 0; diff-check: OK.
+
+La primera ejecución del pipeline BASE terminó con error nativo de Windows
+`-1073741819` después de generar los artefactos. No se contó como aprobada:
+la repetición aislada confirmó build y TypeScript con exit 0, sin cambios de código.
 
 Los 22 fallos heredados incluyen guards antiguos de Compras sensibles al diff,
 unzip ausente en Windows, contratos de fuente de RRHH/centro logístico/
