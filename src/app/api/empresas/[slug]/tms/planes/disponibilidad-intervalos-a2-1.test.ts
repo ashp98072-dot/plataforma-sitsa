@@ -36,8 +36,9 @@ import { emularConsultaConflictoPersonal, type ModeloPersonal, type PlanModelo }
 import { primerConflictoProgramacionIntervalo } from "@/lib/tms/disponibilidad-programacion-intervalos";
 import { POST, PATCH } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
-const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
+const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify({ vehiculoSolicitadoPerfilId: 1, ...(body as object) }) }), ctx);
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 const sumarDias = (fecha: string, n: number) => { const d = new Date(`${fecha}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const D0 = sumarDias(hoyLocal(), 10); // día base futuro (PATCH no edita el pasado)

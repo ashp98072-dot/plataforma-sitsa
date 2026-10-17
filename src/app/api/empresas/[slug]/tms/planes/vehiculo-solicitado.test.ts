@@ -133,11 +133,32 @@ describe("POST — crear viaje con vehículo solicitado", () => {
     expect(insertPlan()).toBeUndefined();
   });
 
-  it("sin vehículo solicitado el INSERT es el de siempre (no nombra las columnas nuevas)", async () => {
-    const res = await post({ fechaPlan: FECHA, horaCarga: "08:00" });
-    expect(res.status).toBe(200);
-    expect(insertPlan()![0]).not.toContain("vehiculo_solicitado");
+  it("OBLIGATORIO: sin vehículo solicitado (viaje propio) se rechaza con error de campo y no se escribe nada", async () => {
+    const res = await post({ fechaPlan: FECHA, horaCarga: "08:00", pilotoNombre: "Piloto Uno" });
+    expect(res.status).toBe(400);
+    const cuerpo = await res.json();
+    expect(cuerpo.error).toBe("Selecciona el vehículo solicitado por el cliente.");
+    expect(cuerpo.errores).toEqual([expect.objectContaining({ campo: "vehiculoSolicitadoPerfilId" })]);
+    expect(insertPlan()).toBeUndefined();
     expect(consultasPerfiles()).toHaveLength(0);
+  });
+
+  it("OBLIGATORIO: sin vehículo solicitado (viaje TERCERIZADO) también se rechaza", async () => {
+    const res = await post({
+      fechaPlan: FECHA, horaCarga: "08:00", tipoViaje: "Tercerizado",
+      pilotoExternoNombre: "Juan Externo", unidadExternaPlaca: "EXT-1", transportistaExterno: "Transportes X",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("Selecciona el vehículo solicitado por el cliente.");
+    expect(insertPlan()).toBeUndefined();
+  });
+
+  it("OBLIGATORIO: null, 0 o un valor no numérico tampoco cuentan como vehículo", async () => {
+    for (const v of [null, 0, "11"]) {
+      const res = await post({ fechaPlan: FECHA, horaCarga: "08:00", vehiculoSolicitadoPerfilId: v });
+      expect(res.status).toBe(400);
+    }
+    expect(insertPlan()).toBeUndefined();
   });
 });
 
@@ -179,15 +200,12 @@ describe("PATCH — editar vehículo solicitado (independiente de unidad/tarifa)
     expect(updatePlan()![0]).not.toContain("vehiculo_solicitado");
   });
 
-  it("null lo quita; el mismo valor actual no reescribe nada", async () => {
-    expect((await patch({ id: 5, vehiculoSolicitadoPerfilId: null })).status).toBe(200);
-    const [, params] = updatePlan()!;
-    const sql = updatePlan()![0];
-    const i = (sql.slice(0, sql.indexOf("vehiculo_solicitado_perfil_id = ?")).match(/\?/g) ?? []).length;
-    expect(params.slice(i, i + 2)).toEqual([null, null]);
+  it("ya NO se puede quitar (null): se rechaza; el mismo valor actual no reescribe nada", async () => {
+    const quitar = await patch({ id: 5, vehiculoSolicitadoPerfilId: null });
+    expect(quitar.status).toBe(400);
+    expect((await quitar.json()).error).toBe("Selecciona el vehículo solicitado por el cliente.");
+    expect(updatePlan()).toBeUndefined();
 
-    conexion = crearConexion();
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conexion) } as never);
     expect((await patch({ id: 5, vehiculoSolicitadoPerfilId: 11 })).status).toBe(200);
     expect(updatePlan()![0]).not.toContain("vehiculo_solicitado_perfil_id = ?");
   });
@@ -218,6 +236,71 @@ describe("PATCH — editar vehículo solicitado (independiente de unidad/tarifa)
   it("no se mezcla con el cambio de tipo de viaje (flujo aislado): 400 si llegan juntos", async () => {
     const res = await patch({ id: 5, tipoViaje: "Tercerizado", vehiculoSolicitadoPerfilId: 12 });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("PATCH — vehículo solicitado OBLIGATORIO al guardar cambios (históricos)", () => {
+  const historico = () => { vsActual = { vehiculo_solicitado_perfil_id: null, vehiculo_solicitado_nombre: null }; };
+
+  it("editar un viaje CON vehículo sin tocar el campo es válido (no se envía ni se revalida)", async () => {
+    expect((await patch({ id: 5, tarifaComercial: 1300 })).status).toBe(200);
+    expect(updatePlan()![0]).not.toContain("vehiculo_solicitado");
+  });
+
+  it("histórico sin vehículo: editar cualquier dato SIN seleccionarlo se rechaza y no escribe", async () => {
+    historico();
+    for (const cuerpo of [{ tarifaComercial: 1300 }, { notas: "x" }, { horaCarga: "09:00" }]) {
+      const res = await patch({ id: 5, ...cuerpo });
+      expect(res.status).toBe(400);
+      expect((await res.json()).errores).toEqual([expect.objectContaining({ campo: "vehiculoSolicitadoPerfilId" })]);
+    }
+    expect(updatePlan()).toBeUndefined();
+  });
+
+  it("histórico sin vehículo: seleccionar uno y guardar es válido y guarda id + fotografía del nombre", async () => {
+    historico();
+    const res = await patch({ id: 5, tarifaComercial: 1300, vehiculoSolicitadoPerfilId: 12 });
+    expect(res.status).toBe(200);
+    const [sql, params] = updatePlan()!;
+    expect(sql).toContain("vehiculo_solicitado_perfil_id = ?, vehiculo_solicitado_nombre = ?");
+    expect(params).toContain(12);
+    expect(params).toContain("Camión 5 toneladas");
+  });
+
+  it("histórico: el perfil elegido debe existir, ser de ESTA empresa y estar activo", async () => {
+    historico();
+    for (const id of [99, 13, 12345]) expect((await patch({ id: 5, vehiculoSolicitadoPerfilId: id })).status).toBe(400);
+    expect(updatePlan()).toBeUndefined();
+  });
+
+  it("las transiciones «Cargado» y «Cancelar» NO son ediciones: no se bloquean por la falta histórica", async () => {
+    historico();
+    expect((await patch({ id: 5, estado: "Cargado" })).status).toBe(200);
+    conexion = crearConexion();
+    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conexion) } as never);
+    expect((await patch({ id: 5, estado: "Cancelado" })).status).toBe(200);
+  });
+
+  it("estados donde el campo está bloqueado no lo exigen (En ruta sin llegada solo admite notas)", async () => {
+    historico();
+    planActual = { ...planActual, estado: "En ruta", pendiente_cierre: 0 };
+    expect((await patch({ id: 5, notas: "solo notas" })).status).toBe(200);
+    planActual = { ...planActual, estado: "En ruta", pendiente_cierre: 1 };
+    expect((await patch({ id: 5, tarifaComercial: 1300 })).status).toBe(400); // pendiente de cierre: el campo SÍ es editable => se exige
+  });
+
+  it("la simple consulta (GET) de un histórico sin vehículo no se bloquea", async () => {
+    historico();
+    vi.mocked(query).mockImplementation((async (sql: string) => String(sql).includes("LEFT JOIN tms_clientes c")
+      ? [{ id: 5, codigo: "PLAN-5", fecha_plan: FECHA, estado: "Programado", vehiculo_solicitado_perfil_id: null, vehiculo_solicitado_nombre: null }] : []) as never);
+    const res = await GET(new Request(`http://x/api?fechaDesde=${FECHA}&fechaHasta=${FECHA}`), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).planes[0].vehiculo_solicitado_nombre).toBeNull();
+  });
+
+  it("sin la migración (columna inexistente) el PATCH sigue como siempre: no hay dónde guardar el dato", async () => {
+    sinColumnas = true;
+    expect((await patch({ id: 5, tarifaComercial: 1300 })).status).toBe(200);
   });
 });
 

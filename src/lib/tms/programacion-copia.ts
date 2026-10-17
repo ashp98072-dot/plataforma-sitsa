@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2";
+import { esColumnaInexistente } from "./vehiculo-solicitado-db";
 import { query } from "@/lib/db";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { listarParadasDePlanes, type ParadaInput } from "@/lib/tms/paradas";
@@ -180,11 +181,25 @@ export async function borradoresDesdeCliente(
   if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
   const origenPorId = new Map(validos.map((v) => [Number(v.id), v])); // hora_carga y regreso del ORIGEN (nunca del cliente)
+  // Vehículo solicitado del ORIGEN (lectura aparte: si la migración aún no está aplicada, no hay dato que heredar y la copia sigue como siempre).
+  const vehiculoOrigen = new Map<number, number>();
+  if (origenIds.length) {
+    try {
+      const vs = await query<RowDataPacket[]>(
+        `SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje WHERE empresa_id = ? AND id IN (${origenIds.map(() => "?").join(",")})`,
+        [empresaId, ...origenIds],
+      );
+      for (const v of vs) if (v.vehiculo_solicitado_perfil_id != null) vehiculoOrigen.set(Number(v.id), Number(v.vehiculo_solicitado_perfil_id));
+    } catch (e) {
+      if (!esColumnaInexistente(e)) throw e;
+    }
+  }
   return {
     ok: true,
     borradores: filas.map((f) => ({
       ...f,
       ...trasladoDeOrigen(fechaOrigen, origenPorId.get(f.origenPlanId as number)?.hora_carga, origenPorId.get(f.origenPlanId as number)?.regreso_estimado), // del ORIGEN en servidor, nunca del cliente
+      vehiculoSolicitadoPerfilId: vehiculoOrigen.get(f.origenPlanId as number) ?? null, // del ORIGEN en servidor, nunca del cliente
       paradas: (paradasMap.get(f.origenPlanId as number) ?? []).map((pp) => ({
         lugarNombre: String(pp.lugar_nombre), tipo: String(pp.tipo), requiereEvidencia: Boolean(pp.requiere_evidencia),
       })),

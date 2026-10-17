@@ -39,8 +39,9 @@ import { guardarParadasPlan } from "@/lib/tms/paradas";
 import { upsertLugar } from "@/lib/tms/plan-comunes";
 import { PATCH, POST } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt" }) };
-const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
+const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify({ vehiculoSolicitadoPerfilId: 1, ...(body as object) }) }), ctx);
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 const FECHA = "2026-12-15";
 const IDS_LUGAR: Record<string, number> = { "BODEGAS CALSA, ZONA 12": 11, "CD WALMART, VILLA NUEVA": 21, "CD WALMART, VILLA NUEVA 2": 22, "BODEGA NUEVA": 12, "DESCARGA B2": 23 };

@@ -1,4 +1,5 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import { resolverVehiculoSolicitado } from "./vehiculo-solicitado-db";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { hoyLocal } from "@/lib/rrhh/dates";
@@ -87,6 +88,12 @@ export type BorradorLote = {
   externo: ExternoLote | null;
   /** Las pone el SERVIDOR (desde el plan origen); nunca se aceptan del cliente. */
   paradas: ParadaInput[];
+  /**
+   * VEHÍCULO SOLICITADO — lo pone el SERVIDOR desde el plan origen (nunca el cliente). La copia hereda lo que el cliente pidió en el viaje origen
+   * SOLO si ese perfil sigue activo en esta empresa; un origen histórico sin dato produce una copia sin dato (no se inventa) que, al editarse
+   * en Programación, exigirá elegir uno.
+   */
+  vehiculoSolicitadoPerfilId?: number | null;
 };
 
 export type TarifaResuelta = { id: number; nombre: string; monto: number; moneda: string };
@@ -522,6 +529,16 @@ export async function confirmarLote(
               ],
             );
             planId = Number(ins.insertId);
+            // Hereda el vehículo solicitado del origen (perfil de ESTA empresa y activo) con su fotografía NUEVA del nombre; misma transacción.
+            if (b.vehiculoSolicitadoPerfilId) {
+              const heredado = await resolverVehiculoSolicitado(empresaId, b.vehiculoSolicitadoPerfilId);
+              if (heredado) {
+                await conn.execute(
+                  `UPDATE tms_planes_viaje SET vehiculo_solicitado_perfil_id = ?, vehiculo_solicitado_nombre = ? WHERE id = ? AND empresa_id = ?`,
+                  [heredado.id, heredado.nombre, planId, empresaId],
+                );
+              }
+            }
           } catch (errInsert) {
             // PROGRAMACION-COPIA-LOTE-TX-1 — SOLO una colisión real del UNIQUE KEY (empresa_id, codigo) reintenta
             // con otro código. Cualquier otro error del INSERT (FK, dato inválido, timeout, esquema…) se propaga

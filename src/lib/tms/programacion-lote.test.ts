@@ -254,6 +254,24 @@ describe("motor: creación por lote (feliz)", () => {
     expect(creadosDestino().filter((p) => p.ruta_id === 10)).toHaveLength(2);
   });
 
+  it("VEHÍCULO SOLICITADO: la copia hereda el del origen (perfil activo de la empresa, nombre fotografiado de nuevo) y NO inventa uno si el origen no lo tenía o ya no está activo", async () => {
+    const base = vi.mocked(query).getMockImplementation()!;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[] = []) => {
+      if (String(sql).includes("FROM tms_cotizacion_costeo_perfiles")) return (params as number[])[1] === 11 && params[0] === EMP ? [{ id: 11, nombre: "Camión 2.5 toneladas" }] : [];
+      return base(sql, params as never);
+    }) as never);
+    const r = await confirmar([
+      borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1, vehiculoSolicitadoPerfilId: 11 }),
+      borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3, vehiculoSolicitadoPerfilId: null }), // origen histórico sin dato
+      borrador({ fila: 3, origenPlanId: 902, unidadPlaca: null, pilotoEmpleadoId: 4, vehiculoSolicitadoPerfilId: 99 }), // perfil ya no activo / de otra empresa
+    ]);
+    expect(r.ok).toBe(true);
+    const updates = conn.execute.mock.calls.filter((c) => String(c[0]).includes("SET vehiculo_solicitado_perfil_id"));
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toEqual([11, "Camión 2.5 toneladas", creadosDestino()[0].id, EMP]);
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
+
   it("límites: máximo 8 auxiliares y máximo de filas por lote", async () => {
     const nueve = await validarLote(EMP, DESTINO, [borrador({ auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27, 28] })]);
     expect(nueve[0].errores.join(" ")).toContain("Máximo 8 auxiliares");

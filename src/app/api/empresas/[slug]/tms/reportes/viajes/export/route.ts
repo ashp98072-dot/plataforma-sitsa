@@ -15,6 +15,9 @@ import { badgeLiquidacion } from "@/lib/tms/liquidacion-viaje-shared";
 import { ETIQUETA_SUBTOTAL_COMERCIAL } from "@/lib/tms/resumen-liquidacion-shared";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { nombreArchivoPlanesViajes, planesViajesAExcel } from "@/lib/tms/planes-viajes-excel";
+import { cuadrillaDePlanes } from "@/lib/tms/cuadrilla";
+import type { IntegranteCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -163,6 +166,29 @@ export async function GET(req: Request, ctx: Ctx) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="reporte-viajes-${fecha}.pdf"`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  }
+
+  // PLANES / VIAJES — libro formateado (una fila por viaje, TODO el filtro) para el botón «Exportar Excel» de Planes / Viajes. El libro de «Reportes»
+  // (abajo) no cambia. Misma autorización (programacion:exportar), mismos filtros y mismos límites de volumen que el resto de este exportador.
+  if (url.searchParams.get("vista") === "planes") {
+    const cuadrillaPorPlan = new Map<number, IntegranteCuadrilla[]>();
+    try {
+      for (let i = 0; i < planes.length; i += 500) {
+        const lote = await cuadrillaDePlanes(guard.empresa.id, planes.slice(i, i + 500).map((p) => p.id));
+        for (const [id, c] of lote) cuadrillaPorPlan.set(id, c);
+      }
+    } catch (e) {
+      // Instalación sin la tabla de cuadrilla: la columna sale vacía (no se rompe la exportación).
+      if ((e as { code?: string })?.code !== "ER_NO_SUCH_TABLE") throw e;
+    }
+    const buffer = await planesViajesAExcel(planes, cuadrillaPorPlan);
+    return new NextResponse(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${nombreArchivoPlanesViajes(filtros, fecha)}"`,
         "Cache-Control": "private, no-store",
       },
     });

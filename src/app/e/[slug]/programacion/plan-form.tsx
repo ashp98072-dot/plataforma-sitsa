@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
@@ -30,8 +30,10 @@ import { filtrarElegibles, type HabilitacionOp } from "@/lib/tms/personal-elegib
 import {
   AYUDA_VEHICULO_SOLICITADO,
   cambioVehiculoSolicitado,
+  exigeVehiculoSolicitadoAlEditar,
   ETIQUETA_VEHICULO_SOLICITADO,
   ETIQUETA_VEHICULO_SOLICITADO_LARGA,
+  MSG_VEHICULO_SOLICITADO_OBLIGATORIO,
   opcionesVehiculoSolicitado,
   textoVehiculoSolicitado,
   type VehiculoSolicitadoOpcion,
@@ -527,6 +529,9 @@ export default function PlanForm({
   const [error, setError] = useState("");
   // Errores de validación estructurados del servidor ("Parada 2 — Lugar: es obligatorio.").
   const [errores, setErrores] = useState<ErrorFormulario[]>([]);
+  // VEHÍCULO SOLICITADO OBLIGATORIO — error junto al campo (cliente) y foco; el servidor lo vuelve a exigir.
+  const [errorVehiculo, setErrorVehiculo] = useState("");
+  const vehiculoRef = useRef<HTMLSelectElement | null>(null);
   // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea: si al
   // guardar se detecta que alguna persona (re)asignada ya tiene un
   // viático RECHAZADO para ESTE MISMO plan, se muestra aparte (no dentro
@@ -963,6 +968,8 @@ export default function PlanForm({
   // (bloqueado = false); además se ofrece la acción de cierre si el
   // usuario tiene el permiso.
   const pendienteCierre = esEdicion && Boolean(plan!.pendiente_cierre);
+  // Mensaje junto al campo: el de esta validación local o el que devolvió el servidor para ese campo.
+  const msgVehiculo = errorVehiculo || errores.find((x) => x.campo === "vehiculoSolicitadoPerfilId")?.mensaje || "";
   const yaCerrado = esEdicion && plan!.estado === "Cerrado";
   // OPS-3.2b/c/d — reconciliación administrativa pre-cierre: mientras el
   // plan está "En ruta" sin llegada registrada, sigue tan bloqueado como
@@ -1118,8 +1125,17 @@ export default function PlanForm({
     if (saving || bloqueado) return;
     setError("");
     setErrores([]);
+    setErrorVehiculo("");
     setMsg("");
     setAvisosRechazoPlan([]);
+    // VEHÍCULO SOLICITADO OBLIGATORIO (Propio y Tercerizado): no depende solo del `required` HTML. En edición solo se exige donde el campo es editable
+    // (Programado/Cargado/pendiente de cierre); un viaje histórico sin dato se puede abrir y consultar, pero para guardar hay que elegir uno.
+    const exigeVehiculo = !esEdicion || exigeVehiculoSolicitadoAlEditar(plan!.estado, pendienteCierre);
+    if (exigeVehiculo && !(form.vehiculoSolicitadoPerfilId > 0)) {
+      setErrorVehiculo(MSG_VEHICULO_SOLICITADO_OBLIGATORIO);
+      vehiculoRef.current?.focus();
+      return;
+    }
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
       .map((p) => ({
@@ -1203,7 +1219,7 @@ export default function PlanForm({
             // tarifa del catálogo elegida; el backend snapshotea nombre/
             // monto/moneda en el viaje.
             tarifaId: form.tarifaId > 0 ? form.tarifaId : undefined,
-            vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId > 0 ? form.vehiculoSolicitadoPerfilId : undefined,
+            vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1837,15 +1853,19 @@ export default function PlanForm({
       {/* PROGRAMACION-VEHICULO-SOLICITADO — dato COMERCIAL del viaje (Propio y Tercerizado), distinto de la Unidad.
           Mismo gate pre-cierre que la tarifa comercial. Cambiarlo no toca la unidad ni la tarifa (ni viceversa). */}
       <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        {ETIQUETA_VEHICULO_SOLICITADO_LARGA}
+        {ETIQUETA_VEHICULO_SOLICITADO_LARGA} <span aria-hidden="true">*</span>
         <select
           className={`${inputCls} mt-1 w-full`}
           value={form.vehiculoSolicitadoPerfilId}
           disabled={bloqueadoParaPreCierre || bloqueado}
-          aria-describedby="ayuda-vehiculo-solicitado"
-          onChange={(e) => setForm((f) => ({ ...f, vehiculoSolicitadoPerfilId: Number(e.target.value) }))}
+          aria-describedby={msgVehiculo ? "ayuda-vehiculo-solicitado error-vehiculo-solicitado" : "ayuda-vehiculo-solicitado"}
+          ref={vehiculoRef}
+          required
+          aria-required="true"
+          aria-invalid={msgVehiculo ? true : undefined}
+          onChange={(e) => { setErrorVehiculo(""); setForm((f) => ({ ...f, vehiculoSolicitadoPerfilId: Number(e.target.value) })); }}
         >
-          <option value={0}>— Sin especificar —</option>
+          <option value={0}>— Selecciona el vehículo solicitado —</option>
           {opcionesVehiculoSolicitado(vehiculosSolicitables, {
             id: plan?.vehiculo_solicitado_perfil_id ?? null,
             nombre: plan?.vehiculo_solicitado_nombre ?? null,
@@ -1858,6 +1878,10 @@ export default function PlanForm({
         <span id="ayuda-vehiculo-solicitado" className="mt-0.5 block text-[10px]">
           {AYUDA_VEHICULO_SOLICITADO}
         </span>
+        {esEdicion && !plan!.vehiculo_solicitado_perfil_id && form.vehiculoSolicitadoPerfilId === 0 && !msgVehiculo && exigeVehiculoSolicitadoAlEditar(plan!.estado, pendienteCierre) ? (
+          <span className="mt-0.5 block text-[10px] text-amber-500">Este viaje es anterior a esta regla y no tiene vehículo solicitado: selecciónalo para poder guardar cambios.</span>
+        ) : null}
+        {msgVehiculo ? <span id="error-vehiculo-solicitado" role="alert" className="mt-0.5 block text-[11px] font-medium text-red-500">{msgVehiculo}</span> : null}
       </label>
 
       {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a

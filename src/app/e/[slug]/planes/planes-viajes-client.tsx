@@ -567,6 +567,37 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
   const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
 
+  // PLANES / VIAJES — «Exportar Excel»: el servidor exporta TODO el filtro actual (incluida la pestaña Pendientes/Activos o Cerrados), no solo la página
+  // visible. Se descarga con fetch para mostrar aquí los errores (sin permiso, demasiados viajes sin acotar) en vez de abrir un JSON en otra pestaña.
+  const [exportando, setExportando] = useState(false);
+  const [errorExportar, setErrorExportar] = useState("");
+  const exportarExcel = useCallback(async () => {
+    setExportando(true);
+    setErrorExportar("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&vista=planes&${filtrosQueryString().toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorExportar(data.error ?? "No se pudo exportar a Excel.");
+        return;
+      }
+      const blob = await res.blob();
+      const nombre = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "planes-viajes.xlsx";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nombre;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorExportar("Error de conexión al exportar.");
+    } finally {
+      setExportando(false);
+    }
+  }, [slug, filtrosQueryString]);
+
   // Selección de viajes (checkbox). Declarada ANTES de `cargar`, que la limpia en cada carga.
   const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const cargar = useCallback(async (paginaSolicitada = page) => {
@@ -1226,6 +1257,20 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             </>
           ) : null}
         </div>
+        {!esReporte ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white disabled:opacity-60"
+              disabled={exportando}
+              onClick={() => void exportarExcel()}
+              title="Exporta a Excel todos los viajes que coinciden con los filtros y la pestaña actuales (no solo la página visible)."
+            >
+              {exportando ? "Exportando…" : "Exportar Excel"}
+            </button>
+            {errorExportar ? <span role="alert" className="text-xs text-red-500">{errorExportar}</span> : null}
+          </div>
+        ) : null}
         {/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación solo en la vista
             de Reportes (Reportes = análisis + exportaciones). */}
         {esReporte ? (

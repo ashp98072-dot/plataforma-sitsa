@@ -37,6 +37,7 @@ import { guardarParadasPlan } from "@/lib/tms/paradas";
 import { upsertLugar } from "@/lib/tms/plan-comunes";
 import { PATCH } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt" }) };
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 const FECHA = "2026-12-15";
