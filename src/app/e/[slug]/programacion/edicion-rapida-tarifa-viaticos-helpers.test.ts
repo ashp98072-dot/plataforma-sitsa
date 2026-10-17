@@ -10,9 +10,12 @@ import {
   errorAntesDeEnviar,
   motivoNoEditable,
   motivoNoEditableTarifa,
+  montoTarifaManualDesdeTexto,
   opcionesTarifa,
   puedeEditarTarifa,
   puedeEditarViaticos,
+  puedeValidar,
+  puedeGuardar,
   tieneRutaConTarifas,
   recursosInternosBloqueados,
   snapshotEsperado,
@@ -71,6 +74,75 @@ describe("Edición rápida (UI) — tarifa histórica", () => {
     expect(cuerpo.cambios[1].nuevo.tarifaComercial).toBe(0);
     expect(cuerpo.cambios[0].esperado.fechaPlan).toBe("2026-09-23");
     expect(validarEdicionRapidaSchema.safeParse(cuerpo).success).toBe(true);
+  });
+});
+
+describe("Tarifa manual — sincronización al escribir", () => {
+  const historico = () => plan({ fecha_plan: "2026-09-23" });
+  const escribir = (b: Borrador, p: PlanEdicionRapida, texto: string) =>
+    editarRecursos(b, p, { tarifaId: null, tarifaComercial: montoTarifaManualDesdeTexto(texto) });
+
+  it("seleccionar manual sin monto mantiene input vacío/pending y explica el bloqueo", () => {
+    const p = historico();
+    const b = editarRecursos(vacio(), p, { tarifaId: null, tarifaComercial: TARIFA_MANUAL_PENDIENTE });
+    expect(tarifaEfectiva(b, p).monto).toBeNaN();
+    expect(errorAntesDeEnviar(b, "Ajuste")).toBe("Falta el monto de la tarifa manual.");
+    expect(puedeValidar(b, "Ajuste", false)).toBe(false);
+    expect(puedeGuardar(b, "Ajuste", new Map(), false)).toBe(false);
+  });
+
+  it.each(["1600", "0", "0.00"])("escribir %s actualiza el borrador y habilita botones sin blur", (texto) => {
+    const b = escribir(vacio(), historico(), texto);
+    expect(cambiosDelBorrador(b)[0].nuevo.tarifaComercial).toBe(Number(texto));
+    expect(errorAntesDeEnviar(b, "Ajuste")).toBeNull();
+    expect(puedeValidar(b, "Ajuste", false)).toBe(true);
+    expect(puedeGuardar(b, "Ajuste", new Map(), false)).toBe(true);
+  });
+
+  it("cada tecla 1 → 16 → 160 → 1600 sincroniza sin perder el snapshot", () => {
+    const p = historico();
+    let b: Borrador = editarRecursos(vacio(), p, { tarifaId: null, tarifaComercial: TARIFA_MANUAL_PENDIENTE });
+    const esperado = b.get(p.id)!.esperado;
+    for (const texto of ["1", "16", "160", "1600"]) {
+      b = escribir(b, p, texto);
+      expect(b.get(p.id)!.nuevo.tarifaComercial).toBe(Number(texto));
+      expect(b.get(p.id)!.esperado).toBe(esperado);
+      expect(puedeValidar(b, "Ajuste", false)).toBe(true);
+    }
+  });
+
+  it("borrar todo vuelve a pendiente; nunca convierte vacío a cero", () => {
+    const p = historico();
+    const b = escribir(escribir(vacio(), p, "1600"), p, "");
+    expect(b.get(p.id)!.nuevo.tarifaComercial).toBeNaN();
+    expect(errorAntesDeEnviar(b, "Ajuste")).toBe("Falta el monto de la tarifa manual.");
+    expect(puedeValidar(b, "Ajuste", false)).toBe(false);
+  });
+
+  it("mantiene mensajes de motivo y monto inválido desde la fuente única", () => {
+    expect(errorAntesDeEnviar(escribir(vacio(), historico(), "1600"), " ")).toBe("Indica el motivo del cambio.");
+    for (const texto of ["-1", "10.555"]) {
+      expect(errorAntesDeEnviar(escribir(vacio(), historico(), texto), "Ajuste")).toMatch(/monto de tarifa manual inválido/);
+    }
+  });
+
+  it("catálogo e histórico conservan la regla solo tarifa", () => {
+    const p = historico();
+    const b = editarRecursos(escribir(vacio(), p, "1600"), p, { tarifaId: 61 });
+    expect(tarifaEfectiva(b, p).tipo).toBe("catalogo");
+    expect(cambiosDelBorrador(b)[0].nuevo.tarifaComercial).toBeUndefined();
+    expect(puedeValidar(b, "Ajuste", false)).toBe(true);
+    expect(motivoNoEditableTarifa(p, HOY)).toBeNull();
+    expect(motivoNoEditable(p, HOY)).toBe("Histórico");
+  });
+
+  it("editar una fila no modifica el monto pendiente de otra", () => {
+    const p = historico();
+    const otro = plan({ id: 2 });
+    const b = escribir(escribir(vacio(), otro, ""), p, "1600");
+    expect(b.get(p.id)!.nuevo.tarifaComercial).toBe(1600);
+    expect(b.get(otro.id)!.nuevo.tarifaComercial).toBeNaN();
+    expect(puedeValidar(b, "Ajuste", false)).toBe(false);
   });
 });
 
