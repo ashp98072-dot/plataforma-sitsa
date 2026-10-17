@@ -706,6 +706,42 @@ export function requireTenantViajesCargosAdicionales(slug: string, accion: Accio
 }
 
 /**
+ * CUENTAS POR PAGAR (M-3A) — guard común de las filas `cxp_facturas`, `cxp_anular` y `cxp_proveedor_fiscal`: permiso EXPLÍCITO e independiente
+ * del rol (ningún rol lo trae por defecto; Admin pasa). Exige que la empresa tenga el módulo Contabilidad. Mismo patrón que
+ * requireTenantFilaLiquidacionViaje; nunca hay fallback a `contabilidad:editar` (quien registra CxC o asientos no puede mover CxP).
+ */
+export async function requireTenantCxp(
+  slug: string,
+  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal",
+  accion: AccionPermiso,
+  mensajeSinPermiso = "Sin permiso para Cuentas por pagar.",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("contabilidad")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Contabilidad." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+/**
  * Corrección de matriz de permisos — Programación deja de depender
  * exclusivamente de "tms": mismo patrón que requireTenantViajesCerrar
  * (permiso propio, permisosEfectivos ya trae el default por rol —
