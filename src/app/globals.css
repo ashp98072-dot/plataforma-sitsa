@@ -123,3 +123,22 @@ option {
 .fila-viaje[data-seleccionada="true"] > td:first-child {
   box-shadow: inset 4px 0 0 var(--accent);
 }
+
+/*
+ * PLANES / VIAJES — columnas fijas a la izquierda (SOLO escritorio ≥ 1024 px): Sel. (si existe), Código, Fecha y Cliente se quedan
+ * visibles mientras se desplaza la tabla horizontalmente. Anchos fijos para que los desplazamientos (left) sean exactos; la celda toma el fondo
+ * OPACO de su fila (normal / amarilla de liquidación pendiente / hover), por lo que nada se transparenta al pasar por debajo.
+ * Por debajo de 1024 px no se fija nada (se necesita el ancho). Las filas de grupo ocupan toda la fila (colSpan) y no se ven afectadas.
+ */
+@media (min-width: 1024px) {
+  .tabla-planes .col-fija { position: sticky; z-index: 2; background-clip: padding-box; }
+  .tabla-planes td.col-fija { background-color: inherit; background-image: inherit; }
+  .tabla-planes thead th.col-fija { z-index: 4; background-color: var(--thead); }
+  .tabla-planes .col-sel { left: 0; width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem; }
+  .tabla-planes .col-codigo { left: 0; width: 9.5rem; min-width: 9.5rem; max-width: 9.5rem; }
+  .tabla-planes .col-fecha { left: 9.5rem; width: 5.75rem; min-width: 5.75rem; max-width: 5.75rem; }
+  .tabla-planes .col-cliente { left: 15.25rem; width: 11rem; min-width: 11rem; max-width: 11rem; overflow-wrap: anywhere; box-shadow: 2px 0 0 var(--border); }
+  .tabla-planes[data-sel="1"] .col-codigo { left: 2.5rem; }
+  .tabla-planes[data-sel="1"] .col-fecha { left: 12rem; }
+  .tabla-planes[data-sel="1"] .col-cliente { left: 17.75rem; }
+}

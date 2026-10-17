@@ -38,7 +38,8 @@ import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
-import { ETIQUETA_VEHICULO_SOLICITADO, textoUnidadUtilizada, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { AYUDA_VEHICULO_SOLICITADO, ETIQUETA_VEHICULO_SOLICITADO, textoUnidadUtilizada, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { TablaConBarraHorizontal } from "@/components/tms/tabla-con-barra-horizontal";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -298,6 +299,9 @@ type ResultadoMasivoUI = Pick<ResultadoCierreMasivo, "tipo" | "solicitados" | "c
 };
 
 const ESTADOS = ["Programado", "Cargado", "En ruta", "Descargado", "Cerrado", "Cancelado"];
+
+/** Columnas fijadas a la izquierda en escritorio (ver `.tabla-planes` en globals.css). Solo estas cuatro; el resto se desplaza. */
+const CLASE_COLUMNA_FIJA: Record<string, string> = { "Sel.": "col-fija col-sel", "Código": "col-fija col-codigo", "Fecha": "col-fija col-fecha", "Cliente": "col-fija col-cliente" };
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -1069,7 +1073,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
   const columnas = [
     ...(mostrarSel ? ["Sel."] : []),
-    "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
+    "Código", "Fecha", "Cliente", "Ruta", ETIQUETA_VEHICULO_SOLICITADO, "Placa / Unidad", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
     "Evid.", "Tarifa usada", "Tarifa", "Cargos", "Subtotal com.", "Estado",
     // LIQUIDACIÓN (Fase 2): dimensión separada del estado del viaje; «—» = sin liquidación registrada (incluye el histórico).
@@ -1404,11 +1408,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
       </p>
 
       {/* Tabla */}
-      <section className="overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="min-w-[1400px] w-full text-left text-sm">
+      <TablaConBarraHorizontal className="rounded-xl border border-[var(--border)]">
+        <table className="tabla-planes min-w-[1400px] w-full text-left text-sm" data-sel={mostrarSel ? "1" : undefined}>
           <thead className="sticky top-0 z-10 bg-[var(--thead)] text-[var(--text)]">
             <tr>{columnas.map((c) => (
-              <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold" title={c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Cargos" ? "Cargos adicionales vigentes al cliente." : c === "Subtotal com." ? "Subtotal comercial antes de impuestos: tarifa base + cargos adicionales vigentes. No es el total de la factura (IVA pendiente) ni incluye costos internos." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
+              <th key={c} className={`whitespace-nowrap px-2 py-2 text-xs font-semibold ${CLASE_COLUMNA_FIJA[c] ?? ""}`} title={c === ETIQUETA_VEHICULO_SOLICITADO ? AYUDA_VEHICULO_SOLICITADO : c === "Placa / Unidad" ? "Unidad (placa) que realmente realiza el viaje; puede diferir del vehículo solicitado." : c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Cargos" ? "Cargos adicionales vigentes al cliente." : c === "Subtotal com." ? "Subtotal comercial antes de impuestos: tarifa base + cargos adicionales vigentes. No es el total de la factura (IVA pendiente) ni incluye costos internos." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
                 {c}
               </th>
             ))}</tr>
@@ -1490,7 +1494,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     data-seleccionada={seleccion.has(p.id) ? "true" : undefined}
                   >
                     {mostrarSel ? (
-                      <td className="px-2 py-1.5 text-xs">
+                      <td className="col-fija col-sel px-2 py-1.5 text-xs">
                         <input
                           type="checkbox"
                           aria-label={`Seleccionar ${p.codigo}`}
@@ -1500,14 +1504,14 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         />
                       </td>
                     ) : null}
-                    <td className="px-2 py-1.5 font-mono text-xs">{p.codigo}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
-                    <td className="px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
+                    <td className="col-fija col-codigo px-2 py-1.5 font-mono text-xs">{p.codigo}</td>
+                    <td className="col-fija col-fecha whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
+                    <td className="col-fija col-cliente px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.rutaCodigo ?? "—"}</td>
+                    {/* PROGRAMACION-VEHICULO-SOLICITADO — lo que pidió el cliente (fotografía guardada en el viaje); columna propia, distinta de la unidad real. */}
+                    <td className="px-2 py-1.5 text-xs" data-testid="celda-vehiculo-solicitado" title={AYUDA_VEHICULO_SOLICITADO}>{textoVehiculoSolicitado(p.vehiculoSolicitado)}</td>
                     <td className="px-2 py-1.5 text-xs">
                       {p.placa ?? "—"}
-                      {/* PROGRAMACION-VEHICULO-SOLICITADO — lo solicitado junto a la unidad realmente usada. */}
-                      <span className="block text-[10px] text-[var(--muted)]" title={ETIQUETA_VEHICULO_SOLICITADO}>Solicitado: {textoVehiculoSolicitado(p.vehiculoSolicitado)}</span>
                       {p.tcPlaca ? (
                         <span className="block text-[10px] text-[var(--muted)]" title={`${ETIQUETA_TC} (${etiquetaOrigenTc(p.tcOrigen)})`}>TC: {p.tcPlaca}</span>
                       ) : null}
@@ -1881,7 +1885,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             ) : null}
           </tbody>
         </table>
-      </section>
+      </TablaConBarraHorizontal>
 
       {/* CORRECCIÓN PR #112 (HALLAZGO 3): paginación server-side — el KPI
           de arriba SIEMPRE refleja todo el filtro, esta barra solo pagina
