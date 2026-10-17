@@ -140,9 +140,10 @@ describe("Planes / Viajes (contrato del reporte)", () => {
     expect(sqls[1]).toContain("p.tc_placa_historica");
     expect(p).toMatchObject({ vehiculoSolicitado: null, tcPlaca: "TC-1" });
   });
-  it("pantalla: tabla (bajo la placa), expediente y confirmación de cierre lo muestran", () => {
+  it("pantalla: tabla (columna propia), expediente y confirmación de cierre lo muestran", () => {
     const src = readFileSync("src/app/e/[slug]/planes/planes-viajes-client.tsx", "utf8");
-    expect(src).toContain("Solicitado: {textoVehiculoSolicitado(p.vehiculoSolicitado)}");
+    expect(src).toContain('data-testid="celda-vehiculo-solicitado"');
+    expect(src).not.toContain("Solicitado: {textoVehiculoSolicitado");
     expect(src).toContain("<li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(p.vehiculoSolicitado)}</li>");
     expect(src).toContain("<li>{ETIQUETA_VEHICULO_SOLICITADO}: {r.vehiculoSolicitado}</li>");
     expect(src).toContain("<li>Unidad utilizada: {r.unidadUtilizada}</li>");
