@@ -79,14 +79,31 @@ describe("backend: todos los caminos que crean/modifican viajes", () => {
     expect(ruta).toContain("esPatchDeEdicion(d) && exigeVehiculoSolicitadoAlEditar(antes.estado, antes.pendienteCierre)");
     expect(ruta).toContain("vehiculoEfectivoTrasPatch(d.vehiculoSolicitadoPerfilId, actualVehiculo.id) == null");
   });
-  it("copiar programación hereda el vehículo del ORIGEN en el servidor (nunca del cliente) y no inventa uno", () => {
+  it("copiar programación hereda el vehículo del ORIGEN en el servidor (nunca del cliente), lo valida ANTES de insertar y lo guarda en el mismo INSERT", () => {
     const copia = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
-    expect(copia).toContain("vehiculoSolicitadoPerfilId: vehiculoOrigen.get(f.origenPlanId as number) ?? null, // del ORIGEN en servidor, nunca del cliente");
-    expect(readFileSync("src/lib/tms/programacion-lote.ts", "utf8")).toContain("resolverVehiculoSolicitado(empresaId, b.vehiculoSolicitadoPerfilId)");
+    expect(copia).toContain("vehiculoSolicitadoPerfilId: vehiculoPorPlan.get(id) ?? null, // del ORIGEN en servidor");
+    const lote = readFileSync("src/lib/tms/programacion-lote.ts", "utf8");
+    expect(lote).toContain("vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
+    expect(lote).toContain("r.vehiculo!.id, r.vehiculo!.nombre");
+    expect(lote).not.toMatch(/UPDATE tms_planes_viaje\s+SET vehiculo_solicitado/); // nunca «crear sin vehículo y completar después»
   });
-  it("caminos que NO tocan el vehículo solicitado (documentados): edición rápida, importación Excel y alta desde solicitud de cliente", () => {
-    for (const f of ["src/lib/tms/edicion-rapida-guardar.ts", "src/lib/tms/programacion-import.ts", "src/lib/tms/solicitudes-cliente-operaciones.ts"]) {
-      expect(readFileSync(f, "utf8")).not.toContain("vehiculo_solicitado");
-    }
+  it("importación Excel: valida el vehículo en la vista previa y lo guarda (id + snapshot) en el mismo INSERT", () => {
+    const imp = readFileSync("src/lib/tms/programacion-import.ts", "utf8");
+    expect(imp).toContain("resolverVehiculoPorTexto(fila.vehiculoSolicitadoExcel, catalogoVehiculoSolicitado)");
+    expect(imp).toContain("listarVehiculosSolicitables(empresaId)");
+    expect(imp).toContain("vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
+    expect(imp).toContain("datos.vehiculoSolicitadoPerfilId,");
+    expect(imp).not.toMatch(/UPDATE tms_planes_viaje\s+SET vehiculo_solicitado/);
+  });
+  it("edición rápida: bloquea guardar un viaje histórico sin vehículo (mensaje fijo) y nunca escribe el campo", () => {
+    expect(readFileSync("src/lib/tms/edicion-rapida-validar.ts", "utf8")).toContain('"VEHICULO_SOLICITADO_FALTANTE", MSG_EDICION_RAPIDA_VEHICULO_FALTANTE');
+    expect(readFileSync("src/lib/tms/edicion-rapida-validar.ts", "utf8")).toContain("Este viaje debe completar el vehículo solicitado desde Programación antes de editarse.");
+    expect(readFileSync("src/lib/tms/edicion-rapida-guardar.ts", "utf8")).not.toContain("vehiculo_solicitado"); // no inventa ni asigna
+  });
+  it("alta desde solicitud de cliente: exige un perfil activo de la empresa y lo guarda en el INSERT del viaje", () => {
+    const op = readFileSync("src/lib/tms/solicitudes-cliente-operaciones.ts", "utf8");
+    expect(op).toContain("resolverVehiculoSolicitado(empresaId, vehiculoSolicitadoPerfilId)");
+    expect(op).toContain("vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
+    expect(op).toContain("MSG_VEHICULO_SOLICITADO_OBLIGATORIO");
   });
 });

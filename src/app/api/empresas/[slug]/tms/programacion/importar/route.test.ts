@@ -156,7 +156,7 @@ describe("POST /tms/programacion/importar — accion=validar", () => {
       filas: [{ filaExcel: 4, estado: "ok", errores: [], advertencias: [], datos: {
         rutaId: 10, rutaCodigo: "1001", clienteId: 5, clienteNombre: "Acme S.A.",
         pilotoEmpleadoId: 20, pilotoNombre: "Juan Pérez", pilotoPersonalId: null,
-        auxiliares: [], unidadPlaca: "P-123ABC", unidadId: null, tarifaVigente: 1500,
+        auxiliares: [], unidadPlaca: "P-123ABC", vehiculoSolicitadoPerfilId: 11, vehiculoSolicitadoNombre: "Camión 5 toneladas", unidadId: null, tarifaVigente: 1500,
         regresoEstimado: "2026-09-20T17:00", lugarCargaTexto: null, destinoDescripcion: null,
         contactoNombre: null, contactoCargo: null, contactoTelefono: null,
       } }],

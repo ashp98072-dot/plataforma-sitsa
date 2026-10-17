@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ execute: vi.fn(), getPool: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ guardarParadasPlan: vi.fn() }));
+// Catálogo de vehículo solicitado: solo el perfil 1 es válido (activo y de ESTA empresa); cualquier otro id no existe para ella.
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  resolverVehiculoSolicitado: vi.fn(async (empresaId: number, id: number) => (empresaId === 7 && id === 1 ? { id: 1, nombre: "Camión 2.5 toneladas" } : null)),
+}));
 vi.mock("@/lib/tms/codigo-plan", async () => {
   const actual = await vi.importActual<typeof import("@/lib/tms/codigo-plan")>("@/lib/tms/codigo-plan");
   // esDuplicadoCodigoPlan se mantiene REAL (compartida con programacion-lote.ts) — solo se mockea la generación.
@@ -209,7 +214,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
   });
 
   it("éxito: FOR UPDATE + INSERT plan + copia N paradas EN EL MISMO ORDEN + UPDATE solicitud + auditoría + commit (nunca rollback)", async () => {
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: true, planId: 900, planCodigo: "PLAN-20990115-001" });
 
     // SELECT ... FOR UPDATE de la solicitud.
@@ -253,12 +258,33 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
     expect(conn.release).toHaveBeenCalledOnce();
   });
 
+  it("VEHÍCULO SOLICITADO: el plan nace CON el vehículo elegido (id + nombre vigente) en el MISMO INSERT", async () => {
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
+    expect(r.ok).toBe(true);
+    const [sql, params] = conn.execute.mock.calls.find(([q]) => String(q).includes("INSERT INTO tms_planes_viaje"))! as unknown as [string, unknown[]];
+    expect(sql).toContain("estado, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
+    expect(params.slice(-2)).toEqual([1, "Camión 2.5 toneladas"]);
+    expect((sql.match(/\?/g) ?? []).length).toBe(params.length);
+  });
+
+  it("VEHÍCULO SOLICITADO: sin vehículo, o con un perfil inexistente / de otra empresa / inactivo → 400 ANTES de abrir transacción: no se crea ningún viaje", async () => {
+    for (const perfil of [undefined, null, 0, 99, 12345]) {
+      vi.mocked(getPool).mockClear();
+      const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", perfil as never);
+      expect(r).toMatchObject({ ok: false, status: 400 });
+      expect((r as { mensaje: string }).mensaje).toMatch(perfil === 99 || perfil === 12345 ? /no existe en el catálogo/ : /Selecciona el vehículo solicitado por el cliente\./);
+      expect(getPool).not.toHaveBeenCalled();
+    }
+    expect(conn.execute.mock.calls.some(([q]) => String(q).includes("INSERT INTO tms_planes_viaje"))).toBe(false);
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+  });
+
   it("solicitud inexistente para esta empresa → 404, rollback, sin crear plan", async () => {
     conn.query.mockImplementation(async (sql: string) => {
       if (String(sql).includes("FOR UPDATE")) return [[]];
       return [[]];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: false, status: 404, mensaje: "Solicitud no encontrada." });
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.execute).not.toHaveBeenCalled();
@@ -269,7 +295,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       if (String(sql).includes("FOR UPDATE")) return [[filaSolicitud({ estado: "SOLICITADA" })]];
       return [[]];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({
       ok: false,
       status: 409,
@@ -283,14 +309,14 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       if (String(sql).includes("FOR UPDATE")) return [[filaSolicitud({ plan_id: 777 })]];
       return [[]];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: false, status: 409, mensaje: "La solicitud ya fue programada." });
     expect(conn.execute).not.toHaveBeenCalled();
     expect(conn.rollback).toHaveBeenCalledOnce();
   });
 
   it("version obsoleta (otro operador ya la modificó) → 409, rollback", async () => {
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 999, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 999, "operador1", 1);
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.status).toBe(409);
@@ -321,7 +347,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       }
       return [[]];
     });
-    await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     const paradasEnviadas = vi.mocked(guardarParadasPlan).mock.calls[0][2];
     const entrega = paradasEnviadas.find((p) => p.tipo === "Entrega")!;
     expect(entrega.lugarNombre).toBe("PriceSmart Zona 10");
@@ -349,7 +375,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       }
       return [{ affectedRows: 1 }];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: true, planId: 900, planCodigo: "PLAN-20990115-001" });
     expect(intentos).toBe(3);
     expect(asegurarCodigoPlanUnico).toHaveBeenCalledTimes(3); // 1 inicial + 2 reintentos
@@ -367,7 +393,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       }
       return [{ affectedRows: 1 }];
     });
-    await expect(programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1")).rejects.toThrow(
+    await expect(programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1)).rejects.toThrow(
       "ER_NO_REFERENCED_ROW_2",
     );
     // Un solo intento — nunca reintentó generando otro código.
@@ -388,7 +414,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       }
       return [{ affectedRows: 1 }];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({
       ok: false,
       status: 409,
@@ -404,7 +430,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
 
   it("fallo copiando una parada (guardarParadasPlan rechaza) → rollback total, sin UPDATE de solicitud", async () => {
     vi.mocked(guardarParadasPlan).mockResolvedValue({ ok: false, error: "fallo simulado de parada" });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: false, status: 409, mensaje: "fallo simulado de parada" });
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
@@ -416,7 +442,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       if (String(sql).includes("UPDATE tms_solicitudes_cliente")) throw new Error("fallo simulado al actualizar");
       return [{ affectedRows: 1 }];
     });
-    await expect(programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1")).rejects.toThrow(
+    await expect(programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1)).rejects.toThrow(
       "fallo simulado al actualizar",
     );
     expect(conn.rollback).toHaveBeenCalledOnce();
@@ -430,7 +456,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       if (s.includes("FROM tms_clientes")) return [[]]; // cliente ya no existe/no pertenece a la empresa
       return [[]];
     });
-    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1");
+    const r = await programarSolicitud(EMPRESA_ID, SOLICITUD_ID, 3, "operador1", 1);
     expect(r).toEqual({ ok: false, status: 409, mensaje: "El cliente de esta solicitud ya no existe." });
     expect(conn.rollback).toHaveBeenCalledOnce();
   });

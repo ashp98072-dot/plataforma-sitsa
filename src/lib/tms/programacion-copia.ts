@@ -67,7 +67,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
   );
   if (!planes.length) return [];
   const planIds = planes.map((p) => Number(p.id));
-  const [extraRows, auxRows, paradasMap] = await Promise.all([
+  const [extraRows, auxRows, paradasMap, vehiculoPorPlan] = await Promise.all([
     // Piloto extra de los planes origen (una consulta; tolera que la tabla aún no exista).
     query<RowDataPacket[]>(
       `SELECT x.plan_id, tp.id_empleado, tp.nombre
@@ -86,6 +86,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       [empresaId, ...planIds],
     ).catch(() => [] as RowDataPacket[]),
     listarParadasDePlanes(planIds),
+    vehiculoSolicitadoDeOrigenes(empresaId, planIds),
   ]);
   const extraPorPlan = new Map<number, RowDataPacket>();
   for (const x of extraRows) if (!extraPorPlan.has(Number(x.plan_id))) extraPorPlan.set(Number(x.plan_id), x);
@@ -96,6 +97,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
     const id = Number(p.id);
     const tercerizado = String(p.tipo_viaje ?? "Propio") === "Tercerizado";
     const advertencias: string[] = [];
+    if (!vehiculoPorPlan.has(id)) advertencias.push("Este viaje no tiene vehículo solicitado: complétalo en Programación antes de copiarlo (la copia se bloqueará).");
     // Auxiliares: tms_plan_auxiliares (hasta 8); planes antiguos: solo auxiliar_id.
     const auxFilas = auxPorPlan.get(id) ?? (p.aux1_nombre ? [{ id_empleado: p.aux1_empleado_id, nombre: p.aux1_nombre }] : []);
     const auxiliarEmpleadoIds: number[] = [];
@@ -116,6 +118,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
     const borrador: BorradorLote = {
       fila: i + 1,
       origenPlanId: id,
+      vehiculoSolicitadoPerfilId: vehiculoPorPlan.get(id) ?? null, // del ORIGEN en servidor
       rutaId: p.ruta_id != null ? Number(p.ruta_id) : null,
       clienteId: p.cliente_id != null ? Number(p.cliente_id) : null,
       horaCarga: p.hora_carga ? String(p.hora_carga).slice(0, 5) : null,
@@ -163,6 +166,25 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
  */
 export type EdicionFilaCopia = Omit<BorradorLote, "paradas" | "regresoOffsetDias" | "regresoHora">;
 
+/**
+ * Vehículo solicitado (perfil) de cada viaje ORIGEN, leído en el servidor (lectura aparte: sin la migración no hay dato y devuelve vacío, lo que luego BLOQUEA
+ * la copia con un mensaje claro). Nunca viene del cliente ni se infiere de la placa, la unidad o la tarifa.
+ */
+async function vehiculoSolicitadoDeOrigenes(empresaId: number, origenIds: number[]): Promise<Map<number, number>> {
+  const mapa = new Map<number, number>();
+  if (!origenIds.length) return mapa;
+  try {
+    const vs = await query<RowDataPacket[]>(
+      `SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje WHERE empresa_id = ? AND id IN (${origenIds.map(() => "?").join(",")})`,
+      [empresaId, ...origenIds],
+    );
+    for (const v of vs) if (v.vehiculo_solicitado_perfil_id != null) mapa.set(Number(v.id), Number(v.vehiculo_solicitado_perfil_id));
+  } catch (e) {
+    if (!esColumnaInexistente(e)) throw e;
+  }
+  return mapa;
+}
+
 export async function borradoresDesdeCliente(
   empresaId: number,
   fechaOrigen: string,
@@ -181,19 +203,7 @@ export async function borradoresDesdeCliente(
   if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
   const origenPorId = new Map(validos.map((v) => [Number(v.id), v])); // hora_carga y regreso del ORIGEN (nunca del cliente)
-  // Vehículo solicitado del ORIGEN (lectura aparte: si la migración aún no está aplicada, no hay dato que heredar y la copia sigue como siempre).
-  const vehiculoOrigen = new Map<number, number>();
-  if (origenIds.length) {
-    try {
-      const vs = await query<RowDataPacket[]>(
-        `SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje WHERE empresa_id = ? AND id IN (${origenIds.map(() => "?").join(",")})`,
-        [empresaId, ...origenIds],
-      );
-      for (const v of vs) if (v.vehiculo_solicitado_perfil_id != null) vehiculoOrigen.set(Number(v.id), Number(v.vehiculo_solicitado_perfil_id));
-    } catch (e) {
-      if (!esColumnaInexistente(e)) throw e;
-    }
-  }
+  const vehiculoOrigen = await vehiculoSolicitadoDeOrigenes(empresaId, origenIds);
   return {
     ok: true,
     borradores: filas.map((f) => ({

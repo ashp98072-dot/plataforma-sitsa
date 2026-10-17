@@ -74,3 +74,26 @@ export function esPatchDeEdicion(d: Record<string, unknown>): boolean {
 export function vehiculoEfectivoTrasPatch(enPatch: number | null | undefined, actual: number | null | undefined): number | null {
   return enPatch !== undefined ? enPatch : (actual ?? null);
 }
+
+function claveVehiculo(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+export type ResolucionVehiculoPorTexto =
+  | { ok: true; vehiculo: { id: number; nombre: string } }
+  | { ok: false; motivo: "vacio" | "no_existe" | "ambiguo" };
+
+/**
+ * Importación Excel: identifica el perfil por su NOMBRE exacto o su CÓDIGO (sin importar mayúsculas, acentos ni espacios
+ * repetidos) dentro del catálogo ACTIVO de la empresa que se le pasa. Nunca adivina: texto vacío, sin coincidencia o con
+ * más de un perfil posible es un rechazo; no se infiere desde la placa, unidad ni tarifa.
+ */
+export function resolverVehiculoPorTexto(texto: string | null | undefined, catalogoActivo: VehiculoSolicitadoOpcion[]): ResolucionVehiculoPorTexto {
+  const clave = claveVehiculo(texto ?? "");
+  if (!clave) return { ok: false, motivo: "vacio" };
+  const coincidencias = catalogoActivo.filter((o) => claveVehiculo(o.nombre) === clave || claveVehiculo(o.codigo) === clave);
+  const ids = new Set(coincidencias.map((o) => o.id));
+  if (ids.size === 0) return { ok: false, motivo: "no_existe" };
+  if (ids.size > 1) return { ok: false, motivo: "ambiguo" };
+  return { ok: true, vehiculo: { id: coincidencias[0].id, nombre: coincidencias[0].nombre } };
+}
