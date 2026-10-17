@@ -248,7 +248,7 @@ type Kpi = {
 
 type ClienteCat = { id: number; nombre: string };
 type UnidadCat = { id: number; placa: string };
-type PersonalCat = { id: number; nombre: string; tipo: string };
+type PersonalCat = { id: number; nombre: string };
 
 type EvidenciaTms = {
   id: number;
@@ -510,12 +510,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [pilotosCat, setPilotosCat] = useState<PersonalCat[]>([]);
 
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/tms/catalogos`)
+    fetch(`/api/empresas/${slug}/tms/planes/catalogos`)
       .then((r) => r.json())
       .then((data) => {
         setClientesCat((data.clientes ?? []) as ClienteCat[]);
         setUnidadesCat((data.unidades ?? []) as UnidadCat[]);
-        setPilotosCat(((data.personal ?? []) as PersonalCat[]).filter((p) => p.tipo === "Piloto"));
+        setPilotosCat((data.pilotos ?? []) as PersonalCat[]);
       })
       .catch(() => undefined);
   }, [slug]);
