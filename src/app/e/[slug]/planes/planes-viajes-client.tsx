@@ -596,7 +596,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     } finally {
       setExportando(false);
     }
-  }, [slug, filtrosQueryString]);
+  }, [filtrosQueryString, slug]);
 
   // Selección de viajes (checkbox). Declarada ANTES de `cargar`, que la limpia en cada carga.
   const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
