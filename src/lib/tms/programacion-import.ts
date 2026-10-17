@@ -18,6 +18,8 @@ import {
   type VentanaProgramacion,
 } from "./disponibilidad-programacion-intervalos";
 import { resolverTcInterno } from "./tc-plan";
+import { resolverVehiculoPorTexto } from "./vehiculo-solicitado";
+import { listarVehiculosSolicitables } from "./vehiculo-solicitado-db";
 import { seSolapaConOcupacionReal, type IntervaloConsulta } from "./disponibilidad-traslapes";
 
 /**
@@ -286,6 +288,9 @@ export type DatosResueltosFilaProgramacion = {
   pilotoPersonalId: number | null;
   auxiliares: AuxiliarResueltoFila[];
   unidadPlaca: string;
+  /** Vehículo solicitado por el cliente (obligatorio): perfil ACTIVO de la empresa resuelto en la vista previa + fotografía de su nombre. */
+  vehiculoSolicitadoPerfilId: number;
+  vehiculoSolicitadoNombre: string;
   /** TMS-TC-PLANES-REPORTES-1 — TC INTERNO resuelto (solo si la fila trae TC): flota_vehiculos.id y placa canónica de Flota. */
   tcVehiculoId?: number;
   tcPlaca?: string;
@@ -391,7 +396,7 @@ export async function previsualizarImportacionProgramacion(
   empresaId: number,
   filas: FilaProgramacionExcel[],
 ): Promise<ResultadoPreviewProgramacion> {
-  const [rutasRows, empleadosRows, personalRows, unidadesRows, disponibilidadVehiculos] = await Promise.all([
+  const [rutasRows, empleadosRows, personalRows, unidadesRows, disponibilidadVehiculos, catalogoVehiculoSolicitado] = await Promise.all([
     query<RowDataPacket[]>(
       // Mismo JOIN que ya usa SELECT_RUTA en cliente-rutas.ts (obtenerRuta/
       // listarRutas) para lugar_carga_texto/destino_descripcion/contacto —
@@ -421,6 +426,8 @@ export async function previsualizarImportacionProgramacion(
     ),
     query<RowDataPacket[]>(`SELECT id, placa FROM tms_unidades WHERE empresa_id = ?`, [empresaId]),
     listarDisponibilidadVehiculos(empresaId),
+    // Perfiles ACTIVOS de ESTA empresa (nunca de otra): contra ellos se resuelve el «Vehículo solicitado» de cada fila.
+    listarVehiculosSolicitables(empresaId),
   ]);
 
   const rutasPorCodigo = new Map<string, RutaCatalogo>();
@@ -602,6 +609,20 @@ export async function previsualizarImportacionProgramacion(
       }
     }
 
+    // 5c) Vehículo solicitado (columna O, OBLIGATORIO): nombre o código de un perfil activo de la empresa. Una fila sin
+    // él, con uno inexistente/inactivo/de otra empresa o ambiguo se rechaza AQUÍ, antes de cualquier INSERT. Nunca se
+    // infiere de la placa, de la unidad ni de la tarifa.
+    const vehiculoSolicitado = resolverVehiculoPorTexto(fila.vehiculoSolicitadoExcel, catalogoVehiculoSolicitado);
+    if (!vehiculoSolicitado.ok) {
+      errores.push(
+        vehiculoSolicitado.motivo === "vacio"
+          ? "Vehículo solicitado es obligatorio: indique el vehículo que pidió el cliente (columna «Vehículo solicitado»)."
+          : vehiculoSolicitado.motivo === "ambiguo"
+            ? `El vehículo solicitado "${fila.vehiculoSolicitadoExcel}" coincide con más de un perfil activo; use el nombre exacto o el código.`
+            : `El vehículo solicitado "${fila.vehiculoSolicitadoExcel}" no existe en el catálogo de esta empresa o no está activo.`,
+      );
+    }
+
     // 6) Tarifa GTQ vs. tarifa vigente de la ruta — cualquier diferencia
     // es error bloqueante (decisión aprobada), sin override manual.
     if (ruta?.activo) {
@@ -624,6 +645,7 @@ export async function previsualizarImportacionProgramacion(
     const rutaOk = ruta!;
     const pilotoOk = piloto!;
     const vehiculoOk = vehiculo!;
+    const vehiculoSolicitadoOk = (vehiculoSolicitado as Extract<typeof vehiculoSolicitado, { ok: true }>).vehiculo;
 
     const pilotoPersonalId = personalIdExistente("Piloto", fila.pilotoCodigoExcel);
     const auxiliaresDatos: AuxiliarResueltoFila[] = auxiliaresResueltos.map((aux) => ({
@@ -688,6 +710,8 @@ export async function previsualizarImportacionProgramacion(
         pilotoPersonalId,
         auxiliares: auxiliaresDatos,
         unidadPlaca: vehiculoOk.placa,
+        vehiculoSolicitadoPerfilId: vehiculoSolicitadoOk.id,
+        vehiculoSolicitadoNombre: vehiculoSolicitadoOk.nombre,
         // Solo cuando la fila trae TC: el resultado de una fila sin TC queda idéntico al de siempre.
         ...(tcResuelto ? { tcVehiculoId: tcResuelto.vehiculoId, tcPlaca: tcResuelto.placa } : {}),
         unidadId,
@@ -905,8 +929,8 @@ export async function confirmarImportacionProgramacion(
           try {
             const [result] = await conn.execute<ResultSetHeader>(
               `INSERT INTO tms_planes_viaje
-                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?)`,
               [
                 empresaId,
                 codigoFinal,
@@ -934,6 +958,9 @@ export async function confirmarImportacionProgramacion(
                 datos.contactoCargo,
                 datos.contactoTelefono,
                 filaOriginal.observacionesExcel || null,
+                // Vehículo solicitado (obligatorio): perfil activo resuelto en la vista previa + fotografía del nombre, en el MISMO INSERT.
+                datos.vehiculoSolicitadoPerfilId,
+                datos.vehiculoSolicitadoNombre,
               ],
             );
             planId = Number(result.insertId);

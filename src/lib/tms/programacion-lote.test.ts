@@ -94,11 +94,14 @@ const plan = (over: Partial<Plan> = {}): Plan => ({
 });
 const borrador = (over: Partial<BorradorLote> = {}): BorradorLote => ({
   fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: null,
-  pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], tarifaId: null, externo: null, paradas: [], ...over,
+  pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], tarifaId: null, externo: null, paradas: [], vehiculoSolicitadoPerfilId: 11, ...over,
 });
+
+const origenesSinVehiculo = new Set<number>();
 
 beforeEach(() => {
   vi.resetAllMocks();
+  origenesSinVehiculo.clear();
   sinTablaOrigen = false;
   falla = { en: null, enPlanNumero: 0 };
   insertPlanFallos = [];
@@ -150,6 +153,10 @@ beforeEach(() => {
         .map(({ o, p }) => ({ plan_origen_id: o.plan_origen_id, codigo: p.codigo }));
     }
     if (s.includes("FROM tms_cliente_rutas r")) { const [emp, ...ids] = params as number[]; return emp === EMP ? ids.map((i) => rutas[i]).filter(Boolean) : []; }
+    // Catálogo de perfiles de vehículo solicitado: SOLO el 11 (activo) de la empresa EMP; el 12 está inactivo y el 99 es de otra empresa.
+    if (s.includes("FROM tms_cotizacion_costeo_perfiles")) { const [emp, ...pids] = params as number[]; return emp === EMP ? pids.filter((i) => i === 11).map((i) => ({ id: i, nombre: "Camión 2.5 toneladas" })) : []; }
+    // Vehículo solicitado de los viajes ORIGEN (lectura aparte de borradoresDesdeCliente): en este escenario todos tienen el perfil 11, salvo los ids de `origenesSinVehiculo`.
+    if (s.includes("SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje")) { const [, ...pids] = params as number[]; return pids.map((id) => ({ id, vehiculo_solicitado_perfil_id: origenesSinVehiculo.has(id) ? null : 11 })); }
     if (s.includes("FROM tms_clientes WHERE")) return [{ id: 3 }];
     if (s.includes("FROM empleados WHERE empresa_id = ? AND id IN")) { const [emp, ...ids] = params as number[]; return emp === EMP ? ids.map((i) => empleados[i]).filter(Boolean) : []; }
     if (s.includes("FROM tms_personal WHERE empresa_id = ? AND id_empleado IN")) { const [, ...ids] = params as number[]; return e.personal.filter((p) => ids.includes(p.id_empleado)).map((p) => ({ id: p.id, tipo: "Piloto", id_empleado: p.id_empleado })); }
@@ -252,6 +259,59 @@ describe("motor: creación por lote (feliz)", () => {
     const r = await confirmar([borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
     expect(r.ok).toBe(true);
     expect(creadosDestino().filter((p) => p.ruta_id === 10)).toHaveLength(2);
+  });
+
+  it("VEHÍCULO SOLICITADO: la copia lo hereda del origen y lo guarda en el MISMO INSERT (id + nombre vigente del catálogo)", async () => {
+    const r = await confirmar([borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1, vehiculoSolicitadoPerfilId: 11 })]);
+    expect(r.ok).toBe(true);
+    const insert = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje"))!;
+    expect(String(insert[0])).toContain("vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
+    expect((insert[1] as unknown[]).slice(-2)).toEqual([11, "Camión 2.5 toneladas"]);
+    expect((String(insert[0]).match(/\?/g) ?? []).length).toBe((insert[1] as unknown[]).length);
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("SET vehiculo_solicitado_perfil_id"))).toBe(false); // nunca se crea el plan y luego se completa
+  });
+
+  it("VEHÍCULO SOLICITADO: origen SIN vehículo, perfil inactivo, inexistente o de otra empresa → el lote NO crea nada (antes de cualquier INSERT) y el mensaje es claro", async () => {
+    for (const [perfil, texto] of [[null, /no tiene vehículo solicitado/], [12, /ya no existe en el catálogo.*inactivo/], [99, /ya no existe en el catálogo/], [5555, /ya no existe en el catálogo/]] as const) {
+      const lote = [
+        borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1, vehiculoSolicitadoPerfilId: 11 }), // esta fila sola sería válida
+        borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3, vehiculoSolicitadoPerfilId: perfil }),
+      ];
+      const validacion = await validarLote(EMP, DESTINO, lote);
+      expect(validacion[0].estado).toBe("ok");
+      expect(validacion[1].estado).toBe("error");
+      expect(validacion[1].errores.join(" ")).toMatch(texto);
+      const antes = creadosDestino().length;
+      const r = await confirmar(lote);
+      expect(r.ok).toBe(false);
+      expect(creadosDestino().length).toBe(antes); // todo o nada: ni siquiera la fila válida
+      expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje"))).toBe(false);
+      conn.execute.mockClear();
+    }
+  });
+
+  it("VEHÍCULO SOLICITADO: borradoresDesdeCliente lo lee del ORIGEN en el servidor (ignora lo que mande el cliente) y un origen histórico produce borrador sin vehículo → bloqueado", async () => {
+    const { borradoresDesdeCliente } = await import("./programacion-copia");
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(sql).includes("hora_carga, DATE_FORMAT(regreso_estimado")) return [{ id: 900, hora_carga: "08:00:00", regreso_estimado: null }, { id: 901, hora_carga: "09:00:00", regreso_estimado: null }];
+      return base(sql, params);
+    }) as never);
+    origenesSinVehiculo.add(901);
+    const r = await borradoresDesdeCliente(EMP, ORIGEN, [
+      { ...borrador({ fila: 1, origenPlanId: 900 }), vehiculoSolicitadoPerfilId: 77 } as never, // el cliente intenta colar otro perfil
+      { ...borrador({ fila: 2, origenPlanId: 901 }), vehiculoSolicitadoPerfilId: 11 } as never, // y a un origen histórico le inventa uno
+    ]);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.borradores.map((b) => b.vehiculoSolicitadoPerfilId)).toEqual([11, null]); // lo del origen, nunca lo del cliente
+    expect((await validarLote(EMP, DESTINO, r.borradores))[1].errores.join(" ")).toMatch(/no tiene vehículo solicitado/);
+  });
+
+  it("VEHÍCULO SOLICITADO: nunca se infiere de la unidad, la placa ni la tarifa", () => {
+    const src = readFileSync("src/lib/tms/programacion-lote.ts", "utf8");
+    expect(src).not.toMatch(/vehiculo\s*=\s*[^;]*(unidad|placa|tarifa)/i);
+    expect(src).toContain("r.vehiculo!.id, r.vehiculo!.nombre");
   });
 
   it("límites: máximo 8 auxiliares y máximo de filas por lote", async () => {
@@ -569,16 +629,23 @@ describe("copiar programación de otra fecha", () => {
     expect(filas.map((f) => f.origen.estado)).toEqual(["Cerrado", "Programado"]);
   });
 
-  it("copia solo configuración: cliente, ruta, hora, traslado, tipo, unidad, TC, piloto, auxiliares (0..8) y paradas; tarifa NULL", async () => {
+  it("copia solo configuración: cliente, ruta, vehículo solicitado del origen, hora, traslado, tipo, unidad, TC, piloto, auxiliares (0..8) y paradas; tarifa NULL", async () => {
     const aux = Array.from({ length: 8 }, (_, i) => ({ plan_id: 900, orden: i + 1, id_empleado: 20 + i, nombre: `Aux ${i}` }));
     const [f] = await cargar([origenRow()], aux);
     expect(f.borrador).toEqual({
-      fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", regresoOffsetDias: null, regresoHora: null, tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
+      fila: 1, origenPlanId: 900, vehiculoSolicitadoPerfilId: 11, rutaId: 10, clienteId: 3, horaCarga: "03:00", regresoOffsetDias: null, regresoHora: null, tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
       pilotoEmpleadoId: 1, pilotoExtraEmpleadoId: null, auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27], tarifaId: null, externo: null,
       paradas: [{ lugarNombre: "Bodega", tipo: "Carga", requiereEvidencia: true }, { lugarNombre: "Xela", tipo: "Descarga", requiereEvidencia: true }],
     });
     // Nada de historia en el borrador (ni siquiera como campos ocultos)
     expect(JSON.stringify(f.borrador)).not.toMatch(/cerrado|km|VIEJA|999|estado|factura|evidencias|bitacora|gasto/i);
+  });
+
+  it("origen histórico SIN vehículo solicitado: el borrador sale sin vehículo y con advertencia visible (la copia se bloqueará)", async () => {
+    origenesSinVehiculo.add(900);
+    const [f] = await cargar([origenRow()]);
+    expect(f.borrador.vehiculoSolicitadoPerfilId).toBeNull();
+    expect(f.advertencias.join(" ")).toMatch(/no tiene vehículo solicitado/);
   });
 
   it("TERCERIZADO: copia solo los campos externos (incl. TC externo); sin unidad/piloto/TC internos", async () => {

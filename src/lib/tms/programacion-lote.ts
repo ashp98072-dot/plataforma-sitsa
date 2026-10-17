@@ -87,6 +87,12 @@ export type BorradorLote = {
   externo: ExternoLote | null;
   /** Las pone el SERVIDOR (desde el plan origen); nunca se aceptan del cliente. */
   paradas: ParadaInput[];
+  /**
+   * VEHÍCULO SOLICITADO — lo pone el SERVIDOR desde el plan origen (nunca el cliente). Es OBLIGATORIO: la copia hereda lo que el cliente pidió en el
+   * viaje origen y solo si ese perfil sigue activo en esta empresa. Un origen sin vehículo (histórico) o con un perfil inexistente/inactivo/de otra
+   * empresa BLOQUEA el lote entero (todo o nada) antes de cualquier INSERT; jamás se infiere de la placa, la unidad ni la tarifa.
+   */
+  vehiculoSolicitadoPerfilId?: number | null;
 };
 
 export type TarifaResuelta = { id: number; nombre: string; monto: number; moneda: string };
@@ -103,6 +109,8 @@ type Resuelto = {
   tc: { vehiculoId: number; placa: string } | null;
   pilotoNombre: string | null;
   auxiliaresNombres: string[];
+  /** Perfil de vehículo solicitado heredado del origen y re-validado contra el catálogo ACTIVO de la empresa (id + nombre vigente para la fotografía). */
+  vehiculo: { id: number; nombre: string } | null;
 };
 
 export type ResultadoFilaLote = {
@@ -180,8 +188,9 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   const clienteIds = [...new Set(borradores.filter((b) => b.rutaId == null).map((b) => b.clienteId).filter((n): n is number => n != null))];
   const empleadoIds = [...new Set(borradores.flatMap((b) => [b.pilotoEmpleadoId, b.pilotoExtraEmpleadoId ?? null, ...b.auxiliarEmpleadoIds]).filter((n): n is number => n != null))];
   const origenIds = borradores.map((b) => b.origenPlanId).filter((n): n is number => n != null);
+  const perfilIds = [...new Set(borradores.map((b) => b.vehiculoSolicitadoPerfilId).filter((n): n is number => n != null && n > 0))];
 
-  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias] = await Promise.all([
+  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias, perfilesRows] = await Promise.all([
     rutaIds.length
       ? query<RowDataPacket[]>(
           `SELECT r.id, r.codigo, r.cliente_id, r.activo, r.lugar_carga_texto, r.destino_descripcion,
@@ -205,8 +214,13 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     listarDisponibilidadVehiculos(empresaId),
     tarifasActivasDeVariasRutas(empresaId, rutaIds),
     copiasVigentesDeOrigen(empresaId, fechaDestino, origenIds),
+    // Perfiles de vehículo solicitado ACTIVOS de ESTA empresa entre los heredados (un id de otra empresa o inactivo simplemente no aparece).
+    perfilIds.length
+      ? query<RowDataPacket[]>(`SELECT id, nombre FROM tms_cotizacion_costeo_perfiles WHERE empresa_id = ? AND activo = 1 AND id IN ${ids(perfilIds)}`, [empresaId, ...perfilIds])
+      : Promise.resolve([] as RowDataPacket[]),
   ]);
 
+  const perfilesActivos = new Map(perfilesRows.map((r) => [Number(r.id), String(r.nombre)]));
   const rutas = new Map(rutasRows.map((r) => [Number(r.id), r]));
   const clientesOk = new Set(clientesRows.map((r) => Number(r.id)));
   const empleados = new Map(empleadosRows.map((r) => [Number(r.id), r]));
@@ -228,9 +242,18 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     const errores: string[] = [];
     const recursos: RecursoDia[] = [];
     const res: Resuelto = { clienteId: null, rutaId: null, rutaCodigo: null, destino: null, lugarCarga: null, contacto: { nombre: null, cargo: null, telefono: null },
-      tarifa: null, unidad: null, tc: null, pilotoNombre: null, auxiliaresNombres: [] };
+      tarifa: null, unidad: null, tc: null, pilotoNombre: null, auxiliaresNombres: [], vehiculo: null };
 
     if (b.horaCarga && !HORA_RE.test(b.horaCarga)) errores.push(`Hora inválida: "${b.horaCarga}" (HH:mm).`);
+
+    // --- vehículo solicitado (OBLIGATORIO; heredado del origen; nunca inferido) ---
+    if (b.vehiculoSolicitadoPerfilId == null) {
+      errores.push("El viaje origen no tiene vehículo solicitado: complétalo en Programación (editar el viaje) antes de copiarlo.");
+    } else if (!perfilesActivos.has(b.vehiculoSolicitadoPerfilId)) {
+      errores.push("El vehículo solicitado del viaje origen ya no existe en el catálogo de esta empresa o está inactivo: actualízalo en Programación antes de copiarlo.");
+    } else {
+      res.vehiculo = { id: b.vehiculoSolicitadoPerfilId, nombre: perfilesActivos.get(b.vehiculoSolicitadoPerfilId) as string };
+    }
 
     // --- ruta / cliente / tarifa (siempre re-resueltos: nunca se copia el snapshot del viaje origen) ---
     if (b.rutaId != null) {
@@ -503,8 +526,8 @@ export async function confirmarLote(
           try {
             const [ins] = await conn.execute<ResultSetHeader>(
               `INSERT INTO tms_planes_viaje
-                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 empresaId, codigo, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
                 b.horaCarga, b.tipoTraslado, regresoPersistidoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
@@ -519,6 +542,7 @@ export async function confirmarLote(
                 esTerc ? x!.costoTercerizado : null,
                 r.tc?.vehiculoId ?? null, r.tc?.placa ?? null,
                 esTerc ? (norm(x!.tcExternoPlaca) || null) : null,
+                r.vehiculo!.id, r.vehiculo!.nombre, // obligatorio: validado arriba (resolverYValidar) bajo el mismo candado
               ],
             );
             planId = Number(ins.insertId);

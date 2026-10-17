@@ -1,3 +1,4 @@
+import { MSG_VEHICULO_SOLICITADO_OBLIGATORIO } from "./vehiculo-solicitado";
 import { NextResponse } from "next/server";
 import type { ZodError } from "zod";
 import { cuerpoErrores, erroresDeZod, type ConfigErrores } from "@/lib/validacion-formulario";
@@ -110,4 +111,15 @@ export const CONFIG_PROGRAMACION: ConfigErrores = {
 /** 400 con `error` (compatibilidad) + `errores` por campo/fila. */
 export function respuestaErroresPrograma(error: ZodError, payload: unknown): NextResponse {
   return NextResponse.json(cuerpoErrores(erroresDeZod(error, CONFIG_PROGRAMACION, payload)), { status: 400 });
+}
+
+/**
+ * 400 de campo para el vehículo solicitado obligatorio (mismo formato `error` + `errores` por campo que el resto de la validación de Programación).
+ * Estado 400: es el patrón vigente de /tms/planes (ErrorDominioFormulario no admite 422 y ningún endpoint de este módulo lo usa).
+ */
+export function respuestaVehiculoSolicitadoObligatorio(): NextResponse {
+  return NextResponse.json(
+    cuerpoErrores([{ campo: "vehiculoSolicitadoPerfilId", etiqueta: "Vehículo solicitado", mensaje: "selecciona el vehículo solicitado por el cliente." }], MSG_VEHICULO_SOLICITADO_OBLIGATORIO),
+    { status: 400 },
+  );
 }

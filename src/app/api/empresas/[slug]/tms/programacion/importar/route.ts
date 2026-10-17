@@ -90,6 +90,8 @@ type FilaRespuestaValidar = {
   observacionesExcel: string;
   /** TMS-TC-PLANES-REPORTES-1 — valor recibido en la columna opcional TC / Caja / Remolque ("" si no viene). */
   tcExcel: string;
+  /** Valor recibido en la columna «Vehículo solicitado» ("" si no viene). */
+  vehiculoSolicitadoExcel: string;
   resuelto: DatosResueltosFilaProgramacion | null;
 };
 
@@ -116,6 +118,7 @@ function combinarFilaRespuesta(
     horaRegresoExcel: fila.horaRegresoExcel,
     observacionesExcel: fila.observacionesExcel,
     tcExcel: fila.tcExcel ?? "",
+    vehiculoSolicitadoExcel: fila.vehiculoSolicitadoExcel ?? "",
     resuelto: preview.datos,
   };
 }

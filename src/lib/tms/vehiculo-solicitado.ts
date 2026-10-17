@@ -46,3 +46,54 @@ export function cambioVehiculoSolicitado(original: number | null | undefined, se
   const nuevo = seleccionado > 0 ? seleccionado : null;
   return nuevo === (original ?? null) ? undefined : nuevo;
 }
+
+/** Mensaje único (frontend y backend) cuando falta el vehículo solicitado. */
+export const MSG_VEHICULO_SOLICITADO_OBLIGATORIO = "Selecciona el vehículo solicitado por el cliente.";
+
+/**
+ * ¿Al guardar CAMBIOS de un viaje existente se exige tener un vehículo solicitado? Solo cuando el campo es EDITABLE: un viaje Cerrado/Cancelado no
+ * admite modificaciones y uno "En ruta" sin llegada solo admite notas (el selector está bloqueado: exigirlo sería imposible de cumplir).
+ * Los viajes históricos (sin dato) se pueden CONSULTAR siempre; solo se exige elegir uno al guardar cambios en estados editables.
+ */
+export function exigeVehiculoSolicitadoAlEditar(estado: string, pendienteCierre: boolean): boolean {
+  if (estado === "Cerrado" || estado === "Cancelado") return false;
+  if (estado === "En ruta" && !pendienteCierre) return false;
+  return true;
+}
+
+/**
+ * ¿Este PATCH es una EDICIÓN de datos del viaje (y por tanto exige vehículo) o solo una transición de estado/motivo? Marcar «Cargado» y «Cancelar» van
+ * por el mismo endpoint pero no editan datos: nunca se bloquean por la falta histórica del vehículo.
+ */
+export function esPatchDeEdicion(d: Record<string, unknown>): boolean {
+  if (d.estado === "Cancelado") return false;
+  return Object.entries(d).some(([k, v]) => v !== undefined && !["id", "estado", "motivoCambio"].includes(k));
+}
+
+/** Vehículo EFECTIVO tras el PATCH: el que trae (null lo quita) o, si no lo toca, el que ya tenía el viaje. */
+export function vehiculoEfectivoTrasPatch(enPatch: number | null | undefined, actual: number | null | undefined): number | null {
+  return enPatch !== undefined ? enPatch : (actual ?? null);
+}
+
+function claveVehiculo(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+export type ResolucionVehiculoPorTexto =
+  | { ok: true; vehiculo: { id: number; nombre: string } }
+  | { ok: false; motivo: "vacio" | "no_existe" | "ambiguo" };
+
+/**
+ * Importación Excel: identifica el perfil por su NOMBRE exacto o su CÓDIGO (sin importar mayúsculas, acentos ni espacios
+ * repetidos) dentro del catálogo ACTIVO de la empresa que se le pasa. Nunca adivina: texto vacío, sin coincidencia o con
+ * más de un perfil posible es un rechazo; no se infiere desde la placa, unidad ni tarifa.
+ */
+export function resolverVehiculoPorTexto(texto: string | null | undefined, catalogoActivo: VehiculoSolicitadoOpcion[]): ResolucionVehiculoPorTexto {
+  const clave = claveVehiculo(texto ?? "");
+  if (!clave) return { ok: false, motivo: "vacio" };
+  const coincidencias = catalogoActivo.filter((o) => claveVehiculo(o.nombre) === clave || claveVehiculo(o.codigo) === clave);
+  const ids = new Set(coincidencias.map((o) => o.id));
+  if (ids.size === 0) return { ok: false, motivo: "no_existe" };
+  if (ids.size > 1) return { ok: false, motivo: "ambiguo" };
+  return { ok: true, vehiculo: { id: coincidencias[0].id, nombre: coincidencias[0].nombre } };
+}
