@@ -19,6 +19,7 @@ import { permisosFiscal } from "@/lib/rrhh/fiscal-migracion-ui";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
+import type { SupervisorCatalogo } from "@/lib/rrhh/supervisores-catalogo";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
 import { CambioFechaAltaVacaciones } from "@/components/rrhh/cambio-fecha-alta-vacaciones";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
@@ -432,7 +433,7 @@ export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   // Activos de la empresa para buscar/agregar Supervisor(es) — independiente
   // de los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
-  const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<Emp[]>([]);
+  const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<SupervisorCatalogo[]>([]);
   // Texto de búsqueda por nombre/código para el selector múltiple de supervisor.
   const [supervisorBusqueda, setSupervisorBusqueda] = useState("");
   // id -> "numeroEmpleado — nombre" para mostrar los chips seleccionados,
@@ -582,19 +583,15 @@ export default function EmpleadosPage() {
     });
   }
 
-  // Reutiliza el mismo GET /empleados, con estado=Activo, para poblar el
-  // buscador de Supervisor(es) — no crea una ruta nueva. Se llama desde
-  // dentro de `cargar()` (mismo efecto ya existente abajo) en vez de un
-  // efecto aparte, para no depender de los filtros/búsqueda que el usuario
-  // haya aplicado a la tabla y para no agregar un segundo useEffect con
-  // setState.
+  // Catálogo Activo independiente de los filtros de tabla, sin fotos/documentos.
+  // Los supervisores asignados históricos se siguen agregando desde el detalle.
   const cargarSupervisores = useCallback(async () => {
     const res = await fetch(
-      `/api/empresas/${slug}/empleados?estado=Activo`,
+      `/api/empresas/${slug}/empleados/supervisores`,
     );
     const data = await res.json();
     if (!res.ok) return;
-    const activos: Emp[] = data.empleados ?? [];
+    const activos: SupervisorCatalogo[] = data.empleados ?? [];
     setSupervisoresDisponibles(activos);
     mergeSupervisorLabels(activos);
   }, [slug]);
@@ -1850,7 +1847,7 @@ export default function EmpleadosPage() {
                 title="Doble clic: expediente (PDF/fotos)"
                 onDoubleClick={() => setDocsEmp(e)}
               >
-                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta /></td>
+                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta usarMiniatura /></td>
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
                 {mostrarDpi ? (

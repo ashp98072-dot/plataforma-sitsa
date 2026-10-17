@@ -61,7 +61,7 @@ describe("RRHH Empleados — foto en el listado", () => {
     expect(e).toContain("empleadosConFoto(");
     expect(e.match(/empleadosConFoto\(/g)).toHaveLength(1);
     expect(e).toContain("e.tieneFoto = conFoto.has(e.id)");
-    expect(page).toContain("<FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta />");
+    expect(page).toContain("<FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta usarMiniatura />");
   });
   it("5-7) tabla: columna Foto al inicio y el resto de columnas y celdas intactas", () => {
     const orden = ["Foto", "Código", "Nombre", "Puesto", "Contrato", "Pago", "Área", "Entrada lab.", "Contratación", "Horario", "Estado", "Docs"];
@@ -80,5 +80,24 @@ describe("RRHH Empleados — foto en el listado", () => {
     const r = leer("src/app/api/empresas/[slug]/empleados/[id]/foto/route.ts");
     expect(r).toContain('requireTenantRrhh(slug, "empleados", "ver")');
     expect(r).toContain("obtenerEmpleado(guard.empresa.id, id)");
+  });
+  it("listado usa derivado lazy; ampliación y ficha conservan original", () => {
+    const html = renderToStaticMarkup(createElement(FotoEmpleadoMiniatura, { slug: "s", empleadoId: 7, nombre: "Ana", usarMiniatura: true, ampliable: true }));
+    expect(html).toContain('src="/api/empresas/s/empleados/7/foto/miniatura"');
+    expect(html).toContain('loading="lazy"');
+    expect(leer("src/components/rrhh/foto-empleado-miniatura.tsx")).toContain("<FotoAmpliada src={originalSrc}");
+    expect(leer("src/components/rrhh/foto-empleado-miniatura.tsx")).toContain("usarMiniatura = false");
+    expect(page).toContain('`/api/empresas/${slug}/empleados/${editId}/foto`');
+  });
+  it("sin foto no pide tampoco la miniatura", () => {
+    const html = renderToStaticMarkup(createElement(FotoEmpleadoMiniatura, { slug: "s", empleadoId: 7, nombre: "Ana", usarMiniatura: true, tieneFoto: false }));
+    expect(html).not.toContain("<img");
+  });
+  it("supervisores usa catálogo ligero independiente y mantiene etiquetas históricas", () => {
+    expect(page).toContain("${slug}/empleados/supervisores");
+    expect(page).not.toContain("${slug}/empleados?estado=Activo");
+    expect(page).toContain("mergeSupervisorLabels(supervisores)");
+    expect(page).toContain("supervisores.map((s) => s.id)");
+    expect(page).toContain("supervisoresDisponibles.filter((s) => s.id !== editId");
   });
 });
