@@ -36,8 +36,9 @@ import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { emularConsultaConflictoPersonal, type ModeloPersonal } from "@/lib/tms/personal-identidad.fixture";
 import { POST, PATCH } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
-const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
+const post = (body: unknown) => POST(new Request("http://x/api", { method: "POST", body: JSON.stringify({ vehiculoSolicitadoPerfilId: 1, ...(body as object) }) }), ctx);
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 
 const PLAN_BASE = { fechaPlan: "2026-09-30", horaCarga: "08:00", pilotoNombre: "Piloto Uno", placa: "", lugarCarga: "Bodega", lugarDescarga: "Destino" };

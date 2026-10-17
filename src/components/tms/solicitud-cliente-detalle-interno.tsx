@@ -58,6 +58,10 @@ export function SolicitudClienteDetalleInterno({
   const [accionEnCurso, setAccionEnCurso] = useState(false);
   const [mostrarRechazo, setMostrarRechazo] = useState(false);
   const [motivo, setMotivo] = useState("");
+  // VEHÍCULO SOLICITADO OBLIGATORIO: la solicitud del cliente no lo captura; Operaciones lo elige al programar (catálogo activo de la empresa).
+  const [vehiculos, setVehiculos] = useState<{ id: number; nombre: string }[]>([]);
+  const [vehiculoId, setVehiculoId] = useState(0);
+  const [errorVehiculo, setErrorVehiculo] = useState("");
 
   const base = `/api/empresas/${slug}/tms/solicitudes-clientes/${solicitudId}`;
 
@@ -82,6 +86,15 @@ export function SolicitudClienteDetalleInterno({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
   }, [cargar]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch(`/api/empresas/${slug}/tms/catalogos`, { signal: ac.signal })
+      .then((r) => r.json())
+      .then((d) => { if (!ac.signal.aborted) setVehiculos(((d.vehiculosSolicitables ?? []) as { id: number; nombre: string }[]).map((v) => ({ id: v.id, nombre: v.nombre }))); })
+      .catch(() => undefined);
+    return () => ac.abort();
+  }, [slug]);
 
   async function onRevisar() {
     if (!solicitud || accionEnCurso) return;
@@ -129,13 +142,18 @@ export function SolicitudClienteDetalleInterno({
 
   async function onProgramar() {
     if (!solicitud || accionEnCurso) return;
+    if (!(vehiculoId > 0)) {
+      setErrorVehiculo("Selecciona el vehículo solicitado por el cliente.");
+      return;
+    }
+    setErrorVehiculo("");
     setAccionEnCurso(true);
     setError("");
     try {
       const res = await fetch(`${base}/programar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ version: solicitud.version }),
+        body: JSON.stringify({ version: solicitud.version, vehiculoSolicitadoPerfilId: vehiculoId }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -223,7 +241,22 @@ export function SolicitudClienteDetalleInterno({
         ) : null}
 
         {solicitud.estado === "EN_REVISION" ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-start gap-2">
+            <label className="text-xs text-[var(--muted)]">
+              Vehículo solicitado por el cliente <span aria-hidden="true">*</span>
+              <select
+                className="mt-1 block rounded-lg border border-[var(--border)] bg-[var(--input)] p-2 text-sm text-[var(--text)]"
+                value={vehiculoId}
+                required
+                aria-required="true"
+                aria-invalid={errorVehiculo ? true : undefined}
+                onChange={(e) => { setErrorVehiculo(""); setVehiculoId(Number(e.target.value)); }}
+              >
+                <option value={0}>— Selecciona el vehículo solicitado —</option>
+                {vehiculos.map((v) => <option key={v.id} value={v.id}>{v.nombre}</option>)}
+              </select>
+              {errorVehiculo ? <span role="alert" className="mt-0.5 block text-[11px] font-medium text-red-500">{errorVehiculo}</span> : null}
+            </label>
             <button
               type="button"
               disabled={accionEnCurso}

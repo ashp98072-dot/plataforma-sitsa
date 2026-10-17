@@ -216,7 +216,7 @@ describe("Programación (formulario y tablero)", () => {
     expect(campo).toBeLessThan(form.indexOf('{form.tipoViaje === "Propio" ? ('));
   });
   it("POST manda el id elegido; PATCH solo si cambió, con el mismo gate pre-cierre que la tarifa", () => {
-    expect(form).toContain("vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId > 0 ? form.vehiculoSolicitadoPerfilId : undefined,");
+    expect(form).toContain("vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId,"); // obligatorio: siempre se envía el elegido
     expect(form).toContain("cambioVehiculoSolicitado(plan?.vehiculo_solicitado_perfil_id, form.vehiculoSolicitadoPerfilId)");
     expect(form).toMatch(/vehiculoSolicitadoPerfilId: bloqueadoParaPreCierre\s*\?\s*undefined/);
   });

@@ -53,6 +53,8 @@ type Modelo = { planes: Plan[]; unidades: Unidad[] };
 let personal: Persona[];
 let m: Modelo;
 let respaldo = "";
+/** Planes SIN vehículo solicitado (históricos); el resto tiene el perfil 11. */
+const sinVehiculo = new Set<number>();
 let viaticos: { plan_id: number; personal_id: number; estado: string }[];
 let auditorias: { usuario: string | null | undefined; accion: string; detalle: string | undefined }[];
 let updates: { sql: string; params: unknown[] }[];
@@ -111,6 +113,9 @@ let conn: ReturnType<typeof crearConexion>;
 /** Lecturas (pool o conexión): planes del lote, auxiliares, personal, unidades TMS, viáticos y motor de intervalos. */
 async function responder(s: string, params: unknown[]): Promise<unknown[]> {
   const empresa = Number(params[0]);
+  if (s.includes("SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje")) {
+    return m.planes.filter((p) => p.empresa_id === empresa && (params.slice(1) as number[]).includes(p.id)).map((p) => ({ id: p.id, vehiculo_solicitado_perfil_id: sinVehiculo.has(p.id) ? null : 11 }));
+  }
   if (s.includes("FROM tms_planes_viaje p") && s.includes("LEFT JOIN tms_unidades u ON u.id = p.unidad_id") && s.includes("p.id IN")) {
     const ids = params.slice(1) as number[];
     return m.planes.filter((p) => p.empresa_id === empresa && ids.includes(p.id)).map((p) => ({
@@ -249,6 +254,21 @@ describe("atomicidad y orden de operaciones", () => {
     expect(updates).toHaveLength(0);
     expect(h.eventos).toEqual(["lock", "begin", "forupdate-planes", "rollback", "unlock", "release"]);
     expect(auditorias).toHaveLength(0);
+  });
+
+  it("VEHÍCULO SOLICITADO: un histórico sin vehículo no se guarda (todo o nada): sin UPDATE, con rollback y el mensaje exigido", async () => {
+    sinVehiculo.add(102);
+    try {
+      const antes = snapshot();
+      const r = await guardar([cambio(101, { pilotoPersonalId: 12 }), cambio(102, { pilotoPersonalId: 13 })]);
+      expect(r).toMatchObject({ ok: false, status: 409, error: MSG_CAMBIOS_INVALIDOS });
+      expect(codigos(r, 102)).toEqual(["VEHICULO_SOLICITADO_FALTANTE"]);
+      expect((r as { filas: { planId: number; errores: { mensaje: string }[] }[] }).filas.find((f) => f.planId === 102)!.errores[0].mensaje)
+        .toBe("Este viaje debe completar el vehículo solicitado desde Programación antes de editarse.");
+      expect(snapshot()).toBe(antes);
+      expect(updates).toHaveLength(0);
+      expect(h.eventos).toContain("rollback");
+    } finally { sinVehiculo.delete(102); }
   });
 
   it("3) un error en el UPDATE de la segunda fila revierte la primera", async () => {

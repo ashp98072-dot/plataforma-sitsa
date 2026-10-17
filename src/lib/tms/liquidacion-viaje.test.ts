@@ -138,6 +138,8 @@ describe("Liquidación de viajes · Fase 1 · alcance (no toca cierre, facturaci
       "src/lib/tms/resumen-liquidacion.ts",
       "src/lib/tms/resumen-liquidacion-shared.ts",
       "src/app/api/empresas/[slug]/tms/reportes/viajes/export/route.ts",
+      // Excel de Planes / Viajes: muestra el estado de liquidación (solo lectura) igual que la pantalla y el export de Reportes.
+      "src/lib/tms/planes-viajes-excel.ts",
     ]);
     const importadores = salida
       .split("\n")

@@ -5,7 +5,8 @@ import { programarSolicitud } from "@/lib/tms/solicitudes-cliente-operaciones";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
-const schema = z.object({ version: z.number().int().nonnegative() });
+// El vehículo solicitado es OBLIGATORIO: el viaje nace 'Programado' y utilizable. Lo elige Operaciones (la solicitud del cliente no lo captura).
+const schema = z.object({ version: z.number().int().nonnegative(), vehiculoSolicitadoPerfilId: z.number().int().positive().optional() });
 
 /**
  * CLIENTE-PORTAL-3 (alcance 7-12) — conversión EN_REVISION -> PROGRAMADA
@@ -35,6 +36,7 @@ export async function POST(req: Request, ctx: Ctx) {
     solicitudId,
     parsed.data.version,
     guard.session.username,
+    parsed.data.vehiculoSolicitadoPerfilId,
   );
   if (!r.ok) return NextResponse.json({ error: r.mensaje }, { status: r.status });
   return NextResponse.json({

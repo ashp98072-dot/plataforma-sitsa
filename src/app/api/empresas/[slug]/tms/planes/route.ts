@@ -41,6 +41,7 @@ import {
   resolverVehiculoSolicitado,
   vehiculoSolicitadoDelPlan,
 } from "@/lib/tms/vehiculo-solicitado-db";
+import { esPatchDeEdicion, exigeVehiculoSolicitadoAlEditar, vehiculoEfectivoTrasPatch } from "@/lib/tms/vehiculo-solicitado";
 import {
   calcularCambiosRecursos,
   camposTocados,
@@ -59,7 +60,7 @@ import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { lugaresDesdeParadas, resolverDescargaReporte } from "@/lib/tms/plan-lugares";
-import { respuestaErroresPrograma } from "@/lib/tms/validacion-programacion";
+import { respuestaVehiculoSolicitadoObligatorio, respuestaErroresPrograma } from "@/lib/tms/validacion-programacion";
 import {
   MSG_EXTRA_SOLO_PROPIO,
   MSG_PERSONA_DUPLICADA,
@@ -696,6 +697,9 @@ export async function POST(req: Request, ctx: Ctx) {
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
+  // VEHÍCULO SOLICITADO OBLIGATORIO (Propio y Tercerizado): todo viaje nuevo nace con el tipo/capacidad que pidió el cliente. Se valida ANTES de
+  // cualquier otra regla o escritura; la validez del perfil (de ESTA empresa y activo) se verifica más abajo.
+  if (d.vehiculoSolicitadoPerfilId == null) return respuestaVehiculoSolicitadoObligatorio();
   const salidaProgramada = `${d.fechaPlan}T${(d.horaCarga || "00:00").slice(0, 5)}`;
   if (d.regresoEstimado && d.regresoEstimado <= salidaProgramada) {
     return NextResponse.json(
@@ -1779,6 +1783,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   const errorEstado = validarEstadoEditable({ estado: antes.estado, pendienteCierre: antes.pendienteCierre }, toca);
   if (errorEstado) return NextResponse.json({ error: errorEstado.error }, { status: errorEstado.status });
+
+  // VEHÍCULO SOLICITADO OBLIGATORIO al GUARDAR CAMBIOS de un viaje editable. Un histórico sin dato se puede consultar siempre; para guardar cambios hay que
+  // elegir uno (el PATCH de «Cargado»/«Cancelar» no es una edición y no se bloquea). Un valor ya guardado que no cambia no se revalida.
+  if (esPatchDeEdicion(d) && exigeVehiculoSolicitadoAlEditar(antes.estado, antes.pendienteCierre)) {
+    try {
+      const actualVehiculo = await vehiculoSolicitadoDelPlan(empresaId, d.id);
+      if (vehiculoEfectivoTrasPatch(d.vehiculoSolicitadoPerfilId, actualVehiculo.id) == null) return respuestaVehiculoSolicitadoObligatorio();
+    } catch (e) {
+      // Instalación sin la migración del vehículo solicitado: no hay dónde guardarlo, la regla no puede aplicarse (el resto de la edición sigue como siempre).
+      if (!esColumnaInexistente(e)) throw e;
+    }
+  }
 
   // Fase P5.1c — FECHA EFECTIVA Y FECHA PASADA. "hoy" se calcula en
   // America/Guatemala (hoyLocal(), ya existente y reutilizado en el resto

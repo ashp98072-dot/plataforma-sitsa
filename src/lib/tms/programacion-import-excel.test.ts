@@ -410,12 +410,12 @@ describe("generarPlantillaProgramacion", () => {
     });
   });
 
-  it("genera las 7 hojas esperadas (Vehiculos y TC separadas)", async () => {
+  it("genera las 8 hojas esperadas (Vehiculos y TC separadas, más el catálogo de vehículos solicitables)", async () => {
     const buf = await generarPlantillaProgramacion(7);
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buf as unknown as ExcelJS.Buffer);
     expect(wb.worksheets.map((w) => w.name)).toEqual([
-      "Programacion", "Rutas", "Vehiculos", "TC", "Empleados", "Clientes", "Instrucciones",
+      "Programacion", "Rutas", "Vehiculos", "TC", "Empleados", "Clientes", "VehiculosSolicitables", "Instrucciones",
     ]);
   });
 

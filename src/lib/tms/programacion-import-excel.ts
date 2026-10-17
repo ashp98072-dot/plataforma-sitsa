@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
+import { listarVehiculosSolicitables } from "./vehiculo-solicitado-db";
 
 /**
  * TMS-IMPORTACION-PROGRAMACION-EXCEL (PR 2 de 6) — plantilla + parser de la
@@ -65,8 +66,13 @@ const COL_OBSERVACIONES = 13; // M
 // aprobadas: un archivo antiguo (13 columnas, sin este encabezado) se lee EXACTAMENTE como antes.
 const COL_TC = 14; // N
 export const ENCABEZADO_TC = "TC / Caja / Remolque";
-/** Encabezados de la plantilla NUEVA (14 columnas). El importador acepta 13 (formato viejo) o 14. */
-export const ENCABEZADOS_PLANTILLA_PROGRAMACION = [...ENCABEZADOS_PROGRAMACION, ENCABEZADO_TC] as const;
+// Columna O: «Vehículo solicitado» (nombre o código del perfil). Al final por la misma razón que TC. El parser acepta
+// archivos de 13/14/15 columnas, pero SIN esta columna (o con la celda vacía) la fila se rechaza en la vista previa:
+// ningún viaje nuevo de Programación puede quedar sin vehículo solicitado.
+const COL_VEHICULO = 15; // O
+export const ENCABEZADO_VEHICULO = "Vehículo solicitado";
+/** Encabezados de la plantilla NUEVA (15 columnas). El importador lee 13, 14 o 15, pero exige el vehículo en cada fila. */
+export const ENCABEZADOS_PLANTILLA_PROGRAMACION = [...ENCABEZADOS_PROGRAMACION, ENCABEZADO_TC, ENCABEZADO_VEHICULO] as const;
 
 const HOJA_PROGRAMACION = "Programacion";
 const FILA_ENCABEZADO = 1;
@@ -100,6 +106,11 @@ export type FilaProgramacionExcel = {
    * (archivo de 13 columnas o celda vacía). Nunca resuelve nada por sí solo: el backend lo valida contra Flota.
    */
   tcExcel?: string;
+  /**
+   * Vehículo solicitado (columna O): nombre o código del perfil, tal cual lo escribió el usuario (espacios normalizados).
+   * "" o ausente = archivo sin la columna o celda vacía; la vista previa lo rechaza (es obligatorio).
+   */
+  vehiculoSolicitadoExcel?: string;
   /** Errores puramente sintácticos de ESTA fila (formato/obligatoriedad/regreso vs. salida). Vacío = fila sintácticamente correcta. */
   erroresSintacticos: string[];
 };
@@ -269,6 +280,7 @@ function parsearFila(
   ws: ExcelJS.Worksheet,
   rowIndex: number,
   conColumnaTc = false,
+  conColumnaVehiculo = false,
 ): FilaProgramacionExcel {
   const row = ws.getRow(rowIndex);
   const errores: string[] = [];
@@ -356,6 +368,7 @@ function parsearFila(
 
   const observacionesExcel = normalizarEspacios(cellStr(row.getCell(COL_OBSERVACIONES).value));
   const tcExcel = conColumnaTc ? normalizarPlaca(row.getCell(COL_TC).value) : "";
+  const vehiculoSolicitadoExcel = conColumnaVehiculo ? normalizarEspacios(cellStr(row.getCell(COL_VEHICULO).value)) : "";
 
   return {
     filaExcel: rowIndex,
@@ -374,6 +387,7 @@ function parsearFila(
     observacionesExcel,
     // Solo cuando el archivo trae la columna: el objeto de un archivo de 13 columnas queda idéntico al de siempre.
     ...(conColumnaTc ? { tcExcel } : {}),
+    ...(conColumnaVehiculo ? { vehiculoSolicitadoExcel } : {}),
     erroresSintacticos: errores,
   };
 }
@@ -423,6 +437,21 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
     );
   }
 
+  // Columna 15 OPCIONAL en el archivo (los archivos viejos no la traen y sus filas se rechazan en la vista previa por
+  // falta de vehículo). Si trae otro encabezado es un archivo alterado; y no puede existir sin la columna TC.
+  const encabezadoO = cellStr(ws.getRow(FILA_ENCABEZADO).getCell(COL_VEHICULO).value);
+  const conColumnaVehiculo = normalizarComparacion(encabezadoO) === normalizarComparacion(ENCABEZADO_VEHICULO);
+  if (encabezadoO.trim() && !conColumnaVehiculo) {
+    throw new Error(
+      `Encabezado inválido en la columna ${letraColumna(COL_VEHICULO)}: se esperaba "${ENCABEZADO_VEHICULO}" y se encontró "${encabezadoO}". No modifique ni reordene las columnas de la hoja "${HOJA_PROGRAMACION}".`,
+    );
+  }
+  if (conColumnaVehiculo && !conColumnaTc) {
+    throw new Error(
+      `Encabezado inválido en la columna ${letraColumna(COL_TC)}: se esperaba "${ENCABEZADO_TC}" antes de la columna "${ENCABEZADO_VEHICULO}". No modifique ni reordene las columnas de la hoja "${HOJA_PROGRAMACION}".`,
+    );
+  }
+
   const filas: FilaProgramacionExcel[] = [];
   const ultimaFila = ws.rowCount;
   for (let rowIndex = FILA_INICIO_DATOS; rowIndex <= ultimaFila; rowIndex++) {
@@ -442,6 +471,7 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
       row.getCell(COL_HORA_REGRESO).value,
       row.getCell(COL_OBSERVACIONES).value,
       ...(conColumnaTc ? [row.getCell(COL_TC).value] : []),
+      ...(conColumnaVehiculo ? [row.getCell(COL_VEHICULO).value] : []),
     ];
     if (celdas.every((v) => !cellStr(v).trim())) continue; // fila completamente vacía: se ignora
 
@@ -453,7 +483,7 @@ export async function parsearExcelProgramacion(buffer: Buffer): Promise<FilaProg
         `El archivo supera el límite de ${MAX_FILAS_PROGRAMACION} filas por importación.`,
       );
     }
-    filas.push(parsearFila(ws, rowIndex, conColumnaTc));
+    filas.push(parsearFila(ws, rowIndex, conColumnaTc, conColumnaVehiculo));
   }
 
   return filas;
@@ -581,6 +611,13 @@ async function catalogoEmpleados(empresaId: number): Promise<CatalogoEmpleado[]>
   }));
 }
 
+export type CatalogoVehiculoSolicitable = { nombre: string; codigo: string };
+
+async function catalogoVehiculosSolicitables(empresaId: number): Promise<CatalogoVehiculoSolicitable[]> {
+  const opciones = await listarVehiculosSolicitables(empresaId);
+  return opciones.map((o) => ({ nombre: o.nombre, codigo: o.codigo }));
+}
+
 export type CatalogoCliente = { nombre: string; nit: string };
 
 async function catalogoClientes(empresaId: number): Promise<CatalogoCliente[]> {
@@ -614,7 +651,7 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
   ws.getRow(FILA_ENCABEZADO).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   ws.getRow(FILA_ENCABEZADO).height = 32;
 
-  const anchos = [13, 11, 13, 26, 13, 13, 15, 15, 18, 12, 15, 13, 30, 22];
+  const anchos = [13, 11, 13, 26, 13, 13, 15, 15, 18, 12, 15, 13, 30, 22, 26];
   anchos.forEach((w, i) => {
     ws.getColumn(i + 1).width = w;
   });
@@ -629,11 +666,11 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
   // rutas-import-excel.ts).
   const ejemplo1 = [
     "2026-09-20", "08:00", "EJEMPLO-NO-IMPORTAR", "Acme S.A. (o su NIT)", "1234",
-    "P-123ABC", "5678", "", "Carga completa", 1500, "2026-09-20", "17:00", "Ejemplo — no se importa", "",
+    "P-123ABC", "5678", "", "Carga completa", 1500, "2026-09-20", "17:00", "Ejemplo — no se importa", "", "Camión 5 toneladas",
   ];
   const ejemplo2 = [
     "2026-09-21", "02:30 PM", "EJEMPLO-NO-IMPORTAR", "Acme S.A.", "1234",
-    "P-456XYZ", "5678", "9012", "Paquetería", 800, "2026-09-21", "06:00 PM", "Ejemplo — no se importa", "TC-456XYZ",
+    "P-456XYZ", "5678", "9012", "Paquetería", 800, "2026-09-21", "06:00 PM", "Ejemplo — no se importa", "TC-456XYZ", "Cabezal",
   ];
   [ejemplo1, ejemplo2].forEach((fila, i) => {
     const rowNum = FILA_EJEMPLO_1 + i;
@@ -644,7 +681,7 @@ function construirHojaProgramacion(wb: ExcelJS.Workbook): ExcelJS.Worksheet {
     ws.getRow(rowNum).fill = { type: "pattern", pattern: "solid", fgColor: { argb: COLOR_EJEMPLO } };
   });
 
-  ws.autoFilter = { from: "A1", to: `N${FILA_INICIO_DATOS + MAX_FILAS_PROGRAMACION}` };
+  ws.autoFilter = { from: "A1", to: `O${FILA_INICIO_DATOS + MAX_FILAS_PROGRAMACION}` };
   return ws;
 }
 
@@ -700,6 +737,7 @@ function construirHojaInstrucciones(wb: ExcelJS.Workbook): void {
     ["Código piloto *", 'Código de empleado (RRHH) del piloto, tal como aparece en la hoja "Empleados". Debe existir y estar activo/habilitado.'],
     ["Placa *", 'Placa exacta de la unidad, tal como aparece en la hoja "Vehiculos".'],
     ["TC / Caja / Remolque", 'OPCIONAL. Placa del TC / caja / remolque del viaje, tal como aparece en la hoja "TC" (solo TC activos de Flota; no use aquí una placa de la hoja "Vehiculos"). Déjela vacía si el viaje no lleva TC. Un mismo TC no puede estar en dos viajes el mismo día. Los archivos antiguos de 13 columnas (sin esta columna) siguen funcionando igual.'],
+    ["Vehículo solicitado *", 'Obligatorio. Vehículo/capacidad que pidió el cliente: escriba el NOMBRE exacto (o el código) tal como aparece en la hoja "VehiculosSolicitables" de este archivo. Debe ser un perfil activo de su empresa; no se deduce de la placa ni de la tarifa. Es distinto de la Placa (la unidad que hará el viaje). Una fila sin vehículo solicitado, o con uno que no existe, se rechaza en la vista previa y no se importa. Los archivos antiguos (sin esta columna) deben agregarla.'],
     ["Código auxiliar 1 / 2", "Códigos de empleado de los auxiliares, si aplica. Ambos son opcionales."],
     ["Tipo traslado", "Texto libre, por ejemplo: Carga completa, Paquetería."],
     ["Tarifa GTQ *", "Obligatoria. Monto en quetzales (puede ser 0). Se contrastará contra la tarifa vigente del sistema para esa ruta al momento de importar."],
@@ -764,12 +802,13 @@ function aplicarDropdown(ws: ExcelJS.Worksheet, columna: number, nombreLista: st
  * (fuera de alcance de este módulo, ver PR 3/4/5).
  */
 export async function generarPlantillaProgramacion(empresaId: number): Promise<Buffer> {
-  const [rutas, vehiculos, tcs, empleados, clientes] = await Promise.all([
+  const [rutas, vehiculos, tcs, empleados, clientes, vehiculosSolicitables] = await Promise.all([
     catalogoRutas(empresaId),
     catalogoVehiculos(empresaId),
     catalogoTc(empresaId),
     catalogoEmpleados(empresaId),
     catalogoClientes(empresaId),
+    catalogoVehiculosSolicitables(empresaId),
   ]);
 
   const wb = new ExcelJS.Workbook();
@@ -813,16 +852,25 @@ export async function generarPlantillaProgramacion(empresaId: number): Promise<B
     clientes.map((c) => [c.nombre, c.nit]),
     [36, 16],
   );
+  construirHojaCatalogo(
+    wb,
+    "VehiculosSolicitables",
+    ["Nombre", "Código"],
+    vehiculosSolicitables.map((v) => [v.nombre, v.codigo]),
+    [36, 18],
+  );
   construirHojaInstrucciones(wb);
 
   definirRangoLista(wb, "LISTA_RUTAS_CODIGOS", "Rutas", rutas.length);
   definirRangoLista(wb, "LISTA_VEHICULOS_PLACAS", "Vehiculos", vehiculos.length);
   definirRangoLista(wb, "LISTA_TC_PLACAS", "TC", tcs.length);
   definirRangoLista(wb, "LISTA_EMPLEADOS_CODIGOS", "Empleados", empleados.length);
+  definirRangoLista(wb, "LISTA_VEHICULOS_SOLICITABLES", "VehiculosSolicitables", vehiculosSolicitables.length);
 
   aplicarDropdown(wsProgramacion, COL_CODIGO_RUTA, "LISTA_RUTAS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_PLACA, "LISTA_VEHICULOS_PLACAS");
   aplicarDropdown(wsProgramacion, COL_TC, "LISTA_TC_PLACAS");
+  aplicarDropdown(wsProgramacion, COL_VEHICULO, "LISTA_VEHICULOS_SOLICITABLES");
   aplicarDropdown(wsProgramacion, COL_PILOTO, "LISTA_EMPLEADOS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_AUX1, "LISTA_EMPLEADOS_CODIGOS");
   aplicarDropdown(wsProgramacion, COL_AUX2, "LISTA_EMPLEADOS_CODIGOS");

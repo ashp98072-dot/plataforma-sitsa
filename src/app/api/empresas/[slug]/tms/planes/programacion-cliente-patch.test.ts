@@ -51,6 +51,7 @@ import { primerConflictoProgramacionIntervalo } from "@/lib/tms/disponibilidad-p
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { GET, PATCH } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 const get = (qs = "fechaDesde=2026-09-23&fechaHasta=2026-09-23") => GET(new Request(`http://x/api?${qs}`), ctx);

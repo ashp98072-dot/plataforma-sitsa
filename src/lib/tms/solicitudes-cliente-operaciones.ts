@@ -1,4 +1,6 @@
 import type { RowDataPacket, ResultSetHeader } from "mysql2";
+import { MSG_VEHICULO_SOLICITADO_INVALIDO, resolverVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado-db";
+import { MSG_VEHICULO_SOLICITADO_OBLIGATORIO } from "@/lib/tms/vehiculo-solicitado";
 import { execute, getPool, query } from "@/lib/db";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
@@ -294,6 +296,7 @@ export async function rechazarSolicitud(
 
 export type ResultadoProgramar =
   | { ok: true; planId: number; planCodigo: string }
+  | { ok: false; status: 400; mensaje: string }
   | { ok: false; status: 404; mensaje: string }
   | { ok: false; status: 409; mensaje: string };
 
@@ -336,7 +339,16 @@ export async function programarSolicitud(
   solicitudId: number,
   version: number,
   usuarioInterno: string,
+  vehiculoSolicitadoPerfilId?: number | null,
 ): Promise<ResultadoProgramar> {
+  // VEHÍCULO SOLICITADO OBLIGATORIO: el viaje que nace de una solicitud es un viaje 'Programado' normal (aparece en Programación y puede avanzar de estado),
+  // así que no puede nacer sin él. La solicitud del cliente no lo captura: lo elige Operaciones al programar (catálogo ACTIVO de esta empresa). Se valida
+  // ANTES de abrir la transacción y de cualquier escritura.
+  if (vehiculoSolicitadoPerfilId == null || !(vehiculoSolicitadoPerfilId > 0)) {
+    return { ok: false, status: 400, mensaje: MSG_VEHICULO_SOLICITADO_OBLIGATORIO };
+  }
+  const vehiculo = await resolverVehiculoSolicitado(empresaId, vehiculoSolicitadoPerfilId);
+  if (!vehiculo) return { ok: false, status: 400, mensaje: MSG_VEHICULO_SOLICITADO_INVALIDO };
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
@@ -401,8 +413,8 @@ export async function programarSolicitud(
         const [insertResult] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
              (empresa_id, codigo, cliente_id, fecha_plan, hora_carga,
-              referencia_cliente, notas, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'Programado')`,
+              referencia_cliente, notas, estado, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?)`,
           [
             empresaId,
             codigoFinal,
@@ -411,6 +423,8 @@ export async function programarSolicitud(
             solicitud.hora_solicitada != null ? String(solicitud.hora_solicitada) : null,
             solicitud.referencia_cliente != null ? String(solicitud.referencia_cliente) : null,
             solicitud.observaciones != null ? String(solicitud.observaciones) : null,
+            vehiculo.id,
+            vehiculo.nombre,
           ],
         );
         planId = Number(insertResult.insertId);

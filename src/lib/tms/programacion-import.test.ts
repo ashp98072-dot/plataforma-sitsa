@@ -44,6 +44,8 @@ function filaFixture(overrides: Partial<FilaProgramacionExcel> = {}): FilaProgra
     fechaRegresoExcel: "2026-09-20",
     horaRegresoExcel: "17:00",
     observacionesExcel: "",
+    // Vehículo solicitado (obligatorio): por defecto el nombre exacto del único perfil activo del mock (id 11).
+    vehiculoSolicitadoExcel: "Camión 5 toneladas",
     erroresSintacticos: [],
     ...overrides,
   };
@@ -308,11 +310,14 @@ type EstadoMock = {
   conflictoUnidad: unknown[];
   tarifas: unknown[];
   lugares: LugarMock[];
+  /** Perfiles de costeo ACTIVOS de la empresa (catálogo de «Vehículo solicitado»). */
+  perfiles: { id: number; codigo: string; nombre: string }[];
 };
 
 function crearEstadoMock(opts: Partial<{
   rutas: unknown[]; empleados: EmpleadoMock[]; personal: PersonalMock[]; unidades: unknown[];
   conflictoPersonal: unknown[]; conflictoUnidad: unknown[]; tarifas: unknown[];
+  perfiles: { id: number; codigo: string; nombre: string }[];
 }> = {}): EstadoMock {
   return {
     rutas: opts.rutas ?? [rutaRow()],
@@ -323,6 +328,7 @@ function crearEstadoMock(opts: Partial<{
     conflictoUnidad: opts.conflictoUnidad ?? [],
     tarifas: opts.tarifas ?? [tarifaRow()],
     lugares: [],
+    perfiles: opts.perfiles ?? [{ id: 11, codigo: "CAM_5T", nombre: "Camión 5 toneladas" }],
   };
 }
 
@@ -346,6 +352,7 @@ function dispatchQuery(estado: EstadoMock, sql: string, params: unknown[]): unkn
     const match = estado.lugares.find((l) => l.nombre === nombre);
     return match ? [{ id: match.id }] : [];
   }
+  if (sql.includes("FROM tms_cotizacion_costeo_perfiles")) return estado.perfiles;
   if (sql.includes("FROM tms_cliente_rutas r")) return estado.rutas;
   if (sql.includes("FROM empleados WHERE empresa_id")) return estado.empleados;
   if (sql.includes("FROM tms_personal WHERE empresa_id = ? AND (codigo IS NOT NULL OR id_empleado IS NOT NULL)")) return estado.personal;
@@ -511,6 +518,8 @@ describe("previsualizarImportacionProgramacion", () => {
       pilotoNombre: "Juan Pérez",
       pilotoPersonalId: null, // nunca ha existido en tms_personal
       unidadPlaca: "P-123ABC",
+      vehiculoSolicitadoPerfilId: 11,
+      vehiculoSolicitadoNombre: "Camión 5 toneladas",
       unidadId: null, // nunca ha existido en tms_unidades
       tarifaVigente: 1500,
       regresoEstimado: "2026-09-20T17:00",
@@ -525,8 +534,8 @@ describe("previsualizarImportacionProgramacion", () => {
     expect(resultado.filas[0]).toEqual({
       filaExcel: 4, estado: "error", errores: ["Placa es obligatoria."], advertencias: [], datos: null,
     });
-    // No debería haber consultado catálogo para esta fila -> solo las 4 consultas bulk iniciales.
-    expect(query).toHaveBeenCalledTimes(4);
+    // No debería haber consultado catálogo para esta fila -> solo las 5 consultas bulk iniciales (incluye perfiles activos).
+    expect(query).toHaveBeenCalledTimes(5);
   });
 
   it("fila duplicada dentro del lote (PR 3): se integra como error, sin resolver catálogo", async () => {

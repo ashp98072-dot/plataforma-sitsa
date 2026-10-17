@@ -34,8 +34,9 @@ import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { MENSAJE_VALIDACION, textoError, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { PATCH, POST } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt" }) };
-const enviar = (metodo: "POST" | "PATCH", body: unknown) => (metodo === "POST" ? POST : PATCH)(new Request("http://x/api", { method: metodo, body: JSON.stringify(body) }), ctx);
+const enviar = (metodo: "POST" | "PATCH", body: unknown) => (metodo === "POST" ? POST : PATCH)(new Request("http://x/api", { method: metodo, body: JSON.stringify(metodo === "POST" && body && typeof body === "object" ? { vehiculoSolicitadoPerfilId: 1, ...body } : body) }), ctx);
 const FECHA = "2026-12-15";
 const leer = async (metodo: "POST" | "PATCH", body: unknown) => {
   const res = await enviar(metodo, body);
