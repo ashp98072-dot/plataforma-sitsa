@@ -79,9 +79,11 @@ describe("page.tsx — filtro de estado: Activos / Bajas / Todos", () => {
 });
 
 describe("page.tsx — supervisores independientes del filtro de la tabla", () => {
-  it("cargarSupervisores sigue pidiendo SIEMPRE estado=Activo y nunca usa filtroEstado/filtroTipo/filtroPago/búsqueda", () => {
+  it("cargarSupervisores usa catálogo ligero SIEMPRE Activo y nunca filtros de tabla", () => {
     const c = cuerpoDeCallback("cargarSupervisores");
-    expect(c).toContain("`/api/empresas/${slug}/empleados?estado=Activo`");
+    expect(c).toContain("`/api/empresas/${slug}/empleados/supervisores`");
+    const catalogo = readFileSync(join(process.cwd(), "src/lib/rrhh/supervisores-catalogo.ts"), "utf8");
+    expect(catalogo).toContain("WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre");
     expect(c).not.toContain("filtroEstado");
     expect(c).not.toContain("filtroTipo");
     expect(c).not.toContain("filtroPago");

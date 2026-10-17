@@ -9,9 +9,11 @@ import { FotoAmpliada } from "@/components/rrhh/detalle-movimientos-mensual";
  * imagen que cargó bien es ampliable. `compacta`: 32 px (listado de Empleados) en lugar de 40 px.
  * `tieneFoto`: `false` → iniciales directamente, SIN pedir el endpoint (evita el 404 por empleado sin fotografía). `true`/sin definir →
  * se pide la imagen como siempre; `onError` queda solo como red de seguridad (archivo ausente/ilegible), no como mecanismo principal.
+ * `usarMiniatura`: opt-in del listado Empleados al derivado privado; la ampliación siempre pide el original.
  */
-export function FotoEmpleadoMiniatura({ slug, empleadoId, nombre, ampliable = false, compacta = false, tieneFoto }: { slug: string; empleadoId: number; nombre: string; ampliable?: boolean; compacta?: boolean; tieneFoto?: boolean }) {
-  const src = `/api/empresas/${slug}/empleados/${empleadoId}/foto`;
+export function FotoEmpleadoMiniatura({ slug, empleadoId, nombre, ampliable = false, compacta = false, tieneFoto, usarMiniatura = false }: { slug: string; empleadoId: number; nombre: string; ampliable?: boolean; compacta?: boolean; tieneFoto?: boolean; usarMiniatura?: boolean }) {
+  const originalSrc = `/api/empresas/${slug}/empleados/${empleadoId}/foto`;
+  const src = usarMiniatura ? originalSrc + "/miniatura" : originalSrc;
   const [fallida, setFallida] = useState<string>();
   const [ampliada, setAmpliada] = useState(false);
   const imagen = (
@@ -22,6 +24,6 @@ export function FotoEmpleadoMiniatura({ slug, empleadoId, nombre, ampliable = fa
   return <div className={`flex ${compacta ? "h-8 w-8" : "h-10 w-10"} shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-[var(--input)]`}>
     {tieneFoto === false || fallida === src ? <span className="text-xs text-[var(--muted)]" aria-label={`Sin fotografía de ${nombre}`}>{nombre.trim().split(/\s+/).slice(0, 2).map((n) => n[0]).join("") || "—"}</span> :
       ampliable ? <button type="button" aria-label={`Ampliar fotografía de ${nombre}`} onClick={(ev) => { ev.stopPropagation(); setAmpliada(true); }} onDoubleClick={(ev) => ev.stopPropagation()} className="h-full w-full cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{imagen}</button> : imagen}
-    {ampliable && ampliada && tieneFoto !== false && fallida !== src ? <FotoAmpliada src={src} nombre={nombre} cerrar={() => setAmpliada(false)} /> : null}
+    {ampliable && ampliada && tieneFoto !== false && fallida !== src ? <FotoAmpliada src={originalSrc} nombre={nombre} cerrar={() => setAmpliada(false)} /> : null}
   </div>;
 }
