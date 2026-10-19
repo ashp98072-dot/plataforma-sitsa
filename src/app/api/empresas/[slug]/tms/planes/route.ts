@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
@@ -256,6 +257,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
   const fechaDesdeParam = url.searchParams.get("fechaDesde");
   const fechaHastaParam = url.searchParams.get("fechaHasta");
+  const rangoExplicito = url.searchParams.get("rango") === "1";
+  if (rangoExplicito) {
+    const error = errorRangoProgramacion(fechaDesdeParam ?? "", fechaHastaParam ?? "");
+    if (error) return NextResponse.json({ error }, { status: 400 });
+  }
   if (fechaDesdeParam && !FECHA_RE.test(fechaDesdeParam)) {
     return NextResponse.json(
       { error: "fechaDesde inválida; usa YYYY-MM-DD." },
@@ -334,7 +340,8 @@ export async function GET(req: Request, ctx: Ctx) {
   // segunda porque es a lo sumo 1 fila) — se dejan sin límite. El GET sin
   // filtros (compat) y el filtro por rango de fecha conservan el límite de
   // seguridad de siempre.
-  const limitSql = pendienteCierreParam || usarId ? "" : "LIMIT 200";
+  // Solo el nuevo modo Rango, con ambos extremos validados, consulta todo el intervalo.
+  const limitSql = pendienteCierreParam || usarId || rangoExplicito ? "" : "LIMIT 200";
 
   // PROGRAMACION-VEHICULO-SOLICITADO — columnas nuevas (aditivas). Si la instalación aún no corrió la migración, se
   // reintenta sin ellas: la lista sigue funcionando y el dato llega como ausente ("—").

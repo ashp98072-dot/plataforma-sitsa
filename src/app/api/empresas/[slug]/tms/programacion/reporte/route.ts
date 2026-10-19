@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { cuadrillaDePlanes } from "@/lib/tms/cuadrilla";
@@ -98,6 +99,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const fechaExacta = url.searchParams.get("fecha") || undefined;
   const fechaDesde = fechaExacta || url.searchParams.get("fechaDesde") || undefined;
   const fechaHasta = fechaExacta || url.searchParams.get("fechaHasta") || undefined;
+  const rangoExplicito = url.searchParams.get("rango") === "1";
+  if (rangoExplicito) {
+    const error = errorRangoProgramacion(fechaDesde ?? "", fechaHasta ?? "");
+    if (error) return NextResponse.json({ error }, { status: 400 });
+  }
 
   const estadoRaw = url.searchParams.get("estado") || undefined;
   const estado = estadoRaw && ESTADOS_FILTRO_VALIDOS.has(estadoRaw) ? estadoRaw : undefined;
@@ -117,6 +123,8 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const condiciones = ["p.empresa_id = ?"];
   const params: (string | number)[] = [guard.empresa.id];
+  // En Rango el reporte replica el tablero activo (Cerrados siguen en Planes / Viajes).
+  if (rangoExplicito) condiciones.push("p.estado <> 'Cerrado'");
   if (estado === "PendienteCierre") {
     condiciones.push(
       `(p.estado NOT IN ('Cerrado', 'Cancelado') AND EXISTS (
@@ -127,6 +135,10 @@ export async function GET(req: Request, ctx: Ctx) {
   } else if (fechaDesde && fechaHasta) {
     condiciones.push("p.fecha_plan BETWEEN ? AND ?");
     params.push(fechaDesde, fechaHasta);
+  }
+  if (rangoExplicito && estado === "PendienteCierre") {
+    condiciones.push("p.fecha_plan BETWEEN ? AND ?");
+    params.push(fechaDesde!, fechaHasta!);
   }
   if (estado === "Programado" || estado === "En ruta" || estado === "Cerrado") {
     condiciones.push("p.estado = ?");
