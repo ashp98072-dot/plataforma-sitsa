@@ -70,6 +70,34 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+describe("GET reporte — modo Rango coherente con Programación", () => {
+  it.each(["xlsx", "pdf"])("%s acota pendientes al intervalo y excluye Cerrados solo en Rango", async (formato) => {
+    await GET(new Request(`http://local?rango=1&formato=${formato}&estado=PendienteCierre&fechaDesde=2026-12-31&fechaHasta=2027-01-02&piloto=Juan&unidad=P-123&cliente=Cliente`), ctx);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.empresa_id = ?");
+    expect(sql).toContain("p.fecha_plan BETWEEN ? AND ?");
+    expect(sql).toContain("p.estado <> 'Cerrado'");
+    expect(sql).toContain("fv.estado = 'cerrado'");
+    expect(sql).toContain("pil.nombre = ?");
+    expect(sql).toContain("u.placa = ?");
+    expect(sql).toContain("c.nombre = ?");
+    expect(params).toEqual([7, "2026-12-31", "2027-01-02", "Juan", "Juan", "P-123", "Cliente"]);
+    expect(formato === "pdf" ? tablaAPdf : tablaAExcel).toHaveBeenCalledTimes(1);
+  });
+  it.each(["", "&fechaDesde=2026-10-17", "&fechaDesde=2026-10-18&fechaHasta=2026-10-17", "&fechaDesde=2026-02-30&fechaHasta=2026-03-02"])("rango inválido %s da 400 sin consultar ni exportar", async (qs) => {
+    expect((await GET(new Request(`http://local?rango=1${qs}`), ctx)).status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+    expect(tablaAExcel).not.toHaveBeenCalled();
+    expect(tablaAPdf).not.toHaveBeenCalled();
+  });
+  it("sin marca de Rango, pendientes conserva la consulta de todas las fechas", async () => {
+    await GET(new Request("http://local?estado=PendienteCierre&fechaDesde=2026-10-01&fechaHasta=2026-10-31"), ctx);
+    const sql = vi.mocked(query).mock.calls[0][0];
+    expect(sql).not.toContain("p.fecha_plan BETWEEN ? AND ?");
+    expect(sql).not.toContain("p.estado <> 'Cerrado'");
+  });
+});
+
 describe("GET /tms/programacion/reporte — exige permiso y rango de fechas", () => {
   it("exige el permiso de módulo TMS antes de consultar nada", async () => {
     vi.mocked(requireTenantModulo).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantModulo>>);

@@ -99,7 +99,7 @@ describe("programacion-client.tsx — Exportar imagen", () => {
 
   it("deshabilita ambos botones mientras genera (evita doble clic/doble descarga)", () => {
     const seccion = programacionClient.slice(pos("Exportar PDF"), pos("Importar Excel"));
-    expect(seccion.match(/disabled=\{exportandoImagen\}/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(seccion.match(/disabled=\{exportandoImagen \|\| exportacionBloqueada\}/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("«Exportar imagen» solo existe en Programación — ningún otro módulo importa programacion-exportar-imagen ni programacion-imagen", () => {

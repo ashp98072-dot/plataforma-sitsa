@@ -20,6 +20,7 @@ import type { FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 import { crearSecuenciaCargas } from "@/lib/tms/plan-form-cambios";
+import { errorRangoProgramacion, urlRangoProgramacion, type IntervaloProgramacion } from "@/lib/tms/programacion-rango";
 
 const PlanForm = dynamic(() => import("./plan-form"), {
   loading: () => <p>Cargando formulario…</p>,
@@ -238,7 +239,7 @@ type EstadoVehiculo = {
 // se puede derivar de `hoy` como los otros 3). `rangoQueContiene` (más
 // abajo) NUNCA devuelve "fecha" — sigue siendo estrictamente Hoy/Mañana/
 // Semana, ver su propio comentario.
-export type Rango = "hoy" | "manana" | "semana" | "fecha";
+export type Rango = "hoy" | "manana" | "semana" | "fecha" | "rango";
 
 const ESTADO_LABEL: Record<string, string> = {
   Programado: "Programado",
@@ -446,8 +447,8 @@ function sumarDias(iso: string, dias: number): string {
 }
 
 /**
- * PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — "fecha" es el único modo cuyo
- * rango NO se deriva de `hoy`: usa tal cual `fechaSeleccionada` (desde ==
+ * PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — "fecha" no se deriva de `hoy`:
+ * usa tal cual `fechaSeleccionada` (desde ==
  * hasta, un solo día — mismo criterio que ya usaban "hoy"/"mañana", sin
  * inventar un caso nuevo de "un solo día"), sin restricción de pasado ni
  * futuro (histórico completo, igual que ya acepta el backend vía
@@ -462,7 +463,9 @@ export function rangoFechas(
   hoy: string,
   rango: Rango,
   fechaSeleccionada?: string,
+  intervalo?: IntervaloProgramacion,
 ): { desde: string; hasta: string } {
+  if (rango === "rango") return intervalo ?? { desde: "", hasta: "" };
   if (rango === "hoy") return { desde: hoy, hasta: hoy };
   if (rango === "manana") {
     const manana = sumarDias(hoy, 1);
@@ -566,10 +569,11 @@ async function obtenerProgramacion(
   slug: string,
   desde: string,
   hasta: string,
+  rangoExplicito = false,
 ): Promise<{ ok: true; datos: DatosProgramacion } | { ok: false; error: string }> {
   const [resPlanes, resPendientes] = await Promise.all([
-    fetch(`/api/empresas/${slug}/tms/planes?fechaDesde=${desde}&fechaHasta=${hasta}`),
-    fetch(`/api/empresas/${slug}/tms/planes?pendienteCierre=1`),
+    fetch(`/api/empresas/${slug}/tms/planes?fechaDesde=${desde}&fechaHasta=${hasta}${rangoExplicito ? "&rango=1" : ""}`),
+    fetch(`/api/empresas/${slug}/tms/planes?pendienteCierre=1${rangoExplicito ? `&fechaDesde=${desde}&fechaHasta=${hasta}&rango=1` : ""}`),
   ]);
   const dataPlanes = await resPlanes.json();
   if (!resPlanes.ok) {
@@ -579,6 +583,11 @@ async function obtenerProgramacion(
   // rápido) — si esta segunda petición falla, no debe tumbar la pantalla
   // completa; se degrada a vacío y "Actualizar" la vuelve a intentar.
   const dataPendientes = await resPendientes.json().catch(() => ({}));
+  // Rango no puede certificar un conjunto completo si falla la mitad de pendientes.
+  // Los modos anteriores conservan su degradación histórica a lista vacía.
+  if (rangoExplicito && (!resPendientes.ok || !Array.isArray(dataPendientes.planes))) {
+    return { ok: false, error: dataPendientes.error ?? "No se pudieron cargar los pendientes del rango. Intenta actualizar." };
+  }
   const pendientesCierre = resPendientes.ok
     ? ((dataPendientes.planes ?? []) as Plan[])
     : [];
@@ -593,18 +602,20 @@ async function obtenerProgramacion(
   };
 }
 
-type Props = { slug: string; hoy: string; planInicialId?: number | null };
+type Props = { slug: string; hoy: string; planInicialId?: number | null; rangoInicial?: IntervaloProgramacion };
 
 // OPS-2.2: sondeo pasivo cada 30s (antes 5s) — ver el efecto de carga más
 // abajo para el resto de las reglas de polling inteligente (pestaña
 // oculta, refresh inmediato al volver, sin requests superpuestos).
 const POLLING_MS = 30_000;
 
-export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
+export function ProgramacionClient({ slug, hoy, planInicialId = null, rangoInicial }: Props) {
   const router = useRouter();
   const { empresaNombre } = useEmpresaSession();
   const { permisos } = useEmpresaSession();
   const [planes, setPlanes] = useState<Plan[]>([]);
+  // Procedencia del último conjunto completo: evita exportar una respuesta anterior de 200 filas.
+  const [rangoCompleto, setRangoCompleto] = useState<string | null>(null);
   // OPS-2.1: lista completa e independiente del rango de fechas — ver
   // DatosProgramacion.pendientesCierre.
   const [pendientesCierre, setPendientesCierre] = useState<Plan[]>([]);
@@ -625,7 +636,8 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // VIAT-4 (punto 5) — la empresa normalmente programa un día antes: la
   // vista inicial de Programación abre en "Mañana", no "Hoy". Botones Hoy/
   // Mañana/Semana siguen disponibles para cambiarlo.
-  const [rango, setRango] = useState<Rango>("manana");
+  const [rango, setRango] = useState<Rango>(rangoInicial ? "rango" : "manana");
+  const [intervalo, setIntervalo] = useState<IntervaloProgramacion>(rangoInicial ?? { desde: hoy, hasta: hoy });
   // PROGRAMACION-FILTRO-FECHA-ESPECIFICA-1 — solo se USA cuando rango ===
   // "fecha" (ver rangoFechas), pero se mantiene aparte de `rango` para que
   // el valor elegido no se pierda al alternar a Hoy/Mañana/Semana y volver
@@ -688,7 +700,14 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   // antes) porque el efecto de carga ahora depende de desde/hasta — el
   // servidor filtra por fecha, ya no el navegador sobre un array de hasta
   // 200 filas.
-  const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada);
+  const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada, intervalo);
+  const esRangoExplicito = rango === "rango";
+  const errorRango = esRangoExplicito ? errorRangoProgramacion(desde, hasta) : null;
+  const exportacionBloqueada = Boolean(errorRango) || (esRangoExplicito && (loading || Boolean(err) || rangoCompleto !== `${desde}/${hasta}`));
+
+  function actualizarUrlRango(nuevo: IntervaloProgramacion | null) {
+    window.history.replaceState(null, "", urlRangoProgramacion(window.location.href, nuevo));
+  }
 
   // Creación/edición de viajes: `mostrarCrear` abre el formulario en modo
   // creación; `editando` selecciona un plan del tablero para abrir el mismo
@@ -742,6 +761,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
    */
   function reporteQueryString(formato: "xlsx" | "pdf"): string {
     const p = new URLSearchParams({ formato, fechaDesde: desde, fechaHasta: hasta });
+    if (esRangoExplicito) p.set("rango", "1");
     if (filtroRapido !== "todos") p.set("estado", filtroRapido);
     if (fPiloto) p.set("piloto", fPiloto);
     if (fUnidad) p.set("unidad", fUnidad);
@@ -786,6 +806,11 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
      * silencio — se conserva el último dato válido, sin error repetido.
      */
     async function ejecutarRefresh(silencioso: boolean) {
+      if (errorRango) {
+        secuenciaCargas.current.iniciar();
+        if (!silencioso) setLoading(false);
+        return;
+      }
       if (enVuelo) return;
       enVuelo = true;
       if (!silencioso) {
@@ -797,18 +822,19 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
           // Edición rápida con cambios pendientes: no se reemplaza la lista bajo el borrador del usuario.
           if (pausarSondeoRef.current) return;
           const turno = secuenciaCargas.current.iniciar();
-          const r = await obtenerProgramacion(slug, desde, hasta).catch(() => null);
+          const r = await obtenerProgramacion(slug, desde, hasta, esRangoExplicito).catch(() => null);
           // PROGRAMACION-PERSISTENCIA — si mientras tanto empezó otra carga (p. ej. la recarga tras guardar), este
           // resultado es más viejo: se descarta para no volver a mostrar los valores anteriores del viaje.
           if (!ignore && r?.ok && secuenciaCargas.current.esVigente(turno)) {
             setPlanes(r.datos.planes);
+            setRangoCompleto(esRangoExplicito ? `${desde}/${hasta}` : null);
             setPendientesCierre(r.datos.pendientesCierre);
             setEstadoVehiculos(r.datos.estadoVehiculos);
             setTarifasPorRuta(r.datos.tarifasPorRuta);
           }
         } else {
           const turno = secuenciaCargas.current.iniciar();
-          const r = await obtenerProgramacion(slug, desde, hasta).catch(
+          const r = await obtenerProgramacion(slug, desde, hasta, esRangoExplicito).catch(
             () => ({ ok: false, error: "Error de conexión al cargar la programación." }) as const,
           );
           if (ignore || !secuenciaCargas.current.esVigente(turno)) return;
@@ -816,6 +842,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             setErr(r.error);
           } else {
             setPlanes(r.datos.planes);
+            setRangoCompleto(esRangoExplicito ? `${desde}/${hasta}` : null);
             setPendientesCierre(r.datos.pendientesCierre);
             setEstadoVehiculos(r.datos.estadoVehiculos);
             setTarifasPorRuta(r.datos.tarifasPorRuta);
@@ -850,7 +877,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       window.clearInterval(intervalo);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [slug, desde, hasta]);
+  }, [slug, desde, hasta, esRangoExplicito, errorRango]);
 
   // TMS-PROGRAMACION-NAVEGACION-DIRECTA-PLAN: si llegó ?plan=ID desde TMS
   // ("Ver en Programación"), trae ESE plan puntual por id — sin depender
@@ -885,6 +912,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         return;
       }
       setPlanDirecto(plan);
+      if (rangoInicial) return; // La URL compartida conserva su intervalo; el editor puntual sigue disponible.
       const contenedor = rangoQueContiene(hoy, plan.fecha_plan);
       if (contenedor) {
         setRango(contenedor);
@@ -897,20 +925,22 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     return () => {
       ignore = true;
     };
-  }, [planInicialId, slug, hoy]);
+  }, [planInicialId, slug, hoy, rangoInicial]);
 
   async function cargar() {
+    if (errorRango) return;
     setLoading(true);
     setErr("");
     const turno = secuenciaCargas.current.iniciar();
     try {
-      const r = await obtenerProgramacion(slug, desde, hasta);
+      const r = await obtenerProgramacion(slug, desde, hasta, esRangoExplicito);
       if (!secuenciaCargas.current.esVigente(turno)) return;
       if (!r.ok) {
         setErr(r.error);
         return;
       }
       setPlanes(r.datos.planes);
+      setRangoCompleto(esRangoExplicito ? `${desde}/${hasta}` : null);
       setPendientesCierre(r.datos.pendientesCierre);
       setEstadoVehiculos(r.datos.estadoVehiculos);
       setTarifasPorRuta(r.datos.tarifasPorRuta);
@@ -963,15 +993,16 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     () =>
       planes.filter(
         (p) =>
+          !errorRango &&
           p.fecha_plan >= desde &&
           p.fecha_plan <= hasta &&
           perteneceAlTableroProgramacion(p.estado),
       ),
-    [planes, desde, hasta],
+    [planes, desde, hasta, errorRango],
   );
 
-  // Fase P4.2: una llamada por FECHA ÚNICA visible (máximo 7, acotado por
-  // "Semana"), nunca por persona ni por plan — evita N+1. listarDisponibilidadPersonal()
+  // Fase P4.2: una llamada por FECHA ÚNICA visible (hasta 7 en "Semana";
+  // Rango puede abarcar más), nunca por persona ni por plan. listarDisponibilidadPersonal()
   // solo acepta una fecha a la vez (diseño aprobado, no se cambió su firma),
   // así que el batching real ocurre aquí, agrupando por fecha_plan.
   useEffect(() => {
@@ -1031,6 +1062,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
   const baseFiltroRapido = filtroRapido === "PendienteCierre" ? pendientesCierre : enRango;
   const visibles = useMemo(() => {
     return baseFiltroRapido.filter((p) => {
+      if (esRangoExplicito && (errorRango || p.fecha_plan < desde || p.fecha_plan > hasta)) return false;
       // Un viaje Tercerizado con piloto externo SÍ tiene piloto (programacion-personal-vista.ts).
       if (filtroRapido === "sin_piloto" && tienePilotoVista(p)) return false;
       if (filtroRapido === "sin_unidad" && p.placa) return false;
@@ -1043,7 +1075,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       if (fCliente && p.cliente !== fCliente) return false;
       return true;
     });
-  }, [baseFiltroRapido, filtroRapido, fPiloto, fUnidad, fCliente]);
+  }, [baseFiltroRapido, filtroRapido, fPiloto, fUnidad, fCliente, esRangoExplicito, errorRango, desde, hasta]);
 
   const resumen = useMemo(
     () => ({
@@ -1053,11 +1085,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       // OPS-2.1: cuenta real y completa (pendientesCierre), no acotada al
       // rango de fechas visible — antes podía mostrar menos de los que
       // en realidad hay pendientes.
-      finalizados: pendientesCierre.length,
+      finalizados: esRangoExplicito
+        ? pendientesCierre.filter((p) => !errorRango && p.fecha_plan >= desde && p.fecha_plan <= hasta).length
+        : pendientesCierre.length,
       sinPiloto: enRango.filter((p) => !tienePilotoVista(p)).length,
       sinUnidad: enRango.filter((p) => !p.placa).length,
     }),
-    [enRango, pendientesCierre],
+    [enRango, pendientesCierre, esRangoExplicito, errorRango, desde, hasta],
   );
 
   const [exportandoImagen, setExportandoImagen] = useState(false);
@@ -1083,6 +1117,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
    * tradicional (nunca se inventa uno nuevo).
    */
   async function exportarImagen(formato: "png" | "jpeg") {
+    if (exportacionBloqueada) return;
     setExportandoImagen(true);
     try {
       const filas: FilaProgramacionImagen[] = visibles.map((p) => {
@@ -1122,7 +1157,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         };
       });
       const rango =
-        filtroRapido === "PendienteCierre"
+        filtroRapido === "PendienteCierre" && !esRangoExplicito
           ? "Pendientes de cierre (todas las fechas)"
           : desde === hasta
             ? desde
@@ -1231,13 +1266,14 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
     setMostrarCrear(false);
     await cargar();
     setEditandoId(eraCreacion ? info.id : null);
-    const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada);
+    const { desde, hasta } = rangoFechas(hoy, rango, fechaSeleccionada, intervalo);
     if (info.fechaPlan >= desde && info.fechaPlan <= hasta) {
       setAvisoRango("");
       return;
     }
     if (info.fechaPlan >= hoy && info.fechaPlan <= sumarDias(hoy, 6)) {
       setRango("semana");
+      if (esRangoExplicito) actualizarUrlRango(null);
       setAvisoRango("");
     } else {
       setAvisoRango(
@@ -1375,6 +1411,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             ["manana", "Mañana"],
             ["semana", "Semana"],
             ["fecha", "Fecha"],
+            ["rango", "Rango"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -1382,7 +1419,9 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             type="button"
             onClick={() => {
               siSePuedenPerderCambios(() => {
+                if (key === "rango" && rango !== "rango") setLoading(true);
                 setRango(key);
+                actualizarUrlRango(key === "rango" ? intervalo : null);
                 setAvisoRango("");
               });
             }}
@@ -1413,8 +1452,35 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             }}
           />
         ) : null}
+        {esRangoExplicito ? (
+          <>
+            {(["desde", "hasta"] as const).map((extremo) => (
+              <label key={extremo} className="text-xs text-[var(--muted)]">
+                {extremo === "desde" ? "Desde" : "Hasta"}
+                <input
+                  type="date"
+                  required
+                  aria-invalid={Boolean(errorRango)}
+                  aria-describedby={errorRango ? "error-rango-programacion" : undefined}
+                  className={`${input} ml-2 py-1`}
+                  value={intervalo[extremo]}
+                  onChange={(e) => {
+                    const nuevo = { ...intervalo, [extremo]: e.target.value };
+                    siSePuedenPerderCambios(() => {
+                      if (nuevo.desde !== intervalo.desde || nuevo.hasta !== intervalo.hasta) setLoading(true);
+                      setIntervalo(nuevo);
+                      actualizarUrlRango(nuevo);
+                      setAvisoRango("");
+                    });
+                  }}
+                />
+              </label>
+            ))}
+            {errorRango ? <p id="error-rango-programacion" role="alert" className="text-sm text-rose-300">{errorRango}</p> : null}
+          </>
+        ) : null}
         <span className="self-center text-xs text-[var(--muted)]">
-          {filtroRapido === "PendienteCierre"
+          {filtroRapido === "PendienteCierre" && !esRangoExplicito
             ? "Pendientes de cierre: se muestran todos, sin importar la fecha."
             : desde === hasta
               ? desde
@@ -1433,13 +1499,15 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
       */}
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
         <a
-          href={`/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("xlsx")}`}
+          href={exportacionBloqueada ? undefined : `/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("xlsx")}`}
+          aria-disabled={exportacionBloqueada}
           className="rounded bg-emerald-700 px-3 py-1.5 text-xs text-white hover:bg-emerald-600"
         >
           Exportar Excel
         </a>
         <a
-          href={`/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("pdf")}`}
+          href={exportacionBloqueada ? undefined : `/api/empresas/${slug}/tms/programacion/reporte?${reporteQueryString("pdf")}`}
+          aria-disabled={exportacionBloqueada}
           className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white hover:bg-[#3f4b5f]"
         >
           Exportar PDF
@@ -1450,7 +1518,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
             rango/Estado/Piloto/Unidad/Cliente que Excel/PDF de arriba). */}
         <button
           type="button"
-          disabled={exportandoImagen}
+          disabled={exportandoImagen || exportacionBloqueada}
           onClick={() => void exportarImagen("png")}
           className="rounded bg-indigo-700 px-3 py-1.5 text-xs text-white hover:bg-indigo-600 disabled:opacity-60"
         >
@@ -1458,7 +1526,7 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         </button>
         <button
           type="button"
-          disabled={exportandoImagen}
+          disabled={exportandoImagen || exportacionBloqueada}
           onClick={() => void exportarImagen("jpeg")}
           className="text-[11px] text-[var(--muted)] underline hover:text-[var(--text)] disabled:opacity-60"
         >
@@ -1475,12 +1543,13 @@ export function ProgramacionClient({ slug, hoy, planInicialId = null }: Props) {
         <span className="text-[10px] text-[var(--muted)]">
           Reporte tradicional: Mes, Día, Placa, Piloto, Auxiliar 1, Auxiliar 2
           {filtroRapido === "Programado" ? "" : ", Código"}, Cliente, Lugar de Carga, Hora, Lugar
-          de Descarga. Exporta exactamente el rango ({filtroRapido === "PendienteCierre"
+          de Descarga. Exporta exactamente el rango ({filtroRapido === "PendienteCierre" && !esRangoExplicito
             ? "todas las fechas"
             : desde === hasta
               ? desde
               : `${desde} → ${hasta}`}) y el Estado/Piloto/Unidad/Cliente que tengas filtrados
           arriba — nunca una fecha distinta a la que ves en el tablero.
+          {esRangoExplicito ? " Rango incluye todos los viajes del intervalo; Pendiente de cierre también respeta estas fechas." : null}
         </span>
       </div>
 
