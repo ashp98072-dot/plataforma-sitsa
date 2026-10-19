@@ -136,7 +136,7 @@ export default function VacacionesPage() {
   }, [slug, filtroEmpleadoId, filtroTipo, filtroDesde, filtroHasta]);
 
   const cargarEmpleados = useCallback(async () => {
-    const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json());
+    const e = await fetch(`/api/empresas/${slug}/rrhh/vacaciones/empleados`).then((r) => r.json());
     const lista: Emp[] = e.empleados ?? [];
     setEmpleados(lista);
     if (!empleadoId && lista[0]?.id) setEmpleadoId(lista[0].id);
