@@ -184,7 +184,7 @@ describe("obtener / listar", () => {
 
   it("antes de la migración (ER_BAD_FIELD_ERROR) la LECTURA cae al SELECT sin columnas nuevas; otros errores se propagan", async () => {
     vi.mocked(query).mockImplementation(async (sql: unknown) => {
-      if (String(sql).includes("condiciones_credito")) {
+      if (String(sql).includes("condiciones_credito") || String(sql).includes("atencion_tratamiento")) {
         throw Object.assign(new Error("Unknown column 'condiciones_credito'"), { code: "ER_BAD_FIELD_ERROR", errno: 1054 });
       }
       if (String(sql).includes("FROM tms_cotizacion_lineas")) return [] as never;
@@ -192,7 +192,9 @@ describe("obtener / listar", () => {
     });
     const c = await obtenerCotizacion(7, 1);
     expect(c).toMatchObject({ condicionesCredito: null, combustibleReferenciaTipo: null, combustibleReferenciaPrecio: null });
-    expect(String(vi.mocked(query).mock.calls[1][0])).not.toContain("condiciones_credito");
+    const ultima = String(vi.mocked(query).mock.calls.map((c) => String(c[0])).filter((s) => s.includes("FROM tms_cotizaciones ")).at(-1));
+    expect(ultima).not.toContain("condiciones_credito");
+    expect(ultima).not.toContain("atencion_tratamiento");
 
     vi.mocked(query).mockReset().mockRejectedValueOnce(Object.assign(new Error("conexión perdida"), { code: "PROTOCOL_CONNECTION_LOST" }));
     await expect(obtenerCotizacion(7, 1)).rejects.toThrow("conexión perdida");

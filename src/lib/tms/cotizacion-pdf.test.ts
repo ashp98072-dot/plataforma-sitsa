@@ -124,7 +124,7 @@ describe("PDF multipágina — la marca de agua y el branding se repiten en cada
 describe.each([["KUIQTRANS", KUIQ], ["MONACO", MONACO]] as const)("contenido comercial — %s", (_marca, base) => {
   it("imprime cliente, atención, cargo, origen, destino, unidad y precio", async () => {
     const { todo } = await generar(base);
-    for (const valor of ["Distribuidora Ejemplo, S.A.", "Atención: Claudia Cordero", "Compras / Logística", "Bodega Zona 12", "Puerto Barrios, Izabal", "Camión 5 toneladas", "Q1,400.00"]) {
+    for (const valor of ["Distribuidora Ejemplo, S.A.", "Claudia Cordero", "Compras / Logística", "Bodega Zona 12", "Puerto Barrios, Izabal", "Camión 5 toneladas", "Q1,400.00"]) {
       expect(todo).toContain(valor);
     }
   });

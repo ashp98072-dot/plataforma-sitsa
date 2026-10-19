@@ -17,6 +17,8 @@ import {
   LIMITE_CONDICIONES_CREDITO,
   MARCAS_DOCUMENTO,
   TIPOS_COMBUSTIBLE_REFERENCIA,
+  TRATAMIENTOS_DESTINATARIO,
+  lineaDestinatario,
   textoCombustibleReferencia,
   type DocumentoEmisor,
   type TipoCombustibleReferencia,
@@ -51,6 +53,7 @@ type Cotizacion = {
   observaciones: string | null;
   documentoEmisor: DocumentoEmisor;
   atencionNombre: string | null;
+  atencionTratamiento: string | null;
   atencionCargo: string | null;
   unidadDescripcion: string | null;
   mensajeComercial: string | null;
@@ -107,6 +110,7 @@ const FORM_VACIO = {
   observaciones: "",
   documentoEmisor: DOCUMENTO_EMISOR_DEFAULT as DocumentoEmisor,
   atencionNombre: "",
+  atencionTratamiento: "",
   atencionCargo: "",
   unidadDescripcion: "",
   mensajeComercial: "",
@@ -230,6 +234,7 @@ export default function CotizacionesPage() {
       observaciones: c.observaciones ?? "",
       documentoEmisor: c.documentoEmisor,
       atencionNombre: c.atencionNombre ?? "",
+      atencionTratamiento: c.atencionTratamiento ?? "",
       atencionCargo: c.atencionCargo ?? "",
       unidadDescripcion: c.unidadDescripcion ?? "",
       mensajeComercial: c.mensajeComercial ?? "",
@@ -315,6 +320,7 @@ export default function CotizacionesPage() {
       documentoEmisor: form.documentoEmisor,
       mensajeComercial: form.mensajeComercial.trim() || null,
       atencionNombre: form.atencionNombre.trim() || null,
+      atencionTratamiento: form.atencionTratamiento || null,
       atencionCargo: form.atencionCargo.trim() || null,
       unidadDescripcion: form.unidadDescripcion.trim() || null,
       // COTIZACIONES-CREDITO-COMBUSTIBLE — vacío = sin dato (null); el servidor valida tipo y precio.
@@ -471,6 +477,12 @@ export default function CotizacionesPage() {
                 {DOCUMENTOS_EMISOR.map((d) => <option key={d} value={d}>{MARCAS_DOCUMENTO[d].etiqueta}</option>)}
               </select>
             </label>
+            <label className="text-xs text-[var(--muted)]">Tratamiento (opcional)
+              <select className={`${inputCls} mt-0.5 w-full`} value={form.atencionTratamiento} onChange={(e) => setForm((f) => ({ ...f, atencionTratamiento: e.target.value }))}>
+                <option value="">Sin tratamiento</option>
+                {TRATAMIENTOS_DESTINATARIO.map((t) => <option key={t.valor} value={t.valor}>{t.etiqueta}</option>)}
+              </select>
+            </label>
             <label className="text-xs text-[var(--muted)]">Atención a (opcional)
               <input maxLength={160} className={`${inputCls} mt-0.5 w-full`} value={form.atencionNombre} onChange={(e) => setForm((f) => ({ ...f, atencionNombre: e.target.value }))} />
             </label>
@@ -600,7 +612,7 @@ export default function CotizacionesPage() {
                 <div><span className="text-[var(--muted)]">Destino:</span> {c.destinoTexto ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Ruta:</span> {c.rutaCodigoHistorico ?? "—"}</div>
                 <div><span className="text-[var(--muted)]">Documento emitido por:</span> {MARCAS_DOCUMENTO[c.documentoEmisor]?.nombre ?? c.documentoEmisor}</div>
-                <div><span className="text-[var(--muted)]">Atención:</span> {[c.atencionNombre, c.atencionCargo].filter(Boolean).join(" · ") || "—"}</div>
+                <div><span className="text-[var(--muted)]">Atención:</span> {[lineaDestinatario(c.atencionTratamiento, c.atencionNombre), c.atencionCargo].filter(Boolean).join(" · ") || "—"}</div>
                 <div><span className="text-[var(--muted)]">Unidad:</span> {c.unidadDescripcion ?? "—"}</div>
                 {c.lineasAdicionales?.length ? (
                   <div className="md:col-span-3">

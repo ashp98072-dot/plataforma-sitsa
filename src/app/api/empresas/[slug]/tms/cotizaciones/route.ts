@@ -59,6 +59,7 @@ const schema = z.object({
   // FASE 6 — documento comercial. La marca es un catálogo cerrado; atención/cargo/unidad son opcionales.
   documentoEmisor: z.enum(DOCUMENTOS_EMISOR).optional(),
   atencionNombre: z.string().max(160).nullable().optional(),
+  atencionTratamiento: z.enum(["Sr.", "Sres.", "Sra.", "Srta."]).nullable().optional(),
   atencionCargo: z.string().max(160).nullable().optional(),
   unidadDescripcion: z.string().max(160).nullable().optional(),
   // PRESENTACIÓN COMERCIAL — snapshot editable del texto del PDF. Si se omite/vacío al crear,
