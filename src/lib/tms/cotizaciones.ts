@@ -11,6 +11,7 @@ import {
   esDocumentoEmisor,
   esPrecioCombustibleValido,
   esTipoCombustibleReferencia,
+  esTratamientoDestinatario,
   type TipoCombustibleReferencia,
   normalizarDocumentoEmisor,
   textoOpcional,
@@ -146,6 +147,7 @@ export type Cotizacion = {
   /** FASE 6 — datos del documento comercial, guardados en la fila (histórico inmutable tras Enviada). */
   documentoEmisor: DocumentoEmisor;
   atencionNombre: string | null;
+  atencionTratamiento: string | null;
   atencionCargo: string | null;
   unidadDescripcion: string | null;
   /** Snapshot del texto del PDF — ver mensajeComercial en cotizacion-documento.ts (fallback determinista si es null). */
@@ -226,6 +228,7 @@ function mapRow(r: RowDataPacket): Omit<Cotizacion, "lineasAdicionales"> {
     observaciones: r.observaciones != null ? String(r.observaciones) : null,
     documentoEmisor: normalizarDocumentoEmisor(r.documento_emisor),
     atencionNombre: r.atencion_nombre != null ? String(r.atencion_nombre) : null,
+    atencionTratamiento: r.atencion_tratamiento != null ? String(r.atencion_tratamiento) : null,
     atencionCargo: r.atencion_cargo != null ? String(r.atencion_cargo) : null,
     unidadDescripcion: r.unidad_descripcion != null ? String(r.unidad_descripcion) : null,
     mensajeComercial: r.mensaje_comercial != null ? String(r.mensaje_comercial) : null,
@@ -245,14 +248,14 @@ function mapRow(r: RowDataPacket): Omit<Cotizacion, "lineasAdicionales"> {
  * respaldo si la migración aún no se aplicó en esta instalación (los datos llegan como NULL). Las ESCRITURAS
  * (crear/editar, incluido su SELECT ... FOR UPDATE) siempre nombran las columnas: sin migración fallan a la vista.
  */
-const selectCotizaciones = (conCreditoCombustible: boolean) => `
+const selectCotizaciones = (conCreditoCombustible: boolean, conTratamiento = true) => `
   SELECT id, empresa_id, codigo, cliente_id, cliente_nombre, ruta_id, ruta_codigo_historico,
          origen_texto, destino_texto, tarifa_referencia, tarifa_cotizada,
          incluye_iva, moneda, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision,
          DATE_FORMAT(fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento, estado,
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
-         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
+         documento_emisor, atencion_nombre, ${conTratamiento ? "atencion_tratamiento, " : ""}atencion_cargo, unidad_descripcion,
          mensaje_comercial, cierre_comercial,
          ${conCreditoCombustible ? "condiciones_credito, combustible_referencia_tipo, combustible_referencia_precio," : ""}
          creado_por, creado_en, actualizado_en
@@ -271,7 +274,13 @@ async function leerCotizaciones(sufijo: string, params: SqlParams): Promise<RowD
     return await query<RowDataPacket[]>(`${SELECT} ${sufijo}`, params);
   } catch (e) {
     if (!esColumnaInexistente(e)) throw e;
-    return query<RowDataPacket[]>(`${selectCotizaciones(false)} ${sufijo}`, params);
+  }
+  // Respaldo escalonado (migraciones aún sin aplicar): primero sin tratamiento, después también sin crédito/combustible.
+  try {
+    return await query<RowDataPacket[]>(`${selectCotizaciones(true, false)} ${sufijo}`, params);
+  } catch (e) {
+    if (!esColumnaInexistente(e)) throw e;
+    return query<RowDataPacket[]>(`${selectCotizaciones(false, false)} ${sufijo}`, params);
   }
 }
 
@@ -323,6 +332,8 @@ export type CotizacionInput = {
   observaciones?: string | null;
   documentoEmisor?: DocumentoEmisor;
   atencionNombre?: string | null;
+  /** «Sr.» | «Sres.» | «Sra.» | «Srta.»; null = sin tratamiento. */
+  atencionTratamiento?: string | null;
   atencionCargo?: string | null;
   unidadDescripcion?: string | null;
   /** Snapshot del texto del PDF; si se omite al CREAR, el llamador (route.ts) resuelve el default de Ajustes/fallback antes de llamar. */
@@ -394,7 +405,10 @@ function validarDocumentoEmisor(valor: unknown) {
 }
 
 /** Atención / cargo / unidad: opcionales; con texto, no pueden exceder la columna VARCHAR(160). */
-function validarTextosDocumento(input: Pick<CotizacionInput, "atencionNombre" | "atencionCargo" | "unidadDescripcion">) {
+function validarTextosDocumento(input: Pick<CotizacionInput, "atencionNombre" | "atencionTratamiento" | "atencionCargo" | "unidadDescripcion">) {
+  if (input.atencionTratamiento != null && input.atencionTratamiento !== "" && !esTratamientoDestinatario(input.atencionTratamiento)) {
+    throw new Error("El tratamiento debe ser Sr., Sres., Sra. o Srta.");
+  }
   for (const [valor, etiqueta] of [
     [input.atencionNombre, "La atención"], [input.atencionCargo, "El cargo / referencia"], [input.unidadDescripcion, "La unidad"],
   ] as const) {
@@ -458,7 +472,7 @@ function validarLineasAdicionales(lineas: LineaAdicionalInput[] | undefined) {
   });
 }
 
-function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial" | "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio">) {
+function validarInput(input: Pick<CotizacionInput, "fechaEmision" | "tarifaCotizada" | "clienteId" | "documentoEmisor" | "atencionNombre" | "atencionTratamiento" | "atencionCargo" | "unidadDescripcion" | "mensajeComercial" | "cierreComercial" | "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio">) {
   if (!input.clienteId) throw new Error("Cliente requerido.");
   if (!input.fechaEmision) throw new Error("Fecha de emisión requerida.");
   if (!(input.tarifaCotizada > 0)) throw new Error("La tarifa cotizada debe ser mayor a cero.");
@@ -518,9 +532,9 @@ export async function crearCotizacion(
          piloto_incluido, gps_incluido, seguro_mercaderia_incluido, seguro_terceros_incluido, servicio_refrigerado,
          km_incluidos, tarifa_km_adicional, condiciones_adicionales, observaciones,
          condiciones_credito, combustible_referencia_tipo, combustible_referencia_precio, creado_por,
-         documento_emisor, atencion_nombre, atencion_cargo, unidad_descripcion,
+         documento_emisor, atencion_nombre, atencion_tratamiento, atencion_cargo, unidad_descripcion,
          mensaje_comercial, cierre_comercial)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         empresaId,
         "", // se completa abajo, mismo criterio que fondos.ts (código derivado del id, sin condición de carrera)
@@ -551,6 +565,7 @@ export async function crearCotizacion(
         creadoPor ?? null,
         input.documentoEmisor ?? DOCUMENTO_EMISOR_DEFAULT,
         textoOpcional(input.atencionNombre),
+        esTratamientoDestinatario(input.atencionTratamiento) ? input.atencionTratamiento : null,
         textoOpcional(input.atencionCargo),
         textoOpcional(input.unidadDescripcion),
         textoOpcional(input.mensajeComercial),
@@ -635,7 +650,7 @@ export async function actualizarCotizacion(
          seguro_mercaderia_incluido = ?, seguro_terceros_incluido = ?, servicio_refrigerado = ?, km_incluidos = ?, tarifa_km_adicional = ?,
          condiciones_adicionales = ?, observaciones = ?,
          condiciones_credito = ?, combustible_referencia_tipo = ?, combustible_referencia_precio = ?,
-         documento_emisor = ?, atencion_nombre = ?, atencion_cargo = ?, unidad_descripcion = ?,
+         documento_emisor = ?, atencion_nombre = ?, atencion_tratamiento = ?, atencion_cargo = ?, unidad_descripcion = ?,
          mensaje_comercial = ?, cierre_comercial = ?
        WHERE id = ? AND empresa_id = ?`,
       [
@@ -665,6 +680,7 @@ export async function actualizarCotizacion(
         cambios.combustibleReferenciaPrecio !== undefined ? cambios.combustibleReferenciaPrecio : actual.combustibleReferenciaPrecio,
         cambios.documentoEmisor ?? actual.documentoEmisor,
         cambios.atencionNombre !== undefined ? textoOpcional(cambios.atencionNombre) : actual.atencionNombre,
+        cambios.atencionTratamiento !== undefined ? (esTratamientoDestinatario(cambios.atencionTratamiento) ? cambios.atencionTratamiento : null) : actual.atencionTratamiento,
         cambios.atencionCargo !== undefined ? textoOpcional(cambios.atencionCargo) : actual.atencionCargo,
         cambios.unidadDescripcion !== undefined ? textoOpcional(cambios.unidadDescripcion) : actual.unidadDescripcion,
         cambios.mensajeComercial !== undefined ? textoOpcional(cambios.mensajeComercial) : actual.mensajeComercial,
@@ -762,6 +778,7 @@ export async function duplicarCotizacion(
     observaciones: original.observaciones,
     documentoEmisor: original.documentoEmisor,
     atencionNombre: original.atencionNombre,
+    atencionTratamiento: original.atencionTratamiento,
     atencionCargo: original.atencionCargo,
     unidadDescripcion: original.unidadDescripcion,
     mensajeComercial: original.mensajeComercial,

@@ -1624,6 +1624,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   -- COTIZACIONES FASE 6 — documento comercial (ver sql/migrate-2026-09-cotizaciones-documento-comercial.sql).
   documento_emisor VARCHAR(20) NOT NULL DEFAULT 'KUIQTRANS',   -- 'KUIQTRANS' | 'MONACO' (validado en la aplicación)
   atencion_nombre VARCHAR(160) NULL,
+  atencion_tratamiento VARCHAR(10) NULL,           -- ver sql/migrate-2026-10-cotizaciones-tratamiento-destinatario.sql: Sr. | Sres. | Sra. | Srta. (validado en la aplicación)
   atencion_cargo VARCHAR(160) NULL,
   unidad_descripcion VARCHAR(160) NULL,
   -- ver sql/migrate-2026-09-cotizaciones-presentacion-comercial.sql — snapshot editable del texto del PDF.

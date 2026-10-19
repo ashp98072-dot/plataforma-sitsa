@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import { fechaLarga, formatoMoneda, type DocumentoComercial } from "./cotizacion-documento";
+import { fechaLarga, formatoMoneda, lineaDestinatario, type DocumentoComercial } from "./cotizacion-documento";
 
 /**
  * COTIZACIONES FASE 6 — utilidades de maquetación compartidas por las
@@ -252,7 +252,8 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
       // Destinatario: el cliente es el principal; atención y cargo son opcionales.
       doc.moveDown(0.8);
       dibujarParrafo(doc, x, ancho, modelo.cliente, { color: colores.texto, tamano: 12, negrita: true });
-      if (modelo.atencionNombre) dibujarParrafo(doc, x, ancho, `Atención: ${modelo.atencionNombre}`, { color: colores.texto, tamano: 10 });
+      const destinatario = lineaDestinatario(modelo.atencionTratamiento, modelo.atencionNombre);
+      if (destinatario) dibujarParrafo(doc, x, ancho, destinatario, { color: colores.texto, tamano: 10 });
       if (modelo.atencionCargo) dibujarParrafo(doc, x, ancho, modelo.atencionCargo, { color: colores.suave, tamano: 9.5 });
 
       doc.moveDown(0.7);

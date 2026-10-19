@@ -20,6 +20,24 @@ export const DOCUMENTO_EMISOR_DEFAULT: DocumentoEmisor = "KUIQTRANS";
 
 export const LIMITE_TEXTO_DOCUMENTO = 160;
 
+/** Tratamiento del destinatario en el PDF (lista cerrada; se elige por cotización, nunca se deduce del nombre). */
+export const TRATAMIENTOS_DESTINATARIO = [
+  { valor: "Sr.", etiqueta: "Señor — Sr." },
+  { valor: "Sres.", etiqueta: "Señores — Sres." },
+  { valor: "Sra.", etiqueta: "Señora — Sra." },
+  { valor: "Srta.", etiqueta: "Señorita — Srta." },
+] as const;
+export type TratamientoDestinatario = (typeof TRATAMIENTOS_DESTINATARIO)[number]["valor"];
+export const esTratamientoDestinatario = (v: unknown): v is TratamientoDestinatario => TRATAMIENTOS_DESTINATARIO.some((t) => t.valor === v);
+
+/** Línea del destinatario bajo el cliente: «Srta. Marjoie Barahona». Sin nombre no hay línea; sin tratamiento (cotizaciones anteriores) solo el nombre. */
+export function lineaDestinatario(tratamiento: string | null | undefined, nombre: string | null | undefined): string | null {
+  const n = nombre?.trim();
+  if (!n) return null;
+  const t = esTratamientoDestinatario(tratamiento) ? tratamiento : null;
+  return t ? `${t} ${n}` : n;
+}
+
 /** Mensaje/cierre comercial — mismo límite que condicionesAdicionales/observaciones en la cotización. */
 export const LIMITE_TEXTO_MENSAJE_COMERCIAL = 2000;
 
@@ -133,7 +151,7 @@ export type DatosDocumento = Pick<
   | "codigo" | "clienteNombre" | "origenTexto" | "destinoTexto" | "tarifaCotizada" | "incluyeIva" | "moneda"
   | "fechaEmision" | "fechaVencimiento" | "pilotoIncluido" | "gpsIncluido" | "seguroMercaderiaIncluido"
   | "seguroTercerosIncluido" | "servicioRefrigerado" | "kmIncluidos" | "tarifaKmAdicional"
-  | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion"
+  | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionTratamiento" | "atencionCargo" | "unidadDescripcion"
   | "mensajeComercial" | "cierreComercial" | "lineasAdicionales"
   | "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio"
 >;
@@ -198,6 +216,8 @@ export type DocumentoComercial = {
   fechaVencimiento: string | null;
   cliente: string;
   atencionNombre: string | null;
+  /** «Sr.» | «Sres.» | «Sra.» | «Srta.» o null (cotizaciones anteriores). */
+  atencionTratamiento: string | null;
   atencionCargo: string | null;
   saludo: string;
   lineas: LineaComercial[];
@@ -234,6 +254,7 @@ export function construirDocumentoComercial(c: DatosDocumento): DocumentoComerci
     fechaVencimiento: c.fechaVencimiento,
     cliente: c.clienteNombre,
     atencionNombre: textoOpcional(c.atencionNombre),
+    atencionTratamiento: esTratamientoDestinatario(c.atencionTratamiento) ? c.atencionTratamiento : null,
     atencionCargo: textoOpcional(c.atencionCargo),
     saludo: textoOpcional(c.mensajeComercial) ?? marca.saludo,
     lineas: lineasComerciales(c),
