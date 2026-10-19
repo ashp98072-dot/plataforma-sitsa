@@ -3,12 +3,13 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCxp, esConflictoTransitorio, esErrorDuplicado } from "./errores";
-import { calcularIsrProveedor, ReglaIsrPendiente, type RegimenFiscal, type ResultadoIsr } from "./isr-proveedor";
-import type { EstadoAdminCxp } from "./saldo";
+import { obtenerAplicado } from "./aplicaciones";
+import { calcularIsrProveedor, ReglaIsrPendiente, type RegimenFiscal, type ResultadoIsr, type TramoIsr } from "./isr-proveedor";
+import { desgloseFinanciero, type EstadoAdminCxp, type EstadoFinancieroCxp } from "./saldo";
 import { documentoNormalizado, fechaIso, idPositivo, importe, textoOpcional } from "./validacion";
 
 /**
- * M-3A — Facturas de proveedor (CxP). Modelo propio (`cxp_facturas`); `cont_cxp` queda como histórico y `fact_facturas`/`fact_pagos` (clientes) no se tocan.
+ * M-3A/M-3B1 — Facturas de proveedor (CxP). Modelo propio (`cxp_facturas`); `cont_cxp` queda como histórico y `fact_facturas`/`fact_pagos` (clientes) no se tocan.
  * Todo cálculo (total, ISR, neto a pagar) lo hace el SERVIDOR; del cliente solo se aceptan los datos capturados del documento.
  */
 export type Actor = { id: number; username: string };
@@ -18,6 +19,8 @@ export type EntradaFactura = {
 };
 export type Calculo = {
   baseNeto: string; ivaMonto: string; totalDocumento: string; isrPorcentaje: string; isrMonto: string; totalNetoPagar: string;
+  /** Desglose del ISR (la tasa es la MARGINAL del tramo): parte fija + parte variable = isrMonto. */
+  isrTramo: TramoIsr; isrFijo: string; isrVariable: string;
   reglaIsr: string; regimenFiscal: RegimenFiscal; sujetoIsr: boolean; advertencias: string[];
 };
 export type FacturaCxp = {
@@ -25,6 +28,11 @@ export type FacturaCxp = {
   fechaDocumento: string; fechaVencimiento: string | null; baseNeto: string; ivaMonto: string; totalDocumento: string; isrPorcentaje: string; isrMonto: string;
   totalNetoPagar: string; reglaIsr: string; regimenFiscal: string; sujetoIsr: boolean; observaciones: string | null; estadoAdmin: EstadoAdminCxp;
   creadoPor: number; creadoEn: string; anuladoPor: number | null; anuladoEn: string | null; motivoAnulacion: string | null;
+  /**
+   * Situación financiera DERIVADA (nunca columna): retención = isrMonto (se resta del total, NO es un pago), montoPagadero = total − retención,
+   * pagado = pagos REGISTRADOS aplicados, saldo = montoPagadero − pagado.
+   */
+  retencionIsr: string; montoPagadero: string; pagado: string; saldo: string; estadoFinanciero: EstadoFinancieroCxp;
 };
 
 const TASA_IVA_REFERENCIA = "0.12";
@@ -39,7 +47,8 @@ export function calcularFactura(baseNeto: string, ivaMonto: string, regimenFisca
   }
   return {
     baseNeto, ivaMonto, totalDocumento: total.toFixed(2), isrPorcentaje: isr.porcentaje, isrMonto: isr.monto,
-    totalNetoPagar: total.minus(isr.monto).toFixed(2), reglaIsr: isr.regla, regimenFiscal, sujetoIsr, advertencias,
+    totalNetoPagar: total.minus(isr.monto).toFixed(2), isrTramo: isr.tramo, isrFijo: isr.fijo, isrVariable: isr.variable,
+    reglaIsr: isr.regla, regimenFiscal, sujetoIsr, advertencias,
   };
 }
 
@@ -93,17 +102,10 @@ const SELECT = `SELECT x.id, x.empresa_id, x.entidad_id, x.proveedor_id, p.nombr
   DATE_FORMAT(x.anulado_en,'%Y-%m-%d %H:%i:%s') AS anulado_en, x.motivo_anulacion
   FROM cxp_facturas x JOIN compras_proveedores p ON p.empresa_id = x.empresa_id AND p.id = x.proveedor_id`;
 
-/**
- * Punto de extensión de pagos: suma de aplicaciones VIGENTES por factura. En M-3A no existe el módulo de pagos, así que es siempre 0.00 y solo
- * lo usa la anulación (no se anula con pagos). El SALDO no se expone en M-3A: su base (neto a pagar vs total) está pendiente de Contabilidad (ver saldo.ts).
- */
-export async function obtenerAplicado(_empresaId: number, _entidadId: number, ids: number[]): Promise<Map<number, string>> {
-  return new Map(ids.map(id => [id, "0.00"]));
-}
-
-function mapear(r: RowDataPacket): FacturaCxp {
+function mapear(r: RowDataPacket, aplicado = "0.00"): FacturaCxp {
   const estadoAdmin = String(r.estado_admin) as EstadoAdminCxp;
   const totalNetoPagar = new Decimal(String(r.total_neto_pagar)).toFixed(2);
+  const fin = desgloseFinanciero(estadoAdmin, { totalDocumento: String(r.total_documento), isrMonto: String(r.isr_monto), totalNetoPagar }, aplicado);
   return {
     id: Number(r.id), empresaId: Number(r.empresa_id), entidadId: Number(r.entidad_id), proveedorId: Number(r.proveedor_id), proveedorNombre: String(r.nombre_comercial),
     tipoDocumento: String(r.tipo_documento), serie: String(r.serie), numero: String(r.numero), fechaDocumento: String(r.fecha_documento),
@@ -113,6 +115,7 @@ function mapear(r: RowDataPacket): FacturaCxp {
     sujetoIsr: Number(r.sujeto_isr_snapshot) === 1, observaciones: r.observaciones == null ? null : String(r.observaciones), estadoAdmin,
     creadoPor: Number(r.creado_por), creadoEn: String(r.creado_en), anuladoPor: r.anulado_por == null ? null : Number(r.anulado_por),
     anuladoEn: r.anulado_en == null ? null : String(r.anulado_en), motivoAnulacion: r.motivo_anulacion == null ? null : String(r.motivo_anulacion),
+    retencionIsr: fin.retencionIsr, montoPagadero: fin.montoPagadero, pagado: fin.pagado, saldo: fin.saldo, estadoFinanciero: fin.estadoFinanciero,
   };
 }
 
@@ -165,21 +168,20 @@ export async function registrarFactura(empresaId: number, entidadId: number, act
 }
 
 /**
- * El documento (empresa + proveedor + serie + número) queda reservado EN TODOS LOS ESTADOS: una factura anulada NO libera su clave. Es la opción
- * restrictiva y reversible (relajarla después no pierde datos; endurecerla con duplicados ya guardados sí sería imposible). PROVISIONAL hasta que
- * Contabilidad confirme si una anulada debe poder volver a registrarse.
+ * El documento (empresa + proveedor + serie + número) queda reservado EN TODOS LOS ESTADOS: una factura anulada NO libera su serie+número
+ * (regla CONFIRMADA por Contabilidad en M-3B1; antes era provisional). Cambiar esta regla exigiría relajar el UNIQUE `uq_cxpf_documento`.
  */
 function errorDuplicado(v: Validada, proveedor: string, existenteId: number | null, fecha: string | null, anulada: boolean) {
   const doc = `${v.serie ? `${v.serie} / ` : ""}${v.numero}`;
   const donde = existenteId ? ` (CxP #${existenteId}${fecha ? `, fecha ${fecha}` : ""})` : "";
-  const nota = anulada ? " Está ANULADA y su número sigue reservado; consulta con Contabilidad cómo corregirla." : "";
+  const nota = anulada ? " Está ANULADA y una factura anulada no libera su serie y número; consulta con Contabilidad cómo corregirla." : "";
   return new ErrorCxp(`La factura ${doc} del proveedor ${proveedor} ya existe${donde}.${nota}`, 409, "FACTURA_DUPLICADA");
 }
 
 export async function obtenerFactura(empresaId: number, entidadId: number, id: number): Promise<FacturaCxp | null> {
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.id = ?`, [empresaId, entidadId, id]);
   if (!rows[0]) return null;
-  return mapear(rows[0]);
+  return mapear(rows[0], (await obtenerAplicado(empresaId, entidadId, [id], undefined, { tolerarSinMigracion: true })).get(id));
 }
 
 export type FiltrosFacturas = { proveedorId?: number; estado?: EstadoAdminCxp; desde?: string; hasta?: string; q?: string; page?: number; pageSize?: number };
@@ -194,10 +196,11 @@ export async function listarFacturas(empresaId: number, entidadId: number, f: Fi
   const desde = `FROM cxp_facturas x JOIN compras_proveedores p ON p.empresa_id = x.empresa_id AND p.id = x.proveedor_id WHERE ${w.join(" AND ")}`;
   const [tot] = await query<RowDataPacket[]>(`SELECT COUNT(*) AS n ${desde}`, p);
   const rows = await query<RowDataPacket[]>(`${SELECT} WHERE ${w.join(" AND ")} ORDER BY x.fecha_documento DESC, x.id DESC LIMIT ? OFFSET ?`, [...p, pageSize, (page - 1) * pageSize]);
-  return { total: Number(tot?.n ?? 0), page, pageSize, facturas: rows.map(mapear) };
+  const aplicado = await obtenerAplicado(empresaId, entidadId, rows.map(r => Number(r.id)), undefined, { tolerarSinMigracion: true });
+  return { total: Number(tot?.n ?? 0), page, pageSize, facturas: rows.map(r => mapear(r, aplicado.get(Number(r.id)))) };
 }
 
-/** Anulación con motivo. Sin borrados: la fila queda (ANULADA) y su clave de documento sigue reservada. Cuando existan pagos aplicados deberá rechazarse (ver obtenerAplicado). */
+/** Anulación con motivo. Sin borrados: la fila queda (ANULADA) y su clave de documento sigue reservada (confirmado). Se rechaza si tiene pagos aplicados vigentes: primero se reversan. */
 export async function anularFactura(empresaId: number, entidadId: number, id: unknown, actor: Actor, motivoEntrada: unknown): Promise<FacturaCxp> {
   const facturaId = idPositivo(id, "Factura");
   const motivo = textoOpcional(motivoEntrada, 500, "Motivo");
@@ -209,7 +212,8 @@ export async function anularFactura(empresaId: number, entidadId: number, id: un
     const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado_admin FROM cxp_facturas WHERE empresa_id = ? AND entidad_id = ? AND id = ? FOR UPDATE", [empresaId, entidadId, facturaId]);
     if (!rows[0]) throw new ErrorCxp("Factura no encontrada.", 404, "NO_ENCONTRADA");
     if (String(rows[0].estado_admin) === "ANULADA") throw new ErrorCxp("La factura ya está anulada.", 409, "YA_ANULADA");
-    const aplicado = (await obtenerAplicado(empresaId, entidadId, [facturaId])).get(facturaId) ?? "0.00";
+    // La factura ya está bloqueada (FOR UPDATE): un pago concurrente espera su bloqueo, así que este pagado es definitivo. Pagos REVERSADOS no cuentan.
+    const aplicado = (await obtenerAplicado(empresaId, entidadId, [facturaId], conn, { tolerarSinMigracion: true })).get(facturaId) ?? "0.00";
     if (!new Decimal(aplicado).isZero()) throw new ErrorCxp("La factura tiene pagos aplicados: reversa los pagos antes de anularla.", 409, "TIENE_PAGOS");
     await conn.execute("UPDATE cxp_facturas SET estado_admin = 'ANULADA', anulado_por = ?, anulado_en = NOW(), motivo_anulacion = ? WHERE empresa_id = ? AND entidad_id = ? AND id = ?",
       [actor.id, motivo, empresaId, entidadId, facturaId]);
