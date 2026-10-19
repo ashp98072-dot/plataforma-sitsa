@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Documento = {
@@ -85,10 +86,12 @@ function Documentos({ slug, entidadId, puedeCobrar }: { slug: string; entidadId:
 
   const cambiar = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setPage(1); };
   async function cobrar(facturaId: number) {
+    const monto = parsearMontoCobro(c.monto);
+    if (monto === null) { setError("Indica un monto válido, mayor que cero y con máximo dos decimales (por ejemplo 2000, 2000.00 o 2,000.00)."); return; }
     setBusy(true); setError(""); setMsg("");
     try {
       await api(`${base}/cobros?entidad=${entidadId}`, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ facturaId, fechaPago: c.fechaPago, monto: Number(c.monto.replace(",", ".")), medioPago: c.medioPago || null, referencia: c.referencia || null, observaciones: c.observaciones || null }) });
+        body: JSON.stringify({ facturaId, fechaPago: c.fechaPago, monto: parsearMontoCobro(c.monto), medioPago: c.medioPago || null, referencia: c.referencia || null, observaciones: c.observaciones || null }) });
       setMsg("Cobro registrado."); setCobrando(null); setC({ fechaPago: hoy(), monto: "", medioPago: "", referencia: "", observaciones: "" }); setVersion(v => v + 1);
     } catch (e) { setError(e instanceof Error ? e.message : "Error"); setVersion(v => v + 1); } finally { setBusy(false); }
   }
@@ -124,7 +127,7 @@ function Documentos({ slug, entidadId, puedeCobrar }: { slug: string; entidadId:
             <input className={campo} placeholder="Medio (transferencia, cheque…)" value={c.medioPago} onChange={e => setC({ ...c, medioPago: e.target.value })} />
             <input className={campo} placeholder="Referencia" value={c.referencia} onChange={e => setC({ ...c, referencia: e.target.value })} />
             <input className={campo} placeholder="Observaciones" value={c.observaciones} onChange={e => setC({ ...c, observaciones: e.target.value })} />
-            <span className="flex gap-1"><button type="button" className={boton} disabled={busy || !(Number(c.monto.replace(",", ".")) > 0) || !c.fechaPago} onClick={() => cobrar(x.facturaId)}>Registrar cobro</button>
+            <span className="flex gap-1"><button type="button" className={boton} disabled={busy || parsearMontoCobro(c.monto) === null || !c.fechaPago} onClick={() => cobrar(x.facturaId)}>Registrar cobro</button>
               <button type="button" className={boton} onClick={() => setCobrando(null)}>Cancelar</button></span></div>
           : <button type="button" className={boton} onClick={() => { setCobrando(x.facturaId); setMsg(""); setError(""); }}>Cobrar</button>)}</td>
       </tr>)}</tbody></table></div>
