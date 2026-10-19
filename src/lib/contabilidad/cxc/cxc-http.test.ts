@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const m = vi.hoisted(() => ({ guard: vi.fn(), documentos: vi.fn(), cobros: vi.fn(), cobrar: vi.fn() }));
+const m = vi.hoisted(() => ({ guard: vi.fn(), documentos: vi.fn(), cobros: vi.fn(), cobrar: vi.fn(), bitacora: vi.fn() }));
 vi.mock("@/lib/tenant", () => ({ requireTenantCxc: m.guard }));
-vi.mock("./cxc", () => ({ listarDocumentosCxc: m.documentos, listarCobrosCxc: m.cobros, registrarCobroCxc: m.cobrar }));
-import { listarCobrosHttp, listarDocumentosHttp, registrarCobroHttp } from "./http";
+vi.mock("./cxc", () => ({ listarDocumentosCxc: m.documentos, listarCobrosCxc: m.cobros, registrarCobroCxc: m.cobrar, listarBitacoraCxcLibro: m.bitacora }));
+import { listarBitacoraHttp, listarCobrosHttp, listarDocumentosHttp, registrarCobroHttp } from "./http";
 
 const OK = { empresa: { id: 7 }, session: { id: 91, username: "conta", rol: "Contabilidad" } };
 const prohibido = () => ({ error: new Response(JSON.stringify({ error: "x" }), { status: 403 }) });
@@ -17,6 +17,7 @@ beforeEach(() => {
   m.documentos.mockResolvedValue({ filas: [], totalReal: 0, page: 1, pageSize: 25, porEntidad: [], rotulo: "x" });
   m.cobros.mockResolvedValue({ cobros: [], totalReal: 0, totalCobrado: "0.00", page: 1, pageSize: 25 });
   m.cobrar.mockResolvedValue({ ok: true });
+  m.bitacora.mockResolvedValue({ eventos: [], totalReal: 0, page: 1, pageSize: 25 });
 });
 
 describe("permisos de los endpoints de CxC (fila + acción, fail-closed)", () => {
@@ -24,11 +25,12 @@ describe("permisos de los endpoints de CxC (fila + acción, fail-closed)", () =>
     ["documentos", () => listarDocumentosHttp(get(), "e"), ["cxc_cuentas", "ver"]],
     ["cobros (lista)", () => listarCobrosHttp(get(), "e"), ["cxc_cuentas", "ver"]],
     ["registrar cobro", () => registrarCobroHttp(post(cuerpo), "e"), ["cxc_cobros", "editar"]],
+    ["bitácora", () => listarBitacoraHttp(get(), "e"), ["cxc_bitacora", "ver"]],
   ] as const)("%s exige %j y no ejecuta sin permiso", async (_n, llamar, [fila, accion]) => {
     m.guard.mockResolvedValue(prohibido());
     expect((await llamar()).status).toBe(403);
     expect(m.guard.mock.calls[0].slice(1, 3)).toEqual([fila, accion]);
-    for (const f of [m.documentos, m.cobros, m.cobrar]) expect(f).not.toHaveBeenCalled();
+    for (const f of [m.documentos, m.cobros, m.cobrar, m.bitacora]) expect(f).not.toHaveBeenCalled();
   });
   it("ningún endpoint de CxC usa el guard de Facturación ni el de módulo Contabilidad", () => {
     const src = readFileSync("src/lib/contabilidad/cxc/http.ts", "utf8");
@@ -74,6 +76,15 @@ describe("ámbito y entradas", () => {
     m.documentos.mockRejectedValueOnce(new Error("SELECT secreto FROM x"));
     const e500 = await listarDocumentosHttp(get(), "e");
     expect(e500.status).toBe(500); expect(JSON.stringify(await e500.json())).not.toContain("secreto");
+  });
+  it("bitácora: empresa de la sesión + libro del query; la entidad es obligatoria; filtros validados", async () => {
+    expect((await listarBitacoraHttp(get("http://l/x"), "e")).status).toBe(400);
+    await listarBitacoraHttp(get("http://l/x?entidad=2&accion=registrar_pago&usuario=ana&facturaId=5&fechaDesde=2026-10-01&empresaId=99"), "e");
+    const [empresaId, entidadId, filtros] = m.bitacora.mock.calls[0];
+    expect([empresaId, entidadId]).toEqual([7, 2]);
+    expect(filtros).toMatchObject({ accion: "registrar_pago", usuario: "ana", facturaId: 5, fechaDesde: "2026-10-01" });
+    await listarBitacoraHttp(get("http://l/x?entidad=2&accion=borrar_todo&fechaDesde=ayer"), "e");
+    expect(m.bitacora.mock.calls[1][2]).toMatchObject({ accion: undefined, fechaDesde: undefined });
   });
   it("las respuestas no se cachean", async () => {
     expect((await listarDocumentosHttp(get(), "e")).headers.get("Cache-Control")).toBe("private, no-store");

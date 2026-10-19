@@ -1,6 +1,6 @@
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
-import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { diferencias, registrarBitacoraFactura } from "./bitacora";
 import { asegurarVinculosTmsClientes } from "@/lib/clientes/repository";
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import { resolverUnidadViaje } from "@/lib/facturacion/unidad-viaje";
@@ -1252,6 +1252,21 @@ export async function previsualizarFactura(
 
 const COLUMNAS_FACT4 = "entidad_id, modelo_lineas, condicion_pago, cuenta_bancaria_id, cuenta_bancaria_snapshot, retencion_iva_pct, retencion_iva_cliente_pct, retencion_iva_monto";
 
+/** Entidad/libro y retención de IVA ESPERADA de una factura (columnas FACT-4). Tolerante: sin la migración FACT-4 devuelve nulos. Solo lectura. */
+async function leerContextoFact4(conn: PoolConnection, empresaId: number, facturaId: number): Promise<{ entidadId: number | null; condicionPago: string | null; retencionPct: string | null; retencionMonto: string | null }> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      "SELECT entidad_id, condicion_pago, retencion_iva_pct, retencion_iva_monto FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1", [facturaId, empresaId]);
+    const r = rows[0];
+    return { entidadId: r?.entidad_id != null ? Number(r.entidad_id) : null, condicionPago: r?.condicion_pago != null ? String(r.condicion_pago) : null,
+      retencionPct: r?.retencion_iva_pct != null ? String(r.retencion_iva_pct) : null, retencionMonto: r?.retencion_iva_monto != null ? Number(r.retencion_iva_monto).toFixed(2) : null };
+  } catch (err) {
+    if (esEsquemaPendiente(err)) return { entidadId: null, condicionPago: null, retencionPct: null, retencionMonto: null };
+    throw err;
+  }
+}
+const dos = (v: unknown) => (v == null || v === "" ? null : Number(v).toFixed(2));
+
 export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura): Promise<ResultadoFactura> {
   if (datos.lineas == null && !tratamientosIvaValidos(datos.planes)) return ERROR_TRATAMIENTO_IVA_REQUERIDO;
   // HOTFIX PRE-MERGE PR #113 (Hallazgo 1) — nunca silenciado: un fallo de
@@ -1314,13 +1329,9 @@ export async function crearFactura(actor: ActorFacturacion, datos: DatosFactura)
       if (!(await insertarLineasBorrador(conn, facturaId, b, !modelo))) return ERROR_VIAJE_YA_VINCULADO;
       if (lc && lc.ok) await insertarLineasFactura(conn, facturaId, lc, new Map(b.lineas.map((l) => [l.planId, l.codigo])));
 
-      await registrarAuditoriaTx(conn, {
-        empresaId: actor.empresaId,
-        usuario: actor.usuario,
-        modulo: "facturacion",
-        accion: "crear_factura",
-        detalle: `Factura #${facturaId} (Borrador) · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}`,
-      });
+      await registrarBitacoraFactura(conn, actor, "crear_factura",
+        `Factura #${facturaId} (Borrador) · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}`,
+        { facturaId, numero: datos.numeroFactura ?? null, entidadId: ctx && ctx.ok ? ctx.entidadId : null, monto: dos(b.total) });
 
       return { ok: true, facturaId };
     }, { readCommitted: true });
@@ -1355,7 +1366,8 @@ export async function actualizarFacturaBorrador(
   try {
     return await tx(async (conn) => {
       const [facturaRows] = await conn.query<RowDataPacket[]>(
-        `SELECT id, estado_admin, cliente_id, cliente_nombre_snapshot, cliente_nit_snapshot, cliente_direccion_snapshot
+        `SELECT id, estado_admin, cliente_id, cliente_nombre_snapshot, cliente_nit_snapshot, cliente_direccion_snapshot,
+                numero_factura, DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision, monto_total, subtotal, iva_monto, porcentaje_iva
          FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
         [facturaId, actor.empresaId],
       );
@@ -1364,6 +1376,10 @@ export async function actualizarFacturaBorrador(
       if (String(factura.estado_admin) !== "Borrador") {
         return { ok: false, error: "Solo se puede editar una factura en Borrador.", status: 409 };
       }
+      // Fotografía ANTERIOR para la bitácora (solo lectura, ya bajo el bloqueo de la factura).
+      const ctxAntes = await leerContextoFact4(conn, actor.empresaId, facturaId);
+      const [lineasAntesRows] = await conn.query<RowDataPacket[]>("SELECT COUNT(*) AS n FROM fact_factura_viajes WHERE factura_id = ?", [facturaId]);
+      const lineasAntes = Number(lineasAntesRows[0]?.n ?? 0);
       const modelo = datos.lineas != null;
       // Un borrador que ya tiene líneas no puede volver al modelo anterior: se editaría sin sus líneas.
       if (!modelo && (await facturaTieneLineas(conn, facturaId))) {
@@ -1453,13 +1469,20 @@ export async function actualizarFacturaBorrador(
         throw err;
       }
 
-      await registrarAuditoriaTx(conn, {
-        empresaId: actor.empresaId,
-        usuario: actor.usuario,
-        modulo: "facturacion",
-        accion: "editar_factura_borrador",
-        detalle: `Factura #${facturaId} (Borrador) editada · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}`,
-      });
+      const cambios = diferencias(
+        {
+          cliente: `${factura.cliente_id} ${factura.cliente_nombre_snapshot ?? ""}`.trim(), entidad: ctxAntes.entidadId, numero: factura.numero_factura, fecha: factura.fecha_emision,
+          lineas: lineasAntes, subtotal: dos(factura.subtotal), iva: dos(factura.iva_monto), porcentajeIva: factura.porcentaje_iva == null ? null : Number(factura.porcentaje_iva),
+          total: dos(factura.monto_total), retencionIvaPct: ctxAntes.retencionPct,
+        },
+        {
+          cliente: `${datos.clienteId} ${snapCliente.nombre}`.trim(), entidad: ctx && ctx.ok ? ctx.entidadId : ctxAntes.entidadId, numero: datos.numeroFactura ?? null, fecha: datos.fechaEmision ?? null,
+          lineas: b.lineas.length, subtotal: dos(b.subtotal), iva: dos(b.iva), porcentajeIva: b.porcentajeIva == null ? null : Number(b.porcentajeIva),
+          total: dos(b.total), retencionIvaPct: ctx && ctx.ok ? String(ctx.retencionIvaPct) : ctxAntes.retencionPct,
+        });
+      await registrarBitacoraFactura(conn, actor, "editar_factura_borrador",
+        `Factura #${facturaId} (Borrador) editada · cliente ${cliente.nombre} · ${calculo.borrador.lineas.length} viaje(s) · monto total Q${b.total}${detalleLineas(lc && lc.ok ? lc : null, ctx && ctx.ok ? ctx : null)}${lc && lc.ok ? detalleViajesLineas(b) : detalleBorrador(calculo.borrador)}${detalleAjustesMonto(calculo.borrador.lineas)}${cambios.length ? ` · cambió: ${cambios.map((c) => c.campo).join(", ")}` : " · sin cambios de valores"}`,
+        { facturaId, numero: datos.numeroFactura ?? (factura.numero_factura != null ? String(factura.numero_factura) : null), entidadId: ctx && ctx.ok ? ctx.entidadId : ctxAntes.entidadId, monto: dos(b.total), cambios });
 
       return { ok: true, facturaId };
     }, { readCommitted: true });
@@ -1539,13 +1562,13 @@ export async function emitirFactura(
       return { ok: false, error: "La factura ya fue modificada por otra solicitud. Actualiza la pantalla.", status: 409 };
     }
 
-    await registrarAuditoriaTx(conn, {
-      empresaId: actor.empresaId,
-      usuario: actor.usuario,
-      modulo: "facturacion",
-      accion: "emitir_factura",
-      detalle: `Factura #${facturaId} emitida · número ${numeroFinal} · fecha ${fechaFinal} · monto Q${factura.monto_total} · ${lineasRows.length} viaje(s)`,
-    });
+    const ctxEmision = await leerContextoFact4(conn, actor.empresaId, facturaId);
+    await registrarBitacoraFactura(conn, actor, "emitir_factura",
+      `Factura #${facturaId} emitida · número ${numeroFinal} · fecha ${fechaFinal} · monto Q${factura.monto_total} · ${lineasRows.length} viaje(s)`,
+      {
+        facturaId, numero: numeroFinal, entidadId: ctxEmision.entidadId, monto: dos(factura.monto_total),
+        cambios: diferencias({ numero: factura.numero_factura, fecha: factura.fecha_emision, estado: "Borrador" }, { numero: numeroFinal, fecha: fechaFinal, estado: "Emitida" }),
+      });
 
     return { ok: true };
   });
@@ -1563,19 +1586,19 @@ const ERROR_CONCURRENCIA_ANULAR: { ok: false; error: string; status: number } = 
  * bloqueos compartidos sobre las filas leídas —entre ellas el viaje— y podría interbloquearse con otra factura que esté
  * tomando ese mismo viaje. El bloqueo de la fila de la factura serializa anulaciones/ediciones/emisiones/pagos.
  */
-export async function anularFactura(actor: ActorFacturacion, facturaId: number): Promise<ResultadoSimple> {
+export async function anularFactura(actor: ActorFacturacion, facturaId: number, motivo?: string | null): Promise<ResultadoSimple> {
   try {
-    return await anularFacturaTx(actor, facturaId);
+    return await anularFacturaTx(actor, facturaId, motivo?.replace(/\s+/g, " ").trim().slice(0, 500) || null);
   } catch (err) {
     if (esConflictoConcurrencia(err)) return ERROR_CONCURRENCIA_ANULAR;
     throw err;
   }
 }
 
-async function anularFacturaTx(actor: ActorFacturacion, facturaId: number): Promise<ResultadoSimple> {
+async function anularFacturaTx(actor: ActorFacturacion, facturaId: number, motivo: string | null): Promise<ResultadoSimple> {
   return tx(async (conn) => {
     const [facturaRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado_admin FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, estado_admin, numero_factura, monto_total FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [facturaId, actor.empresaId],
     );
     const factura = facturaRows[0];
@@ -1638,13 +1661,13 @@ async function anularFacturaTx(actor: ActorFacturacion, facturaId: number): Prom
       throw new Error(`Anulación inconsistente de la factura #${facturaId}: ${copiadas} línea(s) copiadas y ${del.affectedRows} borradas.`);
     }
 
-    await registrarAuditoriaTx(conn, {
-      empresaId: actor.empresaId,
-      usuario: actor.usuario,
-      modulo: "facturacion",
-      accion: "anular_factura",
-      detalle: `Factura #${facturaId} anulada · ${copiadas} línea(s) conservadas en el histórico · viajes liberados para nueva facturación`,
-    });
+    const ctxAnulacion = await leerContextoFact4(conn, actor.empresaId, facturaId);
+    await registrarBitacoraFactura(conn, actor, "anular_factura",
+      `Factura #${facturaId} anulada · ${copiadas} línea(s) conservadas en el histórico · viajes liberados para nueva facturación${motivo ? ` · motivo: ${motivo}` : ""}`,
+      {
+        facturaId, numero: factura.numero_factura != null ? String(factura.numero_factura) : null, entidadId: ctxAnulacion.entidadId, monto: dos(factura.monto_total), motivo,
+        cambios: diferencias({ estado: String(factura.estado_admin) }, { estado: "Anulada" }),
+      });
 
     return { ok: true };
   }, { readCommitted: true });
@@ -1658,7 +1681,7 @@ export async function registrarPago(actor: ActorFacturacion, facturaId: number, 
   }
   return tx(async (conn) => {
     const [facturaRows] = await conn.query<RowDataPacket[]>(
-      `SELECT id, estado_admin, monto_total FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT id, estado_admin, monto_total, numero_factura FROM fact_facturas WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [facturaId, actor.empresaId],
     );
     const factura = facturaRows[0];
@@ -1691,13 +1714,14 @@ export async function registrarPago(actor: ActorFacturacion, facturaId: number, 
     );
 
     const nuevoSaldo = saldo - input.monto;
-    await registrarAuditoriaTx(conn, {
-      empresaId: actor.empresaId,
-      usuario: actor.usuario,
-      modulo: "facturacion",
-      accion: "registrar_pago",
-      detalle: `Factura #${facturaId} · pago Q${input.monto} · saldo restante Q${nuevoSaldo}${input.referencia ? ` · ref. ${input.referencia}` : ""}`,
-    });
+    const ctxPago = await leerContextoFact4(conn, actor.empresaId, facturaId);
+    await registrarBitacoraFactura(conn, actor, "registrar_pago",
+      `Factura #${facturaId} · pago Q${input.monto} · saldo restante Q${nuevoSaldo}${input.referencia ? ` · ref. ${input.referencia}` : ""}`,
+      {
+        facturaId, numero: factura.numero_factura != null ? String(factura.numero_factura) : null, entidadId: ctxPago.entidadId, monto: dos(input.monto),
+        medioPago: input.medioPago ?? null, referencia: input.referencia ?? null,
+        cambios: [{ campo: "saldo", antes: dos(saldo), despues: dos(nuevoSaldo) }],
+      });
 
     return { ok: true };
   });

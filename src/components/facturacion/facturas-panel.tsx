@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
 import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
 import { ConfirmacionesBancariasPanel } from "@/components/facturacion/confirmaciones-bancarias-panel";
+import { BitacoraFacturaPanel } from "@/components/facturacion/bitacora-factura-panel";
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -162,6 +163,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
   const [emitiendo, setEmitiendo] = useState(false);
   const [errorEmitir, setErrorEmitir] = useState("");
   const [confirmandoAnular, setConfirmandoAnular] = useState(false);
+  const [motivoAnular, setMotivoAnular] = useState("");
   const [anulando, setAnulando] = useState(false);
   const [errorAnular, setErrorAnular] = useState("");
   const [mostrarPago, setMostrarPago] = useState(false);
@@ -262,10 +264,11 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
     setAnulando(true);
     setErrorAnular("");
     try {
-      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}/anular`, { method: "POST" });
+      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}/anular`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo: motivoAnular.trim() || undefined }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorAnular(interpretarError(data, "No se pudo anular la factura.")); return; }
       setConfirmandoAnular(false);
+      setMotivoAnular("");
       await refrescarDetalle(facturaId);
     } finally {
       setAnulando(false);
@@ -566,6 +569,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                           ) : null}
 
                           <ConfirmacionesBancariasPanel key={`${slug}:${f.id}`} slug={slug} facturaId={f.id} />
+                          <BitacoraFacturaPanel key={`bit:${slug}:${f.id}`} slug={slug} facturaId={f.id} />
                           {/* Fase J: pagos — solo Emitida. HOTFIX PR #114
                               (Hallazgo 3): con saldo 0 no se ofrece registrar
                               otro pago (acción imposible) — se informa
@@ -606,6 +610,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
                                 <p className="font-semibold text-rose-600">Confirmar: {etiquetaAnular(detalle.factura.estadoAdmin).toLowerCase()}</p>
                                 <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse y la factura anulada conservará su detalle.</p>
+                                <input type="text" maxLength={500} value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} placeholder="Motivo de la anulación (opcional, queda en la bitácora)" aria-label="Motivo de la anulación" className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-1.5" />
                                 {errorAnular ? <p className="text-rose-500">{errorAnular}</p> : null}
                                 <div className="flex gap-2 pt-1">
                                   <button type="button" disabled={anulando} className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void anular(f.id)}>
