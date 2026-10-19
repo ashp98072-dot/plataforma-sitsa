@@ -233,6 +233,83 @@ describe.skipIf(!port)("CxC-1 cobro multi-factura / MariaDB 11.8.9 SOLO LOCAL", 
       await anularCobro(ana, KT, cobro.id, "Error de captura");
       await expect(confirmarIngresoBancario({ empresaId: E1, usuarioId: 31, usuario: "ana" }, f, { ...base, cobroId: cobro.id, idempotencyKey: randomUUID() })).rejects.toThrow(/cobro informado/);
     });
+    describe("confirmación vinculada a un cobro: tope = monto aplicado por ESE cobro a ESA factura", () => {
+      const act = { empresaId: E1, usuarioId: 31, usuario: "ana" };
+      const banco = async () => {
+        const ex = await filas("SELECT id FROM cont_cuentas_bancarias WHERE empresa_id = ? AND entidad_id = ? LIMIT 1", [E1, KT]);
+        if (ex[0]) return Number(ex[0].id);
+        const cuenta = Number((await admin.query<mysql.ResultSetHeader>("INSERT INTO cont_cuentas (empresa_id, entidad_id, codigo, nombre, tipo) VALUES (?, ?, ?, 'Banco', 'Activo')", [E1, KT, `B${Date.now()}`]))[0].insertId);
+        return Number((await admin.query<mysql.ResultSetHeader>("INSERT INTO cont_cuentas_bancarias (empresa_id, entidad_id, cuenta_id, banco, alias, moneda, activa) VALUES (?, ?, ?, 'Banco Uno', 'Operativa', 'GTQ', 1)", [E1, KT, cuenta]))[0].insertId);
+      };
+      const conf = async (facturaId: number, cobroId: number | null, monto: string) =>
+        confirmarIngresoBancario(act, facturaId, { pagoId: null, cobroId, cuentaBancariaId: await banco(), monto, fechaAcreditacion: "2026-10-11", referencia: "DEP", observaciones: null, idempotencyKey: randomUUID() });
+      const activas = async (cobroId: number) => Number((await filas("SELECT COALESCE(SUM(monto),0) t FROM fact_pago_confirmaciones WHERE cobro_id = ? AND estado = 'CONFIRMADA'", [cobroId]))[0].t);
+
+      it("aplicación Q100: confirmar Q101 → rechazado (y nada se escribe); Q100 exactos → permitido", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        await expect(conf(f, cobro.id, "101")).rejects.toThrow(/excede lo aplicado por el cobro/);
+        await expect(conf(f, cobro.id, "100.01")).rejects.toThrow(/excede lo aplicado por el cobro/);
+        expect(await activas(cobro.id)).toBe(0);
+        await conf(f, cobro.id, "100");
+        expect(await activas(cobro.id)).toBe(100);
+      });
+      it("aplicación Q100: Q60 + Q40 permitido; después ni un centavo más", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        await conf(f, cobro.id, "60"); await conf(f, cobro.id, "40");
+        expect(await activas(cobro.id)).toBe(100);
+        await expect(conf(f, cobro.id, "0.01")).rejects.toThrow(/excede lo aplicado por el cobro/);
+      });
+      it("aplicación Q100: Q60 + Q41 → rechazado", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        await conf(f, cobro.id, "60");
+        await expect(conf(f, cobro.id, "41")).rejects.toThrow(/excede lo aplicado por el cobro/);
+        expect(await activas(cobro.id)).toBe(60);
+      });
+      it("una confirmación ANULADA deja de contar: se puede volver a confirmar hasta el tope", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        const c1 = await conf(f, cobro.id, "60");
+        await expect(conf(f, cobro.id, "50")).rejects.toThrow(/excede/);
+        await anularConfirmacionBancaria(act, f, c1.id, "Boleta equivocada");
+        await conf(f, cobro.id, "100");
+        expect(await activas(cobro.id)).toBe(100);
+      });
+      it("otro cobro de la misma factura no se mezcla: cada cobro tiene su propio tope", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const A = (await registrarCobro(ana, KT, entrada([[f, "100.00"]]))).cobro, B = (await registrarCobro(ana, KT, entrada([[f, "200.00"]]))).cobro;
+        await conf(f, A.id, "100");
+        await expect(conf(f, A.id, "1")).rejects.toThrow(/excede lo aplicado por el cobro/); // B tiene holgura, pero no sirve para A
+        await conf(f, B.id, "200"); // el tope de A agotado no limita a B
+        await expect(conf(f, B.id, "0.01")).rejects.toThrow(/excede lo aplicado por el cobro/);
+        expect([await activas(A.id), await activas(B.id)]).toEqual([100, 200]);
+      });
+      it("se mantiene el límite general contra la factura (confirmaciones sin cobro + vinculadas)", async () => {
+        const f = await factura({ monto: "150.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        await conf(f, null, "120"); // confirmación sin vínculo
+        await expect(conf(f, cobro.id, "50")).rejects.toThrow(/saldo pendiente de confirmación/); // cabe en el cobro (<=100) pero 120+50 > 150
+        await conf(f, cobro.id, "30"); // 150 en total: exacto
+        await expect(conf(f, cobro.id, "0.01")).rejects.toThrow();
+      });
+      it("concurrencia: dos confirmaciones de Q60 sobre un cobro aplicado de Q100 → solo una", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        const r = await Promise.allSettled([conf(f, cobro.id, "60"), conf(f, cobro.id, "60")]);
+        expect(r.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+        expect(await activas(cobro.id)).toBe(60);
+      });
+      it("la regla aprobada se mantiene: con confirmación activa el cobro no se anula; sin ella, sí", async () => {
+        const f = await factura({ monto: "1000.00" });
+        const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));
+        const c1 = await conf(f, cobro.id, "40");
+        await expect(anularCobro(ana, KT, cobro.id, "intento")).rejects.toMatchObject({ codigo: "CONFIRMACION_ACTIVA" });
+        await anularConfirmacionBancaria(act, f, c1.id, "Anulada");
+        await anularCobro(ana, KT, cobro.id, "ahora sí");
+      });
+    });
     it("la factura con un cobro VIGENTE no se puede anular; con el cobro anulado sí", async () => {
       const f = await factura({ monto: "100.00" });
       const { cobro } = await registrarCobro(ana, KT, entrada([[f, "100.00"]]));

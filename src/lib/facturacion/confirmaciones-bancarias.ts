@@ -64,10 +64,19 @@ export async function confirmarIngresoBancario(actor: ActorBancario, facturaId: 
       if (!pagos[0]) throw new ErrorConfirmacionBancaria("El pago informado no pertenece a esta factura y empresa.");
     }
     if (input.cobroId !== null) {
+      // Se bloquea la fila del cobro (todas las confirmaciones vinculadas pasan por aquí, serializadas) y se lee lo aplicado por ESE cobro a ESTA factura.
       const [cobros] = await c.query<RowDataPacket[]>(
-        `SELECT c.id FROM fact_cobros c JOIN fact_cobro_aplicaciones a ON a.cobro_id = c.id AND a.factura_id = ?
+        `SELECT c.id, a.monto AS aplicado FROM fact_cobros c JOIN fact_cobro_aplicaciones a ON a.cobro_id = c.id AND a.factura_id = ?
           WHERE c.id = ? AND c.empresa_id = ? AND c.entidad_id = ? AND c.estado = 'VIGENTE' FOR UPDATE`, [facturaId, input.cobroId, actor.empresaId, entidadId]);
       if (!cobros[0]) throw new ErrorConfirmacionBancaria("El cobro informado no está vigente o no incluye esta factura.");
+      // SUM(confirmaciones CONFIRMADAS de este cobro y factura) + nuevo monto <= monto aplicado por el cobro a la factura. Las ANULADAS no cuentan.
+      const [vinc] = await c.query<RowDataPacket[]>(
+        "SELECT COALESCE(SUM(monto),0) AS total FROM fact_pago_confirmaciones WHERE empresa_id=? AND entidad_id=? AND cobro_id=? AND factura_id=? AND estado='CONFIRMADA'",
+        [actor.empresaId, entidadId, input.cobroId, facturaId]);
+      const aplicado = new Decimal(String(cobros[0].aplicado)), yaVinculado = new Decimal(String(vinc[0].total));
+      if (yaVinculado.plus(input.monto).gt(aplicado)) {
+        throw new ErrorConfirmacionBancaria(`El monto excede lo aplicado por el cobro a esta factura (Q${aplicado.toFixed(2)}; ya confirmado Q${yaVinculado.toFixed(2)}).`);
+      }
     }
     const total = await totalActivo(c, actor.empresaId, entidadId, facturaId);
     if (total.plus(input.monto).gt(String(f.monto_total))) throw new ErrorConfirmacionBancaria("El monto excede el saldo pendiente de confirmación bancaria.");

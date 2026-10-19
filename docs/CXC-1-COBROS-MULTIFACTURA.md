@@ -45,7 +45,7 @@ Ver historial = `cxc_cuentas:ver` · registrar = `cxc_cobros:editar` · anular =
 ## Superficie
 * `GET|POST /api/empresas/[slug]/contabilidad/cxc/cobros-aplicados?entidad=` · `POST …/[id]/anular?entidad=` · `GET …/clientes?entidad=` · `GET …/facturas?entidad=&clienteId=`.
 * UI: Contabilidad → Cuentas por cobrar → **Cobros a varias facturas** (cliente → facturas pendientes con total, pagado/aplicado, saldo y monto a aplicar; total del cobro; historial con aplicaciones; Anular con motivo; la anulación se desactiva con la confirmación activa).
-* Confirmaciones bancarias: la API acepta `cobroId` (excluyente con `pagoId`) y el panel lista los cobros vigentes de la factura como opción de vínculo.
+* Confirmaciones bancarias: la API acepta `cobroId` (excluyente con `pagoId`) y el panel lista los cobros vigentes de la factura como opción de vínculo. **Tope**: Σ confirmaciones CONFIRMADAS de ese cobro y factura + monto nuevo ≤ monto aplicado por el cobro a la factura (las anuladas no cuentan; se valida bajo el bloqueo del cobro y se mantiene el límite general contra la factura).
 
 ## Despliegue (orden obligatorio)
 1. `preflight` (resultado APLICAR) → 2. `migrate` → 3. `postcheck` (todos los controles en 0 filas) → 4. desplegar el código.
