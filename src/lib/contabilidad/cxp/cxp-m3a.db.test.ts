@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import Decimal from "decimal.js";
 import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -138,12 +139,17 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       const r = await registrarFactura(1, E1, actor, { ...base, numero: "103", baseNeto: "3000.00", ivaMonto: "100.00" });
       expect(r.advertencias).toHaveLength(1);
     });
-    it("sujeto a ISR: fracción de centavo (redondeo NO confirmado) se BLOQUEA (422), sin escribir", async () => {
-      const antes = await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n);
-      for (const b of ["2800.10", "3333.33", "29999.99", "30000.01"]) {
-        await expect(registrarFactura(1, E1, actor, { ...base, numero: `blk-${b}`, baseNeto: b, ivaMonto: "0.00" })).rejects.toMatchObject({ status: 422, codigo: "REGLA_ISR_PENDIENTE", message: expect.stringMatching(/redondeo/) });
+    it("sujeto a ISR: la fracción de centavo se APROXIMA (mitad hacia arriba, nunca trunca): 2,800.10 → 140.01; 29,999.99 → 1,500.00; 30,000.01 → 1,500.00", async () => {
+      const casos: [string, string, string, string][] = [
+        ["2800.10", "5.00", "140.01", "M3B1_V1:TRAMO_5_PCT"], ["3333.33", "5.00", "166.67", "M3B1_V1:TRAMO_5_PCT"], ["29999.99", "5.00", "1500.00", "M3B1_V1:TRAMO_5_PCT"],
+        ["30000.01", "7.00", "1500.00", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE"], ["30000.20", "7.00", "1500.01", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE"],
+        ["31250.50", "7.00", "1587.54", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE"],
+      ];
+      for (const [b, pct, isr, regla] of casos) {
+        const { factura } = await registrarFactura(1, E1, actor, { ...base, numero: `red-${b}`, baseNeto: b, ivaMonto: "0.00" });
+        expect(factura, b).toMatchObject({ isrPorcentaje: pct, isrMonto: isr, reglaIsr: regla });
+        expect(new Decimal(factura.totalDocumento).minus(factura.isrMonto).toFixed(2), b).toBe(factura.totalNetoPagar);
       }
-      expect(await q("SELECT COUNT(*) n FROM cxp_facturas").then(r => r[0].n)).toBe(antes);
     });
     it("sujeto a ISR: neto < Q2,800 → ISR Q0.00 (se paga todo); Q2,800.00 → 5 %; Q30,000.00 → Q1,500.00; ejemplo Q31,250 → Q1,587.50 / pagadero Q33,412.50", async () => {
       expect((await registrarFactura(1, E1, actor, { ...base, numero: "T-0", baseNeto: "2799.99", ivaMonto: "336.00" })).factura)

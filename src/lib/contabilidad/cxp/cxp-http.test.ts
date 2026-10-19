@@ -15,7 +15,6 @@ import {
   previsualizarFacturaHttp, registrarFacturaHttp, listarPagosHttp, obtenerPagoHttp, registrarPagoHttp, reversarPagoHttp,
 } from "./http";
 import { ErrorCxp } from "./errores";
-import { ReglaIsrPendiente } from "./isr-proveedor";
 import { CATALOGO_PERMISOS } from "@/lib/permisos-catalogo";
 import { PERMISOS_CXP, PLATAFORMA_PERMISIBLES, moduloEmpresaDelPermiso, modulosPropiosDelRol } from "@/lib/permisos-shared";
 
@@ -94,11 +93,11 @@ describe("ámbito, entradas y errores", () => {
     expect((await registrarFacturaHttp(req(undefined, [1]), "e")).status).toBe(400);
     expect(m.registrar).not.toHaveBeenCalled();
   });
-  it("errores de dominio conservan su estado; regla ISR pendiente = 422; BD sin migrar = 503; inesperado = 500 genérico", async () => {
+  it("errores de dominio conservan su estado; factura especial pendiente = 422; BD sin migrar = 503; inesperado = 500 genérico", async () => {
     m.registrar.mockRejectedValueOnce(new ErrorCxp("La factura A / 1 ya está registrada.", 409, "FACTURA_DUPLICADA"));
     const dup = await registrarFacturaHttp(req(undefined, {}), "e");
     expect(dup.status).toBe(409); expect(await dup.json()).toMatchObject({ codigo: "FACTURA_DUPLICADA" });
-    m.registrar.mockRejectedValueOnce(new ReglaIsrPendiente("REDONDEO"));
+    m.registrar.mockRejectedValueOnce(new ErrorCxp("Factura especial pendiente", 422, "FACTURA_ESPECIAL_PENDIENTE"));
     expect((await registrarFacturaHttp(req(undefined, {}), "e")).status).toBe(422);
     m.registrar.mockRejectedValueOnce(Object.assign(new Error("tabla"), { code: "ER_NO_SUCH_TABLE" }));
     const sin = await registrarFacturaHttp(req(undefined, {}), "e");

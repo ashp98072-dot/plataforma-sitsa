@@ -56,7 +56,7 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
   }, [slug]);
   return <div className="space-y-4">
     <h1 className="text-2xl font-semibold">Cuentas por pagar</h1>
-    <p className="text-sm text-[var(--muted)]">Facturas y pagos a proveedores registrados en plataforma. Informativo: no genera pólizas ni sustituye aún a Milenium. La retención de ISR se resta del total de la factura (no es un pago al proveedor). Siguen bloqueados, sin regla confirmada: fracciones de centavo en el ISR, factura especial y retención de IVA.</p>
+    <p className="text-sm text-[var(--muted)]">Facturas y pagos a proveedores registrados en plataforma. Informativo: no genera pólizas ni sustituye aún a Milenium. La retención de ISR se resta del total de la factura (no es un pago al proveedor). Siguen bloqueados, sin regla confirmada: factura especial y retención de IVA. El ISR se redondea a 2 decimales (mitad hacia arriba).</p>
     <label className="block text-sm">Libro contable (entidad)
       <select className={`${campo} ml-2`} value={entidadId} onChange={e => setEntidadId(e.target.value)} aria-label="Entidad">
         <option value="">Seleccionar entidad</option>{entidades.map(e => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}</option>)}

@@ -146,11 +146,16 @@ describe.skipIf(!port)("CxP M-3B1 rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { ti
       await factura(5, 3, "50000.00", "0.00", "0.00", "M3B1_V1:NO_SUJETO_ISR");
       await factura(6, 3, "10000.00", "5.00", "500.00", "M3A_V2:TRAMO_5_PCT_EXACTO"); // factura M-3A histórica: no se reevalúa
       await factura(7, 3, "1000.00", "0.00", "0.00", "M3B1_V1:BAJO_MINIMO_SIN_RETENCION", "anulada");
+      // Redondeo confirmado (2 decimales, mitad hacia arriba): 140.005 → 140.01; 1,499.9995 → 1,500.00; 1,500.014 → 1,500.01; 1,587.535 → 1,587.54.
+      await factura(8, 3, "2800.10", "5.00", "140.01", "M3B1_V1:TRAMO_5_PCT");
+      await factura(9, 3, "29999.99", "5.00", "1500.00", "M3B1_V1:TRAMO_5_PCT");
+      await factura(10, 3, "30000.20", "7.00", "1500.01", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE");
+      await factura(11, 3, "31250.50", "7.00", "1587.54", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE");
       await pago(1, 3, "1587.50"); await aplic(1, 3, "1000.00"); await aplic(1, 4, "587.50");
       await pago(2, 3, "9500.00", "REVERSADO"); await aplic(2, 2, "9500.00"); // reversado: no cuenta aunque sea alto
       await pago(3, 3, "9500.00"); await aplic(3, 2, "9500.00");
       const r = (await correr("postcheck"))[0];
-      expect(r).toMatchObject({ pagos_cxp: 3, aplicaciones_cxp: 4, facturas_cxp: 7, pagos_total_distinto_de_aplicaciones: 0, aplicaciones_proveedor_distinto: 0, pagos_vigentes_sobre_facturas_anuladas: 0, facturas_sobreaplicadas: 0, facturas_isr_fuera_de_tramo: 0 });
+      expect(r).toMatchObject({ pagos_cxp: 3, aplicaciones_cxp: 4, facturas_cxp: 11, pagos_total_distinto_de_aplicaciones: 0, aplicaciones_proveedor_distinto: 0, pagos_vigentes_sobre_facturas_anuladas: 0, facturas_sobreaplicadas: 0, facturas_isr_fuera_de_tramo: 0 });
     });
     it("pago cuyo total no es la suma de sus aplicaciones (o sin aplicaciones)", async () => {
       await base(); await factura(1, 3, "2000.00", "0.00", "0.00", "M3B1_V1:BAJO_MINIMO_SIN_RETENCION");
@@ -175,6 +180,10 @@ describe.skipIf(!port)("CxP M-3B1 rollout SQL / MariaDB 11.8.9 SOLO LOCAL", { ti
       await expect(script(sql("postcheck"))).rejects.toThrow(/integridad/);
     });
     it.each([
+      ["redondeo truncado: 5 % de 2,800.10 = 140.00 (debe ser 140.01)", "M3B1_V1:TRAMO_5_PCT", "2800.10", "5.00", "140.00"],
+      ["redondeo truncado: 5 % de 29,999.99 = 1,499.99 (debe ser 1,500.00)", "M3B1_V1:TRAMO_5_PCT", "29999.99", "5.00", "1499.99"],
+      ["tramo alto sin aproximar: 30,000.20 → 1,500.02 (debe ser 1,500.01)", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE", "30000.20", "7.00", "1500.02"],
+      ["tramo alto truncado: 31,250.50 → 1,587.53 (debe ser 1,587.54)", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE", "31250.50", "7.00", "1587.53"],
       ["5 % mal calculado", "M3B1_V1:TRAMO_5_PCT", "10000.00", "5.00", "499.99"],
       ["tramo alto con 5 % en vez de fijo + 7 %", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE", "31250.00", "7.00", "1562.50"],
       ["tramo alto sin la parte fija", "M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE", "31250.00", "7.00", "87.50"],

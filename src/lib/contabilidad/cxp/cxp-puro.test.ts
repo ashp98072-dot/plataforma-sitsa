@@ -1,13 +1,12 @@
 import Decimal from "decimal.js";
 import { describe, expect, it } from "vitest";
-import { calcularIsrProveedor, isrExacto, ReglaIsrPendiente } from "./isr-proveedor";
+import { calcularIsrProveedor, isrExacto, redondearIsr } from "./isr-proveedor";
 import { calcularSaldo, desgloseFinanciero, estadoFinanciero } from "./saldo";
 import { documentoNormalizado, fechaIso, idPositivo, importe, regimenValido } from "./validacion";
 import { calcularFactura } from "./facturas";
 import { ErrorCxp } from "./errores";
 
 const isr = (baseNeto: string, regimenFiscal: "GENERAL" | "PEQUENO_CONTRIBUYENTE" = "GENERAL", sujetoIsr = true) => calcularIsrProveedor({ baseNeto, regimenFiscal, sujetoIsr });
-const bloquea = (base: string) => { try { isr(base); } catch (e) { return e as ReglaIsrPendiente; } throw new Error(`debió bloquear ${base}`); };
 
 describe("ISR de proveedores (M3B1_V1): rangos sobre el valor neto SIN IVA", () => {
   it("neto < Q2,800.00 → Q0.00 (sujeto a ISR, sin retención)", () => {
@@ -44,20 +43,35 @@ describe("ISR de proveedores (M3B1_V1): rangos sobre el valor neto SIN IVA", () 
     // Un total de Q35,000 usado (erróneamente) como base daría otro monto: el cálculo nunca usa el total.
     expect(isr("35000.00").monto).toBe("1850.00");
   });
-  it("fracciones de centavo: NO confirmadas → se bloquean (ni arriba, ni abajo, ni truncar)", () => {
-    for (const base of ["2800.10", "3333.33", "29999.99", "30000.01", "31250.50", "30000.20"]) {
-      const e = bloquea(base);
-      expect(e).toBeInstanceOf(ReglaIsrPendiente); expect(e.motivo).toBe("REDONDEO"); expect(e.status).toBe(422);
-    }
+  it("REDONDEO confirmado: 2 decimales, mitad hacia arriba (aproximación; NUNCA truncar). Q140.005 → Q140.01; Q1,499.9995 → Q1,500.00", () => {
     expect(isrExacto("2800.10").exacto.toString()).toBe("140.005");
+    expect(isr("2800.10").monto).toBe("140.01");
     expect(isrExacto("29999.99").exacto.toString()).toBe("1499.9995");
-    expect(isrExacto("30000.01").exacto.toString()).toBe("1500.0007");
+    expect(isr("29999.99")).toMatchObject({ monto: "1500.00", tramo: "CINCO_POR_CIENTO", porcentaje: "5.00" }); // sigue siendo del tramo 5 %
+    // Casos con centavos: la fracción >= 0.005 sube, < 0.005 baja (truncar daría otro resultado en los que suben).
+    const casos: [string, string, string][] = [
+      ["2800.01", "140.0005", "140.00"], ["2800.09", "140.0045", "140.00"], ["2800.10", "140.005", "140.01"], ["2800.11", "140.0055", "140.01"],
+      ["3333.33", "166.6665", "166.67"], ["10000.01", "500.0005", "500.00"], ["29999.50", "1499.975", "1499.98"],
+      ["30000.01", "1500.0007", "1500.00"], ["30000.20", "1500.014", "1500.01"], ["30000.50", "1500.035", "1500.04"], ["31250.50", "1587.535", "1587.54"], ["31250.25", "1587.5175", "1587.52"],
+    ];
+    for (const [base, exacto, esperado] of casos) {
+      expect(isrExacto(base).exacto.toString(), base).toBe(exacto);
+      expect(isr(base).monto, base).toBe(esperado);
+    }
+    // Nunca trunca: ningún caso que sube coincide con el truncado.
+    expect(isr("2800.10").monto).not.toBe(isrExacto("2800.10").exacto.toDecimalPlaces(2, Decimal.ROUND_DOWN).toFixed(2));
+    expect(isr("29999.99").monto).not.toBe("1499.99");
   });
-  it("el modo de redondeo solo existe si se pasa EXPLÍCITO (herramienta para cuando Contabilidad lo confirme; ningún flujo lo usa)", () => {
-    const e = { baseNeto: "2800.10", regimenFiscal: "GENERAL" as const, sujetoIsr: true };
-    expect(calcularIsrProveedor(e, Decimal.ROUND_HALF_UP).monto).toBe("140.01");
-    expect(calcularIsrProveedor(e, Decimal.ROUND_DOWN).monto).toBe("140.00");
-    expect(calcularIsrProveedor({ ...e, baseNeto: "30000.01" }, Decimal.ROUND_HALF_UP).monto).toBe("1500.00");
+  it("redondearIsr: mitad hacia arriba exacta en decimal (sin errores de coma flotante)", () => {
+    for (const [x, r] of [["140.005", "140.01"], ["140.0049999", "140.00"], ["1499.9995", "1500.00"], ["0.005", "0.01"], ["0.0049", "0.00"], ["1.005", "1.01"], ["2.675", "2.68"], ["87.50", "87.50"]]) expect(redondearIsr(x).toFixed(2), x).toBe(r);
+  });
+  it("el redondeo se aplica UNA vez sobre el ISR total del tramo (fijo + variable) y fijo + variable = monto", () => {
+    const r = isr("30000.20");
+    expect(r).toMatchObject({ monto: "1500.01", fijo: "1500.00", variable: "0.01" });
+    expect(new Decimal(r.fijo).plus(r.variable).toFixed(2)).toBe(r.monto);
+  });
+  it("continuidad en Q30,000 con redondeo: Q29,999.99 → Q1,500.00 y Q30,000.00 → Q1,500.00", () => {
+    expect(isr("29999.99").monto).toBe(isr("30000.00").monto);
   });
   it("pequeño contribuyente: no se retiene en ningún monto (regla confirmada en M-3A)", () => {
     for (const base of ["100.00", "10000.00", "50000.00"]) expect(isr(base, "PEQUENO_CONTRIBUYENTE", true)).toMatchObject({ monto: "0.00", regla: "M3B1_V1:PEQUENO_CONTRIBUYENTE_SIN_RETENCION" });
@@ -69,10 +83,11 @@ describe("ISR de proveedores (M3B1_V1): rangos sobre el valor neto SIN IVA", () 
     expect(() => isr("0")).toThrow(RangeError);
     expect(() => isr("-5")).toThrow(RangeError);
   });
-  it("sin modo de redondeo por defecto: el código no nombra ninguna modalidad", async () => {
+  it("el redondeo es único y explícito (ROUND_HALF_UP): no hay truncado ni otros modos en el módulo", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync("src/lib/contabilidad/cxp/isr-proveedor.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(src).not.toMatch(/ROUND_|Math\.round|toFixed\(0/);
+    expect(src).toContain("Decimal.ROUND_HALF_UP");
+    expect(src).not.toMatch(/ROUND_DOWN|ROUND_FLOOR|ROUND_CEIL|ROUND_UP|ROUND_HALF_(DOWN|EVEN)|Math\.(round|floor|trunc)|toFixed\(0/);
   });
 });
 
@@ -88,8 +103,9 @@ describe("calcularFactura", () => {
     expect(calcularFactura("1000.00", "100.00", "GENERAL", false).advertencias).toHaveLength(1);
     expect(calcularFactura("1000.00", "0.00", "PEQUENO_CONTRIBUYENTE", false).totalNetoPagar).toBe("1000.00");
   });
-  it("una fracción de centavo propaga ReglaIsrPendiente", () => {
-    expect(() => calcularFactura("2800.10", "336.01", "GENERAL", true)).toThrow(ReglaIsrPendiente);
+  it("una fracción de centavo se aproxima y el monto pagadero queda coherente: neto 2,800.10 + IVA 336.01 − ISR 140.01", () => {
+    expect(calcularFactura("2800.10", "336.01", "GENERAL", true)).toMatchObject({ isrMonto: "140.01", totalDocumento: "3136.11", totalNetoPagar: "2996.10" });
+    expect(calcularFactura("29999.99", "3600.00", "GENERAL", true)).toMatchObject({ isrMonto: "1500.00", totalNetoPagar: "32099.99" });
   });
 });
 

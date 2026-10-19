@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { requireTenantCxp } from "@/lib/tenant";
 import { ambitoDesdeRequest, errorAmbito } from "@/lib/contabilidad/ambito";
 import { ErrorCxp } from "./errores";
-import { ReglaIsrPendiente } from "./isr-proveedor";
 import { anularFactura, listarFacturas, obtenerFactura, previsualizarFactura, registrarFactura } from "./facturas";
 import { listarPagos, obtenerPago, registrarPago, reversarPago } from "./pagos";
 import { guardarConfigFiscal, listarCuentasCxp, listarProveedoresCxp, obtenerConfigFiscal } from "./proveedor-fiscal";
@@ -15,7 +14,6 @@ type Ok = Exclude<Guard, { error: NextResponse }>;
 /** Convierte cualquier fallo en una respuesta JSON segura (sin SQL ni detalles internos). */
 function responderError(e: unknown) {
   if (e instanceof ErrorCxp) return NextResponse.json({ error: e.message, codigo: e.codigo }, { status: e.status });
-  if (e instanceof ReglaIsrPendiente) return NextResponse.json({ error: e.message, codigo: e.codigo }, { status: e.status });
   const ambito = errorAmbito(e);
   if (ambito) return ambito;
   const code = (e as { code?: string })?.code;

@@ -4,7 +4,7 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCxp, esConflictoTransitorio, esErrorDuplicado } from "./errores";
 import { obtenerAplicado } from "./aplicaciones";
-import { calcularIsrProveedor, ReglaIsrPendiente, type RegimenFiscal, type ResultadoIsr, type TramoIsr } from "./isr-proveedor";
+import { calcularIsrProveedor, type RegimenFiscal, type ResultadoIsr, type TramoIsr } from "./isr-proveedor";
 import { desgloseFinanciero, type EstadoAdminCxp, type EstadoFinancieroCxp } from "./saldo";
 import { documentoNormalizado, fechaIso, idPositivo, importe, textoOpcional } from "./validacion";
 
@@ -37,7 +37,7 @@ export type FacturaCxp = {
 
 const TASA_IVA_REFERENCIA = "0.12";
 
-/** Retorna el calculo fiscal de una factura SIN persistir. Lanza ReglaIsrPendiente (422) si la regla aún no está confirmada. */
+/** Retorna el cálculo fiscal de una factura SIN persistir (ISR con redondeo confirmado a 2 decimales, mitad hacia arriba). */
 export function calcularFactura(baseNeto: string, ivaMonto: string, regimenFiscal: RegimenFiscal, sujetoIsr: boolean): Calculo {
   const isr: ResultadoIsr = calcularIsrProveedor({ baseNeto, regimenFiscal, sujetoIsr });
   const total = new Decimal(baseNeto).plus(ivaMonto);
@@ -161,7 +161,6 @@ export async function registrarFactura(empresaId: number, entidadId: number, act
     return { factura, advertencias: calculo.advertencias };
   } catch (e) {
     try { await conn.rollback(); } catch { /* conserva el error original */ }
-    if (e instanceof ReglaIsrPendiente) throw new ErrorCxp(e.message, 422, e.codigo);
     if (esConflictoTransitorio(e)) throw new ErrorCxp("Operación en conflicto. Actualiza y vuelve a intentar.", 409, "CONFLICTO");
     throw e;
   } finally { conn.release(); }

@@ -1,6 +1,6 @@
 # CxP M-3B1 — Pagos a proveedores y retención de ISR de facturas normales
 
-Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (tests unitarios + MariaDB 11.8.9 desechable local). **No probado con datos reales ni aprobado para producción.** Las migraciones **no fueron ejecutadas** en ninguna base real. Rama `feat/cxp-m3b1-pagos-isr`, base `main` `bf19db81`.
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (tests unitarios + MariaDB 11.8.9 desechable local). **No probado con datos reales ni aprobado para producción.** Las migraciones **no fueron ejecutadas** en ninguna base real. Rama `feat/cxp-m3b1-pagos-isr`.
 
 ## Discovery (M-3A, antes de cambiar código)
 | Tema | Hallazgo en M-3A |
@@ -12,7 +12,7 @@ Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (tests unitarios + MariaDB 1
 | Reglas que **contradecían** las confirmaciones nuevas | (1) `BASE_BAJO_MINIMO` bloqueaba neto < Q2,800 (ahora: Q0.00); (2) `BASE_SOBRE_TRAMO` bloqueaba > Q29,999.00, incluido el hueco 29,999.01–29,999.99 y ≥ Q30,000 (ahora: 5 % hasta < Q30,000 y fijo + 7 % desde Q30,000); (3) el saldo no se exponía (ahora: base = monto pagadero); (4) la no-liberación del número de una anulada era "provisional" (ahora: confirmada) |
 | Históricos | No se modifican. Las facturas con `regla_isr = M3A_V2:*` conservan su cálculo (el 5 % de M-3A coincide con la fórmula nueva en su rango, y por M-3A no pudo existir ninguna factura con neto < Q2,800 ni ≥ Q29,999.01) |
 
-**Conclusión del discovery:** el modelo de M-3A (importes inmutables, ámbito por entidad, FK compuestas, anulación con motivo) **sí permite** agregar pagos de forma segura sin tocar `cxp_facturas`. No hubo necesidad de detenerse. Una sola decisión de negocio sigue abierta (redondeo, ver más abajo) y se **bloquea** en lugar de improvisarla.
+**Conclusión del discovery:** el modelo de M-3A (importes inmutables, ámbito por entidad, FK compuestas, anulación con motivo) **sí permite** agregar pagos de forma segura sin tocar `cxp_facturas`. No hubo necesidad de detenerse. La decisión de redondeo quedó confirmada e implementada (ver más abajo).
 
 ## Retención de ISR — fórmula implementada (`isr-proveedor.ts`, regla `M3B1_V1`)
 Solo para **factura normal** de proveedor sujeto a ISR. La base es **exclusivamente el valor neto sin IVA**.
@@ -27,7 +27,7 @@ Solo para **factura normal** de proveedor sujeto a ISR. La base es **exclusivame
 * Ejemplo confirmado: total Q35,000, IVA Q3,750, neto Q31,250 → excedente Q1,250 → 7 % = Q87.50 → ISR **Q1,587.50** → monto pagadero **Q33,412.50** (cubierto en pruebas puras y contra MariaDB).
 * Pequeño contribuyente y proveedor "no sujeto a ISR" siguen sin retención (regla ya confirmada en M-3A; no se agregó ninguna regla nueva).
 * **No implementado y bloqueado/separado:** factura especial (422 `FACTURA_ESPECIAL_PENDIENTE`), retención de IVA (no existe en el código), cualquier otro impuesto.
-* **Redondeo — PENDIENTE (bloquea):** Contabilidad confirmó "conservar los centavos"; no confirmó qué hacer con una **fracción menor a un centavo**. Resulta cuando el 5 % de un neto con centavos no es exacto (p. ej. Q2,800.10 → Q140.005; Q29,999.99 → Q1,499.9995) o el 7 % del excedente (exacto en centavos **solo si el excedente es de quetzales enteros**, porque 7 y 100 son coprimos). Estos casos se rechazan con 422 `REGLA_ISR_PENDIENTE` y no se escribe nada. `calcularIsrProveedor(entrada, modo)` acepta un modo de redondeo **explícito** (probado) para cuando se confirme; ningún flujo de producción lo pasa. Ver "Preguntas bloqueantes".
+* **Redondeo — CONFIRMADO por Contabilidad e implementado:** el ISR se expresa siempre con **2 decimales** y la fracción se **aproxima: mitad hacia arriba (`Decimal.ROUND_HALF_UP`), nunca se trunca**. Q140.005 → **Q140.01**; Q1,499.9995 → **Q1,500.00**. Se redondea **una sola vez**, sobre el ISR total exacto del tramo (fijo + variable), con aritmética decimal exacta (`decimal.js`, sin coma flotante). Ejemplos: Q2,800.10 → 140.01; Q3,333.33 → 166.67; Q29,999.99 → 1,500.00 (sigue siendo tramo 5 %); Q30,000.01 → 1,500.00; Q30,000.20 → 1,500.01; Q31,250.50 → 1,587.54. El neto pagadero queda coherente (total − ISR redondeado). Ya no existe el bloqueo `REGLA_ISR_PENDIENTE`/`REDONDEO`. Las facturas M3B1_V1 registradas antes de esta confirmación solo pudieron ser montos exactos en centavos, que el redondeo no cambia.
 
 ## Modelo de pagos (migración `2026-11-cxp-m3b1-pagos`, 2 tablas nuevas, sin ALTER)
 * **`cxp_pagos`** — un pago pertenece a **un proveedor** y a **una entidad**: `fecha_pago`, `monto_total`, `medio_pago`, `referencia`, `observaciones`, `clave_idempotencia` (UNIQUE por empresa+entidad), `huella` (SHA-256 del contenido), `estado` (`REGISTRADO | REVERSADO`), creación y reversión (usuario, fecha, motivo). FK compuesta a `cxp_proveedor_fiscal`.
@@ -61,14 +61,14 @@ Si las tablas de pagos aún no existen (migración sin aplicar), las **lecturas*
 `sql/{preflight,migrate,postcheck,rollback}-2026-11-cxp-m3b1-pagos.sql` (generador `scripts/generar-sql-cxp-m3b1.py`, DDL fuente `scripts/cxp-m3b1-ddl.sql`).
 * **Preflight** (solo lectura): `CLEAN | FINAL | DIVERGENTE` sobre **43 objetos** exactos (tablas, columnas, índices, CHECK, FK). Exige M-3A aplicada; sin ella es `DIVERGENTE`.
 * **Migrate**: `CLEAN` → DDL; `FINAL` → `NOOP`; otro → `SIGNAL` **antes** de cualquier DDL; reaudita `FINAL` y verifica conteos de M-3A idénticos. Solo `CREATE TABLE` de tablas nuevas: sin ALTER, sin DML, sin backfill (los saldos de facturas históricas se derivan).
-* **Postcheck**: `FINAL` + integridad lógica con `SIGNAL`: pago = suma de aplicaciones, mismo proveedor pago/factura, sin pagos vigentes sobre facturas anuladas, sin sobreaplicación, y **ISR de cada factura `M3B1_V1` dentro de su tramo** (nota: el postcheck de M-3A solo conoce el 5 % y marcaría como error una factura del tramo alto; después de M-3B1 usar este postcheck).
+* **Postcheck**: `FINAL` + integridad lógica con `SIGNAL`: pago = suma de aplicaciones, mismo proveedor pago/factura, sin pagos vigentes sobre facturas anuladas, sin sobreaplicación, y **ISR de cada factura `M3B1_V1` dentro de su tramo y con el redondeo confirmado** (`ROUND(base × 5 %, 2)` y `ROUND(1500 + (base − 30000) × 7 %, 2)`; `ROUND` de MariaDB sobre DECIMAL redondea .5 alejándose de cero, igual que mitad hacia arriba para importes positivos) (nota: el postcheck de M-3A solo conoce el 5 % y marcaría como error una factura del tramo alto; después de M-3B1 usar este postcheck).
 * **Rollback**: solo desde `FINAL` y **solo con ambas tablas vacías**; con cualquier pago (aunque reversado) se detiene. Estrategia de recuperación con datos: respaldo previo → reversar desde la aplicación (traza) → conservar las tablas o, con autorización expresa, restaurar el respaldo.
 
 ## Pruebas
-Puras (`cxp-puro`, `pagos-puro`, `cxp-http`, `cxp-ui`) y contra MariaDB 11.8.9 desechable (`cxp-m3b1.db`, `cxp-m3b1-rollout.db`, y `cxp-m3a*.db` actualizadas): `LIQ_TEST_DB_PORT=3399 npx vitest run src/lib/contabilidad/cxp --no-file-parallelism`. Cubren: Q2,799.99 → Q0; Q2,800.00 → 5 %; Q29,999.99 (tramo 5 %, fracción de centavo bloqueada); Q30,000.00 (continuidad); Q31,250 → Q1,587.50; centavos; pagos parciales y múltiples; un pago a varias facturas; reversión/anulación; serie+número no reutilizable tras anular; multiempresa/entidad; permisos; concurrencia; idempotencia; migración (CLEAN/FINAL/DIVERGENTE/NOOP/rollback/postcheck).
+Puras (`cxp-puro`, `pagos-puro`, `cxp-http`, `cxp-ui`) y contra MariaDB 11.8.9 desechable (`cxp-m3b1.db`, `cxp-m3b1-rollout.db`, y `cxp-m3a*.db` actualizadas): `LIQ_TEST_DB_PORT=3399 npx vitest run src/lib/contabilidad/cxp --no-file-parallelism`. Cubren: Q2,799.99 → Q0; Q2,800.00 → 5 %; Q29,999.99 (tramo 5 %, → Q1,500.00 por redondeo); Q30,000.00 (continuidad); Q31,250 → Q1,587.50; redondeo a 2 decimales mitad hacia arriba (y que no trunca; también en el postcheck SQL); pagos parciales y múltiples; un pago a varias facturas; reversión/anulación; serie+número no reutilizable tras anular; multiempresa/entidad; permisos; concurrencia; idempotencia; migración (CLEAN/FINAL/DIVERGENTE/NOOP/rollback/postcheck).
 
 ## Preguntas todavía bloqueantes (para Contabilidad)
-1. **Redondeo de fracciones de centavo del ISR** (ver arriba). Hasta responderlo, un neto con centavos cuyo 5 % no sea exacto (y casi todo neto ≥ Q30,000 con centavos) se rechaza. Se necesita: modo (mitad arriba / truncar / etc.) y si aplica por factura.
+1. ~~Redondeo de fracciones de centavo del ISR~~ — **resuelto** (mitad hacia arriba a 2 decimales).
 2. ¿Un pago puede ir a facturas de **varios proveedores**? (hoy: un solo proveedor por pago).
 3. ¿Se requiere **reversa parcial** o basta reversar el pago completo?
 4. ¿Hay **anticipos** (pago sin factura) en la siguiente fase?

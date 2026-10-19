@@ -234,7 +234,7 @@ SELECT DATABASE() base_objetivo,VERSION() version_servidor,@cxpp_inicial estado_
 
 POSTCHECK = ("""-- CXP M-3B1 (pagos) - POSTCHECK (SOLO LECTURA). Exige FINAL y FALLA (SIGNAL) si cualquier conteo de integridad es > 0; siempre los muestra.
 -- Verifica: pagos = suma de aplicaciones, mismo proveedor pago/factura, sin pagos vigentes sobre facturas anuladas, sin sobreaplicacion, y que el ISR de
--- cada factura M3B1_V1 coincida con el tramo confirmado (el postcheck de M-3A solo conoce 5 %, por eso este es el vigente cuando existan facturas M3B1_V1).
+-- cada factura M3B1_V1 coincida con el tramo confirmado y su redondeo a 2 decimales (mitad hacia arriba; ROUND de MariaDB sobre DECIMAL redondea .5 alejandose de cero) (el postcheck de M-3A solo conoce 5 %, por eso este es el vigente cuando existan facturas M3B1_V1).
 -- Se GENERA con scripts/generar-sql-cxp-m3b1.py (no editar a mano).
 """ + AUDIT + CONTEOS + """DELIMITER $$
 BEGIN NOT ATOMIC
@@ -252,8 +252,8 @@ BEGIN NOT ATOMIC
   (SELECT COUNT(*) FROM cxp_facturas WHERE regla_isr LIKE 'M3B1\\_V1:%' AND NOT (
     (regla_isr IN ('M3B1_V1:PEQUENO_CONTRIBUYENTE_SIN_RETENCION','M3B1_V1:NO_SUJETO_ISR') AND isr_monto=0)
     OR (regla_isr='M3B1_V1:BAJO_MINIMO_SIN_RETENCION' AND isr_monto=0 AND base_neto<2800)
-    OR (regla_isr='M3B1_V1:TRAMO_5_PCT' AND base_neto>=2800 AND base_neto<30000 AND isr_porcentaje=5 AND isr_monto*100=base_neto*5)
-    OR (regla_isr='M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE' AND base_neto>=30000 AND isr_porcentaje=7 AND isr_monto*100=150000+(base_neto-30000)*7)))
+    OR (regla_isr='M3B1_V1:TRAMO_5_PCT' AND base_neto>=2800 AND base_neto<30000 AND isr_porcentaje=5 AND isr_monto=ROUND(base_neto*0.05,2))
+    OR (regla_isr='M3B1_V1:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE' AND base_neto>=30000 AND isr_porcentaje=7 AND isr_monto=ROUND(1500+(base_neto-30000)*0.07,2))))
  INTO @cxpp_n_pagos,@cxpp_n_aplicaciones,@cxpp_p_total_no_suma,@cxpp_p_proveedor_distinto,@cxpp_p_pago_en_anulada,@cxpp_p_sobreaplicada,@cxpp_p_isr_tramo;
  IF @cxpp_p_total_no_suma+@cxpp_p_proveedor_distinto+@cxpp_p_pago_en_anulada+@cxpp_p_sobreaplicada+@cxpp_p_isr_tramo>0 THEN
   SELECT @cxpp_p_total_no_suma pagos_total_distinto_de_aplicaciones,@cxpp_p_proveedor_distinto aplicaciones_proveedor_distinto,@cxpp_p_pago_en_anulada pagos_vigentes_sobre_facturas_anuladas,
