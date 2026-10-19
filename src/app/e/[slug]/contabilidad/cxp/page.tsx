@@ -16,8 +16,8 @@ export default async function CxpPage({ params }: Props) {
   const flags = {
     puedeVer: p("cxp_facturas", "ver"), puedeRegistrar: p("cxp_facturas", "editar"), puedeAnular: p("cxp_anular", "editar"),
     puedeVerFiscal: p("cxp_proveedor_fiscal", "ver"), puedeEditarFiscal: p("cxp_proveedor_fiscal", "editar"),
-    puedeVerPagos: p("cxp_pagos", "ver"), puedeRegistrarPago: p("cxp_pagos", "editar"), puedeReversarPago: p("cxp_reversar_pago", "editar"),
+    puedeVerPagos: p("cxp_pagos", "ver"), puedeRegistrarPago: p("cxp_pagos", "editar"), puedeReversarPago: p("cxp_reversar_pago", "editar"), puedeVerBitacora: p("cxp_bitacora", "ver"),
   };
-  if (!flags.puedeVer && !flags.puedeVerFiscal && !flags.puedeVerPagos) return <p>Sin permiso para ver Cuentas por pagar.</p>;
+  if (!flags.puedeVer && !flags.puedeVerFiscal && !flags.puedeVerPagos && !flags.puedeVerBitacora) return <p>Sin permiso para ver Cuentas por pagar.</p>;
   return <CxpClient slug={slug} {...flags} />;
 }
