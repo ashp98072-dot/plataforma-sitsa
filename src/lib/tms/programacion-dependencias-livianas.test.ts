@@ -10,7 +10,7 @@ import { MAX_FILAS_EDICION_RAPIDA } from "./edicion-rapida-limites";
 import * as cuadrilla from "./cuadrilla-contrato";
 import * as edicion from "./edicion-rapida-schema";
 
-const BASE = "9373adf493d7aaa27668bbeeb02fda9288ef2396";
+const BASE = "52a23786e4dfdbe26f794f2a7b2ed717d8c95058";
 const rutaCuadrilla = "src/lib/tms/cuadrilla-contrato.ts";
 const rutaEdicion = "src/lib/tms/edicion-rapida-schema.ts";
 const rutaCliente = "src/app/e/[slug]/programacion/programacion-client.tsx";

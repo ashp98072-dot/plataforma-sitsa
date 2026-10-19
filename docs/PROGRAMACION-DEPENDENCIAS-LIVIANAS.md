@@ -1,7 +1,11 @@
 # Programación: dependencias iniciales sin Zod
 
-BASE: `9373adf493d7aaa27668bbeeb02fda9288ef2396` (main al iniciar).
+BASE actualizada: `52a23786e4dfdbe26f794f2a7b2ed717d8c95058`.
+BASE inicial: `9373adf493d7aaa27668bbeeb02fda9288ef2396` (main al iniciar).
 Rama: `codex/programacion-dependencias-livianas`.
+Main avanzó por #493 durante la validación. Se incorporó mediante merge normal
+sin conflictos: `f8e3b2029ddf5590b1472e3f664b8c1018ae33ee`. Los cambios de CxC
+son exactamente los de main; no pertenecen al diff de esta PR ni se editaron.
 
 ## Alcance y equivalencia
 
@@ -38,8 +42,8 @@ En la validación local estuvieron disponibles todos los objetos y pasaron los 2
 ## Bundle medido
 
 Next 16.3.6, Node 20.20.2, npm 10.8.2, mismas dependencias y máquina Windows.
-Build BASE realizado durante la auditoría inmediatamente anterior sobre este
-SHA exacto; sus artefactos se conservaron. Build HEAD nuevo, sin reutilizar
+Se reconstruyó la BASE actualizada y se conservaron sus artefactos; los tamaños
+de Programación coinciden con la BASE inicial. Build HEAD nuevo, sin reutilizar
 `.next` de BASE. No se presentan tiempos de build como latencia productiva.
 
 Se evalúa `page_client-reference-manifest.js` de Programación y se toman sus
@@ -83,9 +87,39 @@ npm run build
 ```
 
 Nuevas: 23/23. Dirigidas: 1416 aprobadas / 10 fallos heredados, todos presentes
-en la suite BASE. ESLint dirigido BASE y HEAD limpio. Builds BASE y HEAD exitosos
+en la suite BASE; revalidadas también dentro de la suite completa tras el merge
+de main. ESLint dirigido BASE y HEAD limpio. Builds BASE y HEAD exitosos
 (exit 0); conservan los cuatro warnings de tracing de filesystem anteriores,
 fuera del alcance, y los avisos existentes de middleware/Cache-Control.
+
+Suite completa, misma máquina, Node/npm/dependencias y comando:
+
+| Resultado | BASE actualizada | HEAD actualizado |
+| --- | ---: | ---: |
+| Aprobadas | 10980 | 11003 |
+| Fallidas | 22 | 22 |
+| Omitidas | 670 | 670 |
+
+Fallos comparados por archivo relativo + `fullName` + primera línea del mensaje:
+idénticos, cero nuevos y cero eliminados. Sin suites fallidas sin assertions.
+Los 22 se distribuyen en Centro logístico (1), guards históricos de Compras (2),
+contrato de esquema Vacaciones (1), `unzip` ausente en Windows (1), contrato
+textual de vehículo solicitado (1), wiring de imagen Programación (1), montaje
+Atracción talento (1), PATCH TC (7), PATCH tercerizados (1) y regreso
+opcional/identidad de personal (6). No se corrigieron ni modificaron esos tests.
+SHA-256 del conjunto ordenado de identidades de fallo:
+`020d8973bfbecd866c841297abf1834ac6c713389949062b8db51c9cb639925e`.
+
+TypeScript independiente (`tsc --noEmit`) HEAD: exit 0; TypeScript de ambos
+builds: exit 0. Diff-check limpio. Los manifiestos canónicos de rutas
+`app-paths-manifest.json` y `routes-manifest.json` son idénticos BASE/HEAD.
+La primera suite HEAD sobre la BASE inicial se interrumpió al detectar el
+avance de main; no se cuenta como validación completa. Se repitió completa con
+la BASE nueva y el resultado anterior es el definitivo.
+
+Archivos de la PR: `programacion-client.tsx`, `edicion-rapida-helpers.ts`,
+`cuadrilla-contrato.ts`, `edicion-rapida-schema.ts`, los dos módulos livianos,
+`programacion-dependencias-livianas.test.ts` y este documento (8 en total).
 
 Riesgo bajo: separación de módulos, no reescritura de lógica. Los tamaños y
 hashes de chunks pueden cambiar al actualizar Next. No se midió navegación
