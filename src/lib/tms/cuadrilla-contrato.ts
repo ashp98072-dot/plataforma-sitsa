@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { textoCuadrilla } from "./cuadrilla-presentacion";
+
 export const integranteCuadrillaSchema = z.discriminatedUnion("tipo", [
   z.object({ tipo: z.literal("INTERNO"), empleadoId: z.number().int().positive() }).strict(),
   z.object({
@@ -25,7 +27,4 @@ export function cuadrillaPayload(filas: IntegranteCuadrilla[]): CuadrillaInput[]
   return filas.map((f) => f.tipo === "INTERNO"
     ? { tipo: "INTERNO", empleadoId: f.empleadoId! }
     : { tipo: "EXTERNO", nombre: f.nombre, identificacion: f.identificacion ?? "", telefono: f.telefono ?? "" });
-}
-export function textoCuadrilla(filas: IntegranteCuadrilla[]): string {
-  return filas.map((f) => `${f.nombre} (${f.tipo === "INTERNO" ? "interno" : "externo"})`).join("\n");
 }

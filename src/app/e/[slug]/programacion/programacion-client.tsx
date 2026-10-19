@@ -15,7 +15,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { exportarProgramacionComoImagen } from "./programacion-exportar-imagen";
 import { celdaPilotoImagen, mesDia, type FilaProgramacionImagen } from "@/lib/tms/programacion-imagen";
 import { auxiliaresDeVista, pilotosDeVista, tieneAuxiliaresVista, tienePilotoVista } from "@/lib/tms/programacion-personal-vista";
-import { textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
+import { textoCuadrilla } from "@/lib/tms/cuadrilla-presentacion";
 import type { FilaEdicionRapidaEntrada } from "./edicion-rapida";
 import { confirmarPerdida, MSG_CAMBIOS_PENDIENTES, puedeUsarEdicionRapida, type TarifaRutaEdicion } from "./edicion-rapida-helpers";
 import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
