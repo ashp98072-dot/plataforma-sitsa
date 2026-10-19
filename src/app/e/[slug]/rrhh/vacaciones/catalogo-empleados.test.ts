@@ -5,7 +5,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const ruta = "src/app/e/[slug]/rrhh/vacaciones/page.tsx";
-const baseSHA = "262081384e7ec6edd21dbaae6013a8fb187e942e";
+const baseSHA = "303ef2720c98f67d94d5368d16bcdcf87cb7f478";
 const textoHead = readFileSync(ruta, "utf8");
 const normalizar = (s: string) => s.replace(/\r\n/g, "\n");
 let textoBase: string | null = null;
