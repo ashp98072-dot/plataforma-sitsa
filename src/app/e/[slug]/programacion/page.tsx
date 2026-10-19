@@ -1,9 +1,10 @@
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { ProgramacionClient } from "./programacion-client";
+import { rangoProgramacionDesdeParams } from "@/lib/tms/programacion-rango";
 
 type Props = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ plan?: string }>;
+  searchParams: Promise<{ plan?: string; desde?: string | string[]; hasta?: string | string[] }>;
 };
 
 /**
@@ -19,12 +20,14 @@ type Props = {
  */
 export default async function ProgramacionPage({ params, searchParams }: Props) {
   const { slug } = await params;
-  const { plan } = await searchParams;
+  const filtros = await searchParams;
+  const { plan } = filtros;
   const planInicialId = plan ? Number(plan) : null;
   return (
     <ProgramacionClient
       slug={slug}
       hoy={hoyLocal()}
+      rangoInicial={rangoProgramacionDesdeParams(filtros)}
       planInicialId={Number.isFinite(planInicialId) ? planInicialId : null}
     />
   );

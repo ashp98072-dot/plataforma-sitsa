@@ -22,8 +22,8 @@ const pos = (texto: string, from = 0) => {
 };
 
 describe("programacion-client.tsx — Rango incluye 'fecha' como cuarto modo", () => {
-  it("el tipo Rango tiene los 4 valores: hoy | manana | semana | fecha", () => {
-    expect(programacionClient).toMatch(/export type Rango = "hoy" \| "manana" \| "semana" \| "fecha";/);
+  it("el tipo Rango conserva los 4 modos anteriores y agrega rango", () => {
+    expect(programacionClient).toMatch(/export type Rango = "hoy" \| "manana" \| "semana" \| "fecha" \| "rango";/);
   });
 
   it("rangoQueContiene (navegación directa a un plan) sigue devolviendo SOLO hoy/manana/semana/null — nunca 'fecha' (no se rompe la navegación existente)", () => {
@@ -94,7 +94,7 @@ describe("programacion-client.tsx — Estado/Piloto/Unidad/Cliente, exportacione
 
   it("resumen (contadores) se deriva de enRango — se recalcula automáticamente con cualquier rango, incluida una fecha específica", () => {
     const i = pos("const resumen = useMemo(");
-    const bloque = programacionClient.slice(i, pos("[enRango, pendientesCierre]", i));
+    const bloque = programacionClient.slice(i, pos("[enRango, pendientesCierre,", i));
     expect(bloque).toContain("enRango.length");
     expect(bloque).toContain('enRango.filter((p) => p.estado === "Programado")');
   });
@@ -112,8 +112,8 @@ describe("programacion-client.tsx — Estado/Piloto/Unidad/Cliente, exportacione
   it("el botón Actualizar (cargar()) usa desde/hasta capturados del cierre — nunca reinicia rango ni fechaSeleccionada (conserva la fecha tras actualizar)", () => {
     const i = pos("async function cargar() {");
     const bloque = programacionClient.slice(i, pos("\n  }\n", i));
-    expect(bloque).toContain("obtenerProgramacion(slug, desde, hasta)");
-    expect(bloque).not.toContain("setRango");
+    expect(bloque).toContain("obtenerProgramacion(slug, desde, hasta, esRangoExplicito)");
+    expect(bloque).not.toMatch(/\bsetRango\(/);
     expect(bloque).not.toContain("setFechaSeleccionada");
   });
 

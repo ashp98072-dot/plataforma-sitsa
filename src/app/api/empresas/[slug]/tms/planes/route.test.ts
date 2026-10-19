@@ -109,6 +109,51 @@ beforeEach(() => {
  * real del ticket: PLAN-20260901-005 (fecha_plan 2026-09-01) visto un día
  * después — ningún filtro de rango lo cubriría, pero ?id= sí debe.
  */
+describe("GET Programación — modo Rango", () => {
+  it.each([
+    ["2026-10-17", "2026-10-17"], ["2026-10-17", "2026-10-24"],
+    ["2026-09-30", "2026-10-02"], ["2026-12-31", "2027-01-02"],
+  ])("intervalo inclusivo %s / %s sin LIMIT 200 y con tenant", async (desde, hasta) => {
+    vi.mocked(query).mockResolvedValue([]);
+    const res = await GET(req(`?rango=1&fechaDesde=${desde}&fechaHasta=${hasta}`), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).planes).toEqual([]);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(sql).toContain("p.empresa_id = ?");
+    expect(sql).toContain("p.fecha_plan BETWEEN ? AND ?");
+    expect(sql).not.toContain("LIMIT 200");
+    expect(params).toEqual([expect.any(String), EMPRESA_ID, desde, hasta]);
+  });
+
+  it.each(["", "&fechaDesde=2026-10-17", "&fechaDesde=2026-10-18&fechaHasta=2026-10-17", "&fechaDesde=2026-02-30&fechaHasta=2026-03-02"])("rango inválido %s da 400 sin lecturas", async (qs) => {
+    expect((await GET(req(`?rango=1${qs}`), ctx)).status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("pendientes también recibe fecha, pero los consumidores anteriores siguen sin recorte", async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await GET(req("?rango=1&pendienteCierre=1&fechaDesde=2026-10-01&fechaHasta=2026-10-31"), ctx);
+    expect(vi.mocked(query).mock.calls[0][0]).toContain("p.fecha_plan BETWEEN ? AND ?");
+    expect(vi.mocked(query).mock.calls[0][0]).toContain("fv.estado = 'cerrado'");
+    vi.mocked(query).mockClear();
+    await GET(req("?pendienteCierre=1"), ctx);
+    expect(vi.mocked(query).mock.calls[0][0]).not.toContain("p.fecha_plan BETWEEN ? AND ?");
+  });
+
+  it("no trunca 201 viajes y conserva Propio/Tercerizado y vehículo solicitado", async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    vi.mocked(query).mockResolvedValueOnce(Array.from({ length: 201 }, (_, i) => filaPlan({
+      id: i + 1, tipo_viaje: i % 2 ? "Tercerizado" : "Propio",
+      vehiculo_solicitado_perfil_id: 8, vehiculo_solicitado_nombre: "Camión solicitado",
+    })) as never);
+    const data = await (await GET(req("?rango=1&fechaDesde=2026-09-01&fechaHasta=2026-09-30"), ctx)).json();
+    expect(data.planes).toHaveLength(201);
+    expect(data.planes[0].tipo_viaje).toBe("Propio");
+    expect(data.planes[1].tipo_viaje).toBe("Tercerizado");
+    expect(data.planes[0].vehiculo_solicitado_nombre).toBe("Camión solicitado");
+  });
+});
+
 describe("GET /api/empresas/[slug]/tms/planes?id=", () => {
   it("exige permiso ANTES de tocar la DB", async () => {
     vi.mocked(requireTenantProgramacionOTms).mockResolvedValue({

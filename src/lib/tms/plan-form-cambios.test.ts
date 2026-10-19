@@ -208,7 +208,9 @@ describe("cableado (código fuente)", () => {
     expect(form).toContain("paradas: bloqueadoParaPreCierre ? undefined : cambioParadas(plan?.paradas ?? [], paradas)");
   });
   it("las cargas de la lista (sondeo, carga inicial y recarga tras guardar) respetan el turno", () => {
-    expect((cliente.match(/secuenciaCargas\.current\.iniciar\(\)/g) ?? []).length).toBe(3);
+    // Las tres cargas conservan sus turnos; un cuarto invalida respuestas al quedar Rango inválido.
+    expect((cliente.match(/secuenciaCargas\.current\.iniciar\(\)/g) ?? []).length).toBe(4);
+    expect(cliente).toMatch(/if \(errorRango\) \{\s*secuenciaCargas\.current\.iniciar\(\)/);
     expect((cliente.match(/secuenciaCargas\.current\.esVigente\(turno\)/g) ?? []).length).toBe(3);
   });
 });
