@@ -1,5 +1,7 @@
 # CxP M-3A — Base de Cuentas por Pagar (proveedores + facturas de proveedor)
 
+> **Actualización M-3B1:** varias reglas "PENDIENTE" de este documento quedaron resueltas por Contabilidad y están implementadas en [CXP-M3B1-PAGOS-ISR.md](CXP-M3B1-PAGOS-ISR.md): neto < Q2,800 → ISR Q0; 5 % hasta < Q30,000; Q1,500 + 7 % del excedente desde Q30,000; saldo = monto pagadero (total − retención) − pagos; una factura anulada NO libera su serie+número. El redondeo del ISR también quedó confirmado (2 decimales, mitad hacia arriba). Siguen pendientes: factura especial y retención de IVA. Lo que dice abajo sobre esas reglas es el estado de M-3A (histórico).
+
 Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (tests unitarios + MariaDB 11.8.9 desechable). **No probado con datos reales ni aprobado para producción.** La migración **no fue ejecutada** en ninguna base real.
 
 ## Principio de esta fase

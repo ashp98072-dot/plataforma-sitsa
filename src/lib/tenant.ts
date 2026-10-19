@@ -706,13 +706,13 @@ export function requireTenantViajesCargosAdicionales(slug: string, accion: Accio
 }
 
 /**
- * CUENTAS POR PAGAR (M-3A) — guard común de las filas `cxp_facturas`, `cxp_anular` y `cxp_proveedor_fiscal`: permiso EXPLÍCITO e independiente
+ * CUENTAS POR PAGAR (M-3A/M-3B1) — guard común de las filas `cxp_facturas`, `cxp_anular`, `cxp_proveedor_fiscal`, `cxp_pagos` y `cxp_reversar_pago`: permiso EXPLÍCITO e independiente
  * del rol (ningún rol lo trae por defecto; Admin pasa). Exige que la empresa tenga el módulo Contabilidad. Mismo patrón que
  * requireTenantFilaLiquidacionViaje; nunca hay fallback a `contabilidad:editar` (quien registra CxC o asientos no puede mover CxP).
  */
 export async function requireTenantCxp(
   slug: string,
-  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal",
+  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal" | "cxp_pagos" | "cxp_reversar_pago",
   accion: AccionPermiso,
   mensajeSinPermiso = "Sin permiso para Cuentas por pagar.",
 ): Promise<Ok | Fail> {

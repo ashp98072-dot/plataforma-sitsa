@@ -1,26 +1,32 @@
 import Decimal from "decimal.js";
 
 /**
- * M-3A — Retención de ISR a proveedores al REGISTRAR una factura normal (lógica PURA, sin BD).
+ * M-3B1 — Retención de ISR a proveedores al REGISTRAR una factura normal (lógica PURA, sin BD).
  *
- * ÚNICA REGLA CONFIRMADA por Contabilidad que se codifica:
- *  - Proveedor sujeto a ISR con valor neto (base sin IVA) de Q2,800.00 a Q29,999.00 → 5 % sobre ese valor neto.
- *  - Pequeño contribuyente → sin retención. Proveedor NO sujeto a ISR (configuración explícita) → sin retención.
- *  - La empresa no retiene IVA en una factura normal de proveedor.
+ * REGLAS CONFIRMADAS por Contabilidad (factura NORMAL de proveedor sujeto a ISR):
+ *  1. El rango se determina SOLO con el valor neto SIN IVA (`baseNeto`); el IVA nunca forma parte de la base del ISR.
+ *  2. neto <  Q2,800.00                  → Q0.00
+ *     Q2,800.00 <= neto < Q30,000.00     → 5 % del valor neto
+ *     neto >= Q30,000.00                 → Q1,500.00 + 7 % × (neto − Q30,000.00)
+ *     (continua en Q30,000.00: 5 % × 30,000 = 1,500 = 1,500 + 7 % × 0).
+ *  3. REDONDEO (confirmado): el ISR siempre se expresa con 2 decimales y la fracción se APROXIMA (mitad hacia arriba, `ROUND_HALF_UP`;
+ *     nunca se trunca). Q140.005 → Q140.01; Q1,499.9995 → Q1,500.00. Se redondea UNA sola vez, sobre el ISR total exacto del tramo
+ *     (fijo + variable), no sobre cada parte; los importes son siempre positivos, así que "mitad hacia arriba" = "mitad alejándose de cero".
+ *  4. Pequeño contribuyente (ya confirmado en M-3A) y proveedor marcado «no sujeto a ISR» (configuración explícita) → sin retención.
+ *  5. Sin retención de IVA en una factura normal.
  *
- * TODO LO DEMÁS ESTÁ PENDIENTE Y SE BLOQUEA (`ReglaIsrPendiente`, 422, no se escribe nada) en vez de asumirlo:
- *  - BASE_BAJO_MINIMO: base menor a Q2,800.00 de un sujeto de ISR. Contabilidad no dijo si es «sin retención»; no se interpreta.
- *  - BASE_SOBRE_TRAMO: base mayor a Q29,999.00 (incluye el hueco 29,999.01–29,999.99 y «desde Q30,000.00 → 7 %», fórmula sin definir).
- *  - REDONDEO: el 5 % no es un importe exacto en centavos (p. ej. base Q2,800.10 → Q140.005). La regla de redondeo fiscal no está
- *    confirmada, así que NO se fija ninguna (ni mitad arriba, ni abajo, ni truncar): solo se registran los casos exactos.
- *  - Factura especial: IVA e ISR «sobre la base del pago» → fase de pagos.
- * Cuando Contabilidad responda, se cambia ESTE módulo (y su versión) y se levanta el bloqueo; las facturas ya registradas conservan la
- * `regla_isr` con la que se calcularon.
+ * FUERA DE ALCANCE (no se calcula ni se aproxima): factura especial y retención de IVA se rechazan antes de llegar aquí.
+ * Cada factura guarda con qué regla se calculó (`regla_isr`); las registradas con M3A_V2 conservan su cálculo (no se reescriben).
+ * Las facturas M3B1_V1 que se hubieran registrado antes del redondeo confirmado solo pudieron ser montos exactos en centavos, que no cambian.
  */
-export const REGLA_ISR_VERSION = "M3A_V2";
+export const REGLA_ISR_VERSION = "M3B1_V1";
+/** Versión anterior (M-3A): se conserva solo como referencia de lectura para facturas ya registradas. */
+export const REGLA_ISR_VERSION_M3A = "M3A_V2";
 export const ISR_BASE_MINIMA = "2800.00";
-export const ISR_TRAMO_5_MAXIMO = "29999.00";
+export const ISR_TRAMO_FIJO_DESDE = "30000.00";
 export const ISR_TRAMO_5_PORCENTAJE = "5.00";
+export const ISR_TRAMO_FIJO_MONTO = "1500.00";
+export const ISR_TRAMO_EXCEDENTE_PORCENTAJE = "7.00";
 
 export const REGIMENES_FISCALES = ["GENERAL", "PEQUENO_CONTRIBUYENTE"] as const;
 export type RegimenFiscal = (typeof REGIMENES_FISCALES)[number];
@@ -28,38 +34,60 @@ export type RegimenFiscal = (typeof REGIMENES_FISCALES)[number];
 export type ReglaIsrAplicada =
   | `${typeof REGLA_ISR_VERSION}:PEQUENO_CONTRIBUYENTE_SIN_RETENCION`
   | `${typeof REGLA_ISR_VERSION}:NO_SUJETO_ISR`
-  | `${typeof REGLA_ISR_VERSION}:TRAMO_5_PCT_EXACTO`;
+  | `${typeof REGLA_ISR_VERSION}:BAJO_MINIMO_SIN_RETENCION`
+  | `${typeof REGLA_ISR_VERSION}:TRAMO_5_PCT`
+  | `${typeof REGLA_ISR_VERSION}:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE`;
 
-export type MotivoReglaPendiente = "BASE_BAJO_MINIMO" | "BASE_SOBRE_TRAMO" | "REDONDEO";
-const MENSAJES: Record<MotivoReglaPendiente, string> = {
-  BASE_BAJO_MINIMO: "Retención de ISR pendiente de confirmación de Contabilidad: para un proveedor sujeto a ISR con base menor a Q2,800.00 no se ha definido el tratamiento. La factura no se registra hasta definirlo.",
-  BASE_SOBRE_TRAMO: "Retención de ISR pendiente de confirmación de Contabilidad: para una base mayor a Q29,999.00 (desde Q30,000.00 aplica 7 % con fórmula no definida) no hay regla. La factura no se registra hasta definirla.",
-  REDONDEO: "Retención de ISR pendiente de confirmación de Contabilidad: el 5 % de esta base no es un importe exacto en centavos y la regla de redondeo no está definida. La factura no se registra hasta definirla.",
+export type TramoIsr = "SIN_RETENCION" | "CINCO_POR_CIENTO" | "FIJO_MAS_SIETE_POR_CIENTO";
+export type EntradaIsr = { baseNeto: string; regimenFiscal: RegimenFiscal; sujetoIsr: boolean };
+export type ResultadoIsr = {
+  /** Tasa MARGINAL del tramo: 0.00, 5.00 o 7.00 (en el tramo alto es la tasa sobre el excedente, no una tasa efectiva). */
+  porcentaje: string;
+  monto: string;
+  regla: ReglaIsrAplicada;
+  tramo: TramoIsr;
+  /** Parte fija (Q1,500.00 en el tramo alto; Q0.00 en los demás). */
+  fijo: string;
+  /** Parte variable = monto − fijo. */
+  variable: string;
 };
 
-/** La regla aplicable existe en el negocio pero Contabilidad aún no confirmó su fórmula: la operación se rechaza, no se aproxima. */
-export class ReglaIsrPendiente extends Error {
-  readonly codigo = "REGLA_ISR_PENDIENTE";
-  readonly status = 422;
-  constructor(readonly motivo: MotivoReglaPendiente) {
-    super(MENSAJES[motivo]);
-    this.name = "ReglaIsrPendiente";
+/** Cálculo exacto (sin redondear) del ISR de un tramo para un neto sujeto: el que Contabilidad confirmó. */
+export function isrExacto(baseNeto: Decimal.Value): { tramo: TramoIsr; porcentaje: string; fijo: Decimal; exacto: Decimal } {
+  const base = new Decimal(baseNeto);
+  if (base.lt(ISR_BASE_MINIMA)) return { tramo: "SIN_RETENCION", porcentaje: "0.00", fijo: new Decimal(0), exacto: new Decimal(0) };
+  if (base.lt(ISR_TRAMO_FIJO_DESDE)) {
+    return { tramo: "CINCO_POR_CIENTO", porcentaje: ISR_TRAMO_5_PORCENTAJE, fijo: new Decimal(0), exacto: base.times(ISR_TRAMO_5_PORCENTAJE).div(100) };
   }
+  const fijo = new Decimal(ISR_TRAMO_FIJO_MONTO);
+  return {
+    tramo: "FIJO_MAS_SIETE_POR_CIENTO", porcentaje: ISR_TRAMO_EXCEDENTE_PORCENTAJE, fijo,
+    exacto: fijo.plus(base.minus(ISR_TRAMO_FIJO_DESDE).times(ISR_TRAMO_EXCEDENTE_PORCENTAJE).div(100)),
+  };
 }
 
-export type EntradaIsr = { baseNeto: string; regimenFiscal: RegimenFiscal; sujetoIsr: boolean };
-export type ResultadoIsr = { porcentaje: string; monto: string; regla: ReglaIsrAplicada };
+const REGLA_POR_TRAMO: Record<TramoIsr, ReglaIsrAplicada> = {
+  SIN_RETENCION: `${REGLA_ISR_VERSION}:BAJO_MINIMO_SIN_RETENCION`,
+  CINCO_POR_CIENTO: `${REGLA_ISR_VERSION}:TRAMO_5_PCT`,
+  FIJO_MAS_SIETE_POR_CIENTO: `${REGLA_ISR_VERSION}:TRAMO_FIJO_1500_MAS_7_PCT_EXCEDENTE`,
+};
+
+/** Redondeo confirmado por Contabilidad: 2 decimales, mitad hacia arriba (aproximación; nunca truncar). */
+export const ISR_REDONDEO = Decimal.ROUND_HALF_UP;
+export function redondearIsr(exacto: Decimal.Value): Decimal {
+  return new Decimal(exacto).toDecimalPlaces(2, ISR_REDONDEO);
+}
 
 export function calcularIsrProveedor(entrada: EntradaIsr): ResultadoIsr {
   const base = new Decimal(entrada.baseNeto);
   if (!base.isFinite() || base.lte(0)) throw new RangeError("La base neta debe ser mayor que cero.");
-  if (entrada.regimenFiscal === "PEQUENO_CONTRIBUYENTE") {
-    return { porcentaje: "0.00", monto: "0.00", regla: `${REGLA_ISR_VERSION}:PEQUENO_CONTRIBUYENTE_SIN_RETENCION` };
-  }
-  if (!entrada.sujetoIsr) return { porcentaje: "0.00", monto: "0.00", regla: `${REGLA_ISR_VERSION}:NO_SUJETO_ISR` };
-  if (base.lt(ISR_BASE_MINIMA)) throw new ReglaIsrPendiente("BASE_BAJO_MINIMO");
-  if (base.gt(ISR_TRAMO_5_MAXIMO)) throw new ReglaIsrPendiente("BASE_SOBRE_TRAMO");
-  const exacto = base.times(ISR_TRAMO_5_PORCENTAJE).div(100);
-  if (exacto.decimalPlaces() > 2) throw new ReglaIsrPendiente("REDONDEO");
-  return { porcentaje: ISR_TRAMO_5_PORCENTAJE, monto: exacto.toFixed(2), regla: `${REGLA_ISR_VERSION}:TRAMO_5_PCT_EXACTO` };
+  const sinRetencion = (regla: ReglaIsrAplicada): ResultadoIsr => ({ porcentaje: "0.00", monto: "0.00", regla, tramo: "SIN_RETENCION", fijo: "0.00", variable: "0.00" });
+  if (entrada.regimenFiscal === "PEQUENO_CONTRIBUYENTE") return sinRetencion(`${REGLA_ISR_VERSION}:PEQUENO_CONTRIBUYENTE_SIN_RETENCION`);
+  if (!entrada.sujetoIsr) return sinRetencion(`${REGLA_ISR_VERSION}:NO_SUJETO_ISR`);
+  const t = isrExacto(base);
+  const monto = redondearIsr(t.exacto);
+  return {
+    porcentaje: t.porcentaje, monto: monto.toFixed(2), regla: REGLA_POR_TRAMO[t.tramo], tramo: t.tramo,
+    fijo: t.fijo.toFixed(2), variable: monto.minus(t.fijo).toFixed(2),
+  };
 }

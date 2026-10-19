@@ -172,8 +172,10 @@ const LABEL_PERMISO_LIQUIDACION_VIAJE: Record<PermisoLiquidacionViaje, string> =
  *   - cxp_facturas: ver / registrar facturas de proveedores.
  *   - cxp_anular: anular una factura de proveedor (permiso aparte de registrar).
  *   - cxp_proveedor_fiscal: ver / editar la configuración fiscal-contable del proveedor (régimen, ISR, cuentas).
+ *   - cxp_pagos (M-3B1): ver / registrar pagos a proveedores (aplicados a una o varias facturas).
+ *   - cxp_reversar_pago (M-3B1): reversar un pago (permiso aparte de registrar).
  */
-export const PERMISOS_CXP = ["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal"] as const;
+export const PERMISOS_CXP = ["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal", "cxp_pagos", "cxp_reversar_pago"] as const;
 export type PermisoCxp = (typeof PERMISOS_CXP)[number];
 export function esPermisoCxp(m: string): m is PermisoCxp {
   return (PERMISOS_CXP as readonly string[]).includes(m);
@@ -182,6 +184,8 @@ const LABEL_PERMISO_CXP: Record<PermisoCxp, string> = {
   cxp_facturas: "CxP: facturas de proveedores",
   cxp_anular: "CxP: anular facturas de proveedores",
   cxp_proveedor_fiscal: "CxP: configuración fiscal del proveedor",
+  cxp_pagos: "CxP: pagos a proveedores",
+  cxp_reversar_pago: "CxP: reversar pagos a proveedores",
 };
 
 export const PLATAFORMA_PERMISIBLES = [

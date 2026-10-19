@@ -4,16 +4,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   guard: vi.fn(), registrar: vi.fn(), listar: vi.fn(), obtener: vi.fn(), anular: vi.fn(), previsualizar: vi.fn(),
   guardarConfig: vi.fn(), obtenerConfig: vi.fn(), proveedores: vi.fn(), cuentas: vi.fn(),
+  registrarPago: vi.fn(), listarPagos: vi.fn(), obtenerPago: vi.fn(), reversarPago: vi.fn(),
 }));
 vi.mock("@/lib/tenant", () => ({ requireTenantCxp: m.guard }));
 vi.mock("./facturas", () => ({ registrarFactura: m.registrar, listarFacturas: m.listar, obtenerFactura: m.obtener, anularFactura: m.anular, previsualizarFactura: m.previsualizar }));
+vi.mock("./pagos", () => ({ registrarPago: m.registrarPago, listarPagos: m.listarPagos, obtenerPago: m.obtenerPago, reversarPago: m.reversarPago }));
 vi.mock("./proveedor-fiscal", () => ({ guardarConfigFiscal: m.guardarConfig, obtenerConfigFiscal: m.obtenerConfig, listarProveedoresCxp: m.proveedores, listarCuentasCxp: m.cuentas }));
 import {
   anularFacturaHttp, guardarConfigFiscalHttp, listarCuentasHttp, listarFacturasHttp, listarProveedoresHttp, obtenerConfigFiscalHttp, obtenerFacturaHttp,
-  previsualizarFacturaHttp, registrarFacturaHttp,
+  previsualizarFacturaHttp, registrarFacturaHttp, listarPagosHttp, obtenerPagoHttp, registrarPagoHttp, reversarPagoHttp,
 } from "./http";
 import { ErrorCxp } from "./errores";
-import { ReglaIsrPendiente } from "./isr-proveedor";
 import { CATALOGO_PERMISOS } from "@/lib/permisos-catalogo";
 import { PERMISOS_CXP, PLATAFORMA_PERMISIBLES, moduloEmpresaDelPermiso, modulosPropiosDelRol } from "@/lib/permisos-shared";
 
@@ -27,6 +28,7 @@ beforeEach(() => {
   m.listar.mockResolvedValue({ facturas: [] }); m.obtener.mockResolvedValue({ id: 7 }); m.anular.mockResolvedValue({ id: 7 });
   m.previsualizar.mockResolvedValue({ totalNetoPagar: "1.00" }); m.guardarConfig.mockResolvedValue({}); m.obtenerConfig.mockResolvedValue(null);
   m.proveedores.mockResolvedValue([]); m.cuentas.mockResolvedValue([]);
+  m.registrarPago.mockResolvedValue({ pago: { id: 9 }, repetido: false }); m.listarPagos.mockResolvedValue({ pagos: [] }); m.obtenerPago.mockResolvedValue({ id: 9 }); m.reversarPago.mockResolvedValue({ id: 9 });
 });
 
 describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
@@ -39,11 +41,15 @@ describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
     ["ver config", () => obtenerConfigFiscalHttp(req(), "e", "3"), ["cxp_proveedor_fiscal", "ver"]],
     ["editar config", () => guardarConfigFiscalHttp(req(undefined, {}), "e", "3"), ["cxp_proveedor_fiscal", "editar"]],
     ["cuentas", () => listarCuentasHttp(req(), "e"), ["cxp_proveedor_fiscal", "ver"]],
+    ["listar pagos", () => listarPagosHttp(req(), "e"), ["cxp_pagos", "ver"]],
+    ["ver pago", () => obtenerPagoHttp(req(), "e", "9"), ["cxp_pagos", "ver"]],
+    ["registrar pago", () => registrarPagoHttp(req(undefined, {}), "e"), ["cxp_pagos", "editar"]],
+    ["reversar pago", () => reversarPagoHttp(req(undefined, { motivo: "error" }), "e", "9"), ["cxp_reversar_pago", "editar"]],
   ] as const)("%s exige %j y no ejecuta sin permiso", async (_n, llamar, [fila, accion]) => {
     m.guard.mockResolvedValue(prohibido());
     expect((await llamar()).status).toBe(403);
     expect(m.guard.mock.calls[0].slice(1, 3)).toEqual([fila, accion]);
-    for (const f of [m.registrar, m.anular, m.guardarConfig, m.listar, m.obtener, m.cuentas, m.obtenerConfig, m.previsualizar]) expect(f).not.toHaveBeenCalled();
+    for (const f of [m.registrar, m.anular, m.guardarConfig, m.listar, m.obtener, m.cuentas, m.obtenerConfig, m.previsualizar, m.registrarPago, m.listarPagos, m.obtenerPago, m.reversarPago]) expect(f).not.toHaveBeenCalled();
   });
   it("el listado de proveedores acepta cualquiera de los dos permisos de lectura", async () => {
     m.guard.mockResolvedValueOnce(prohibido()).mockResolvedValueOnce(OK);
@@ -53,7 +59,7 @@ describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
     expect((await listarProveedoresHttp(req(), "e")).status).toBe(403);
   });
   it("registrar NO concede anular ni configurar (filas independientes); catálogo y roles", () => {
-    expect(PERMISOS_CXP).toEqual(["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal"]);
+    expect(PERMISOS_CXP).toEqual(["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal", "cxp_pagos", "cxp_reversar_pago"]);
     for (const p of PERMISOS_CXP) {
       expect(PLATAFORMA_PERMISIBLES).toContain(p);
       expect(moduloEmpresaDelPermiso(p)).toBe("contabilidad");
@@ -62,7 +68,7 @@ describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
     }
     const cont = CATALOGO_PERMISOS.find(x => x.id === "contabilidad")!;
     const ids = cont.acciones.map(a => a.id);
-    expect(ids).toEqual(expect.arrayContaining(["cxp_ver", "cxp_registrar", "cxp_anular", "cxp_ver_fiscal", "cxp_editar_fiscal"]));
+    expect(ids).toEqual(expect.arrayContaining(["cxp_ver", "cxp_registrar", "cxp_anular", "cxp_ver_fiscal", "cxp_editar_fiscal", "cxp_ver_pagos", "cxp_registrar_pago", "cxp_reversar_pago"]));
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
@@ -87,11 +93,11 @@ describe("ámbito, entradas y errores", () => {
     expect((await registrarFacturaHttp(req(undefined, [1]), "e")).status).toBe(400);
     expect(m.registrar).not.toHaveBeenCalled();
   });
-  it("errores de dominio conservan su estado; regla ISR pendiente = 422; BD sin migrar = 503; inesperado = 500 genérico", async () => {
+  it("errores de dominio conservan su estado; factura especial pendiente = 422; BD sin migrar = 503; inesperado = 500 genérico", async () => {
     m.registrar.mockRejectedValueOnce(new ErrorCxp("La factura A / 1 ya está registrada.", 409, "FACTURA_DUPLICADA"));
     const dup = await registrarFacturaHttp(req(undefined, {}), "e");
     expect(dup.status).toBe(409); expect(await dup.json()).toMatchObject({ codigo: "FACTURA_DUPLICADA" });
-    m.registrar.mockRejectedValueOnce(new ReglaIsrPendiente("BASE_SOBRE_TRAMO"));
+    m.registrar.mockRejectedValueOnce(new ErrorCxp("Factura especial pendiente", 422, "FACTURA_ESPECIAL_PENDIENTE"));
     expect((await registrarFacturaHttp(req(undefined, {}), "e")).status).toBe(422);
     m.registrar.mockRejectedValueOnce(Object.assign(new Error("tabla"), { code: "ER_NO_SUCH_TABLE" }));
     const sin = await registrarFacturaHttp(req(undefined, {}), "e");
@@ -108,10 +114,35 @@ describe("ámbito, entradas y errores", () => {
   });
 });
 
+describe("pagos (M-3B1): ámbito, cuerpo y respuestas", () => {
+  it("registrar pago: empresa, entidad, usuario, total y estado NO se leen del cuerpo; 201 nuevo / 200 repetido", async () => {
+    const r1 = await registrarPagoHttp(req(undefined, {
+      proveedorId: 3, fechaPago: "2026-11-05", medioPago: "Transferencia", referencia: "T-1", observaciones: "x", claveIdempotencia: "clave-0001", aplicaciones: [{ facturaId: 7, monto: "100.00" }],
+      empresaId: 99, entidadId: 99, usuario: "otro", montoTotal: "1.00", estado: "REVERSADO", creadoPor: 1,
+    }), "e");
+    expect(r1.status).toBe(201);
+    const [empresaId, entidadId, actor, entrada] = m.registrarPago.mock.calls[0];
+    expect([empresaId, entidadId, actor]).toEqual([1, 5, { id: 91, username: "op" }]);
+    expect(Object.keys(entrada).sort()).toEqual(["aplicaciones", "claveIdempotencia", "fechaPago", "medioPago", "observaciones", "proveedorId", "referencia"]);
+    m.registrarPago.mockResolvedValueOnce({ pago: { id: 9 }, repetido: true });
+    expect((await registrarPagoHttp(req(undefined, {}), "e")).status).toBe(200);
+  });
+  it("errores de pago conservan su estado (sobreaplicación 409); pago inexistente 404; filtros inválidos 400", async () => {
+    m.registrarPago.mockRejectedValueOnce(new ErrorCxp("supera su saldo", 409, "SOBREAPLICACION"));
+    const r = await registrarPagoHttp(req(undefined, {}), "e");
+    expect(r.status).toBe(409); expect(await r.json()).toMatchObject({ codigo: "SOBREAPLICACION" });
+    m.obtenerPago.mockResolvedValueOnce(null);
+    expect((await obtenerPagoHttp(req(), "e", "9")).status).toBe(404);
+    expect((await listarPagosHttp(req("http://l/x?entidad=5&estado=PAGADO"), "e")).status).toBe(400);
+    expect((await reversarPagoHttp(req(undefined, { motivo: "x" }), "e", "9")).status).toBe(200);
+    expect(m.reversarPago.mock.calls[0][3]).toEqual({ id: 91, username: "op" });
+  });
+});
+
 describe("arquitectura (no tocar CxC, clientes ni cont_cxp)", () => {
   const leer = (f: string) => readFileSync(f, "utf8");
   it("los servicios CxP nunca escriben en cont_cxp, fact_*, cont_asientos ni pólizas", () => {
-    for (const f of ["facturas.ts", "proveedor-fiscal.ts", "http.ts"]) {
+    for (const f of ["facturas.ts", "proveedor-fiscal.ts", "http.ts", "pagos.ts", "aplicaciones.ts"]) {
       const src = leer(`src/lib/contabilidad/cxp/${f}`).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       expect(src).not.toMatch(/(INSERT INTO|UPDATE|DELETE FROM)\s+(cont_cxp|cont_cxc|cont_asiento|fact_|clientes|compras_proveedores)/i);
       expect(src).not.toMatch(/cont_eventos|poliza|fel_/i);

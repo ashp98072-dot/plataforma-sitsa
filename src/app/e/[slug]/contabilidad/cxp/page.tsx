@@ -5,7 +5,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 
 type Props = { params: Promise<{ slug: string }> };
 
-/** Cuentas por pagar (M-3A). Los permisos vienen de las filas propias de CxP; el servidor los vuelve a exigir en cada endpoint. */
+/** Cuentas por pagar (M-3A/M-3B1). Los permisos vienen de las filas propias de CxP; el servidor los vuelve a exigir en cada endpoint. */
 export default async function CxpPage({ params }: Props) {
   const { slug } = await params;
   const session = await getSession();
@@ -16,7 +16,8 @@ export default async function CxpPage({ params }: Props) {
   const flags = {
     puedeVer: p("cxp_facturas", "ver"), puedeRegistrar: p("cxp_facturas", "editar"), puedeAnular: p("cxp_anular", "editar"),
     puedeVerFiscal: p("cxp_proveedor_fiscal", "ver"), puedeEditarFiscal: p("cxp_proveedor_fiscal", "editar"),
+    puedeVerPagos: p("cxp_pagos", "ver"), puedeRegistrarPago: p("cxp_pagos", "editar"), puedeReversarPago: p("cxp_reversar_pago", "editar"),
   };
-  if (!flags.puedeVer && !flags.puedeVerFiscal) return <p>Sin permiso para ver Cuentas por pagar.</p>;
+  if (!flags.puedeVer && !flags.puedeVerFiscal && !flags.puedeVerPagos) return <p>Sin permiso para ver Cuentas por pagar.</p>;
   return <CxpClient slug={slug} {...flags} />;
 }
