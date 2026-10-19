@@ -136,6 +136,11 @@ agregar("contabilidad",
   { ...accion("cxc_cuentas","cxc_ver","Ver cuentas por cobrar y cobros (CxC)","puedeVer"), grupo: "Cuentas por cobrar" },
   { ...accion("cxc_cobros","cxc_cobrar","Registrar cobros de clientes (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" },
   { ...accion("cxc_bitacora","cxc_ver_bitacora","Ver bitácora de movimientos de CxC","puedeVer"), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
+// REPORTES CONTABLES (M-4): una fila por reporte, solo lectura, sin equivalencia por rol (ver PERMISOS_CONT_REPORTES en permisos-shared.ts).
+agregar("contabilidad",
+  { ...accion("contabilidad_diario","contabilidad_ver_diario","Ver Libro Diario","puedeVer"), grupo: "Reportes contables" },
+  { ...accion("contabilidad_mayor","contabilidad_ver_mayor","Ver Libro Mayor","puedeVer"), grupo: "Reportes contables" },
+  { ...accion("contabilidad_balance","contabilidad_ver_balance","Ver Balance de comprobación","puedeVer"), grupo: "Reportes contables" });
 // CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
 agregar("contabilidad",
   { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },
