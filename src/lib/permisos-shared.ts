@@ -188,6 +188,22 @@ const LABEL_PERMISO_CXP: Record<PermisoCxp, string> = {
   cxp_reversar_pago: "CxP: reversar pagos a proveedores",
 };
 
+/**
+ * CUENTAS POR COBRAR (Contabilidad → CxC): filas propias dentro de "contabilidad" (mismo patrón que PERMISOS_CXP). NINGUNA se concede por rol
+ * (Admin las recibe por catálogo). NO dan acceso a Facturación: la pantalla de CxC lee fact_facturas/fact_pagos por su propio guard.
+ *   - cxc_cuentas: ver documentos (facturas emitidas/anuladas) y cobros de CxC.
+ *   - cxc_cobros: registrar un cobro (fact_pagos) contra una factura emitida; exige también poder ver CxC en la UI.
+ */
+export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros"] as const;
+export type PermisoCxc = (typeof PERMISOS_CXC)[number];
+export function esPermisoCxc(m: string): m is PermisoCxc {
+  return (PERMISOS_CXC as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_CXC: Record<PermisoCxc, string> = {
+  cxc_cuentas: "CxC: cuentas por cobrar",
+  cxc_cobros: "CxC: registrar cobros",
+};
+
 export const PLATAFORMA_PERMISIBLES = [
   "cotizaciones",
   "proveedor_portales",
@@ -346,6 +362,8 @@ export const PLATAFORMA_PERMISIBLES = [
   ...PERMISOS_LIQUIDACION_VIAJE,
   // CUENTAS POR PAGAR (M-3A): ver PERMISOS_CXP arriba (ningún rol por defecto).
   ...PERMISOS_CXP,
+  // CUENTAS POR COBRAR (Contabilidad): ver PERMISOS_CXC arriba (ningún rol por defecto).
+  ...PERMISOS_CXC,
 ] as const;
 
 /** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
@@ -439,6 +457,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (esPermisoEntrega(m)) return "tms";
   if (esPermisoLiquidacionViaje(m)) return "tms";
   if (esPermisoCxp(m)) return "contabilidad";
+  if (esPermisoCxc(m)) return "contabilidad";
   if (m === "flota_combustible") return "tms";
   if (m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
@@ -497,6 +516,7 @@ export function labelPermiso(modulo: string): string {
   if (esPermisoEntrega(modulo)) return LABEL_PERMISO_ENTREGA[modulo];
   if (esPermisoLiquidacionViaje(modulo)) return LABEL_PERMISO_LIQUIDACION_VIAJE[modulo];
   if (esPermisoCxp(modulo)) return LABEL_PERMISO_CXP[modulo];
+  if (esPermisoCxc(modulo)) return LABEL_PERMISO_CXC[modulo];
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -592,7 +612,7 @@ export const GRUPOS_PERMISOS: {
     id: "contabilidad",
     titulo: "Permisos Contabilidad / Facturación",
     descripcion: "Cuentas, asientos, cartera y facturación de la empresa.",
-    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXP],
+    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP],
   },
   {
     id: "otros",
@@ -947,7 +967,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS &&
       !esPermisoEntrega(p.modulo) &&
       !esPermisoLiquidacionViaje(p.modulo) &&
-      !esPermisoCxp(p.modulo)
+      !esPermisoCxp(p.modulo) &&
+      !esPermisoCxc(p.modulo)
     ) {
       out.add(p.modulo);
     }
