@@ -129,6 +129,10 @@ agregar("facturacion",
   { ...accion(FILA_FACTURACION_EMPRESA,"editar_empresa","Editar configuración de facturación de la empresa",E), requiere: "ver_empresa", grupo: "Configuración de la empresa" },
   { ...accion(FILA_FACTURACION_REQUISITOS,"ver_requisitos","Ver requisitos de facturación de clientes","puedeVer"), grupo: "Requisitos de clientes" },
   { ...accion(FILA_FACTURACION_REQUISITOS,"editar_requisitos","Editar requisitos de facturación de clientes",E), requiere: "ver_requisitos", grupo: "Requisitos de clientes" });
+// CUENTAS POR COBRAR (Contabilidad): filas propias (ver PERMISOS_CXC en permisos-shared.ts), sin equivalencia por rol y SIN acceso a Facturación.
+agregar("contabilidad",
+  { ...accion("cxc_cuentas","cxc_ver","Ver cuentas por cobrar y cobros (CxC)","puedeVer"), grupo: "Cuentas por cobrar" },
+  { ...accion("cxc_cobros","cxc_cobrar","Registrar cobros de clientes (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
 // CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
 agregar("contabilidad",
   { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },

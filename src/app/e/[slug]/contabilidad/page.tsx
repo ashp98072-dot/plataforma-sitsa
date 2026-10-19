@@ -60,27 +60,23 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
   const [ocupado, setOcupado] = useState(false);
   const [cuentas, setCuentas] = useState<Record<string, unknown>[]>([]);
   const [asientos, setAsientos] = useState<Record<string, unknown>[]>([]);
-  const [cxc, setCxc] = useState<Record<string, unknown>[]>([]);
   const [cxp, setCxp] = useState<Record<string, unknown>[]>([]);
   const [codigo, setCodigo] = useState("");
   const [nombre, setNombre] = useState("");
   const [tipo, setTipo] = useState("Activo");
-  const [cliente, setCliente] = useState("");
-  const [proveedor, setProveedor] = useState("");
-  const [monto, setMonto] = useState(0);
   const [msg, setMsg] = useState("");
 
   const cargar = useCallback((signal?: AbortSignal) => Promise.all(
-    ["cuentas", "asientos", "cxc", "cxp"].map((tipo) => fetch(api(tipo), { cache: "no-store", signal }).then(respuesta)),
+    ["cuentas", "asientos", "cxp"].map((tipo) => fetch(api(tipo), { cache: "no-store", signal }).then(respuesta)),
   ), [api]);
   const mostrar = useCallback((datos: Awaited<ReturnType<typeof cargar>>) => {
     if (!vivo.current) return;
-    const [c, a, cx, cp] = datos;
-    setCuentas(c.cuentas); setAsientos(a.asientos); setCxc(cx.cxc); setCxp(cp.cxp);
+    const [c, a, cp] = datos;
+    setCuentas(c.cuentas); setAsientos(a.asientos); setCxp(cp.cxp);
   }, []);
   const fallo = useCallback((e: unknown) => {
     if (!vivo.current) return;
-    setCuentas([]); setAsientos([]); setCxc([]); setCxp([]);
+    setCuentas([]); setAsientos([]); setCxp([]);
     setMsg(e instanceof Error ? e.message : "Error de conexión.");
   }, []);
   useEffect(() => {
@@ -106,19 +102,12 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
     e.preventDefault();
     if (await guardar("cuentas", { codigo, nombre, tipo })) { setCodigo(""); setNombre(""); }
   }
-  async function crearCxc() {
-    if (await guardar("cxc", { cliente, fecha: new Date().toLocaleDateString("en-CA", { timeZone: "America/Guatemala" }), monto })) setCliente("");
-  }
-  async function crearCxp() {
-    if (await guardar("cxp", { proveedor, fecha: new Date().toLocaleDateString("en-CA", { timeZone: "America/Guatemala" }), monto })) setProveedor("");
-  }
-
   return (
     <><fieldset disabled={!puedeEditar || ocupado} className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Contabilidad</h1>
         <p className="text-sm text-[var(--muted)]">
-          Plan de cuentas, asientos y CxC/CxP de la entidad seleccionada.
+          Plan de cuentas y asientos de la entidad seleccionada. Cuentas por cobrar y Cuentas por pagar tienen su propia pantalla en el menú de Contabilidad.
           Captura de partidas disponible. Períodos, reversos e importación desde Milenium siguen pendientes.
         </p>
       </div>
@@ -136,14 +125,6 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
 
       {puedeEditar && <CapturaPartida cuentas={cuentas.filter((c) => Number(c.activa) === 1).map((c) => ({ id: Number(c.id), codigo: String(c.codigo), nombre: String(c.nombre) }))} ocupado={ocupado} guardar={(body) => guardar("asientos", body)} />}
 
-      <div className="flex flex-wrap gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Cliente CxC" value={cliente} onChange={(e) => setCliente(e.target.value)} />
-        <input className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Proveedor CxP" value={proveedor} onChange={(e) => setProveedor(e.target.value)} />
-        <input type="number" className="w-28 rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" value={monto} onChange={(e) => setMonto(Number(e.target.value))} />
-        <button type="button" onClick={() => void crearCxc()} className="rounded bg-[var(--accent-2)] px-3 py-1 text-sm">CxC</button>
-        <button type="button" onClick={() => void crearCxp()} className="rounded bg-[#0f766e] px-3 py-1 text-sm">CxP</button>
-      </div>
-
       {!puedeEditar && <p>Acceso de solo lectura.</p>}
       {msg ? <p role="status" className="text-sm">{msg}</p> : null}
 
@@ -159,17 +140,7 @@ function LibroContable({ slug, entidadId, puedeEditar }: { slug: string; entidad
           </ul>
         </div>
         <div className="rounded-xl border border-[var(--border)] p-4">
-          <h2 className="font-medium">CxC ({cxc.length})</h2>
-          <ul className="mt-2 space-y-1 text-sm">
-            {cxc.map((r) => (
-              <li key={String(r.id)}>
-                {String(r.cliente)} · Q{Number(r.saldo).toFixed(2)} · {String(r.estado)}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <div className="rounded-xl border border-[var(--border)] p-4">
-          <h2 className="font-medium">CxP ({cxp.length})</h2>
+          <h2 className="font-medium">Registros manuales de CxP — legado, solo lectura ({cxp.length})</h2>
           <ul className="mt-2 space-y-1 text-sm">
             {cxp.map((r) => (
               <li key={String(r.id)}>
