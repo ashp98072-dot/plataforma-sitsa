@@ -1,3 +1,5 @@
+import Decimal from "decimal.js";
+import { SQL_COBRADO } from "./cobrado";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { diferencias, registrarBitacoraFactura } from "./bitacora";
@@ -291,7 +293,7 @@ const FACTURA_SELECT = `
   FROM fact_facturas f
   INNER JOIN clientes c ON c.id = f.cliente_id
   LEFT JOIN (
-    SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+    SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id
   ) pg ON pg.factura_id = f.id
 `;
 
@@ -520,7 +522,7 @@ export async function obtenerFactura(
   );
   if (!rows[0]) return null;
   const anulada = String(rows[0].estado_admin) === "Anulada";
-  const [viajesRows, pagosRows, anulacionRows] = await Promise.all([
+  const [viajesRows, pagosRows, anulacionRows, cobrosRows] = await Promise.all([
     leerLineasFactura(facturaId, anulada),
     query<RowDataPacket[]>(
       `SELECT id, DATE_FORMAT(fecha_pago, '%Y-%m-%d') AS fecha_pago, monto, referencia, medio_pago,
@@ -538,6 +540,13 @@ export async function obtenerFactura(
           [empresaId, `Factura #${facturaId} anulada%`],
         )
       : Promise.resolve([] as RowDataPacket[]),
+    // CxC-1: aplicaciones de cobros VIGENTES (cuentan en el total pagado, así que también se listan). Se muestran como filas de pago con id negativo.
+    query<RowDataPacket[]>(
+      `SELECT a.id, DATE_FORMAT(c.fecha_cobro, '%Y-%m-%d') AS fecha_pago, a.monto, c.referencia, c.medio_pago, c.observaciones, c.creado_por AS registrado_por, c.creado_en, c.id AS cobro_id
+         FROM fact_cobro_aplicaciones a JOIN fact_cobros c ON c.id = a.cobro_id AND c.estado = 'VIGENTE'
+        WHERE a.factura_id = ? AND c.empresa_id = ? ORDER BY c.fecha_cobro, a.id`,
+      [facturaId, empresaId],
+    ),
   ]);
   const contabilidad = await leerContabilidadFactura(empresaId, facturaId);
   const viajes: FacturaViajeLinea[] = viajesRows.map((r) => ({
@@ -565,13 +574,22 @@ export async function obtenerFactura(
     viajes,
     lineas,
     contabilidad,
-    pagos: pagosRows.map((r) => ({
-      id: Number(r.id), fechaPago: String(r.fecha_pago), monto: Number(r.monto),
-      referencia: r.referencia != null ? String(r.referencia) : null,
-      medioPago: r.medio_pago != null ? String(r.medio_pago) : null,
-      observaciones: r.observaciones != null ? String(r.observaciones) : null,
-      registradoPor: Number(r.registrado_por), creadoEn: String(r.creado_en),
-    })),
+    pagos: [
+      ...pagosRows.map((r) => ({
+        id: Number(r.id), fechaPago: String(r.fecha_pago), monto: Number(r.monto),
+        referencia: r.referencia != null ? String(r.referencia) : null,
+        medioPago: r.medio_pago != null ? String(r.medio_pago) : null,
+        observaciones: r.observaciones != null ? String(r.observaciones) : null,
+        registradoPor: Number(r.registrado_por), creadoEn: String(r.creado_en),
+      })),
+      ...cobrosRows.map((r) => ({
+        id: -Number(r.id), fechaPago: String(r.fecha_pago), monto: Number(r.monto),
+        referencia: r.referencia != null ? String(r.referencia) : null,
+        medioPago: `Cobro múltiple #${Number(r.cobro_id)}${r.medio_pago != null ? ` · ${String(r.medio_pago)}` : ""}`,
+        observaciones: r.observaciones != null ? String(r.observaciones) : null,
+        registradoPor: Number(r.registrado_por), creadoEn: String(r.creado_en),
+      })),
+    ].sort((x, y) => x.fechaPago.localeCompare(y.fechaPago) || x.id - y.id),
   };
 }
 
@@ -673,7 +691,7 @@ export async function obtenerKpisFacturacion(empresaId: number): Promise<KpisFac
       `SELECT COUNT(*) AS emitidas, COALESCE(SUM(f.monto_total), 0) AS valor_facturado,
               COALESCE(SUM(pg.total_pagado), 0) AS cobrado
        FROM fact_facturas f
-       LEFT JOIN (SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id) pg
+       LEFT JOIN (SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id) pg
          ON pg.factura_id = f.id
        WHERE f.empresa_id = ? AND f.estado_admin = 'Emitida'`,
       [empresaId],
@@ -1611,7 +1629,13 @@ async function anularFacturaTx(actor: ActorFacturacion, facturaId: number, motiv
       `SELECT COUNT(*) AS c FROM fact_pagos WHERE factura_id = ? FOR UPDATE`,
       [facturaId],
     );
-    if (Number(pagosRows[0]?.c ?? 0) > 0) {
+    // CxC-1: también cuentan las aplicaciones de cobros VIGENTES (un cobro anulado ya no impide anular la factura).
+    const [aplicRows] = await conn.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM fact_cobro_aplicaciones a JOIN fact_cobros c ON c.id = a.cobro_id AND c.estado = 'VIGENTE'
+        WHERE a.factura_id = ? FOR UPDATE`,
+      [facturaId],
+    );
+    if (Number(pagosRows[0]?.c ?? 0) + Number(aplicRows[0]?.c ?? 0) > 0) {
       return {
         ok: false,
         error: "No se puede anular una factura con pagos registrados; requiere nota de crédito/reversa (no implementado en esta fase).",
@@ -1690,13 +1714,15 @@ export async function registrarPago(actor: ActorFacturacion, facturaId: number, 
       return { ok: false, error: "Solo se pueden registrar pagos contra una factura Emitida.", status: 409 };
     }
 
+    // Cobrado = pagos legados + aplicaciones de cobros VIGENTES (CxC-1), en aritmética decimal exacta.
     const [sumaRows] = await conn.query<RowDataPacket[]>(
-      `SELECT COALESCE(SUM(monto), 0) AS total FROM fact_pagos WHERE factura_id = ?`,
+      `SELECT COALESCE(SUM(monto), 0) AS total FROM ${SQL_COBRADO} WHERE factura_id = ?`,
       [facturaId],
     );
-    const totalPagado = Number(sumaRows[0]?.total ?? 0);
-    const saldo = Number(factura.monto_total) - totalPagado;
-    if (input.monto > saldo) {
+    const totalPagado = new Decimal(String(sumaRows[0]?.total ?? 0));
+    const saldoExacto = new Decimal(String(factura.monto_total)).minus(totalPagado);
+    const saldo = saldoExacto.toNumber();
+    if (new Decimal(String(input.monto)).gt(saldoExacto)) {
       return {
         ok: false,
         error: `El pago (Q${input.monto}) excede el saldo pendiente (Q${saldo}).`,

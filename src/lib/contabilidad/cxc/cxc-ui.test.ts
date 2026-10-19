@@ -50,7 +50,8 @@ describe("pantalla de CxC", () => {
   });
   it("el cobro solo se ofrece con permiso, sobre factura Emitida con saldo; no hay reversión (no existe) ni edición de cobros", () => {
     expect(cliente).toMatch(/puedeCobrar && x\.estadoAdmin === "Emitida" && Number\(x\.saldoInformativo\) > 0/);
-    expect(cliente).not.toMatch(/Reversar|reversar|anular cobro|Anular/);
+    // El cobro simple de «Documentos»/«Cobros» sigue sin reversión; la anulación vive solo en el panel de cobros a varias facturas (CxC-1).
+    expect(cliente.replace(/puedeAnularCobro|puedeAnular=|CobrosAplicadosPanel|Anuló cobro múltiple/g, "")).not.toMatch(/Reversar|reversar|anular cobro|Anular/);
     expect(cliente).toContain("no existe esa función");
   });
   it("el cliente no calcula saldos: solo muestra lo que devuelve el servidor", () => {

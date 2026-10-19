@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
 import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
+import { CobrosAplicadosPanel } from "@/components/contabilidad/cobros-aplicados-panel";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Documento = {
@@ -25,10 +26,10 @@ async function api(url: string, init?: RequestInit) {
   return data;
 }
 
-export function CxcClient({ slug, puedeVer, puedeCobrar, puedeVerBitacora = false }: { slug: string; puedeVer: boolean; puedeCobrar: boolean; puedeVerBitacora?: boolean }) {
+export function CxcClient({ slug, puedeVer, puedeCobrar, puedeVerBitacora = false, puedeAnularCobro = false }: { slug: string; puedeVer: boolean; puedeCobrar: boolean; puedeVerBitacora?: boolean; puedeAnularCobro?: boolean }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidadId, setEntidadId] = useState("");
-  const [vista, setVista] = useState<"documentos" | "cobros" | "bitacora" | "legado">("documentos");
+  const [vista, setVista] = useState<"documentos" | "cobros" | "aplicados" | "bitacora" | "legado">("documentos");
   const [error, setError] = useState("");
   useEffect(() => {
     const ac = new AbortController();
@@ -55,11 +56,13 @@ export function CxcClient({ slug, puedeVer, puedeCobrar, puedeVerBitacora = fals
       <div className="flex gap-2">
         <button type="button" className={boton} aria-pressed={vista === "documentos"} onClick={() => setVista("documentos")}>Documentos</button>
         <button type="button" className={boton} aria-pressed={vista === "cobros"} onClick={() => setVista("cobros")}>Cobros</button>
+        <button type="button" className={boton} aria-pressed={vista === "aplicados"} onClick={() => setVista("aplicados")}>Cobros a varias facturas</button>
         {puedeVerBitacora && <button type="button" className={boton} aria-pressed={vista === "bitacora"} onClick={() => setVista("bitacora")}>Bitácora</button>}
         <button type="button" className={boton} aria-pressed={vista === "legado"} onClick={() => setVista("legado")}>Registros manuales (legado)</button>
       </div>
       {vista === "documentos" && <Documentos key={`d${entidadId}`} slug={slug} entidadId={entidadId} puedeCobrar={puedeCobrar} />}
       {vista === "cobros" && <Cobros key={`c${entidadId}`} slug={slug} entidadId={entidadId} />}
+      {vista === "aplicados" && <CobrosAplicadosPanel key={`a${entidadId}`} slug={slug} entidadId={entidadId} puedeCobrar={puedeCobrar} puedeAnular={puedeAnularCobro} />}
       {vista === "bitacora" && puedeVerBitacora && <Bitacora key={`b${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "legado" && <LegadoManual key={`l${entidadId}`} slug={slug} entidadId={entidadId} />}
     </>}
@@ -186,7 +189,7 @@ function Cobros({ slug, entidadId }: { slug: string; entidadId: string }) {
 
 type EventoApi = EventoBitacoraVista & { facturaId: number | null; accion: string };
 const ACCIONES_FILTRO: [string, string][] = [["", "Todas las acciones"], ["crear_factura", "Creó borrador"], ["editar_factura_borrador", "Editó borrador"], ["emitir_factura", "Emitió factura"],
-  ["anular_factura", "Anuló factura"], ["registrar_pago", "Registró cobro"], ["confirmar_ingreso_bancario", "Confirmó ingreso bancario"], ["anular_confirmacion_bancaria", "Anuló confirmación bancaria"]];
+  ["anular_factura", "Anuló factura"], ["registrar_pago", "Registró cobro"], ["registrar_cobro_multiple", "Registró cobro múltiple"], ["anular_cobro_multiple", "Anuló cobro múltiple"], ["confirmar_ingreso_bancario", "Confirmó ingreso bancario"], ["anular_confirmacion_bancaria", "Anuló confirmación bancaria"]];
 
 /** SOLO LECTURA. Auditoría de Facturación/CxC del libro (permiso propio cxc_bitacora). */
 function Bitacora({ slug, entidadId }: { slug: string; entidadId: string }) {

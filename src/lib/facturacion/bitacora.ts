@@ -29,11 +29,13 @@ type ActorBit = { empresaId: number; usuario: string; usuarioId: number };
 
 export const ACCIONES_BITACORA = [
   "crear_factura", "editar_factura_borrador", "emitir_factura", "anular_factura", "registrar_pago", "confirmar_ingreso_bancario", "anular_confirmacion_bancaria",
+  "registrar_cobro_multiple", "anular_cobro_multiple",
 ] as const;
 export type AccionBitacora = (typeof ACCIONES_BITACORA)[number];
 export const ETIQUETA_ACCION: Record<AccionBitacora, string> = {
   crear_factura: "Creó borrador", editar_factura_borrador: "Editó borrador", emitir_factura: "Emitió factura", anular_factura: "Anuló factura",
   registrar_pago: "Registró cobro", confirmar_ingreso_bancario: "Confirmó ingreso bancario", anular_confirmacion_bancaria: "Anuló confirmación bancaria",
+  registrar_cobro_multiple: "Registró cobro múltiple", anular_cobro_multiple: "Anuló cobro múltiple",
 };
 
 const acotar = (v: string | null | undefined, max: number) => (v == null ? null : String(v).replace(/\s+/g, " ").trim().slice(0, max) || null);
@@ -83,7 +85,7 @@ export function parsearEvento(r: RowDataPacket | { id: unknown; usuario: unknown
   const facturaId = datos.facturaId ?? Number(/^Factura #(\d+) /.exec(texto)?.[1] ?? NaN);
   const doc = datos.numero ?? null;
   const partes = [`${etiqueta}${doc ? ` ${doc}` : Number.isFinite(facturaId) ? ` #${facturaId}` : ""}`];
-  if (accion === "registrar_pago") {
+  if (accion === "registrar_pago" || accion === "registrar_cobro_multiple") {
     if (datos.monto) partes.push(`Q${Number(datos.monto).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
     if (datos.medioPago) partes.push(datos.medioPago);
     if (datos.referencia) partes.push(datos.referencia);

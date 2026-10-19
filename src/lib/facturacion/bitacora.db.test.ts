@@ -65,6 +65,8 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
     holder.pool = mysql.createPool({ host: "127.0.0.1", port, user: "root", password: "", database, connectionLimit: 8, timezone: "local" });
     await asegurarSchemaClientes();
     for (const f of ["migrate-2026-08-fact-1-facturas-pagos", "migrate-2026-10-fact-2-borrador-snapshots-iva", "migrate-2026-10-fact-3-anuladas-historico", "migrate-2026-10-fact-4-lineas-contado-retencion"]) await admin.query(leer(`sql/${f}.sql`));
+    // CxC-1: SQL_COBRADO (saldos) necesita las tablas de cobros; se crean con el DDL REAL de schema.sql (sin usuarios FK: fixture sin tabla usuarios).
+    for (const t of ["fact_cobros", "fact_cobro_aplicaciones"]) await admin.query(extraerCreate(schema, t).replace(/^\s*CONSTRAINT fk_fcobro_(actor|anulador)[^\n]*\n/gm, ""));
     await admin.query(`INSERT INTO empresas (id, codigo, nombre, slug) VALUES (${E1}, 'E7', 'Empresa 7', 'e7'), (${E2}, 'E8', 'Empresa 8', 'e8')`);
     await admin.query(`INSERT INTO tms_clientes (id, empresa_id, nombre) VALUES (501, ${E1}, 'Cliente X'), (601, ${E2}, 'Cliente Z')`);
     await admin.query(`INSERT INTO clientes (id, empresa_id, nombre, razon_social, nit, direccion, tms_cliente_id) VALUES (20, ${E1}, 'Comercial X', 'Cliente X, S.A.', '1234567-8', 'Zona 1', 501), (30, ${E2}, 'Comercial Z', NULL, NULL, NULL, 601)`);

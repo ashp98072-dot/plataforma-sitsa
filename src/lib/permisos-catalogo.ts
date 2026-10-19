@@ -135,7 +135,8 @@ agregar("facturacion",
 agregar("contabilidad",
   { ...accion("cxc_cuentas","cxc_ver","Ver cuentas por cobrar y cobros (CxC)","puedeVer"), grupo: "Cuentas por cobrar" },
   { ...accion("cxc_cobros","cxc_cobrar","Registrar cobros de clientes (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" },
-  { ...accion("cxc_bitacora","cxc_ver_bitacora","Ver bitácora de movimientos de CxC","puedeVer"), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
+  { ...accion("cxc_bitacora","cxc_ver_bitacora","Ver bitácora de movimientos de CxC","puedeVer"), requiere: "cxc_ver", grupo: "Cuentas por cobrar" },
+  { ...accion("cxc_anular_cobro","cxc_anular_cobro","Anular cobros aplicados a facturas (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
 // REPORTES CONTABLES (M-4): una fila por reporte, solo lectura, sin equivalencia por rol (ver PERMISOS_CONT_REPORTES en permisos-shared.ts).
 agregar("contabilidad",
   { ...accion("contabilidad_diario","contabilidad_ver_diario","Ver Libro Diario","puedeVer"), grupo: "Reportes contables" },

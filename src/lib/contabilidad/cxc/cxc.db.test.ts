@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
+import { SQL_TABLAS_COBROS_MINIMAS } from "@/lib/facturacion/cobros-test-util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ pool: null as Pool | null }));
@@ -53,6 +54,7 @@ describe.skipIf(!port)("Contabilidad → CxC / MariaDB 11.8.9 SOLO LOCAL", () =>
         CREATE TABLE fact_pagos(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, factura_id INT NOT NULL, fecha_pago DATE NOT NULL,
           monto DECIMAL(14,2) NOT NULL, referencia VARCHAR(120) NULL, medio_pago VARCHAR(40) NULL, observaciones TEXT NULL, registrado_por INT NOT NULL,
           creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_p_f (factura_id), KEY idx_p_e (empresa_id)) ENGINE=InnoDB;
+        ${SQL_TABLAS_COBROS_MINIMAS}
         CREATE TABLE cont_cuentas_bancarias(id INT PRIMARY KEY, empresa_id INT NOT NULL, entidad_id INT NOT NULL, banco VARCHAR(120) NOT NULL, alias VARCHAR(120) NOT NULL) ENGINE=InnoDB;
         CREATE TABLE fact_pago_confirmaciones(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, entidad_id INT NOT NULL, pago_id INT NULL,
           factura_id INT NOT NULL, cuenta_bancaria_id INT NOT NULL, monto DECIMAL(14,2) NOT NULL, fecha_acreditacion DATE NOT NULL, referencia VARCHAR(120) NOT NULL, estado VARCHAR(12) NOT NULL DEFAULT 'CONFIRMADA') ENGINE=InnoDB;

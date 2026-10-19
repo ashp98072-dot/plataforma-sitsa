@@ -410,6 +410,7 @@ describe("13) cancelar el borrador libera los viajes", () => {
     conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
       if (sql.includes("SELECT id, estado_admin") && sql.includes("FROM fact_facturas") && !sql.includes("cliente_id")) return [[{ id: creada.facturaId, estado_admin: "Borrador" }]];
       if (sql.includes("SELECT COUNT(*) AS c FROM fact_pagos")) return [[{ c: 0 }]];
+      if (sql.includes("SELECT COUNT(*) AS c FROM fact_cobro_aplicaciones")) return [[{ c: 0 }]];
       return original(sql, params);
     });
     const r = await anularFactura(actor, creada.facturaId);

@@ -1,3 +1,4 @@
+import { SQL_COBRADO } from "@/lib/facturacion/cobrado";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
@@ -419,7 +420,7 @@ const JOIN_FACTURACION = `
   LEFT JOIN fact_factura_viajes ffv ON ffv.plan_id = p.id
   LEFT JOIN fact_facturas f ON f.id = ffv.factura_id AND f.empresa_id = p.empresa_id AND f.estado_admin <> 'Anulada'
   LEFT JOIN (
-    SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+    SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id
   ) pg ON pg.factura_id = f.id
 `;
 
@@ -622,7 +623,7 @@ export async function obtenerKpisReporte(
               COALESCE(SUM(pgx.total_pagado), 0) AS cobrado
        FROM fact_facturas fx
        LEFT JOIN (
-         SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+         SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id
        ) pgx ON pgx.factura_id = fx.id
        WHERE fx.empresa_id = ? AND fx.estado_admin = 'Emitida' AND fx.id IN (
          SELECT f.id FROM tms_planes_viaje p
