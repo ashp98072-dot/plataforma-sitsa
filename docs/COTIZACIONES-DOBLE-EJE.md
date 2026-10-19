@@ -6,7 +6,7 @@ Alta de configuración por empresa, sin cambios de esquema, motor, validaciones,
 
 Fuente leída: Cotizador 2026.xlsx, hoja «Cabezales »: G12 GPS 100; H12 seguro 1250; I12 aceite 2400; J12 precio llanta 1490; L3 camión 275000; L4 cinco años; N3 salario piloto 9388.59. No existe hoja DOBLE_EJE.
 
-La instrucción de negocio autoriza para DOBLE_EJE 6 llantas, salario auxiliar 6046.73 y viáticos/hotel 250. No se atribuyen esos tres valores a Cabezales: allí J13 multiplica por 18, N4 es 0 y N12 es 200. No se modifica el Excel ni se recalculan sus fórmulas.
+La corrección de negocio confirma 18 llantas para DOBLE_EJE, igual que CABEZAL (J13 multiplica por 18). Mantiene salario auxiliar 6046.73 y viáticos/hotel 250 por instrucción expresa; no se atribuyen estos dos valores a Cabezales, donde N4 es 0 y N12 es 200. No se modifica el Excel ni se recalculan sus fórmulas.
 
 ## Configuración propuesta
 
@@ -16,8 +16,8 @@ La instrucción de negocio autoriza para DOBLE_EJE 6 llantas, salario auxiliar 6
 | Seguro vehículo mensual | 1250 | H12 |
 | Aceite por servicio | 2400 | I12 |
 | Precio llanta | 1490 | J12 |
-| Cantidad llantas | 6 | Instrucción de negocio |
-| Juego de llantas | 8940 | 1490 × 6; compatibilidad con campo histórico |
+| Cantidad llantas | 18 | Corrección de negocio: misma cantidad que CABEZAL; J13 |
+| Juego de llantas | 26820 | 1490 × 18; compatibilidad con campo histórico |
 | Adquisición informativa / valor depreciable | 275000 | L3, sin descontar IVA |
 | Años depreciación | 5 | L4 |
 | Salario piloto mensual | 9388.59 | N3 |

@@ -43,10 +43,16 @@ describe("DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor", ()
     expect(proyectar(cabezal)).toMatchObject({
       codigo: "DOBLE_EJE", nombre: "Doble eje", gps_mensual: 100,
       seguro_vehiculo_mensual: 1250, costo_aceite_servicio: 2400,
-      precio_llanta: 1490, cantidad_llantas: 6, costo_juego_llantas: 8940,
+      precio_llanta: 1490, cantidad_llantas: 18, costo_juego_llantas: 26820,
       costo_adquisicion: 275000, deprec_valor_base: 275000, deprec_anios: 5,
       salario_piloto_mensual: 9388.59, salario_auxiliar_mensual: 6046.73, viaticos_hotel_viaje: 250,
     });
+  });
+  it("mantiene 18 llantas como CABEZAL y el juego equivale a precio por cantidad", () => {
+    const resultado = proyectar(cabezal);
+    expect(resultado.precio_llanta).toBe(1490);
+    expect(resultado.cantidad_llantas).toBe(18);
+    expect(resultado.costo_juego_llantas).toBe(Number(resultado.precio_llanta) * Number(resultado.cantidad_llantas));
   });
   it.each([null, 0, 1])("conserva banderas incluso cuando son %s, y todos los parámetros heredados", bandera => {
     const fuente = { ...cabezal, auxiliar_multiplica_dias: bandera, viaticos_hotel_multiplica_dias: bandera };
