@@ -140,7 +140,7 @@ BEGIN NOT ATOMIC
       (estado = 'REGISTRADO' AND reversado_por IS NULL AND reversado_en IS NULL AND motivo_reversion IS NULL)
       OR (estado = 'REVERSADO' AND reversado_por IS NOT NULL AND reversado_en IS NOT NULL AND motivo_reversion IS NOT NULL AND CHAR_LENGTH(TRIM(motivo_reversion)) > 0))
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
-  
+
   CREATE TABLE cxp_pago_aplicaciones (
     id INT NOT NULL AUTO_INCREMENT,
     empresa_id INT NOT NULL,

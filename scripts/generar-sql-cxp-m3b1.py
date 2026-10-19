@@ -211,7 +211,7 @@ BEGIN NOT ATOMIC
   SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='DETENER: contrato CXP M3B1 DIVERGENTE (o M-3A ausente); no se ejecuto DDL';
  END IF;
  IF @cxpp_estado='CLEAN' THEN
-""" + "\n".join("  " + linea for linea in DDL.split("\n")) + """
+""" + "\n".join(("  " + linea).rstrip() for linea in DDL.split("\n")) + """
  END IF;
 END$$
 DELIMITER ;
