@@ -706,6 +706,35 @@ export function requireTenantViajesCargosAdicionales(slug: string, accion: Accio
 }
 
 /**
+ * CUENTAS POR COBRAR (Contabilidad) — guard de las filas `cxc_cuentas` y `cxc_cobros`: permiso EXPLÍCITO e independiente del rol y de Facturación
+ * (ningún rol lo trae por defecto; Admin pasa). Exige el módulo Contabilidad de la empresa. NO exige ni concede `facturacion:*`; nunca hay
+ * fallback a `contabilidad:editar` ni a permisos de Facturación.
+ */
+export async function requireTenantCxc(
+  slug: string,
+  fila: "cxc_cuentas" | "cxc_cobros",
+  accion: AccionPermiso,
+  mensajeSinPermiso = "Sin permiso para Cuentas por cobrar.",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("contabilidad")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo Contabilidad." }, { status: 403 }) };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+/**
  * CUENTAS POR PAGAR (M-3A/M-3B1) — guard común de las filas `cxp_facturas`, `cxp_anular`, `cxp_proveedor_fiscal`, `cxp_pagos` y `cxp_reversar_pago`: permiso EXPLÍCITO e independiente
  * del rol (ningún rol lo trae por defecto; Admin pasa). Exige que la empresa tenga el módulo Contabilidad. Mismo patrón que
  * requireTenantFilaLiquidacionViaje; nunca hay fallback a `contabilidad:editar` (quien registra CxC o asientos no puede mover CxP).
