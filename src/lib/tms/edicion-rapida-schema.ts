@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { MAX_FILAS_EDICION_RAPIDA } from "./edicion-rapida-limites";
+
+export { MAX_FILAS_EDICION_RAPIDA } from "./edicion-rapida-limites";
 
 /**
  * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-1: cuerpo de POST /tms/planes/edicion-rapida/validar. Esquema ESTRICTO: sin
@@ -6,7 +9,6 @@ import { z } from "zod";
  * (piloto, auxiliares, unidad, TC) + (PR-355) la tarifa del catálogo y los viáticos. Fecha, hora, regreso, estado, ruta,
  * cliente y paradas NO se cambian aquí.
  */
-export const MAX_FILAS_EDICION_RAPIDA = 200;
 
 const id = z.number().int().positive().max(2147483647);
 const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "fechaPlan inválida (YYYY-MM-DD).");
