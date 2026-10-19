@@ -185,7 +185,8 @@ export async function registrarPago(empresaId: number, entidadId: number, actor:
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: actor.username, modulo: "contabilidad", accion: "cxp_registrar_pago",
       detalle: JSON.stringify({ entidadId, pagoId, usuarioId: actor.id, proveedorId: v.proveedorId, fechaPago: v.fechaPago, montoTotal: v.montoTotal,
-        medioPago: v.medioPago, referencia: v.referencia, aplicaciones: v.aplicaciones }),
+        medioPago: v.medioPago, referencia: v.referencia,
+        aplicaciones: v.aplicaciones.map(a => { const f = porId.get(a.facturaId)!; return { ...a, documento: `${f.serie ? `${f.serie}-` : ""}${f.numero}` }; }) }),
     });
     await conn.commit();
     return { pago: (await obtenerPago(empresaId, entidadId, pagoId))!, repetido: false };
@@ -205,15 +206,16 @@ export async function reversarPago(empresaId: number, entidadId: number, id: unk
   try {
     await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await conn.beginTransaction();
-    const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado, monto_total, proveedor_id FROM cxp_pagos WHERE empresa_id = ? AND entidad_id = ? AND id = ? FOR UPDATE", [empresaId, entidadId, pagoId]);
+    const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado, monto_total, proveedor_id, DATE_FORMAT(fecha_pago,'%Y-%m-%d') AS fecha_pago, medio_pago, referencia FROM cxp_pagos WHERE empresa_id = ? AND entidad_id = ? AND id = ? FOR UPDATE", [empresaId, entidadId, pagoId]);
     if (!rows[0]) throw new ErrorCxp("Pago no encontrado.", 404, "NO_ENCONTRADO");
     if (String(rows[0].estado) === "REVERSADO") throw new ErrorCxp("El pago ya está reversado.", 409, "YA_REVERSADO");
-    const [apl] = await conn.query<RowDataPacket[]>("SELECT factura_id, monto FROM cxp_pago_aplicaciones WHERE empresa_id = ? AND entidad_id = ? AND pago_id = ? ORDER BY factura_id", [empresaId, entidadId, pagoId]);
+    const [apl] = await conn.query<RowDataPacket[]>("SELECT a.factura_id, a.monto, f.serie, f.numero FROM cxp_pago_aplicaciones a JOIN cxp_facturas f ON f.empresa_id = a.empresa_id AND f.entidad_id = a.entidad_id AND f.id = a.factura_id WHERE a.empresa_id = ? AND a.entidad_id = ? AND a.pago_id = ? ORDER BY a.factura_id", [empresaId, entidadId, pagoId]);
     await conn.execute("UPDATE cxp_pagos SET estado = 'REVERSADO', reversado_por = ?, reversado_en = NOW(), motivo_reversion = ? WHERE empresa_id = ? AND entidad_id = ? AND id = ?", [actor.id, motivo, empresaId, entidadId, pagoId]);
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: actor.username, modulo: "contabilidad", accion: "cxp_reversar_pago",
-      detalle: JSON.stringify({ entidadId, pagoId, usuarioId: actor.id, proveedorId: Number(rows[0].proveedor_id), montoTotal: new Decimal(String(rows[0].monto_total)).toFixed(2), motivo,
-        aplicaciones: apl.map(a => ({ facturaId: Number(a.factura_id), monto: new Decimal(String(a.monto)).toFixed(2) })), antes: "REGISTRADO", despues: "REVERSADO" }),
+      detalle: JSON.stringify({ entidadId, pagoId, usuarioId: actor.id, proveedorId: Number(rows[0].proveedor_id), fechaPago: String(rows[0].fecha_pago), medioPago: rows[0].medio_pago == null ? null : String(rows[0].medio_pago),
+        referencia: rows[0].referencia == null ? null : String(rows[0].referencia), montoTotal: new Decimal(String(rows[0].monto_total)).toFixed(2), motivo,
+        aplicaciones: apl.map(a => ({ facturaId: Number(a.factura_id), documento: `${a.serie ? `${a.serie}-` : ""}${a.numero}`, monto: new Decimal(String(a.monto)).toFixed(2) })), antes: "REGISTRADO", despues: "REVERSADO" }),
     });
     await conn.commit();
   } catch (e) {

@@ -59,7 +59,7 @@ describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
     expect((await listarProveedoresHttp(req(), "e")).status).toBe(403);
   });
   it("registrar NO concede anular ni configurar (filas independientes); catálogo y roles", () => {
-    expect(PERMISOS_CXP).toEqual(["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal", "cxp_pagos", "cxp_reversar_pago"]);
+    expect(PERMISOS_CXP).toEqual(["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal", "cxp_pagos", "cxp_reversar_pago", "cxp_bitacora"]);
     for (const p of PERMISOS_CXP) {
       expect(PLATAFORMA_PERMISIBLES).toContain(p);
       expect(moduloEmpresaDelPermiso(p)).toBe("contabilidad");
@@ -68,7 +68,7 @@ describe("permisos propios de CxP (fila + acción) y fail-closed", () => {
     }
     const cont = CATALOGO_PERMISOS.find(x => x.id === "contabilidad")!;
     const ids = cont.acciones.map(a => a.id);
-    expect(ids).toEqual(expect.arrayContaining(["cxp_ver", "cxp_registrar", "cxp_anular", "cxp_ver_fiscal", "cxp_editar_fiscal", "cxp_ver_pagos", "cxp_registrar_pago", "cxp_reversar_pago"]));
+    expect(ids).toEqual(expect.arrayContaining(["cxp_ver", "cxp_registrar", "cxp_anular", "cxp_ver_fiscal", "cxp_editar_fiscal", "cxp_ver_pagos", "cxp_registrar_pago", "cxp_reversar_pago", "cxp_ver_bitacora"]));
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

@@ -208,7 +208,7 @@ export async function anularFactura(empresaId: number, entidadId: number, id: un
   try {
     await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await conn.beginTransaction();
-    const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado_admin FROM cxp_facturas WHERE empresa_id = ? AND entidad_id = ? AND id = ? FOR UPDATE", [empresaId, entidadId, facturaId]);
+    const [rows] = await conn.query<RowDataPacket[]>("SELECT id, estado_admin, proveedor_id, serie, numero, total_documento, total_neto_pagar FROM cxp_facturas WHERE empresa_id = ? AND entidad_id = ? AND id = ? FOR UPDATE", [empresaId, entidadId, facturaId]);
     if (!rows[0]) throw new ErrorCxp("Factura no encontrada.", 404, "NO_ENCONTRADA");
     if (String(rows[0].estado_admin) === "ANULADA") throw new ErrorCxp("La factura ya está anulada.", 409, "YA_ANULADA");
     // La factura ya está bloqueada (FOR UPDATE): un pago concurrente espera su bloqueo, así que este pagado es definitivo. Pagos REVERSADOS no cuentan.
@@ -218,7 +218,8 @@ export async function anularFactura(empresaId: number, entidadId: number, id: un
       [actor.id, motivo, empresaId, entidadId, facturaId]);
     await registrarAuditoriaTx(conn, {
       empresaId, usuario: actor.username, modulo: "contabilidad", accion: "cxp_anular_factura",
-      detalle: JSON.stringify({ entidadId, facturaId, usuarioId: actor.id, motivo, antes: "REGISTRADA", despues: "ANULADA" }),
+      detalle: JSON.stringify({ entidadId, facturaId, usuarioId: actor.id, proveedorId: Number(rows[0].proveedor_id), documento: `${rows[0].serie ? `${rows[0].serie}-` : ""}${rows[0].numero}`,
+        total: new Decimal(String(rows[0].total_documento)).toFixed(2), neto: new Decimal(String(rows[0].total_neto_pagar)).toFixed(2), motivo, antes: "REGISTRADA", despues: "ANULADA" }),
     });
     await conn.commit();
   } catch (e) {

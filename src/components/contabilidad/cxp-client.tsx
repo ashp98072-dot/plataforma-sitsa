@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Config = { regimenFiscal: "GENERAL" | "PEQUENO_CONTRIBUYENTE"; sujetoIsr: boolean; cuentaProveedorId: number | null; cuentaAnticipoId: number | null; cuentaGastoId: number | null; activo: boolean };
@@ -33,13 +34,13 @@ async function api(url: string, init?: RequestInit) {
 const post = (url: string, method: string, body: unknown) => api(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const nuevaClave = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `k${Date.now()}${Math.random().toString(36).slice(2, 10)}`);
 
-export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVerFiscal, puedeEditarFiscal, puedeVerPagos = false, puedeRegistrarPago = false, puedeReversarPago = false }: {
+export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVerFiscal, puedeEditarFiscal, puedeVerPagos = false, puedeRegistrarPago = false, puedeReversarPago = false, puedeVerBitacora = false }: {
   slug: string; puedeVer: boolean; puedeRegistrar: boolean; puedeAnular: boolean; puedeVerFiscal: boolean; puedeEditarFiscal: boolean;
-  puedeVerPagos?: boolean; puedeRegistrarPago?: boolean; puedeReversarPago?: boolean;
+  puedeVerPagos?: boolean; puedeRegistrarPago?: boolean; puedeReversarPago?: boolean; puedeVerBitacora?: boolean;
 }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidadId, setEntidadId] = useState("");
-  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : "proveedores");
+  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores" | "bitacora">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : puedeVerFiscal ? "proveedores" : "bitacora");
   const [error, setError] = useState("");
   useEffect(() => {
     const ac = new AbortController();
@@ -67,9 +68,11 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
         {puedeVer && <button type="button" className={boton} aria-pressed={vista === "facturas"} onClick={() => setVista("facturas")}>Facturas</button>}
         {puedeVerPagos && <button type="button" className={boton} aria-pressed={vista === "pagos"} onClick={() => setVista("pagos")}>Pagos</button>}
         {(puedeVerFiscal || puedeVer) && <button type="button" className={boton} aria-pressed={vista === "proveedores"} onClick={() => setVista("proveedores")}>Proveedores y configuración fiscal</button>}
+        {puedeVerBitacora && <button type="button" className={boton} aria-pressed={vista === "bitacora"} onClick={() => setVista("bitacora")}>Bitácora</button>}
       </div>
       {vista === "facturas" && puedeVer && <Facturas key={`f${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrar} puedeAnular={puedeAnular} />}
       {vista === "pagos" && puedeVerPagos && <Pagos key={`g${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrarPago} puedeReversar={puedeReversarPago} />}
+      {vista === "bitacora" && puedeVerBitacora && <Bitacora key={`b${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "proveedores" && <Proveedores key={`p${entidadId}`} slug={slug} entidadId={entidadId} puedeVerFiscal={puedeVerFiscal} puedeEditar={puedeEditarFiscal} />}
     </>}
   </div>;
@@ -304,5 +307,47 @@ function Proveedores({ slug, entidadId, puedeVerFiscal, puedeEditar }: { slug: s
       </div>
       <div className="flex gap-2"><button type="button" className={boton} onClick={guardar}>Guardar</button><button type="button" className={boton} onClick={() => setEdit(null)}>Cancelar</button></div>
     </fieldset>}
+  </section>;
+}
+
+type EventoApi = EventoBitacoraVista & { accion: string };
+const ACCIONES_FILTRO: [string, string][] = [["", "Todas las acciones"], ["cxp_registrar_factura", "Registró factura"], ["cxp_anular_factura", "Anuló factura"], ["cxp_registrar_pago", "Registró pago"],
+  ["cxp_reversar_pago", "Reversó pago"], ["cxp_crear_config_proveedor", "Configuró proveedor (fiscal)"], ["cxp_actualizar_config_proveedor", "Actualizó configuración fiscal"]];
+
+/** SOLO LECTURA. Auditoría de CxP del libro (permiso propio cxp_bitacora). Los eventos ya se registran en la misma transacción del movimiento. */
+function Bitacora({ slug, entidadId }: { slug: string; entidadId: string }) {
+  const base = `/api/empresas/${slug}/contabilidad/cxp`;
+  const [f, setF] = useState({ accion: "", usuario: "", fechaDesde: "", fechaHasta: "" });
+  const [page, setPage] = useState(1);
+  const [lista, setLista] = useState<{ eventos: EventoApi[]; totalReal: number; pageSize: number } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const ac = new AbortController();
+    const sp = new URLSearchParams({ entidad: entidadId, page: String(page) });
+    for (const k of Object.keys(f) as (keyof typeof f)[]) if (f[k]) sp.set(k, f[k]);
+    fetch(`${base}/bitacora?${sp}`, { cache: "no-store", signal: ac.signal }).then(async r => ({ ok: r.ok, d: await r.json() }))
+      .then(({ ok, d }) => { if (ac.signal.aborted) return; if (ok) { setLista(d); setError(""); } else setError(d.error ?? "No se pudo cargar."); })
+      .catch(() => { if (!ac.signal.aborted) setError("No se pudo cargar la bitácora."); });
+    return () => ac.abort();
+  }, [base, entidadId, f, page]);
+  const cambiar = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setPage(1); };
+  const paginas = lista ? Math.max(1, Math.ceil(lista.totalReal / lista.pageSize)) : 1;
+  return <section className="space-y-4">
+    {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
+    <div className="flex flex-wrap gap-2">
+      <select className={campo} aria-label="Acción" value={f.accion} onChange={cambiar("accion")}>{ACCIONES_FILTRO.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>
+      <input className={campo} placeholder="Usuario (exacto)" value={f.usuario} onChange={cambiar("usuario")} />
+      <label className="text-xs">Desde<input type="date" className={`${campo} block`} value={f.fechaDesde} onChange={cambiar("fechaDesde")} /></label>
+      <label className="text-xs">Hasta<input type="date" className={`${campo} block`} value={f.fechaHasta} onChange={cambiar("fechaHasta")} /></label>
+    </div>
+    <ul className="space-y-1 text-sm">{lista?.eventos.map(e => <li key={e.id} className="border-t border-[var(--border)] pt-1">{lineaBitacora(e)}
+      {e.cambios && e.cambios.length > 0 && <small className="block text-[var(--muted)]">{e.cambios.map(c => `${c.campo}: ${c.antes ?? "—"} → ${c.despues ?? "—"}`).join(" · ")}</small>}</li>)}</ul>
+    {lista && lista.eventos.length === 0 && <p className="text-sm">No hay movimientos para este filtro en el libro seleccionado.</p>}
+    <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+      <button type="button" className={boton} disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button>
+      <span>{lista ? `${lista.totalReal} movimientos · página ${page} de ${paginas}` : "Cargando…"}</span>
+      <button type="button" className={boton} disabled={page >= paginas} onClick={() => setPage(page + 1)}>Siguiente</button>
+    </div>
+    <p className="text-xs text-[var(--muted)]">Registro de auditoría: los eventos no se editan ni se borran. Incluye facturas de proveedor (registro y anulación), pagos (registro y reversión) y cambios de configuración fiscal. No existe edición de facturas de proveedor.</p>
   </section>;
 }
