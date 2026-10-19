@@ -3,7 +3,8 @@ import { z } from "zod";
 import { requireTenantCxc } from "@/lib/tenant";
 import { ambitoDesdeRequest, errorAmbito } from "@/lib/contabilidad/ambito";
 import { filtrosDesdeParams } from "@/lib/facturacion/cuentas-por-cobrar-shared";
-import { listarCobrosCxc, listarDocumentosCxc, registrarCobroCxc } from "./cxc";
+import { ACCIONES_BITACORA, type AccionBitacora } from "@/lib/facturacion/bitacora";
+import { listarBitacoraCxcLibro, listarCobrosCxc, listarDocumentosCxc, registrarCobroCxc } from "./cxc";
 
 const NO_STORE = { "Cache-Control": "private, no-store" };
 type Guard = Awaited<ReturnType<typeof requireTenantCxc>>;
@@ -64,5 +65,19 @@ export async function registrarCobroHttp(req: Request, slug: string) {
     if (!parsed.success) return json({ error: "Datos de cobro inválidos." }, 400);
     const r = await registrarCobroCxc({ empresaId: g.empresa.id, usuarioId: g.session.id, usuario: g.session.username }, entidadId, parsed.data);
     return r.ok ? json({ mensaje: "Cobro registrado." }, 201) : json({ error: r.error }, r.status);
+  });
+}
+
+/** Bitácora de movimientos de CxC del libro. Permiso PROPIO cxc_bitacora:ver (ver documentos no basta; tampoco Facturación). */
+export async function listarBitacoraHttp(req: Request, slug: string) {
+  const g = await requireTenantCxc(slug, "cxc_bitacora", "ver", "Sin permiso para ver la bitácora de Cuentas por cobrar.");
+  if (g.error) return g.error;
+  return conAmbito(req, g, async (entidadId) => {
+    const sp = new URL(req.url).searchParams;
+    const accion = sp.get("accion");
+    return json(await listarBitacoraCxcLibro(g.empresa.id, entidadId, {
+      facturaId: entero(sp.get("facturaId")), accion: (ACCIONES_BITACORA as readonly string[]).includes(accion ?? "") ? (accion as AccionBitacora) : undefined,
+      usuario: texto(sp.get("usuario"), 100), fechaDesde: fecha(sp.get("fechaDesde")), fechaHasta: fecha(sp.get("fechaHasta")), page: entero(sp.get("page")), pageSize: entero(sp.get("pageSize")),
+    }));
   });
 }

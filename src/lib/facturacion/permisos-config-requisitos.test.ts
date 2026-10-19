@@ -69,7 +69,7 @@ describe("catálogo: acciones de Configuración empresa / Requisitos clientes", 
     expect(fact.label).toBe("Facturación clientes");
     expect(fact.acciones.map((a) => a.id)).toEqual([
       "ver", "crear", "editar", "emitir", "anular", "pagos",
-      "ver_confirmaciones_bancarias", "confirmar_banco", "anular_confirmacion",
+      "ver_confirmaciones_bancarias", "confirmar_banco", "anular_confirmacion", "ver_bitacora",
       "ver_empresa", "editar_empresa", "ver_requisitos", "editar_requisitos",
     ]);
     expect(fact.acciones.filter((a) => a.id.endsWith("_empresa") || a.id.endsWith("_requisitos")).map((a) => a.label)).toEqual([

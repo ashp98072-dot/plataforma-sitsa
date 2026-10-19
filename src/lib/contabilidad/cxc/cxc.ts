@@ -4,6 +4,7 @@ import { AccesoContable } from "@/lib/contabilidad/ambito";
 import { listarCuentasPorCobrar } from "@/lib/facturacion/cuentas-por-cobrar";
 import { importe, paginacionEfectiva, type FiltrosCxc, type RespuestaListaCxc } from "@/lib/facturacion/cuentas-por-cobrar-shared";
 import { registrarPago } from "@/lib/facturacion/facturas";
+import { listarBitacoraCxc, type FiltrosBitacoraCxc } from "@/lib/facturacion/bitacora";
 
 /**
  * Contabilidad → Cuentas por cobrar. Es una VISTA sobre la CxC oficial de la plataforma (fact_facturas + fact_pagos, lógica de
@@ -24,6 +25,12 @@ export async function exigirEntidadActiva(empresaId: number, entidadId: number):
 export async function listarDocumentosCxc(empresaId: number, entidadId: number, filtros: FiltrosCxc): Promise<RespuestaListaCxc> {
   await exigirEntidadActiva(empresaId, entidadId);
   return listarCuentasPorCobrar(empresaId, { ...filtros, vista: "historial", entidad: entidadId });
+}
+
+/** Bitácora de CxC (auditoría de Facturación) de UN libro. Solo lectura; reutiliza la tabla `auditoria`. */
+export async function listarBitacoraCxcLibro(empresaId: number, entidadId: number, filtros: FiltrosBitacoraCxc) {
+  await exigirEntidadActiva(empresaId, entidadId);
+  return listarBitacoraCxc(empresaId, entidadId, filtros);
 }
 
 export type CobroCxc = {

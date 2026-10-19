@@ -118,6 +118,8 @@ agregar("facturacion",
   accion("facturacion_ver_confirmaciones_bancarias","ver_confirmaciones_bancarias","Ver confirmaciones bancarias","puedeVer"),
   accion("facturacion_confirmar_banco","confirmar_banco","Confirmar ingreso bancario","puedeVer"),
   accion("facturacion_anular_confirmacion","anular_confirmacion","Anular confirmación bancaria","puedeVer"));
+// Bitácora de facturas: acción propia (sin equivalencia por rol); ver facturas NO concede ver quién hizo qué.
+agregar("facturacion", accion("facturacion_ver_bitacora","ver_bitacora","Ver bitácora de movimientos de la factura","puedeVer"));
 // FACTURACION-PERMISOS-CONFIG-REQUISITOS: «Configuración empresa» y «Requisitos clientes» dejan de depender del ROL (alcanceFacturacion) y pasan a ser acciones
 // asignables, independientes de emitir/anular/pagar («Emitir factura» solo es borrador -> emitida; nunca edita NIT, razón social, FEL ni configuración).
 // Cada sección usa una fila propia (VARCHAR(40)) con dos flags: ver = puedeVer, editar = puedeEditar. Sin fila explícita NO hay acceso (a diferencia de `nueva`, no hay
@@ -132,7 +134,8 @@ agregar("facturacion",
 // CUENTAS POR COBRAR (Contabilidad): filas propias (ver PERMISOS_CXC en permisos-shared.ts), sin equivalencia por rol y SIN acceso a Facturación.
 agregar("contabilidad",
   { ...accion("cxc_cuentas","cxc_ver","Ver cuentas por cobrar y cobros (CxC)","puedeVer"), grupo: "Cuentas por cobrar" },
-  { ...accion("cxc_cobros","cxc_cobrar","Registrar cobros de clientes (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
+  { ...accion("cxc_cobros","cxc_cobrar","Registrar cobros de clientes (CxC)",E), requiere: "cxc_ver", grupo: "Cuentas por cobrar" },
+  { ...accion("cxc_bitacora","cxc_ver_bitacora","Ver bitácora de movimientos de CxC","puedeVer"), requiere: "cxc_ver", grupo: "Cuentas por cobrar" });
 // CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
 agregar("contabilidad",
   { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },

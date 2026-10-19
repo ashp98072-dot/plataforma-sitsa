@@ -712,7 +712,7 @@ export function requireTenantViajesCargosAdicionales(slug: string, accion: Accio
  */
 export async function requireTenantCxc(
   slug: string,
-  fila: "cxc_cuentas" | "cxc_cobros",
+  fila: "cxc_cuentas" | "cxc_cobros" | "cxc_bitacora",
   accion: AccionPermiso,
   mensajeSinPermiso = "Sin permiso para Cuentas por cobrar.",
 ): Promise<Ok | Fail> {
@@ -1384,7 +1384,7 @@ const MENSAJE_CONFIG_FACTURACION: Record<AccionConfigFacturacion, string> = {
 };
 export async function requireTenantFacturacion(
   slug: string,
-  accion: AccionPermiso | "emitir" | "anular" | "pagos" | "ver_confirmaciones_bancarias" | "confirmar_banco" | "anular_confirmacion" | AccionConfigFacturacion = "ver",
+  accion: AccionPermiso | "emitir" | "anular" | "pagos" | "ver_confirmaciones_bancarias" | "confirmar_banco" | "anular_confirmacion" | "ver_bitacora" | AccionConfigFacturacion = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -1415,7 +1415,7 @@ export async function requireTenantFacturacion(
     if (permitido) return { session, empresa };
     return { error: NextResponse.json({ error: MENSAJE_CONFIG_FACTURACION[accion as AccionConfigFacturacion] }, { status: 403 }) };
   }
-  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos" || accion === "ver_confirmaciones_bancarias" || accion === "confirmar_banco" || accion === "anular_confirmacion"
+  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos" || accion === "ver_confirmaciones_bancarias" || accion === "confirmar_banco" || accion === "anular_confirmacion" || accion === "ver_bitacora"
     ? tieneAccionCatalogo(perms, "facturacion", accion)
     : tienePermiso(perms, "facturacion", accion as AccionPermiso);
   if (tienePermisoBase(perms, "facturacion") && autorizado) {
