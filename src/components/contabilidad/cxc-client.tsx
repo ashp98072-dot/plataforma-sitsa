@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
+import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Documento = {
@@ -24,10 +25,10 @@ async function api(url: string, init?: RequestInit) {
   return data;
 }
 
-export function CxcClient({ slug, puedeVer, puedeCobrar }: { slug: string; puedeVer: boolean; puedeCobrar: boolean }) {
+export function CxcClient({ slug, puedeVer, puedeCobrar, puedeVerBitacora = false }: { slug: string; puedeVer: boolean; puedeCobrar: boolean; puedeVerBitacora?: boolean }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidadId, setEntidadId] = useState("");
-  const [vista, setVista] = useState<"documentos" | "cobros" | "legado">("documentos");
+  const [vista, setVista] = useState<"documentos" | "cobros" | "bitacora" | "legado">("documentos");
   const [error, setError] = useState("");
   useEffect(() => {
     const ac = new AbortController();
@@ -54,10 +55,12 @@ export function CxcClient({ slug, puedeVer, puedeCobrar }: { slug: string; puede
       <div className="flex gap-2">
         <button type="button" className={boton} aria-pressed={vista === "documentos"} onClick={() => setVista("documentos")}>Documentos</button>
         <button type="button" className={boton} aria-pressed={vista === "cobros"} onClick={() => setVista("cobros")}>Cobros</button>
+        {puedeVerBitacora && <button type="button" className={boton} aria-pressed={vista === "bitacora"} onClick={() => setVista("bitacora")}>Bitácora</button>}
         <button type="button" className={boton} aria-pressed={vista === "legado"} onClick={() => setVista("legado")}>Registros manuales (legado)</button>
       </div>
       {vista === "documentos" && <Documentos key={`d${entidadId}`} slug={slug} entidadId={entidadId} puedeCobrar={puedeCobrar} />}
       {vista === "cobros" && <Cobros key={`c${entidadId}`} slug={slug} entidadId={entidadId} />}
+      {vista === "bitacora" && puedeVerBitacora && <Bitacora key={`b${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "legado" && <LegadoManual key={`l${entidadId}`} slug={slug} entidadId={entidadId} />}
     </>}
     {!puedeVer && <p>Sin permiso para ver Cuentas por cobrar.</p>}
@@ -178,6 +181,48 @@ function Cobros({ slug, entidadId }: { slug: string; entidadId: string }) {
       <button type="button" className={boton} disabled={page >= paginas} onClick={() => setPage(page + 1)}>Siguiente</button>
     </div>
     <p className="text-xs text-[var(--muted)]">Los cobros se registran desde la pestaña Documentos. No existe reversión de cobros en la plataforma todavía.</p>
+  </section>;
+}
+
+type EventoApi = EventoBitacoraVista & { facturaId: number | null; accion: string };
+const ACCIONES_FILTRO: [string, string][] = [["", "Todas las acciones"], ["crear_factura", "Creó borrador"], ["editar_factura_borrador", "Editó borrador"], ["emitir_factura", "Emitió factura"],
+  ["anular_factura", "Anuló factura"], ["registrar_pago", "Registró cobro"], ["confirmar_ingreso_bancario", "Confirmó ingreso bancario"], ["anular_confirmacion_bancaria", "Anuló confirmación bancaria"]];
+
+/** SOLO LECTURA. Auditoría de Facturación/CxC del libro (permiso propio cxc_bitacora). */
+function Bitacora({ slug, entidadId }: { slug: string; entidadId: string }) {
+  const base = `/api/empresas/${slug}/contabilidad/cxc`;
+  const [f, setF] = useState({ accion: "", usuario: "", fechaDesde: "", fechaHasta: "" });
+  const [page, setPage] = useState(1);
+  const [lista, setLista] = useState<{ eventos: EventoApi[]; totalReal: number; pageSize: number } | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const ac = new AbortController();
+    const sp = new URLSearchParams({ entidad: entidadId, page: String(page) });
+    for (const k of Object.keys(f) as (keyof typeof f)[]) if (f[k]) sp.set(k, f[k]);
+    fetch(`${base}/bitacora?${sp}`, { cache: "no-store", signal: ac.signal }).then(async r => ({ ok: r.ok, d: await r.json() }))
+      .then(({ ok, d }) => { if (ac.signal.aborted) return; if (ok) { setLista(d); setError(""); } else setError(d.error ?? "No se pudo cargar."); })
+      .catch(() => { if (!ac.signal.aborted) setError("No se pudo cargar la bitácora."); });
+    return () => ac.abort();
+  }, [base, entidadId, f, page]);
+  const cambiar = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setPage(1); };
+  const paginas = lista ? Math.max(1, Math.ceil(lista.totalReal / lista.pageSize)) : 1;
+  return <section className="space-y-4">
+    {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
+    <div className="flex flex-wrap gap-2">
+      <select className={campo} aria-label="Acción" value={f.accion} onChange={cambiar("accion")}>{ACCIONES_FILTRO.map(([v, t]) => <option key={v} value={v}>{t}</option>)}</select>
+      <input className={campo} placeholder="Usuario (exacto)" value={f.usuario} onChange={cambiar("usuario")} />
+      <label className="text-xs">Desde<input type="date" className={`${campo} block`} value={f.fechaDesde} onChange={cambiar("fechaDesde")} /></label>
+      <label className="text-xs">Hasta<input type="date" className={`${campo} block`} value={f.fechaHasta} onChange={cambiar("fechaHasta")} /></label>
+    </div>
+    <ul className="space-y-1 text-sm">{lista?.eventos.map(e => <li key={e.id} className="border-t border-[var(--border)] pt-1">{lineaBitacora(e)}
+      {e.cambios && e.cambios.length > 0 && <small className="block text-[var(--muted)]">{e.cambios.map(c => `${c.campo}: ${c.antes ?? "—"} → ${c.despues ?? "—"}`).join(" · ")}</small>}</li>)}</ul>
+    {lista && lista.eventos.length === 0 && <p className="text-sm">No hay movimientos para este filtro en el libro seleccionado.</p>}
+    <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+      <button type="button" className={boton} disabled={page <= 1} onClick={() => setPage(page - 1)}>Anterior</button>
+      <span>{lista ? `${lista.totalReal} movimientos · página ${page} de ${paginas}` : "Cargando…"}</span>
+      <button type="button" className={boton} disabled={page >= paginas} onClick={() => setPage(page + 1)}>Siguiente</button>
+    </div>
+    <p className="text-xs text-[var(--muted)]">Registro de auditoría: los eventos no se editan ni se borran. Se muestran los movimientos de las facturas de este libro (creación y edición de borradores, emisión, anulación y cobros).</p>
   </section>;
 }
 

@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import Decimal from "decimal.js";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
-import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { registrarBitacoraFactura } from "./bitacora";
 import { confirmacionBancariaSchema, motivoBloqueoBancario, BLOQUEO_MONEDA, type ConfirmacionBancariaInput } from "./confirmacion-bancaria-schema";
 
 export class ErrorConfirmacionBancaria extends Error {
@@ -65,7 +65,7 @@ export async function confirmarIngresoBancario(actor: ActorBancario, facturaId: 
     const [r] = await c.execute<ResultSetHeader>(`INSERT INTO fact_pago_confirmaciones
       (empresa_id,entidad_id,pago_id,factura_id,cuenta_bancaria_id,monto,fecha_acreditacion,referencia,observaciones,idempotency_key,huella,confirmado_por,evidencia_ruta,evidencia_nombre,evidencia_mime,evidencia_tamano,evidencia_sha256)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [actor.empresaId, entidadId, input.pagoId, facturaId, input.cuentaBancariaId, new Decimal(input.monto).toFixed(2), input.fechaAcreditacion, input.referencia, input.observaciones, input.idempotencyKey, huella, actor.usuarioId, evidencia?.ruta ?? null, evidencia?.nombre ?? null, evidencia?.mime ?? null, evidencia?.tamano ?? null, evidencia?.sha256 ?? null]);
-    await registrarAuditoriaTx(c, { empresaId: actor.empresaId, usuario: actor.usuario, modulo: "facturacion", accion: "confirmar_ingreso_bancario", detalle: `Factura #${facturaId} · confirmación #${r.insertId} · Q${new Decimal(input.monto).toFixed(2)}` });
+    await registrarBitacoraFactura(c, actor, "confirmar_ingreso_bancario", `Factura #${facturaId} · confirmación #${r.insertId} · Q${new Decimal(input.monto).toFixed(2)}`, { facturaId, entidadId, monto: new Decimal(input.monto).toFixed(2), referencia: input.referencia });
     return { id: r.insertId, estado: "CONFIRMADA", idempotente: false };
   });
 }
@@ -77,7 +77,7 @@ export async function anularConfirmacionBancaria(actor: ActorBancario, facturaId
     if (!r[0]) throw new ErrorConfirmacionBancaria("Confirmación no encontrada.", 404);
     if (r[0].estado === "ANULADA") return { id, idempotente: true };
     await c.execute("UPDATE fact_pago_confirmaciones SET estado='ANULADA', anulado_por=?, anulado_en=CURRENT_TIMESTAMP, motivo_anulacion=? WHERE id=? AND empresa_id=? AND estado='CONFIRMADA'", [actor.usuarioId, motivo.trim(), id, actor.empresaId]);
-    await registrarAuditoriaTx(c, { empresaId: actor.empresaId, usuario: actor.usuario, modulo: "facturacion", accion: "anular_confirmacion_bancaria", detalle: `Factura #${facturaId} · confirmación #${id} · ${motivo.trim()}` });
+    await registrarBitacoraFactura(c, actor, "anular_confirmacion_bancaria", `Factura #${facturaId} · confirmación #${id} · ${motivo.trim()}`, { facturaId, motivo: motivo.trim() });
     return { id, idempotente: false };
   });
 }

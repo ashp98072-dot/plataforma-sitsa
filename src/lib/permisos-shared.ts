@@ -192,9 +192,10 @@ const LABEL_PERMISO_CXP: Record<PermisoCxp, string> = {
  * CUENTAS POR COBRAR (Contabilidad → CxC): filas propias dentro de "contabilidad" (mismo patrón que PERMISOS_CXP). NINGUNA se concede por rol
  * (Admin las recibe por catálogo). NO dan acceso a Facturación: la pantalla de CxC lee fact_facturas/fact_pagos por su propio guard.
  *   - cxc_cuentas: ver documentos (facturas emitidas/anuladas) y cobros de CxC.
+ *   - cxc_bitacora: ver la bitácora (auditoría) de movimientos de CxC del libro; permiso aparte de ver documentos.
  *   - cxc_cobros: registrar un cobro (fact_pagos) contra una factura emitida; exige también poder ver CxC en la UI.
  */
-export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros"] as const;
+export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros", "cxc_bitacora"] as const;
 export type PermisoCxc = (typeof PERMISOS_CXC)[number];
 export function esPermisoCxc(m: string): m is PermisoCxc {
   return (PERMISOS_CXC as readonly string[]).includes(m);
@@ -202,6 +203,7 @@ export function esPermisoCxc(m: string): m is PermisoCxc {
 const LABEL_PERMISO_CXC: Record<PermisoCxc, string> = {
   cxc_cuentas: "CxC: cuentas por cobrar",
   cxc_cobros: "CxC: registrar cobros",
+  cxc_bitacora: "CxC: bitácora de movimientos",
 };
 
 export const PLATAFORMA_PERMISIBLES = [

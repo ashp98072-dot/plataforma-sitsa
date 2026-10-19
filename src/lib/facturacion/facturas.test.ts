@@ -290,7 +290,7 @@ describe("emitirFactura", () => {
       expect(update()?.[1]).toEqual(["F-001", "2026-09-01", actor.usuarioId, 1, actor.empresaId]);
       const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
       expect(audit.detalle).toContain("fecha 2026-09-01");
-      expect(audit.detalle).not.toContain("2026-08-27");
+      expect(audit.detalle?.split(" | #BIT ")[0]).not.toContain("2026-08-27"); // el texto legible usa la nueva; el JSON conserva la anterior en «cambios»
     });
 
     it("7) fecha NULL y sin fecha nueva → el error actual de fecha obligatoria, sin UPDATE", async () => {
