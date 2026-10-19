@@ -196,8 +196,9 @@ const LABEL_PERMISO_CXP: Record<PermisoCxp, string> = {
  *   - cxc_cuentas: ver documentos (facturas emitidas/anuladas) y cobros de CxC.
  *   - cxc_bitacora: ver la bitácora (auditoría) de movimientos de CxC del libro; permiso aparte de ver documentos.
  *   - cxc_cobros: registrar un cobro (fact_pagos) contra una factura emitida; exige también poder ver CxC en la UI.
+ *   - cxc_anular_cobro (CxC-1): anular un cobro multi-factura (fact_cobros); permiso aparte de registrar, como CxP separa registrar y reversar.
  */
-export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros", "cxc_bitacora"] as const;
+export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros", "cxc_bitacora", "cxc_anular_cobro"] as const;
 export type PermisoCxc = (typeof PERMISOS_CXC)[number];
 export function esPermisoCxc(m: string): m is PermisoCxc {
   return (PERMISOS_CXC as readonly string[]).includes(m);
@@ -221,6 +222,7 @@ const LABEL_PERMISO_CXC: Record<PermisoCxc, string> = {
   cxc_cuentas: "CxC: cuentas por cobrar",
   cxc_cobros: "CxC: registrar cobros",
   cxc_bitacora: "CxC: bitácora de movimientos",
+  cxc_anular_cobro: "CxC: anular cobros aplicados",
 };
 
 export const PLATAFORMA_PERMISIBLES = [

@@ -2241,6 +2241,67 @@ CREATE TABLE IF NOT EXISTS fact_pago_confirmaciones (
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
+-- CxC-1 — ver sql/migrate-2026-10-cxc-cobros-multifactura.sql (cabecera de cobro + aplicaciones; nada de fact_pagos se migra).
+CREATE TABLE IF NOT EXISTS fact_cobros (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  moneda CHAR(3) NOT NULL DEFAULT 'GTQ',
+  fecha_cobro DATE NOT NULL,
+  monto_total DECIMAL(14,2) NOT NULL,                 -- = Σ aplicaciones (lo calcula y valida el servidor)
+  medio_pago VARCHAR(40) NULL,
+  referencia VARCHAR(120) NULL,
+  observaciones TEXT NULL,
+  clave_idempotencia VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  estado VARCHAR(10) NOT NULL DEFAULT 'VIGENTE',      -- VIGENTE | ANULADO
+  creado_por INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  anulado_por INT NULL,
+  anulado_en DATETIME NULL,
+  motivo_anulacion TEXT NULL,
+  UNIQUE KEY uq_fcobro_idempotencia (empresa_id, entidad_id, clave_idempotencia),
+  UNIQUE KEY uq_fcobro_ambito (empresa_id, entidad_id, id),
+  KEY idx_fcobro_cliente (empresa_id, entidad_id, cliente_id, fecha_cobro),
+  KEY idx_fcobro_estado (empresa_id, entidad_id, estado),
+  CONSTRAINT fk_fcobro_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_cliente FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_actor FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_anulador FOREIGN KEY (anulado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fcobro_monto CHECK (monto_total > 0),
+  CONSTRAINT ck_fcobro_estado CHECK (
+    (estado = 'VIGENTE' AND anulado_por IS NULL AND anulado_en IS NULL AND motivo_anulacion IS NULL)
+    OR (estado = 'ANULADO' AND anulado_por IS NOT NULL AND anulado_en IS NOT NULL AND motivo_anulacion IS NOT NULL AND CHAR_LENGTH(TRIM(motivo_anulacion)) > 0)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+CREATE TABLE IF NOT EXISTS fact_cobro_aplicaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  cobro_id INT NOT NULL,
+  factura_id INT NOT NULL,
+  monto DECIMAL(14,2) NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fcapl_cobro_factura (cobro_id, factura_id),   -- una aplicación por factura dentro de un cobro
+  KEY idx_fcapl_factura (factura_id),
+  KEY idx_fcapl_ambito (empresa_id, entidad_id, cobro_id),
+  CONSTRAINT fk_fcapl_cobro FOREIGN KEY (empresa_id, entidad_id, cobro_id) REFERENCES fact_cobros(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcapl_factura FOREIGN KEY (factura_id) REFERENCES fact_facturas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fcapl_monto CHECK (monto > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- Vínculo opcional de una confirmación bancaria con un cobro (CxC-1).
+ALTER TABLE fact_pago_confirmaciones
+  ADD COLUMN IF NOT EXISTS cobro_id INT NULL AFTER pago_id,
+  ADD KEY IF NOT EXISTS idx_fpc_cobro (cobro_id);
+-- La FK se crea solo si no existe (patrón information_schema + PREPARE; sin la cláusula IF NOT EXISTS en la FK).
+SET @fk_fpc_cobro := (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'fact_pago_confirmaciones' AND CONSTRAINT_NAME = 'fk_fpc_cobro' AND CONSTRAINT_TYPE = 'FOREIGN KEY');
+SET @sql := IF(@fk_fpc_cobro = 0, 'ALTER TABLE fact_pago_confirmaciones ADD CONSTRAINT fk_fpc_cobro FOREIGN KEY (cobro_id) REFERENCES fact_cobros(id) ON DELETE RESTRICT ON UPDATE RESTRICT', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+
 -- FEL-2A (modelo, dominio e idempotencia con proveedor MOCK). Sin seeds ni datos. Ver sql/migrate-2026-10-fel-2a-modelo.sql.
 -- fact_facturas no se define en este archivo: el UNIQUE aditivo es el destino de la FK compuesta de fel_documentos.
 -- (1) Único cambio sobre una tabla existente. `id` ya es PK, por lo que cualquier índice UNIQUE que lo contenga se

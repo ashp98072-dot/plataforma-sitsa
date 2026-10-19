@@ -66,14 +66,14 @@ describe("permisos propios de CxC (Contabilidad), independientes de Facturación
     expect((await requireTenantFacturacion("kt", "ver_bitacora")).error?.status).toBe(403); // exige además el acceso base al módulo
   });
   it("catálogo: filas CxC registradas en Contabilidad, ningún rol las trae por defecto, cobrar exige ver", () => {
-    expect(PERMISOS_CXC).toEqual(["cxc_cuentas", "cxc_cobros", "cxc_bitacora"]);
+    expect(PERMISOS_CXC).toEqual(["cxc_cuentas", "cxc_cobros", "cxc_bitacora", "cxc_anular_cobro"]);
     for (const p of PERMISOS_CXC) {
       expect(PLATAFORMA_PERMISIBLES).toContain(p);
       expect(moduloEmpresaDelPermiso(p)).toBe("contabilidad");
       for (const rol of ["Contabilidad", "Visualizador", "Facturacion"]) expect(modulosPropiosDelRol(rol as never)).not.toContain(p);
     }
     const acciones = CATALOGO_PERMISOS.find((x) => x.id === "contabilidad")!.acciones;
-    expect(acciones.map((a) => a.id)).toEqual(expect.arrayContaining(["cxc_ver", "cxc_cobrar", "cxc_ver_bitacora"]));
+    expect(acciones.map((a) => a.id)).toEqual(expect.arrayContaining(["cxc_ver", "cxc_cobrar", "cxc_ver_bitacora", "cxc_anular_cobro"]));
     expect(acciones.find((a) => a.id === "cxc_cobrar")).toMatchObject({ requiere: "cxc_ver" });
     expect(new Set(acciones.map((a) => a.id)).size).toBe(acciones.length);
   });

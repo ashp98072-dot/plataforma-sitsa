@@ -712,7 +712,7 @@ export function requireTenantViajesCargosAdicionales(slug: string, accion: Accio
  */
 export async function requireTenantCxc(
   slug: string,
-  fila: "cxc_cuentas" | "cxc_cobros" | "cxc_bitacora",
+  fila: "cxc_cuentas" | "cxc_cobros" | "cxc_bitacora" | "cxc_anular_cobro",
   accion: AccionPermiso,
   mensajeSinPermiso = "Sin permiso para Cuentas por cobrar.",
 ): Promise<Ok | Fail> {

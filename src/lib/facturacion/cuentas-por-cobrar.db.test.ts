@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import ExcelJS from "exceljs";
 import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
+import { SQL_TABLAS_COBROS_MINIMAS } from "@/lib/facturacion/cobros-test-util";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const holder = vi.hoisted(() => ({ pool: null as Pool | null, log: [] as string[] }));
@@ -94,6 +95,7 @@ describe.skipIf(!port)("CxC informativa (M-2a) / MariaDB 11.8.9 SOLO LOCAL", () 
         CREATE TABLE cont_cxc(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, entidad_id INT NULL, cliente VARCHAR(200) NOT NULL,
           documento VARCHAR(80) NULL, fecha DATE NOT NULL, vencimiento DATE NULL, monto DECIMAL(14,2) NOT NULL DEFAULT 0, saldo DECIMAL(14,2) NOT NULL DEFAULT 0,
           estado VARCHAR(40) NOT NULL DEFAULT 'Pendiente') ENGINE=InnoDB;
+        ${SQL_TABLAS_COBROS_MINIMAS}
         INSERT INTO clientes VALUES (1, 7, 'Cliente Alfa', 'Alfa, S.A.', '1111111'), (2, 7, 'Cliente Beta', NULL, '2222222'), (9, 8, 'Cliente Otro', NULL, '9999999');
         INSERT INTO cont_entidades VALUES (1, 7, 'KT', 'KuiqTrans', 1), (2, 7, 'MON', 'Logiservicios Monaco', 1);
         INSERT INTO cont_cuentas_bancarias VALUES (1, 7, 1, 'Banco Uno', 'Operativa');

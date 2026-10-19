@@ -7,13 +7,15 @@ const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((s) => {
 }, "Fecha de acreditación inválida.");
 export const confirmacionBancariaSchema = z.object({
   pagoId: z.number().int().positive().nullable().default(null),
+  /** CxC-1: vínculo opcional con un cobro multi-factura vigente (un cobro con confirmación activa no se puede anular). Excluyente con pagoId. */
+  cobroId: z.number().int().positive().nullable().default(null),
   cuentaBancariaId: z.number().int().positive(),
   monto: z.string().regex(/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/).refine((s) => new Decimal(s).gt(0), "Monto inválido."),
   fechaAcreditacion: fecha,
   referencia: z.string().trim().min(1).max(120),
   observaciones: z.string().trim().max(2000).nullable().default(null),
   idempotencyKey: z.string().regex(/^[a-zA-Z0-9_-]{16,80}$/),
-}).strict();
+}).strict().refine((v) => v.pagoId === null || v.cobroId === null, { message: "Indica un pago o un cobro, no ambos.", path: ["cobroId"] });
 export type ConfirmacionBancariaInput = z.infer<typeof confirmacionBancariaSchema>;
 export const anulacionBancariaSchema = z.object({ motivo: z.string().trim().min(1).max(2000) }).strict();
 export const BLOQUEO_RETENCION = "La factura tiene retención y su tratamiento bancario aún no está habilitado. No se puede confirmar el ingreso hasta definir la regla de retenciones.";

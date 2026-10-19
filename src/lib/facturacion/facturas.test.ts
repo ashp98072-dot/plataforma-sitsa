@@ -48,6 +48,7 @@ type Overrides = {
   vinculoExistente?: Record<string, unknown> | null;
   factura?: Record<string, unknown> | null;
   pagosCount?: number;
+  aplicacionesCount?: number;
   pagosSuma?: number;
   lineasEmitir?: Record<string, unknown>[];
   /** Filas previas (snapshot) del borrador que se edita: SELECT ... FROM fact_factura_viajes WHERE factura_id = ? */
@@ -78,7 +79,11 @@ function mockConnQuery(o: Overrides = {}) {
     if (sql.includes("SELECT COUNT(*) AS c FROM fact_pagos")) {
       return [[{ c: o.pagosCount ?? 0 }]];
     }
-    if (sql.includes("SELECT COALESCE(SUM(monto), 0) AS total FROM fact_pagos")) {
+    // CxC-1: aplicaciones de cobros VIGENTES (impiden anular la factura) y «cobrado» = pagos + aplicaciones (SQL_COBRADO).
+    if (sql.includes("SELECT COUNT(*) AS c FROM fact_cobro_aplicaciones")) {
+      return [[{ c: o.aplicacionesCount ?? 0 }]];
+    }
+    if (sql.includes("SELECT COALESCE(SUM(monto), 0) AS total FROM (") && sql.includes("cobrado_x")) {
       return [[{ total: o.pagosSuma ?? 0 }]];
     }
     if (sql.includes("FROM fact_factura_viajes ffv") && sql.includes("INNER JOIN tms_planes_viaje")) {
@@ -499,6 +504,7 @@ describe("FACT-3 — obtenerFactura: una Anulada se lee de su histórico, nunca 
       if (sql.includes("FROM fact_factura_viajes_anuladas")) return lineasHist;
       if (sql.includes("FROM fact_factura_viajes ffv")) return lineasActivas;
       if (sql.includes("FROM fact_pagos")) return [];
+      if (sql.includes("FROM fact_cobro_aplicaciones")) return [];
       if (sql.includes("FROM auditoria")) return [{ usuario: "facturador-a", cuando: "2026-10-09 14:05" }];
       throw new Error(`Consulta inesperada: ${sql}`);
     }) as never);

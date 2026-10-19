@@ -1,3 +1,4 @@
+import { SQL_COBRADO } from "./cobrado";
 import type { RowDataPacket } from "mysql2/promise";
 import { query, type SqlValue } from "@/lib/db";
 import {
@@ -44,7 +45,7 @@ const escaparLike = (t: string) => t.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /** Subconsulta de pagos agregados por factura, acotada por empresa (su `?` va PRIMERO en los parámetros). */
 const SQL_PAGOS_AGREGADOS = `(SELECT factura_id, SUM(monto) AS total_pagado, COUNT(*) AS cantidad_pagos, MAX(fecha_pago) AS ultima_fecha
-     FROM fact_pagos WHERE empresa_id = ? GROUP BY factura_id) pg ON pg.factura_id = f.id`;
+     FROM ${SQL_COBRADO} WHERE empresa_id = ? GROUP BY factura_id) pg ON pg.factura_id = f.id`;
 
 type Ctx = { fact4: boolean };
 

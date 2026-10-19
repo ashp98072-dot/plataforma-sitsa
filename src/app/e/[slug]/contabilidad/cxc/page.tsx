@@ -15,5 +15,5 @@ export default async function CxcPage({ params }: Props) {
   const p = (fila: string, accion: "ver" | "editar") => admin || tienePermiso(permisos, fila, accion);
   const puedeVer = p("cxc_cuentas", "ver");
   if (!puedeVer) return <p>Sin permiso para ver Cuentas por cobrar.</p>;
-  return <CxcClient slug={slug} puedeVer={puedeVer} puedeCobrar={p("cxc_cobros", "editar")} puedeVerBitacora={p("cxc_bitacora", "ver")} />;
+  return <CxcClient slug={slug} puedeVer={puedeVer} puedeCobrar={p("cxc_cobros", "editar")} puedeVerBitacora={p("cxc_bitacora", "ver")} puedeAnularCobro={p("cxc_anular_cobro", "editar")} />;
 }
