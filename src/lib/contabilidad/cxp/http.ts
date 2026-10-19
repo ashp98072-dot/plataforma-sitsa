@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireTenantCxp } from "@/lib/tenant";
 import { ambitoDesdeRequest, errorAmbito } from "@/lib/contabilidad/ambito";
 import { ErrorCxp } from "./errores";
+import { ACCIONES_BITACORA_CXP, listarBitacoraCxp, type AccionBitacoraCxp } from "./bitacora";
 import { anularFactura, listarFacturas, obtenerFactura, previsualizarFactura, registrarFactura } from "./facturas";
 import { listarPagos, obtenerPago, registrarPago, reversarPago } from "./pagos";
 import { guardarConfigFiscal, listarCuentasCxp, listarProveedoresCxp, obtenerConfigFiscal } from "./proveedor-fiscal";
@@ -174,5 +175,21 @@ export async function reversarPagoHttp(req: Request, slug: string, id: string) {
   return conAmbito(req, g, async entidadId => {
     const b = await cuerpo(req);
     return json({ pago: await reversarPago(g.empresa.id, entidadId, id, actor(g), b.motivo) });
+  });
+}
+
+/** Bitácora de movimientos de CxP del libro. Permiso PROPIO cxp_bitacora:ver (ver facturas/pagos no basta). Solo lectura sobre `auditoria`. */
+export async function listarBitacoraCxpHttp(req: Request, slug: string) {
+  const g = await requireTenantCxp(slug, "cxp_bitacora", "ver", "Sin permiso para ver la bitácora de Cuentas por pagar.");
+  if (g.error) return g.error;
+  return conAmbito(req, g, async entidadId => {
+    const sp = new URL(req.url).searchParams, accion = sp.get("accion");
+    if (accion && !(ACCIONES_BITACORA_CXP as readonly string[]).includes(accion)) throw new ErrorCxp("Acción inválida.", 400, "ACCION_INVALIDA");
+    const num = (k: string) => (sp.get(k) && /^[1-9]\d{0,9}$/.test(sp.get(k)!) ? Number(sp.get(k)) : undefined);
+    const fecha = (k: string) => (sp.get(k) && /^\d{4}-\d{2}-\d{2}$/.test(sp.get(k)!) ? sp.get(k)! : undefined);
+    return json(await listarBitacoraCxp(g.empresa.id, entidadId, {
+      accion: (accion as AccionBitacoraCxp) || undefined, usuario: sp.get("usuario")?.trim().slice(0, 100) || undefined,
+      fechaDesde: fecha("fechaDesde"), fechaHasta: fecha("fechaHasta"), page: num("page"), pageSize: num("pageSize"),
+    }));
   });
 }

@@ -5,6 +5,7 @@ import { type LineaBorrador } from "@/components/facturacion/factura-borrador-fo
 import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
 import { ConfirmacionesBancariasPanel } from "@/components/facturacion/confirmaciones-bancarias-panel";
 import { BitacoraFacturaPanel } from "@/components/facturacion/bitacora-factura-panel";
+import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -276,8 +277,8 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
   }
 
   async function registrarPago(facturaId: number) {
-    const monto = Number(pagoMonto);
-    if (!pagoFecha || !Number.isFinite(monto) || monto <= 0) { setErrorPago("Fecha y monto (mayor que cero) son obligatorios."); return; }
+    const monto = parsearMontoCobro(pagoMonto);
+    if (!pagoFecha || monto === null) { setErrorPago("Fecha y monto (mayor que cero) son obligatorios."); return; }
     setRegistrandoPago(true);
     setErrorPago("");
     try {
@@ -582,14 +583,14 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                   <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
                                     <div className="grid gap-2 sm:grid-cols-2">
                                       <label className="flex flex-col gap-1">Fecha de pago<input className={inputCls} type="date" value={pagoFecha} onChange={(e) => setPagoFecha(e.target.value)} /></label>
-                                      <label className="flex flex-col gap-1">Monto<input className={inputCls} type="number" step="0.01" min={0} max={detalle.factura.saldo} value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1">Monto<input className={inputCls} type="text" inputMode="decimal" autoComplete="off" placeholder="2,000.00" value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1">Medio de pago<input className={inputCls} value={pagoMedio} onChange={(e) => setPagoMedio(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1">Referencia<input className={inputCls} value={pagoReferencia} onChange={(e) => setPagoReferencia(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1 sm:col-span-2">Observaciones<input className={inputCls} value={pagoObs} onChange={(e) => setPagoObs(e.target.value)} /></label>
                                     </div>
                                     {errorPago ? <p className="text-rose-500">{errorPago}</p> : null}
                                     <div className="flex gap-2 pt-1">
-                                      <button type="button" disabled={registrandoPago} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
+                                      <button type="button" disabled={registrandoPago || parsearMontoCobro(pagoMonto) === null || !pagoFecha} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
                                         {registrandoPago ? "Registrando…" : "Guardar pago"}
                                       </button>
                                       <button type="button" disabled={registrandoPago} className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" onClick={() => { setMostrarPago(false); setErrorPago(""); }}>Cancelar</button>

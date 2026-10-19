@@ -741,7 +741,7 @@ export async function requireTenantCxc(
  */
 export async function requireTenantCxp(
   slug: string,
-  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal" | "cxp_pagos" | "cxp_reversar_pago",
+  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal" | "cxp_pagos" | "cxp_reversar_pago" | "cxp_bitacora",
   accion: AccionPermiso,
   mensajeSinPermiso = "Sin permiso para Cuentas por pagar.",
 ): Promise<Ok | Fail> {
