@@ -15,6 +15,7 @@ import { confirmarLote, validarLote } from "@/lib/tms/programacion-lote";
 import { GET as cargar } from "./route";
 import { POST as validar } from "./validar/route";
 import { POST as confirmar } from "./confirmar/route";
+import { cuerpoLote, filaDesdeCarga, seleccionarTodos } from "@/app/e/[slug]/programacion/copiar/copiar-helpers";
 
 /**
  * TMS-PROGRAMACION-LOTE-1 (PR A) — la regla "el ORIGEN no puede estar Cancelado" se exige en el BACKEND (validar y
@@ -47,6 +48,12 @@ beforeEach(() => {
   // la consulta, el Cancelado volvería a colarse y estas pruebas fallarían.
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
     const s = String(sql);
+    if (s.includes("SELECT id, vehiculo_solicitado_perfil_id")) {
+      const [emp, ...ids] = params;
+      return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({
+        id: p.id, vehiculo_solicitado_perfil_id: p.id === 900 ? 11 : null,
+      }));
+    }
     if (s.includes("FROM tms_planes_viaje") && s.includes("p.fecha_plan = ?")) {
       const [emp, fecha] = params as [number, string];
       return planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && p.estado !== "Cancelado").map((p) => ({ id: p.id, codigo: `P${p.id}`, estado: p.estado }));
@@ -70,6 +77,27 @@ describe("GET: la carga inicial no devuelve orígenes Cancelados", () => {
 });
 
 describe("POST /validar con orígenes enviados a mano", () => {
+  it.each([validar, confirmar])("carga -> payload UI -> POST conserva el perfil del servidor y admite orígenes antiguos", async (handler) => {
+    const carga = await cargar(new Request(`http://x/api?fechaOrigen=${ORIGEN}&fechaDestino=2026-09-25`), ctx);
+    const data = await carga.json();
+    expect(data.filas.map((f: { borrador: { vehiculoSolicitadoPerfilId: number | null } }) => f.borrador.vehiculoSolicitadoPerfilId)).toEqual([11, null]);
+    const payload = cuerpoLote(ORIGEN, "2026-09-25", seleccionarTodos(data.filas.map(filaDesdeCarga)));
+    for (const f of payload.filas) expect(f).not.toHaveProperty("vehiculoSolicitadoPerfilId");
+    vi.mocked(validarLote).mockClear();
+    expect((await post(handler, payload)).status).toBe(200);
+    const borradores = handler === validar
+      ? vi.mocked(validarLote).mock.calls[0][2]
+      : vi.mocked(confirmarLote).mock.calls[0][4];
+    expect(borradores.map((b) => b.vehiculoSolicitadoPerfilId)).toEqual([11, null]);
+    expect(query).toHaveBeenCalledWith(expect.stringContaining("SELECT id, vehiculo_solicitado_perfil_id"), [7, 900, 901]);
+  });
+
+  it.each([validar, confirmar])("rechaza un perfil inyectado por el cliente", async (handler) => {
+    const payload = cuerpo([900]);
+    expect((await post(handler, { ...payload, filas: [{ ...payload.filas[0], vehiculoSolicitadoPerfilId: 99 }] })).status).toBe(400);
+    expect(validarLote).not.toHaveBeenCalled();
+    expect(confirmarLote).not.toHaveBeenCalled();
+  });
   it("origen CANCELADO -> 400 con mensaje claro; no se valida nada", async () => {
     const r = await post(validar, cuerpo([902]));
     expect(r.status).toBe(400);
