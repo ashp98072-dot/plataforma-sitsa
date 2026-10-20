@@ -164,7 +164,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
  * fecha origen indicada y que NO esté Cancelado (igual que la carga inicial; un Cerrado sí es origen válido — no
  * confundir con la regla del plan DESTINO cancelado, que sí permite volver a copiar) — nunca se confía en ids o paradas enviados por el cliente.
  */
-export type EdicionFilaCopia = Omit<BorradorLote, "paradas" | "regresoOffsetDias" | "regresoHora">;
+export type EdicionFilaCopia = Omit<BorradorLote, "paradas" | "regresoOffsetDias" | "regresoHora" | "vehiculoSolicitadoPerfilId">;
 
 /**
  * Vehículo solicitado (perfil) de cada viaje ORIGEN, leído en el servidor (lectura aparte: sin la migración no hay dato y devuelve vacío, lo que luego BLOQUEA
