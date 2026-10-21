@@ -76,7 +76,21 @@ function valorSeguro(c: ExcelJS.Cell, perfil: PerfilProveedor, campo: CampoProve
 
 export function resumirProveedorV2(p: PreviewProveedorV2): void {
   const ops = p.filas.filter(f => f.identidadCandidata);
-  const elegibles = ops.filter(f => f.estado !== "INVALIDA" && !f.conflicto && f.duplicadoDe == null && !f.posiblePrevio);
+  const candidatos = new Map<string, FilaProveedorV2[]>();
+  for (const f of ops) {
+    const grupo = candidatos.get(f.identidadCandidata!) ?? [];
+    grupo.push(f); candidatos.set(f.identidadCandidata!, grupo);
+  }
+  const elegibles: FilaProveedorV2[] = []; let bloqueados = 0;
+  for (const grupo of candidatos.values()) {
+    // La elegibilidad pertenece a la identidad completa: nunca rescatar una aparición
+    // aparentemente válida si otra está bloqueada, aunque sea la canónica o cambie el orden.
+    if (grupo.some(f => !["VALIDA", "ADVERTENCIA"].includes(f.estado) || f.conflicto || f.posiblePrevio) ||
+        new Set(grupo.map(f => f.huella)).size > 1) {
+      bloqueados++; continue;
+    }
+    elegibles.push(grupo[0]); // una sola contribución por identidad, sin depender de duplicadoDe
+  }
   p.resumen = {
     apariciones: ops.length, candidatos: new Set(ops.map(f => f.identidadCandidata)).size,
     duplicados: ops.filter(f => f.duplicadoDe != null).length,
@@ -84,7 +98,7 @@ export function resumirProveedorV2(p: PreviewProveedorV2): void {
     invalidas: p.filas.filter(f => f.estado === "INVALIDA").length,
     ignoradas: p.filas.filter(f => f.estado === "IGNORADA").length,
     posiblesPrevios: new Set(ops.filter(f => f.posiblePrevio).map(f => f.identidadCandidata)).size,
-    bloqueados: new Set(ops.filter(f => f.estado === "INVALIDA" || f.conflicto || f.posiblePrevio).map(f => f.identidadCandidata)).size,
+    bloqueados,
     elegibles: elegibles.length,
     galonesElegibles: elegibles.reduce((a, f) => a.plus(f.galones ?? 0), new Decimal(0)).toFixed(),
     montoElegible: elegibles.reduce((a, f) => a.plus(f.monto ?? 0), new Decimal(0)).toFixed(),
