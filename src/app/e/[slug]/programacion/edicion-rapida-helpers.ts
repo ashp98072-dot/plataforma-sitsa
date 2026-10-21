@@ -157,6 +157,18 @@ export function motivoNoEditableTarifa(p: PlanEdicionRapida, hoy: string): strin
   return motivoNoEditable(p, hoy);
 }
 
+/** Los viáticos históricos mantienen el snapshot defensivo, pero la fecha pasada por sí sola no los bloquea. */
+export function motivoNoEditableViaticos(p: PlanEdicionRapida, hoy: string): string | null {
+  if (!puedeEditarViaticos(p)) {
+    return recursosInternosBloqueados(p) ? "Viaje tercerizado" : "Datos de viáticos no disponibles: recarga la programación.";
+  }
+  if (p.fecha_plan < hoy) {
+    if (p.estado === "Cerrado" || p.estado === "Cancelado") return p.estado;
+    return motivoSnapshotNoEditable(p);
+  }
+  return motivoNoEditable(p, hoy);
+}
+
 function motivoSnapshotNoEditable(p: PlanEdicionRapida): string | null {
   // Datos que el GET aún no trae (versión anterior del servidor): sin snapshot exacto no se edita.
   if (p.auxiliarPersonalIds === undefined || p.flotaVehiculoId === undefined) return "Sin datos para edición rápida";

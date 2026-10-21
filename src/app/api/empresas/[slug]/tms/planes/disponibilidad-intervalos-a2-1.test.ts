@@ -43,6 +43,7 @@ const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PA
 const sumarDias = (fecha: string, n: number) => { const d = new Date(`${fecha}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const D0 = sumarDias(hoyLocal(), 10); // día base futuro (PATCH no edita el pasado)
 const D1 = sumarDias(D0, 1);
+const DPAST = sumarDias(hoyLocal(), -1);
 
 const PILOTO = { id: 91, empresa_id: 7, nombre: "Piloto Uno", tipo: "Piloto" as const, id_empleado: null };
 const AUX = { id: 92, empresa_id: 7, nombre: "Aux Dos", tipo: "Auxiliar" as const, id_empleado: null };
@@ -105,6 +106,13 @@ describe("POST — política por intervalos", () => {
     const res = await crear({ horaCarga: "07:59", regresoEstimado: `${D0}T10:00` });
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(`El piloto Piloto Uno ya está asignado al PLAN-77 para el ${D0.split("-").reverse().join("/")}.`);
+    expect(inserts()).toHaveLength(0);
+  });
+
+  it("2b) una creación retroactiva conserva exactamente la misma protección de conflicto", async () => {
+    modelo.planes = [existente({ inicio: `${DPAST} 05:00:00`, regreso_estimado: `${DPAST} 08:00:00` })];
+    const res = await crear({ fechaPlan: DPAST, horaCarga: "07:59", regresoEstimado: `${DPAST}T10:00` });
+    expect(res.status).toBe(409);
     expect(inserts()).toHaveLength(0);
   });
 

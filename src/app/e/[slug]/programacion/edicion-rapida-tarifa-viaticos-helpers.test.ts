@@ -10,6 +10,7 @@ import {
   errorAntesDeEnviar,
   motivoNoEditable,
   motivoNoEditableTarifa,
+  motivoNoEditableViaticos,
   opcionesTarifa,
   puedeEditarTarifa,
   puedeEditarViaticos,
@@ -42,14 +43,16 @@ const plan = (over: Partial<PlanEdicionRapida> = {}): PlanEdicionRapida => ({
 const vacio = (): Borrador => new Map<number, EntradaBorrador>();
 const TARIFAS: TarifaRutaEdicion[] = [{ id: 61, nombre: "Corta", monto: "1500.00", moneda: "GTQ" }, { id: 62, nombre: "Larga", monto: 2500, moneda: "GTQ" }];
 
-describe("Edición rápida (UI) — tarifa histórica", () => {
-  it.each(["Programado", "Cargado", "En ruta", "Descargado"])("%s histórico habilita solo tarifa, no recursos/viáticos", (estado) => {
+describe("Edición rápida (UI) — correcciones comerciales históricas", () => {
+  it.each(["Programado", "Cargado", "En ruta", "Descargado"])("%s histórico habilita tarifa y viáticos, no recursos", (estado) => {
     const p = plan({ estado, fecha_plan: "2026-09-23" });
     expect(motivoNoEditable(p, HOY)).toBe("Histórico");
     expect(motivoNoEditableTarifa(p, HOY)).toBeNull();
+    expect(motivoNoEditableViaticos(p, HOY)).toBeNull();
   });
   it.each(["Cerrado", "Cancelado"])("%s sigue bloqueado", (estado) => {
     expect(motivoNoEditableTarifa(plan({ estado, fecha_plan: "2026-09-23" }), HOY)).toBe(estado);
+    expect(motivoNoEditableViaticos(plan({ estado, fecha_plan: "2026-09-23" }), HOY)).toBe(estado);
   });
   it.each([
     { tarifa_id: undefined }, { auxiliarPersonalIds: undefined }, { flotaVehiculoId: undefined },
@@ -58,11 +61,15 @@ describe("Edición rápida (UI) — tarifa histórica", () => {
     expect(motivoNoEditableTarifa(plan({ fecha_plan: "2026-09-23", ...over }), HOY)).not.toBeNull();
   });
   it("hoy/futuro conserva comportamiento; tercerizado histórico permite tarifa", () => {
-    for (const fecha_plan of [HOY, "2026-09-25"]) expect(motivoNoEditableTarifa(plan({ fecha_plan }), HOY)).toBeNull();
+    for (const fecha_plan of [HOY, "2026-09-25"]) {
+      expect(motivoNoEditableTarifa(plan({ fecha_plan }), HOY)).toBeNull();
+      expect(motivoNoEditableViaticos(plan({ fecha_plan }), HOY)).toBeNull();
+    }
     const p = plan({ fecha_plan: "2026-09-23", tipo_viaje: "Tercerizado" });
     expect(motivoNoEditableTarifa(p, HOY)).toBeNull();
     expect(recursosInternosBloqueados(p)).toBe(true);
     expect(puedeEditarViaticos(p)).toBe(false);
+    expect(motivoNoEditableViaticos(p, HOY)).toBe("Viaje tercerizado");
   });
   it("varias tarifas históricas conservan snapshots y motivo, incluyendo manual Q0", () => {
     const a = plan({ fecha_plan: "2026-09-23" });

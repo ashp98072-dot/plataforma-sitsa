@@ -110,13 +110,15 @@ describe("edicion-rapida.tsx", () => {
     expect(selector).toContain("TARIFA_MANUAL_PENDIENTE");
   });
 
-  it("histórico: solo tarifa tiene bloqueo independiente; recursos y viáticos conservan el general", () => {
+  it("histórico: tarifa y viáticos tienen bloqueo independiente; recursos conservan el general", () => {
     expect(tabla).toContain("const bloqueoTarifa = motivoNoEditableTarifa(p, hoy);");
     expect(tabla).toContain("const tarifaDeshabilitada = bloqueoTarifa != null || guardando;");
     expect(tabla.match(/disabled=\{tarifaDeshabilitada\}/g)).toHaveLength(2);
     expect(tabla).toContain("Viaje histórico: solo se permite actualizar la tarifa.");
     expect(tabla).toContain("const deshabilitado = bloqueo != null || guardando || internosBloqueados;");
-    expect(tabla).toContain("const viaticosDeshabilitados = bloqueo != null || guardando;");
+    expect(tabla).toContain("const bloqueoViaticos = motivoNoEditableViaticos(p, hoy);");
+    expect(tabla).toContain("const viaticosDeshabilitados = bloqueoViaticos != null || guardando;");
+    expect(tabla).toContain("${bloqueo} (solo viáticos)");
     for (const label of ["Piloto de", "Agregar auxiliar a", "Unidad de", "TC de"]) {
       expect(trozo(tabla, `aria-label={\`${label}`, "value=")).toContain("disabled={deshabilitado");
     }
