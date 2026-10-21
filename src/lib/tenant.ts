@@ -81,7 +81,7 @@ export async function requireTenantMultas(
   return tenant;
 }
 
-export async function requireTenant(slug: string): Promise<Ok | Fail> {
+export async function requireTenant(slug: string, opciones: { soloLectura?: boolean } = {}): Promise<Ok | Fail> {
   const session = await getSession();
   if (!session) {
     return {
@@ -109,7 +109,7 @@ export async function requireTenant(slug: string): Promise<Ok | Fail> {
     };
   }
 
-  if (session.empresaId !== empresa.id) {
+  if (!opciones.soloLectura && session.empresaId !== empresa.id) {
     const token = await createSessionToken({
       ...session,
       empresaId: empresa.id,
@@ -532,8 +532,9 @@ export async function requireTenantViaticosComprobantes(
 export async function requireTenantFlotaCombustible(
   slug: string,
   accion: AccionCombustible = "ver",
+  opciones: { soloLectura?: boolean } = {},
 ): Promise<Ok | Fail> {
-  const tenant = await requireTenant(slug);
+  const tenant = await requireTenant(slug, opciones);
   if (tenant.error) return tenant;
 
   const { session, empresa } = tenant;

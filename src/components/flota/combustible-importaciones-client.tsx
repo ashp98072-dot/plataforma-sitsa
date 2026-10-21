@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
+import { PreviewCombustibleV2 } from "./combustible-preview-v2";
 import type { AnalisisImportacion, FilaImportada } from "@/lib/flota/combustible-importacion-parser";
 const input = "rounded border border-[var(--border)] bg-[var(--input)] p-2";
 type Resumen = AnalisisImportacion["resumen"];
@@ -32,6 +33,16 @@ export function FilasImportacion({ filas }: { filas: FilaImportada[] }) {
   </section>;
 }
 export function NuevaImportacionCombustible({ slug }: { slug: string }) {
+  const [legacy, setLegacy] = useState(false);
+  return <section className="space-y-4 p-4"><h1>Importaciones de proveedor</h1>
+    <Link prefetch={false} href={`/e/${slug}/combustibles/importaciones`}>Volver a importaciones</Link>
+    <label className="block">Flujo <select value={legacy ? "legacy" : "v2"} onChange={e => setLegacy(e.target.value === "legacy")}>
+      <option value="v2">Vista previa HALEL / SHELL</option><option value="legacy">Importación histórica HALEL v1 (evidencia para conciliación)</option>
+    </select></label>
+    {legacy ? <NuevaImportacionLegacy slug={slug} /> : <PreviewCombustibleV2 slug={slug} />}
+  </section>;
+}
+function NuevaImportacionLegacy({ slug }: { slug: string }) {
   const router = useRouter();
   const [proveedores, setProveedores] = useState<{ id: number; nombre: string }[]>([]), [proveedorId, setProveedor] = useState(""), [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<(AnalisisImportacion & { token: string; sha256: string }) | null>(null), [error, setError] = useState(""), [busy, setBusy] = useState(false);
