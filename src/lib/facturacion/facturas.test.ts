@@ -16,6 +16,7 @@ import {
   emitirFactura,
   listarFacturas,
   listarViajesPendientes,
+  obtenerFactura,
   obtenerKpisFacturacion,
   registrarPago,
   type ActorFacturacion,
@@ -35,7 +36,11 @@ const actor: ActorFacturacion = { empresaId: 7, usuarioId: 3, usuario: "facturad
 
 // tms_clientes.id = 501 <-> clientes.id = 20 (mismo cliente, dos espacios de ID distintos)
 const CLIENTE = { id: 20, nombre: "Cliente X", tms_cliente_id: 501 };
-const PLAN_CERRADO = { id: 1, codigo: "PLAN-1", empresa_id: 7, cliente_id: 501, estado: "Cerrado", tarifa_comercial: 1000 };
+const PLAN_CERRADO = {
+  id: 1, codigo: "PLAN-1", empresa_id: 7, cliente_id: 501, estado: "Cerrado", tarifa_comercial: 1000,
+  fecha_plan: "2026-08-27", ruta_codigo_historico: "RUTA-01", lugar_carga_id: null, lugar_descarga_id: null,
+  lugar_descarga_historico: "Xela", tarifa_moneda_historico: "GTQ",
+};
 
 type Overrides = {
   cliente?: Record<string, unknown> | null;
@@ -43,17 +48,27 @@ type Overrides = {
   vinculoExistente?: Record<string, unknown> | null;
   factura?: Record<string, unknown> | null;
   pagosCount?: number;
+  aplicacionesCount?: number;
   pagosSuma?: number;
   lineasEmitir?: Record<string, unknown>[];
+  /** Filas previas (snapshot) del borrador que se edita: SELECT ... FROM fact_factura_viajes WHERE factura_id = ? */
+  lineasPrevias?: Record<string, unknown>[];
 };
 
 function mockConnQuery(o: Overrides = {}) {
   conn.query.mockImplementation(async (sql: string) => {
+    if (sql.startsWith("SET TRANSACTION ISOLATION LEVEL")) return [[]];
     if (sql.includes("FROM clientes WHERE id = ?")) {
       return [o.cliente === undefined ? [CLIENTE] : o.cliente ? [o.cliente] : []];
     }
     if (sql.includes("FROM tms_planes_viaje WHERE id = ?")) {
       return [o.plan === undefined ? [PLAN_CERRADO] : o.plan ? [o.plan] : []];
+    }
+    if (sql.includes("FROM tms_lugares WHERE id = ?")) {
+      return [[]];
+    }
+    if (sql.includes("FROM fact_factura_viajes WHERE factura_id = ?")) {
+      return [o.lineasPrevias ?? []];
     }
     if (sql.includes("FROM fact_factura_viajes WHERE plan_id = ?")) {
       return [o.vinculoExistente ? [o.vinculoExistente] : []];
@@ -64,12 +79,18 @@ function mockConnQuery(o: Overrides = {}) {
     if (sql.includes("SELECT COUNT(*) AS c FROM fact_pagos")) {
       return [[{ c: o.pagosCount ?? 0 }]];
     }
-    if (sql.includes("SELECT COALESCE(SUM(monto), 0) AS total FROM fact_pagos")) {
+    // CxC-1: aplicaciones de cobros VIGENTES (impiden anular la factura) y «cobrado» = pagos + aplicaciones (SQL_COBRADO).
+    if (sql.includes("SELECT COUNT(*) AS c FROM fact_cobro_aplicaciones")) {
+      return [[{ c: o.aplicacionesCount ?? 0 }]];
+    }
+    if (sql.includes("SELECT COALESCE(SUM(monto), 0) AS total FROM (") && sql.includes("cobrado_x")) {
       return [[{ total: o.pagosSuma ?? 0 }]];
     }
     if (sql.includes("FROM fact_factura_viajes ffv") && sql.includes("INNER JOIN tms_planes_viaje")) {
       return [o.lineasEmitir ?? [{ plan_id: 1, codigo: "PLAN-1", estado: "Cerrado" }]];
     }
+    // FACT-4: ¿el borrador ya guarda líneas? En estos casos es el modelo anterior (una línea implícita por viaje).
+    if (sql.includes("SELECT modelo_lineas FROM fact_facturas")) return [[{ modelo_lineas: 0 }]];
     throw new Error(`Consulta inesperada: ${sql}`);
   });
 }
@@ -100,7 +121,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("crearFactura — validación e integridad", () => {
   it("1) solo un viaje Cerrado puede facturarse", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, estado: "En ruta" } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("no está Cerrado"); }
     expect(conn.commit).not.toHaveBeenCalled();
@@ -108,27 +129,27 @@ describe("crearFactura — validación e integridad", () => {
 
   it("2) el plan debe pertenecer a la MISMA empresa (no se encuentra si pertenece a otra)", async () => {
     mockConnQuery({ plan: null }); // simula que WHERE empresa_id=? no lo encontró
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(404);
   });
 
   it("3) todos los viajes deben pertenecer al MISMO cliente (vía el puente clientes.tms_cliente_id)", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, cliente_id: 999 } }); // otro tms_clientes.id
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(400); expect(r.error).toContain("no pertenece al cliente"); }
   });
 
   it("4) un viaje ya vinculado a OTRA factura viva → 409", async () => {
     mockConnQuery({ vinculoExistente: { factura_id: 999 } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("ya está vinculado"); }
   });
 
   it("5) [defensa UNIQUE] el INSERT en fact_factura_viajes usa el MISMO plan_id ya validado bajo FOR UPDATE — el UNIQUE(plan_id) es la segunda capa de la misma garantía", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const lockCall = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM fact_factura_viajes WHERE plan_id = ?"));
     const insertCall = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_factura_viajes"));
     expect(lockCall?.[1]).toEqual([1]);
@@ -136,21 +157,22 @@ describe("crearFactura — validación e integridad", () => {
   });
 
   it("6) monto_total se calcula SERVER-SIDE (suma real de monto_asignado, nunca un valor enviado por el cliente)", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 250 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 250, precioIncluyeIva: true }] });
     const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
     expect(insertFactura?.[1]).toEqual(expect.arrayContaining([250])); // monto_total = 250, no otro valor inventado
   });
 
-  it("7) tarifa_comercial null y sin monto explícito → monto_asignado = 0 (nunca inventado)", async () => {
+  it("7) FACT-2: tarifa_comercial null → el viaje NO es facturable (409), nunca se factura en cero ni se inventa el monto", async () => {
     mockConnQuery({ plan: { ...PLAN_CERRADO, tarifa_comercial: null } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
-    expect(r.ok).toBe(true);
-    const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
-    expect(insertFactura?.[1]).toEqual(expect.arrayContaining([0]));
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.status).toBe(409); expect(r.error).toContain("tarifa comercial válida"); }
+    expect(conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"))).toBeUndefined();
+    expect(conn.commit).not.toHaveBeenCalled();
   });
 
   it("8) monto_asignado distinto de tarifa_comercial queda AUDITADO explícitamente", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 800 }] }); // tarifa real es 1000
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, montoAsignado: 800, precioIncluyeIva: true }] }); // tarifa real es 1000
     const auditoria = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
     expect(auditoria.detalle).toContain("Montos ajustados");
     expect(auditoria.detalle).toContain("tarifa_comercial Q1000");
@@ -158,20 +180,20 @@ describe("crearFactura — validación e integridad", () => {
   });
 
   it("25) multiempresa: nunca confía en un empresa_id ajeno — el plan se busca SIEMPRE con el empresa_id del actor", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const planCall = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_planes_viaje WHERE id = ?"));
     expect(planCall?.[1]).toEqual([1, 7]);
   });
 
   it("cliente sin puente TMS (tms_cliente_id NULL) → rechazado, nunca deja pasar una comparación incorrecta", async () => {
     mockConnQuery({ cliente: { ...CLIENTE, tms_cliente_id: null } });
-    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("no está vinculado a TMS");
   });
 
   it("crea siempre como Borrador", async () => {
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     const insertFactura = conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO fact_facturas"));
     expect(String(insertFactura?.[0])).toContain("'Borrador'");
   });
@@ -180,14 +202,14 @@ describe("crearFactura — validación e integridad", () => {
 describe("actualizarFacturaBorrador", () => {
   it("9) Borrador es editable — reaplica TODAS las validaciones al cambiar viajes", async () => {
     mockConnQuery({ factura: { id: 1, estado_admin: "Borrador", cliente_id: 20 } });
-    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(true);
     expect(conn.execute).toHaveBeenCalledWith(expect.stringContaining("DELETE FROM fact_factura_viajes WHERE factura_id = ?"), [1]);
   });
 
   it("10) una factura Emitida queda CONGELADA — PATCH rechazado", async () => {
     mockConnQuery({ factura: { id: 1, estado_admin: "Emitida", cliente_id: 20 } });
-    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] });
+    const r = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(409);
   });
@@ -235,6 +257,61 @@ describe("emitirFactura", () => {
     expect(registrarAuditoriaTx).toHaveBeenCalled();
     const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
     expect(audit.accion).toBe("emitir_factura");
+  });
+
+  describe("fecha_emision al emitir (YYYY-MM-DD, nunca un Date)", () => {
+    const borradorConFecha = { id: 1, estado_admin: "Borrador", numero_factura: "F-001", fecha_emision: "2026-08-27", monto_total: 1000 };
+    const update = () => conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE fact_facturas"));
+
+    it("la consulta de bloqueo formatea la fecha EN SQL", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      await emitirFactura(actor, 1, {});
+      const lock = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM fact_facturas WHERE id = ? AND empresa_id = ?"));
+      expect(String(lock?.[0])).toContain("DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS fecha_emision");
+    });
+
+    it("10) emitir NO modifica el tratamiento de IVA ni los importes: el UPDATE solo toca número, fecha y estado", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      await emitirFactura(actor, 1, {});
+      const sql = String(update()?.[0]);
+      expect(sql).not.toMatch(/precio_incluye_iva|porcentaje_iva|subtotal|iva_monto|monto_total|moneda/);
+      expect(sql).toContain("SET numero_factura = ?, fecha_emision = ?, estado_admin = 'Emitida'");
+    });
+
+    it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: usa exactamente «2026-08-27» en el UPDATE y en la auditoría", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      const r = await emitirFactura(actor, 1, {});
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-08-27", actor.usuarioId, 1, actor.empresaId]);
+      const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
+      expect(audit.detalle).toContain("fecha 2026-08-27");
+      expect(audit.detalle).not.toMatch(/GMT|Thu|Aug/);
+    });
+
+    it("6) emitir CON fechaEmision nueva sigue usando la nueva (tiene prioridad)", async () => {
+      mockConnQuery({ factura: borradorConFecha });
+      const r = await emitirFactura(actor, 1, { fechaEmision: "2026-09-01" });
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-09-01", actor.usuarioId, 1, actor.empresaId]);
+      const audit = vi.mocked(registrarAuditoriaTx).mock.calls[0][1];
+      expect(audit.detalle).toContain("fecha 2026-09-01");
+      expect(audit.detalle?.split(" | #BIT ")[0]).not.toContain("2026-08-27"); // el texto legible usa la nueva; el JSON conserva la anterior en «cambios»
+    });
+
+    it("7) fecha NULL y sin fecha nueva → el error actual de fecha obligatoria, sin UPDATE", async () => {
+      mockConnQuery({ factura: { ...borradorConFecha, fecha_emision: null } });
+      const r = await emitirFactura(actor, 1, {});
+      expect(r.ok).toBe(false);
+      if (!r.ok) { expect(r.status).toBe(400); expect(r.error).toBe("La fecha de emisión es obligatoria para emitir."); }
+      expect(update()).toBeUndefined();
+    });
+
+    it("NULL con fecha nueva → emite con la nueva", async () => {
+      mockConnQuery({ factura: { ...borradorConFecha, fecha_emision: null } });
+      const r = await emitirFactura(actor, 1, { fechaEmision: "2026-09-01" });
+      expect(r.ok).toBe(true);
+      expect(update()?.[1]).toEqual(["F-001", "2026-09-01", actor.usuarioId, 1, actor.empresaId]);
+    });
   });
 
   it("no se puede emitir una factura que ya no está en Borrador", async () => {
@@ -287,7 +364,7 @@ describe("[18/19] saldo y estado financiero derivados (nunca guardados)", () => 
     // La propia ausencia de una columna "saldo"/"estado_financiero" en los
     // INSERT/UPDATE de fact_facturas ya lo demuestra: ningún INSERT/UPDATE
     // de esta suite escribe esas columnas.
-    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] });
+    await crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
     for (const call of conn.execute.mock.calls) {
       expect(String(call[0])).not.toMatch(/\bsaldo\b|estado_financiero/i);
     }
@@ -326,13 +403,174 @@ describe("anularFactura", () => {
   });
 });
 
+describe("FACT-3 — anular conserva el detalle histórico y libera los viajes", () => {
+  const sqlsExecute = () => conn.execute.mock.calls.map((c) => String(c[0]).replace(/\s+/g, " ").trim());
+  const idx = (prefijo: string) => sqlsExecute().findIndex((x) => x.startsWith(prefijo));
+
+  it("anular COPIA las líneas al histórico y recién después borra las activas (misma transacción), antes del commit", async () => {
+    mockConnQuery({ factura: { id: 1, estado_admin: "Borrador" }, pagosCount: 0 });
+    const r = await anularFactura(actor, 1);
+    expect(r.ok).toBe(true);
+    const iUpdate = idx("UPDATE fact_facturas SET estado_admin = 'Anulada'");
+    const iCopia = idx("INSERT INTO fact_factura_viajes_anuladas");
+    const iBorra = idx("DELETE FROM fact_factura_viajes WHERE factura_id = ?");
+    expect(iUpdate).toBeGreaterThanOrEqual(0);
+    expect(iCopia).toBeGreaterThan(iUpdate);
+    expect(iBorra).toBeGreaterThan(iCopia); // nunca se libera sin haber copiado
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+    expect(conn.rollback).not.toHaveBeenCalled();
+    // la copia toma SOLO las líneas de ESA factura y registra quién anuló
+    const copia = conn.execute.mock.calls[iCopia];
+    expect(String(copia[0])).toContain("WHERE ffv.factura_id = ?");
+    expect(copia[1]).toEqual([3, 1]); // [usuarioId, facturaId]
+    // la copia incluye TODA la fotografía fiscal de la línea
+    for (const col of ["descripcion", "precio_incluye_iva", "porcentaje_iva", "base_monto", "iva_monto", "total_linea", "codigo_viaje_snapshot", "destino_snapshot"]) {
+      expect(String(copia[0])).toContain(col);
+    }
+    expect(vi.mocked(registrarAuditoriaTx).mock.calls[0][1].detalle).toContain("conservadas en el histórico");
+  });
+
+  it("el vínculo activo se BORRA (no se marca inactivo): UNIQUE(plan_id) sigue siendo la garantía anti doble facturación", async () => {
+    mockConnQuery({ factura: { id: 1, estado_admin: "Borrador" } });
+    await anularFactura(actor, 1);
+    expect(sqlsExecute().some((x) => /UPDATE fact_factura_viajes/i.test(x))).toBe(false);
+    expect(idx("DELETE FROM fact_factura_viajes WHERE factura_id = ?")).toBeGreaterThanOrEqual(0);
+  });
+
+  it("si la tabla histórica no existe (migración sin aplicar) NO se anula ni se borra nada: 503 y rollback", async () => {
+    mockConnQuery({ factura: { id: 1, estado_admin: "Borrador" } });
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO fact_factura_viajes_anuladas")) {
+        throw Object.assign(new Error("Table doesn't exist"), { code: "ER_NO_SUCH_TABLE", errno: 1146 });
+      }
+      return [{ affectedRows: 1, insertId: 1 }, []];
+    });
+    const r = await anularFactura(actor, 1);
+    expect(r).toMatchObject({ ok: false, status: 503 });
+    if (!r.ok) expect(r.error).toContain("FACT-3");
+    expect(sqlsExecute().some((x) => x.startsWith("DELETE FROM fact_factura_viajes"))).toBe(false);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled(); // el UPDATE a Anulada también se deshace
+  });
+
+  it("si lo copiado y lo borrado no coinciden, se deshace TODO (nunca liberar sin copiar)", async () => {
+    mockConnQuery({ factura: { id: 1, estado_admin: "Borrador" } });
+    conn.execute.mockImplementation(async (sql: string) => {
+      if (String(sql).includes("INSERT INTO fact_factura_viajes_anuladas")) return [{ affectedRows: 2 }, []];
+      if (String(sql).startsWith("DELETE FROM fact_factura_viajes")) return [{ affectedRows: 3 }, []];
+      return [{ affectedRows: 1, insertId: 1 }, []];
+    });
+    await expect(anularFactura(actor, 1)).rejects.toThrow(/inconsistente/);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("una Anulada no admite doble anulación (no vuelve a copiar), edición, emisión ni pagos", async () => {
+    mockConnQuery({ factura: { id: 1, estado_admin: "Anulada", monto_total: 100 } });
+    const doble = await anularFactura(actor, 1);
+    expect(doble).toMatchObject({ ok: false, status: 409 });
+    expect(sqlsExecute().some((x) => x.includes("fact_factura_viajes_anuladas"))).toBe(false);
+
+    const editar = await actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] });
+    expect(editar).toMatchObject({ ok: false, status: 409 });
+    if (!editar.ok) expect(editar.error).toContain("Solo se puede editar una factura en Borrador");
+
+    const emitir = await emitirFactura(actor, 1, { numeroFactura: "F-1", fechaEmision: "2026-08-27" });
+    expect(emitir).toMatchObject({ ok: false, status: 409 });
+    if (!emitir.ok) expect(emitir.error).toContain("Solo se puede emitir una factura en Borrador");
+
+    const pago = await registrarPago(actor, 1, { fechaPago: "2026-08-28", monto: 10 });
+    expect(pago).toMatchObject({ ok: false, status: 409 });
+    if (!pago.ok) expect(pago.error).toContain("Emitida");
+    expect(sqlsExecute().some((x) => /INSERT INTO fact_pagos|UPDATE fact_facturas SET numero_factura/.test(x))).toBe(false);
+  });
+});
+
+describe("FACT-3 — obtenerFactura: una Anulada se lee de su histórico, nunca de datos vivos", () => {
+  const filaFactura = (estado: string) => ({
+    id: 5, cliente_id: 20, cliente: "Cliente X", numero_factura: null, fecha_emision: null, monto_total: 212, estado_admin: estado,
+    observaciones: "obs conservada", creado_por: 3, creado_en: "x", actualizado_por: 3, actualizado_en: "y", moneda: "GTQ",
+    subtotal: 189.29, iva_monto: 22.71, porcentaje_iva: 12, precio_incluye_iva: null,
+    cliente_nombre_snapshot: "Cliente Congelado", cliente_nit_snapshot: "1234567-8", cliente_direccion_snapshot: "Zona 1", total_pagado: 0,
+  });
+  const linea = (id: number, extra: Record<string, unknown> = {}) => ({
+    id, plan_id: id, codigo: `V-${id}`, fecha_plan: "2026-09-01", monto_asignado: 100, descripcion: `Línea ${id}`, ruta_codigo_snapshot: "R-1",
+    origen_snapshot: "A", destino_snapshot: "B", cantidad: 1, precio_incluye_iva: 1, porcentaje_iva: 12, base_monto: 89.29, iva_monto: 10.71,
+    total_linea: 100, ...extra,
+  });
+  const usar = (estado: string, lineasActivas: Record<string, unknown>[], lineasHist: Record<string, unknown>[]) => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM fact_facturas f")) return [filaFactura(estado)];
+      if (sql.includes("FROM fact_factura_viajes_anuladas")) return lineasHist;
+      if (sql.includes("FROM fact_factura_viajes ffv")) return lineasActivas;
+      if (sql.includes("FROM fact_pagos")) return [];
+      if (sql.includes("FROM fact_cobro_aplicaciones")) return [];
+      if (sql.includes("FROM auditoria")) return [{ usuario: "facturador-a", cuando: "2026-10-09 14:05" }];
+      throw new Error(`Consulta inesperada: ${sql}`);
+    }) as never);
+  };
+  const sqls = () => vi.mocked(query).mock.calls.map((c) => String(c[0]));
+
+  it("Anulada: las líneas salen del histórico (todas, con base/IVA/total) y se informa quién y cuándo anuló", async () => {
+    usar("Anulada", [], [linea(1), linea(2, { precio_incluye_iva: 0, base_monto: 100, iva_monto: 12, total_linea: 112 })]);
+    const d = await obtenerFactura(7, 5);
+    expect(d?.factura.estadoAdmin).toBe("Anulada");
+    expect(d?.viajes.map((v) => [v.codigo, v.base, v.iva, v.total, v.precioIncluyeIva])).toEqual([["V-1", 89.29, 10.71, 100, true], ["V-2", 100, 12, 112, false]]);
+    expect(d?.factura).toMatchObject({ cliente: "Cliente Congelado", clienteNit: "1234567-8", observaciones: "obs conservada", subtotal: 189.29, iva: 22.71, montoTotal: 212 });
+    expect(d?.anulacion).toEqual({ fecha: "2026-10-09 14:05", usuario: "facturador-a" });
+    expect(sqls().some((x) => x.includes("FROM fact_factura_viajes_anuladas"))).toBe(true);
+    expect(sqls().some((x) => x.includes("FROM fact_factura_viajes ffv"))).toBe(false); // no mira los vínculos activos
+    // el histórico se lee solo por su factura y sin unir datos vivos del viaje
+    const hist = sqls().find((x) => x.includes("fact_factura_viajes_anuladas")) ?? "";
+    expect(hist).not.toMatch(/tms_planes_viaje/);
+  });
+
+  it("Borrador/Emitida: sigue leyendo los vínculos activos (y no consulta el histórico ni la auditoría de anulación)", async () => {
+    usar("Emitida", [linea(1)], [linea(9)]);
+    const d = await obtenerFactura(7, 5);
+    expect(d?.viajes.map((v) => v.codigo)).toEqual(["V-1"]);
+    expect(d?.anulacion).toBeNull();
+    expect(sqls().some((x) => x.includes("fact_factura_viajes_anuladas"))).toBe(false);
+    expect(sqls().some((x) => x.includes("FROM auditoria"))).toBe(false);
+  });
+
+  it("Anulada anterior a FACT-3 (sin líneas conservadas): viajes vacíos, sin inventar nada", async () => {
+    usar("Anulada", [], []);
+    const d = await obtenerFactura(7, 5);
+    expect(d?.viajes).toEqual([]);
+    expect(d?.factura.montoTotal).toBe(212);
+  });
+
+  it("si la tabla histórica aún no existe (código desplegado antes de la migración) la lectura NO falla: queda sin detalle", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM fact_facturas f")) return [filaFactura("Anulada")];
+      if (sql.includes("FROM fact_factura_viajes_anuladas")) throw Object.assign(new Error("no table"), { code: "ER_NO_SUCH_TABLE", errno: 1146 });
+      return [];
+    }) as never);
+    const d = await obtenerFactura(7, 5);
+    expect(d?.viajes).toEqual([]);
+    expect(d?.factura.estadoAdmin).toBe("Anulada");
+  });
+
+  it("multiempresa: la factura se busca por empresa_id y, si es de otra empresa, no se lee ningún histórico", async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) => {
+      if (sql.includes("FROM fact_facturas f")) return [];
+      throw new Error(`No debería consultarse: ${sql}`);
+    }) as never);
+    expect(await obtenerFactura(8, 5)).toBeNull();
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("f.id = ? AND f.empresa_id = ?");
+    expect(params).toEqual([5, 8]);
+  });
+});
+
 describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () => {
   it("22) factura Anulada NUNCA cuenta como facturación activa: tras anular, el viaje reaparece como pendiente", async () => {
     // La condición NOT EXISTS(fact_factura_viajes) es exactamente lo que
     // garantiza esto, porque anularFactura BORRA esa fila.
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
+      placa_interna: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
     }], 1);
     const { items: viajes, totalReal } = await listarViajesPendientes(7, {});
     expect(viajes).toHaveLength(1);
@@ -353,10 +591,13 @@ describe("[22/23/24] listarViajesPendientes — estado derivado del viaje", () =
     expect(viajes).toEqual([]);
   });
 
-  it("nunca expone piloto/auxiliares/evidencias/paradas/GPS", async () => {
+  it("FACT-2: expone SOLO el nombre del piloto — nunca auxiliares/evidencias/paradas/GPS", async () => {
     await listarViajesPendientes(7, {});
     const [sql] = vi.mocked(query).mock.calls[0];
-    expect(sql).not.toMatch(/piloto|auxiliar|evidencia|parada|latitud|longitud/i);
+    expect(sql).not.toMatch(/auxiliar|evidencia|parada|latitud|longitud/i);
+    expect(sql).toContain("pil.nombre");
+    // No se leen otros datos de la persona (teléfono, código, tipo…).
+    expect(sql).not.toMatch(/pil\.(telefono|codigo|tipo|estado)/);
   });
 
   it("filtra por clienteId vía el puente clientes.tms_cliente_id (nunca compara IDs de espacios distintos)", async () => {
@@ -382,7 +623,7 @@ describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 1: un viaje sin cliente vinculad
   it("3) un viaje CON bridge (cli.id no nulo en la fila devuelta) sí aparece, con clienteId/cliente reales", async () => {
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
+      placa_interna: "C-034BXR", tarifa_comercial: 1000, cerrado_en: "2026-08-27T18:00",
     }], 1);
     const { items } = await listarViajesPendientes(7, {});
     expect(items).toHaveLength(1);
@@ -393,7 +634,7 @@ describe("HOTFIX PRE-MERGE PR #114 — Hallazgo 1: un viaje sin cliente vinculad
   it("4) clienteId/cliente en la respuesta nunca son null (garantizado por cli.id IS NOT NULL en el WHERE)", async () => {
     mockQuery([{
       id: 1, codigo: "PLAN-1", fecha_plan: "2026-08-27", cliente_id: 20, cliente: "Cliente X",
-      placa: null, tarifa_comercial: null, cerrado_en: null,
+      placa_interna: null, tarifa_comercial: null, cerrado_en: null,
     }], 1);
     const { items } = await listarViajesPendientes(7, {});
     expect(items[0]?.clienteId).not.toBeNull();
@@ -422,13 +663,13 @@ describe("HOTFIX PRE-MERGE PR #113 — Hallazgo 1: el puente clientes↔TMS nunc
 
   it("2) asegurarVinculosTmsClientes falla → crearFactura rechaza (nunca crea una factura con el puente roto)", async () => {
     vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_NO_SUCH_TABLE"));
-    await expect(crearFactura(actor, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_NO_SUCH_TABLE");
+    await expect(crearFactura(actor, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] })).rejects.toThrow("ER_NO_SUCH_TABLE");
     expect(getConnection).not.toHaveBeenCalled();
   });
 
   it("3) asegurarVinculosTmsClientes falla → actualizarFacturaBorrador rechaza", async () => {
     vi.mocked(asegurarVinculosTmsClientes).mockRejectedValue(new Error("ER_ACCESS_DENIED_ERROR"));
-    await expect(actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1 }] })).rejects.toThrow("ER_ACCESS_DENIED_ERROR");
+    await expect(actualizarFacturaBorrador(actor, 1, { clienteId: 20, planes: [{ planId: 1, precioIncluyeIva: true }] })).rejects.toThrow("ER_ACCESS_DENIED_ERROR");
     expect(getConnection).not.toHaveBeenCalled();
   });
 

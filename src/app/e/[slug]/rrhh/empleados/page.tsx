@@ -19,7 +19,9 @@ import { permisosFiscal } from "@/lib/rrhh/fiscal-migracion-ui";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { FotoEmpleado } from "@/components/rrhh/foto-empleado";
 import { FotoEmpleadoMiniatura } from "@/components/rrhh/foto-empleado-miniatura";
+import type { SupervisorCatalogo } from "@/lib/rrhh/supervisores-catalogo";
 import { PortalAccesoModal } from "@/components/rrhh/portal-acceso-modal";
+import { CambioFechaAltaVacaciones } from "@/components/rrhh/cambio-fecha-alta-vacaciones";
 import { BitacoraLegalEmpleado } from "@/components/rrhh/bitacora-legal-empleado";
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import {
@@ -55,6 +57,7 @@ type Emp = {
   horaSalidaTeorica?: string;
   estado?: string;
   docsCount?: number;
+  tieneFoto?: boolean;
   dpi?: string;
   nit?: string;
   igss?: string;
@@ -430,7 +433,7 @@ export default function EmpleadosPage() {
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   // Activos de la empresa para buscar/agregar Supervisor(es) — independiente
   // de los filtros de búsqueda/estado de la tabla (esos sí acotan `empleados`).
-  const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<Emp[]>([]);
+  const [supervisoresDisponibles, setSupervisoresDisponibles] = useState<SupervisorCatalogo[]>([]);
   // Texto de búsqueda por nombre/código para el selector múltiple de supervisor.
   const [supervisorBusqueda, setSupervisorBusqueda] = useState("");
   // id -> "numeroEmpleado — nombre" para mostrar los chips seleccionados,
@@ -455,6 +458,8 @@ export default function EmpleadosPage() {
   const [fotoPreview, setFotoPreview] = useState<string>();
   const [guardando, setGuardando] = useState(false);
   const guardandoRef = useRef(false);
+  // Cambiar la fecha de contratación con vacaciones registradas: si la vista previa del rebase trae un bloqueo no se puede guardar.
+  const [bloqueoFechaAlta, setBloqueoFechaAlta] = useState(false);
   useEffect(() => () => { if (fotoPreview) URL.revokeObjectURL(fotoPreview); }, [fotoPreview]);
   function seleccionarFoto(file: File | null) {
     if (file && (!file.size || file.size > 5 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(file.type))) {
@@ -578,19 +583,15 @@ export default function EmpleadosPage() {
     });
   }
 
-  // Reutiliza el mismo GET /empleados, con estado=Activo, para poblar el
-  // buscador de Supervisor(es) — no crea una ruta nueva. Se llama desde
-  // dentro de `cargar()` (mismo efecto ya existente abajo) en vez de un
-  // efecto aparte, para no depender de los filtros/búsqueda que el usuario
-  // haya aplicado a la tabla y para no agregar un segundo useEffect con
-  // setState.
+  // Catálogo Activo independiente de los filtros de tabla, sin fotos/documentos.
+  // Los supervisores asignados históricos se siguen agregando desde el detalle.
   const cargarSupervisores = useCallback(async () => {
     const res = await fetch(
-      `/api/empresas/${slug}/empleados?estado=Activo`,
+      `/api/empresas/${slug}/empleados/supervisores`,
     );
     const data = await res.json();
     if (!res.ok) return;
-    const activos: Emp[] = data.empleados ?? [];
+    const activos: SupervisorCatalogo[] = data.empleados ?? [];
     setSupervisoresDisponibles(activos);
     mergeSupervisorLabels(activos);
   }, [slug]);
@@ -598,8 +599,12 @@ export default function EmpleadosPage() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial remota existente
     void cargar();
+  }, [cargar]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- catálogo remoto inicial por empresa
     void cargarSupervisores();
-  }, [cargar, cargarSupervisores]);
+  }, [cargarSupervisores]);
 
   useEffect(() => {
     if (!entrevistaId || entrevistaCargada.current === entrevistaId) return;
@@ -772,6 +777,10 @@ export default function EmpleadosPage() {
     if (guardandoRef.current) return;
     setError("");
     setMensaje("");
+    if (editId && bloqueoFechaAlta) {
+      setError("La nueva fecha de contratación no se puede guardar: revisa el aviso de vacaciones.");
+      return;
+    }
     const { labels, secciones: secs } = faltantesAlta(
       form as unknown as Record<string, unknown>,
     );
@@ -1635,10 +1644,13 @@ export default function EmpleadosPage() {
           </FormSection>
         ) : null}
 
+        {editId ? <CambioFechaAltaVacaciones slug={slug} empleadoId={editId} fechaAlta={form.fechaAlta} onBloqueo={setBloqueoFechaAlta} /> : null}
+
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
           <button
             type="submit"
-            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white"
+            disabled={Boolean(editId) && bloqueoFechaAlta}
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-50"
           >
             {guardando ? "Guardando…" : editId ? "Guardar cambios" : "Crear"}
           </button>
@@ -1835,7 +1847,7 @@ export default function EmpleadosPage() {
                 title="Doble clic: expediente (PDF/fotos)"
                 onDoubleClick={() => setDocsEmp(e)}
               >
-                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} ampliable compacta /></td>
+                <td className="px-3 py-1"><FotoEmpleadoMiniatura slug={slug} empleadoId={e.id} nombre={e.nombre} tieneFoto={e.tieneFoto} ampliable compacta usarMiniatura /></td>
                 <td className="px-3 py-2">{e.codigo}</td>
                 <td className="px-3 py-2">{e.nombre}</td>
                 {mostrarDpi ? (

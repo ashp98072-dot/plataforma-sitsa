@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
   // Turbopack pueda conectarse a él, y el build entero falla. "workerThreads" evalúa esos loaders dentro del mismo
   // proceso de Node, sin depender de poder crear/conectar procesos hijo. Next 16.2.12 admite ambos valores.
   experimental: {
+    // Next 16.3.6: limita el pool de recolección/prerender en Hostinger compartido.
+    // No cambia los workers de loaders de Turbopack ni la concurrencia del servidor.
+    cpus: 1,
     turbopackPluginRuntimeStrategy: "workerThreads",
   },
   serverExternalPackages: ["exceljs", "pdfkit"],

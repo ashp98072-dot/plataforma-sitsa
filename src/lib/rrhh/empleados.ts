@@ -19,6 +19,8 @@ export type Empleado = {
   horaSalidaTeorica: string;
   estado: string;
   docsCount?: number;
+  /** Solo listados: hay registro de fotografía en el expediente. `undefined` = no se determinó (se asume que puede tenerla). */
+  tieneFoto?: boolean;
   dpi?: string;
   nit?: string;
   igss?: string;
@@ -239,6 +241,17 @@ export async function listarEmpleados(
       for (const e of empleados) e.docsCount = counts.get(e.id) ?? 0;
     } catch {
       for (const e of empleados) e.docsCount = 0;
+    }
+    try {
+      // Si esta consulta falla, `tieneFoto` queda sin definir y la miniatura conserva su comportamiento previo.
+      const { empleadosConFoto } = await import("./foto-empleado-existencia");
+      const conFoto = await empleadosConFoto(
+        empresaId,
+        empleados.map((e) => e.id),
+      );
+      for (const e of empleados) e.tieneFoto = conFoto.has(e.id);
+    } catch {
+      /* sin determinar */
     }
   }
   return empleados;
@@ -727,6 +740,9 @@ export async function crearEmpleado(
       await transferirDocumentosAEmpleado(conn, empresaId, data.entrevistaId, empleadoId);
     }
 
+    const { marcarVacacionesDirty } = await import("./vacaciones-sync-estado");
+    await marcarVacacionesDirty(conn, empresaId, empleadoId);
+
     await conn.commit();
   } catch (e) {
     await conn.rollback();
@@ -742,6 +758,7 @@ export async function actualizarEmpleado(
   empresaId: number,
   id: number,
   data: EmpleadoInput,
+  opciones: { usuario?: string | null } = {},
 ): Promise<boolean> {
   await asegurarSchemaEmpleados().catch(() => undefined);
   const f = paramsFicha(data);
@@ -772,6 +789,18 @@ export async function actualizarEmpleado(
   let affectedRows: number;
   try {
     await conn.beginTransaction();
+
+    // RRHH VACACIONES: cambiar `fecha_alta` cambia la BASE de los períodos de vacaciones. Si cambia y el empleado ya tiene saldos o vacaciones,
+    // se REBASEA la serie (reaplicando cronológicamente todos los consumos) en ESTA misma transacción y ANTES del UPDATE de la ficha: si hay un
+    // bloqueo o cualquier invariante falla se lanza un error, todo se revierte y la ficha conserva su fecha_alta. Misma fecha: no hace nada.
+    // Carga diferida: el grafo del rebase (vacaciones, reconstrucción, períodos…) solo se necesita al actualizar; no debe cargarse con cada import de este módulo (p. ej. listarEmpleados).
+    const { rebasearVacacionesEnConexion } = await import("./vacaciones-rebase-db");
+    await rebasearVacacionesEnConexion(conn, empresaId, id, data.fechaAlta, { usuario: opciones.usuario });
+    const [baseSync] = await conn.query<RowDataPacket[]>("SELECT fecha_alta, estado FROM empleados WHERE empresa_id = ? AND id = ? LIMIT 1", [empresaId, id]);
+    if (baseSync[0] && (toIsoDate(baseSync[0].fecha_alta) !== (data.fechaAlta || null) || String(baseSync[0].estado) !== data.estado)) {
+      const { marcarVacacionesDirty } = await import("./vacaciones-sync-estado");
+      await marcarVacacionesDirty(conn, empresaId, id);
+    }
 
     // Si no se debe tocar el supervisor (campo omitido), se conserva el
     // valor actual de la columna leyéndolo dentro de la MISMA transacción

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { bloquearAmbito, exigirEsquemaC2b, type AmbitoContable } from "./ambito";
@@ -31,44 +31,58 @@ export const asientoSchema = z.object({
   }).refine((l) => (l.debe > 0 && l.haber === 0) || (l.haber > 0 && l.debe === 0), "Cada línea debe tener un solo lado positivo.")).min(2).max(500),
 });
 
-export async function registrarAsiento(empresaId: number, usuario: string, input: unknown, ambito: AmbitoContable) {
+function validarAsiento(input: unknown) {
   const parsed = asientoSchema.safeParse(input);
   if (!parsed.success) throw new AsientoInvalido("Datos inválidos: revisa fecha, importes, cuentas y límites de las líneas.");
   const d = parsed.data;
   const debe = d.lineas.reduce((s, l) => s + centavos(l.debe), BigInt(0));
   const haber = d.lineas.reduce((s, l) => s + centavos(l.haber), BigInt(0));
   if (debe !== haber) throw new AsientoInvalido("El asiento no cuadra (debe ≠ haber).");
+  return { d, debe };
+}
+
+/** El llamador posee la transacción y debe revertirla ante cualquier error.
+ * PR A no implementa control de periodos. Su futura validación va antes del INSERT.
+ */
+export async function registrarAsientoTx(conn: PoolConnection, empresaId: number, usuario: string, input: unknown, ambito: AmbitoContable) {
+  const { d, debe } = validarAsiento(input);
   const ids = [...new Set(d.lineas.map((l) => l.cuentaId))].sort((a, b) => a - b);
+  await bloquearAmbito(conn, empresaId, ambito, true);
+  await exigirEsquemaC2b(conn);
+  // Orden estable y current read: no aceptar cuentas desactivadas/borradas mientras se registra.
+  const [cuentas] = await conn.query<RowDataPacket[]>(
+    `SELECT id, empresa_id, entidad_id, activa FROM cont_cuentas
+     WHERE empresa_id = ? AND entidad_id = ? AND id IN (${ids.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
+    [empresaId, ambito.entidadId, ...ids],
+  );
+  if (cuentas.length !== ids.length || cuentas.some((c) => Number(c.empresa_id) !== empresaId || Number(c.entidad_id) !== ambito.entidadId || Number(c.activa) !== 1)) {
+    throw new AsientoInvalido("Todas las cuentas deben existir, estar activas y pertenecer a esta empresa y entidad.");
+  }
+  const [asiento] = await conn.execute<ResultSetHeader>(
+    `INSERT INTO cont_asientos (empresa_id, entidad_id, fecha, numero, glosa, estado, creado_por)
+     VALUES (?, ?, ?, ?, ?, 'Registrado', ?)`,
+    [empresaId, ambito.entidadId, d.fecha, d.numero, d.glosa ?? null, usuario],
+  );
+  const id = Number(asiento.insertId);
+  for (const l of d.lineas) {
+    await conn.execute(
+      "INSERT INTO cont_asiento_detalle (empresa_id, entidad_id, asiento_id, cuenta_id, debe, haber) VALUES (?, ?, ?, ?, ?, ?)",
+      [empresaId, ambito.entidadId, id, l.cuentaId, decimalSql(l.debe), decimalSql(l.haber)],
+    );
+  }
+  await registrarAuditoriaTx(conn, {
+    empresaId, usuario, modulo: "contabilidad", accion: "registrar_asiento",
+    detalle: `Entidad #${ambito.entidadId}; asiento #${id}; ${d.lineas.length} líneas; total por lado en centavos: ${debe}.`,
+  });
+  return id;
+}
+
+export async function registrarAsiento(empresaId: number, usuario: string, input: unknown, ambito: AmbitoContable) {
+  validarAsiento(input); // Mantener rechazo antes de adquirir conexión en la API manual.
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
-    await bloquearAmbito(conn, empresaId, ambito, true);
-    await exigirEsquemaC2b(conn);
-    // Orden estable y current read: no aceptar cuentas desactivadas/borradas mientras se registra.
-    const [cuentas] = await conn.query<RowDataPacket[]>(
-      `SELECT id, empresa_id, entidad_id, activa FROM cont_cuentas
-       WHERE empresa_id = ? AND entidad_id = ? AND id IN (${ids.map(() => "?").join(",")}) ORDER BY id FOR UPDATE`,
-      [empresaId, ambito.entidadId, ...ids],
-    );
-    if (cuentas.length !== ids.length || cuentas.some((c) => Number(c.empresa_id) !== empresaId || Number(c.entidad_id) !== ambito.entidadId || Number(c.activa) !== 1)) {
-      throw new AsientoInvalido("Todas las cuentas deben existir, estar activas y pertenecer a esta empresa y entidad.");
-    }
-    const [asiento] = await conn.execute<ResultSetHeader>(
-      `INSERT INTO cont_asientos (empresa_id, entidad_id, fecha, numero, glosa, estado, creado_por)
-       VALUES (?, ?, ?, ?, ?, 'Registrado', ?)`,
-      [empresaId, ambito.entidadId, d.fecha, d.numero, d.glosa ?? null, usuario],
-    );
-    const id = Number(asiento.insertId);
-    for (const l of d.lineas) {
-      await conn.execute(
-        "INSERT INTO cont_asiento_detalle (empresa_id, entidad_id, asiento_id, cuenta_id, debe, haber) VALUES (?, ?, ?, ?, ?, ?)",
-        [empresaId, ambito.entidadId, id, l.cuentaId, decimalSql(l.debe), decimalSql(l.haber)],
-      );
-    }
-    await registrarAuditoriaTx(conn, {
-      empresaId, usuario, modulo: "contabilidad", accion: "registrar_asiento",
-      detalle: `Entidad #${ambito.entidadId}; asiento #${id}; ${d.lineas.length} líneas; total por lado en centavos: ${debe}.`,
-    });
+    const id = await registrarAsientoTx(conn, empresaId, usuario, input, ambito);
     await conn.commit();
     return id;
   } catch (error) {

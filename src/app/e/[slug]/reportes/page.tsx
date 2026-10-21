@@ -24,7 +24,7 @@ export default async function ReportesPage({ params }: Props) {
           <article key={reporte.ruta} className="flex min-h-40 flex-col rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
             <h2 className="font-semibold">{reporte.nombre}</h2>
             <p className="mt-2 flex-1 text-sm text-[var(--muted)]">{reporte.descripcion}</p>
-            <Link href={`/e/${slug}/reportes/${reporte.ruta}`} className="mt-4 w-fit rounded bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white">Ver reporte</Link>
+            <Link href={`/e/${slug}/reportes/${reporte.ruta}`} prefetch={false} className="mt-4 w-fit rounded bg-[var(--accent)] px-3 py-2 text-sm font-medium text-white">Ver reporte</Link>
           </article>
         ))}
       </section>

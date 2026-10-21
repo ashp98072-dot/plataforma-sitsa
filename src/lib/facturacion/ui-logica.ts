@@ -15,7 +15,7 @@
 export type EstadoAdmin = "Borrador" | "Emitida" | "Anulada";
 export type EstadoFinanciero = "Sin pagos" | "Pago parcial" | "Cobrado";
 
-type ViajeConCliente = { planId: number; clienteId: number | null; cliente?: string | null };
+type ViajeConCliente = { planId: number; clienteId: number | null; cliente?: string | null; moneda?: string | null };
 
 /**
  * Fase D — un viaje solo puede agregarse a la selección si no hay
@@ -34,7 +34,80 @@ export function evaluarSeleccion<T extends ViajeConCliente>(
       mensaje: `Ya seleccionaste viajes de "${primero.cliente ?? "otro cliente"}". Solo puedes facturar viajes de un mismo cliente a la vez — deselecciona esos viajes primero.`,
     };
   }
+  // FACT-2: una factura admite una sola moneda. Si el dato falta en alguno se deja pasar: el servidor decide.
+  if (primero && primero.moneda && viaje.moneda && primero.moneda !== viaje.moneda) {
+    return {
+      accion: "rechazar",
+      mensaje: `Los viajes seleccionados están en ${primero.moneda}; este viaje está en ${viaje.moneda}. Una factura admite una sola moneda — factúralos por separado.`,
+    };
+  }
   return { accion: "agregar" };
+}
+
+/** FACT-2 — «Q1,234.00» para quetzales; «USD 1,234.00» para cualquier otra moneda. */
+export function formatearMonto(valor: number | null | undefined, monedaCodigo = "GTQ"): string {
+  if (valor == null || !Number.isFinite(valor)) return "—";
+  const n = valor.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return monedaCodigo === "GTQ" ? `Q${n}` : `${monedaCodigo} ${n}`;
+}
+
+/**
+ * FACT-2 — huella de la selección (viajes + montos). La vista previa solo habilita «Guardar borrador» mientras su
+ * huella coincida con la de las líneas actuales; si el usuario cambia un monto o quita un viaje, debe previsualizar
+ * de nuevo. El servidor igualmente revalida todo al guardar.
+ */
+export function firmaLineas(lineas: { planId: number; montoAsignado: number; precioIncluyeIva?: boolean | null }[]): string {
+  return lineas
+    .map((l) => `${l.planId}:${l.montoAsignado}:${l.precioIncluyeIva == null ? "?" : l.precioIncluyeIva ? "i" : "a"}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * FACT-2 — huella de TODO lo que determina el resultado de la vista previa: el cliente y, de cada línea, el viaje, el
+ * monto y SU tratamiento de IVA. «Guardar borrador» solo se habilita mientras la huella actual coincida con la de la
+ * vista previa; cambiar el tratamiento de IVA de CUALQUIER viaje (o un monto, o quitar/agregar un viaje) obliga a
+ * previsualizar de nuevo.
+ */
+export function firmaPreview(input: {
+  clienteId: number;
+  lineas: { planId: number; montoAsignado: number; precioIncluyeIva: boolean }[];
+}): string {
+  return `${input.clienteId}#${firmaLineas(input.lineas)}`;
+}
+
+/**
+ * FACT-2 — pie de la tabla de líneas del formulario del borrador. Al CREAR hay vista previa; al EDITAR no la hay (el
+ * servidor recalcula al guardar), así que el texto no puede remitir a una vista previa que no existe.
+ */
+export function etiquetaSumaTarifas(esEdicion: boolean): string {
+  return esEdicion
+    ? "Suma de tarifas (el total con IVA se recalcula al guardar)"
+    : "Suma de tarifas (el total con IVA se calcula en la vista previa)";
+}
+
+/** FACT-2 — tratamiento de IVA de UNA línea. */
+export function etiquetaTratamientoIva(precioIncluyeIva: boolean | null): string {
+  if (precioIncluyeIva == null) return "Sin definir";
+  return precioIncluyeIva ? "IVA incluido" : "IVA agregado";
+}
+
+/**
+ * FACT-2 — resumen del tratamiento de IVA de una factura a partir de SUS LÍNEAS (la fuente de verdad). Nunca finge una
+ * sola política cuando hay mezcla.
+ */
+export function resumenTratamientoIva(lineas: (boolean | null)[]): string {
+  const conocidas = lineas.filter((v): v is boolean => v != null);
+  if (!conocidas.length) return "Sin definir";
+  const incluidas = conocidas.filter(Boolean).length;
+  if (incluidas > 0 && incluidas < conocidas.length) return "Mixto: varía por viaje";
+  if (conocidas.length < lineas.length) return "Mixto: varía por viaje"; // hay líneas sin tratamiento congelado
+  return incluidas === conocidas.length ? "IVA incluido en la tarifa" : "IVA agregado a la tarifa";
+}
+
+/** FACT-2 — un Borrador se «cancela» (libera sus viajes); una factura Emitida se «anula». Mismo endpoint y permiso. */
+export function etiquetaAnular(estadoAdmin: EstadoAdmin): string {
+  return estadoAdmin === "Borrador" ? "Cancelar borrador" : "Anular factura";
 }
 
 /** Fase E — total de la factura: SUM de monto_asignado, solo lectura. */

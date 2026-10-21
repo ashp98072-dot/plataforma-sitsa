@@ -1,7 +1,11 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { FacturaBorradorForm, type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
+import { ConfirmacionesBancariasPanel } from "@/components/facturacion/confirmaciones-bancarias-panel";
+import { BitacoraFacturaPanel } from "@/components/facturacion/bitacora-factura-panel";
+import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -10,6 +14,10 @@ import {
   esBorrador,
   esEmitida,
   interpretarError,
+  etiquetaAnular,
+  etiquetaTratamientoIva,
+  formatearMonto,
+  resumenTratamientoIva,
   puedeOfrecerAnular,
   puedeRegistrarOtroPago,
   validarEmision,
@@ -36,34 +44,57 @@ type Factura = {
   totalPagado: number;
   saldo: number;
   estadoFinanciero: EstadoFinanciero | null;
+  // FACT-2 — desglose congelado (null en facturas anteriores a FACT-2).
+  moneda: string;
+  subtotal: number | null;
+  iva: number | null;
+  porcentajeIva: number | null;
+  precioIncluyeIva: boolean | null;
+  clienteNit: string | null;
 };
 
-type FacturaViajeLinea = { id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number };
+type FacturaViajeLinea = {
+  id: number; planId: number; codigo: string; fechaPlan: string; montoAsignado: number;
+  descripcion: string | null; precioIncluyeIva: boolean | null; base: number | null; iva: number | null; total: number | null;
+  origen: string | null; destino: string | null;
+};
+// FACT-4 — líneas de factura y decisiones de contabilidad congeladas (mismas formas que obtenerFactura).
+type FacturaLineaDetalle = {
+  id: number; orden: number; cantidad: number; descripcion: string; precioUnitario: number; valor: number;
+  clasificacion: "SERVICIO" | "BIEN" | null; precioIncluyeIva: boolean | null; porcentajeIva: number | null;
+  base: number | null; iva: number | null; total: number | null;
+  viajes: { planId: number | null; codigo: string }[];
+};
+type ContabilidadFactura = {
+  modeloLineas: boolean; entidadId: number | null; entidadNombre: string | null;
+  condicionPago: "CREDITO" | "CONTADO" | null;
+  cuentaBancaria: { cuentaBancariaId: number; banco: string; alias: string; referencia: string | null; entidadNombre: string } | null;
+  retencionIva: { aplicadaPct: number; clientePct: number | null; monto: number };
+  esquemaPendiente: boolean;
+};
 type PagoFactura = { id: number; fechaPago: string; monto: number; referencia: string | null; medioPago: string | null; observaciones: string | null; registradoPor: number; creadoEn: string };
+type AnulacionFactura = { fecha: string; usuario: string | null };
 type ClienteCat = { clienteId: number; nombre: string };
 
 type Props = {
   slug: string;
-  puedeCrear: boolean;
   puedeEditar: boolean;
+  puedeEmitir: boolean;
+  puedeAnular: boolean;
+  puedePagar: boolean;
   abrirFacturaId: number | null;
   onAbierta: () => void;
   onCambio: () => void;
 };
 
-function moneda(v: number | null): string {
-  if (v == null) return "—";
-  return `Q${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]";
 const linkCls = "text-[var(--accent)] hover:underline";
 const PAGE_SIZE = 50;
 
-export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, onAbierta, onCambio }: Props) {
+export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, puedePagar, abrirFacturaId, onAbierta, onCambio }: Props) {
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/facturacion/clientes`)
+    fetch(`/api/empresas/${slug}/facturacion/facturas/catalogos`)
       .then((r) => r.json())
       .then((data) => setClientesCat((data.clientes ?? []) as ClienteCat[]))
       .catch(() => undefined);
@@ -124,7 +155,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
 
   // --- Detalle expandible (Fase G) ---
   const [expandido, setExpandido] = useState<number | null>(null);
-  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[] } | null>(null);
+  const [detalle, setDetalle] = useState<{ factura: Factura; viajes: FacturaViajeLinea[]; pagos: PagoFactura[]; anulacion?: AnulacionFactura | null; lineas: FacturaLineaDetalle[]; contabilidad: ContabilidadFactura } | null>(null);
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [editandoBorrador, setEditandoBorrador] = useState(false);
   const [confirmandoEmitir, setConfirmandoEmitir] = useState(false);
@@ -133,6 +164,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
   const [emitiendo, setEmitiendo] = useState(false);
   const [errorEmitir, setErrorEmitir] = useState("");
   const [confirmandoAnular, setConfirmandoAnular] = useState(false);
+  const [motivoAnular, setMotivoAnular] = useState("");
   const [anulando, setAnulando] = useState(false);
   const [errorAnular, setErrorAnular] = useState("");
   const [mostrarPago, setMostrarPago] = useState(false);
@@ -233,10 +265,11 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
     setAnulando(true);
     setErrorAnular("");
     try {
-      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}/anular`, { method: "POST" });
+      const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}/anular`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo: motivoAnular.trim() || undefined }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorAnular(interpretarError(data, "No se pudo anular la factura.")); return; }
       setConfirmandoAnular(false);
+      setMotivoAnular("");
       await refrescarDetalle(facturaId);
     } finally {
       setAnulando(false);
@@ -244,8 +277,8 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
   }
 
   async function registrarPago(facturaId: number) {
-    const monto = Number(pagoMonto);
-    if (!pagoFecha || !Number.isFinite(monto) || monto <= 0) { setErrorPago("Fecha y monto (mayor que cero) son obligatorios."); return; }
+    const monto = parsearMontoCobro(pagoMonto);
+    if (!pagoFecha || monto === null) { setErrorPago("Fecha y monto (mayor que cero) son obligatorios."); return; }
     setRegistrandoPago(true);
     setErrorPago("");
     try {
@@ -328,9 +361,9 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                   <td className="px-2 py-1.5 font-mono text-xs">{f.numeroFactura ?? "—"}</td>
                   <td className="px-2 py-1.5 text-xs">{f.cliente}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{f.fechaEmision ?? "—"}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.montoTotal)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.totalPagado)}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(f.saldo)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.montoTotal, f.moneda)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.totalPagado, f.moneda)}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(f.saldo, f.moneda)}</td>
                   <td className="px-2 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badgeAdminClase(f.estadoAdmin)}`}>{f.estadoAdmin}</span></td>
                   <td className="px-2 py-1.5"><span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badgeFinancieroClase(f.estadoFinanciero)}`}>{f.estadoFinanciero ?? "—"}</span></td>
                   <td className="px-2 py-1.5"><button type="button" className={linkCls} onClick={() => void abrirDetalle(f.id)}>{expandido === f.id ? "Cerrar" : "Ver detalle"}</button></td>
@@ -353,12 +386,18 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                         // desalineado con la fila expandida.
                         <p className="text-xs text-[var(--muted)]">Cargando…</p>
                       ) : editandoBorrador ? (
-                        <FacturaBorradorForm
+                        <FacturaFormulario
                           slug={slug}
                           clienteId={detalle.factura.clienteId}
                           clienteNombre={detalle.factura.cliente}
                           facturaId={detalle.factura.id}
-                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado }))}
+                          detalle={{
+                            moneda: detalle.factura.moneda,
+                            viajes: detalle.viajes.map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva, origen: v.origen, destino: v.destino })),
+                            lineas: detalle.lineas,
+                            contabilidad: detalle.contabilidad,
+                          }}
+                          lineasIniciales={detalle.viajes.map((v): LineaBorrador => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: null, tarifaComercial: null, montoAsignado: v.montoAsignado, precioIncluyeIva: v.precioIncluyeIva ?? true, moneda: detalle.factura.moneda }))}
                           numeroFacturaInicial={detalle.factura.numeroFactura}
                           fechaEmisionInicial={detalle.factura.fechaEmision}
                           observacionesInicial={detalle.factura.observaciones}
@@ -375,9 +414,38 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                                 <li>Cliente: {detalle.factura.cliente}</li>
                                 <li>Fecha emisión: {detalle.factura.fechaEmision ?? "—"}</li>
                                 <li>Estado: {detalle.factura.estadoAdmin}</li>
-                                <li>Monto total: {moneda(detalle.factura.montoTotal)}</li>
-                                <li>Total pagado: {moneda(detalle.factura.totalPagado)}</li>
-                                <li>Saldo: {moneda(detalle.factura.saldo)}</li>
+                                {detalle.factura.estadoAdmin === "Anulada" ? (
+                                  <li className="font-semibold text-rose-600">
+                                    Anulada{detalle.anulacion ? ` el ${detalle.anulacion.fecha}${detalle.anulacion.usuario ? ` por ${detalle.anulacion.usuario}` : ""}` : ""} · documento inmutable
+                                  </li>
+                                ) : null}
+                                {detalle.factura.clienteNit ? <li>NIT: {detalle.factura.clienteNit}</li> : null}
+                                {detalle.factura.subtotal != null && detalle.factura.iva != null ? (
+                                  <>
+                                    <li>Tratamiento de IVA: {resumenTratamientoIva(detalle.viajes.map((v) => v.precioIncluyeIva))}</li>
+                                    <li>Subtotal: {formatearMonto(detalle.factura.subtotal, detalle.factura.moneda)}</li>
+                                    <li>IVA{detalle.factura.porcentajeIva != null ? ` (${detalle.factura.porcentajeIva} %)` : ""}: {formatearMonto(detalle.factura.iva, detalle.factura.moneda)}</li>
+                                  </>
+                                ) : null}
+                                {detalle.contabilidad?.condicionPago ? (
+                                  <li>
+                                    Condición de pago: {detalle.contabilidad.condicionPago === "CONTADO" ? "Contado" : "Crédito"}
+                                    {detalle.contabilidad.cuentaBancaria ? ` · ${detalle.contabilidad.cuentaBancaria.banco} ${detalle.contabilidad.cuentaBancaria.alias}` : ""}
+                                  </li>
+                                ) : null}
+                                {detalle.contabilidad?.entidadNombre ? <li>Entidad emisora: {detalle.contabilidad.entidadNombre}</li> : null}
+                                {detalle.contabilidad?.modeloLineas ? (
+                                  <li>
+                                    Retención de IVA: {detalle.contabilidad.retencionIva.aplicadaPct} %
+                                    {detalle.contabilidad.retencionIva.aplicadaPct ? ` · ${formatearMonto(detalle.contabilidad.retencionIva.monto, detalle.factura.moneda)}` : ""}
+                                    {detalle.contabilidad.retencionIva.clientePct != null && detalle.contabilidad.retencionIva.clientePct !== detalle.contabilidad.retencionIva.aplicadaPct
+                                      ? ` (configurada del cliente: ${detalle.contabilidad.retencionIva.clientePct} %)`
+                                      : ""}
+                                  </li>
+                                ) : null}
+                                <li>Monto total: {formatearMonto(detalle.factura.montoTotal, detalle.factura.moneda)}</li>
+                                <li>Total pagado: {formatearMonto(detalle.factura.totalPagado, detalle.factura.moneda)}</li>
+                                <li>Saldo: {formatearMonto(detalle.factura.saldo, detalle.factura.moneda)}</li>
                                 <li>Estado financiero: {detalle.factura.estadoFinanciero ?? "—"}</li>
                                 <li>Observaciones: {detalle.factura.observaciones ?? "—"}</li>
                               </ul>
@@ -386,21 +454,80 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                                   Editar borrador
                                 </button>
                               ) : null}
+                              <a
+                                href={`/api/empresas/${slug}/facturacion/facturas/${detalle.factura.id}/pdf-demo`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 ml-2 inline-block rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text)] hover:underline"
+                                title={
+                                  detalle.factura.estadoAdmin === "Anulada"
+                                    ? "Representación de prueba con la marca ANULADA, desde el detalle conservado al anular. No es un documento fiscal."
+                                    : "Representación de prueba para validar el formato. No es un documento fiscal."
+                                }
+                              >
+                                Ver PDF demo
+                              </a>
                             </div>
                             <div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. Viajes</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">B. {detalle.contabilidad?.modeloLineas ? "Líneas de factura y viajes" : "Viajes"}</p>
+                              {detalle.contabilidad?.modeloLineas && detalle.lineas?.length ? (
+                                <div className="table-scroll mt-1 rounded border border-[var(--border)]">
+                                  <table className="min-w-full text-left text-[11px]">
+                                    <thead className="bg-[var(--thead)] uppercase text-[var(--muted)]">
+                                      <tr>
+                                        <th className="px-1.5 py-1">Cant.</th>
+                                        <th className="px-1.5 py-1">Descripción</th>
+                                        <th className="px-1.5 py-1 text-right">Precio unit.</th>
+                                        <th className="px-1.5 py-1 text-right">Valor</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {detalle.lineas.map((l) => (
+                                        <tr key={l.id} className="border-t border-[var(--border)] align-top">
+                                          <td className="px-1.5 py-1">{l.cantidad}</td>
+                                          <td className="px-1.5 py-1">
+                                            {l.descripcion}
+                                            <span className="block text-[var(--muted)]">
+                                              {l.clasificacion === "BIEN" ? "Bien" : "Servicio"} · {l.precioIncluyeIva == null ? "IVA —" : etiquetaTratamientoIva(l.precioIncluyeIva)} · Viajes: {l.viajes.map((v) => v.codigo).join(", ") || "—"}
+                                            </span>
+                                          </td>
+                                          <td className="whitespace-nowrap px-1.5 py-1 text-right">{formatearMonto(l.precioUnitario, detalle.factura.moneda)}</td>
+                                          <td className="whitespace-nowrap px-1.5 py-1 text-right">{formatearMonto(l.valor, detalle.factura.moneda)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              ) : null}
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.viajes.map((v) => (
-                                  <li key={v.id}>{v.codigo} · {v.fechaPlan} · {moneda(v.montoAsignado)}</li>
+                                  <li key={v.id}>
+                                    {v.codigo} · {v.fechaPlan} · {formatearMonto(v.montoAsignado, detalle.factura.moneda)}
+                                    {v.descripcion ? <span className="block text-[var(--muted)]">{v.descripcion}</span> : null}
+                                    {v.base != null && v.iva != null && v.total != null ? (
+                                      <span className="block text-[var(--muted)]">
+                                        {etiquetaTratamientoIva(v.precioIncluyeIva)} · Base {formatearMonto(v.base, detalle.factura.moneda)} · IVA {formatearMonto(v.iva, detalle.factura.moneda)} · Total {formatearMonto(v.total, detalle.factura.moneda)}
+                                      </span>
+                                    ) : null}
+                                  </li>
                                 ))}
-                                {!detalle.viajes.length ? <li className="text-[var(--muted)]">Sin viajes.</li> : null}
+                                {!detalle.viajes.length ? (
+                                  <li className="text-[var(--muted)]">
+                                    {detalle.factura.estadoAdmin === "Anulada"
+                                      ? "Esta factura se anuló antes de que se conservara el histórico de sus viajes: no hay detalle disponible."
+                                      : "Sin viajes."}
+                                  </li>
+                                ) : null}
+                                {detalle.factura.estadoAdmin === "Anulada" && detalle.viajes.length ? (
+                                  <li className="pt-1 text-[11px] text-[var(--muted)]">Detalle histórico conservado. Estos viajes quedaron libres y pueden facturarse de nuevo.</li>
+                                ) : null}
                               </ul>
                             </div>
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">C. Pagos</p>
                               <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                                 {detalle.pagos.map((pg) => (
-                                  <li key={pg.id}>{pg.fechaPago} · {moneda(pg.monto)} {pg.medioPago ? `· ${pg.medioPago}` : ""} {pg.referencia ? `· ref. ${pg.referencia}` : ""}</li>
+                                  <li key={pg.id}>{pg.fechaPago} · {formatearMonto(pg.monto, detalle.factura.moneda)} {pg.medioPago ? `· ${pg.medioPago}` : ""} {pg.referencia ? `· ref. ${pg.referencia}` : ""}</li>
                                 ))}
                                 {!detalle.pagos.length ? <li className="text-[var(--muted)]">Sin pagos registrados.</li> : null}
                               </ul>
@@ -408,14 +535,14 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                           </div>
 
                           {/* Fase I: emitir — solo Borrador */}
-                          {puedeEditar && esBorrador(detalle.factura.estadoAdmin) ? (
+                          {puedeEmitir && esBorrador(detalle.factura.estadoAdmin) ? (
                             confirmandoEmitir ? (
                               <div className="space-y-1.5 rounded border border-sky-700/60 bg-sky-950/10 p-2 text-xs">
                                 <p className="font-semibold text-sky-700">Confirmar emisión</p>
                                 <ul className="grid gap-x-4 gap-y-0.5 sm:grid-cols-2">
                                   <li>Cliente: {detalle.factura.cliente}</li>
                                   <li>Viajes: {detalle.viajes.length}</li>
-                                  <li>Total: {moneda(detalle.factura.montoTotal)}</li>
+                                  <li>Total: {formatearMonto(detalle.factura.montoTotal, detalle.factura.moneda)}</li>
                                 </ul>
                                 <div className="grid gap-2 sm:grid-cols-2">
                                   <label className="flex flex-col gap-1">
@@ -442,26 +569,28 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                             )
                           ) : null}
 
+                          <ConfirmacionesBancariasPanel key={`${slug}:${f.id}`} slug={slug} facturaId={f.id} />
+                          <BitacoraFacturaPanel key={`bit:${slug}:${f.id}`} slug={slug} facturaId={f.id} />
                           {/* Fase J: pagos — solo Emitida. HOTFIX PR #114
                               (Hallazgo 3): con saldo 0 no se ofrece registrar
                               otro pago (acción imposible) — se informa
                               "Factura cobrada" en su lugar. */}
                           {esEmitida(detalle.factura.estadoAdmin) ? (
                             <div>
-                              <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{moneda(detalle.factura.saldo)}</span></p>
-                              {puedeCrear && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
+                              <p className="mb-1 text-xs text-[var(--muted)]">Saldo actual: <span className="font-medium text-[var(--text)]">{formatearMonto(detalle.factura.saldo, detalle.factura.moneda)}</span></p>
+                              {puedePagar && puedeRegistrarOtroPago(detalle.factura.estadoAdmin, detalle.factura.saldo) ? (
                                 mostrarPago ? (
                                   <div className="space-y-1.5 rounded border border-[var(--border)] p-2 text-xs">
                                     <div className="grid gap-2 sm:grid-cols-2">
                                       <label className="flex flex-col gap-1">Fecha de pago<input className={inputCls} type="date" value={pagoFecha} onChange={(e) => setPagoFecha(e.target.value)} /></label>
-                                      <label className="flex flex-col gap-1">Monto<input className={inputCls} type="number" step="0.01" min={0} max={detalle.factura.saldo} value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
+                                      <label className="flex flex-col gap-1">Monto<input className={inputCls} type="text" inputMode="decimal" autoComplete="off" placeholder="2,000.00" value={pagoMonto} onChange={(e) => setPagoMonto(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1">Medio de pago<input className={inputCls} value={pagoMedio} onChange={(e) => setPagoMedio(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1">Referencia<input className={inputCls} value={pagoReferencia} onChange={(e) => setPagoReferencia(e.target.value)} /></label>
                                       <label className="flex flex-col gap-1 sm:col-span-2">Observaciones<input className={inputCls} value={pagoObs} onChange={(e) => setPagoObs(e.target.value)} /></label>
                                     </div>
                                     {errorPago ? <p className="text-rose-500">{errorPago}</p> : null}
                                     <div className="flex gap-2 pt-1">
-                                      <button type="button" disabled={registrandoPago} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
+                                      <button type="button" disabled={registrandoPago || parsearMontoCobro(pagoMonto) === null || !pagoFecha} className="rounded bg-emerald-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void registrarPago(f.id)}>
                                         {registrandoPago ? "Registrando…" : "Guardar pago"}
                                       </button>
                                       <button type="button" disabled={registrandoPago} className="rounded border border-[var(--border)] px-2.5 py-1 text-[var(--text)]" onClick={() => { setMostrarPago(false); setErrorPago(""); }}>Cancelar</button>
@@ -477,11 +606,12 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                           ) : null}
 
                           {/* Fase K: anular — Borrador o Emitida, nunca ya Anulada */}
-                          {puedeEditar && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
+                          {puedeAnular && puedeOfrecerAnular(detalle.factura.estadoAdmin) ? (
                             confirmandoAnular ? (
                               <div className="space-y-1.5 rounded border border-rose-700/60 bg-rose-950/10 p-2 text-xs">
-                                <p className="font-semibold text-rose-600">Confirmar anulación</p>
-                                <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse.</p>
+                                <p className="font-semibold text-rose-600">Confirmar: {etiquetaAnular(detalle.factura.estadoAdmin).toLowerCase()}</p>
+                                <p>Si la factura no tiene pagos, los viajes quedarán libres para volver a facturarse y la factura anulada conservará su detalle.</p>
+                                <input type="text" maxLength={500} value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} placeholder="Motivo de la anulación (opcional, queda en la bitácora)" aria-label="Motivo de la anulación" className="w-full rounded border border-[var(--border)] bg-[var(--input)] p-1.5" />
                                 {errorAnular ? <p className="text-rose-500">{errorAnular}</p> : null}
                                 <div className="flex gap-2 pt-1">
                                   <button type="button" disabled={anulando} className="rounded bg-rose-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void anular(f.id)}>
@@ -491,7 +621,7 @@ export function FacturasPanel({ slug, puedeCrear, puedeEditar, abrirFacturaId, o
                                 </div>
                               </div>
                             ) : (
-                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>Anular factura</button>
+                              <button type="button" className="text-xs text-rose-500 hover:underline" onClick={() => setConfirmandoAnular(true)}>{etiquetaAnular(detalle.factura.estadoAdmin)}</button>
                             )
                           ) : null}
                         </div>

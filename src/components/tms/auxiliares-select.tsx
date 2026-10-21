@@ -8,6 +8,8 @@ export type AuxiliarOpt = {
   id: number;
   codigo: string;
   nombre: string;
+  /** TMS-PROGRAMACION-HABILITACIONES-1 — mismo criterio que PilotoOpt.habilitacionEstado. */
+  habilitacionEstado?: "HABILITADO" | "CAPACITACION" | null;
 };
 
 type Props = {
@@ -106,6 +108,12 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
     return auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`;
   }
 
+  // TMS-PROGRAMACION-HABILITACIONES-1 — advertencia NO bloqueante para cada auxiliar YA elegido cuya
+  // habilitación explícita es CAPACITACION — nunca impide agregarlo ni guardar.
+  const enCapacitacion = empleadoIds
+    .map((id) => auxiliares.find((a) => a.id === id))
+    .filter((a): a is AuxiliarOpt => a?.habilitacionEstado === "CAPACITACION");
+
   // PLAN-FORM-SELECTS-DROPDOWN-STACKING: mismo ajuste que PlacaSelect/
   // PilotoSelect — ver el comentario en placa-select.tsx. Este campo
   // también puede tapar (o ser tapado por) lo que venga después en el
@@ -183,6 +191,12 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
 
       {open && !lleno && q.length > 0 && filtered.length === 0 ? <span className="mt-0.5 block text-[10px]">No se encontraron empleados.</span> : null}
 
+      {enCapacitacion.length ? (
+        <p className="mt-1 rounded bg-amber-900/20 px-2 py-1 text-[11px] text-amber-300">
+          ⚠ {enCapacitacion.map((a) => a.nombre).join(", ")} {enCapacitacion.length === 1 ? "está habilitado" : "están habilitados"} como auxiliar en capacitación.
+        </p>
+      ) : null}
+
       {open && !lleno && filtered.length > 0 ? (
         <ul
           id={`${listId}-list`}
@@ -204,13 +218,20 @@ export function AuxiliaresSelect({ auxiliares, empleadoIds, nombresLibres, max, 
                   onClick={() => agregarId(a)}
                 >
                   <span className={ocupacion ? "text-[var(--muted)]" : "text-[var(--text)]"}>{a.nombre}</span>
-                  {ocupacion ? (
-                    <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                      Asignado · {textoOcupacion(ocupacion)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-[var(--muted)]">{a.codigo}</span>
-                  )}
+                  <span className="flex items-center gap-1">
+                    {a.habilitacionEstado === "CAPACITACION" ? (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                        En capacitación
+                      </span>
+                    ) : null}
+                    {ocupacion ? (
+                      <span className="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                        Asignado · {textoOcupacion(ocupacion)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-[var(--muted)]">{a.codigo}</span>
+                    )}
+                  </span>
                 </button>
               </li>
             );

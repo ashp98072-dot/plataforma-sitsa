@@ -104,7 +104,130 @@ export const FLOTA_SUBMODULO_LABEL: Record<FlotaSubmodulo, string> = {
  * src/lib/tms/viaticos.ts, src/lib/tms/cierre-viaje.ts y
  * src/lib/tenant.ts (requireTenantViaticosAutorizar/Pagar/ViajesCerrar).
  */
+/**
+ * CONTROL DE ENTREGA DE DOCUMENTOS (PR 1 — base común, ver src/lib/entregas/): filas propias de usuario_modulo (sin SQL),
+ * acción `editar` = puede actuar. NINGÚN rol las trae por defecto (decisión de negocio: asignación manual desde Usuarios);
+ * Admin conserva el bypass administrativo del sistema. Todas viven dentro de TMS (Fondos, Gastos y Compras dependen de "tms").
+ *   - documentos_entregas: base «Ver» del grupo en la matriz (activar una acción la activa).
+ *   - fondos/gastos/compras_entrega_emitir: actuar por el área INICIAL del módulo (Operaciones / Compras).
+ *   - entregas_area_tesoreria / entregas_area_contabilidad: actuar por esas áreas en los tres módulos.
+ *   - entregas_presencial: registrar recepciones presenciales (persona sin usuario, firma dibujada).
+ *   - entregas_anular: anular entregas pendientes emitidas por otra persona.
+ */
+export const PERMISOS_ENTREGA = [
+  "documentos_entregas",
+  "fondos_entrega_emitir",
+  "gastos_entrega_emitir",
+  "compras_entrega_emitir",
+  "entregas_area_tesoreria",
+  "entregas_area_contabilidad",
+  "entregas_presencial",
+  "entregas_anular",
+] as const;
+export type PermisoEntrega = (typeof PERMISOS_ENTREGA)[number];
+export function esPermisoEntrega(m: string): m is PermisoEntrega {
+  return (PERMISOS_ENTREGA as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_ENTREGA: Record<PermisoEntrega, string> = {
+  documentos_entregas: "Control de entrega de documentos",
+  fondos_entrega_emitir: "Control de entrega: Operaciones (Solicitudes de fondo)",
+  gastos_entrega_emitir: "Control de entrega: Operaciones (Gastos operativos)",
+  compras_entrega_emitir: "Control de entrega: Compras (Requerimientos)",
+  entregas_area_tesoreria: "Control de entrega: actuar por Tesorería",
+  entregas_area_contabilidad: "Control de entrega: actuar por Contabilidad",
+  entregas_presencial: "Control de entrega: recepción presencial",
+  entregas_anular: "Control de entrega: anular entregas de otros",
+};
+
+/**
+ * LIQUIDACIÓN DE VIAJES (TMS): filas propias dentro de "programacion" (mismo patrón que `viajes_cerrar` y PERMISOS_ENTREGA),
+ * `editar` = puede actuar. NINGUNA se concede por rol: se asignan manualmente desde Usuarios. FASE 2 solo declara la que tiene
+ * endpoint/UI; las demás (cargos, configuración) se declararán con su fase.
+ *   - viajes_confirmar_reporte: confirmar que el piloto entregó su reporte (REPORTE_RECIBIDO). No cierra ni liquida.
+ *   - viajes_liquidar: liquidar / liquidar nuevamente (Fase 3). No cierra, no factura, no crea cargos ni mueve fondos.
+ *   - viajes_reabrir_liquidacion: reabrir una liquidación (LIQUIDADO → EN_AJUSTE) con motivo (Fase 3). Permiso aparte de liquidar.
+ *   - viajes_cargos_adicionales: crear/editar/anular/reactivar cargos adicionales FACTURABLES del viaje (Fase 4). Es un permiso
+ *     COMERCIAL aparte: no da cerrar, liquidar ni editar la programación; ver cargos solo requiere poder ver el viaje.
+ */
+export const PERMISOS_LIQUIDACION_VIAJE = [
+  "viajes_confirmar_reporte",
+  "viajes_liquidar",
+  "viajes_reabrir_liquidacion",
+  "viajes_cargos_adicionales",
+] as const;
+export type PermisoLiquidacionViaje = (typeof PERMISOS_LIQUIDACION_VIAJE)[number];
+export function esPermisoLiquidacionViaje(m: string): m is PermisoLiquidacionViaje {
+  return (PERMISOS_LIQUIDACION_VIAJE as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_LIQUIDACION_VIAJE: Record<PermisoLiquidacionViaje, string> = {
+  viajes_confirmar_reporte: "Viajes: confirmar reporte recibido",
+  viajes_liquidar: "Viajes: liquidar",
+  viajes_reabrir_liquidacion: "Viajes: reabrir liquidación",
+  viajes_cargos_adicionales: "Viajes: cargos adicionales facturables",
+};
+
+/**
+ * CUENTAS POR PAGAR (CxP, M-3A): filas propias dentro de "contabilidad" (mismo patrón que PERMISOS_LIQUIDACION_VIAJE), `ver` = puedeVer y
+ * `editar` = puede actuar. NINGUNA se concede por rol (ni siquiera a Contabilidad): un Admin las asigna desde Usuarios; Admin las recibe por catálogo.
+ *   - cxp_facturas: ver / registrar facturas de proveedores.
+ *   - cxp_anular: anular una factura de proveedor (permiso aparte de registrar).
+ *   - cxp_proveedor_fiscal: ver / editar la configuración fiscal-contable del proveedor (régimen, ISR, cuentas).
+ *   - cxp_pagos (M-3B1): ver / registrar pagos a proveedores (aplicados a una o varias facturas).
+ *   - cxp_reversar_pago (M-3B1): reversar un pago (permiso aparte de registrar).
+ *   - cxp_bitacora: ver la bitácora (auditoría) de movimientos de CxP del libro; permiso aparte de ver facturas/pagos.
+ */
+export const PERMISOS_CXP = ["cxp_facturas", "cxp_anular", "cxp_proveedor_fiscal", "cxp_pagos", "cxp_reversar_pago", "cxp_bitacora"] as const;
+export type PermisoCxp = (typeof PERMISOS_CXP)[number];
+export function esPermisoCxp(m: string): m is PermisoCxp {
+  return (PERMISOS_CXP as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_CXP: Record<PermisoCxp, string> = {
+  cxp_facturas: "CxP: facturas de proveedores",
+  cxp_anular: "CxP: anular facturas de proveedores",
+  cxp_proveedor_fiscal: "CxP: configuración fiscal del proveedor",
+  cxp_pagos: "CxP: pagos a proveedores",
+  cxp_reversar_pago: "CxP: reversar pagos a proveedores",
+  cxp_bitacora: "CxP: bitácora de movimientos",
+};
+
+/**
+ * CUENTAS POR COBRAR (Contabilidad → CxC): filas propias dentro de "contabilidad" (mismo patrón que PERMISOS_CXP). NINGUNA se concede por rol
+ * (Admin las recibe por catálogo). NO dan acceso a Facturación: la pantalla de CxC lee fact_facturas/fact_pagos por su propio guard.
+ *   - cxc_cuentas: ver documentos (facturas emitidas/anuladas) y cobros de CxC.
+ *   - cxc_bitacora: ver la bitácora (auditoría) de movimientos de CxC del libro; permiso aparte de ver documentos.
+ *   - cxc_cobros: registrar un cobro (fact_pagos) contra una factura emitida; exige también poder ver CxC en la UI.
+ *   - cxc_anular_cobro (CxC-1): anular un cobro multi-factura (fact_cobros); permiso aparte de registrar, como CxP separa registrar y reversar.
+ */
+export const PERMISOS_CXC = ["cxc_cuentas", "cxc_cobros", "cxc_bitacora", "cxc_anular_cobro"] as const;
+export type PermisoCxc = (typeof PERMISOS_CXC)[number];
+export function esPermisoCxc(m: string): m is PermisoCxc {
+  return (PERMISOS_CXC as readonly string[]).includes(m);
+}
+/**
+ * REPORTES CONTABLES (M-4): filas propias dentro de "contabilidad", una por reporte (ningún rol las trae por defecto; Admin las recibe por catálogo).
+ * Son de SOLO LECTURA sobre cont_asientos / cont_asiento_detalle / cont_cuentas. No conceden registrar asientos ni ver CxC/CxP.
+ */
+export const PERMISOS_CONT_REPORTES = ["contabilidad_diario", "contabilidad_mayor", "contabilidad_balance"] as const;
+export type PermisoContReporte = (typeof PERMISOS_CONT_REPORTES)[number];
+export function esPermisoContReporte(m: string): m is PermisoContReporte {
+  return (PERMISOS_CONT_REPORTES as readonly string[]).includes(m);
+}
+const LABEL_PERMISO_CONT_REPORTE: Record<PermisoContReporte, string> = {
+  contabilidad_diario: "Contabilidad: Libro Diario",
+  contabilidad_mayor: "Contabilidad: Libro Mayor",
+  contabilidad_balance: "Contabilidad: Balance de comprobación",
+};
+
+const LABEL_PERMISO_CXC: Record<PermisoCxc, string> = {
+  cxc_cuentas: "CxC: cuentas por cobrar",
+  cxc_cobros: "CxC: registrar cobros",
+  cxc_bitacora: "CxC: bitácora de movimientos",
+  cxc_anular_cobro: "CxC: anular cobros aplicados",
+};
+
 export const PLATAFORMA_PERMISIBLES = [
+  "cotizaciones",
+  "proveedor_portales",
   "compras_proveedores",
   "compras_requerimientos",
   // COMPRAS-FASE-4-AUTORIZACION: autorizar/rechazar un Requerimiento de
@@ -249,7 +372,25 @@ export const PLATAFORMA_PERMISIBLES = [
   // defecto. Gatea sobre el módulo de empresa "flota" (ver
   // moduloEmpresaDelPermiso), igual que el resto de Flota/Predios.
   "flota_combustible",
+  // FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: acción especializada de Vehículos (acción `editar`); su etiqueta, descripción y dependencias viven en el catálogo central
+  // (permisos-catalogo.ts, Flota / Predios → Vehículos). Mismo patrón que flota_combustible/viajes_cerrar: NO se agrega a FLOTA_SUBMODULOS a propósito (ese arreglo se
+  // reparte completo a varios roles y se lo habría dado a todos). Ningún rol lo trae por defecto; un Admin lo asigna desde Usuarios. Sin él, solo la empresa propietaria
+  // edita un vehículo; con él, además, los vehículos compartidos accesibles desde la empresa activa (la propiedad nunca cambia). Gatea sobre el módulo de empresa "flota".
+  "flota_vehiculos_otras_empresas",
+  // CONTROL DE ENTREGA DE DOCUMENTOS: ver PERMISOS_ENTREGA arriba (ningún rol por defecto).
+  ...PERMISOS_ENTREGA,
+  // LIQUIDACIÓN DE VIAJES: ver PERMISOS_LIQUIDACION_VIAJE arriba (ningún rol por defecto).
+  ...PERMISOS_LIQUIDACION_VIAJE,
+  // CUENTAS POR PAGAR (M-3A): ver PERMISOS_CXP arriba (ningún rol por defecto).
+  ...PERMISOS_CXP,
+  // CUENTAS POR COBRAR (Contabilidad): ver PERMISOS_CXC arriba (ningún rol por defecto).
+  ...PERMISOS_CXC,
+  // REPORTES CONTABLES (M-4): ver PERMISOS_CONT_REPORTES arriba (ningún rol por defecto).
+  ...PERMISOS_CONT_REPORTES,
 ] as const;
+
+/** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
+export const PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS = "flota_vehiculos_otras_empresas";
 
 export type PlataformaPermisible = (typeof PLATAFORMA_PERMISIBLES)[number];
 
@@ -332,11 +473,17 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
-  if (m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
+  if (m === "cotizaciones" || m === "proveedor_portales" || m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
   if (m === "multas") return "tms";
-  if (m === "flota_combustible") return "flota";
+  if (esPermisoEntrega(m)) return "tms";
+  if (esPermisoLiquidacionViaje(m)) return "tms";
+  if (esPermisoCxp(m)) return "contabilidad";
+  if (esPermisoCxc(m)) return "contabilidad";
+  if (esPermisoContReporte(m)) return "contabilidad";
+  if (m === "flota_combustible") return "tms";
+  if (m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
     m === "viaticos" ||
     m === "viaticos_autorizar" ||
@@ -389,7 +536,12 @@ export function labelPermiso(modulo: string): string {
   if (modulo === "gastos") return "Gastos operativos / Solicitudes de fondo";
   if (modulo === "gastos_autorizar") return "Solicitudes de fondo: autorizar y rechazar";
   if (modulo === "gastos_operativos_autorizar") return "Gastos operativos: autorizar y rechazar";
-  if (modulo === "flota_combustible") return "Flota: revisar/aprobar combustible";
+  if (modulo === "flota_combustible") return "Operaciones: Combustibles";
+  if (esPermisoEntrega(modulo)) return LABEL_PERMISO_ENTREGA[modulo];
+  if (esPermisoLiquidacionViaje(modulo)) return LABEL_PERMISO_LIQUIDACION_VIAJE[modulo];
+  if (esPermisoCxp(modulo)) return LABEL_PERMISO_CXP[modulo];
+  if (esPermisoCxc(modulo)) return LABEL_PERMISO_CXC[modulo];
+  if (esPermisoContReporte(modulo)) return LABEL_PERMISO_CONT_REPORTE[modulo];
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -466,6 +618,8 @@ export const GRUPOS_PERMISOS: {
       "viaticos_liquidar",
       "viaticos_comprobantes",
       "viajes_cerrar",
+      ...PERMISOS_LIQUIDACION_VIAJE,
+      ...PERMISOS_ENTREGA,
     ],
   },
   {
@@ -483,7 +637,7 @@ export const GRUPOS_PERMISOS: {
     id: "contabilidad",
     titulo: "Permisos Contabilidad / Facturación",
     descripcion: "Cuentas, asientos, cartera y facturación de la empresa.",
-    modulos: ["contabilidad", "facturacion"],
+    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP, ...PERMISOS_CONT_REPORTES],
   },
   {
     id: "otros",
@@ -622,7 +776,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "rrhh", "flota", "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -725,9 +879,11 @@ export function mergePermisosConCatalogo(
       }
     }
   }
-  return catalogoPermisosRol(rol).map(
-    (m) => map.get(m) ?? permisoVacio(m),
-  );
+  const catalogo = catalogoPermisosRol(rol);
+  return [
+    ...catalogo.map((m) => map.get(m) ?? permisoVacio(m)),
+    ...[...map.values()].filter((p) => !catalogo.includes(p.modulo)),
+  ];
 }
 
 export function tienePermiso(
@@ -736,6 +892,11 @@ export function tienePermiso(
   accion: AccionPermiso,
 ): boolean {
   const p = permisos.find((x) => x.modulo === modulo);
+  if (p && permisos.some(x => x.modulo === "permisos_acciones_v2" && x.puedeVer)) {
+    // Una matriz V2 tiene denegaciones explícitas; no inferir lectura ni
+    // volver a conceder un submódulo negado desde el paraguas Flota.
+    return p[accion === "ver" ? "puedeVer" : accion === "crear" ? "puedeCrear" : accion === "editar" ? "puedeEditar" : "puedeEliminar"];
+  }
   if (p) {
     switch (accion) {
       case "ver":
@@ -809,6 +970,8 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&
       p.modulo !== "cotizaciones_costeo" &&
+      p.modulo !== "cotizaciones" &&
+      p.modulo !== "proveedor_portales" &&
       p.modulo !== "cotizaciones_ajustes" &&
       p.modulo !== "rrhh_requerimientos" &&
       p.modulo !== "rrhh_requerimientos_autorizar" &&
@@ -825,7 +988,13 @@ export function modulosPlataformaDesdePermisos(
       p.modulo !== "gastos" &&
       p.modulo !== "gastos_autorizar" &&
       p.modulo !== "gastos_operativos_autorizar" &&
-      p.modulo !== "flota_combustible"
+      p.modulo !== "flota_combustible" &&
+      p.modulo !== PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS &&
+      !esPermisoEntrega(p.modulo) &&
+      !esPermisoLiquidacionViaje(p.modulo) &&
+      !esPermisoCxp(p.modulo) &&
+      !esPermisoCxc(p.modulo) &&
+      !esPermisoContReporte(p.modulo)
     ) {
       out.add(p.modulo);
     }
@@ -889,7 +1058,4 @@ export const FLOTA_NAV: {
   { sub: "flota_lecturas", label: "Lecturas", path: "lecturas" },
   { sub: "flota_reportes", label: "Reportes flota", path: "reportes" },
   { sub: "flota_piloto", label: "Registrar viaje", path: "piloto" },
-  // FLOTA-COMBUSTIBLE-1 (Fase 2): revisión/aprobación de cargas de
-  // combustible del piloto.
-  { sub: "flota_combustible", label: "Combustible", path: "combustible" },
 ];

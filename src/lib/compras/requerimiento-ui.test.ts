@@ -100,7 +100,7 @@ it("ruta antigua redirige y las páginas y menú conservan gates independientes"
   expect(landing).toContain('redirect(`/e/${slug}/compras/requerimientos`)');
   expect(leer("src/app/e/[slug]/compras/requerimientos/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_requerimientos")');
   expect(leer("src/app/e/[slug]/compras/proveedores/page.tsx")).toContain('obtenerAccesoComprasPagina(slug, "compras_proveedores")');
-  expect(leer("src/components/app-shell.tsx")).toContain('tienePermiso(permisos, "compras_requerimientos", "ver")');
+  expect(leer("src/components/app-shell.tsx")).toContain('tienePermisoBase(permisos, "compras_requerimientos")');
 });
 
 describe("COMPRAS-PROVEEDOR-INLINE (sección 5) — permisos: NO se concede ninguno nuevo, se reutiliza compras_proveedores", () => {

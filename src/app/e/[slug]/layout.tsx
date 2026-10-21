@@ -13,6 +13,7 @@ import {
 } from "@/lib/permisos-shared";
 import { derivarModulosEmpresa, modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
+import { CATALOGO_PERMISOS, tienePermisoBase } from "@/lib/permisos-catalogo";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,9 @@ export default async function EmpresaLayout({ children, params }: Props) {
   const empresaMods = derivarModulosEmpresa(baseEmpresaMods);
 
   const extraMods = modulosPlataformaDesdePermisos(permisos);
+  // Capacidad de empresa para alojar enlaces granulares, NO un grant tms:*.
+  const tieneOperaciones = empresaMods.includes("tms") && CATALOGO_PERMISOS.some(m =>
+    m.area === "operaciones" && tienePermisoBase(permisos, m.id));
   const moduloVisible = (m: Modulo) => {
     if (!(empresaMods.includes(m) || m === "gerencia")) return false;
     if (
@@ -78,6 +82,7 @@ export default async function EmpresaLayout({ children, params }: Props) {
           ...new Set([
             ...rolMods.filter(moduloVisible),
             ...extraMods.filter(moduloVisible),
+            ...(tieneOperaciones ? ["tms" as Modulo] : []),
           ]),
         ] as Modulo[]);
 

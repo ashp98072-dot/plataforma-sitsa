@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ listarParadasDePlanes: vi.fn(() => Promise.resolve(new Map())) }));
 vi.mock("@/lib/rrhh/export-files", () => ({ tablaAExcel: vi.fn(async () => Buffer.from("xlsx")), tablaAPdf: vi.fn(async () => Buffer.from("pdf")) }));
-vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionOTms: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionExportar: vi.fn() }));
 vi.mock("@/lib/tms/reporte-viajes-historial-pdf", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tms/reporte-viajes-historial-pdf")>()),
   reporteViajesHistorialPdf: vi.fn(async () => Buffer.from("pdf")),
@@ -12,7 +12,7 @@ vi.mock("@/lib/tms/reporte-viajes-historial-pdf", async (importOriginal) => ({
 
 import { query } from "@/lib/db";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import { calcularKpisReporte, obtenerReporteViajes, resolverTcReporte, type PlanReporte } from "./reportes-viajes";
 import { filaOperativa, HEADERS_OPERATIVOS, reporteViajesHistorialPdf } from "./reporte-viajes-historial-pdf";
 import { etiquetaOrigenTc } from "./tc-viaje-shared";
@@ -171,7 +171,8 @@ describe("obtenerReporteViajes — TC en el contrato del reporte", () => {
       return [];
     }) as never);
     expect(await primero()).toMatchObject({ tcPlaca: null, tcOrigen: null });
-    expect(n).toBe(2);
+    // PROGRAMACION-VEHICULO-SOLICITADO: respaldo escalonado (TC+vehículo solicitado → solo TC → base).
+    expect(n).toBe(3);
   });
   it("otro error de BD NO se traga", async () => {
     vi.mocked(query).mockImplementation((async () => { throw Object.assign(new Error("boom"), { code: "ER_LOCK_DEADLOCK" }); }) as never);
@@ -195,7 +196,7 @@ const plan = (over: Partial<PlanReporte> = {}) => ({
 
 describe("exportación Excel de viajes", () => {
   beforeEach(() => {
-    vi.mocked(requireTenantProgramacionOTms).mockResolvedValue({ empresa: { id: 7, nombre: "ACME" }, session: {} } as never);
+    vi.mocked(requireTenantProgramacionExportar).mockResolvedValue({ empresa: { id: 7, nombre: "ACME" }, session: {} } as never);
   });
   const exportarConPlanes = async (planes: PlanReporte[]) => {
     vi.mocked(query).mockImplementation((async (sql: string) => {
@@ -238,8 +239,12 @@ describe("exportación Excel de viajes", () => {
     expect(r.status).toBe(200);
     const arg = vi.mocked(tablaAExcel).mock.calls[0][0] as { headers: string[]; rows: string[][] };
     const i = arg.headers.indexOf("TC / Caja / Remolque");
-    expect(i).toBe(arg.headers.length - 2);
-    expect(arg.headers.at(-1)).toBe("Origen TC");
+    // PROGRAMACION-VEHICULO-SOLICITADO agrega "Vehículo solicitado" DESPUÉS (las columnas TC no se mueven entre sí);
+    // TMS FASE 5 agrega al FINAL «Cargos adicionales», «Subtotal comercial» y «Estado liquidación» (nada se reubica).
+    expect(i).toBe(arg.headers.length - 6);
+    expect(arg.headers[i + 1]).toBe("Origen TC");
+    expect(arg.headers[i + 2]).toBe("Vehículo solicitado");
+    expect(arg.headers.slice(-3)).toEqual(["Cargos adicionales", "Subtotal comercial (antes de impuestos)", "Estado liquidación"]);
     expect(arg.rows.map((f) => [f[i], f[i + 1]])).toEqual([["TC-456XYZ", "Propio"], ["TX-900", "Tercerizado"]]);
     expect(arg.rows.every((f) => f.length === arg.headers.length)).toBe(true);
   });
@@ -247,11 +252,12 @@ describe("exportación Excel de viajes", () => {
 
 describe("exportación PDF de viajes", () => {
   it("la tabla operativa incluye 'TC / Caja / Remolque' (al final del arreglo; no se mueven las demás)", () => {
-    expect(HEADERS_OPERATIVOS.at(-1)).toBe("TC / Caja / Remolque");
+    // PROGRAMACION-VEHICULO-SOLICITADO agrega "Vehículo solicitado" al final (índice 17); el TC sigue en el 16.
+    expect(HEADERS_OPERATIVOS[16]).toBe("TC / Caja / Remolque");
     expect(HEADERS_OPERATIVOS.slice(0, 5)).toEqual(["Fecha", "Código", "Cliente", "Ruta", "Unidad / placa"]);
-    expect(filaOperativa(plan({ tcPlaca: "TC-456XYZ", tcOrigen: "INTERNO" })).at(-1)).toBe("TC-456XYZ");
-    expect(filaOperativa(plan({ tcPlaca: "TX-900", tcOrigen: "EXTERNO" })).at(-1)).toBe("TX-900 (Tercerizado)");
-    expect(filaOperativa(plan()).at(-1)).toBe("—");
+    expect(filaOperativa(plan({ tcPlaca: "TC-456XYZ", tcOrigen: "INTERNO" }))[16]).toBe("TC-456XYZ");
+    expect(filaOperativa(plan({ tcPlaca: "TX-900", tcOrigen: "EXTERNO" }))[16]).toBe("TX-900 (Tercerizado)");
+    expect(filaOperativa(plan())[16]).toBe("—");
   });
   it("el layout compacta el TC junto a la unidad (misma fila, sin agregar filas ni ensanchar la tabla)", () => {
     const src = readFileSync("src/lib/tms/reporte-viajes-historial-pdf.ts", "utf8");

@@ -98,6 +98,21 @@ CREATE TABLE IF NOT EXISTS empleados (
   CONSTRAINT fk_emp_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS rrhh_vacaciones_sync_estado (
+  empresa_id INT NOT NULL,
+  id_empleado INT NOT NULL,
+  ultima_sync_fecha DATE NULL,
+  dirty TINYINT(1) NOT NULL DEFAULT 1,
+  generacion BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  politica_fingerprint VARCHAR(100) NULL,
+  fecha_alta_sync DATE NULL,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (empresa_id, id_empleado),
+  CONSTRAINT chk_vsync_dirty CHECK (dirty IN (0, 1)),
+  CONSTRAINT fk_vsync_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_vsync_empleado FOREIGN KEY (empresa_id, id_empleado) REFERENCES empleados(empresa_id, id) ON DELETE CASCADE ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
 CREATE TABLE IF NOT EXISTS rrhh_descuentos (
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
@@ -654,6 +669,12 @@ CREATE TABLE IF NOT EXISTS tms_planes_viaje (
   tc_vehiculo_id INT NULL,
   tc_placa_historica VARCHAR(40) NULL,
   tc_externo_placa VARCHAR(40) NULL,
+  -- PROGRAMACION-VEHICULO-SOLICITADO: vehículo/capacidad solicitado comercialmente por el cliente
+  -- (perfil de tms_cotizacion_costeo_perfiles, FK compuesta más abajo) + fotografía de su nombre.
+  -- Independiente de la unidad real (unidad_id) y de tarifa_comercial. NULL en viajes históricos.
+  -- Ver migrate-2026-10-programacion-vehiculo-solicitado.sql.
+  vehiculo_solicitado_perfil_id INT NULL,
+  vehiculo_solicitado_nombre VARCHAR(120) NULL,
   piloto_id INT NULL,
   auxiliar_id INT NULL,
   fecha_plan DATE NOT NULL,
@@ -1491,7 +1512,10 @@ CREATE TABLE IF NOT EXISTS tms_gastos_operativos (
   INDEX idx_gastos_empleado (empresa_id, empleado_id),
   CONSTRAINT fk_gasto_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_gasto_empleado_ambito FOREIGN KEY (empresa_id, empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_gasto_vehiculo_ambito FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT,
+  -- Vehículos propios o compartidos (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
+  -- Ver sql/migrate-2026-10-fondos-vehiculos-compartidos.sql.
+  INDEX idx_gastos_vehiculo_id (vehiculo_id),
+  CONSTRAINT fk_gasto_vehiculo FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT,
   CONSTRAINT fk_gasto_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_gasto_plan_ambito FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1560,7 +1584,10 @@ CREATE TABLE IF NOT EXISTS tms_solicitud_fondo_lineas (
   CONSTRAINT fk_fondolin_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_fondolin_solicitud_ambito FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_fondolin_empleado_ambito FOREIGN KEY (empresa_id, empleado_id) REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_fondolin_vehiculo_ambito FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos (empresa_id, id) ON DELETE RESTRICT,
+  -- Vehículos propios o compartidos (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
+  -- Ver sql/migrate-2026-10-fondos-vehiculos-compartidos.sql.
+  INDEX idx_fondolin_vehiculo_id (vehiculo_id),
+  CONSTRAINT fk_fondolin_vehiculo FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondolin_cliente_ambito FOREIGN KEY (empresa_id, cliente_id) REFERENCES tms_clientes (empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_fondolin_plan_ambito FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1597,11 +1624,16 @@ CREATE TABLE IF NOT EXISTS tms_cotizaciones (
   -- COTIZACIONES FASE 6 — documento comercial (ver sql/migrate-2026-09-cotizaciones-documento-comercial.sql).
   documento_emisor VARCHAR(20) NOT NULL DEFAULT 'KUIQTRANS',   -- 'KUIQTRANS' | 'MONACO' (validado en la aplicación)
   atencion_nombre VARCHAR(160) NULL,
+  atencion_tratamiento VARCHAR(10) NULL,           -- ver sql/migrate-2026-10-cotizaciones-tratamiento-destinatario.sql: Sr. | Sres. | Sra. | Srta. (validado en la aplicación)
   atencion_cargo VARCHAR(160) NULL,
   unidad_descripcion VARCHAR(160) NULL,
   -- ver sql/migrate-2026-09-cotizaciones-presentacion-comercial.sql — snapshot editable del texto del PDF.
   mensaje_comercial TEXT NULL,
   cierre_comercial TEXT NULL,
+  -- ver sql/migrate-2026-10-cotizaciones-credito-combustible.sql — datos comerciales por cotización (snapshot).
+  condiciones_credito VARCHAR(300) NULL,
+  combustible_referencia_tipo VARCHAR(20) NULL,       -- 'diesel' | 'gasolina' | 'otro' (validado en la aplicación)
+  combustible_referencia_precio DECIMAL(12,2) NULL,   -- Q por galón
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -1642,6 +1674,17 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_lineas (
 -- versionarse) y docs/COTIZACIONES-COSTEO-PERSISTENCIA-PROPUESTA.md. Perfiles/parámetros son configuración
 -- de negocio: no se siembran aquí.
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
+  -- Excel 2026: NULL conserva equivalentes anteriores sin inventar costos.
+  viajes_mes DECIMAL(10,2) NULL DEFAULT NULL,
+  precio_llanta DECIMAL(12,2) NULL DEFAULT NULL,
+  cantidad_llantas INT NULL DEFAULT NULL,
+  salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL,
+  salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL,
+  -- Paridad Cotizador 2026: UN solo valor «Viáticos y hotel» por viaje (no por persona ni por día). NULL = sin configurar.
+  viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL,
+  -- Paridad Cotizador 2026: comportamiento por hoja fuente. 1 = por cada día de servicio, 0 = una sola vez, NULL = sin configurar.
+  auxiliar_multiplica_dias TINYINT(1) NULL DEFAULT NULL,
+  viaticos_hotel_multiplica_dias TINYINT(1) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   codigo VARCHAR(40) NOT NULL,                 -- p. ej. CAMION_5T, CABEZAL
@@ -1673,7 +1716,29 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_perfiles (
   CONSTRAINT fk_costeo_perfil_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- PROGRAMACION-VEHICULO-SOLICITADO — se declara aquí porque tms_cotizacion_costeo_perfiles se crea
+-- después de tms_planes_viaje. FK compuesta: un viaje nunca apunta al perfil de otra empresa.
+-- Instalación limpia: sintaxis estándar, mismo patrón que fk_tmsplan_tc_vehiculo.
+ALTER TABLE tms_planes_viaje
+  ADD INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id),
+  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado
+  FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id)
+  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id)
+  ON DELETE RESTRICT
+  ON UPDATE RESTRICT;
+
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
+  -- Configuración global aditiva por vigencia; no modifica vigencias anteriores.
+  seguro_mercaderia_anual DECIMAL(14,2) NULL DEFAULT NULL,
+  cantidad_camiones INT NULL DEFAULT NULL,
+  viajes_anuales DECIMAL(10,2) NULL DEFAULT NULL,
+  dias_depreciacion_mes DECIMAL(5,2) NULL DEFAULT NULL,
+  dias_gastos_mes DECIMAL(5,2) NULL DEFAULT NULL,
+  gastos_administracion DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_mantenimiento DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_seguridad DECIMAL(14,2) NULL DEFAULT NULL,
+  gastos_predios DECIMAL(14,2) NULL DEFAULT NULL,
+  dias_laborales_mes DECIMAL(5,2) NULL DEFAULT NULL,
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   vigente_desde DATE NOT NULL,
@@ -1695,6 +1760,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeo_parametros (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
+  resultado_snapshot JSON NULL DEFAULT NULL, -- Resultado V2 completo; históricos V1 sin transformar
   id INT AUTO_INCREMENT PRIMARY KEY,
   empresa_id INT NOT NULL,
   cotizacion_id INT NOT NULL,
@@ -1706,7 +1772,7 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   perfil_snapshot JSON NOT NULL,               -- PerfilCosteoUnidad tal como se usó
   parametros_snapshot JSON NOT NULL,           -- ParametrosEconomicosCosteo tal como se usó
   input_snapshot JSON NOT NULL,                -- km, días, cantidades, banderas, overrides, otros costos, precio de venta
-  motor_version VARCHAR(20) NOT NULL,          -- versión de las fórmulas; permite auditar recálculos
+  motor_version VARCHAR(40) NOT NULL,          -- versión de las fórmulas; permite auditar recálculos
   -- Resultados denormalizados para consultas/reportes (los componentes viven en D).
   costo_operativo DECIMAL(16,6) NOT NULL,
   iva DECIMAL(16,6) NOT NULL,
@@ -1718,9 +1784,15 @@ CREATE TABLE IF NOT EXISTS tms_cotizacion_costeos (
   margen_real DECIMAL(12,6) NULL,              -- utilidad / costo con IVA (margen SOBRE COSTO)
   creado_por VARCHAR(100) NULL,
   creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_cotizacion_costeo_cotizacion (empresa_id, cotizacion_id),
+  -- Historial de costeos: N versiones por cotización, cada una inmutable. es_seleccionado = versión utilizada (a lo sumo una; la unicidad la garantiza la app con FOR UPDATE).
+  version INT NOT NULL DEFAULT 1,
+  es_seleccionado TINYINT(1) NOT NULL DEFAULT 0,
+  seleccionado_por VARCHAR(100) NULL DEFAULT NULL,
+  seleccionado_en DATETIME NULL DEFAULT NULL,
+  UNIQUE KEY uq_cotizacion_costeo_version (empresa_id, cotizacion_id, version),
   UNIQUE KEY uq_cotizacion_costeo_empresa_id (empresa_id, id),
   INDEX idx_cotizacion_costeo_fecha (empresa_id, creado_en),
+  INDEX idx_cotizacion_costeo_historial (empresa_id, cotizacion_id, creado_en),
   CONSTRAINT fk_cotizacion_costeo_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,
   CONSTRAINT fk_cotizacion_costeo_cotizacion FOREIGN KEY (empresa_id, cotizacion_id) REFERENCES tms_cotizaciones (empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -1892,7 +1964,10 @@ CREATE TABLE IF NOT EXISTS compras_requerimiento_lineas (
   INDEX idx_compras_linea_proveedor (empresa_id, proveedor_id),
   CONSTRAINT fk_cb_requerimiento_lineas_requerimiento FOREIGN KEY (empresa_id, requerimiento_id) REFERENCES compras_requerimientos(empresa_id, id) ON DELETE RESTRICT,
   CONSTRAINT fk_cb_requerimiento_lineas_proveedor FOREIGN KEY (empresa_id, proveedor_id) REFERENCES compras_proveedores(empresa_id, id) ON DELETE RESTRICT,
-  CONSTRAINT fk_cb_requerimiento_lineas_vehiculo FOREIGN KEY (empresa_id, vehiculo_id) REFERENCES flota_vehiculos(empresa_id, id) ON DELETE RESTRICT
+  -- Unidad propia o compartida (flota_vehiculo_acceso): FK simple; la regla de acceso la valida la aplicación.
+  -- Ver sql/migrate-2026-10-vehiculos-compartidos-global.sql.
+  INDEX idx_compras_req_linea_vehiculo_id (vehiculo_id),
+  CONSTRAINT fk_cb_requerimiento_lineas_veh FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS compras_linea_documentos (
@@ -2014,4 +2089,565 @@ CREATE TABLE IF NOT EXISTS rrhh_requerimiento_lineas (
   CONSTRAINT fk_rh_req_lineas_proveedor FOREIGN KEY (empresa_id, proveedor_id) REFERENCES rrhh_proveedores(empresa_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Cuadrilla es un rol independiente: nunca asigna auxiliares ni genera viáticos.
+CREATE TABLE IF NOT EXISTS tms_plan_cuadrilla (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  plan_id INT NOT NULL,
+  orden SMALLINT NOT NULL,
+  tipo VARCHAR(10) NOT NULL,
+  id_empleado INT NULL,
+  nombre VARCHAR(200) NOT NULL,
+  identificacion VARCHAR(100) NULL,
+  telefono VARCHAR(50) NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tpc_plan_empleado (plan_id, id_empleado),
+  UNIQUE KEY uq_tpc_plan_orden (plan_id, orden),
+  INDEX idx_tpc_empresa_plan (empresa_id, plan_id),
+  INDEX idx_tpc_empresa_empleado (empresa_id, id_empleado),
+  CONSTRAINT chk_tpc_tipo CHECK (
+    (tipo = 'INTERNO' AND id_empleado IS NOT NULL AND identificacion IS NULL AND telefono IS NULL)
+    OR (tipo = 'EXTERNO' AND id_empleado IS NULL)
+  ),
+  CONSTRAINT fk_tpc_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_tpc_plan FOREIGN KEY (empresa_id, plan_id)
+    REFERENCES tms_planes_viaje(empresa_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_tpc_empleado FOREIGN KEY (empresa_id, id_empleado)
+    REFERENCES empleados(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- Habilitaciones operativas TMS: capa de elegibilidad por empleado, separada de empleados.categoria_ops
+-- (puesto/categoría contractual de RRHH, que NO se toca) y de tms_personal (catálogo operativo que se
+-- sigue creando/resolviendo igual al asignar un viaje, vía personalDesdeEmpleado()). Un empleado puede
+-- tener hasta 2 filas (una por rol); "activo=0" desactiva sin perder historial.
+CREATE TABLE IF NOT EXISTS tms_personal_habilitaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  rol VARCHAR(20) NOT NULL,
+  estado VARCHAR(20) NOT NULL DEFAULT 'HABILITADO',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tph_empleado_rol (empresa_id, empleado_id, rol),
+  INDEX idx_tph_empresa_empleado (empresa_id, empleado_id),
+  INDEX idx_tph_empresa_rol_activo (empresa_id, rol, activo),
+  CONSTRAINT chk_tph_rol CHECK (rol IN ('PILOTO', 'AUXILIAR')),
+  CONSTRAINT chk_tph_estado CHECK (estado IN ('HABILITADO', 'CAPACITACION')),
+  CONSTRAINT fk_tph_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_tph_empleado FOREIGN KEY (empresa_id, empleado_id)
+    REFERENCES empleados(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- PR A: solo infraestructura. Ejecutar UNICAMENTE tras preflight APTO y autorización.
+-- Sin seeds/backfill, sin automatización. Una tabla existente NO se considera compatible por IF NOT EXISTS.
+CREATE TABLE IF NOT EXISTS cont_cuentas_rol (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  rol VARCHAR(40) NOT NULL,
+  cuenta_id INT NOT NULL,
+  activa TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cont_cuentas_rol (empresa_id, entidad_id, rol),
+  KEY idx_cont_cuentas_rol_cuenta (empresa_id, entidad_id, cuenta_id),
+  CONSTRAINT fk_cont_rol_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_cont_rol_cuenta FOREIGN KEY (empresa_id, entidad_id, cuenta_id) REFERENCES cont_cuentas(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_cont_rol_valido CHECK (rol IN ('CLIENTES','IVA_POR_PAGAR','VENTAS_SERVICIOS','RETENCION_IVA','TRANSITO_BANCARIO','ANTICIPOS','DEVOLUCIONES_VENTAS','VENTAS_BIENES'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+CREATE TABLE IF NOT EXISTS cont_eventos (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  factura_id INT NOT NULL,
+  tipo_evento VARCHAR(40) NOT NULL,
+  evento_origen_id INT NULL,
+  asiento_id INT NOT NULL,
+  clave_evento VARCHAR(120) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  fecha_contable DATE NOT NULL,
+  datos_snapshot JSON NOT NULL,
+  creado_por INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_cont_evento_clave (empresa_id, entidad_id, clave_evento),
+  UNIQUE KEY uq_cont_evento_asiento (empresa_id, entidad_id, asiento_id),
+  UNIQUE KEY uq_cont_evento_ambito (empresa_id, entidad_id, factura_id, id),
+  KEY idx_cont_evento_factura (empresa_id, entidad_id, factura_id, tipo_evento),
+  KEY idx_cont_evento_origen (empresa_id, entidad_id, factura_id, evento_origen_id),
+  CONSTRAINT fk_cont_evento_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  -- No modifica fact_facturas: FK física simple + comprobación empresa/entidad bajo lock en el helper.
+  CONSTRAINT fk_cont_evento_factura FOREIGN KEY (factura_id) REFERENCES fact_facturas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_cont_evento_asiento FOREIGN KEY (empresa_id, entidad_id, asiento_id) REFERENCES cont_asientos(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_cont_evento_origen FOREIGN KEY (empresa_id, entidad_id, factura_id, evento_origen_id) REFERENCES cont_eventos(empresa_id, entidad_id, factura_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_cont_evento_actor FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_cont_evento_tipo CHECK (tipo_evento IN ('FACTURA_EMITIDA','COBRO_CONFIRMADO','RETENCION_NO_EMITIDA')),
+  -- COBRO reservado, imposible insertar hasta añadir confirmación + FK en PR B/D.
+  CONSTRAINT ck_cont_evento_origen CHECK (
+    (tipo_evento = 'FACTURA_EMITIDA' AND evento_origen_id IS NULL) OR
+    (tipo_evento = 'RETENCION_NO_EMITIDA' AND evento_origen_id IS NOT NULL)),
+  CONSTRAINT ck_cont_evento_huella CHECK (huella REGEXP '^[0-9a-f]{64}$'),
+  CONSTRAINT ck_cont_evento_snapshot CHECK (JSON_VALID(datos_snapshot) AND JSON_VALUE(datos_snapshot, '$.version') IS NOT NULL AND JSON_VALUE(datos_snapshot, '$.version') = 1)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
+-- PR B: confirmación bancaria independiente de pago informado; sin automatización.
+CREATE TABLE IF NOT EXISTS fact_pago_confirmaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  pago_id INT NULL,
+  factura_id INT NOT NULL,
+  cuenta_bancaria_id INT NOT NULL,
+  monto DECIMAL(14,2) NOT NULL,
+  fecha_acreditacion DATE NOT NULL,
+  referencia VARCHAR(120) NOT NULL,
+  observaciones TEXT NULL,
+  idempotency_key VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  estado VARCHAR(12) NOT NULL DEFAULT 'CONFIRMADA',
+  confirmado_por INT NOT NULL,
+  confirmado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  anulado_por INT NULL,
+  anulado_en DATETIME NULL,
+  motivo_anulacion TEXT NULL,
+  evidencia_ruta VARCHAR(500) NULL,
+  evidencia_nombre VARCHAR(255) NULL,
+  evidencia_mime VARCHAR(40) NULL,
+  evidencia_tamano INT NULL,
+  evidencia_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  UNIQUE KEY uq_fpc_idempotencia (empresa_id,entidad_id,idempotency_key),
+  KEY idx_fpc_factura_estado (empresa_id,entidad_id,factura_id,estado),
+  KEY idx_fpc_banco_fecha (empresa_id,entidad_id,cuenta_bancaria_id,fecha_acreditacion),
+  KEY idx_fpc_pago (pago_id),
+  CONSTRAINT fk_fpc_entidad FOREIGN KEY (empresa_id,entidad_id) REFERENCES cont_entidades(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fpc_banco FOREIGN KEY (empresa_id,entidad_id,cuenta_bancaria_id) REFERENCES cont_cuentas_bancarias(empresa_id,entidad_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fpc_factura FOREIGN KEY (factura_id) REFERENCES fact_facturas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fpc_pago FOREIGN KEY (pago_id) REFERENCES fact_pagos(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fpc_actor FOREIGN KEY (confirmado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fpc_anulador FOREIGN KEY (anulado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fpc_monto CHECK (monto > 0),
+  CONSTRAINT ck_fpc_referencia CHECK (CHAR_LENGTH(TRIM(referencia)) > 0),
+  CONSTRAINT ck_fpc_estado CHECK (
+    (estado='CONFIRMADA' AND anulado_por IS NULL AND anulado_en IS NULL AND motivo_anulacion IS NULL)
+    OR (estado='ANULADA' AND anulado_por IS NOT NULL AND anulado_en IS NOT NULL AND motivo_anulacion IS NOT NULL AND CHAR_LENGTH(TRIM(motivo_anulacion))>0)
+  ),
+  CONSTRAINT ck_fpc_evidencia CHECK (
+    (evidencia_ruta IS NULL AND evidencia_nombre IS NULL AND evidencia_mime IS NULL AND evidencia_tamano IS NULL AND evidencia_sha256 IS NULL)
+    OR (evidencia_ruta IS NOT NULL AND evidencia_nombre IS NOT NULL AND evidencia_mime IS NOT NULL AND evidencia_mime IN ('application/pdf','image/png','image/jpeg') AND evidencia_tamano IS NOT NULL AND evidencia_tamano BETWEEN 1 AND 10485760 AND evidencia_sha256 IS NOT NULL)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- CxC-1 — ver sql/migrate-2026-10-cxc-cobros-multifactura.sql (cabecera de cobro + aplicaciones; nada de fact_pagos se migra).
+CREATE TABLE IF NOT EXISTS fact_cobros (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  cliente_id INT NOT NULL,
+  moneda CHAR(3) NOT NULL DEFAULT 'GTQ',
+  fecha_cobro DATE NOT NULL,
+  monto_total DECIMAL(14,2) NOT NULL,                 -- = Σ aplicaciones (lo calcula y valida el servidor)
+  medio_pago VARCHAR(40) NULL,
+  referencia VARCHAR(120) NULL,
+  observaciones TEXT NULL,
+  clave_idempotencia VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  estado VARCHAR(10) NOT NULL DEFAULT 'VIGENTE',      -- VIGENTE | ANULADO
+  creado_por INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  anulado_por INT NULL,
+  anulado_en DATETIME NULL,
+  motivo_anulacion TEXT NULL,
+  UNIQUE KEY uq_fcobro_idempotencia (empresa_id, entidad_id, clave_idempotencia),
+  UNIQUE KEY uq_fcobro_ambito (empresa_id, entidad_id, id),
+  KEY idx_fcobro_cliente (empresa_id, entidad_id, cliente_id, fecha_cobro),
+  KEY idx_fcobro_estado (empresa_id, entidad_id, estado),
+  CONSTRAINT fk_fcobro_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_cliente FOREIGN KEY (cliente_id) REFERENCES clientes(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_actor FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcobro_anulador FOREIGN KEY (anulado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fcobro_monto CHECK (monto_total > 0),
+  CONSTRAINT ck_fcobro_estado CHECK (
+    (estado = 'VIGENTE' AND anulado_por IS NULL AND anulado_en IS NULL AND motivo_anulacion IS NULL)
+    OR (estado = 'ANULADO' AND anulado_por IS NOT NULL AND anulado_en IS NOT NULL AND motivo_anulacion IS NOT NULL AND CHAR_LENGTH(TRIM(motivo_anulacion)) > 0)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+CREATE TABLE IF NOT EXISTS fact_cobro_aplicaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  cobro_id INT NOT NULL,
+  factura_id INT NOT NULL,
+  monto DECIMAL(14,2) NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fcapl_cobro_factura (cobro_id, factura_id),   -- una aplicación por factura dentro de un cobro
+  KEY idx_fcapl_factura (factura_id),
+  KEY idx_fcapl_ambito (empresa_id, entidad_id, cobro_id),
+  CONSTRAINT fk_fcapl_cobro FOREIGN KEY (empresa_id, entidad_id, cobro_id) REFERENCES fact_cobros(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fcapl_factura FOREIGN KEY (factura_id) REFERENCES fact_facturas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fcapl_monto CHECK (monto > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- Vínculo opcional de una confirmación bancaria con un cobro (CxC-1).
+ALTER TABLE fact_pago_confirmaciones
+  ADD COLUMN IF NOT EXISTS cobro_id INT NULL AFTER pago_id,
+  ADD KEY IF NOT EXISTS idx_fpc_cobro (cobro_id);
+-- La FK se crea solo si no existe (patrón information_schema + PREPARE; sin la cláusula IF NOT EXISTS en la FK).
+SET @fk_fpc_cobro := (SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'fact_pago_confirmaciones' AND CONSTRAINT_NAME = 'fk_fpc_cobro' AND CONSTRAINT_TYPE = 'FOREIGN KEY');
+SET @sql := IF(@fk_fpc_cobro = 0, 'ALTER TABLE fact_pago_confirmaciones ADD CONSTRAINT fk_fpc_cobro FOREIGN KEY (cobro_id) REFERENCES fact_cobros(id) ON DELETE RESTRICT ON UPDATE RESTRICT', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+
+-- FEL-2A (modelo, dominio e idempotencia con proveedor MOCK). Sin seeds ni datos. Ver sql/migrate-2026-10-fel-2a-modelo.sql.
+-- fact_facturas no se define en este archivo: el UNIQUE aditivo es el destino de la FK compuesta de fel_documentos.
+-- (1) Único cambio sobre una tabla existente. `id` ya es PK, por lo que cualquier índice UNIQUE que lo contenga se
+-- cumple trivialmente (el preflight lo comprueba de todos modos). Es el destino de la FK compuesta de fel_documentos:
+-- impide, estructuralmente, ligar un documento fiscal a la factura (o entidad) de otra empresa.
+ALTER TABLE fact_facturas
+  ADD UNIQUE INDEX IF NOT EXISTS uq_factura_ambito (empresa_id, entidad_id, id);
+
+-- (2) Emisor lógico por (empresa, entidad). ÚNICA fuente del modo. Sin NIT ni datos fiscales aquí.
+CREATE TABLE IF NOT EXISTS fel_emisores (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  modo VARCHAR(12) NOT NULL DEFAULT 'DESACTIVADO',
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fel_emisor_entidad (empresa_id, entidad_id),
+  UNIQUE KEY uq_fel_emisor_empresa_id (empresa_id, id),
+  UNIQUE KEY uq_fel_emisor_ambito (empresa_id, id, entidad_id),
+  CONSTRAINT fk_fel_emisor_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_emisor_entidad FOREIGN KEY (empresa_id, entidad_id) REFERENCES cont_entidades(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fel_emisor_modo CHECK (modo IN ('DESACTIVADO','TEST','PROD'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (3) Configuración POR AMBIENTE (TEST / PROD en filas separadas). base_url/NIT/secreto son NULL hasta que el
+-- responsable los configure; ningún valor fiscal ni URL de proveedor se inventa. Los datos que dependen de la
+-- documentación de INFILE (afiliación IVA, establecimiento, frases, dirección) se agregan de forma aditiva en FEL-3.
+CREATE TABLE IF NOT EXISTS fel_emisor_ambientes (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  emisor_id INT NOT NULL,
+  ambiente VARCHAR(4) NOT NULL,
+  proveedor VARCHAR(20) NOT NULL,
+  base_url VARCHAR(300) NULL,
+  nit_emisor VARCHAR(20) NULL,
+  nombre_fiscal VARCHAR(250) NULL,
+  secreto_cifrado TEXT NULL,
+  secreto_actualizado_en DATETIME NULL,
+  secreto_actualizado_por INT NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_fel_amb (empresa_id, emisor_id, ambiente),
+  UNIQUE KEY uq_fel_amb_proveedor (empresa_id, emisor_id, ambiente, proveedor),
+  CONSTRAINT fk_fel_amb_emisor FOREIGN KEY (empresa_id, emisor_id) REFERENCES fel_emisores(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_amb_actor FOREIGN KEY (secreto_actualizado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fel_amb_ambiente CHECK (ambiente IN ('TEST','PROD')),
+  CONSTRAINT ck_fel_amb_proveedor CHECK (CAST(proveedor AS BINARY) REGEXP '^[A-Z0-9_]{2,20}$'),
+  -- Un documento MOCK jamás puede pertenecer a un ambiente PROD: CERTIFICADO + PROD implica proveedor real.
+  CONSTRAINT ck_fel_amb_mock_no_prod CHECK (NOT (proveedor = 'MOCK' AND ambiente = 'PROD'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (4) Documento FEL: FUENTE DE VERDAD FISCAL. Nunca se borra (ON DELETE RESTRICT en todo). estado_admin de
+-- fact_facturas NO es prueba fiscal. Un registro por envío fiscal; RECHAZADO es terminal (una corrección = fila nueva).
+CREATE TABLE IF NOT EXISTS fel_documentos (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  factura_id INT NOT NULL,
+  emisor_id INT NOT NULL,
+  entidad_id INT NOT NULL,
+  ambiente VARCHAR(4) NOT NULL,
+  proveedor VARCHAR(20) NOT NULL,
+  tipo_documento VARCHAR(12) NOT NULL,
+  estado VARCHAR(14) NOT NULL DEFAULT 'PENDIENTE',
+  referencia_emisor CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella_dto CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  dto_json LONGTEXT NOT NULL,
+  documento_origen_id INT NULL,
+  motivo VARCHAR(500) NULL,
+  autorizacion VARCHAR(64) NULL,
+  serie VARCHAR(40) NULL,
+  numero VARCHAR(40) NULL,
+  fecha_certificacion DATETIME NULL,
+  anulado_en DATETIME NULL,
+  anulado_por INT NULL,
+  motivo_anulacion VARCHAR(500) NULL,
+  ultimo_codigo VARCHAR(60) NULL,
+  ultimo_mensaje VARCHAR(500) NULL,
+  version INT NOT NULL DEFAULT 1,
+  creado_por INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  -- A lo sumo UNA factura fiscal viva por fact_facturas: NULL (no choca) para notas y para RECHAZADO.
+  factura_viva TINYINT GENERATED ALWAYS AS (CASE WHEN tipo_documento = 'FACTURA' AND estado <> 'RECHAZADO' THEN 1 ELSE NULL END) STORED,
+  UNIQUE KEY uq_fel_doc_referencia (referencia_emisor),
+  UNIQUE KEY uq_fel_doc_empresa_id (empresa_id, id),
+  UNIQUE KEY uq_fel_doc_origen (empresa_id, emisor_id, id),
+  UNIQUE KEY uq_fel_doc_autorizacion (empresa_id, ambiente, autorizacion),
+  UNIQUE KEY uq_fel_doc_serie_numero (empresa_id, emisor_id, ambiente, serie, numero),
+  UNIQUE KEY uq_fel_doc_factura_viva (empresa_id, factura_id, factura_viva),
+  KEY idx_fel_doc_factura (empresa_id, factura_id),
+  KEY idx_fel_doc_estado (empresa_id, estado),
+  CONSTRAINT fk_fel_doc_factura FOREIGN KEY (empresa_id, entidad_id, factura_id) REFERENCES fact_facturas(empresa_id, entidad_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_doc_emisor FOREIGN KEY (empresa_id, emisor_id, entidad_id) REFERENCES fel_emisores(empresa_id, id, entidad_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_doc_ambiente FOREIGN KEY (empresa_id, emisor_id, ambiente, proveedor) REFERENCES fel_emisor_ambientes(empresa_id, emisor_id, ambiente, proveedor) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_doc_origen FOREIGN KEY (empresa_id, emisor_id, documento_origen_id) REFERENCES fel_documentos(empresa_id, emisor_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_doc_creador FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_doc_anulador FOREIGN KEY (anulado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fel_doc_tipo CHECK (tipo_documento IN ('FACTURA','NOTA_CREDITO','NOTA_DEBITO')),
+  CONSTRAINT ck_fel_doc_estado CHECK (estado IN ('PENDIENTE','CERTIFICADO','RECHAZADO','INCIERTO','NO_ENCONTRADO','ANULADO')),
+  CONSTRAINT ck_fel_doc_ambiente CHECK (ambiente IN ('TEST','PROD')),
+  -- CERTIFICADO/ANULADO exigen la identidad fiscal completa; el resto de estados no puede traerla.
+  CONSTRAINT ck_fel_doc_certificacion CHECK (
+    (estado IN ('CERTIFICADO','ANULADO') AND autorizacion IS NOT NULL AND serie IS NOT NULL AND numero IS NOT NULL AND fecha_certificacion IS NOT NULL)
+    OR (estado NOT IN ('CERTIFICADO','ANULADO') AND autorizacion IS NULL AND serie IS NULL AND numero IS NULL AND fecha_certificacion IS NULL)
+  ),
+  CONSTRAINT ck_fel_doc_anulacion CHECK (
+    (estado = 'ANULADO' AND anulado_en IS NOT NULL AND motivo_anulacion IS NOT NULL)
+    OR (estado <> 'ANULADO' AND anulado_en IS NULL AND anulado_por IS NULL AND motivo_anulacion IS NULL)
+  ),
+  -- Notas de crédito/débito siempre referencian un documento origen; una FACTURA con origen es una refacturación.
+  -- La no-autorreferencia NO puede garantizarla la BD: MariaDB no admite AUTO_INCREMENT en un CHECK y la FK acepta una
+  -- fila que se referencia a sí misma si se inserta con id explícito. Es una invariante de APLICACIÓN: el servicio solo
+  -- inserta el origen ya existente, jamás hace UPDATE de documento_origen_id (lo exige una prueba de arquitectura) y
+  -- verify-2026-10-fel-2a-modelo.sql la audita. Sin autorreferencia y con origen inmutable no hay ciclos posibles.
+  CONSTRAINT ck_fel_doc_origen CHECK (tipo_documento = 'FACTURA' OR documento_origen_id IS NOT NULL)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (5) Intentos: un envío/consulta/anulación por fila, con la clave de solicitud y la huella del contenido. Se inserta
+-- ENVIANDO antes de la llamada externa y se CIERRA una sola vez (ENVIANDO -> resultado). Sin secretos ni XML.
+CREATE TABLE IF NOT EXISTS fel_intentos (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  documento_id INT NOT NULL,
+  tipo VARCHAR(12) NOT NULL,
+  estado VARCHAR(14) NOT NULL DEFAULT 'ENVIANDO',
+  clave_solicitud VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  huella_solicitud CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  codigo VARCHAR(60) NULL,
+  mensaje VARCHAR(500) NULL,
+  respuesta_redactada TEXT NULL,
+  usuario_id INT NULL,
+  creado_en DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  finalizado_en DATETIME(3) NULL,
+  UNIQUE KEY uq_fel_int_solicitud (empresa_id, clave_solicitud),
+  KEY idx_fel_int_doc (empresa_id, documento_id, id),
+  CONSTRAINT fk_fel_int_doc FOREIGN KEY (empresa_id, documento_id) REFERENCES fel_documentos(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_fel_int_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_fel_int_tipo CHECK (tipo IN ('CERTIFICAR','CONSULTAR','ANULAR')),
+  CONSTRAINT ck_fel_int_estado CHECK (estado IN ('ENVIANDO','CERTIFICADO','RECHAZADO','PENDIENTE','NO_ENCONTRADO','INCIERTO','ERROR_CONFIG','ANULADO')),
+  CONSTRAINT ck_fel_int_cierre CHECK ((estado = 'ENVIANDO' AND finalizado_en IS NULL) OR (estado <> 'ENVIANDO' AND finalizado_en IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- TMS LIQUIDACION DE VIAJES FASE 1 (modelo minimo; sin seeds ni datos). Ver sql/migrate-2026-10-tms-liquidacion-viajes-fase1.sql.
+-- (1) Configuracion por empresa. Sin fila, o fecha NULL = la liquidacion NO se exige (el sistema actual no cambia).
+CREATE TABLE IF NOT EXISTS tms_liquidacion_config (
+  empresa_id INT NOT NULL,
+  fecha_activacion_liquidacion DATE NULL DEFAULT NULL,
+  actualizado_por INT NULL,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (empresa_id),
+  CONSTRAINT fk_tlc_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tlc_actor FOREIGN KEY (actualizado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (2) Liquidacion 1:1 por viaje (estado VIGENTE). La historia vive en tms_viaje_liquidacion_eventos.
+CREATE TABLE IF NOT EXISTS tms_viaje_liquidaciones (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  plan_id INT NOT NULL,
+  estado VARCHAR(20) NOT NULL,
+  version INT NOT NULL DEFAULT 1,
+  reporte_recibido_en DATETIME NOT NULL,
+  reporte_recibido_por INT NOT NULL,
+  liquidado_en DATETIME NULL,
+  liquidado_por INT NULL,
+  reabierto_en DATETIME NULL,
+  reabierto_por INT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tvl_empresa_plan (empresa_id, plan_id),
+  KEY idx_tvl_empresa_estado (empresa_id, estado),
+  CONSTRAINT fk_tvl_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvl_plan FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvl_reporte_por FOREIGN KEY (reporte_recibido_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvl_liquidado_por FOREIGN KEY (liquidado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvl_reabierto_por FOREIGN KEY (reabierto_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_tvl_estado CHECK (estado IN ('REPORTE_RECIBIDO', 'LIQUIDADO', 'EN_AJUSTE')),
+  CONSTRAINT ck_tvl_version CHECK (version >= 1),
+  CONSTRAINT ck_tvl_pares CHECK (
+    (liquidado_en IS NULL) = (liquidado_por IS NULL) AND (reabierto_en IS NULL) = (reabierto_por IS NULL)
+  ),
+  -- Coherencia estado <-> marcas: REPORTE_RECIBIDO solo existe antes de la primera liquidacion; LIQUIDADO y EN_AJUSTE
+  -- conservan la ultima liquidacion; EN_AJUSTE exige la ultima reapertura.
+  CONSTRAINT ck_tvl_estado_marcas CHECK (
+    (estado = 'REPORTE_RECIBIDO' AND liquidado_en IS NULL AND reabierto_en IS NULL)
+    OR (estado = 'LIQUIDADO' AND liquidado_en IS NOT NULL)
+    OR (estado = 'EN_AJUSTE' AND liquidado_en IS NOT NULL AND reabierto_en IS NOT NULL)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (3) Eventos APPEND-ONLY. Una fila por transicion; `version` = version de la liquidacion DESPUES de la transicion, de modo que
+-- UNIQUE (empresa_id, plan_id, version) impide duplicar un evento. Nunca se actualiza ni se borra (la aplicacion no emite UPDATE/DELETE;
+-- ON DELETE RESTRICT impide borrar la liquidacion mientras tenga eventos).
+CREATE TABLE IF NOT EXISTS tms_viaje_liquidacion_eventos (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  plan_id INT NOT NULL,
+  version INT NOT NULL,
+  tipo VARCHAR(20) NOT NULL,
+  estado_antes VARCHAR(20) NULL,
+  estado_despues VARCHAR(20) NOT NULL,
+  actor_id INT NOT NULL,
+  detalle VARCHAR(500) NULL,
+  snapshot_json LONGTEXT NULL,
+  creado_en DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_tvle_version (empresa_id, plan_id, version),
+  KEY idx_tvle_actor (actor_id),
+  CONSTRAINT fk_tvle_liquidacion FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_viaje_liquidaciones(empresa_id, plan_id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvle_actor FOREIGN KEY (actor_id) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_tvle_version CHECK (version >= 1),
+  CONSTRAINT ck_tvle_snapshot CHECK (snapshot_json IS NULL OR JSON_VALID(snapshot_json)),
+  CONSTRAINT ck_tvle_transicion CHECK (
+    (tipo = 'REPORTE_RECIBIDO' AND estado_antes IS NULL AND estado_despues = 'REPORTE_RECIBIDO')
+    OR (tipo = 'LIQUIDADO' AND estado_antes = 'REPORTE_RECIBIDO' AND estado_despues = 'LIQUIDADO')
+    OR (tipo = 'REABIERTO' AND estado_antes = 'LIQUIDADO' AND estado_despues = 'EN_AJUSTE'
+        AND detalle IS NOT NULL AND CHAR_LENGTH(TRIM(detalle)) >= 5)
+    OR (tipo = 'RELIQUIDADO' AND estado_antes = 'EN_AJUSTE' AND estado_despues = 'LIQUIDADO')
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- ============================================================================
+-- TMS LIQUIDACION DE VIAJES - FASE 4 (cargos adicionales facturables). Ver sql/migrate-2026-10-tms-liquidacion-cargos-fase4.sql
+-- ============================================================================
+-- (1) Cargo: estado VIGENTE (nunca se borra; se anula con motivo y puede reactivarse). Moneda = la de la tarifa del viaje.
+CREATE TABLE IF NOT EXISTS tms_viaje_cargos_adicionales (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  plan_id INT NOT NULL,
+  concepto VARCHAR(120) NOT NULL,
+  monto DECIMAL(12,2) NOT NULL,
+  observacion VARCHAR(500) NULL,
+  activo TINYINT(1) NOT NULL DEFAULT 1,
+  version INT NOT NULL DEFAULT 1,
+  anulado_por INT NULL,
+  anulado_en DATETIME NULL,
+  motivo_anulacion VARCHAR(500) NULL,
+  clave_envio VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  huella CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  creado_por INT NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_por INT NULL,
+  actualizado_en DATETIME NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_tvca_empresa_id (empresa_id, id),
+  UNIQUE KEY uq_tvca_clave (empresa_id, clave_envio),
+  KEY idx_tvca_plan (empresa_id, plan_id, activo),
+  CONSTRAINT fk_tvca_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvca_plan FOREIGN KEY (empresa_id, plan_id) REFERENCES tms_planes_viaje(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvca_creador FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvca_actualizador FOREIGN KEY (actualizado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvca_anulador FOREIGN KEY (anulado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_tvca_monto CHECK (monto > 0),
+  CONSTRAINT ck_tvca_concepto CHECK (CHAR_LENGTH(TRIM(concepto)) >= 2),
+  CONSTRAINT ck_tvca_version CHECK (version >= 1),
+  CONSTRAINT ck_tvca_activo CHECK (activo IN (0, 1)),
+  -- Anulado exige quién, cuándo y motivo; activo no conserva marcas de anulación (la historia vive en los eventos).
+  CONSTRAINT ck_tvca_anulacion CHECK (
+    (activo = 1 AND anulado_por IS NULL AND anulado_en IS NULL AND motivo_anulacion IS NULL)
+    OR (activo = 0 AND anulado_por IS NOT NULL AND anulado_en IS NOT NULL AND motivo_anulacion IS NOT NULL
+        AND CHAR_LENGTH(TRIM(motivo_anulacion)) >= 5)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- (2) Eventos APPEND-ONLY: una fila por cambio del cargo, con su estado antes/despues. `version` = version del cargo DESPUES del
+-- cambio, de modo que UNIQUE (empresa_id, cargo_id, version) impide duplicar un evento. La aplicacion nunca hace UPDATE/DELETE;
+-- ON DELETE RESTRICT impide borrar el cargo mientras tenga historia.
+CREATE TABLE IF NOT EXISTS tms_viaje_cargo_eventos (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  cargo_id INT NOT NULL,
+  plan_id INT NOT NULL,
+  version INT NOT NULL,
+  tipo VARCHAR(12) NOT NULL,
+  actor_id INT NOT NULL,
+  estado_antes LONGTEXT NULL,
+  estado_despues LONGTEXT NOT NULL,
+  motivo VARCHAR(500) NULL,
+  creado_en DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_tvce_version (empresa_id, cargo_id, version),
+  KEY idx_tvce_plan (empresa_id, plan_id, id),
+  KEY idx_tvce_actor (actor_id),
+  CONSTRAINT fk_tvce_cargo FOREIGN KEY (empresa_id, cargo_id) REFERENCES tms_viaje_cargos_adicionales(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT fk_tvce_actor FOREIGN KEY (actor_id) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT ck_tvce_version CHECK (version >= 1),
+  CONSTRAINT ck_tvce_tipo CHECK (tipo IN ('CREADO', 'EDITADO', 'ANULADO', 'REACTIVADO')),
+  CONSTRAINT ck_tvce_json CHECK (JSON_VALID(estado_despues) AND (estado_antes IS NULL OR JSON_VALID(estado_antes))),
+  CONSTRAINT ck_tvce_motivo CHECK (tipo <> 'ANULADO' OR (motivo IS NOT NULL AND CHAR_LENGTH(TRIM(motivo)) >= 5))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+
+-- ============================================================================
+-- RRHH - Justificacion de faltas (capa sobre la ausencia real). Ver sql/migrate-2026-10-rrhh-justificaciones-faltas.sql
+-- FK compuesta (empresa_id, empleado_id) -> empleados(empresa_id, id): requiere el UNIQUE (empresa_id, id) de empleados.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS (segura de repetir). No altera ni reinterpreta sesiones_trabajo,
+-- incidencias, rrhh_asistencia_ausencias, vacaciones, planilla ni `empleados` (NO agrega índices a empleados). No inserta datos.
+-- NO ejecutada por este PR. Antes: preflight-2026-10-rrhh-justificaciones-faltas.sql; después: verify-... del mismo nombre.
+--
+-- IMPORTANTE (contexto): ANTES de ejecutar, SELECCIONAR la base de datos destino (producción: u611730801_Plataforma). Este script
+-- usa nombres de tabla SIN esquema (igual que sus hermanos) para poder probarse en una base desechable; el preflight DETIENE si la
+-- base seleccionada no es la esperada. No ejecutar con `information_schema` ni `mysql` seleccionadas.
+--
+-- Una fila por empresa + empleado + fecha. La ausencia SIGUE siendo una ausencia: esta tabla solo registra que RRHH la justificó
+-- (tipo del catálogo de incidencias, observación, quién y cuándo) y, si se revierte, quién/cuándo/por qué. Nunca se borra:
+-- ACTIVA / REVERTIDA. NO modifica el descuento de planilla (la justificación documenta/audita la razón, nada más). La evidencia
+-- opcional reutiliza `documentos_empleados` (sin columnas nuevas allí).
+--
+-- TENANT-SAFE: FK COMPUESTA (empresa_id, empleado_id) → empleados(empresa_id, id). Exige un índice UNIQUE (empresa_id, id) en
+-- `empleados` (en schema.sql: uq_ruta_personal_empresa_id; en producción: uq_multas_empleado_empresa_id; el nombre no importa).
+-- Si ese índice NO existe, el CREATE TABLE FALLA por completo (error 1215) y no queda ninguna tabla parcial: el preflight lo
+-- comprueba antes y DETIENE. Este script nunca agrega ese índice por su cuenta.
+--
+-- Política de FKs (igual que rrhh_asistencia_ausencias, sobre la que ya se apoya la limpieza administrativa de empleados):
+-- empresa y empleado ON DELETE CASCADE; todas ON UPDATE RESTRICT. Actores como VARCHAR(100) (username), igual que sus hermanas.
+
+SET NAMES utf8mb4;
+
+CREATE TABLE IF NOT EXISTS rrhh_asistencia_justificaciones (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  empresa_id INT NOT NULL,
+  empleado_id INT NOT NULL,
+  fecha DATE NOT NULL,
+  tipo VARCHAR(80) NOT NULL,
+  observacion VARCHAR(500) NULL,
+  estado VARCHAR(12) NOT NULL DEFAULT 'ACTIVA',
+  version INT NOT NULL DEFAULT 1,
+  creado_por VARCHAR(100) NOT NULL,
+  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  actualizado_por VARCHAR(100) NULL,
+  actualizado_en DATETIME NULL,
+  revertido_por VARCHAR(100) NULL,
+  revertido_en DATETIME NULL,
+  motivo_reversion VARCHAR(300) NULL,
+  UNIQUE KEY uq_asist_just (empresa_id, empleado_id, fecha),
+  INDEX idx_asist_just_fecha (empresa_id, fecha, estado),
+  CONSTRAINT fk_asist_just_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT fk_asist_just_empleado FOREIGN KEY (empresa_id, empleado_id)
+    REFERENCES empleados(empresa_id, id) ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT ck_asist_just_estado CHECK (estado IN ('ACTIVA', 'REVERTIDA')),
+  CONSTRAINT ck_asist_just_version CHECK (version >= 1),
+  CONSTRAINT ck_asist_just_tipo CHECK (CHAR_LENGTH(TRIM(tipo)) >= 2),
+  -- ACTIVA no conserva marcas de reversión; REVERTIDA exige quién, cuándo y motivo.
+  CONSTRAINT ck_asist_just_reversion CHECK (
+    (estado = 'ACTIVA' AND revertido_por IS NULL AND revertido_en IS NULL AND motivo_reversion IS NULL)
+    OR (estado = 'REVERTIDA' AND revertido_por IS NOT NULL AND revertido_en IS NOT NULL AND motivo_reversion IS NOT NULL
+        AND CHAR_LENGTH(TRIM(motivo_reversion)) >= 5)
+  )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

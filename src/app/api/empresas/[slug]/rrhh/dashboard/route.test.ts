@@ -3,7 +3,9 @@ vi.mock("@/lib/tenant", () => ({ requireTenantRrhh: vi.fn() }));
 vi.mock("@/lib/rrhh/dashboard", () => ({
   obtenerEstadisticasDashboard: vi.fn(), obtenerResumenGerencial: vi.fn(), obtenerSituacionEmpleadosHoy: vi.fn(),
 }));
+vi.mock("@/lib/rrhh/cumpleanios", () => ({ resumenCumpleaniosDelMes: vi.fn() }));
 import { requireTenantRrhh } from "@/lib/tenant";
+import { resumenCumpleaniosDelMes } from "@/lib/rrhh/cumpleanios";
 import { obtenerEstadisticasDashboard, obtenerResumenGerencial, obtenerSituacionEmpleadosHoy } from "@/lib/rrhh/dashboard";
 import { GET } from "./route";
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
@@ -14,6 +16,24 @@ beforeEach(() => {
   vi.mocked(obtenerEstadisticasDashboard).mockResolvedValue({ totalEmpleados: 4 } as never);
   vi.mocked(obtenerResumenGerencial).mockResolvedValue([{ mes: "2026-08", altas: 2 }] as never);
   vi.mocked(obtenerSituacionEmpleadosHoy).mockResolvedValue([]);
+  vi.mocked(resumenCumpleaniosDelMes).mockResolvedValue({ mes: 10, anio: 2026, nombreMes: "Octubre", total: 2, proximos: [] });
+});
+it("incluye el resumen de cumpleaños del mes (solo resumen) con la empresa validada", async () => {
+  const data = await (await GET(req, ctx)).json();
+  expect(data.cumpleanios).toMatchObject({ nombreMes: "Octubre", total: 2 });
+  expect(resumenCumpleaniosDelMes).toHaveBeenCalledWith(7, expect.any(Number), expect.any(Number), expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), 5);
+});
+it("si falla el resumen de cumpleaños el resto del dashboard sigue y no se expone el detalle", async () => {
+  vi.mocked(resumenCumpleaniosDelMes).mockRejectedValue(new Error("SQL privado"));
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const res = await GET(req, ctx);
+  const data = await res.json();
+  expect(res.status).toBe(200);
+  expect(data.cumpleanios).toBeNull();
+  expect(data.stats.totalEmpleados).toBe(4);
+  expect(data.avisos).toHaveLength(1);
+  expect(JSON.stringify(data)).not.toContain("SQL privado");
+  log.mockRestore();
 });
 it("preserva resumen aunque falle la bandeja diaria y no expone detalles internos", async () => {
   vi.mocked(obtenerSituacionEmpleadosHoy).mockRejectedValue(new Error("SQL privado"));

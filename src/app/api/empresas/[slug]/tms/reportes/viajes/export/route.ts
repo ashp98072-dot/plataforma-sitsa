@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import {
   calcularKpisReporte,
   filtrosReporteDesdeUrl,
@@ -11,7 +11,13 @@ import { ahoraLocal, formatearTimestampVisible, hoyLocal } from "@/lib/rrhh/date
 import { filaReporteDiario, HEADERS_REPORTE_DIARIO, totalValorViajes } from "@/lib/tms/reporte-diario-viajes";
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
+import { badgeLiquidacion } from "@/lib/tms/liquidacion-viaje-shared";
+import { ETIQUETA_SUBTOTAL_COMERCIAL } from "@/lib/tms/resumen-liquidacion-shared";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
+import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { nombreArchivoPlanesViajes, planesViajesAExcel } from "@/lib/tms/planes-viajes-excel";
+import { cuadrillaDePlanes } from "@/lib/tms/cuadrilla";
+import type { IntegranteCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -76,6 +82,15 @@ function filaExcel(p: PlanReporte): string[] {
     // Sin TC: celda vacía. Placa = snapshot histórico (o texto externo si es Tercerizado).
     p.tcPlaca ?? "",
     etiquetaOrigenTc(p.tcOrigen),
+    // PROGRAMACION-VEHICULO-SOLICITADO — al FINAL (no se mueve ninguna columna existente). Separado de
+    // "Equipo asignado"/"Identificación vehículo" (la unidad REAL). Sin dato (históricos): "—".
+    textoVehiculoSolicitado(p.vehiculoSolicitado),
+    // TMS FASE 5 — al FINAL (no se mueve ninguna columna existente). Columnas SEPARADAS: tarifa base («Valor del viaje»,
+    // arriba), cargos adicionales vigentes y subtotal comercial ANTES de impuestos (sin IVA; no es total de factura). Los
+    // costos internos/gastos no se exportan aquí ni intervienen en el subtotal.
+    p.cargosAdicionales?.total ?? "0.00",
+    p.subtotalComercial ?? "Pendiente",
+    badgeLiquidacion(p.liquidacion, p.estado)?.texto ?? "—",
   ];
 }
 
@@ -97,11 +112,13 @@ const HEADERS_EXCEL = [
   "Estado facturación", "Número factura", "Monto facturado viaje",
   "Estado cobro factura", "Total factura", "Total pagado factura", "Saldo factura",
   ETIQUETA_TC, "Origen TC",
+  ETIQUETA_VEHICULO_SOLICITADO,
+  "Cargos adicionales", ETIQUETA_SUBTOTAL_COMERCIAL, "Estado liquidación",
 ];
 
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenantProgramacionOTms(slug, "ver");
+  const guard = await requireTenantProgramacionExportar(slug);
   if (guard.error) return guard.error;
 
   const url = new URL(req.url);
@@ -149,6 +166,29 @@ export async function GET(req: Request, ctx: Ctx) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="reporte-viajes-${fecha}.pdf"`,
+        "Cache-Control": "private, no-store",
+      },
+    });
+  }
+
+  // PLANES / VIAJES — libro formateado (una fila por viaje, TODO el filtro) para el botón «Exportar Excel» de Planes / Viajes. El libro de «Reportes»
+  // (abajo) no cambia. Misma autorización (programacion:exportar), mismos filtros y mismos límites de volumen que el resto de este exportador.
+  if (url.searchParams.get("vista") === "planes") {
+    const cuadrillaPorPlan = new Map<number, IntegranteCuadrilla[]>();
+    try {
+      for (let i = 0; i < planes.length; i += 500) {
+        const lote = await cuadrillaDePlanes(guard.empresa.id, planes.slice(i, i + 500).map((p) => p.id));
+        for (const [id, c] of lote) cuadrillaPorPlan.set(id, c);
+      }
+    } catch (e) {
+      // Instalación sin la tabla de cuadrilla: la columna sale vacía (no se rompe la exportación).
+      if ((e as { code?: string })?.code !== "ER_NO_SUCH_TABLE") throw e;
+    }
+    const buffer = await planesViajesAExcel(planes, cuadrillaPorPlan);
+    return new NextResponse(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${nombreArchivoPlanesViajes(filtros, fecha)}"`,
         "Cache-Control": "private, no-store",
       },
     });

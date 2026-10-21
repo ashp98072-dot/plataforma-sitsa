@@ -6,6 +6,8 @@ import {
   obtenerSituacionEmpleadosHoy,
   obtenerDetalleMovimientosMensual,
 } from "@/lib/rrhh/dashboard";
+import { hoyLocal } from "@/lib/rrhh/dates";
+import { resumenCumpleaniosDelMes } from "@/lib/rrhh/cumpleanios";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -35,13 +37,16 @@ export async function GET(req: Request, ctx: Ctx) {
       return NextResponse.json({ error: "No se pudo cargar el detalle mensual." }, { status: 500 });
     }
   }
+  // Cumpleaños del mes en curso (Guatemala): UN conteo + máximo 5 próximos, nunca la lista completa.
+  const hoy = hoyLocal();
   const resultados = await Promise.allSettled([
     obtenerEstadisticasDashboard(guard.empresa.id),
     obtenerResumenGerencial(guard.empresa.id),
     obtenerSituacionEmpleadosHoy(guard.empresa.id),
+    resumenCumpleaniosDelMes(guard.empresa.id, Number(hoy.slice(5, 7)), Number(hoy.slice(0, 4)), hoy, 5),
   ]);
-  const [stats, resumen, situacion] = resultados;
-  const nombres = ["Estadísticas de hoy", "Resumen mensual", "Situación del personal"];
+  const [stats, resumen, situacion, cumpleanios] = resultados;
+  const nombres = ["Estadísticas de hoy", "Resumen mensual", "Situación del personal", "Cumpleaños del mes"];
   // Diagnóstico SOLO en el log del servidor (sección + code/errno/sqlState/message); al cliente solo llega el aviso genérico.
   resultados.forEach((r, i) => { if (r.status === "rejected") registrarFalloSeccion(nombres[i], r.reason); });
   const avisos = resultados.flatMap((r, i) => r.status === "rejected" ? [`${nombres[i]}: no disponible. Intenta nuevamente o solicita revisar el servidor.`] : []);
@@ -49,6 +54,7 @@ export async function GET(req: Request, ctx: Ctx) {
     stats: stats.status === "fulfilled" ? stats.value : null,
     resumenGerencial: resumen.status === "fulfilled" ? resumen.value : [],
     situacionHoy: situacion.status === "fulfilled" ? situacion.value : null,
+    cumpleanios: cumpleanios.status === "fulfilled" ? cumpleanios.value : null,
     avisos,
     empresa: guard.empresa.nombre,
   }, { headers: { "Cache-Control": "private, no-store" } });

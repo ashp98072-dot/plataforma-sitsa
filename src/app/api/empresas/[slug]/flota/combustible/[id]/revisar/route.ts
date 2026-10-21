@@ -8,12 +8,12 @@ type Ctx = { params: Promise<{ slug: string; id: string }> };
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 2) — aprobar/rechazar una carga de
  * combustible PENDIENTE. Guardado por requireTenantFlotaCombustible
- * ("editar") — permiso propio, distinto de "ver" (que solo permite
+ * ("revisar") — acción propia, distinta de "ver" (que solo permite
  * consultar la bandeja).
  */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantFlotaCombustible(slug, "editar");
+  const guard = await requireTenantFlotaCombustible(slug, "revisar");
   if (guard.error) return guard.error;
 
   const cargaId = Number(id);
@@ -32,6 +32,7 @@ export async function POST(req: Request, ctx: Ctx) {
     accion,
     guard.session.username,
     motivoRechazo,
+    guard.session.id,
   );
   if (!resultado.ok) {
     return NextResponse.json({ error: resultado.error }, { status: resultado.status });
@@ -42,7 +43,7 @@ export async function POST(req: Request, ctx: Ctx) {
     usuario: guard.session.username,
     accion: accion === "aprobar" ? "aprobar_combustible" : "rechazar_combustible",
     modulo: "flota",
-    detalle: `Carga de combustible #${cargaId} ${accion === "aprobar" ? "aprobada" : "rechazada"}${motivoRechazo ? `: ${motivoRechazo}` : ""}`,
+    detalle: `Carga de combustible #${cargaId} ${accion === "aprobar" ? "aprobada" : "rechazada"} · usuario #${guard.session.id}${motivoRechazo ? `: ${motivoRechazo}` : ""}`,
   });
 
   return NextResponse.json({

@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FacturaBorradorForm, type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
-import { calcularTotalPaginas, evaluarSeleccion } from "@/lib/facturacion/ui-logica";
+import { type LineaBorrador } from "@/components/facturacion/factura-borrador-form";
+import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
+import { calcularTotalPaginas, evaluarSeleccion, formatearMonto } from "@/lib/facturacion/ui-logica";
 
 /**
  * FACT-1-UI (Fase D/E) — Operaciones → Facturación clientes → Viajes
@@ -24,6 +25,12 @@ type ViajePendiente = {
   placa: string | null;
   tarifaComercial: number | null;
   cerradoEn: string | null;
+  rutaCodigo: string | null;
+  origen: string | null;
+  destino: string | null;
+  piloto: string | null;
+  estado: string;
+  moneda: string;
 };
 
 type ClienteCat = { clienteId: number; nombre: string };
@@ -34,18 +41,13 @@ type Props = {
   onFacturaCreada: (facturaId: number) => void;
 };
 
-function moneda(v: number | null): string {
-  if (v == null) return "—";
-  return `Q${v.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]";
 const PAGE_SIZE = 50;
 
 export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Props) {
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/facturacion/clientes`)
+    fetch(`/api/empresas/${slug}/facturacion/facturas/catalogos`)
       .then((r) => r.json())
       .then((data) => setClientesCat(((data.clientes ?? []) as ClienteCat[])))
       .catch(() => undefined);
@@ -54,6 +56,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
   const [fCliente, setFCliente] = useState("");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
+  const [fRuta, setFRuta] = useState("");
 
   const [viajes, setViajes] = useState<ViajePendiente[]>([]);
   const [page, setPage] = useState(1);
@@ -66,8 +69,9 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
     if (fCliente) p.set("clienteId", fCliente);
     if (fDesde) p.set("fechaDesde", fDesde);
     if (fHasta) p.set("fechaHasta", fHasta);
+    if (fRuta.trim()) p.set("ruta", fRuta.trim());
     return p;
-  }, [fCliente, fDesde, fHasta]);
+  }, [fCliente, fDesde, fHasta, fRuta]);
 
   const cargar = useCallback(async (paginaSolicitada = 1) => {
     setLoading(true);
@@ -98,7 +102,7 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
 
   function buscar() { setBuscarTick((t) => t + 1); }
   function limpiarFiltros() {
-    setFCliente(""); setFDesde(""); setFHasta("");
+    setFCliente(""); setFDesde(""); setFHasta(""); setFRuta("");
     setBuscarTick((t) => t + 1);
   }
 
@@ -139,9 +143,9 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
   if (creando && clienteSeleccionado) {
     const lineas: LineaBorrador[] = Array.from(seleccion.values())
       .sort((a, b) => a.fechaPlan.localeCompare(b.fechaPlan))
-      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0 }));
+      .map((v) => ({ planId: v.planId, codigo: v.codigo, fechaPlan: v.fechaPlan, placa: v.placa, tarifaComercial: v.tarifaComercial, montoAsignado: v.tarifaComercial ?? 0, precioIncluyeIva: true, moneda: v.moneda, origen: v.origen, destino: v.destino })); // «IVA incluido» preseleccionado (caso más común); se cambia por viaje
     return (
-      <FacturaBorradorForm
+      <FacturaFormulario
         slug={slug}
         clienteId={clienteSeleccionado.id}
         clienteNombre={clienteSeleccionado.nombre}
@@ -176,6 +180,10 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
             Fecha hasta
             <input className={inputCls} type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} />
           </label>
+          <label className="flex flex-col gap-1 text-xs text-[var(--muted)]">
+            Ruta o destino
+            <input className={inputCls} value={fRuta} maxLength={80} placeholder="Código o destino" onChange={(e) => setFRuta(e.target.value)} />
+          </label>
           <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={buscar}>Buscar</button>
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" onClick={limpiarFiltros}>Limpiar filtros</button>
         </div>
@@ -206,10 +214,14 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
             <tr>
               {puedeCrear ? <th className="px-2 py-2" /> : null}
               <th className="px-2 py-2">Fecha</th>
-              <th className="px-2 py-2">Código</th>
+              <th className="px-2 py-2">Viaje</th>
               <th className="px-2 py-2">Cliente</th>
+              <th className="px-2 py-2">Ruta</th>
+              <th className="px-2 py-2">Origen → Destino</th>
               <th className="px-2 py-2">Unidad</th>
+              <th className="px-2 py-2">Piloto</th>
               <th className="px-2 py-2">Tarifa comercial</th>
+              <th className="px-2 py-2">Estado</th>
               <th className="px-2 py-2">Fecha cierre</th>
             </tr>
           </thead>
@@ -227,14 +239,18 @@ export function ViajesPendientesPanel({ slug, puedeCrear, onFacturaCreada }: Pro
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{v.fechaPlan}</td>
                   <td className="px-2 py-1.5 font-mono text-xs">{v.codigo}</td>
                   <td className="px-2 py-1.5 text-xs">{v.cliente}</td>
+                  <td className="px-2 py-1.5 font-mono text-xs">{v.rutaCodigo ?? "—"}</td>
+                  <td className="px-2 py-1.5 text-xs">{v.origen ?? "—"} → {v.destino ?? "—"}</td>
                   <td className="px-2 py-1.5 text-xs">{v.placa ?? "—"}</td>
-                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(v.tarifaComercial)}</td>
+                  <td className="px-2 py-1.5 text-xs">{v.piloto ?? "—"}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5 text-xs">{formatearMonto(v.tarifaComercial, v.moneda)}</td>
+                  <td className="px-2 py-1.5 text-xs">{v.estado}</td>
                   <td className="whitespace-nowrap px-2 py-1.5 text-xs">{v.cerradoEn ? v.cerradoEn.replace("T", " ") : "—"}</td>
                 </tr>
               );
             })}
             {!viajes.length && !loading ? (
-              <tr><td colSpan={puedeCrear ? 7 : 6} className="px-3 py-4 text-center text-sm text-[var(--muted)]">Sin viajes pendientes de facturación con estos filtros.</td></tr>
+              <tr><td colSpan={puedeCrear ? 11 : 10} className="px-3 py-4 text-center text-sm text-[var(--muted)]">Sin viajes pendientes de facturación con estos filtros.</td></tr>
             ) : null}
           </tbody>
         </table>

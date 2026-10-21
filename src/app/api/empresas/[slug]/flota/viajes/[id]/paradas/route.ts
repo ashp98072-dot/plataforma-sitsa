@@ -3,7 +3,6 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
 import {
-  asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { listarParadasDelPlan } from "@/lib/tms/paradas";

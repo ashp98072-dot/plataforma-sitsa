@@ -6,6 +6,7 @@ import { crearRequerimientoSchema, editarRequerimientoSchema, filtrosCompraSchem
 import { catalogosCompra, ErrorCompra, guardarRequerimiento, listarRequerimientos, obtenerRequerimiento } from "./requerimientos";
 import { query } from "@/lib/db";
 import { buscarFacturaExistente } from "./facturas-duplicadas";
+import { cuerpoErroresRequerimiento } from "./requerimiento-validacion";
 
 const respuesta = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "private, no-store" } });
 const idValido = (id: string) => /^[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id)) && Number(id) <= 2147483647;
@@ -36,7 +37,8 @@ export async function requerimientoGuardar(req: Request, slug: string, rawId?: s
   const datos = (rawId === undefined ? crearRequerimientoSchema : editarRequerimientoSchema).safeParse(payload);
   if (!datos.success) {
     const erroresCampos = Object.fromEntries(datos.error.issues.map(i => [i.path.join(".") || "formulario", i.code === "unrecognized_keys" ? "El formulario contiene campos no permitidos." : i.message]));
-    return respuesta({ error: Object.values(erroresCampos)[0], erroresCampos }, 400);
+    // `erroresCampos` se conserva (aditivo); `errores` trae línea + campo + problema legible ("Línea 2 — Repuesto a comprar: …").
+    return respuesta({ ...cuerpoErroresRequerimiento(datos.error, payload), erroresCampos }, 400);
   }
   try {
     return respuesta(await guardarRequerimiento(guard.empresa.id, guard.session.id, guard.session.username, datos.data,

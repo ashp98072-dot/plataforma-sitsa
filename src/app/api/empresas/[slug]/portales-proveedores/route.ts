@@ -8,7 +8,8 @@ import {
   ROLES_PORTALES_PROVEEDORES,
 } from "@/lib/proveedores/acceso";
 import { labelRol } from "@/lib/permisos-shared";
-import { requireTenant } from "@/lib/tenant";
+import { tienePermiso } from "@/lib/permisos";
+import { requireTenantPortalesProveedores } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -42,7 +43,7 @@ async function usuarioAsignable(usuarioId: number, empresaId: number) {
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenant(slug);
+  const guard = await requireTenantPortalesProveedores(slug, "ver");
   if (guard.error) return guard.error;
   if (!puedeUsarPortalesProveedores(guard.session.rol)) {
     return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });
@@ -80,7 +81,9 @@ export async function GET(_req: Request, ctx: Ctx) {
   return NextResponse.json(
     {
       puedeAdministrar: admin,
-      puedeCrear: true,
+      puedeCrear: admin || tienePermiso(guard.permisos, "proveedor_portales", "crear"),
+      puedeEditar: admin || tienePermiso(guard.permisos, "proveedor_portales", "editar"),
+      puedeEliminar: admin || tienePermiso(guard.permisos, "proveedor_portales", "eliminar"),
       usuarioActualId: guard.session.id,
       portales: rows.map((r) => ({
         id: Number(r.id),
@@ -109,7 +112,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireTenant(slug);
+  const guard = await requireTenantPortalesProveedores(slug, "ver");
   if (guard.error) return guard.error;
   if (!puedeUsarPortalesProveedores(guard.session.rol)) {
     return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });
@@ -147,6 +150,8 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: Object.values(erroresCampos)[0], erroresCampos }, { status: 400 });
   }
   const data = parsed.data;
+  const accionGuard = await requireTenantPortalesProveedores(slug, data.id ? "editar" : "crear");
+  if (accionGuard.error) return accionGuard.error;
   const asignadoUsuarioId = admin ? data.asignadoUsuarioId : guard.session.id;
   if (!asignadoUsuarioId) {
     return NextResponse.json({ error: "Selecciona el usuario asignado.", erroresCampos: { asignadoUsuarioId: "Selecciona el usuario asignado." } }, { status: 400 });

@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CuestionarioFields } from "@/components/clientes/cuestionario-fields";
+import { CuentasPorCobrarPanel } from "@/components/facturacion/cuentas-por-cobrar-panel";
 import { FacturasPanel } from "@/components/facturacion/facturas-panel";
 import { ViajesPendientesPanel } from "@/components/facturacion/viajes-pendientes-panel";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { tieneAccionCatalogo, tienePermisoBase } from "@/lib/permisos-catalogo";
 import type {
   RespuestasFacturacion,
   SeccionFacturacion,
@@ -19,7 +21,7 @@ type Props = {
   verClientes: boolean;
   editarClientes: boolean;
   /** Desde menú: Conta → empresa, Ops → clientes. */
-  vistaInicial?: "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda" | null;
+  vistaInicial?: "facturas" | "viajes-pendientes" | "cuentas-por-cobrar" | "empresa" | "clientes" | "ayuda" | null;
 };
 
 type KpisFacturacion = {
@@ -53,7 +55,7 @@ type ResumenCliente = {
   actualizadoAt: string | null;
 };
 
-type Tab = "facturas" | "viajes-pendientes" | "empresa" | "clientes" | "ayuda";
+type Tab = "facturas" | "viajes-pendientes" | "cuentas-por-cobrar" | "empresa" | "clientes" | "ayuda";
 
 export function FacturacionClient({
   slug,
@@ -67,8 +69,8 @@ export function FacturacionClient({
   // permiso propio del módulo "facturacion" (el MISMO que exige
   // requireTenantFacturacion en el backend), nunca por el alcance de rol
   // del cuestionario (empresa/clientes) ni por "tms".
-  const { permisos } = useEmpresaSession();
-  const puedeVerFacturas = tienePermiso(permisos, "facturacion", "ver");
+  const { permisos, rol } = useEmpresaSession();
+  const puedeVerFacturas = rol === "Admin" || tienePermisoBase(permisos, "facturacion");
   const puedeCrearFacturas = tienePermiso(permisos, "facturacion", "crear");
   const puedeEditarFacturas = tienePermiso(permisos, "facturacion", "editar");
 
@@ -77,6 +79,7 @@ export function FacturacionClient({
     if (puedeVerFacturas) {
       list.push({ id: "facturas", label: "Facturas" });
       list.push({ id: "viajes-pendientes", label: "Viajes pendientes" });
+      list.push({ id: "cuentas-por-cobrar", label: "Cuentas por cobrar" });
     }
     if (verEmpresa) {
       list.push({ id: "empresa", label: "Configuración empresa" });
@@ -107,6 +110,9 @@ export function FacturacionClient({
   const [resumen, setResumen] = useState<ResumenCliente[]>([]);
   const [clienteId, setClienteId] = useState<number | null>(null);
   const [clienteNombre, setClienteNombre] = useState("");
+  // FACT-4: retención de IVA del cliente (0/15/30). Solo se envía si cambió respecto de lo cargado.
+  const [retencionIvaPct, setRetencionIvaPct] = useState(0);
+  const [retencionIvaInicial, setRetencionIvaInicial] = useState(0);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -182,6 +188,8 @@ export function FacturacionClient({
         setRespuestas(data.respuestas ?? {});
         setCompletadoPct(Number(data.completadoPct ?? 0));
         setClienteNombre(data.cliente?.nombre ?? "");
+        setRetencionIvaPct(Number(data.retencionIvaPct ?? 0));
+        setRetencionIvaInicial(Number(data.retencionIvaPct ?? 0));
         setClienteId(id);
       } finally {
         setLoading(false);
@@ -218,11 +226,16 @@ export function FacturacionClient({
       const res = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ respuestas }),
+        body: JSON.stringify(
+          tab === "clientes" && retencionIvaPct !== retencionIvaInicial
+            ? { respuestas, retencionIvaPct }
+            : { respuestas },
+        ),
       });
       const data = await res.json();
       setMsg(data.mensaje || data.error || "");
       if (res.ok) {
+        if (tab === "clientes") setRetencionIvaInicial(retencionIvaPct);
         setCompletadoPct(Number(data.completadoPct ?? completadoPct));
         if (tab === "clientes") await cargarResumen();
       }
@@ -295,13 +308,17 @@ export function FacturacionClient({
       {tab === "facturas" && puedeVerFacturas ? (
         <FacturasPanel
           slug={slug}
-          puedeCrear={puedeCrearFacturas}
           puedeEditar={puedeEditarFacturas}
+          puedeEmitir={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "emitir")}
+          puedeAnular={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "anular")}
+          puedePagar={rol === "Admin" || tieneAccionCatalogo(permisos, "facturacion", "pagos")}
           abrirFacturaId={facturaAAbrir}
           onAbierta={() => setFacturaAAbrir(null)}
           onCambio={() => void cargarKpi()}
         />
       ) : null}
+
+      {tab === "cuentas-por-cobrar" && puedeVerFacturas ? <CuentasPorCobrarPanel slug={slug} /> : null}
 
       {tab === "viajes-pendientes" && puedeVerFacturas ? (
         <ViajesPendientesPanel
@@ -464,6 +481,25 @@ export function FacturacionClient({
               style={{ width: `${completadoPct}%` }}
             />
           </div>
+          {tab === "clientes" && !loading ? (
+            <label className="flex max-w-xs flex-col gap-1 text-xs text-[var(--muted)]">
+              Retención de IVA que practica este cliente
+              <select
+                aria-label="Retención de IVA del cliente"
+                className="rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm text-[var(--text)]"
+                value={retencionIvaPct}
+                disabled={!puedeGuardar}
+                onChange={(e) => setRetencionIvaPct(Number(e.target.value))}
+              >
+                <option value={0}>No aplica (0 %)</option>
+                <option value={15}>15 %</option>
+                <option value={30}>30 %</option>
+              </select>
+              <span className="text-[10px]">
+                Se precarga al preparar una factura de este cliente. La constancia de retención se verifica después.
+              </span>
+            </label>
+          ) : null}
           {loading ? (
             <p className="text-sm text-[var(--muted)]">Cargando formulario…</p>
           ) : (

@@ -33,7 +33,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 /** Solo contra factura Emitida. Rechaza sobrepago (monto > saldo). facturacion:crear. */
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenantFacturacion(slug, "crear");
+  const guard = await requireTenantFacturacion(slug, "pagos");
   if (guard.error) return guard.error;
 
   const facturaId = idValido(id);

@@ -1,4 +1,6 @@
 "use client";
+import { hoyLocal } from "@/lib/rrhh/dates";
+import { diasCalendarioInclusivos, diasPreviewActual, puedeRegistrarRango, type CalculoVacaciones } from "@/lib/rrhh/vacaciones-calendario";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
@@ -17,6 +19,15 @@ import {
 } from "@/lib/rrhh/vacaciones-eliminar-ui";
 import { SolicitudesVacacionesPanel } from "@/components/rrhh/solicitudes-vacaciones-panel";
 import { VacacionesAlertasPanel } from "@/components/rrhh/vacaciones-alertas-panel";
+import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
+import { ImportarHistorialVacaciones } from "@/components/rrhh/importar-historial-vacaciones";
+import { ExportarHistorialVacaciones } from "@/components/rrhh/exportar-historial-vacaciones";
+import { PendientesReparacionVacaciones } from "@/components/rrhh/pendientes-reparacion-vacaciones";
+import { ModoCargaHistoricaVacaciones } from "@/components/rrhh/modo-carga-historica-vacaciones";
+import { tienePermiso } from "@/lib/permisos-shared";
+import { PrevisualizacionHistorica } from "@/components/rrhh/previsualizacion-historica-vacaciones";
+import type { PrevisualizacionRegistro } from "@/lib/rrhh/vacaciones-registro";
+import type { HistorialVacaciones } from "@/lib/rrhh/vacaciones";
 
 type Emp = { id: number; codigo: string; nombre: string; dpi?: string };
 type Periodo = {
@@ -43,12 +54,21 @@ export default function VacacionesPage() {
   const slug = String(useParams().slug);
   const { rol, permisos } = useEmpresaSession();
   const puedeEliminar = puedeEliminarVacaciones(rol, permisos);
+  // Importar historial (solo vista previa): el endpoint exige RRHH · Vacaciones · editar; aquí solo se oculta la herramienta.
+  const puedeImportarHistorial = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
   const [empleados, setEmpleados] = useState<Emp[]>([]);
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [empleadoId, setEmpleadoId] = useState(0);
   const [tipo, setTipo] = useState<(typeof TIPOS)[number]>("Vacaciones");
   const [saldo, setSaldo] = useState<number | null>(null);
   const [periodos, setPeriodos] = useState<Periodo[]>([]);
+  const [historial, setHistorial] = useState<HistorialVacaciones | null>(null);
+  // Reparación administrada de series de períodos: RRHH · Vacaciones · editar (los endpoints lo exigen de nuevo). `versionReparacion` refresca el indicador.
+  const puedeReparar = rol === "Admin" || tienePermiso(permisos, "vacaciones", "editar");
+  const [versionReparacion, setVersionReparacion] = useState(0);
+  // Historial completo de vacaciones (por empresa): la activación exige RRHH · Configuración · editar (el servidor lo vuelve a exigir); la interfaz no ofrece desactivarlo.
+  const puedeCambiarModo = rol === "Admin" || tienePermiso(permisos, "configuracion", "editar");
+  const [modoHistorico, setModoHistorico] = useState(false);
   const [aviso, setAviso] = useState("");
   // RRHH-VACACIONES-FILTROS-HISTORIAL-1 — estados INDEPENDIENTES del empleado/tipo del formulario de registro
   // (empleadoId/tipo arriba). 0/"" = sin filtro ("Todos"). Cambiar estos filtros nunca toca empleadoId/tipo/
@@ -59,14 +79,21 @@ export default function VacacionesPage() {
   const [filtroHasta, setFiltroHasta] = useState("");
   const [errorFiltros, setErrorFiltros] = useState("");
   const [fechaInicio, setFechaInicio] = useState(
-    new Date().toISOString().slice(0, 10),
+    hoyLocal(),
   );
   const [fechaFin, setFechaFin] = useState(
-    new Date().toISOString().slice(0, 10),
+    hoyLocal(),
   );
-  const [dias, setDias] = useState("1");
+  const [calculo, setCalculo] = useState<CalculoVacaciones|null>(null);
+  const claveCalculo = JSON.stringify([slug,fechaInicio,fechaFin]);
+  const diasCalculados = diasPreviewActual(calculo,claveCalculo,fechaInicio,fechaFin);
+  const dias = diasCalculados===null ? "" : String(diasCalculados);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Registro HISTÓRICO: vista previa del consumo en la fecha de la vacación (no el saldo de hoy) y decisión explícita de RRHH cuando se requiere.
+  const [previa, setPrevia] = useState<(PrevisualizacionRegistro & { diasHabiles: number }) | null>(null);
+  const [decisionAcepta, setDecisionAcepta] = useState(false);
+  const [decisionMotivo, setDecisionMotivo] = useState("");
   const [evModal, setEvModal] = useState<{
     id: number;
     titulo: string;
@@ -82,12 +109,13 @@ export default function VacacionesPage() {
   // ambas lean del mismo endpoint GET con el mismo parámetro `empleadoId` (con significado distinto según la llamada
   // — el del formulario en una, el del filtro en la otra).
   const cargarFormularioEmpleado = useCallback(async () => {
-    if (!empleadoId) { setSaldo(null); setPeriodos([]); setAviso(""); return; }
+    if (!empleadoId) { setSaldo(null); setPeriodos([]); setHistorial(null); setAviso(""); return; }
     // AJUSTE PR #376 (punto 1) — soloResumen=1: el backend calcula saldo/periodos SIN ejecutar listarVacaciones()
     // (antes esta llamada traía y descartaba el historial completo; ahora nunca lo toca).
     const v = await fetch(`/api/empresas/${slug}/rrhh/vacaciones?empleadoId=${empleadoId}&soloResumen=1`).then((r) => r.json());
     setSaldo(v.saldo ?? null);
     setPeriodos(v.periodos ?? []);
+    setHistorial(v.historial ?? null);
     setAviso(v.aviso ?? "");
   }, [slug, empleadoId]);
 
@@ -108,7 +136,7 @@ export default function VacacionesPage() {
   }, [slug, filtroEmpleadoId, filtroTipo, filtroDesde, filtroHasta]);
 
   const cargarEmpleados = useCallback(async () => {
-    const e = await fetch(`/api/empresas/${slug}/empleados`).then((r) => r.json());
+    const e = await fetch(`/api/empresas/${slug}/rrhh/vacaciones/empleados`).then((r) => r.json());
     const lista: Emp[] = e.empleados ?? [];
     setEmpleados(lista);
     if (!empleadoId && lista[0]?.id) setEmpleadoId(lista[0].id);
@@ -145,25 +173,62 @@ export default function VacacionesPage() {
   }
 
   useEffect(() => {
-    if (!fechaInicio || !fechaFin) return;
+    try { diasCalendarioInclusivos(fechaInicio,fechaFin); } catch { return; }
+    const controller = new AbortController();
+    let vigente = true;
     const t = setTimeout(async () => {
-      const res = await fetch(
+      try {
+        const res = await fetch(
         `/api/empresas/${slug}/rrhh/vacaciones/dias-habiles?inicio=${fechaInicio}&fin=${fechaFin}`,
+        {signal:controller.signal,cache:"no-store"},
       );
       const data = await res.json();
-      if (res.ok && typeof data.dias === "number") setDias(String(data.dias));
+        if (vigente && res.ok && typeof data.dias === "number") setCalculo({clave:claveCalculo,dias:data.dias});
+      } catch { /* Sin respuesta válida no hay cálculo utilizable ni envío. */ }
     }, 300);
-    return () => clearTimeout(t);
-  }, [slug, fechaInicio, fechaFin]);
+    return () => {vigente=false;controller.abort();clearTimeout(t);};
+  }, [slug, fechaInicio, fechaFin, claveCalculo]);
+
+  // Vista previa del registro histórico: solo cuando el tipo descuenta saldo. No limita las fechas del formulario por períodos vigentes.
+  useEffect(() => {
+    const diasNum = Number(dias);
+    if (!empleadoId || !fechaInicio || !fechaFin || fechaFin < fechaInicio || !Number.isFinite(diasNum) || diasNum <= 0 || !(tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones")) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- limpia la vista previa cuando el formulario deja de ser evaluable
+      setPrevia(null);
+      return;
+    }
+    let vigente = true;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/empresas/${slug}/rrhh/vacaciones/preview-historico?empleadoId=${empleadoId}&fechaInicio=${fechaInicio}&fechaFin=${fechaFin}&diasHabiles=${diasNum}`);
+        const data = await res.json();
+        if (vigente) { setPrevia(res.ok && data.esHistorico ? data : null); setDecisionAcepta(false); setDecisionMotivo(""); }
+      } catch {
+        if (vigente) setPrevia(null);
+      }
+    }, 400);
+    return () => { vigente = false; clearTimeout(t); };
+  }, [slug, empleadoId, fechaInicio, fechaFin, dias, tipo]);
 
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
     setError("");
     setMsg("");
-    const diasNum = Number(dias);
-    if (!Number.isFinite(diasNum) || diasNum <= 0) {
+    const diasNum = diasPreviewActual(calculo,claveCalculo,fechaInicio,fechaFin);
+    if (!puedeRegistrarRango(diasNum,saldo,tipo==="Vacaciones"||tipo==="A cuenta de Vacaciones",!!previa?.esHistorico)) {
       setError("Días hábiles inválidos.");
       return;
+    }
+    const plan = previa?.plan ?? null;
+    if (previa && plan) {
+      if (plan.bloqueos.length || previa.superposiciones.length) {
+        setError(plan.bloqueos[0]?.mensaje ?? "La vacación se superpone con otra ya registrada.");
+        return;
+      }
+      if (plan.requiereDecision && (!decisionAcepta || decisionMotivo.trim().length < 10)) {
+        setError("Este registro histórico requiere una decisión explícita: marca la confirmación e indica el motivo (mínimo 10 caracteres).");
+        return;
+      }
     }
     const res = await fetch(`/api/empresas/${slug}/rrhh/vacaciones`, {
       method: "POST",
@@ -172,8 +237,8 @@ export default function VacacionesPage() {
         empleadoId,
         fechaInicio,
         fechaFin,
-        diasHabiles: diasNum,
         tipo,
+        ...(plan?.requiereDecision && decisionAcepta ? { decision: { huella: plan.huella, motivo: decisionMotivo.trim() } } : {}),
       }),
     });
     const data = await res.json();
@@ -181,6 +246,8 @@ export default function VacacionesPage() {
       setError(data.error ?? "Error");
       return;
     }
+    setDecisionAcepta(false);
+    setDecisionMotivo("");
     setMsg(
       `${data.mensaje} · ${data.diasHabiles} día(s)` +
         (data.desglose?.length
@@ -210,6 +277,7 @@ export default function VacacionesPage() {
 
   const usaSaldo =
     tipo === "Vacaciones" || tipo === "A cuenta de Vacaciones";
+  const superaSaldo = usaSaldo && !previa?.esHistorico && saldo!==null && diasCalculados!==null && diasCalculados>saldo;
   const input =
     "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-sm";
 
@@ -235,6 +303,13 @@ export default function VacacionesPage() {
           </Link>
         </div>
       </div>
+
+      <ModoCargaHistoricaVacaciones
+        slug={slug}
+        puedeCambiar={puedeCambiarModo}
+        onModo={setModoHistorico}
+        onCambio={async () => { await cargar(); setVersionReparacion((v) => v + 1); }}
+      />
 
       {aviso ? <p className="text-sm text-amber-300">{aviso}</p> : null}
 
@@ -271,9 +346,10 @@ export default function VacacionesPage() {
           Días hábiles
           <input
             className={`${input} mt-1 w-full`}
-            value={dias}
-            onChange={(e) => setDias(e.target.value)}
+            value={diasCalculados===null || superaSaldo ? "—" : dias}
+            readOnly
           />
+          {superaSaldo ? <span className="text-xs text-red-300">El rango supera el saldo disponible. Revisa las fechas.</span> : null}
         </label>
         <label className="text-sm text-[var(--muted)]">
           Desde
@@ -281,7 +357,7 @@ export default function VacacionesPage() {
             type="date"
             className={`${input} mt-1 w-full`}
             value={fechaInicio}
-            onChange={(e) => setFechaInicio(e.target.value)}
+            onChange={(e) => {setCalculo(null);setPrevia(null);setFechaInicio(e.target.value);}}
           />
         </label>
         <label className="text-sm text-[var(--muted)]">
@@ -290,23 +366,32 @@ export default function VacacionesPage() {
             type="date"
             className={`${input} mt-1 w-full`}
             value={fechaFin}
-            onChange={(e) => setFechaFin(e.target.value)}
+            onChange={(e) => {setCalculo(null);setPrevia(null);setFechaFin(e.target.value);}}
           />
         </label>
         <div className="flex items-end">
-          <button className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white">
+          <button disabled={!empleadoId||!puedeRegistrarRango(diasCalculados,saldo,usaSaldo,!!previa?.esHistorico)} className="rounded bg-[var(--accent)] px-4 py-2 text-sm text-white disabled:opacity-50">
             {usaSaldo ? "Registrar (descuenta saldo)" : "Registrar permiso"}
           </button>
         </div>
       </form>
 
+      {usaSaldo && previa ? (
+        <PrevisualizacionHistorica
+          previa={previa}
+          decisionAcepta={decisionAcepta}
+          onDecisionAcepta={setDecisionAcepta}
+          decisionMotivo={decisionMotivo}
+          onDecisionMotivo={setDecisionMotivo}
+        />
+      ) : null}
+
       {usaSaldo && saldo != null ? (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm">
           <p className="text-xs text-[var(--muted)]">
-            El saldo se calcula desde la fecha de contratación / alta (no la
-            entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular
-            el periodo actual, el excedente se descuenta del periodo más viejo
-            (FIFO).
+            {modoHistorico
+              ? "El saldo se calcula desde la fecha de contratación / alta e incluye todos los períodos acumulados, descontando las vacaciones registradas."
+              : "El saldo se calcula desde la fecha de contratación / alta (no la entrada laboral). Máximo 2 periodos vigentes (30 días): al acumular el periodo actual, el excedente se descuenta del periodo más viejo (FIFO)."}
           </p>
           <p className="mt-1">
             Saldo disponible:{" "}
@@ -324,6 +409,20 @@ export default function VacacionesPage() {
           </ul>
         </div>
       ) : null}
+
+      {puedeReparar ? <PendientesReparacionVacaciones slug={slug} version={versionReparacion} onRevisar={(id) => setEmpleadoId(id)} onLoteTerminado={async () => { await cargar(); setVersionReparacion((v) => v + 1); }} /> : null}
+
+      {usaSaldo && historial ? (
+        <HistorialPeriodosVacaciones
+          historial={historial}
+          admin
+          modoCargaHistorica={modoHistorico}
+          reparacion={puedeReparar && empleadoId ? { slug, empleadoId, onReparado: async () => { await cargar(); setVersionReparacion((v) => v + 1); } } : undefined}
+        />
+      ) : null}
+
+      {puedeImportarHistorial ? <ExportarHistorialVacaciones slug={slug} /> : null}
+      {puedeImportarHistorial ? <ImportarHistorialVacaciones slug={slug} /> : null}
 
       {error ? <p className="text-sm text-red-300">{error}</p> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}

@@ -4,7 +4,8 @@ import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/li
 import { ESTADOS_COTIZACION, crearCotizacion, listarCotizaciones } from "@/lib/tms/cotizaciones";
 import { DOCUMENTOS_EMISOR, DOCUMENTO_EMISOR_DEFAULT } from "@/lib/tms/cotizacion-documento";
 import { obtenerPresentacionComercial } from "@/lib/tms/cotizacion-presentacion";
-import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { ErrorCosteoVersionConflicto } from "@/lib/tms/cotizacion-costeo-db";
+import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -58,6 +59,7 @@ const schema = z.object({
   // FASE 6 — documento comercial. La marca es un catálogo cerrado; atención/cargo/unidad son opcionales.
   documentoEmisor: z.enum(DOCUMENTOS_EMISOR).optional(),
   atencionNombre: z.string().max(160).nullable().optional(),
+  atencionTratamiento: z.enum(["Sr.", "Sres.", "Sra.", "Srta."]).nullable().optional(),
   atencionCargo: z.string().max(160).nullable().optional(),
   unidadDescripcion: z.string().max(160).nullable().optional(),
   // PRESENTACIÓN COMERCIAL — snapshot editable del texto del PDF. Si se omite/vacío al crear,
@@ -65,6 +67,8 @@ const schema = z.object({
   // recalcula al leer o exportar más tarde — eso lo lee directamente el PDF del snapshot guardado.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — condiciones de crédito + combustible de referencia (snapshot comercial).
+  ...creditoCombustibleSchema,
   // Rutas/destinos adicionales a la línea principal (varias rutas en una sola cotización, cada una con su propio precio).
   lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
   // COTIZACIONES-COSTEO: opcional. El costeo se RECALCULA en servidor (el cliente no manda resultados ni parámetros).
@@ -103,7 +107,7 @@ export async function POST(req: Request, ctx: Ctx) {
     const cotizacion = await crearCotizacion(guard.empresa.id, datos, guard.session.username, preparado);
     return NextResponse.json({ mensaje: preparado ? "Cotización y costeo creados." : "Cotización creada.", cotizacion });
   } catch (error) {
-    if (error instanceof ErrorCosteoYaRegistrado) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ErrorCosteoVersionConflicto) return NextResponse.json({ error: error.message }, { status: 409 });
     const mensajeCosteo = mensajeErrorCosteo(error);
     if (mensajeCosteo) return NextResponse.json({ error: mensajeCosteo }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear la cotización." }, { status: 400 });

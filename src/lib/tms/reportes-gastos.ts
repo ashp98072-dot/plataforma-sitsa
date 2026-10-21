@@ -178,7 +178,7 @@ export async function reporteGastosPorUnidad(empresaId: number, f: FiltrosReport
     `SELECT CAST(g.vehiculo_id AS CHAR) AS clave, COALESCE(veh.placa, 'Sin unidad') AS etiqueta,
             COUNT(*) AS registros, SUM(g.cantidad * g.monto) AS total_monto
      FROM tms_gastos_operativos g
-     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+     LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id
      WHERE ${where}
      GROUP BY g.vehiculo_id, veh.placa
      ORDER BY total_monto DESC`,
@@ -323,7 +323,7 @@ export async function reporteViaticosPorViajeEmpleado(
      INNER JOIN tms_personal per ON per.id = v.personal_id AND per.empresa_id = v.empresa_id
      LEFT JOIN empleados e ON e.id = per.id_empleado AND e.empresa_id = per.empresa_id
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
-     LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id AND fv.empresa_id = p.empresa_id
+     LEFT JOIN flota_vehiculos fv ON fv.id = u.flota_vehiculo_id
      LEFT JOIN tms_clientes cli ON cli.id = p.cliente_id AND cli.empresa_id = p.empresa_id
      WHERE ${where}
      ORDER BY p.fecha_plan DESC, v.id DESC`,
@@ -485,7 +485,7 @@ export async function reporteGastosDetalle(empresaId: number, f: FiltrosReporteG
       FROM tms_gastos_operativos g
       LEFT JOIN tms_planes_viaje p ON p.id = g.plan_id AND p.empresa_id = g.empresa_id
       LEFT JOIN empleados emp ON emp.id = g.empleado_id AND emp.empresa_id = g.empresa_id
-      LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id AND veh.empresa_id = g.empresa_id
+      LEFT JOIN flota_vehiculos veh ON veh.id = g.vehiculo_id
       LEFT JOIN tms_clientes cli ON cli.id = g.cliente_id AND cli.empresa_id = g.empresa_id
       WHERE ${whereFlat}
       UNION ALL
@@ -657,6 +657,8 @@ export type FilaSolicitudFondoReporte = {
   autorizanteNombre?: string | null;
   fechaAutorizacion?: string | null;
   totalSolicitud?: number;
+  /** tms_solicitudes_fondo.observaciones (cabecera): se repite en cada línea de la misma solicitud, como `totalSolicitud`. */
+  observaciones?: string | null;
   estadoFondo: string;
 };
 
@@ -722,7 +724,7 @@ export async function reporteSolicitudesFondo(
             l.plan_id, l.cantidad, l.descripcion, l.monto,
             s.entidad_requirente_nombre, s.requirente_nombre, s.solicitante_nombre, s.autorizante_nombre,
             DATE_FORMAT(s.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion,
-            s.total AS total_solicitud, s.estado
+            s.total AS total_solicitud, s.estado, s.observaciones
      FROM tms_solicitud_fondo_lineas l
      INNER JOIN tms_solicitudes_fondo s ON s.id = l.solicitud_id AND s.empresa_id = l.empresa_id
      WHERE ${where}
@@ -758,6 +760,7 @@ export async function reporteSolicitudesFondo(
       autorizanteNombre: r.autorizante_nombre != null ? String(r.autorizante_nombre) : null,
       fechaAutorizacion: r.fecha_autorizacion != null ? String(r.fecha_autorizacion) : null,
       totalSolicitud: Number(r.total_solicitud ?? 0),
+      observaciones: r.observaciones != null ? String(r.observaciones) : null,
       estadoFondo: String(r.estado),
     };
   });
@@ -782,6 +785,7 @@ export type SolicitudFondoAgrupada = {
   autorizanteNombre: string | null;
   /** tms_solicitudes_fondo.total (suma server-side de sus líneas). */
   totalSolicitud: number;
+  observaciones: string | null;
   lineas: FilaSolicitudFondoReporte[];
 };
 
@@ -800,6 +804,7 @@ export function agruparSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): Sol
         solicitanteNombre: f.solicitanteNombre ?? null,
         autorizanteNombre: f.autorizanteNombre ?? null,
         totalSolicitud: f.totalSolicitud ?? 0,
+        observaciones: f.observaciones ?? null,
         lineas: [],
       };
       mapa.set(f.solicitudId, g);

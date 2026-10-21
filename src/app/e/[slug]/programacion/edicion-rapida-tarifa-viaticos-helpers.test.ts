@@ -293,7 +293,7 @@ describe("Edición rápida (UI) — guardas de código (PR-355)", () => {
     expect(tabla).toContain('"Tarifa", "Viáticos"');
     expect(tabla).toContain("aria-label={`Tarifa de ${p.codigo}`}");
     expect(tabla).toContain("aria-label={`Viático de ${nombre} en ${p.codigo}`}");
-    expect(tabla).toContain("colSpan={11}");
+    expect(tabla).toContain("colSpan={12}");
     expect(tabla).toContain("— Sin tarifa —");
   });
 

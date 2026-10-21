@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { execute } from "@/lib/db";
 import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
-import { requireTenant } from "@/lib/tenant";
+import { requireTenantPortalesProveedores } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 export async function DELETE(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenant(slug);
+  const guard = await requireTenantPortalesProveedores(slug, "eliminar");
   if (guard.error) return guard.error;
   if (!puedeUsarPortalesProveedores(guard.session.rol)) {
     return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });

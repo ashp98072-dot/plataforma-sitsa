@@ -93,9 +93,9 @@ export function resumenFilas(filas: FilaEditable[]) {
 /** Cuerpo para validar/confirmar: solo filas incluidas y solo los campos editables (sin paradas, sin empresa, sin montos). */
 export function cuerpoLote(fechaOrigen: string, fechaDestino: string, filas: FilaEditable[]) {
   const edicion: EdicionFilaCopia[] = filasIncluidas(filas).map((f) => {
-    // paradas y el traslado del regreso los recalcula el SERVIDOR desde el plan origen (el esquema estricto no los acepta).
-    const { paradas: _paradas, regresoOffsetDias: _offset, regresoHora: _hora, ...resto } = f.borrador;
-    void _paradas; void _offset; void _hora;
+    // Paradas, regreso y perfil solicitado se recuperan del origen en el servidor; no son ediciones del cliente.
+    const { paradas: _paradas, regresoOffsetDias: _offset, regresoHora: _hora, vehiculoSolicitadoPerfilId: _perfil, ...resto } = f.borrador;
+    void _paradas; void _offset; void _hora; void _perfil;
     return resto;
   });
   return { fechaOrigen, fechaDestino, filas: edicion };

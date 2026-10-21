@@ -1,0 +1,143 @@
+-- =====================================================================
+-- PROPUESTA (NO EJECUTABLE AUTOMATICAMENTE) — RECONSTRUCCION COMPLETA DE VACACIONES DESDE EL HISTORIAL OFICIAL
+-- TODO el contenido esta COMENTADO a proposito. Ni la aplicacion ni Claude lo ejecutan (CLAUDE.md seccion 4). Es la guia para que el
+-- responsable de la base y RRHH la apliquen MANUALMENTE y por pasos, DESPUES de:
+--   1) revisar la vista previa/simulacion de la aplicacion (RRHH · Vacaciones · «Importar historial») sin errores ni bloqueantes;
+--   2) ejecutar y archivar sql/preflight-reconstruccion-vacaciones.sql;
+--   3) corregir las fichas BLOQUEANTES (Elisa, id 37: fecha_alta 1899-12-31) con el dato real de RRHH;
+--   4) aprobar por escrito las advertencias que requieren decision (saldo insuficiente, vacaciones superpuestas, empleados sin historial).
+--
+-- REGLAS INVIOLABLES
+--   * NO TRUNCATE. NO "SET FOREIGN_KEY_CHECKS = 0". Todo DELETE lleva filtro explicito y se verifica con conteos antes y despues.
+--   * NO se toca ninguna incidencia que no sea 'Vacaciones' / 'A cuenta de Vacaciones', ni incidencias con evidencias o ligadas a solicitudes.
+--   * NO se sobrescribe backup_saldos_vacaciones_20261006 ni ningun respaldo existente: los respaldos de esta propuesta llevan sello propio
+--     (bk_reconstruccion_<AAAAMMDD_HHMM>_*) y el paso 0 verifica que NO existan.
+--   * Fuente de verdad = el historial oficial de RRHH. Las vacaciones actuales NO se suman al archivo (se reemplazan).
+--   * Los datos a insertar (periodos y consumos FIFO) NO se calculan en SQL: los produce el motor de simulacion de la aplicacion
+--     (src/lib/rrhh/vacaciones-reconstruccion.ts) y se cargan en tablas de STAGING en un paso controlado POSTERIOR a este PR
+--     (la aplicacion todavia no escribe nada). Asi el SQL solo copia lo ya revisado en la vista previa.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- PASO 0 — precondiciones (solo lectura)
+-- ---------------------------------------------------------------------
+-- -- Elegir un sello unico: <TS> = AAAAMMDD_HHMM  (ejemplo conceptual: 20261008_0900)
+-- SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'bk\_reconstruccion\_<TS>\_%';   -- debe devolver 0 filas
+-- SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'backup_saldos_vacaciones_20261006'; -- debe existir; NO se toca
+
+-- ---------------------------------------------------------------------
+-- PASO 1 — RESPALDOS SEPARADOS (con sello explicito; nunca CREATE OR REPLACE ni DROP de un respaldo)
+-- ---------------------------------------------------------------------
+-- CREATE TABLE bk_reconstruccion_<TS>_vacaciones                  AS SELECT * FROM vacaciones;
+-- CREATE TABLE bk_reconstruccion_<TS>_incidencias_vacaciones      AS SELECT * FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones');
+-- CREATE TABLE bk_reconstruccion_<TS>_detalle_consumo_vacaciones  AS SELECT * FROM detalle_consumo_vacaciones;
+-- CREATE TABLE bk_reconstruccion_<TS>_saldos_vacaciones           AS SELECT * FROM saldos_vacaciones;
+-- CREATE TABLE bk_reconstruccion_<TS>_solicitudes_vacaciones      AS SELECT * FROM solicitudes_vacaciones;
+-- -- Verificar que cada respaldo tiene exactamente las mismas filas que su origen:
+-- SELECT (SELECT COUNT(*) FROM vacaciones) = (SELECT COUNT(*) FROM bk_reconstruccion_<TS>_vacaciones) AS vacaciones_ok,
+--        (SELECT COUNT(*) FROM incidencias WHERE tipo IN ('Vacaciones','A cuenta de Vacaciones')) = (SELECT COUNT(*) FROM bk_reconstruccion_<TS>_incidencias_vacaciones) AS incidencias_ok,
+--        (SELECT COUNT(*) FROM detalle_consumo_vacaciones) = (SELECT COUNT(*) FROM bk_reconstruccion_<TS>_detalle_consumo_vacaciones) AS detalle_ok,
+--        (SELECT COUNT(*) FROM saldos_vacaciones) = (SELECT COUNT(*) FROM bk_reconstruccion_<TS>_saldos_vacaciones) AS saldos_ok,
+--        (SELECT COUNT(*) FROM solicitudes_vacaciones) = (SELECT COUNT(*) FROM bk_reconstruccion_<TS>_solicitudes_vacaciones) AS solicitudes_ok;   -- todo 1
+
+-- ---------------------------------------------------------------------
+-- PASO 2 — TABLAS DE STAGING (las llena el paso controlado posterior con lo YA revisado en la vista previa)
+-- ---------------------------------------------------------------------
+-- CREATE TABLE stg_vac_historial (            -- filas oficiales validadas del archivo de RRHH (1 fila = 1 vacacion)
+--   origen INT NOT NULL, empresa_id INT NOT NULL, empleado_id INT NOT NULL,
+--   fecha_inicio DATE NOT NULL, fecha_fin DATE NOT NULL, dias_habiles DECIMAL(8,2) NOT NULL,
+--   tipo VARCHAR(80) NOT NULL, observacion TEXT NULL,
+--   incidencia_id INT NULL,                   -- se llena en el paso 4.6
+--   PRIMARY KEY (origen), UNIQUE KEY uq_stg_llave (empleado_id, fecha_inicio, fecha_fin, dias_habiles, tipo)
+-- ) ENGINE=InnoDB;
+-- CREATE TABLE stg_vac_periodos (             -- salida del motor: periodos regenerados por empleado
+--   empresa_id INT NOT NULL, empleado_id INT NOT NULL, anio_laboral INT NOT NULL,
+--   periodo_inicio DATE NOT NULL, periodo_fin DATE NOT NULL,
+--   dias_otorgados DECIMAL(8,2) NOT NULL, dias_disponibles DECIMAL(8,2) NOT NULL, estado VARCHAR(30) NOT NULL,
+--   PRIMARY KEY (empleado_id, anio_laboral)
+-- ) ENGINE=InnoDB;
+-- CREATE TABLE stg_vac_consumos (             -- salida del motor: que periodo consume cada vacacion (FIFO)
+--   origen INT NOT NULL, empleado_id INT NOT NULL, anio_laboral INT NOT NULL, dias_tomados DECIMAL(8,2) NOT NULL,
+--   PRIMARY KEY (origen, anio_laboral)
+-- ) ENGINE=InnoDB;
+
+-- ---------------------------------------------------------------------
+-- PASO 3 — VALIDAR EL STAGING (todo debe dar 0 / coincidir; ver tambien preflight-reconstruccion-vacaciones.sql, seccion 7)
+-- ---------------------------------------------------------------------
+-- SELECT COUNT(*) AS vacaciones_a_cargar FROM stg_vac_historial;                    -- = total de filas validas de la vista previa
+-- SELECT COUNT(*) AS periodos_a_cargar   FROM stg_vac_periodos;
+-- SELECT COUNT(*) AS consumos_a_cargar   FROM stg_vac_consumos;
+-- SELECT COUNT(*) AS empleados_inexistentes FROM stg_vac_historial s LEFT JOIN empleados e ON e.id = s.empleado_id AND e.empresa_id = s.empresa_id WHERE e.id IS NULL;           -- 0
+-- SELECT COUNT(*) AS empleados_bloqueados FROM empleados e WHERE e.id IN (SELECT empleado_id FROM stg_vac_historial) AND (e.fecha_alta IS NULL OR e.fecha_alta < '1980-01-01');   -- 0
+-- SELECT COUNT(*) AS periodos_traslapados FROM stg_vac_periodos a JOIN stg_vac_periodos b ON b.empleado_id = a.empleado_id AND b.anio_laboral > a.anio_laboral
+--  WHERE a.periodo_inicio <= b.periodo_fin AND b.periodo_inicio <= a.periodo_fin;                                                                                               -- 0
+-- -- suma de consumos por vacacion = dias de la vacacion (salvo faltantes aprobados por RRHH):
+-- SELECT h.origen, h.dias_habiles, COALESCE(SUM(c.dias_tomados), 0) AS consumido FROM stg_vac_historial h LEFT JOIN stg_vac_consumos c ON c.origen = h.origen GROUP BY h.origen, h.dias_habiles HAVING consumido <> h.dias_habiles;
+
+-- ---------------------------------------------------------------------
+-- PASO 4 — RECONSTRUCCION en UNA transaccion (alcance: SOLO los empleados presentes en stg_vac_historial y la empresa <EMPRESA_ID>)
+-- ---------------------------------------------------------------------
+-- START TRANSACTION;
+--
+--   -- 4.0 conteos de partida (anotar)
+--   SELECT (SELECT COUNT(*) FROM incidencias WHERE tipo NOT IN ('Vacaciones','A cuenta de Vacaciones')) AS otras_incidencias_antes;   -- NO debe cambiar
+--
+--   -- 4.1 eliminar el DETALLE FIFO de los empleados a reconstruir (los saldos aun existen: nada se borra en cascada por sorpresa)
+--   DELETE d FROM detalle_consumo_vacaciones d JOIN saldos_vacaciones s ON s.id = d.saldo_id
+--    WHERE s.empresa_id = <EMPRESA_ID> AND s.id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial);
+--
+--   -- 4.2 eliminar UNICAMENTE incidencias de vacaciones reconstruibles (sin evidencias ni solicitud ligada; nunca otros tipos)
+--   DELETE i FROM incidencias i
+--    WHERE i.empresa_id = <EMPRESA_ID> AND i.tipo IN ('Vacaciones','A cuenta de Vacaciones')
+--      AND i.id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial)
+--      AND NOT EXISTS (SELECT 1 FROM evidencias_incidencias ev WHERE ev.incidencia_id = i.id)
+--      AND NOT EXISTS (SELECT 1 FROM solicitudes_vacaciones sv WHERE sv.incidencia_id = i.id);
+--   -- si el preflight (3b) listo incidencias con evidencias/solicitud, NO se borran aqui: decidir caso por caso antes de seguir.
+--
+--   -- 4.3 eliminar las vacaciones (historial simple) de esos empleados
+--   DELETE FROM vacaciones WHERE empresa_id = <EMPRESA_ID> AND id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial);
+--
+--   -- 4.4 eliminar los saldos de esos empleados (el detalle ya fue eliminado en 4.1)
+--   DELETE FROM saldos_vacaciones WHERE empresa_id = <EMPRESA_ID> AND id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial);
+--
+--   -- 4.5 regenerar los periodos (los calculo el motor; aqui solo se copian)
+--   INSERT INTO saldos_vacaciones (empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado)
+--   SELECT empresa_id, empleado_id, anio_laboral, periodo_inicio, periodo_fin, dias_otorgados, dias_disponibles, estado FROM stg_vac_periodos;
+--
+--   -- 4.6 insertar las incidencias correspondientes y guardar su id en el staging
+--   INSERT INTO incidencias (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
+--   SELECT empresa_id, empleado_id, tipo, fecha_inicio, fecha_fin, dias_habiles FROM stg_vac_historial ORDER BY origen;
+--   UPDATE stg_vac_historial h JOIN incidencias i
+--      ON i.empresa_id = h.empresa_id AND i.id_empleado = h.empleado_id AND i.tipo = h.tipo
+--     AND i.fecha_inicio = h.fecha_inicio AND i.fecha_fin = h.fecha_fin AND i.dias_habiles = h.dias_habiles
+--      SET h.incidencia_id = i.id;
+--   SELECT COUNT(*) AS sin_incidencia FROM stg_vac_historial WHERE incidencia_id IS NULL;     -- debe ser 0 (si no: ROLLBACK)
+--
+--   -- 4.7 insertar las vacaciones (fila espejo 1:1 con su incidencia)
+--   INSERT INTO vacaciones (empresa_id, id_empleado, fecha_inicio, fecha_fin, dias_habiles, observaciones, estado)
+--   SELECT empresa_id, empleado_id, fecha_inicio, fecha_fin, dias_habiles, observacion, 'Aprobado' FROM stg_vac_historial ORDER BY origen;
+--
+--   -- 4.8 generar el detalle FIFO exacto producido por el motor
+--   INSERT INTO detalle_consumo_vacaciones (incidencia_id, saldo_id, dias_tomados)
+--   SELECT h.incidencia_id, s.id, c.dias_tomados
+--     FROM stg_vac_consumos c
+--     JOIN stg_vac_historial h ON h.origen = c.origen
+--     JOIN saldos_vacaciones s ON s.empresa_id = h.empresa_id AND s.id_empleado = c.empleado_id AND s.anio_laboral = c.anio_laboral;
+--
+--   -- 4.9 VALIDACIONES (todas deben cumplirse; si alguna falla: ROLLBACK;)
+--   SELECT (SELECT COUNT(*) FROM incidencias WHERE tipo NOT IN ('Vacaciones','A cuenta de Vacaciones')) AS otras_incidencias_despues;   -- = otras_incidencias_antes
+--   -- por empleado:
+--   --   cero traslapes · cero anios laborales duplicados · cero saldos sin anio · cero detalle huerfano ·
+--   --   SUM(detalle por incidencia) = dias_habiles · vacaciones = incidencias 1:1 · saldo vigente <= 30 · sin disponibles negativos · sin vacaciones duplicadas
+--   SELECT s.id_empleado, COUNT(*) AS filas FROM saldos_vacaciones s GROUP BY s.id_empleado, s.anio_laboral HAVING COUNT(*) > 1;                        -- 0 filas (anio duplicado)
+--   SELECT COUNT(*) AS saldos_sin_anio FROM saldos_vacaciones WHERE anio_laboral IS NULL AND id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial);   -- 0
+--   SELECT COUNT(*) AS saldos_negativos FROM saldos_vacaciones WHERE dias_disponibles < 0;                                                               -- 0
+--   SELECT id_empleado, SUM(dias_disponibles) AS saldo FROM saldos_vacaciones WHERE estado = 'Vigente' GROUP BY id_empleado HAVING SUM(dias_disponibles) > 30;   -- 0 filas
+--   SELECT COUNT(*) AS detalle_huerfano FROM detalle_consumo_vacaciones d LEFT JOIN incidencias i ON i.id = d.incidencia_id LEFT JOIN saldos_vacaciones s ON s.id = d.saldo_id WHERE i.id IS NULL OR s.id IS NULL;  -- 0
+--   SELECT i.id, i.dias_habiles, COALESCE(SUM(d.dias_tomados), 0) AS detalle FROM incidencias i LEFT JOIN detalle_consumo_vacaciones d ON d.incidencia_id = i.id
+--    WHERE i.tipo IN ('Vacaciones','A cuenta de Vacaciones') AND i.id_empleado IN (SELECT DISTINCT empleado_id FROM stg_vac_historial)
+--    GROUP BY i.id, i.dias_habiles HAVING detalle <> i.dias_habiles;                                                                                      -- 0 filas (salvo faltantes aprobados)
+--   --   GLOBAL: COUNT(vacaciones importadas) = COUNT(stg_vac_historial) = COUNT(incidencias de vacaciones de esos empleados); COUNT(detalle) > 0 si hay consumos
+--
+-- COMMIT;   -- solo si TODAS las validaciones pasaron
+-- -- ROLLBACK;  -- ante cualquier diferencia. Restauracion posterior (si hiciera falta): desde las tablas bk_reconstruccion_<TS>_*.

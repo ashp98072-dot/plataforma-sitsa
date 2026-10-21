@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getUploadsRoot } from "@/lib/uploads";
+import { FILTRO_FOTO_EMPLEADO } from "./foto-empleado-existencia";
 
 export const MAX_FOTO_EMPLEADO = 5 * 1024 * 1024;
 export function tipoFotoEmpleado(bytes: Uint8Array): string | null {
@@ -17,8 +18,7 @@ const privadas = { "Cache-Control": "private, no-store", "X-Content-Type-Options
 export async function respuestaFotoEmpleado(empresaId: number, empleadoId: number) {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, ruta_archivo FROM documentos_empleados
-     WHERE empresa_id = ? AND id_empleado = ? AND tipo_documento = 'Foto'
-       AND LOWER(ruta_archivo) REGEXP '[.](jpg|jpeg|png|webp)$'
+     WHERE empresa_id = ? AND id_empleado = ? AND ${FILTRO_FOTO_EMPLEADO}
      ORDER BY subido_en DESC, id DESC LIMIT 1`, [empresaId, empleadoId]);
   if (!rows[0]) return NextResponse.json({ error: "Sin fotografía registrada." }, { status: 404, headers: privadas });
   const dir = resolve(getUploadsRoot(), "empresas", String(empresaId), "documentos");

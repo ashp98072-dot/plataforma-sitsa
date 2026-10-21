@@ -8,7 +8,7 @@ vi.mock("@/lib/tms/cotizaciones", async (importOriginal) => {
 });
 vi.mock("@/lib/tms/cotizacion-costeo-db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tms/cotizacion-costeo-db")>();
-  return { ...actual, listarPerfilesCosteo: vi.fn(), obtenerParametrosCosteoVigentes: vi.fn(), obtenerSnapshotCosteo: vi.fn() };
+  return { ...actual, listarPerfilesCosteo: vi.fn(), obtenerParametrosCosteoVigentes: vi.fn(), obtenerCosteoSeleccionado: vi.fn() };
 });
 vi.mock("@/lib/tms/cotizacion-costeo-servicio", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tms/cotizacion-costeo-servicio")>();
@@ -19,7 +19,7 @@ vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 
 import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { actualizarCotizacion, crearCotizacion, listarCotizaciones, obtenerCotizacion } from "@/lib/tms/cotizaciones";
-import { ErrorCosteoConfig, ErrorCosteoYaRegistrado, listarPerfilesCosteo, obtenerParametrosCosteoVigentes, obtenerSnapshotCosteo } from "@/lib/tms/cotizacion-costeo-db";
+import { ErrorCosteoConfig, ErrorCosteoVersionConflicto, MENSAJE_COSTEO_VERSION_CONFLICTO, listarPerfilesCosteo, obtenerParametrosCosteoVigentes, obtenerCosteoSeleccionado } from "@/lib/tms/cotizacion-costeo-db";
 import { prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 import { GET as configGET } from "./config/route";
 import { POST as calcularPOST } from "./calcular/route";
@@ -111,12 +111,12 @@ describe("GET cotizaciones/[id]/costeo", () => {
   it("sin permiso => 403 (cotizaciones:ver y tms:ver NO alcanzan)", async () => {
     vi.mocked(requireTenantCotizacionesCosteo).mockResolvedValue(denegado());
     const res = await snapshotGET(new Request("http://x"), ctx());
-    expect(res.status).toBe(403); expect(requireTenantCotizaciones).not.toHaveBeenCalled(); expect(obtenerSnapshotCosteo).not.toHaveBeenCalled();
+    expect(res.status).toBe(403); expect(requireTenantCotizaciones).not.toHaveBeenCalled(); expect(obtenerCosteoSeleccionado).not.toHaveBeenCalled();
   });
   it("cotización inexistente => 404; cotización sin costeo => 404", async () => {
     vi.mocked(obtenerCotizacion).mockResolvedValue(null);
     expect((await snapshotGET(new Request("http://x"), ctx())).status).toBe(404);
-    vi.mocked(obtenerCotizacion).mockResolvedValue({ id: 10 } as never); vi.mocked(obtenerSnapshotCosteo).mockResolvedValue(null);
+    vi.mocked(obtenerCotizacion).mockResolvedValue({ id: 10 } as never); vi.mocked(obtenerCosteoSeleccionado).mockResolvedValue(null);
     const res = await snapshotGET(new Request("http://x"), ctx());
     expect(res.status).toBe(404); expect((await res.json()).error).toBe("Esta cotización no tiene costeo registrado.");
   });
@@ -124,10 +124,10 @@ describe("GET cotizaciones/[id]/costeo", () => {
     vi.mocked(requireTenantCotizacionesCosteo).mockResolvedValue(ok(3));
     vi.mocked(obtenerCotizacion).mockResolvedValue(null);
     await snapshotGET(new Request("http://x"), ctx("10"));
-    expect(obtenerCotizacion).toHaveBeenCalledWith(3, 10); expect(obtenerSnapshotCosteo).not.toHaveBeenCalled();
-    vi.mocked(obtenerCotizacion).mockResolvedValue({ id: 10 } as never); vi.mocked(obtenerSnapshotCosteo).mockResolvedValue({ id: 1 } as never);
+    expect(obtenerCotizacion).toHaveBeenCalledWith(3, 10); expect(obtenerCosteoSeleccionado).not.toHaveBeenCalled();
+    vi.mocked(obtenerCotizacion).mockResolvedValue({ id: 10 } as never); vi.mocked(obtenerCosteoSeleccionado).mockResolvedValue({ id: 1 } as never);
     const res = await snapshotGET(new Request("http://x"), ctx("10"));
-    expect(obtenerSnapshotCosteo).toHaveBeenCalledWith(3, 10);
+    expect(obtenerCosteoSeleccionado).toHaveBeenCalledWith(3, 10);
     expect(res.status).toBe(200); expect(res.headers.get("Cache-Control")).toBe("private, no-store"); expect(await res.json()).toEqual({ costeo: { id: 1 } });
   });
   it("id no numérico o fuera de rango => 404 sin consultar", async () => {
@@ -178,11 +178,12 @@ describe("Editar cotización — snapshot inmutable", () => {
     expect(prepararCosteo).toHaveBeenCalledWith(1, PAYLOAD, { fechaEmision: "2026-09-01", tarifaCotizada: 4500, incluyeIva: true });
     expect(actualizarCotizacion).toHaveBeenCalledWith(1, 10, { tarifaCotizada: 4500 }, PREPARADO, "admin");
   });
-  it("si ya existe el snapshot => 409 con el mensaje exacto (no se reemplaza)", async () => {
+  it("ya NO existe el bloqueo «ya tiene un costeo registrado»: un conflicto de numeración (carrera residual) responde 409 con su propio mensaje y se puede reintentar", async () => {
     vi.mocked(obtenerCotizacion).mockResolvedValue({ id: 10, fechaEmision: "2026-09-01", tarifaCotizada: 4000, incluyeIva: true } as never);
-    vi.mocked(actualizarCotizacion).mockRejectedValue(new ErrorCosteoYaRegistrado());
+    vi.mocked(actualizarCotizacion).mockRejectedValue(new ErrorCosteoVersionConflicto());
     const res = await editarPATCH(post({ costeo: PAYLOAD }, "PATCH"), ctx());
-    expect(res.status).toBe(409); expect((await res.json()).error).toBe("Esta cotización ya tiene un costeo registrado.");
+    expect(res.status).toBe(409); expect((await res.json()).error).toBe(MENSAJE_COSTEO_VERSION_CONFLICTO);
+    expect(MENSAJE_COSTEO_VERSION_CONFLICTO).not.toContain("ya tiene un costeo registrado");
   });
   it("con costeo y sin permiso: 403 y no se edita nada", async () => {
     vi.mocked(requireTenantCotizacionesCosteo).mockResolvedValue(denegado());
@@ -203,6 +204,6 @@ describe("Los GET normales (listado y detalle) nunca llevan costeo", () => {
     const lista = await (await listadoGET(new Request("http://x/api"), ctx())).json();
     const detalle = await (await detalleGET(new Request("http://x/api"), ctx())).json();
     for (const cuerpo of [lista, detalle]) for (const clave of ["costeo", "costoOperativo", "precioSugerido", "utilidad", "margen"]) expect(JSON.stringify(cuerpo).toLowerCase()).not.toContain(clave.toLowerCase());
-    expect(requireTenantCotizacionesCosteo).not.toHaveBeenCalled(); expect(obtenerSnapshotCosteo).not.toHaveBeenCalled();
+    expect(requireTenantCotizacionesCosteo).not.toHaveBeenCalled(); expect(obtenerCosteoSeleccionado).not.toHaveBeenCalled();
   });
 });

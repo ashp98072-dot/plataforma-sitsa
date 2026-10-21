@@ -5,10 +5,10 @@ vi.mock("@/lib/db", () => ({ query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
 import { query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
-import { calcularCosteoServicio, COTIZACION_COSTEO_MOTOR_VERSION, type InputCosteoServicio } from "./cotizacion-costeo";
+import { calcularCosteoServicio, COTIZACION_COSTEO_COTIZADOR_V2_VERSION, COTIZACION_COSTEO_MOTOR_VERSION, type InputCosteoServicio } from "./cotizacion-costeo";
 import {
-  ErrorCosteoConfig, ErrorCosteoYaRegistrado, MENSAJE_COSTEO_YA_REGISTRADO, MENSAJE_SIN_PARAMETROS, guardarSnapshotCosteoTx,
-  listarPerfilesCosteo, obtenerParametrosCosteoVigentes, obtenerPerfilCosteo, obtenerSnapshotCosteo, sumaComponentesCoincide,
+  ErrorCosteoConfig, ErrorCosteoVersionConflicto, MENSAJE_COSTEO_VERSION_CONFLICTO, MENSAJE_SIN_PARAMETROS, guardarSnapshotCosteoTx,
+  listarHistorialCosteos, listarPerfilesCosteo, obtenerCosteoSeleccionado, obtenerParametrosCosteoVigentes, obtenerPerfilCosteo, sumaComponentesCoincide,
   type CosteoPreparado, type PerfilCosteoConId,
 } from "./cotizacion-costeo-db";
 
@@ -28,6 +28,15 @@ const filaParam = (vigente: string, over: Record<string, unknown> = {}) => ({
 });
 
 beforeEach(() => vi.resetAllMocks());
+
+/**
+ * Consultas del guardado de una versión: 1) bloqueo de la cotización padre, 2) MAX(version) + «hay seleccionado» de sus costeos.
+ * `maxVersion` = última versión ya registrada (0 = primer costeo); `haySeleccionado` = 1 si alguna ya es la utilizada.
+ */
+const consultaGuardar = (over: { padre?: boolean; maxVersion?: number; haySeleccionado?: number } = {}) => async (sql: string) => {
+  if (String(sql).includes("FROM tms_cotizaciones ")) return [over.padre === false ? [] : [{ id: 10 }]];
+  return [[{ max_version: over.maxVersion ?? 0, hay_seleccionado: over.haySeleccionado ?? (over.maxVersion ? 1 : 0) }]];
+};
 
 // ---------------------------------------------------------------------------
 describe("Perfiles (tenant-safe)", () => {
@@ -76,7 +85,8 @@ describe("Parámetros vigentes por fecha", () => {
     baseSimulada();
     const r = await obtenerParametrosCosteoVigentes(1, "2026-09-21");
     expect(r.vigenteDesde).toBe("2026-09-21");
-    expect(r.parametros).toEqual({ precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 });
+    expect(r.parametros).toMatchObject({ precioCombustibleGalon: 29.89, ivaTasa: 0.12, costoPilotoDia: 207.74, costoAuxiliarDia: 148.04, viaticoPilotoDia: 200, viaticoAuxiliarDia: 200, viaticoGuiaDia: 125, margenObjetivo: 0.2 });
+    expect(r.parametros.gastosAdministracion).toBeNull();
     expect("hotelDia" in r.parametros).toBe(false);
   });
   it("usa la fila más reciente cuyo vigente_desde <= fecha", async () => {
@@ -115,9 +125,9 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
   };
   const costeo: CosteoPreparado = { perfil, input, resultado: calcularCosteoServicio(input) };
 
-  function conexion(over: { existente?: boolean; falla?: (sql: string) => Error | null } = {}) {
+  function conexion(over: { padre?: boolean; maxVersion?: number; haySeleccionado?: number; falla?: (sql: string) => Error | null } = {}) {
     const conn = {
-      query: vi.fn(async () => [over.existente ? [{ id: 9 }] : []]),
+      query: vi.fn(consultaGuardar(over)),
       execute: vi.fn(async (sql: string) => {
         const error = over.falla?.(sql);
         if (error) throw error;
@@ -148,7 +158,24 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
     await guardar(conn);
     const params = (conn.execute.mock.calls[0] as unknown as [string, unknown[]])[1];
     const r = costeo.resultado;
-    expect(params.slice(9)).toEqual([r.costoOperativo, r.iva, r.costoConIva, r.margenObjetivoAplicado, r.precioSugerido, r.precioVenta, r.utilidadEstimada, r.margenReal, "admin"]);
+    expect(params.slice(9, 18)).toEqual([r.costoOperativo, r.iva, r.costoConIva, r.margenObjetivoAplicado, r.precioSugerido, r.precioVenta, r.utilidadEstimada, r.margenReal, "admin"]);
+    expect(JSON.parse(String(params[18]))).toEqual(r);
+  });
+  it("V2 conserva override, margen objetivo y resultado completo; envía importes DECIMAL como texto", async () => {
+    const entrada = {...input,motorVersion:"COSTEO_EXCEL_2026",perfil:{...input.perfil,viajesMes:20,salarioPilotoMensual:4000,salarioAuxiliarMensual:3000},parametros:{...input.parametros,diasLaboralesMes:20},precioCombustibleOverride:43,margenObjetivo:.45};
+    const resultado = calcularCosteoServicio(entrada);
+    const conn = conexion();
+    await guardar(conn,{perfil:{...perfil,...entrada.perfil},input:entrada,resultado});
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string,unknown[]];
+    expect(sql.match(/\?/g)).toHaveLength(params.length);
+    expect(params[8]).toBe("COSTEO_EXCEL_2026");
+    expect(params[9]).toBe(resultado.costoOperativo.toFixed(6));
+    expect(JSON.parse(String(params[7]))).toMatchObject({precioCombustibleOverride:43,margenObjetivo:.45});
+    expect(JSON.parse(String(params[18]))).toEqual(resultado);
+    expect(JSON.parse(String(params[5]))).toMatchObject({salarioPilotoMensual:4000,salarioAuxiliarMensual:3000});
+    expect(JSON.parse(String(params[6]))).not.toHaveProperty("salarioPilotoMensual");
+    expect(JSON.parse(String(params[18]))).toMatchObject({valoresUsados:{salarioPilotoMensual:4000,salarioAuxiliarMensual:3000,costoPilotoDia:200,costoAuxiliarDia:150}});
+    expect(input.parametros.precioCombustibleGalon).toBe(29.89);
   });
   it("inserta TODOS los componentes del motor, en orden estable 1..N, y su suma coincide con el costo operativo", async () => {
     const conn = conexion();
@@ -176,20 +203,83 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
     await guardar(conn);
     const [, datos] = vi.mocked(registrarAuditoriaTx).mock.calls[0];
     expect(datos).toMatchObject({ empresaId: 1, usuario: "admin", accion: "crear_costeo", modulo: "tms_cotizaciones" });
-    expect(datos.detalle).toBe("Costeo interno registrado para cotización COT-000010 con perfil CABEZAL.");
+    expect(datos.detalle).toBe("Costeo interno versión 1 registrado para cotización COT-000010 con perfil CABEZAL.");
     for (const secreto of ["29.89", "207", "148", "margen", "combustible", "0.2", "3907"]) expect(datos.detalle).not.toContain(secreto);
   });
-  it("el snapshot NO puede reemplazarse: si ya existe => ErrorCosteoYaRegistrado, sin INSERT/UPDATE/DELETE", async () => {
-    const conn = conexion({ existente: true });
-    await expect(guardar(conn)).rejects.toBeInstanceOf(ErrorCosteoYaRegistrado);
-    await expect(guardar(conn)).rejects.toThrow(MENSAJE_COSTEO_YA_REGISTRADO);
-    expect(MENSAJE_COSTEO_YA_REGISTRADO).toBe("Esta cotización ya tiene un costeo registrado.");
-    expect(conn.execute).not.toHaveBeenCalled(); expect(registrarAuditoriaTx).not.toHaveBeenCalled();
-    expect(conn.query.mock.calls[0]).toEqual([expect.stringContaining("FOR UPDATE"), [1, 10]]);
+  it("primer costeo => versión 1 y queda SELECCIONADO; inserta version, es_seleccionado y seleccionado_por/seleccionado_en", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toContain("version, es_seleccionado, seleccionado_por, seleccionado_en");
+    expect(sql).toMatch(/NOW\(\)\)$/);
+    expect(sql.match(/\?/g)).toHaveLength(params.length);
+    expect(params.slice(19)).toEqual([1, 1, "admin"]);
   });
-  it("la restricción UNIQUE de la BD (carrera) también se traduce a ErrorCosteoYaRegistrado", async () => {
+  it("segundo costeo => versión 2, NO seleccionado (no reemplaza al utilizado); tercero => versión 3", async () => {
+    const dos = conexion({ maxVersion: 1, haySeleccionado: 1 });
+    await guardar(dos);
+    const [sql2, p2] = dos.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(p2.slice(19)).toEqual([2, 0, null]);
+    expect(sql2).toMatch(/NULL\)$/);
+    const tres = conexion({ maxVersion: 2, haySeleccionado: 1 });
+    await guardar(tres);
+    expect((tres.execute.mock.calls[0] as unknown as [string, unknown[]])[1].slice(19)).toEqual([3, 0, null]);
+  });
+  it("si por datos antiguos ninguna versión está seleccionada, la nueva queda seleccionada (la cotización nunca se queda sin costeo utilizado)", async () => {
+    const conn = conexion({ maxVersion: 4, haySeleccionado: 0 });
+    await guardar(conn);
+    expect((conn.execute.mock.calls[0] as unknown as [string, unknown[]])[1].slice(19)).toEqual([5, 1, "admin"]);
+  });
+  it("una versión nueva NUNCA sobrescribe a la anterior: solo INSERT (sin UPDATE/DELETE/REPLACE), componentes de la versión nueva con su propio costeo_id", async () => {
+    const conn = conexion({ maxVersion: 1, haySeleccionado: 1 });
+    await guardar(conn);
+    const sentencias = [...conn.query.mock.calls, ...conn.execute.mock.calls].map((c) => String((c as unknown as unknown[])[0]));
+    expect(sentencias.filter((q) => /^\s*(UPDATE|DELETE|REPLACE)\b/i.test(q))).toEqual([]);
+    expect(conn.execute.mock.calls).toHaveLength(2);
+    const [, comp] = conn.execute.mock.calls[1] as unknown as [string, unknown[]];
+    expect(comp[1]).toBe(55); // costeo_id = insertId de la versión nueva
+  });
+  it("serializa con la cotización padre: bloquea tms_cotizaciones (empresa_id + id) FOR UPDATE ANTES de leer MAX(version) y de insertar", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [[sqlPadre, paramsPadre], [sqlMax, paramsMax]] = conn.query.mock.calls as unknown as [[string, unknown[]], [string, unknown[]]];
+    expect(sqlPadre).toContain("FROM tms_cotizaciones WHERE empresa_id = ? AND id = ?"); expect(sqlPadre).toContain("FOR UPDATE"); expect(paramsPadre).toEqual([1, 10]);
+    expect(sqlMax).toContain("MAX(version)"); expect(sqlMax).toContain("WHERE empresa_id = ? AND cotizacion_id = ?"); expect(sqlMax).toContain("FOR UPDATE"); expect(paramsMax).toEqual([1, 10]);
+  });
+  it("cotización inexistente en la empresa => error antes de insertar nada (no se versiona una cotización ajena)", async () => {
+    const conn = conexion({ padre: false });
+    await expect(guardar(conn)).rejects.toThrow("Cotización no encontrada.");
+    expect(conn.execute).not.toHaveBeenCalled(); expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+  it("CONCURRENCIA: dos guardados simultáneos de la misma cotización obtienen versiones distintas (2 y 3), sin duplicados", async () => {
+    const filas: { version: number; sel: number }[] = [{ version: 1, sel: 1 }];
+    let cola: Promise<void> = Promise.resolve();
+    const guardarSerializado = async () => {
+      const previa = cola;
+      let liberar!: () => void;
+      cola = new Promise<void>((r) => { liberar = r; }); // el bloqueo FOR UPDATE de la cotización se mantiene hasta el commit del llamador
+      const conn = {
+        query: async (sql: string) => {
+          if (sql.includes("FROM tms_cotizaciones ")) { await previa; return [[{ id: 10 }]]; }
+          await new Promise((r) => setTimeout(r, 5)); // ventana de carrera: sin el bloqueo ambos leerían el mismo MAX
+          return [[{ max_version: Math.max(0, ...filas.map((f) => f.version)), hay_seleccionado: filas.some((f) => f.sel) ? 1 : 0 }]];
+        },
+        execute: async (sql: string, params: unknown[]) => {
+          if (sql.includes("INSERT INTO tms_cotizacion_costeos")) { filas.push({ version: params[19] as number, sel: params[20] as number }); return [{ insertId: 100 + filas.length, affectedRows: 1 }]; }
+          return [{ affectedRows: 1 }];
+        },
+      };
+      try { await guardar(conn as never); } finally { liberar(); }
+    };
+    await Promise.all([guardarSerializado(), guardarSerializado()]);
+    expect(filas.map((f) => f.version).sort()).toEqual([1, 2, 3]);
+    expect(new Set(filas.map((f) => f.version)).size).toBe(3);
+    expect(filas.filter((f) => f.sel === 1)).toHaveLength(1);
+  });
+  it("la restricción UNIQUE (empresa_id, cotizacion_id, version) de la BD (carrera residual) se traduce a ErrorCosteoVersionConflicto", async () => {
     const conn = conexion({ falla: (sql) => (sql.includes("INSERT INTO tms_cotizacion_costeos") ? Object.assign(new Error("dup"), { code: "ER_DUP_ENTRY" }) : null) });
-    await expect(guardar(conn)).rejects.toBeInstanceOf(ErrorCosteoYaRegistrado);
+    await expect(guardar(conn)).rejects.toBeInstanceOf(ErrorCosteoVersionConflicto);
+    await expect(guardar(conn)).rejects.toThrow(MENSAJE_COSTEO_VERSION_CONFLICTO);
   });
   it("cualquier otro fallo se propaga tal cual (el llamador revierte la transacción)", async () => {
     const conn = conexion({ falla: (sql) => (sql.includes("costeo_componentes") ? new Error("falló componentes") : null) });
@@ -198,33 +288,314 @@ describe("Snapshot: guardar (INMUTABLE, misma transacción del llamador)", () =>
   });
   it("el módulo nunca hace UPDATE ni DELETE sobre las tablas de snapshot", () => {
     const fuente = readFileSync("src/lib/tms/cotizacion-costeo-db.ts", "utf8");
-    expect(fuente).not.toMatch(/\b(UPDATE|DELETE)\b[^;`]*tms_cotizacion_costeo/i);
+    expect(fuente).not.toMatch(/\b(UPDATE|DELETE)\s+(FROM\s+)?tms_cotizacion_costeo/i);
+    expect(fuente).not.toContain("ErrorCosteoYaRegistrado");
     expect(fuente).not.toMatch(/REPLACE INTO|ON DUPLICATE KEY UPDATE/i);
   });
 });
 
 // ---------------------------------------------------------------------------
-describe("Snapshot: leer", () => {
-  const fila = {
-    id: 55, cotizacion_id: 10, perfil_id: 4, perfil_codigo: "CABEZAL", perfil_nombre: "Cabezal", perfil_snapshot: '{"codigo":"CABEZAL"}',
+describe("Historial de costeos: leer (snapshots persistidos, tenant-safe)", () => {
+  const fila = (id: number, version: number, over: Record<string, unknown> = {}) => ({
+    id, cotizacion_id: 10, version, es_seleccionado: version === 1 ? 1 : 0, seleccionado_por: version === 1 ? "admin" : null, seleccionado_en: version === 1 ? "2026-09-21 10:05:00" : null,
+    perfil_id: 4, perfil_codigo: "CABEZAL", perfil_nombre: "Cabezal", perfil_snapshot: '{"codigo":"CABEZAL"}',
     parametros_snapshot: { ivaTasa: 0.12 }, input_snapshot: '{"distanciaKm":600}', motor_version: "COSTEO_V1", costo_operativo: "3907.209097",
     iva: "468.865092", costo_con_iva: "4376.074188", margen_objetivo: "0.2000", precio_sugerido: "5251.289026", precio_venta: "6000.00",
-    utilidad_estimada: "1623.925812", margen_real: "0.371100", creado_por: "admin", creado_en: "2026-09-21 10:00:00",
-  };
-  it("filtra por empresa_id en ambas tablas y devuelve componentes por orden", async () => {
+    utilidad_estimada: "1623.925812", margen_real: "0.371100", creado_por: "admin", creado_en: "2026-09-21 10:00:00", ...over,
+  });
+  it("obtenerCosteoSeleccionado: filtra por empresa_id + cotizacion_id + es_seleccionado = 1 y devuelve componentes por orden", async () => {
     vi.mocked(query)
-      .mockResolvedValueOnce([fila] as never)
+      .mockResolvedValueOnce([fila(55, 1)] as never)
       .mockResolvedValueOnce([{ clave: "gps", concepto: "GPS", monto: "5.803333" }, { clave: "aceite", concepto: "Aceite", monto: "223.200000" }] as never);
-    const s = await obtenerSnapshotCosteo(1, 10);
+    const s = await obtenerCosteoSeleccionado(1, 10);
     const [[sql1, p1], [sql2, p2]] = vi.mocked(query).mock.calls;
-    expect(String(sql1)).toContain("WHERE empresa_id = ? AND cotizacion_id = ?"); expect(p1).toEqual([1, 10]);
+    expect(String(sql1)).toContain("WHERE empresa_id = ? AND cotizacion_id = ? AND es_seleccionado = 1"); expect(p1).toEqual([1, 10]);
     expect(String(sql2)).toContain("WHERE empresa_id = ? AND costeo_id = ?"); expect(String(sql2)).toContain("ORDER BY orden ASC"); expect(p2).toEqual([1, 55]);
-    expect(s).toMatchObject({ id: 55, motorVersion: "COSTEO_V1", costoOperativo: 3907.209097, precioVenta: 6000, margenReal: 0.3711, perfil: { codigo: "CABEZAL" }, parametros: { ivaTasa: 0.12 }, input: { distanciaKm: 600 } });
+    expect(s).toMatchObject({ id: 55, version: 1, esSeleccionado: true, seleccionadoPor: "admin", motorVersion: "COSTEO_V1", costoOperativo: 3907.209097, precioVenta: 6000, margenReal: 0.3711, perfil: { codigo: "CABEZAL" }, parametros: { ivaTasa: 0.12 }, input: { distanciaKm: 600 } });
     expect(s!.componentes).toEqual([{ clave: "gps", concepto: "GPS", monto: 5.803333 }, { clave: "aceite", concepto: "Aceite", monto: 223.2 }]);
   });
-  it("sin costeo (o de otra empresa) => null, sin consultar componentes", async () => {
+  it("sin costeo seleccionado (o de otra empresa) => null, sin consultar componentes", async () => {
     vi.mocked(query).mockResolvedValue([] as never);
-    expect(await obtenerSnapshotCosteo(2, 10)).toBeNull();
+    expect(await obtenerCosteoSeleccionado(2, 10)).toBeNull();
     expect(query).toHaveBeenCalledTimes(1);
+  });
+  it("lee el resultado V2 guardado sin consultar parámetros maestros ni ejecutar el motor", async () => {
+    const resultado = { motorVersion: "COSTEO_EXCEL_2026", margenObjetivoAplicado: .45, margenObjetivoMonto: 870.21, subtotalComercial: 2804.02, precioPorKm: 14.28 };
+    vi.mocked(query).mockResolvedValueOnce([fila(55, 1, { motor_version: "COSTEO_EXCEL_2026", resultado_snapshot: JSON.stringify(resultado) })] as never).mockResolvedValueOnce([] as never);
+    const s = await obtenerCosteoSeleccionado(1, 10);
+    expect(s!.resultado).toEqual(resultado);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(query).mock.calls.every(([sql]) => !String(sql).includes("FROM tms_cotizacion_costeo_parametros"))).toBe(true);
+  });
+  it("listarHistorialCosteos: todas las versiones ORDER BY version DESC, filtrando por empresa_id + cotizacion_id y componentes por empresa_id + costeo_id IN (...)", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([fila(57, 3), fila(56, 2), fila(55, 1)] as never)
+      .mockResolvedValueOnce([
+        { costeo_id: 55, clave: "gps", concepto: "GPS", monto: "5.000000" },
+        { costeo_id: 56, clave: "gps", concepto: "GPS", monto: "6.000000" },
+        { costeo_id: 56, clave: "aceite", concepto: "Aceite", monto: "7.000000" },
+        { costeo_id: 57, clave: "gps", concepto: "GPS", monto: "8.000000" },
+      ] as never);
+    const h = await listarHistorialCosteos(1, 10);
+    const [[sql1, p1], [sql2, p2]] = vi.mocked(query).mock.calls;
+    expect(String(sql1)).toContain("WHERE empresa_id = ? AND cotizacion_id = ?"); expect(String(sql1)).toContain("ORDER BY version DESC"); expect(p1).toEqual([1, 10]);
+    expect(String(sql2)).toContain("WHERE empresa_id = ? AND costeo_id IN (?, ?, ?)"); expect(String(sql2)).toContain("ORDER BY costeo_id ASC, orden ASC"); expect(p2).toEqual([1, 57, 56, 55]);
+    expect(h.map((x) => x.version)).toEqual([3, 2, 1]);
+    expect(h.map((x) => x.esSeleccionado)).toEqual([false, false, true]);
+    expect(h.map((x) => x.componentes.map((c) => c.monto))).toEqual([[8], [6, 7], [5]]); // cada versión conserva SUS componentes
+    expect(h.every((x) => x.cotizacionId === 10)).toBe(true);
+  });
+  it("listarHistorialCosteos: sin costeos (o de otra empresa) => [] y sin consultar componentes", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    expect(await listarHistorialCosteos(2, 10)).toEqual([]);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+  it("las versiones conservan SUS snapshots distintos (perfil, parámetros, input, motor): la configuración posterior no los altera", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([
+        fila(56, 2, { perfil_snapshot: '{"codigo":"CABEZAL","rendimientoKmGalon":8}', parametros_snapshot: '{"precioCombustibleGalon":35}', input_snapshot: '{"distanciaKm":700}', motor_version: "COSTEO_COTIZADOR_2026" }),
+        fila(55, 1, { perfil_snapshot: '{"codigo":"CABEZAL","rendimientoKmGalon":9.3}', parametros_snapshot: '{"precioCombustibleGalon":29.89}', input_snapshot: '{"distanciaKm":600}' }),
+      ] as never)
+      .mockResolvedValueOnce([] as never);
+    const [v2, v1] = await listarHistorialCosteos(1, 10);
+    expect(v2.perfil).toMatchObject({ rendimientoKmGalon: 8 }); expect(v1.perfil).toMatchObject({ rendimientoKmGalon: 9.3 });
+    expect(v2.parametros).toMatchObject({ precioCombustibleGalon: 35 }); expect(v1.parametros).toMatchObject({ precioCombustibleGalon: 29.89 });
+    expect([v2.input.distanciaKm, v1.input.distanciaKm]).toEqual([700, 600]);
+    expect([v2.motorVersion, v1.motorVersion]).toEqual(["COSTEO_COTIZADOR_2026", "COSTEO_V1"]);
+    // Todo vino de las columnas *_snapshot: ninguna consulta toca perfiles ni parámetros vigentes.
+    expect(vi.mocked(query).mock.calls.every(([sql]) => !/FROM tms_cotizacion_costeo_(perfiles|parametros)/.test(String(sql)))).toBe(true);
+  });
+  it("fechas: un DATETIME entregado como Date se normaliza a «YYYY-MM-DD HH:mm:ss» (local); una cadena se conserva", async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([fila(55, 1, { creado_en: new Date(2026, 9, 5, 9, 55, 7), seleccionado_en: "2026-10-05 10:00:00" })] as never)
+      .mockResolvedValueOnce([] as never);
+    const [v] = await listarHistorialCosteos(1, 10);
+    expect(v.creadoEn).toBe("2026-10-05 09:55:07");
+    expect(v.seleccionadoEn).toBe("2026-10-05 10:00:00");
+  });
+  it("un costeo histórico (fila previa a la migración, ya con version = 1 y seleccionado) se lee sin cambios de formato", async () => {
+    vi.mocked(query).mockResolvedValueOnce([fila(55, 1, { seleccionado_por: null, seleccionado_en: null })] as never).mockResolvedValueOnce([] as never);
+    const [v] = await listarHistorialCosteos(1, 10);
+    expect(v).toMatchObject({ version: 1, esSeleccionado: true, seleccionadoPor: null, seleccionadoEn: null, creadoPor: "admin" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paridad Cotizador 2026: columna viaticos_hotel_viaje y snapshot COSTEO_COTIZADOR_2026
+// ---------------------------------------------------------------------------
+describe("Perfil: viaticos_hotel_viaje", () => {
+  it("el SELECT del perfil lee la columna nueva y se mapea a viaticosHotelViaje (NULL => null, no 0)", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: "300.00" })] as never);
+    const conValor = await obtenerPerfilCosteo(1, 4);
+    expect(String(vi.mocked(query).mock.calls[0][0])).toContain("viaticos_hotel_viaje");
+    expect(conValor?.viaticosHotelViaje).toBe(300);
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: null })] as never);
+    expect((await obtenerPerfilCosteo(1, 4))?.viaticosHotelViaje).toBeNull();
+    vi.mocked(query).mockResolvedValue([filaPerfil({ viaticos_hotel_viaje: "0.00" })] as never);
+    expect((await obtenerPerfilCosteo(1, 4))?.viaticosHotelViaje).toBe(0); // 0 configurado es 0
+  });
+  it("el SELECT lee las banderas «por cada día» y las mapea: NULL => null (sin configurar), 1 => true, 0 => false", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: 1, viaticos_hotel_multiplica_dias: 0 })] as never);
+    const cfg = await obtenerPerfilCosteo(1, 4);
+    const sql = String(vi.mocked(query).mock.calls[0][0]);
+    expect(sql).toContain("auxiliar_multiplica_dias");
+    expect(sql).toContain("viaticos_hotel_multiplica_dias");
+    expect([cfg?.auxiliarMultiplicaDias, cfg?.viaticosHotelMultiplicaDias]).toEqual([true, false]);
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: null, viaticos_hotel_multiplica_dias: null })] as never);
+    const sin = await obtenerPerfilCosteo(1, 4);
+    expect([sin?.auxiliarMultiplicaDias, sin?.viaticosHotelMultiplicaDias]).toEqual([null, null]);
+    vi.mocked(query).mockResolvedValue([filaPerfil()] as never); // fila sin las columnas (datos previos a la migración)
+    expect((await obtenerPerfilCosteo(1, 4))?.auxiliarMultiplicaDias).toBeNull();
+    vi.mocked(query).mockResolvedValue([filaPerfil({ auxiliar_multiplica_dias: "0", viaticos_hotel_multiplica_dias: "1" })] as never);
+    const txt = await obtenerPerfilCosteo(1, 4);
+    expect([txt?.auxiliarMultiplicaDias, txt?.viaticosHotelMultiplicaDias]).toEqual([false, true]);
+  });
+  it("sigue filtrando por empresa_id (aislamiento) también al leer la columna nueva", async () => {
+    vi.mocked(query).mockResolvedValue([filaPerfil()] as never);
+    await listarPerfilesCosteo(7);
+    const [sql, params] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("WHERE empresa_id = ?");
+    expect(params).toEqual([7]);
+  });
+});
+
+describe("Snapshot COSTEO_COTIZADOR_2026", () => {
+  const perfil: PerfilCosteoConId = {
+    id: 4, codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas", costoAdquisicion: null, diasOperacionMes: 30, gpsMensual: 100, seguroVehiculoMensual: 950,
+    costoAceiteServicio: 1750, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 3400, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 25, viajesMes: 20,
+    precioLlanta: 850, cantidadLlantas: 4, salarioPilotoMensual: 6787.685066666668, salarioAuxiliarMensual: 6039.965066666668, viaticosHotelViaje: 200,
+    depreciacion: { valorBase: 150000, anios: 5, diasOperacionMes: 26 }, costoRefrigeracion: null,
+  };
+  const parametros = {
+    precioCombustibleGalon: 43, ivaTasa: 0.12, costoPilotoDia: 0, costoAuxiliarDia: 0, viaticoPilotoDia: 0, viaticoAuxiliarDia: 0, viaticoGuiaDia: 0,
+    seguroMercaderiaAnual: 70000, cantidadCamiones: 46, viajesAnuales: 240, diasDepreciacionMes: 26, diasGastosMes: 20, diasLaboralesMes: 20,
+    gastosAdministracion: 90586.01, gastosMantenimiento: 34602.28, gastosSeguridad: 25826.24, gastosPredios: 52221.96,
+  };
+  const { id: _id, ...perfilMotor } = perfil; void _id;
+  const input: InputCosteoServicio = {
+    motorVersion: "COSTEO_COTIZADOR_2026", perfil: perfilMotor, parametros, distanciaKm: 220, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 1,
+    incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, viaticosHotelTotal: 250,
+  };
+  const resultado = calcularCosteoServicio(input);
+  const conexion = () => ({ query: vi.fn(consultaGuardar()), execute: vi.fn(async () => [{ insertId: 55, affectedRows: 1 }]) });
+  const guardar = (conn: ReturnType<typeof conexion>) =>
+    guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 10, cotizacionCodigo: "COT-000010", usuario: "admin", costeo: { perfil, input, resultado } });
+
+  it("guarda versión COSTEO_COTIZADOR_2026, importes como texto DECIMAL, el override y el perfil con viaticosHotelViaje", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql.match(/\?/g)).toHaveLength(params.length);
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026");
+    expect(params[9]).toBe(resultado.costoOperativo.toFixed(6));
+    expect(typeof params[9]).toBe("string");
+    expect(JSON.parse(String(params[5]))).toMatchObject({ viaticosHotelViaje: 200 });
+    expect(JSON.parse(String(params[7]))).toMatchObject({ viaticosHotelTotal: 250, margenObjetivo: 0.3 });
+    expect(JSON.parse(String(params[18]))).toEqual(resultado);
+  });
+  it("los componentes llevan UNA sola línea «Viáticos y hotel» (sin viático por rol ni hotel) y suman el costo operativo", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[1] as unknown as [string, unknown[]];
+    const claves = [] as string[];
+    for (let i = 0; i < params.length; i += 6) claves.push(String(params[i + 3]));
+    expect(claves).toContain("viaticosHotel");
+    for (const retirada of ["viaticoPiloto", "viaticoAuxiliar", "viaticoGuia", "hotel"]) expect(claves).not.toContain(retirada);
+    expect(sumaComponentesCoincide(resultado)).toBe(true);
+  });
+  it("la lectura devuelve el resultado guardado tal cual, sin consultar parámetros ni recalcular", async () => {
+    const fila = {
+      id: 55, cotizacion_id: 10, version: 1, es_seleccionado: 1, seleccionado_por: null, seleccionado_en: null, perfil_id: 4, perfil_codigo: "CAMION_2_7T", perfil_nombre: "Camión 2.7 toneladas", perfil_snapshot: JSON.stringify(perfil),
+      parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZADOR_2026",
+      costo_operativo: String(resultado.costoOperativo), iva: String(resultado.iva), costo_con_iva: String(resultado.costoConIva), margen_objetivo: "0.300000",
+      precio_sugerido: String(resultado.precioSugerido), precio_venta: null, utilidad_estimada: null, margen_real: null, creado_por: "admin", creado_en: "2026-10-05 10:00:00",
+      resultado_snapshot: JSON.stringify(resultado),
+    };
+    vi.mocked(query).mockResolvedValueOnce([fila] as never).mockResolvedValueOnce([] as never);
+    const s = await obtenerCosteoSeleccionado(1, 10);
+    expect(s?.motorVersion).toBe("COSTEO_COTIZADOR_2026");
+    expect(s?.resultado).toEqual(resultado);
+    expect(vi.mocked(query).mock.calls.every(([sql]) => !String(sql).includes("FROM tms_cotizacion_costeo_parametros"))).toBe(true);
+  });
+  it("los snapshots anteriores (V1 y COSTEO_EXCEL_2026) siguen usando su propio formato de persistencia", async () => {
+    const conn = conexion();
+    const anterior = { ...input, motorVersion: "COSTEO_EXCEL_2026", viaticosHotelTotal: undefined, hotelTotal: 900 };
+    const r = calcularCosteoServicio(anterior);
+    await guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 11, cotizacionCodigo: "COT-000011", usuario: "admin", costeo: { perfil, input: anterior, resultado: r } });
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_EXCEL_2026");
+    expect(params[9]).toBe(r.costoOperativo.toFixed(6));
+    expect(r.hotel).toBe(900);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PARIDAD MATEMÁTICA: COSTEO_COTIZADOR_2026_V2 conserva la precisión del cálculo en el snapshot
+// ---------------------------------------------------------------------------
+describe("Snapshot COSTEO_COTIZADOR_2026_V2 (precisión completa; redondeo a 2 decimales solo para mostrar)", () => {
+  const perfil: PerfilCosteoConId = {
+    id: 4, codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas", costoAdquisicion: null, diasOperacionMes: 30, gpsMensual: 100, seguroVehiculoMensual: 950,
+    costoAceiteServicio: 1750, vidaUtilAceiteKm: 5000, costoJuegoLlantas: 3400, vidaUtilLlantasKm: 50000, rendimientoKmGalon: 25, viajesMes: 20,
+    precioLlanta: 850, cantidadLlantas: 4, salarioPilotoMensual: 6787.685066666668, salarioAuxiliarMensual: 6040, viaticosHotelViaje: 200,
+    auxiliarMultiplicaDias: true, viaticosHotelMultiplicaDias: true, depreciacion: { valorBase: 150000, anios: 5, diasOperacionMes: 26 }, costoRefrigeracion: null,
+  };
+  const parametros = {
+    precioCombustibleGalon: 43, ivaTasa: 0.12, costoPilotoDia: 0, costoAuxiliarDia: 0, viaticoPilotoDia: 0, viaticoAuxiliarDia: 0, viaticoGuiaDia: 0,
+    seguroMercaderiaAnual: 70000, cantidadCamiones: 46, viajesAnuales: 240, diasDepreciacionMes: 26, diasGastosMes: 20, diasLaboralesMes: 20,
+    gastosAdministracion: 90586.01, gastosMantenimiento: 34602.28, gastosSeguridad: 25826.24, gastosPredios: 52221.96,
+  };
+  const { id: _id, ...perfilMotor } = perfil; void _id;
+  const input: InputCosteoServicio = {
+    motorVersion: COTIZACION_COSTEO_COTIZADOR_V2_VERSION, perfil: perfilMotor, parametros, distanciaKm: 220, diasServicio: 1, cantidadPilotos: 1, cantidadAuxiliares: 1,
+    incluirGps: true, incluirSeguroVehiculo: true, margenObjetivo: 0.3, seguroMercaderia: 6.34,
+  };
+  const resultado = calcularCosteoServicio(input);
+  const exacto = resultado.precision!;
+  const conexion = () => ({ query: vi.fn(consultaGuardar()), execute: vi.fn(async () => [{ insertId: 55, affectedRows: 1 }]) });
+  const guardar = (conn: ReturnType<typeof conexion>, r = resultado) =>
+    guardarSnapshotCosteoTx(conn as never, { empresaId: 1, cotizacionId: 10, cotizacionCodigo: "COT-000010", usuario: "admin", costeo: { perfil, input, resultado: r } });
+
+  it("el resultado de V2 trae `precision` (cadenas decimales) y los valores visibles redondeados a 2 decimales una sola vez", () => {
+    expect(resultado.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(exacto.costoOperativo.startsWith("1671.8139944")).toBe(true);
+    expect(resultado.costoOperativo).toBe(1671.81);
+    expect(exacto.precioSugerido.startsWith("2434.1611758")).toBe(true);
+    expect(resultado.precioSugerido).toBe(2434.16);
+  });
+  it("motor_version = COSTEO_COTIZADOR_2026_V2 (cabe en VARCHAR(40), el ancho de la columna) y resultado_snapshot conserva la precisión y el motor", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(String(params[8]).length).toBeLessThanOrEqual(40); // motor_version VARCHAR(40) NOT NULL
+    const guardado = JSON.parse(String(params[18]));
+    expect(guardado.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(guardado.precision).toEqual(exacto);
+    expect(guardado.precision.politicaRedondeo).toBe("al_final");
+  });
+  it("las columnas DECIMAL(16,6) guardan el valor de CÁLCULO (6 decimales), no el redondeado a 2: costo base, IVA, costo con IVA y precio sugerido", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    const a6 = (t: string) => Number(t).toFixed(6);
+    expect(params[9]).toBe(a6(exacto.costoOperativo)); expect(params[9]).toBe("1671.813994");
+    expect(params[10]).toBe(a6(exacto.iva)); expect(params[11]).toBe(a6(exacto.costoConIva));
+    expect(params[13]).toBe(a6(exacto.precioSugerido)); expect(params[13]).toBe("2434.161176");
+    expect(typeof params[9]).toBe("string");
+  });
+  it("los componentes se guardan con el valor de cálculo (6 decimales) y suman el costo base guardado con holgura de microcentavos", async () => {
+    const conn = conexion();
+    await guardar(conn);
+    const [, params] = conn.execute.mock.calls[1] as unknown as [string, unknown[]];
+    let suma = 0;
+    for (let i = 0; i < params.length; i += 6) {
+      const clave = String(params[i + 3]);
+      expect(params[i + 5]).toBe(Number(exacto.componentes[clave]).toFixed(6));
+      suma += Number(params[i + 5]);
+    }
+    expect(Math.abs(suma - Number((conn.execute.mock.calls[0] as unknown as [string, unknown[]])[1][9]))).toBeLessThan(1e-4);
+    expect(params.slice(0, 6)[5]).toBe("220.909228"); // gastos generales: 220.90922826… (no 220.91)
+  });
+  it("sumaComponentesCoincide con `precision`: acepta V2 aunque los componentes VISIBLES sumen distinto del costo base visible", () => {
+    const visibles = resultado.componentes.reduce((s, c) => s + c.monto, 0);
+    expect(Math.abs(visibles - resultado.costoOperativo)).toBeLessThan(0.1); // 1671.81 (coincide aquí; en otros casos puede diferir en centavos, como el libro)
+    expect(sumaComponentesCoincide(resultado)).toBe(true);
+    const desfasado = { ...resultado, componentes: resultado.componentes.map((c) => (c.clave === "gps" ? { ...c, monto: c.monto + 0.05 } : c)) };
+    expect(sumaComponentesCoincide(desfasado)).toBe(true); // lo visible no decide: valida el cálculo con precisión
+  });
+  it("sumaComponentesCoincide rechaza una precisión adulterada, incompleta o con claves de más", () => {
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, costoOperativo: String(Number(exacto.costoOperativo) + 1) } })).toBe(false);
+    const { gps: _g, ...sinGps } = exacto.componentes; void _g;
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, componentes: sinGps } })).toBe(false);
+    expect(sumaComponentesCoincide({ ...resultado, precision: { ...exacto, componentes: { ...exacto.componentes, extra: "1" } } })).toBe(false);
+  });
+  it("un adulterado sin precisión (motores anteriores) sigue rechazándose por la suma de componentes visibles", async () => {
+    const conn = conexion();
+    const anterior = calcularCosteoServicio({ ...input, motorVersion: "COSTEO_COTIZADOR_2026" });
+    expect(anterior.precision).toBeUndefined();
+    await expect(guardar(conn, { ...anterior, costoOperativo: anterior.costoOperativo + 5 })).rejects.toThrow("no coinciden");
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("COSTEO_COTIZADOR_2026 anterior sigue guardándose redondeado por componente, tal como antes (sin `precision`)", async () => {
+    const conn = conexion();
+    const anterior = calcularCosteoServicio({ ...input, motorVersion: "COSTEO_COTIZADOR_2026" });
+    await guardar(conn, anterior);
+    const [, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(params[8]).toBe("COSTEO_COTIZADOR_2026");
+    expect(params[9]).toBe(anterior.costoOperativo.toFixed(6));
+    expect(JSON.parse(String(params[18]))).not.toHaveProperty("precision");
+  });
+  it("lectura: un snapshot V2 conserva `precision` y el historial no recalcula nada", async () => {
+    const fila = {
+      id: 55, cotizacion_id: 10, version: 1, es_seleccionado: 1, seleccionado_por: null, seleccionado_en: null, perfil_id: 4, perfil_codigo: "CAMION_2_7T", perfil_nombre: "Camión 2.7 toneladas",
+      perfil_snapshot: JSON.stringify(perfil), parametros_snapshot: JSON.stringify(parametros), input_snapshot: JSON.stringify({ distanciaKm: 220 }), motor_version: "COSTEO_COTIZADOR_2026_V2",
+      costo_operativo: "1671.813994", iva: Number(exacto.iva).toFixed(6), costo_con_iva: Number(exacto.costoConIva).toFixed(6), margen_objetivo: "0.300000", precio_sugerido: "2434.161176", precio_venta: null,
+      utilidad_estimada: null, margen_real: null, creado_por: "admin", creado_en: "2026-10-05 10:00:00", resultado_snapshot: JSON.stringify(resultado),
+    };
+    vi.mocked(query).mockResolvedValueOnce([fila] as never).mockResolvedValueOnce([] as never);
+    const [v] = await listarHistorialCosteos(1, 10);
+    expect(v.motorVersion).toBe("COSTEO_COTIZADOR_2026_V2");
+    expect(v.resultado?.precision).toEqual(exacto);
+    expect(v.costoOperativo).toBe(1671.813994);
   });
 });

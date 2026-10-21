@@ -83,12 +83,12 @@ export function shouldSendActivityPing(
   return !Number.isFinite(lastPingMs) || nowMs - lastPingMs >= ACTIVITY_PING_THROTTLE_MS;
 }
 
-/** Una validación GET en curso no debe bloquear una actividad humana POST. */
+/** Serializar HTTP; el guard conserva actividad humana pendiente durante GET. */
 export function canStartHumanActivityRequest(state: {
   validationInFlight: boolean;
   activityInFlight: boolean;
 }): boolean {
-  return !state.activityInFlight;
+  return !state.validationInFlight && !state.activityInFlight;
 }
 
 export function isTrustedHumanActivity(event: Pick<Event, "isTrusted" | "type">): boolean {

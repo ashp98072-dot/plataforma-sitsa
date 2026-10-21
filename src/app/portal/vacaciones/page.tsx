@@ -2,12 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
 import {
-  calcularSaldoTotalDisponible,
-  obtenerPeriodosDisponibles,
+  crearLecturaVacacionesEmpleado,
 } from "@/lib/rrhh/vacaciones";
 import { listarSolicitudesPorEmpleado } from "@/lib/rrhh/solicitudes-vacaciones";
 import SolicitarVacacionesForm from "./solicitar-form";
 import { listarEquipoVacaciones } from "@/lib/rrhh/vacaciones-equipo";
+import { HistorialPeriodosVacaciones } from "@/components/rrhh/historial-periodos-vacaciones";
 
 const ESTADO_COLOR: Record<string, string> = {
   Pendiente: "text-[#e8c468]",
@@ -21,11 +21,14 @@ export default async function VacacionesPage() {
     redirect("/portal/login");
   }
 
-  const [saldo, periodos, solicitudes, equipo] = await Promise.all([
-    calcularSaldoTotalDisponible(session!.empresaId, session!.empleadoId),
-    obtenerPeriodosDisponibles(session!.empresaId, session!.empleadoId),
+  const lectura = crearLecturaVacacionesEmpleado(session.empresaId, session.empleadoId);
+  const [saldo, periodos, solicitudes, equipo, historial] = await Promise.all([
+    lectura.calcularSaldoTotalDisponible(),
+    lectura.obtenerPeriodosDisponibles(),
     listarSolicitudesPorEmpleado(session!.empresaId, session!.empleadoId),
     listarEquipoVacaciones(session!.empresaId, session!.empleadoId),
+    // Historial completo (aditivo): si falla, el portal sigue mostrando saldo y desglose vigente.
+    lectura.obtenerHistorialPeriodos().catch(() => null),
   ]);
 
   return (
@@ -72,6 +75,10 @@ export default async function VacacionesPage() {
             </div>
           </section>
         ) : null}
+
+        <div className="mt-6">
+          <HistorialPeriodosVacaciones historial={historial} />
+        </div>
 
         <div className="mt-6">
           <SolicitarVacacionesForm saldoDisponible={saldo} />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { ClienteSearch } from "@/components/tms/cliente-search";
 import { PlacaSelect, type VehiculoOpt } from "@/components/tms/placa-select";
@@ -13,6 +13,8 @@ import {
 } from "@/lib/tms/plan-form-viaticos";
 import { RutaSelect, type RutaOpt } from "@/components/tms/ruta-select";
 import { AuxiliaresSelect } from "@/components/tms/auxiliares-select";
+import { CuadrillaSelect } from "@/components/tms/cuadrilla-select";
+import { cuadrillaPayload, type IntegranteCuadrilla } from "@/lib/tms/cuadrilla-contrato";
 import { Hora12Input } from "@/components/tms/hora-input-12h";
 import { FechaHora12Input } from "@/components/tms/fecha-hora-12h-input";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
@@ -24,6 +26,30 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { normalizarPlaca } from "@/lib/flota/placa";
 import { aplicarDefaultsRutaSinSobrescribir } from "@/lib/tms/ruta-defaults";
+import { filtrarElegibles, type HabilitacionOp } from "@/lib/tms/personal-elegibilidad";
+import {
+  AYUDA_VEHICULO_SOLICITADO,
+  cambioVehiculoSolicitado,
+  exigeVehiculoSolicitadoAlEditar,
+  ETIQUETA_VEHICULO_SOLICITADO,
+  ETIQUETA_VEHICULO_SOLICITADO_LARGA,
+  MSG_VEHICULO_SOLICITADO_OBLIGATORIO,
+  opcionesVehiculoSolicitado,
+  textoVehiculoSolicitado,
+  type VehiculoSolicitadoOpcion,
+} from "@/lib/tms/vehiculo-solicitado";
+import {
+  cambioHoraCarga,
+  cambioParadas,
+  cambioTextoSnapshot,
+  debeAplicarRuta,
+  descripcionReporteInicial,
+  paradasFormularioDesdePlan,
+  plantillaDesdeRuta,
+} from "@/lib/tms/plan-form-cambios";
+import { descargaDeParadas } from "@/lib/tms/plan-lugares";
+import { ErroresFormulario } from "@/components/errores-formulario";
+import { leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 
 /**
  * Formulario propio de Programación para crear/editar un viaje — reutiliza
@@ -73,6 +99,8 @@ type EmpOps = {
   nombre: string;
   puesto?: string;
   categoriaOps: string;
+  /** TMS-PROGRAMACION-HABILITACIONES-1 — habilitaciones operativas ACTIVAS del empleado (aditivo, personal-ops/route.ts). */
+  habilitacionesOps?: HabilitacionOp[];
 };
 
 /** Mejora Programación (contacto) — mismo shape que devuelve GET /tms/clientes/[clienteId]/contactos. */
@@ -309,8 +337,13 @@ export default function PlanForm({
   const esEdicion = plan != null;
 
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
-  const [pilotos, setPilotos] = useState<EmpOps[]>([]);
-  const [auxiliares, setAuxiliares] = useState<EmpOps[]>([]);
+  // PROGRAMACION-VEHICULO-SOLICITADO — perfiles activos de costeo (Cotizaciones) de la empresa, vía GET /tms/catalogos.
+  const [vehiculosSolicitables, setVehiculosSolicitables] = useState<VehiculoSolicitadoOpcion[]>([]);
+  const [pilotos, setPilotos] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
+  const [auxiliares, setAuxiliares] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
+  const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
+  const [cuadrilla, setCuadrilla] = useState<IntegranteCuadrilla[]>(plan?.cuadrilla ?? []);
+  const cuadrillaCambio = esEdicion && JSON.stringify(cuadrillaPayload(cuadrilla)) !== JSON.stringify(cuadrillaPayload(plan?.cuadrilla ?? []));
   // Mejora Programación (Opción A) — configuración de montos sugeridos
   // (tms_viaticos_config, misma que ya usa ViaticosConfigPanel en TMS) y
   // los montos que el usuario ajusta ANTES del primer guardado, keyed por
@@ -345,6 +378,8 @@ export default function PlanForm({
   // Precarga de piloto/auxiliares del plan (edición): se resuelve por
   // NOMBRE contra el roster de RRHH ya cargado — mismo criterio ya
   // usado en tms/page.tsx (seleccionarPlan()), no se inventa un cruce nuevo.
+  // PROGRAMACION-PARADAS-FUENTE — lo guardado como «lugar de descarga» solo se muestra aparte si difiere de la 1.ª descarga.
+  const descripcionInicialReporte = descripcionReporteInicial(plan?.lugar_descarga_historico, plan?.paradas);
   const [form, setForm] = useState({
     codigo: plan?.codigo ?? "",
     fechaPlan: plan?.fecha_plan ?? fechaSugerida ?? hoy,
@@ -369,6 +404,8 @@ export default function PlanForm({
     // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§2) — opción de tarifa
     // del catálogo elegida para este viaje (0 = ninguna / monto manual).
     tarifaId: plan?.tarifa_id ?? 0,
+    // PROGRAMACION-VEHICULO-SOLICITADO — 0 = sin dato. Independiente de la unidad y de la tarifa: cambiar uno no toca el otro.
+    vehiculoSolicitadoPerfilId: plan?.vehiculo_solicitado_perfil_id ?? 0,
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
     // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
@@ -378,7 +415,8 @@ export default function PlanForm({
     // se mostraba "en vivo" sin copiarse; ahora sí se copia).
     rutaId: plan?.ruta_id ?? 0,
     rutaCodigo: plan?.ruta_codigo_historico ?? "",
-    lugarDescargaHistorico: plan?.lugar_descarga_historico ?? "",
+    // PROGRAMACION-PARADAS-FUENTE — aquí solo vive la «descripción distinta en el reporte»; el destino normal sale de las paradas.
+    lugarDescargaHistorico: descripcionInicialReporte,
     contactoNombreHistorico: plan?.contacto_nombre_historico ?? "",
     contactoCargoHistorico: plan?.contacto_cargo_historico ?? "",
     contactoTelefonoHistorico: plan?.contacto_telefono_historico ?? "",
@@ -402,22 +440,11 @@ export default function PlanForm({
   // selectores distintos — el TC nunca aparece como Unidad ni al revés.
   const unidadesOpciones = todosVehiculos.filter((v) => v.tipoUnidad !== "TC");
   const tcOpciones = todosVehiculos.filter((v) => v.tipoUnidad === "TC");
-  const [paradasForm, setParadasForm] = useState<ParadaForm[]>(
-    plan?.paradas?.length
-      ? plan.paradas.map((p) => ({
-          // OPS-3.2d: se conserva el id real — se reenvía tal cual al
-          // guardar para que el backend actualice esta misma fila en vez
-          // de recrearla (evita romper evidencias ya asociadas).
-          id: p.id,
-          lugarNombre: p.lugar_nombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
-          requiereEvidencia: p.requiere_evidencia,
-        }))
-      : [
-          { lugarNombre: "", tipo: "Carga", requiereEvidencia: true },
-          { lugarNombre: "", tipo: "Descarga", requiereEvidencia: true },
-        ],
-  );
+  // OPS-3.2d: se conserva el id real de cada parada (el backend la actualiza IN-PLACE, sin romper evidencias).
+  // PROGRAMACION-PERSISTENCIA: al abrir un viaje se muestran SUS paradas, nunca las de la ruta maestra.
+  const [paradasForm, setParadasForm] = useState<ParadaForm[]>(paradasFormularioDesdePlan(plan?.paradas));
+  // Opción colapsada «descripción distinta en el reporte»: abierta solo si el viaje ya la tiene o la ruta la aportó.
+  const [descReporteAbierta, setDescReporteAbierta] = useState(descripcionInicialReporte !== "");
   const [saving, setSaving] = useState(false);
   // Mejora Programación (punto 20) — ViaticosPanel solo refetch en su
   // propio mount ([slug, planId]); como este formulario NO se desmonta
@@ -500,6 +527,11 @@ export default function PlanForm({
   const [guardandoUbicacion, setGuardandoUbicacion] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor ("Parada 2 — Lugar: es obligatorio.").
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
+  // VEHÍCULO SOLICITADO OBLIGATORIO — error junto al campo (cliente) y foco; el servidor lo vuelve a exigir.
+  const [errorVehiculo, setErrorVehiculo] = useState("");
+  const vehiculoRef = useRef<HTMLSelectElement | null>(null);
   // PROGRAMACION-RECHAZADO-AVISO-1 — informativo, NUNCA bloquea: si al
   // guardar se detecta que alguna persona (re)asignada ya tiene un
   // viático RECHAZADO para ESTE MISMO plan, se muestra aparte (no dentro
@@ -547,21 +579,19 @@ export default function PlanForm({
     if (cat.ok) {
       const c = await cat.json();
       setClientesCat((c.clientes ?? []) as ClienteCat[]);
+      setVehiculosSolicitables((c.vehiculosSolicitables ?? []) as VehiculoSolicitadoOpcion[]);
     }
     if (ops.ok) {
       const o = await ops.json();
       const list = (o.personal ?? []) as EmpOps[];
-      const match = (p: EmpOps, kind: "piloto" | "auxiliar") => {
-        const catOps = (p.categoriaOps || "").toLowerCase();
-        const puesto = (p.puesto || "").toLowerCase();
-        return kind === "piloto"
-          ? p.categoriaOps === "Piloto" || catOps.includes("piloto") || puesto.includes("piloto")
-          : p.categoriaOps === "Auxiliar" || catOps.includes("auxiliar") || puesto.includes("auxiliar");
-      };
-      const pilotosFil = list.filter((p) => match(p, "piloto"));
-      const auxFil = list.filter((p) => match(p, "auxiliar"));
-      setPilotos(pilotosFil.length ? pilotosFil : list);
-      setAuxiliares(auxFil.length ? auxFil : list);
+      setEmpleadosCuadrilla(list);
+      // TMS-PROGRAMACION-HABILITACIONES-1 — elegibilidad ADITIVA (legacy puesto/categoriaOps O habilitación
+      // operativa activa para ese rol, ver personal-elegibilidad.ts). SIN fallback a "mostrar a todos" si
+      // la lista queda vacía — a diferencia del comportamiento anterior, una lista vacía se queda vacía; la
+      // UI (PilotoSelect/AuxiliaresSelect) ya muestra su propio mensaje "Sin pilotos/auxiliares en RRHH".
+      const habilitacionesPorEmpleado = new Map<number, HabilitacionOp[]>(list.map((p) => [p.id, p.habilitacionesOps ?? []]));
+      setPilotos(filtrarElegibles(list, habilitacionesPorEmpleado, "PILOTO", (p) => p.id));
+      setAuxiliares(filtrarElegibles(list, habilitacionesPorEmpleado, "AUXILIAR", (p) => p.id));
     }
     if (viaticosCfg.ok) {
       const vc = await viaticosCfg.json();
@@ -897,17 +927,19 @@ export default function PlanForm({
     // para este viaje sin tocar la ruta maestra).
     const placaSugerida = ruta.unidadRecurrentePlaca ?? "";
 
+    // PROGRAMACION-PERSISTENCIA — plantilla de la ruta (pura, probada en plan-form-cambios.ts).
+    const plantilla = plantillaDesdeRuta(ruta, { horaCarga: form.horaCarga, lugarDescargaHistorico: form.lugarDescargaHistorico });
     setForm((f) => ({
       ...f,
       clienteId: ruta.clienteId,
       clienteNombre: ruta.clienteNombre,
-      horaCarga: ruta.horaHabitual || f.horaCarga,
+      horaCarga: plantilla.horaCarga,
       tarifaId: tarifaSel?.id ?? 0,
       tarifaComercial: tarifaSel ? String(tarifaSel.monto) : defaults.tarifaComercial,
       placa: placaSugerida || f.placa,
-      rutaId: ruta.id,
-      rutaCodigo: ruta.codigo,
-      lugarDescargaHistorico: ruta.destinoDescripcion ?? f.lugarDescargaHistorico,
+      rutaId: plantilla.rutaId,
+      rutaCodigo: plantilla.rutaCodigo,
+      lugarDescargaHistorico: plantilla.lugarDescargaHistorico,
       contactoNombreHistorico: ruta.contactoNombre ?? "",
       contactoCargoHistorico: ruta.contactoCargo ?? "",
       contactoTelefonoHistorico: ruta.contactoTelefono ?? "",
@@ -917,24 +949,8 @@ export default function PlanForm({
       auxiliarNombres: defaults.auxiliarNombres,
     }));
     setContactoClienteIdSeleccionado(ruta.contactoClienteId ?? null);
-    const nuevasParadas: ParadaForm[] = [];
-    if (ruta.lugarCargaTexto) {
-      nuevasParadas.push({ lugarNombre: ruta.lugarCargaTexto, tipo: "Carga", requiereEvidencia: true, clienteUbicacionId: ruta.ubicacionCargaId });
-    }
-    if (ruta.paradas.length) {
-      for (const p of ruta.paradas) {
-        nuevasParadas.push({
-          lugarNombre: p.lugarNombre,
-          tipo: (["Carga", "Descarga", "Entrega"].includes(p.tipo) ? p.tipo : "Descarga") as ParadaForm["tipo"],
-          requiereEvidencia: true,
-          clienteUbicacionId: p.clienteUbicacionId,
-        });
-      }
-    } else if (ruta.destinoDescripcion) {
-      // Respaldo solo para el tablero/seguimiento — el reporte no depende de esto.
-      nuevasParadas.push({ lugarNombre: ruta.destinoDescripcion, tipo: "Descarga", requiereEvidencia: true, clienteUbicacionId: null });
-    }
-    if (nuevasParadas.length) setParadasForm(nuevasParadas);
+    setDescReporteAbierta(plantilla.lugarDescargaHistorico !== "");
+    if (plantilla.paradas) setParadasForm(plantilla.paradas);
   }
 
   // Se evalúa contra el estado ORIGINAL del plan (antes de este guardado),
@@ -952,6 +968,8 @@ export default function PlanForm({
   // (bloqueado = false); además se ofrece la acción de cierre si el
   // usuario tiene el permiso.
   const pendienteCierre = esEdicion && Boolean(plan!.pendiente_cierre);
+  // Mensaje junto al campo: el de esta validación local o el que devolvió el servidor para ese campo.
+  const msgVehiculo = errorVehiculo || errores.find((x) => x.campo === "vehiculoSolicitadoPerfilId")?.mensaje || "";
   const yaCerrado = esEdicion && plan!.estado === "Cerrado";
   // OPS-3.2b/c/d — reconciliación administrativa pre-cierre: mientras el
   // plan está "En ruta" sin llegada registrada, sigue tan bloqueado como
@@ -1106,8 +1124,18 @@ export default function PlanForm({
     e.preventDefault();
     if (saving || bloqueado) return;
     setError("");
+    setErrores([]);
+    setErrorVehiculo("");
     setMsg("");
     setAvisosRechazoPlan([]);
+    // VEHÍCULO SOLICITADO OBLIGATORIO (Propio y Tercerizado): no depende solo del `required` HTML. En edición solo se exige donde el campo es editable
+    // (Programado/Cargado/pendiente de cierre); un viaje histórico sin dato se puede abrir y consultar, pero para guardar hay que elegir uno.
+    const exigeVehiculo = !esEdicion || exigeVehiculoSolicitadoAlEditar(plan!.estado, pendienteCierre);
+    if (exigeVehiculo && !(form.vehiculoSolicitadoPerfilId > 0)) {
+      setErrorVehiculo(MSG_VEHICULO_SOLICITADO_OBLIGATORIO);
+      vehiculoRef.current?.focus();
+      return;
+    }
     const paradas = paradasForm
       .filter((p) => p.lugarNombre.trim())
       .map((p) => ({
@@ -1122,6 +1150,8 @@ export default function PlanForm({
         clienteUbicacionId: p.clienteUbicacionId ?? undefined,
       }));
 
+    // Las filas de parada en blanco no se envían: el número de «Parada N» que devuelve el servidor se traduce al de pantalla.
+    const paradasPantalla = paradasForm.flatMap((p, i) => (p.lugarNombre.trim() ? [i + 1] : []));
     const tcResuelto = resolverTcId();
     if (!tcResuelto.ok) {
       setError(tcResuelto.error);
@@ -1167,7 +1197,7 @@ export default function PlanForm({
     }
     // OPS-AJUSTES (sección 3) — mismo requisito del backend, verificado
     // aquí primero para no obligar un viaje redondo solo por el motivo.
-    if (cambioSensible && !motivoCambioFinal) {
+    if ((cambioSensible || cuadrillaCambio) && !motivoCambioFinal) {
       setError("Indica el motivo del cambio de piloto, unidad o auxiliares.");
       return;
     }
@@ -1189,6 +1219,7 @@ export default function PlanForm({
             // tarifa del catálogo elegida; el backend snapshotea nombre/
             // monto/moneda en el viaje.
             tarifaId: form.tarifaId > 0 ? form.tarifaId : undefined,
+            vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1211,6 +1242,7 @@ export default function PlanForm({
               form.tipoViaje === "Propio" && form.mostrarPilotoExtra && form.pilotoExtraEmpleadoId ? form.pilotoExtraEmpleadoId : undefined,
             auxiliarEmpleadoIds: form.auxiliarEmpleadoIds.length ? form.auxiliarEmpleadoIds : undefined,
             auxiliarNombres: form.auxiliarNombres.length ? form.auxiliarNombres : undefined,
+            cuadrilla: cuadrillaPayload(cuadrilla),
             ...camposTipoViaje(),
             paradas,
             lugarCarga: paradas.find((p) => p.tipo === "Carga")?.lugarNombre,
@@ -1220,7 +1252,9 @@ export default function PlanForm({
         });
         const data = await res.json();
         if (!res.ok) {
-          setError(data.error ?? "No se pudo crear el viaje.");
+          const leidos = leerErroresRespuesta(data, "No se pudo crear el viaje.");
+          setErrores(remapearLineas(leidos.errores, "paradas", paradasPantalla));
+          setError(leidos.errores.length ? "" : leidos.mensaje);
           return;
         }
         setMsg(data.mensaje ?? "Viaje creado.");
@@ -1279,7 +1313,8 @@ export default function PlanForm({
           // fechaPlan/horaCarga siguen atados a `soloNotas` a secas — OPS-3.2c
           // NO los habilita (quedan para OPS-3.2d, junto con paradas).
           fechaPlan: soloNotas ? undefined : form.fechaPlan || undefined,
-          horaCarga: soloNotas ? undefined : form.horaCarga || undefined,
+          // PROGRAMACION-PERSISTENCIA — solo si cambió contra lo persistido (nunca se reenvía un valor viejo).
+          horaCarga: soloNotas ? undefined : cambioHoraCarga(plan?.hora_carga, form.horaCarga),
           // OPS-3.2c: piloto/unidad/auxiliares pasan de `soloNotas` a
           // `bloqueadoParaPreCierre` — se liberan en pendiente de cierre,
           // igual que los seis campos de OPS-3.2b de abajo. Además, ahora
@@ -1297,7 +1332,8 @@ export default function PlanForm({
           // dedicadas (marcarCargado()/cancelarViaje() más abajo), y
           // "En ruta"/"Cerrado" nunca fueron responsabilidad de este
           // formulario (Portal y /cerrar respectivamente).
-          motivoCambio: camposSensibles.motivoCambio,
+          motivoCambio: cuadrillaCambio ? motivoCambioFinal : camposSensibles.motivoCambio,
+          cuadrilla: !bloqueadoParaPreCierre && cuadrillaCambio ? cuadrillaPayload(cuadrilla) : undefined,
           auxiliarEmpleadoIds: camposSensibles.auxiliarEmpleadoIds,
           auxiliarNombres: camposSensibles.auxiliarNombres,
           // Tipo de traslado: se guarda al editarlo (antes se mostraba pero nunca se enviaba). Solo si cambió; bloqueado en "En ruta" sin llegada.
@@ -1331,15 +1367,21 @@ export default function PlanForm({
           // guardado": este PATCH nunca mandaba clienteId. Solo se envía si REALMENTE cambió contra el plan
           // persistido (mismo criterio que tarifaId arriba) — nunca el cliente actual si no se tocó.
           clienteId: bloqueadoParaPreCierre || form.clienteId === (plan?.clienteId ?? 0) ? undefined : form.clienteId || undefined,
+          // PROGRAMACION-VEHICULO-SOLICITADO — solo si cambió (null lo quita); mismo gate pre-cierre que la tarifa.
+          vehiculoSolicitadoPerfilId: bloqueadoParaPreCierre
+            ? undefined
+            : cambioVehiculoSolicitado(plan?.vehiculo_solicitado_perfil_id, form.vehiculoSolicitadoPerfilId),
           // rutaId ahora distingue "no tocar" (undefined, sin cambios) de "quitar" (null, el usuario limpió el
           // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
           // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
           rutaId: bloqueadoParaPreCierre || form.rutaId === (plan?.ruta_id ?? 0) ? undefined : (form.rutaId || null),
-          rutaCodigo: bloqueadoParaPreCierre ? undefined : form.rutaCodigo.trim() || undefined,
-          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : form.lugarDescargaHistorico.trim() || undefined,
-          contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : form.contactoNombreHistorico.trim() || undefined,
-          contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoCargoHistorico.trim() || undefined,
-          contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : form.contactoTelefonoHistorico.trim() || undefined,
+          // PROGRAMACION-PERSISTENCIA — snapshots del viaje: solo si cambiaron contra lo persistido; null = el usuario
+          // los BORRÓ (antes un campo vaciado se ignoraba y reaparecía el valor anterior al reabrir).
+          rutaCodigo: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.ruta_codigo_historico, form.rutaCodigo),
+          lugarDescargaHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(descripcionInicialReporte, form.lugarDescargaHistorico),
+          contactoNombreHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_nombre_historico, form.contactoNombreHistorico),
+          contactoCargoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_cargo_historico, form.contactoCargoHistorico),
+          contactoTelefonoHistorico: bloqueadoParaPreCierre ? undefined : cambioTextoSnapshot(plan?.contacto_telefono_historico, form.contactoTelefonoHistorico),
           // CORRECCIÓN PR #80: NO usar `!paradas.length` para colapsar a
           // `undefined` — eso confundía "no tocar paradas" (undefined) con
           // "el usuario dejó la lista final vacía" ([]). Si las paradas
@@ -1347,12 +1389,15 @@ export default function PlanForm({
           // SIEMPRE, incluso como arreglo vacío, para que el backend
           // procese la eliminación real (y aplique el 409 si alguna
           // omitida todavía tiene evidencia).
-          paradas: bloqueadoParaPreCierre ? undefined : paradas,
+          // PROGRAMACION-PERSISTENCIA — solo si la lista realmente cambió (una lista vaciada sí viaja como []).
+          paradas: bloqueadoParaPreCierre ? undefined : cambioParadas(plan?.paradas ?? [], paradas),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "No se pudo actualizar el viaje.");
+        const leidos = leerErroresRespuesta(data, "No se pudo actualizar el viaje.");
+        setErrores(remapearLineas(leidos.errores, "paradas", paradasPantalla));
+        setError(leidos.errores.length ? "" : leidos.mensaje);
         return;
       }
       setMsg(data.mensaje ?? "Viaje actualizado.");
@@ -1604,7 +1649,8 @@ export default function PlanForm({
                 <li>Código: {plan!.codigo}</li>
                 <li>Cliente: {form.clienteNombre || "—"}</li>
                 <li>Ruta: {form.rutaCodigo || "—"}</li>
-                <li>Destino: {form.lugarDescargaHistorico || "—"}</li>
+                <li>Destino: {form.lugarDescargaHistorico || descargaDeParadas(paradasForm) || "—"}</li>
+                <li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(plan!.vehiculo_solicitado_nombre)}</li>
                 <li>Unidad: {form.placa || "—"}</li>
                 <li>Piloto: {form.pilotoNombre || "—"}</li>
                 <li>Auxiliares: {[...form.auxiliarNombres, ...form.auxiliarEmpleadoIds.map((id) => auxiliares.find((a) => a.id === id)?.nombre ?? `#${id}`)].join(", ") || "—"}</li>
@@ -1697,22 +1743,35 @@ export default function PlanForm({
           clienteId={form.clienteId}
           value={form.rutaCodigo}
           inputClassName={inputCls}
-          onSeleccionar={aplicarRuta}
+          onSeleccionar={(ruta) => {
+            // PROGRAMACION-PERSISTENCIA — la ruta maestra es solo plantilla: se aplica al elegir una ruta DISTINTA.
+            // Re-elegir la misma ruta nunca pisa la hora/destino/paradas ya editados para este viaje.
+            if (debeAplicarRuta(form.rutaId, ruta.id)) aplicarRuta(ruta);
+          }}
         />
       </div>
-      <label className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
-        Lugar de descarga (descripción operativa — como la usa Operaciones)
-        <input
-          className={`${inputCls} mt-1 w-full`}
-          placeholder="Ej. RUTA-A - punto1-punto2-punto3"
-          value={form.lugarDescargaHistorico}
-          onChange={(e) => setForm((f) => ({ ...f, lugarDescargaHistorico: e.target.value }))}
-        />
-        <span className="mt-0.5 block text-[10px]">
-          Se copió de la ruta elegida arriba (si aplica) — puedes ajustarla solo para este viaje.
-          Es lo que sale en el reporte tradicional (columna &quot;Lugar de Descarga&quot;).
-        </span>
-      </label>
+      {/* PROGRAMACION-PARADAS-FUENTE — el destino se captura UNA sola vez, en «Paradas del viaje». Esta opción (colapsada)
+          solo existe para el caso en que Operaciones necesite en el reporte un texto distinto a la primera descarga. */}
+      <details
+        open={descReporteAbierta}
+        onToggle={(e) => setDescReporteAbierta(e.currentTarget.open)}
+        className={`text-xs text-[var(--muted)] md:col-span-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}
+      >
+        <summary className="cursor-pointer select-none">Usar descripción distinta en el reporte (opcional)</summary>
+        <label className="mt-1 block">
+          Descripción del lugar de descarga para el reporte
+          <input
+            className={`${inputCls} mt-1 w-full`}
+            placeholder="Ej. RUTA-A - punto1-punto2-punto3"
+            value={form.lugarDescargaHistorico}
+            onChange={(e) => setForm((f) => ({ ...f, lugarDescargaHistorico: e.target.value }))}
+          />
+          <span className="mt-0.5 block text-[10px]">
+            Déjalo vacío para que el reporte use la primera descarga/entrega de las paradas (lo normal). Solo se llena si el
+            reporte tradicional debe mostrar un texto distinto al de la parada.
+          </span>
+        </label>
+      </details>
       <div className={`md:col-span-3 space-y-2 rounded border border-[var(--border)] p-2 ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         <p className="text-[11px] font-medium text-[var(--muted)]">
           Contacto operativo — viene del cliente (o de la ruta elegida). El teléfono no se edita
@@ -1789,6 +1848,40 @@ export default function PlanForm({
             ? "Otra empresa ejecuta el viaje físicamente — el cliente/tarifa/programación siguen siendo tuyos."
             : "Piloto, auxiliares y unidad propios (RRHH/Flota)."}
         </span>
+      </label>
+
+      {/* PROGRAMACION-VEHICULO-SOLICITADO — dato COMERCIAL del viaje (Propio y Tercerizado), distinto de la Unidad.
+          Mismo gate pre-cierre que la tarifa comercial. Cambiarlo no toca la unidad ni la tarifa (ni viceversa). */}
+      <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+        {ETIQUETA_VEHICULO_SOLICITADO_LARGA} <span aria-hidden="true">*</span>
+        <select
+          className={`${inputCls} mt-1 w-full`}
+          value={form.vehiculoSolicitadoPerfilId}
+          disabled={bloqueadoParaPreCierre || bloqueado}
+          aria-describedby={msgVehiculo ? "ayuda-vehiculo-solicitado error-vehiculo-solicitado" : "ayuda-vehiculo-solicitado"}
+          ref={vehiculoRef}
+          required
+          aria-required="true"
+          aria-invalid={msgVehiculo ? true : undefined}
+          onChange={(e) => { setErrorVehiculo(""); setForm((f) => ({ ...f, vehiculoSolicitadoPerfilId: Number(e.target.value) })); }}
+        >
+          <option value={0}>— Selecciona el vehículo solicitado —</option>
+          {opcionesVehiculoSolicitado(vehiculosSolicitables, {
+            id: plan?.vehiculo_solicitado_perfil_id ?? null,
+            nombre: plan?.vehiculo_solicitado_nombre ?? null,
+          }).map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.etiqueta}
+            </option>
+          ))}
+        </select>
+        <span id="ayuda-vehiculo-solicitado" className="mt-0.5 block text-[10px]">
+          {AYUDA_VEHICULO_SOLICITADO}
+        </span>
+        {esEdicion && !plan!.vehiculo_solicitado_perfil_id && form.vehiculoSolicitadoPerfilId === 0 && !msgVehiculo && exigeVehiculoSolicitadoAlEditar(plan!.estado, pendienteCierre) ? (
+          <span className="mt-0.5 block text-[10px] text-amber-500">Este viaje es anterior a esta regla y no tiene vehículo solicitado: selecciónalo para poder guardar cambios.</span>
+        ) : null}
+        {msgVehiculo ? <span id="error-vehiculo-solicitado" role="alert" className="mt-0.5 block text-[11px] font-medium text-red-500">{msgVehiculo}</span> : null}
       </label>
 
       {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a
@@ -1970,7 +2063,7 @@ export default function PlanForm({
       {/* OPS-AJUSTES (sección 3) — motivo obligatorio, solo visible cuando
           piloto/unidad/auxiliares realmente cambian respecto al plan
           original (cambioSensible). El backend lo vuelve a exigir. */}
-      {cambioSensible ? (
+      {cambioSensible || cuadrillaCambio ? (
         <div className="md:col-span-3 space-y-1 rounded border border-amber-700/60 bg-amber-950/10 p-2 text-xs">
           <label className="block text-[var(--muted)]">
             Motivo del cambio (piloto/unidad/auxiliares)
@@ -1993,6 +2086,9 @@ export default function PlanForm({
         </div>
       ) : null}
 
+      <CuadrillaSelect integrantes={cuadrilla} empleados={empleadosCuadrilla} ocupados={ocupacionPersonal}
+        excluidos={[form.pilotoEmpleadoId, form.mostrarPilotoExtra ? form.pilotoExtraEmpleadoId : 0, ...form.auxiliarEmpleadoIds]}
+        disabled={bloqueadoParaPreCierre || bloqueado} onChange={setCuadrilla} />
       <label className={`text-xs text-[var(--muted)] ${soloNotas || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
         Tipo de traslado
         <input
@@ -2132,6 +2228,10 @@ export default function PlanForm({
         }`}
       >
         <p className="text-xs font-medium">Paradas del viaje</p>
+        <p className="text-[10px] text-[var(--muted)]">
+          Las paradas definen el lugar de carga y los destinos del viaje. El primer punto de carga y la primera
+          descarga/entrega se usan también en los reportes y el Portal del piloto.
+        </p>
 
         {form.clienteId ? (
           <div className="rounded border border-[var(--border)] bg-black/10 p-2">
@@ -2429,6 +2529,7 @@ export default function PlanForm({
       ) : null}
 
       {error ? <p className="md:col-span-3 text-sm text-red-300">{error}</p> : null}
+      {errores.length ? <div className="md:col-span-3"><ErroresFormulario errores={errores} /></div> : null}
       {msg ? <p className="md:col-span-3 text-sm text-emerald-300">{msg}</p> : null}
 
       <button

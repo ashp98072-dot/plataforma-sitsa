@@ -18,6 +18,7 @@ import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad"
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import {
   ENCABEZADO_TC,
+  ENCABEZADO_VEHICULO,
   ENCABEZADOS_PLANTILLA_PROGRAMACION,
   ENCABEZADOS_PROGRAMACION,
   generarPlantillaProgramacion,
@@ -63,9 +64,10 @@ describe("parser: compatibilidad con Excel antiguo (13 columnas) y nuevo (14)", 
     expect(filas.every((f) => f.erroresSintacticos.length === 0)).toBe(true); // el TC nunca es obligatorio
   });
 
-  it("los encabezados oficiales (13) NO cambian; la plantilla nueva agrega el 14º al final", () => {
+  it("los encabezados oficiales (13) NO cambian; la plantilla nueva agrega TC (14º) y «Vehículo solicitado» (15º) al final", () => {
     expect(ENCABEZADOS_PROGRAMACION).toHaveLength(13);
-    expect(ENCABEZADOS_PLANTILLA_PROGRAMACION).toHaveLength(14);
+    expect(ENCABEZADOS_PLANTILLA_PROGRAMACION).toHaveLength(15);
+    expect(ENCABEZADOS_PLANTILLA_PROGRAMACION[14]).toBe(ENCABEZADO_VEHICULO);
     expect(ENCABEZADOS_PLANTILLA_PROGRAMACION.slice(0, 13)).toEqual([...ENCABEZADOS_PROGRAMACION]);
     expect(ENCABEZADOS_PLANTILLA_PROGRAMACION[13]).toBe("TC / Caja / Remolque");
   });
@@ -129,7 +131,7 @@ const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), comm
 const fila = (over: Partial<FilaProgramacionExcel> = {}): FilaProgramacionExcel => ({
   filaExcel: 4, fechaSalidaExcel: "2026-09-21", horaSalidaExcel: "08:00", codigoRutaExcel: "1001", clienteExcel: "123456-7",
   pilotoCodigoExcel: "P-1", placaExcel: "P-123ABC", auxiliar1CodigoExcel: "", auxiliar2CodigoExcel: "", tipoTrasladoExcel: "Carga",
-  tarifaExcel: 1500, fechaRegresoExcel: null, horaRegresoExcel: null, observacionesExcel: "", erroresSintacticos: [], ...over,
+  tarifaExcel: 1500, fechaRegresoExcel: null, horaRegresoExcel: null, observacionesExcel: "", vehiculoSolicitadoExcel: "Camión 5 toneladas", erroresSintacticos: [], ...over,
 });
 
 beforeEach(() => {
@@ -158,6 +160,7 @@ beforeEach(() => {
       return [{ id: 10, codigo: "1001", cliente_id: 3, activo: 1, tarifa_referencia: 1500, lugar_carga_texto: "Bodega", destino_descripcion: "Xela",
         contacto_nombre: null, contacto_cargo: null, contacto_telefono: null, cliente_nombre: "Acme", cliente_nit: "123456-7" }];
     }
+    if (s.includes("FROM tms_cotizacion_costeo_perfiles")) return [{ id: 11, codigo: "CAM_5T", nombre: "Camión 5 toneladas" }];
     if (s.includes("FROM empleados")) return [{ id: 100, codigo: "P-1", nombre: "Juan", estado: "Activo" }];
     if (s.includes("FROM tms_personal")) return [];
     if (s.includes("FROM tms_unidades")) return [];

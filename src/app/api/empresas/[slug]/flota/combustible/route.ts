@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
+import { guardarCombustibleHttp } from "@/lib/flota/combustible-staff-http";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
-import { asegurarSchemaFlotaLectura } from "@/lib/flota/schema";
 import {
   listarCargasCombustibleRevision,
   type EstadoCargaCombustible,
@@ -19,7 +19,6 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
   const { slug } = await ctx.params;
   const guard = await requireTenantFlotaCombustible(slug, "ver");
   if (guard.error) return guard.error;
-  await asegurarSchemaFlotaLectura().catch(() => undefined);
 
   const url = new URL(req.url);
   const estadoRaw = url.searchParams.get("estado");
@@ -42,4 +41,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
     })),
     resumen,
   });
+}
+
+export async function POST(req: Request, ctx: { params: Promise<{ slug: string }> }) {
+  return guardarCombustibleHttp(req, (await ctx.params).slug);
 }

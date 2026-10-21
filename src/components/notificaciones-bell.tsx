@@ -27,6 +27,7 @@ export function NotificacionesBell({ slug }: Props) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const solicitud = useRef<AbortController | null>(null);
 
   // COMPRAS-NOTIFICACIONES: antes era una allowlist fija de roles, pero
   // permisos explícitos como compras_autorizar (y cualquier otro futuro)
@@ -40,15 +41,24 @@ export function NotificacionesBell({ slug }: Props) {
 
   const cargar = useCallback(async (silencioso = false) => {
     if (!puedeVer) return;
+    // Poll, apertura y Actualizar comparten una sola solicitud en curso.
+    if (solicitud.current) return;
+    const controller = new AbortController();
+    solicitud.current = controller;
     if (!silencioso) setLoading(true);
     try {
-      const res = await fetch(`/api/empresas/${slug}/notificaciones`);
+      const res = await fetch(`/api/empresas/${slug}/notificaciones`, { signal: controller.signal });
       const data = await res.json();
-      if (res.ok) {
+      if (res.ok && !controller.signal.aborted) {
         setItems(data.notificaciones ?? []);
         setPendientes(Number(data.pendientes ?? 0));
       }
+    } catch {
+      // Conservar el último feed si falla la red o se desmonta/cambia empresa.
     } finally {
+      if (solicitud.current === controller) solicitud.current = null;
+      // Igual que antes del cambio: quien puso `loading` lo libera siempre (también si la solicitud se abortó por cambio de
+      // empresa), para no dejar el indicador colgado. Un setState tras desmontar es inocuo.
       if (!silencioso) setLoading(false);
     }
   }, [slug, puedeVer]);
@@ -70,6 +80,8 @@ export function NotificacionesBell({ slug }: Props) {
     const t = setInterval(() => void cargar(true), 150_000);
     return () => {
       cancelled = true;
+      solicitud.current?.abort();
+      solicitud.current = null;
       if (idleId != null && typeof cancelIdleCallback !== "undefined") {
         cancelIdleCallback(idleId);
       }
@@ -214,6 +226,7 @@ export function NotificacionesBell({ slug }: Props) {
                         ) : null}
                         <Link
                           href={n.enlace}
+                          prefetch={false}
                           className="text-[11px] text-sky-400 underline"
                           onClick={() => setOpen(false)}
                         >

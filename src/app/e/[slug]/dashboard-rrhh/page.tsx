@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import type { ResumenMensual } from "@/lib/rrhh/dashboard";
+import type { ResumenCumpleanios } from "@/lib/rrhh/cumpleanios-shared";
 import { DetalleMovimientosPanel } from "@/components/rrhh/detalle-movimientos-mensual";
 
 type Stats = {
@@ -65,6 +66,7 @@ function DashboardRrhh({ slug }: { slug: string }) {
     ResumenMensual[]
   >([]);
   const [situacionHoy, setSituacionHoy] = useState<SituacionHoy[] | null>(null);
+  const [cumpleanios, setCumpleanios] = useState<ResumenCumpleanios | null>(null);
   const [empresa, setEmpresa] = useState(empresaNombre);
   const [error, setError] = useState("");
   const [avisos, setAvisos] = useState<string[]>([]);
@@ -84,11 +86,12 @@ function DashboardRrhh({ slug }: { slug: string }) {
         setStats(data.stats);
         setResumenGerencial(data.resumenGerencial ?? []);
         setSituacionHoy(data.situacionHoy ?? null);
+        setCumpleanios((data.cumpleanios ?? null) as ResumenCumpleanios | null);
         setAvisos(data.avisos ?? []);
         if (data.empresa) setEmpresa(String(data.empresa));
       } catch (e) {
         if (!controller.signal.aborted) {
-          setStats(null); setResumenGerencial([]); setSituacionHoy(null); setAvisos([]);
+          setStats(null); setResumenGerencial([]); setSituacionHoy(null); setCumpleanios(null); setAvisos([]);
           setError(e instanceof Error ? e.message : "Error de conexión.");
         }
       } finally {
@@ -231,6 +234,36 @@ function DashboardRrhh({ slug }: { slug: string }) {
             </div>
           ))}
         </div>
+      ) : null}
+
+      {cumpleanios ? (
+        <section aria-label="Cumpleaños del mes" className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-semibold">Cumpleaños de {cumpleanios.nombreMes.toLowerCase()}</h2>
+              <p className="mt-1 text-2xl font-semibold">
+                {cumpleanios.total} {cumpleanios.total === 1 ? "empleado" : "empleados"}
+              </p>
+            </div>
+            <Link href={`/e/${slug}/rrhh/reportes/cumpleanios`} className="text-xs text-[var(--accent)] underline">
+              Ver listado →
+            </Link>
+          </div>
+          {cumpleanios.proximos.length ? (
+            <ul className="mt-2 space-y-0.5 text-xs">
+              {cumpleanios.proximos.map((p) => (
+                <li key={p.id} className="flex justify-between gap-2">
+                  <span className="truncate">{p.nombre}</span>
+                  <span className="shrink-0 text-[var(--muted)]">{p.dia} de {cumpleanios.nombreMes.toLowerCase()}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {cumpleanios.total === 0 ? "Nadie cumple años este mes." : "No quedan cumpleaños en lo que resta del mes."}
+            </p>
+          )}
+        </section>
       ) : null}
 
       {situacionHoy !== null ? (

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -24,7 +25,7 @@ import {
  * base en memoria; solo se emula el SQL (UPDATE condicional / SELECT ... FOR
  * UPDATE), nunca la lógica de cierre.
  */
-type Plan = { id: number; empresa_id: number; codigo: string; estado: string; tipo_viaje: string; cerrado_por?: string; cierre_manual?: number; motivo?: string };
+type Plan = { id: number; empresa_id: number; codigo: string; estado: string; tipo_viaje: string; tarifa_comercial: number | null; cerrado_por?: string; cierre_manual?: number; motivo?: string };
 type Flota = { id: number; plan_id: number; empresa_id: number; estado: string };
 
 let planes: Plan[];
@@ -32,9 +33,17 @@ let flotas: Flota[];
 let fallar: Set<number>;
 let fallaAuditoria: Set<number>;
 let respaldo: string;
+/** Estado de liquidación por plan. Sin entrada = REPORTE_RECIBIDO (default); `null` = SIN fila de liquidación. */
+let liquidaciones: Map<number, string | null>;
+const estadoLiq = (id: number): string | null => (liquidaciones.has(id) ? liquidaciones.get(id)! : "REPORTE_RECIBIDO");
+/** Planes con el evento append-only REPORTE_RECIBIDO (evidencia histórica). Por defecto: todo plan con fila de liquidación lo tiene. */
+let sinEvento: Set<number>;
+const tieneEvento = (id: number): boolean => estadoLiq(id) != null && !sinEvento.has(id);
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 
-const plan = (id: number, estado: string, extra: Partial<Plan> = {}): Plan => ({ id, empresa_id: 7, codigo: `PLAN-${id}`, estado, tipo_viaje: "Propio", ...extra });
+// PLANES-TARIFA-CIERRE-1 — tarifa_comercial: 500 por defecto (CON tarifa); los tests que necesitan "sin
+// tarifa" la sobreescriben explícitamente con `tarifa_comercial: null` vía `extra`.
+const plan = (id: number, estado: string, extra: Partial<Plan> = {}): Plan => ({ id, empresa_id: 7, codigo: `PLAN-${id}`, estado, tipo_viaje: "Propio", tarifa_comercial: 500, ...extra });
 const llegada = (planId: number, empresa = 7): Flota => ({ id: 900 + planId, plan_id: planId, empresa_id: empresa, estado: "cerrado" });
 const tieneLlegada = (p: Plan) => flotas.some((f) => f.plan_id === p.id && f.empresa_id === p.empresa_id && f.estado === "cerrado");
 const estados = () => Object.fromEntries(planes.map((p) => [p.id, p.estado]));
@@ -46,12 +55,12 @@ const manual = (ids: number[], extra: Partial<Parameters<typeof cerrarViajesMasi
 
 beforeEach(() => {
   vi.resetAllMocks();
-  planes = []; flotas = []; fallar = new Set(); fallaAuditoria = new Set();
+  planes = []; flotas = []; fallar = new Set(); fallaAuditoria = new Set(); liquidaciones = new Map(); sinEvento = new Set();
   vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
     const s = String(sql);
     if (s.includes("p.id IN")) {
       const [emp, ...ids] = params as number[];
-      return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({ id: p.id, codigo: p.codigo, estado: p.estado, llegada_registrada: tieneLlegada(p) ? 1 : 0 }));
+      return planes.filter((p) => p.empresa_id === emp && ids.includes(p.id)).map((p) => ({ id: p.id, codigo: p.codigo, estado: p.estado, tarifa_comercial: p.tarifa_comercial, llegada_registrada: tieneLlegada(p) ? 1 : 0, estado_liquidacion: estadoLiq(p.id), evento_reporte_recibido: tieneEvento(p.id) ? 1 : 0 }));
     }
     throw new Error(`query inesperada: ${s}`);
   }) as never);
@@ -67,12 +76,23 @@ beforeEach(() => {
     if (s.includes("SELECT p.estado")) {
       const [id, emp] = params as number[];
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
-      return [p ? [{ estado: p.estado, llegada_registrada: tieneLlegada(p) ? 1 : 0 }] : []];
+      return [p ? [{ estado: p.estado, tarifa_comercial: p.tarifa_comercial, llegada_registrada: tieneLlegada(p) ? 1 : 0 }] : []];
     }
     if (s.includes("SELECT tipo_viaje")) {
       const [id, emp] = params as number[];
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
       return [p ? [{ tipo_viaje: p.tipo_viaje }] : []];
+    }
+    if (s.includes("FROM tms_viaje_liquidacion_eventos")) {
+      const [emp, id] = params as number[];
+      const p = planes.find((x) => x.id === id && x.empresa_id === emp);
+      return [p && tieneEvento(id) ? [{ hay: 1 }] : []];
+    }
+    if (s.includes("FROM tms_viaje_liquidaciones")) {
+      const [emp, id] = params as number[];
+      const p = planes.find((x) => x.id === id && x.empresa_id === emp);
+      const e = p ? estadoLiq(id) : null; // otra empresa / inexistente: sin fila
+      return [e ? [{ estado: e }] : []];
     }
     if (s.includes("FROM tms_planes_viaje")) { const p = planes.find((x) => x.id === params[0] && x.empresa_id === params[1]); return [p ? [p] : []]; }
     if (s.includes("FROM flota_viajes")) { const f = flotas.filter((x) => x.plan_id === params[0]).at(-1); return [f ? [f] : []]; }
@@ -84,7 +104,8 @@ beforeEach(() => {
     if (s.includes("UPDATE tms_planes_viaje") && s.includes("cierre_manual")) {
       const [usuario, motivo, , id, emp] = params as [string, string, string | null, number, number];
       if (fallar.has(id)) throw new Error("fallo de BD");
-      const p = planes.find((x) => x.id === id && x.empresa_id === emp && ["Programado", "Cargado", "En ruta"].includes(x.estado));
+      // PLANES-TARIFA-CIERRE-1 — misma defensa `AND tarifa_comercial IS NOT NULL` del SQL real.
+      const p = planes.find((x) => x.id === id && x.empresa_id === emp && ["Programado", "Cargado", "En ruta"].includes(x.estado) && x.tarifa_comercial != null);
       if (!p) return [{ affectedRows: 0 }];
       Object.assign(p, { estado: "Cerrado", cerrado_por: usuario, cierre_manual: 1, motivo });
       return [{ affectedRows: 1 }];
@@ -93,7 +114,8 @@ beforeEach(() => {
       const [usuario, id, emp] = params as [string, number, number];
       if (fallar.has(id)) throw new Error("fallo de BD");
       const p = planes.find((x) => x.id === id && x.empresa_id === emp);
-      const ok = p && (p.estado === "Descargado" || (["En ruta", "Cargado"].includes(p.estado) && tieneLlegada(p)));
+      // PLANES-TARIFA-CIERRE-1 — misma condición `AND p.tarifa_comercial IS NOT NULL` del SQL real.
+      const ok = p && p.tarifa_comercial != null && (p.estado === "Descargado" || (["En ruta", "Cargado"].includes(p.estado) && tieneLlegada(p)));
       if (!ok) return [{ affectedRows: 0 }];
       p.estado = "Cerrado"; p.cerrado_por = usuario;
       return [{ affectedRows: 1 }];
@@ -104,31 +126,42 @@ beforeEach(() => {
 });
 
 describe("helper de elegibilidad NORMAL (UI y backend comparten el criterio)", () => {
-  it("Descargado sí (con o sin llegada); En ruta/Cargado solo con llegada; Programado, Cerrado y Cancelado nunca", () => {
-    expect(puedeCerrarNormalmente("Descargado", false)).toBe(true);
-    expect(puedeCerrarNormalmente("Descargado", true)).toBe(true);
+  it("Descargado sí (con o sin llegada); En ruta/Cargado solo con llegada; Programado, Cerrado y Cancelado nunca (todos CON tarifa)", () => {
+    expect(puedeCerrarNormalmente("Descargado", false, true, true)).toBe(true);
+    expect(puedeCerrarNormalmente("Descargado", true, true, true)).toBe(true);
     for (const e of ["En ruta", "Cargado"]) {
-      expect(puedeCerrarNormalmente(e, true)).toBe(true);
-      expect(puedeCerrarNormalmente(e, false)).toBe(false);
+      expect(puedeCerrarNormalmente(e, true, true, true)).toBe(true);
+      expect(puedeCerrarNormalmente(e, false, true, true)).toBe(false);
     }
     for (const e of ["Programado", "Cerrado", "Cancelado"]) {
-      expect(puedeCerrarNormalmente(e, true)).toBe(false);
-      expect(puedeCerrarNormalmente(e, false)).toBe(false);
+      expect(puedeCerrarNormalmente(e, true, true, true)).toBe(false);
+      expect(puedeCerrarNormalmente(e, false, true, true)).toBe(false);
     }
   });
 
-  it("manual: Programado/Cargado/En ruta sí; Descargado, Cerrado y Cancelado no", () => {
-    for (const e of ["Programado", "Cargado", "En ruta"]) expect(puedeCerrarManualmente(e)).toBe(true);
-    for (const e of ["Descargado", "Cerrado", "Cancelado"]) expect(puedeCerrarManualmente(e)).toBe(false);
+  it("manual: Programado/Cargado/En ruta sí; Descargado, Cerrado y Cancelado no (todos CON tarifa)", () => {
+    for (const e of ["Programado", "Cargado", "En ruta"]) expect(puedeCerrarManualmente(e, true, true)).toBe(true);
+    for (const e of ["Descargado", "Cerrado", "Cancelado"]) expect(puedeCerrarManualmente(e, true, true)).toBe(false);
+  });
+
+  it("PLANES-TARIFA-CIERRE-1 (1/2/3/4): SIN tarifa, ningún estado es elegible (ni normal ni manual)", () => {
+    expect(puedeCerrarNormalmente("Descargado", false, false, true)).toBe(false);
+    expect(puedeCerrarNormalmente("En ruta", true, false, true)).toBe(false);
+    expect(puedeCerrarManualmente("Programado", false, true)).toBe(false);
   });
 
   it("los motivos legibles solo existen cuando NO procede", () => {
-    expect(motivoNoCierreNormal("Descargado", false)).toBeNull();
-    expect(motivoNoCierreNormal("En ruta", false)).toContain("no ha registrado la llegada");
-    expect(motivoNoCierreNormal("Cerrado", true)).toContain("ya fue cerrado");
-    expect(motivoNoCierreNormal("Cancelado", true)).toContain("cancelado");
-    expect(motivoNoCierreManual("Programado")).toBeNull();
-    expect(motivoNoCierreManual("Descargado")).toContain("no admite cierre manual");
+    expect(motivoNoCierreNormal("Descargado", false, true, true)).toBeNull();
+    expect(motivoNoCierreNormal("En ruta", false, true, true)).toContain("no ha registrado la llegada");
+    expect(motivoNoCierreNormal("Cerrado", true, true, true)).toContain("ya fue cerrado");
+    expect(motivoNoCierreNormal("Cancelado", true, true, true)).toContain("cancelado");
+    expect(motivoNoCierreManual("Programado", true, true)).toBeNull();
+    expect(motivoNoCierreManual("Descargado", true, true)).toContain("no admite cierre manual");
+  });
+
+  it("PLANES-TARIFA-CIERRE-1 (6): mensaje correcto cuando lo único que falta es la tarifa", () => {
+    expect(motivoNoCierreNormal("Descargado", false, false, true)).toBe("No se puede cerrar este viaje porque todavía no tiene una tarifa asignada.");
+    expect(motivoNoCierreManual("Programado", false, true)).toBe("No se puede cerrar este viaje porque todavía no tiene una tarifa asignada.");
   });
 
   it("no diverge del backend: el UPDATE de cerrarViaje() usa exactamente esos estados", () => {
@@ -215,6 +248,19 @@ describe("cierre masivo NORMAL — reutiliza cerrarViaje() real", () => {
     expect(r).toMatchObject({ solicitados: 0, cerrados: [], omitidos: [], errores: [] });
     expect(vi.mocked(query)).not.toHaveBeenCalled();
     expect(conn.execute).not.toHaveBeenCalled();
+  });
+
+  /** PLANES-TARIFA-CIERRE-1 (18/19/20) — mezcla con/sin tarifa: solo los que tienen tarifa se intentan cerrar; sin tarifa -> omitido, no error. */
+  it("18/19) mezcla con/sin tarifa: solo se cierran los que tienen tarifa; los sin tarifa quedan omitidos con el mensaje específico", async () => {
+    planes = [
+      plan(1, "Descargado", { tarifa_comercial: 500 }),
+      plan(2, "Descargado", { tarifa_comercial: null }),
+      plan(3, "Descargado", { tarifa_comercial: 0 }), // Q0 explícito SÍ cuenta
+    ];
+    const r = await normal([1, 2, 3]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 3]);
+    expect(r.omitidos).toEqual([{ id: 2, codigo: "PLAN-2", motivo: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." }]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Descargado", 3: "Cerrado" });
   });
 });
 
@@ -331,6 +377,18 @@ describe("cierre masivo MANUAL — reutiliza cerrarViajeManual() real con motivo
     expect(r.cerrados.map((c) => c.id)).toEqual([2]);
     expect(planes[0].estado).toBe("Programado");
   });
+
+  /** PLANES-TARIFA-CIERRE-1 (18/19/20) — mismo criterio que el masivo NORMAL: sin tarifa, omitido con motivo específico. */
+  it("18/19) mezcla con/sin tarifa en MANUAL: solo los que tienen tarifa se cierran; sin tarifa -> omitido", async () => {
+    planes = [
+      plan(1, "Programado", { tarifa_comercial: 500 }),
+      plan(2, "Programado", { tarifa_comercial: null }),
+    ];
+    const r = await manual([1, 2]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1]);
+    expect(r.omitidos).toEqual([{ id: 2, codigo: "PLAN-2", motivo: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." }]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Programado" });
+  });
 });
 
 /**
@@ -340,7 +398,10 @@ describe("cierre masivo MANUAL — reutiliza cerrarViajeManual() real con motivo
  * archivo) para cada lote — sin transacción global, combinando cerrados/omitidos/errores de todos los lotes.
  */
 describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más allá de la página cargada", () => {
-  const candidato = (id: number, estado: string, llegadaRegistrada = false) => ({ id, codigo: `PLAN-${id}`, estado, llegadaRegistrada });
+  // PLANES-TARIFA-CIERRE-1 — tarifaComercial: 500 por defecto (CON tarifa); los tests "sin tarifa" la pasan explícitamente como null.
+  // REQUISITO DE SECUENCIA — reporteRecibido: true por defecto; los tests "sin reporte" lo pasan false.
+  const candidato = (id: number, estado: string, llegadaRegistrada = false, tarifaComercial: number | null = 500, reporteRecibido = true) =>
+    ({ id, codigo: `PLAN-${id}`, estado, llegadaRegistrada, tarifaComercial, reporteRecibido });
 
   it("16/17/18) resuelve el período (MES) y consulta candidatos con el rango de fechas correcto — SIEMPRE fresco, nunca ids pasados por el caller", async () => {
     planes = [plan(1, "Descargado")];
@@ -437,7 +498,7 @@ describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más all�
     expect(conn.rollback).not.toHaveBeenCalled();
     expect(registrarAuditoria).toHaveBeenLastCalledWith(expect.objectContaining({
       empresaId: 7, accion: "cierre_masivo_viajes_periodo",
-      detalle: expect.stringContaining("solicitados 401 · cerrados 201 · omitidos 0 · errores 200"),
+      detalle: expect.stringContaining("solicitados 401 · cerrados 201 · omitidos 0 (sin reporte recibido 0) · errores 200"),
     }));
     expect(vi.mocked(registrarAuditoria).mock.invocationCallOrder.at(-1)).toBeGreaterThan(conn.commit.mock.invocationCallOrder.at(-1)!);
   });
@@ -466,7 +527,7 @@ describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más all�
     expect(resumenPeriodo).toHaveLength(1);
     expect(resumenPeriodo[0]).toMatchObject({ empresaId: 7, usuario: "jefe", modulo: "tms" });
     expect(resumenPeriodo[0].detalle).toContain("SEMANA 2026-W40");
-    expect(resumenPeriodo[0].detalle).toContain("solicitados 1 · cerrados 1 · omitidos 0 · errores 0");
+    expect(resumenPeriodo[0].detalle).toContain("solicitados 1 · cerrados 1 · omitidos 0 (sin reporte recibido 0) · errores 0");
   });
 
   it("respuesta incluye agrupación/valor/etiqueta del período resuelto", async () => {
@@ -494,6 +555,33 @@ describe("cerrarViajesMasivoPorPeriodo — cierre por Día/Semana/Mes, más all�
     expect(r).toMatchObject({ solicitados: 0, cerrados: [], omitidos: [], errores: [] });
     expect(vi.mocked(query)).not.toHaveBeenCalled(); // cerrarViajesMasivo([]) nunca consulta nada
   });
+
+  /** PLANES-TARIFA-CIERRE-1 (26) — la resolución FRESCA al confirmar excluye candidatos sin tarifa, sin importar lo que decía la vista previa. */
+  it("26) la resolución fresca excluye candidatos sin tarifa (nunca confía solo en la vista previa)", async () => {
+    planes = [plan(1, "Descargado", { tarifa_comercial: 500 }), plan(2, "Descargado", { tarifa_comercial: null })];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Descargado", false, 500), candidato(2, "Descargado", false, null)]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("solicitados" in r ? r.solicitados : null).toBe(1); // el id 2 (sin tarifa) nunca entró en `ids`
+    expect("cerrados" in r ? r.cerrados.map((c) => c.id) : null).toEqual([1]);
+  });
+
+  /**
+   * PLANES-TARIFA-CIERRE-1 (27) — caso de concurrencia: la resolución de candidatos (obtenerCandidatosCierre)
+   * todavía reporta tarifa (calificó como elegible, `ids` lo incluye), pero el estado REAL de la fila —
+   * releído por cerrarViajesMasivo() justo antes de cerrar, NUNCA confiado de la resolución anterior — ya no
+   * tiene tarifa (cambió en el instante entre ambas lecturas). Resultado: omitido, nunca forzado.
+   */
+  it("27) concurrencia: candidato reportado como elegible pero la relectura real (cerrarViajesMasivo) ya no tiene tarifa -> omitido, nunca cerrado", async () => {
+    planes = [plan(1, "Descargado", { tarifa_comercial: null })]; // estado REAL actual: sin tarifa
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Descargado", false, 500)]); // resolución de candidatos: todavía la reportaba
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    expect("solicitados" in r ? r.solicitados : null).toBe(1); // sí calificó como candidato según la resolución
+    expect("cerrados" in r ? r.cerrados : null).toEqual([]);
+    expect("omitidos" in r ? r.omitidos : null).toEqual([
+      expect.objectContaining({ id: 1, motivo: "No se puede cerrar este viaje porque todavía no tiene una tarifa asignada." }),
+    ]);
+    expect(estados()).toEqual({ 1: "Descargado" }); // nunca quedó Cerrado
+  });
 });
 
 describe("garantías estructurales", () => {
@@ -502,5 +590,211 @@ describe("garantías estructurales", () => {
     expect(src).toContain("cerrarViaje(opts.empresaId, id, opts.usuario)");
     expect(src).toContain("cerrarViajeManual({");
     expect(src).not.toMatch(/UPDATE\s+tms_planes_viaje|UPDATE\s+flota_viajes|beginTransaction/);
+  });
+});
+
+/**
+ * REQUISITO DE SECUENCIA — cierre masivo: cada viaje se valida (no todo-o-nada: semántica actual conservada). Un viaje sin
+ * REPORTE_RECIBIDO se OMITE con su motivo y NUNCA se cierra; los demás del lote sí.
+ */
+describe("cierre masivo — exige REPORTE_RECIBIDO por viaje (semántica parcial conservada)", () => {
+  const MSG = "No se puede cerrar el viaje porque el reporte aún no ha sido recibido.";
+  const candidato = (id: number, estado: string, llegadaRegistrada = false, tarifaComercial: number | null = 500, reporteRecibido = true) =>
+    ({ id, codigo: `PLAN-${id}`, estado, llegadaRegistrada, tarifaComercial, reporteRecibido });
+
+  it("lote mixto NORMAL: cierra los que tienen REPORTE_RECIBIDO y omite (con motivo) los demás; nada se cierra por accidente", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado"), plan(4, "Descargado"), plan(5, "Descargado")];
+    liquidaciones.set(2, null); // sin fila
+    liquidaciones.set(3, "EN_AJUSTE"); sinEvento.add(3); // etapa posterior SIN evento REPORTE_RECIBIDO: no habilita
+    liquidaciones.set(4, "LIQUIDADO"); sinEvento.add(4);
+    const r = await normal([1, 2, 3, 4, 5]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 5]);
+    expect(r.omitidos).toEqual([
+      { id: 2, codigo: "PLAN-2", motivo: MSG },
+      { id: 3, codigo: "PLAN-3", motivo: MSG },
+      { id: 4, codigo: "PLAN-4", motivo: MSG },
+    ]);
+    expect(r.errores).toEqual([]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Descargado", 3: "Descargado", 4: "Descargado", 5: "Cerrado" });
+  });
+
+  it("lote mixto MANUAL: mismo criterio (el cierre manual solo omite la llegada física, no el reporte)", async () => {
+    planes = [plan(1, "Programado"), plan(2, "En ruta"), plan(3, "Cargado")];
+    liquidaciones.set(2, null);
+    const r = await manual([1, 2, 3]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 3]);
+    expect(r.omitidos).toEqual([{ id: 2, codigo: "PLAN-2", motivo: MSG }]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "En ruta", 3: "Cerrado" });
+  });
+
+  it("la elegibilidad se recalcula en SERVIDOR: un id sin reporte jamás llega a UPDATE del plan", async () => {
+    planes = [plan(1, "Descargado")];
+    liquidaciones.set(1, null);
+    await normal([1]);
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("carrera: el reporte se informa recibido en la lista pero desaparece antes del cierre -> cerrarViaje lo rechaza bajo lock y queda omitido", async () => {
+    planes = [plan(1, "Descargado")];
+    // La consulta inicial dice REPORTE_RECIBIDO; la lectura bajo lock (dentro de la transacción) ya no encuentra fila.
+    const original = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("FROM tms_viaje_liquidaciones")) return [[]];
+      return original(sql, params);
+    });
+    const r = await normal([1]);
+    expect(r.cerrados).toEqual([]);
+    expect(r.omitidos).toEqual([{ id: 1, codigo: "PLAN-1", motivo: MSG }]);
+    expect(estados()).toEqual({ 1: "Descargado" }); // rollback real: el UPDATE se deshizo
+  });
+
+  it("no crea ni modifica liquidaciones: ningún INSERT/UPDATE/DELETE sobre tms_viaje_liquidacion*/cargos", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado")];
+    liquidaciones.set(2, null);
+    await normal([1, 2]);
+    const todas = [...conn.query.mock.calls, ...conn.execute.mock.calls, ...vi.mocked(query).mock.calls].map(([sql]) => String(sql));
+    expect(todas.some((q) => /(INSERT INTO|UPDATE|DELETE FROM)\s+tms_viaje_(liquidacion|cargo)/i.test(q))).toBe(false);
+  });
+
+  it("otra empresa: un id ajeno nunca aparece ni se cierra (aislamiento)", async () => {
+    planes = [plan(1, "Descargado", { empresa_id: 8 })];
+    const r = await normal([1]);
+    expect(r.cerrados).toEqual([]);
+    expect(r.omitidos).toEqual([{ id: 1, codigo: "—", motivo: "Viaje no encontrado." }]);
+  });
+
+  it("sin la tabla de liquidaciones (errno 1146): la consulta inicial reintenta sin ella y todos quedan sin reporte", async () => {
+    planes = [plan(1, "Descargado")];
+    let llamadas = 0;
+    const original = vi.mocked(query).getMockImplementation()!;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      llamadas++;
+      if (String(sql).includes("tms_viaje_liquidaciones")) throw Object.assign(new Error("no existe"), { errno: 1146 });
+      const filas = (await original(sql, params as never)) as Record<string, unknown>[];
+      return filas.map((f) => ({ ...f, estado_liquidacion: null, evento_reporte_recibido: 0 }));
+    }) as never);
+    const r = await normal([1]);
+    expect(llamadas).toBe(2);
+    expect(r.cerrados).toEqual([]);
+    expect(r.omitidos).toEqual([{ id: 1, codigo: "PLAN-1", motivo: MSG }]);
+  });
+
+  it("período: candidatos sin REPORTE_RECIBIDO se devuelven en omitidos (con motivo), cuentan en solicitados y NO se cierran", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Programado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([
+      candidato(1, "Descargado"),
+      candidato(2, "Descargado", false, 500, false), // sin reporte
+      candidato(3, "Programado", false, 500, true), // no elegible NORMAL (estado)
+    ]);
+    const r = await cerrarViajesMasivoPorPeriodo({ empresaId: 7, usuario: "jefe", tipo: "NORMAL", agrupacion: "MES", valor: "2026-09" });
+    if (!("cerrados" in r)) throw new Error("se esperaba resultado");
+    expect(r.cerrados.map((c) => c.id)).toEqual([1]);
+    expect(r.omitidos).toEqual([{ id: 2, codigo: "PLAN-2", motivo: MSG }]);
+    expect(r.solicitados).toBe(2); // = cerrados + omitidos + errores
+    expect(r.cerrados.length + r.omitidos.length + r.errores.length).toBe(r.solicitados);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Descargado", 3: "Programado" });
+  });
+
+  it("período MANUAL: mismo criterio y el resumen de auditoría informa cuántos quedaron sin reporte", async () => {
+    planes = [plan(1, "Programado"), plan(2, "Programado")];
+    vi.mocked(obtenerCandidatosCierre).mockResolvedValue([candidato(1, "Programado"), candidato(2, "Programado", false, 500, false)]);
+    const r = await cerrarViajesMasivoPorPeriodo({
+      empresaId: 7, usuario: "jefe", tipo: "MANUAL", agrupacion: "MES", valor: "2026-09", motivo: "Cierre administrativo del mes",
+    });
+    if (!("cerrados" in r)) throw new Error("se esperaba resultado");
+    expect(r.cerrados.map((c) => c.id)).toEqual([1]);
+    expect(r.omitidos.map((o) => o.id)).toEqual([2]);
+    const detalles = vi.mocked(registrarAuditoria).mock.calls.map(([a]) => String(a.detalle));
+    expect(detalles.some((d) => d.includes("sin reporte recibido 1"))).toBe(true);
+  });
+});
+
+/**
+ * REQUISITO DE SECUENCIA — arquitectura: TODOS los caminos que ponen `estado = 'Cerrado'` pasan por cerrarViaje/
+ * cerrarViajeManual (donde vive la validación bajo lock); ningún otro SQL de la aplicación cierra viajes.
+ */
+describe("cierre — todos los caminos pasan por el gate de REPORTE_RECIBIDO (arquitectura)", () => {
+  it("solo cierre-viaje.ts escribe estado = 'Cerrado' sobre tms_planes_viaje", () => {
+    let salida = "";
+    try {
+      salida = execFileSync("git", ["grep", "--untracked", "-lE", "SET\\s+(p\\.)?estado\\s*=\\s*'Cerrado'", "--", "src"], { encoding: "utf8" });
+    } catch (e) {
+      if ((e as { status?: number }).status !== 1) throw e;
+    }
+    const archivos = salida.split("\n").filter(Boolean).filter((f) => !/\.test\.tsx?$/.test(f));
+    expect(archivos).toEqual(["src/lib/tms/cierre-viaje.ts"]);
+  });
+
+  it("el cierre masivo y el de período usan cerrarViaje/cerrarViajeManual (no escriben estado propio)", () => {
+    const src = readFileSync("src/lib/tms/cierre-masivo.ts", "utf8");
+    expect(src).toMatch(/await cerrarViaje\(opts\.empresaId, id, opts\.usuario\)/);
+    expect(src).toMatch(/await cerrarViajeManual\(/);
+    expect(src).not.toMatch(/UPDATE tms_planes_viaje/);
+  });
+
+  it("el endpoint de edición de planes NO acepta 'Cerrado' como estado (PATCH solo Programado/Cargado/Cancelado)", () => {
+    const src = readFileSync("src/app/api/empresas/[slug]/tms/planes/route.ts", "utf8");
+    expect(src).toMatch(/\.enum\(\["Programado", "Cargado", "Cancelado"\]\)/);
+  });
+
+  it("cierre-viaje.ts valida REPORTE_RECIBIDO bajo lock en AMBAS funciones y nunca escribe liquidaciones", () => {
+    const src = readFileSync("src/lib/tms/cierre-viaje.ts", "utf8");
+    expect(src.match(/reporteRecibidoBloqueado\(conn,/g)?.length).toBe(2);
+    expect(src).toMatch(/FROM tms_viaje_liquidaciones WHERE empresa_id = \? AND plan_id = \? FOR UPDATE/);
+    expect(src).not.toMatch(/(INSERT INTO|UPDATE|DELETE FROM)\s+tms_viaje_(liquidacion|cargo)/i);
+    // Sin fecha de activación (fase posterior) ni backfill.
+    expect(src).not.toMatch(/fecha_activacion|obtenerFechaActivacionLiquidacion/);
+  });
+
+  it("la regla pura exige EXACTAMENTE REPORTE_RECIBIDO (EN_AJUSTE/LIQUIDADO/sin fila no habilitan el cierre)", async () => {
+    const { reporteRecibidoParaCierre } = await import("./cierre-viaje-shared");
+    expect(reporteRecibidoParaCierre("REPORTE_RECIBIDO")).toBe(true);
+    for (const e of [null, undefined, "", "PENDIENTE", "EN_AJUSTE", "LIQUIDADO", "RELIQUIDADO", "reporte_recibido"]) {
+      expect(reporteRecibidoParaCierre(e as string | null | undefined), String(e)).toBe(false);
+    }
+    expect(puedeCerrarNormalmente("Descargado", true, true, false)).toBe(false);
+    expect(puedeCerrarManualmente("Programado", true, false)).toBe(false);
+    expect(motivoNoCierreNormal("Descargado", true, true, false)).toBe("No se puede cerrar el viaje porque el reporte aún no ha sido recibido.");
+    expect(motivoNoCierreManual("Programado", true, false)).toBe("No se puede cerrar el viaje porque el reporte aún no ha sido recibido.");
+    // El reporte es el ÚLTIMO requisito: Cancelado/Cerrado/sin tarifa/sin llegada conservan sus mensajes.
+    expect(motivoNoCierreNormal("Cancelado", true, true, false)).toContain("cancelado");
+    expect(motivoNoCierreNormal("Cerrado", true, true, false)).toContain("ya fue cerrado");
+    expect(motivoNoCierreNormal("En ruta", false, true, false)).toContain("no ha registrado la llegada");
+    expect(motivoNoCierreNormal("Descargado", false, false, false)).toContain("tarifa");
+  });
+});
+
+/**
+ * COMPATIBILIDAD CON PLANES HEREDADOS — masivo: «el reporte fue recibido» = liquidación REPORTE_RECIBIDO o evento histórico.
+ */
+describe("cierre masivo — planes heredados con evento REPORTE_RECIBIDO", () => {
+  const MSG = "No se puede cerrar el viaje porque el reporte aún no ha sido recibido.";
+
+  it("EN_AJUSTE/LIQUIDADO con evento se cierran; sin evento (fixture inválido) o sin fila se omiten", async () => {
+    planes = [plan(1, "Descargado"), plan(2, "Descargado"), plan(3, "Descargado"), plan(4, "Descargado"), plan(5, "Descargado")];
+    liquidaciones.set(1, "EN_AJUSTE"); // con evento
+    liquidaciones.set(2, "LIQUIDADO"); // con evento
+    liquidaciones.set(3, "EN_AJUSTE"); sinEvento.add(3); // fixture inválido
+    liquidaciones.set(4, null); // sin fila
+    // 5: REPORTE_RECIBIDO por defecto
+    const r = await normal([1, 2, 3, 4, 5]);
+    expect(r.cerrados.map((c) => c.id)).toEqual([1, 2, 5]);
+    expect(r.omitidos).toEqual([
+      { id: 3, codigo: "PLAN-3", motivo: MSG },
+      { id: 4, codigo: "PLAN-4", motivo: MSG },
+    ]);
+    expect(estados()).toEqual({ 1: "Cerrado", 2: "Cerrado", 3: "Descargado", 4: "Descargado", 5: "Cerrado" });
+  });
+
+  it("la pre-consulta y la revalidación bajo lock usan la misma fuente (evento append-only), siempre por empresa", async () => {
+    planes = [plan(1, "Descargado")];
+    liquidaciones.set(1, "LIQUIDADO");
+    await normal([1]);
+    const lecturas = conn.query.mock.calls.filter(([sql]) => String(sql).includes("FROM tms_viaje_liquidacion_eventos"));
+    expect(lecturas).toHaveLength(1);
+    expect(lecturas[0][1]).toEqual([7, 1]);
+    const pre = vi.mocked(query).mock.calls[0][0] as string;
+    expect(pre).toContain("ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO'");
   });
 });

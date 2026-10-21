@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
+import { listarVehiculosActivosAccesibles, obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { esUsuarioOperaciones, ERROR_REQUIRIENTE_OPERACIONES, resolverUsuarioDeEmpresaTx, resolverSolicitanteOperacionesTx } from "@/lib/tms/identidad-administrativa";
 import { normalizarMetodoPagoCompra } from "./metodos-pago";
@@ -12,6 +13,8 @@ import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { capturarFirmaRolCompraTx } from "./requerimiento-firmas-captura";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS, mensajeFacturaDuplicadaServidor, normalizarFacturaCompra } from "./factura-compra";
 import { adquirirLocksFacturas, buscarFacturaExistente, liberarLocksFacturas } from "./facturas-duplicadas";
+import { MENSAJE_CONFLICTO_IDEMPOTENCIA, esDuplicadoDeClave, lectorDeConexion } from "@/lib/tms/idempotencia-envio";
+import { INDICE_CLAVE_COMPRAS, buscarRequerimientoPorClave, claveValidaCompra, huellaRequerimiento } from "./requerimiento-idempotencia";
 
 export class ErrorCompra extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -44,17 +47,26 @@ export async function obtenerRequerimiento(empresaId: number, id: number): Promi
   return { ...rows[0], lineas, cantidad_lineas: lineas.length } as unknown as DetalleCompra;
 }
 export async function catalogosCompra(empresaId: number) {
-  // No usar listarVehiculosAccesibles: incluye unidades compartidas de otros tenants.
-  const [proveedores, vehiculos, entidades, usuarios] = await Promise.all([
+  // Unidades PROPIAS + COMPARTIDAS con la empresa activa (regla única de Flota: flota_vehiculo_acceso), solo activas y sin duplicados.
+  // Una unidad de otra empresa que NO está compartida con esta nunca aparece.
+  const [proveedores, vehiculosAccesibles, entidades, usuarios] = await Promise.all([
     query<RowDataPacket[]>(`SELECT id, nombre_comercial, nit, contacto_nombre, contacto_telefono, telefono,
       metodo_pago_habitual, banco, numero_cuenta, dias_credito FROM compras_proveedores WHERE empresa_id = ? AND activo = 1 ORDER BY nombre_comercial, id`, [empresaId]),
-    query<RowDataPacket[]>(`SELECT id, placa, descripcion, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa, id`, [empresaId]),
+    listarVehiculosActivosAccesibles(empresaId),
     // El helper de Fondos/Gastos limita códigos KT/MONACO; Compras usa entidades reales del tenant, sin nombres/códigos hardcodeados.
     query<RowDataPacket[]>(`SELECT id, nombre FROM cont_entidades WHERE empresa_id = ? AND activa = 1 ORDER BY nombre, id`, [empresaId]),
     query<RowDataPacket[]>(`SELECT DISTINCT u.id, u.nombre, u.rol_global FROM usuarios u LEFT JOIN usuario_empresa ue ON ue.usuario_id = u.id AND ue.empresa_id = ?
       WHERE u.activo = 1 AND u.nombre IS NOT NULL AND TRIM(u.nombre) <> '' AND (ue.usuario_id IS NOT NULL OR u.acceso_todas_empresas = 1) ORDER BY u.nombre, u.id`, [empresaId]),
   ]);
   const opciones = (rows: RowDataPacket[]) => rows.map(r => ({ id: Number(r.id), nombre: String(r.nombre) }));
+  // Campos aditivos: `compartido` y la empresa dueña para rotular «Frescofresh · Compartido» (los consumidores anteriores leían id/placa/descripcion/marca/modelo).
+  const vehiculos = vehiculosAccesibles
+    .sort((a, b) => String(a.placa).localeCompare(String(b.placa)) || Number(a.id) - Number(b.id))
+    .map(r => ({
+      id: Number(r.id), placa: String(r.placa), descripcion: r.descripcion != null ? String(r.descripcion) : null,
+      marca: r.marca != null ? String(r.marca) : null, modelo: r.modelo != null ? String(r.modelo) : null,
+      compartido: Number(r.compartido ?? 0) === 1, empresaDuenaNombre: r.empresa_duena_nombre != null ? String(r.empresa_duena_nombre) : null,
+    }));
   return { proveedores, vehiculos, entidades, usuarios: opciones(usuarios), requirentesOperaciones: opciones(usuarios.filter(r => esUsuarioOperaciones(r.rol_global))) };
 }
 export const MSG_FACTURA_UNICA_BD = "Una de las facturas ya está registrada para ese proveedor en otro requerimiento. Revisa las líneas e inténtalo de nuevo.";
@@ -70,6 +82,20 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
   // la misma por proveedor + serie normalizada + número normalizado; sin número no hay control. Vale para líneas nuevas y editadas.
   const repetidas = indicesFacturasRepetidas(datos.lineas);
   if (repetidas.size) throw new ErrorCompra(`${MSG_FACTURAS_REPETIDAS} (líneas ${[...repetidas].map(i => i + 1).join(", ")})`, 409);
+  // IDEMPOTENCIA (solo al CREAR) — la búsqueda por clave va ANTES de los locks de facturas y de sus validaciones: un reintento
+  // de un requerimiento con facturas ya confirmado fallaría por «factura duplicada» en vez de devolver la creación original.
+  const clave = id === undefined ? datos.clave_idempotencia ?? null : null;
+  if (clave !== null && !claveValidaCompra(clave)) throw new ErrorCompra("La clave de envío no es válida.");
+  // El solicitante efectivo es el usuario autenticado (`usuarioId`, el que se persiste en solicitante_usuario_id), nunca un dato del cliente.
+  const huella = clave ? huellaRequerimiento(datos, usuarioId) : null;
+  let claveEfectiva = clave;
+  if (clave) {
+    const previa = await buscarRequerimientoPorClave((sql, params) => query<RowDataPacket[]>(sql, params), empresaId, clave, huella!);
+    if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+    if (previa.tipo === "existente") return previa.resultado;
+    // Migración sin aplicar: se crea en modo legado (sin protección) en vez de fallar la operación.
+    if (previa.tipo === "sin_soporte") claveEfectiva = null;
+  }
   const conn = await getPool().getConnection();
   const rutasFirmas: string[] = [];
   const locksFacturas: string[] = [];
@@ -84,6 +110,13 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       if (!bloqueo.ok) throw new ErrorCompra("No se pudo validar las facturas porque hay otra operación en curso para el mismo proveedor. Intenta de nuevo.", 409);
     }
     await conn.beginTransaction();
+    // IDEMPOTENCIA — segunda comprobación, ya con el lock de facturas y dentro de la transacción: la petición que esperó al
+    // ganador ve su creación confirmada (instantánea posterior a la liberación del lock) y la devuelve en vez de fallar.
+    if (claveEfectiva) {
+      const previa = await buscarRequerimientoPorClave(lectorDeConexion(conn), empresaId, claveEfectiva, huella!);
+      if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+      if (previa.tipo === "existente") { await conn.rollback(); return previa.resultado; }
+    }
     let antes: RowDataPacket | undefined;
     let existentes: RowDataPacket[] = [];
     if (id !== undefined) {
@@ -153,15 +186,22 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       };
       let unidad = linea.unidad_descripcion;
       if (linea.vehiculo_id !== null) {
+        // Línea que YA referenciaba esta unidad: es histórica y se conserva aunque luego se haya retirado la compartición (no se vuelve a exigir
+        // acceso actual ni se reescribe su descripción). Una unidad nueva o cambiada sí debe ser propia o compartida AHORA con la empresa.
+        const yaReferenciada = vieja !== undefined && Number(vieja.vehiculo_id) === linea.vehiculo_id;
         let vehiculo = vehiculos.get(linea.vehiculo_id);
         if (!vehiculo) {
-          const [rows] = await conn.query<RowDataPacket[]>(`SELECT id, activo, placa, descripcion, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND id = ? LOCK IN SHARE MODE`, [empresaId, linea.vehiculo_id]);
-          vehiculo = rows[0];
-          if (!vehiculo) throw new ErrorCompra("El vehículo no pertenece a esta empresa.");
-          vehiculos.set(linea.vehiculo_id, vehiculo);
+          // Propia o COMPARTIDA con la empresa activa (regla única de Flota); nunca «cualquier id». La propiedad del vehículo no cambia.
+          vehiculo = (await obtenerVehiculoAccesibleTx(conn, empresaId, linea.vehiculo_id, "v.id, v.activo, v.placa, v.descripcion, v.marca, v.modelo", true)) ?? undefined;
+          if (!vehiculo && !yaReferenciada) throw new ErrorCompra("El vehículo no pertenece a esta empresa.");
+          if (vehiculo) vehiculos.set(linea.vehiculo_id, vehiculo);
         }
-        if (!vehiculo.activo && (!vieja || Number(vieja.vehiculo_id) !== linea.vehiculo_id)) throw new ErrorCompra("La unidad seleccionada no está activa.");
-        unidad = !vehiculo.activo && vieja ? vieja.unidad_descripcion : [vehiculo.placa, vehiculo.descripcion || [vehiculo.marca, vehiculo.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ").slice(0, 200);
+        if (!vehiculo) {
+          unidad = vieja!.unidad_descripcion;
+        } else {
+          if (!vehiculo.activo && !yaReferenciada) throw new ErrorCompra("La unidad seleccionada no está activa.");
+          unidad = !vehiculo.activo && vieja ? vieja.unidad_descripcion : [vehiculo.placa, vehiculo.descripcion || [vehiculo.marca, vehiculo.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ").slice(0, 200);
+        }
       }
       const metodoPago = vieja && Number(vieja.proveedor_id) === linea.proveedor_id && vieja.metodo_pago === linea.metodo_pago
         ? linea.metodo_pago : normalizarMetodoPagoCompra(linea.metodo_pago);
@@ -174,10 +214,11 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
       const [result] = await conn.execute<ResultSetHeader>(`INSERT INTO compras_requerimientos
         (empresa_id, codigo, fecha_requerimiento, entidad_requirente_id, entidad_requirente_nombre,
          requirente_usuario_id, requirente_nombre, solicitante_usuario_id, solicitante_nombre, estado, total, observaciones, creado_por,
-         encargado_compras_usuario_id, encargado_compras_nombre)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?, ?, ?)`,
+         encargado_compras_usuario_id, encargado_compras_nombre${claveEfectiva ? ", clave_idempotencia, huella_idempotencia" : ""})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', ?, ?, ?, ?, ?${claveEfectiva ? ", ?, ?" : ""})`,
       [empresaId, `TMP-${randomUUID()}`, datos.fecha_requerimiento, datos.entidad_requirente_id, entidades[0].nombre,
-        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId, encargadoId, encargadoNombre]);
+        datos.requirente_usuario_id, requirente.nombre, usuarioId, solicitante!.nombre, total, datos.observaciones, usuarioId, encargadoId, encargadoNombre,
+        ...(claveEfectiva ? [claveEfectiva, huella] : [])]);
       id = result.insertId;
       codigo = `RC-${datos.fecha_requerimiento.slice(0, 4)}-${String(id).padStart(6, "0")}`;
       await conn.execute(`UPDATE compras_requerimientos SET codigo = ? WHERE empresa_id = ? AND id = ?`, [codigo, empresaId, id]);
@@ -223,6 +264,14 @@ export async function guardarRequerimiento(empresaId: number, usuarioId: number,
     return { id: id!, codigo, version: antes ? Number(antes.version) + 1 : 1 };
   } catch (error) {
     try { await conn.rollback(); } catch { /* Conservar el error original. */ }
+    // CONCURRENCIA — otra petición con la MISMA clave confirmó primero y el UNIQUE (empresa_id, clave) rechazó este INSERT:
+    // tras el rollback se relee (instantánea nueva); misma huella => se devuelve esa creación; otra => 409. Solo el índice de la
+    // clave cuenta como reintento; un duplicado de código o de factura sigue su camino normal.
+    if (claveEfectiva && esDuplicadoDeClave(error, INDICE_CLAVE_COMPRAS)) {
+      const previa = await buscarRequerimientoPorClave(lectorDeConexion(conn), empresaId, claveEfectiva, huella!);
+      if (previa.tipo === "existente") return previa.resultado;
+      if (previa.tipo === "conflicto") throw new ErrorCompra(MENSAJE_CONFLICTO_IDEMPOTENCIA, 409);
+    }
     // Red de seguridad del UNIQUE de BD (sql/migrate-2026-09-compras-facturas-unicas.sql): solo ese índice se traduce; otros ER_DUP_ENTRY se propagan.
     if (esDuplicadoFacturaUnica(error)) throw new ErrorCompra(MSG_FACTURA_UNICA_BD, 409);
     throw error;

@@ -9,9 +9,14 @@ import { MESES_ES } from "@/lib/tms/reportes-mes";
 import { paramsExportarGastos, paramsListadoGastos } from "@/lib/tms/exportacion-operativa-filtros";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
+import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
+import { leerErroresRespuesta, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
+import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
+import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
+import { enviarGasto } from "@/lib/tms/gastos-envio-cliente";
 
 type Gasto = {
   id: number;
@@ -100,7 +105,7 @@ type PlanCatalogo = {
  */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria?: string | null; telefono?: string | null }[];
-  vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null }[];
+  vehiculos: { id: number; placa: string; marca?: string | null; modelo?: string | null; compartido?: boolean; empresaDuenaNombre?: string | null }[];
   clientes: { id: number; codigo?: string | null; nombre: string; nit?: string | null }[];
   planes: PlanCatalogo[];
   usuarios: { id: number; nombre: string }[];
@@ -185,6 +190,8 @@ export default function GastosPage() {
   const opcionesUsuarios = (usuarios: { id: number; nombre: string }[]): CatalogoSearchOption[] => usuarios.map((u) => ({ value: String(u.id), label: u.nombre }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor (línea + campo + problema) para el resumen y el resaltado de campos.
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [msg, setMsg] = useState("");
 
   const [fFechaDesde, setFFechaDesde] = useState("");
@@ -202,7 +209,14 @@ export default function GastosPage() {
   const [form, setForm] = useState(FORM_VACIO);
   /** GASTOS-MULTIPLES-LINEAS-1 — líneas ADICIONALES a "Línea 1" (los campos de `form`); `[]` = gasto simple, comportamiento idéntico al actual. */
   const [lineasAdicionales, setLineasAdicionales] = useState<LineaGastoForm[]>([]);
+  // Clave de campo del servidor para "Línea 1" (los campos de arriba): `lineas.0.x` en modo líneas, `x` en modo cabecera.
+  const campoL1 = (campo: string) => (lineasAdicionales.length > 0 ? `lineas.0.${campo}` : campo);
   const [comprobante, setComprobante] = useState<File | null>(null);
+  // Doble envío: la bandera `enVuelo` del guard es síncrona; `guardando` solo pinta el botón. La clave identifica ESTA
+  // creación y se conserva entre reintentos (también si falla la subida del comprobante) hasta que todo se confirme.
+  const [guardEnvio] = useState(() => crearGuardEnvio());
+  const [guardando, setGuardando] = useState(false);
+  const claveEnvioRef = useRef<string | null>(null);
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
   /** GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón que motivoRechazo en fondos/page.tsx: un input por fila, por id. */
@@ -247,6 +261,7 @@ export default function GastosPage() {
   }, [cargar]);
 
   function nuevo() {
+    claveEnvioRef.current = null;
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setForm(FORM_VACIO);
     setLineasAdicionales([]);
@@ -326,18 +341,25 @@ export default function GastosPage() {
     }));
   }
 
+  /** Punto de entrada del botón: un solo envío en vuelo; el botón se rehabilita siempre al terminar (éxito o error). */
   async function guardar() {
-    setError(""); setMsg("");
-    if (!form.categoria) { setError("Selecciona una categoría."); return; }
-    if (!(Number(form.monto) > 0)) { setError("El monto debe ser mayor a cero."); return; }
-    // GASTOS-MULTIPLES-LINEAS-1 — validación cliente de las líneas
-    // ADICIONALES (mismo criterio que valida el servidor,
-    // validarLineasGasto en gastos.ts: categoría + monto > 0). "Línea 1"
-    // (`form`) ya se validó arriba, igual que siempre.
-    if (lineasAdicionales.some((l) => !l.categoria || !(Number(l.monto) > 0))) {
-      setError("Cada línea adicional necesita categoría y un monto mayor a cero.");
-      return;
-    }
+    await guardEnvio.ejecutar(async () => {
+      setGuardando(true);
+      try {
+        await guardarGasto();
+      } catch {
+        setError("No se pudo contactar al servidor. Revisa tu conexión y vuelve a intentar.");
+      } finally {
+        setGuardando(false);
+      }
+    });
+  }
+
+  async function guardarGasto() {
+    setError(""); setMsg(""); setErrores([]);
+    // Categoría y monto (de "Línea 1" y de cada línea adicional) los valida el SERVIDOR y responde por línea y campo
+    // («Línea 2 — Monto: debe ser mayor que Q0.»); aquí ya no se corta con un mensaje genérico. El número de línea del
+    // servidor coincide con el de pantalla: "Línea 1" = campos de arriba, "Línea 2…" = las adicionales en orden.
     const payload = {
       fechaSolicitud: form.fechaSolicitud,
       fechaViaje: form.fechaViaje || null,
@@ -375,18 +397,28 @@ export default function GastosPage() {
       setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
     }
     if (comprobante && comprobante.size > MAX_UPLOAD_BYTES) { setError("El comprobante supera el máximo de 50 MB."); return; }
-    const url = editandoId ? `/api/empresas/${slug}/tms/gastos/${editandoId}` : `/api/empresas/${slug}/tms/gastos`;
-    const res = await fetch(url, { method: editandoId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? "No se pudo guardar."); return; }
-    const gastoId = editandoId ?? data.gasto?.id;
-    if (comprobante && gastoId) {
-      const archivos = new FormData(); archivos.set("file", comprobante);
-      const subida = await fetch(`/api/empresas/${slug}/tms/gastos/${gastoId}/comprobante`, { method: "POST", body: archivos });
-      const subidaData = await subida.json().catch(() => ({}));
-      if (!subida.ok) { setError(`${data.mensaje ?? "Gasto guardado."} ${subidaData.error ?? "No se pudo adjuntar el comprobante."}`); await cargar(); return; }
+    // Solo al CREAR se manda la clave de envío (la edición actúa sobre un id existente y no crea registros). Si el comprobante falla tras
+    // crear, la clave se conserva y el reintento recupera el MISMO gasto en vez de crear otro (ver enviarGasto).
+    const clave = editandoId ? "" : (claveEnvioRef.current ??= nuevaClaveEnvio());
+    const r = await enviarGasto({ fetchFn: fetch, slug, editandoId, payload, claveIdempotencia: clave, comprobante });
+    if (r.fase === "crear") {
+      const leidos = leerErroresRespuesta(r.data, "No se pudo guardar.");
+      setErrores(leidos.errores);
+      setError(leidos.errores.length ? "" : leidos.mensaje);
+      // 409 de idempotencia: el gasto ya existe con otros datos; se refresca el listado para que lo vea antes de reintentar.
+      if (r.status === 409) await cargar();
+      return;
     }
-    setMsg(comprobante ? "Gasto y comprobante guardados." : (data.mensaje ?? "Guardado."));
+    setErrores([]);
+    if (r.fase === "comprobante") {
+      const subidaError = typeof r.subidaData.error === "string" ? r.subidaData.error : "No se pudo adjuntar el comprobante.";
+      const guardado = typeof r.data.mensaje === "string" ? r.data.mensaje : "Gasto guardado.";
+      setError(`${guardado} ${subidaError} Vuelve a presionar Guardar para reintentar la carga del comprobante; no se creará otro gasto.`);
+      await cargar();
+      return;
+    }
+    claveEnvioRef.current = null;
+    setMsg(comprobante ? "Gasto y comprobante guardados." : (typeof r.data.mensaje === "string" ? r.data.mensaje : "Guardado."));
     setMostrarForm(false);
     await cargar();
   }
@@ -478,7 +510,7 @@ export default function GastosPage() {
           {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
         </select></label>
         <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={fEmpleadoId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={setFEmpleadoId} />
-        <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={fVehiculoId} inputClassName={inputCls} emptyLabel="Todas" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={setFVehiculoId} />
+        <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={fVehiculoId} inputClassName={inputCls} emptyLabel="Todas" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={setFVehiculoId} />
         <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={fClienteId} inputClassName={inputCls} emptyLabel="Todos" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre }))} onChange={setFClienteId} />
         </div>
         <div className="flex flex-wrap gap-2">
@@ -503,7 +535,7 @@ export default function GastosPage() {
           */}
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
+              <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={form.entidadRequirenteId} onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) || 0 }))}>
                 <option value={0}>—</option>
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
@@ -512,29 +544,32 @@ export default function GastosPage() {
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
+              <input type="date" className={`${claseCampo(errores, "fechaSolicitud", inputCls)} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Categoría
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
+              <select className={`${claseCampo(errores, campoL1("categoria"), inputCls)} mt-0.5 w-full`} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
                 <option value="">Selecciona…</option>
                 {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
+              <ErrorCampo errores={errores} campo={campoL1("categoria")} />
             </label>
             <label className="text-xs text-[var(--muted)]">Descripción
               <input className={`${inputCls} mt-0.5 w-full`} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} />
             </label>
             <label className="text-xs text-[var(--muted)]">Cantidad
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+              <input type="number" min="0.01" step="0.01" className={`${claseCampo(errores, campoL1("cantidad"), inputCls)} mt-0.5 w-full`} value={form.cantidad} onChange={(e) => setForm((f) => ({ ...f, cantidad: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("cantidad")} />
             </label>
             <label className="text-xs text-[var(--muted)]">Monto (Q)
-              <input type="number" min="0.01" step="0.01" className={`${inputCls} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+              <input type="number" min="0.01" step="0.01" className={`${claseCampo(errores, campoL1("monto"), inputCls)} mt-0.5 w-full`} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("monto")} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
             <CatalogoSearchSelect label="Empleado / persona" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={String(form.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(f.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) }))} />
-            <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
+            <CatalogoSearchSelect label="Placa / unidad" placeholder="Buscar placa..." value={String(form.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={(value) => setForm((f) => ({ ...f, vehiculoId: Number(value) || 0 }))} />
             <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(form.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => setForm((f) => ({ ...f, clienteId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Viaje / plan
               <select className={`${inputCls} mt-0.5 w-full`} value={form.planId} onChange={(e) => seleccionarPlan(Number(e.target.value))}>
@@ -543,7 +578,8 @@ export default function GastosPage() {
               </select>
             </label>
             <label className="text-xs text-[var(--muted)]">Fecha viaje
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
+              <input type="date" className={`${claseCampo(errores, campoL1("fechaViaje"), inputCls)} mt-0.5 w-full`} value={form.fechaViaje} onChange={(e) => setForm((f) => ({ ...f, fechaViaje: e.target.value }))} />
+              <ErrorCampo errores={errores} campo={campoL1("fechaViaje")} />
             </label>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
@@ -551,7 +587,7 @@ export default function GastosPage() {
               <input className={`${inputCls} mt-0.5 w-full`} readOnly value={catalogos.empleados.find((x) => x.id === form.empleadoId)?.nombre ?? ""} />
             </label>
             <label className="text-xs text-[var(--muted)]">Método de pago
-              <select className={`${inputCls} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === f.empleadoId)) }))}>
+              <select className={`${claseCampo(errores, campoL1("metodoPago"), inputCls)} mt-0.5 w-full`} value={form.metodoPago} onChange={(e) => setForm((f) => ({ ...f, metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === f.empleadoId)) }))}>
                 <option value="">—</option>
                 {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
@@ -564,7 +600,7 @@ export default function GastosPage() {
               (numeroCuentaPago) — nunca un campo separado.
             */}
             <label className="text-xs text-[var(--muted)]">{form.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-              <input className={`${inputCls} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
+              <input className={`${claseCampo(errores, campoL1("numeroCuentaPago"), inputCls)} mt-0.5 w-full`} placeholder={form.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={form.numeroCuentaPago} onChange={(e) => setForm((f) => ({ ...f, numeroCuentaPago: e.target.value }))} />
               {form.empleadoId && form.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === form.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
             </label>
             <label className="text-xs text-[var(--muted)]">Cargo
@@ -605,18 +641,18 @@ export default function GastosPage() {
               return (
                 <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                    <select className={claseCampo(errores, `lineas.${i + 1}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
                       {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <input className={claseCampo(errores, `lineas.${i + 1}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i + 1}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i + 1}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
                     <button type="button" onClick={() => setLineasAdicionales((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
                   </div>
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado..." sinResultados="No se encontraron empleados." value={String(l.empleadoId || "")} inputClassName={inputCls} emptyLabel="— Sin empleado —" options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · ") }))} onChange={(value) => set({ empleadoId: Number(value) || 0, numeroCuentaPago: destinoPagoEmpleado(l.metodoPago, catalogos.empleados.find((x) => String(x.id) === value)) })} />
-                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={String(l.vehiculoId || "")} inputClassName={inputCls} emptyLabel="— Sin unidad —" options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} onChange={(value) => set({ vehiculoId: Number(value) || 0 })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={String(l.clienteId || "")} inputClassName={inputCls} emptyLabel="— Sin cliente —" options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} onChange={(value) => set({ clienteId: Number(value) || 0 })} />
                     <label className="text-xs text-[var(--muted)]">Viaje / plan
                       <select className={`${inputCls} mt-0.5 w-full`} value={l.planId} onChange={(e) => set({ planId: Number(e.target.value) || 0 })}>
@@ -625,18 +661,18 @@ export default function GastosPage() {
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
-                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <input type="date" className={`${claseCampo(errores, `lineas.${i + 1}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
                     </label>
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === l.empleadoId)) })}>
+                      <select className={`${claseCampo(errores, `lineas.${i + 1}.metodoPago`, inputCls)} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, numeroCuentaPago: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => x.id === l.empleadoId)) })}>
                         <option value="">—</option>
                         {metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
+                      <input className={`${claseCampo(errores, `lineas.${i + 1}.numeroCuentaPago`, inputCls)} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "No. cuenta / referencia de pago"} value={l.numeroCuentaPago} onChange={(e) => set({ numeroCuentaPago: e.target.value })} />
                       {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => x.id === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                   </div>
@@ -650,7 +686,16 @@ export default function GastosPage() {
             {lineasAdicionales.length ? <p className="text-sm font-medium">Total del gasto: Q{totalFormulario().toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p> : null}
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">Guardar</button>
+            <ErroresFormulario errores={errores} />
+            <button
+              type="button"
+              onClick={() => void guardar()}
+              disabled={guardando}
+              aria-busy={guardando}
+              className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {guardando ? "Guardando…" : "Guardar"}
+            </button>
             <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
           </div>
         </div>

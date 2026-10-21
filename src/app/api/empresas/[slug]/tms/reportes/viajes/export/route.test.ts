@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionOTms: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantProgramacionExportar: vi.fn() }));
 vi.mock("@/lib/tms/reportes-viajes", () => ({
   obtenerReporteViajesParaExportar: vi.fn(() => Promise.resolve({ ok: true, planes: [] })),
   calcularKpisReporte: vi.fn(() => ({
@@ -27,7 +27,7 @@ vi.mock("@/lib/rrhh/dates", () => ({
   formatearTimestampVisible: vi.fn((v: string) => v),
 }));
 
-import { requireTenantProgramacionOTms } from "@/lib/tenant";
+import { requireTenantProgramacionExportar } from "@/lib/tenant";
 import { filtrosReporteDesdeUrl, obtenerReporteViajesParaExportar } from "@/lib/tms/reportes-viajes";
 import { tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import { reporteViajesHistorialPdf } from "@/lib/tms/reporte-viajes-historial-pdf";
@@ -37,8 +37,8 @@ const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(requireTenantProgramacionOTms).mockResolvedValue(
-    { empresa: { id: 7, nombre: "SITSA" }, session: { id: 8, username: "ops1" } } as Awaited<ReturnType<typeof requireTenantProgramacionOTms>>,
+  vi.mocked(requireTenantProgramacionExportar).mockResolvedValue(
+    { empresa: { id: 7, nombre: "SITSA" }, session: { id: 8, username: "ops1" } } as Awaited<ReturnType<typeof requireTenantProgramacionExportar>>,
   );
   vi.mocked(obtenerReporteViajesParaExportar).mockResolvedValue({ ok: true, planes: [] });
 });
@@ -46,7 +46,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("GET /tms/reportes/viajes/export — 14) recibe y aplica los MISMOS filtros que el listado", () => {
   it("exige permiso antes de generar el archivo", async () => {
-    vi.mocked(requireTenantProgramacionOTms).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantProgramacionOTms>>);
+    vi.mocked(requireTenantProgramacionExportar).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantProgramacionExportar>>);
     const res = await GET(new Request("http://localhost/x?formato=xlsx"), ctx);
     expect(res.status).toBe(403);
     expect(obtenerReporteViajesParaExportar).not.toHaveBeenCalled();

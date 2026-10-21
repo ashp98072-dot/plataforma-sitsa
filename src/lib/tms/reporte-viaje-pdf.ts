@@ -4,6 +4,7 @@ import { ahoraLocal, formatearTimestampVisible } from "@/lib/rrhh/dates";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
+import { ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -78,6 +79,8 @@ export async function reporteViajePdf(
     if (p.pilotoExtra) campo("Pilotos", textoPilotos(p.piloto, p.pilotoExtra));
     else campo("Piloto", p.piloto ?? "—");
     campo("Auxiliares", p.auxiliares.length ? p.auxiliares.join(", ") : "—");
+    // PROGRAMACION-VEHICULO-SOLICITADO — lo solicitado (comercial) junto a lo realmente usado, para compararlos.
+    campo(ETIQUETA_VEHICULO_SOLICITADO, textoVehiculoSolicitado(p.vehiculoSolicitado));
     campo("Unidad", p.placa ?? "—");
     campo("Equipo asignado", p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—");
 

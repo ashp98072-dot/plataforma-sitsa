@@ -272,9 +272,9 @@ describe("Pureza", () => {
   it("el motor no depende de DB, React ni de cotizaciones.ts", async () => {
     const { readFileSync } = await import("node:fs");
     const fuente = readFileSync("src/lib/tms/cotizacion-costeo.ts", "utf8");
-    expect(fuente).not.toMatch(/^import /m); expect(fuente).not.toMatch(/Date\.now|new Date\(|process\.env|@\/lib\/db|from "react"/);
+    expect(fuente).not.toMatch(/Date\.now|new Date\(|process\.env|@\/lib\/db|from "react"|from ".\/cotizaciones"/);
   });
   it("catálogo de códigos de perfil (solo referencia; sin valores económicos)", () => {
-    expect(CODIGOS_PERFIL_COSTEO.map(p => p.codigo)).toEqual(["CAMION_2_7T", "CAMION_5T", "CAMION_5T_REFRIGERADO", "CAMION_10T", "CABEZAL"]);
+    expect(CODIGOS_PERFIL_COSTEO.map(p => p.codigo)).toEqual(["CAMION_1T", "CAMION_12T", "CAMION_2_7T", "CAMION_5T", "CAMION_5T_REFRIGERADO", "CAMION_10T", "CABEZAL"]);
   });
 });

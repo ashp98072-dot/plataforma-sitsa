@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
 import { execute, getPool, query, type SqlParams } from "@/lib/db";
@@ -26,13 +27,22 @@ import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
-import type { RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
+import type { RecursoProgramacion as RecursoDia } from "@/lib/tms/disponibilidad-programacion-intervalos";
+import { cuadrillaSchema, textoCuadrilla } from "@/lib/tms/cuadrilla-contrato";
+import { CuadrillaError, cuadrillaDePlanes, resolverCuadrilla, validarCuadrillaRoles, guardarCuadrillaPlan } from "@/lib/tms/cuadrilla";
 import {
   mensajeConflictoProgramacionIntervalo,
   primerConflictoProgramacionIntervalo,
   ventanaProgramacionSegura,
 } from "@/lib/tms/disponibilidad-programacion-intervalos";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
+import {
+  esColumnaInexistente,
+  MSG_VEHICULO_SOLICITADO_INVALIDO,
+  resolverVehiculoSolicitado,
+  vehiculoSolicitadoDelPlan,
+} from "@/lib/tms/vehiculo-solicitado-db";
+import { esPatchDeEdicion, exigeVehiculoSolicitadoAlEditar, vehiculoEfectivoTrasPatch } from "@/lib/tms/vehiculo-solicitado";
 import {
   calcularCambiosRecursos,
   camposTocados,
@@ -50,6 +60,8 @@ import {
 import { esTc, normalizarTipoUnidad } from "@/lib/flota/tipo-unidad";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
+import { lugaresDesdeParadas, resolverDescargaReporte } from "@/lib/tms/plan-lugares";
+import { respuestaVehiculoSolicitadoObligatorio, respuestaErroresPrograma } from "@/lib/tms/validacion-programacion";
 import {
   MSG_EXTRA_SOLO_PROPIO,
   MSG_PERSONA_DUPLICADA,
@@ -245,6 +257,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const FECHA_RE = /^\d{4}-\d{2}-\d{2}$/;
   const fechaDesdeParam = url.searchParams.get("fechaDesde");
   const fechaHastaParam = url.searchParams.get("fechaHasta");
+  const rangoExplicito = url.searchParams.get("rango") === "1";
+  if (rangoExplicito) {
+    const error = errorRangoProgramacion(fechaDesdeParam ?? "", fechaHastaParam ?? "");
+    if (error) return NextResponse.json({ error }, { status: 400 });
+  }
   if (fechaDesdeParam && !FECHA_RE.test(fechaDesdeParam)) {
     return NextResponse.json(
       { error: "fechaDesde inválida; usa YYYY-MM-DD." },
@@ -323,9 +340,12 @@ export async function GET(req: Request, ctx: Ctx) {
   // segunda porque es a lo sumo 1 fila) — se dejan sin límite. El GET sin
   // filtros (compat) y el filtro por rango de fecha conservan el límite de
   // seguridad de siempre.
-  const limitSql = pendienteCierreParam || usarId ? "" : "LIMIT 200";
+  // Solo el nuevo modo Rango, con ambos extremos validados, consulta todo el intervalo.
+  const limitSql = pendienteCierreParam || usarId || rangoExplicito ? "" : "LIMIT 200";
 
-  const [rows, disp] = await Promise.all([
+  // PROGRAMACION-VEHICULO-SOLICITADO — columnas nuevas (aditivas). Si la instalación aún no corrió la migración, se
+  // reintenta sin ellas: la lista sigue funcionando y el dato llega como ausente ("—").
+  const consultaPlanes = (conVehiculoSolicitado: boolean) =>
     query<RowDataPacket[]>(
       `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
               p.hora_carga, p.estado, p.cerrado_por,
@@ -359,6 +379,7 @@ export async function GET(req: Request, ctx: Ctx) {
               -- mostrar (Tercerizado: snapshot externo; Propio: placa del TC interno
               -- o, si el vehículo ya no existe, su fotografía).
               p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
+              ${conVehiculoSolicitado ? "p.vehiculo_solicitado_perfil_id, p.vehiculo_solicitado_nombre," : ""}
               CASE WHEN p.tipo_viaje = 'Tercerizado' THEN p.tc_externo_placa
                    ELSE COALESCE(tcv.placa, p.tc_placa_historica) END AS tc,
               c.nombre AS cliente, p.cliente_id AS clienteId, u.placa, pil.nombre AS piloto, aux.nombre AS auxiliar,
@@ -388,11 +409,14 @@ export async function GET(req: Request, ctx: Ctx) {
        ORDER BY p.fecha_plan DESC, p.id DESC
        ${limitSql}`,
       paramsRows,
-    ),
+    );
+  const [rows, disp] = await Promise.all([
+    consultaPlanes(true).catch((e: unknown) => (esColumnaInexistente(e) ? consultaPlanes(false) : Promise.reject(e))),
     listarDisponibilidadVehiculos(guard.empresa.id).catch(() => null),
   ]);
 
   const planIds = rows.map((r) => Number(r.id));
+  const cuadrillaMap = await cuadrillaDePlanes(guard.empresa.id, planIds);
   const [paradasMap, auxMap, cierreManualIds, extraMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanes(planIds),
@@ -464,6 +488,7 @@ export async function GET(req: Request, ctx: Ctx) {
       // reemplaza `auxiliares` (string[]) — TMS y otros consumidores
       // existentes siguen leyendo ese campo tal cual.
       auxiliaresDetalle,
+      cuadrilla: cuadrillaMap.get(id) ?? [],
       // EDICIÓN RÁPIDA PR-3 (aditivo): ids EXACTOS que el validador de edición rápida compara como snapshot —
       // unidad por flota_vehiculos.id y auxiliares SOLO de tms_plan_auxiliares (sin el fallback legado de
       // auxiliaresDetalle), en su orden (el primero es el principal).
@@ -542,6 +567,7 @@ export async function GET(req: Request, ctx: Ctx) {
 }
 
 const schema = z.object({
+  cuadrilla: cuadrillaSchema.optional(),
   codigo: z.string().optional(),
   fechaPlan: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   horaCarga: z.string().regex(/^\d{2}:\d{2}(?::\d{2})?$/).optional(),
@@ -590,6 +616,9 @@ const schema = z.object({
   // Tercerizado: `tcExternoPlaca` (solo texto, snapshot). Nunca se mezclan.
   tcVehiculoId: z.number().int().positive().optional(),
   tcExternoPlaca: z.string().max(40).optional(),
+  // PROGRAMACION-VEHICULO-SOLICITADO — perfil de costeo (Cotizaciones) que el cliente solicitó/cotizó. Aplica a Propio
+  // y Tercerizado. Se valida contra ESTA empresa y se fotografía su nombre; nunca se deriva de la unidad.
+  vehiculoSolicitadoPerfilId: z.number().int().positive().optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -667,12 +696,17 @@ export async function POST(req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const parsed = schema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    // Errores claros por campo/fila ("Parada 2 — Lugar: es obligatorio."); `error` se conserva por compatibilidad.
+    return respuestaErroresPrograma(parsed.error, body);
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
+  // VEHÍCULO SOLICITADO OBLIGATORIO (Propio y Tercerizado): todo viaje nuevo nace con el tipo/capacidad que pidió el cliente. Se valida ANTES de
+  // cualquier otra regla o escritura; la validez del perfil (de ESTA empresa y activo) se verifica más abajo.
+  if (d.vehiculoSolicitadoPerfilId == null) return respuestaVehiculoSolicitadoObligatorio();
   const salidaProgramada = `${d.fechaPlan}T${(d.horaCarga || "00:00").slice(0, 5)}`;
   if (d.regresoEstimado && d.regresoEstimado <= salidaProgramada) {
     return NextResponse.json(
@@ -692,6 +726,12 @@ export async function POST(req: Request, ctx: Ctx) {
       { error: "La tarifa seleccionada no pertenece a esa ruta de esta empresa o no está activa." },
       { status: 400 },
     );
+  }
+  // PROGRAMACION-VEHICULO-SOLICITADO — independiente de unidad/tarifa: solo se valida y se fotografía.
+  const vehiculoSolicitado =
+    d.vehiculoSolicitadoPerfilId != null ? await resolverVehiculoSolicitado(empresaId, d.vehiculoSolicitadoPerfilId) : null;
+  if (d.vehiculoSolicitadoPerfilId != null && !vehiculoSolicitado) {
+    return NextResponse.json({ error: MSG_VEHICULO_SOLICITADO_INVALIDO }, { status: 400 });
   }
   // El monto del viaje se DERIVA de la tarifa elegida, pero sigue siendo
   // editable como override manual (si el usuario mandó tarifaComercial).
@@ -971,21 +1011,16 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   }
 
-  const lugarCargaId = await upsertLugar(
-    empresaId,
-    paradasInput.find((p) => p.tipo === "Carga")?.lugarNombre || d.lugarCarga,
-    "Carga",
-  );
-  const lugarDescargaId = await upsertLugar(
-    empresaId,
-    paradasInput.find((p) => p.tipo === "Descarga" || p.tipo === "Entrega")
-      ?.lugarNombre || d.lugarDescarga,
-    "Descarga",
-  );
+  // Regla ÚNICA (compartida con el PATCH): los lugares resumen salen de las paradas del viaje.
+  const lugaresPlan = lugaresDesdeParadas(paradasInput, { lugarCarga: d.lugarCarga, lugarDescarga: d.lugarDescarga });
+  // PROGRAMACION-PARADAS-FUENTE — "Lugar de Descarga" del reporte = primera Descarga/Entrega de las paradas (el cliente ya
+  // no lo captura dos veces). `lugarDescargaHistorico` del payload solo es una descripción DISTINTA explícita (VIAT-4b).
+  const descargaReporte = resolverDescargaReporte({ override: d.lugarDescargaHistorico, paradasNuevas: paradasInput, respaldoLegacy: d.lugarDescarga });
 
   // Piloto, auxiliares y unidad quedan ocupados durante toda fecha_plan.
   // La hora y el regreso estimado no modifican esta reserva diaria.
   const recursosNuevoPlan: RecursoDia[] = [
+    ...(d.cuadrilla ?? []).flatMap((c) => c.tipo === "INTERNO" ? [{ tipo: "cuadrilla" as const, id: c.empleadoId }] : []),
     ...(pilotoId ? [{ tipo: "piloto" as const, id: pilotoId }] : []),
     // El piloto extra consume disponibilidad EXACTAMENTE igual que el principal (mismo motor, misma ventana).
     ...(pilotoExtraId ? [{ tipo: "piloto" as const, id: pilotoExtraId }] : []),
@@ -1102,12 +1137,23 @@ export async function POST(req: Request, ctx: Ctx) {
 
     await conn.beginTransaction();
 
+    // Lugares resumen (Portal del piloto / búsqueda de salida) derivados de las paradas: en la MISMA transacción que el plan, las
+    // paradas y el snapshot — si algo falla, rollback total (antes se creaban fuera de la transacción).
+    const lugarCargaId = await upsertLugar(empresaId, lugaresPlan.carga, "Carga", conn);
+    const lugarDescargaId = await upsertLugar(empresaId, lugaresPlan.descarga, "Descarga", conn);
+    const cuadrilla = await resolverCuadrilla(empresaId, d.cuadrilla ?? [], conn);
+    await validarCuadrillaRoles(empresaId, cuadrilla, [pilotoId, pilotoExtraId, ...auxPersonalIds].filter((id): id is number => id != null), conn);
+    if (cuadrilla.some((c) => c.empleadoId != null)) {
+      const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursosNuevoPlan,
+        ventanaProgramacionSegura({ fechaPlan: d.fechaPlan, horaCarga: d.horaCarga ?? null, regresoEstimado: d.regresoEstimado ?? null }), [], conn);
+      if (conflicto) throw new CuadrillaError(mensajeConflictoProgramacionIntervalo(conflicto), 409);
+    }
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         const [result] = await conn.execute<ResultSetHeader>(
           `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa${vehiculoSolicitado ? ", vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre" : ""})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${vehiculoSolicitado ? ", ?, ?" : ""})`,
           [
             empresaId,
             codigoFinal,
@@ -1130,7 +1176,7 @@ export async function POST(req: Request, ctx: Ctx) {
             d.referenciaCliente?.trim() || null,
             d.rutaId ?? null,
             d.rutaCodigo?.trim() || null,
-            d.lugarDescargaHistorico?.trim() || null,
+            descargaReporte.valor,
             d.contactoNombreHistorico?.trim() || null,
             d.contactoCargoHistorico?.trim() || null,
             d.contactoTelefonoHistorico?.trim() || null,
@@ -1145,6 +1191,8 @@ export async function POST(req: Request, ctx: Ctx) {
             tcVehiculoId,
             tcPlacaHistorica,
             snapshotTercerizado.tcExternoPlaca,
+            // Solo si se eligió: sin dato no se nombran las columnas (compatibilidad antes de la migración).
+            ...(vehiculoSolicitado ? [vehiculoSolicitado.id, vehiculoSolicitado.nombre] : []),
           ],
         );
         planId = Number(result.insertId);
@@ -1165,6 +1213,11 @@ export async function POST(req: Request, ctx: Ctx) {
       );
     }
     await guardarAuxiliaresPlan(planId, auxPersonalIds, conn);
+    if (cuadrilla.length) {
+      await guardarCuadrillaPlan(empresaId, planId, cuadrilla, conn);
+      await registrarAuditoriaTx(conn, { empresaId, usuario: guard.session.username, accion: "crear_ruta", modulo: "tms",
+        detalle: `Plan #${planId} · cuadrilla [${textoCuadrilla(cuadrilla)}]` });
+    }
     // Piloto extra: misma transacción que el plan (rollback conjunto). Sin extra no se escribe nada.
     if (pilotoExtraId != null) await guardarPilotoExtraPlan(empresaId, planId, pilotoExtraId, conn);
     if (paradasInput.length) {
@@ -1194,6 +1247,7 @@ export async function POST(req: Request, ctx: Ctx) {
     await conn.commit();
   } catch (e) {
     await conn.rollback();
+    if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     console.error("POST tms/planes (transacción de alta)", e);
     return NextResponse.json(
       { error: "No se pudo crear el viaje. No se guardó ningún cambio." },
@@ -1244,6 +1298,7 @@ export async function POST(req: Request, ctx: Ctx) {
 }
 
 const patchSchema = z.object({
+  cuadrilla: cuadrillaSchema.optional(),
   id: z.number().int().positive(),
   pilotoNombre: z.string().optional(),
   auxiliarNombre: z.string().optional(),
@@ -1298,11 +1353,13 @@ const patchSchema = z.object({
   // ruta usada. BUGFIX-PROGRAMACION-CLIENTE-1: ahora también admite `null`
   // (quita el vínculo a la ruta) — undefined = no tocar, null = quitar, number = cambiar.
   rutaId: z.number().int().positive().nullable().optional(),
-  rutaCodigo: z.string().max(40).optional(),
-  lugarDescargaHistorico: z.string().max(300).optional(),
-  contactoNombreHistorico: z.string().max(160).optional(),
-  contactoCargoHistorico: z.string().max(120).optional(),
-  contactoTelefonoHistorico: z.string().max(80).optional(),
+  // PROGRAMACION-PERSISTENCIA — snapshots del viaje: ausente = no tocar; null = el usuario lo BORRÓ (se limpia);
+  // texto = nuevo valor. "" se sigue tratando como "no tocar" (compatibilidad con clientes previos).
+  rutaCodigo: z.string().max(40).nullable().optional(),
+  lugarDescargaHistorico: z.string().max(300).nullable().optional(),
+  contactoNombreHistorico: z.string().max(160).nullable().optional(),
+  contactoCargoHistorico: z.string().max(120).nullable().optional(),
+  contactoTelefonoHistorico: z.string().max(80).nullable().optional(),
   paradas: z
     .array(
       z.object({
@@ -1350,6 +1407,9 @@ const patchSchema = z.object({
   // PROGRAMACION-TC-CAJA-REMOLQUE-1 — `null` (o "" en tcExternoPlaca) quita el TC.
   tcVehiculoId: z.number().int().positive().nullable().optional(),
   tcExternoPlaca: z.string().max(40).nullable().optional(),
+  // PROGRAMACION-VEHICULO-SOLICITADO — `null` lo quita; ausente = no se toca. Es un dato COMERCIAL: sigue las reglas
+  // por estado de los datos comerciales (camposTocados.comercial) y NUNCA cambia unidad, tarifa ni personal.
+  vehiculoSolicitadoPerfilId: z.number().int().positive().nullable().optional(),
 });
 
 /**
@@ -1494,9 +1554,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     /* ok */
   }
 
-  const parsed = patchSchema.safeParse(await req.json());
+  const body = await req.json().catch(() => ({}));
+  const parsed = patchSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErroresPrograma(parsed.error, body);
   }
   const d = parsed.data;
   const empresaId = guard.empresa.id;
@@ -1506,6 +1567,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // handler. Cualquier PATCH que NO lo traiga sigue exactamente el mismo
   // camino de siempre (todo lo de abajo, sin cambios).
   if (d.tipoViaje !== undefined) {
+    if (d.cuadrilla !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del cambio de cuadrilla." }, { status: 400 });
+    if (d.vehiculoSolicitadoPerfilId !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del vehículo solicitado." }, { status: 400 });
     return patchTipoViaje(empresaId, d, guard.session.username);
   }
 
@@ -1589,6 +1652,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
   );
   if (!cambioTc.ok) return NextResponse.json({ error: cambioTc.error }, { status: cambioTc.status });
   const { escribirTcInterno, tcVehiculoIdNuevo, tcPlacaNueva, escribirTcExterno, tcExternoNuevo, tcEfectivo } = cambioTc;
+
+  // PROGRAMACION-VEHICULO-SOLICITADO — solo si el PATCH trae el campo y REALMENTE cambia. Un perfil nuevo debe ser de
+  // ESTA empresa y estar activo; el valor actual (aunque el perfil se haya desactivado) nunca se re-valida. Independiente
+  // de unidad/tarifa/personal: nada de eso se recalcula aquí.
+  const vehiculoSolicitadoCambio: { escribir: boolean; id: number | null; nombre: string | null; antesNombre: string | null } = {
+    escribir: false, id: null, nombre: null, antesNombre: null,
+  };
+  if (d.vehiculoSolicitadoPerfilId !== undefined) {
+    const actual = await vehiculoSolicitadoDelPlan(empresaId, d.id);
+    if (d.vehiculoSolicitadoPerfilId !== actual.id) {
+      const nuevo = d.vehiculoSolicitadoPerfilId === null ? null : await resolverVehiculoSolicitado(empresaId, d.vehiculoSolicitadoPerfilId);
+      if (d.vehiculoSolicitadoPerfilId !== null && !nuevo) {
+        return NextResponse.json({ error: MSG_VEHICULO_SOLICITADO_INVALIDO }, { status: 400 });
+      }
+      Object.assign(vehiculoSolicitadoCambio, { escribir: true, id: nuevo?.id ?? null, nombre: nuevo?.nombre ?? null, antesNombre: actual.nombre });
+    }
+  }
 
   // BUGFIX-PROGRAMACION-CLIENTE-1 — cambiar de cliente. Solo por ID (mismo criterio que piloto/unidad "por ID" de
   // esta fase); NUNCA se confía en un nombre de cliente enviado por el PATCH para esto. El cliente debe existir y
@@ -1693,6 +1773,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // regla exclusiva de Programación (mismo criterio ya usado para bloquear
   // paradas en "En ruta").
   const toca = camposTocados(d);
+  if (d.cuadrilla !== undefined) {
+    if (!d.motivoCambio?.trim()) return NextResponse.json({ error: "Indica el motivo del cambio de cuadrilla." }, { status: 400 });
+    if (antes.estado === "En ruta" && !antes.pendienteCierre) return NextResponse.json({ error: "No se puede cambiar la cuadrilla de un viaje En ruta sin llegada." }, { status: 409 });
+  }
 
   // OPS-AJUSTES (sección 3) — motivo obligatorio para cambios sensibles:
   // piloto, unidad y auxiliares. Se valida aquí, ANTES de cualquier
@@ -1706,6 +1790,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   const errorEstado = validarEstadoEditable({ estado: antes.estado, pendienteCierre: antes.pendienteCierre }, toca);
   if (errorEstado) return NextResponse.json({ error: errorEstado.error }, { status: errorEstado.status });
+
+  // VEHÍCULO SOLICITADO OBLIGATORIO al GUARDAR CAMBIOS de un viaje editable. Un histórico sin dato se puede consultar siempre; para guardar cambios hay que
+  // elegir uno (el PATCH de «Cargado»/«Cancelar» no es una edición y no se bloquea). Un valor ya guardado que no cambia no se revalida.
+  if (esPatchDeEdicion(d) && exigeVehiculoSolicitadoAlEditar(antes.estado, antes.pendienteCierre)) {
+    try {
+      const actualVehiculo = await vehiculoSolicitadoDelPlan(empresaId, d.id);
+      if (vehiculoEfectivoTrasPatch(d.vehiculoSolicitadoPerfilId, actualVehiculo.id) == null) return respuestaVehiculoSolicitadoObligatorio();
+    } catch (e) {
+      // Instalación sin la migración del vehículo solicitado: no hay dónde guardarlo, la regla no puede aplicarse (el resto de la edición sigue como siempre).
+      if (!esColumnaInexistente(e)) throw e;
+    }
+  }
 
   // Fase P5.1c — FECHA EFECTIVA Y FECHA PASADA. "hoy" se calcula en
   // America/Guatemala (hoyLocal(), ya existente y reutilizado en el resto
@@ -1955,6 +2051,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
   let lockTraslapeAdquirido = false;
   try {
     await conn.beginTransaction();
+    // La prelectura solo decide si hace falta el candado; la lectura autoritativa
+    // sigue siendo current-read en esta transacción. Sin recursos no hay GET_LOCK.
+    const cuadrillaPrevia = (await cuadrillaDePlanes(empresaId, [d.id])).get(d.id) ?? [];
+    const necesitaCandado = (d.estado ?? antes.estado) !== "Cancelado" && (
+      (d.cuadrilla ?? cuadrillaPrevia).some((c) => c.tipo === "INTERNO")
+      || Boolean(pilotoId ?? antes.pilotoId) || Boolean(pilotoExtraFinalPatch)
+      || (auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds).length > 0
+      || Boolean(unidadId ?? antes.unidadId) || Boolean(placaNorm) || Boolean(d.flotaVehiculoId) || Boolean(tcEfectivo)
+    );
+    if (necesitaCandado) try {
+      const [lockCuadrilla] = await conn.query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [`tms_traslape_${empresaId}`]);
+      lockTraslapeAdquirido = Number(lockCuadrilla[0]?.l) === 1;
+    } catch {
+      lockTraslapeAdquirido = false;
+    }
+    if (necesitaCandado && !lockTraslapeAdquirido) throw new CuadrillaError("No se pudo validar la disponibilidad de recursos porque hay otra operación en curso. Intenta de nuevo.", 409);
+    const cuadrillaAnterior = (await cuadrillaDePlanes(empresaId, [d.id], conn)).get(d.id) ?? [];
+    const cuadrillaEfectiva = d.cuadrilla === undefined ? cuadrillaAnterior : await resolverCuadrilla(empresaId, d.cuadrilla, conn, cuadrillaAnterior);
+    await validarCuadrillaRoles(empresaId, cuadrillaEfectiva,
+      [pilotoId ?? antes.pilotoId, pilotoExtraFinalPatch, ...(auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds)].filter((id): id is number => id != null), conn);
 
     if (placaNorm) {
       const [r] = await conn.execute<ResultSetHeader>(
@@ -2003,6 +2119,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       const unidadEfectiva = unidadId ?? antes.unidadId;
       const auxiliaresEfectivos = auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds;
       const recursosEfectivos: RecursoDia[] = [
+        ...cuadrillaEfectiva.flatMap((c) => c.empleadoId == null ? [] : [{ tipo: "cuadrilla" as const, id: c.empleadoId }]),
         ...(pilotoEfectivo ? [{ tipo: "piloto" as const, id: pilotoEfectivo }] : []),
         ...(pilotoExtraFinalPatch ? [{ tipo: "piloto" as const, id: pilotoExtraFinalPatch }] : []),
         ...auxiliaresEfectivos.map((id) => ({ tipo: "auxiliar" as const, id })),
@@ -2022,7 +2139,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         // mutua contra otra transacción concurrente, así que no debe
         // correr, y esta solicitud no debe escribir nada.
         let lockRows: RowDataPacket[] = [];
-        try {
+        if (!lockTraslapeAdquirido) try {
           [lockRows] = await conn.query<RowDataPacket[]>(
             "SELECT GET_LOCK(?, 8) AS l",
             [`tms_traslape_${empresaId}`],
@@ -2030,7 +2147,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
         } catch {
           lockRows = [];
         }
-        lockTraslapeAdquirido = Number(lockRows[0]?.l) === 1;
+        lockTraslapeAdquirido = lockTraslapeAdquirido || Number(lockRows[0]?.l) === 1;
         if (!lockTraslapeAdquirido) {
           await conn.rollback();
           return NextResponse.json(
@@ -2072,6 +2189,27 @@ export async function PATCH(req: Request, ctx: Ctx) {
     // (antes.estado), nunca contra el nuevo valor del body. Así, un
     // "Cerrado" recién puesto por el Jefe queda protegido: este UPDATE no
     // lo toca.
+    // PROGRAMACION-PARADAS-FUENTE — "Lugar de Descarga" del reporte: se deriva en el SERVIDOR (misma transacción que las
+    // paradas) de la primera Descarga/Entrega. Quitar la ruta descarta cualquier descripción de la ruta anterior (se vuelve
+    // a seguir a las paradas); una descripción distinta ya guardada se conserva si el destino cambia sin pedir otra cosa.
+    const overrideDescarga = rutaSeQuita ? null : d.lugarDescargaHistorico;
+    let actualDescarga: { historico: string | null; paradas: { lugarNombre: string; tipo: string }[] } | undefined;
+    if (paradasInput !== undefined || overrideDescarga === null) {
+      const [hRows] = await conn.query<RowDataPacket[]>(
+        "SELECT lugar_descarga_historico FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1",
+        [d.id, empresaId],
+      );
+      const [pRows] = await conn.query<RowDataPacket[]>(
+        "SELECT lugar_nombre, tipo FROM tms_plan_paradas WHERE plan_id = ? ORDER BY orden ASC, id ASC",
+        [d.id],
+      );
+      actualDescarga = {
+        historico: hRows[0]?.lugar_descarga_historico != null ? String(hRows[0].lugar_descarga_historico) : null,
+        paradas: pRows.map((r) => ({ lugarNombre: String(r.lugar_nombre), tipo: String(r.tipo ?? "") })),
+      };
+    }
+    const descargaReporte = resolverDescargaReporte({ override: overrideDescarga, paradasNuevas: paradasInput, actual: actualDescarga ?? { historico: null, paradas: [] } });
+
     const [patchResult] = await conn.execute<ResultSetHeader>(
       `UPDATE tms_planes_viaje SET
         fecha_plan = COALESCE(?, fecha_plan),
@@ -2098,13 +2236,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
         -- de la ruta anterior todavía visible. Si la ruta NO se quita, conservan su comportamiento de siempre
         -- (COALESCE: solo se pisan si el PATCH manda un valor no vacío; edición manual del destino sigue intacta).
         ruta_codigo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, ruta_codigo_historico) END,
-        lugar_descarga_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, lugar_descarga_historico) END,
+        -- PROGRAMACION-PARADAS-FUENTE: derivado de la primera Descarga/Entrega (resolverDescargaReporte); no se toca si el destino no cambia.
+        lugar_descarga_historico = CASE WHEN ? THEN ? ELSE lugar_descarga_historico END,
         contacto_nombre_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_nombre_historico) END,
         contacto_cargo_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_cargo_historico) END,
         contacto_telefono_historico = CASE WHEN ? THEN NULL ELSE COALESCE(?, contacto_telefono_historico) END,
         tc_vehiculo_id = CASE WHEN ? THEN ? ELSE tc_vehiculo_id END,
         tc_placa_historica = CASE WHEN ? THEN ? ELSE tc_placa_historica END,
         tc_externo_placa = CASE WHEN ? THEN ? ELSE tc_externo_placa END,
+        ${vehiculoSolicitadoCambio.escribir ? "vehiculo_solicitado_perfil_id = ?, vehiculo_solicitado_nombre = ?," : ""}
         tipo_traslado = CASE WHEN ? THEN ? ELSE tipo_traslado END
        WHERE id = ? AND empresa_id = ? AND estado = ?`,
       [
@@ -2143,17 +2283,20 @@ export async function PATCH(req: Request, ctx: Ctx) {
         d.clienteId ?? null,
         d.rutaId !== undefined,
         d.rutaId ?? null,
-        rutaSeQuita, d.rutaCodigo?.trim() || null,
-        rutaSeQuita, d.lugarDescargaHistorico?.trim() || null,
-        rutaSeQuita, d.contactoNombreHistorico?.trim() || null,
-        rutaSeQuita, d.contactoCargoHistorico?.trim() || null,
-        rutaSeQuita, d.contactoTelefonoHistorico?.trim() || null,
+        // PROGRAMACION-PERSISTENCIA — null explícito = el usuario borró el dato de ESTE viaje: se limpia.
+        rutaSeQuita || d.rutaCodigo === null, d.rutaCodigo?.trim() || null,
+        descargaReporte.aplicar, descargaReporte.valor,
+        rutaSeQuita || d.contactoNombreHistorico === null, d.contactoNombreHistorico?.trim() || null,
+        rutaSeQuita || d.contactoCargoHistorico === null, d.contactoCargoHistorico?.trim() || null,
+        rutaSeQuita || d.contactoTelefonoHistorico === null, d.contactoTelefonoHistorico?.trim() || null,
         escribirTcInterno,
         tcVehiculoIdNuevo,
         escribirTcInterno,
         tcPlacaNueva,
         escribirTcExterno,
         tcExternoNuevo,
+        // Solo cuando cambia: sin cambio no se nombran las columnas (compatibilidad antes de la migración).
+        ...(vehiculoSolicitadoCambio.escribir ? [vehiculoSolicitadoCambio.id, vehiculoSolicitadoCambio.nombre] : []),
         d.tipoTraslado !== undefined,
         d.tipoTraslado?.trim() || null,
         d.id,
@@ -2208,6 +2351,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (auxPersonalIdsLegado != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsLegado, conn);
     }
+    if (d.cuadrilla !== undefined) {
+      await guardarCuadrillaPlan(empresaId, d.id, cuadrillaEfectiva, conn);
+      await registrarAuditoriaTx(conn, { empresaId, usuario: guard.session.username, accion: "editar_ruta", modulo: "tms",
+        detalle: `Plan #${d.id} · cuadrilla [${textoCuadrilla(cuadrillaAnterior) || "—"}] → [${textoCuadrilla(cuadrillaEfectiva) || "—"}] · motivo ${d.motivoCambio}` });
+    }
     if (auxPersonalIdsNuevo != null) {
       await guardarAuxiliaresPlan(d.id, auxPersonalIdsNuevo, conn);
     }
@@ -2249,12 +2397,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
         await conn.rollback();
         return NextResponse.json({ error: rParadas.error }, { status: 409 });
       }
+      // PROGRAMACION-PERSISTENCIA — los lugares resumen (Portal del piloto / búsqueda de salida) se re-derivan de las
+      // paradas RECIÉN guardadas con la MISMA regla que al crear: antes solo se fijaban en el POST y una parada
+      // editada aquí seguía mostrándose con el origen/destino viejo fuera de Programación.
+      const lugares = lugaresDesdeParadas(paradasInput);
+      const lugarCargaId = await upsertLugar(empresaId, lugares.carga, "Carga", conn);
+      const lugarDescargaId = await upsertLugar(empresaId, lugares.descarga, "Descarga", conn);
+      await conn.execute(
+        `UPDATE tms_planes_viaje SET lugar_carga_id = ?, lugar_descarga_id = ? WHERE id = ? AND empresa_id = ?`,
+        [lugarCargaId, lugarDescargaId, d.id, empresaId],
+      );
     }
 
     await conn.commit();
   } catch (e) {
     await conn.rollback();
     console.error("PATCH tms/planes transacción", e);
+    if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json(
       { error: "No se pudo actualizar el plan. Intenta de nuevo." },
       { status: 500 },
@@ -2341,6 +2500,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
     cambios.push("tarifa del catálogo desvinculada (no pertenece a la nueva ruta; monto conservado como override)");
   } else if (d.tarifaId !== undefined && d.tarifaId !== antes.tarifaId) {
     cambios.push(`tarifa del catálogo ${antes.tarifaId ?? "—"} → ${d.tarifaId ?? "—"}`);
+  }
+  if (vehiculoSolicitadoCambio.escribir) {
+    cambios.push(`vehículo solicitado ${vehiculoSolicitadoCambio.antesNombre || "—"} → ${vehiculoSolicitadoCambio.nombre || "—"}`);
   }
   if (d.costoOperativoReferencia !== undefined && d.costoOperativoReferencia !== antes.costoOperativoReferencia) {
     cambios.push(`costo operativo Q${antes.costoOperativoReferencia ?? "—"} → Q${d.costoOperativoReferencia ?? "—"}`);

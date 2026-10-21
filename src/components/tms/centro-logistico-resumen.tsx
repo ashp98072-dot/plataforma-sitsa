@@ -23,7 +23,7 @@ export function TmsQuickLinks({ slug }: { slug: string }) {
   return (
     <nav aria-label="Accesos rápidos de logística" className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
       {ACCESOS_LOGISTICOS.map((acceso) => (
-        <Link key={acceso.ruta} href={`/e/${slug}/${acceso.ruta}`} className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 transition-colors hover:border-[var(--accent)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+        <Link key={acceso.ruta} href={`/e/${slug}/${acceso.ruta}`} prefetch={false} className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 transition-colors hover:border-[var(--accent)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
           <span className="font-semibold text-[var(--accent)]">{acceso.titulo} →</span>
           <p className="mt-1 text-sm text-[var(--muted)]">{acceso.descripcion}</p>
         </Link>

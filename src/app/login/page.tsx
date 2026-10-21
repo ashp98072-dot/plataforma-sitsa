@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { NovalvionLogo } from "@/components/novalvion-brand";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -52,11 +53,11 @@ export default function LoginPage() {
         onSubmit={onSubmit}
         className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card)] p-8 shadow-2xl"
       >
-        <p className="text-sm uppercase tracking-[0.2em] text-[var(--muted)]">
-          Grupo SITSA
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold">Plataforma Corporativa</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">
+        <h1 className="flex justify-center">
+          <NovalvionLogo className="w-full max-w-[18rem]" />
+          <span className="sr-only">Plataforma Corporativa</span>
+        </h1>
+        <p className="mt-4 text-center text-sm text-[var(--muted)]">
           Multiempresa · RRHH · TMS · Flota · Contabilidad
         </p>
 

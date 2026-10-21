@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
+import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
 
 export function normalizarNombrePiloto(nombre: string): string {
   return nombre
@@ -160,13 +161,7 @@ export async function vehiculoPorPlaca(
   const placa = placaRaw.trim().toUpperCase().replace(/\s+/g, "-");
   const placaAlt = placaRaw.trim().toUpperCase().replace(/[\s-]+/g, "");
   if (!placaAlt) return null;
-  const acceso = `(
-    v.empresa_id = ?
-    OR EXISTS (
-      SELECT 1 FROM flota_vehiculo_acceso a
-      WHERE a.vehiculo_id = v.id AND a.empresa_id = ?
-    )
-  )`;
+  const acceso = predicadoVehiculoAccesible("v", "?");
   const matchExacto = `(
     UPPER(REPLACE(REPLACE(v.placa,' ',''),'-','')) = ?
     OR UPPER(v.placa) = ?

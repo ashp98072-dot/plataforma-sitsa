@@ -1,0 +1,389 @@
+# Facturación de viajes — Fase 1: viaje cerrado → viaje facturable → borrador de factura
+
+**Estado: IMPLEMENTADO y VERIFICADO TÉCNICAMENTE (tsc, ESLint, build, pruebas con base simulada y pruebas contra MariaDB 11.8.9 y 10.4 reales y desechables — ver §14 — y validación manual de la interfaz en navegador con datos de desarrollo — ver §15). NO probado en la base de producción/Hostinger ni con usuarios reales. NO aprobado para producción.**
+
+Esta fase **no emite FEL**: no conecta con INFILE ni con la SAT, no usa credenciales FEL, no genera UUID/serie/número FEL, no crea pólizas ni cuentas por cobrar. Un test de arquitectura (`src/lib/facturacion/sin-fel-fase1.test.ts`) lo exige sobre el código del flujo.
+
+Contexto: la auditoría de Milenium (`docs/AUDITORIA-MILENIUM-CONTABILIDAD-FACTURACION.md`) concluye que Milenium no conoce el concepto de «viaje» y que se factura a mano con texto libre. Esta fase conecta el viaje de la plataforma con un borrador de factura estructurado.
+
+---
+
+## 1. Hallazgo del discovery: ya existía FACT-1, se REUTILIZÓ
+
+Antes de escribir código se inspeccionó el repositorio. **`fact_facturas`, `fact_factura_viajes` y `fact_pagos` ya existen y están en uso** (`sql/migrate-2026-08-fact-1-facturas-pagos.sql`; confirmadas como aplicadas en `docs/AUDITORIA-MIGRACIONES-ESTADO-REAL.md`), junto con su API, su pantalla (Operaciones → Facturación clientes), permisos granulares y auditoría. Por eso **no se creó ninguna entidad «documento por facturar»**: el borrador de factura de FACT-1 (`estado_admin = 'Borrador'`) **es** el documento por facturar. Crear otra tabla habría sido un segundo sistema de facturación paralelo.
+
+| Pedido de la fase | Ya existía (FACT-1) | Se agregó (FACT-2) |
+|---|---|---|
+| Viaje facturable = Cerrado, del cliente, sin factura viva | `condicionesViajesPendientes`, `UNIQUE(plan_id)`, bridge `clientes.tms_cliente_id` | + tarifa comercial > 0, + ruta/destino identificable, + **solo GTQ** |
+| Pantalla «Viajes por facturar» | pestaña «Viajes pendientes» | + columnas ruta, origen → destino, piloto, estado; + filtro por ruta |
+| Selección de varios viajes del mismo cliente | `evaluarSeleccion` (UI) + validación en servidor | + misma moneda |
+| Borrador de factura | `crearFactura` / `actualizarFacturaBorrador` | + líneas estructuradas, IVA desglosado **por línea** (incluido o agregado), snapshots |
+| Anti doble facturación | `FOR UPDATE` + `UNIQUE(plan_id)` | + bloqueo en orden estable, + defensa ante el duplicado en el INSERT, + conflicto de concurrencia como 409 |
+| Cancelar borrador / liberar viajes | `anularFactura` (borra los vínculos) | etiqueta «Cancelar borrador» en la UI |
+| Permisos | `requireTenantFacturacion` con `ver`/`crear`/`editar`/`emitir`/`anular`/`pagos` | endpoint de preview con `crear` |
+| Auditoría | `registrarAuditoriaTx` | + totales, IVA, moneda y viajes en el detalle |
+| Preview sin escritura | — | `previsualizarFactura` + `POST …/facturas/preview` |
+| Cálculo de IVA | — | `src/lib/facturacion/impuestos.ts` |
+
+## 2. Qué se creó
+
+**Código**
+- `src/lib/facturacion/impuestos.ts` — cálculo de IVA con `decimal.js`; la política (incluido / agregado) se recibe por línea.
+- `src/lib/facturacion/borrador-calculo.ts` — lógica **pura** (sin DB): elegibilidad de un viaje, descripción de línea, totales. La comparten crear, editar y la vista previa, así que **no pueden divergir**.
+- `previsualizarFactura` y la validación compartida en `src/lib/facturacion/facturas.ts`.
+- `POST /api/empresas/[slug]/facturacion/facturas/preview`.
+- UI: columnas y filtro de ruta en «Viajes pendientes»; paso «Previsualizar» antes de «Guardar borrador»; detalle del borrador con base/IVA/total por línea y resumen.
+
+**SQL (solo propuesto, NO ejecutado)** — ver §9
+- `sql/migrate-2026-10-fact-2-borrador-snapshots-iva.sql`
+- `sql/preflight-2026-10-fact-2-borrador-snapshots-iva.sql` (solo lectura)
+
+**No se creó**: ninguna tabla nueva, ningún estado nuevo, ninguna columna booleana «facturable».
+
+## 3. «Facturable» se DERIVA, no se guarda
+
+Un viaje es facturable cuando se cumple **todo** lo siguiente (una sola definición en SQL para el listado, el contador y el KPI, y su equivalente en `evaluarPlanFacturable` para el servidor):
+
+| Regla | Dónde |
+|---|---|
+| Pertenece a la empresa de la sesión | `p.empresa_id = ?` — y en servidor el viaje se relee con `empresa_id` del actor |
+| Está **Cerrado** (cierre administrativo, `viajes_cerrar`) | `p.estado = 'Cerrado'` |
+| Su cliente TMS está vinculado a un cliente de Facturación | `cli.id IS NOT NULL` (puente `clientes.tms_cliente_id`) |
+| **Tarifa comercial válida** (> 0) | `p.tarifa_comercial > 0` — *nuevo* |
+| **Ruta válida**: código de ruta, destino congelado en el viaje, **o un destino de catálogo que realmente existe** (un `tms_lugares` de la MISMA empresa con nombre no vacío) | *nuevo* — mismo criterio en SQL (`EXISTS` correlacionado por `empresa_id`) y en servidor |
+| Sin factura viva (Borrador o Emitida) | `NOT EXISTS` sobre `fact_factura_viajes` |
+| **Moneda GTQ** (única soportada en la Fase 1; ver más abajo) | `p.tarifa_moneda_historico` vacío/NULL, `Q`, `QTZ` o `GTQ` |
+
+**Listado y servidor deben decir lo mismo.** Un viaje que aparece en «Viajes por facturar» nunca debe ser rechazado después por la vista previa o por guardar. La prueba contra MariaDB real (§14) verifica la equivalencia caso por caso (moneda, destino de catálogo válido, inexistente, de otra empresa, con nombre vacío, ruta o destino en blanco, tarifa, estado).
+
+**Moneda**: la Fase 1 solo admite **GTQ**, porque Contabilidad no ha definido el tratamiento de moneda extranjera (IVA, tipo de cambio). `null`/vacío, `Q`, `QTZ` y `GTQ` se normalizan a GTQ; cualquier otra (USD, EUR…) **no aparece** en el listado y el servidor responde **409**: «Esta fase de Facturación solo admite GTQ. La facturación en moneda extranjera está pendiente de definición contable.» La restricción vive en `MONEDA_SOPORTADA` (`borrador-calculo.ts`); se levanta en un solo lugar cuando Contabilidad la defina.
+
+Por qué derivado y no un booleano: anular o cancelar una factura **borra** su fila en `fact_factura_viajes`, así que «no existe fila» ya significa «libre». Un booleano redundante podría quedar desincronizado; la derivación no puede.
+
+«Cancelada/reemplazada que aún bloquee»: no existe ese caso en este modelo, porque anular borra los vínculos. «Marcado como facturado externamente»: ver §8.
+
+El **estado** y la **empresa** no son filtros de la pantalla: el estado siempre es `Cerrado` y la empresa siempre es la de la sesión. Los filtros son cliente, fecha desde/hasta y ruta (código o destino).
+
+## 4. Estados
+
+Se mantienen los de FACT-1; no se introdujo ninguno nuevo.
+
+| Estado | Significado hoy |
+|---|---|
+| `Borrador` | Documento por facturar. Editable. Sin número, sin fecha de emisión. Reserva sus viajes. |
+| `Emitida` | Emisión **interna** de FACT-1 (número y fecha capturados a mano). **No es FEL.** Congelada; admite pagos. |
+| `Anulada` | Borrador cancelado o factura anulada. Libera los viajes. Equivale al «CANCELADO» pedido. |
+
+Extensión futura (no implementada, no hay ninguna columna ni lógica para ellos): `LISTO_PARA_EMITIR`, `EMITIDO_EXTERNO` (convivencia con Milenium), `EMITIDO_FEL`. Debe decidirse con Contabilidad si «Emitida» pasa a significar «emitida con certificación» o si se crea un estado aparte.
+
+## 5. Cálculo de IVA — tratamiento POR LÍNEA
+
+**Confirmado por Contabilidad**: la mayoría de las tarifas **ya incluyen** el IVA 12 %, pero hay viajes cuya tarifa **lleva el IVA agregado**, y **una misma factura puede mezclar ambos**. Por eso el tratamiento **no es una política global ni por factura: es de cada línea/viaje**, se elige explícitamente y se **congela por línea**. **Sigue pendiente** la regla de negocio que decide automáticamente cuál corresponde (¿por cliente, ruta, tipo de servicio, cotización?); mientras no se conozca, **nada se infiere**.
+
+`calcularTotalesLinea({ montoLinea, porcentajeIva, precioIncluyeIva })` y `calcularTotalesFactura({ porcentajeIva, lineas: [{ montoLinea, precioIncluyeIva }] })` en `impuestos.ts` (las fórmulas viven solo ahí; `construirBorrador` las reutiliza).
+
+- Aritmética decimal (`decimal.js`), redondeo half-up a 2 decimales. El porcentaje de la fase es 12 % (`PORCENTAJE_IVA_FASE1`).
+- **IVA incluido en la tarifa** (`precio_incluye_iva = 1`): `base = round(tarifa / 1.12)` e `IVA = tarifa − base`, así `base + IVA = total` exacto. `112.00 → 100.00 + 12.00`; `100.00 → 89.29 + 10.71`; `1000.00 → 892.86 + 107.14`.
+- **IVA agregado a la tarifa** (`precio_incluye_iva = 0`): `base = tarifa`, `IVA = round(base × 12 %)`, `total = base + IVA`. `100.00 → 100.00 + 12.00 = 112.00`; `1000.00 → 1000.00 + 120.00 = 1120.00`.
+- **Ejemplo mixto**: línea 1 = Q100 con IVA incluido (89.29 + 10.71 = 100.00) y línea 2 = Q100 con IVA agregado (100.00 + 12.00 = 112.00) → **subtotal 189.29, IVA 22.71, total 212.00**.
+- **El documento es la suma de sus líneas ya calculadas**: subtotal = Σ base, IVA = Σ IVA de cada línea, total = Σ total de línea. **Nunca se recalcula el IVA globalmente sobre el total agregado.**
+- `monto_total` sigue siendo el **total con IVA**, así que pagos, saldos y KPIs de FACT-1 no cambian.
+- **Encabezado de la factura** (`fact_facturas.precio_incluye_iva` / `porcentaje_iva`): es solo un **resumen de compatibilidad**, **no la fuente de verdad** (esa son las líneas). `precio_incluye_iva` = `1` o `0` únicamente si **todas** las líneas coinciden y **`NULL` cuando hay mezcla** (o es una factura anterior): nunca indica una sola política cuando no la hay. `porcentaje_iva` = 12 mientras todas las líneas usen 12 %.
+- **Servidor**: cada línea del payload debe traer `precioIncluyeIva` booleano (Zod en las tres rutas y verificación en la capa de servicio); sin valor por defecto. Un campo a nivel de factura se ignora.
+- **Pregunta contable abierta**: ¿qué regla decide, por viaje, si la tarifa ya incluye el IVA o si se agrega? (hoy lo elige quien factura).
+
+## 6. Prevención de doble facturación
+
+Capas, de la más débil a la más fuerte:
+1. **UI**: no ofrece viajes ya facturados ni mezcla clientes/monedas (no es una defensa; solo ayuda).
+2. **Servidor, siempre**: crear y editar **releen** cada viaje de la base (nunca confían en el payload) y revalidan cliente, empresa, estado, tarifa, ruta, moneda y vínculo.
+3. **Transacción con `FOR UPDATE`** sobre cada viaje, en **orden ascendente de id** (dos usuarios con viajes en común toman los bloqueos en el mismo orden). La fila del viaje es el punto de serialización: el segundo usuario espera al primero y luego ve el vínculo. **Crear y editar usan `READ COMMITTED`** (solo para esa transacción): con el aislamiento por defecto (REPEATABLE READ) el `SELECT … FOR UPDATE` sobre un vínculo que aún no existe toma un bloqueo de hueco en el índice UNIQUE y dos usuarios —incluso con viajes distintos o solo traslapados— se interbloqueaban al insertar. Se reprodujo contra MariaDB real y se corrigió (§14).
+4. **`UNIQUE(plan_id)` en `fact_factura_viajes`** (ya existente): si algo se colara entre validar e insertar, la base rechaza el duplicado y la aplicación lo devuelve como **409**, con rollback completo (no queda factura a medias).
+5. Un deadlock o `lock wait timeout` se devuelve como **409 reintentable**, no como error 500.
+
+La **vista previa no reserva nada**: no abre transacción, no usa `FOR UPDATE`, no audita, no llama a `asegurarVinculosTmsClientes` (que escribe). Una preview correcta **no garantiza** que el viaje siga libre al guardar; por eso guardar revalida todo.
+
+## 7. Snapshots («congelar datos»)
+
+Al crear el borrador se guardan (columnas nuevas, ver §9):
+
+- **Cliente** (en `fact_facturas`): nombre fiscal (razón social, o nombre comercial si no hay), NIT y dirección.
+- **Por línea** (en `fact_factura_viajes`): código del viaje, fecha del viaje, código de ruta, origen, destino, descripción, cantidad (1), monto capturado, **tratamiento de IVA (`precio_incluye_iva`) y `porcentaje_iva`**, base, IVA, total. El snapshot fiscal es **autosuficiente por línea**: una factura histórica conserva exactamente cómo se calculó cada línea aunque las reglas futuras cambien.
+- **Documento**: moneda, subtotal, IVA, porcentaje de IVA y el resumen del tratamiento (1 / 0 / NULL con mezcla, ver §5).
+
+Lectura: el detalle prefiere **siempre** lo congelado (`COALESCE(snapshot, dato vivo)`); el dato vivo solo rellena filas anteriores a FACT-2. El listado también muestra el nombre congelado del cliente.
+
+Edición del borrador: **no refresca lo congelado**. Las líneas que siguen en el borrador conservan su fotografía y el cliente conserva la suya si no cambió de cliente. Se re-fotografía únicamente lo nuevo (viaje agregado, cliente cambiado, o filas anteriores a FACT-2 que no tenían snapshot).
+
+Descripción de línea: `Servicio de transporte – {origen} → {destino} – {dd/mm/aaaa}`. El destino congelado del viaje (`lugar_descarga_historico`) manda sobre el catálogo vivo; lo desconocido se muestra como «—». Hay una línea por viaje y `viaje_id` se conserva como referencia estructurada (`plan_id`).
+
+## 8. Convivencia futura con Milenium — «Facturado externamente» (NO implementado)
+
+Hoy no existe nada equivalente en el repositorio. Se **documenta, no se implementa**, porque exige una tabla nueva y decisiones de Contabilidad. Diseño propuesto:
+
+- Tabla aparte `fact_viaje_facturado_externo` (`empresa_id`, `plan_id` **UNIQUE**, `origen` — `MILENIUM`/otro —, `referencia`, `fecha_factura`, `observacion`, `registrado_por`, `creado_en`, y baja lógica con motivo).
+- La condición de «facturable» (§3) agregaría un `NOT EXISTS` contra esa tabla; así sigue derivado.
+- **No** modelarlo como una `fact_facturas` en estado `Emitida` con número externo: contaminaría KPIs, pagos y cobranza con documentos que viven en otro sistema.
+- Preguntas para Contabilidad: ¿quién puede marcar/desmarcar?, ¿se permite deshacer?, ¿se carga la historia en bloque (con revisión previa) o viaje por viaje?, ¿cómo se concilia con el riesgo de doble facturación entre sistemas?
+
+## 9. SQL que habría que aplicar (NO ejecutado)
+
+**El código FACT-2 lee y escribe las columnas nuevas: el SQL debe aplicarse ANTES de desplegar.** Si se despliega sin aplicarlo, crear/editar borradores y leer facturas fallarán con «Unknown column». (No se agregó un modo degradado a propósito: guardar una factura sin su snapshot sería un fallo silencioso sobre datos financieros.)
+
+Orden: (1) correr `preflight-2026-10-fact-2-borrador-snapshots-iva.sql` (solo lectura) y revisar; (2) aplicar `migrate-2026-10-fact-2-borrador-snapshots-iva.sql`; (3) desplegar.
+
+La migración es aditiva e idempotente (`ADD COLUMN IF NOT EXISTS`, MariaDB), todo `NULL`/`DEFAULT`, sin backfill, sin tocar índices ni FKs:
+- `fact_facturas`: `moneda` (default `GTQ`), `subtotal`, `iva_monto`, `porcentaje_iva` y `precio_incluye_iva` (**resumen**: NULL con mezcla), `cliente_nombre_snapshot`, `cliente_nit_snapshot`, `cliente_direccion_snapshot`.
+- `fact_factura_viajes`: `codigo_viaje_snapshot`, `fecha_viaje_snapshot`, `ruta_codigo_snapshot`, `origen_snapshot`, `destino_snapshot`, `descripcion`, `cantidad` (default 1), **`precio_incluye_iva`, `porcentaje_iva`** (política fiscal congelada de la línea), `base_monto`, `iva_monto`, `total_linea`.
+
+Facturas y borradores anteriores quedan con snapshot `NULL` (incluido el tratamiento de IVA de sus líneas) y se muestran como siempre (solo `monto_total` / `monto_asignado`); al editar un borrador así se elige el tratamiento de cada línea (la pantalla muestra «IVA incluido» preseleccionado). El preflight verifica ANTES de migrar que las columnas nuevas no existan. Reversión: las columnas son opcionales; basta desplegar la versión anterior del código y, si se quisiera, `DROP COLUMN` (acción destructiva: solo con autorización).
+
+## 10. Permisos y auditoría
+
+Se reutilizan los permisos granulares de `facturacion` (no se creó ninguno):
+
+| Acción pedida | Permiso | Endpoint |
+|---|---|---|
+| Ver viajes por facturar | `facturacion:ver` | `GET …/facturacion/viajes-pendientes` |
+| Previsualizar / crear borrador | `facturacion:crear` | `POST …/facturas/preview`, `POST …/facturas` |
+| Editar borrador | `facturacion:editar` | `PATCH …/facturas/[id]` |
+| Cancelar borrador | `facturacion:anular` (el mismo permiso que anula una factura) | `POST …/facturas/[id]/anular` |
+
+Si se quiere un permiso distinto para «cancelar borrador» frente a «anular factura emitida» hay que ampliar el catálogo de permisos: no se hizo en esta fase.
+
+Auditoría (`auditoria`, módulo `facturacion`): crear y editar registran usuario, empresa, cantidad de viajes, moneda, subtotal, IVA, el resumen del tratamiento de cada línea («2 con IVA incluido y 1 con IVA agregado»), total y los códigos de los viajes con su tratamiento; anular registra la cancelación. No se guardan NIT ni dirección del cliente en la bitácora.
+
+## 11. Decisiones tomadas y puntos para Contabilidad
+
+1. **Tratamiento de IVA — confirmado por Contabilidad**: existen tarifas con IVA incluido (la mayoría) y tarifas a las que se agrega el IVA, y **una misma factura puede mezclar ambas**. La política se elige **por línea/viaje** y se congela por línea (§5). **Sigue abierta**: la regla de negocio que decida automáticamente cuál corresponde (hoy lo elige quien factura, con «IVA incluido» preseleccionado y visible).
+2. **Tarifa comercial obligatoria.** Antes un viaje sin tarifa podía facturarse en cero (había una prueba que lo exigía); ahora **no es facturable** hasta que tenga tarifa > 0. Aún se puede ajustar el monto de una línea, pero la tarifa de base debe existir. Cambio de comportamiento respecto de FACT-1: confirmar que no hay viajes legítimos sin tarifa que hoy se facturen a mano.
+3. **Ruta válida = código de ruta o destino identificable.** Se eligió ese criterio porque un viaje armado a mano en Programación puede no tener ruta de catálogo; exigir ruta de catálogo ocultaría viajes facturables. Si Contabilidad exige ruta de catálogo, se endurece en `evaluarPlanFacturable` y en la condición SQL.
+4. **Moneda**: la Fase 1 solo admite **GTQ** (se toma de `tarifa_moneda_historico`; vacío/`Q`/`QTZ`/`GTQ` = GTQ). Otra moneda se bloquea en servidor y no se lista. Falta que Contabilidad defina el tratamiento de moneda extranjera. (Los KPI de `facturacion-client.tsx` suman en quetzales; no se tocó ese archivo.)
+5. **Piloto visible** en «Viajes pendientes»: solo el **nombre**, a pedido de esta fase. FACT-1 lo había excluido a propósito (Facturación «no necesita ni debe ver» datos operativos) y una prueba lo verificaba; se reemplazó por una que permite únicamente el nombre y sigue excluyendo auxiliares, evidencias, paradas y GPS. Si el criterio de privacidad prevalece, es quitar un campo.
+6. **Emisor legal**: aún no existe como dato (la configuración fiscal de la empresa está en el cuestionario `fact_empresa_perfil`, sin campos estructurados). Dentro de una empresa el emisor es la propia empresa, por lo que la regla «mismo emisor» se cumple por construcción; cuando haya varios emisores por empresa habrá que añadirla.
+7. **Cancelar = anular** (mismo estado, mismo endpoint, mismo permiso). Ver §10.
+8. **Rutas de API**: se adaptaron al patrón real del repositorio (`/api/empresas/[slug]/facturacion/…`), no a las rutas conceptuales del ticket; no se duplicó `GET/POST borradores` porque `facturas` ya es el recurso del borrador.
+
+## 12. Qué queda pendiente para FEL (fuera de esta fase)
+
+Sin FEL todavía: emisión/certificación con INFILE (endpoint, autenticación, sandbox e idempotencia oficial **sin confirmar**), serie/número/UUID, XML certificado, anulación fiscal, notas de crédito, almacenamiento seguro de credenciales (nunca en texto claro), proveedor FEL simulado para pruebas, pólizas contables, cuentas por cobrar, y la convivencia con Milenium (§8). Ver `docs/FEL-INFILE-*` y la auditoría de Milenium.
+
+## 13. Verificación y límites
+
+- **Hecho**: `tsc --noEmit`, ESLint, `git diff --check`, `npm run build` y toda la suite de vitest (resultado y comparación con `origin/main` en el PR).
+- **Pruebas nuevas**: IVA y redondeo; elegibilidad del viaje; preview sin escritura; creación con snapshot; doble uso del mismo viaje (secuencial y por carrera en el INSERT); deadlock → 409; orden de bloqueo; cancelar libera viajes; snapshots no cambian al editar cliente/ruta; permisos; multiempresa; arquitectura sin FEL.
+- **Limitaciones restantes**: el esquema de las pruebas es el de `sql/schema.sql` + la migración FACT-1 (no una copia de producción) y el volumen es de pruebas. La interfaz se validó manualmente solo con datos sintéticos de desarrollo (§15). Hace falta repetir §14 y §15 en un ambiente de pruebas con datos representativos antes de considerarlo **PROBADO**. (La validación en MariaDB 11.8.9 —la versión del servidor objetivo— ya se hizo; no está pendiente.)
+
+## 14. Validación contra una MariaDB real y desechable
+
+`src/lib/facturacion/integracion-mariadb.test.ts` ejecuta el **código real** de `facturas.ts` (sin mocks) y los **archivos SQL reales** (`migrate-2026-08-fact-1…`, preflight y migración FACT-2) contra una base creada solo para la prueba. Es **opt-in**: se omite salvo que exista `FACT_TEST_DB_PORT`, y su `vi.mock("@/lib/db")` apunta fijo a `127.0.0.1` / base `fact_test_fase1` / `root` sin contraseña, sin leer ningún `.env` (no puede conectarse a Hostinger ni a producción). Cada corrida borra y recrea esa base.
+
+Cómo correrla (instancia MariaDB desechable en el puerto 3399 con un `--datadir` temporal; se validó con **MariaDB 11.8.9** —zip oficial de archive.mariadb.org, SHA-256 verificado— y con 10.4.32):
+
+```bash
+FACT_TEST_DB_PORT=3399 npx vitest run src/lib/facturacion/integracion-mariadb.test.ts
+```
+
+Qué cubre (47 pruebas): A preflight · B migración · C idempotencia (2.ª ejecución) y datos anteriores intactos · D crear · E leer · F editar (lo congelado no se refresca) · G cancelar y liberar · H snapshots tras cambiar cliente/ruta/destino/tarifa · I `subtotal + IVA = total` verificado en SQL · fechas DATE y `emitirFactura` · **IVA por línea: incluido, agregado, factura MIXTA (Q100 + Q100 → 189.29 / 22.71 / 212.00), encabezado NULL con mezcla, vista previa = guardado, editar conservando/cambiando una sola línea, snapshot fiscal estable, factura emitida inmodificable, líneas anteriores con NULL, sesiones concurrentes con tratamientos distintos y selecciones mixtas traslapadas** · J dos sesiones con el mismo viaje (20 rondas) · J2 serialización por bloqueo · J3 `UNIQUE(plan_id)` ante INSERT directos · K tres viajes en orden opuesto (10 rondas) · K2 selecciones traslapadas (10 rondas) · L viajes distintos y contiguos (30 rondas) · control de que un orden de bloqueo opuesto SÍ produce deadlock · listado ⇔ servidor (18 casos) · multiempresa · filtro de ruta/destino.
+
+**Defectos que solo aparecieron contra la base real** (la simulación en memoria los ocultaba) y que ya están corregidos:
+1. **Deadlock** con selecciones traslapadas o contiguas (bloqueos de hueco en REPEATABLE READ) → crear/editar usan `READ COMMITTED`. Con ese cambio desactivado las pruebas K2 y L fallan siempre; con él, pasan.
+2. **Editar un borrador** leía `fecha_viaje_snapshot` como objeto `Date` y lo reinsertaba como texto inválido («Thu Aug 27») → ahora se lee con `DATE_FORMAT`.
+3. **Filtro «ruta o destino»**: `NOT (NULL REGEXP …)` es `NULL` y ocultaba los viajes sin destino congelado → se usa `COALESCE`.
+
+**Hallazgo preexistente de FACT-1, ya corregido**: `mapFactura` convertía `fecha_emision` con `String(valor).slice(0, 10)`, pero el driver devuelve un objeto `Date` para una columna `DATE`; con una factura que ya tenía fecha, el listado, el detalle y el formulario de edición mostraban «Thu Aug 27». Ahora `FACTURA_SELECT` **y la consulta de bloqueo de `emitirFactura`** formatean en SQL (`DATE_FORMAT(…, '%Y-%m-%d') AS fecha_emision`), sin depender de la zona horaria; `mapFactura` no cambió y los filtros por rango siguen comparando la columna. Cubierto por pruebas unitarias y por la prueba opt-in contra MariaDB real (que además demuestra que el driver SÍ entrega un `Date`).
+
+## 15. Validación manual de la interfaz (navegador, datos de desarrollo)
+
+Se levantó la aplicación en desarrollo (`next dev`) contra una **base MariaDB 10.4 desechable local** (puerto 3399, creada con `sql/schema.sql`, el seed de usuarios del proyecto, la migración FACT-1 y el preflight + migración FACT-2) y **datos sintéticos** («Cliente Demo Uno/Dos», viajes `DEMO-*`, `PAG-*` y casos negativos `NO-*`). Sin Hostinger, sin producción, sin FEL/INFILE/SAT. Se probó en escritorio (1440×900) y se revisó el ancho a 1024 px.
+
+| # | Caso | Resultado |
+|---|---|---|
+| 1 | Una línea, **IVA incluido**, Q100 | Vista previa **89.29 + 10.71 = 100.00**. Guardado y reabierto tras recargar: conserva «IVA incluido en la tarifa» y los mismos importes. |
+| 2 | Una línea, **Agregar IVA**, Q100 | Vista previa **100.00 + 12.00 = 112.00**. Guardado y reabierto: conserva «IVA agregado a la tarifa». |
+| 3 | **Factura mixta** (A: Q100 incluido, B: Q100 agregado) | Vista previa: A 89.29 + 10.71 = 100.00; B 100.00 + 12.00 = 112.00; **subtotal 189.29, IVA 22.71, TOTAL 212.00**. El detalle guardado muestra el tratamiento de cada viaje y el resumen dice **«Mixto: varía por viaje»**; en la base el encabezado `precio_incluye_iva` es `NULL` y cada línea guarda el suyo. |
+| 4 | Invalidación de la vista previa | «Guardar borrador» queda deshabilitado y aparece el aviso «vuelve a previsualizar» al cambiar el tratamiento de una línea, un monto, **quitar** un viaje o **agregar** un viaje. Volver exactamente a la selección previsualizada la vuelve a validar (misma huella). |
+| 5 | Edición del borrador mixto | Los selectores cargan lo almacenado (A «IVA incluido», B «Agregar IVA»). Al cambiar solo una línea y guardar, solo esa línea cambia fiscalmente, los totales se recalculan (200.00 + 24.00 = 224.00) y las descripciones/ruta/fecha congeladas no cambian; devolverla a «IVA incluido» restituye 189.29 / 22.71 / 212.00 y el encabezado vuelve a `NULL`. |
+| 6 | Emitida no editable | Tras emitir (número y fecha de prueba), el detalle ya no ofrece «Editar borrador», ni campos de monto/viajes, ni selectores de IVA; solo «Registrar pago» y «Anular factura». Un `PATCH` directo a la API responde **409** y nada cambia en la base. |
+| 7 | Cancelar borrador | Queda **Anulada**, se borran sus vínculos, el contador de «Viajes pendientes» sube y el viaje vuelve a aparecer en «Viajes por facturar» y se puede seleccionar de nuevo. |
+| 8 | «Viajes por facturar» | Columnas ruta, origen → destino, unidad, piloto, tarifa, estado y fecha de cierre correctas; el filtro de ruta/destino encuentra tanto el código como el nombre del destino de catálogo (sin destino congelado); paginación 50 + 14 de 64 con la selección conservada entre páginas; seleccionar viajes de otro cliente se bloquea con explicación. **No aparecen** los viajes sin tarifa (NULL o 0), en ruta/programados, en USD ni sin ruta/destino. |
+| 9 | UX / diseño | La columna «Tratamiento IVA (12 %)» se entiende; «IVA incluido» aparece preseleccionado al agregar un viaje y «Agregar IVA» se elige sin ambigüedad. Sin columnas cortadas ni textos superpuestos y sin scroll horizontal a 1440 px (ni en las tablas del formulario y de la vista previa a 1024 px; allí solo «Unidad» baja a dos líneas). Antes de la vista previa el pie dice «Suma de tarifas (el total con IVA se calcula en la vista previa)», no un «Total» engañoso. |
+
+**Defecto encontrado y corregido** (único cambio de código tras la prueba): al **editar** un borrador el pie decía «el total con IVA se calcula en la vista previa», pero la edición no tiene vista previa. Ahora dice «el total con IVA se recalcula al guardar» (`etiquetaSumaTarifas`, con prueba unitaria). Se repitió el caso en el navegador.
+
+**Observaciones sin cambios** (preexistentes de FACT-1 o menores): en la edición las columnas «Unidad» y «Tarifa comercial» muestran «—» (el formulario de edición no las recibe); el botón de confirmación al cancelar un borrador sigue diciendo «Confirmar anulación» (el título de la confirmación sí dice «cancelar borrador»); los endpoints de notificaciones del layout fallan en esta base mínima de desarrollo porque faltan tablas de otros módulos (`rrhh_recordatorios`, `flota_vehiculo_documentos`, `flota_viajes.plan_id`), sin relación con Facturación.
+
+## 16. Columna «Unidad» de «Viajes pendientes» (viajes tercerizados)
+
+**Datos reales** (`tms_planes_viaje`): `tipo_viaje` (`'Propio'` | `'Tercerizado'`, `DEFAULT 'Propio'`) identifica el viaje tercerizado; en ellos `unidad_id` queda **NULL a propósito** y la placa externa se guarda como texto en **`unidad_externa_placa`** (`VARCHAR(40)`, mayúsculas, opcional). No existe una tabla ni un snapshot aparte: esa columna *es* el snapshot. (`tc_externo_placa` es la caja/remolque, otro dato; `unidad_externa_descripcion` y `transportista_externo` no se muestran.)
+
+**Regla** (`src/lib/facturacion/unidad-viaje.ts`, la misma que usan Programación y su reporte: `esTercerizado ? unidad_externa_placa : placa`):
+1. Viaje **tercerizado** → su placa externa; si no la capturaron (NULL, vacía o en blanco), **«Tercerizado»**.
+2. Viaje **propio** → la placa de su unidad interna (`tms_unidades.placa`); sin unidad, `—`.
+
+No es «placa interna primero» porque en un tercerizado `unidad_id` es NULL por diseño; si apareciera un `unidad_id` huérfano, Programación lo ignora y Facturación debe decir lo mismo. La respuesta sigue llamándose `placa` (compatibilidad) con el valor ya resuelto. Además, la unión con `tms_unidades` ahora filtra por la **misma empresa** del viaje (antes no lo hacía). No cambia la facturabilidad, el IVA, los filtros ni los snapshots.
+
+## 17. PDF DEMO de la factura (NO FISCAL)
+
+Representación visual para que Contabilidad valide el **formato** antes de integrar FEL. **No es un documento fiscal**: no hay FEL, INFILE, SAT, XML ni UUID, no se usan credenciales externas y no escribe nada en la base (solo lee).
+
+**Dónde**: botón **«Ver PDF demo»** en el detalle de una factura (Borrador y Emitida; no en Anuladas) → `GET /api/empresas/[slug]/facturacion/facturas/[id]/pdf-demo` (se abre inline en otra pestaña). Permiso: el mismo `requireTenantFacturacion(slug, "ver")`; la empresa sale de la sesión/guard, nunca del cliente, y `obtenerFactura` filtra por `empresa_id` (la factura de otra empresa → **404**).
+
+**Referencia visual**: la factura que la empresa usa hoy (PDF «FRAIJANES 4855», impreso desde el sistema actual). El PDF demo la reproduce como una evolución, no como una plantilla genérica: marco redondeado, emisor a la izquierda (razón social, logo, dirección, teléfono, NIT), bloque «DOCUMENTO TRIBUTARIO ELECTRÓNICO» a la derecha (tipo, SERIE, NO., NÚMERO DE AUTORIZACIÓN) y fecha en tres casillas **DÍA / MES / AÑO**; bloque de cliente (NOMBRE, DIRECCIÓN, NIT, CONDICIONES, No. INTERNO, CÓDIGO CLIENTE); tabla **CÓDIGO | DESCRIPCIÓN | TOTAL** con un área amplia de detalle; **TOTAL EN LETRAS**, leyenda tributaria, **OBSERVACIONES** y **TOTAL Q.**; recuadro reservado y, al pie, número de autorización, certificador, NIT del certificador y correlativo interno.
+
+**Logo OBLIGATORIO de la empresa emisora**: la factura siempre lleva el logo de la empresa del tenant (`empresas.logo_url` de la empresa que devuelve `requireTenantFacturacion`; nunca una ruta enviada por el cliente ni el logo de otra empresa). Antes de generar se resuelve el archivo con el resolvedor seguro de `uploads` (`absPathFromRelative`), se valida que exista, sea un archivo no vacío (máx. 5 MB) y que PDFKit (PNG o JPEG) pueda leerlo y decodificarlo. **Si falta, no existe, es ilegible o no soportado (SVG, GIF…), o su ruta apunta al directorio de otra empresa (`empresas/<otroId>/…`) → 409 «Esta empresa no tiene un logo válido configurado para la factura.» y no se genera el PDF; ya no hay respaldo silencioso a solo texto.** El orden de los errores no revela el estado del logo: una factura inexistente o de otra empresa sigue siendo 404, y una Anulada o sin snapshot, su 409 propio. El logo se dibuja a la izquierda del encabezado con `fit` (proporcional, nunca se estira): un logo cuadrado o vertical en un recuadro de 132×100 pt con los datos del emisor a su derecha; uno apaisado (relación ≥ 2.2) a todo el ancho del bloque (288×58 pt) con los datos debajo. Nota operativa: `logo_url` es una ruta relativa a `uploads` (igual que en la boleta de vacaciones); los logos de marca de `public/brands/` que usan las cotizaciones **no** se usan aquí. Cada empresa debe tener su `logo_url` configurado para poder generar el PDF demo.
+
+**Base e IVA no se imprimen** (la factura real no los muestra). Se siguen calculando, guardando y **validando** (por línea y en los totales); solo cambia la representación. La descripción es la congelada, impresa como en la factura actual: «SERVICIO DE TRANSPORTE - ORIGEN A DESTINO - FECHA» (el «→» sale como «A»; «—» sigue significando «desconocido»).
+
+**Qué es demo y qué no**: franja superior «DEMO — DOCUMENTO NO FISCAL», marca de agua «DEMO - NO FISCAL» y pie con la leyenda + «Página i de n» + fecha de generación (Guatemala) en **todas** las páginas. Todo lo que en la factura real viene de la certificación (SERIE, NO., NÚMERO DE AUTORIZACIÓN, CERTIFICADOR, NIT del certificador y el recuadro del QR) dice **«PENDIENTE FEL»**: no se simula ningún dato. El «tipo de documento» de la factura real (factura cambiaria u otro) **no está definido** en la plataforma; el demo solo dice «FACTURA DEMO».
+
+**Varias páginas**: cada página repite marco, encabezado, cliente, encabezado de la tabla, recuadro FEL y pie; el total en letras, la leyenda, las observaciones y el TOTAL aparecen solo en la **última** (las demás dicen «Continúa en la página n de N»).
+
+**Librería reutilizada**: PDFKit, igual que el resto del proyecto (no hay un segundo sistema de PDF). Se reutiliza el patrón de ruta de `tms/gastos/[id]/pdf`, el logo vía `empresa.logoUrl` + `absPathFromRelative` (ahora obligatorio, ver arriba), `formatearMonto` y `ahoraLocal/formatearTimestampVisible`. El marco se dibuja con primitivas de PDFKit (la tabla ya no usa `dibujarTablaEnDoc`, porque el formato real no es una tabla con cuadrícula). Código: `src/lib/facturacion/factura-demo-pdf.ts`; total en letras: `src/lib/facturacion/numero-letras.ts` (determinista, sin servicios externos: «UN MIL DOSCIENTOS TREINTA Y NUEVE CON 44/100»).
+
+**Datos**: lo **congelado** (`obtenerFactura`): cliente (nombre/NIT/dirección del snapshot), viaje (código, descripción) y por línea `precio_incluye_iva`, `porcentaje_iva`, base, IVA y total. Nunca se reconstruye con datos vivos. El IVA es **por línea** tal como se congeló (incluido, agregado o mixto); no se recalcula globalmente. Suma de bases = subtotal, suma de IVA = IVA de la factura y suma de totales = total de la factura (centavos).
+
+**Casos que NO generan PDF (409, sin inventar importes)**: factura Anulada; sin viajes; factura anterior al desglose de IVA por línea (sin snapshot); línea con base + IVA ≠ total; totales del encabezado ≠ suma de líneas.
+
+**Campos del formato real: qué existe y qué no** (discovery)
+
+| Campo | ¿Existe en la plataforma? | En el PDF demo |
+|---|---|---|
+| Razón social, NIT, dirección del emisor | Sí, `fact_empresa_perfil` (`razon_social_factura`, `nit_emisor`, `direccion_fiscal`, `nombre_comercial`) | se usan; si faltan, «pendiente de definir» (la razón social cae al nombre de la empresa) |
+| Logo | Sí, `empresas.logo_url` (ruta relativa a `uploads`) | **obligatorio**: se valida y, si falta o no es legible, 409 sin PDF |
+| **Teléfono del emisor** | **No** (`empresas` no lo tiene y el cuestionario no lo pregunta; `telefono_cxc` es del contacto de cobro del cliente) | «Teléfono: pendiente de definir» |
+| Cliente: nombre, NIT, dirección | Sí, snapshot congelado en la factura | se usan |
+| **Código de cliente** | Sí, `clientes.codigo` (opcional, **no congelado**) | se lee con filtro de `empresa_id`; sin código, «Pendiente de definir». Es el único dato vivo que se lee |
+| **Condiciones** | **No en la factura.** Existen `dias_credito` (perfil del cliente) y `credito_default_dias` (perfil de la empresa), pero son datos vivos y la regla «contado / crédito N días» no está definida | «Pendiente de definir» |
+| **No. interno / correlativo interno** | Sí: `numero_factura` (Emitida) o el id del borrador | «BORRADOR #id (sin número)» o el número de la factura |
+| **Leyenda tributaria** (p. ej. «sujeto a pagos trimestrales») | **No** (el cuestionario solo tiene «régimen», sin texto de leyenda) | «Leyenda tributaria: pendiente de definir» |
+| **Observaciones** | Sí, `fact_facturas.observaciones` | se imprimen; sin texto, «—» (si es muy larga se recorta con «…» dentro de su recuadro) |
+| Serie, número, autorización, certificador, NIT del certificador, QR | No (FEL no está integrado) | «PENDIENTE FEL» |
+
+**Para una fase posterior (sin SQL todavía)**: teléfono del emisor; `condiciones` (y su snapshot) en la factura; texto de leyenda tributaria por empresa/régimen; congelar también el código de cliente; tipo de documento (factura / factura cambiaria); y las reglas de FEL.
+
+**Muestra**: `docs/ejemplos/FACTURA-DEMO-EJEMPLO.pdf` (datos sintéticos, factura mixta de tres viajes, con el logo sintético `docs/ejemplos/logo-demo-empresa.png`: no es la marca de ninguna empresa).
+
+**Verificación**: pruebas unitarias del generador, del total en letras y de la ruta (tabla Código/Descripción/Total, Base e IVA ausentes, total en letras, espacios FEL sin datos simulados, marca NO FISCAL, factura mixta con cálculos internos intactos, varias líneas, observaciones, datos faltantes, multipágina con encabezado y pie en cada página, multiempresa, solo lectura, **logo obligatorio**: válido PNG/JPG, ausente, inexistente, ilegible o no soportado → 409, el logo de una empresa nunca aparece en la factura de otra y se dibuja con `fit`); pruebas opt-in contra MariaDB real (lo congelado no cambia si cambian cliente/ruta/tarifa vivos, multiempresa 404, Emitida, Anulada/legacy 409, código de cliente filtrado por empresa, solo lectura); en el navegador (dev, datos sintéticos) se comprobó que el enlace aparece en el borrador y que el endpoint responde `application/pdf`, `Cache-Control: private, no-store`, y 400/404 para id inválido, inexistente o empresa distinta (comprobación hecha antes de que el logo fuera obligatorio). El **aspecto visual** se revisó sobre renders del PDF de muestra (una y cuatro páginas) comparados con la factura de referencia.
+
+## 18. FACT-3 — una factura anulada conserva su detalle histórico y sus viajes se liberan
+
+**Problema confirmado en producción**: al anular, `anularFactura` ponía la factura en `Anulada` y **borraba** sus filas de `fact_factura_viajes`. Eso liberaba los viajes (correcto) pero la factura anulada quedaba «Sin viajes» y su PDF era imposible: se perdía la trazabilidad del documento anulado.
+
+**Por qué se borraban**: `fact_factura_viajes` tiene `UNIQUE(plan_id)` (la garantía de base de datos contra doble facturación: un viaje en a lo sumo UNA fila). Dejar la fila de una factura anulada impediría volver a facturar ese viaje. Además, todo el sistema asume que «hay fila» = «viaje facturado activamente»: `listarViajesPendientes`, los KPI, las notificaciones y el reporte de viajes TMS (`LEFT JOIN … ON plan_id` 1:1) usan `NOT EXISTS`/`LEFT JOIN` sobre esa tabla, y las limpiezas administrativas la vacían por factura.
+
+**Alternativas evaluadas**
+| | Idea | Veredicto |
+|---|---|---|
+| B | Marcar la fila como inactiva (`activo`) y cambiar `UNIQUE(plan_id)` por una clave compatible (p. ej. `UNIQUE(plan_id, vinculo)` con `vinculo = 0` si activa y `factura_id` si anulada) | Funciona en MariaDB, pero **cada lector** debería filtrar `activo = 1` (viajes pendientes, KPI, notificaciones, reporte TMS —un `LEFT JOIN` 1:1 que duplicaría filas—, limpiezas): un solo olvido duplica viajes o importes. Requiere además `ALTER` sobre una tabla en uso. Descartada. |
+| C | Quitar el `UNIQUE` y validar solo en la aplicación | Descartada: pierde la defensa de base de datos. |
+| **A** | **Tabla histórica aparte; al anular se COPIA la línea y se borra la activa, en la misma transacción** | **Elegida.** |
+
+**Diseño (A)**: nueva tabla `fact_factura_viajes_anuladas` (solo líneas de facturas anuladas) con la misma fotografía fiscal que la línea activa (código, fecha, ruta, origen, destino, descripción, cantidad, `precio_incluye_iva`, `porcentaje_iva`, base, IVA, total, monto asignado) más `linea_creada_en`, `anulada_en` y `anulada_por`.
+- `fact_factura_viajes` sigue conteniendo **solo vínculos activos** y `UNIQUE(plan_id)` **no se toca** (ni la tabla): por eso la defensa anti doble facturación y todos sus lectores quedan exactamente igual. No hay ningún `ALTER` sobre tablas existentes.
+- En la nueva tabla **no hay `UNIQUE(plan_id)` a propósito** (un viaje puede figurar en el histórico de varias facturas anuladas y activo en otra). Sí `UNIQUE(factura_id, plan_id)`: una factura no puede copiar dos veces el mismo viaje (defensa ante reintentos).
+- FKs: `factura_id → fact_facturas ON DELETE CASCADE` (si se limpia la factura se va su histórico) y `plan_id → tms_planes_viaje ON DELETE SET NULL` (el histórico **no bloquea** borrar un viaje; su fotografía basta para mostrar el documento).
+
+**Flujo de anular** (`anularFactura`, una transacción **READ COMMITTED**): bloquea la factura `FOR UPDATE` → rechaza si ya está Anulada o tiene pagos → `UPDATE` a Anulada → **copia** las líneas (`INSERT … SELECT`) → **borra** las activas → verifica que lo copiado = lo borrado (si no, deshace todo) → auditoría («N línea(s) conservadas en el histórico»). Las líneas anteriores a FACT-2 sin código/fecha congelados toman esos dos datos del viaje en ese momento (lo mismo que mostraba la pantalla); nada más se infiere. Si la tabla no existe (código desplegado antes de la migración), **no se anula** y responde 503: nunca se borra sin copiar.
+
+**Concurrencia**: la fila de la factura (`FOR UPDATE`) serializa anular / editar / emitir / pagar. Doble anulación → una sola copia y un 409. Anular mientras otra sesión toma el mismo viaje → el vínculo se libera atómicamente y la otra factura o lo toma después o recibe un 409 «ya vinculado». **Hallazgo de la prueba real**: con el aislamiento por defecto (REPEATABLE READ) el `INSERT … SELECT` toma bloqueos compartidos sobre el viaje y **sí se interbloquea** con otra factura que lo esté tomando (reproducido 3 de 3 veces contra MariaDB real); por eso la anulación usa READ COMMITTED, igual que crear/editar. Un conflicto residual (deadlock/timeout) se devuelve como 409, nunca 500.
+
+**Lectura**: `obtenerFactura` de una factura **Anulada** lee SIEMPRE su histórico (solo la fotografía; sin unir datos vivos del viaje) y devuelve además `anulacion { fecha, usuario }` tomado de la auditoría (`anular_factura`). Borrador/Emitida siguen leyendo los vínculos activos. El detalle de otra empresa no es alcanzable: la factura se busca por `empresa_id` antes de leer líneas.
+
+**Inmutabilidad**: una Anulada no se puede editar (solo Borrador), emitir (solo Borrador), recibir pagos (solo Emitida) ni anular otra vez; no hay ninguna otra vía de escritura sobre sus líneas.
+
+**PDF**: «Ver PDF demo» ahora también existe para una Anulada, desde su histórico (nunca datos vivos), con la marca **ANULADA** muy visible (franja roja superior «ANULADA — DEMO — DOCUMENTO NO FISCAL», «FACTURA DEMO — ANULADA», marca de agua grande «ANULADA» y pie) además de la leyenda NO FISCAL. Conserva su número y fecha de emisión si los tenía; si no, muestra la fecha de anulación. Se valida igual (totales = suma de líneas) y exige logo.
+
+**Datos existentes — fuera de alcance**: las facturas anuladas **antes** de este cambio ya perdieron sus líneas. No se reconstruyen ni se infieren desde datos vivos: siguen «sin detalle», la UI lo dice y su PDF responde 409 con ese motivo. Una recuperación (p. ej. desde la auditoría o respaldos) sería **otra fase**, con su propia revisión.
+
+**SQL (propuesta, NO ejecutada en producción)**: `sql/preflight-2026-10-fact-3-anuladas-historico.sql` (solo lectura) y `sql/migrate-2026-10-fact-3-anuladas-historico.sql` (`CREATE TABLE IF NOT EXISTS`: aditiva e idempotente; sin `ALTER`, sin tocar filas). **Debe aplicarse ANTES de desplegar el código.**
+
+**Limpiezas administrativas**: no requieren cambios: borrar `fact_facturas` arrastra su histórico (`CASCADE`) y borrar `tms_planes_viaje` no se bloquea (`SET NULL`). Sus conteos de vista previa no incluyen la tabla nueva (pendiente menor, no funcional).
+
+**Verificación**: pruebas unitarias (orden copiar→borrar, tabla ausente → 503 sin cambios, inconsistencia → rollback, lectura del histórico, multiempresa) y contra **MariaDB real** (preflight, migración e idempotencia; borrador con varios viajes → anular → detalle completo; viajes de vuelta en pendientes; reutilizados en otra factura con la anulada intacta aunque cambien cliente/ruta/tarifa vivos; editar/emitir/pagar/anular de nuevo → 409; `UNIQUE(plan_id)` por aplicación y por SQL directo; multiempresa; doble anulación y anular-vs-facturar-vs-editar en rondas, sin deadlock; FKs; PDF de la anulada con sus líneas y la marca ANULADA; anulada previa → 409).
+
+
+## 19. FACT-4 — líneas de factura agrupables, condición de pago, banco y retención de IVA (preconfiguración contable)
+
+> **Estado: IMPLEMENTADO + VERIFICADO TÉCNICAMENTE (compilación, ESLint de lo tocado, pruebas unitarias y contra MariaDB real desechable). NO probado por Contabilidad, NO aprobado para producción.** Esta fase **no** integra FEL/INFILE, **no** genera asientos ni pólizas, **no** toca saldos y **no** ejecuta SQL en producción. La migración es una **propuesta** para revisión.
+
+### 19.1 Referencia funcional y grado de certeza (regla del proyecto: Milenium es la referencia; Mónaco y KT son entidades parametrizables de un mismo motor)
+
+| Regla | Referencia en Milenium (ver `FACTURACION-CONTABILIDAD-MILENIUM-DISCOVERY.md`) | Estado | Qué se implementó |
+|---|---|---|---|
+| La factura **no tiene viajes**: tiene líneas de servicio con descripción libre; la agrupación es del facturador | `f06/f07`, §C | CONFIRMADO | Líneas editables/agrupables; **sin** regla automática de agrupación |
+| Descarga: línea aparte **o** integrada en la descripción del flete (decide el facturador) | §C.1 | CONFIRMADO | Botón «+ Descarga» (opcional); nace con precio 0 y exige capturarlo |
+| `valor = cantidad × precio unitario` | §C, oct-2026 | CONFIRMADO | El servidor recalcula `valor = ROUND(cant × precio, 2)` |
+| Crédito/contado es **independiente** del documento FEL (mismo documento para ambos) | `f06.CREDIT`, `DIASCR` | CONFIRMADO | `condicion_pago` CREDITO\|CONTADO en la factura |
+| Venta a crédito → **D Clientes**; al contado → **D Bancos** (cuenta según el banco que recibe) | §K | CONFIRMADO (Contabilidad) | Solo se **congela** la decisión y el banco; **no** se asienta |
+| Póliza automática **después** de certificar FEL | §K | CONFIRMADO (Contabilidad) | **Sin implementar** (depende de FEL) |
+| Ventas distingue **SERVICIOS / BIENES** | — | CONFIRMADO (Contabilidad) | `clasificacion` SERVICIO\|BIEN por línea (sin cuentas en código) |
+| Facturas y notas de crédito afectan IVA; recibos no | — | CONFIRMADO (Contabilidad) | Fuera de alcance de esta fase |
+| Retención de IVA por cliente: **15 % o 30 %**, configurable, visible al preparar la factura, se registra al inicio y la constancia se verifica después | documento `E` / `RETIVA` (cc05), 87 % = 15 % | CONFIRMADO (Contabilidad) | `retencion_iva_pct` 0\|15\|30 por cliente; precarga; congelada en la factura |
+| Asiento con retención (Q3,000 IVA incl., 15 %): **D Retención IVA 48.21 + D Cliente/Banco 2,951.79 / H Ventas 2,678.57 + H IVA por pagar 321.43** | co03 | CONFIRMADO (Contabilidad) | `poliza-venta.ts`: propuesta **pura** (no escribe); cuadra al centavo |
+| La retención **no** reduce Ventas ni IVA por pagar | — | CONFIRMADO (Contabilidad) | Va al DEBE en su propio rol `RETENCION_IVA` |
+| ISR retenido por clientes | Milenium no lo calcula en ventas | **PENDIENTE CONTABILIDAD** | **No implementado** |
+| Anulación de factura certificada y contabilizada → reverso contable automático | — | CONFIRMADO (Contabilidad) | Solo **diseño** (§19.8); no implementado |
+| Cuentas de ventas/IVA/clientes/bancos/retención por entidad | parametrización por serie/cuenta | CONFIRMADO (regla) | **Ningún número de cuenta en código**: roles resueltos por parametrización (a construir) |
+
+### 19.2 Modelo de datos (aditivo; ver `sql/migrate-2026-10-fact-4-lineas-contado-retencion.sql`)
+
+- **`fact_factura_lineas`** (nueva): una fila por línea de la factura: `orden`, `cantidad`, `descripcion`, `precio_unitario`, `valor`, `clasificacion`, `precio_incluye_iva`, `porcentaje_iva`, `base_monto`, `iva_monto`, `total_linea`. `UNIQUE(factura_id, orden)`, FK `factura_id` → `fact_facturas` **CASCADE**.
+- **`fact_factura_linea_viajes`** (nueva): **trazabilidad línea → viaje** (`linea_id`, `plan_id`, `codigo_viaje_snapshot`). `UNIQUE(linea_id, plan_id)`; **no** hay `UNIQUE(plan_id)` (un viaje puede estar en flete **y** descarga). FK `plan_id` → `tms_planes_viaje` **SET NULL**: el código congelado basta y borrar un viaje nunca bloquea.
+- **`fact_facturas`** (columnas nuevas): `entidad_id` (FK compuesta a `cont_entidades(empresa_id,id)`), `modelo_lineas`, `condicion_pago`, `cuenta_bancaria_id` (**FK compuesta** `(empresa_id, entidad_id, cuenta_bancaria_id)` → `cont_cuentas_bancarias(empresa_id, entidad_id, id)`: la base impide que una factura apunte a un banco de otra empresa o de otra entidad, incluso por SQL directo o por un bug futuro; en CRÉDITO la columna es `NULL` y la FK —`MATCH SIMPLE`— no se evalúa; un `CHECK` impide un banco sin entidad, caso en que la FK tampoco se evaluaría), `cuenta_bancaria_snapshot` (JSON congelado), `retencion_iva_pct`, `retencion_iva_cliente_pct` (qué tenía el cliente al preparar la factura → auditoría de cambios) y `retencion_iva_monto` (**congelado**: `ROUND(IVA × %, 2)`).
+- **`cont_cuentas_bancarias`** (nueva): catálogo de bancos por empresa/entidad; la cuenta contable es una FK compuesta `(empresa_id, entidad_id, cuenta_id)` → `cont_cuentas`, de modo que **una cuenta de otra entidad no se puede colgar de un banco** (probado contra la base). Sin números de cuenta en el código.
+- **`fact_entidad_config`** (nueva): `plantilla_factura` por entidad (`CODIGO_DESCRIPCION_TOTAL` = formato KT/Milenium; `CANTIDAD_DESCRIPCION_UNITARIO_VALOR` = formato Mónaco). Sin fila → la plantilla por defecto.
+- **`fact_cliente_perfil.retencion_iva_pct`**: columna tipada (0\|15\|30), **no** dentro del JSON del cuestionario (para validarla y consultarla).
+
+**`fact_factura_viajes` NO cambia** y su `UNIQUE(plan_id)` sigue siendo la defensa de base de datos contra doble facturación. En el modelo de líneas las columnas fiscales por viaje quedan en `NULL` (los totales viven en las líneas: no hay doble verdad). Al anular, `fact_factura_viajes` se vacía como en FACT-3 (viajes libres) pero **las líneas y su tabla puente sobreviven** (no participan de `UNIQUE(plan_id)`).
+
+### 19.3 Compatibilidad y despliegue
+
+- **LECTURAS** (listado, detalle, PDF demo): las facturas anteriores a FACT-4 se leen igual (`lineas` implícitas por viaje, `modeloLineas=false`, retención 0) y **degradan con gracia** si la migración aún no está aplicada (`esquemaPendiente=true`).
+- **ESCRITURAS (crear / editar / vista previa) — SIN FALLBACK SILENCIOSO**: desde esta fase **exigen** líneas y condición de pago (y entidad emisora). Si la migración FACT-4 **no** está aplicada, el servidor responde **503** (`Falta aplicar la migración FACT-4…`) **antes** de leer o escribir nada —con payload FACT-4 **y** con el payload del modelo anterior—; con la migración aplicada, un payload del modelo anterior (sin líneas/condición) es **400**. Nunca se guarda una factura con el modelo viejo, que perdería líneas agrupadas, condición de pago, entidad, banco, clasificación y retención. La pantalla, ante `fact4Disponible=false` (o si no pudo leer el contexto), **no ofrece ningún formulario**: muestra el bloqueo («falta aplicar la migración FACT-4… No se guardó nada») y, si fue un error de lectura, «Reintentar». El formulario anterior (un viaje = una línea) ya no es alcanzable desde la interfaz. Los llamadores internos de la capa `facturas.ts` (pruebas anteriores) conservan el modelo anterior; el **único** borde HTTP es el que aplica esta regla.
+- **Orden requerido**: preflight → respaldo → migración (idempotente; sin `UPDATE`/`DELETE`; sin tocar filas) → desplegar el código. Desplegar el código **antes** de la migración es seguro (no se corrompe nada) pero **bloquea crear/editar facturas** hasta aplicarla.
+- La migración **no** inserta bancos ni plantillas: Contabilidad los da de alta (hay plantillas de `INSERT` comentadas). Mientras no haya bancos, **CONTADO no se puede guardar** (la pantalla lo explica).
+
+### 19.4 Interfaz — «Preparar líneas de factura»
+
+Viajes seleccionados → **líneas** → factura. Columnas siempre visibles: **Cantidad | Descripción | Precio unitario | Valor**, más Tipo (Servicio/Bien), tratamiento de IVA y los **viajes de origen** (código). Acciones: marcar varias líneas → **Agrupar en una línea** (exige mismo IVA y misma clasificación; mismo precio → suma cantidades, distinto → cantidad 1 y precio = suma), **Desagrupar**, **+ Descarga**, reordenar ↑↓, quitar línea, quitar/agregar viaje. Aviso si algún viaje quedó **sin línea** (no se puede guardar). Selector de **entidad emisora** (si hay más de una), **Condición de pago** CRÉDITO/CONTADO y, al contado, **cuenta bancaria** (solo las activas, de la entidad y la moneda de la factura). **Retención de IVA** 0/15/30 precargada del cliente y visible; **solo se cambia con el permiso «Editar requisitos de clientes»** (el mismo que edita el requisito en el cliente; no se creó otro permiso). La vista previa muestra líneas, totales, retención (informativa) y «a cobrar». **No hay ninguna acción FEL ni contable.**
+
+La retención del cliente se edita en **Facturación → Clientes** (selector junto al cuestionario; solo se envía si cambió).
+
+### 19.5 Seguridad y multiempresa
+
+Montos, valores, IVA y retención **siempre se recalculan en el servidor**; entidad, banco y cliente se validan **por `empresa_id`** (un banco/entidad de otra empresa, inactivo, de otra moneda o de otra entidad se rechaza con 400 sin escribir). La retención solo puede diferir de la del cliente con permiso (403 si no). Reenviar la retención ya congelada de un borrador no requiere el permiso **solo si el cliente de la factura sigue siendo el mismo y el borrador ya estaba en el modelo de líneas**: si se cambia de cliente, la retención se compara contra la configuración del cliente **nuevo** (cualquier valor distinto exige «Editar requisitos de clientes»; sin override se usa la del cliente nuevo); un borrador anterior a FACT-4 no tiene retención «congelada» (su 0 es el valor por defecto) y tampoco da la excepción. El contexto (`GET …/facturas/contexto`) no expone números de cuenta contable.
+
+### 19.6 Parametrización por entidad (qué es dato y qué es código)
+
+Es **dato** (por entidad): plantilla de factura, bancos y su cuenta contable, y —cuando se construya— cuentas de Clientes/IVA por pagar/Ventas servicios/Ventas bienes/Retención IVA/Anticipos/Tránsito, series FEL, tipos y numeración de póliza, políticas de crédito. Es **código** (común): líneas, cálculo de IVA, retención, validaciones y la propuesta de partida por **roles** (`CLIENTES`, `BANCOS`, `RETENCION_IVA`, `VENTAS_SERVICIOS`, `VENTAS_BIENES`, `IVA_POR_PAGAR`). Nada del motor pregunta «¿es Mónaco?».
+
+### 19.7 Retención de IVA — fórmula implementada
+
+`base = total/1.12` (suma de las bases por línea) · `iva = total − base` · `retención = ROUND(iva × %, 2)` (0, 15 o 30) · `cliente|banco = total − retención`. DEBE = HABER = total. Q3,000 IVA incluido al 15 % → 48.21 / 2,951.79 / 2,678.57 / 321.43; al 30 % → 96.43 / 2,903.57. Probado en unitarias y contra la base real (valor congelado aunque el cliente cambie después).
+
+### 19.8 Anulación — diseño del reverso (NO implementado)
+
+Cuando exista la póliza (después de FEL), anular una factura **certificada y contabilizada** debe generar **un solo reverso exacto**: mismas cuentas y montos del asiento original con DEBE/HABER invertidos, fecha del documento de anulación, y vínculo al original. **Idempotencia**: el asiento llevará una **referencia de origen única** `(empresa_id, entidad_id, origen_tipo='FACTURA', origen_id, evento)` con `evento ∈ {EMISION, REVERSO_ANULACION}` bajo `UNIQUE`, de modo que reintentos (red, doble clic, reproceso) no dupliquen; el reverso se arma **desde el asiento guardado**, nunca recalculando con datos vivos (por eso hoy se congelan líneas, retención y banco). Una factura sin póliza (aún no certificada) se anula como hoy, sin reverso. La anulación actual de FACT-3 **no cambia** en esta fase.
+
+### 19.9 No incluido / pendientes
+
+FEL/INFILE reales; pólizas y asientos reales; ISR retenido por clientes; nota de crédito contable; cierres; libro de IVA; **UI para administrar bancos y plantillas por entidad** (hoy alta manual); logo y datos del emisor por **entidad** (hoy por empresa); días de crédito y complemento de factura cambiaria en el PDF de Mónaco (su plantilla ya tiene las 4 columnas, pero la adenda completa no); liquidación mensual del IVA retenido contra IVA por pagar.
+
+### 19.10 Preguntas abiertas (para Contabilidad / negocio)
+
+1. **Acceso a entidades**: ¿qué facturadores pueden emitir por Mónaco y cuáles por KT? Hoy cualquiera con «crear factura» ve todas las entidades **activas** de la empresa (`cont_entidad_usuarios` existe pero no se aplicó aquí).
+2. **Días de crédito**: ¿por cliente, por factura o por entidad? (no se congelan todavía).
+3. **Base de la retención**: se implementó sobre el **IVA total de la factura** (ejemplo confirmado). ¿Hay topes/mínimos (p. ej. por monto) o bienes vs. servicios con distinto tratamiento?
+4. **Clasificación por defecto**: hoy toda línea nace SERVICIO y el facturador cambia a BIEN. ¿Debe derivarse de algo (tipo de servicio/artículo)?
+5. **Código de artículo en KT** (formato «Código/Descripción/Total»): la plantilla usa los códigos de los viajes de la línea; ¿es lo correcto para KT?
+6. **Quién administra** bancos y plantillas por entidad (pantalla propia vs. alta asistida).
+7. **Logo y datos fiscales del emisor** por entidad (hoy por empresa).
+8. **Retención con constancia**: ¿se registra el cobro de la retención contra la factura (documento tipo `E` de Milenium) en una fase posterior, y quién verifica la constancia?
+
+### 19.11 Verificación (qué se verificó y qué no)
+
+- **Compilación**: `npx tsc --noEmit` limpio. **Lint**: sin errores nuevos en lo tocado (los 3 `react-hooks/set-state-in-effect` de `facturacion-client.tsx` son preexistentes). `git diff --check` limpio.
+- **Unitarias**: líneas (22), partida de venta (10), entrada HTTP/retención/permiso (15), ruta de contexto, PUT del cliente (retención 0/15/30 y permiso), más las suites existentes.
+- **MariaDB real desechable (opt-in, `FACT_TEST_DB_PORT`)**: preflight, migración e idempotencia; datos anteriores intactos; 3 viajes → 1 línea + descarga con trazabilidad y `UNIQUE(plan_id)` vigente (también por SQL directo); **migración ausente** → `fact4Disponible=false`, el borde HTTP real responde 503 con payload FACT-4 y con el anterior y no hay mutación parcial (el borrador previo queda igual); tras migrar, 400 al payload anterior; entidad obligatoria en CRÉDITO y CONTADO; **FK compuesta banco↔entidad↔empresa** (rechaza banco de otra entidad/empresa, acepta el correcto y el crédito sin banco, UPDATE cruzado, DELETE del banco referenciado) y mutación detectada; **cambio de cliente A→B con retención congelada** (403 sin permiso y cero mutaciones; con permiso 15 aplicado / 30 configurado; sin override 30); clasificación SERVICIO/BIEN congelada; puente línea↔viaje y PDF de la anulada; validaciones; contado/crédito/banco (otra empresa, inactivo, otra entidad, otra moneda); snapshot del banco congelado; retención 15/30 % con el ejemplo confirmado; editar (reemplaza líneas, rechaza payload anterior); anular conserva líneas; PDF por plantilla de entidad; multiempresa; y una **mutación** (quitar el filtro de empresa/activo del banco) que la suite detecta.
+- **No verificado**: prueba manual en navegador con datos reales, contra la base de producción, ni validación por Contabilidad de las reglas marcadas arriba.

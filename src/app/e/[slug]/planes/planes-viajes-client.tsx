@@ -6,7 +6,12 @@ import Link from "next/link";
 import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
-import { puedeCerrarManualmente, puedeCerrarNormalmente } from "@/lib/tms/cierre-viaje-shared";
+import {
+  MENSAJE_CONFIRMAR_REPORTE_PRIMERO,
+  puedeCerrarManualmente,
+  puedeCerrarNormalmente,
+  reporteRecibidoDeLiquidacion,
+} from "@/lib/tms/cierre-viaje-shared";
 import type { ResultadoCierreMasivo } from "@/lib/tms/cierre-masivo";
 import type { AgrupacionPlanes } from "@/lib/tms/planes-periodo";
 import {
@@ -18,11 +23,23 @@ import {
   resumenSeleccion,
   type GrupoPlanes,
 } from "./planes-agrupacion";
+import {
+  accionesLiquidacionFila,
+  badgeLiquidacion,
+  claseFilaLiquidacion,
+  type AdvertenciaReporte,
+  type ResumenLiquidacionFila,
+} from "@/lib/tms/liquidacion-viaje-shared";
+import type { EventoLiquidacionViaje } from "@/lib/tms/liquidacion-viaje";
+import { HistorialLiquidacion, ModalLiquidarViaje, ModalReabrirLiquidacion } from "@/components/tms/liquidacion-viaje-modales";
+import { ResumenLiquidacionViajeCard } from "@/components/tms/resumen-liquidacion-viaje";
 import { formatearFechaHora12, formatearHora12 } from "@/lib/tms/hora-formato";
 import { ETIQUETA_TC, etiquetaOrigenTc } from "@/lib/tms/tc-viaje-shared";
 import { resumenRegreso } from "@/lib/tms/regreso-viaje";
 import { textoPilotos } from "@/lib/tms/piloto-extra-comun";
 import { PilotosCelda } from "@/components/tms/pilotos-celda";
+import { AYUDA_VEHICULO_SOLICITADO, ETIQUETA_VEHICULO_SOLICITADO, textoUnidadUtilizada, textoVehiculoSolicitado } from "@/lib/tms/vehiculo-solicitado";
+import { TablaConBarraHorizontal } from "@/components/tms/tabla-con-barra-horizontal";
 
 /**
  * OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link a un plan puntual.
@@ -64,6 +81,14 @@ export function esExpedienteHistorico(estado: string): boolean {
 export type ModoPlanesViajes = "operativo" | "reporte";
 
 /**
+ * PLANES-SEPARAR-CERRADOS — modo operativo separa los viajes en dos pestañas en vez de mezclarlos en una sola
+ * tabla: "Pendientes / Activos" (estado <> 'Cerrado', reutiliza `soloSinCerrar` ya existente en el backend) y
+ * "Viajes cerrados" (estado = 'Cerrado', reutiliza `soloCerrados`). Es SOLO un filtro — nunca una tabla nueva,
+ * nunca mueve datos. Modo reporte NO usa esto (conserva sus 3 checkboxes de filtro de siempre).
+ */
+export type VistaPlanes = "ACTIVOS" | "CERRADOS";
+
+/**
  * Qué acciones expone cada fila de la tabla según el modo. Función pura
  * (mismo criterio que el resto del repo: la lógica se prueba sin
  * renderizar el componente). En modo "reporte" nunca aparece una acción
@@ -72,19 +97,33 @@ export type ModoPlanesViajes = "operativo" | "reporte";
  */
 export function accionesViaje(
   modo: ModoPlanesViajes,
-  p: { estado: string; pendienteCierre: boolean },
+  p: { estado: string; pendienteCierre: boolean; tarifaComercial: number | null; liquidacion?: { estado: string; version?: number; reporteRecibido?: boolean } | null },
   puedeCerrarViaje: boolean,
-): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean } {
+): { verDetalle: boolean; pdf: boolean; irProgramacion: boolean; cerrar: boolean; cierreManual: boolean; faltaTarifa: boolean; faltaReporte: boolean } {
   const consulta = modo === "reporte";
   const historico = esExpedienteHistorico(p.estado);
+  // PLANES-TARIFA-CIERRE-1 — `!== null`, NUNCA `> 0`: Q0.00 capturado explícitamente SÍ cuenta como tarifa.
+  const tieneTarifa = p.tarifaComercial != null;
+  // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
+  // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
+  // REQUISITO DE SECUENCIA: solo con REPORTE_RECIBIDO (sin fila de liquidación = reporte no recibido). El servidor REVALIDA.
+  const reporteRecibido = reporteRecibidoDeLiquidacion(p.liquidacion);
+  const cerrar = !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre, tieneTarifa, reporteRecibido);
+  const cierreManual = !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado, tieneTarifa, reporteRecibido);
+  // Sin tarifa, pero el estado SÍ admitiría algún cierre si la tuviera — distingue "falta tarifa" de
+  // "el estado no lo permite" (nunca se muestra el aviso para un viaje que de todos modos no podría cerrarse).
+  const podriaConTarifa = puedeCerrarNormalmente(p.estado, p.pendienteCierre, true, true) || puedeCerrarManualmente(p.estado, true, true);
+  // Elegible por estado/llegada/tarifa pero SIN reporte recibido: se muestra «Cerrar viaje» DESHABILITADO con su motivo.
+  const faltaReporte = !consulta && puedeCerrarViaje && !reporteRecibido && tieneTarifa
+    && (puedeCerrarNormalmente(p.estado, p.pendienteCierre, true, true) || puedeCerrarManualmente(p.estado, true, true));
   return {
     verDetalle: true,
     pdf: true,
     irProgramacion: !consulta && !historico,
-    // TMS-CIERRE-MASIVO-1: misma regla que cerrarViaje() en el backend (Descargado, o En ruta/Cargado con llegada).
-    // `pendienteCierre` por sí solo también incluye Programado con llegada, que el backend rechaza.
-    cerrar: !consulta && puedeCerrarViaje && puedeCerrarNormalmente(p.estado, p.pendienteCierre),
-    cierreManual: !consulta && puedeCerrarViaje && puedeCerrarManualmente(p.estado),
+    cerrar,
+    cierreManual,
+    faltaTarifa: !consulta && puedeCerrarViaje && !tieneTarifa && podriaConTarifa,
+    faltaReporte,
   };
 }
 
@@ -123,6 +162,11 @@ type PlanReporte = {
   horaCarga: string | null;
   estado: string;
   pendienteCierre: boolean;
+  /** Liquidación VIGENTE (Fase 2), dimensión separada de `estado`. Ausente/null = sin liquidación registrada. */
+  liquidacion?: ResumenLiquidacionFila | null;
+  /** FASE 5 — cargos adicionales vigentes y subtotal comercial (tarifa + cargos, ANTES de impuestos; sin costos internos). */
+  cargosAdicionales?: { cantidad: number; total: string };
+  subtotalComercial?: string | null;
   cerradoPor: string | null;
   cerradoEn: string | null;
   clienteId: number | null;
@@ -150,6 +194,8 @@ type PlanReporte = {
   tcPlaca?: string | null;
   tcOrigen?: "INTERNO" | "EXTERNO" | null;
   tcVehiculoId?: number | null;
+  /** PROGRAMACION-VEHICULO-SOLICITADO — lo que el cliente solicitó (snapshot); null en históricos ("—"). */
+  vehiculoSolicitado?: string | null;
   pilotoId: number | null;
   piloto: string | null;
   /** Piloto extra (si tiene): se muestra junto al principal. */
@@ -202,7 +248,7 @@ type Kpi = {
 
 type ClienteCat = { id: number; nombre: string };
 type UnidadCat = { id: number; placa: string };
-type PersonalCat = { id: number; nombre: string; tipo: string };
+type PersonalCat = { id: number; nombre: string };
 
 type EvidenciaTms = {
   id: number;
@@ -253,6 +299,9 @@ type ResultadoMasivoUI = Pick<ResultadoCierreMasivo, "tipo" | "solicitados" | "c
 };
 
 const ESTADOS = ["Programado", "Cargado", "En ruta", "Descargado", "Cerrado", "Cancelado"];
+
+/** Columnas fijadas a la izquierda en escritorio (ver `.tabla-planes` en globals.css). Solo estas cuatro; el resto se desplaza. */
+const CLASE_COLUMNA_FIJA: Record<string, string> = { "Sel.": "col-fija col-sel", "Código": "col-fija col-codigo", "Fecha": "col-fija col-fecha", "Cliente": "col-fija col-cliente" };
 
 function moneda(v: number | null): string {
   if (v == null) return "Pendiente";
@@ -386,11 +435,16 @@ export function resumenCierre(p: PlanReporte): {
   kmLlegada: string;
   evidencias: number;
   tarifa: string;
+  /** PROGRAMACION-VEHICULO-SOLICITADO — informativo: una diferencia con la unidad usada es válida y NO bloquea el cierre. */
+  vehiculoSolicitado: string;
+  unidadUtilizada: string;
 } {
   return {
     codigo: p.codigo,
     cliente: p.cliente ?? "—",
     placa: p.placa ?? "—",
+    vehiculoSolicitado: textoVehiculoSolicitado(p.vehiculoSolicitado),
+    unidadUtilizada: textoUnidadUtilizada(p.placa, p.unidadCapacidad),
     piloto: textoPilotos(p.piloto, p.pilotoExtra) || "—",
     // OPERACIONES-HORA-12H-1 (Grupo C) — hora REAL de salida/llegada en
     // formato 12h con AM/PM; regresoEstimado/cerradoEn (fuera de este
@@ -409,6 +463,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const searchParams = useSearchParams();
   const { permisos } = useEmpresaSession();
   const puedeCerrarViaje = tienePermiso(permisos, "viajes_cerrar", "editar");
+  // LIQUIDACIÓN (Fase 2): permiso propio y SEPARADO del cierre; la confirmación del reporte no cierra ni liquida.
+  const puedeConfirmarReporte = tienePermiso(permisos, "viajes_confirmar_reporte", "editar");
+  // Fase 3: liquidar y reabrir son permisos propios, separados entre sí y de confirmar reporte y de cerrar.
+  const puedeLiquidar = tienePermiso(permisos, "viajes_liquidar", "editar");
+  const puedeReabrirLiquidacion = tienePermiso(permisos, "viajes_reabrir_liquidacion", "editar");
   const esReporte = modo === "reporte";
 
   // OPERACIONES-UX-PLANES-SIMPLIFICADO-1 — deep-link desde Programación
@@ -439,20 +498,24 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   const [fEstadoFacturacion, setFEstadoFacturacion] = useState("");
   const [fEstadoCobro, setFEstadoCobro] = useState("");
   const [soloPendientes, setSoloPendientes] = useState(false);
+  // PLANES-SEPARAR-CERRADOS — en modo operativo la pestaña por defecto es "Pendientes / Activos"
+  // (soloSinCerrar=true desde el inicio); en modo reporte se conservan los filtros de siempre (nada activo,
+  // "Todos" por defecto, como antes de este ticket).
   const [soloCerrados, setSoloCerrados] = useState(false);
-  const [soloSinCerrar, setSoloSinCerrar] = useState(false);
+  const [soloSinCerrar, setSoloSinCerrar] = useState(modo === "operativo");
+  const [vista, setVista] = useState<VistaPlanes>("ACTIVOS");
 
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [unidadesCat, setUnidadesCat] = useState<UnidadCat[]>([]);
   const [pilotosCat, setPilotosCat] = useState<PersonalCat[]>([]);
 
   useEffect(() => {
-    fetch(`/api/empresas/${slug}/tms/catalogos`)
+    fetch(`/api/empresas/${slug}/tms/planes/catalogos`)
       .then((r) => r.json())
       .then((data) => {
         setClientesCat((data.clientes ?? []) as ClienteCat[]);
         setUnidadesCat((data.unidades ?? []) as UnidadCat[]);
-        setPilotosCat(((data.personal ?? []) as PersonalCat[]).filter((p) => p.tipo === "Piloto"));
+        setPilotosCat((data.pilotos ?? []) as PersonalCat[]);
       })
       .catch(() => undefined);
   }, [slug]);
@@ -504,6 +567,39 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   /** Para exportar: SIN page/pageSize — el exportador siempre trae todo el filtro. */
   const exportQueryString = useCallback(() => filtrosQueryString().toString(), [filtrosQueryString]);
 
+  // PLANES / VIAJES — «Exportar Excel»: el servidor exporta TODO el filtro actual (incluida la pestaña Pendientes/Activos o Cerrados), no solo la página
+  // visible. Se descarga con fetch para mostrar aquí los errores (sin permiso, demasiados viajes sin acotar) en vez de abrir un JSON en otra pestaña.
+  const [exportando, setExportando] = useState(false);
+  const [errorExportar, setErrorExportar] = useState("");
+  const exportarExcel = useCallback(async () => {
+    setExportando(true);
+    setErrorExportar("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/reportes/viajes/export?formato=xlsx&vista=planes&${filtrosQueryString().toString()}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorExportar(data.error ?? "No se pudo exportar a Excel.");
+        return;
+      }
+      const blob = await res.blob();
+      const nombre = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "")?.[1] ?? "planes-viajes.xlsx";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nombre;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorExportar("Error de conexión al exportar.");
+    } finally {
+      setExportando(false);
+    }
+  }, [filtrosQueryString, slug]);
+
+  // Selección de viajes (checkbox). Declarada ANTES de `cargar`, que la limpia en cada carga.
+  const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const cargar = useCallback(async (paginaSolicitada = page) => {
     setLoading(true);
     setError("");
@@ -554,12 +650,51 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     setBuscarTick((t) => t + 1); // nuevo filtro: siempre vuelve a la primera página
   }
 
+  /**
+   * PLANES-SEPARAR-CERRADOS — filtros de estado que corresponden a cada pestaña (solo modo operativo; reutiliza
+   * `soloCerrados`/`soloSinCerrar`, ya existentes en el backend — nunca un filtro nuevo). CERRADOS fuerza
+   * `soloPendientes=false` (no tiene sentido combinarlo con "solo cerrados") y fija el select Estado en
+   * "Cerrado" (disabled, ver JSX); ACTIVOS nunca ofrece "Cerrado" como opción y limpia el Estado si venía de la
+   * pestaña de cerrados (evitaría la combinación imposible `estado='Cerrado' AND estado<>'Cerrado'`).
+   */
+  function aplicarFiltrosDeVista(v: VistaPlanes) {
+    if (v === "CERRADOS") {
+      setSoloCerrados(true);
+      setSoloSinCerrar(false);
+      setSoloPendientes(false);
+      setFEstado("Cerrado");
+    } else {
+      setSoloSinCerrar(true);
+      setSoloCerrados(false);
+      setFEstado((prev) => (prev === "Cerrado" ? "" : prev));
+    }
+  }
+
+  /** Cambiar de pestaña: aplica sus filtros, sale de cualquier deep-link, limpia selección de cierre masivo, vuelve a la página 1. */
+  function irAVista(nuevaVista: VistaPlanes) {
+    setVista(nuevaVista);
+    aplicarFiltrosDeVista(nuevaVista);
+    setPlanFocoId(null);
+    setBannerCierre(false);
+    setSeleccion(new Set());
+    setBuscarTick((t) => t + 1);
+  }
+
   function limpiarFiltros() {
     setFDesde(primerDiaMes);
     setFHasta(hoy);
-    setFCliente(""); setFPiloto(""); setFUnidad(""); setFEstado(""); setFRuta("");
+    setFCliente(""); setFPiloto(""); setFUnidad(""); setFRuta("");
     setFEstadoFacturacion(""); setFEstadoCobro("");
-    setSoloPendientes(false); setSoloCerrados(false); setSoloSinCerrar(false);
+    setSoloPendientes(false);
+    if (modo === "operativo") {
+      // Nunca deja soloSinCerrar/soloCerrados en false/false: eso mezclaría de nuevo activos y cerrados en la
+      // misma pestaña — "Limpiar filtros" reaplica los de la pestaña ACTUAL, no los apaga.
+      aplicarFiltrosDeVista(vista);
+    } else {
+      setFEstado("");
+      setSoloCerrados(false);
+      setSoloSinCerrar(false);
+    }
     setPlanFocoId(null);
     setBannerCierre(false);
     setBuscarTick((t) => t + 1);
@@ -603,7 +738,6 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
   // "Cerrar seleccionados"/"Cierre manual masivo" se CONSERVA sin cambios: solo cierra lo marcado con checkbox
   // EN ESTA PÁGINA — es un concepto separado de "Cerrar elegibles del período" (más abajo), que ignora la
   // selección y resuelve TODO el período server-side (ver PLANES-CIERRE-PERIODO).
-  const [seleccion, setSeleccion] = useState<Set<number>>(new Set());
   const [togglesGrupo, setTogglesGrupo] = useState<Record<string, boolean>>({});
   const [masivo, setMasivo] = useState<{ tipo: "NORMAL" | "MANUAL"; clave: string } | null>(null);
   const [motivoMasivo, setMotivoMasivo] = useState("");
@@ -618,6 +752,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     // Cambiar de Día/Semana/Mes cambia por completo las claves de grupo — una selección vieja podría quedar
     // referida a un grupo que ya no existe con ese formato; se limpia por seguridad (mismo criterio que ya
     // aplica cargar() al cambiar cualquier otro filtro operativo).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSeleccion(new Set());
   }, [modoAgrupacion]);
 
@@ -674,9 +809,75 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     }
   }
 
+  // LIQUIDACIÓN (Fase 2) — «Confirmar reporte recibido». Las advertencias (sin salida/llegada del piloto) NO bloquean: el servidor
+  // responde 409 ADVERTENCIAS sin escribir y se vuelve a enviar reconociéndolas.
+  const [reportePlan, setReportePlan] = useState<{ planId: number; codigo: string } | null>(null);
+  const [reporteObs, setReporteObs] = useState("");
+  const [reporteAdvertencias, setReporteAdvertencias] = useState<AdvertenciaReporte[]>([]);
+  const [reporteError, setReporteError] = useState("");
+  const [enviandoReporte, setEnviandoReporte] = useState(false);
+
+  // LIQUIDACIÓN (Fase 3) — liquidar/reabrir (modales con resumen/motivo) e historial append-only en el detalle del viaje.
+  const [modalLiquidar, setModalLiquidar] = useState<{ planId: number; codigo: string } | null>(null);
+  const [modalReabrir, setModalReabrir] = useState<{ planId: number; codigo: string } | null>(null);
+  const [historialLiquidacion, setHistorialLiquidacion] = useState<Record<number, EventoLiquidacionViaje[]>>({});
+
+  async function cargarHistorialLiquidacion(planId: number) {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${planId}/liquidacion`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setHistorialLiquidacion((h) => ({ ...h, [planId]: (data.eventos ?? []) as EventoLiquidacionViaje[] }));
+    } catch {
+      /* el historial es informativo: un fallo no bloquea el detalle */
+    }
+  }
+
+  async function liquidacionActualizada(planId: number) {
+    setModalLiquidar(null);
+    setModalReabrir(null);
+    await cargar();
+    if (expandido === planId) void cargarHistorialLiquidacion(planId);
+  }
+
+  function abrirConfirmarReporte(p: { id: number; codigo: string }) {
+    setReportePlan({ planId: p.id, codigo: p.codigo });
+    setReporteObs("");
+    setReporteAdvertencias([]);
+    setReporteError("");
+  }
+
+  async function confirmarReporte(reconocerAdvertencias: boolean) {
+    if (!reportePlan || enviandoReporte) return;
+    setEnviandoReporte(true);
+    setReporteError("");
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/planes/${reportePlan.planId}/reporte-recibido`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ observacion: reporteObs.trim() || undefined, reconocerAdvertencias }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.codigo === "ADVERTENCIAS" && Array.isArray(data.advertencias)) {
+        setReporteAdvertencias(data.advertencias as AdvertenciaReporte[]);
+        return;
+      }
+      if (!res.ok) {
+        setReporteError(data.error ?? "No se pudo confirmar el reporte.");
+        return;
+      }
+      setReportePlan(null);
+      await cargar();
+    } catch {
+      setReporteError("Error de conexión.");
+    } finally {
+      setEnviandoReporte(false);
+    }
+  }
+
   async function abrirDetalle(planId: number) {
     if (expandido === planId) { setExpandido(null); setConfirmandoCierre(null); return; }
     setExpandido(planId);
+    void cargarHistorialLiquidacion(planId);
     if (!evidenciasPorPlan[planId] || !bitacoraPorPlan[planId]) {
       setCargandoDetalle(true);
       try {
@@ -723,7 +924,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
     }
   }
 
-  const mostrarSel = !esReporte && puedeCerrarViaje;
+  // PLANES-SEPARAR-CERRADOS — en la pestaña "Viajes cerrados" NUNCA se muestran selección/cierre masivo/cierre
+  // por período (ya están cerrados) — plegar `vista === "ACTIVOS"` aquí basta para ocultar TODO lo derivado:
+  // columna de checkbox, botones "Seleccionar elegibles"/"Cerrar seleccionados"/"Cierre manual masivo" y las
+  // acciones de período (puedeAccionPeriodo, más abajo).
+  const mostrarSel = !esReporte && puedeCerrarViaje && vista === "ACTIVOS";
 
   // Agrupación visual por Día/Semana/Mes SOLO en modo operativo (el reporte conserva la tabla plana).
   const grupos = useMemo(() => (esReporte ? [] : agruparPlanes(planes, modoAgrupacion)), [esReporte, planes, modoAgrupacion]);
@@ -899,9 +1104,11 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
   const columnas = [
     ...(mostrarSel ? ["Sel."] : []),
-    "Código", "Fecha", "Cliente", "Ruta", "Placa", "Piloto", "Auxiliares",
+    "Código", "Fecha", "Cliente", "Ruta", ETIQUETA_VEHICULO_SOLICITADO, "Placa / Unidad", "Piloto", "Auxiliares",
     "H. salida", "H. llegada", "Km salida", "Km llegada", "Km rec.",
-    "Evid.", "Tarifa usada", "Tarifa", "Estado",
+    "Evid.", "Tarifa usada", "Tarifa", "Cargos", "Subtotal com.", "Estado",
+    // LIQUIDACIÓN (Fase 2): dimensión separada del estado del viaje; «—» = sin liquidación registrada (incluye el histórico).
+    "Liquidación",
     // Fase D — Facturación (FACT-1). "Tarifa" (arriba) sigue siendo el
     // valor comercial PROGRAMADO — "Monto fact." es el snapshot real
     // usado en la factura; no siempre coinciden (ver th title).
@@ -971,9 +1178,23 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             </select>
           </label>
           <label className="text-xs text-[var(--muted)]">Estado
-            <select className={`${inputCls} mt-0.5 block`} value={fEstado} onChange={(e) => setFEstado(e.target.value)}>
-              <option value="">Todos</option>
-              {ESTADOS.map((e) => <option key={e} value={e}>{e}</option>)}
+            {/* PLANES-SEPARAR-CERRADOS — en ACTIVOS (operativo) "Cerrado" no se ofrece (combinación imposible
+                con soloSinCerrar); en CERRADOS queda fijo en "Cerrado" y deshabilitado (la pestaña ya lo fija).
+                Modo reporte: sin cambios, todas las opciones de siempre. */}
+            <select
+              className={`${inputCls} mt-0.5 block`}
+              value={fEstado}
+              onChange={(e) => setFEstado(e.target.value)}
+              disabled={!esReporte && vista === "CERRADOS"}
+            >
+              {!esReporte && vista === "CERRADOS" ? (
+                <option value="Cerrado">Cerrado</option>
+              ) : (
+                <>
+                  <option value="">Todos</option>
+                  {(esReporte ? ESTADOS : ESTADOS.filter((e) => e !== "Cerrado")).map((e) => <option key={e} value={e}>{e}</option>)}
+                </>
+              )}
             </select>
           </label>
           {/* PROGRAMACION-REPORTES-FILTROS-1 — texto libre: código de ruta o destino (ej. "Xela"). */}
@@ -1003,19 +1224,53 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" disabled={loading} onClick={() => void cargar(page)}>{loading ? "Actualizando…" : "Actualizar"}</button>
         </div>
         <div className="mt-2 flex flex-wrap gap-3 text-xs">
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloPendientes} onChange={(e) => { setSoloPendientes(e.target.checked); if (e.target.checked) { setSoloCerrados(false); setSoloSinCerrar(false); } }} />
-            Solo pendientes de cierre
-          </label>
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloCerrados} onChange={(e) => { setSoloCerrados(e.target.checked); if (e.target.checked) setSoloSinCerrar(false); }} />
-            Solo cerrados
-          </label>
-          <label className="flex items-center gap-1 text-[var(--text)]">
-            <input type="checkbox" checked={soloSinCerrar} onChange={(e) => { setSoloSinCerrar(e.target.checked); if (e.target.checked) setSoloCerrados(false); }} />
-            Solo sin cerrar
-          </label>
+          {/* PLANES-SEPARAR-CERRADOS — "Solo pendientes de cierre" vive en AMBOS modos, pero en operativo solo
+              tiene sentido dentro de la pestaña ACTIVOS (en CERRADOS no aplica: todo ya está Cerrado). */}
+          {esReporte || vista === "ACTIVOS" ? (
+            <label className="flex items-center gap-1 text-[var(--text)]">
+              <input
+                type="checkbox"
+                checked={soloPendientes}
+                onChange={(e) => {
+                  setSoloPendientes(e.target.checked);
+                  // Modo reporte: se conserva la exclusión mutua de siempre entre los 3 checkboxes. Modo
+                  // operativo: soloSinCerrar ya lo controla la pestaña, nunca lo toca este checkbox.
+                  if (esReporte && e.target.checked) { setSoloCerrados(false); setSoloSinCerrar(false); }
+                }}
+              />
+              Solo pendientes de cierre
+            </label>
+          ) : null}
+          {/* PLANES-SEPARAR-CERRADOS — "Solo cerrados"/"Solo sin cerrar" se QUITAN de la interfaz en modo
+              operativo (esa función ahora la cumplen las pestañas) pero se CONSERVAN en modo reporte, sin
+              cambios, para el análisis flexible que Reportes necesita. */}
+          {esReporte ? (
+            <>
+              <label className="flex items-center gap-1 text-[var(--text)]">
+                <input type="checkbox" checked={soloCerrados} onChange={(e) => { setSoloCerrados(e.target.checked); if (e.target.checked) setSoloSinCerrar(false); }} />
+                Solo cerrados
+              </label>
+              <label className="flex items-center gap-1 text-[var(--text)]">
+                <input type="checkbox" checked={soloSinCerrar} onChange={(e) => { setSoloSinCerrar(e.target.checked); if (e.target.checked) setSoloCerrados(false); }} />
+                Solo sin cerrar
+              </label>
+            </>
+          ) : null}
         </div>
+        {!esReporte ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="rounded bg-[#334155] px-3 py-1.5 text-xs text-white disabled:opacity-60"
+              disabled={exportando}
+              onClick={() => void exportarExcel()}
+              title="Exporta a Excel todos los viajes que coinciden con los filtros y la pestaña actuales (no solo la página visible)."
+            >
+              {exportando ? "Exportando…" : "Exportar Excel"}
+            </button>
+            {errorExportar ? <span role="alert" className="text-xs text-red-500">{errorExportar}</span> : null}
+          </div>
+        ) : null}
         {/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación solo en la vista
             de Reportes (Reportes = análisis + exportaciones). */}
         {esReporte ? (
@@ -1025,6 +1280,32 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
           </div>
         ) : null}
       </section>
+
+      {/* PLANES-SEPARAR-CERRADOS — pestañas principales, SOLO modo operativo (Reportes conserva su vista de
+          siempre). Es exclusivamente un filtro de estado (soloSinCerrar/soloCerrados, ya existentes en el
+          backend) — nunca una tabla nueva ni datos movidos. Default: "Pendientes / Activos". */}
+      {!esReporte ? (
+        <div className="inline-flex overflow-hidden rounded-lg border border-[var(--border)] text-sm" role="tablist" aria-label="Vista de viajes">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={vista === "ACTIVOS"}
+            className={`px-4 py-2 font-medium transition ${vista === "ACTIVOS" ? "bg-[var(--accent)] text-white" : "text-[var(--text)] hover:bg-[var(--input)]"}`}
+            onClick={() => irAVista("ACTIVOS")}
+          >
+            Pendientes / Activos
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={vista === "CERRADOS"}
+            className={`border-l border-[var(--border)] px-4 py-2 font-medium transition ${vista === "CERRADOS" ? "bg-[var(--accent)] text-white" : "text-[var(--text)] hover:bg-[var(--input)]"}`}
+            onClick={() => irAVista("CERRADOS")}
+          >
+            Viajes cerrados
+          </button>
+        </div>
+      ) : null}
 
       {/* KPI — OPERACIONES-UX-PLANES-REPORTES-1: los indicadores y el bloque
           de facturación viven en la vista de Reportes, no en la gestión
@@ -1065,6 +1346,69 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
 
       {error ? <p className="text-sm text-rose-500">{error}</p> : null}
 
+      {modalLiquidar ? (
+        <ModalLiquidarViaje
+          slug={slug}
+          planId={modalLiquidar.planId}
+          codigo={modalLiquidar.codigo}
+          onClose={() => setModalLiquidar(null)}
+          onDone={() => void liquidacionActualizada(modalLiquidar.planId)}
+        />
+      ) : null}
+      {modalReabrir ? (
+        <ModalReabrirLiquidacion
+          slug={slug}
+          planId={modalReabrir.planId}
+          codigo={modalReabrir.codigo}
+          onClose={() => setModalReabrir(null)}
+          onDone={() => void liquidacionActualizada(modalReabrir.planId)}
+        />
+      ) : null}
+
+      {reportePlan ? (
+        <div role="dialog" aria-modal="true" aria-label="Confirmar reporte recibido" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--text)]">
+            <h2 className="text-base font-semibold">Confirmar reporte recibido</h2>
+            <p>
+              Viaje <span className="font-mono">{reportePlan.codigo}</span>. Confirmas que el piloto entregó su reporte. El viaje quedará
+              «pendiente de liquidar»; esto <strong>no</strong> lo cierra ni lo liquida.
+            </p>
+            <label className="block text-xs text-[var(--muted)]">
+              Observación (opcional)
+              <textarea
+                className={`${inputCls} mt-1 block w-full`}
+                rows={2}
+                maxLength={400}
+                value={reporteObs}
+                onChange={(e) => setReporteObs(e.target.value)}
+                disabled={enviandoReporte}
+              />
+            </label>
+            {reporteAdvertencias.length ? (
+              <div role="alert" className="rounded border border-amber-700/60 bg-amber-950/20 px-2 py-1.5 text-xs text-amber-300">
+                <p className="font-medium">Advertencias (no bloquean):</p>
+                <ul className="list-disc pl-5">{reporteAdvertencias.map((a) => <li key={a.codigo}>{a.mensaje}</li>)}</ul>
+                <p className="mt-1">Si confirma, la advertencia quedará registrada junto con la confirmación.</p>
+              </div>
+            ) : null}
+            {reporteError ? <p className="text-xs text-rose-500">{reporteError}</p> : null}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs" disabled={enviandoReporte} onClick={() => setReportePlan(null)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                disabled={enviandoReporte}
+                onClick={() => void confirmarReporte(reporteAdvertencias.length > 0)}
+              >
+                {enviandoReporte ? "Confirmando…" : reporteAdvertencias.length ? "Confirmar reporte de todas formas" : "Confirmar reporte"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {resultadoMasivo ? (
         <section aria-label="Resultado del cierre masivo" className="space-y-1 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--text)]">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1101,12 +1445,19 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
         </div>
       ) : null}
 
+      {/* Leyenda de la columna Liquidación (Fase 2): el color nunca es el único portador de significado. */}
+      <p className="text-xs text-[var(--muted)]">
+        <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: "var(--fila-pendiente-liquidar)", border: "1px solid var(--border)" }} />
+        Fila amarilla = requiere una acción pendiente (sin reporte confirmado o en ajuste). Fondo normal = reporte recibido, liquidado o histórico cerrado/cancelado sin liquidación.
+        «—» = cerrado o cancelado sin liquidación registrada.
+      </p>
+
       {/* Tabla */}
-      <section className="overflow-x-auto rounded-xl border border-[var(--border)]">
-        <table className="min-w-[1400px] w-full text-left text-sm">
+      <TablaConBarraHorizontal className="rounded-xl border border-[var(--border)]">
+        <table className="tabla-planes min-w-[1400px] w-full text-left text-sm" data-sel={mostrarSel ? "1" : undefined}>
           <thead className="sticky top-0 z-10 bg-[var(--thead)] text-[var(--text)]">
             <tr>{columnas.map((c) => (
-              <th key={c} className="whitespace-nowrap px-2 py-2 text-xs font-semibold" title={c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
+              <th key={c} className={`whitespace-nowrap px-2 py-2 text-xs font-semibold ${CLASE_COLUMNA_FIJA[c] ?? ""}`} title={c === ETIQUETA_VEHICULO_SOLICITADO ? AYUDA_VEHICULO_SOLICITADO : c === "Placa / Unidad" ? "Unidad (placa) que realmente realiza el viaje; puede diferir del vehículo solicitado." : c === "Tarifa" ? "Valor comercial PROGRAMADO del viaje." : c === "Cargos" ? "Cargos adicionales vigentes al cliente." : c === "Subtotal com." ? "Subtotal comercial antes de impuestos: tarifa base + cargos adicionales vigentes. No es el total de la factura (IVA pendiente) ni incluye costos internos." : c === "Monto fact." ? "Snapshot real usado en la factura — no siempre coincide con la tarifa comercial." : undefined}>
                 {c}
               </th>
             ))}</tr>
@@ -1131,10 +1482,21 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                           {it.abierto ? "▼" : "▶"} {g.etiqueta}
                         </button>
                         {modoAgrupacion === "DIA" && g.clave === hoy ? <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-medium text-white">Hoy</span> : null}
-                        <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
-                        <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
-                        <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span>
-                        <span className="text-xs text-[var(--muted)]">{g.otros} otros</span>
+                        {/* PLANES-SEPARAR-CERRADOS — en la pestaña CERRADOS el grupo es 100% cerrados por
+                            filtro: un contador único y limpio en vez de repetir "0 pendientes de cierre · 0
+                            otros" sin sentido. En ACTIVOS se mantienen los contadores de siempre (ocultando
+                            "0 cerrados", que el filtro de la pestaña ya garantiza en 0). No se tocó el helper
+                            de conteos (agruparPlanes) — mismo GrupoPlanes de siempre, solo cambia qué se pinta. */}
+                        {!esReporte && vista === "CERRADOS" ? (
+                          <span className="text-xs text-emerald-500">{g.total} viaje(s) · {g.cerrados} cerrados</span>
+                        ) : (
+                          <>
+                            <span className="text-xs text-[var(--text)]">{g.total} viaje(s){parcial ? " en esta página" : ""}</span>
+                            <span className="text-xs text-amber-500">{g.cerrables} pendientes de cierre</span>
+                            {g.cerrados > 0 ? <span className="text-xs text-emerald-500">{g.cerrados} cerrados</span> : null}
+                            <span className="text-xs text-[var(--muted)]">{g.otros} otros</span>
+                          </>
+                        )}
                         {nota ? <span className="text-xs italic text-[var(--muted)]">{nota}</span> : null}
                       </div>
                       {mostrarSel && it.abierto ? (
@@ -1171,9 +1533,13 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
               const acc = accionesViaje(modo, p, puedeCerrarViaje);
               return (
                 <Fragment key={p.id}>
-                  <tr className="border-t border-[var(--border)] bg-[var(--card)] align-top">
+                  <tr
+                    className="fila-viaje border-t border-[var(--border)] align-top"
+                    data-liquidacion={claseFilaLiquidacion(p.liquidacion, p.estado)}
+                    data-seleccionada={seleccion.has(p.id) ? "true" : undefined}
+                  >
                     {mostrarSel ? (
-                      <td className="px-2 py-1.5 text-xs">
+                      <td className="col-fija col-sel px-2 py-1.5 text-xs">
                         <input
                           type="checkbox"
                           aria-label={`Seleccionar ${p.codigo}`}
@@ -1183,10 +1549,12 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                         />
                       </td>
                     ) : null}
-                    <td className="px-2 py-1.5 font-mono text-xs">{p.codigo}</td>
-                    <td className="whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
-                    <td className="px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
+                    <td className="col-fija col-codigo px-2 py-1.5 font-mono text-xs">{p.codigo}</td>
+                    <td className="col-fija col-fecha whitespace-nowrap px-2 py-1.5 text-xs">{p.fechaPlan}</td>
+                    <td className="col-fija col-cliente px-2 py-1.5 text-xs">{p.cliente ?? "—"}</td>
                     <td className="px-2 py-1.5 text-xs">{p.rutaCodigo ?? "—"}</td>
+                    {/* PROGRAMACION-VEHICULO-SOLICITADO — lo que pidió el cliente (fotografía guardada en el viaje); columna propia, distinta de la unidad real. */}
+                    <td className="px-2 py-1.5 text-xs" data-testid="celda-vehiculo-solicitado" title={AYUDA_VEHICULO_SOLICITADO}>{textoVehiculoSolicitado(p.vehiculoSolicitado)}</td>
                     <td className="px-2 py-1.5 text-xs">
                       {p.placa ?? "—"}
                       {p.tcPlaca ? (
@@ -1203,8 +1571,24 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <td className="px-2 py-1.5 text-xs">{p.evidencias}</td>
                     <td className="px-2 py-1.5 text-xs" title={p.tarifaMontoSnapshot != null ? `Monto de la tarifa al armar el viaje: ${moneda(p.tarifaMontoSnapshot)}` : undefined}>{p.tarifaNombre ?? "—"}</td>
                     <td className="whitespace-nowrap px-2 py-1.5 text-xs">{moneda(p.tarifaComercial)}</td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs" data-testid="celda-cargos">
+                      {p.cargosAdicionales && p.cargosAdicionales.cantidad > 0 ? moneda(Number(p.cargosAdicionales.total)) : "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-1.5 text-xs" data-testid="celda-subtotal-comercial">
+                      {p.subtotalComercial != null ? moneda(Number(p.subtotalComercial)) : "—"}
+                    </td>
                     <td className="px-2 py-1.5 text-xs">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${badge.clase}`}>{badge.texto}</span>
+                    </td>
+                    <td className="px-2 py-1.5 text-xs">
+                      {(() => {
+                        const bLiq = badgeLiquidacion(p.liquidacion, p.estado);
+                        return bLiq ? (
+                          <span title={bLiq.titulo} className={`rounded-full px-2 py-0.5 text-[10px] font-medium text-white ${bLiq.clase}`}>{bLiq.texto}</span>
+                        ) : (
+                          <span className="text-[var(--muted)]" title="Cerrado o cancelado sin liquidación registrada (histórico)">—</span>
+                        );
+                      })()}
                     </td>
                     {(() => {
                       const bFact = badgeFacturacion(p.estadoFacturacion);
@@ -1242,11 +1626,57 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             Cerrar viaje
                           </button>
                         ) : null}
+                        {acc.faltaReporte ? (
+                          <button
+                            type="button"
+                            disabled
+                            title={MENSAJE_CONFIRMAR_REPORTE_PRIMERO}
+                            aria-label={`Cerrar viaje deshabilitado: ${MENSAJE_CONFIRMAR_REPORTE_PRIMERO}`}
+                            className="cursor-not-allowed text-[var(--muted)] opacity-60"
+                            data-cierre-deshabilitado="reporte-no-recibido"
+                          >
+                            Cerrar viaje
+                          </button>
+                        ) : null}
                         {acc.cierreManual ? (
                           <button type="button" className="text-rose-500 hover:underline" onClick={() => abrirCierreManual(p.id)}>
                             Cierre manual
                           </button>
                         ) : null}
+                        {(() => {
+                          const accLiq = accionesLiquidacionFila({
+                            estadoPlan: p.estado,
+                            liquidacion: p.liquidacion,
+                            puedeConfirmarReporte,
+                            puedeLiquidar,
+                            puedeReabrir: puedeReabrirLiquidacion,
+                            soloConsulta: esReporte,
+                          });
+                          return (
+                            <>
+                              {accLiq.confirmarReporte ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => abrirConfirmarReporte(p)}>
+                                  Confirmar reporte
+                                </button>
+                              ) : null}
+                              {accLiq.liquidar ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => setModalLiquidar({ planId: p.id, codigo: p.codigo })}>
+                                  {accLiq.etiquetaLiquidar}
+                                </button>
+                              ) : null}
+                              {accLiq.reabrir ? (
+                                <button type="button" className="text-[var(--accion-reporte)] hover:underline" onClick={() => setModalReabrir({ planId: p.id, codigo: p.codigo })}>
+                                  Reabrir liquidación
+                                </button>
+                              ) : null}
+                              {accLiq.requiereCierre ? (
+                                <span className="text-[10px] text-[var(--muted)]" title="La liquidación se realiza con el viaje ya cerrado.">
+                                  Cerrar el viaje para liquidar
+                                </span>
+                              ) : null}
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                   </tr>
@@ -1254,6 +1684,16 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                     <tr className="border-t border-[var(--border)] bg-[var(--panel)]">
                       <td colSpan={columnas.length} className="px-3 py-3">
                         <div className="mb-3"><Stepper p={p} /></div>
+                        {historialLiquidacion[p.id]?.length ? (
+                          <div className="mb-3"><HistorialLiquidacion eventos={historialLiquidacion[p.id]} /></div>
+                        ) : null}
+                        <div className="mb-3">
+                          <ResumenLiquidacionViajeCard
+                            slug={slug}
+                            planId={p.id}
+                            version={`${p.estado}:${p.liquidacion?.estado ?? "-"}:${p.liquidacion?.version ?? 0}`}
+                          />
+                        </div>
                         <div className="grid gap-4 lg:grid-cols-3">
                           <div>
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">A. Datos generales</p>
@@ -1277,6 +1717,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                             <ul className="mt-1 space-y-0.5 text-xs text-[var(--text)]">
                               <li>{p.pilotoExtra ? "Pilotos" : "Piloto"}: {textoPilotos(p.piloto, p.pilotoExtra) || "—"}</li>
                               <li>Auxiliares: {p.auxiliares.join(", ") || "—"}</li>
+                              <li>{ETIQUETA_VEHICULO_SOLICITADO}: {textoVehiculoSolicitado(p.vehiculoSolicitado)}</li>
                               <li>Unidad: {p.placa ?? "—"}</li>
                               <li>Equipo asignado: {p.unidadTipo ? `${p.unidadTipo}${p.unidadCapacidad ? ` · ${p.unidadCapacidad}` : ""}` : "—"}</li>
                               <li>{ETIQUETA_TC}: {p.tcPlaca ?? "—"}</li>
@@ -1324,6 +1765,16 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                               <li>Cerrado por: {p.cerradoPor ?? "—"}</li>
                               <li>Cerrado en: {fh(p.cerradoEn)}</li>
                             </ul>
+                            {acc.faltaTarifa ? (
+                              <p className="mt-2 text-[11px] text-amber-500" title="Asigná una tarifa antes de cerrar este viaje.">
+                                Falta tarifa — asigná una tarifa antes de cerrar este viaje.
+                              </p>
+                            ) : null}
+                            {acc.faltaReporte ? (
+                              <p className="mt-2 text-[11px] text-amber-500" title={MENSAJE_CONFIRMAR_REPORTE_PRIMERO}>
+                                {MENSAJE_CONFIRMAR_REPORTE_PRIMERO}
+                              </p>
+                            ) : null}
                             {acc.cerrar ? (
                               confirmandoCierre === p.id ? (
                                 // CORRECCIÓN PR #112 (HALLAZGO 1): confirmación
@@ -1338,6 +1789,8 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
                                         <li>Código: {r.codigo}</li>
                                         <li>Cliente: {r.cliente}</li>
                                         <li>Placa: {r.placa}</li>
+                                        <li>{ETIQUETA_VEHICULO_SOLICITADO}: {r.vehiculoSolicitado}</li>
+                                        <li>Unidad utilizada: {r.unidadUtilizada}</li>
                                         <li>Piloto: {r.piloto}</li>
                                         <li>Hora salida: {r.horaSalida}</li>
                                         <li>Hora llegada: {r.horaLlegada}</li>
@@ -1477,7 +1930,7 @@ export default function PlanesViajesClient({ modo = "operativo" }: { modo?: Modo
             ) : null}
           </tbody>
         </table>
-      </section>
+      </TablaConBarraHorizontal>
 
       {/* CORRECCIÓN PR #112 (HALLAZGO 3): paginación server-side — el KPI
           de arriba SIEMPRE refleja todo el filtro, esta barra solo pagina

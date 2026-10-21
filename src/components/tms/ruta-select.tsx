@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
+import { enterEligeRuta } from "@/lib/tms/plan-form-cambios";
 
 export type RutaParadaOpt = {
   id: number;
@@ -156,9 +157,14 @@ export function RutaSelect({ slug, clienteId, value, inputClassName, onSeleccion
             setOpen(false);
             (e.target as HTMLInputElement).blur();
           }
-          if (e.key === "Enter" && open && opciones[0]) {
+          // PROGRAMACION-PERSISTENCIA — Enter solo elige si el usuario está BUSCANDO (escribió algo distinto de lo que
+          // ya muestra el campo). Antes, un Enter sobre el campo precargado con la ruta del viaje re-aplicaba la ruta
+          // maestra y pisaba hora/destino/paradas ya editados.
+          if (e.key === "Enter" && enterEligeRuta({ texto, valor: value, abierto: open, hayOpciones: opciones.length > 0 })) {
             e.preventDefault();
             elegir(opciones[0]);
+          } else if (e.key === "Enter" && open) {
+            e.preventDefault();
           }
         }}
         onBlur={() => {

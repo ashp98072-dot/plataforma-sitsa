@@ -352,3 +352,69 @@ describe("generarPdfGastoAutorizado — encabezado", () => {
     expect(spy.mock.calls.map((c) => llamadaTexto(c).texto)).toContain("EMPRESA REQUIRIENTE: SITSA");
   });
 });
+
+/**
+ * OBSERVACIONES en el PDF individual de Gasto — el MISMO campo que ya exporta el Excel. Vacío/null => sin bloque.
+ */
+describe("generarPdfGastoAutorizado — Observaciones", () => {
+  const OBS = "Factura a nombre de la empresa.\nPendiente de reintegro.";
+
+  async function generar(sobre: Partial<Record<string, unknown>> = {}) {
+    vi.mocked(obtenerGasto).mockResolvedValue(gasto(sobre) as never);
+    vi.mocked(query).mockResolvedValue([] as never);
+    const spy = espiarTexto();
+    const r = await generarPdfGastoAutorizado(7, 1, "SITSA");
+    expect(r.ok).toBe(true);
+    return { spy, textos: spy.mock.calls.map((c) => String(c[0])) };
+  }
+
+  it("dibuja OBSERVACIONES con el texto íntegro (saltos incluidos), después del TOTAL y antes de las firmas", async () => {
+    const { textos } = await generar({ observaciones: OBS });
+    const iTotal = textos.findIndex((t) => t.startsWith("TOTAL:"));
+    const iTitulo = textos.indexOf("OBSERVACIONES:");
+    expect(iTitulo).toBeGreaterThan(iTotal);
+    expect(textos[iTitulo + 1]).toBe(OBS);
+    expect(textos.indexOf("FIRMA DEL REQUIRIENTE")).toBeGreaterThan(iTitulo + 1);
+  });
+
+  it.each([null, "", "  "])("sin observaciones (%j) no dibuja bloque", async (valor) => {
+    const { textos } = await generar({ observaciones: valor });
+    expect(textos).not.toContain("OBSERVACIONES:");
+  });
+
+  it("el TOTAL no cambia con observaciones y el texto largo no se recorta", async () => {
+    const sin = (await generar({ observaciones: null })).textos.find((t) => t.startsWith("TOTAL:"));
+    vi.restoreAllMocks();
+    const largo = "Detalle ".repeat(37).trim().padEnd(300, "z").slice(0, 300);
+    const { textos } = await generar({ observaciones: largo });
+    expect(textos.find((t) => t.startsWith("TOTAL:"))).toBe(sin);
+    expect(textos).toContain(largo);
+  });
+
+  it("no parte el bloque entre páginas y conserva las 3 firmas con gastos de muchas líneas", async () => {
+    for (const n of [1, 9, 12, 13, 14, 18, 26]) {
+      vi.restoreAllMocks();
+      const lineas = Array.from({ length: n }, (_, i) => ({
+        id: i + 1, orden: i, categoria: "Combustible", descripcion: "Diesel", cantidad: 1, monto: 10,
+        fechaViaje: "2026-09-02", empleadoId: 4, empleadoNombre: "Heber Sitan", cargo: "Piloto", vehiculoId: 9, placa: "P111AAA",
+        clienteId: 5, clienteNombre: "Cliente A", planId: null, metodoPago: "Efectivo", numeroCuentaPago: "123",
+      }));
+      vi.mocked(obtenerGasto).mockResolvedValue(gasto({ observaciones: OBS, lineas }) as never);
+      vi.mocked(query).mockResolvedValue([] as never);
+      const spy = espiarTexto();
+      const paginas = vi.spyOn(PDFDocument.prototype, "addPage");
+      const r = await generarPdfGastoAutorizado(7, 1, "SITSA");
+      expect(r.ok).toBe(true);
+      const textos = spy.mock.calls.map((c) => String(c[0]));
+      const i = textos.indexOf("OBSERVACIONES:");
+      expect(i, `n=${n}`).toBeGreaterThan(-1);
+      expect(textos[i + 1], `n=${n}`).toBe(OBS);
+      const a = spy.mock.invocationCallOrder[i];
+      const b = spy.mock.invocationCallOrder[i + 1];
+      expect(paginas.mock.invocationCallOrder.some((o) => o > a && o < b), `n=${n}`).toBe(false);
+      for (const f of ["FIRMA DEL REQUIRIENTE", "FIRMA DEL SOLICITANTE", "FIRMA DEL AUTORIZANTE"]) {
+        expect(textos.filter((t) => t === f), `${f} n=${n}`).toHaveLength(1);
+      }
+    }
+  });
+});

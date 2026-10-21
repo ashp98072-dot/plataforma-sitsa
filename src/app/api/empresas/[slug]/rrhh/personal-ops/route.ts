@@ -8,6 +8,7 @@ import {
 } from "@/lib/permisos";
 import { modulosPorRol, type RolGlobal } from "@/lib/roles";
 import { requireTenant } from "@/lib/tenant";
+import { listarHabilitacionesActivasDe } from "@/lib/tms/personal-habilitaciones";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -107,6 +108,17 @@ export async function GET(req: Request, ctx: Ctx) {
       );
     }
 
+    // TMS-PROGRAMACION-HABILITACIONES-1 — aditivo: NO cambia el significado de id/codigo/nombre/puesto/
+    // categoriaOps/estado. Si la tabla de habilitaciones aún no existe en esta BD (migración pendiente),
+    // se degrada a "sin habilitaciones" sin romper el resto de la respuesta — mismo criterio defensivo que
+    // ya usa este endpoint para categoria_ops (ver catch de abajo).
+    let habilitacionesPorEmpleado: Awaited<ReturnType<typeof listarHabilitacionesActivasDe>> = new Map();
+    try {
+      habilitacionesPorEmpleado = await listarHabilitacionesActivasDe(guard.empresa.id, rows.map((r) => Number(r.id)));
+    } catch {
+      habilitacionesPorEmpleado = new Map();
+    }
+
     return NextResponse.json({
       personal: rows.map((r) => ({
         id: Number(r.id),
@@ -115,6 +127,7 @@ export async function GET(req: Request, ctx: Ctx) {
         puesto: r.puesto ? String(r.puesto) : "",
         categoriaOps: r.categoria_ops ? String(r.categoria_ops) : "",
         estado: String(r.estado),
+        habilitacionesOps: habilitacionesPorEmpleado.get(Number(r.id)) ?? [],
       })),
     });
   } catch {

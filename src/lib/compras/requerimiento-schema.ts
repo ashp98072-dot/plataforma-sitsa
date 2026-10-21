@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLAVE_ENVIO_REGEX } from "@/lib/idempotencia/clave-envio";
 
 export { METODOS_PAGO_COMPRAS } from "./metodos-pago";
 export const ESTADOS_COMPRAS = ["Pendiente", "Autorizada", "Rechazada"] as const;
@@ -38,7 +39,12 @@ function validarLineas(datos: { lineas: z.infer<typeof lineaCompraSchema>[] }, c
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", path: ["lineas"], message: "Hay IDs de líneas repetidos." });
   if (datos.lineas.reduce((sum, l) => sum + centavosCompra(l.total), 0) > 999999999999) ctx.addIssue({ code: "custom", path: ["lineas"], message: "El total del requerimiento supera DECIMAL(12,2)." });
 }
-export const crearRequerimientoSchema = z.object(cabecera).strict().superRefine((datos, ctx) => {
+export const crearRequerimientoSchema = z.object({
+  ...cabecera,
+  // Clave de envío (idempotencia): OPCIONAL en la primera ventana de despliegue (frontend anterior en caché); el formulario
+  // nuevo siempre la envía. Solo existe al CREAR: editar actúa sobre un id existente y no crea registros.
+  clave_idempotencia: z.string().regex(CLAVE_ENVIO_REGEX, "La clave de envío no es válida.").optional(),
+}).strict().superRefine((datos, ctx) => {
   validarLineas(datos, ctx);
   if (datos.lineas.some(l => l.id !== undefined)) ctx.addIssue({ code: "custom", path: ["lineas"], message: "Las líneas nuevas no pueden incluir ID." });
 });

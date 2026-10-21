@@ -62,6 +62,8 @@ export type EntradaCamposTocados = {
   referenciaCliente?: unknown;
   /** Tipo de traslado (dato comercial descriptivo). */
   tipoTraslado?: unknown;
+  /** PROGRAMACION-VEHICULO-SOLICITADO — dato comercial del viaje (mismas reglas por estado que tarifa/referencia). */
+  vehiculoSolicitadoPerfilId?: unknown;
 };
 
 export function camposTocados(d: EntradaCamposTocados): CamposTocados {
@@ -79,7 +81,8 @@ export function camposTocados(d: EntradaCamposTocados): CamposTocados {
       d.tarifaId !== undefined ||
       d.costoOperativoReferencia !== undefined ||
       d.referenciaCliente !== undefined ||
-      d.tipoTraslado !== undefined,
+      d.tipoTraslado !== undefined ||
+      d.vehiculoSolicitadoPerfilId !== undefined,
   };
 }
 

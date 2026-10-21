@@ -4,7 +4,6 @@ import { query } from "@/lib/db";
 import { requireTenantFlotaAny } from "@/lib/tenant";
 import { celdaPdf, tablaAExcel, tablaAPdf } from "@/lib/rrhh/export-files";
 import {
-  asegurarSchemaFlota,
   asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import {

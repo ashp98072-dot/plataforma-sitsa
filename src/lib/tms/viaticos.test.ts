@@ -996,6 +996,23 @@ describe("listarViaticosAutorizadosPorPeriodo — histórico por autorizado_en, 
     expect(items[0]).toMatchObject({ id: 10, estado: "AUTORIZADO", autorizadoEn: "2026-09-15 10:00:00" });
   });
 
+  it("16) VIATICOS-COMPROBANTE-ADMIN-1 — la consulta trae el snapshot histórico de destino (lugar_descarga_historico), nunca el catálogo vivo de lugares", async () => {
+    vi.mocked(query).mockResolvedValueOnce([] as never);
+    await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    const [sql] = vi.mocked(query).mock.calls[0];
+    expect(String(sql)).toContain("pl.lugar_descarga_historico AS lugar_descarga");
+  });
+
+  it("16) mapea lugar_descarga -> lugarDescarga; null -> null (nunca revienta)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ lugar_descarga: "Zona 12" })] as never);
+    const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items[0].lugarDescarga).toBe("Zona 12");
+
+    vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ lugar_descarga: null })] as never);
+    const items2 = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");
+    expect(items2[0].lugarDescarga).toBeNull();
+  });
+
   it("10) un viático AUTORIZADO en el período que luego pasó a ENTREGADO sigue apareciendo (estado actual no filtra)", async () => {
     vi.mocked(query).mockResolvedValueOnce([filaAutorizada({ estado: "ENTREGADO", entregado_por: "op2", entregado_en: "2026-09-20 09:00:00" })] as never);
     const items = await listarViaticosAutorizadosPorPeriodo(7, "2026-09-01 00:00:00", "2026-10-01 00:00:00");

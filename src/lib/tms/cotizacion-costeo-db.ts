@@ -1,9 +1,12 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import { D, decimalCosteoSql } from "./cotizacion-costeo-excel";
 import type { PoolConnection } from "mysql2/promise";
 import { query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { CAMPOS_EXCEL_PARAMETROS, CAMPOS_EXCEL_PERFIL, mapCamposExcel } from "./cotizacion-costeo-excel-campos";
 import {
   COTIZACION_COSTEO_MOTOR_VERSION,
+  esMotorCotizador2026,
   type ComponenteCosteo,
   type DepreciacionCosteo,
   type InputCosteoServicio,
@@ -30,16 +33,19 @@ export class ErrorCosteoConfig extends Error {
   }
 }
 
-export const MENSAJE_COSTEO_YA_REGISTRADO = "Esta cotización ya tiene un costeo registrado.";
-export class ErrorCosteoYaRegistrado extends Error {
+export const MENSAJE_COSTEO_VERSION_CONFLICTO = "No se pudo registrar el costeo porque otra operación modificó esta cotización al mismo tiempo. Intenta de nuevo.";
+/** La numeración de versiones se serializa bloqueando la cotización padre; este error solo aparece si, aun así, dos escrituras chocan en el índice único. */
+export class ErrorCosteoVersionConflicto extends Error {
   constructor() {
-    super(MENSAJE_COSTEO_YA_REGISTRADO);
-    this.name = "ErrorCosteoYaRegistrado";
+    super(MENSAJE_COSTEO_VERSION_CONFLICTO);
+    this.name = "ErrorCosteoVersionConflicto";
   }
 }
 
 const num = (v: unknown): number => Number(v);
 const numONull = (v: unknown): number | null => (v == null ? null : Number(v));
+/** TINYINT(1) nullable: NULL (o columna ausente en filas viejas) = sin configurar; 1 = true; 0 = false. */
+const boolONull = (v: unknown): boolean | null => (v == null ? null : Number(v) === 1);
 
 // ---------------------------------------------------------------------------
 // Perfiles
@@ -56,6 +62,9 @@ function mapDepreciacion(valorBase: unknown, anios: unknown, dias: unknown): Dep
 function mapPerfil(r: RowDataPacket): PerfilCosteoConId {
   return {
     id: num(r.id),
+    ...mapCamposExcel(r, CAMPOS_EXCEL_PERFIL),
+    auxiliarMultiplicaDias: boolONull(r.auxiliar_multiplica_dias),
+    viaticosHotelMultiplicaDias: boolONull(r.viaticos_hotel_multiplica_dias),
     codigo: String(r.codigo),
     nombre: String(r.nombre),
     costoAdquisicion: numONull(r.costo_adquisicion),
@@ -76,7 +85,8 @@ const SELECT_PERFIL = `
   SELECT id, codigo, nombre, costo_adquisicion, dias_operacion_mes, gps_mensual, seguro_vehiculo_mensual,
          costo_aceite_servicio, vida_util_aceite_km, costo_juego_llantas, vida_util_llantas_km, rendimiento_km_galon,
          deprec_valor_base, deprec_anios, deprec_dias_operacion_mes,
-         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes
+         refrig_valor_base, refrig_anios, refrig_dias_operacion_mes, viajes_mes, precio_llanta, cantidad_llantas, salario_piloto_mensual, salario_auxiliar_mensual, viaticos_hotel_viaje,
+         auxiliar_multiplica_dias, viaticos_hotel_multiplica_dias
   FROM tms_cotizacion_costeo_perfiles
 `;
 
@@ -107,7 +117,8 @@ export async function obtenerParametrosCosteoVigentes(empresaId: number, fecha: 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) throw new ErrorCosteoConfig("Fecha de emisión no válida para obtener los parámetros de costeo.");
   const rows = await query<RowDataPacket[]>(
     `SELECT DATE_FORMAT(vigente_desde, '%Y-%m-%d') AS vigente_desde, precio_combustible_galon, iva_tasa, costo_piloto_dia,
-            costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia, margen_objetivo
+            costo_auxiliar_dia, viatico_piloto_dia, viatico_auxiliar_dia, viatico_guia_dia, hotel_dia, margen_objetivo,
+            seguro_mercaderia_anual, cantidad_camiones, viajes_anuales, dias_depreciacion_mes, dias_gastos_mes, gastos_administracion, gastos_mantenimiento, gastos_seguridad, gastos_predios, dias_laborales_mes
      FROM tms_cotizacion_costeo_parametros
      WHERE empresa_id = ? AND vigente_desde <= ?
      ORDER BY vigente_desde DESC
@@ -117,6 +128,7 @@ export async function obtenerParametrosCosteoVigentes(empresaId: number, fecha: 
   const r = rows[0];
   if (!r) throw new ErrorCosteoConfig(MENSAJE_SIN_PARAMETROS);
   const parametros: ParametrosEconomicosCosteo = {
+    ...mapCamposExcel(r, CAMPOS_EXCEL_PARAMETROS),
     precioCombustibleGalon: num(r.precio_combustible_galon),
     ivaTasa: num(r.iva_tasa),
     costoPilotoDia: num(r.costo_piloto_dia),
@@ -152,7 +164,17 @@ export function inputParaSnapshot(input: InputCosteoServicio): InputSnapshotCost
 
 const TOLERANCIA_SUMA_COMPONENTES = 1e-4;
 
+/** Con `precision` (COSTEO_COTIZADOR_2026_V2) los componentes de CÁLCULO suman el costo base con la precisión del cálculo; los de presentación (2 decimales) pueden diferir en centavos, como en el libro. */
+const TOLERANCIA_SUMA_PRECISA = new D("1e-9");
+
 export function sumaComponentesCoincide(resultado: ResultadoCosteoServicio): boolean {
+  if (resultado.precision) {
+    const claves = resultado.componentes.map((c) => c.clave);
+    const p = resultado.precision.componentes;
+    if (claves.some((k) => p[k] == null) || Object.keys(p).length !== claves.length) return false;
+    const suma = claves.reduce((s, k) => s.plus(p[k]), new D(0));
+    return suma.minus(resultado.precision.costoOperativo).abs().lte(TOLERANCIA_SUMA_PRECISA);
+  }
   const suma = resultado.componentes.reduce((s, c) => s + c.monto, 0);
   return Math.abs(suma - resultado.costoOperativo) <= TOLERANCIA_SUMA_COMPONENTES;
 }
@@ -163,25 +185,42 @@ async function queryConn<T extends RowDataPacket[]>(conn: PoolConnection, sql: s
 }
 
 /**
- * Inserta el snapshot + sus componentes DENTRO de la transacción del
- * llamador (crearCotizacion/actualizarCotizacion): si algo falla, el
- * llamador revierte también la cotización. Cardinalidad 1:1 e inmutable: si
- * ya existe un snapshot NO se reemplaza (sin UPDATE ni DELETE+INSERT).
+ * Inserta una NUEVA VERSIÓN del costeo + sus componentes DENTRO de la transacción del llamador (crearCotizacion/actualizarCotizacion): si algo
+ * falla, el llamador revierte también la cotización. Cardinalidad 1:N e inmutable: cada guardado crea una versión nueva (MAX(version) + 1) y
+ * jamás hace UPDATE ni DELETE de una versión existente.
+ *
+ * Concurrencia: se bloquea la cotización padre (FOR UPDATE, tenant-safe) ANTES de leer MAX(version): dos usuarios que costean a la vez se
+ * serializan y no pueden obtener el mismo número. Selección: la primera versión (o cualquiera si, por datos antiguos, ninguna estuviera
+ * seleccionada) queda como la utilizada; una versión posterior NO reemplaza a la seleccionada: eso exige la acción explícita «Usar este costeo».
  */
 export async function guardarSnapshotCosteoTx(
   conn: PoolConnection,
   p: { empresaId: number; cotizacionId: number; cotizacionCodigo: string; usuario: string | null; costeo: CosteoPreparado },
 ): Promise<number> {
   const { perfil, input, resultado } = p.costeo;
+  // Los motores con Decimal (PR #406 y Cotizador 2026) persisten importes como texto decimal; V1 conserva su comportamiento.
+  const monetario = (v: number | null) => resultado.motorVersion === "COSTEO_EXCEL_2026" || esMotorCotizador2026(resultado.motorVersion) ? decimalCosteoSql(v) : v;
+  // COSTEO_COTIZADOR_2026_V2: las columnas DECIMAL(16,6) y los componentes guardan el valor de CÁLCULO (hasta 6 decimales, desde `precision`), no el redondeado a 2;
+  // el JSON resultado_snapshot conserva 12 decimales. Los demás motores guardan lo que siempre guardaron.
+  const exacto = resultado.precision;
+  const preciso = (texto: string | undefined, v: number | null) => (exacto && texto != null ? new D(texto).toFixed(6) : monetario(v));
   if (!sumaComponentesCoincide(resultado)) {
     throw new Error("Los componentes del costeo no coinciden con el costo operativo.");
   }
-  const existente = await queryConn<RowDataPacket[]>(
+  const padre = await queryConn<RowDataPacket[]>(
     conn,
-    "SELECT id FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? LIMIT 1 FOR UPDATE",
+    "SELECT id FROM tms_cotizaciones WHERE empresa_id = ? AND id = ? LIMIT 1 FOR UPDATE",
     [p.empresaId, p.cotizacionId],
   );
-  if (existente[0]) throw new ErrorCosteoYaRegistrado();
+  if (!padre[0]) throw new Error("Cotización no encontrada.");
+  const previo = await queryConn<RowDataPacket[]>(
+    conn,
+    `SELECT COALESCE(MAX(version), 0) AS max_version, COALESCE(MAX(es_seleccionado), 0) AS hay_seleccionado
+     FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? FOR UPDATE`,
+    [p.empresaId, p.cotizacionId],
+  );
+  const version = Number(previo[0]?.max_version ?? 0) + 1;
+  const seleccionado = Number(previo[0]?.hay_seleccionado ?? 0) === 0;
 
   const { id: _perfilId, ...perfilSnapshot } = perfil;
   void _perfilId;
@@ -191,19 +230,20 @@ export async function guardarSnapshotCosteoTx(
       `INSERT INTO tms_cotizacion_costeos
         (empresa_id, cotizacion_id, perfil_id, perfil_codigo, perfil_nombre, perfil_snapshot, parametros_snapshot, input_snapshot,
          motor_version, costo_operativo, iva, costo_con_iva, margen_objetivo, precio_sugerido, precio_venta, utilidad_estimada,
-         margen_real, creado_por)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         margen_real, creado_por, resultado_snapshot, version, es_seleccionado, seleccionado_por, seleccionado_en)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${seleccionado ? "NOW()" : "NULL"})`,
       [
         p.empresaId, p.cotizacionId, perfil.id, perfil.codigo, perfil.nombre,
         JSON.stringify(perfilSnapshot), JSON.stringify(input.parametros), JSON.stringify(inputParaSnapshot(input)),
-        COTIZACION_COSTEO_MOTOR_VERSION,
-        resultado.costoOperativo, resultado.iva, resultado.costoConIva, resultado.margenObjetivoAplicado, resultado.precioSugerido,
-        resultado.precioVenta, resultado.utilidadEstimada, resultado.margenReal, p.usuario,
+        resultado.motorVersion ?? COTIZACION_COSTEO_MOTOR_VERSION,
+        preciso(exacto?.costoOperativo, resultado.costoOperativo), preciso(exacto?.iva, resultado.iva), preciso(exacto?.costoConIva, resultado.costoConIva), monetario(resultado.margenObjetivoAplicado), preciso(exacto?.precioSugerido, resultado.precioSugerido),
+        monetario(resultado.precioVenta), monetario(resultado.utilidadEstimada), monetario(resultado.margenReal), p.usuario, JSON.stringify(resultado),
+        version, seleccionado ? 1 : 0, seleccionado ? p.usuario : null,
       ],
     );
     costeoId = Number(res.insertId);
   } catch (error) {
-    if ((error as { code?: string }).code === "ER_DUP_ENTRY") throw new ErrorCosteoYaRegistrado();
+    if ((error as { code?: string }).code === "ER_DUP_ENTRY") throw new ErrorCosteoVersionConflicto();
     throw error;
   }
 
@@ -213,7 +253,7 @@ export async function guardarSnapshotCosteoTx(
     await conn.execute<ResultSetHeader>(
       `INSERT INTO tms_cotizacion_costeo_componentes (empresa_id, costeo_id, orden, clave, concepto, monto)
        VALUES ${componentes.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
-      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, c.monto]),
+      componentes.flatMap((c, i) => [p.empresaId, costeoId, i + 1, c.clave, c.concepto, preciso(exacto?.componentes[c.clave], c.monto)]),
     );
   }
 
@@ -223,14 +263,21 @@ export async function guardarSnapshotCosteoTx(
     usuario: p.usuario,
     accion: "crear_costeo",
     modulo: "tms_cotizaciones",
-    detalle: `Costeo interno registrado para cotización ${p.cotizacionCodigo} con perfil ${perfil.codigo}.`,
+    detalle: `Costeo interno versión ${version} registrado para cotización ${p.cotizacionCodigo} con perfil ${perfil.codigo}.`,
   });
   return costeoId;
 }
 
 export type SnapshotCosteo = {
+  resultado?: ResultadoCosteoServicio | null;
   id: number;
   cotizacionId: number;
+  /** Número de versión dentro de la cotización (1, 2, 3...). */
+  version: number;
+  /** Versión «utilizada» de la cotización (a lo sumo una). */
+  esSeleccionado: boolean;
+  seleccionadoPor: string | null;
+  seleccionadoEn: string | null;
   perfilId: number | null;
   perfilCodigo: string;
   perfilNombre: string;
@@ -255,25 +302,21 @@ function json<T>(v: unknown): T {
   return (typeof v === "string" ? JSON.parse(v) : v) as T;
 }
 
-/** Tenant-safe: filtra por empresa_id en ambas tablas. `null` si la cotización no tiene costeo en esta empresa. */
-export async function obtenerSnapshotCosteo(empresaId: number, cotizacionId: number): Promise<SnapshotCosteo | null> {
-  const rows = await query<RowDataPacket[]>(
-    `SELECT id, cotizacion_id, perfil_id, perfil_codigo, perfil_nombre, perfil_snapshot, parametros_snapshot, input_snapshot,
-            motor_version, costo_operativo, iva, costo_con_iva, margen_objetivo, precio_sugerido, precio_venta,
-            utilidad_estimada, margen_real, creado_por, creado_en
-     FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? LIMIT 1`,
-    [empresaId, cotizacionId],
-  );
-  const r = rows[0];
-  if (!r) return null;
-  const comps = await query<RowDataPacket[]>(
-    "SELECT clave, concepto, monto FROM tms_cotizacion_costeo_componentes WHERE empresa_id = ? AND costeo_id = ? ORDER BY orden ASC",
-    [empresaId, r.id],
-  );
+const COLUMNAS_COSTEO = `id, cotizacion_id, version, es_seleccionado, seleccionado_por, seleccionado_en, perfil_id, perfil_codigo, perfil_nombre,
+            perfil_snapshot, parametros_snapshot, input_snapshot, motor_version, costo_operativo, iva, costo_con_iva, margen_objetivo,
+            precio_sugerido, precio_venta, utilidad_estimada, margen_real, creado_por, creado_en, resultado_snapshot`;
+
+/** Todo sale de lo PERSISTIDO en esa versión (perfil/parámetros/input/resultado snapshot): nunca de la configuración viva. */
+function mapCosteo(r: RowDataPacket, componentes: ComponenteCosteo[]): SnapshotCosteo {
   return {
     id: num(r.id),
     cotizacionId: num(r.cotizacion_id),
+    version: num(r.version),
+    esSeleccionado: Number(r.es_seleccionado) === 1,
+    seleccionadoPor: r.seleccionado_por != null ? String(r.seleccionado_por) : null,
+    seleccionadoEn: fechaHoraSql(r.seleccionado_en),
     perfilId: numONull(r.perfil_id),
+    resultado: r.resultado_snapshot == null ? null : json<ResultadoCosteoServicio>(r.resultado_snapshot),
     perfilCodigo: String(r.perfil_codigo),
     perfilNombre: String(r.perfil_nombre),
     perfil: json<PerfilCosteoUnidad>(r.perfil_snapshot),
@@ -289,7 +332,62 @@ export async function obtenerSnapshotCosteo(empresaId: number, cotizacionId: num
     utilidadEstimada: numONull(r.utilidad_estimada),
     margenReal: numONull(r.margen_real),
     creadoPor: r.creado_por != null ? String(r.creado_por) : null,
-    creadoEn: r.creado_en != null ? String(r.creado_en) : null,
-    componentes: comps.map((c) => ({ clave: String(c.clave), concepto: String(c.concepto), monto: num(c.monto) })),
+    creadoEn: fechaHoraSql(r.creado_en),
+    componentes,
   };
+}
+
+/** DATETIME → «YYYY-MM-DD HH:mm:ss» (hora local, igual que el pool). mysql2 puede entregar Date; String(Date) no es presentable. */
+function fechaHoraSql(v: unknown): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    const d = (n: number) => String(n).padStart(2, "0");
+    return `${v.getFullYear()}-${d(v.getMonth() + 1)}-${d(v.getDate())} ${d(v.getHours())}:${d(v.getMinutes())}:${d(v.getSeconds())}`;
+  }
+  return String(v);
+}
+
+const mapComponente = (c: RowDataPacket): ComponenteCosteo => ({ clave: String(c.clave), concepto: String(c.concepto), monto: num(c.monto) });
+
+/**
+ * Historial COMPLETO de costeos de una cotización, de la versión más reciente a la más antigua (ORDER BY version DESC). Tenant-safe: filtra por
+ * empresa_id en ambas tablas. Devuelve los snapshots persistidos; no consulta perfiles ni parámetros vigentes.
+ */
+export async function listarHistorialCosteos(empresaId: number, cotizacionId: number): Promise<SnapshotCosteo[]> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT ${COLUMNAS_COSTEO}
+     FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? ORDER BY version DESC`,
+    [empresaId, cotizacionId],
+  );
+  if (!rows.length) return [];
+  const ids = rows.map((r) => num(r.id));
+  const comps = await query<RowDataPacket[]>(
+    `SELECT costeo_id, clave, concepto, monto FROM tms_cotizacion_costeo_componentes
+     WHERE empresa_id = ? AND costeo_id IN (${ids.map(() => "?").join(", ")}) ORDER BY costeo_id ASC, orden ASC`,
+    [empresaId, ...ids],
+  );
+  const porCosteo = new Map<number, ComponenteCosteo[]>();
+  for (const c of comps) {
+    const lista = porCosteo.get(num(c.costeo_id)) ?? [];
+    lista.push(mapComponente(c));
+    porCosteo.set(num(c.costeo_id), lista);
+  }
+  return rows.map((r) => mapCosteo(r, porCosteo.get(num(r.id)) ?? []));
+}
+
+/** El costeo «utilizado» de la cotización (es_seleccionado = 1). Tenant-safe. `null` si no hay costeo o ninguno está seleccionado. */
+export async function obtenerCosteoSeleccionado(empresaId: number, cotizacionId: number): Promise<SnapshotCosteo | null> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT ${COLUMNAS_COSTEO}
+     FROM tms_cotizacion_costeos WHERE empresa_id = ? AND cotizacion_id = ? AND es_seleccionado = 1 ORDER BY version DESC LIMIT 1`,
+    [empresaId, cotizacionId],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  const comps = await query<RowDataPacket[]>(
+    "SELECT clave, concepto, monto FROM tms_cotizacion_costeo_componentes WHERE empresa_id = ? AND costeo_id = ? ORDER BY orden ASC",
+    [empresaId, r.id],
+  );
+  return mapCosteo(r, comps.map(mapComponente));
 }

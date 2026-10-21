@@ -4,21 +4,30 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { absPathFromRelative } from "@/lib/uploads";
 import { ahoraLocal, fmtTs, formatearTimestampVisible } from "@/lib/rrhh/dates";
-import { dibujarTablaEnDoc } from "@/lib/rrhh/export-files";
 import { reforzarFirmaParaPdf } from "@/lib/firmas/reforzar-firma-pdf";
 import { listarViaticosAutorizadosPorPeriodo } from "@/lib/tms/viaticos";
 import { listarFirmasViatico, type FirmaViaticoResumen } from "@/lib/firmas/firmas-lectura";
 import type { PeriodoComprobante } from "@/lib/tms/viaticos-comprobante-periodo";
+import { filasComprobante, totalGeneralComprobante } from "@/lib/tms/viaticos-comprobante-filas";
 
 /**
- * VIATICOS-COMPROBANTE-PDF — comprobante en PDF, en lote, HISTÓRICO por período (Día/Semana/Mes) de todos los
- * viáticos AUTORIZADOS de una empresa DURANTE ese período (criterio: `autorizado_en`, no el estado actual — ver
- * VIATICOS-COMPROBANTE-PERIODO en viaticos-comprobante-periodo.ts y listarViaticosAutorizadosPorPeriodo() en
- * viaticos.ts): una tabla (no una página por viático, ver dibujarTablaEnDoc) con los datos del viaje/empleado/
- * monto, y debajo UN bloque de firma por cada persona distinta que autorizó (no uno por viático — si la misma
- * persona autorizó varios, aparece una sola vez) — en la MISMA página si cabe, solo avanza a una página nueva
- * cuando ya no hay espacio. Cada bloque muestra el nombre real del firmante (nombreFirmante, nunca su usuario
- * de acceso), su rol, la fecha, y su imagen de firma más reciente del lote si existe.
+ * VIATICOS-COMPROBANTE-ADMIN-1 — comprobante en PDF, en lote, HISTÓRICO por período (Día/Semana/Mes) de todos
+ * los viáticos AUTORIZADOS de una empresa DURANTE ese período (criterio: `autorizado_en`, no el estado actual
+ * — ver VIATICOS-COMPROBANTE-PERIODO en viaticos-comprobante-periodo.ts y listarViaticosAutorizadosPorPeriodo()
+ * en viaticos.ts). Formato administrativo (v3), A4 vertical, reemplaza el formato técnico anterior — mismos
+ * datos/criterio histórico, solo cambia la presentación: título "REQUERIMIENTO DE VIÁTICOS", cabecera con
+ * Empresa requiriente + Período en cajas simples, tabla compacta (Viaje/Fecha viaje/Nombre/Cargo/Placa/
+ * Cliente/Cantidad/Lugar de descarga/Total), TOTAL GENERAL y UN bloque de firma por cada persona distinta que
+ * autorizó (no uno por viático) — en la MISMA página si cabe, solo avanza a una página nueva cuando ya no hay
+ * espacio.
+ *
+ * NO incluye "Código de petición", "Persona que requiere" ni su firma, "Fecha de solicitud", "No. Cuenta" ni
+ * "Banco" — discovery confirmó que tms_viaticos (fuente de este comprobante) y tms_viatico_requerimientos/
+ * tms_viatico_requerimiento_lineas (requerimientos manuales, la referencia visual de este formato) son dos
+ * flujos SIN relación entre sí: no existe una entidad "requerimiento" real detrás de un lote histórico por
+ * período, ni una acción de firma "requirente" a nivel de tms_viaticos (solo AUTORIZAR_VIATICO/
+ * LIQUIDAR_VIATICO). Mostrar cualquiera de esos campos sería inventar un dato que no existe. Ver
+ * viaticos-comprobante-filas.ts para el detalle completo de esta decisión.
  *
  * Reutiliza TAL CUAL:
  * - listarViaticosAutorizadosPorPeriodo() — mismos JOINs/columnas que Control de Viáticos (VIAT-3), pero
@@ -26,10 +35,15 @@ import type { PeriodoComprobante } from "@/lib/tms/viaticos-comprobante-periodo"
  *   dentro del período que después pasó a ENTREGADO/LIQUIDADO sigue apareciendo.
  * - listarFirmasViatico() — mismo historial de firmas que ya expone el
  *   modal "Ver firmas" (VIATICOS-HISTORIAL-FIRMA-1).
- * - dibujarTablaEnDoc() (src/lib/rrhh/export-files.ts) — el mismo
- *   dibujado de tabla ya usado en los reportes de RRHH, extraído de
- *   pdfTabla() para poder seguir agregando contenido propio (las
- *   imágenes de firma) en el mismo documento sin duplicar esa lógica.
+ * - filasComprobante() (viaticos-comprobante-filas.ts) — mismo DTO de filas que consume el Excel
+ *   (viaticos-comprobante-excel.ts), un solo mapeo para ambos formatos.
+ *
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — la tabla ya NO usa dibujarTablaEnDoc()
+ * (src/lib/rrhh/export-files.ts): ese helper es COMPARTIDO por otros reportes de RRHH y dibuja encabezado con
+ * fondo navy (#1e3a5f) + zebra striping, un estilo "reporte técnico" que NO corresponde al formato
+ * administrativo v3 aprobado (fondo blanco, sin relleno fuerte, bordes finos) — y no debía modificarse para
+ * no afectar a esos otros reportes. En su lugar, dibujarTablaAdministrativaViaticos() (más abajo) es un
+ * renderer LOCAL y privado de este módulo, exclusivo para este comprobante.
  *
  * listarFirmasViatico() deliberadamente nunca expone imagen_ruta
  * (contrato documentado en firmas-lectura.ts). Para incrustar la imagen
@@ -156,6 +170,87 @@ export function agruparPorFirmante(
   return orden.map((clave) => porClave.get(clave)!);
 }
 
+/** Anchos (pt) de las 9 columnas del formato administrativo, A4 vertical — suma 522pt (ancho útil ≈523pt). */
+const ANCHOS_TABLA_VIATICOS = [46, 58, 90, 46, 46, 64, 46, 76, 50];
+// VIATICOS-COMPROBANTE-ADMIN-1 (ajuste visual) — el primer renderer priorizaba caber ~39 filas por página
+// (fuente 7.5, fila 16pt) y quedó demasiado comprimido/difícil de leer frente al preview v3 aprobado
+// visualmente. Se prioriza legibilidad: fuente y alto de fila más grandes, apuntando a ~20-25 filas por
+// página (varía según cuánto texto tenga cada celda) en vez de maximizar filas por página.
+const ALTO_FILA_TABLA = 26;
+// El encabezado admite HASTA 2 líneas (mismo criterio que el formato real escaneado de referencia, donde
+// "FECHA DE SOLICITUD" ya se partía en 2 líneas) — así "Lugar de descarga"/"Cantidad" no quedan truncados con
+// "…" en su propia etiqueta fija, que nunca cambia y SIEMPRE debe leerse completa.
+const ALTO_ENCABEZADO_TABLA = 32;
+const FUENTE_TABLA = 9;
+
+/**
+ * VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — renderer LOCAL y privado de este módulo (no exportado,
+ * no reutilizado por ningún otro reporte). Reemplaza dibujarTablaEnDoc() SOLO para este comprobante porque ese
+ * helper compartido (src/lib/rrhh/export-files.ts) dibuja encabezado con fondo navy + filas zebra — un estilo
+ * "reporte técnico" que el formato v3 aprobado explícitamente no usa (fondo blanco, SIN relleno fuerte, bordes
+ * finos, texto negro). No se modifica dibujarTablaEnDoc() en absoluto: lo siguen consumiendo otros reportes de
+ * RRHH tal cual estaba.
+ *
+ * `footerReserve` es la altura (pt) que debe quedar libre DESPUÉS de la ÚLTIMA fila — reservada para TOTAL
+ * GENERAL + el/los bloque(s) de autorización + el pie de página — calculada por el caller a partir del número
+ * real de firmantes distintos (ver comprobanteAutorizacionesPdf). Solo la ÚLTIMA fila respeta ese límite
+ * reducido; todas las filas anteriores usan el alto completo de la página — así, si hace falta mover contenido
+ * a una página nueva, se mueve ÚNICAMENTE lo necesario (la propia última fila, nunca de más), y lo que viene
+ * después (total + firmas + pie) siempre queda junto en esa misma página final.
+ */
+function dibujarTablaAdministrativaViaticos(
+  doc: InstanceType<typeof PDFDocument>,
+  opts: {
+    headers: string[];
+    rows: string[][];
+    widths: number[];
+    align?: Partial<Record<number, "left" | "right" | "center">>;
+    footerReserve: number;
+  },
+): void {
+  const marginL = doc.page.margins.left;
+  const marginT = doc.page.margins.top;
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
+
+  const dibujarEncabezado = (y: number): number => {
+    let x = marginL;
+    doc.font("Helvetica-Bold").fontSize(FUENTE_TABLA).fillColor("#0f172a");
+    opts.headers.forEach((h, i) => {
+      const w = opts.widths[i];
+      doc.rect(x, y, w, ALTO_ENCABEZADO_TABLA).strokeColor("#334155").lineWidth(0.8).stroke();
+      // El encabezado SÍ puede partirse en 2 líneas (lineBreak por defecto) en vez de truncar con "…": es una
+      // etiqueta fija y corta, siempre debe leerse completa (a diferencia de los datos de cada fila, que sí
+      // truncan con ellipsis más abajo porque su longitud varía y no tiene sentido reservarles el peor caso).
+      doc.text(h, x + 4, y + 6, { width: w - 8, height: ALTO_ENCABEZADO_TABLA - 8, align: opts.align?.[i] ?? "left" });
+      x += w;
+    });
+    return y + ALTO_ENCABEZADO_TABLA;
+  };
+
+  let y = dibujarEncabezado(doc.y);
+
+  opts.rows.forEach((cells, idx) => {
+    const ultima = idx === opts.rows.length - 1;
+    const limite = pageBottom() - (ultima ? opts.footerReserve : 0);
+    if (y + ALTO_FILA_TABLA > limite) {
+      doc.addPage();
+      y = dibujarEncabezado(marginT);
+    }
+    let x = marginL;
+    doc.font("Helvetica").fontSize(FUENTE_TABLA).fillColor("#0f172a");
+    cells.forEach((cell, i) => {
+      const w = opts.widths[i];
+      doc.rect(x, y, w, ALTO_FILA_TABLA).strokeColor("#94a3b8").lineWidth(0.5).stroke();
+      doc.text(cell, x + 4, y + 8, { width: w - 8, height: ALTO_FILA_TABLA - 8, align: opts.align?.[i] ?? "left", lineBreak: false, ellipsis: true });
+      x += w;
+    });
+    y += ALTO_FILA_TABLA;
+  });
+
+  doc.x = marginL;
+  doc.y = y;
+}
+
 /**
  * `null` cuando no hay ningún viático autorizado EN EL PERÍODO — el caller (route.ts) decide el mensaje/estado
  * HTTP; esta función nunca genera un PDF vacío.
@@ -180,42 +275,16 @@ export async function comprobanteAutorizacionesPdf(
     }),
   );
 
-  const headers = [
-    "Viaje",
-    "Fecha",
-    "Cliente",
-    "Empleado",
-    "Rol",
-    "Monto",
-    "Autorizado por",
-    "Fecha autorización",
-    "Código de firma",
-  ];
-  // VIATICOS-COMPROBANTE-PERIODO (corrección pre-merge) — "Fecha autorización" de la TABLA usa v.autorizadoEn
-  // (tms_viaticos.autorizado_en, el momento REAL de la transición PROGRAMADO->AUTORIZADO que ya decide QUÉ
-  // viáticos entran en el período — ver listarViaticosAutorizadosPorPeriodo) en vez de firma.fechaHoraServidor
-  // (firmas_electronicas.fecha_hora_servidor, el momento del REGISTRO de firma). Son dos fuentes distintas que
-  // normalmente casi coinciden pero no deben intercambiarse: si autorizado_en existe pero por algún motivo no se
-  // encuentra la firma AUTORIZAR_VIATICO de un registro histórico, la tabla debe seguir mostrando la fecha de
-  // autorización real, nunca "—" (fechaHoraServidor solo sigue usándose dentro del bloque visual de firma, más
-  // abajo, donde sí corresponde mostrar el momento del registro de firma).
-  const rows = porViatico.map(({ viatico: v, firma }) => [
-    v.planCodigo,
-    v.fechaPlan,
-    v.cliente ?? "—",
-    v.personalNombre,
-    v.rol,
-    moneda(v.montoAsignado),
-    firma?.nombreFirmante ?? "No disponible",
-    fechaLargaEsGt(v.autorizadoEn),
-    firma?.codigoFirma ?? "—",
-  ]);
+  const headers = ["Viaje", "Fecha viaje", "Nombre", "Cargo", "Placa", "Cliente", "Cantidad", "Lugar de descarga", "Total"];
+  const filas = filasComprobante(items);
+  const rows = filas.map((f) => [f.viaje, f.fechaViaje, f.nombre, f.cargo, f.placa, f.cliente, String(f.cantidad), f.lugarDescarga, moneda(f.total)]);
+  const total = totalGeneralComprobante(filas);
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
-      size: "LETTER",
-      layout: "landscape",
-      margins: { top: 36, bottom: 40, left: 32, right: 32 },
+      size: "A4",
+      layout: "portrait",
+      margins: { top: 40, bottom: 40, left: 36, right: 36 },
       bufferPages: true,
     });
     const chunks: Buffer[] = [];
@@ -227,35 +296,77 @@ export async function comprobanteAutorizacionesPdf(
     const pageWidth = doc.page.width - marginL - doc.page.margins.right;
     const pageBottom = () => doc.page.height - doc.page.margins.bottom - 12;
 
-    doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a").text(tituloEmpresa(empresaNombre), { width: pageWidth });
-    doc.moveDown(0.2).font("Helvetica").fontSize(9).fillColor("#475569")
-      .text("Comprobante de autorización de viáticos — TMS / Logística", { width: pageWidth });
-    // VIATICOS-COMPROBANTE-PERIODO — línea de período explícita, distinta de la fecha de generación del documento
-    // (footer, más abajo): esta es la FECHA/RANGO de autorización que demuestra el lote, no "hoy".
-    doc.font("Helvetica").fontSize(9).fillColor("#475569")
-      .text(`Período: ${periodo.etiqueta}`, { width: pageWidth });
-    doc.font("Helvetica").fontSize(9).fillColor("#475569")
-      .text(`${items.length} viático${items.length === 1 ? "" : "s"} autorizado${items.length === 1 ? "" : "s"}`, { width: pageWidth });
-    doc.moveDown(0.35);
+    // VIATICOS-COMPROBANTE-ADMIN-1 — título del formato administrativo
+    // aprobado (reemplaza "Comprobante de autorización de viáticos — TMS
+    // / Logística"). Sin subtítulo.
+    doc.font("Helvetica-Bold").fontSize(15).fillColor("#0f172a").text("REQUERIMIENTO DE VIÁTICOS", { align: "center", width: pageWidth });
+    doc.moveDown(0.8);
 
-    // VIATICOS-PDF-PRESENTACION-1: "Monto" (índice 5) quedaba demasiado
-    // angosta — el cálculo genérico de anchos por longitud de texto de
-    // dibujarTablaEnDoc() subestima el espacio real que necesita una
-    // columna de montos cuando las demás columnas (Cliente/Empleado/
-    // Código de firma) son largas, y terminaba truncándola con "…" (bug
-    // reproducido: "Q50.00" -> "Q50.0…"). `minWeight` le da un piso de
-    // ancho suficiente para montos normales en GTQ con miles ("Q1,250.00")
-    // sin tocar el cálculo para ningún otro reporte que use esta misma
-    // función compartida (parámetro opt-in). `align: "center"` centra
-    // encabezado y valores, igual que pidió el ticket.
-    dibujarTablaEnDoc(doc, { headers, rows, align: { 5: "center" }, minWeight: { 5: 14 } });
+    // Cabecera: campo con etiqueta a la izquierda + caja con el valor
+    // centrado — mismo estilo "formulario administrativo" aprobado (sin
+    // tarjetas, sin fondo navy). Solo Empresa requiriente y Período:
+    // "Código de petición" y "Persona que requiere" NO se incluyen (ver
+    // docblock del módulo — no existe una fuente real para este
+    // comprobante histórico por período).
+    const campoCaja = (etiqueta: string, valor: string, y: number) => {
+      const labelW = 140;
+      const boxX = marginL + labelW + 8;
+      const boxW = pageWidth - labelW - 8;
+      doc.font("Helvetica").fontSize(9).fillColor("#0f172a").text(etiqueta, marginL, y + 4, { width: labelW, align: "right" });
+      doc.rect(boxX, y, boxW, 18).strokeColor("#334155").lineWidth(0.7).stroke();
+      doc.font("Helvetica").fontSize(9).fillColor("#0f172a").text(valor, boxX, y + 5, { width: boxW, align: "center", lineBreak: false });
+    };
+    let yCampo = doc.y;
+    campoCaja("EMPRESA REQUIRIENTE", tituloEmpresa(empresaNombre), yCampo);
+    yCampo += 26;
+    campoCaja("PERÍODO", periodo.etiqueta, yCampo);
+    yCampo += 26;
+    doc.font("Helvetica").fontSize(9).fillColor("#475569")
+      .text(`${items.length} viático${items.length === 1 ? "" : "s"} autorizado${items.length === 1 ? "" : "s"}`, marginL, yCampo, { width: pageWidth });
+    doc.y = yCampo + 18;
+
+    // VIATICOS-COMPROBANTE-ADMIN-1 (corrección pre-merge) — calculado ANTES de dibujar la tabla, para poder
+    // reservarle espacio real a TOTAL GENERAL + el/los bloque(s) de autorización en la ÚLTIMA fila (ver
+    // dibujarTablaAdministrativaViaticos): sin esto, la tabla podía consumir toda la página y dejar las firmas
+    // solas en una página nueva casi vacía.
+    const firmantes = agruparPorFirmante(porViatico);
+    const ALTO_TOTAL_GENERAL = 30;
+    const ALTO_TITULO_AUTORIZACION = 26;
+    const ALTO_BLOQUE_FIRMA = (tieneImagen: boolean) => 40 + (tieneImagen ? 76 : 0);
+    const alturaUtil = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
+    const footerReserveCalculado =
+      ALTO_TOTAL_GENERAL +
+      ALTO_TITULO_AUTORIZACION +
+      firmantes.reduce((acc, f) => acc + ALTO_BLOQUE_FIRMA(Boolean(f.imagen)), 0);
+    // Tope de seguridad: con muchos firmantes distintos, reservar la altura COMPLETA en la última fila dejaría
+    // sin espacio a filas que si caben perfectamente — el bloque de firmas YA tiene su propio control de salto
+    // de página (más abajo), así que basta reservar lo suficiente para arrancar el bloque sin quedar solo.
+    const footerReserve = Math.min(footerReserveCalculado, alturaUtil * 0.6);
+
+    // "Cantidad" (índice 6) y "Total" (índice 8) alineados a la derecha —
+    // mismo criterio que el resto de reportes administrativos del repo
+    // (viaticos-requerimientos-export.ts).
+    dibujarTablaAdministrativaViaticos(doc, {
+      headers,
+      rows,
+      widths: ANCHOS_TABLA_VIATICOS,
+      align: { 6: "right", 8: "right" },
+      footerReserve,
+    });
+
+    // TOTAL GENERAL — suma exacta de las filas exportadas (mismo valor
+    // que totalGeneralComprobante() ya usa el Excel, un solo cálculo).
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a").text(`TOTAL GENERAL: ${moneda(total)}`, marginL, doc.y, { width: pageWidth, align: "right" });
 
     // Bloque de autorización — UNA firma por persona distinta (no una
     // por viático: el detalle por viático ya está en la tabla de
     // arriba). Sigue en la MISMA página si cabe (doc.y ya quedó
-    // posicionado justo después de la tabla por dibujarTablaEnDoc); solo
-    // se agrega una página nueva cuando el siguiente bloque ya no cabe.
-    const firmantes = agruparPorFirmante(porViatico);
+    // posicionado justo después de la tabla); el footerReserve de arriba
+    // ya garantizó espacio suficiente, este chequeo por bloque queda
+    // como red de seguridad (p. ej. un nombre de firmante inusualmente
+    // largo) y es el que sigue manejando el caso de MUCHOS firmantes
+    // que legítimamente necesitan más de una página.
     let tituloDibujado = false;
     firmantes.forEach(({ firma, imagen }) => {
       const alturaEstimada = 40 + (imagen ? 76 : 0) + (tituloDibujado ? 0 : 22);
@@ -284,7 +395,7 @@ export async function comprobanteAutorizacionesPdf(
           doc.moveDown(0.1);
         }
       }
-      doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#94a3b8").lineWidth(0.6).stroke();
+      doc.moveTo(doc.x, doc.y).lineTo(doc.x + 180, doc.y).strokeColor("#334155").lineWidth(0.7).stroke();
       doc.moveDown(0.15);
       // VIATICOS-PDF-PRESENTACION-1: ÚNICAMENTE el nombre real del
       // firmante (snapshot de payload_canonico al firmar) — nunca su

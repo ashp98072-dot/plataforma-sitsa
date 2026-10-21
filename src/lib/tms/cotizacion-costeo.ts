@@ -13,7 +13,26 @@
  */
 
 /** Versión de las fórmulas; se persiste en cada snapshot (tms_cotizacion_costeos.motor_version). Cambiar una fórmula exige subirla. */
+import type { ParametrosExcel, PerfilExcel } from "./cotizacion-costeo-excel-campos";
+import { calcularCosteoExcel } from "./cotizacion-costeo-excel";
+import { calcularCosteoCotizador2026 } from "./cotizacion-costeo-cotizador-2026";
 export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
+/** Motor del PR #406 (viáticos/hotel desglosados). SOLO lectura de snapshots existentes y funciones puras: los cálculos NUEVOS usan COTIZADOR_2026. */
+export const COTIZACION_COSTEO_EXCEL_VERSION = "COSTEO_EXCEL_2026";
+/**
+ * Paridad con «Cotizador 2026.xlsx»: una sola columna «Viáticos y hotel». REDONDEA CADA CONCEPTO a 2 decimales antes de sumar (política anterior).
+ * Solo lectura de snapshots ya guardados y funciones puras: los cálculos NUEVOS usan COTIZADOR_V2.
+ */
+export const COTIZACION_COSTEO_COTIZADOR_VERSION = "COSTEO_COTIZADOR_2026";
+/**
+ * Paridad MATEMÁTICA exacta con «Cotizador 2026.xlsx»: mismas fórmulas, pero la precisión interna se conserva (Decimal de 40 dígitos) y solo se redondea a 2
+ * decimales para mostrar/persistir (como el libro: la celda solo da formato). Es la versión de los cálculos NUEVOS. Un mismo input puede dar un centavo
+ * distinto que COSTEO_COTIZADOR_2026, por eso es una versión propia y los snapshots anteriores no se reinterpretan.
+ */
+export const COTIZACION_COSTEO_COTIZADOR_V2_VERSION = "COSTEO_COTIZADOR_2026_V2";
+
+/** Motores de la familia «Cotizador 2026» (con `resultado_snapshot` completo, un solo margen y una sola columna de viáticos y hotel). */
+export const esMotorCotizador2026 = (version: string | null | undefined): boolean => version === COTIZACION_COSTEO_COTIZADOR_VERSION || version === COTIZACION_COSTEO_COTIZADOR_V2_VERSION;
 
 // ---------------------------------------------------------------------------
 // A. PARÁMETROS / INPUTS
@@ -21,6 +40,8 @@ export const COTIZACION_COSTEO_MOTOR_VERSION = "COSTEO_V1";
 
 /** Códigos de referencia de perfiles; el motor NO ramifica por ellos, solo por los parámetros del perfil. */
 export const CODIGOS_PERFIL_COSTEO = [
+  { codigo: "CAMION_1T", nombre: "Camión 1 tonelada" },
+  { codigo: "CAMION_12T", nombre: "Camión 12 toneladas" },
   { codigo: "CAMION_2_7T", nombre: "Camión 2.7 toneladas" },
   { codigo: "CAMION_5T", nombre: "Camión 5 toneladas" },
   { codigo: "CAMION_5T_REFRIGERADO", nombre: "Camión 5 toneladas refrigerado" },
@@ -37,7 +58,7 @@ export type DepreciacionCosteo = {
   diasOperacionMes: number;
 };
 
-export type PerfilCosteoUnidad = {
+export type PerfilCosteoUnidad = PerfilExcel & {
   codigo: string;
   nombre: string;
   /** Informativo (no entra al cálculo): la depreciación se define en `depreciacion`. */
@@ -58,7 +79,7 @@ export type PerfilCosteoUnidad = {
   costoRefrigeracion?: DepreciacionCosteo | null;
 };
 
-export type ParametrosEconomicosCosteo = {
+export type ParametrosEconomicosCosteo = ParametrosExcel & {
   precioCombustibleGalon: number;
   /** Fracción, p. ej. 0.12. Siempre llega como parámetro. */
   ivaTasa: number;
@@ -75,6 +96,8 @@ export type ParametrosEconomicosCosteo = {
 export type OtroCostoCosteo = { concepto: string; monto: number };
 
 export type InputCosteoServicio = {
+  motorVersion?: string;
+  precioCombustibleOverride?: number;
   perfil: PerfilCosteoUnidad;
   parametros: ParametrosEconomicosCosteo;
   distanciaKm: number;
@@ -86,6 +109,7 @@ export type InputCosteoServicio = {
   incluirSeguroVehiculo: boolean;
   /** Monto del servicio (no depende de días ni km). */
   seguroMercaderia?: number;
+  incluirSeguroMercaderia?: boolean;
   usarRefrigeracion?: boolean;
   otrosCostos?: OtroCostoCosteo[];
   precioVenta?: number | null;
@@ -99,6 +123,11 @@ export type InputCosteoServicio = {
   viaticoAuxiliarTotal?: number;
   viaticoGuiaTotal?: number;
   hotelTotal?: number;
+  /**
+   * COSTEO_COTIZADOR_2026: «Viáticos y hotel (Q)», UN solo monto por viaje (no se multiplica por personas ni por días). Prevalece sobre
+   * `perfil.viaticosHotelViaje`. Los cuatro overrides de arriba pertenecen al motor del PR #406 / V1 y el motor nuevo los ignora.
+   */
+  viaticosHotelTotal?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -108,6 +137,46 @@ export type InputCosteoServicio = {
 export type ComponenteCosteo = { clave: string; concepto: string; monto: number };
 
 export type ResultadoCosteoServicio = {
+  advertencias?: string[];
+  valoresUsados?: {
+    precioCombustibleGalon: number;
+    rendimientoKmGalon: number;
+    viajesMes: number | null;
+    diasDepreciacionVehiculo: number | null;
+    diasDepreciacionThermo: number | null;
+    costoJuegoLlantas: number;
+    salarioPilotoMensual: number | null;
+    salarioAuxiliarMensual: number | null;
+    costoPilotoDia: number;
+    costoAuxiliarDia: number;
+    diasLaboralesMes: number | null;
+    /** COSTEO_COTIZADOR_2026: «Viáticos y hotel» efectivamente usado y su origen. */
+    viaticosHotelViaje?: number;
+    origenViaticosHotel?: "override" | "perfil" | "sin_configurar";
+    /** Comportamiento efectivo por días (config del perfil, o el predeterminado si estaba sin configurar). */
+    auxiliarMultiplicaDias?: boolean;
+    viaticosHotelMultiplicaDias?: boolean;
+  };
+  motorVersion?: string;
+  /**
+   * COSTEO_COTIZADOR_2026_V2: valores de CÁLCULO con precisión completa (cadenas decimales de 12 decimales), para auditar el cálculo exactamente.
+   * Los campos numéricos del resultado (componentes, costo base, IVA, total...) son los valores de PRESENTACIÓN/persistencia, redondeados a 2 decimales
+   * una sola vez, al final. Ausente en los motores anteriores (que redondeaban cada concepto).
+   */
+  precision?: {
+    politicaRedondeo: "al_final";
+    componentes: Record<string, string>;
+    costoOperativo: string;
+    margenObjetivoMonto: string;
+    subtotalComercial: string;
+    iva: string;
+    costoConIva: string;
+    precioSugerido: string;
+    precioPorKm: string | null;
+  };
+  gastosGenerales?: number;
+  subtotalComercial?: number;
+  precioPorKm?: number | null;
   depreciacion: number;
   refrigeracion: number;
   gps: number;
@@ -122,6 +191,8 @@ export type ResultadoCosteoServicio = {
   viaticoAuxiliar: number;
   viaticoGuia: number;
   hotel: number;
+  /** COSTEO_COTIZADOR_2026: la columna única «Viáticos y hotel» (los cuatro campos anteriores quedan en 0 en ese motor). */
+  viaticosHotel?: number;
   otrosCostos: number;
   /** Suma de los componentes de arriba; SIN IVA. Costo interno. */
   costoOperativo: number;
@@ -257,6 +328,9 @@ export function costoPersonal(costoDia: number, diasServicio: number, cantidad: 
 
 export function calcularCosteoServicio(input: InputCosteoServicio): ResultadoCosteoServicio {
   validarInput(input);
+  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_V2_VERSION) return calcularCosteoCotizador2026(input, "al_final");
+  if (input.motorVersion === COTIZACION_COSTEO_COTIZADOR_VERSION) return calcularCosteoCotizador2026(input, "por_componente");
+  if (input.motorVersion === COTIZACION_COSTEO_EXCEL_VERSION) return calcularCosteoExcel(input);
   const { perfil, parametros } = input;
   const dias = input.diasServicio;
   const km = input.distanciaKm;

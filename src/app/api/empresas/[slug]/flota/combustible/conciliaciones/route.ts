@@ -17,7 +17,7 @@ import {
 import {
   guardarConciliacionCombustible,
 } from "@/lib/flota/combustible-conciliacion-persistencia";
-import { asegurarSchemaFlota } from "@/lib/flota/schema";
+
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
 import {
   borrarUpload,
@@ -150,34 +150,14 @@ export async function POST(
   const guard =
     await requireTenantFlotaCombustible(
       slug,
-      "editar",
+      "conciliar",
     );
 
   if (guard.error) {
     return guard.error;
   }
 
-  /*
-   * Asegurar el esquema antes de intentar guardar la conciliación.
-   */
-  try {
-    await asegurarSchemaFlota();
-  } catch (error) {
-    console.error(
-      "[combustible-conciliacion] asegurar schema",
-      error,
-    );
-
-    return NextResponse.json(
-      {
-        error:
-          "No se pudo preparar el módulo de conciliación.",
-      },
-      {
-        status: 500,
-      },
-    );
-  }
+  // Esquema preparado mediante migración explícita antes del despliegue.
 
   /*
    * Leer multipart/form-data.

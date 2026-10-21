@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireClientesOFacturacion } from "@/lib/clientes/acceso";
-import {
-  alcanceFacturacion,
-  denyFacturacionAlcance,
-} from "@/lib/facturacion/alcance";
+import { requireFacturacionConfig } from "@/lib/facturacion/acceso";
 import { CUESTIONARIO_EMPRESA } from "@/lib/facturacion/cuestionario";
 import {
   guardarPerfilEmpresa,
@@ -15,14 +11,8 @@ type Ctx = { params: Promise<{ slug: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireClientesOFacturacion(slug, "facturacion");
+  const guard = await requireFacturacionConfig(slug, "ver_empresa");
   if (guard.error) return guard.error;
-  const alcance = alcanceFacturacion(guard.session.rol);
-  if (!alcance.verEmpresa) {
-    return denyFacturacionAlcance(
-      "Solo Contabilidad administra la facturación de la empresa.",
-    );
-  }
   const perfil = await obtenerPerfilEmpresa(guard.empresa.id);
   return NextResponse.json({
     cuestionario: CUESTIONARIO_EMPRESA,
@@ -50,14 +40,8 @@ const schema = z.object({
 
 export async function PUT(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
-  const guard = await requireClientesOFacturacion(slug, "facturacion", true);
+  const guard = await requireFacturacionConfig(slug, "editar_empresa");
   if (guard.error) return guard.error;
-  const alcance = alcanceFacturacion(guard.session.rol);
-  if (!alcance.editarEmpresa) {
-    return denyFacturacionAlcance(
-      "Solo Contabilidad puede editar la facturación de la empresa.",
-    );
-  }
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });

@@ -2,9 +2,13 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
+import { useEmpresaSession } from "@/lib/empresa-session";
+import { tieneAccionCatalogo } from "@/lib/permisos-catalogo";
 
 export default function CmsPage() {
   const slug = String(useParams().slug);
+  const { permisos, rol } = useEmpresaSession();
+  const puedeGestionar = rol === "Admin" || tieneAccionCatalogo(permisos, "cms", "publicar");
   const [secciones, setSecciones] = useState<Record<string, unknown>[]>([]);
   const [clave, setClave] = useState("inicio");
   const [titulo, setTitulo] = useState("");
@@ -24,6 +28,7 @@ export default function CmsPage() {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (!puedeGestionar) return;
     const res = await fetch(`/api/empresas/${slug}/cms`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -44,13 +49,13 @@ export default function CmsPage() {
           /site/{slug}
         </a>
       </p>
-      <form onSubmit={onSubmit} className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
+      {puedeGestionar ? <form onSubmit={onSubmit} className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
         <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Clave (inicio, servicios…)" value={clave} onChange={(e) => setClave(e.target.value)} required />
         <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="Título" value={titulo} onChange={(e) => setTitulo(e.target.value)} />
         <textarea className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" rows={4} placeholder="Contenido" value={contenido} onChange={(e) => setContenido(e.target.value)} />
         <input className="w-full rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1" placeholder="URL imagen" value={imagenUrl} onChange={(e) => setImagenUrl(e.target.value)} />
         <button className="rounded bg-[var(--accent)] px-3 py-1 text-sm">Guardar sección</button>
-      </form>
+      </form> : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
       <ul className="space-y-2">
         {secciones.map((s) => (

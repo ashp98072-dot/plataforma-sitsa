@@ -15,6 +15,13 @@
   --panel: #1e293b;
   --input: #0b1217;
   --thead: #0d1522;
+  /* LIQUIDACIÓN (Fase 2): fondo COMPLETO de fila «pendiente de liquidar». Oscuro: amarillo atenuado; nunca blanco literal. */
+  --fila-pendiente-liquidar: #3a3218;
+  /* Dentro de la fila amarilla el enlace de acento se aclara (sobre #3a3218 el --accent normal baja a 2.2:1). */
+  --fila-pendiente-accent: #5ea8e0;
+  --fila-pendiente-muted: #93a4b8;
+  --fila-hover: rgba(255, 255, 255, 0.06);
+  --accion-reporte: #fbbf24;
   --nav-hover: rgba(255, 255, 255, 0.05);
   --nav-active: rgba(255, 255, 255, 0.1);
   --nav-text-strong: #ffffff;
@@ -36,6 +43,13 @@
   --panel: #e8eef5;
   --input: #ffffff;
   --thead: #e8eef5;
+  /* LIQUIDACIÓN (Fase 2): claro = amarillo suave. Blanco = la superficie normal --card. El texto secundario se oscurece dentro de
+     la fila amarilla para conservar ≥ 4.5:1 sobre #fff3bf. */
+  --fila-pendiente-liquidar: #fff3bf;
+  --fila-pendiente-accent: #1d5f96;
+  --fila-pendiente-muted: #526079;
+  --fila-hover: rgba(15, 23, 42, 0.05);
+  --accion-reporte: #92400e;
   --nav-hover: rgba(15, 23, 42, 0.06);
   --nav-active: rgba(29, 95, 150, 0.12);
   --nav-text-strong: #0f172a;
@@ -87,4 +101,44 @@ textarea::placeholder {
 option {
   color: var(--text);
   background-color: var(--input);
+}
+
+/*
+ * PLANES / VIAJES — fila de viaje (LIQUIDACIÓN, Fase 2). El fondo COMPLETO de la fila indica el estado; el color del texto
+ * NO cambia. «normal» = superficie del tema (blanco en claro, tarjeta oscura en oscuro: nunca blanco literal en oscuro).
+ * Hover y selección son capas independientes del fondo para que sigan visibles sobre la fila amarilla.
+ */
+.fila-viaje {
+  background-color: var(--card);
+}
+.fila-viaje[data-liquidacion="pendiente"] {
+  background-color: var(--fila-pendiente-liquidar);
+  /* Solo ajusta los tonos de texto SECUNDARIO/enlace para el contraste; el color del texto principal no cambia. */
+  --muted: var(--fila-pendiente-muted);
+  --accent: var(--fila-pendiente-accent);
+}
+.fila-viaje:hover {
+  background-image: linear-gradient(var(--fila-hover), var(--fila-hover));
+}
+.fila-viaje[data-seleccionada="true"] > td:first-child {
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+/*
+ * PLANES / VIAJES — columnas fijas a la izquierda (SOLO escritorio ≥ 1024 px): Sel. (si existe), Código, Fecha y Cliente se quedan
+ * visibles mientras se desplaza la tabla horizontalmente. Anchos fijos para que los desplazamientos (left) sean exactos; la celda toma el fondo
+ * OPACO de su fila (normal / amarilla de liquidación pendiente / hover), por lo que nada se transparenta al pasar por debajo.
+ * Por debajo de 1024 px no se fija nada (se necesita el ancho). Las filas de grupo ocupan toda la fila (colSpan) y no se ven afectadas.
+ */
+@media (min-width: 1024px) {
+  .tabla-planes .col-fija { position: sticky; z-index: 2; background-clip: padding-box; }
+  .tabla-planes td.col-fija { background-color: inherit; background-image: inherit; }
+  .tabla-planes thead th.col-fija { z-index: 4; background-color: var(--thead); }
+  .tabla-planes .col-sel { left: 0; width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem; }
+  .tabla-planes .col-codigo { left: 0; width: 9.5rem; min-width: 9.5rem; max-width: 9.5rem; }
+  .tabla-planes .col-fecha { left: 9.5rem; width: 5.75rem; min-width: 5.75rem; max-width: 5.75rem; }
+  .tabla-planes .col-cliente { left: 15.25rem; width: 11rem; min-width: 11rem; max-width: 11rem; overflow-wrap: anywhere; box-shadow: 2px 0 0 var(--border); }
+  .tabla-planes[data-sel="1"] .col-codigo { left: 2.5rem; }
+  .tabla-planes[data-sel="1"] .col-fecha { left: 12rem; }
+  .tabla-planes[data-sel="1"] .col-cliente { left: 17.75rem; }
 }

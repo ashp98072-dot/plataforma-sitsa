@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantGastos } from "@/lib/tenant";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO, actualizarGasto, obtenerGasto } from "@/lib/tms/gastos";
+import { CONFIG_GASTOS, respuestaErroresZod, respuestaFalloOperacion, conCuentaMovil } from "@/lib/tms/validacion-fondos-gastos";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -15,7 +16,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 }
 
 /** GASTOS-MULTIPLES-LINEAS-1 — mismo schema de línea que el POST de creación (gastos/route.ts). */
-const lineaSchema = z.object({
+const lineaSchema = conCuentaMovil(z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),
@@ -27,7 +28,7 @@ const lineaSchema = z.object({
   vehiculoId: z.number().int().positive().nullable().optional(),
   clienteId: z.number().int().positive().nullable().optional(),
   planId: z.number().int().positive().nullable().optional(),
-});
+}), "numeroCuentaPago", true);
 
 const schema = z.object({
   fechaSolicitud: z.string().min(1).optional(),
@@ -67,16 +68,17 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const guard = await requireTenantGastos(slug, "editar");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json().catch(() => ({})));
+  const body = await req.json().catch(() => ({}));
+  const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
+    return respuestaErroresZod(parsed.error, CONFIG_GASTOS, body);
   }
   try {
     const gasto = await actualizarGasto(guard.empresa.id, Number(id), parsed.data);
     if (!gasto) return NextResponse.json({ error: "Gasto no encontrado." }, { status: 404 });
     return NextResponse.json({ mensaje: "Gasto actualizado.", gasto });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar el gasto." }, { status: 400 });
+    return respuestaFalloOperacion(error, "PATCH tms/gastos/[id]");
   }
 }
 

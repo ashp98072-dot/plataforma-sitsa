@@ -3,13 +3,13 @@ import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { descifrarCredencial } from "@/lib/proveedores/credenciales";
 import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
-import { requireTenant } from "@/lib/tenant";
+import { requireTenantPortalesProveedores } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
 export async function POST(_req: Request, ctx: Ctx) {
   const { slug, id } = await ctx.params;
-  const guard = await requireTenant(slug);
+  const guard = await requireTenantPortalesProveedores(slug, "ver");
   if (guard.error) return guard.error;
   if (!puedeUsarPortalesProveedores(guard.session.rol)) {
     return NextResponse.json({ error: "Sin acceso a portales de proveedores." }, { status: 403 });

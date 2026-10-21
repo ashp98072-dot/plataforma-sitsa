@@ -74,6 +74,9 @@ function crearConexion() {
     }),
     execute: vi.fn(async (sql: string, params: unknown[] = []) => {
       const s = String(sql);
+      if (s.startsWith("INSERT INTO rrhh_vacaciones_sync_estado")) {
+        expect(params).toEqual([EMP, 7]); eventos.push("dirty"); return [{ affectedRows: 1 }];
+      }
       if (s.startsWith("UPDATE saldos_vacaciones SET dias_disponibles")) {
         fallar("saldo"); eventos.push("update-saldo");
         const x = db.saldos.find((q) => q.id === params[1] && q.empresa_id === params[2]);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
+import { listarVehiculosActivosAccesibles } from "@/lib/flota/acceso";
 import {
   asegurarVinculosTmsClientes,
   crearClienteDesdeTms,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/clientes/schema";
 import { execute, query } from "@/lib/db";
 import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
+import { listarVehiculosSolicitables } from "@/lib/tms/vehiculo-solicitado-db";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -38,7 +40,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     /* TMS sigue aunque clientes aún no esté migrado */
   }
 
-  const [shared, tmsClientes, lugares, unidades, personal, flotaVehiculos] = await Promise.all([
+  const [shared, tmsClientes, lugares, unidades, personal, flotaVehiculos, vehiculosSolicitables] = await Promise.all([
     listarClientes(eid).catch(() => []),
     query<RowDataPacket[]>(
       "SELECT id, nombre, nit, telefono, estado FROM tms_clientes WHERE empresa_id = ? ORDER BY nombre",
@@ -56,12 +58,12 @@ export async function GET(_req: Request, ctx: Ctx) {
       "SELECT id, id_empleado, codigo, nombre, tipo, telefono, estado FROM tms_personal WHERE empresa_id = ? ORDER BY nombre",
       [eid],
     ),
-    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota de ESTA
-    // empresa para el selector de "unidad recurrente" de las rutas.
-    query<RowDataPacket[]>(
-      "SELECT id, placa, marca, modelo FROM flota_vehiculos WHERE empresa_id = ? AND activo = 1 ORDER BY placa",
-      [eid],
-    ).catch(() => [] as RowDataPacket[]),
+    // RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§4) — flota ACCESIBLE desde ESTA
+    // empresa (propia + compartida, regla única de Flota) para el selector de
+    // "unidad recurrente" de las rutas; solo activas y sin duplicados.
+    listarVehiculosActivosAccesibles(eid).catch(() => [] as RowDataPacket[]),
+    // PROGRAMACION-VEHICULO-SOLICITADO — perfiles ACTIVOS de costeo (Cotizaciones) de ESTA empresa: id/código/nombre.
+    listarVehiculosSolicitables(eid),
   ]);
 
   // Preferir datos del módulo Clientes cuando hay vínculo TMS.
@@ -92,11 +94,15 @@ export async function GET(_req: Request, ctx: Ctx) {
       lugares,
       unidades,
       personal,
+      vehiculosSolicitables,
       flotaVehiculos: flotaVehiculos.map((v) => ({
         id: Number(v.id),
         placa: String(v.placa),
         marca: v.marca != null ? String(v.marca) : null,
         modelo: v.modelo != null ? String(v.modelo) : null,
+        // Aditivos: unidad compartida con la empresa activa y su empresa dueña (rótulo «Frescofresh · Compartido»).
+        compartido: Number(v.compartido ?? 0) === 1,
+        empresaDuenaNombre: v.empresa_duena_nombre != null ? String(v.empresa_duena_nombre) : null,
       })),
     },
     { headers: { "Cache-Control": "private, no-store" } },

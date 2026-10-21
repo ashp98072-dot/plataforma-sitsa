@@ -8,10 +8,12 @@ export const COTIZACION_DOC: Cotizacion = {
   fechaEmision: "2026-09-08", fechaVencimiento: "2026-09-22", estado: "Borrador",
   pilotoIncluido: true, gpsIncluido: true, seguroMercaderiaIncluido: false, seguroTercerosIncluido: true, servicioRefrigerado: true,
   kmIncluidos: 50, tarifaKmAdicional: 12.5, condicionesAdicionales: "Pago contra entrega.\nVigencia sujeta a disponibilidad.",
-  observaciones: "Cliente frecuente.", documentoEmisor: "MONACO", atencionNombre: "Claudia Cordero", atencionCargo: "Compras / Logística",
+  observaciones: "Cliente frecuente.", documentoEmisor: "MONACO", atencionNombre: "Claudia Cordero", atencionTratamiento: null, atencionCargo: "Compras / Logística",
   unidadDescripcion: "Camión 5 toneladas",
   // null a propósito: ejercita el fallback determinista de MARCAS_DOCUMENTO (ver construirDocumentoComercial).
   mensajeComercial: null, cierreComercial: null,
+  // null a propósito: cotización histórica sin condiciones de crédito ni combustible de referencia.
+  condicionesCredito: null, combustibleReferenciaTipo: null, combustibleReferenciaPrecio: null,
   creadoPor: "admin", creadoEn: "2026-09-08 10:00:00", actualizadoEn: null,
   lineasAdicionales: [],
 };

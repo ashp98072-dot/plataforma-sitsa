@@ -607,6 +607,27 @@ export async function listarLineas(
   return rows.map(mapLinea);
 }
 
+/** Lectura portal: conserva el orden de listarLineas y el sueldo mensual vigente.
+ * uq_plan_linea(periodo_id,id_empleado) admite una sola línea por persona/período.
+ * Si un esquema legado contiene duplicados, el consumidor conserva el primer find.
+ */
+export async function listarLineasEmpleadoPorPeriodos(
+  empresaId: number, empleadoId: number, periodoIds: number[],
+): Promise<PlanillaLinea[]> {
+  if (!periodoIds.length) return [];
+  await asegurarSchemaPlanillas();
+  const rows = await query<RowDataPacket[]>(
+    `SELECT l.*, COALESCE(e.sueldo_base, l.sueldo_base) AS sueldo_mensual
+     FROM rrhh_planilla_lineas l
+     LEFT JOIN empleados e ON e.id = l.id_empleado AND e.empresa_id = l.empresa_id
+     WHERE l.empresa_id = ? AND l.id_empleado = ?
+       AND l.periodo_id IN (${periodoIds.map(() => "?").join(",")})
+     ORDER BY l.nombre_empleado`,
+    [empresaId, empleadoId, ...periodoIds],
+  );
+  return rows.map(mapLinea);
+}
+
 export function calcularCuadre(lineas: PlanillaLinea[]): CuadrePlanilla {
   const empty = () => ({
     cantidad: 0,

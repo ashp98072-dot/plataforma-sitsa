@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getColaboradorSession } from "@/lib/rrhh/colaborador-session";
-import { listarPeriodos, listarLineas } from "@/lib/rrhh/planillas";
+import { listarPeriodos, listarLineasEmpleadoPorPeriodos } from "@/lib/rrhh/planillas";
 
 // Solo periodos ya finalizados: mientras un periodo está en "Generada",
 // RRHH todavía puede editar montos (ISR, forma de pago, etc.) desde su
@@ -18,10 +18,16 @@ export async function GET() {
     ESTADOS_VISIBLES_COLABORADOR.includes(p.estado),
   );
 
+  const lineas = await listarLineasEmpleadoPorPeriodos(
+    session.empresaId, session.empleadoId, finalizados.map((p) => p.id),
+  );
+  const porPeriodo = new Map<number, (typeof lineas)[number]>();
+  for (const linea of lineas) {
+    if (!porPeriodo.has(linea.periodoId)) porPeriodo.set(linea.periodoId, linea);
+  }
   const boletas = [];
   for (const periodo of finalizados) {
-    const lineas = await listarLineas(session.empresaId, periodo.id);
-    const propia = lineas.find((l) => l.empleadoId === session.empleadoId);
+    const propia = porPeriodo.get(periodo.id);
     if (!propia) continue; // no trabajaba, o no tenía línea en ese periodo
     boletas.push({
       periodoId: periodo.id,

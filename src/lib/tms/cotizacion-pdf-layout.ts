@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import { fechaLarga, formatoMoneda, type DocumentoComercial } from "./cotizacion-documento";
+import { fechaLarga, formatoMoneda, lineaDestinatario, type DocumentoComercial } from "./cotizacion-documento";
 
 /**
  * COTIZACIONES FASE 6 — utilidades de maquetación compartidas por las
@@ -58,6 +58,8 @@ export type EstiloTabla = {
   fondoFilaAlterna?: string;
   tamanoTexto?: number;
   relleno?: number;
+  /** true: el texto de cada celda (encabezado incluido) se centra verticalmente en la altura de la fila; por defecto, alineado arriba. */
+  centradoVertical?: boolean;
 };
 
 /** Anchos de columna en puntos, proporcionales a `peso` y sumando exactamente `ancho`. */
@@ -86,8 +88,10 @@ export function dibujarTabla(doc: Pdf, x: number, ancho: number, columnas: Colum
     if (opciones.fondo) doc.rect(x, y, ancho, alto).fill(opciones.fondo);
     let cx = x;
     celdas.forEach((texto, i) => {
+      // Centrado vertical: la altura de la fila es la de su celda más alta; las demás se centran dentro de ella (misma medición que alturaFila).
+      const yTexto = estilo.centradoVertical ? y + (alto - alturaTexto(texto, i, opciones.negrita)) / 2 : y + pad;
       doc.font(opciones.negrita ? "Helvetica-Bold" : "Helvetica").fontSize(tamano).fillColor(opciones.color)
-        .text(texto, cx + pad, y + pad, { width: anchos[i] - pad * 2, align: columnas[i].alinear ?? "left" });
+        .text(texto, cx + pad, yTexto, { width: anchos[i] - pad * 2, align: columnas[i].alinear ?? "left" });
       cx += anchos[i];
     });
     doc.rect(x, y, ancho, alto).lineWidth(0.6).strokeColor(estilo.colorBorde).stroke();
@@ -248,7 +252,8 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
       // Destinatario: el cliente es el principal; atención y cargo son opcionales.
       doc.moveDown(0.8);
       dibujarParrafo(doc, x, ancho, modelo.cliente, { color: colores.texto, tamano: 12, negrita: true });
-      if (modelo.atencionNombre) dibujarParrafo(doc, x, ancho, `Atención: ${modelo.atencionNombre}`, { color: colores.texto, tamano: 10 });
+      const destinatario = lineaDestinatario(modelo.atencionTratamiento, modelo.atencionNombre);
+      if (destinatario) dibujarParrafo(doc, x, ancho, destinatario, { color: colores.texto, tamano: 10 });
       if (modelo.atencionCargo) dibujarParrafo(doc, x, ancho, modelo.atencionCargo, { color: colores.suave, tamano: 9.5 });
 
       doc.moveDown(0.7);
@@ -262,13 +267,14 @@ export function renderDocumentoComercial(tema: TemaComercial, modelo: DocumentoC
       dibujarTabla(
         doc, x, ancho,
         [
-          { titulo: "Punto de carga", peso: 2.8 },
-          { titulo: "Punto de descarga", peso: 2.8 },
-          { titulo: "Unidad", peso: 2.1 },
-          { titulo: modelo.encabezadoPrecio, peso: 2.3, alinear: "right" },
+          // Todas las columnas (y sus encabezados) van centradas horizontalmente; los anchos (pesos) no cambian.
+          { titulo: "Punto de carga", peso: 2.8, alinear: "center" },
+          { titulo: "Punto de descarga", peso: 2.8, alinear: "center" },
+          { titulo: "Unidad", peso: 2.1, alinear: "center" },
+          { titulo: modelo.encabezadoPrecio, peso: 2.3, alinear: "center" },
         ],
         modelo.lineas.map((l) => [l.origen, l.destino, l.unidad, formatoMoneda(l.precio, modelo.moneda)]),
-        { fondoEncabezado: colores.acento, textoEncabezado: colores.textoSobreAcento, colorBorde: colores.borde, colorTexto: colores.texto, fondoFilaAlterna: colores.filaAlterna },
+        { fondoEncabezado: colores.acento, textoEncabezado: colores.textoSobreAcento, colorBorde: colores.borde, colorTexto: colores.texto, fondoFilaAlterna: colores.filaAlterna, centradoVertical: true },
       );
 
       const estiloLista = { color: colores.texto, colorVineta: colores.acento };

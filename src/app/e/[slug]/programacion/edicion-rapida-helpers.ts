@@ -1,9 +1,7 @@
 import type { DisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { tienePermiso, type PermisoModulo } from "@/lib/permisos-shared";
-import {
-  MAX_FILAS_EDICION_RAPIDA,
-  type FilaResultadoEdicionRapida,
-} from "@/lib/tms/edicion-rapida-schema";
+import { MAX_FILAS_EDICION_RAPIDA } from "@/lib/tms/edicion-rapida-limites";
+import type { FilaResultadoEdicionRapida } from "@/lib/tms/edicion-rapida-schema";
 
 /**
  * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-3: lógica PURA (sin React) de la tabla compacta de edición rápida, para poder

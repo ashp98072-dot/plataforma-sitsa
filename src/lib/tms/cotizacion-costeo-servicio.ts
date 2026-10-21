@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { calcularIva } from "./cotizaciones";
-import { calcularCosteoServicio, ErrorCosteo, type InputCosteoServicio, type ResultadoCosteoServicio } from "./cotizacion-costeo";
+import { calcularCosteoServicio, COTIZACION_COSTEO_COTIZADOR_V2_VERSION, ErrorCosteo, type InputCosteoServicio, type ResultadoCosteoServicio } from "./cotizacion-costeo";
 import {
   ErrorCosteoConfig,
   obtenerParametrosCosteoVigentes,
@@ -14,8 +14,9 @@ import {
  * El cliente solo envía los datos operativos del servicio. Perfil (por id,
  * revalidado contra la empresa) y parámetros económicos (vigentes por
  * fecha) salen SIEMPRE de la base: el esquema es `.strict()`, así que
- * cualquier intento de mandar gpsMensual, combustible, salarios, IVA,
+ * cualquier intento de mandar gpsMensual, precio global, salarios, IVA,
  * llantas, aceite, depreciación o rendimiento se rechaza con 400.
+ * Solo precioCombustibleOverride es editable por cotización; no modifica Ajustes.
  */
 
 const monto = z.number().finite().min(0).max(1_000_000_000);
@@ -27,15 +28,15 @@ export const costeoPayloadSchema = z.object({
   diasServicio: z.number().finite().positive().max(365),
   cantidadPilotos: z.number().finite().min(0).max(100),
   cantidadAuxiliares: z.number().finite().min(0).max(100),
-  cantidadGuias: opcional(z.number().finite().min(0).max(100)),
   incluirGps: z.boolean(),
   incluirSeguroVehiculo: z.boolean(),
   seguroMercaderia: opcional(monto),
+  incluirSeguroMercaderia: opcional(z.boolean()),
+  precioCombustibleOverride: opcional(monto),
   usarRefrigeracion: opcional(z.boolean()),
-  viaticoPilotoTotal: opcional(monto),
-  viaticoAuxiliarTotal: opcional(monto),
-  viaticoGuiaTotal: opcional(monto),
-  hotelTotal: opcional(monto),
+  // Cotizador 2026: UNA sola columna «Viáticos y hotel» (monto directo del viaje; vacío = valor del perfil). Los overrides separados
+  // de piloto/auxiliar/guía/hotel y las guías ya no existen en el cálculo nuevo y se rechazan (.strict()).
+  viaticosHotelTotal: opcional(monto),
   otrosCostos: z.array(z.object({ concepto: z.string().trim().min(1).max(120), monto }).strict()).max(50).optional(),
   // Fracción (0.2 = 20 %). Tope de negocio de 5 (500 %); el snapshot lo guarda en DECIMAL(10,6).
   margenObjetivo: opcional(z.number().finite().min(0).max(5)),
@@ -74,6 +75,7 @@ export function precioVentaDesdeTarifa(tarifaCotizada: number | null | undefined
 
 function construirInput(payload: CosteoPayload, perfil: InputCosteoServicio["perfil"], parametros: InputCosteoServicio["parametros"], precioVenta: number | null): InputCosteoServicio {
   const input: InputCosteoServicio = {
+    motorVersion: COTIZACION_COSTEO_COTIZADOR_V2_VERSION,
     perfil,
     parametros,
     distanciaKm: payload.distanciaKm,
@@ -85,15 +87,13 @@ function construirInput(payload: CosteoPayload, perfil: InputCosteoServicio["per
     precioVenta,
   };
   // Solo las claves presentes: null/ausente = "no informado", nunca 0 implícito.
-  if (payload.cantidadGuias != null) input.cantidadGuias = payload.cantidadGuias;
   if (payload.seguroMercaderia != null) input.seguroMercaderia = payload.seguroMercaderia;
   if (payload.usarRefrigeracion != null) input.usarRefrigeracion = payload.usarRefrigeracion;
-  if (payload.viaticoPilotoTotal != null) input.viaticoPilotoTotal = payload.viaticoPilotoTotal;
-  if (payload.viaticoAuxiliarTotal != null) input.viaticoAuxiliarTotal = payload.viaticoAuxiliarTotal;
-  if (payload.viaticoGuiaTotal != null) input.viaticoGuiaTotal = payload.viaticoGuiaTotal;
-  if (payload.hotelTotal != null) input.hotelTotal = payload.hotelTotal;
+  if (payload.viaticosHotelTotal != null) input.viaticosHotelTotal = payload.viaticosHotelTotal;
   if (payload.otrosCostos?.length) input.otrosCostos = payload.otrosCostos;
   if (payload.margenObjetivo != null) input.margenObjetivo = payload.margenObjetivo;
+  if (payload.precioCombustibleOverride != null) input.precioCombustibleOverride = payload.precioCombustibleOverride;
+  if (payload.incluirSeguroMercaderia != null) input.incluirSeguroMercaderia = payload.incluirSeguroMercaderia;
   return input;
 }
 
@@ -112,9 +112,11 @@ export async function prepararCosteo(
   const { vigenteDesde, parametros } = await obtenerParametrosCosteoVigentes(empresaId, contexto.fechaEmision);
   const { id: _id, ...perfilMotor } = perfil;
   void _id;
-  const input = construirInput(payload, perfilMotor, parametros, precioVentaDesdeTarifa(contexto.tarifaCotizada, contexto.incluyeIva));
+  // 20 es el default inicial configurable expresamente permitido para GPS.
+  const perfilResuelto = { ...perfilMotor, viajesMes: perfilMotor.viajesMes ?? 20 };
+  const input = construirInput(payload, perfilResuelto, parametros, precioVentaDesdeTarifa(contexto.tarifaCotizada, contexto.incluyeIva));
   const resultado: ResultadoCosteoServicio = calcularCosteoServicio(input);
-  return { perfil, input, resultado, parametrosVigenteDesde: vigenteDesde };
+  return { perfil: { ...perfil, viajesMes: perfilResuelto.viajesMes }, input, resultado, parametrosVigenteDesde: vigenteDesde };
 }
 
 /** Errores de configuración/validación del costeo => mensaje seguro para el cliente (400); cualquier otro se relanza. */

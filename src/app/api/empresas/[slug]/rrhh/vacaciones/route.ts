@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
+import { diasCalendarioInclusivos, RangoVacacionesInvalido, validarDiasCalculados } from "@/lib/rrhh/vacaciones-calendario";
 import { z } from "zod";
 import { requireTenantRrhh } from "@/lib/tenant";
 import {
-  calcularSaldoTotalDisponible,
+  crearLecturaVacacionesEmpleado,
   contarDiasHabiles,
   listarVacaciones,
-  obtenerPeriodosDisponibles,
   registrarIncidenciaSinSaldo,
-  registrarVacacionesFifo,
 } from "@/lib/rrhh/vacaciones";
+import { registrarVacaciones } from "@/lib/rrhh/vacaciones-registro";
 import { TIPOS_VACACIONES } from "@/lib/rrhh/vacaciones-eliminar-ui";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -39,6 +39,16 @@ const filtrosSchema = z.object({
 }).refine((v) => !v.desde || !v.hasta || v.desde <= v.hasta, { message: "El rango de fechas no es válido." })
   .refine((v) => !v.soloResumen || v.empleadoId, { message: "soloResumen requiere empleadoId." });
 
+/** Historial completo de períodos (ADITIVO): si falla no rompe la respuesta de saldo/registro (y la clave `historial` simplemente se omite). */
+async function historialSeguro(lectura: ReturnType<typeof crearLecturaVacacionesEmpleado>) {
+  try {
+    return await lectura.obtenerHistorialPeriodos();
+  } catch (error) {
+    console.error("[vacaciones] historial de períodos:", error);
+    return null;
+  }
+}
+
 export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantRrhh(slug, "vacaciones", "ver");
@@ -56,11 +66,13 @@ export async function GET(req: Request, ctx: Ctx) {
   }
   const { empleadoId, tipo, desde, hasta, soloResumen } = parsed.data;
 
-  if (soloResumen && empleadoId) {
+  const lectura = empleadoId ? crearLecturaVacacionesEmpleado(guard.empresa.id, empleadoId) : null;
+
+  if (soloResumen && empleadoId && lectura) {
     try {
-      const saldo = await calcularSaldoTotalDisponible(guard.empresa.id, empleadoId);
-      const periodos = await obtenerPeriodosDisponibles(guard.empresa.id, empleadoId);
-      return NextResponse.json({ saldo, periodos });
+      const saldo = await lectura.calcularSaldoTotalDisponible();
+      const periodos = await lectura.obtenerPeriodosDisponibles();
+      return NextResponse.json({ saldo, periodos, historial: (await historialSeguro(lectura)) ?? undefined });
     } catch {
       return NextResponse.json({
         saldo: null,
@@ -72,17 +84,11 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const vacaciones = await listarVacaciones(guard.empresa.id, { empleadoId, tipo, desde, hasta });
 
-  if (empleadoId) {
+  if (empleadoId && lectura) {
     try {
-      const saldo = await calcularSaldoTotalDisponible(
-        guard.empresa.id,
-        empleadoId,
-      );
-      const periodos = await obtenerPeriodosDisponibles(
-        guard.empresa.id,
-        empleadoId,
-      );
-      return NextResponse.json({ vacaciones, saldo, periodos });
+      const saldo = await lectura.calcularSaldoTotalDisponible();
+      const periodos = await lectura.obtenerPeriodosDisponibles();
+      return NextResponse.json({ vacaciones, saldo, periodos, historial: (await historialSeguro(lectura)) ?? undefined });
     } catch {
       return NextResponse.json({
         vacaciones,
@@ -102,6 +108,8 @@ const schema = z.object({
   fechaFin: z.string().min(8),
   diasHabiles: z.number().positive().optional(),
   tipo: z.string().default("Vacaciones"),
+  /** Decisión explícita de RRHH para un registro HISTÓRICO que cruza un aniversario o tiene déficit (atada a la huella de la propuesta). */
+  decision: z.object({ huella: z.string().length(64), motivo: z.string().max(500) }).optional(),
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -109,32 +117,45 @@ export async function POST(req: Request, ctx: Ctx) {
   const guard = await requireTenantRrhh(slug, "vacaciones", "crear");
   if (guard.error) return guard.error;
 
-  const parsed = schema.safeParse(await req.json());
+  const parsed = schema.safeParse(await req.json().catch(()=>null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   }
   const d = parsed.data;
-  const dias =
-    d.diasHabiles ??
-    (await contarDiasHabiles(guard.empresa.id, d.fechaInicio, d.fechaFin));
+  let dias: number;
+  try {
+    diasCalendarioInclusivos(d.fechaInicio,d.fechaFin);
+    dias = validarDiasCalculados(d.fechaInicio,d.fechaFin,await contarDiasHabiles(guard.empresa.id,d.fechaInicio,d.fechaFin));
+    if(dias<=0)return NextResponse.json({error:"El rango de fechas no tiene días hábiles."},{status:400});
+  } catch(e) {
+    if(e instanceof RangoVacacionesInvalido)return NextResponse.json({error:e.message},{status:400});
+    return NextResponse.json({error:"No se pudo calcular los días."},{status:500});
+  }
 
   if (TIPOS_CON_SALDO.has(d.tipo)) {
-    const r = await registrarVacacionesFifo({
+    // Registro normal sin cambios; si la fecha de inicio cae en un período que HOY está Vencido es un registro HISTÓRICO (ver vacaciones-registro.ts).
+    const r = await registrarVacaciones({
       empresaId: guard.empresa.id,
       idEmpleado: d.empleadoId,
       fechaInicio: d.fechaInicio,
       fechaFin: d.fechaFin,
       diasATomar: dias,
       tipo: d.tipo,
+      decision: d.decision,
+      usuario: guard.session.username,
     });
     if (!r.ok) {
-      return NextResponse.json({ error: r.mensaje }, { status: 400 });
+      return NextResponse.json(
+        { error: r.mensaje, ...(r.codigo ? { codigo: r.codigo } : {}), ...(r.requiereDecision ? { requiereDecision: true } : {}), ...(r.plan ? { plan: r.plan } : {}) },
+        { status: r.codigo === "DECISION_REQUERIDA" ? 409 : 400 },
+      );
     }
     return NextResponse.json({
       mensaje: r.mensaje,
       desglose: r.desglose,
       incidenciaId: r.incidenciaId,
       diasHabiles: dias,
+      ...(r.historico ? { historico: true, plan: r.plan } : {}),
     });
   }
 

@@ -8,7 +8,6 @@ import {
 } from "@/lib/flota/import-excel";
 import {
   asegurarSchemaFlota,
-  asegurarSchemaFlotaLectura,
 } from "@/lib/flota/schema";
 import { guardarFiltrosVehiculo } from "@/lib/flota/filtros";
 import { guardarAccesoVehiculo } from "@/lib/flota/acceso";

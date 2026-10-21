@@ -20,8 +20,62 @@ export const DOCUMENTO_EMISOR_DEFAULT: DocumentoEmisor = "KUIQTRANS";
 
 export const LIMITE_TEXTO_DOCUMENTO = 160;
 
+/** Tratamiento del destinatario en el PDF (lista cerrada; se elige por cotización, nunca se deduce del nombre). */
+export const TRATAMIENTOS_DESTINATARIO = [
+  { valor: "Sr.", etiqueta: "Señor — Sr." },
+  { valor: "Sres.", etiqueta: "Señores — Sres." },
+  { valor: "Sra.", etiqueta: "Señora — Sra." },
+  { valor: "Srta.", etiqueta: "Señorita — Srta." },
+] as const;
+export type TratamientoDestinatario = (typeof TRATAMIENTOS_DESTINATARIO)[number]["valor"];
+export const esTratamientoDestinatario = (v: unknown): v is TratamientoDestinatario => TRATAMIENTOS_DESTINATARIO.some((t) => t.valor === v);
+
+/** Línea del destinatario bajo el cliente: «Srta. Marjoie Barahona». Sin nombre no hay línea; sin tratamiento (cotizaciones anteriores) solo el nombre. */
+export function lineaDestinatario(tratamiento: string | null | undefined, nombre: string | null | undefined): string | null {
+  const n = nombre?.trim();
+  if (!n) return null;
+  const t = esTratamientoDestinatario(tratamiento) ? tratamiento : null;
+  return t ? `${t} ${n}` : n;
+}
+
 /** Mensaje/cierre comercial — mismo límite que condicionesAdicionales/observaciones en la cotización. */
 export const LIMITE_TEXTO_MENSAJE_COMERCIAL = 2000;
+
+/**
+ * COTIZACIONES-CREDITO-COMBUSTIBLE — datos COMERCIALES por cotización (guardados con la cotización, nunca recalculados ni
+ * leídos de Ajustes al generar el PDF). Separados de `tarifaReferencia` (referencia tarifaria de la ruta) y de los
+ * datos operativos internos (que nunca llegan al documento).
+ */
+/** Condiciones de crédito: texto libre controlado (ej. "Crédito 30 días"); mismo límite que origen/destino (VARCHAR(300)). */
+export const LIMITE_CONDICIONES_CREDITO = 300;
+/** Tipos de combustible de referencia — mismos códigos que ya usa Flota (`diesel`/`gasolina`) más `otro`. Catálogo cerrado pequeño, sin tabla. */
+export const TIPOS_COMBUSTIBLE_REFERENCIA = ["diesel", "gasolina", "otro"] as const;
+export type TipoCombustibleReferencia = (typeof TIPOS_COMBUSTIBLE_REFERENCIA)[number];
+export const ETIQUETA_COMBUSTIBLE: Record<TipoCombustibleReferencia, string> = { diesel: "Diésel", gasolina: "Gasolina", otro: "Otro" };
+/** Tope de la columna DECIMAL(12,2), mismo que el resto de montos de la cotización. */
+export const MAX_PRECIO_COMBUSTIBLE = 9999999999.99;
+
+export function esTipoCombustibleReferencia(valor: unknown): valor is TipoCombustibleReferencia {
+  return typeof valor === "string" && (TIPOS_COMBUSTIBLE_REFERENCIA as readonly string[]).includes(valor);
+}
+
+/** Precio de referencia válido: número finito > 0, a lo sumo 2 decimales y dentro de la columna DECIMAL(12,2). */
+export function esPrecioCombustibleValido(valor: number): boolean {
+  if (!Number.isFinite(valor) || !(valor > 0) || valor > MAX_PRECIO_COMBUSTIBLE) return false;
+  const centavos = valor * 100;
+  return Math.abs(centavos - Math.round(centavos)) < 1e-6;
+}
+
+/**
+ * "Diésel — Q29.75/galón" | "Diésel" | "Q29.75/galón" | null (sin datos). El precio es por galón y en quetzales (lo
+ * que pide negocio), independiente de la moneda de la tarifa cotizada.
+ */
+export function textoCombustibleReferencia(tipo: string | null | undefined, precio: number | null | undefined): string | null {
+  const etiqueta = esTipoCombustibleReferencia(tipo) ? ETIQUETA_COMBUSTIBLE[tipo] : null;
+  const monto = precio != null ? `${formatoMoneda(precio, "GTQ")}/galón` : null;
+  if (etiqueta && monto) return `${etiqueta} — ${monto}`;
+  return etiqueta ?? monto;
+}
 
 export type MarcaDocumento = {
   clave: DocumentoEmisor;
@@ -97,8 +151,9 @@ export type DatosDocumento = Pick<
   | "codigo" | "clienteNombre" | "origenTexto" | "destinoTexto" | "tarifaCotizada" | "incluyeIva" | "moneda"
   | "fechaEmision" | "fechaVencimiento" | "pilotoIncluido" | "gpsIncluido" | "seguroMercaderiaIncluido"
   | "seguroTercerosIncluido" | "servicioRefrigerado" | "kmIncluidos" | "tarifaKmAdicional"
-  | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionCargo" | "unidadDescripcion"
+  | "condicionesAdicionales" | "observaciones" | "documentoEmisor" | "atencionNombre" | "atencionTratamiento" | "atencionCargo" | "unidadDescripcion"
   | "mensajeComercial" | "cierreComercial" | "lineasAdicionales"
+  | "condicionesCredito" | "combustibleReferenciaTipo" | "combustibleReferenciaPrecio"
 >;
 
 /**
@@ -143,6 +198,12 @@ export function condicionesComerciales(c: DatosDocumento): string[] {
   if (c.servicioRefrigerado) items.push("Servicio refrigerado");
   if (c.kmIncluidos != null) items.push(`${numeroCorto(c.kmIncluidos)} km incluidos`);
   if (c.tarifaKmAdicional != null) items.push(`${formatoMoneda(c.tarifaKmAdicional, c.moneda)} por km adicional`);
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — debajo de las condiciones del servicio, antes de las adicionales; sin dato
+  // (cotizaciones históricas) la línea se omite en vez de imprimir "—".
+  const credito = textoOpcional(c.condicionesCredito);
+  if (credito) items.push(`Condiciones de crédito: ${credito}`);
+  // El combustible de referencia (tipo y precio) es SOLO de control interno: se guarda con la cotización y se ve en la pantalla interna,
+  // pero NUNCA se agrega a las condiciones ni a ningún otro bloque del documento comercial (PDF KuiqTrans / Mónaco).
   items.push(...lineasDeTexto(c.condicionesAdicionales));
   return items;
 }
@@ -155,6 +216,8 @@ export type DocumentoComercial = {
   fechaVencimiento: string | null;
   cliente: string;
   atencionNombre: string | null;
+  /** «Sr.» | «Sres.» | «Sra.» | «Srta.» o null (cotizaciones anteriores). */
+  atencionTratamiento: string | null;
   atencionCargo: string | null;
   saludo: string;
   lineas: LineaComercial[];
@@ -162,6 +225,8 @@ export type DocumentoComercial = {
   encabezadoPrecio: string;
   moneda: string;
   condiciones: string[];
+  /** COTIZACIONES-CREDITO-COMBUSTIBLE — valor guardado (también incluido como línea en `condiciones`). El combustible de referencia NO forma parte del documento comercial. */
+  condicionesCredito: string | null;
   observaciones: string[];
   cierre: string;
 };
@@ -189,6 +254,7 @@ export function construirDocumentoComercial(c: DatosDocumento): DocumentoComerci
     fechaVencimiento: c.fechaVencimiento,
     cliente: c.clienteNombre,
     atencionNombre: textoOpcional(c.atencionNombre),
+    atencionTratamiento: esTratamientoDestinatario(c.atencionTratamiento) ? c.atencionTratamiento : null,
     atencionCargo: textoOpcional(c.atencionCargo),
     saludo: textoOpcional(c.mensajeComercial) ?? marca.saludo,
     lineas: lineasComerciales(c),
@@ -196,6 +262,7 @@ export function construirDocumentoComercial(c: DatosDocumento): DocumentoComerci
     encabezadoPrecio: encabezadoPrecio(c.incluyeIva),
     moneda: c.moneda,
     condiciones: condicionesComerciales(c),
+    condicionesCredito: textoOpcional(c.condicionesCredito),
     observaciones: lineasDeTexto(c.observaciones),
     cierre: textoOpcional(c.cierreComercial) ?? marca.cierre,
   };

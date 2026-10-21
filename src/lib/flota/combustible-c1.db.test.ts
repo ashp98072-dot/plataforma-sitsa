@@ -1,0 +1,114 @@
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import mysql, { type Pool, type RowDataPacket, type Connection } from "mysql2/promise";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+const state = vi.hoisted(() => ({ pool: null as Pool | null }));
+vi.mock("@/lib/db", () => ({ getPool: () => state.pool, query: async (sql: string, params: (string | number | boolean | Date | null)[]) => (await state.pool!.query(sql, params))[0], execute: async (sql: string, params: (string | number | boolean | Date | null)[]) => (await state.pool!.execute(sql, params))[0] }));
+vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: "empresas/1/flota/fixture.pdf", original: "fixture.pdf", size: 10 }), contentTypeFor: () => "application/pdf", borrarUpload: vi.fn(), validarRutaArchivoEmpresa: () => true }));
+import { guardarEstacion, listarEstaciones } from "./combustible-estaciones";
+import { guardarCombustibleStaff } from "./combustible-staff";
+import { listarCargasCombustibleRevision, resumenCombustibleMensual, revisarCargaCombustible } from "./combustible";
+const habilitado = process.env.COMBUSTIBLE_C1_DB_PORT === "33479";
+const db = `combustible_c1_test_${randomUUID().replaceAll("-", "")}`;
+let admin: Connection;
+let historico: RowDataPacket;
+const sql = (archivo: string) => readFileSync(`sql/${archivo}`, "utf8");
+beforeAll(async () => {
+  if (!habilitado) return;
+  admin = await mysql.createConnection({ host: "127.0.0.1", port: 33479, user: "root", multipleStatements: true });
+  await admin.query(`CREATE DATABASE ${db} CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci`);
+  state.pool = mysql.createPool({ host: "127.0.0.1", port: 33479, user: "root", database: db, multipleStatements: true, connectionLimit: 4 });
+  await state.pool.query(`CREATE TABLE usuarios(id INT PRIMARY KEY); INSERT INTO usuarios VALUES(91),(92);
+    CREATE TABLE empresas(id INT PRIMARY KEY); INSERT INTO empresas VALUES(1),(2);
+    CREATE TABLE flota_vehiculos(id INT PRIMARY KEY, empresa_id INT NOT NULL, placa VARCHAR(30), activo TINYINT NOT NULL DEFAULT 1);
+    INSERT INTO flota_vehiculos VALUES(7,1,'P-123',1),(8,2,'P-OTRA',1);
+    CREATE TABLE flota_vehiculo_acceso(vehiculo_id INT, empresa_id INT);
+    CREATE TABLE compras_proveedores(id INT PRIMARY KEY, empresa_id INT, nombre_comercial VARCHAR(200), activo TINYINT, UNIQUE KEY uq_fixture_proveedor (empresa_id,id));
+    INSERT INTO compras_proveedores VALUES(3,1,'Proveedor A',1),(4,2,'Proveedor B',1);
+    CREATE TABLE flota_viajes(id INT PRIMARY KEY, empresa_id INT, vehiculo_id INT); INSERT INTO flota_viajes VALUES(9,1,7),(10,2,8);
+    CREATE TABLE auditoria(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, usuario VARCHAR(100), accion VARCHAR(100), modulo VARCHAR(100), detalle TEXT);`);
+  const fuente = readFileSync("src/lib/flota/schema.ts", "utf8");
+  const ddl = fuente.match(/CREATE TABLE IF NOT EXISTS flota_combustible_cargas \([\s\S]*?ENGINE=InnoDB DEFAULT CHARSET=utf8mb4/)![0];
+  await state.pool.query(ddl);
+  await state.pool.query(`ALTER TABLE flota_combustible_cargas ADD numero_vale VARCHAR(40) NULL, ADD fecha_consumo DATE NULL, ADD precio_por_galon DECIMAL(10,2) NULL, MODIFY galones DECIMAL(12,3) NOT NULL;
+    INSERT INTO flota_combustible_cargas (id,empresa_id,vehiculo_id,viaje_id,empleado_id,piloto_nombre,tipo_combustible,galones,monto,ruta_relativa,nombre_original,estado,creado_por,creado_at)
+    VALUES(1,1,7,9,20,'Piloto histórico','diesel',10.125,300.50,'empresas/1/flota/viejo.pdf','viejo.pdf','APROBADO','portal:E20','2026-10-01 10:00:00');`);
+  await state.pool.query("UPDATE flota_combustible_cargas SET gasolinera='Texto histórico sin catálogo' WHERE id=1");
+  const [rows] = await state.pool.query<RowDataPacket[]>("SELECT * FROM flota_combustible_cargas WHERE id=1"); historico = rows[0];
+}, 30000);
+afterAll(async () => {
+  await state.pool?.end();
+  if (admin) { if (!/^combustible_c1_test_[a-f0-9]{32}$/.test(db)) throw Error("BD no desechable"); await admin.query(`DROP DATABASE ${db}`); await admin.end(); }
+});
+it.skipIf(!habilitado)("MariaDB 11.8.9: preflight, upgrade, históricos intactos y segunda ejecución segura", async () => {
+  const [v] = await admin.query<RowDataPacket[]>("SELECT VERSION() AS v"); expect(v[0].v).toContain("11.8.9");
+  await state.pool!.query(sql("preflight-2026-10-combustibles-c1.sql"));
+  await state.pool!.query(sql("migrate-2026-10-combustibles-c1.sql"));
+  await state.pool!.query(sql("migrate-2026-10-combustibles-c1.sql"));
+  await state.pool!.query(sql("preflight-2026-10-combustibles-estaciones.sql"));
+  await state.pool!.query(sql("migrate-2026-10-combustibles-estaciones.sql"));
+  await state.pool!.query(sql("migrate-2026-10-combustibles-estaciones.sql"));
+  await state.pool!.query(sql("verificar-2026-10-combustibles-estaciones.sql"));
+  const [rows] = await state.pool!.query<RowDataPacket[]>("SELECT * FROM flota_combustible_cargas WHERE id=1");
+  for (const [k, valor] of Object.entries(historico)) expect(rows[0][k]).toEqual(valor);
+  expect(rows[0].proveedor_id).toBeNull(); expect(rows[0].observaciones).toBeNull();
+  expect(rows[0].creado_por_usuario_id).toBeNull(); expect(rows[0].revisado_por_usuario_id).toBeNull();
+  await state.pool!.query(sql("verificar-2026-10-combustibles-c1.sql"));
+  const [cols] = await state.pool!.query<RowDataPacket[]>("SHOW COLUMNS FROM flota_combustible_cargas");
+  for (const campo of ["viaje_id", "empleado_id", "piloto_nombre", "proveedor_id", "observaciones", "creado_por_usuario_id", "revisado_por_usuario_id"]) expect(cols.find(c => c.Field === campo)?.Null).toBe("YES");
+});
+it.skipIf(!habilitado)("servicio real: alta/edición staff, aislamiento, revisión y resumen preservados", async () => {
+  const input = { proveedorId: 3, vehiculoId: 7, viajeId: null, numeroVale: "OP-1", fechaConsumo: "2026-10-15", tipoCombustible: "diesel" as const, galones: "10.125", monto: "300.50", km: null, gasolinera: "Estación", observaciones: "Operaciones" };
+  const file = { name: "vale.pdf", size: 10, arrayBuffer: async () => new ArrayBuffer(10) };
+  const id = await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file);
+  const [rows] = await state.pool!.query<RowDataPacket[]>("SELECT * FROM flota_combustible_cargas WHERE id=?", [id]);
+  expect(rows[0]).toMatchObject({ viaje_id: null, empleado_id: null, piloto_nombre: null, estado: "PENDIENTE", precio_por_galon: "29.68", creado_por: "op", creado_por_usuario_id: 91, revisado_por_usuario_id: null });
+  expect((await listarCargasCombustibleRevision(1)).items.find(c => c.id === id)?.viajeId).toBeNull();
+  await guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, { ...input, viajeId: 9 }, null, id);
+  await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)).rejects.toMatchObject({ status: 409 });
+  for (const ajeno of [{ ...input, proveedorId: 4 }, { ...input, vehiculoId: 8 }, { ...input, viajeId: 10 }]) await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, ajeno, file)).rejects.toThrow();
+  await revisarCargaCombustible(1, id, "aprobar", "revisor", undefined, 92);
+  const [revisados] = await state.pool!.query<RowDataPacket[]>("SELECT empleado_id, piloto_nombre, creado_por_usuario_id, revisado_por_usuario_id, revisado_por FROM flota_combustible_cargas WHERE id=?", [id]);
+  expect(revisados[0]).toMatchObject({ empleado_id: null, piloto_nombre: null, creado_por_usuario_id: 91, revisado_por_usuario_id: 92, revisado_por: "revisor" });
+  await expect(guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, null, id)).rejects.toMatchObject({ status: 409 });
+  expect((await resumenCombustibleMensual(1, "2026-10")).total.cargas).toBe(2);
+  expect((await listarCargasCombustibleRevision(2)).items).toHaveLength(0);
+});
+it.skipIf(!habilitado)("dos altas concurrentes del mismo proveedor/vale no duplican", async () => {
+  const input = { proveedorId: 3, vehiculoId: 7, viajeId: null, numeroVale: "CONCURRENTE", fechaConsumo: "2026-10-15", tipoCombustible: "diesel" as const, galones: "1", monto: "30", km: null, gasolinera: "", observaciones: "" };
+  const file = { name: "vale.pdf", size: 10, arrayBuffer: async () => new ArrayBuffer(10) };
+  const resultados = await Promise.allSettled([guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file), guardarCombustibleStaff(1, { usuarioId: 91, username: "op" }, input, file)]);
+  expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
+  const fallo = resultados.find(r => r.status === "rejected") as PromiseRejectedResult;
+  expect(fallo.reason.status).toBe(409);
+  const [rows] = await state.pool!.query<RowDataPacket[]>("SELECT COUNT(*) AS n FROM flota_combustible_cargas WHERE empresa_id=1 AND proveedor_id=3 AND numero_vale='CONCURRENTE'");
+  expect(rows[0].n).toBe(1);
+});
+
+it.skipIf(!habilitado)("catálogo estaciones: crear/editar/desactivar/reactivar, snapshot e aislamiento reales", async () => {
+  const actor = { usuarioId: 91, username: "op" };
+  const estacion = await guardarEstacion(1, actor, { proveedorId: 3, nombre: "Estación Inicial", direccion: "Referencia" });
+  expect((await listarEstaciones(1, { proveedorId: 3, activo: true }))[0]).toMatchObject({ id: estacion, nombre: "Estación Inicial", activo: true });
+  expect(await listarEstaciones(2)).toHaveLength(0);
+  await expect(guardarEstacion(2, actor, { nombre: "Ajena" }, estacion)).rejects.toMatchObject({ status: 404 });
+  await expect(guardarEstacion(1, actor, { proveedorId: 4, nombre: "Proveedor ajeno" })).rejects.toThrow();
+  const input = { proveedorId: 3, estacionId: estacion, vehiculoId: 7, viajeId: null, numeroVale: "EST-1", fechaConsumo: "2026-10-15", tipoCombustible: "diesel" as const, galones: "1", monto: "30", km: null, gasolinera: "Texto no confiable", observaciones: "" };
+  const file = { name: "vale.pdf", size: 10, arrayBuffer: async () => new ArrayBuffer(10) };
+  const vale = await guardarCombustibleStaff(1, actor, input, file);
+  await guardarEstacion(1, actor, { nombre: "Estación Renombrada", direccion: "Nueva referencia" }, estacion);
+  await guardarCombustibleStaff(1, actor, input, null, vale);
+  const [r] = await state.pool!.query<RowDataPacket[]>("SELECT gasolinera, estacion_id FROM flota_combustible_cargas WHERE id=?", [vale]);
+  expect(r[0]).toMatchObject({ gasolinera: "Estación Inicial", estacion_id: estacion });
+  await guardarEstacion(1, actor, { activo: false }, estacion);
+  expect(await listarEstaciones(1, { activo: true })).toHaveLength(0);
+  await expect(guardarCombustibleStaff(1, actor, { ...input, numeroVale: "EST-2" }, file)).rejects.toThrow("estación");
+  await guardarCombustibleStaff(1, actor, input, null, vale); // conserva una referencia histórica inactiva
+  await guardarEstacion(1, actor, { activo: true }, estacion);
+  expect((await listarEstaciones(1, { buscar: "Renombrada", activo: true }))[0].direccion).toBe("Nueva referencia");
+  await state.pool!.query("INSERT INTO compras_proveedores VALUES(5,1,'Otro proveedor',1)");
+  await expect(guardarCombustibleStaff(1, actor, { ...input, proveedorId: 5, numeroVale: "EST-3" }, file)).rejects.toThrow("estación");
+  await expect(guardarEstacion(1, actor, { proveedorId: 5 }, estacion)).rejects.toMatchObject({ status: 409 });
+  await expect(state.pool!.query("UPDATE flota_combustible_cargas SET proveedor_id=5 WHERE id=?", [vale])).rejects.toMatchObject({ errno: 1452 });
+  const [viejo] = await state.pool!.query<RowDataPacket[]>("SELECT gasolinera, estacion_id FROM flota_combustible_cargas WHERE id=1");
+  expect(viejo[0]).toMatchObject({ gasolinera: "Texto histórico sin catálogo", estacion_id: null });
+});

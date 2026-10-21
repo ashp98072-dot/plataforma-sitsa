@@ -1,6 +1,10 @@
+import { SQL_COBRADO } from "@/lib/facturacion/cobrado";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
+import { liquidacionesDePlanes } from "@/lib/tms/liquidacion-viaje";
+import type { ResumenLiquidacionFila } from "@/lib/tms/liquidacion-viaje-shared";
+import { resumenComercialDePlanes } from "@/lib/tms/resumen-liquidacion";
 import { listarParadasDePlanes, type PlanParada } from "@/lib/tms/paradas";
 import { pilotoExtraDePlanes } from "@/lib/tms/piloto-extra";
 import {
@@ -72,6 +76,13 @@ export type PlanReporte = {
   tcPlaca?: string | null;
   tcOrigen?: "INTERNO" | "EXTERNO" | null;
   tcVehiculoId?: number | null;
+  /**
+   * PROGRAMACION-VEHICULO-SOLICITADO — vehículo/capacidad SOLICITADO por el cliente (fotografía del nombre del perfil de
+   * costeo al programar). Independiente de la unidad real (`placa`/`unidadTipo`/`unidadCapacidad`) y de la tarifa.
+   * null = sin dato (viajes previos a la funcionalidad): se muestra "—", nunca se infiere de la unidad.
+   */
+  vehiculoSolicitado?: string | null;
+  vehiculoSolicitadoPerfilId?: number | null;
   pilotoId: number | null;
   piloto: string | null;
   /** PILOTO EXTRA (nombre) del viaje, si tiene; el principal sigue siendo `piloto`/`pilotoId`. */
@@ -91,6 +102,17 @@ export type PlanReporte = {
   regresoReal?: string | null;
   /** El cierre fue manual (sin llegada física). Solo puede ser true si estado = Cerrado. */
   cierreManual?: boolean;
+  /**
+   * LIQUIDACIÓN DE VIAJES (Fase 2) — liquidación VIGENTE del viaje, dimensión SEPARADA de `estado`. null = «sin liquidación
+   * registrada» (incluye todo el histórico): NUNCA se infiere «liquidado». Solo lectura; no interviene en el cierre.
+   */
+  liquidacion?: ResumenLiquidacionFila | null;
+  /**
+   * TMS FASE 5 — cargos adicionales VIGENTES del viaje (cantidad y total, cadena decimal) y subtotal comercial = tarifa base +
+   * cargos, ANTES de impuestos (null sin tarifa). Costos internos/gastos NUNCA intervienen. No es «total factura»: sin IVA.
+   */
+  cargosAdicionales?: { cantidad: number; total: string };
+  subtotalComercial?: string | null;
   kmSalida: number | null;
   kmLlegada: number | null;
   kmRecorridos: number | null;
@@ -398,7 +420,7 @@ const JOIN_FACTURACION = `
   LEFT JOIN fact_factura_viajes ffv ON ffv.plan_id = p.id
   LEFT JOIN fact_facturas f ON f.id = ffv.factura_id AND f.empresa_id = p.empresa_id AND f.estado_admin <> 'Anulada'
   LEFT JOIN (
-    SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+    SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id
   ) pg ON pg.factura_id = f.id
 `;
 
@@ -601,7 +623,7 @@ export async function obtenerKpisReporte(
               COALESCE(SUM(pgx.total_pagado), 0) AS cobrado
        FROM fact_facturas fx
        LEFT JOIN (
-         SELECT factura_id, SUM(monto) AS total_pagado FROM fact_pagos GROUP BY factura_id
+         SELECT factura_id, SUM(monto) AS total_pagado FROM ${SQL_COBRADO} GROUP BY factura_id
        ) pgx ON pgx.factura_id = fx.id
        WHERE fx.empresa_id = ? AND fx.estado_admin = 'Emitida' AND fx.id IN (
          SELECT f.id FROM tms_planes_viaje p
@@ -677,7 +699,8 @@ export async function obtenerReporteViajes(
   // TC (tc_vehiculo_id / tc_placa_historica / tc_externo_placa): columnas de la migración
   // PROGRAMACION-TC-CAJA-REMOLQUE-1. Si una instalación aún no las tiene, el reporte sigue
   // funcionando (sin TC) — nunca se rompe por esto.
-  const consulta = (conTc: boolean) => query<RowDataPacket[]>(
+  // PROGRAMACION-VEHICULO-SOLICITADO: mismo criterio — sin sus columnas, el reporte sigue (dato ausente = "—").
+  const consulta = (conTc: boolean, conVehiculoSolicitado: boolean) => query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, DATE_FORMAT(p.fecha_plan, '%Y-%m-%d') AS fecha_plan,
             p.hora_carga, p.estado, p.cerrado_por,
             DATE_FORMAT(p.cerrado_en, '%Y-%m-%dT%H:%i') AS cerrado_en,
@@ -690,6 +713,7 @@ export async function obtenerReporteViajes(
             p.tarifa_id, p.tarifa_nombre_historico, p.tarifa_monto_historico, p.tarifa_moneda_historico,
             u.placa, u.tipo AS unidad_tipo, ve.capacidad AS unidad_capacidad,
             ${conTc ? "p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa, tcv.placa AS tc_placa_actual," : ""}
+            ${conVehiculoSolicitado ? "p.vehiculo_solicitado_perfil_id, p.vehiculo_solicitado_nombre," : ""}
             p.piloto_id, pil.nombre AS piloto,
             COALESCE(ev.cnt, 0) AS evidencias,
             fviaje.km_salida, fviaje.km_llegada,
@@ -730,22 +754,30 @@ export async function obtenerReporteViajes(
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
-  let rows: RowDataPacket[];
-  try {
-    rows = await consulta(true);
-  } catch (e) {
-    const err = e as { code?: string; errno?: number };
-    if (err?.code !== "ER_BAD_FIELD_ERROR" && err?.errno !== 1054) throw e;
-    rows = await consulta(false);
+  // Escalonado: sin las columnas de vehículo solicitado se conserva el TC; sin las de TC, el reporte base.
+  let rows: RowDataPacket[] = [];
+  const intentos: [boolean, boolean][] = [[true, true], [true, false], [false, false]];
+  for (const [i, [conTc, conVs]] of intentos.entries()) {
+    try {
+      rows = await consulta(conTc, conVs);
+      break;
+    } catch (e) {
+      const err = e as { code?: string; errno?: number };
+      if ((err?.code !== "ER_BAD_FIELD_ERROR" && err?.errno !== 1054) || i === intentos.length - 1) throw e;
+    }
   }
 
   const planIds = rows.map((r) => Number(r.id));
-  const [paradasMap, auxMap, extraMap, cierreManualIds] = await Promise.all([
+  const [paradasMap, auxMap, extraMap, cierreManualIds, liquidacionMap, comercialMap] = await Promise.all([
     listarParadasDePlanes(planIds),
     auxiliaresDePlanesReporte(planIds),
     // Piloto extra de todos los viajes del reporte en UNA consulta.
     pilotoExtraDePlanes(planIds),
     planesConCierreManual(empresaId, rows.filter((r) => r.estado === "Cerrado").map((r) => Number(r.id))),
+    // Liquidación vigente en UNA consulta (tolerante: sin tablas ⇒ mapa vacío ⇒ «—»). Solo informativa.
+    liquidacionesDePlanes(empresaId, planIds),
+    // Cargos adicionales vigentes + subtotal comercial en UNA consulta agrupada por plan (sin N+1; tolerante a tabla ausente).
+    resumenComercialDePlanes(empresaId, rows.map((r) => ({ id: Number(r.id), tarifaComercial: r.tarifa_comercial }))),
   ]);
 
   return rows.map((r) => {
@@ -779,6 +811,8 @@ export async function obtenerReporteViajes(
       unidadTipo: r.unidad_tipo ? String(r.unidad_tipo) : null,
       unidadCapacidad: r.unidad_capacidad ? String(r.unidad_capacidad) : null,
       ...resolverTcReporte(r),
+      vehiculoSolicitado: r.vehiculo_solicitado_nombre != null && String(r.vehiculo_solicitado_nombre).trim() ? String(r.vehiculo_solicitado_nombre) : null,
+      vehiculoSolicitadoPerfilId: r.vehiculo_solicitado_perfil_id != null ? Number(r.vehiculo_solicitado_perfil_id) : null,
       pilotoId: r.piloto_id != null ? Number(r.piloto_id) : null,
       piloto: r.piloto ? String(r.piloto) : null,
       pilotoExtra: extraMap.get(id)?.nombre ?? null,
@@ -789,6 +823,12 @@ export async function obtenerReporteViajes(
       horaLlegada,
       regresoReal: horaLlegada,
       cierreManual: cierreManualIds.has(id),
+      liquidacion: liquidacionMap.get(id) ?? null,
+      cargosAdicionales: {
+        cantidad: comercialMap.get(id)?.cargosCantidad ?? 0,
+        total: comercialMap.get(id)?.cargosTotal ?? "0.00",
+      },
+      subtotalComercial: comercialMap.get(id)?.subtotalComercial ?? null,
       kmSalida,
       kmLlegada,
       kmRecorridos: calcularKmRecorridos(kmSalida, kmLlegada),
@@ -851,30 +891,59 @@ function mapearFacturacionFila(
  * callers) — así "Solo pendientes de cierre" + "Septiembre 2026" da pendientes DENTRO de septiembre, nunca
  * todos los pendientes históricos.
  */
-export type CandidatoCierre = { id: number; codigo: string; estado: string; llegadaRegistrada: boolean };
+/**
+ * PLANES-TARIFA-CIERRE-1 — `tarifaComercial` viaja tal cual (`number | null`, nunca `> 0` interpretado aquí)
+ * para que el caller decida elegibilidad con el MISMO criterio puro (`tarifa_comercial !== null`) que
+ * cierre-viaje-shared.ts — nunca una segunda regla inventada sobre el monto.
+ */
+export type CandidatoCierre = {
+  id: number;
+  codigo: string;
+  estado: string;
+  llegadaRegistrada: boolean;
+  tarifaComercial: number | null;
+  /** El reporte FUE recibido: liquidación REPORTE_RECIBIDO o evento histórico REPORTE_RECIBIDO. Sin fila ni evento = false. */
+  reporteRecibido: boolean;
+};
 
 export async function obtenerCandidatosCierre(
   empresaId: number,
   filtros: FiltrosReporteViajes,
 ): Promise<CandidatoCierre[]> {
   const { condiciones, params } = construirCondiciones(empresaId, filtros, { forzarRangoConSoloPendientes: true });
-  const rows = await query<RowDataPacket[]>(
-    `SELECT p.id, p.codigo, p.estado,
+  // `reporte_recibido`: el reporte FUE recibido — liquidación actual en REPORTE_RECIBIDO o evento histórico append-only
+  // REPORTE_RECIBIDO del plan (sin fila ni evento = 0). Si las tablas de liquidación aún no existen (migración no aplicada)
+  // ningún reporte pudo registrarse: 0 para todos.
+  const sqlCandidatos = (conLiquidacion: boolean) =>
+    `SELECT p.id, p.codigo, p.estado, p.tarifa_comercial,
             EXISTS (
               SELECT 1 FROM flota_viajes fv
               WHERE fv.plan_id = p.id AND fv.empresa_id = p.empresa_id AND fv.estado = 'cerrado'
-            ) AS llegada_registrada
+            ) AS llegada_registrada,
+            ${conLiquidacion
+              ? `(EXISTS (SELECT 1 FROM tms_viaje_liquidaciones l
+                          WHERE l.empresa_id = p.empresa_id AND l.plan_id = p.id AND l.estado = 'REPORTE_RECIBIDO')
+                  OR EXISTS (SELECT 1 FROM tms_viaje_liquidacion_eventos ev
+                          WHERE ev.empresa_id = p.empresa_id AND ev.plan_id = p.id AND ev.tipo = 'REPORTE_RECIBIDO'))`
+              : "0"} AS reporte_recibido
      FROM tms_planes_viaje p
      ${JOIN_FACTURACION}
      WHERE ${condiciones.join(" AND ")}
-     ORDER BY p.fecha_plan, p.id`,
-    params,
-  );
+     ORDER BY p.fecha_plan, p.id`;
+  let rows: RowDataPacket[];
+  try {
+    rows = await query<RowDataPacket[]>(sqlCandidatos(true), params);
+  } catch (e) {
+    if ((e as { errno?: number }).errno !== 1146) throw e;
+    rows = await query<RowDataPacket[]>(sqlCandidatos(false), params);
+  }
   return rows.map((r) => ({
     id: Number(r.id),
     codigo: String(r.codigo),
     estado: String(r.estado),
     llegadaRegistrada: Number(r.llegada_registrada) === 1,
+    tarifaComercial: r.tarifa_comercial != null ? Number(r.tarifa_comercial) : null,
+    reporteRecibido: Number(r.reporte_recibido) === 1,
   }));
 }
 

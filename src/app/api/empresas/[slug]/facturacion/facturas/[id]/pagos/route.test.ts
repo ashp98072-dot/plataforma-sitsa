@@ -30,11 +30,12 @@ describe("GET /facturacion/facturas/[id]/pagos", () => {
 });
 
 describe("POST /facturacion/facturas/[id]/pagos — 14/17) solo Emitida, sobrepago rechazado", () => {
-  it("exige facturacion:crear antes de tocar la lib", async () => {
+  it("exige facturacion:pagos antes de tocar la lib", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
     const res = await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify(cuerpoPago) }), ctx);
     expect(res.status).toBe(403);
     expect(registrarPago).not.toHaveBeenCalled();
+    expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "pagos");
   });
 
   it("delega en registrarPago con el actor del guard", async () => {

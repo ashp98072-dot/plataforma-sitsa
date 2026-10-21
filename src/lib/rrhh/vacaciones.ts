@@ -1,17 +1,26 @@
-import {
-  addYears,
-  differenceInYears,
-  format,
-  parseISO,
-  subDays,
-} from "date-fns";
+import { differenceInYears, format, parseISO } from "date-fns";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
-import { hoyLocal, toIsoDate } from "./dates";
+import { toIsoDate } from "./dates";
+import { contarDiasVacacionesCalendario, diasCalendarioInclusivos } from "./vacaciones-calendario";
 import { contarEvidenciasPorIncidencia } from "./evidencias";
+import { obtenerPoliticaConConsulta, obtenerPoliticaVacaciones } from "./vacaciones-modo-db";
+import { candidatosVacaciones, marcarVacacionesDirty, sincronizarCandidatoVacaciones } from "./vacaciones-sync-estado";
+import {
+  MAX_PERIODOS_VIGENTES,
+  analizarTraslapes,
+  calcularDiasAcumuladosProporcional,
+  estadoVisualPeriodo,
+  fechaLaboralSospechosa,
+  planificarSincronizacion,
+  type AdvertenciaPeriodos,
+  type EstadoVisualPeriodo,
+  type FilaSaldo,
+  type MotivoOmision,
+} from "./vacaciones-periodos";
 
-const DIAS_POR_PERIODO = 15;
-const MAX_PERIODOS_VIGENTES = 2;
+// La fórmula proporcional vive ahora en vacaciones-periodos.ts (módulo puro); se re-exporta para no romper a nadie.
+export { calcularDiasAcumuladosProporcional };
 
 function toDate(value: string | Date): Date {
   if (value instanceof Date) {
@@ -50,67 +59,14 @@ export async function contarDiasHabiles(
   fInicio: string,
   fFin: string,
 ): Promise<number> {
-  const inicio = toDate(fInicio);
-  const fin = toDate(fFin);
-  if (inicio > fin) return 0;
+  diasCalendarioInclusivos(fInicio, fFin);
   const feriados = await obtenerFeriadosEnRango(empresaId, fInicio, fFin);
-  let dias = 0;
-  const dia = new Date(inicio);
-  while (dia <= fin) {
-    const fechaStr = toIso(dia);
-    const weekdayPy = (dia.getDay() + 6) % 7;
-    if (weekdayPy !== 6 && !feriados.has(fechaStr)) dias += 1;
-    dia.setDate(dia.getDate() + 1);
-  }
-  return dias;
-}
-
-function contarDomingosEnRango(fechaInicio: Date, fechaFin: Date): number {
-  if (fechaInicio > fechaFin) return 0;
-  const weekdayPy = (fechaInicio.getDay() + 6) % 7;
-  const diasHastaPrimerDomingo = (6 - weekdayPy) % 7;
-  const primerDomingo = new Date(fechaInicio);
-  primerDomingo.setDate(primerDomingo.getDate() + diasHastaPrimerDomingo);
-  if (primerDomingo > fechaFin) return 0;
-  const days = Math.floor(
-    (fechaFin.getTime() - primerDomingo.getTime()) / (24 * 60 * 60 * 1000),
-  );
-  return Math.floor(days / 7) + 1;
-}
-
-function diasLaborablesEnRango(fechaInicio: Date, fechaFin: Date): number {
-  if (fechaInicio > fechaFin) return 0;
-  const diasTotales =
-    Math.floor(
-      (fechaFin.getTime() - fechaInicio.getTime()) / (24 * 60 * 60 * 1000),
-    ) + 1;
-  return diasTotales - contarDomingosEnRango(fechaInicio, fechaFin);
-}
-
-export function calcularDiasAcumuladosProporcional(
-  periodoInicio: Date,
-  periodoFinTeorico: Date,
-  hoy: Date,
-  diasMeta: number,
-): number {
-  if (hoy < periodoInicio) return 0;
-  const finTranscurrido = hoy < periodoFinTeorico ? hoy : periodoFinTeorico;
-  const laborablesTranscurridos = diasLaborablesEnRango(
-    periodoInicio,
-    finTranscurrido,
-  );
-  const laborablesCompleto = diasLaborablesEnRango(
-    periodoInicio,
-    periodoFinTeorico,
-  );
-  if (laborablesCompleto <= 0) return 0;
-  const acumulados =
-    (diasMeta * laborablesTranscurridos) / laborablesCompleto;
-  return Math.round(Math.min(acumulados, diasMeta) * 100) / 100;
+  return contarDiasVacacionesCalendario(fInicio, fFin, feriados);
 }
 
 type ResultadoSincronizacionEmpresa = {
   empleados: number;
+  sincronizados: number;
   errores: number;
 };
 
@@ -119,51 +75,43 @@ type ResultadoSincronizacionEmpresa = {
  * que RRHH abra primero la ficha de cada uno. La campana y el panel de
  * alertas llaman esta función antes de consultar quién alcanzó 15 días.
  *
- * Se deduplica por empresa y día de Guatemala para que el polling de la
- * campana siga siendo barato: como máximo se recalcula una vez al día por
- * proceso de servidor. Las promesas concurrentes comparten el mismo trabajo.
+ * Solo se deduplica trabajo EN CURSO. Cada nueva petición revisa el índice
+ * persistente: nuevas invalidaciones y políticas no quedan ocultas por el Map.
  */
 const sincronizacionesEmpresa = new Map<
   number,
-  { fecha: string; promesa: Promise<ResultadoSincronizacionEmpresa> }
+  Promise<ResultadoSincronizacionEmpresa>
 >();
 
 export async function sincronizarVacacionesEmpleadosActivos(
   empresaId: number,
 ): Promise<ResultadoSincronizacionEmpresa> {
-  const fecha = hoyLocal();
   const vigente = sincronizacionesEmpresa.get(empresaId);
-  if (vigente?.fecha === fecha) return vigente.promesa;
+  if (vigente) return vigente;
 
   const promesa = (async () => {
-    const empleados = await query<RowDataPacket[]>(
-      `SELECT id
-       FROM empleados
-       WHERE empresa_id = ? AND estado = 'Activo' AND fecha_alta IS NOT NULL
-       ORDER BY id`,
-      [empresaId],
-    );
+    const empleados = await candidatosVacaciones(empresaId);
     let errores = 0;
+    let sincronizados = 0;
     for (const empleado of empleados) {
       try {
-        await sincronizarPeriodosVacaciones(empresaId, Number(empleado.id));
+        if (await sincronizarCandidatoVacaciones(empresaId, empleado, sincronizarPeriodosVacacionesEnConexion)) sincronizados += 1;
       } catch (error) {
         errores += 1;
         console.error(
-          `[vacaciones] No se pudo sincronizar empleado ${Number(empleado.id)}:`,
+          `[vacaciones] No se pudo sincronizar empleado ${empleado}:`,
           error,
         );
       }
     }
-    return { empleados: empleados.length, errores };
+    return { empleados: empleados.length, sincronizados, errores };
   })();
 
-  sincronizacionesEmpresa.set(empresaId, { fecha, promesa });
+  sincronizacionesEmpresa.set(empresaId, promesa);
   try {
     return await promesa;
-  } catch (error) {
-    sincronizacionesEmpresa.delete(empresaId);
-    throw error;
+  } finally {
+    if (sincronizacionesEmpresa.get(empresaId) === promesa) sincronizacionesEmpresa.delete(empresaId);
   }
 }
 
@@ -181,19 +129,71 @@ async function fechaBaseAntiguedad(
   return toDate(rows[0].fecha_alta as string | Date);
 }
 
+export type ResultadoSincronizacionPeriodos = {
+  advertencias: AdvertenciaPeriodos[];
+  /** true = el empleado quedó CONGELADO (REQUIERE_REPARACION_ADMINISTRADA): no se escribió nada (ni períodos, ni vencimientos, ni tope). */
+  requiereReparacion: boolean;
+  omitido: MotivoOmision | null;
+  /** true = modo de carga histórica activo pero el consumo del colaborador NO es verificable: no se restauró ningún saldo (defensa en profundidad). */
+  consumoNoVerificable?: boolean;
+};
+
+/** Σ de días consumidos por saldo (detalle FIFO) del empleado; tolerante a que la tabla aún no exista. Solo lo usa el modo de carga histórica. */
+async function consumoPorSaldo(conn: PoolConnection, empresaId: number, idEmpleado: number): Promise<Map<number, number>> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT d.saldo_id, SUM(d.dias_tomados) AS consumido
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       GROUP BY d.saldo_id`,
+      [empresaId, idEmpleado],
+    );
+    return new Map((rows ?? []).map((r) => [Number(r.saldo_id), Number(r.consumido)]));
+  } catch (error) {
+    if ((error as { errno?: number } | null)?.errno === 1146) return new Map();
+    throw error;
+  }
+}
+
+/** Ids de saldos del empleado referenciados por detalle FIFO (tolerante a que la tabla aún no exista). */
+async function saldosConConsumo(conn: PoolConnection, empresaId: number, idEmpleado: number): Promise<Set<number>> {
+  try {
+    const [rows] = await conn.query<RowDataPacket[]>(
+      `SELECT DISTINCT d.saldo_id
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?`,
+      [empresaId, idEmpleado],
+    );
+    return new Set((rows ?? []).map((r) => Number(r.saldo_id)));
+  } catch (error) {
+    if ((error as { errno?: number } | null)?.errno === 1146) return new Set();
+    throw error;
+  }
+}
+
+/**
+ * Sincroniza los períodos de UN empleado dentro de la transacción del llamador.
+ *
+ * RRHH-VACACIONES-HISTORIAL: la generación de períodos la decide `planificarSincronizacion` (módulo puro y probado):
+ * períodos esperados siempre desde la fecha base (sin traslape), sin insertar nunca un período que se superponga con otro,
+ * sin reescribir fechas de un saldo con consumo FIFO, y sin generar nada si la fecha laboral es sospechosa (< 1980).
+ * Las reglas de vencimiento y tope de 30 días (2 períodos completos utilizables) NO cambian: el historial completo se
+ * conserva en BD y se consulta con `obtenerHistorialPeriodos`; el saldo UTILIZABLE sigue siendo el de los períodos vigentes.
+ */
 export async function sincronizarPeriodosVacacionesEnConexion(
   conn: PoolConnection,
   empresaId: number,
   idEmpleado: number,
-): Promise<void> {
+): Promise<ResultadoSincronizacionPeriodos> {
     const fechaAlta = await fechaBaseAntiguedad(conn, empresaId, idEmpleado);
-    if (!fechaAlta) return;
+    if (!fechaAlta) return { advertencias: [], requiereReparacion: false, omitido: null };
 
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
-    if (fechaAlta > hoy) return;
+    if (fechaAlta > hoy) return { advertencias: [], requiereReparacion: false, omitido: null };
 
-    const aniosCompletos = differenceInYears(hoy, fechaAlta);
     const [existentesRows] = await conn.query<RowDataPacket[]>(
       `SELECT id, anio_laboral, periodo_inicio, periodo_fin,
               dias_otorgados, dias_disponibles, estado
@@ -202,71 +202,57 @@ export async function sincronizarPeriodosVacacionesEnConexion(
        FOR UPDATE`,
       [empresaId, idEmpleado],
     );
-    const existentes = new Map<number, RowDataPacket>();
-    for (const r of existentesRows) {
-      if (r.anio_laboral != null) existentes.set(Number(r.anio_laboral), r);
+    const consumidos = await saldosConConsumo(conn, empresaId, idEmpleado);
+    const existentes: FilaSaldo[] = (existentesRows ?? []).map((r) => ({
+      id: Number(r.id),
+      anioLaboral: r.anio_laboral != null ? Number(r.anio_laboral) : null,
+      inicio: String(toIsoDate(r.periodo_inicio) ?? ""),
+      fin: String(toIsoDate(r.periodo_fin) ?? ""),
+      otorgados: Number(r.dias_otorgados),
+      disponibles: Number(r.dias_disponibles),
+      estado: String(r.estado),
+      conConsumo: consumidos.has(Number(r.id)),
+    }));
+
+    // Política por empresa: NORMAL (vencimiento a 2 períodos + tope de 30) o CARGA HISTÓRICA (temporal: sin vencimiento ni tope).
+    const politica = await obtenerPoliticaConConsulta(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId);
+
+    // DEFENSA EN PROFUNDIDAD (modo carga histórica): la verificación del consumo va ANTES de planificar y de cualquier INSERT/UPDATE. En modo carga el saldo se reconstruye como
+    // `otorgados − detalle FIFO`; si el consumo del colaborador NO es verificable (sin detalle suficiente, detalle cruzado/huérfano…) eso podría INVENTAR días disponibles. Ese
+    // colaborador queda COMPLETAMENTE intacto: sin inserts (ni períodos faltantes), sin updates, sin deletes, sin tocar estado/disponible; se informa `consumoNoVerificable`.
+    if (politica.maxPeriodosVigentes == null) {
+      const { verificarConsumoEmpleado } = await import("./vacaciones-modo-preflight-db"); // carga diferida (evita el ciclo con el rebase)
+      const noVerificable = await verificarConsumoEmpleado(async (sql, p) => (await conn.query<RowDataPacket[]>(sql, p))[0], empresaId, idEmpleado);
+      if (noVerificable.length) return { advertencias: [], requiereReparacion: false, omitido: null, consumoNoVerificable: true };
     }
 
-    for (let n = 1; n <= aniosCompletos + 1; n++) {
-      const periodoInicio = addYears(fechaAlta, n - 1);
-      const periodoFin = subDays(addYears(fechaAlta, n), 1);
-      const esCompleto = n <= aniosCompletos;
+    const plan = planificarSincronizacion(fechaAlta, hoy, existentes);
+    // Fecha sospechosa / futura / serie histórica con consumo / estructura inconsistente: NO se escribe nada
+    // (ni INSERT ni UPDATE de períodos, ni vencimientos, ni reducción a 0, ni tope de 30). La lectura/historial sigue funcionando.
+    if (plan.omitido) return { advertencias: plan.advertencias, requiereReparacion: plan.requiereReparacion, omitido: plan.omitido };
 
-      let diasOtorgadosNuevo: number;
-      if (esCompleto) {
-        diasOtorgadosNuevo = DIAS_POR_PERIODO;
-      } else {
-        diasOtorgadosNuevo = calcularDiasAcumuladosProporcional(
-          periodoInicio,
-          periodoFin,
-          hoy,
-          DIAS_POR_PERIODO,
-        );
-        if (diasOtorgadosNuevo <= 0 && !existentes.has(n)) continue;
-      }
-
-      const fila = existentes.get(n);
-      if (!fila) {
-        await conn.execute(
-          `INSERT IGNORE INTO saldos_vacaciones
-            (empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin,
-             dias_otorgados, dias_disponibles, estado)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'Vigente')`,
-          [
-            empresaId,
-            idEmpleado,
-            n,
-            toIso(periodoInicio),
-            toIso(periodoFin),
-            diasOtorgadosNuevo,
-            diasOtorgadosNuevo,
-          ],
-        );
-      } else if (String(fila.estado) !== "Vencido") {
-        const otorgadosPrev = Number(fila.dias_otorgados);
-        const disponiblesPrev = Number(fila.dias_disponibles);
-        const consumido =
-          Math.round((otorgadosPrev - disponiblesPrev) * 100) / 100;
-        const disponiblesNuevo =
-          Math.round(Math.max(diasOtorgadosNuevo - consumido, 0) * 100) / 100;
-        await conn.execute(
-          `UPDATE saldos_vacaciones
-           SET periodo_inicio = ?, periodo_fin = ?,
-               dias_otorgados = ?, dias_disponibles = ?
-           WHERE id = ?`,
-          [
-            toIso(periodoInicio),
-            toIso(periodoFin),
-            diasOtorgadosNuevo,
-            disponiblesNuevo,
-            Number(fila.id),
-          ],
-        );
-      }
+    for (const ins of plan.inserts) {
+      await conn.execute(
+        `INSERT IGNORE INTO saldos_vacaciones
+          (empresa_id, id_empleado, anio_laboral, periodo_inicio, periodo_fin,
+           dias_otorgados, dias_disponibles, estado)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'Vigente')`,
+        [empresaId, idEmpleado, ins.anioLaboral, ins.inicio, ins.fin, ins.otorgados, ins.otorgados],
+      );
+    }
+    for (const upd of plan.updates) {
+      await conn.execute(
+        `UPDATE saldos_vacaciones
+         SET periodo_inicio = ?, periodo_fin = ?,
+             dias_otorgados = ?, dias_disponibles = ?
+         WHERE id = ?`,
+        [upd.inicio, upd.fin, upd.otorgados, upd.disponibles, upd.id],
+      );
     }
 
+    const aniosCompletos = differenceInYears(hoy, fechaAlta);
     const periodoEnCursoN = aniosCompletos + 1;
-    const [periodos] = await conn.query<RowDataPacket[]>(
+    const [periodosTodos] = await conn.query<RowDataPacket[]>(
       `SELECT id, estado, anio_laboral, dias_otorgados, dias_disponibles
        FROM saldos_vacaciones
        WHERE empresa_id = ? AND id_empleado = ?
@@ -274,11 +260,27 @@ export async function sincronizarPeriodosVacacionesEnConexion(
        FOR UPDATE`,
       [empresaId, idEmpleado],
     );
+    // Un saldo sin año laboral no participa en vencimiento ni tope (queda como advertencia del plan).
+    const periodos = (periodosTodos ?? []).filter((p) => p.anio_laboral != null);
+
+    if (politica.maxPeriodosVigentes == null) {
+      // MODO CARGA HISTÓRICA: sin vencimiento ni tope. Todo período desde la fecha de alta es utilizable por lo que NO se haya consumido; el consumo sale del
+      // detalle FIFO (verificable), de modo que ni reaparece lo ya tomado ni se pierde nada. Idempotente: sin cambios no escribe. Aquí no borra historial; los períodos faltantes los completa el plan normal de sincronización (inserts de `planificarSincronizacion`).
+      // (El consumo ya fue verificado al inicio de la función, antes de cualquier escritura.)
+      const consumo = await consumoPorSaldo(conn, empresaId, idEmpleado);
+      for (const p of periodos) {
+        const esperado = Math.max(0, Math.round((Number(p.dias_otorgados) - (consumo.get(Number(p.id)) ?? 0)) * 100) / 100);
+        if (String(p.estado) === "Vigente" && Number(p.dias_disponibles) === esperado) continue;
+        await conn.execute("UPDATE saldos_vacaciones SET estado = 'Vigente', dias_disponibles = ? WHERE id = ?", [esperado, Number(p.id)]);
+      }
+      return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null };
+    }
+
     const completados = periodos.filter(
       (p) => Number(p.anio_laboral) !== periodoEnCursoN,
     );
     for (let idx = 0; idx < completados.length; idx++) {
-      if (idx < MAX_PERIODOS_VIGENTES) continue;
+      if (idx < (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES)) continue;
       const p = completados[idx];
       if (String(p.estado) !== "Vencido") {
         await conn.execute(
@@ -297,7 +299,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     const completadosVigentes = completados
       .filter(
         (p, idx) =>
-          idx < MAX_PERIODOS_VIGENTES && String(p.estado) !== "Vencido",
+          idx < (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES) && String(p.estado) !== "Vencido",
       )
       .sort((a, b) => Number(a.anio_laboral) - Number(b.anio_laboral));
 
@@ -305,7 +307,7 @@ export async function sincronizarPeriodosVacacionesEnConexion(
     // completos vigentes. Si todavía no se completa el segundo periodo, la
     // suma de ambos nunca puede superar el tope (15 + hasta 15 = 30 como
     // máximo), así que no hay excedente real que descontar todavía.
-    if (completadosVigentes.length >= MAX_PERIODOS_VIGENTES) {
+    if (politica.aplicarTope && completadosVigentes.length >= (politica.maxPeriodosVigentes ?? MAX_PERIODOS_VIGENTES)) {
       const capTotal = completadosVigentes.reduce(
         (s, p) => s + Number(p.dias_otorgados),
         0,
@@ -337,23 +339,44 @@ export async function sincronizarPeriodosVacacionesEnConexion(
         }
       }
     }
+    return { advertencias: plan.advertencias, requiereReparacion: false, omitido: null };
 }
 
 export async function sincronizarPeriodosVacaciones(
   empresaId: number,
   idEmpleado: number,
-): Promise<void> {
+): Promise<ResultadoSincronizacionPeriodos> {
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
-    await sincronizarPeriodosVacacionesEnConexion(conn, empresaId, idEmpleado);
+    const resultado = await sincronizarPeriodosVacacionesEnConexion(conn, empresaId, idEmpleado);
     await conn.commit();
+    return resultado;
   } catch (error) {
     await conn.rollback();
     throw error;
   } finally {
     conn.release();
   }
+}
+
+/** Crear dentro de cada request/render. Nunca guardar este lector en estado global.
+ * La transacción habitual termina antes de las lecturas; no se comparte conexión.
+ * Los helpers públicos individuales conservan su sincronización para otros consumidores.
+ */
+export function crearLecturaVacacionesEmpleado(empresaId: number, idEmpleado: number) {
+  let sincronizacion: Promise<ResultadoSincronizacionPeriodos> | undefined;
+  let periodos: Promise<PeriodoVacaciones[]> | undefined;
+  const sincronizar = () => sincronizacion ??= sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  const obtenerPeriodos = () => periodos ??= sincronizar().then(() => leerPeriodosDisponibles(empresaId, idEmpleado));
+  return {
+    obtenerPeriodosDisponibles: obtenerPeriodos,
+    calcularSaldoTotalDisponible: async () => {
+      const disponibles = await obtenerPeriodos();
+      return Math.round(disponibles.reduce((s, p) => s + p.diasDisponibles, 0) * 100) / 100;
+    },
+    obtenerHistorialPeriodos: async () => leerHistorialPeriodos(empresaId, idEmpleado, await sincronizar()),
+  };
 }
 
 export type PeriodoVacaciones = {
@@ -370,6 +393,10 @@ export async function obtenerPeriodosDisponibles(
   idEmpleado: number,
 ): Promise<PeriodoVacaciones[]> {
   await sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  return leerPeriodosDisponibles(empresaId, idEmpleado);
+}
+
+async function leerPeriodosDisponibles(empresaId: number, idEmpleado: number): Promise<PeriodoVacaciones[]> {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, anio_laboral, periodo_inicio, periodo_fin,
             dias_otorgados, dias_disponibles
@@ -396,6 +423,146 @@ export async function calcularSaldoTotalDisponible(
   return (
     Math.round(periodos.reduce((s, p) => s + p.diasDisponibles, 0) * 100) / 100
   );
+}
+
+export type HistorialPeriodo = {
+  id: number;
+  anioLaboral: number | null;
+  periodoInicio: string;
+  periodoFin: string;
+  diasOtorgados: number;
+  diasConsumidos: number;
+  diasDisponibles: number;
+  /** Estado de BD (Vigente | Vencido). */
+  estado: string;
+  /** Estado para mostrar: En curso | Vigente | Consumido | Vencido. */
+  estadoVisual: EstadoVisualPeriodo;
+  /** Consumos históricos registrados contra este período (detalle FIFO), del más antiguo al más reciente. */
+  consumos: { incidenciaId: number; tipo: string; fechaInicio: string; fechaFin: string; dias: number }[];
+};
+
+export type HistorialVacaciones = {
+  /** Saldo UTILIZABLE actual (solo períodos Vigentes; el tope de 30 días sigue vigente). NO es la suma del historial. */
+  saldoActual: number;
+  /** TODOS los períodos del empleado, del más antiguo al más reciente (nunca se borran ni se ocultan por antigüedad). */
+  periodos: HistorialPeriodo[];
+  fechaLaboral: string | null;
+  fechaLaboralSospechosa: boolean;
+  /** true si la ficha tiene una fecha laboral sospechosa y NO se muestran como válidos los períodos que generó. */
+  historialOculto: boolean;
+  /** true = el motor no sincroniza a este empleado (fecha sospechosa, serie histórica con consumo o estructura inconsistente): requiere reparación administrada. */
+  requiereReparacion: boolean;
+  advertencias: AdvertenciaPeriodos[];
+  /** true = la empresa está en MODO DE CARGA HISTÓRICA: sin vencimiento ni tope; el saldo mostrado es TEMPORAL. */
+  modoCargaHistorica?: boolean;
+};
+
+/**
+ * Historial COMPLETO de períodos de un empleado: período, otorgados, consumidos (suma del detalle FIFO), disponibles y estado.
+ * Los períodos vencidos o consumidos siguen siendo parte del historial. No altera FIFO ni el saldo utilizable.
+ * Con fecha laboral sospechosa (< 1980) solo se devuelven los períodos con consumo o Vigentes y `historialOculto = true`,
+ * en vez de presentar decenas de períodos inválidos como si fueran reales.
+ */
+export async function obtenerHistorialPeriodos(
+  empresaId: number,
+  idEmpleado: number,
+): Promise<HistorialVacaciones> {
+  const sync = await sincronizarPeriodosVacaciones(empresaId, idEmpleado);
+  return leerHistorialPeriodos(empresaId, idEmpleado, sync);
+}
+
+async function leerHistorialPeriodos(
+  empresaId: number,
+  idEmpleado: number,
+  sync: ResultadoSincronizacionPeriodos,
+): Promise<HistorialVacaciones> {
+  const [empRows, rows] = await Promise.all([
+    query<RowDataPacket[]>(
+      "SELECT fecha_alta FROM empleados WHERE id = ? AND empresa_id = ? LIMIT 1",
+      [idEmpleado, empresaId],
+    ),
+    query<RowDataPacket[]>(
+      `SELECT s.id, s.anio_laboral, s.periodo_inicio, s.periodo_fin, s.dias_otorgados, s.dias_disponibles, s.estado,
+              COALESCE((SELECT SUM(d.dias_tomados) FROM detalle_consumo_vacaciones d WHERE d.saldo_id = s.id), 0) AS dias_consumidos
+       FROM saldos_vacaciones s
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       ORDER BY COALESCE(s.anio_laboral, 99999), s.periodo_inicio, s.id`,
+      [empresaId, idEmpleado],
+    ),
+  ]);
+  const base = empRows[0]?.fecha_alta ? toDate(empRows[0].fecha_alta as string | Date) : null;
+  const sospechosa = base ? fechaLaboralSospechosa(base) : false;
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const anioEnCurso = base && !sospechosa && base <= hoy ? differenceInYears(hoy, base) + 1 : null;
+
+  // Consumos por período (detalle FIFO ↔ incidencia). Aditivo: si falla no rompe el historial.
+  const consumosPorSaldo = new Map<number, HistorialPeriodo["consumos"]>();
+  try {
+    const cons = await query<RowDataPacket[]>(
+      `SELECT d.saldo_id, d.dias_tomados, i.id AS incidencia_id, i.tipo, i.fecha_inicio, i.fecha_fin
+       FROM detalle_consumo_vacaciones d
+       INNER JOIN incidencias i ON i.id = d.incidencia_id
+       INNER JOIN saldos_vacaciones s ON s.id = d.saldo_id
+       WHERE s.empresa_id = ? AND s.id_empleado = ?
+       ORDER BY i.fecha_inicio, d.id`,
+      [empresaId, idEmpleado],
+    );
+    for (const c of cons ?? []) {
+      const k = Number(c.saldo_id);
+      consumosPorSaldo.set(k, [...(consumosPorSaldo.get(k) ?? []), {
+        incidenciaId: Number(c.incidencia_id), tipo: String(c.tipo), fechaInicio: toIsoDate(c.fecha_inicio) ?? "", fechaFin: toIsoDate(c.fecha_fin) ?? "",
+        dias: Math.round(Number(c.dias_tomados) * 100) / 100,
+      }]);
+    }
+  } catch {
+    /* sin detalle de consumos: el historial sigue mostrando totales */
+  }
+  const todos: HistorialPeriodo[] = rows.map((r) => {
+    const base2 = {
+      estado: String(r.estado),
+      anioLaboral: r.anio_laboral != null ? Number(r.anio_laboral) : null,
+      disponibles: Number(r.dias_disponibles),
+      consumidos: Math.round(Number(r.dias_consumidos) * 100) / 100,
+    };
+    return {
+      id: Number(r.id),
+      anioLaboral: base2.anioLaboral,
+      periodoInicio: toIsoDate(r.periodo_inicio) ?? "",
+      periodoFin: toIsoDate(r.periodo_fin) ?? "",
+      diasOtorgados: Number(r.dias_otorgados),
+      diasConsumidos: base2.consumidos,
+      diasDisponibles: base2.disponibles,
+      estado: base2.estado,
+      estadoVisual: estadoVisualPeriodo(base2, anioEnCurso),
+      consumos: consumosPorSaldo.get(Number(r.id)) ?? [],
+    };
+  });
+
+  const advertencias: AdvertenciaPeriodos[] = [...sync.advertencias];
+  advertencias.push(
+    ...analizarTraslapes(
+      todos.map((p) => ({
+        id: p.id, anioLaboral: p.anioLaboral, inicio: p.periodoInicio, fin: p.periodoFin,
+        otorgados: p.diasOtorgados, disponibles: p.diasDisponibles, estado: p.estado, conConsumo: p.diasConsumidos > 0,
+      })),
+    ),
+  );
+  const periodos = sospechosa ? todos.filter((p) => p.estado === "Vigente" || p.diasConsumidos > 0) : todos;
+  if (sospechosa && !advertencias.some((a) => a.codigo === "FECHA_LABORAL_SOSPECHOSA")) {
+    advertencias.unshift({ codigo: "FECHA_LABORAL_SOSPECHOSA", mensaje: "Fecha laboral inválida o anterior a 1980: no se generan períodos; requiere el dato real de RRHH." });
+  }
+  const saldoActual = Math.round(todos.filter((p) => p.estado === "Vigente").reduce((s, p) => s + p.diasDisponibles, 0) * 100) / 100;
+  return {
+    saldoActual,
+    periodos,
+    fechaLaboral: base ? toIso(base) : null,
+    fechaLaboralSospechosa: sospechosa,
+    historialOculto: sospechosa && periodos.length < todos.length,
+    requiereReparacion: sync.requiereReparacion || sospechosa,
+    advertencias,
+    modoCargaHistorica: (await obtenerPoliticaVacaciones(empresaId)).modo === "CARGA_HISTORICA",
+  };
 }
 
 export type DesgloseConsumo = {
@@ -433,7 +600,7 @@ export async function registrarVacacionesFifoEnConexion(
   input: VacacionesFifoInput,
 ): Promise<ResultadoVacacionesFifo> {
   const diasATomar = input.diasATomar;
-  if (diasATomar <= 0) {
+  if (!Number.isFinite(diasATomar) || diasATomar <= 0) {
     return {
       ok: false,
       mensaje: "Los días a descontar deben ser mayores que cero.",
@@ -540,6 +707,7 @@ export async function registrarVacacionesFifoEnConexion(
     restante -= tomar;
   }
 
+  await marcarVacacionesDirty(conn, input.empresaId, input.idEmpleado);
   return {
     ok: true,
     mensaje: "Vacaciones registradas (FIFO).",
@@ -639,9 +807,10 @@ export async function registrarIncidenciaSinSaldo(input: {
   fechaFin: string;
   dias: number;
 }): Promise<{ ok: boolean; mensaje: string; incidenciaId: number | null }> {
+  const conn = await getPool().getConnection();
   try {
-    const pool = getPool();
-    const [r] = await pool.execute<ResultSetHeader>(
+    await conn.beginTransaction();
+    const [r] = await conn.execute<ResultSetHeader>(
       `INSERT INTO incidencias
         (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -654,16 +823,21 @@ export async function registrarIncidenciaSinSaldo(input: {
         input.dias,
       ],
     );
+    if (["Vacaciones", "A cuenta de Vacaciones"].includes(input.tipo)) await marcarVacacionesDirty(conn, input.empresaId, input.idEmpleado);
+    await conn.commit();
     return {
       ok: true,
       mensaje: `${input.tipo} registrado.`,
       incidenciaId: Number(r.insertId),
     };
   } catch (err) {
+    await conn.rollback();
     return {
       ok: false,
       mensaje: err instanceof Error ? err.message : "Error al registrar",
       incidenciaId: null,
     };
+  } finally {
+    conn.release();
   }
 }

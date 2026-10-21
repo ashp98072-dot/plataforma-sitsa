@@ -4,6 +4,10 @@ import {
   obtenerEmpresaPorSlug,
   type Empresa,
 } from "./empresas";
+import { derivarModulosEmpresa } from "./roles";
+import { tieneAccionCatalogo, tienePermisoBase, tienePermisoOperativo } from "./permisos-catalogo";
+import { capacidadesFacturacion } from "./facturacion/capacidades";
+import { puedeUsarPortalesProveedores } from "./proveedores/acceso";
 import {
   puedeEditarModulo,
   modulosPorRol,
@@ -24,12 +28,38 @@ import {
   permisosEfectivos,
   tienePermiso,
   type AccionPermiso,
+  type PermisoModulo,
   type FlotaSubmodulo,
   type RrhhSubmodulo,
 } from "./permisos";
+import { actorDesdeSesion, puedeUsarEntregas } from "./entregas/actor";
+import type { ActorEntrega } from "./entregas/reglas";
+import { puedeCombustible, type AccionCombustible } from "./flota/combustible-permisos";
 
 type Ok = { session: SessionPayload; empresa: Empresa; error?: undefined };
 type Fail = { session?: undefined; empresa?: undefined; error: NextResponse };
+
+export async function requireTenantPortalesProveedores(slug: string, accion: AccionPermiso = "ver"): Promise<(Ok & { permisos: PermisoModulo[] }) | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+  if (tenant.session.rol === "Admin") return { ...tenant, permisos: [] };
+  const permisos = await permisosEfectivos(tenant.session.id, tenant.session.rol);
+  if (!puedeUsarPortalesProveedores(tenant.session.rol) || !tienePermisoBase(permisos, "proveedor_portales") ||
+      !tienePermiso(permisos, "proveedor_portales", accion)) {
+    return { error: NextResponse.json({error:"Sin permiso para accesos proveedores."},{status:403}) };
+  }
+  return { ...tenant, permisos };
+}
+
+export async function requireTenantProgramacionExportar(slug: string): Promise<Ok | Fail> {
+  const guard = await requireTenantProgramacionOTms(slug, "ver");
+  if (guard.error || guard.session.rol === "Admin") return guard;
+  const permisos = await permisosEfectivos(guard.session.id, guard.session.rol);
+  if (!tieneAccionCatalogo(permisos,"programacion","exportar")) {
+    return { error: NextResponse.json({error:"Sin permiso para exportar Programación."},{status:403}) };
+  }
+  return guard;
+}
 
 /** Multas tiene permiso propio: nunca hereda autoridad de TMS/Flota. */
 export async function requireTenantMultas(
@@ -149,6 +179,12 @@ export async function requireTenantModulo(
   }
 
   if (editar) {
+    const accionGeneral = modulo === "cms" ? "publicar" : "gestionar";
+    const usaAccionGeneral = ["tms","reciclaje","tarimas","cms"].includes(modulo);
+    if (usaAccionGeneral &&
+        !tieneAccionCatalogo(perms,modulo,accionGeneral)) {
+      return { error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }) };
+    }
     // Contabilidad: una revocación explícita no se recupera por el rol.
     // Mantiene el contrato legado crear O editar de este guard, sin afectar otros módulos.
     if (modulo === "contabilidad" &&
@@ -157,6 +193,7 @@ export async function requireTenantModulo(
       return { error: NextResponse.json({ error: "Solo lectura." }, { status: 403 }) };
     }
     const puedeEditar =
+      (usaAccionGeneral && tieneAccionCatalogo(perms,modulo,accionGeneral)) ||
       puedeEditarModulo(session.rol, modulo) ||
       tienePermiso(perms, modulo, "editar") ||
       tienePermiso(perms, modulo, "crear") ||
@@ -482,8 +519,7 @@ export async function requireTenantViaticosComprobantes(
 }
 
 /**
- * FLOTA-COMBUSTIBLE-1 (Fase 2) — revisar/aprobar/rechazar las cargas de
- * combustible que el piloto registra desde el Portal. Permiso propio y
+ * COMBUSTIBLES C-1 — captura, edición pendiente y revisión por Operaciones. Permiso propio y
  * explícito ("flota_combustible") — no es un FlotaSubmodulo (no se
  * reutiliza requireTenantFlota) a propósito: ese tipo se reparte por
  * completo ("...FLOTA_SUBMODULOS") a varios roles que nunca pidieron
@@ -491,12 +527,11 @@ export async function requireTenantViaticosComprobantes(
  * PLATAFORMA_PERMISIBLES, permisos-shared.ts). GerenteOperaciones/
  * JefeOperaciones lo traen por defecto ("los de operaciones son los que
  * autorizan", confirmado por el usuario); cualquier otro rol puede
- * recibirlo desde Usuarios. Gatea sobre el módulo de empresa "flota"
- * (Flota/Predios), igual que el resto de este archivo para ese dominio.
+ * recibirlo desde Usuarios. Gatea sobre el módulo de empresa "tms" (Operaciones), sin acceso completo a Flota.
  */
 export async function requireTenantFlotaCombustible(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionCombustible = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -507,25 +542,37 @@ export async function requireTenantFlotaCombustible(
   const empresaMods = empresa.modulos.length
     ? empresa.modulos
     : modulosPorRol(session.rol);
-  if (empresaMods.length && !empresaMods.includes("flota")) {
+  if (empresaMods.length && !empresaMods.includes("tms")) {
     return {
       error: NextResponse.json(
-        { error: "Esta empresa no tiene el módulo Flota / Predios." },
+        { error: "Esta empresa no tiene el módulo Operaciones / TMS." },
         { status: 403 },
       ),
     };
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  if (!tienePermiso(perms, "flota_combustible", accion)) {
+  if (!puedeCombustible(perms, accion)) {
     return {
       error: NextResponse.json(
-        { error: `Sin permiso para ${accion} la revisión de combustible.` },
+        { error: `Sin permiso de Combustibles: ${accion}.` },
         { status: 403 },
       ),
     };
   }
   return { session, empresa };
+}
+
+/**
+ * FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS — ¿puede esta sesión editar vehículos de OTRAS empresas? Acción «Editar vehículos de otras empresas» del catálogo
+ * central (Flota / Predios → Vehículos) Y la base «Ver vehículos» (sin base la acción no da ningún acceso). Admin conserva el bypass administrativo ya
+ * existente. No mira `username` ni `rol` fuera de ese bypass. Es solo una CAPACIDAD: el endpoint además exige que el vehículo sea accesible desde la
+ * empresa activa (obtenerVehiculoAccesible: propio o compartido con ella; ver decidirEdicionVehiculo) y nunca consulta empresasParaUsuario.
+ */
+export async function sesionPuedeEditarVehiculosOtrasEmpresas(session: { id: number; rol: string }): Promise<boolean> {
+  if (session.rol === "Admin") return true;
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  return tienePermisoBase(perms, "flota_vehiculos") && tieneAccionCatalogo(perms, "flota_vehiculos", "editar_otras_empresas");
 }
 
 /**
@@ -566,6 +613,186 @@ export async function requireTenantViajesCerrar(
         { status: 403 },
       ),
     };
+  }
+  return { session, empresa };
+}
+
+/**
+ * LIQUIDACIÓN DE VIAJES (Fase 2) — confirmar que el piloto entregó su reporte. Permiso EXPLÍCITO `viajes_confirmar_reporte:editar`,
+ * independiente del rol y de `viajes_cerrar` (quien confirma no necesariamente liquida ni cierra). Mismo patrón que
+ * requireTenantViajesCerrar; exige que la empresa tenga el módulo TMS.
+ */
+export async function requireTenantViajesConfirmarReporte(
+  slug: string,
+  accion: AccionPermiso = "ver",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, "viajes_confirmar_reporte", accion)) {
+    return {
+      error: NextResponse.json(
+        { error: "Sin permiso para confirmar el reporte recibido de viajes." },
+        { status: 403 },
+      ),
+    };
+  }
+  return { session, empresa };
+}
+
+/**
+ * LIQUIDACIÓN DE VIAJES (Fase 3) — guard común de las filas `viajes_liquidar` y `viajes_reabrir_liquidacion`: permiso EXPLÍCITO e
+ * independiente del rol, de `viajes_cerrar` y de `viajes_confirmar_reporte` (quien confirma, liquida, reabre y cierra no es
+ * necesariamente la misma persona). Mismo patrón que requireTenantViajesCerrar; exige el módulo TMS de la empresa.
+ */
+async function requireTenantFilaLiquidacionViaje(
+  slug: string,
+  fila: "viajes_liquidar" | "viajes_reabrir_liquidacion" | "viajes_cargos_adicionales",
+  accion: AccionPermiso,
+  mensajeSinPermiso: string,
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("tms")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo TMS." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+export function requireTenantViajesLiquidar(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_liquidar", accion, "Sin permiso para liquidar viajes.");
+}
+
+export function requireTenantViajesReabrirLiquidacion(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_reabrir_liquidacion", accion, "Sin permiso para reabrir la liquidación de viajes.");
+}
+
+/** Fase 4 — cargos adicionales facturables: permiso EXPLÍCITO `viajes_cargos_adicionales`, separado de liquidar, reabrir y cerrar. */
+export function requireTenantViajesCargosAdicionales(slug: string, accion: AccionPermiso = "ver"): Promise<Ok | Fail> {
+  return requireTenantFilaLiquidacionViaje(slug, "viajes_cargos_adicionales", accion, "Sin permiso para gestionar cargos adicionales.");
+}
+
+/**
+ * CUENTAS POR COBRAR (Contabilidad) — guard de las filas `cxc_cuentas` y `cxc_cobros`: permiso EXPLÍCITO e independiente del rol y de Facturación
+ * (ningún rol lo trae por defecto; Admin pasa). Exige el módulo Contabilidad de la empresa. NO exige ni concede `facturacion:*`; nunca hay
+ * fallback a `contabilidad:editar` ni a permisos de Facturación.
+ */
+export async function requireTenantCxc(
+  slug: string,
+  fila: "cxc_cuentas" | "cxc_cobros" | "cxc_bitacora" | "cxc_anular_cobro",
+  accion: AccionPermiso,
+  mensajeSinPermiso = "Sin permiso para Cuentas por cobrar.",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("contabilidad")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo Contabilidad." }, { status: 403 }) };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+/**
+ * REPORTES CONTABLES (M-4) — guard de las filas `contabilidad_diario`, `contabilidad_mayor` y `contabilidad_balance`: permiso EXPLÍCITO por reporte, solo
+ * lectura, independiente del rol (ningún rol lo trae por defecto; Admin pasa). Exige el módulo Contabilidad de la empresa. Sin fallback a `contabilidad:ver`.
+ */
+export async function requireTenantContReporte(
+  slug: string,
+  fila: "contabilidad_diario" | "contabilidad_mayor" | "contabilidad_balance",
+  mensajeSinPermiso = "Sin permiso para este reporte contable.",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("contabilidad")) {
+    return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo Contabilidad." }, { status: 403 }) };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, "ver")) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
+  }
+  return { session, empresa };
+}
+
+/**
+ * CUENTAS POR PAGAR (M-3A/M-3B1) — guard común de las filas `cxp_facturas`, `cxp_anular`, `cxp_proveedor_fiscal`, `cxp_pagos` y `cxp_reversar_pago`: permiso EXPLÍCITO e independiente
+ * del rol (ningún rol lo trae por defecto; Admin pasa). Exige que la empresa tenga el módulo Contabilidad. Mismo patrón que
+ * requireTenantFilaLiquidacionViaje; nunca hay fallback a `contabilidad:editar` (quien registra CxC o asientos no puede mover CxP).
+ */
+export async function requireTenantCxp(
+  slug: string,
+  fila: "cxp_facturas" | "cxp_anular" | "cxp_proveedor_fiscal" | "cxp_pagos" | "cxp_reversar_pago" | "cxp_bitacora",
+  accion: AccionPermiso,
+  mensajeSinPermiso = "Sin permiso para Cuentas por pagar.",
+): Promise<Ok | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  if (session.rol === "Admin") return { session, empresa };
+
+  const empresaMods = empresa.modulos.length
+    ? empresa.modulos
+    : modulosPorRol(session.rol);
+  if (empresaMods.length && !empresaMods.includes("contabilidad")) {
+    return {
+      error: NextResponse.json(
+        { error: "Esta empresa no tiene el módulo Contabilidad." },
+        { status: 403 },
+      ),
+    };
+  }
+
+  const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!tienePermiso(perms, fila, accion)) {
+    return { error: NextResponse.json({ error: mensajeSinPermiso }, { status: 403 }) };
   }
   return { session, empresa };
 }
@@ -653,8 +880,7 @@ export async function requireTenantRutas(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "rutas", accion) ||
-    tienePermiso(perms, "tms", accion)
+    tienePermisoOperativo(perms, "rutas", accion)
   ) {
     return { session, empresa };
   }
@@ -699,8 +925,7 @@ export async function requireTenantGastos(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "gastos", accion) ||
-    tienePermiso(perms, "tms", accion)
+    tienePermisoOperativo(perms, "gastos", accion)
   ) {
     return { session, empresa };
   }
@@ -754,6 +979,36 @@ export async function requireTenantGastosAutorizar(
   return { session, empresa };
 }
 
+/**
+ * CONTROL DE ENTREGA DE DOCUMENTOS (PR 2) — puerta de los endpoints de entregas. Resuelve empresa, usuario, nombre, rol y
+ * permisos SIEMPRE desde la sesión del servidor y devuelve el `actor` que consumen los servicios de `src/lib/entregas`.
+ *
+ * Exige que la empresa tenga TMS (Fondos/Gastos/Compras viven ahí) y que el usuario tenga alguna razón para usarlo (alguna fila de
+ * entrega, o —si el endpoint lo acepta— ver Solicitudes de fondo). Qué puede hacer en cada área lo decide el servicio con las
+ * reglas comunes: aquí NO se duplican. Admin conserva el bypass administrativo del sistema.
+ */
+export async function requireTenantEntregas(
+  slug: string,
+  opciones: { aceptaGastosVer?: boolean } = {},
+): Promise<(Ok & { actor: ActorEntrega }) | Fail> {
+  const tenant = await requireTenant(slug);
+  if (tenant.error) return tenant;
+
+  const { session, empresa } = tenant;
+  const esAdmin = session.rol === "Admin";
+  if (!esAdmin) {
+    const empresaMods = empresa.modulos.length ? empresa.modulos : modulosPorRol(session.rol);
+    if (empresaMods.length && !empresaMods.includes("tms")) {
+      return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo TMS." }, { status: 403 }) };
+    }
+  }
+  const permisos = await permisosEfectivos(session.id, session.rol as RolGlobal);
+  if (!puedeUsarEntregas(permisos, esAdmin, opciones)) {
+    return { error: NextResponse.json({ error: "Sin permiso para el control de entrega de documentos." }, { status: 403 }) };
+  }
+  return { session, empresa, actor: actorDesdeSesion(session, permisos) };
+}
+
 /** Autorizar o rechazar Gastos operativos, sin fallback al permiso general. */
 export async function requireTenantGastosOperativosAutorizar(
   slug: string,
@@ -793,7 +1048,7 @@ export async function requireTenantGastosOperativosAutorizar(
  */
 export async function requireTenantCotizaciones(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionPermiso | "estado" = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -815,8 +1070,9 @@ export async function requireTenantCotizaciones(
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
   if (
-    tienePermiso(perms, "cotizaciones", accion) ||
-    tienePermiso(perms, "tms", accion)
+    accion === "estado"
+      ? ((tienePermisoBase(perms, "cotizaciones") || tienePermisoBase(perms, "tms")) && tieneAccionCatalogo(perms, "cotizaciones", "estado"))
+      : tienePermisoOperativo(perms, "cotizaciones", accion)
   ) {
     return { session, empresa };
   }
@@ -1146,9 +1402,16 @@ export async function requireTenantRrhhAny(
  * "tms" como alternativa) — mantenerlos separados es precisamente lo que
  * impide que dar acceso a TMS implique acceso a facturación, o viceversa.
  */
+export type AccionConfigFacturacion = "ver_empresa" | "editar_empresa" | "ver_requisitos" | "editar_requisitos";
+const MENSAJE_CONFIG_FACTURACION: Record<AccionConfigFacturacion, string> = {
+  ver_empresa: "Sin permiso para ver la configuración de facturación de la empresa.",
+  editar_empresa: "Sin permiso para editar la configuración de facturación de la empresa.",
+  ver_requisitos: "Sin permiso para ver los requisitos de facturación de clientes.",
+  editar_requisitos: "Sin permiso para editar los requisitos de facturación de clientes.",
+};
 export async function requireTenantFacturacion(
   slug: string,
-  accion: AccionPermiso = "ver",
+  accion: AccionPermiso | "emitir" | "anular" | "pagos" | "ver_confirmaciones_bancarias" | "confirmar_banco" | "anular_confirmacion" | "ver_bitacora" | AccionConfigFacturacion = "ver",
 ): Promise<Ok | Fail> {
   const tenant = await requireTenant(slug);
   if (tenant.error) return tenant;
@@ -1156,9 +1419,9 @@ export async function requireTenantFacturacion(
   const { session, empresa } = tenant;
   if (session.rol === "Admin") return { session, empresa };
 
-  const empresaMods = empresa.modulos.length
+  const empresaMods = derivarModulosEmpresa((empresa.modulos.length
     ? empresa.modulos
-    : modulosPorRol(session.rol);
+    : modulosPorRol(session.rol)) as Modulo[]);
   if (empresaMods.length && !empresaMods.includes("facturacion")) {
     return {
       error: NextResponse.json(
@@ -1169,7 +1432,20 @@ export async function requireTenantFacturacion(
   }
 
   const perms = await permisosEfectivos(session.id, session.rol as RolGlobal);
-  if (tienePermiso(perms, "facturacion", accion)) {
+  // Configuración de la empresa / requisitos de clientes: permisos PROPIOS (capacidades.ts), nunca el rol ni «emitir/editar factura».
+  if (accion in MENSAJE_CONFIG_FACTURACION) {
+    const cap = capacidadesFacturacion(perms, session.rol);
+    const permitido = {
+      ver_empresa: cap.verEmpresa, editar_empresa: cap.editarEmpresa,
+      ver_requisitos: cap.verClientes, editar_requisitos: cap.editarClientes,
+    }[accion as AccionConfigFacturacion];
+    if (permitido) return { session, empresa };
+    return { error: NextResponse.json({ error: MENSAJE_CONFIG_FACTURACION[accion as AccionConfigFacturacion] }, { status: 403 }) };
+  }
+  const autorizado = accion === "emitir" || accion === "anular" || accion === "pagos" || accion === "ver_confirmaciones_bancarias" || accion === "confirmar_banco" || accion === "anular_confirmacion" || accion === "ver_bitacora"
+    ? tieneAccionCatalogo(perms, "facturacion", accion)
+    : tienePermiso(perms, "facturacion", accion as AccionPermiso);
+  if (tienePermisoBase(perms, "facturacion") && autorizado) {
     return { session, empresa };
   }
   return {

@@ -28,6 +28,7 @@ import { emularConsultaConflictoPersonal, type PersonalModelo } from "@/lib/tms/
 import { ESTADOS_ASIGNACION_DIARIA } from "./disponibilidad-programacion-dia";
 import { validarEdicionRapidaSchema, MAX_FILAS_EDICION_RAPIDA, type ValidarEdicionRapida } from "./edicion-rapida-schema";
 import { validarEdicionRapida } from "./edicion-rapida-validar";
+import type { IntegranteCuadrilla } from "./cuadrilla-contrato";
 
 const EMP = 7;
 const sumarDias = (fecha: string, n: number) => { const d = new Date(`${fecha}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -46,6 +47,9 @@ let planes: Plan[];
 let viaticos: { plan_id: number; personal_id: number; estado: string }[];
 let sqls: string[];
 let engineExcluidos: number[][];
+let cuadrillas: Map<number, IntegranteCuadrilla[]>;
+/** Planes SIN vehículo solicitado (históricos). Los demás tienen el perfil 11. */
+let sinVehiculo: Set<number>;
 
 const persona = (id: number, nombre: string, idEmpleado: number | null, tipo: "Piloto" | "Auxiliar" = "Piloto"): Persona => ({ id, empresa_id: EMP, nombre, tipo, id_empleado: idEmpleado, estado: "Activo" });
 const plan = (id: number, over: Partial<Plan> = {}): Plan => ({
@@ -55,6 +59,8 @@ const plan = (id: number, over: Partial<Plan> = {}): Plan => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  cuadrillas = new Map();
+  sinVehiculo = new Set();
   sqls = [];
   engineExcluidos = [];
   viaticos = [];
@@ -69,6 +75,13 @@ beforeEach(() => {
     const s = String(sql);
     sqls.push(s);
     const empresa = Number(params[0]);
+    if (s.includes("SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje")) {
+      const ids = params.slice(1) as number[];
+      return planes.filter((p) => p.empresa_id === empresa && ids.includes(p.id)).map((p) => ({ id: p.id, vehiculo_solicitado_perfil_id: sinVehiculo.has(p.id) ? null : 11 }));
+    }
+    if (s.includes("FROM tms_plan_cuadrilla c INNER JOIN")) {
+      return [...cuadrillas].filter(([id]) => params.slice(1).includes(id)).flatMap(([id, integrantes]) => integrantes.map((c) => ({ plan_id: id, tipo: c.tipo, id_empleado: c.empleadoId, nombre: c.nombre, identificacion: null, telefono: null })));
+    }
     if (s.includes("FROM tms_planes_viaje p") && s.includes("LEFT JOIN tms_unidades u ON u.id = p.unidad_id") && s.includes("p.id IN")) {
       const ids = params.slice(1) as number[];
       return planes.filter((p) => p.empresa_id === empresa && ids.includes(p.id)).map((p) => ({
@@ -485,6 +498,22 @@ describe("estado FINAL del lote: intercambios y rotaciones", () => {
 });
 
 describe("solo lectura y contexto", () => {
+  it("Cuadrilla interna estacionaria del lote bloquea al piloto que intenta usar el mismo empleado en una ventana solapada", async () => {
+    cuadrillas.set(102, [{ tipo: "INTERNO", empleadoId: 102, nombre: "Luis", identificacion: null, telefono: null }]);
+    planes[0].regreso = `${D0} 09:00:00`;
+    const r = await validar([cambio(101, { pilotoPersonalId: 12 }), cambio(102)]);
+    expect(codigos(r, 101)).toContain("RECURSO_OCUPADO_LOTE");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("Cuadrilla permite ventanas secuenciales y externos no reservan un empleado", async () => {
+    cuadrillas.set(102, [{ tipo: "INTERNO", empleadoId: 102, nombre: "Luis", identificacion: null, telefono: null }]);
+    const r = await validar([cambio(101, { pilotoPersonalId: 12 }), cambio(102)]);
+    expect(codigos(r, 101)).not.toContain("RECURSO_OCUPADO_LOTE");
+    cuadrillas.set(102, [{ tipo: "EXTERNO", empleadoId: null, nombre: "Luis", identificacion: null, telefono: null }]);
+    planes[0].regreso = `${D0} 09:00:00`;
+    expect(codigos(await validar([cambio(101, { pilotoPersonalId: 12 }), cambio(102)]), 101)).not.toContain("RECURSO_OCUPADO_LOTE");
+  });
   it("31) resolverSeleccionPersonal en modo lectura: nunca crea personal", async () => {
     await validar([cambio(101, { pilotoPersonalId: 12, auxiliarPersonalIds: [20, 21] })]);
     expect(personalDesdeEmpleado).not.toHaveBeenCalled();
@@ -531,6 +560,42 @@ describe("solo lectura (guarda de código)", () => {
       expect(sinBloqueo, f).not.toMatch(/(INSERT|UPDATE|DELETE)/);
       expect(sinBloqueo, f).not.toMatch(/execute\(|getPool|beginTransaction|GET_LOCK|registrarAuditoria|sincronizarViaticosPlan|personalDesdeEmpleado|guardarAuxiliaresPlan|guardarParadasPlan/);
       if (f.includes("/validar/route.ts")) expect(codigo, f).not.toMatch(/FOR UPDATE|conn/);
+    }
+  });
+});
+
+describe("VEHÍCULO SOLICITADO obligatorio: la edición rápida no puede dejar incompleto un viaje histórico", () => {
+  it("histórico sin vehículo + cambio real → error por fila con el mensaje exigido y NO se guarda", async () => {
+    sinVehiculo.add(101);
+    const r = await validar([cambio(101, { pilotoPersonalId: 12 })]);
+    expect(r.ok).toBe(false);
+    expect(codigos(r, 101)).toEqual(["VEHICULO_SOLICITADO_FALTANTE"]);
+    expect(fila(r, 101).errores[0].mensaje).toBe("Este viaje debe completar el vehículo solicitado desde Programación antes de editarse.");
+  });
+
+  it("con vehículo la edición rápida sigue como siempre", async () => {
+    const r = await validar([cambio(101, { pilotoPersonalId: 12 })]);
+    expect(codigos(r, 101)).not.toContain("VEHICULO_SOLICITADO_FALTANTE");
+  });
+
+  it("sin cambio real en esa fila (solo se reenvía lo mismo) no se bloquea; la fila histórica no arrastra a las demás del lote", async () => {
+    sinVehiculo.add(101);
+    const r = await validar([cambio(101), cambio(102, { pilotoPersonalId: 12 })]);
+    expect(codigos(r, 101)).not.toContain("VEHICULO_SOLICITADO_FALTANTE");
+    expect(codigos(r, 102)).not.toContain("VEHICULO_SOLICITADO_FALTANTE");
+  });
+
+  it("un lote con una fila histórica incompleta queda inválido completo (todo o nada)", async () => {
+    sinVehiculo.add(102);
+    const r = await validar([cambio(101, { pilotoPersonalId: 12 }), cambio(102, { pilotoPersonalId: 13 })]);
+    expect(r.ok).toBe(false);
+    expect(codigos(r, 102)).toContain("VEHICULO_SOLICITADO_FALTANTE");
+  });
+
+  it("no se inventa ningún vehículo: la edición rápida jamás escribe ni infiere el campo", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const f of ["src/lib/tms/edicion-rapida-validar.ts", "src/lib/tms/edicion-rapida-guardar.ts"]) {
+      expect(readFileSync(f, "utf8")).not.toMatch(/SET[^`]*vehiculo_solicitado|UPDATE tms_planes_viaje[^`]*vehiculo_solicitado/);
     }
   });
 });

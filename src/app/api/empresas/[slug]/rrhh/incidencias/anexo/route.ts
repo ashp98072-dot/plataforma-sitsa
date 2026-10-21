@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
+import { marcarVacacionesDirty } from "@/lib/rrhh/vacaciones-sync-estado";
+import type { ResultSetHeader } from "mysql2/promise";
 import { requireTenantRrhh } from "@/lib/tenant";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -52,23 +54,28 @@ export async function POST(req: Request, ctx: Ctx) {
     });
   }
 
+  const conn = await getPool().getConnection();
   try {
-    const result = await execute(
+    await conn.beginTransaction();
+    const [result] = await conn.execute<ResultSetHeader>(
       `INSERT INTO incidencias
         (empresa_id, id_empleado, tipo, fecha_inicio, fecha_fin, dias_habiles)
        VALUES (?, ?, ?, ?, ?, 1)`,
       [guard.empresa.id, empleadoId, tipo, fecha, fecha],
     );
+    if (["Vacaciones", "A cuenta de Vacaciones"].includes(tipo)) await marcarVacacionesDirty(conn, guard.empresa.id, empleadoId);
+    await conn.commit();
     return NextResponse.json({
       incidenciaId: Number(result.insertId),
       tipo,
       creado: true,
     });
   } catch (err) {
+    await conn.rollback();
     console.error("anexo incidencia", err);
     return NextResponse.json(
       { error: "No se pudo preparar la incidencia para adjuntos." },
       { status: 500 },
     );
-  }
+  } finally { conn.release(); }
 }

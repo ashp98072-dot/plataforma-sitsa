@@ -1,4 +1,4 @@
-import type { ComponenteCosteo, ResultadoCosteoServicio } from "./cotizacion-costeo";
+import { esMotorCotizador2026, type ComponenteCosteo, type ResultadoCosteoServicio } from "./cotizacion-costeo";
 
 /**
  * COTIZACIONES-COSTEO (Fase 3) — lógica pura del formulario de costeo
@@ -14,45 +14,44 @@ export type PerfilOpcion = {
   gpsMensual: number;
   seguroVehiculoMensual: number;
   costoRefrigeracion?: unknown | null;
+  /** Valor predeterminado de «Viáticos y hotel (Q)» del perfil (se muestra como sugerencia del campo). */
+  viaticosHotelViaje?: number | null;
 };
 
 export type OtroCostoForm = { concepto: string; monto: string };
 
 export type CosteoFormState = {
+  precioCombustibleOverride?: string;
+  incluirSeguroMercaderia?: boolean;
   perfilId: number;
   distanciaKm: string;
   diasServicio: string;
   cantidadPilotos: string;
   cantidadAuxiliares: string;
-  cantidadGuias: string;
   incluirGps: boolean;
   incluirSeguroVehiculo: boolean;
   seguroMercaderia: string;
   usarRefrigeracion: boolean;
-  viaticoPilotoTotal: string;
-  viaticoAuxiliarTotal: string;
-  viaticoGuiaTotal: string;
-  hotelTotal: string;
+  /** «Viáticos y hotel (Q)»: UN solo monto del viaje. Vacío = valor del perfil. */
+  viaticosHotelTotal: string;
   otrosCostos: OtroCostoForm[];
   /** En porcentaje (20 = 20 %). Vacío = usar el margen de los parámetros vigentes. */
   margenObjetivoPct: string;
 };
 
 export const COSTEO_FORM_VACIO: CosteoFormState = {
+  precioCombustibleOverride: "",
+  incluirSeguroMercaderia: true,
   perfilId: 0,
   distanciaKm: "",
   diasServicio: "1",
   cantidadPilotos: "1",
   cantidadAuxiliares: "0",
-  cantidadGuias: "0",
   incluirGps: false,
   incluirSeguroVehiculo: false,
   seguroMercaderia: "",
   usarRefrigeracion: false,
-  viaticoPilotoTotal: "",
-  viaticoAuxiliarTotal: "",
-  viaticoGuiaTotal: "",
-  hotelTotal: "",
+  viaticosHotelTotal: "",
   otrosCostos: [],
   margenObjetivoPct: "",
 };
@@ -79,20 +78,18 @@ const numero = (v: string): number => (v.trim() === "" ? NaN : Number(v));
 
 /** Payload que el servidor recalcula. Solo datos operativos: jamás parámetros económicos ni datos del perfil. */
 export type PayloadCosteoCliente = {
+  precioCombustibleOverride?: number;
+  incluirSeguroMercaderia?: boolean;
   perfilId: number;
   distanciaKm: number;
   diasServicio: number;
   cantidadPilotos: number;
   cantidadAuxiliares: number;
-  cantidadGuias: number;
   incluirGps: boolean;
   incluirSeguroVehiculo: boolean;
   usarRefrigeracion: boolean;
   seguroMercaderia?: number;
-  viaticoPilotoTotal?: number;
-  viaticoAuxiliarTotal?: number;
-  viaticoGuiaTotal?: number;
-  hotelTotal?: number;
+  viaticosHotelTotal?: number;
   otrosCostos?: { concepto: string; monto: number }[];
   margenObjetivo?: number;
 };
@@ -103,10 +100,11 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   if (!(distanciaKm >= 0)) return { ok: false, error: "Indica la distancia en km (0 o más)." };
   const diasServicio = numero(form.diasServicio);
   if (!(diasServicio > 0)) return { ok: false, error: "Los días de servicio deben ser mayores a cero." };
-  const cantidades = { cantidadPilotos: numero(form.cantidadPilotos), cantidadAuxiliares: numero(form.cantidadAuxiliares), cantidadGuias: numero(form.cantidadGuias) };
+  const cantidades = { cantidadPilotos: numero(form.cantidadPilotos), cantidadAuxiliares: numero(form.cantidadAuxiliares) };
   if (Object.values(cantidades).some((c) => !(c >= 0))) return { ok: false, error: "Las cantidades de personal deben ser 0 o más." };
 
   const payload: PayloadCosteoCliente = {
+    incluirSeguroMercaderia: form.incluirSeguroMercaderia ?? true,
     perfilId: form.perfilId,
     distanciaKm,
     diasServicio,
@@ -117,8 +115,8 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   };
   // Vacío = no informado (nunca 0 implícito): los overrides solo viajan si el usuario los escribió.
   const opcionales = [
-    ["seguroMercaderia", form.seguroMercaderia], ["viaticoPilotoTotal", form.viaticoPilotoTotal], ["viaticoAuxiliarTotal", form.viaticoAuxiliarTotal],
-    ["viaticoGuiaTotal", form.viaticoGuiaTotal], ["hotelTotal", form.hotelTotal],
+    ["precioCombustibleOverride", form.precioCombustibleOverride ?? ""],
+    ["seguroMercaderia", form.seguroMercaderia], ["viaticosHotelTotal", form.viaticosHotelTotal],
   ] as const;
   for (const [clave, texto] of opcionales) {
     if (texto.trim() === "") continue;
@@ -133,7 +131,7 @@ export function construirPayloadCosteo(form: CosteoFormState): { ok: true; paylo
   if (otros.length) payload.otrosCostos = otros.map((o) => ({ concepto: o.concepto.trim(), monto: numero(o.monto) }));
   if (form.margenObjetivoPct.trim() !== "") {
     const pct = numero(form.margenObjetivoPct);
-    if (!(pct >= 0)) return { ok: false, error: "El margen objetivo debe ser 0 % o más." };
+    if (!Number.isFinite(pct) || pct < 0 || pct > 500) return { ok: false, error: "El margen objetivo debe estar entre 0 y 500 %." };
     payload.margenObjetivo = pct / 100;
   }
   return { ok: true, payload };
@@ -162,6 +160,10 @@ export const porcentajeCosteo = (fraccion: number | null | undefined) => (fracci
 
 /** Datos que muestra el resumen: mismos para un cálculo nuevo y para un snapshot registrado. */
 export type ResumenCosteoDatos = {
+  margenObjetivoMonto?: number;
+  advertencias?: string[];
+  subtotalComercial?: number;
+  precioPorKm?: number | null;
   costoOperativo: number;
   iva: number;
   costoConIva: number;
@@ -173,8 +175,17 @@ export type ResumenCosteoDatos = {
   componentes: ComponenteCosteo[];
 };
 
+/**
+ * Motores que guardan un `resultado_snapshot` completo (subtotal, margen, IVA, precio/km). V1 no lo tiene y se muestra con su
+ * formato original; tanto los snapshots del PR #406 como los nuevos del Cotizador 2026 usan el resumen detallado.
+ */
+export const motorConResultadoCompleto = (version: string | undefined | null): boolean => version === "COSTEO_EXCEL_2026" || esMotorCotizador2026(version);
+
 export function resumenDesdeResultado(r: ResultadoCosteoServicio): ResumenCosteoDatos {
   return {
+    advertencias: r.advertencias,
+    margenObjetivoMonto: r.margenObjetivoMonto,
+    subtotalComercial: r.subtotalComercial, precioPorKm: r.precioPorKm,
     costoOperativo: r.costoOperativo, iva: r.iva, costoConIva: r.costoConIva, margenObjetivo: r.margenObjetivoAplicado,
     precioSugerido: r.precioSugerido, precioVenta: r.precioVenta, utilidadEstimada: r.utilidadEstimada, margenReal: r.margenReal,
     componentes: r.componentes,

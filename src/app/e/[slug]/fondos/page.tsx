@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { aplicarEmpleadoSeleccionado, aplicarPlanSeleccionado } from "@/lib/tms/fondos-selectores";
@@ -12,6 +12,13 @@ import { paramsExportarFondos, paramsListadoFondos } from "@/lib/tms/exportacion
 import { AutorizacionConfirmacionModal } from "@/components/tms/autorizacion-confirmacion-modal";
 import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirmacion";
 import { FondoLineasClient, type DetalleLineasFondo } from "@/components/tms/fondo-lineas-client";
+import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-formulario";
+import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
+import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
+import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
+import { EntregasPorRecibir, HistorialEntregas, RegistrarEntregaModal } from "@/components/tms/fondo-entregas";
+import { opcionesRegistro, type ResumenEntregaDocumento } from "@/lib/entregas/presentacion";
+import { areasRecepcionDelActor, type ActorEntrega } from "@/lib/entregas/reglas";
 
 type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
@@ -46,7 +53,7 @@ const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 p
  */
 type Catalogos = {
   empleados: { id: number; codigo: string; nombre: string; puesto: string | null; cuentaBancaria: string | null; telefono?: string | null }[];
-  vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null }[];
+  vehiculos: { id: number; placa: string; marca: string | null; modelo: string | null; compartido?: boolean; empresaDuenaNombre?: string | null }[];
   clientes: { id: number; codigo: string | null; nombre: string; nit: string | null }[];
   planes: {
     id: number; codigo: string; clienteId: number | null; clienteNombre: string | null; fechaPlan: string;
@@ -88,8 +95,19 @@ export default function FondosPage() {
   // el botón solo se muestra a quien tiene el permiso propio
   // "gastos_autorizar" (editar). El endpoint vuelve a validarlo en el
   // servidor — ocultar el botón NO es la única defensa.
-  const { permisos } = useEmpresaSession();
+  const { permisos, rol, username } = useEmpresaSession();
   const puedeAutorizar = tienePermiso(permisos, "gastos_autorizar", "editar");
+  // CONTROL DE ENTREGA (PR 2) — solo para decidir qué ofrecer: el servidor vuelve a validar permisos, custodia y estado en cada
+  // acción. Se usan las MISMAS reglas comunes (src/lib/entregas) que el servicio; no hay una copia de las reglas en la pantalla.
+  const actorEntrega = useMemo<ActorEntrega>(
+    () => ({ usuarioId: -1, username, nombre: username, rol, esAdmin: rol === "Admin", permisos }),
+    [username, rol, permisos],
+  );
+  const puedeRecibirEntregas = areasRecepcionDelActor(actorEntrega).FONDOS.length > 0;
+  const [resumenEntregas, setResumenEntregas] = useState<Record<number, ResumenEntregaDocumento>>({});
+  const [versionEntregas, setVersionEntregas] = useState(0);
+  const [entregaExpandida, setEntregaExpandida] = useState<number | null>(null);
+  const [registrandoEntregaId, setRegistrandoEntregaId] = useState<number | null>(null);
   const [confirmandoAutorizacionId, setConfirmandoAutorizacionId] = useState<number | null>(null);
   const [autorizandoId, setAutorizandoId] = useState<number | null>(null);
   const bloqueoAutorizacion = useRef<number | null>(null);
@@ -97,6 +115,8 @@ export default function FondosPage() {
   const [solicitudes, setSolicitudes] = useState<SolicitudFondo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Errores de validación estructurados del servidor (línea + campo + problema) para el resumen y el resaltado de campos.
+  const [errores, setErrores] = useState<ErrorFormulario[]>([]);
   const [msg, setMsg] = useState("");
   const [fEstado, setFEstado] = useState("");
   const [fFechaDesde, setFFechaDesde] = useState("");
@@ -123,6 +143,11 @@ export default function FondosPage() {
   const [fechaRequerimiento, setFechaRequerimiento] = useState(new Date().toISOString().slice(0, 10));
   const [observaciones, setObservaciones] = useState("");
   const [lineas, setLineas] = useState<LineaForm[]>([{ ...LINEA_VACIA }]);
+  // Doble envío: la bandera `enVuelo` del guard es síncrona (un `useState` solo se vería en el siguiente render); `guardando`
+  // solo pinta el botón. La clave identifica ESTA creación y se reutiliza en cada reintento hasta que se confirme.
+  const [guardEnvio] = useState(() => crearGuardEnvio());
+  const [guardando, setGuardando] = useState(false);
+  const claveEnvioRef = useRef<string | null>(null);
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [cacheLineas] = useState(() => new Map<string, DetalleLineasFondo>());
@@ -169,12 +194,32 @@ export default function FondosPage() {
     void cargar();
   }, [cargar]);
 
+  // Resumen de entrega de TODA la página en una sola consulta (sin polling): al cargar el listado y tras cada acción de entrega.
+  useEffect(() => {
+    const ids = solicitudes.map((s) => s.id);
+    if (!ids.length) return;
+    let vigente = true;
+    fetch(`/api/empresas/${slug}/tms/fondos/entregas/resumen?ids=${ids.join(",")}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { resumen?: Record<number, ResumenEntregaDocumento> } | null) => { if (vigente && d?.resumen) setResumenEntregas(d.resumen); })
+      .catch(() => undefined);
+    return () => { vigente = false; };
+  }, [slug, solicitudes, versionEntregas]);
+
+  function alCambiarEntrega(mensaje: string) {
+    setMsg(mensaje);
+    setRegistrandoEntregaId(null);
+    setVersionEntregas((v) => v + 1);
+  }
+
   function totalForm(): number {
     return lineas.reduce((s, l) => s + (Number(l.cantidad) || 1) * (Number(l.monto) || 0), 0);
   }
 
   function cerrarFormulario() {
+    claveEnvioRef.current = null;
     setMostrarForm(false);
+    setErrores([]);
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setEntidadRequirenteId(""); setRequirenteNombre(""); setRequirenteUsuarioId(""); setSolicitanteUsuarioId(""); setObservaciones(""); setLineas([{ ...LINEA_VACIA }]);
   }
@@ -187,6 +232,7 @@ export default function FondosPage() {
    * precargar el formulario, para no perder las líneas ya guardadas.
    */
   async function abrirEditar(s: SolicitudFondo) {
+    claveEnvioRef.current = null;
     setError("");
     const res = await fetch(`/api/empresas/${slug}/tms/fondos/${s.id}`);
     const data = await res.json().catch(() => ({}));
@@ -217,14 +263,31 @@ export default function FondosPage() {
     setMostrarForm(true);
   }
 
+  /** Punto de entrada del botón: un solo envío en vuelo; el botón se rehabilita siempre al terminar (éxito o error). */
   async function guardar() {
-    setError(""); setMsg("");
+    await guardEnvio.ejecutar(async () => {
+      setGuardando(true);
+      try {
+        await guardarSolicitud();
+      } catch {
+        setError("No se pudo contactar al servidor. Revisa tu conexión y vuelve a intentar.");
+      } finally {
+        setGuardando(false);
+      }
+    });
+  }
+
+  async function guardarSolicitud() {
+    setError(""); setMsg(""); setErrores([]);
     if (!entidadRequirenteId) { setError("Selecciona la empresa requirente."); return; }
     if (!requirenteUsuarioId && !(editandoId && !requirenteHistorico.id)) { setError("Selecciona un requirente de Operaciones."); return; }
     if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
-    const lineasValidas = lineas.filter((l) => l.categoria && Number(l.monto) > 0);
-    if (!lineasValidas.length) { setError("Agrega al menos una línea de gasto válida."); return; }
-    const lineasPayload = lineasValidas.map((l) => {
+    // Se envían todas las líneas que el usuario llenó (antes se descartaban en silencio las incompletas): así el servidor puede
+    // decir «Línea 2 — Monto: …». Las filas totalmente en blanco se omiten; `lineasPantalla` conserva su número visible.
+    const lineasLlenas = indicesLlenos(lineas, LINEA_VACIA);
+    if (!lineasLlenas.length) { setError("Agrega al menos una línea de gasto."); return; }
+    const lineasPantalla = lineasLlenas.map((i) => i + 1);
+    const lineasPayload = lineasLlenas.map((i) => lineas[i]).map((l) => {
       const empleado = catalogos.empleados.find((e) => String(e.id) === l.empleadoId);
       return {
         categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
@@ -267,11 +330,21 @@ export default function FondosPage() {
             solicitanteUsuarioId: Number(solicitanteUsuarioId),
             fechaRequerimiento,
             observaciones: observaciones.trim() || null,
+            claveIdempotencia: (claveEnvioRef.current ??= nuevaClaveEnvio()),
             lineas: lineasPayload,
           }),
         });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(data.error ?? (editandoId ? "No se pudo editar la solicitud." : "No se pudo crear la solicitud.")); return; }
+    if (!res.ok) {
+      const leidos = leerErroresRespuesta(data, editandoId ? "No se pudo editar la solicitud." : "No se pudo crear la solicitud.");
+      const delServidor = remapearLineas(leidos.errores, "lineas", lineasPantalla);
+      setErrores(delServidor);
+      setError(delServidor.length ? "" : leidos.mensaje);
+      // 409 de idempotencia: la creación ya existe con otros datos; se refresca el listado para que la vea antes de reintentar.
+      if (res.status === 409) await cargar();
+      return;
+    }
+    setErrores([]);
     setMsg(data.mensaje ?? (editandoId ? "Solicitud actualizada." : "Solicitud creada."));
     cerrarFormulario();
     await cargar();
@@ -364,21 +437,24 @@ export default function FondosPage() {
       ) : null}
       {msg ? <p className="text-sm text-emerald-300">{msg}</p> : null}
 
+      {puedeRecibirEntregas ? <EntregasPorRecibir slug={slug} version={versionEntregas} onCambio={alCambiarEntrega} /> : null}
+
       {mostrarForm ? (
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente *
-              <select className={`${inputCls} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
+              <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
                 <option value="">Seleccionar empresa requirente…</option>
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
             </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={requirenteUsuarioId} options={opcionesConHistorico(opcionesUsuarios(catalogos.usuariosOperaciones), requirenteUsuarioId === requirenteHistorico.id ? requirenteUsuarioId : "", requirenteHistorico.nombre)} inputClassName={inputCls} onChange={(value) => { setRequirenteUsuarioId(value); if (value) setRequirenteNombre(""); }} />
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
-            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={setSolicitanteUsuarioId} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={claseCampo(errores, "solicitanteUsuarioId", inputCls)} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
-              <input type="date" className={`${inputCls} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
+              <input type="date" className={`${claseCampo(errores, "fechaRequerimiento", inputCls)} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
+              <ErrorCampo errores={errores} campo="fechaRequerimiento" />
             </label>
           </div>
           <div className="space-y-2">
@@ -389,13 +465,13 @@ export default function FondosPage() {
               return (
                 <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={inputCls} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                    <select className={claseCampo(errores, `lineas.${i}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
                       {catalogos.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <input className={inputCls} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={inputCls} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    <input className={claseCampo(errores, `lineas.${i}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
                     <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
                   </div>
                   {/*
@@ -410,7 +486,7 @@ export default function FondosPage() {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
                       set(aplicarEmpleadoSeleccionado(l, empleado, value));
                     }} />
-                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: [v.marca, v.modelo].filter(Boolean).join(" ") }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
+                    <CatalogoSearchSelect label="Unidad" placeholder="Buscar placa..." value={l.vehiculoId} options={catalogos.vehiculos.map((v) => ({ value: String(v.id), label: v.placa, detail: detalleVehiculoCatalogo(v) }))} inputClassName={inputCls} onChange={(value) => set({ vehiculoId: value })} />
                     <CatalogoSearchSelect label="Cliente" placeholder="Buscar cliente..." value={l.clienteId} options={catalogos.clientes.map((c) => ({ value: String(c.id), label: c.nombre, detail: [c.codigo, c.nit ? `NIT ${c.nit}` : null].filter(Boolean).join(" · ") }))} inputClassName={inputCls} onChange={(value) => set({ clienteId: value })} />
                     {/*
                       SOLICITUD-FONDOS-REPORTE-1 (pendiente 2 del PR #211) —
@@ -427,7 +503,8 @@ export default function FondosPage() {
                       set(aplicarPlanSeleccionado(l, plan, value, empleado));
                     }} />
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
-                      <input type="date" className={`${inputCls} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <input type="date" className={`${claseCampo(errores, `lineas.${i}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <ErrorCampo errores={errores} campo={`lineas.${i}.fechaViaje`} />
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>
                     </label>
                   </div>
@@ -444,13 +521,14 @@ export default function FondosPage() {
                       "Cuenta / Número".
                     */}
                     <label className="text-xs text-[var(--muted)]">Método de pago
-                      <select className={`${inputCls} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, cuenta: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => String(x.id) === l.empleadoId)) })}>
+                      <select className={`${claseCampo(errores, `lineas.${i}.metodoPago`, inputCls)} mt-0.5 w-full`} value={l.metodoPago} onChange={(e) => set({ metodoPago: e.target.value, cuenta: destinoPagoEmpleado(e.target.value, catalogos.empleados.find((x) => String(x.id) === l.empleadoId)) })}>
                         <option value="">—</option>
                         {catalogos.metodosPago.map((m) => <option key={m} value={m}>{m}</option>)}
                       </select>
                     </label>
                     <label className="text-xs text-[var(--muted)]">{l.metodoPago === "Transferencia móvil" ? "Número de teléfono" : "Cuenta"}
-                      <input className={`${inputCls} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      <input className={`${claseCampo(errores, `lineas.${i}.cuentaOverride`, inputCls)} mt-0.5 w-full`} placeholder={l.metodoPago === "Transferencia móvil" ? "Número de transferencia móvil" : "Número de cuenta para depósito"} value={l.cuenta} onChange={(e) => set({ cuenta: e.target.value })} maxLength={100} />
+                      <ErrorCampo errores={errores} campo={`lineas.${i}.cuentaOverride`} />
                       {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => String(x.id) === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
@@ -469,8 +547,15 @@ export default function FondosPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} />
           </label>
-          <button type="button" onClick={() => void guardar()} className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white">
-            {editandoId ? "Guardar cambios" : "Crear solicitud"}
+          <ErroresFormulario errores={errores} />
+          <button
+            type="button"
+            onClick={() => void guardar()}
+            disabled={guardando}
+            aria-busy={guardando}
+            className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {guardando ? "Guardando…" : editandoId ? "Guardar cambios" : "Crear solicitud"}
           </button>
         </div>
       ) : null}
@@ -485,6 +570,15 @@ export default function FondosPage() {
                   {s.estado}
                 </span>
                 {" "}· Q{s.total.toLocaleString("es-GT", { minimumFractionDigits: 2 })}
+                {resumenEntregas[s.id]?.pendiente ? (
+                  <>
+                    {" "}· <span className="rounded border border-amber-500/60 px-1.5 py-0.5 text-[11px] text-amber-300">
+                      {resumenEntregas[s.id]!.pendiente!.texto}{resumenEntregas[s.id]!.pendiente!.modo === "PRESENCIAL" ? " (presencial)" : ""}
+                    </span>
+                  </>
+                ) : resumenEntregas[s.id] && resumenEntregas[s.id]!.total > 0 ? (
+                  <span className="text-xs text-[var(--muted)]"> · En {resumenEntregas[s.id]!.custodiaEtiqueta}</span>
+                ) : null}
               </div>
               <div className="flex items-center gap-2 text-xs">
                 <button type="button" onClick={() => setExpandido(expandido === s.id ? null : s.id)} className="text-[var(--accent)]">
@@ -519,16 +613,54 @@ export default function FondosPage() {
                 {s.estado === "Autorizada" ? (
                   <button type="button" onClick={() => void cambiarEstado(s.id, "liquidar")} className="rounded bg-[var(--accent)] px-2 py-1 text-white">Liquidar</button>
                 ) : null}
+                {(() => {
+                  // CONTROL DE ENTREGA: «Registrar entrega» solo si el usuario puede actuar por el área que tiene la custodia, el
+                  // documento admite entregas y no hay una pendiente; «Entregas» abre el historial (ver estado, anular, recepción presencial).
+                  const r = resumenEntregas[s.id];
+                  if (!r) return null;
+                  const opciones = opcionesRegistro(actorEntrega, "FONDOS", r.custodia, Boolean(r.pendiente), s.estado);
+                  return (
+                    <>
+                      {opciones.permitido ? (
+                        <button type="button" onClick={() => setRegistrandoEntregaId(s.id)} className="rounded border border-[var(--accent)] px-2 py-1 text-[var(--accent)]">Registrar entrega</button>
+                      ) : null}
+                      {r.total > 0 || opciones.permitido ? (
+                        <button type="button" onClick={() => setEntregaExpandida(entregaExpandida === s.id ? null : s.id)} className="text-[var(--accent)]">
+                          {entregaExpandida === s.id ? "Ocultar entregas" : "Entregas"}
+                        </button>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
             </div>
             {s.motivoRechazo ? <p className="mt-1 text-xs text-red-300">Motivo de rechazo: {s.motivoRechazo}</p> : null}
             {expandido === s.id ? (
               <FondoLineasClient key={`${slug}/${s.id}`} slug={slug} id={s.id} cache={cacheLineas} />
             ) : null}
+            {entregaExpandida === s.id ? (
+              <HistorialEntregas slug={slug} solicitudId={s.id} version={versionEntregas} onCambio={alCambiarEntrega} />
+            ) : null}
           </div>
         ))}
         {!solicitudesFiltradas.length && !loading ? <p className="text-[var(--muted)]">Sin solicitudes con este filtro.</p> : null}
       </div>
+      {(() => {
+        const s = registrandoEntregaId !== null ? solicitudes.find((x) => x.id === registrandoEntregaId) : undefined;
+        const r = s ? resumenEntregas[s.id] : undefined;
+        if (!s || !r) return null;
+        const opciones = opcionesRegistro(actorEntrega, "FONDOS", r.custodia, Boolean(r.pendiente), s.estado);
+        if (!opciones.permitido) return null;
+        return (
+          <RegistrarEntregaModal
+            slug={slug}
+            solicitud={{ id: s.id, codigo: s.codigo }}
+            opciones={opciones}
+            onCerrar={() => setRegistrandoEntregaId(null)}
+            onHecho={(m) => { setEntregaExpandida(s.id); alCambiarEntrega(m); }}
+          />
+        );
+      })()}
       <AutorizacionConfirmacionModal
         abierto={confirmandoAutorizacionId !== null}
         mensaje="¿Está seguro de que desea autorizar esta solicitud de fondo?"

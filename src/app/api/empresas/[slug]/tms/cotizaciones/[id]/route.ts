@@ -3,7 +3,8 @@ import { z } from "zod";
 import { requireTenantCotizaciones, requireTenantCotizacionesCosteo } from "@/lib/tenant";
 import { actualizarCotizacion, obtenerCotizacion } from "@/lib/tms/cotizaciones";
 import { DOCUMENTOS_EMISOR } from "@/lib/tms/cotizacion-documento";
-import { ErrorCosteoYaRegistrado } from "@/lib/tms/cotizacion-costeo-db";
+import { ErrorCosteoVersionConflicto } from "@/lib/tms/cotizacion-costeo-db";
+import { creditoCombustibleSchema } from "@/lib/tms/cotizacion-credito-combustible-schema";
 import { costeoPayloadSchema, mensajeErrorCosteo, prepararCosteo } from "@/lib/tms/cotizacion-costeo-servicio";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
@@ -46,6 +47,7 @@ const schema = z.object({
   // FASE 6 — documento comercial. La marca es un catálogo cerrado; atención/cargo/unidad son opcionales.
   documentoEmisor: z.enum(DOCUMENTOS_EMISOR).optional(),
   atencionNombre: z.string().max(160).nullable().optional(),
+  atencionTratamiento: z.enum(["Sr.", "Sres.", "Sra.", "Srta."]).nullable().optional(),
   atencionCargo: z.string().max(160).nullable().optional(),
   unidadDescripcion: z.string().max(160).nullable().optional(),
   // PRESENTACIÓN COMERCIAL — snapshot editable del texto del PDF; solo cambia si el PATCH lo trae
@@ -53,10 +55,12 @@ const schema = z.object({
   // aquí: cambiar de marca en el formulario y no tocar el mensaje NO lo pisa en silencio.
   mensajeComercial: z.string().max(2000).nullable().optional(),
   cierreComercial: z.string().max(2000).nullable().optional(),
+  // COTIZACIONES-CREDITO-COMBUSTIBLE — condiciones de crédito + combustible de referencia (snapshot comercial).
+  ...creditoCombustibleSchema,
   // Rutas/destinos adicionales: si se omite, las líneas existentes no se tocan; si se manda
   // (incluido vacío []), reemplaza por completo las líneas adicionales guardadas.
   lineasAdicionales: z.array(lineaAdicionalSchema).max(50).optional(),
-  // COTIZACIONES-COSTEO: registra el snapshot por primera vez; si ya existe, 409 (inmutable).
+  // COTIZACIONES-COSTEO: registra una NUEVA versión del costeo (historial; cada versión es inmutable).
   costeo: costeoPayloadSchema.optional(),
 });
 
@@ -89,7 +93,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (!cotizacion) return NextResponse.json({ error: "Cotización no encontrada." }, { status: 404 });
     return NextResponse.json({ mensaje: "Cotización actualizada.", cotizacion });
   } catch (error) {
-    if (error instanceof ErrorCosteoYaRegistrado) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof ErrorCosteoVersionConflicto) return NextResponse.json({ error: error.message }, { status: 409 });
     const mensajeCosteo = mensajeErrorCosteo(error);
     if (mensajeCosteo) return NextResponse.json({ error: mensajeCosteo }, { status: 400 });
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo actualizar la cotización." }, { status: 400 });

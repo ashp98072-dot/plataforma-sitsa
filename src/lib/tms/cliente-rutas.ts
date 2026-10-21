@@ -1,6 +1,7 @@
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
+import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
 import { tarifasActivasDeRuta, tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { hoyLocal } from "@/lib/rrhh/dates";
 
@@ -80,13 +81,14 @@ async function validarUbicacionDeEmpresaTx(conn: PoolConnection, empresaId: numb
 
 /**
  * RUTAS-TARIFARIO-MULTIPLE-UNIDAD-RECURRENTE-1 (§5) — la unidad recurrente
- * DEBE ser un vehículo de flota_vehiculos de ESTA empresa. `null`/`undefined`
- * la quita sin validar (se permite dejar la ruta sin unidad recurrente).
+ * DEBE ser un vehículo ACCESIBLE desde ESTA empresa: propio o compartido con
+ * ella (regla única de Flota, flota_vehiculo_acceso; Programación ya acepta
+ * unidades compartidas). `null`/`undefined` la quita sin validar (se permite
+ * dejar la ruta sin unidad recurrente).
  */
 async function validarUnidadRecurrenteTx(conn: PoolConnection, empresaId: number, vehiculoId: number | null | undefined): Promise<void> {
   if (vehiculoId == null) return;
-  const rows = await queryConn<RowDataPacket[]>(conn, "SELECT id FROM flota_vehiculos WHERE id = ? AND empresa_id = ? LIMIT 1", [vehiculoId, empresaId]);
-  if (!rows[0]) throw new Error("La unidad recurrente indicada no pertenece a la flota de esta empresa.");
+  if (!(await obtenerVehiculoAccesibleTx(conn, empresaId, vehiculoId, "v.id"))) throw new Error("La unidad recurrente indicada no pertenece a la flota de esta empresa.");
 }
 
 /**
@@ -292,6 +294,7 @@ function mapRuta(r: RowDataPacket): Omit<ClienteRuta, "paradas"> {
   };
 }
 
+// Histórico: la ruta ya guardó una unidad recurrente validada; el JOIN de su placa no exige la compartición actual (no debe quedar vacía).
 const SELECT_RUTA = `
   SELECT r.id, r.cliente_id, c.nombre AS cliente_nombre, r.codigo, r.nombre,
          r.ubicacion_carga_id, r.lugar_carga_texto, r.destino_descripcion, r.hora_habitual,
@@ -303,7 +306,7 @@ const SELECT_RUTA = `
   FROM tms_cliente_rutas r
   INNER JOIN tms_clientes c ON c.id = r.cliente_id
   LEFT JOIN tms_cliente_contactos ct ON ct.id = r.contacto_cliente_id
-  LEFT JOIN flota_vehiculos fvr ON fvr.id = r.unidad_recurrente_id AND fvr.empresa_id = r.empresa_id
+  LEFT JOIN flota_vehiculos fvr ON fvr.id = r.unidad_recurrente_id
 `;
 
 async function paradasDeRutas(rutaIds: number[]): Promise<Map<number, RutaParada[]>> {

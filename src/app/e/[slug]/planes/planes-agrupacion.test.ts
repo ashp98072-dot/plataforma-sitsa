@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   agruparPlanes,
   elegibilidadCierre,
+  faltaReporteParaCierre,
   esSeleccionable,
   fechaVisible,
   grupoAbierto,
@@ -13,7 +14,12 @@ import {
 } from "./planes-agrupacion";
 import { accionesViaje } from "./planes-viajes-client";
 
-const p = (id: number, fechaPlan: string, estado: string, pendienteCierre = false): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre });
+// PLANES-TARIFA-CIERRE-1 — tarifaComercial: 500 por defecto (CON tarifa); los tests "sin tarifa" la pasan explícitamente como null.
+// REQUISITO DE SECUENCIA — reporte RECIBIDO por defecto (solo REPORTE_RECIBIDO habilita el cierre); los tests "sin reporte" lo pasan null.
+const p = (
+  id: number, fechaPlan: string, estado: string, pendienteCierre = false, tarifaComercial: number | null = 500,
+  liquidacion: { estado: string; reporteRecibido?: boolean } | null = { estado: "REPORTE_RECIBIDO" },
+): PlanAgrupable => ({ id, fechaPlan, estado, pendienteCierre, tarifaComercial, liquidacion });
 
 const planes: PlanAgrupable[] = [
   p(1, "2026-09-22", "Cerrado"),
@@ -167,18 +173,55 @@ describe("elegibilidad: la UI coincide con el backend", () => {
   });
 });
 
-describe('corrección de la inconsistencia: "Cerrar viaje" normal solo si cerrarViaje() lo admitiría', () => {
+describe('corrección de la inconsistencia: "Cerrar viaje" normal solo si cerrarViaje() lo admitiría (todos CON tarifa)', () => {
   it("Programado con llegada (pendienteCierre) YA NO muestra 'Cerrar viaje' pero conserva Cierre manual", () => {
-    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true }, true);
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
     expect(a.cerrar).toBe(false);
     expect(a.cierreManual).toBe(true);
   });
   it("Descargado sí muestra 'Cerrar viaje' (el backend lo admite aunque el listado no lo marque pendiente)", () => {
-    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(true);
   });
   it("En ruta sin llegada: sin 'Cerrar viaje' (solo manual); con llegada: sí", () => {
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false }, true).cerrar).toBe(false);
-    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true }, true).cerrar).toBe(true);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(false);
+    expect(accionesViaje("operativo", { estado: "En ruta", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true).cerrar).toBe(true);
+  });
+});
+
+/** PLANES-TARIFA-CIERRE-1 (7-10, 29-33) — accionesViaje respeta tarifa; UI test 29-37 se cubren en el bloque de inspección de código más abajo. */
+describe("accionesViaje — tarifa (PLANES-TARIFA-CIERRE-1)", () => {
+  it("Descargado SIN tarifa (null) -> ni cerrar ni cierreManual, y faltaTarifa=true", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a.cerrar).toBe(false);
+    expect(a.cierreManual).toBe(false);
+    expect(a.faltaTarifa).toBe(true);
+  });
+
+  it("Programado SIN tarifa -> cierreManual false, faltaTarifa true (el estado SÍ admitiría manual si tuviera tarifa)", () => {
+    const a = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a.cierreManual).toBe(false);
+    expect(a.faltaTarifa).toBe(true);
+  });
+
+  it("Cerrado SIN tarifa -> faltaTarifa false (el estado de todos modos no admitiría ningún cierre, no es 'culpa' de la tarifa)", () => {
+    const a = accionesViaje("operativo", { estado: "Cerrado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("Q0.00 (tarifaComercial = 0, no null) se comporta como CON tarifa", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 0, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a.cerrar).toBe(true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("modo reporte: faltaTarifa siempre false (sin acciones operativas)", () => {
+    const a = accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a.faltaTarifa).toBe(false);
+  });
+
+  it("sin permiso viajes_cerrar:editar: faltaTarifa siempre false", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: { estado: "REPORTE_RECIBIDO" } }, false);
+    expect(a.faltaTarifa).toBe(false);
   });
 });
 
@@ -245,7 +288,7 @@ describe("pantalla (código fuente): selección, botones separados y reporte sin
     expect(src).toContain("if (esReporte) return planes.map((p) => ({ kind: \"plan\" as const, p }))");
     expect(src).toContain("{mostrarSel && it.abierto ? (");
     expect(src).toContain("{!esReporte ? (");
-    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false });
+    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: true, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true)).toEqual({ verDetalle: true, pdf: true, irProgramacion: false, cerrar: false, cierreManual: false, faltaTarifa: false, faltaReporte: false });
   });
 
   it("regresión: cierre individual, cierre manual individual, Ver detalle, Programación y PDF siguen en cada fila", () => {
@@ -349,5 +392,243 @@ describe("PLANES-CIERRE-PERIODO — selector Día/Semana/Mes y acciones del per�
   it("cambiar de agrupación limpia la selección (evita referirse a un grupo con un formato de clave que ya no existe)", () => {
     const efecto = src.slice(src.indexOf("useEffect(() => {\n    // Cambiar de Día/Semana/Mes"), src.indexOf("}, [modoAgrupacion]);"));
     expect(efecto).toContain("setSeleccion(new Set())");
+  });
+});
+
+/**
+ * PLANES-SEPARAR-CERRADOS — separa "Pendientes / Activos" (estado <> 'Cerrado') de "Viajes cerrados"
+ * (estado = 'Cerrado') en dos pestañas del modo operativo, reutilizando soloSinCerrar/soloCerrados ya
+ * existentes en el backend (nunca una tabla nueva ni SQL duplicado). Mismo criterio de pruebas que el resto
+ * de este archivo: sin harness de componentes React, se verifica el código fuente directamente.
+ */
+describe("PLANES-SEPARAR-CERRADOS — pestañas Pendientes/Activos vs Viajes cerrados", () => {
+  const src = readFileSync("src/app/e/[slug]/planes/planes-viajes-client.tsx", "utf8").replace(/\r\n/g, "\n");
+  const fnAplicar = src.slice(src.indexOf("function aplicarFiltrosDeVista"), src.indexOf("function irAVista"));
+  const fnIrAVista = src.slice(src.indexOf("function irAVista"), src.indexOf("function limpiarFiltros"));
+  const fnLimpiar = src.slice(src.indexOf("function limpiarFiltros"), src.indexOf("function verTodosLosPlanes"));
+
+  it("1) modo operativo inicia en ACTIVOS (vista y soloSinCerrar por defecto)", () => {
+    expect(src).toContain('useState<VistaPlanes>("ACTIVOS")');
+    expect(src).toContain('useState(modo === "operativo")'); // soloSinCerrar: true en operativo, false en reporte (sin cambios)
+  });
+
+  it("2/3) ACTIVOS manda soloSinCerrar=1 y NO manda soloCerrados — mismo builder de query existente (filtrosQueryString)", () => {
+    expect(src).toContain('if (soloSinCerrar) p.set("soloSinCerrar", "1")');
+    expect(src).toContain('if (soloCerrados) p.set("soloCerrados", "1")');
+    // aplicarFiltrosDeVista(ACTIVOS) deja soloSinCerrar=true y soloCerrados=false — ambos estados fluyen al mismo filtrosQueryString ya existente.
+    expect(fnAplicar).toMatch(/setSoloSinCerrar\(true\);\s*\n\s*setSoloCerrados\(false\);/);
+  });
+
+  it("4/5) CERRADOS manda soloCerrados=1 y NO manda soloSinCerrar", () => {
+    expect(fnAplicar).toMatch(/setSoloCerrados\(true\);\s*\n\s*setSoloSinCerrar\(false\);/);
+  });
+
+  it("8) CERRADOS fuerza soloPendientes=false", () => {
+    const bloqueCerrados = fnAplicar.slice(fnAplicar.indexOf('if (v === "CERRADOS")'), fnAplicar.indexOf("} else {"));
+    expect(bloqueCerrados).toContain("setSoloPendientes(false)");
+  });
+
+  it("6) cambiar de pestaña resetea page=1 (reutiliza buscarTick -> cargar(1), mismo mecanismo que 'Buscar')", () => {
+    expect(fnIrAVista).toContain("setBuscarTick((t) => t + 1)");
+    // El efecto que escucha buscarTick llama cargar(1) con página fija — no cargar(page).
+    const efectoBuscarTick = src.slice(src.indexOf("useEffect(() => {\n    // eslint-disable-next-line react-hooks/set-state-in-effect\n    void cargar(1)"), src.indexOf("}, [buscarTick])"));
+    expect(efectoBuscarTick).toContain("void cargar(1)");
+  });
+
+  it("7) cambiar de pestaña limpia la selección de cierre masivo", () => {
+    expect(fnIrAVista).toContain("setSeleccion(new Set())");
+  });
+
+  it("9/10/11/12) filtros cliente/piloto/unidad/rango de fecha se CONSERVAN al cambiar de pestaña (irAVista nunca los toca)", () => {
+    for (const campo of ["fCliente", "fPiloto", "fUnidad", "fDesde", "fHasta"]) {
+      expect(fnIrAVista).not.toContain(`set${campo[0].toUpperCase()}${campo.slice(1)}`);
+    }
+  });
+
+  it("13/14/15) la agrupación Día/Semana/Mes es independiente de la pestaña — agruparPlanes(planes, modoAgrupacion) no depende de `vista`", () => {
+    expect(src).toContain("const grupos = useMemo(() => (esReporte ? [] : agruparPlanes(planes, modoAgrupacion))");
+  });
+
+  it("16/17) las acciones de cierre (selección/masivo/período) son visibles en ACTIVOS y se ocultan en CERRADOS: todas cuelgan de mostrarSel, que ahora exige vista === \"ACTIVOS\"", () => {
+    expect(src).toContain('const mostrarSel = !esReporte && puedeCerrarViaje && vista === "ACTIVOS"');
+    expect(src).toContain("const puedeAccionPeriodo = mostrarSel && planFocoId == null");
+    expect(src).toContain('...(mostrarSel ? ["Sel."] : [])');
+    expect(src).toContain("{mostrarSel && it.abierto ? (");
+    expect(src).toContain("{puedeAccionPeriodo && it.abierto ? (");
+  });
+
+  it("18) el checkbox 'Solo pendientes de cierre' solo aparece en modo reporte o en la pestaña ACTIVOS del operativo", () => {
+    expect(src).toContain('{esReporte || vista === "ACTIVOS" ? (');
+    expect(src).toContain("checked={soloPendientes}");
+  });
+
+  it("19) los checkboxes 'Solo cerrados'/'Solo sin cerrar' ya NO aparecen en modo operativo — solo dentro de `{esReporte ? (...) : null}`", () => {
+    const bloqueCheckboxes = src.slice(src.indexOf('<div className="mt-2 flex flex-wrap gap-3 text-xs">'), src.indexOf("{/* OPERACIONES-UX-PLANES-REPORTES-1 — exportación"));
+    expect(bloqueCheckboxes).toContain("{esReporte ? (");
+    expect(bloqueCheckboxes).toContain("checked={soloCerrados}");
+    expect(bloqueCheckboxes).toContain("checked={soloSinCerrar}");
+    // Ambos checkboxes (sus <input checked={...}>, no solo el texto en un comentario) quedan DENTRO del bloque
+    // `esReporte ? (...) : null` — nunca sueltos, fuera de esa condición.
+    const idxEsReporte = bloqueCheckboxes.indexOf("{esReporte ? (");
+    const idxSoloCerrados = bloqueCheckboxes.indexOf("checked={soloCerrados}");
+    const idxSoloSinCerrar = bloqueCheckboxes.indexOf("checked={soloSinCerrar}");
+    expect(idxSoloCerrados).toBeGreaterThan(idxEsReporte);
+    expect(idxSoloSinCerrar).toBeGreaterThan(idxEsReporte);
+  });
+
+  it("20) Reportes conserva los 3 filtros de siempre (soloPendientes/soloCerrados/soloSinCerrar), sin pestañas", () => {
+    expect(src).toContain("{!esReporte ? (");
+    expect(src).toContain('role="tablist" aria-label="Vista de viajes"');
+    // El bloque de pestañas nunca se renderiza cuando esReporte es true.
+    const idxPestañas = src.indexOf('role="tablist" aria-label="Vista de viajes"');
+    const idxEsReporteGuard = src.lastIndexOf("{!esReporte ? (", idxPestañas);
+    expect(idxEsReporteGuard).toBeGreaterThan(-1);
+    expect(idxEsReporteGuard).toBeLessThan(idxPestañas);
+  });
+
+  it("21/22) deep-link a un plan (abierto o Cerrado) sigue funcionando: filtrosQueryString ignora soloSinCerrar/soloCerrados/vista cuando hay planFocoId (comportamiento existente, sin cambios)", () => {
+    const fnFiltrosQuery = src.slice(src.indexOf("const filtrosQueryString = useCallback"), src.indexOf("const exportQueryString"));
+    expect(fnFiltrosQuery).toContain("if (planFocoId != null)");
+    expect(fnFiltrosQuery).toContain('p.set("planId", String(planFocoId))');
+    expect(fnFiltrosQuery).toContain("return p;"); // corta ANTES de aplicar soloSinCerrar/soloCerrados/fEstado
+    // El corte temprano ocurre ANTES de las líneas que agregan soloSinCerrar/soloCerrados a la query.
+    const idxCorte = fnFiltrosQuery.indexOf('p.set("planId", String(planFocoId))');
+    const idxSoloSinCerrar = fnFiltrosQuery.indexOf('p.set("soloSinCerrar"');
+    expect(idxCorte).toBeLessThan(idxSoloSinCerrar);
+  });
+
+  it("23/24/25/26) cerrar individual/manual/masivo/período recargan con `cargar()` (servidor sigue siendo fuente de verdad) — nunca un filter() optimista en el arreglo local", () => {
+    expect(src).not.toMatch(/planes\.filter\(\s*\(?p\)?\s*=>\s*p\.id\s*!==/); // ningún filtro optimista del arreglo `planes` tras cerrar
+    const fnConfirmarManual = src.slice(src.indexOf("async function confirmarCierreManual"), src.indexOf("async function abrirDetalle"));
+    expect(fnConfirmarManual).toContain("await cargar()");
+    const fnCerrarViaje = src.slice(src.indexOf("async function cerrarViaje(planId"), src.indexOf("const mostrarSel ="));
+    expect(fnCerrarViaje).toContain("await cargar()");
+    const fnEjecutarMasivo = src.slice(src.indexOf("async function ejecutarMasivo"), src.indexOf("async function abrirCierrePeriodo"));
+    expect(fnEjecutarMasivo).toContain("await cargar()");
+    const fnEjecutarPeriodo = src.slice(src.indexOf("async function ejecutarCierrePeriodo"), src.indexOf("puedeAccionPeriodo = mostrarSel"));
+    expect(fnEjecutarPeriodo).toContain("await cargar()");
+  });
+
+  it("27) el backend no cambia: sigue reutilizando soloCerrados/soloSinCerrar ya existentes (mismos nombres de parámetro en la query string)", () => {
+    expect(src).toContain('p.set("soloCerrados", "1")');
+    expect(src).toContain('p.set("soloSinCerrar", "1")');
+    expect(src).not.toContain("vista=cerrados"); // no se persiste en URL (fuera de alcance, estado client-side)
+  });
+
+  it("28) no SQL: ningún string de este archivo contiene una sentencia SQL (sigue siendo un componente cliente puro)", () => {
+    expect(src).not.toMatch(/\bSELECT\b|\bUPDATE\b|\bINSERT\b/);
+  });
+
+  it("Cancelados: ACTIVOS usa exactamente estado <> 'Cerrado' (vía soloSinCerrar) — nunca excluye Cancelado ni crea una tercera pestaña", () => {
+    expect(src).not.toContain('"CANCELADOS"');
+    expect(src).not.toContain("VistaPlanes = \"ACTIVOS\" | \"CERRADOS\" | \"CANCELADOS\"");
+    // El filtro Estado en ACTIVOS sigue permitiendo seleccionar "Cancelado" explícitamente.
+    expect(src).toContain('ESTADOS.filter((e) => e !== "Cerrado")');
+  });
+
+  it("filtro Estado: ACTIVOS nunca ofrece 'Cerrado'; CERRADOS lo fija y deshabilita; Reportes sin cambios", () => {
+    const bloqueEstado = src.slice(src.indexOf('<label className="text-xs text-[var(--muted)]">Estado\n'), src.indexOf("</label>", src.indexOf('<label className="text-xs text-[var(--muted)]">Estado\n')));
+    expect(bloqueEstado).toContain('disabled={!esReporte && vista === "CERRADOS"}');
+    expect(bloqueEstado).toContain('<option value="Cerrado">Cerrado</option>');
+    expect(bloqueEstado).toContain("ESTADOS.filter((e) => e !== \"Cerrado\")");
+  });
+
+  it("limpiarFiltros() en modo operativo reaplica los filtros de la pestaña ACTUAL (nunca deja soloSinCerrar/soloCerrados en false/false, lo que rompería la separación)", () => {
+    expect(fnLimpiar).toContain('if (modo === "operativo")');
+    expect(fnLimpiar).toContain("aplicarFiltrosDeVista(vista)");
+  });
+
+  it("contadores del grupo: CERRADOS muestra un resumen limpio ('N viaje(s) · N cerrados'); ACTIVOS oculta '0 cerrados'; ningún cambio al helper agruparPlanes", () => {
+    expect(src).toContain("{g.total} viaje(s) · {g.cerrados} cerrados");
+    expect(src).toContain("{g.cerrados > 0 ?");
+  });
+
+  it("las pestañas están posicionadas después de los filtros principales y antes de 'Agrupar por'", () => {
+    const idxFiltrosFin = src.indexOf("</section>\n\n      {/* PLANES-SEPARAR-CERRADOS — pestañas");
+    const idxPestañas = src.indexOf('role="tablist" aria-label="Vista de viajes"');
+    const idxAgruparPor = src.indexOf("Agrupar por");
+    expect(idxFiltrosFin).toBeGreaterThan(-1);
+    expect(idxFiltrosFin).toBeLessThan(idxPestañas);
+    expect(idxPestañas).toBeLessThan(idxAgruparPor);
+  });
+});
+
+/**
+ * REQUISITO DE SECUENCIA (UI) — sin REPORTE_RECIBIDO la acción «Cerrar viaje» se muestra DESHABILITADA con
+ * «Confirme primero la recepción del reporte.» (el servidor manda); con REPORTE_RECIBIDO funciona como siempre.
+ */
+describe("cierre de viaje — requiere REPORTE_RECIBIDO (UI)", () => {
+  const MSG = "Confirme primero la recepción del reporte.";
+
+  it("accionesViaje: elegible por estado pero sin reporte -> cerrar/cierreManual false y faltaReporte true", () => {
+    for (const liquidacion of [null, undefined, { estado: "EN_AJUSTE" }, { estado: "LIQUIDADO" }]) {
+      const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion }, true);
+      expect(a.cerrar, JSON.stringify(liquidacion)).toBe(false);
+      expect(a.cierreManual).toBe(false);
+      expect(a.faltaReporte).toBe(true);
+    }
+    const manual = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true);
+    expect(manual).toMatchObject({ cerrar: false, cierreManual: false, faltaReporte: true });
+  });
+
+  it("con REPORTE_RECIBIDO: cerrar/cierreManual como siempre y sin aviso", () => {
+    const a = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(a).toMatchObject({ cerrar: true, faltaReporte: false });
+    const m = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "REPORTE_RECIBIDO" } }, true);
+    expect(m).toMatchObject({ cierreManual: true, faltaReporte: false });
+  });
+
+  it("no hay aviso de reporte donde el viaje no podría cerrarse de todos modos (Cerrado, Cancelado, sin permiso, modo reporte)", () => {
+    for (const estado of ["Cerrado", "Cancelado"]) {
+      expect(accionesViaje("operativo", { estado, pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true).faltaReporte, estado).toBe(false);
+    }
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, false).faltaReporte).toBe(false);
+    expect(accionesViaje("reporte", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: null }, true).faltaReporte).toBe(false);
+    // Sin tarifa el motivo visible es la tarifa (no se acumula el aviso de reporte).
+    expect(accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: null, liquidacion: null }, true)).toMatchObject({ faltaTarifa: true, faltaReporte: false });
+  });
+
+  it("elegibilidadCierre/esSeleccionable/faltaReporteParaCierre: sin reporte no es seleccionable para cierre masivo", () => {
+    const sin = p(1, "d", "Descargado", false, 500, null);
+    const con = p(2, "d", "Descargado", false, 500, { estado: "REPORTE_RECIBIDO" });
+    expect(elegibilidadCierre(sin, true)).toEqual({ normal: false, manual: false });
+    expect(esSeleccionable(sin, true)).toBe(false);
+    expect(faltaReporteParaCierre(sin, true)).toBe(true);
+    expect(esSeleccionable(con, true)).toBe(true);
+    expect(faltaReporteParaCierre(con, true)).toBe(false);
+    expect(agruparPlanes([sin, con], "DIA")[0]).toMatchObject({ total: 2, cerrables: 1 });
+  });
+
+  it("pantalla: botón «Cerrar viaje» deshabilitado con el mensaje (no se oculta en silencio)", () => {
+    const src = readFileSync("src/app/e/[slug]/planes/planes-viajes-client.tsx", "utf8");
+    expect(src).toMatch(/acc\.faltaReporte \? \(\s*<button\s+type="button"\s+disabled\s+title=\{MENSAJE_CONFIRMAR_REPORTE_PRIMERO\}/);
+    expect(src).toMatch(/data-cierre-deshabilitado="reporte-no-recibido"/);
+    expect(MSG).toBe("Confirme primero la recepción del reporte.");
+    const shared = readFileSync("src/lib/tms/cierre-viaje-shared.ts", "utf8");
+    expect(shared).toContain(`MENSAJE_CONFIRMAR_REPORTE_PRIMERO = "${MSG}"`);
+  });
+});
+
+describe("cierre de viaje — planes heredados (evidencia histórica de reporte recibido)", () => {
+  it("EN_AJUSTE/LIQUIDADO con reporteRecibido (evento) habilitan el cierre; sin él, no", () => {
+    for (const estado of ["EN_AJUSTE", "LIQUIDADO"]) {
+      const con = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3, reporteRecibido: true } }, true);
+      expect(con, estado).toMatchObject({ cerrar: true, faltaReporte: false });
+      const sin = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3, reporteRecibido: false } }, true);
+      expect(sin, estado).toMatchObject({ cerrar: false, faltaReporte: true });
+      const sinCampo = accionesViaje("operativo", { estado: "Descargado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado, version: 3 } }, true);
+      expect(sinCampo.cerrar, estado).toBe(false); // el estado posterior por sí solo no habilita
+    }
+    const manual = accionesViaje("operativo", { estado: "Programado", pendienteCierre: false, tarifaComercial: 500, liquidacion: { estado: "EN_AJUSTE", version: 3, reporteRecibido: true } }, true);
+    expect(manual).toMatchObject({ cierreManual: true, faltaReporte: false });
+  });
+
+  it("elegibilidad y selección usan el mismo criterio", () => {
+    const heredado = p(1, "d", "Descargado", false, 500, { estado: "LIQUIDADO", reporteRecibido: true });
+    const invalido = p(2, "d", "Descargado", false, 500, { estado: "LIQUIDADO" });
+    expect(elegibilidadCierre(heredado, true)).toEqual({ normal: true, manual: false });
+    expect(esSeleccionable(heredado, true)).toBe(true);
+    expect(esSeleccionable(invalido, true)).toBe(false);
+    expect(faltaReporteParaCierre(invalido, true)).toBe(true);
   });
 });

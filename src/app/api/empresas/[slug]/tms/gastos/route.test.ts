@@ -9,6 +9,7 @@ vi.mock("@/lib/tms/gastos", async (importOriginal) => {
 import { requireTenantGastos } from "@/lib/tenant";
 import { crearGasto } from "@/lib/tms/gastos";
 import { GET, POST } from "./route";
+import { ConflictoIdempotencia } from "@/lib/tms/idempotencia-envio";
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
 
@@ -145,5 +146,38 @@ describe("POST /tms/gastos — schema de líneas (GASTOS-MULTIPLES-LINEAS-1)", (
     const res = await POST(postReq({ ...bodyBase, lineas: [{ categoria: "Combustible", monto: 0 }] }), ctx);
     expect(res.status).toBe(400);
     expect(crearGasto).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * IDEMPOTENCIA (PR A) — la clave de envío es OPCIONAL en el backend (ventana de despliegue): sin ella el POST se comporta
+ * como siempre; con ella se valida el formato y se pasa a crearGasto; una reutilización con otro contenido es 409.
+ */
+describe("POST /tms/gastos — claveIdempotencia", () => {
+  const CLAVE = "3f2a9c1e-7b64-4d0a-9e51-2c8f6a1b0d33";
+
+  it("con clave válida la pasa a crearGasto junto con el resto del contenido", async () => {
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: CLAVE }), ctx);
+    expect(res.status).toBe(200);
+    expect(crearGasto).toHaveBeenCalledWith(7, expect.objectContaining({ claveIdempotencia: CLAVE }), "ops1");
+  });
+
+  it("sin clave sigue funcionando (compatibilidad con frontend anterior en caché)", async () => {
+    const res = await POST(postReq(bodyBase), ctx);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(crearGasto).mock.calls[0][1]).not.toHaveProperty("claveIdempotencia");
+  });
+
+  it("clave con formato inválido → 400 sin llegar a crearGasto", async () => {
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: "corta" }), ctx);
+    expect(res.status).toBe(400);
+    expect(crearGasto).not.toHaveBeenCalled();
+  });
+
+  it("misma clave con contenido distinto → 409 con el mensaje de conflicto (no un 500)", async () => {
+    vi.mocked(crearGasto).mockRejectedValue(new ConflictoIdempotencia());
+    const res = await POST(postReq({ ...bodyBase, claveIdempotencia: CLAVE }), ctx);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("ya se registró con datos distintos");
   });
 });

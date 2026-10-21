@@ -108,7 +108,7 @@ describe("listarCargasCombustibleViaje", () => {
     const out = await listarCargasCombustibleViaje(7, 5);
     expect(out).toEqual([
       {
-        id: 1, viajeId: 5, tipoCombustible: "diesel", numeroVale: "A-12345", fechaConsumo: "2026-09-02",
+        id: 1, viajeId: 5, vehiculoId: undefined, estacionId: null, proveedorId: null, proveedorNombre: null, observaciones: null, tipoCombustible: "diesel", numeroVale: "A-12345", fechaConsumo: "2026-09-02",
         galones: 40, monto: 850.5, precioGalon: 21.26,
         km: 12000, gasolinera: "Shell Zona 10", nombreArchivo: "vale.jpg",
         estado: "PENDIENTE", motivoRechazo: null, creadoPor: "portal:E001", creadoEn: "2026-09-03 10:00:00",

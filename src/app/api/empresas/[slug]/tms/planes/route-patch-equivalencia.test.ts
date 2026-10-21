@@ -48,6 +48,7 @@ import { primerConflictoProgramacionIntervalo } from "@/lib/tms/disponibilidad-p
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { PATCH } from "./route";
 
+vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
 const ctx = { params: Promise.resolve({ slug: "kt-monaco" }) };
 const patch = (body: unknown) => PATCH(new Request("http://x/api", { method: "PATCH", body: JSON.stringify(body) }), ctx);
 const sumarDias = (fecha: string, n: number) => { const d = new Date(`${fecha}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -204,6 +205,7 @@ describe("PATCH — tercerizado y TC", () => {
     expect(listarDisponibilidadPersonal).not.toHaveBeenCalled();
     expect(primerConflictoProgramacionIntervalo).not.toHaveBeenCalled();
     expect(orden).not.toContain("lock");
+    expect(orden).not.toContain("unlock");
     expect(update()![1]).toContain("TC-EXT"); // placa externa en mayúsculas
   });
 

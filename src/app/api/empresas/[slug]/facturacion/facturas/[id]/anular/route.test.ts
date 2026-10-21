@@ -18,18 +18,27 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /facturacion/facturas/[id]/anular — 21) rechaza si hay pagos (vía la lib)", () => {
-  it("exige facturacion:editar antes de tocar la lib", async () => {
+  it("exige facturacion:anular antes de tocar la lib", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
     const res = await POST(new Request("http://localhost/x", { method: "POST" }), ctx);
     expect(res.status).toBe(403);
     expect(anularFactura).not.toHaveBeenCalled();
+    expect(requireTenantFacturacion).toHaveBeenCalledWith("prueba", "anular");
+  });
+
+  it("el motivo opcional del cuerpo viaja al servicio (queda en la bitácora); un motivo no textual se ignora", async () => {
+    vi.mocked(anularFactura).mockResolvedValue({ ok: true });
+    await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ motivo: "Duplicada", empresaId: 99 }) }), ctx);
+    expect(anularFactura).toHaveBeenLastCalledWith({ empresaId: 7, usuarioId: 3, usuario: "facturador1" }, 10, "Duplicada");
+    await POST(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ motivo: 123 }) }), ctx);
+    expect(anularFactura).toHaveBeenLastCalledWith({ empresaId: 7, usuarioId: 3, usuario: "facturador1" }, 10, null);
   });
 
   it("20) éxito: delega en anularFactura con el actor del guard", async () => {
     vi.mocked(anularFactura).mockResolvedValue({ ok: true });
     const res = await POST(new Request("http://localhost/x", { method: "POST" }), ctx);
     expect(res.status).toBe(200);
-    expect(anularFactura).toHaveBeenCalledWith({ empresaId: 7, usuarioId: 3, usuario: "facturador1" }, 10);
+    expect(anularFactura).toHaveBeenCalledWith({ empresaId: 7, usuarioId: 3, usuario: "facturador1" }, 10, null); // motivo opcional: sin cuerpo = null
   });
 
   it("propaga 409 cuando la lib rechaza por pagos existentes", async () => {
