@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 vi.mock("./session", () => ({ getSession: vi.fn(), createSessionToken: vi.fn(), setSessionCookie: vi.fn() }));
 vi.mock("./empresas", () => ({ obtenerEmpresaPorSlug: vi.fn(), empresasParaUsuario: vi.fn() }));
 vi.mock("./permisos", async original => ({ ...await original<typeof import("./permisos")>(), permisosEfectivos: vi.fn() }));
-import { getSession } from "./session";
+import { getSession, createSessionToken, setSessionCookie } from "./session";
 import { obtenerEmpresaPorSlug, empresasParaUsuario } from "./empresas";
 import { permisosEfectivos } from "./permisos";
 import { requireTenantFlotaCombustible } from "./tenant";
@@ -35,4 +35,19 @@ it("Admin no puede cruzar empresa fuera de su acceso", async () => {
   vi.mocked(getSession).mockResolvedValue({ id: 3, rol: "Admin", empresaId: 7 } as never);
   vi.mocked(empresasParaUsuario).mockResolvedValue([]);
   expect((await requireTenantFlotaCombustible("kt", "revisar")).error?.status).toBe(403);
+});
+it("preview en otra empresa autorizada no cambia cookie ni objeto de sesión", async () => {
+  const session = { id: 3, rol: "JefeOperaciones", username: "op", empresaId: 99 } as const;
+  vi.mocked(getSession).mockResolvedValue(session as never);
+  const g = await requireTenantFlotaCombustible("kt", "conciliar", { soloLectura: true });
+  expect(g.error).toBeUndefined(); expect(g.empresa?.id).toBe(7);
+  expect(session.empresaId).toBe(99);
+  expect(createSessionToken).not.toHaveBeenCalled(); expect(setSessionCookie).not.toHaveBeenCalled();
+});
+it("guard histórico mantiene selección de empresa por defecto", async () => {
+  const session = { id: 3, rol: "JefeOperaciones", username: "op", empresaId: 99 };
+  vi.mocked(getSession).mockResolvedValue(session as never);
+  vi.mocked(createSessionToken).mockResolvedValue("token-sintetico");
+  expect((await requireTenantFlotaCombustible("kt", "conciliar")).error).toBeUndefined();
+  expect(setSessionCookie).toHaveBeenCalledWith("token-sintetico"); expect(session.empresaId).toBe(7);
 });
