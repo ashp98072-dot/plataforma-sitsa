@@ -22,7 +22,6 @@ import {
   MAX_AUXILIARES_EDICION_RAPIDA,
   motivoNoEditable,
   motivoNoEditableTarifa,
-  montoTarifaManualDesdeTexto,
   montoViaticoValido,
   opcionesPersonal,
   opcionesTarifa,
@@ -48,6 +47,7 @@ import {
   type TarifaRutaEdicion,
   type VehiculoCatalogo,
 } from "./edicion-rapida-helpers";
+import { montoTarifaManualDesdeTexto } from "./edicion-rapida-tarifa-manual";
 
 /**
  * PROGRAMACIÓN — EDICIÓN RÁPIDA PR-3: tabla compacta tipo Excel para cambiar piloto/auxiliares/unidad/TC (y, PR-355,

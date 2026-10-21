@@ -10,7 +10,6 @@ import {
   errorAntesDeEnviar,
   motivoNoEditable,
   motivoNoEditableTarifa,
-  montoTarifaManualDesdeTexto,
   opcionesTarifa,
   puedeEditarTarifa,
   puedeEditarViaticos,
@@ -28,6 +27,7 @@ import {
   type PlanEdicionRapida,
   type TarifaRutaEdicion,
 } from "./edicion-rapida-helpers";
+import { montoTarifaManualDesdeTexto } from "./edicion-rapida-tarifa-manual";
 
 /** PR-355 — UI pura de Edición rápida: tarifa y viáticos (borrador, payload, opciones, filas no editables). */
 const HOY = "2026-09-24";
