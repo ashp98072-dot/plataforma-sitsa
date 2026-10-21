@@ -35,9 +35,10 @@ vi.mock("@/lib/tms/personal-resolucion", () => ({ personalDesdeEmpleado: vi.fn((
 
 import { execute, getPool, query } from "@/lib/db";
 import { requireTenantProgramacion } from "@/lib/tenant";
-import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { hoyLocal } from "@/lib/rrhh/dates";
 import { POST, PATCH } from "./route";
 
 vi.mock("@/lib/tms/vehiculo-solicitado-db", async (importOriginal) => (await import("@/lib/tms/vehiculo-solicitado-db.fixture")).conVehiculoSolicitado(await importOriginal<object>()));
@@ -95,6 +96,25 @@ const PLAN_TERCERIZADO_BASE = {
 };
 
 describe("POST /tms/planes — Tercerizado: texto libre, sin catálogos internos", () => {
+  const moverDias = (fecha: string, dias: number) => {
+    const d = new Date(`${fecha}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + dias);
+    return d.toISOString().slice(0, 10);
+  };
+
+  it.each([-1, 0, 1])("conserva una fecha de operación pasada, actual o futura (%i días), y la audita", async (desfase) => {
+    const fechaPlan = moverDias(hoyLocal(), desfase);
+    const res = await post({ ...PLAN_TERCERIZADO_BASE, fechaPlan });
+    expect(res.status).toBe(200);
+    const [, params] = insertPlan()!;
+    expect(params[8]).toBe(fechaPlan);
+    expect(registrarAuditoria).toHaveBeenCalledWith(expect.objectContaining({
+      empresaId: 7,
+      usuario: "ops",
+      detalle: expect.stringContaining(`fecha ${fechaPlan}`),
+    }));
+  });
+
   it("crea el plan con tipo_viaje='Tercerizado' y el snapshot de texto guardado (piloto_id/auxiliar_id/unidad_id en NULL)", async () => {
     const res = await post(PLAN_TERCERIZADO_BASE);
     expect(res.status).toBe(200);

@@ -22,6 +22,7 @@ import {
   MAX_AUXILIARES_EDICION_RAPIDA,
   motivoNoEditable,
   motivoNoEditableTarifa,
+  motivoNoEditableViaticos,
   montoViaticoValido,
   opcionesPersonal,
   opcionesTarifa,
@@ -327,7 +328,8 @@ export function EdicionRapida({
               const bloqueoTarifa = motivoNoEditableTarifa(p, hoy);
               const tarifaDeshabilitada = bloqueoTarifa != null || guardando;
               const viaticos = puedeEditarViaticos(p) ? viaticosVisibles(borrador, p) : [];
-              const viaticosDeshabilitados = bloqueo != null || guardando;
+              const bloqueoViaticos = motivoNoEditableViaticos(p, hoy);
+              const viaticosDeshabilitados = bloqueoViaticos != null || guardando;
               const r = recursosVisibles(borrador, p);
               const estado = estadoFila(p.id, borrador, resultados);
               const vista = ESTADO_EDICION[estado];
@@ -519,7 +521,9 @@ export function EdicionRapida({
                   </td>
                   <td className="min-w-[200px] px-2 py-1.5">
                     {bloqueo ? (
-                      <span className="rounded bg-[var(--input)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]" title="No editable en Edición rápida">{bloqueo}</span>
+                      <span className="rounded bg-[var(--input)] px-1.5 py-0.5 text-[10px] text-[var(--muted)]" title="No editable en Edición rápida">
+                        {bloqueoViaticos == null ? `${bloqueo} (solo viáticos)` : bloqueo}
+                      </span>
                     ) : (
                       <span className={`font-medium ${vista.clase}`}>{res?.estado === "sin_cambios" ? "Sin cambios" : vista.texto}</span>
                     )}

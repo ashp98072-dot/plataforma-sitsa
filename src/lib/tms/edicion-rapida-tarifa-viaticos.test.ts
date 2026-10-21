@@ -150,7 +150,7 @@ const validar = (cambios: ReturnType<typeof cambio>[], motivo?: string) => valid
 const guardar = (cambios: ReturnType<typeof cambio>[], motivo?: string) => guardarEdicionRapida(EMP, "ana", lote(cambios, motivo));
 const codigos = (r: Awaited<ReturnType<typeof validar>>, planId: number) => r.filas.find((f) => f.planId === planId)!.errores.map((e) => e.codigo);
 
-describe("Edición rápida — tarifa histórica exclusivamente", () => {
+describe("Edición rápida — corrección comercial histórica", () => {
   beforeEach(() => { for (const p of planes) p.fecha_plan = sumarDias(HOY, -1); });
 
   it.each(["Programado", "Cargado", "En ruta", "Descargado"])("%s histórico admite catálogo con recursos sin cambio real", async (estado) => {
@@ -173,13 +173,33 @@ describe("Edición rápida — tarifa histórica exclusivamente", () => {
   it.each([
     ["piloto", { pilotoPersonalId: 11 }], ["auxiliares", { auxiliarPersonalIds: [21] }],
     ["unidad", { flotaVehiculoId: 30 }], ["TC", { tcVehiculoId: 40 }],
-    ["viáticos", { viaticos: [{ personalId: 10, montoAsignado: 250 }] }],
   ])("tarifa + %s histórico es rechazado sin escrituras", async (_recurso, extra) => {
     const cambios = [cambio(101, { tarifaId: 61, ...extra })];
     expect(codigos(await validar(cambios), 101)).toContain("FECHA_PASADA");
     expect(await guardar(cambios)).toMatchObject({ ok: false, status: 409 });
     expect(updates).toHaveLength(0);
     expect(registrarAuditoriaTx).not.toHaveBeenCalled();
+  });
+
+  it("viáticos históricos PROGRAMADO se validan y guardan con el snapshot y el motivo", async () => {
+    viaticos = [{ plan_id: 101, personal_id: 10, monto_asignado: 200, monto_sugerido: 200, estado: "PROGRAMADO" }];
+    const cambioHistorico = cambio(101, { viaticos: [{ personalId: 10, montoAsignado: 250 }] });
+    expect((await validar([cambioHistorico], "Corrección de viático histórico")).ok).toBe(true);
+    expect(await guardar([cambioHistorico], "Corrección de viático histórico")).toMatchObject({ ok: true, guardados: 1 });
+    expect(sincronizarViaticosPlan).toHaveBeenCalledWith(EMP, 101, expect.anything(), expect.anything(), [{ personalId: 10, montoAsignado: 250 }]);
+    expect(registrarAuditoriaTx).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ detalle: expect.stringContaining("viáticos") }));
+  });
+
+  it.each(["Cerrado", "Cancelado"])("%s histórico bloquea viáticos", async (estado) => {
+    planes[0].estado = estado;
+    viaticos = [{ plan_id: 101, personal_id: 10, monto_asignado: 200, monto_sugerido: 200, estado: "PROGRAMADO" }];
+    expect(codigos(await validar([cambio(101, { viaticos: [{ personalId: 10, montoAsignado: 250 }] })]), 101)).toContain("ESTADO_NO_EDITABLE");
+  });
+
+  it("viáticos históricos no desbloquean recursos", async () => {
+    viaticos = [{ plan_id: 101, personal_id: 10, monto_asignado: 200, monto_sugerido: 200, estado: "PROGRAMADO" }];
+    const r = await validar([cambio(101, { pilotoPersonalId: 11, viaticos: [{ personalId: 10, montoAsignado: 250 }] })]);
+    expect(codigos(r, 101)).toContain("FECHA_PASADA");
   });
 
   it.each(["Cerrado", "Cancelado"])("%s histórico nunca admite tarifa", async (estado) => {

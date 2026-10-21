@@ -333,18 +333,19 @@ export async function evaluarEdicionRapida(empresaId: number, datos: ValidarEdic
   for (const fila of candidatas) {
     const plan = fila.plan!;
     const toca = tocaDe(fila);
-    // Excepción LOCAL: la fecha pasada admite solo tarifa, calculada desde diferencias reales con la BD.
-    // No relaja PATCH/Ajustar ni permite otros datos comerciales (viáticos incluidos).
-    const soloTarifa = fila.cambiaTarifa && !fila.cambiaPiloto && !fila.cambiaAuxiliares &&
-      !fila.cambiaUnidad && !fila.cambiaTc && !fila.cambiaViaticos;
-    const tarifaHistorica = plan.fechaPlan < hoy && soloTarifa && plan.estado !== "Cerrado" && plan.estado !== "Cancelado";
+    // Excepción LOCAL: la fecha pasada admite únicamente correcciones comerciales
+    // (tarifa y/o viáticos), calculadas desde diferencias reales con la BD.
+    // No relaja PATCH/Ajustar ni permite tocar recursos operativos.
+    const soloComercial = (fila.cambiaTarifa || fila.cambiaViaticos) && !fila.cambiaPiloto && !fila.cambiaAuxiliares &&
+      !fila.cambiaUnidad && !fila.cambiaTc;
+    const comercialHistorico = plan.fechaPlan < hoy && soloComercial && plan.estado !== "Cerrado" && plan.estado !== "Cancelado";
     const eMotivo = validarMotivoCambioRecursos(toca, motivo);
     if (eMotivo) err(fila, "MOTIVO_REQUERIDO", eMotivo.error);
     else if (fila.cambiaViaticos && !motivo) err(fila, "MOTIVO_REQUERIDO", "Indica el motivo del cambio de viáticos.");
-    else if (tarifaHistorica && !motivo) err(fila, "MOTIVO_REQUERIDO", "Indica el motivo del cambio de tarifa histórica.");
-    const eEstado = tarifaHistorica ? null : validarEstadoEditable({ estado: plan.estado, pendienteCierre: plan.pendienteCierre }, toca);
+    else if (comercialHistorico && !motivo) err(fila, "MOTIVO_REQUERIDO", "Indica el motivo del cambio comercial histórico.");
+    const eEstado = comercialHistorico ? null : validarEstadoEditable({ estado: plan.estado, pendienteCierre: plan.pendienteCierre }, toca);
     if (eEstado) { err(fila, "ESTADO_NO_EDITABLE", eEstado.error); fila.fatal = true; continue; }
-    const eFecha = tarifaHistorica ? null : validarFechaNoPasada(plan.fechaPlan, hoy);
+    const eFecha = comercialHistorico ? null : validarFechaNoPasada(plan.fechaPlan, hoy);
     if (eFecha) { err(fila, "FECHA_PASADA", eFecha.error); fila.fatal = true; continue; }
     // VEHÍCULO SOLICITADO OBLIGATORIO: un viaje histórico sin vehículo no se puede dejar "editado pero incompleto". La edición rápida no tiene selector de vehículo:
     // se bloquea la fila (mínimo cambio que conserva la UX y las reglas actuales) hasta completarlo desde Programación. Solo aplica donde la edición es posible.
