@@ -1,4 +1,5 @@
-// Laboratorio exclusivo de GitHub-hosted Actions. No importa codigo de aplicacion ni .env.
+﻿// Laboratorio aislado: Actions/Docker o backend portable Windows explicitamente autorizado.
+// No importa codigo de aplicacion ni .env.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -18,6 +19,7 @@ const list = names.map(n => `'${n}'`).join(',');
 const tests = [];
 let evidence, registryPath, registry, dockerConfig, image;
 let serial = 0;
+let nativeLab;
 
 function rows(output) {
   return output.trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'));
@@ -116,7 +118,7 @@ function query(container, label, input, expectedCode = 0, detail = '', db = true
   if (db) input = "SET @cb2_schema = _utf8mb4'cb2_lab';\n" + input;
   const id = `${String(++serial).padStart(3, '0')}-${label}`;
   save(`${id}.sql`, input);
-  const result = docker(['exec', '-i', container, 'mariadb', '--no-defaults', '--protocol=socket', '-uroot',
+  const result = nativeLab ? nativeLab.execute(container, input, db) : docker(['exec', '-i', container, 'mariadb', '--no-defaults', '--protocol=socket', '-uroot',
     '--batch', '--raw', '--skip-column-names', ...(db ? ['--database=cb2_lab'] : [])], input, true);
   save(`${id}.json`, { status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error?.message });
   assert(!result.error, result.error?.message);
@@ -137,6 +139,7 @@ function cleanupOne(container) {
   docker(['rm', '--force', container]);
 }
 function laboratory(label, action) {
+  if (nativeLab) return nativeLab.laboratory(label, action, fixture, query);
   const container = `sitsa-cb2-${randomUUID()}`;
   registry.containers.push(container);
   fs.writeFileSync(registryPath, JSON.stringify(registry));
@@ -166,7 +169,9 @@ function migrate(container) {
   preState(query(container, 'preflight-contexto-information-schema', 'USE information_schema;\n' + sql.preflight), 'CLEAN');
   preState(query(container, 'preflight-sin-objetivo', 'SET @cb2_schema = NULL;\n' + sql.preflight), 'DIVERGENTE');
   preState(query(container, 'preflight-innodb-no-estricto', 'SET SESSION innodb_strict_mode = OFF;\n' + sql.preflight), 'DIVERGENTE');
-  query(container, 'migracion-contexto-incorrecto', 'USE information_schema;\n' + sql.migrate, 1644, 'CB2: se requiere CLEAN y base compatible');
+  query(container, 'crear-otro-esquema-sintetico', 'CREATE DATABASE cb2_other;');
+  query(container, 'migracion-contexto-incorrecto', 'USE cb2_other;\n' + sql.migrate, 1644, 'CB2: se requiere CLEAN y base compatible');
+  assert.equal(query(container, 'otro-esquema-sin-tablas', "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='cb2_other';").trim(), '0');
   const before = query(container, 'postcheck-clean', sql.postcheck);
   state(before, 'METADATA', 'estado_esquema_cb2', 'CLEAN');
   state(before, 'RESULTADO', 'estado_postcheck', 'DIVERGENTE');
@@ -183,14 +188,14 @@ function migrate(container) {
 const snapshotTables = [...names, 'empresas', 'usuarios', 'compras_proveedores', 'flota_vehiculos',
   'flota_vehiculo_acceso', 'flota_combustible_cargas', 'flota_combustible_conciliaciones',
   'flota_combustible_conciliacion_filas', 'auditoria'].sort();
-const scalarTypes = new Set(['tinyint', 'int', 'bigint', 'decimal', 'date', 'datetime']);
+const scalarTypes = new Set(['tinyint', 'smallint', 'int', 'bigint', 'decimal', 'date', 'datetime']);
 const stringTypes = new Set(['char', 'varchar', 'text', 'longtext']);
 function snapshotSelect(table, fields) {
   assert(snapshotTables.includes(table));
   assert(fields.length > 0);
   const expressions = fields.flatMap(field => {
     assert.match(field.name, /^[a-z0-9_]+$/);
-    assert(scalarTypes.has(field.type) || stringTypes.has(field.type), 'Tipo sin codificacion auditada');
+    assert(scalarTypes.has(field.type) || stringTypes.has(field.type), `Tipo sin codificacion auditada: ${table}.${field.name} (${field.type})`);
     const column = '\x60' + field.name + '\x60';
     // HEX(numero) redondea/convierte como BIGINT. Primero texto exacto para escalares;
     // strings conservan bytes originales, sin conversion de charset ni longitud limitada.
@@ -285,8 +290,15 @@ SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEM
     postFinal(query(c, 'postcheck-pendiente', sql.postcheck));
     assert.deepEqual(rows(query(c, 'asociacion-eventos', fixture('associate'))), [['FACTURADO', '1'], ['2'], ['1'], ['3', '1']]);
     postFinal(query(c, 'postcheck-eventos', sql.postcheck));
-    rejectTransaction(c, 'empresa-cruzada', 'UPDATE flota_cb2_consumos SET empresa_id=2,proveedor_id=3,factura_id=NULL,factura_asociada_por=NULL,factura_asociada_en=NULL WHERE id=1', 1452, 'fk_cb2c_importacion');
-    rejectTransaction(c, 'proveedor-cruzado', 'UPDATE flota_cb2_consumos SET proveedor_id=2,factura_id=NULL,factura_asociada_por=NULL,factura_asociada_en=NULL WHERE id=1', 1452, 'fk_cb2c_importacion');
+    // INSERT sobre un nuevo consumo: UPDATE de una clave ya referenciada activa
+    // primero RESTRICT del diario (1451), ocultando la FK de ambito que queremos probar.
+    const consumptionColumns = 'empresa_id,proveedor_id,importacion_origen_id,vehiculo_id,factura_id,fecha_consumo,numero_vale,vale_norm,placa_original,placa_normalizada,version_clave,clave_candidata,version_huella,huella_operacion,payload_operacion,piloto_informado,producto,galones,precio,monto,kilometraje,kilometraje_texto,galones_calculados,moneda,creado_por,creado_en,factura_asociada_por,factura_asociada_en';
+    const clonedConsumption = (empresa, proveedor) => 'INSERT INTO flota_cb2_consumos (' + consumptionColumns + ') SELECT '
+      + consumptionColumns.split(',').map(n => n === 'empresa_id' ? String(empresa) : n === 'proveedor_id' ? String(proveedor)
+        : ['factura_id', 'factura_asociada_por', 'factura_asociada_en'].includes(n) ? 'NULL' : n).join(',')
+      + ' FROM flota_cb2_consumos WHERE id=1';
+    rejectTransaction(c, 'empresa-cruzada', clonedConsumption(2, 3), 1452, 'fk_cb2c_importacion');
+    rejectTransaction(c, 'proveedor-cruzado', clonedConsumption(1, 2), 1452, 'fk_cb2c_importacion');
     rejectTransaction(c, 'factura-otro-proveedor', 'UPDATE flota_cb2_consumos SET factura_id=2 WHERE id=1', 1452, 'fk_cb2c_factura');
     rejectTransaction(c, 'factura-otra-empresa', 'UPDATE flota_cb2_consumos SET factura_id=3 WHERE id=1', 1452, 'fk_cb2c_factura');
     rejectTransaction(c, 'vehiculo-inexistente', 'UPDATE flota_cb2_consumos SET vehiculo_id=999 WHERE id=1', 1452, 'fk_cb2c_vehiculo');
@@ -323,6 +335,7 @@ hoja_indice,hoja_nombre,fila_excel,resultado,datos_origen,decision,motivo,usuari
   const alterations = [
     ['longitud', 'ALTER TABLE flota_cb2_facturas MODIFY serie VARCHAR(127) NOT NULL;'],
     ['check', 'ALTER TABLE flota_cb2_facturas DROP CONSTRAINT ck_cb2f_total, ADD CONSTRAINT ck_cb2f_total CHECK (total_documental IS NULL OR total_documental > 0);'],
+    ['check-asociacion', 'ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_asociacion, ADD CONSTRAINT ck_cb2c_asociacion CHECK (factura_id IS NULL OR factura_asociada_por IS NULL OR factura_asociada_en IS NULL);'],
     ['indice', 'ALTER TABLE flota_cb2_filas DROP INDEX idx_cb2l_hoja_revision, ADD UNIQUE KEY idx_cb2l_hoja_revision (empresa_id,proveedor_id,importacion_id,revision,hoja_indice,fila_excel,id);'],
   ];
   for (const [label, alteration] of alterations) record(`esquema-alterado-${label}`, () => laboratory(label, c => {
@@ -367,6 +380,8 @@ function setup() {
   assert(Array.isArray(registry.containers));
 }
 function snapshotSelfTest() {
+  assert(snapshotSelect('flota_cb2_importaciones', [{ name: 'version_contrato', type: 'smallint' }]).includes('CAST(CAST(`version_contrato` AS CHAR CHARACTER SET utf8mb4) AS BINARY)'));
+
   // Datos reales del fixture base, interpretados solo para estas pruebas en memoria.
   const insert = fixture('base').match(/INSERT INTO compras_proveedores VALUES ([^;]+);/);
   assert(insert);
@@ -501,6 +516,17 @@ function selfTest() {
   console.log('PASS: aserciones positivas/negativas del arnes y contratos estaticos. No se ejecuto Docker ni SQL.');
 }
 
+// Backend portable explicito; comparte suite y aserciones, no suplanta Docker/Actions.
+export function runNativeLaboratory(adapter) {
+  assert.equal(process.platform, 'win32');
+  nativeLab = adapter;
+  evidence = adapter.evidence;
+  let status = 'FAIL';
+  try { suite(); status = 'PASS'; }
+  finally { save('summary.json', { status, tests, backend: 'windows-portable-named-pipe', note: 'Solo fixtures sinteticos; casos posteriores a fallo NO EJECUTADOS.' }); }
+}
+
+if (path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
 const mode = process.argv[2];
 if (mode === '--self-test') selfTest();
 else if (mode === '--cleanup') {
@@ -536,3 +562,5 @@ else if (mode === '--cleanup') {
       `## Laboratorio CB2 SQL: ${status}\n\nCommit SQL/arnes: ${process.env.CB2_AUDITED_SHA}\nWorkflow: ${process.env.GITHUB_SHA}\n\nResultados y logs en artefacto cb2-sql-lab-${registry.run}.\n`);
   }
 } else throw new Error('Usar --self-test (estatico) o --run/--cleanup exclusivamente en Actions aprobado');
+
+}

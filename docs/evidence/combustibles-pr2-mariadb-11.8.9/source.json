@@ -1,0 +1,23 @@
+{
+  "baseline": "bc12de32f9b3ba3666df4d89ee8707e66cf0b1b4",
+  "dateUTC": "2026-10-22T16:31:02.839Z",
+  "platform": "win32",
+  "node": "v24.18.0",
+  "archiveURL": "https://archive.mariadb.org/mariadb-11.8.9/winx64-packages/mariadb-11.8.9-winx64.zip",
+  "archiveSHA256": "830c46727d9278eae212ae3eca44eeb9e71b2a68704e95f344a64fba7b1963f5",
+  "binaries": {
+    "mariadbd": "de2c4350e36bcdff6a18b614a21701a8a827509f44f51274411bb52a2849f9e5",
+    "mariadb": "a093362874408aa721d0a29de26cce74deb35dce50f7302f3c65586ec7e14500",
+    "mariadb-install-db": "4acb5febeee0613a96a6fc8906da2fee002d4a7c820804297719f8a0596ac1bf"
+  },
+  "files": {
+    "scripts\\ci\\combustibles-pr2-lab\\run.mjs": "7d532521da404567395bf4791a373bbac5dfde3b532a299555fdd8663f0a7ed9",
+    "scripts\\ci\\combustibles-pr2-lab\\run-portable-windows.mjs": "9a155f6beeaaeee326e4f3f71e9924d7e43d625f4dbd158521c86469ecc319ac",
+    "scripts\\ci\\combustibles-pr2-lab\\base.sql": "c31c3284d84dacd64957338eb158e8155f7d8561155c2a76b27bb132ba9f15dc",
+    "scripts\\ci\\combustibles-pr2-lab\\seed.sql": "956492732d4a482f3020eaf74714cf13b3fdd4a0b5fbf97668d47c57fa0e67eb",
+    "scripts\\ci\\combustibles-pr2-lab\\associate.sql": "1a1696ae97e5d494c3c0fa96c67c7a0a0a9869480b074715f6db7e27c8d611fd",
+    "sql\\preflight-2026-10-combustibles-pr2-consumos-facturas.sql": "c7f4b82d39b0d46732e358ccbf041247f668ad28cf7e83aa2356d11af4a05c98",
+    "sql\\migrate-2026-10-combustibles-pr2-consumos-facturas.sql": "48a735121b73a10d1d36aaf3ef67b8b1bb2be04094ccf2f23c68241480121c8d",
+    "sql\\postcheck-2026-10-combustibles-pr2-consumos-facturas.sql": "35cbe2a5c59af86e3359b11a634b508f8e4108044c0193d365bb5ed834243172"
+  }
+}

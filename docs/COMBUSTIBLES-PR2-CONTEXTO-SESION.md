@@ -1,5 +1,10 @@
 ﻿# PR #507: esquema objetivo explicito y estrictitud de sesion
 
+Actualizacion: el laboratorio portable MariaDB 11.8.9 ya se ejecuto; ver
+[informe de resultados](COMBUSTIBLES-PR2-LAB-RESULTADOS-MARIADB-11.8.9.md).
+Las menciones historicas a escenarios pendientes quedan sustituidas por ese informe;
+la ruta remota Actions y la ejecucion en produccion siguen sin realizarse.
+
 Auditoria 2026-10-22. Sustituye el procedimiento anterior basado en DATABASE()
 constante. No se ejecuto SQL contra Hostinger, migracion ni cambios globales.
 

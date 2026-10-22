@@ -1,5 +1,10 @@
 # Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
 
+Actualizacion: el laboratorio portable MariaDB 11.8.9 ya se ejecuto; ver
+[informe de resultados](../../../docs/COMBUSTIBLES-PR2-LAB-RESULTADOS-MARIADB-11.8.9.md).
+Las menciones historicas a escenarios pendientes quedan sustituidas por ese informe;
+la ruta remota Actions y la ejecucion en produccion siguen sin realizarse.
+
 Parametro obligatorio: los tres SQL requieren `SET @cb2_schema` explicito en la
 misma conexion, sin fallback a DATABASE(). El arnes lo fija a cb2_lab por query.
 Ver [procedimiento actualizado](../../../docs/COMBUSTIBLES-PR2-CONTEXTO-SESION.md).
@@ -10,7 +15,51 @@ Este directorio contiene exclusivamente un arnés de pruebas SQL y fixtures sint
 No es un servicio de la aplicación. Los tres scripts SQL auditados se leen sin modificarlos.
 El PR debe permanecer Draft. Publicar este workflow no autoriza ejecutarlo ni hacer merge.
 
-## Entrada y seguridad
+## Ejecucion portable Windows autorizada el 2026-10-22
+
+El usuario autorizo ejecutar las pruebas pendientes en una base aislada, sin produccion.
+Se agrega run-portable-windows.mjs para compartir la MISMA suite/aserciones con un
+servidor MariaDB 11.8.9 portable. No simula Docker ni falsea GITHUB_ACTIONS; las
+guardias del backend Actions siguen intactas. La ruta remota descrita abajo sigue
+requiriendo su launcher/environment y no se publico ni ejecuto.
+
+El backend portable solo acepta --run-isolated y binarios en .lab-runtime dentro
+del checkout. Requiere ZIP 11.8.9 y sha256sums.txt oficiales; comprueba el hash ZIP,
+registra hashes de binarios/fuentes y crea un datadir NUEVO con UUID por escenario.
+No lee .env, dumps, credenciales o archivos de configuracion de MySQL instalados.
+No instala servicio; servidor y cliente usan --no-defaults. Servidor con
+--skip-networking y named pipe de UUID; cliente --protocol=PIPE --host=. y ese
+socket fijo, sin parametros de host/URL. Verifica @@skip_networking=1, @@named_pipe=1,
+@@socket, @@datadir y VERSION() antes de crear cb2_lab o aplicar fixtures.
+Entorno de procesos reducido a variables del sistema y TEMP de este run, sin tokens.
+
+Es aislamiento de base/proceso, no un contenedor ni una VM: no hay limites Docker
+de CPU/memoria/red del sistema operativo. El canal local named pipe se distingue
+del socket Unix del laboratorio remoto; TCP esta deshabilitado. No se accede a
+ninguna base preexistente ni al servicio MySQL instalado en el equipo.
+La limpieza usa SHUTDOWN en ese canal exclusivo y confirma que deja de aceptar
+conexiones. Se conservan datadirs sinteticos y evidencia bajo .lab-runtime (ignorado
+por Git); no se ejecuta prune ni borrado global. No habilita ejecucion automatica.
+
+Preparacion desde raiz de este checkout (PowerShell; descarga oficial, sin instalar):
+
+```powershell
+New-Item -ItemType Directory -Force .lab-runtime | Out-Null
+curl.exe --fail --location --output .lab-runtime/mariadb-11.8.9-winx64.zip https://archive.mariadb.org/mariadb-11.8.9/winx64-packages/mariadb-11.8.9-winx64.zip
+curl.exe --fail --location --output .lab-runtime/sha256sums.txt https://archive.mariadb.org/mariadb-11.8.9/winx64-packages/sha256sums.txt
+# Comprobar SHA-256 oficial ANTES de extraer/ejecutar:
+Get-FileHash -Algorithm SHA256 .lab-runtime/mariadb-11.8.9-winx64.zip
+# Esperado: 830c46727d9278eae212ae3eca44eeb9e71b2a68704e95f344a64fba7b1963f5
+Expand-Archive -LiteralPath .lab-runtime/mariadb-11.8.9-winx64.zip -DestinationPath .lab-runtime
+node scripts/ci/combustibles-pr2-lab/run-portable-windows.mjs --run-isolated
+```
+
+El runner no descarga nada ni acepta binarios externos por argumento. stdout indica
+el directorio de evidencia del run; summary.json PASS solo aparece si concluye toda
+la suite. No inferir PASS de los self-tests en memoria. No ejecutar este comando
+como rutina sin revisar el alcance/autorizacion del laboratorio.
+
+## Entrada y seguridad del backend remoto (no ejecutado)
 
 Workflow: `.github/workflows/combustibles-pr2-sql-lab.yml`.
 

@@ -230,17 +230,17 @@ SELECT j.* FROM JSON_TABLE('[
   ["flota_cb2_consumos","ck_cb2c_importes","galones > 0 and precio > 0 and monto > 0"],
   ["flota_cb2_consumos","ck_cb2c_km","kilometraje is null or kilometraje >= 0"],
   ["flota_cb2_consumos","ck_cb2c_calculados","galones_calculados in (0,1)"],
-  ["flota_cb2_consumos","ck_cb2c_asociacion","(factura_id is null and factura_asociada_por is null and factura_asociada_en is null) or (factura_id is not null and factura_asociada_por is not null and factura_asociada_en is not null)"],
+  ["flota_cb2_consumos","ck_cb2c_asociacion","factura_id is null and factura_asociada_por is null and factura_asociada_en is null or factura_id is not null and factura_asociada_por is not null and factura_asociada_en is not null"],
   ["flota_cb2_filas","ck_filas_datos_origen","datos_origen is null or json_valid(datos_origen)"],
   ["flota_cb2_filas","ck_filas_decision","json_valid(decision)"],
   ["flota_cb2_filas","ck_cb2l_tipo","tipo in (''ORIGEN'',''RESOLUCION'',''ASOCIACION_FACTURA'')"],
   ["flota_cb2_filas","ck_cb2l_operacion","operacion_tipo in (''CONFIRMAR'',''REANUDAR'',''ASOCIAR_FACTURA'')"],
   ["flota_cb2_filas","ck_cb2l_posicion","revision >= 1 and operacion_ordinal >= 1 and hoja_indice between 1 and 20 and fila_excel between 1 and 5000"],
-  ["flota_cb2_filas","ck_cb2l_payload","(tipo = ''ORIGEN'' and origen_fila_id is null and datos_origen is not null and revision = 1 and operacion_tipo = ''CONFIRMAR'') or (tipo = ''RESOLUCION'' and origen_fila_id is not null and datos_origen is null and revision > 1 and operacion_tipo = ''REANUDAR'') or (tipo = ''ASOCIACION_FACTURA'' and origen_fila_id is not null and datos_origen is null and revision > 1 and operacion_tipo in (''REANUDAR'',''ASOCIAR_FACTURA''))"],
+  ["flota_cb2_filas","ck_cb2l_payload","tipo = ''ORIGEN'' and origen_fila_id is null and datos_origen is not null and revision = 1 and operacion_tipo = ''CONFIRMAR'' or tipo = ''RESOLUCION'' and origen_fila_id is not null and datos_origen is null and revision > 1 and operacion_tipo = ''REANUDAR'' or tipo = ''ASOCIACION_FACTURA'' and origen_fila_id is not null and datos_origen is null and revision > 1 and operacion_tipo in (''REANUDAR'',''ASOCIAR_FACTURA'')"],
   ["flota_cb2_filas","ck_cb2l_resultado","resultado in (''CREADA'',''REUTILIZADA'',''BLOQUEADA'',''INVALIDA'',''IGNORADA'',''OMITIDA'',''FACTURA_ASOCIADA'',''SIN_CAMBIO'')"],
-  ["flota_cb2_filas","ck_cb2l_consumo","(resultado in (''CREADA'',''REUTILIZADA'',''FACTURA_ASOCIADA'',''SIN_CAMBIO'') and consumo_id is not null) or (resultado in (''BLOQUEADA'',''INVALIDA'',''IGNORADA'',''OMITIDA'') and consumo_id is null)"],
-  ["flota_cb2_filas","ck_cb2l_documento","(tipo = ''ASOCIACION_FACTURA'' and factura_nueva_id is not null and ((resultado = ''FACTURA_ASOCIADA'' and factura_anterior_id is null) or (resultado = ''SIN_CAMBIO'' and factura_anterior_id is not null and factura_anterior_id = factura_nueva_id))) or (tipo <> ''ASOCIACION_FACTURA'' and resultado in (''CREADA'',''REUTILIZADA'',''BLOQUEADA'',''INVALIDA'',''IGNORADA'',''OMITIDA'') and factura_anterior_id is null and factura_nueva_id is null)"],
-  ["flota_cb2_filas","ck_cb2l_marca_origen","(tipo = ''ORIGEN'' and marca_origen is not null and marca_origen = 1) or (tipo <> ''ORIGEN'' and marca_origen is null)"],
+  ["flota_cb2_filas","ck_cb2l_consumo","resultado in (''CREADA'',''REUTILIZADA'',''FACTURA_ASOCIADA'',''SIN_CAMBIO'') and consumo_id is not null or resultado in (''BLOQUEADA'',''INVALIDA'',''IGNORADA'',''OMITIDA'') and consumo_id is null"],
+  ["flota_cb2_filas","ck_cb2l_documento","tipo = ''ASOCIACION_FACTURA'' and factura_nueva_id is not null and (resultado = ''FACTURA_ASOCIADA'' and factura_anterior_id is null or resultado = ''SIN_CAMBIO'' and factura_anterior_id is not null and factura_anterior_id = factura_nueva_id) or tipo <> ''ASOCIACION_FACTURA'' and resultado in (''CREADA'',''REUTILIZADA'',''BLOQUEADA'',''INVALIDA'',''IGNORADA'',''OMITIDA'') and factura_anterior_id is null and factura_nueva_id is null"],
+  ["flota_cb2_filas","ck_cb2l_marca_origen","tipo = ''ORIGEN'' and marca_origen is not null and marca_origen = 1 or tipo <> ''ORIGEN'' and marca_origen is null"],
   ["flota_cb2_filas","ck_cb2l_idempotencia","operacion_clave regexp ''^[A-Za-z0-9_-]{16,64}$'' and solicitud_sha256 regexp ''^[0-9a-f]{64}$'' and operacion_total between 1 and 10000 and operacion_ordinal between 1 and operacion_total"]
 ]', '$[*]' COLUMNS(
  tabla VARCHAR(64) PATH '$[0]', nombre VARCHAR(64) PATH '$[1]', expresion TEXT PATH '$[2]')) AS j

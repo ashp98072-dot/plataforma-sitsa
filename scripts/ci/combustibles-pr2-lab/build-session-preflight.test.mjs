@@ -105,3 +105,24 @@ test('indice BASE de vehiculos exige el nombre auditado y su estructura exacta',
   assert(fixture.includes('UNIQUE KEY uq_multas_vehiculo_empresa_id (empresa_id,id)'));
   assert(!fixture.includes('uq_flota_vehiculos_empresa_id'));
 });
+
+test('cinco CHECK coinciden con serializacion real 11.8.9 sin borrar parentesis', () => {
+  const golden = JSON.parse(readFileSync(new URL('./check-serialization-11.8.9.json', import.meta.url), 'utf8'));
+  assert.equal(golden.checks.length, 5);
+  for (const name of ['preflight', 'migrate', 'postcheck']) {
+    const sql = readFileSync(new URL(`../../../sql/${name}-2026-10-combustibles-pr2-consumos-facturas.sql`, import.meta.url), 'utf8');
+    const blocks = [...sql.matchAll(/checks_esperados AS \(\s*SELECT j\.\* FROM JSON_TABLE\('(\[[\s\S]*?\])',/g)];
+    assert.equal(blocks.length, name === 'migrate' ? 2 : 1);
+    for (const block of blocks) {
+      const expected = JSON.parse(block[1]);
+      for (const check of golden.checks) {
+        const row = expected.filter(row => row[1] === check.name);
+        assert.equal(row.length, 1);
+        assert.equal(row[0][2], check.clause.replaceAll('`', '').replaceAll("'", "''"));
+      }
+      const document = expected.find(row => row[1] === 'ck_cb2l_documento')[2];
+      assert(document.includes("and (resultado = ''FACTURA_ASOCIADA''"));
+      assert(document.includes("factura_nueva_id) or tipo <>"));
+    }
+  }
+});

@@ -1,0 +1,25 @@
+{
+  "source": "SHOW CREATE TABLE, MariaDB 11.8.9 Windows portable, 2026-10-22; solo fixtures sinteticos",
+  "checks": [
+    {
+      "name": "ck_cb2c_asociacion",
+      "clause": "`factura_id` is null and `factura_asociada_por` is null and `factura_asociada_en` is null or `factura_id` is not null and `factura_asociada_por` is not null and `factura_asociada_en` is not null"
+    },
+    {
+      "name": "ck_cb2l_payload",
+      "clause": "`tipo` = 'ORIGEN' and `origen_fila_id` is null and `datos_origen` is not null and `revision` = 1 and `operacion_tipo` = 'CONFIRMAR' or `tipo` = 'RESOLUCION' and `origen_fila_id` is not null and `datos_origen` is null and `revision` > 1 and `operacion_tipo` = 'REANUDAR' or `tipo` = 'ASOCIACION_FACTURA' and `origen_fila_id` is not null and `datos_origen` is null and `revision` > 1 and `operacion_tipo` in ('REANUDAR','ASOCIAR_FACTURA')"
+    },
+    {
+      "name": "ck_cb2l_consumo",
+      "clause": "`resultado` in ('CREADA','REUTILIZADA','FACTURA_ASOCIADA','SIN_CAMBIO') and `consumo_id` is not null or `resultado` in ('BLOQUEADA','INVALIDA','IGNORADA','OMITIDA') and `consumo_id` is null"
+    },
+    {
+      "name": "ck_cb2l_documento",
+      "clause": "`tipo` = 'ASOCIACION_FACTURA' and `factura_nueva_id` is not null and (`resultado` = 'FACTURA_ASOCIADA' and `factura_anterior_id` is null or `resultado` = 'SIN_CAMBIO' and `factura_anterior_id` is not null and `factura_anterior_id` = `factura_nueva_id`) or `tipo` <> 'ASOCIACION_FACTURA' and `resultado` in ('CREADA','REUTILIZADA','BLOQUEADA','INVALIDA','IGNORADA','OMITIDA') and `factura_anterior_id` is null and `factura_nueva_id` is null"
+    },
+    {
+      "name": "ck_cb2l_marca_origen",
+      "clause": "`tipo` = 'ORIGEN' and `marca_origen` is not null and `marca_origen` = 1 or `tipo` <> 'ORIGEN' and `marca_origen` is null"
+    }
+  ]
+}
