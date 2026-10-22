@@ -1,5 +1,10 @@
 # Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
 
+Postcheck independiente de solo lectura para phpMyAdmin:
+[procedimiento](../../../docs/COMBUSTIBLES-PR2-POSTCHECK-PHPMYADMIN.md), archivo
+sql/postcheck-phpmyadmin-2026-10-combustibles-pr2.sql. No reejecutar el import
+de migracion para verificar una base ya migrada.
+
 Correccion #2014: import silencioso + prueba mysqli real sin next_result().
 Consultar el procedimiento phpMyAdmin actualizado y evidencia sin-resultados.
 El runner Windows requiere tambien PHP portable (mbstring/mysqli) y sql-parser

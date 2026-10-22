@@ -1,0 +1,29 @@
+{
+    "status": "PASS",
+    "file": "postcheck-phpmyadmin-2026-10-combustibles-pr2.sql",
+    "parser": "phpmyadmin\/sql-parser 5.10.0 BufferedQuery",
+    "php": "8.4.14",
+    "sqlSHA256": "7c9e579fdf5230f3c2bf93ff2eed21bd047165f1e238aa4168c47f18441980c4",
+    "results": [
+        {
+            "chunkBytes": 1,
+            "statements": 4,
+            "blockSHA256": "e231fcada5310eb66a73801c2bdefab0df16ed49c851f97cc68202c7d17a7210"
+        },
+        {
+            "chunkBytes": 7,
+            "statements": 4,
+            "blockSHA256": "e231fcada5310eb66a73801c2bdefab0df16ed49c851f97cc68202c7d17a7210"
+        },
+        {
+            "chunkBytes": 4096,
+            "statements": 4,
+            "blockSHA256": "e231fcada5310eb66a73801c2bdefab0df16ed49c851f97cc68202c7d17a7210"
+        },
+        {
+            "chunkBytes": 42676,
+            "statements": 4,
+            "blockSHA256": "e231fcada5310eb66a73801c2bdefab0df16ed49c851f97cc68202c7d17a7210"
+        }
+    ]
+}

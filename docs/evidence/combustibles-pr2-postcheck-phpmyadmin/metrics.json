@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "run": "79da826d-0509-427e-a12e-3864540dd3f1",
+  "tests": 26,
+  "clientInvocations": 692,
+  "instances": 15,
+  "allShutdownZero": true,
+  "allPipesClosed": true,
+  "dataSnapshotComparisons": 4,
+  "structureSnapshotComparisons": 3
+}

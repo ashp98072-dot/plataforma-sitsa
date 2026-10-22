@@ -28,8 +28,9 @@ const executeFile = (exe, args, input = '', timeout = 120000) => spawnSync(exe, 
 const instances = new Map();
 const wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const clientArgs = instance => ['--no-defaults', '--protocol=PIPE', '--host=.', `--socket=${instance.pipe}`, '-uroot', '--batch', '--raw', '--skip-column-names', '--default-character-set=utf8mb4'];
-const sourcePaths = ['run.mjs', 'run-portable-windows.mjs', 'build-phpmyadmin-import.mjs', 'base.sql', 'seed.sql', 'associate.sql'].map(n => path.join(repo, 'scripts/ci/combustibles-pr2-lab', n)).concat(['preflight', 'migrate', 'postcheck'].map(n => path.join(repo, `sql/${n}-2026-10-combustibles-pr2-consumos-facturas.sql`)));
+const sourcePaths = ['run.mjs', 'run-portable-windows.mjs', 'build-phpmyadmin-import.mjs', 'build-phpmyadmin-postcheck.mjs', 'test-phpmyadmin-postcheck-mysqli.php', 'base.sql', 'seed.sql', 'associate.sql'].map(n => path.join(repo, 'scripts/ci/combustibles-pr2-lab', n)).concat(['preflight', 'migrate', 'postcheck'].map(n => path.join(repo, `sql/${n}-2026-10-combustibles-pr2-consumos-facturas.sql`)));
 sourcePaths.push(path.join(repo, 'sql/import-phpmyadmin-2026-10-combustibles-pr2.sql'));
+sourcePaths.push(path.join(repo, 'sql/postcheck-phpmyadmin-2026-10-combustibles-pr2.sql'));
 save('source.json', { baseline: 'bc12de32f9b3ba3666df4d89ee8707e66cf0b1b4', dateUTC: new Date().toISOString(), platform: process.platform, node: process.version, archiveURL: 'https://archive.mariadb.org/mariadb-11.8.9/winx64-packages/mariadb-11.8.9-winx64.zip', archiveSHA256: sha256(zip), binaries: Object.fromEntries(['mariadbd', 'mariadb', 'mariadb-install-db'].map(n => [n, sha256(fs.readFileSync(bin(n)))])), files: Object.fromEntries(sourcePaths.map(p => [path.relative(repo, p), sha256(fs.readFileSync(p))])) });
 console.log(`Evidencia: ${evidence}`);
 try {
@@ -47,6 +48,13 @@ try {
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const report = JSON.parse(result.stdout); assert.equal(report.status, 'PASS');
       save('mysqli-flow.json', report);
+    },
+    postcheckFlow(id, label, sql, expected) {
+      const instance = instances.get(id); assert(instance); assert.match(label, /^[a-z-]+$/);
+      const result = executeFile(path.join(runtime, 'php/php.exe'), ['-n', '-d', 'extension_dir=' + path.join(runtime, 'php/ext'), '-d', 'extension=php_mbstring.dll', '-d', 'extension=php_mysqli.dll', path.join(repo, 'scripts/ci/combustibles-pr2-lab/test-phpmyadmin-postcheck-mysqli.php')], JSON.stringify({pipe: instance.pipe, sql, expected}));
+      save('postcheck-mysqli-' + label + '.json', {status:result.status, stdout:result.stdout, stderr:result.stderr});
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      save('postcheck-flow-' + label + '.json', JSON.parse(result.stdout));
     },
     laboratory(label, action, fixture, query) {
       const id = `cb2-${randomUUID()}`;

@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "php": "8.4.14",
+  "client": "mysqlnd 8.4.14",
+  "transport": "\\\\.\\pipe\\cb2-404af3b4-d66b-4bdc-82ca-8d2039b80de4 via named pipe",
+  "steps": [
+    {
+      "prefix": "USE `cb2_lab`",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "SET @cb2_pc_done = 0",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "BEGIN NOT ATOMIC\n DECL",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "SELECT CASE WHEN COALE",
+      "fields": 9,
+      "pending": false,
+      "cleanup": "OK"
+    }
+  ],
+  "result": [
+    "DIVERGENTE",
+    "FINAL",
+    "15",
+    "1",
+    "{\"consumo_sin_padres_del_ambito\":0, \"estado_factura_inconsistente\":0, \"huellas_duplicadas\":0, \"fila_sin_importacion_del_ambito\":0, \"fila_sin_consumo_del_ambito\":0, \"evento_sin_original_inmutable\":0, \"revision_posterior_a_cabecera\":0, \"operacion_con_payload_o_actor_discordante\":1, \"consumo_sin_evidencia_de_creacion\":0, \"cabecera_sin_evidencia_original\":0, \"originales_repetidos\":0, \"revision_con_mas_de_una_operacion\":0, \"original_con_consumos_distintos\":0, \"asociacion_documental_incompatible\":0, \"consumo_con_factura_de_moneda_distinta\":0}",
+    "cb2_lab",
+    "1",
+    "NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+    "0"
+  ],
+  "flags": [
+    "1",
+    "1"
+  ]
+}

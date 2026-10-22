@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildImport, compoundBody } from './build-phpmyadmin-import.mjs';
+import { buildPostcheck } from './build-phpmyadmin-postcheck.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(dir, '../../..');
@@ -274,7 +275,36 @@ function rejectTransaction(c, label, statement, code, detail) {
     }
   });
 }
+function structureSnapshot(c, label) {
+  return snapshotTables.map(table => query(c, label + '-' + table, `SHOW CREATE TABLE ${table};`));
+}
 function suite() {
+  if (nativeLab?.postcheckFlow) record('postcheck-phpmyadmin-solo-lectura', () => laboratory('postcheck-lectura', c => {
+    nativeLab.postcheckFlow(c, 'sin-tablas', buildPostcheck('cb2_lab'), ['DIVERGENTE','CLEAN',null,null]);
+    assert.equal(query(c, 'postcheck-sin-tablas-conservado', `SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='cb2_lab' AND TABLE_NAME IN (${list});`).trim(), '0');
+    migrate(c);
+    query(c, 'postcheck-semilla', fixture('seed'));
+    query(c, 'postcheck-asociacion', fixture('associate'));
+    let before = dataSnapshot(c, 'pc-final-antes');
+    let ddlBefore = structureSnapshot(c, 'pc-estructura-antes');
+    nativeLab.postcheckFlow(c, 'final', buildPostcheck('cb2_lab'), ['CB2_POSTCHECK_FINAL','FINAL','15','0']);
+    compareSnapshots(before, dataSnapshot(c, 'pc-final-despues'));
+    const output = rows(query(c, 'pc-cli-independiente', buildPostcheck('cb2_lab')));
+    assert.equal(output.length, 1); assert.equal(output[0][0], 'CB2_POSTCHECK_FINAL');
+    compareSnapshots(before, dataSnapshot(c, 'pc-cli-despues'));
+    assert.deepEqual(structureSnapshot(c, 'pc-estructura-despues'), ddlBefore, 'Postcheck modifico DDL');
+    query(c, 'pc-defecto-sintetico', "UPDATE flota_cb2_filas SET operacion_total=3 WHERE operacion_tipo='REANUDAR';");
+    before = dataSnapshot(c, 'pc-datos-mal-antes');
+    nativeLab.postcheckFlow(c, 'datos-divergentes', buildPostcheck('cb2_lab'), ['DIVERGENTE','FINAL','15','1']);
+    compareSnapshots(before, dataSnapshot(c, 'pc-datos-mal-despues'));
+    assert.deepEqual(structureSnapshot(c, 'pc-datos-estructura-despues'), ddlBefore);
+    query(c, 'pc-metadata-sintetica', 'ALTER TABLE flota_cb2_facturas MODIFY serie VARCHAR(127) NOT NULL;');
+    before = dataSnapshot(c, 'pc-metadata-mal-antes');
+    ddlBefore = structureSnapshot(c, 'pc-meta-estructura-antes');
+    nativeLab.postcheckFlow(c, 'metadata-divergente', buildPostcheck('cb2_lab'), ['DIVERGENTE','DIVERGENTE',null,null]);
+    compareSnapshots(before, dataSnapshot(c, 'pc-metadata-mal-despues'));
+    assert.deepEqual(structureSnapshot(c, 'pc-meta-estructura-despues'), ddlBefore);
+  }));
   if (nativeLab?.importFlow) record('phpmyadmin-mysqli-sin-drenaje', () => laboratory('mysqli', c => {
     nativeLab.importFlow(c, buildImport('cb2_lab'));
     preState(query(c, 'mysqli-preflight-final', sql.preflight), 'FINAL');

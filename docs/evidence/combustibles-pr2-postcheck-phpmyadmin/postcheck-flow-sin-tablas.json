@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "php": "8.4.14",
+  "client": "mysqlnd 8.4.14",
+  "transport": "\\\\.\\pipe\\cb2-404af3b4-d66b-4bdc-82ca-8d2039b80de4 via named pipe",
+  "steps": [
+    {
+      "prefix": "USE `cb2_lab`",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "SET @cb2_pc_done = 0",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "BEGIN NOT ATOMIC\n DECL",
+      "fields": 0,
+      "pending": false,
+      "cleanup": "OK"
+    },
+    {
+      "prefix": "SELECT CASE WHEN COALE",
+      "fields": 9,
+      "pending": false,
+      "cleanup": "OK"
+    }
+  ],
+  "result": [
+    "DIVERGENTE",
+    "CLEAN",
+    null,
+    null,
+    null,
+    "cb2_lab",
+    "1",
+    "NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+    "0"
+  ],
+  "flags": [
+    "1",
+    "1"
+  ]
+}
