@@ -1,0 +1,18 @@
+{
+    "dateUTC":  "2026-10-22T18:17:14.0632748Z",
+    "base":  "8cf7efc2995fd9562ec1dc8fd4f58dd073e2b7d8",
+    "status":  "PASS",
+    "engine":  "MariaDB 11.8.9 Win64",
+    "transport":  "UUID local named pipe; skip-networking=1",
+    "integrationTests":  16,
+    "canonicalPostcheckAssertions":  "15 incidencias exactas, 0 en cada uno de los 16 casos",
+    "unitAndRegressionTests":  138,
+    "typecheck":  "PASS",
+    "eslint":  "PASS",
+    "limitations":  [
+                        "Sin produccion, UI nueva ni despliegue",
+                        "COMMIT incierto probado con double, no corte real de red",
+                        "Sin prueba al volumen maximo"
+                    ],
+    "run":  "backend-d1d8b240-e76f-42ad-bca7-1e5753295764"
+}

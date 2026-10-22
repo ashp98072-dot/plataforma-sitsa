@@ -105,7 +105,7 @@ export function resumirProveedorV2(p: PreviewProveedorV2): void {
   };
 }
 
-export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor): Promise<PreviewProveedorV2> {
+export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor, diagnostico?: (fila: FilaProveedorV2, campo: string) => void): Promise<PreviewProveedorV2> {
   validarArchivoImportacion({ name: "reporte.xlsx", size: buffer.length }); validarContenedorXlsx(buffer);
   const originales = leerOoxmlProveedor(buffer);
   const wb = new ExcelJS.Workbook();
@@ -156,7 +156,7 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
         f.estado = "IGNORADA"; f.motivos.push("Cabecera, subtotal, nota o fila sin operación"); continue;
       }
       if (f.vale) f.identidadCandidata = hashImportacion(JSON.stringify([f.vale])); // namespace empresa/proveedor lo aplica el servidor
-      const invalidar = (msg: string) => { f.estado = "INVALIDA"; f.motivos.push(msg); };
+      const invalidar = (msg: string, campo = "operacion") => { f.estado = "INVALIDA"; f.motivos.push(msg); diagnostico?.(f, campo); };
       if (!f.vale || !f.placaNormalizada) invalidar("Vale y placa son obligatorios");
       const fecha = row.getCell(cols.fecha!);
       if (fecha.type === ExcelJS.ValueType.Formula || fecha.type === ExcelJS.ValueType.Error) invalidar("Fecha no verificable");
@@ -176,8 +176,8 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
       for (const k of campos.filter(k => !["fecha", "galones", "precio", "monto", "auxiliar"].includes(k))) {
         if (!cols[k]) continue;
         const c = row.getCell(cols[k]!);
-        if (c.type === ExcelJS.ValueType.Formula || c.type === ExcelJS.ValueType.Error) invalidar(`${k}: fórmula/error no permitido`);
-        if (identificadores.get(c.address)?.seguro === false) invalidar(`${k}: identificador numérico no seguro; literal XML conservado, exige revisión`);
+        if (c.type === ExcelJS.ValueType.Formula || c.type === ExcelJS.ValueType.Error) invalidar(`${k}: fórmula/error no permitido`, k);
+        if (identificadores.get(c.address)?.seguro === false) invalidar(`${k}: identificador numérico no seguro; literal XML conservado, exige revisión`, k);
       }
       if (cols.km) f.kilometraje = decimalCeldaProveedor(row.getCell(cols.km).value, 3);
       if (textos.km && f.kilometraje == null) f.motivos.push("Kilometraje conservado como texto");
