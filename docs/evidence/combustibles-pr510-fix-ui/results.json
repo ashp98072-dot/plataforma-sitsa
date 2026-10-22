@@ -1,0 +1,142 @@
+{
+  "base": "861d5cfb",
+  "tests": {
+    "total": 260,
+    "passed": 260,
+    "failed": 0,
+    "files": 24,
+    "success": true
+  },
+  "checks": {
+    "typescript": "tsc --noEmit --incremental false: exit 0",
+    "eslint": "changed TS/TSX, --max-warnings=0: exit 0",
+    "whitespace": "git diff --check: exit 0"
+  },
+  "limits": {
+    "productionAccess": false,
+    "realDatabase": false,
+    "browserVisualReview": "Not completed: automation runtime initialization failed"
+  },
+  "suites": [
+    {
+      "file": "src/components/app-shell-operaciones.test.ts",
+      "passed": 15,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/tenant-combustible.test.ts",
+      "passed": 7,
+      "status": "passed"
+    },
+    {
+      "file": "src/components/flota/combustible-preview-v2.test.ts",
+      "passed": 1,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c-http.test.ts",
+      "passed": 10,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c-shared.test.ts",
+      "passed": 11,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-importacion-parser.test.ts",
+      "passed": 13,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-importacion-v2-resumen.test.ts",
+      "passed": 6,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-importacion-v2.test.ts",
+      "passed": 16,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-importaciones.test.ts",
+      "passed": 15,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-ooxml-v2.test.ts",
+      "passed": 7,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-permisos.test.ts",
+      "passed": 13,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-preview-v2-http.test.ts",
+      "passed": 12,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/combustible-ux-captura.test.ts",
+      "passed": 10,
+      "status": "passed"
+    },
+    {
+      "file": "src/components/flota/cb2/client.test.ts",
+      "passed": 6,
+      "status": "passed"
+    },
+    {
+      "file": "src/components/flota/cb2/grupos-origen.test.ts",
+      "passed": 8,
+      "status": "passed"
+    },
+    {
+      "file": "src/components/flota/cb2/panel.dom.test.ts",
+      "passed": 13,
+      "status": "passed"
+    },
+    {
+      "file": "src/components/flota/cb2/ubicacion.test.ts",
+      "passed": 2,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/http-origin.test.ts",
+      "passed": 16,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/http.test.ts",
+      "passed": 12,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/model.test.ts",
+      "passed": 11,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/origin.test.ts",
+      "passed": 31,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/originales.test.ts",
+      "passed": 18,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/repository.test.ts",
+      "passed": 4,
+      "status": "passed"
+    },
+    {
+      "file": "src/lib/flota/cb2/storage.test.ts",
+      "passed": 3,
+      "status": "passed"
+    }
+  ]
+}

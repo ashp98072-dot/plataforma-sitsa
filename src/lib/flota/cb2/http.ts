@@ -5,6 +5,7 @@ import { MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 import { ErrorArchivoProveedor, validarArchivoImportacion } from "../combustible-importacion-parser";
 import { ErrorCB2, confirmar, seleccion, moneda, reanudar, asociar, id } from "./model";
 import * as service from "./service";
+import { validarOrigenCB2 } from "./origin";
 const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
 export async function bodyAcotado(req: Request, max: number) {
     if (!req.body)
@@ -38,8 +39,8 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
     try {
         if (accion === "reanudar" && g.session.rol !== "Admin")
             throw new ErrorCB2("Reanudar requiere Admin hasta disponer de capacidad especifica.", 403);
-        if (!lectura && req.headers.get("origin") && req.headers.get("origin") !== new URL(req.url).origin)
-            throw new ErrorCB2("Origen no permitido.", 403);
+        if (!lectura)
+            validarOrigenCB2(req);
         const ctx = { empresaId: g.empresa.id, proveedorId: 0, actor: { id: g.session.id, username: g.session.username }, autorizar: async () => {
                 const actual = await requireTenantFlotaCombustible(slug, "conciliar");
                 if (actual.error || actual.session.id !== g.session.id || actual.empresa.id !== g.empresa.id || (accion === "reanudar" && actual.session.rol !== "Admin"))

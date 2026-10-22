@@ -50,4 +50,4 @@ export function FiltrosCB2({ tipo, cat, onApply }: {
 }
 export function PaginacionCB2({ list }: {
     list: ListadoCB2;
-}) { return <div className="flex items-center gap-3"><button className={button} disabled={list.pagina === 1 || list.loading} onClick={list.anterior}>Anterior</button><span>Página {list.pagina} · {list.rows.length} registros</span><button className={button} disabled={list.rows.length < 50 || list.loading} onClick={list.siguiente}>Siguiente</button></div>; }
+}) { return <div className="flex flex-wrap items-center gap-3"><button className={button} disabled={list.pagina === 1 || list.loading} onClick={list.anterior}>Anterior</button><span>Página {list.pagina} · {list.rows.length} registros</span><button className={button} disabled={list.rows.length < 50 || list.loading} onClick={list.siguiente}>Siguiente</button></div>; }
