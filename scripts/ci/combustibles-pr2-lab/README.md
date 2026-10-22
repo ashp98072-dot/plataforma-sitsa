@@ -1,5 +1,11 @@
 # Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
 
+Parametro obligatorio: los tres SQL requieren `SET @cb2_schema` explicito en la
+misma conexion, sin fallback a DATABASE(). El arnes lo fija a cb2_lab por query.
+Ver [procedimiento actualizado](../../../docs/COMBUSTIBLES-PR2-CONTEXTO-SESION.md).
+Los nuevos casos de contexto information_schema, objetivo NULL e InnoDB no
+estricto requieren laboratorio aprobado; no se ejecutaron con el self-test.
+
 Este directorio contiene exclusivamente un arnés de pruebas SQL y fixtures sintéticos.
 No es un servicio de la aplicación. Los tres scripts SQL auditados se leen sin modificarlos.
 El PR debe permanecer Draft. Publicar este workflow no autoriza ejecutarlo ni hacer merge.

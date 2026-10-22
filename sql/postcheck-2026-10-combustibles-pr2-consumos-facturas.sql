@@ -1,5 +1,6 @@
 -- PROPUESTA PR 2. NO EJECUTADA. MariaDB 11.8.x; pendiente de auditoria y autorizacion.
--- Esquema seleccionado, metadata completamente visible y sin escrituras/DDL concurrentes.
+-- Requiere SET @cb2_schema = nombre explicito del esquema objetivo en esta misma sesion.
+-- Sin fallback a DATABASE(); metadata completamente visible y sin escrituras/DDL concurrentes.
 -- Cualquier error deja el resultado SIN CERTIFICAR. No cambiar variables para forzar compatibilidad.
 -- Sin escrituras persistentes: SELECT y PREPARE/EXECUTE de un SELECT constante.
 -- METADATA FINAL no certifica los datos; RESULTADO FINAL exige todas las incidencias en cero.
@@ -251,7 +252,7 @@ SELECT TABLE_NAME AS tabla, INDEX_NAME AS nombre,
  SUM(SUB_PART IS NOT NULL OR INDEX_TYPE <> 'BTREE'
      OR COALESCE(COLLATION, '') <> 'A' OR IGNORED <> 'NO') AS incompatibles
 FROM information_schema.STATISTICS
-WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin
+WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin
 GROUP BY TABLE_NAME, INDEX_NAME
 ),
 fks_reales AS (
@@ -265,7 +266,7 @@ FROM information_schema.KEY_COLUMN_USAGE AS k
 JOIN information_schema.REFERENTIAL_CONSTRAINTS AS r
  ON CONVERT(r.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(k.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(k.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin
  AND CONVERT(r.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(k.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin
-WHERE CONVERT(k.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin
+WHERE CONVERT(k.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin
 GROUP BY k.TABLE_NAME, k.CONSTRAINT_NAME
 ),
 verificaciones AS (
@@ -285,7 +286,7 @@ SELECT e.ambito, CONCAT('columna:', e.tabla, '.', e.nombre) AS objeto,
  ) AS ok
 FROM columnas_esperadas AS e
 LEFT JOIN information_schema.COLUMNS AS c
- ON CONVERT(c.TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(c.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(c.COLUMN_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
+ ON CONVERT(c.TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(c.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(c.COLUMN_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
 UNION ALL
 SELECT e.ambito, CONCAT('indice:', e.tabla, '.', e.nombre),
  COALESCE(CONVERT(r.columnas USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.columnas USING utf8mb4) COLLATE utf8mb4_bin AND r.numero_columnas = 1 + CHAR_LENGTH(e.columnas) - CHAR_LENGTH(REPLACE(e.columnas, ',', ''))
@@ -295,7 +296,7 @@ LEFT JOIN indices_reales AS r ON CONVERT(r.tabla USING utf8mb4) COLLATE utf8mb4_
 UNION ALL
 SELECT e.ambito, CONCAT('fk:', e.tabla, '.', e.nombre),
  COALESCE(CONVERT(r.columnas USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.columnas USING utf8mb4) COLLATE utf8mb4_bin AND r.numero_columnas = 1 + CHAR_LENGTH(e.columnas) - CHAR_LENGTH(REPLACE(e.columnas, ',', ''))
-  AND CONVERT(r.padre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.padre USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.destino USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.destino USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.esquema_padre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin
+  AND CONVERT(r.padre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.padre USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.destino USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.destino USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.esquema_padre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin
   AND r.borrar = 'RESTRICT' AND r.actualizar = 'RESTRICT', 0)
 FROM fks_esperadas AS e
 LEFT JOIN fks_reales AS r ON CONVERT(r.tabla USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.nombre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
@@ -304,58 +305,61 @@ SELECT 'NUEVO', CONCAT('check:', e.tabla, '.', e.nombre),
  COALESCE(REGEXP_REPLACE(CONVERT(r.CHECK_CLAUSE USING utf8mb4), CONVERT(UNHEX('27283f3a27277c5c5c2e7c5b5e275c5c5d292a27282a534b495029282a46297c5b5b3a73706163653a5d605d2b') USING utf8mb4), '') COLLATE utf8mb4_bin = REGEXP_REPLACE(CONVERT(e.expresion USING utf8mb4), CONVERT(UNHEX('27283f3a27277c5c5c2e7c5b5e275c5c5d292a27282a534b495029282a46297c5b5b3a73706163653a5d605d2b') USING utf8mb4), '') COLLATE utf8mb4_bin, 0)
 FROM checks_esperados AS e
 LEFT JOIN information_schema.CHECK_CONSTRAINTS AS r
- ON CONVERT(r.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
+ ON CONVERT(r.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
 UNION ALL
 SELECT 'BASE', 'entorno',
- (DATABASE() IS NOT NULL AND VERSION() LIKE '11.8.%MariaDB%'
+ (@cb2_schema IS NOT NULL AND CHAR_LENGTH(@cb2_schema) BETWEEN 1 AND 64
+  AND CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin NOT IN
+      (_utf8mb4'information_schema', _utf8mb4'mysql', _utf8mb4'performance_schema', _utf8mb4'sys')
+  AND VERSION() LIKE '11.8.%MariaDB%'
   AND @@foreign_key_checks = 1 AND @@check_constraint_checks = 1
   AND (FIND_IN_SET('STRICT_ALL_TABLES', @@sql_mode) > 0
        OR FIND_IN_SET('STRICT_TRANS_TABLES', @@sql_mode) > 0)
   AND @@innodb_strict_mode = 1 AND @@innodb_page_size >= 8192
   AND @@group_concat_max_len >= 8192 AND @@sql_mode NOT LIKE '%NO_BACKSLASH_ESCAPES%'
   AND (SELECT COUNT(*) FROM information_schema.TABLES
-       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('empresas','usuarios','compras_proveedores','flota_vehiculos','flota_combustible_cargas','flota_combustible_conciliaciones','flota_combustible_conciliacion_filas','auditoria','flota_vehiculo_acceso')
+       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('empresas','usuarios','compras_proveedores','flota_vehiculos','flota_combustible_cargas','flota_combustible_conciliaciones','flota_combustible_conciliacion_filas','auditoria','flota_vehiculo_acceso')
        AND ENGINE = 'InnoDB' AND TABLE_TYPE = 'BASE TABLE') = 9)
 UNION ALL
 SELECT 'BASE', 'triggers_auditoria',
  (SELECT COUNT(*) FROM information_schema.TRIGGERS
-  WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND EVENT_OBJECT_TABLE = 'auditoria') = 0
+  WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND EVENT_OBJECT_TABLE = 'auditoria') = 0
 UNION ALL
 SELECT 'BASE', 'nombres_fk_sin_colisiones',
  (SELECT COUNT(*) FROM fks_esperadas AS e
   JOIN information_schema.TABLE_CONSTRAINTS AS r
-   ON CONVERT(r.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
+   ON CONVERT(r.CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND CONVERT(r.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin
    AND r.CONSTRAINT_TYPE = 'FOREIGN KEY'
   WHERE e.ambito = 'NUEVO' AND CONVERT(r.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_bin <> CONVERT(e.tabla USING utf8mb4) COLLATE utf8mb4_bin) = 0
 UNION ALL
 SELECT 'BASE', 'tablas_base_sin_particiones',
  (SELECT COUNT(*) FROM information_schema.PARTITIONS
-  WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('empresas','usuarios','compras_proveedores','flota_vehiculos','auditoria')
+  WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('empresas','usuarios','compras_proveedores','flota_vehiculos','auditoria')
   AND PARTITION_NAME IS NOT NULL) = 0
 UNION ALL
 SELECT 'NUEVO', 'tablas_y_objetos_exactos',
  ((SELECT COUNT(*) FROM information_schema.TABLES
-   WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')
+   WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')
    AND ENGINE = 'InnoDB' AND TABLE_TYPE = 'BASE TABLE'
    AND ROW_FORMAT = 'Dynamic' AND TABLE_COLLATION = 'utf8mb4_bin') = 4
   AND (SELECT COUNT(*) FROM information_schema.COLUMNS
-       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 86
+       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 86
   AND (SELECT COUNT(*) FROM indices_reales WHERE tabla IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 34
   AND (SELECT COUNT(*) FROM fks_reales WHERE tabla IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 18
   AND (SELECT COUNT(*) FROM information_schema.CHECK_CONSTRAINTS
-       WHERE CONVERT(CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 26
+       WHERE CONVERT(CONSTRAINT_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 26
   AND (SELECT COUNT(*) FROM information_schema.PARTITIONS
-       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')
+       WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')
        AND PARTITION_NAME IS NOT NULL) = 0
   AND (SELECT COUNT(*) FROM information_schema.TRIGGERS
-       WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND EVENT_OBJECT_TABLE IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 0)
+       WHERE CONVERT(TRIGGER_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND EVENT_OBJECT_TABLE IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) = 0)
 ),
 resumen AS (
 SELECT
  COALESCE(MIN(CASE WHEN ambito = 'BASE' THEN COALESCE(ok, 0) ELSE 1 END), 0) AS base_ok,
  COALESCE(MIN(CASE WHEN ambito = 'NUEVO' THEN COALESCE(ok, 0) ELSE 1 END), 0) AS nuevas_ok,
  (SELECT COUNT(*) FROM information_schema.TABLES
-  WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) AS tablas_nuevas
+  WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas','flota_cb2_consumos','flota_cb2_filas')) AS tablas_nuevas
 FROM verificaciones
 )
 -- END CB2_METADATA_CANONICO
@@ -371,7 +375,9 @@ SELECT 'METADATA' AS ambito, 'estado_esquema_cb2' AS objeto,
 
 DELIMITER $$
 BEGIN NOT ATOMIC
- IF @cb2_estado = 'FINAL' AND @cb2_base_ok = 1 THEN
+ IF @cb2_estado = 'FINAL' AND @cb2_base_ok = 1
+    AND COALESCE(CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin =
+        CONVERT(@cb2_schema USING utf8mb4) COLLATE utf8mb4_bin, 0) = 1 THEN
   -- BEGIN CB2_DATOS_CANONICO (literal SQL; no ejecutar durante esta tarea)
   SELECT 'WITH incidencias AS (
 SELECT ''consumo_sin_padres_del_ambito'' AS comprobacion, (
@@ -527,7 +533,7 @@ SELECT COUNT(*) FROM (
  ELSE
   SELECT 'RESULTADO' AS ambito, 'estado_postcheck' AS objeto, 'DIVERGENTE' AS valor;
   SELECT 'NOTA' AS ambito, 'certificacion' AS objeto,
-   'SIN CERTIFICAR: metadata no FINAL; no se consultaron datos' AS valor;
+   'SIN CERTIFICAR: metadata no FINAL o contexto distinto del objetivo; no se consultaron datos' AS valor;
  END IF;
 END$$
 DELIMITER ;

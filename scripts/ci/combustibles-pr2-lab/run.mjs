@@ -113,6 +113,7 @@ function record(test, action) {
   } finally { save('results.json', tests); }
 }
 function query(container, label, input, expectedCode = 0, detail = '', db = true) {
+  if (db) input = "SET @cb2_schema = _utf8mb4'cb2_lab';\n" + input;
   const id = `${String(++serial).padStart(3, '0')}-${label}`;
   save(`${id}.sql`, input);
   const result = docker(['exec', '-i', container, 'mariadb', '--no-defaults', '--protocol=socket', '-uroot',
@@ -162,6 +163,10 @@ function laboratory(label, action) {
 }
 function migrate(container) {
   preState(query(container, 'preflight-clean', sql.preflight), 'CLEAN');
+  preState(query(container, 'preflight-contexto-information-schema', 'USE information_schema;\n' + sql.preflight), 'CLEAN');
+  preState(query(container, 'preflight-sin-objetivo', 'SET @cb2_schema = NULL;\n' + sql.preflight), 'DIVERGENTE');
+  preState(query(container, 'preflight-innodb-no-estricto', 'SET SESSION innodb_strict_mode = OFF;\n' + sql.preflight), 'DIVERGENTE');
+  query(container, 'migracion-contexto-incorrecto', 'USE information_schema;\n' + sql.migrate, 1644, 'CB2: se requiere CLEAN y base compatible');
   const before = query(container, 'postcheck-clean', sql.postcheck);
   state(before, 'METADATA', 'estado_esquema_cb2', 'CLEAN');
   state(before, 'RESULTADO', 'estado_postcheck', 'DIVERGENTE');
@@ -169,6 +174,11 @@ function migrate(container) {
   assert.equal(query(container, 'migrar', sql.migrate).trim(), 'APLICADA_PENDIENTE_POSTCHECK\tFINAL');
   preState(query(container, 'preflight-final', sql.preflight), 'FINAL');
   postFinal(query(container, 'postcheck-vacio', sql.postcheck));
+  const wrongContext = query(container, 'postcheck-contexto-incorrecto', 'USE information_schema;\n' + sql.postcheck);
+  state(wrongContext, 'METADATA', 'estado_esquema_cb2', 'FINAL');
+  state(wrongContext, 'RESULTADO', 'estado_postcheck', 'DIVERGENTE');
+  assert(!rows(wrongContext).some(row => row[0] === 'DATO'));
+
 }
 const snapshotTables = [...names, 'empresas', 'usuarios', 'compras_proveedores', 'flota_vehiculos',
   'flota_vehiculo_acceso', 'flota_combustible_cargas', 'flota_combustible_conciliaciones',
