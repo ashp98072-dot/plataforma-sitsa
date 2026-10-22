@@ -1,5 +1,10 @@
 # Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
 
+Importacion phpMyAdmin autocontenida y pruebas nuevas: ver
+[procedimiento](../../../docs/COMBUSTIBLES-PR2-IMPORT-PHPMYADMIN.md).
+El SQL exacto publicado es sql/import-phpmyadmin-2026-10-combustibles-pr2.sql;
+no importar el migrate canonico aislado sin su preparacion de sesion.
+
 Actualizacion: el laboratorio portable MariaDB 11.8.9 ya se ejecuto; ver
 [informe de resultados](../../../docs/COMBUSTIBLES-PR2-LAB-RESULTADOS-MARIADB-11.8.9.md).
 Las menciones historicas a escenarios pendientes quedan sustituidas por ese informe;

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildImport, compoundBody } from './build-phpmyadmin-import.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(dir, '../../..');
@@ -274,6 +275,38 @@ function rejectTransaction(c, label, statement, code, detail) {
   });
 }
 function suite() {
+  record('import-phpmyadmin-sesion-nueva', () => laboratory('import-sesion', c => {
+    const baseline = "SET SESSION sql_mode='NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'; SET SESSION innodb_strict_mode=OFF; SET @cb2_schema=NULL; USE information_schema;\n";
+    const output = query(c, 'import-autocontenido', baseline + buildImport('cb2_lab'));
+    const start = rows(output).find(r => r[0] === 'IMPORT_INICIO');
+    assert(start && start[2] === 'cb2_lab' && start[3] === 'cb2_lab');
+    assert(start[4].split(',').includes('STRICT_ALL_TABLES'));
+    assert.deepEqual(start.slice(5, 8), ['1', '1', '1']);
+    preState(output, 'CLEAN');
+    postFinal(output);
+    const finish = rows(output).find(r => r[0] === 'IMPORT_FIN');
+    assert(finish && finish[2] === '1' && finish[3] === 'cb2_lab' && finish[5] === '1' && finish[6] === 'FINAL');
+    const restored = rows(output).find(r => r[0] === 'IMPORT_RESTAURADO');
+    assert.deepEqual(restored?.slice(1), ['NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '0']);
+    assert.deepEqual(rows(query(c, 'import-conteos', `SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='cb2_lab' AND TABLE_NAME IN (${list});`)), [['4']]);
+  }));
+  record('import-phpmyadmin-fallo-cerrado', () => laboratory('import-fallo', c => {
+    query(c, 'base-incompatible-import', 'ALTER TABLE auditoria MODIFY usuario VARCHAR(99) NULL;');
+    query(c, 'import-base-incompatible', buildImport('cb2_lab'), 1644, 'CB2: se requiere CLEAN y base compatible');
+    const nested = compoundBody(buildImport('cb2_lab')).replace(/^USE `cb2_lab`;\n/, '');
+    const handled = query(c, 'import-handler-restaura', `DELIMITER $
+BEGIN NOT ATOMIC
+ DECLARE CONTINUE HANDLER FOR SQLEXCEPTION GET DIAGNOSTICS CONDITION 1 @cb2_caught = MYSQL_ERRNO;
+ SET SESSION sql_mode='NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
+ SET SESSION innodb_strict_mode=OFF;
+ SET @cb2_caught=NULL;
+ ${nested}
+ SELECT 'ERROR_RESTAURADO', @cb2_caught, @@SESSION.sql_mode, @@SESSION.innodb_strict_mode;
+END$
+DELIMITER ;`);
+    assert.deepEqual(rows(handled).find(r => r[0] === 'ERROR_RESTAURADO')?.slice(1), ['1644', 'NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '0']);
+    assert.equal(query(c, 'import-fallo-sin-tablas', `SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='cb2_lab' AND TABLE_NAME IN (${list});`).trim(), '0');
+  }));
   record('positivo-y-restricciones', () => laboratory('positivo', c => {
     migrate(c);
     const expected = ['4', '86', '34', '18', '26'];
