@@ -458,7 +458,7 @@ function selfTest() {
     { ...fkError, stderr: fkError.stderr.replace('`fk_cb2c_factura`', '`fk_cb2c_factura_extra`') },
     { ...fkError, stderr: `${fkError.stderr}\nERROR 2002 (HY000): Cannot connect` },
   ]) assert.throws(() => rejected(bad, 1452, 'fk_cb2c_factura'));
-  const contracts = Object.values(sql).flatMap(s => [...s.matchAll(/-- BEGIN CB2_METADATA_CANONICO\n([\s\S]*?)\n-- END CB2_METADATA_CANONICO/g)].map(m => m[1]));
+  const contracts = Object.values(sql).flatMap(s => [...s.matchAll(/-- BEGIN CB2_METADATA_CANONICO\r?\n([\s\S]*?)\r?\n-- END CB2_METADATA_CANONICO/g)].map(m => m[1].replace(/\r\n/g, '\n')));
   assert.equal(contracts.length, 4);
   assert.equal(new Set(contracts).size, 1);
   const canonical = contracts[0];
