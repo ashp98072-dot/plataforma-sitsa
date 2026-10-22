@@ -1,0 +1,125 @@
+{
+    "baseline":  "4aab79f666dedf57c067cf6468446da7f617238a",
+    "status":  "PASS",
+    "tests":  58,
+    "failed":  0,
+    "typecheck":  "PASS",
+    "eslint":  "PASS",
+    "databaseRun":  false,
+    "files":  [
+                  {
+                      "file":  "src/components/app-shell-operaciones.test.ts",
+                      "status":  "passed",
+                      "tests":  15,
+                      "cases":  [
+                                    "Compras — accesos directos sin padre redundante elimina únicamente el enlace clicable Compras / Repuestos",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=true, proveedores=false",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=false, proveedores=true",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=false, proveedores=false",
+                                    "Compras — accesos directos sin padre redundante Admin conserva acceso con Operaciones habilitado y no añade acceso sin módulo",
+                                    "menú Operaciones — nombres y orden capacidad TMS de empresa no concede Disponibilidad sin permiso de lectura",
+                                    "menú Operaciones — nombres y orden muestra Ajustes de costeo solo con su permiso explícito y la ruta correcta",
+                                    "menú Operaciones — nombres y orden existe el enlace \u0027Planes / Viajes\u0027 apuntando a /planes",
+                                    "menú Operaciones — nombres y orden ya no existe el enlace viejo \u0027Reportes de viajes\u0027 a /tms/reportes",
+                                    "menú Operaciones — nombres y orden \u0027Reportes\u0027 apunta a la ruta actual /reportes",
+                                    "menú Operaciones — nombres y orden orden del flujo: Rutas antes que Programación, Programación antes que Planes / Viajes",
+                                    "\u0027TMS / Logística\u0027 — se oculta del menú, nunca se elimina el link del módulo tms se omite solo para no-Admin (continue), nunca se borra el push del resto de opsMods",
+                                    "\u0027TMS / Logística\u0027 — se oculta del menú, nunca se elimina Planes / Viajes conserva el MISMO gating que Programación (puedeProgramacion) — sin permisos nuevos ni perdidos",
+                                    "rutas TMS internas siguen intactas /e/[slug]/tms sigue teniendo su page.tsx (no se borró la pantalla técnica)",
+                                    "rutas TMS internas siguen intactas /e/[slug]/tms/reportes ahora redirige a /planes (no es 404, no se pierde el enlace guardado)"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/combustible-preview-v2.test.ts",
+                      "status":  "passed",
+                      "tests":  1,
+                      "cases":  [
+                                    "vista previa común muestra candidatos, conflicto, origen, facturas y totales sin confirmar consumos"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-importaciones-wiring.test.ts",
+                      "status":  "passed",
+                      "tests":  5,
+                      "cases":  [
+                                    "contrato de importaciones sin ejecución SQL scripts de diagnóstico SELECT/SHOW, migración aditiva sin datos ni cargas",
+                                    "contrato de importaciones sin ejecución SQL columnas, UNIQUE y FKs son ALTERs separados con certificación física entre B y D",
+                                    "contrato de importaciones sin ejecución SQL los tres scripts usan exactamente el mismo contrato de metadata y de datos",
+                                    "contrato de importaciones sin ejecución SQL legacy excluye explícitamente HALEL de listado, detalle y descarga",
+                                    "contrato de importaciones sin ejecución SQL tabla de preview renderiza filtros y fecha neutral sin match ni total financiero"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-ux-captura.test.ts",
+                      "status":  "passed",
+                      "tests":  10,
+                      "cases":  [
+                                    "captura separada y buscador reutilizado busca proveedor por fragmento/tildes y conserva ID real, nunca el texto como valor",
+                                    "captura separada y buscador reutilizado formulario y mantenimiento reutilizan buscador sin modificar el componente compartido",
+                                    "captura separada y buscador reutilizado principal solo enlaza alta con permiso y no monta formulario de alta",
+                                    "captura separada y buscador reutilizado formulario no envía viaje_id ni siquiera al editar histórico",
+                                    "captura separada y buscador reutilizado proveedor/estación filtra IDs y limpia selección al cambiar proveedor",
+                                    "captura separada y buscador reutilizado filtro de estaciones conserva texto y ID real del proveedor al consultar",
+                                    "captura separada y buscador reutilizado Ver sin Registrar no recibe formulario por URL directa (guard real)",
+                                    "captura separada y buscador reutilizado Registrar permite la pantalla con guard real",
+                                    "captura separada y buscador reutilizado la nueva pantalla tampoco cruza empresas",
+                                    "captura separada y buscador reutilizado guardar/cancelar vuelven con una navegación, sin refresh extra"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/client.test.ts",
+                      "status":  "passed",
+                      "tests":  6,
+                      "cases":  [
+                                    "flujos CB2 de interfaz conserva clave y solicitud tras error incierto; bloquea otra acción",
+                                    "flujos CB2 de interfaz persiste solo referencia de reintento y separa usuario y empresa",
+                                    "flujos CB2 de interfaz excluye doble envio simultaneo y permite editar solo rechazo definitivo",
+                                    "flujos CB2 de interfaz lee todas las paginas de evidencia y aplica eventos por revision/id",
+                                    "flujos CB2 de interfaz envia selecciones ordenadas y errores HTTP no se presentan como exito",
+                                    "flujos CB2 de interfaz no certifica respuestas 200 incompletas y presenta errores de descarga privada"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/grupos-origen.test.ts",
+                      "status":  "passed",
+                      "tests":  8,
+                      "cases":  [
+                                    "reconstruccion operativa del historial por candidato no reabre un consumo resuelto aunque la ultima revision sea bloqueada",
+                                    "reconstruccion operativa del historial por candidato candidato totalmente resuelto conserva todas sus apariciones sin selector",
+                                    "reconstruccion operativa del historial por candidato resolucion parcial mantiene solo la aparicion pendiente seleccionable",
+                                    "reconstruccion operativa del historial por candidato una aparicion no resuelta bloqueada bloquea el candidato completo",
+                                    "reconstruccion operativa del historial por candidato resolucion posterior valida supera bloqueo y asociacion documental no altera estado operativo",
+                                    "reconstruccion operativa del historial por candidato revisiones iguales se ordenan por id, no por orden de respuesta",
+                                    "reconstruccion operativa del historial por candidato evidencia de dos consumos incompatibles queda bloqueada",
+                                    "reconstruccion operativa del historial por candidato filas ignoradas siguen trazables y no cuentan como pendientes"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/panel.dom.test.ts",
+                      "status":  "passed",
+                      "tests":  11,
+                      "cases":  [
+                                    "interfaz CB2 montada: flujos funcionales importa parcialmente y reintenta sin cambiar clave",
+                                    "interfaz CB2 montada: flujos funcionales asocia factura con ceros y revisiones exactas",
+                                    "interfaz CB2 montada: flujos funcionales Admin reanuda desde historial y ofrece descarga privada",
+                                    "interfaz CB2 montada: flujos funcionales solo lectura no presenta escrituras",
+                                    "interfaz CB2 montada: flujos funcionales filtra en servidor",
+                                    "interfaz CB2 montada: flujos funcionales conciliar no concede reanudacion Admin",
+                                    "interfaz CB2 montada: flujos funcionales recarga conserva clave y revision original de asociacion incierta",
+                                    "interfaz CB2 montada: flujos funcionales pagina con cursor y conserva seleccion al filtrar",
+                                    "interfaz CB2 montada: flujos funcionales rechaza factura elegida de otro proveedor antes de enviar",
+                                    "interfaz CB2 montada: flujos funcionales no ofrece reanudar candidatos resueltos en revisiones previas aunque luego se bloqueen",
+                                    "interfaz CB2 montada: flujos funcionales resolucion parcial de apariciones mantiene solo las pendientes seleccionables"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/ubicacion.test.ts",
+                      "status":  "passed",
+                      "tests":  2,
+                      "cases":  [
+                                    "ubicacion y compatibilidad de Combustibles conserva la unica opcion existente entre Planes/Viajes y Viaticos",
+                                    "ubicacion y compatibilidad de Combustibles misma pantalla conserva vales, estaciones y conciliacion historica"
+                                ]
+                  }
+              ]
+}

@@ -148,3 +148,35 @@ certifica una ejecucion browser→HTTP→MariaDB de despliegue, ni volumen maxim
 moviles reales, latencia de red o comportamiento del CDN. No se ejecuto build con
 servicios/entornos productivos. El PR queda Draft para auditoria independiente,
 sin merge, sin SQL ni operaciones de datos en produccion y sin cambios de esquema.
+
+## Correccion de auditoria: estado operativo del candidato
+
+Base revisada: 4aab79f666dedf57c067cf6468446da7f617238a. gruposOrigen ahora
+recorre todos los ORIGEN/RESOLUCION ordenados por revision/id y conserva una fila
+por aparicion original. ASOCIACION_FACTURA no cambia el estado operativo.
+Una CREADA/REUTILIZADA con consumo valido permanece resuelta aunque otro evento
+posterior sin consumo informe bloqueo: eso no elimina el consumo ya conservado.
+
+Se distinguen estado de aparicion y estado de candidato: PENDIENTE, RESUELTA,
+BLOQUEADA (e IGNORADA para filas sin candidato). Un grupo completamente resuelto
+no presenta selector. En una resolucion parcial, solo las apariciones pendientes
+son seleccionables, manteniendo la seleccion por identidad completa. Una aparicion
+no resuelta bloqueada bloquea el grupo; resultados desconocidos/inconsistentes no
+se ofrecen como pendientes seguros. Todas las apariciones y el diario completo
+siguen visibles, sin filtrar originales resueltos ni alterar evidencia.
+
+Historial cuenta candidatos pendientes unicos y filtra la seleccion nuevamente
+antes de enviar: referencias obsoletas/resueltas no llegan a una nueva solicitud.
+Sin candidatos pendientes o seleccion vigente se deshabilita el boton y el handler
+no envia reanudacion. Se muestran estados separados en lugar de la etiqueta
+ambigua BLOQUEADA / RESUELTA. Recuperar un intento incierto por su misma clave
+sigue disponible: es recuperacion idempotente, no una nueva reanudacion.
+
+Pruebas de esta correccion: 58 dirigidas PASS (8 archivos), incluidas ocho pruebas
+nuevas de reconstruccion y dos de interfaz montada para resolucion completa/
+parcial. Cubren multiples revisiones, orden por revision/id, creacion previa,
+evento posterior bloqueado, grupos resueltos/pending/bloqueados, seleccion obsoleta,
+trazabilidad inmutable y ausencia de POST sin pendientes. TypeScript, ESLint y
+git diff --check PASS. No se repite MariaDB: no cambian backend, SQL ni contratos
+de escritura. La evidencia previa de motor queda preservada como historica.
+Evidencia de la correccion: [revision-grupos/](evidence/combustibles-pr509-interfaz/revision-grupos/).

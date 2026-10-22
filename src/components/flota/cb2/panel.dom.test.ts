@@ -14,6 +14,7 @@ const preview = { sha256: "b".repeat(64), token: "firmado", nota: "Revalidar his
 const original = { id: 10, proveedor_id: 1, importacion_id: 2, revision: 1, tipo: "ORIGEN", origen_fila_id: null, consumo_id: null, hoja_nombre: "DEMO", fila_excel: 2, resultado: "OMITIDA", datos_origen: JSON.stringify({ vale: "0001", placaOriginal: "C-001ABC", fechaConsumo: "2026-10-01" }), decision: JSON.stringify({ version: 1, moneda: "GTQ", candidato }), motivo: "Pendiente" };
 const header = { id: 2, proveedor_id: 1, proveedor_nombre: "PROVEEDOR DEMO", archivo_nombre: "demo.xlsx", archivo_sha256: preview.sha256, revision: 1, estado: "PARCIAL", resumen_actual: '{"pendientes":1}' };
 const consumo = { id: 3, proveedor_id: 1, importacion_origen_id: 2, moneda: "GTQ", numero_vale: "0001", placa_original: "C-001ABC", fecha_consumo: "2026-10-01", galones: "10", precio: "20", monto: "200", factura_id: null, estado_factura: "PENDIENTE_FACTURA" };
+let eventosHistorial: Record<string, unknown>[] = [];
 let failConfirm = false, failAsociar = false, revisionHeader = 1, paginado = false, consumoProveedor = 1;
 const response = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 beforeEach(() => {
@@ -24,6 +25,7 @@ beforeEach(() => {
     document.body.append(host);
     root = createRoot(host);
     calls.length = 0;
+    eventosHistorial = [];
     failConfirm = false;
     failAsociar = false;
     revisionHeader = 1;
@@ -51,7 +53,7 @@ beforeEach(() => {
         if (url.endsWith("/asociar") || url.endsWith("/reanudar"))
             return response({ eventos: [{ id: 11, importacionId: 2, revision: 2, resultado: "REUTILIZADA", consumoId: 3 }] });
         if (url.includes("/filas?"))
-            return response([original]);
+            return response([original, ...eventosHistorial]);
         if (url.includes("/importaciones?"))
             return response([{ ...header, revision: revisionHeader }]);
         if (url.includes("/consumos?"))
@@ -64,11 +66,20 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 async function flush() { await act(async () => { await new Promise(r => setTimeout(r, 5)); }); }
 async function mount(admin = true, canWrite = true) { await act(async () => { root.render(createElement(CombustiblesCB2, { slug: "demo", actorId: 1, admin, canWrite })); }); await flush(); }
-function btn(text: string) { const b = Array.from(host.querySelectorAll("button")).find(e => e.textContent === text && !e.closest("[hidden]")); if (!b)
-    throw new Error(`Boton ausente ${text}`); return b; }
+function btn(text: string) {
+    const b = Array.from(host.querySelectorAll("button")).find(e => e.textContent === text && !e.closest("[hidden]"));
+    if (!b)
+        throw new Error(`Boton ausente ${text}`);
+    return b;
+}
 async function click(text: string) { await act(async () => btn(text).click()); await flush(); }
-function control(text: string) { const l = Array.from(host.querySelectorAll("label")).find(e => e.textContent?.startsWith(text) && !e.closest("[hidden]")); const e = l?.querySelector("input,select,textarea") ?? (l?.htmlFor ? document.getElementById(l.htmlFor) : null); if (!e)
-    throw new Error(`Control ausente ${text}`); return e as HTMLInputElement; }
+function control(text: string) {
+    const l = Array.from(host.querySelectorAll("label")).find(e => e.textContent?.startsWith(text) && !e.closest("[hidden]"));
+    const e = l?.querySelector("input,select,textarea") ?? (l?.htmlFor ? document.getElementById(l.htmlFor) : null);
+    if (!e)
+        throw new Error(`Control ausente ${text}`);
+    return e as HTMLInputElement;
+}
 async function change(text: string, value: string) { const el = control(text); await act(async () => { const proto = el.tagName === "SELECT" ? HTMLSelectElement.prototype : el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true })); }); }
 async function seleccionarConsumo() { await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Seleccionar consumo 3"]')!.click()); }
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
@@ -82,4 +93,32 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
     it("recarga conserva clave y revision original de asociacion incierta", async () => { await mount(); await prepararAsociacion(); failAsociar = true; await click("Asociar factura al lote"); const first = calls.find(c => c.url.endsWith("/asociar"))!; await act(async () => root.unmount()); root = createRoot(host); await mount(); await click("Reintentar exactamente la solicitud"); const posts = calls.filter(c => c.url.endsWith("/asociar")); expect(posts).toHaveLength(2); expect(posts[1].init!.body).toBe(first.init!.body); expect(JSON.parse(String(posts[1].init!.body)).revisiones).toEqual([{ id: 2, revision: 1 }]); });
     it("pagina con cursor y conserva seleccion al filtrar", async () => { paginado = true; await mount(); await seleccionarConsumo(); await click("Siguiente"); expect(calls.some(c => c.url.includes("/consumos?") && c.url.includes("despues=52"))).toBe(true); expect(host.textContent).toContain("1 consumos seleccionados"); await change("Buscar vale o placa", "0001"); await click("Aplicar filtros"); expect(calls.at(-1)!.url).toContain("despues=0"); expect(calls.at(-1)!.url).toContain("buscar=0001"); });
     it("rechaza factura elegida de otro proveedor antes de enviar", async () => { consumoProveedor = 2; await mount(); await prepararAsociacion(); await click("Asociar factura al lote"); expect(host.textContent).toContain("pertenece a otro proveedor"); expect(calls.some(c => c.url.endsWith("/asociar"))).toBe(false); });
+    it("no ofrece reanudar candidatos resueltos en revisiones previas aunque luego se bloqueen", async () => {
+        revisionHeader = 4;
+        eventosHistorial = [{ ...original, id: 11, tipo: "RESOLUCION", revision: 2, origen_fila_id: 10, resultado: "CREADA", consumo_id: 3 }, { ...original, id: 12, tipo: "RESOLUCION", revision: 4, origen_fila_id: 10, resultado: "BLOQUEADA", consumo_id: null }];
+        await mount();
+        await click("Historial");
+        await click("Ver trazabilidad #2");
+        expect(host.textContent).toContain("No quedan candidatos pendientes");
+        expect(host.textContent).toContain("Diario completo (3 eventos)");
+        expect(btn("Reanudar selección").disabled).toBe(true);
+        expect(Array.from(host.querySelectorAll("label")).some(l => l.textContent?.startsWith("Unidad para vale"))).toBe(false);
+        await click("Reanudar selección");
+        expect(calls.some(c => c.url.endsWith("/reanudar"))).toBe(false);
+    });
+    it("resolucion parcial de apariciones mantiene solo las pendientes seleccionables", async () => {
+        revisionHeader = 2;
+        eventosHistorial = [{ ...original, id: 11, fila_excel: 3, datos_origen: JSON.stringify({ vale: "0001", placaOriginal: "C-001ABC" }) }, { ...original, id: 12, tipo: "RESOLUCION", revision: 2, origen_fila_id: 10, resultado: "CREADA", consumo_id: 3 }];
+        await mount();
+        await click("Historial");
+        await click("Ver trazabilidad #2");
+        expect(host.textContent).toContain("1 candidatos pendientes");
+        const labels = Array.from(host.querySelectorAll("label")).filter(l => l.textContent?.startsWith("Unidad para vale"));
+        expect(labels).toHaveLength(1);
+        expect(labels[0].textContent).toContain("DEMO:3");
+        await change("Unidad para vale", "1");
+        await change("Motivo de reanudación", "Completar apariciones pendientes");
+        await click("Reanudar selección");
+        expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion).toEqual([{ candidato, vehiculoId: 1 }]);
+    });
 });

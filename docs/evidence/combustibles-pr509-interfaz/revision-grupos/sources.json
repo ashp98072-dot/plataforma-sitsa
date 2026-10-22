@@ -1,0 +1,10 @@
+{
+    "hashConvention":  "SHA256 UTF-8 sin BOM; CRLF normalizado a LF",
+    "files":  {
+                  "src/components/flota/cb2/client.ts":  "959774f374da851f7b7283b1bcfdc0abc39359bf7655847876b1f95c6a4da334",
+                  "src/components/flota/cb2/historial.tsx":  "623d4d4e22311743a9e692abd93bb617eafc4889211b69a11529aef240850696",
+                  "src/components/flota/cb2/importar.tsx":  "b4d780d3c7cb776300855482fb8df2842a4c8910d55a5a51cdf42681d6d4b2c6",
+                  "src/components/flota/cb2/panel.dom.test.ts":  "84a682a63b1e4ba0ef65c6359400a9b4d3abc4ab136ec71208bcd343ed1fd657",
+                  "src/components/flota/cb2/grupos-origen.test.ts":  "2b84518dab8d6c74bbbab268caf8dd6c96bf8f48a1edda23283b010030ac6c19"
+              }
+}

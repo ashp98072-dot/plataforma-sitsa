@@ -112,13 +112,49 @@ export function leerObjeto(value: unknown): Record<string, unknown> {
         return {};
     }
 }
-export function gruposOrigen(rows: Registro[]): FilaCB2[] {
-    const ultimos = new Map<number, Registro>();
+export type EstadoOrigenCB2 = "PENDIENTE" | "RESUELTA" | "BLOQUEADA" | "IGNORADA";
+export type FilaOrigenCB2 = FilaCB2 & {
+    estadoAparicion: EstadoOrigenCB2;
+    estadoCandidato: EstadoOrigenCB2;
+    consumoId: number | null;
+};
+export function gruposOrigen(rows: Registro[]): FilaOrigenCB2[] {
     const originales = rows.filter(r => r.tipo === "ORIGEN");
-    for (const r of [...rows].sort((a, b) => Number(a.revision) - Number(b.revision) || a.id - b.id))
-        if (r.tipo !== "ASOCIACION_FACTURA")
-            ultimos.set(Number(r.origen_fila_id ?? r.id), r);
-    return originales.map(o => { const f = leerObjeto(o.datos_origen), d = leerObjeto(o.decision), actual = ultimos.get(o.id); return { hoja: String(o.hoja_nombre), fila: Number(o.fila_excel), candidato: typeof d.candidato === "string" ? d.candidato : null, bloqueada: actual?.consumo_id != null, documento: null, errores: [], estado: actual?.consumo_id != null ? "RESUELTA" : String(actual?.resultado ?? o.resultado), motivos: [String(actual?.motivo ?? o.motivo)], vale: String(f.vale ?? ""), placa: String(f.placaOriginal ?? ""), placaNormalizada: String(f.placaNormalizada ?? ""), fecha: typeof f.fechaConsumo === "string" ? f.fechaConsumo : null, galones: typeof f.galones === "string" ? f.galones : null, precio: typeof f.precio === "string" ? f.precio : null, monto: typeof f.monto === "string" ? f.monto : null, moneda: String(d.moneda ?? "") }; });
+    const eventos = new Map<number, Registro[]>();
+    // ASOCIACION_FACTURA no modifica la resolucion operativa de una aparicion.
+    for (const r of [...rows].sort((a, b) => Number(a.revision) - Number(b.revision) || a.id - b.id)) {
+        if (r.tipo !== "ORIGEN" && r.tipo !== "RESOLUCION")
+            continue;
+        const id = Number(r.tipo === "ORIGEN" ? r.id : r.origen_fila_id);
+        eventos.set(id, [...(eventos.get(id) ?? []), r]);
+    }
+    const filas = originales.map(o => {
+        const f = leerObjeto(o.datos_origen), d = leerObjeto(o.decision), historia = eventos.get(o.id) ?? [o], actual = historia[historia.length - 1];
+        const creadas = historia.filter(e => ["CREADA", "REUTILIZADA"].includes(String(e.resultado)) && Number.isInteger(e.consumo_id) && Number(e.consumo_id) > 0);
+        const consumos = new Set(creadas.map(e => Number(e.consumo_id)));
+        // Una resolucion posterior sin consumo no deshace una creacion/reutilizacion.
+        const consumoId = consumos.size === 1 ? [...consumos][0] : null;
+        const candidato = typeof d.candidato === "string" ? d.candidato : null;
+        const estado: EstadoOrigenCB2 = consumos.size > 1 ? "BLOQUEADA" : consumoId !== null ? "RESUELTA" : !candidato && actual.resultado === "IGNORADA" ? "IGNORADA" : candidato && actual.resultado === "OMITIDA" ? "PENDIENTE" : "BLOQUEADA";
+        return { hoja: String(o.hoja_nombre), fila: Number(o.fila_excel), candidato, bloqueada: estado !== "PENDIENTE", documento: null, errores: [], estado, estadoAparicion: estado, estadoCandidato: estado, consumoId, motivos: [String(actual.motivo ?? o.motivo ?? "")], vale: String(f.vale ?? ""), placa: String(f.placaOriginal ?? ""), placaNormalizada: String(f.placaNormalizada ?? ""), fecha: typeof f.fechaConsumo === "string" ? f.fechaConsumo : null, galones: typeof f.galones === "string" ? f.galones : null, precio: typeof f.precio === "string" ? f.precio : null, monto: typeof f.monto === "string" ? f.monto : null, moneda: String(d.moneda ?? "") } satisfies FilaOrigenCB2;
+    });
+    const grupos = new Map<string, FilaOrigenCB2[]>();
+    for (const f of filas)
+        if (f.candidato)
+            grupos.set(f.candidato, [...(grupos.get(f.candidato) ?? []), f]);
+    for (const grupo of grupos.values()) {
+        const estado: EstadoOrigenCB2 = grupo.every(f => f.estadoAparicion === "RESUELTA") ? "RESUELTA" : grupo.some(f => f.estadoAparicion === "BLOQUEADA") ? "BLOQUEADA" : "PENDIENTE";
+        for (const f of grupo) {
+            f.estadoCandidato = estado;
+            f.bloqueada = estado !== "PENDIENTE" || f.estadoAparicion !== "PENDIENTE";
+            f.motivos.push(`Candidato: ${estado}`);
+        }
+    }
+    return filas; // Nunca eliminar apariciones ya resueltas del historial.
+}
+export function seleccionPendienteCB2(filas: FilaOrigenCB2[], seleccion: Record<string, string>): SeleccionCB2 {
+    const pendientes = new Set(filas.filter(f => f.estadoCandidato === "PENDIENTE" && f.estadoAparicion === "PENDIENTE" && f.candidato).map(f => f.candidato!));
+    return elecciones(seleccion).filter(s => pendientes.has(s.candidato));
 }
 export function resultadoCB2(value: unknown) {
     const r = value as {
