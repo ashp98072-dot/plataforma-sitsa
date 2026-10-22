@@ -1,4 +1,18 @@
-# Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
+# Laboratorio SQL del PR #507 — resultados y reproduccion
+## Estado vigente: revision final 2026-10-22
+
+El laboratorio portable MariaDB 11.8.9 termino con 26 registros PASS; el informe
+mas reciente es [postcheck phpMyAdmin](../../../docs/COMBUSTIBLES-PR2-POSTCHECK-PHPMYADMIN.md).
+El operador tambien reporto migracion y postcheck independientes correctos en
+Hostinger: FINAL, 15 validaciones y cero incidencias. Es evidencia comunicada
+por el operador, no una conexion productiva del agente. No reejecutar migracion.
+
+La seccion de backend remoto es una propuesta historica: el workflow mencionado
+NO forma parte del PR ni esta publicado; no es una via ejecutable disponible.
+Las menciones posteriores a pruebas pendientes o produccion sin ejecutar describen
+etapas anteriores y quedan sustituidas por este estado y la
+[revision final](../../../docs/COMBUSTIBLES-PR2-REVISION-FINAL.md).
+El merge sigue pendiente de auditoria independiente y autorizacion.
 
 Postcheck independiente de solo lectura para phpMyAdmin:
 [procedimiento](../../../docs/COMBUSTIBLES-PR2-POSTCHECK-PHPMYADMIN.md), archivo
