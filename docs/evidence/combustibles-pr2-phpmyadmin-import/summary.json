@@ -1,0 +1,127 @@
+{
+  "status": "PASS",
+  "tests": [
+    {
+      "test": "import-phpmyadmin-sesion-nueva",
+      "began": "2026-10-22T16:58:25.177Z",
+      "status": "PASS"
+    },
+    {
+      "test": "import-phpmyadmin-fallo-cerrado",
+      "began": "2026-10-22T16:58:33.878Z",
+      "status": "PASS"
+    },
+    {
+      "test": "empresa-cruzada",
+      "began": "2026-10-22T16:58:57.671Z",
+      "status": "PASS"
+    },
+    {
+      "test": "proveedor-cruzado",
+      "began": "2026-10-22T16:58:59.641Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otro-proveedor",
+      "began": "2026-10-22T16:59:01.668Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otra-empresa",
+      "began": "2026-10-22T16:59:03.905Z",
+      "status": "PASS"
+    },
+    {
+      "test": "vehiculo-inexistente",
+      "began": "2026-10-22T16:59:05.878Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-sin-actor",
+      "began": "2026-10-22T16:59:08.380Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-null-con-metadata",
+      "began": "2026-10-22T16:59:10.460Z",
+      "status": "PASS"
+    },
+    {
+      "test": "json-invalido",
+      "began": "2026-10-22T16:59:12.463Z",
+      "status": "PASS"
+    },
+    {
+      "test": "marca-origen-null",
+      "began": "2026-10-22T16:59:14.615Z",
+      "status": "PASS"
+    },
+    {
+      "test": "ordinal-duplicado",
+      "began": "2026-10-22T16:59:16.658Z",
+      "status": "PASS"
+    },
+    {
+      "test": "original-duplicado",
+      "began": "2026-10-22T16:59:18.740Z",
+      "status": "PASS"
+    },
+    {
+      "test": "positivo-y-restricciones",
+      "began": "2026-10-22T16:58:42.904Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-parcial",
+      "began": "2026-10-22T16:59:23.604Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-longitud",
+      "began": "2026-10-22T16:59:30.779Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check",
+      "began": "2026-10-22T16:59:45.330Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check-asociacion",
+      "began": "2026-10-22T17:00:00.566Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-indice",
+      "began": "2026-10-22T17:00:16.677Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-anterior",
+      "began": "2026-10-22T17:00:33.030Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-arbitrario",
+      "began": "2026-10-22T17:00:38.751Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-orden-invertido",
+      "began": "2026-10-22T17:00:44.718Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-no-unico",
+      "began": "2026-10-22T17:00:49.591Z",
+      "status": "PASS"
+    },
+    {
+      "test": "base-incompatible",
+      "began": "2026-10-22T17:00:55.075Z",
+      "status": "PASS"
+    }
+  ],
+  "backend": "windows-portable-named-pipe",
+  "note": "Solo fixtures sinteticos; casos posteriores a fallo NO EJECUTADOS."
+}

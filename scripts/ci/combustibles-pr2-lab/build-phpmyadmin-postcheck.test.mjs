@@ -1,0 +1,30 @@
+﻿import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import { buildPostcheck, metadataContract, postcheckOutput } from './build-phpmyadmin-postcheck.mjs';
+import { dataContract } from './build-phpmyadmin-import.mjs';
+
+test('postcheck independiente exacto, contratos completos y sin escrituras persistentes', () => {
+ const source = readFileSync(new URL('../../../sql/postcheck-2026-10-combustibles-pr2-consumos-facturas.sql', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+ const content = buildPostcheck();
+ assert.deepEqual(readFileSync(postcheckOutput), Buffer.from(content, 'utf8'));
+ assert(content.startsWith('USE `u611730801_Plataforma`;'));
+ assert.equal(metadataContract(), source.match(/-- BEGIN CB2_METADATA_CANONICO[\s\S]*?INTO @cb2_base_ok, @cb2_estado FROM resumen;/)[0]);
+ assert(content.includes(metadataContract()));
+ const literal = source.match(/SELECT '(WITH incidencias AS \([\s\S]*?)' INTO @cb2_postcheck_select;/)[1].replaceAll("''", "'");
+ assert.equal(dataContract(), literal.split("\nSELECT 'DATO' AS ambito")[0]);
+ assert(content.includes(dataContract()));
+ assert.equal((dataContract().match(/ AS comprobacion/g) || []).length, 15);
+ const code = content.replace(/'(?:''|\\.|[^'\\])*'/g, "''").replace(/--[^\r\n]*/g, '');
+ assert(!/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE|TRUNCATE|RENAME|GRANT|REVOKE|CALL|PREPARE|EXECUTE|LOAD|OUTFILE|DUMPFILE|COMMIT|ROLLBACK|TRANSACTION)\b/i.test(code));
+ assert(!/\bREPLACE[ \t]+(?=[A-Za-z_`])/i.test(code));
+ assert(!/SET\s+(?:(?:@@)?GLOBAL|(?:SESSION\s+)?(?:FOREIGN_KEY_CHECKS|CHECK_CONSTRAINT_CHECKS))/i.test(code));
+ assert(content.includes("IF @cb2_estado = 'FINAL' AND @cb2_base_ok = 1 THEN"));
+ assert(content.includes('DECLARE EXIT HANDLER FOR SQLEXCEPTION'));
+ assert(content.includes('RESIGNAL;'));
+ assert(content.includes("THEN 'SIN_CERTIFICAR'"));
+ assert.equal((content.match(/^DELIMITER /gm) || []).length, 2);
+ assert(content.includes('\nEND$$\nDELIMITER ;\nSELECT CASE'));
+ assert(content.includes('INTO @cb2_pc_data, @cb2_pc_count, @cb2_pc_sum, @cb2_pc_nonnull'));
+ for (const schema of ['', 'mysql', 'SYS', 'information_schema', 'a;b', 'a`b']) assert.throws(() => buildPostcheck(schema));
+});

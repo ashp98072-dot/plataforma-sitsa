@@ -46,3 +46,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# MariaDB portable: binarios, bases sinteticas y evidencia local
+/.lab-runtime/

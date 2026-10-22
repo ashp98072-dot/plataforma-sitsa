@@ -1,0 +1,28 @@
+{
+    "status": "PASS",
+    "parser": "phpmyadmin\/sql-parser 5.10.0 BufferedQuery",
+    "php": "8.4.14",
+    "sqlSHA256": "31da5333509559b5f6d52320b1a99efd26f0f7077e3783d114d080d334692a9b",
+    "results": [
+        {
+            "chunkBytes": 1,
+            "statements": 2,
+            "blockSHA256": "7dc6daa36e9857d15a3a91b95b9182c96d50f956993ac66d55010d9e752701be"
+        },
+        {
+            "chunkBytes": 7,
+            "statements": 2,
+            "blockSHA256": "7dc6daa36e9857d15a3a91b95b9182c96d50f956993ac66d55010d9e752701be"
+        },
+        {
+            "chunkBytes": 4096,
+            "statements": 2,
+            "blockSHA256": "7dc6daa36e9857d15a3a91b95b9182c96d50f956993ac66d55010d9e752701be"
+        },
+        {
+            "chunkBytes": 164089,
+            "statements": 2,
+            "blockSHA256": "7dc6daa36e9857d15a3a91b95b9182c96d50f956993ac66d55010d9e752701be"
+        }
+    ]
+}

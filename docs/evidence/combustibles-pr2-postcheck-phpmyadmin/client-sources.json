@@ -1,0 +1,10 @@
+{
+  "files": {
+    "scripts/ci/combustibles-pr2-lab/test-phpmyadmin-postcheck-mysqli.php": "80a11c29021e671343d87e38de5dccc7dcb679c0272f660bf5eb6d3741240d6a",
+    "scripts/ci/combustibles-pr2-lab/test-phpmyadmin-buffer.php": "c42d72342f97122a12735efbc5b12228a492d829e57d2dc48fc3c3a8b95a274f",
+    "scripts/ci/combustibles-pr2-lab/build-phpmyadmin-postcheck.test.mjs": "a9b7b22778bbf098d9cccf4ea38cdab4c7b14787441614ec59bbc731671b253c",
+    ".lab-runtime/php/php.exe": "4b2d6cec966d8cbfda86eb1bd44464116d585afc125ed4e181f0d45f44454e55",
+    ".lab-runtime/php/ext/php_mysqli.dll": "0702de69435d4800b33102e4bffebbf5ecec16e18c0986b580b0afbcfa1fd090",
+    ".lab-runtime/sql-parser.zip": "091fa81daeb8c60d587ca2ddf0d8186e03c146cea8760e2dd416736db28717e8"
+  }
+}

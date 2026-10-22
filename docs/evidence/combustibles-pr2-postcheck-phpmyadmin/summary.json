@@ -1,0 +1,137 @@
+{
+  "status": "PASS",
+  "tests": [
+    {
+      "test": "postcheck-phpmyadmin-solo-lectura",
+      "began": "2026-10-22T17:38:37.058Z",
+      "status": "PASS"
+    },
+    {
+      "test": "phpmyadmin-mysqli-sin-drenaje",
+      "began": "2026-10-22T17:39:16.516Z",
+      "status": "PASS"
+    },
+    {
+      "test": "import-phpmyadmin-sesion-nueva",
+      "began": "2026-10-22T17:39:25.606Z",
+      "status": "PASS"
+    },
+    {
+      "test": "import-phpmyadmin-fallo-cerrado",
+      "began": "2026-10-22T17:39:32.370Z",
+      "status": "PASS"
+    },
+    {
+      "test": "empresa-cruzada",
+      "began": "2026-10-22T17:40:00.137Z",
+      "status": "PASS"
+    },
+    {
+      "test": "proveedor-cruzado",
+      "began": "2026-10-22T17:40:03.500Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otro-proveedor",
+      "began": "2026-10-22T17:40:06.839Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otra-empresa",
+      "began": "2026-10-22T17:40:10.491Z",
+      "status": "PASS"
+    },
+    {
+      "test": "vehiculo-inexistente",
+      "began": "2026-10-22T17:40:13.492Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-sin-actor",
+      "began": "2026-10-22T17:40:17.148Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-null-con-metadata",
+      "began": "2026-10-22T17:40:20.267Z",
+      "status": "PASS"
+    },
+    {
+      "test": "json-invalido",
+      "began": "2026-10-22T17:40:22.673Z",
+      "status": "PASS"
+    },
+    {
+      "test": "marca-origen-null",
+      "began": "2026-10-22T17:40:24.913Z",
+      "status": "PASS"
+    },
+    {
+      "test": "ordinal-duplicado",
+      "began": "2026-10-22T17:40:27.284Z",
+      "status": "PASS"
+    },
+    {
+      "test": "original-duplicado",
+      "began": "2026-10-22T17:40:29.533Z",
+      "status": "PASS"
+    },
+    {
+      "test": "positivo-y-restricciones",
+      "began": "2026-10-22T17:39:39.453Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-parcial",
+      "began": "2026-10-22T17:40:34.579Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-longitud",
+      "began": "2026-10-22T17:40:42.064Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check",
+      "began": "2026-10-22T17:40:57.737Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check-asociacion",
+      "began": "2026-10-22T17:41:13.646Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-indice",
+      "began": "2026-10-22T17:41:29.173Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-anterior",
+      "began": "2026-10-22T17:41:44.960Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-arbitrario",
+      "began": "2026-10-22T17:41:50.137Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-orden-invertido",
+      "began": "2026-10-22T17:41:55.014Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-no-unico",
+      "began": "2026-10-22T17:41:59.837Z",
+      "status": "PASS"
+    },
+    {
+      "test": "base-incompatible",
+      "began": "2026-10-22T17:42:04.891Z",
+      "status": "PASS"
+    }
+  ],
+  "backend": "windows-portable-named-pipe",
+  "note": "Solo fixtures sinteticos; casos posteriores a fallo NO EJECUTADOS."
+}

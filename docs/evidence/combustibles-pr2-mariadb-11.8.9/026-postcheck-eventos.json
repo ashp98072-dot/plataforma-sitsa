@@ -1,0 +1,5 @@
+{
+  "status": 0,
+  "stdout": "METADATA\testado_esquema_cb2\tFINAL\nDATO\tconsumo_sin_padres_del_ambito\t0\nDATO\testado_factura_inconsistente\t0\nDATO\thuellas_duplicadas\t0\nDATO\tfila_sin_importacion_del_ambito\t0\nDATO\tfila_sin_consumo_del_ambito\t0\nDATO\tevento_sin_original_inmutable\t0\nDATO\trevision_posterior_a_cabecera\t0\nDATO\toperacion_con_payload_o_actor_discordante\t0\nDATO\tconsumo_sin_evidencia_de_creacion\t0\nDATO\tcabecera_sin_evidencia_original\t0\nDATO\toriginales_repetidos\t0\nDATO\trevision_con_mas_de_una_operacion\t0\nDATO\toriginal_con_consumos_distintos\t0\nDATO\tasociacion_documental_incompatible\t0\nDATO\tconsumo_con_factura_de_moneda_distinta\t0\nRESULTADO\testado_postcheck\tFINAL\nDIAGNOSTICO\tgrupos_candidatos_con_multiples_consumos\t0\n",
+  "stderr": ""
+}

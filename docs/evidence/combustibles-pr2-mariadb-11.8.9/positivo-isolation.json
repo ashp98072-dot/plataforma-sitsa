@@ -1,0 +1,8 @@
+{
+  "transport": "local named pipe (--host=.)",
+  "skipNetworking": true,
+  "namedPipe": true,
+  "datadir": "C:\\Users\\Admin\\Documents\\plataforma-sitsa\\.audit-pr507-session\\.lab-runtime\\run-66c734c8-3931-4559-93d7-1a3052b200c8\\cb2-9b82a2b7-3abf-4d68-9256-19ce5a34b4b8",
+  "pid": 21340,
+  "version": "11.8.9-MariaDB"
+}
