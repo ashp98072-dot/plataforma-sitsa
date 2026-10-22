@@ -53,7 +53,13 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                 const f = await service.archivo(ctx.empresaId, iid!);
                 return new Response(new Uint8Array(f.buffer), { headers: { ...headers, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="cb2-${iid}.xlsx"` } });
             }
-            resultado = await service.consultar(ctx.empresaId, accion as "importaciones" | "consumos" | "facturas" | "filas", iid, limit, after);
+            const filtros = z.object({proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+                proveedorId:url.searchParams.has("proveedorId")?Number(url.searchParams.get("proveedorId")):undefined,
+                estado:url.searchParams.get("estado")||undefined,desde:url.searchParams.get("desde")||undefined,hasta:url.searchParams.get("hasta")||undefined,buscar:url.searchParams.get("buscar")||undefined,
+            });
+            if(filtros.desde && filtros.hasta && filtros.desde>filtros.hasta)throw new ErrorCB2("Rango de fechas invalido.",400);
+            const tipo = accion as "importaciones" | "consumos" | "facturas" | "filas";
+            resultado = Object.values(filtros).some(v=>v!==undefined) ? await service.consultar(ctx.empresaId,tipo,iid,limit,after,filtros) : await service.consultar(ctx.empresaId,tipo,iid,limit,after);
         }
         else if (accion === "preview" || accion === "confirmar") {
             const type = req.headers.get("content-type") ?? "";

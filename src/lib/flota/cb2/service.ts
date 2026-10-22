@@ -28,7 +28,7 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
     await proveedor(ctx);
     const lineas = await analizar(buffer, entrada.perfil, entrada.moneda), sha = hash(buffer);
     const token = await new SignJWT({ solicitud: digest(ctx, "CONFIRMAR", [sha, entrada]), archivo: sha }).setProtectedHeader({ alg: "HS256" }).setAudience(audience).setIssuedAt().setExpirationTime("15m").sign(getAuthSecretBytes());
-    return { sha256: sha, token, filas: lineas.map(l => ({ hoja: l.fila.hoja, fila: l.fila.fila, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: l.fila.motivos })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
+    return { sha256: sha, token, filas: lineas.map(l => ({ hoja: l.fila.hoja, fila: l.fila.fila, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: l.fila.motivos, vale: l.fila.vale, placa: l.fila.placaOriginal, placaNormalizada: l.fila.placaNormalizada, fecha: l.fila.fechaConsumo, galones: l.fila.galones, precio: l.fila.precio, monto: l.fila.monto, moneda: entrada.moneda })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
 }
 export async function confirmarArchivo(ctx: Contexto, buffer: Buffer, nombre: string, entrada: Entrada, clave: string, token: string) {
     const sha = hash(buffer), request = digest(ctx, "CONFIRMAR", [sha, entrada]);
@@ -303,12 +303,23 @@ export async function asociarFactura(ctx: Contexto, op: {
         return { eventos: await diario(c, ctx, "ASOCIAR_FACTURA", op.clave, request, eventos), repetida: false };
     });
 }
-export async function consultar(empresa: number, tipo: "importaciones" | "consumos" | "facturas" | "filas", importacion?: number, limite = 100, despues = 0) {
+export type FiltrosCB2 = { proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
+export async function consultar(empresa: number, tipo: "importaciones" | "consumos" | "facturas" | "filas", importacion?: number, limite = 100, despues = 0, filtros: FiltrosCB2 = {}) {
     const c = await getPool().getConnection();
     try {
         const table = { importaciones: "flota_cb2_importaciones", consumos: "flota_cb2_consumos", facturas: "flota_cb2_facturas", filas: "flota_cb2_filas" }[tipo];
         const columns = tipo === "importaciones" ? "id,proveedor_id,proveedor_nombre,perfil,archivo_nombre,archivo_sha256,estado,revision,resumen_actual,creado_en" : tipo === "filas" ? "id,importacion_id,revision,tipo,origen_fila_id,consumo_id,hoja_nombre,fila_excel,resultado,datos_origen,decision,motivo,operacion_clave,creado_en" : "*";
-        return await rows(c, `SELECT ${columns} FROM ${table} WHERE empresa_id=? AND id>?${importacion && tipo === "filas" ? " AND importacion_id=?" : ""} ORDER BY id LIMIT ?`, [empresa, despues, ...(importacion && tipo === "filas" ? [importacion] : []), limite]);
+        const where = ["empresa_id=?", "id>?"]; const args: (string|number)[] = [empresa, despues];
+        if (importacion && tipo === "filas") { where.push("importacion_id=?"); args.push(importacion); }
+        if (filtros.proveedorId) { where.push("proveedor_id=?"); args.push(filtros.proveedorId); }
+        if (filtros.estado && (tipo === "consumos" || tipo === "importaciones")) { where.push(`${tipo === "consumos" ? "estado_factura" : "estado"}=?`); args.push(filtros.estado); }
+        if (tipo === "consumos") for (const [op, value] of [[">=", filtros.desde],["<=", filtros.hasta]]) if (value) {where.push(`fecha_consumo ${op} ?`);args.push(value);}
+        if (filtros.buscar && tipo !== "filas") {
+            const campos = tipo === "consumos" ? ["vale_norm","placa_normalizada"] : tipo === "facturas" ? ["serie_norm","numero_norm"] : ["archivo_nombre","proveedor_nombre"];
+            where.push(`(${campos.map(c => `LOCATE(UPPER(?),UPPER(${c}))>0`).join(" OR ")})`);
+            args.push(...campos.map(() => filtros.buscar!));
+        }
+        return await rows(c, `SELECT ${columns} FROM ${table} WHERE ${where.join(" AND ")} ORDER BY id LIMIT ?`, [...args, limite]);
     }
     finally {
         c.release();

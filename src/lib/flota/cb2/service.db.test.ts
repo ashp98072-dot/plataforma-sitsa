@@ -246,4 +246,17 @@ describe.skipIf(!pipe)("CB2 MariaDB 11.8.9 PIPE propio sin produccion", () => {
             await expect(reanudarArchivo(ctx,{importacionId:h.id,revision:1,seleccion:(await entrada(b)).seleccion,clave:key(),motivo:"fixture"})).rejects.toThrow("JSON");expect(await snapshot()).toEqual(before);
         }} finally {await q("UPDATE flota_cb2_filas SET decision=? WHERE id=?",[o.decision,o.id]);}
     });
+    it("preview muestra identidad legible y filtros de lectura se aplican antes del cursor", async () => {
+        const a=row("0001"),b=row("0002");a[6]="SERIE";a[7]="000001";b[0]=new Date("2026-10-02T00:00:00Z");
+        const file=await libro([a,b]),e=await entrada(file),p=await preview(ctx,file,e);
+        expect(p.filas.find(f=>f.candidato)).toMatchObject({vale:"0001",placa:"C-001ABC",fecha:"2026-10-01",moneda:"GTQ"});
+        await confirmarArchivo(ctx,file,"filtros.xlsx",e,key(),p.token);
+        const all=await consultar(1,"consumos");expect(all).toHaveLength(2);
+        expect(await consultar(1,"consumos",undefined,50,0,{estado:"PENDIENTE_FACTURA",desde:"2026-10-02",hasta:"2026-10-02",buscar:"0002",proveedorId:1})).toHaveLength(1);
+        expect(await consultar(1,"consumos",undefined,50,0,{proveedorId:2})).toHaveLength(0);
+        expect(await consultar(2,"consumos",undefined,50,0,{buscar:"0001"})).toHaveLength(0);
+        expect(await consultar(1,"consumos",undefined,1,all[0].id)).toHaveLength(1);
+        expect(await consultar(1,"facturas",undefined,50,0,{buscar:"000001"})).toHaveLength(1);
+        expect(await consultar(1,"consumos",undefined,50,0,{buscar:"%"})).toHaveLength(0);
+    });
 });

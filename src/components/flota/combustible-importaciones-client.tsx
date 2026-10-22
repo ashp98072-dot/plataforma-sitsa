@@ -33,11 +33,11 @@ export function FilasImportacion({ filas }: { filas: FilaImportada[] }) {
   </section>;
 }
 export function NuevaImportacionCombustible({ slug }: { slug: string }) {
-  const [legacy, setLegacy] = useState(false);
+  const [legacy, setLegacy] = useState(true);
   return <section className="space-y-4 p-4"><h1>Importaciones de proveedor</h1>
     <Link prefetch={false} href={`/e/${slug}/combustibles/importaciones`}>Volver a importaciones</Link>
     <label className="block">Flujo <select value={legacy ? "legacy" : "v2"} onChange={e => setLegacy(e.target.value === "legacy")}>
-      <option value="v2">Vista previa HALEL / SHELL</option><option value="legacy">Importación histórica HALEL v1 (evidencia para conciliación)</option>
+      <option value="v2">Diagnóstico HALEL / SHELL (solo lectura)</option><option value="legacy">Importación histórica HALEL v1 (evidencia para conciliación)</option>
     </select></label>
     {legacy ? <NuevaImportacionLegacy slug={slug} /> : <PreviewCombustibleV2 slug={slug} />}
   </section>;

@@ -48,7 +48,7 @@ export function PreviewCombustibleV2({ slug }: { slug: string }) {
     finally { enCurso.current = false; setBusy(false); }
   }
   return <section className="space-y-4">
-    <h2>Vista previa HALEL / SHELL</h2><p>Analiza consumos candidatos y conserva sus apariciones en pantalla. Esta vista previa no guarda archivos ni registros; la confirmación de consumos estará disponible en una fase posterior.</p>
+    <h2>Vista previa HALEL / SHELL</h2><p>Analiza consumos candidatos y conserva sus apariciones en pantalla. Este diagnóstico no guarda archivos ni registros. Para confirmar consumos utiliza Operaciones → Combustibles → Importar Excel.</p>
     <form onSubmit={e => { e.preventDefault(); void analizar(); }}><fieldset disabled={busy} className="space-y-3">
       <label>Formato <select value={perfil} onChange={e => { setPerfil(e.target.value as PerfilProveedor); invalidar(); }}><option>HALEL</option><option>SHELL</option></select></label>
       <CatalogoSearchSelect label="Proveedor de la empresa" placeholder="Buscar proveedor..." value={proveedor} onChange={v => { setProveedor(v); invalidar(); }} options={proveedores.map(p => ({ value: String(p.id), label: p.nombre }))} inputClassName="rounded border p-2" />

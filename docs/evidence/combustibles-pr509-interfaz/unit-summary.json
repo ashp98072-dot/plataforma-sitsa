@@ -1,0 +1,355 @@
+{
+    "status":  "PASS",
+    "tests":  201,
+    "failed":  0,
+    "files":  [
+                  {
+                      "file":  "src/components/app-shell-operaciones.test.ts",
+                      "status":  "passed",
+                      "tests":  15,
+                      "cases":  [
+                                    "Compras — accesos directos sin padre redundante elimina únicamente el enlace clicable Compras / Repuestos",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=true, proveedores=false",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=false, proveedores=true",
+                                    "Compras — accesos directos sin padre redundante permisos independientes ver requerimientos=false, proveedores=false",
+                                    "Compras — accesos directos sin padre redundante Admin conserva acceso con Operaciones habilitado y no añade acceso sin módulo",
+                                    "menú Operaciones — nombres y orden capacidad TMS de empresa no concede Disponibilidad sin permiso de lectura",
+                                    "menú Operaciones — nombres y orden muestra Ajustes de costeo solo con su permiso explícito y la ruta correcta",
+                                    "menú Operaciones — nombres y orden existe el enlace \u0027Planes / Viajes\u0027 apuntando a /planes",
+                                    "menú Operaciones — nombres y orden ya no existe el enlace viejo \u0027Reportes de viajes\u0027 a /tms/reportes",
+                                    "menú Operaciones — nombres y orden \u0027Reportes\u0027 apunta a la ruta actual /reportes",
+                                    "menú Operaciones — nombres y orden orden del flujo: Rutas antes que Programación, Programación antes que Planes / Viajes",
+                                    "\u0027TMS / Logística\u0027 — se oculta del menú, nunca se elimina el link del módulo tms se omite solo para no-Admin (continue), nunca se borra el push del resto de opsMods",
+                                    "\u0027TMS / Logística\u0027 — se oculta del menú, nunca se elimina Planes / Viajes conserva el MISMO gating que Programación (puedeProgramacion) — sin permisos nuevos ni perdidos",
+                                    "rutas TMS internas siguen intactas /e/[slug]/tms sigue teniendo su page.tsx (no se borró la pantalla técnica)",
+                                    "rutas TMS internas siguen intactas /e/[slug]/tms/reportes ahora redirige a /planes (no es 404, no se pierde el enlace guardado)"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/tenant-combustible.test.ts",
+                      "status":  "passed",
+                      "tests":  7,
+                      "cases":  [
+                                    "Operaciones conserva acciones legacy sin acceso completo a Flota",
+                                    "requiere permiso propio, no hereda autoridad de TMS",
+                                    "ver no permite registrar/editar/revisar",
+                                    "empresa sin TMS no habilita combustibles por tener Flota",
+                                    "Admin no puede cruzar empresa fuera de su acceso",
+                                    "preview en otra empresa autorizada no cambia cookie ni objeto de sesión",
+                                    "guard histórico mantiene selección de empresa por defecto"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/combustible-preview-v2.test.ts",
+                      "status":  "passed",
+                      "tests":  1,
+                      "cases":  [
+                                    "vista previa común muestra candidatos, conflicto, origen, facturas y totales sin confirmar consumos"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-c2c-http.test.ts",
+                      "status":  "passed",
+                      "tests":  10,
+                      "cases":  [
+                                    "permisos: lecturas = ver; escrituras = conciliar lecturas piden «ver» y no ejecutan sin permiso",
+                                    "permisos: lecturas = ver; escrituras = conciliar recalcular y acciones piden «conciliar» y no escriben sin permiso",
+                                    "entradas y errores empresa y usuario salen del guard, nunca del cuerpo",
+                                    "entradas y errores acción inválida / ids inválidos → 400 sin servicio",
+                                    "entradas y errores 409 del servicio llega como 409 con el mensaje; error inesperado es 500 genérico",
+                                    "entradas y errores fila/importación inexistente (o de otra empresa) → 404",
+                                    "arquitectura y UI el servicio nunca escribe en vales, fondos ni contabilidad",
+                                    "arquitectura y UI el reporte no se enlaza al fondo directamente: solo cadena fila → vale → línea",
+                                    "arquitectura y UI sub-pestaña montada dentro de Combustibles → Conciliación",
+                                    "arquitectura y UI badges muestran ambos valores"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-c2c-shared.test.ts",
+                      "status":  "passed",
+                      "tests":  11,
+                      "cases":  [
+                                    "normalizarVale trim, NFC, espacios y mayúsculas; conserva ceros a la izquierda y guiones",
+                                    "compararFilaConVale todo igual → sin diferencias (placa normalizada, importes con escala distinta)",
+                                    "compararFilaConVale tolerancias: monto Q0.01 y galones 0.001 pasan; más allá es DISTINTA con delta",
+                                    "compararFilaConVale placa distinta, fecha distinta y precio distinto se reportan por campo",
+                                    "compararFilaConVale dato faltante es FALTANTE y NO cuenta como diferencia",
+                                    "clasificarFila 0 candidatos → SIN_VALE_INTERNO",
+                                    "clasificarFila 1 candidato igual → EXACTA; con diferencia → CON_DIFERENCIAS",
+                                    "clasificarFila fecha distinta sigue siendo coincidencia (por vale), solo con diferencia visible; piloto no participa",
+                                    "clasificarFila varios candidatos o filas competidoras → AMBIGUA, nunca se elige",
+                                    "etiquetaDiferencia",
+                                    "la normalización de placa es idéntica a la del parser C-2B"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-importacion-parser.test.ts",
+                      "status":  "passed",
+                      "tests":  13,
+                      "cases":  [
+                                    "HALEL anonimizado tres hojas 20 apariciones -\u003e 10 estimadas; no elimina filas originales",
+                                    "HALEL anonimizado conserva NO MARCA KM, decimal, piloto desconocido, serie/factura y fecha neutral",
+                                    "HALEL anonimizado alias cerrado NO. DE VALE",
+                                    "HALEL anonimizado alias cerrado No de Vale",
+                                    "HALEL anonimizado alias cerrado VALE",
+                                    "HALEL anonimizado mismo vale con datos distintos es posible, no se fusiona",
+                                    "HALEL anonimizado preserva ceros y texto original de placa/vale; sin normalizador peligroso de prefijo C",
+                                    "HALEL anonimizado número con formato 000000 conserva padding visible y valor crudo",
+                                    "HALEL anonimizado fila inválida conserva evidencia; fórmulas operativas no se evalúan",
+                                    "HALEL anonimizado hojas sin estructura se conservan, pero ninguna reconocida rechaza",
+                                    "HALEL anonimizado archivo inválido/corrupto y exceso dimensional se rechazan",
+                                    "HALEL anonimizado extensión, MIME, vacío y tamaño",
+                                    "HALEL anonimizado decimales exactos sin truncar ni adivinar coma decimal"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-importacion-v2-resumen.test.ts",
+                      "status":  "passed",
+                      "tests":  6,
+                      "cases":  [
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden \u0027primera inválida y segunda válida\u0027: bloquea todo el candidato en ambos órdenes",
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden \u0027primera válida y segunda inválida\u0027: bloquea todo el candidato en ambos órdenes",
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden \u0027primera válida y segunda posible prev…\u0027: bloquea todo el candidato en ambos órdenes",
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden \u0027conflicto marcado únicamente en la se…\u0027: bloquea todo el candidato en ambos órdenes",
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden \u0027huellas contradictorias sin propagar …\u0027: bloquea todo el candidato en ambos órdenes",
+                                    "elegibilidad por identidad candidata, independiente de apariciones y orden duplicados exactos válidos suman una sola vez en todas las permutaciones, aun sin referencia canónica"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-importacion-v2.test.ts",
+                      "status":  "passed",
+                      "tests":  16,
+                      "cases":  [
+                                    "contrato común v2 y compatibilidad v1 HALEL: 39 apariciones, 21 candidatos, 18 repetidos y conflicto de precio bloqueado en ambas versiones",
+                                    "contrato común v2 y compatibilidad v1 SHELL: 663 candidatos, fórmulas compartidas y sumas verificadas, fechas originales y auxiliares",
+                                    "contrato común v2 y compatibilidad v1 v1 conserva fecha de reporte, clasificación y tipo históricos",
+                                    "contrato común v2 y compatibilidad v1 solo corrige ruido binario numérico; no trunca precisión real o texto ni acepta coma ambigua",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula no permitida SUM(E2:E4)",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula no permitida WEBSERVICE(\"https://example.invalid\")",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula no permitida E3/H3",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula no permitida E2/0",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula no permitida E2+H2",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula sin cache verificable (undefined)",
+                                    "contrato común v2 y compatibilidad v1 bloquea fórmula sin cache verificable (999)",
+                                    "contrato común v2 y compatibilidad v1 no admite fórmulas en identificadores ni sumas no verificables en montos",
+                                    "contrato común v2 y compatibilidad v1 identificadores numéricos fuera del rango seguro quedan bloqueados sin inventar dígitos",
+                                    "contrato común v2 y compatibilidad v1 duplicado exacto conserva ambas evidencias, un candidato y una suma",
+                                    "contrato común v2 y compatibilidad v1 preserva padding numérico, km decimal, factura de texto y fecha Excel 1904",
+                                    "contrato común v2 y compatibilidad v1 rechaza columnas ambiguas y libros sin contrato reconocido"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-importaciones.test.ts",
+                      "status":  "passed",
+                      "tests":  15,
+                      "cases":  [
+                                    "preview y confirmación independientes de vales preview no escribe BD ni archivo; confirmar guarda todas las filas y auditoría atómica",
+                                    "preview y confirmación independientes de vales bloquea mismo archivo, sin reimportación silenciosa",
+                                    "preview y confirmación independientes de vales operación previa se advierte sin fusionar y nueva aparición entre preview/confirmar exige repetir preview",
+                                    "preview y confirmación independientes de vales proveedor ajeno rechazado",
+                                    "preview y confirmación independientes de vales no acepta confirmar otro tenant con el recibo",
+                                    "preview y confirmación independientes de vales no acepta confirmar otro proveedor con el recibo",
+                                    "preview y confirmación independientes de vales no acepta confirmar otro usuario con el recibo",
+                                    "preview y confirmación independientes de vales no acepta confirmar otro archivo con el recibo",
+                                    "preview y confirmación independientes de vales no acepta confirmar otro token con el recibo",
+                                    "preview y confirmación independientes de vales rollback en insert compensa solamente el archivo nuevo",
+                                    "preview y confirmación independientes de vales rollback en auditoria compensa solamente el archivo nuevo",
+                                    "preview y confirmación independientes de vales rollback en upload compensa solamente el archivo nuevo",
+                                    "preview y confirmación independientes de vales UNIQUE físico protege carrera y devuelve 409",
+                                    "preview y confirmación independientes de vales COMMIT incierto no destruye evidencia que podría haber quedado referenciada",
+                                    "preview y confirmación independientes de vales detalle exige tenant y perfil y no devuelve rutas físicas"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-ooxml-v2.test.ts",
+                      "status":  "passed",
+                      "tests":  7,
+                      "cases":  [
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles preserva literalmente una serie numérica imposible sin pasar por Number ni inventar precisión",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles un identificador textual largo fiable permanece texto y no se bloquea por tamaño entero",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles identificador numérico de más de 53 bits conserva los dígitos del XML, aunque ExcelJS los redondearía",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles rechaza el tamaño expandido falsificado antes de cargar ExcelJS",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles rechaza DTD, coordenadas y combinaciones masivas antes de cargar ExcelJS",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles rechaza DTD, coordenadas y combinaciones masivas antes de cargar ExcelJS",
+                                    "OOXML v2: exactitud de identificadores y archivos hostiles rechaza DTD, coordenadas y combinaciones masivas antes de cargar ExcelJS"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-permisos.test.ts",
+                      "status":  "passed",
+                      "tests":  13,
+                      "cases":  [
+                                    "acciones independientes de Combustibles catálogo central ofrece exactamente seis capacidades y filas VARCHAR(40)",
+                                    "acciones independientes de Combustibles solo Ver + ver no concede otras capacidades",
+                                    "acciones independientes de Combustibles solo Ver + registrar no concede otras capacidades",
+                                    "acciones independientes de Combustibles solo Ver + editar_pendientes no concede otras capacidades",
+                                    "acciones independientes de Combustibles solo Ver + revisar no concede otras capacidades",
+                                    "acciones independientes de Combustibles solo Ver + conciliar no concede otras capacidades",
+                                    "acciones independientes de Combustibles solo Ver + gestionar_estaciones no concede otras capacidades",
+                                    "acciones independientes de Combustibles sin Ver ni siquiera una fila de acción aislada da acceso",
+                                    "acciones independientes de Combustibles legacy anterior/V2 (v2=false) conserva editar en las cinco acciones",
+                                    "acciones independientes de Combustibles legacy anterior/V2 (v2=true) conserva editar en las cinco acciones",
+                                    "acciones independientes de Combustibles legacy solo Ver/crear/eliminar no hereda nuevas acciones",
+                                    "acciones independientes de Combustibles Solo Ver y quitar Ver limpian las acciones aunque siga existiendo editar legacy",
+                                    "acciones independientes de Combustibles UI conecta capacidades distintas sin quitar consulta ni catálogo activo"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-preview-v2-http.test.ts",
+                      "status":  "passed",
+                      "tests":  12,
+                      "cases":  [
+                                    "preview v2 HTTP sin persistencia catálogo dedicado consulta solo proveedores de la empresa con guard de solo lectura",
+                                    "preview v2 HTTP sin persistencia rechaza cuerpos excesivos y multipart inválido sin consultar proveedores",
+                                    "preview v2 HTTP sin persistencia no consulta ni analiza sin autorización (401)",
+                                    "preview v2 HTTP sin persistencia no consulta ni analiza sin autorización (403)",
+                                    "preview v2 HTTP sin persistencia valida proveedor de la empresa y no persiste archivo ni análisis",
+                                    "preview v2 HTTP sin persistencia rechaza proveedor ajeno o inactivo",
+                                    "preview v2 HTTP sin persistencia rechaza contexto inválido OTRO/3",
+                                    "preview v2 HTTP sin persistencia rechaza contexto inválido SHELL/0",
+                                    "preview v2 HTTP sin persistencia rechaza contexto inválido HALEL/NaN",
+                                    "preview v2 HTTP sin persistencia posibles previos son advertencias y se excluyen de totales sin afirmar unicidad definitiva",
+                                    "preview v2 HTTP sin persistencia esquema ausente se informa como cobertura no disponible, nunca se auto-crea",
+                                    "preview v2 HTTP sin persistencia un fallo de consulta no se disfraza de historial vacío"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/combustible-ux-captura.test.ts",
+                      "status":  "passed",
+                      "tests":  10,
+                      "cases":  [
+                                    "captura separada y buscador reutilizado busca proveedor por fragmento/tildes y conserva ID real, nunca el texto como valor",
+                                    "captura separada y buscador reutilizado formulario y mantenimiento reutilizan buscador sin modificar el componente compartido",
+                                    "captura separada y buscador reutilizado principal solo enlaza alta con permiso y no monta formulario de alta",
+                                    "captura separada y buscador reutilizado formulario no envía viaje_id ni siquiera al editar histórico",
+                                    "captura separada y buscador reutilizado proveedor/estación filtra IDs y limpia selección al cambiar proveedor",
+                                    "captura separada y buscador reutilizado filtro de estaciones conserva texto y ID real del proveedor al consultar",
+                                    "captura separada y buscador reutilizado Ver sin Registrar no recibe formulario por URL directa (guard real)",
+                                    "captura separada y buscador reutilizado Registrar permite la pantalla con guard real",
+                                    "captura separada y buscador reutilizado la nueva pantalla tampoco cruza empresas",
+                                    "captura separada y buscador reutilizado guardar/cancelar vuelven con una navegación, sin refresh extra"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/client.test.ts",
+                      "status":  "passed",
+                      "tests":  6,
+                      "cases":  [
+                                    "flujos CB2 de interfaz conserva clave y solicitud tras error incierto; bloquea otra acción",
+                                    "flujos CB2 de interfaz persiste solo referencia de reintento y separa usuario y empresa",
+                                    "flujos CB2 de interfaz excluye doble envio simultaneo y permite editar solo rechazo definitivo",
+                                    "flujos CB2 de interfaz lee todas las paginas de evidencia y aplica eventos por revision/id",
+                                    "flujos CB2 de interfaz envia selecciones ordenadas y errores HTTP no se presentan como exito",
+                                    "flujos CB2 de interfaz no certifica respuestas 200 incompletas y presenta errores de descarga privada"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/panel.dom.test.ts",
+                      "status":  "passed",
+                      "tests":  9,
+                      "cases":  [
+                                    "interfaz CB2 montada: flujos funcionales importa parcialmente y reintenta sin cambiar clave",
+                                    "interfaz CB2 montada: flujos funcionales asocia factura con ceros y revisiones exactas",
+                                    "interfaz CB2 montada: flujos funcionales Admin reanuda desde historial y ofrece descarga privada",
+                                    "interfaz CB2 montada: flujos funcionales solo lectura no presenta escrituras",
+                                    "interfaz CB2 montada: flujos funcionales filtra en servidor",
+                                    "interfaz CB2 montada: flujos funcionales conciliar no concede reanudacion Admin",
+                                    "interfaz CB2 montada: flujos funcionales recarga conserva clave y revision original de asociacion incierta",
+                                    "interfaz CB2 montada: flujos funcionales pagina con cursor y conserva seleccion al filtrar",
+                                    "interfaz CB2 montada: flujos funcionales rechaza factura elegida de otro proveedor antes de enviar"
+                                ]
+                  },
+                  {
+                      "file":  "src/components/flota/cb2/ubicacion.test.ts",
+                      "status":  "passed",
+                      "tests":  2,
+                      "cases":  [
+                                    "ubicacion y compatibilidad de Combustibles conserva la unica opcion existente entre Planes/Viajes y Viaticos",
+                                    "ubicacion y compatibilidad de Combustibles misma pantalla conserva vales, estaciones y conciliacion historica"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/cb2/http.test.ts",
+                      "status":  "passed",
+                      "tests":  12,
+                      "cases":  [
+                                    "CB2 HTTP propaga guard 401 sin tocar datos",
+                                    "CB2 HTTP propaga guard 403 sin tocar datos",
+                                    "CB2 HTTP propaga guard 404 sin tocar datos",
+                                    "CB2 HTTP lectura tenant del servidor, paginada y no-store",
+                                    "CB2 HTTP limites de lectura y IDs invalidos",
+                                    "CB2 HTTP conciliar no concede resolucion",
+                                    "CB2 HTTP revalida permiso despues del bloqueo",
+                                    "CB2 HTTP rechaza otro Origin y JSON de datos arbitrarios",
+                                    "CB2 HTTP acota bytes reales sin confiar en content-length",
+                                    "CB2 HTTP no filtra SQL ni rutas ante error de driver",
+                                    "CB2 HTTP valida filtros de lectura y conserva tenant del servidor",
+                                    "CB2 HTTP rechaza fechas invertidas e IDs de filtro invalidos sin consultar datos"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/cb2/model.test.ts",
+                      "status":  "passed",
+                      "tests":  11,
+                      "cases":  [
+                                    "CB2 contrato operativo sin factura, conserva ceros y decimal canonico",
+                                    "CB2 contrato operativo huella ignora documento y procedencia",
+                                    "CB2 contrato operativo documento inseguro no invalida operacion; motivo libre no desbloquea",
+                                    "CB2 contrato operativo una aparicion operativa invalida bloquea todo grupo permutacion=false",
+                                    "CB2 contrato operativo una aparicion operativa invalida bloquea todo grupo permutacion=true",
+                                    "CB2 contrato operativo documentos fiables contradictorios bloquean",
+                                    "CB2 contrato operativo documento ausente y completo compatible comparten operacion",
+                                    "CB2 contrato operativo identificador numerico fuera del rango seguro bloquea",
+                                    "CB2 contrato operativo sin truncar columnas del contrato",
+                                    "CB2 contrato operativo recupera solo N ordinales completos con mismo actor/digest",
+                                    "CB2 contrato operativo rechaza flags de forzado, seleccion duplicada y cuerpos no canonicos"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/cb2/originales.test.ts",
+                      "status":  "passed",
+                      "tests":  18,
+                      "cases":  [
+                                    "CB2 moneda de evidencia original coherencia de todos los originales independiente del orden",
+                                    "CB2 moneda de evidencia original no certifica ausencia ni monedas mezcladas aunque la primera sea valida",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable null",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable []",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable {}",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable {\"moneda\":\"GTQ\"}",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable {",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable {\"version\":2,\"moneda\":\"GTQ\",\"candidato\":null,\"vehiculoId\":null,\"errores\":[]}",
+                                    "CB2 moneda de evidencia original rechaza estructura JSON no certificable {\"version\":1,\"moneda\":\"EUR\",\"candidato\":null,\"vehiculoId\":null,\"errores\":[]}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"empresa_id\":9}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"proveedor_id\":9}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"importacion_id\":9}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"tipo\":\"RESOLUCION\"}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"revision\":2}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"marca_origen\":null}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"origen_fila_id\":1}",
+                                    "CB2 moneda de evidencia original exige ambito y evento ORIGEN valido {\"operacion_tipo\":\"REANUDAR\"}",
+                                    "CB2 moneda de evidencia original rechaza originales repetidos o datos_origen sin posicion coincidente"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/cb2/repository.test.ts",
+                      "status":  "passed",
+                      "tests":  4,
+                      "cases":  [
+                                    "CB2 transaccion reserva conexiones para revalidar el guard central",
+                                    "CB2 transaccion commit incierto destruye conexion y no reejecuta; rollback conserva causa",
+                                    "CB2 transaccion deadlock reintenta acotado con el mismo callback y restaura modos",
+                                    "CB2 transaccion FK/CHECK deshabilitados rechaza sin forzarlos"
+                                ]
+                  },
+                  {
+                      "file":  "src/lib/flota/cb2/storage.test.ts",
+                      "status":  "passed",
+                      "tests":  3,
+                      "cases":  [
+                                    "CB2 evidencia privada guarda ruta privada aleatoria y valida hash",
+                                    "CB2 evidencia privada rechaza tenant, traversal y ruta absoluta",
+                                    "CB2 evidencia privada archivo cambiado y archivo ausente bloquean"
+                                ]
+                  }
+              ]
+}
