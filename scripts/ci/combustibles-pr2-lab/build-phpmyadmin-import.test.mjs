@@ -1,28 +1,38 @@
 ﻿import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { buildImport, compoundBody, importOutput } from './build-phpmyadmin-import.mjs';
+import { buildImport, compoundBody, dataContract, silentMigration, importOutput } from './build-phpmyadmin-import.mjs';
+const read = name => readFileSync(new URL(`../../../sql/${name}-2026-10-combustibles-pr2-consumos-facturas.sql`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
-test('import publicado exacto, sin BOM y con los tres contratos integros', () => {
-  const content = buildImport();
-  const bytes = readFileSync(importOutput);
-  assert.deepEqual(bytes, Buffer.from(content, 'utf8'));
-  assert(bytes.subarray(0, 4).equals(Buffer.from('USE ')));
-  assert(!bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])));
-  assert.equal((content.match(/^USE /gm) || []).length, 1);
-  assert.equal((content.match(/^DELIMITER /gm) || []).length, 2);
-  assert.equal((content.match(/^BEGIN NOT ATOMIC$/gm) || []).length, 1);
-  assert.equal((content.match(/-- BEGIN CB2_METADATA_CANONICO/g) || []).length, 4);
-  for (const name of ['preflight', 'migrate', 'postcheck']) {
-    const source = readFileSync(new URL(`../../../sql/${name}-2026-10-combustibles-pr2-consumos-facturas.sql`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-    assert(content.includes(compoundBody(source)), name + ': cuerpo canonico preservado');
-    if (name === 'migrate') assert.deepEqual(content.match(/^CREATE TABLE [\s\S]*?COLLATE=utf8mb4_bin;/gm), source.match(/^CREATE TABLE [\s\S]*?COLLATE=utf8mb4_bin;/gm));
-  }
-  assert(content.includes('DECLARE EXIT HANDLER FOR SQLEXCEPTION'));
-  assert(content.includes('RESIGNAL;'));
-  assert.equal((content.match(/SET SESSION sql_mode = v_cb2_mode;/g) || []).length, 2);
-  assert.equal((content.match(/SET SESSION innodb_strict_mode = v_cb2_innodb;/g) || []).length, 2);
-  assert(content.includes("SET @cb2_schema = _utf8mb4'u611730801_Plataforma';"));
-  assert(!/SET\s+(?:@@)?GLOBAL/i.test(content));
-  for (const schema of ['information_schema', 'mysql', 'SYS', 'a`b', 'a;DROP TABLE x', '']) assert.throws(() => buildImport(schema));
+test('import exacto sin BOM; bloque silencioso, DDL/guards y 15 incidencias intactos', () => {
+ const content = buildImport();
+ const bytes = readFileSync(importOutput);
+ assert.deepEqual(bytes, Buffer.from(content, 'utf8'));
+ assert(bytes.subarray(0, 4).equals(Buffer.from('USE ')));
+ assert.equal((content.match(/^DELIMITER /gm) || []).length, 2);
+ assert.equal((content.match(/^BEGIN NOT ATOMIC$/gm) || []).length, 1);
+ assert.equal((content.match(/-- BEGIN CB2_METADATA_CANONICO/g) || []).length, 2);
+ const migration = read('migrate');
+ assert.deepEqual(content.match(/^CREATE TABLE [\s\S]*?COLLATE=utf8mb4_bin;/gm), migration.match(/^CREATE TABLE [\s\S]*?COLLATE=utf8mb4_bin;/gm));
+ const originalReport = " SELECT 'APLICADA_PENDIENTE_POSTCHECK' AS resultado_migracion,\n        @cb2_estado AS estado_esquema_cb2;";
+ const silentReport = " SELECT 'APLICADA_PENDIENTE_POSTCHECK', @cb2_estado\n INTO @cb2_import_resultado, @cb2_import_estado;";
+ assert.equal(silentMigration().replace(silentReport, originalReport), compoundBody(migration));
+ assert(content.includes(silentMigration()));
+ assert(content.includes('\nEND$$\nDELIMITER ;\nSELECT CASE'));
+ const literal = read('postcheck').match(/SELECT '(WITH incidencias AS \([\s\S]*?)' INTO @cb2_postcheck_select;/)[1].replaceAll("''", "'");
+ assert.equal(dataContract(), literal.split("\nSELECT 'DATO' AS ambito")[0]);
+ assert.equal((dataContract().match(/ AS comprobacion/g) || []).length, 15);
+ assert(content.includes(dataContract()));
+ assert(content.includes('INTO @cb2_datos, @cb2_total_validaciones, @cb2_total_incidencias, @cb2_validaciones_no_nulas'));
+ assert(content.includes('SET @cb2_import_ok = 0;'));
+ assert(content.includes("ELSE 'SIN_CERTIFICAR'"));
+ assert(content.includes('DECLARE EXIT HANDLER FOR SQLEXCEPTION'));
+ assert(content.includes('RESIGNAL;'));
+ assert.equal((content.match(/SET SESSION sql_mode = v_cb2_mode;/g) || []).length, 2);
+ assert.equal((content.match(/SET SESSION innodb_strict_mode = v_cb2_innodb;/g) || []).length, 2);
+ assert(!/\b(?:PREPARE|EXECUTE|CALL)\b/.test(content));
+ assert(!/SET\s+(?:(?:@@)?GLOBAL|(?:SESSION\s+)?(?:FOREIGN_KEY_CHECKS|CHECK_CONSTRAINT_CHECKS))/i.test(content));
+ assert.equal((content.match(/^SELECT CASE WHEN COALESCE\(@cb2_import_ok/gm) || []).length, 1);
+ assert(content.includes("SET @cb2_schema = _utf8mb4'u611730801_Plataforma';"));
+ for(const schema of ['information_schema','mysql','SYS','a`b','a;DROP TABLE x','']) assert.throws(() => buildImport(schema));
 });

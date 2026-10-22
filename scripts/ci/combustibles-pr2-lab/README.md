@@ -1,5 +1,10 @@
 # Laboratorio remoto del PR #507 — pendiente de aprobación y ejecución
 
+Correccion #2014: import silencioso + prueba mysqli real sin next_result().
+Consultar el procedimiento phpMyAdmin actualizado y evidencia sin-resultados.
+El runner Windows requiere tambien PHP portable (mbstring/mysqli) y sql-parser
+5.10.0 de phpMyAdmin bajo .lab-runtime; no se suple su ausencia omitiendo la prueba.
+
 Importacion phpMyAdmin autocontenida y pruebas nuevas: ver
 [procedimiento](../../../docs/COMBUSTIBLES-PR2-IMPORT-PHPMYADMIN.md).
 El SQL exacto publicado es sql/import-phpmyadmin-2026-10-combustibles-pr2.sql;
@@ -312,3 +317,16 @@ Fuentes oficiales consultadas para la codificacion:
 - [HEX: numeros frente a cadenas](https://mariadb.com/docs/server/reference/sql-functions/string-functions/hex).
 - [CAST y charset explicito](https://mariadb.com/docs/server/reference/sql-functions/string-functions/cast).
 - [OCTET_LENGTH en bytes](https://mariadb.com/docs/server/reference/sql-functions/string-functions/octet_length).
+
+Preparacion adicional del cliente de prueba PHP (sin instalar servicios):
+
+```powershell
+curl.exe --fail --location --output .lab-runtime/php.zip https://windows.php.net/downloads/releases/archives/php-8.4.14-nts-Win32-vs17-x64.zip
+curl.exe --fail --location --output .lab-runtime/sql-parser.zip https://github.com/phpmyadmin/sql-parser/archive/refs/tags/5.10.0.zip
+Expand-Archive -LiteralPath .lab-runtime/php.zip -DestinationPath .lab-runtime/php
+Expand-Archive -LiteralPath .lab-runtime/sql-parser.zip -DestinationPath .lab-runtime
+```
+
+La suite portable invoca el driver mysqli con mbstring/mysqli habilitados.
+No se necesita servidor web ni una instalacion phpMyAdmin, y esto no certifica
+la UI/version exacta de Hostinger. El flujo probado no usa next_result().

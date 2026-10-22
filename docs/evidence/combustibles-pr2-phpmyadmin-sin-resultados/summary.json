@@ -1,0 +1,132 @@
+{
+  "status": "PASS",
+  "tests": [
+    {
+      "test": "phpmyadmin-mysqli-sin-drenaje",
+      "began": "2026-10-22T17:16:27.714Z",
+      "status": "PASS"
+    },
+    {
+      "test": "import-phpmyadmin-sesion-nueva",
+      "began": "2026-10-22T17:16:33.822Z",
+      "status": "PASS"
+    },
+    {
+      "test": "import-phpmyadmin-fallo-cerrado",
+      "began": "2026-10-22T17:16:38.453Z",
+      "status": "PASS"
+    },
+    {
+      "test": "empresa-cruzada",
+      "began": "2026-10-22T17:16:52.760Z",
+      "status": "PASS"
+    },
+    {
+      "test": "proveedor-cruzado",
+      "began": "2026-10-22T17:16:54.740Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otro-proveedor",
+      "began": "2026-10-22T17:16:56.728Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-otra-empresa",
+      "began": "2026-10-22T17:16:58.828Z",
+      "status": "PASS"
+    },
+    {
+      "test": "vehiculo-inexistente",
+      "began": "2026-10-22T17:17:00.831Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-sin-actor",
+      "began": "2026-10-22T17:17:02.694Z",
+      "status": "PASS"
+    },
+    {
+      "test": "factura-null-con-metadata",
+      "began": "2026-10-22T17:17:04.521Z",
+      "status": "PASS"
+    },
+    {
+      "test": "json-invalido",
+      "began": "2026-10-22T17:17:06.342Z",
+      "status": "PASS"
+    },
+    {
+      "test": "marca-origen-null",
+      "began": "2026-10-22T17:17:08.234Z",
+      "status": "PASS"
+    },
+    {
+      "test": "ordinal-duplicado",
+      "began": "2026-10-22T17:17:10.045Z",
+      "status": "PASS"
+    },
+    {
+      "test": "original-duplicado",
+      "began": "2026-10-22T17:17:11.854Z",
+      "status": "PASS"
+    },
+    {
+      "test": "positivo-y-restricciones",
+      "began": "2026-10-22T17:16:42.393Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-parcial",
+      "began": "2026-10-22T17:17:16.047Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-longitud",
+      "began": "2026-10-22T17:17:21.769Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check",
+      "began": "2026-10-22T17:17:36.004Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-check-asociacion",
+      "began": "2026-10-22T17:17:48.489Z",
+      "status": "PASS"
+    },
+    {
+      "test": "esquema-alterado-indice",
+      "began": "2026-10-22T17:18:01.843Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-anterior",
+      "began": "2026-10-22T17:18:15.900Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-nombre-arbitrario",
+      "began": "2026-10-22T17:18:20.922Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-orden-invertido",
+      "began": "2026-10-22T17:18:26.642Z",
+      "status": "PASS"
+    },
+    {
+      "test": "indice-base-vehiculos-no-unico",
+      "began": "2026-10-22T17:18:31.525Z",
+      "status": "PASS"
+    },
+    {
+      "test": "base-incompatible",
+      "began": "2026-10-22T17:18:36.259Z",
+      "status": "PASS"
+    }
+  ],
+  "backend": "windows-portable-named-pipe",
+  "note": "Solo fixtures sinteticos; casos posteriores a fallo NO EJECUTADOS."
+}

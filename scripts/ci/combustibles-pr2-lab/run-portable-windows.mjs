@@ -39,6 +39,15 @@ try {
       const instance = instances.get(id); assert(instance);
       return executeFile(bin('mariadb'), [...clientArgs(instance), ...(db ? ['--database=cb2_lab'] : [])], input);
     },
+    importFlow(id, sql) {
+      const instance = instances.get(id); assert(instance);
+      const php = path.join(runtime, 'php/php.exe');
+      const result = executeFile(php, ['-n', '-d', 'extension_dir=' + path.join(runtime, 'php/ext'), '-d', 'extension=php_mbstring.dll', '-d', 'extension=php_mysqli.dll', path.join(repo, 'scripts/ci/combustibles-pr2-lab/test-phpmyadmin-mysqli.php')], JSON.stringify({ pipe: instance.pipe, sql }));
+      save('mysqli-import.json', { status: result.status, stdout: result.stdout, stderr: result.stderr, error: result.error?.message });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const report = JSON.parse(result.stdout); assert.equal(report.status, 'PASS');
+      save('mysqli-flow.json', report);
+    },
     laboratory(label, action, fixture, query) {
       const id = `cb2-${randomUUID()}`;
       const datadir = path.join(runDir, id);

@@ -275,25 +275,27 @@ function rejectTransaction(c, label, statement, code, detail) {
   });
 }
 function suite() {
+  if (nativeLab?.importFlow) record('phpmyadmin-mysqli-sin-drenaje', () => laboratory('mysqli', c => {
+    nativeLab.importFlow(c, buildImport('cb2_lab'));
+    preState(query(c, 'mysqli-preflight-final', sql.preflight), 'FINAL');
+    postFinal(query(c, 'mysqli-postcheck-final', sql.postcheck));
+  }));
   record('import-phpmyadmin-sesion-nueva', () => laboratory('import-sesion', c => {
     const baseline = "SET SESSION sql_mode='NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'; SET SESSION innodb_strict_mode=OFF; SET @cb2_schema=NULL; USE information_schema;\n";
     const output = query(c, 'import-autocontenido', baseline + buildImport('cb2_lab'));
-    const start = rows(output).find(r => r[0] === 'IMPORT_INICIO');
-    assert(start && start[2] === 'cb2_lab' && start[3] === 'cb2_lab');
-    assert(start[4].split(',').includes('STRICT_ALL_TABLES'));
-    assert.deepEqual(start.slice(5, 8), ['1', '1', '1']);
-    preState(output, 'CLEAN');
-    postFinal(output);
-    const finish = rows(output).find(r => r[0] === 'IMPORT_FIN');
-    assert(finish && finish[2] === '1' && finish[3] === 'cb2_lab' && finish[5] === '1' && finish[6] === 'FINAL');
-    const restored = rows(output).find(r => r[0] === 'IMPORT_RESTAURADO');
-    assert.deepEqual(restored?.slice(1), ['NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '0']);
+    const result = rows(output);
+    assert.equal(result.length, 1, 'Solo una fila de un SELECT superior, sin salidas desde el bloque');
+    assert.deepEqual(result[0].slice(0, 4), ['CB2_IMPORT_FINAL', 'FINAL', '15', '0']);
+    const data = JSON.parse(result[0][4]);
+    assert.equal(Object.keys(data).length, 15);
+    assert(Object.values(data).every(n => n === 0));
+    assert.deepEqual(result[0].slice(5), ['cb2_lab', '1', 'NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '0']);
     assert.deepEqual(rows(query(c, 'import-conteos', `SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='cb2_lab' AND TABLE_NAME IN (${list});`)), [['4']]);
   }));
   record('import-phpmyadmin-fallo-cerrado', () => laboratory('import-fallo', c => {
     query(c, 'base-incompatible-import', 'ALTER TABLE auditoria MODIFY usuario VARCHAR(99) NULL;');
     query(c, 'import-base-incompatible', buildImport('cb2_lab'), 1644, 'CB2: se requiere CLEAN y base compatible');
-    const nested = compoundBody(buildImport('cb2_lab')).replace(/^USE `cb2_lab`;\n/, '');
+    const nested = compoundBody(buildImport('cb2_lab')).replace(/^USE `cb2_lab`;\n/, '').replace(/\nSELECT CASE[\s\S]*$/, '');
     const handled = query(c, 'import-handler-restaura', `DELIMITER $
 BEGIN NOT ATOMIC
  DECLARE CONTINUE HANDLER FOR SQLEXCEPTION GET DIAGNOSTICS CONDITION 1 @cb2_caught = MYSQL_ERRNO;

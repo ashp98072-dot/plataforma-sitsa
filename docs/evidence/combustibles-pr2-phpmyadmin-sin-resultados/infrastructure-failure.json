@@ -1,0 +1,5 @@
+{
+  "status": 1,
+  "stdout": "Running bootstrap\nCreating my.ini file\nERROR: Can't write to mysqld's stdin\n",
+  "stderr": "FATAL ERROR: database creation failed\n"
+}

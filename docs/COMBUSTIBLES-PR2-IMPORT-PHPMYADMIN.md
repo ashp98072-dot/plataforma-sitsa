@@ -1,160 +1,166 @@
-﻿# PR #507: importacion autocontenida para phpMyAdmin
+﻿# PR #507: importacion phpMyAdmin sin resultados pendientes
 
-Fecha: 2026-10-22. Base revisada: cc0ea1df36bc2c5128d146b432a641a81e01d336.
-No se conecto a Hostinger ni se ejecuto SQL de produccion. No se autoriza un nuevo
-intento con este documento: requiere auditoria independiente y autorizacion posterior.
+Fecha: 2026-10-22. Sustituye el procedimiento del commit 4745d2d.
+No se conecto a Hostinger, no se ejecuto SQL de produccion ni se hizo merge.
+La auditoria independiente debe aprobar este SHA antes de autorizar otro intento.
 
-## Diagnostico del #1644
+## Diagnostico corregido: #2014
 
-El archivo migrate canonico exige @cb2_schema, esquema seleccionado correcto,
-modo SQL estricto e innodb_strict_mode=1 en SU conexion. No los inicializa.
-Un preflight CLEAN en otra peticion no los transmite al importador; el generador
-preflight restaura los modos anteriores al terminar. Los valores observados antes
-(NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION e innodb_strict_mode=0) incumplen entorno.
-Si @cb2_schema no existe, base_ok=0 y estado=DIVERGENTE. Si DATABASE() difiere del
-objetivo, la guardia de DDL tambien rechaza, aunque metadata sea CLEAN.
+La variante 4745d2d emitia numerosos resultados desde un mismo BEGIN NOT ATOMIC:
+IMPORT_INICIO, preflight, resultado de migracion, metadata, filas DATO y otras marcas.
+Que el parser extraiga un bloque completo NO demuestra que el cliente consuma sus
+resultados. La prueba anterior cubria division y motor, pero no ese protocolo.
 
-El #1644 con el texto del SIGNAL demuestra que se alcanzo y ejecuto esa guardia;
-no es el mismo problema que un #1064 por fragmentacion. Sin la salida de los
-parametros de ESA importacion, no es posible atribuirlo a una sola condicion.
-Las advertencias del analizador estatico sobre BEGIN NOT ATOMIC no son el error
-del servidor. [MariaDB admite esa sintaxis fuera de procedimientos](https://mariadb.com/docs/server/reference/sql-statements/programmatic-compound-statements/begin-end).
-No retirar la guardia ni el bloque para silenciar advertencias.
+[PHP documenta](https://www.php.net/manual/en/mysqli.quickstart.stored-procedures.php)
+que deben consumirse todos los resultados antes de ejecutar otra orden. Sin ese
+consumo, un SET posterior puede fallar con Commands out of sync. El SET de
+FOREIGN_KEY_CHECKS que muestra phpMyAdmin puede ser solo la siguiente operacion
+que encuentra el problema; no demuestra un fallo de la FK ni justifica desactivarla.
+No se conoce la version exacta de phpMyAdmin/mysqlnd de Hostinger.
 
-El archivo anterior tiene siete sentencias superiores, excluyendo DELIMITER.
-El contador de phpMyAdmin no prueba que las siete finalizaran ni que se crearan
-tablas. Las cuatro tablas ausentes se comprobaron tras un intento anterior: hay
-que comprobar de nuevo el inventario actual antes de autorizar otro intento.
+Reproduccion local REAL: mysqli->query('BEGIN NOT ATOMIC SELECT 1; SELECT 2; END'),
+free() del primer resultado y despues SET FOREIGN_KEY_CHECKS=ON, sin next_result():
+error 2014. Es una reproduccion minima del mecanismo, no una conexion a Hostinger
+ni una reproduccion de su UI completa. El #2014 por si solo no prueba cuanto DDL
+llego a ejecutarse. El operador reporto cero tablas CB2 despues del intento;
+verificar de nuevo el inventario actual antes de cualquier accion autorizada.
 
-El [importador SQL de phpMyAdmin 5.2.2](https://github.com/phpmyadmin/phpmyadmin/blob/RELEASE_5_2_2/libraries/classes/Plugins/Import/ImportSql.php)
-usa BufferedQuery para extraer sentencias y puede establecer SQL_MODE desde
-opciones de compatibilidad. No hay garantia de variables heredadas de otro envio.
-La seleccion de base hecha por el cliente entre sentencias tampoco es estable.
-No se ha identificado la version/configuracion concreta de Hostinger.
+## Archivo exacto publicado
 
-## Archivo que debe auditarse y descargarse desde GitHub
+**sql/import-phpmyadmin-2026-10-combustibles-pr2.sql**, del NUEVO SHA auditado de
+feature/combustibles-pr2-sql-diseno. Descartar la copia de 4745d2d.
+Descargar mediante Raw/Download raw file desde GitHub; no copiar HTML ni fragmentos.
+El archivo tiene UTF-8 sin BOM y LF fijado mediante .gitattributes.
 
-**sql/import-phpmyadmin-2026-10-combustibles-pr2.sql**
+El importador recibe cuatro sentencias superiores:
 
-Usar ese archivo del commit final auditado mediante Raw/Download raw file. No usar
-migrate-2026-10-combustibles-pr2-consumos-facturas.sql directamente en phpMyAdmin,
-ni pegar fragmentos JSON_TABLE, ni copiar el HTML de GitHub. El SQL importable
-esta publicado en la rama feature/combustibles-pr2-sql-diseno; no es solo un
-artefacto local. Empieza con USE y esta codificado UTF-8 sin BOM, con LF fijado
-por .gitattributes para que Windows no lo recodifique al checkout.
+1. USE explicito del esquema objetivo.
+2. SET @cb2_import_ok=0: certificacion cerrada incluso si un cliente continua tras error.
+3. Un bloque BEGIN NOT ATOMIC SIN resultados tabulares. Guarda/restaura modos,
+   prepara @cb2_schema literal, activa los dos modos estrictos por sesion, conserva
+   las guardias de CLEAN, ejecuta exactamente el DDL aprobado, revalida metadata
+   FINAL y evalua las 15 incidencias del postcheck mediante SELECT ... INTO.
+4. Un unico SELECT superior, buffered normal, con una fila de resumen y el detalle
+   JSON de las 15 incidencias. Solo da CB2_IMPORT_FINAL si el bloque termino; en
+   otro caso SIN_CERTIFICAR. No es un SELECT dentro de un bloque/CALL.
 
-El archivo hace USE explicito de u611730801_Plataforma y envia un solo bloque
-BEGIN NOT ATOMIC al servidor. Dentro del bloque:
+En el bloque, solo el reporte final de migrate pasa de SELECT a SELECT INTO.
+No hay PREPARE/EXECUTE/CALL que devuelvan datos al cliente. Las incidencias se
+obtienen literalmente del CTE original del postcheck; se agregan a JSON y variables
+sin emitir filas. Se exige 15 comprobaciones no nulas y suma cero o se lanza SIGNAL.
+El inventario y los diagnosticos no bloqueantes no se emiten desde el bloque.
 
-1. Guarda ambos modos en variables LOCALES, define un EXIT HANDLER que restaura
-   esos modos y RESIGNAL (no oculta ni continua errores).
-2. Fija @cb2_schema literal, activa STRICT_ALL_TABLES preservando otros modos y
-   activa InnoDB estricto SOLO por sesion. Verifica el esquema real.
-3. Ejecuta preflight completo; migrate completo, con sus dos validaciones y
-   guardias; y postcheck completo. No hay intervencion del cliente entre ellos.
-4. Emite IMPORT_FIN y restaura los modos originales, tambien por sesion.
+Los tres archivos canonicos preflight/migrate/postcheck NO cambian respecto a
+4745d2d. Los cuatro CREATE TABLE, columnas, indices, FK y CHECK son identicos.
+Las dos validaciones canonicas completas de migrate y todos sus SIGNAL permanecen.
+Las 15 comprobaciones de datos conservan exactamente sus subconsultas y predicados.
+No hay SET FOREIGN_KEY_CHECKS, SET CHECK_CONSTRAINT_CHECKS ni cambios globales en
+el archivo publicado. Las flags se leen y se exigen en 1, sin forzarlas.
 
-Los tres SQL canonicos permanecen identicos a cc0ea1df. El generador solo adapta
-DELIMITER y convierte BEGIN NOT ATOMIC internos a BEGIN para anidarlos. Preserva
-literalmente sus CTE, comprobaciones, SIGNAL, CREATE TABLE y lecturas de datos.
-No hay CREATE PROCEDURE, tablas auxiliares, SET GLOBAL, permisos ni cambios de
-configuracion. El bloque no es transaccion atomica: el handler no revierte DDL.
-Un error despues del primer CREATE puede dejar parcial y requiere diagnostico.
+EXIT HANDLER restaura ambos modos y RESIGNAL; no oculta errores ni sigue con DDL.
+El indicador de exito solo cambia a 1 al concluir todas las comprobaciones y
+restauraciones. DDL tiene commits implicitos: no se promete rollback global ni
+limpieza automatica de tablas parciales. El unico bloque evita cambios de contexto
+por el cliente entre metadata y DDL, pero no aporta aislamiento frente a otros usuarios.
 
-## Procedimiento propuesto para el operador, NO ejecutado en produccion
+## Procedimiento propuesto: ejecutar SOLO despues de auditoria/autorizacion
 
-1. ChatGPT debe auditar este commit, archivo SQL y evidencia antes de autorizar.
-   El respaldo y CLEAN anterior no sustituyen esa aprobacion.
-2. Comprobar el estado ACTUAL con una lectura literal, sin depender de DATABASE():
+1. Auditar el commit nuevo, el SQL, el generador y la evidencia de mysqli.
+2. Comprobar el estado actual mediante una lectura literal, sin depender de DATABASE():
 
    ```sql
    SELECT TABLE_NAME FROM information_schema.TABLES
-   WHERE TABLE_SCHEMA = 'u611730801_Plataforma'
+   WHERE TABLE_SCHEMA='u611730801_Plataforma'
    AND TABLE_NAME IN ('flota_cb2_importaciones','flota_cb2_facturas',
-                     'flota_cb2_consumos','flota_cb2_filas')
-   ORDER BY TABLE_NAME;
+                     'flota_cb2_consumos','flota_cb2_filas') ORDER BY TABLE_NAME;
    ```
 
-   Si hay una a tres tablas: detenerse, diagnosticar parcial. Si hay cuatro:
-   diagnosticar/postcheck autorizado, sin reejecutar migracion. Cero tablas es
-   requisito para el intento inicial, no certifica por si solo compatibilidad.
-3. Descargar el archivo Raw del SHA aprobado y verificar que empieza con USE,
-   sin BOM. Si se trabaja con el repo en Windows, NO usar Set-Content, Out-File
-   ni > para generarlo. Para reconstruir/verificar la copia publicada:
+   Cero tablas es requisito de un primer intento, no certifica CLEAN. Una a tres
+   tablas exige diagnostico de parcial; cuatro exige verificacion, no reejecucion.
+   El respaldo y el CLEAN anterior no sustituyen las comprobaciones actuales.
+3. Descargar Raw del SQL del SHA aprobado. Opcionalmente, con checkout de ese SHA:
 
    ```powershell
-   node scripts/ci/combustibles-pr2-lab/build-phpmyadmin-import.mjs --write
    node scripts/ci/combustibles-pr2-lab/build-phpmyadmin-import.mjs --check
    ```
 
-   --check exige bytes exactos contra el generador y fuentes actuales.
-4. Solo tras autorizacion: seleccionar la base de produccion en phpMyAdmin,
-   pestana Importar, archivo completo, formato SQL, codificacion UTF-8,
-   compatibilidad NONE y delimitador inicial punto y coma. Respetar las directivas
-   DELIMITER del archivo. No omitir consultas, reanudar importacion parcial,
-   transformar SQL ni continuar tras errores. No enviar SET separado.
-5. Conservar salida completa. IMPORT_INICIO debe mostrar esquema actual/objetivo
-   correctos, STRICT_ALL_TABLES e InnoDB estricto=1 y checks FK/CHECK en 1.
-   Preflight debe CLEAN/base_compatible=1, migracion APLICADA_PENDIENTE_POSTCHECK
-   FINAL, postcheck RESULTADO FINAL y 15 DATO=0. IMPORT_FIN: misma_conexion=1,
-   migracion_completada=1, estado_metadata=FINAL y esquema correcto.
-   IMPORT_RESTAURADO debe mostrar los modos originales.
-6. Si phpMyAdmin oculta resultados intermedios, faltan marcas, hay error o timeout,
-   no certificar exito por el contador o mensaje generico. Conservar la evidencia
-   y revisar inventario actual/postcheck autorizado; no reintentar automaticamente.
+   Si se reconstruye, --write escribe directamente sin BOM. No usar Set-Content,
+   Out-File ni > para crear el SQL. Empieza con USE, no con comentarios o BOM.
+4. Tras autorizacion explicita: seleccionar u611730801_Plataforma, pestana Importar,
+   archivo completo, formato SQL, UTF-8, compatibilidad NONE y delimitador inicial ;.
+   Respetar DELIMITER del archivo. No saltar consultas, reanudar importacion parcial,
+   transformar SQL ni continuar tras errores. Mantener FK/CHECK activados; no usar
+   ninguna opcion de deshabilitacion para intentar que pase.
+5. Conservar la fila unica de salida. Exigir simultaneamente:
+   resultado=CB2_IMPORT_FINAL, estado_metadata=FINAL, validaciones=15,
+   incidencias=0, los 15 valores de detalle_datos en cero,
+   esquema_objetivo=u611730801_Plataforma y misma_conexion=1.
+   sql_mode_restaurado e innodb_restaurado deben ser los valores iniciales.
+6. Error, timeout, SIN_CERTIFICAR, salida oculta o incompleta => no certificar ni
+   reintentar. Conservar el error y consultar inventario actual de solo lectura.
+   Los canonicos con multiples resultados no deben usarse como sustituto directo
+   de este archivo en ese importador. Para diagnosticos adicionales, revisar antes
+   el flujo de cliente; no quitar validaciones ni correr el DDL manualmente por partes.
 
-La llamada al servidor es un bloque indivisible a efectos de envio del cliente:
-no puede cambiar DATABASE() entre los CTE internos y CREATE. Sigue habiendo
-commits implicitos y posibilidad de parcial ante fallo de DDL. Mantener exclusividad
-operativa: ninguna escritura ni cambio de esquema concurrente durante la operacion.
+## Pruebas reales y evidencia
 
-## Pruebas realizadas
+Resultado FINAL: PASS, run e1402bdf-a62f-4edf-80c9-4dc2ea542d30: 25 registros,
+507 llamadas del cliente del arnes mas el flujo directo mysqli, 14 instancias.
+Todos los SHUTDOWN devolvieron 0, los canales cerraron y los PIDs terminaron.
+Conteos independientes: 4 tablas, 86 columnas, 34 indices, 18 FK, 26 CHECK;
+postcheck FINAL y 15 incidencias en cero. Pruebas Node: 5 PASS; self-test,
+node --check, php -l y git diff --check PASS. Los tres canonicos siguen identicos
+a 4745d2d.
 
-**MariaDB 11.8.9 portable Win64, exclusivamente fixtures sinteticos:** PASS final,
-run 72a84295-3486-4895-a597-0f1afcd7c44e: 24 registros, 501 llamadas del cliente,
-13 instancias nuevas. Todas cerradas con SHUTDOWN=0, canal sin conexion posterior
-y PIDs terminados. No Docker/Actions ni servicios globales modificados.
+Una repeticion previa se detuvo al inicializar otro datadir, con solo 63 MB libres.
+No se conto como PASS. Se verifico ausencia de servidores activos y se eliminaron
+unicamente 92 datadirs sinteticos cb2-UUID dentro del runtime de este workspace,
+con limites de ruta comprobados y evidencia preservada. Con espacio liberado,
+el mismo codigo completo la suite final. El fallo de infraestructura se conserva
+en infrastructure-failure.json. No se borraron datos ajenos ni evidencia.
 
-- Import desde @cb2_schema=NULL, DATABASE()=information_schema, modos no estrictos
-  iguales a los reportados por Hostinger: el lote selecciona cb2_lab, prepara
-  sesion, da CLEAN, crea las cuatro tablas y postcheck FINAL; restaura los dos modos.
-- Base incompatible: SIGNAL 1644 exacto, cero tablas CB2. Otra prueba captura ese
-  RESIGNAL en un bloque EXTERNO solo de test y comprueba, en la MISMA sesion,
-  restauracion a NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION e InnoDB=0.
-  El SQL publicado no tiene CONTINUE HANDLER ni oculta el error.
-- Suite previa completa: conteos 4/86/34/18/26, FK/CHECK/UNIQUE, 15 DATO=0,
-  snapshots, rechazos de esquema parcial/alterado, indices y modos estrictos.
-- 5 pruebas Node PASS, self-test PASS, node --check y git diff --check PASS.
-  El test nuevo exige bytes del archivo generado, cuerpos canonicos integros,
-  cuatro CREATE identicos, handlers y ninguna escritura global.
+La prueba nueva usa PHP 8.4.14/mysqlnd, mysqli real y BufferedQuery 5.10.0 oficial
+sobre MariaDB 11.8.9 portable, transporte PIPE local con UUID y TCP deshabilitado.
+No conecta a servicios existentes ni usa dumps, .env o credenciales productivas.
 
-**Parser oficial phpmyadmin/sql-parser 5.10.0 BufferedQuery**, PHP 8.4.14 portable:
-PASS con chunks de 1, 7, 4096 y 164089 bytes. Extrae siempre DOS sentencias:
-USE y BEGIN NOT ATOMIC completo. Hash del bloque identico en los cuatro casos;
-ningun JSON_TABLE queda como sentencia independiente. La prueba no abre BD.
-Este es el componente utilizado por ImportSql; no reproduce toda la interfaz,
-plugins, version o configuracion de Hostinger.
+El driver usa query() buffered simple y free() del unico resultado, sin next_result()
+ni multi_query. Despues de CADA sentencia intenta SET FOREIGN_KEY_CHECKS=ON y
+SET CHECK_CONSTRAINT_CHECKS=ON, reproduciendo el tipo de limpieza que fallo.
+Nunca desactiva esos controles. Exige more_results()=false tras cada consulta.
+El bloque debe dar fields=0; solo el SELECT superior da fields=9 y una fila.
+Verifica cuatro tablas, FINAL, las 15 incidencias en cero, flags en 1 y restauracion.
+La misma prueba reproduce primero el 2014 del bloque minimo multirresultado.
 
-Reproducir parser: descargar sql-parser tag 5.10.0 de su repo oficial y extraer
-bajo .lab-runtime/sql-parser-5.10.0; PHP portable con mbstring bajo .lab-runtime/php.
-Ejecutar desde raiz:
+Tambien se ejecuta la suite previa completa: guardias, escenarios incompatibles,
+modos de sesion, restauracion tras error, indices, FK/CHECK/UNIQUE, snapshots y
+postchecks. Los resultados del run final y sus hashes se publican en
+**docs/evidence/combustibles-pr2-phpmyadmin-sin-resultados/**.
+La prueba de BufferedQuery lee chunks de 1, 7, 4096 y archivo completo; siempre
+extrae cuatro sentencias con el mismo bloque, sin fragmentar JSON_TABLE.
+Las pruebas Node exigen DDL exacto, cuerpo de migracion salvo su salida INTO,
+CTE de las 15 incidencias exacto y ausencia de cambios de flags/globales.
+
+Reproduccion local (solo despues de preparar el laboratorio portable del README):
 
 ```powershell
+node scripts/ci/combustibles-pr2-lab/build-phpmyadmin-import.mjs --check
+node --test scripts/ci/combustibles-pr2-lab/build-phpmyadmin-import.test.mjs scripts/ci/combustibles-pr2-lab/build-session-preflight.test.mjs
+node scripts/ci/combustibles-pr2-lab/run-portable-windows.mjs --run-isolated
 .\.lab-runtime\php\php.exe -n -d extension_dir=.lab-runtime/php/ext -d extension=php_mbstring.dll scripts/ci/combustibles-pr2-lab/test-phpmyadmin-buffer.php
 ```
 
-Evidencia versionada en docs/evidence/combustibles-pr2-phpmyadmin-import:
-summary.json, source.json, parser.json, resultados positivos/negativos y cierres.
-source.json conserva el marcador historico baseline=bc12de32 del runner anterior;
-los hashes de fuentes identifican el codigo realmente probado y se comprobaron
-contra los archivos finales. La base de este cambio es cc0ea1df.
-La copia ensayada por el motor solo sustituye el esquema literal por cb2_lab;
-no cambia ninguna otra parte de los cuerpos canonicos.
+El runner portable necesita PHP portable en .lab-runtime/php y sql-parser 5.10.0
+oficial en .lab-runtime/sql-parser-5.10.0. Invoca test-phpmyadmin-mysqli.php con
+mbstring/mysqli y un pipe cb2 de la instancia propia. Ese driver solo admite cb2_lab
+sintetico; rechaza el nombre productivo y cualquier endpoint externo.
 
-## Limites para auditoria independiente
+## Limites
 
-No se ejecuto phpMyAdmin de Hostinger, su UI ni SQL en produccion. Motor probado
-Win64 y parser fijado 5.10.0: contrastar con la version desplegada. Los fixtures no
-certifican datos historicos, privilegios, volumen, bloqueos o capacidad de Hostinger.
-Se conserva el contrato aprobado; no se relajan guardias ni se fuerza CLEAN.
-No hubo merge. Toda ejecucion futura de produccion requiere autorizacion explicita.
+El flujo de cliente probado reproduce parser, mysqli buffered y limpieza posterior;
+no se ejecuto la UI/configuracion de Hostinger ni su version exacta. Motor Win64 y
+fixtures sinteticos no certifican datos historicos, privilegios, concurrencia, volumen
+ni tiempos de DDL de Linux/Hostinger. No se altero el contrato aprobado.
+El #2014 era un riesgo de protocolo que el ensayo anterior no cubria; la prueba
+actual lo reproduce y comprueba su ausencia con el archivo nuevo, sin drenar
+resultados por fuera para ocultar el problema. Produccion sigue pendiente de
+la auditoria independiente y de autorizacion explicita. No hubo merge.
