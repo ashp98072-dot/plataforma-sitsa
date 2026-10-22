@@ -170,22 +170,78 @@ function migrate(container) {
   preState(query(container, 'preflight-final', sql.preflight), 'FINAL');
   postFinal(query(container, 'postcheck-vacio', sql.postcheck));
 }
-function dataSnapshot(c, label) {
-  // BASE y CB2 completas: NULL y bytes de cada columna, incluidas generated.
-  const columns = rows(query(c, `${label}-columnas`, `SELECT TABLE_NAME,COLUMN_NAME
-FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION;`));
+const snapshotTables = [...names, 'empresas', 'usuarios', 'compras_proveedores', 'flota_vehiculos',
+  'flota_vehiculo_acceso', 'flota_combustible_cargas', 'flota_combustible_conciliaciones',
+  'flota_combustible_conciliacion_filas', 'auditoria'].sort();
+const scalarTypes = new Set(['tinyint', 'int', 'bigint', 'decimal', 'date', 'datetime']);
+const stringTypes = new Set(['char', 'varchar', 'text', 'longtext']);
+function snapshotSelect(table, fields) {
+  assert(snapshotTables.includes(table));
+  assert(fields.length > 0);
+  const expressions = fields.flatMap(field => {
+    assert.match(field.name, /^[a-z0-9_]+$/);
+    assert(scalarTypes.has(field.type) || stringTypes.has(field.type), 'Tipo sin codificacion auditada');
+    const column = '\x60' + field.name + '\x60';
+    // HEX(numero) redondea/convierte como BIGINT. Primero texto exacto para escalares;
+    // strings conservan bytes originales, sin conversion de charset ni longitud limitada.
+    const bytes = scalarTypes.has(field.type)
+      ? 'CAST(CAST(' + column + ' AS CHAR CHARACTER SET utf8mb4) AS BINARY)'
+      : 'CAST(' + column + ' AS BINARY)';
+    return ['IF(' + column + " IS NULL,'N','V')",
+      'IFNULL(OCTET_LENGTH(' + bytes + '),0)', 'IFNULL(HEX(' + bytes + "),'')"];
+  });
+  return "SET time_zone='+00:00'; SET NAMES utf8mb4; START TRANSACTION WITH CONSISTENT SNAPSHOT;\n"
+    + 'SELECT COUNT(*) FROM \x60' + table + '\x60;\n'
+    + 'SELECT ' + expressions.join(',') + ' FROM \x60' + table + '\x60;\n'
+    + 'SELECT @@warning_count;\nSELECT COUNT(*) FROM \x60' + table + '\x60;\n'
+    + "COMMIT; SELECT 'CB2_SNAPSHOT_END';\n";
+}
+function parseTableSnapshot(table, fields, output) {
+  // No trim/filter: una columna vacia final o una linea perdida nunca se descartan.
+  assert(output.endsWith('\n'), 'Salida sin terminador de linea');
+  const lines = output.slice(0, -1).split('\n');
+  assert.equal(lines.pop(), 'CB2_SNAPSHOT_END', 'Salida incompleta');
+  const afterCount = lines.pop();
+  assert.equal(lines.pop(), '0', 'Warnings al serializar datos');
+  const count = lines.shift();
+  assert.match(count ?? '', /^(0|[1-9][0-9]*)$/);
+  assert.equal(afterCount, count, 'Conteos inconsistentes');
+  assert.equal(BigInt(lines.length), BigInt(count), 'Filas perdidas/truncadas');
+  const data = lines.map(line => {
+    const cells = line.split('\t');
+    assert.equal(cells.length, fields.length * 3, 'Limites de columna incorrectos');
+    return fields.map((field, i) => {
+      const [tag, length, hex] = cells.slice(i * 3, i * 3 + 3);
+      assert(tag === 'N' || tag === 'V', 'Indicador NULL invalido');
+      assert.match(length, /^(0|[1-9][0-9]*)$/);
+      assert.match(hex, /^(?:[0-9A-F]{2})*$/);
+      assert.equal(BigInt(hex.length / 2), BigInt(length), 'Bytes perdidos/truncados');
+      if (tag === 'N') { assert.equal(length, '0'); assert.equal(hex, ''); }
+      return [tag, length, hex];
+    });
+  }).map(row => JSON.stringify(row)).sort(); // Orden binario JS, sin collation SQL; duplicados conservados.
+  return { table, fields, count, data };
+}
+function compareSnapshots(before, after) {
+  assert.deepEqual(after, before, 'Cambios persistentes en datos/conteos/tipos/columnas');
+}
+function dataSnapshot(c, label, read = query) {
+  const columns = rows(read(c, label + '-columnas', 'SELECT TABLE_NAME,COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,'
+    + "COALESCE(CHARACTER_SET_NAME,'-'),COALESCE(COLLATION_NAME,'-'),IS_NULLABLE,EXTRA,ORDINAL_POSITION "
+    + 'FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION;'));
   const tables = new Map();
-  for (const [table, column] of columns) {
-    assert.match(table, /^[a-z0-9_]+$/);
-    assert.match(column, /^[a-z0-9_]+$/);
+  for (const row of columns) {
+    assert.equal(row.length, 9);
+    const [table, name, type, columnType, charset, collation, nullable, extra, ordinal] = row;
+    assert(snapshotTables.includes(table), 'Tabla inesperada');
     if (!tables.has(table)) tables.set(table, []);
-    tables.get(table).push(column);
+    assert.equal(ordinal, String(tables.get(table).length + 1), 'Columna omitida/reordenada');
+    tables.get(table).push({ name, type, columnType, charset, collation, nullable, extra, ordinal });
   }
-  assert.equal(tables.size, 13, 'Nueve tablas BASE y cuatro CB2');
-  return [...tables].map(([table, fields]) => {
-    const values = fields.map(n => `IF(\`${n}\` IS NULL,'N',CONCAT('V',HEX(\`${n}\`)))`).join(',');
-    return [table, fields, query(c, `${label}-${table}`,
-      `SELECT CONCAT_WS('|',${values}) AS fila FROM \`${table}\` ORDER BY BINARY fila;`)];
+  assert.deepEqual([...tables.keys()].sort(), snapshotTables, 'Se requieren las 13 tablas exactas');
+  return snapshotTables.map(table => {
+    const fields = tables.get(table);
+    return parseTableSnapshot(table, fields, read(c, label + '-' + table, snapshotSelect(table, fields)));
   });
 }
 function rejectTransaction(c, label, statement, code, detail) {
@@ -197,7 +253,7 @@ function rejectTransaction(c, label, statement, code, detail) {
       // InnoDB revierte al cerrar la conexion, no dependemos de un ROLLBACK posterior.
       query(c, label, `START TRANSACTION; ${statement};`, code, detail);
     } finally {
-      assert.deepEqual(dataSnapshot(c, `${label}-despues`), before, `${label}: datos modificados`);
+      compareSnapshots(before, dataSnapshot(c, `${label}-despues`));
       postFinal(query(c, `${label}-postcheck`, sql.postcheck));
     }
   });
@@ -287,7 +343,98 @@ function setup() {
   assert.equal(registry.run, run);
   assert(Array.isArray(registry.containers));
 }
+function snapshotSelfTest() {
+  // Datos reales del fixture base, interpretados solo para estas pruebas en memoria.
+  const insert = fixture('base').match(/INSERT INTO compras_proveedores VALUES ([^;]+);/);
+  assert(insert);
+  const providers = [...insert[1].matchAll(/\((\d+),(\d+),'([A-Z_]+)',(\d+)\)/g)]
+    .map(m => [m[1], m[2], m[3], m[4]]);
+  assert.equal(providers.length, 3);
+  const fields = ['id', 'empresa_id', 'nombre_comercial', 'activo'].map((name, i) => ({
+    name, type: i === 2 ? 'varchar' : 'int', columnType: i === 2 ? 'varchar(200)' : 'int(11)',
+    charset: i === 2 ? 'utf8mb4' : '-', collation: i === 2 ? 'utf8mb4_bin' : '-',
+    nullable: 'NO', extra: '', ordinal: String(i + 1),
+  }));
+  // Modelo independiente del wire: tres campos ASCII por celda, no SQL ni Docker.
+  const wire = data => [String(data.length), ...data.map(row => row.flatMap(value => {
+    if (value === null) return ['N', '0', ''];
+    const bytes = Buffer.from(value, 'utf8');
+    return ['V', String(bytes.length), bytes.toString('hex').toUpperCase()];
+  }).join('\t')), '0', String(data.length), 'CB2_SNAPSHOT_END', ''].join('\n');
+  const parsed = (data, schema = fields) => parseTableSnapshot('compras_proveedores', schema, wire(data));
+  const original = parsed(providers);
+  compareSnapshots(original, parsed([...providers].reverse()));
+  for (const change of [
+    data => { data[0][2] += '_CAMBIO'; }, // mismo conteo, texto distinto
+    data => { data[0][1] = '2'; }, // cambio de empresa del fixture
+    data => { data[0][3] = '0'; }, // flag persistente
+    data => { data[0][2] = ''; }, data => { data[0][2] = null; },
+    data => { data.pop(); }, data => { data.push([...data[0]]); },
+    data => { [data[0][0], data[0][3]] = ['11', '']; }, // limites de columna
+  ]) {
+    const changed = structuredClone(providers); change(changed);
+    assert.throws(() => compareSnapshots(original, parsed(changed)));
+  }
+  const changedType = structuredClone(fields); changedType[0].type = 'varchar';
+  assert.throws(() => compareSnapshots(original, parsed(providers, changedType)));
+  const textField = [fields[2]];
+  const edgeValues = [null, '', 'NULL', 'N', 'V', '|', ':', '\t', '\n', '\r', '\0',
+    'a|b', 'a:b', ' a ', '\u00e9', 'e\u0301', '\u{1F6E2}', 'x'.repeat(100000)];
+  const edgeSnapshots = edgeValues.map(v => parseTableSnapshot('auditoria', textField, wire([[v]])));
+  assert.equal(new Set(edgeSnapshots.map(v => JSON.stringify(v))).size, edgeValues.length);
+  const decimals = ['1.000001', '1.000002', '-1.000001', '999999999999.999999'];
+  const decimalField = [{ ...fields[0], type: 'decimal', columnType: 'decimal(18,6)' }];
+  assert.equal(new Set(decimals.map(v => JSON.stringify(parseTableSnapshot('flota_cb2_consumos', decimalField, wire([[v]]))))).size, decimals.length);
+  const temporalField = [{ ...fields[0], type: 'datetime', columnType: 'datetime(6)' }];
+  const dates = ['2026-01-01 00:00:00.000001', '2026-01-01 00:00:00.000002'];
+  assert.throws(() => compareSnapshots(
+    parseTableSnapshot('flota_cb2_consumos', temporalField, wire([[dates[0]]])),
+    parseTableSnapshot('flota_cb2_consumos', temporalField, wire([[dates[1]]]))));
+  const pair = [fields[2], { ...fields[2], name: 'segundo', ordinal: '2' }];
+  assert.throws(() => compareSnapshots(
+    parseTableSnapshot('auditoria', pair, wire([['a|b', 'c']])),
+    parseTableSnapshot('auditoria', pair, wire([['a', 'b|c']]))));
+  const transport = wire(providers);
+  for (const broken of [
+    transport.slice(0, -1), transport.replace('CB2_SNAPSHOT_END', ''),
+    transport.replace(/^[^\n]*\n/, '4\n'), // conteo/filas no coincide
+    transport.replace('V\t1\t31', 'V\t2\t31'), // HEX truncado
+    transport.replace('V\t1\t31', 'V\t1\t3Z'), // HEX corrupto
+    transport.replace('V\t1\t31', 'N\t1\t31'), // NULL con payload
+    transport.replace('V\t1\t31', 'V\t1'), // columna perdida
+    transport.replace('\n0\n3\nCB2_SNAPSHOT_END', '\n1\n3\nCB2_SNAPSHOT_END'), // warning
+  ]) assert.throws(() => parseTableSnapshot('compras_proveedores', fields, broken));
+  assert.equal(parsed([]).count, '0');
+  const statement = snapshotSelect('compras_proveedores', fields);
+  assert(!/CONCAT|GROUP_CONCAT|LIMIT|SHA2|MD5/.test(statement));
+  assert(statement.includes('OCTET_LENGTH(') && statement.includes('AS CHAR CHARACTER SET utf8mb4'));
+  assert(statement.includes('WITH CONSISTENT SNAPSHOT') && statement.includes('@@warning_count'));
+  assert.throws(() => snapshotSelect('auditoria', [{ name: 'valor', type: 'double' }]));
+  // Integracion del inventario exacto de 13 tablas con query sustituida por un lector en memoria.
+  const schemas = Object.fromEntries(snapshotTables.map(table => [table,
+    table === 'compras_proveedores' ? fields : [fields[0]]]));
+  const reader = (c, label, input) => {
+    if (input.startsWith('SELECT TABLE_NAME')) return snapshotTables.flatMap(table => schemas[table].map(f =>
+      [table, f.name, f.type, f.columnType, f.charset, f.collation, f.nullable, f.extra, f.ordinal].join('\t'))).join('\n') + '\n';
+    const table = snapshotTables.find(t => input.includes('FROM \x60' + t + '\x60;'));
+    assert(table);
+    return wire(table === 'compras_proveedores' ? providers : []);
+  };
+  const all = dataSnapshot(null, 'modelo', reader);
+  assert.equal(all.length, 13);
+  compareSnapshots(all, dataSnapshot(null, 'modelo', reader));
+  for (let i = 0; i < all.length; i++) {
+    const altered = structuredClone(all);
+    altered[i] = parseTableSnapshot(all[i].table, schemas[all[i].table], wire(
+      all[i].table === 'compras_proveedores' ? providers.slice(1) : [['1']]));
+    assert.throws(() => compareSnapshots(all, altered));
+  }
+  assert.throws(() => dataSnapshot(null, 'incompleto', (c, label, input) =>
+    reader(c, label, input).replace(/^auditoria\t.*\n/m, '')));
+  console.log('PASS: snapshots tipados, fixtures mutados, 13 tablas, conteos, limites y truncamientos (solo memoria).');
+}
 function selfTest() {
+  snapshotSelfTest();
   preState('RESUMEN\tbase_compatible\t1\nRESUMEN\tCLEAN\t0', 'CLEAN');
   assert.throws(() => preState('RESUMEN\tCLEAN\t0', 'CLEAN'));
   assert.throws(() => preState('RESUMEN\tbase_compatible\t1\nRESUMEN\tFINAL\t0', 'FINAL'));

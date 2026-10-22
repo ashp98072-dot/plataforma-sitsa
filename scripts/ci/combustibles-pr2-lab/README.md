@@ -157,8 +157,8 @@ SQLSTATE incorrecto o multiples errores causan FAIL.
 
 rejectTransaction envia START TRANSACTION y una sola sentencia DML sin COMMIT. No depende de
 un ROLLBACK posterior al error: InnoDB revierte la transaccion abierta al cerrar la conexion.
-Antes y despues, otras conexiones leen las 13 tablas BASE/CB2 completas: columnas ordenadas,
-NULL diferenciado y valores HEX, filas ordenadas por bytes y duplicados preservados. Se comparan
+Antes y despues, otras conexiones leen las 13 tablas BASE/CB2 completas: columnas ordenadas y tipadas,
+NULL separado de vacio, longitud en bytes y HEX por celda, filas ordenadas en memoria y duplicados preservados. Se comparan
 instantaneas completas, no solo conteos/checksums. La suite es secuencial y sin otros escritores.
 SQL/salidas quedan en evidencia; truncamiento o fallo de lectura aborta. No se exige restaurar
 contadores internos AUTO_INCREMENT: un INSERT rechazado puede consumir valores sin cambiar filas.
@@ -207,3 +207,48 @@ Consulta oficial del 22 de octubre de 2026, sin consultar ni cambiar configuraci
 Fuentes oficiales:
 - [Disponibilidad y creacion de environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
 - [Required reviewers, acceso minimo y Prevent self-review](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers).
+
+## Correccion puntual de dataSnapshot para nueva auditoria
+
+Solo cambios locales, pendientes de revision/publicacion; no se ejecuto SQL ni Docker.
+Se reemplaza CONCAT_WS por tres campos independientes por columna: indicador N/V, longitud
+OCTET_LENGTH y HEX. No hay concatenacion SQL entre columnas. El transporte solo usa N/V,
+digitos decimales y HEX mayusculo: tabs/newlines del valor se codifican como bytes HEX. NULL
+exige N/0/vacio y un valor vacio exige V/0/vacio. El parser valida aridad exacta, HEX par valido
+y que longitud declarada coincida con todos los bytes recibidos. No usa trim ni elimina vacios.
+La representacion final es JSON de arrays de celdas, con limites explicitos, sin hashes.
+
+El inventario exige los nombres de las 13 tablas y ordinales continuos de sus columnas. Incluye
+nombre, DATA_TYPE, COLUMN_TYPE (precision/escala), charset, collation, nullability y EXTRA de
+cada columna; cambiar tipo/orden cambia el snapshot. Solo se admiten los tipos presentes en
+los fixtures y SQL auditados: tinyint/int/bigint/decimal/date/datetime/char/varchar/text/longtext.
+Un tipo nuevo falla hasta tener una codificacion revisada. Para escalares se usa CAST AS CHAR
+CHARACTER SET utf8mb4 antes del CAST AS BINARY y HEX, sin longitud ni conversion JS a Number:
+HEX(numero) directamente puede convertirlo a BIGINT y perder fracciones. Las cadenas se leen
+como bytes sin transcodificarlas. Se fija UTC para la sesion. Se comparan valores SQL logicos,
+incluidas generated; no paginas fisicas, padding interno de CHAR ni contadores AUTO_INCREMENT.
+
+Cada tabla se lee en una conexion independiente con transaccion WITH CONSISTENT SNAPSHOT,
+COUNT(*) antes/despues y warning_count de la serializacion igual a cero. Se exige conteo
+identico y que coincida con las filas recibidas usando BigInt. Un marcador final obligatorio
+permite rechazar salidas incompletas. No se usan GROUP_CONCAT, LIMIT, cast con longitud ni
+ordenacion por collation SQL: se ordenan en JS las filas completas codificadas, preservando
+multiplicidad. La suite es secuencial, sin otros escritores entre tablas. El limite de salida
+de spawnSync sigue siendo 16 MiB: excederlo produce error de proceso y FAIL, nunca un snapshot
+recortado aceptado. Tambien fallan warnings, bytes faltantes, columnas omitidas o datos corruptos.
+Las comprobaciones posteriores de rechazo/conexion independiente y postcheck FINAL se conservan.
+
+El self-test ejecuta solo funciones JS: extrae las tres filas de compras_proveedores del fixture
+base y comprueba cambios de nombre, empresa, activo, NULL/vacio, eliminacion y duplicacion.
+Un lector simulado ejercita el mismo dataSnapshot en las 13 tablas y detecta una mutacion en
+cada tabla y un inventario incompleto. Otros casos cubren limites de columna, separadores,
+NUL/tab/newline, Unicode, texto de 100000 bytes, tipos distintos, decimales que difieren solo
+en fracciones, microsegundos, reordenacion equivalente, cero filas, longitudes incorrectas,
+HEX invalido/truncado, columnas perdidas, warning y falta de marcador/terminador.
+Estas pruebas demuestran el comparador/parser y la construccion estatica del SELECT, no que
+MariaDB haya ejecutado o validado esa consulta. La comprobacion de motor queda pendiente.
+
+Fuentes oficiales consultadas para la codificacion:
+- [HEX: numeros frente a cadenas](https://mariadb.com/docs/server/reference/sql-functions/string-functions/hex).
+- [CAST y charset explicito](https://mariadb.com/docs/server/reference/sql-functions/string-functions/cast).
+- [OCTET_LENGTH en bytes](https://mariadb.com/docs/server/reference/sql-functions/string-functions/octet_length).
