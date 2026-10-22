@@ -1,0 +1,31 @@
+{
+    "hashConvention":  "SHA256 UTF-8 sin BOM; CRLF normalizado a LF",
+    "files":  {
+                  "src/lib/flota/cb2/fixture.ts":  "0e3462fc14109337db55f38a931fbf30c8e8343e0fcbca96aaaee63b19bd719f",
+                  "src/lib/flota/cb2/http.test.ts":  "ef4cc1817cbb9bb11890eae47d6152dc9c8b82f35d3905d6b260c16b27fab4d7",
+                  "src/lib/flota/cb2/http.ts":  "dfc2e0ad04a1595fea84cc8f203352f6beb455dfd5b7fad27c632b162c5f07af",
+                  "src/lib/flota/cb2/model.test.ts":  "ca0fa306ccf5a74afff7e99cc08c3e63c18fa8ad0584972e7a069cc5205bd793",
+                  "src/lib/flota/cb2/model.ts":  "5d5eed72f557690a55b21d6ba2fb6195f3a707e629d3e81b8966a5e3a601ce8a",
+                  "src/lib/flota/cb2/repository.test.ts":  "03fb52a7ca0de7e7d84bd137950413f37d52b923f045d89ec35c6350f3272685",
+                  "src/lib/flota/cb2/repository.ts":  "fc620fd2241be0ed41f5ae7c5d35bf5ac6fec24d64c7e65494a04aefda6fbd4b",
+                  "src/lib/flota/cb2/service.db.test.ts":  "0fca9d13c1b65cfff4ada7c99d0ea104227853193a839cb535236bf4c4a84633",
+                  "src/lib/flota/cb2/service.ts":  "d5cd38ad94f5b02efeaf675e83ac4eda9102d654d8fa43bc9a7fda27499e4138",
+                  "src/lib/flota/cb2/storage.test.ts":  "e99659fbc022e840bbd6eca09e0462831cc9c92203c697d57c369d1fdcc68a57",
+                  "src/lib/flota/cb2/storage.ts":  "a063a73c53b87632c526a2deb5ea2980180b5bf04cb71a0fea64c53ed972957e",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/asociar/route.ts":  "46b448ab50e7a443f9b13265ba3856ef08b0b500ee235fc0505a02ca3e6c9b52",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/confirmar/route.ts":  "d48912494ee4db70b0689d1ce1a640a481a8d7b7126eb34a9f83283a141266d9",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/consumos/route.ts":  "d78498718716a12f3787bf52ad43291ffbd84db730d582a36b94e879551b5a4e",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/facturas/route.ts":  "a5b7a20b8797a0175d727932fbc93507fe5243c425ce2b0ab0c9aac444de948a",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/importaciones/route.ts":  "041ea58ac50eea2c2cd36914520024d08cb3a1a8dee9216c663f29165a4aa3bd",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/importaciones/[id]/archivo/route.ts":  "dea1639a35155811360ebccf40202ba035b68bf9f7549e6534b5ea2a42c80877",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/importaciones/[id]/filas/route.ts":  "6e21387e7ac9d97b7252ff0a13bd640f1f4adf1343dcbd489583a51e84d22106",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/preview/route.ts":  "1c7f1e99103c4f1eb18947a5cc7c2683a729962755701a5c98da5bbbe0aca070",
+                  "src/app/api/empresas/[slug]/flota/combustible/cb2/reanudar/route.ts":  "d53a6e43b0d4218ad28fd8c3d4faecf8f5aeb367ee6e3b4e61b910f83dc32f63",
+                  "src/lib/flota/combustible-importacion-v2.ts":  "8121d08078ed3139ca4e76516b1294466e365b1cedd8d0a199719c29f05ef063",
+                  "scripts/ci/combustibles-pr508-backend/run-windows.mjs":  "ecfc453c24d73e484dad2c2a002f2b079bfadf1b5256e88bf1251b6a2e7630c5",
+                  "scripts/ci/combustibles-pr2-lab/base.sql":  "54214acdf8daea7128803442d1fa26821b3211f5cef91f3bdd541d04ac1cf9f1",
+                  "sql/migrate-2026-10-combustibles-pr2-consumos-facturas.sql":  "48a735121b73a10d1d36aaf3ef67b8b1bb2be04094ccf2f23c68241480121c8d",
+                  "sql/postcheck-2026-10-combustibles-pr2-consumos-facturas.sql":  "35cbe2a5c59af86e3359b11a634b508f8e4108044c0193d365bb5ed834243172",
+                  "src/lib/flota/cb2/originales.test.ts":  "cb78619c4388c538a3e1ddb37bf50b53b92ead6b10da3b80af8e4df69f19811a"
+              }
+}

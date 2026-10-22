@@ -216,4 +216,34 @@ describe.skipIf(!pipe)("CB2 MariaDB 11.8.9 PIPE propio sin produccion", () => {
         await expect(asociarFactura({ ...ctx, proveedorId: 2 }, op)).rejects.toThrow("Consumo");
         expect(await snapshot()).toEqual(snap);
     });
+    it("reanuda desde ORIGEN pese a eventos de revisiones posteriores y otra importacion/proveedor", async () => {
+        const b = await libro([row()]); await importar(b, false);
+        const [h] = await q("SELECT * FROM flota_cb2_importaciones");
+        const seleccion = (await entrada(b)).seleccion;
+        await reanudarArchivo(ctx, {importacionId:h.id,revision:1,seleccion,clave:key(),motivo:"Revision 2"});
+        const [c] = await q("SELECT * FROM flota_cb2_consumos");
+        await asociarFactura(ctx, asociar.parse({proveedorId:1,clave:key(),documento:{serie:"S",numero:"01",moneda:"GTQ"},consumos:[c.id],revisiones:[{id:h.id,revision:2}],motivo:"Revision 3"}));
+        await q("UPDATE flota_cb2_filas SET decision=? WHERE tipo<>'ORIGEN'", [JSON.stringify({moneda:"USD"})]);
+        const e = {...await entrada(b,false),moneda:"USD" as const}, otro = {...ctx,proveedorId:2};
+        const p = await preview(otro,b,e); await confirmarArchivo(otro,b,"otro.xlsx",e,key(),p.token);
+        await reanudarArchivo(ctx,{importacionId:h.id,revision:3,seleccion,clave:key(),motivo:"Revision 4"});
+        expect((await q("SELECT moneda FROM flota_cb2_consumos WHERE empresa_id=1 AND proveedor_id=1"))[0].moneda).toBe("GTQ");
+        expect((await q("SELECT revision FROM flota_cb2_importaciones WHERE id=?",[h.id]))[0].revision).toBe(4);
+    });
+    it("moneda inconsistente en un original posterior bloquea sin escribir", async () => {
+        const b=await libro([row("01"),row("02")]);await importar(b,false);
+        const [h]=await q("SELECT * FROM flota_cb2_importaciones");
+        const os=await q("SELECT id,decision FROM flota_cb2_filas WHERE tipo='ORIGEN' ORDER BY id"), ultimo=os[os.length-1];
+        await q("UPDATE flota_cb2_filas SET decision=JSON_SET(decision,'$.moneda','USD') WHERE id=?",[ultimo.id]);
+        try {const before=await snapshot();await expect(reanudarArchivo(ctx,{importacionId:h.id,revision:1,seleccion:(await entrada(b)).seleccion,clave:key(),motivo:"fixture"})).rejects.toThrow("inconsistente");expect(await snapshot()).toEqual(before);}
+        finally {await q("UPDATE flota_cb2_filas SET decision=? WHERE id=?",[ultimo.decision,ultimo.id]);}
+    });
+    it("JSON original valido para SQL pero estructuralmente invalido no permite reanudar", async () => {
+        const b=await libro([row()]);await importar(b,false);
+        const [h]=await q("SELECT * FROM flota_cb2_importaciones"),[o]=await q("SELECT id,decision FROM flota_cb2_filas WHERE tipo='ORIGEN' ORDER BY id");
+        try {for(const decision of ["[]","null",'{"moneda":"GTQ"}']){
+            await q("UPDATE flota_cb2_filas SET decision=? WHERE id=?",[decision,o.id]);const before=await snapshot();
+            await expect(reanudarArchivo(ctx,{importacionId:h.id,revision:1,seleccion:(await entrada(b)).seleccion,clave:key(),motivo:"fixture"})).rejects.toThrow("JSON");expect(await snapshot()).toEqual(before);
+        }} finally {await q("UPDATE flota_cb2_filas SET decision=? WHERE id=?",[o.decision,o.id]);}
+    });
 });

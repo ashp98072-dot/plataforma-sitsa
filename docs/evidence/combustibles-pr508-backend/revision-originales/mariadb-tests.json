@@ -1,0 +1,5 @@
+{
+  "status": 0,
+  "stdout": "\n\u001b[1m\u001b[30m\u001b[46m RUN \u001b[49m\u001b[39m\u001b[22m \u001b[36mv4.1.11 \u001b[39m\u001b[90mC:/Users/Admin/Documents/plataforma-sitsa/.work-pr508\u001b[39m\n\n \u001b[32m✓\u001b[39m src/lib/flota/cb2/service.db.test.ts \u001b[2m(\u001b[22m\u001b[2m19 tests\u001b[22m\u001b[2m)\u001b[22m\u001b[33m 4202\u001b[2mms\u001b[22m\u001b[39m\n\n\u001b[2m Test Files \u001b[22m \u001b[1m\u001b[32m1 passed\u001b[39m\u001b[22m\u001b[90m (1)\u001b[39m\n\u001b[2m      Tests \u001b[22m \u001b[1m\u001b[32m19 passed\u001b[39m\u001b[22m\u001b[90m (19)\u001b[39m\n\u001b[2m   Start at \u001b[22m 12:42:47\n\u001b[2m   Duration \u001b[22m 4.93s\u001b[2m (transform 177ms, setup 0ms, import 596ms, tests 4.20s, environment 0ms)\u001b[22m\n\n",
+  "stderr": ""
+}

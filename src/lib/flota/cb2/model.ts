@@ -11,6 +11,37 @@ export const hash = (s: string | Buffer) => createHash("sha256").update(s).diges
 export const id = z.number().int().positive().max(2147483647);
 export const clave = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const moneda = z.enum(["GTQ", "USD"]);
+const decisionOriginal = z.object({
+    version: z.literal(1), moneda,
+    candidato: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    vehiculoId: id.nullable(), errores: z.array(z.string()),
+}).strict();
+/** Validar TODOS los originales; el resultado no depende de cual sea primero. */
+export function monedaOriginal(originales: Record<string, unknown>[], empresa: number, proveedor: number, importacion: number): "GTQ" | "USD" {
+    if (!originales.length || originales.length > 10000)
+        throw new ErrorCB2("Evidencia original incompleta o no certificable.");
+    const monedas = new Set<"GTQ" | "USD">();
+    const posiciones = new Set<string>();
+    for (const o of originales) {
+        if (Number(o.empresa_id) !== empresa || Number(o.proveedor_id) !== proveedor || Number(o.importacion_id) !== importacion ||
+            o.tipo !== "ORIGEN" || Number(o.revision) !== 1 || Number(o.marca_origen) !== 1 || o.origen_fila_id !== null || o.operacion_tipo !== "CONFIRMAR")
+            throw new ErrorCB2("Evento ORIGEN no certificable.");
+        let decision: z.infer<typeof decisionOriginal>;
+        try {
+            decision = decisionOriginal.parse(JSON.parse(String(o.decision)));
+            const datos: unknown = JSON.parse(String(o.datos_origen));
+            if (!datos || typeof datos !== "object" || Array.isArray(datos) ||
+                !Number.isInteger(Number(o.hoja_indice)) || Number(o.hoja_indice) < 1 || Number(o.hoja_indice) > 20 ||
+                !Number.isInteger(Number(o.fila_excel)) || Number(o.fila_excel) < 1 || Number(o.fila_excel) > 5000 ||
+                (datos as Record<string, unknown>).hoja !== o.hoja_nombre || (datos as Record<string, unknown>).fila !== Number(o.fila_excel)) throw new Error();
+        } catch { throw new ErrorCB2("JSON de evidencia original no certificable."); }
+        const posicion = `${o.hoja_indice}:${o.fila_excel}`;
+        if (posiciones.has(posicion)) throw new ErrorCB2("Posiciones ORIGEN repetidas.");
+        posiciones.add(posicion); monedas.add(decision.moneda);
+    }
+    if (monedas.size !== 1) throw new ErrorCB2("Moneda inconsistente entre originales.");
+    return [...monedas][0];
+}
 const decimal = z.string().regex(/^\d{1,12}(?:\.\d{1,6})?$/).transform(s => new Decimal(s).toFixed());
 const texto = z.string().trim().min(1).max(128).refine(s => !/[\u0000-\u001f\u007f]/.test(s));
 export const documento = z.object({ serie: texto, numero: texto, moneda, fecha: z.iso.date().nullable().default(null), total: decimal.nullable().default(null) }).strict();

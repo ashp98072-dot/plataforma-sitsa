@@ -3,7 +3,7 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
 import { getPool } from "@/lib/db";
 import { ahoraLocal } from "@/lib/rrhh/dates";
-import { ErrorCB2, hash, analizar, type Linea, type Seleccion, type Evento, type Documento } from "./model";
+import { ErrorCB2, hash, analizar, monedaOriginal, type Linea, type Seleccion, type Evento, type Documento } from "./model";
 import { rows, insert, tx, anterior, diario, factura, vehiculos, type Contexto } from "./repository";
 import * as storage from "./storage";
 const audience = "combustibles-cb2-confirmar-v1";
@@ -90,6 +90,10 @@ async function cabecera(c: PoolConnection, ctx: Contexto, id: number, lock = fal
         throw new ErrorCB2("Importacion no encontrada.", 404);
     return h;
 }
+async function originales(c: PoolConnection, ctx: Contexto, importacionId: number, lock = false) {
+    // Sin paginacion: ninguna moneda ni aparicion original puede quedar fuera.
+    return rows(c, `SELECT * FROM flota_cb2_filas WHERE empresa_id=? AND proveedor_id=? AND importacion_id=? AND tipo='ORIGEN' ORDER BY hoja_indice,fila_excel,id${lock ? " FOR UPDATE" : ""}`, [ctx.empresaId, ctx.proveedorId, importacionId]);
+}
 export async function reanudarArchivo(ctx: Contexto, op: {
     importacionId: number;
     revision: number;
@@ -107,8 +111,10 @@ export async function reanudarArchivo(ctx: Contexto, op: {
     // El archivo viene exclusivamente de la cabecera, nunca del cliente.
     const c = await getPool().getConnection();
     let h: RowDataPacket;
+    let currency: "GTQ" | "USD";
     try {
         h = await cabecera(c, ctx, op.importacionId);
+        currency = monedaOriginal(await originales(c, ctx, op.importacionId), ctx.empresaId, ctx.proveedorId, op.importacionId);
     }
     finally {
         c.release();
@@ -116,11 +122,6 @@ export async function reanudarArchivo(ctx: Contexto, op: {
     if (Number(h.version_contrato) !== 2 || Number(h.version_parser) !== 1)
         throw new ErrorCB2("Version de evidencia no soportada.");
     const buffer = await storage.leer(ctx.empresaId, String(h.archivo_ruta), String(h.archivo_sha256));
-    // Moneda operativa inmutable declarada en ORIGEN (incluso si no hubo consumos).
-    const r = await consultar(ctx.empresaId, "filas", op.importacionId, 1);
-    const currency = JSON.parse(String(r[0]?.decision ?? "{} modo invalido")).moneda;
-    if (currency !== "GTQ" && currency !== "USD")
-        throw new ErrorCB2("Moneda original no certificable.");
     const lineas = await analizar(buffer, h.perfil, currency);
     return tx(ctx, async (c) => {
         const retry = await anterior(c, ctx, "REANUDAR", op.clave, request);
@@ -129,7 +130,9 @@ export async function reanudarArchivo(ctx: Contexto, op: {
         h = await cabecera(c, ctx, op.importacionId, true);
         if (Number(h.revision) !== op.revision)
             throw new ErrorCB2("Revision obsoleta.");
-        const origenes = await rows(c, "SELECT * FROM flota_cb2_filas WHERE empresa_id=? AND proveedor_id=? AND importacion_id=? AND tipo='ORIGEN' ORDER BY hoja_indice,fila_excel", [ctx.empresaId, ctx.proveedorId, op.importacionId]);
+        const origenes = await originales(c, ctx, op.importacionId, true);
+        if (monedaOriginal(origenes, ctx.empresaId, ctx.proveedorId, op.importacionId) !== currency)
+            throw new ErrorCB2("Moneda original cambio durante la reanudacion.");
         if (origenes.length !== lineas.length)
             throw new ErrorCB2("Evidencia original incompleta.");
         const elegidas = new Set(op.seleccion.map(s => s.candidato));

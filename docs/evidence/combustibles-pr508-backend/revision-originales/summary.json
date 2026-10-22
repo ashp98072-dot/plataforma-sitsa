@@ -1,0 +1,13 @@
+{
+    "baseline":  "915f110498ffb876e1d862d35244103f32933e9f",
+    "dateUTC":  "2026-10-22T18:44:03.3562395Z",
+    "status":  "PASS",
+    "unitTests":  46,
+    "integrationTests":  19,
+    "engine":  "MariaDB 11.8.9",
+    "transport":  "UUID local named pipe; skip-networking=1",
+    "canonicalIncidencias":  "15 comprobaciones, todas cero tras cada caso",
+    "typecheck":  "PASS",
+    "eslint":  "PASS",
+    "production":  false
+}

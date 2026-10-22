@@ -154,3 +154,32 @@ PASS; las 15 incidencias canonicas dieron cero tras cada caso. TypeScript, ESLin
 node --check y git diff --check PASS. No hay servidores MariaDB de prueba activos.
 Evidencia: [summary.json](evidence/combustibles-pr508-backend/summary.json), salida
 del motor, cierre y hashes normalizados LF de fuentes en el mismo directorio.
+
+## Correccion de auditoria: moneda original de reanudacion
+
+Revision sobre SHA 915f110498ffb876e1d862d35244103f32933e9f. La moneda ya no
+se obtiene de consultar(filas, limite=1). Reanudar lee TODOS los ORIGEN de empresa,
+proveedor e importacion explicitos, sin LIMIT/OFFSET, ordenados por hoja/fila/id.
+Exige evento ORIGEN de revision 1/CONFIRMAR, marca y referencia originales validas,
+JSON de decision version 1 con estructura completa, datos_origen con posicion
+coincidente y una unica moneda GTQ/USD entre todos los originales. Ausencia,
+version desconocida, monedas mezcladas o JSON no certificable rechazan con 409.
+Los eventos posteriores RESOLUCION/ASOCIACION_FACTURA no son fuente de moneda.
+
+Antes de escribir vuelve a leer los mismos originales con FOR UPDATE y a validar
+su coherencia y moneda respecto al analisis. La verificacion de cantidad y la
+comparacion del archivo privado/originales permanecen vigentes. El resumen lee
+el diario completo ordenado por revision/id; no pagina evidencia de reanudacion.
+La paginacion publica GET /filas queda limitada a consultas del usuario y no se
+utiliza como fuente de la reanudacion. Recuperar una operacion ya confirmada
+sigue reconstruyendo su resultado del diario antes de revisar revision/evidencia.
+
+Pruebas de esta correccion: 46 dirigidas PASS y 19 casos MariaDB 11.8.9 aislado
+PASS (incluidos los 16 anteriores). Casos nuevos: multiples eventos hasta
+revision 4 y otro proveedor con moneda distinta, moneda incoherente en un
+original posterior, y JSON valido para SQL pero sin estructura certificable.
+Snapshots confirman rechazo sin nuevas escrituras. Se evaluan las mismas
+15 incidencias canonicas tras cada caso: todas cero. TypeScript y ESLint PASS.
+Evidencia de esta revision separada de la entrega inicial:
+[evidence/combustibles-pr508-backend/revision-originales/](evidence/combustibles-pr508-backend/revision-originales/).
+No cambia esquema, permisos, endpoints ni contratos SQL. Sin produccion ni merge.
