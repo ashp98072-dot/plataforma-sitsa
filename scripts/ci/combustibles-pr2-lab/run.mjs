@@ -461,6 +461,18 @@ function selfTest() {
   const contracts = Object.values(sql).flatMap(s => [...s.matchAll(/-- BEGIN CB2_METADATA_CANONICO\n([\s\S]*?)\n-- END CB2_METADATA_CANONICO/g)].map(m => m[1]));
   assert.equal(contracts.length, 4);
   assert.equal(new Set(contracts).size, 1);
+  const canonical = contracts[0];
+  const explicit = value => `CONVERT(${value} USING utf8mb4) COLLATE utf8mb4_bin`;
+  for (const name of ['CONSTRAINT_SCHEMA', 'TABLE_NAME', 'CONSTRAINT_NAME']) {
+    assert(canonical.includes(`${explicit('r.' + name)} = ${explicit('k.' + name)}`));
+  }
+  // Ningun cruce textual puede volver a depender de collations implicitas.
+  const rawPairs = [...canonical.matchAll(/\b([rck]\.[A-Za-z_]+) (=|<>) ([ekr]\.[A-Za-z_]+)\b/g)];
+  assert.equal(rawPairs.length, 5); // cuatro dimensiones numericas y NON_UNIQUE
+  for (const [, left] of rawPairs) assert([
+    'c.CHARACTER_MAXIMUM_LENGTH', 'c.NUMERIC_PRECISION', 'c.NUMERIC_SCALE',
+    'c.DATETIME_PRECISION', 'r.no_unico',
+  ].includes(left));
   assert.equal((sql.migrate.match(/^CREATE TABLE /gm) ?? []).length, 4);
   for (const name of ['base', 'seed', 'associate']) assert(fixture(name).includes('SOLO LABORATORIO AISLADO'));
   console.log('PASS: aserciones positivas/negativas del arnes y contratos estaticos. No se ejecuto Docker ni SQL.');
