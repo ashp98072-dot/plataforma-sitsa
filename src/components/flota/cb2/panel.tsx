@@ -1,4 +1,5 @@
 "use client";
+import styles from "./panel.module.css";
 import { useEffect, useState } from "react";
 import { apiCB2, jsonCB2, OperacionCB2, type CatalogosCB2 } from "./client";
 import { ImportarCB2, button, type EjecutarCB2 } from "./importar";
@@ -96,8 +97,8 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
             setBusy(false);
         }
     }
-    return <section className="space-y-4 rounded border border-[var(--border)] p-4" aria-label="Consumos y facturas CB2"><h2 className="text-lg font-semibold">Consumos y facturas de proveedor</h2>
- <nav className="flex flex-wrap gap-2" aria-label="Vistas de consumos y facturas">{tabs.filter(([k]) => k !== "importar" || canWrite).map(([key, label]) => <button key={key} className={`${button} ${tab === key ? "bg-sky-700 text-white" : ""}`} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{label}</button>)}</nav>
+    return <section className={`${styles.panel} space-y-6 rounded-2xl border border-[var(--border)] p-4 sm:p-6`} aria-label="Consumos y facturas CB2"><header className="space-y-1"><p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Consumos de proveedores</p><h2 className="text-xl font-semibold">Consumos y facturas de proveedor</h2><p className="text-sm text-[var(--muted)]">Importa, revisa y da seguimiento a tus archivos HALEL y SHELL.</p></header>
+ <nav className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--bg)] p-1.5 sm:grid-cols-4" aria-label="Vistas de consumos y facturas">{tabs.filter(([k]) => k !== "importar" || canWrite).map(([key, label]) => <button key={key} className={`${button} ${tab === key ? "border-transparent bg-[var(--accent)] text-white shadow-sm" : "border-transparent text-[var(--muted)]"}`} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{label}</button>)}</nav>
  {busy && <p role="status">Procesando solicitud. No cierres esta pantalla ni repitas la acción.</p>}{error && <p role="alert" className="text-red-500">{error}</p>}{message && <p role="status" className="rounded border border-[var(--border)] p-3">{message}</p>}
  {op.pending && <aside className="space-y-2 rounded border border-amber-600 p-3"><p>Hay una solicitud pendiente ({op.pending.action}). Conservamos su clave de reintento. No cambies archivo, selección ni revisiones para recuperar un resultado incierto.</p>{op.pending.ejecutar ? <button className={button} disabled={busy} onClick={() => void retry()}>Reintentar exactamente la solicitud</button> : <p>Tras recargar, reproduce el mismo archivo y decisiones. No se guardan archivos ni recibos en el navegador.</p>}<details><summary>Decisiones del intento pendiente</summary><pre className="max-w-xl whitespace-pre-wrap break-all text-xs">{JSON.stringify(op.pending.identidad, null, 2)}</pre></details>{op.pending.definitivo && <button className={button} disabled={busy} onClick={() => { op.editar(); setError(""); setMessage("Solicitud rechazada sin aplicar. Puedes corregirla o actualizar los datos."); }}>Corregir solicitud rechazada</button>}</aside>}
  {catalogosError && <p role="alert">{catalogosError} <button className={button} onClick={() => setRecargarCat(n => n + 1)}>Reintentar catálogos</button></p>}

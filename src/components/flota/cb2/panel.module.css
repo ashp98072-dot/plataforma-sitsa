@@ -1,0 +1,29 @@
+.panel { min-width: 0; background: var(--card); color: var(--text); }
+.panel h2 { letter-spacing: -.02em; }
+.panel fieldset { min-width: 0; }
+.panel input, .panel select, .panel textarea { min-width: 0; max-width: 100%; }
+.panel label { display: flex; flex-direction: column; gap: .5rem; font-size: .875rem; font-weight: 500; min-width: 0; }
+.panel label:has(input[type="checkbox"]) { flex-direction: row; align-items: flex-start; }
+.panel input[type="checkbox"] { accent-color: var(--accent); width: 1rem; height: 1rem; flex-shrink: 0; margin-top: .2rem; }
+.panel table { min-width: 740px; border-collapse: separate; border-spacing: 0; }
+.panel thead { background: var(--thead); color: var(--muted); }
+.panel th { padding: .9rem 1rem; font-size: .75rem; font-weight: 600; white-space: nowrap; }
+.panel td { padding: 1rem; border-top: 1px solid var(--border); vertical-align: top; line-height: 1.6; }
+.panel tbody tr:hover { background: var(--fila-hover); }
+.panel div:has(> table) { border: 1px solid var(--border); border-radius: .75rem; }
+.panel form { background: var(--bg); align-items: end; padding: 1rem; border-radius: .75rem; }
+.panel p { line-height: 1.65; }
+.panel [role="alert"] { padding: .85rem 1rem; border: 1px solid #b45309; border-radius: .75rem; color: var(--text); background: color-mix(in srgb, #b45309 12%, var(--card)); overflow-wrap: anywhere; }
+.panel [role="status"] { padding: .85rem 1rem; border-radius: .75rem; background: var(--bg); }
+.panel button, .panel a, .panel input, .panel select, .panel textarea { outline-offset: 3px; }
+.panel button:focus-visible, .panel a:focus-visible, .panel input:focus-visible, .panel select:focus-visible, .panel textarea:focus-visible { outline: 2px solid var(--accent-2); }
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: 1.5rem 0; }
+.steps li { display: flex; align-items: center; gap: .65rem; padding: .85rem; border: 1px solid var(--border); border-radius: .75rem; color: var(--muted); font-size: .875rem; }
+.steps span { display: grid; place-items: center; border-radius: 50%; width: 1.75rem; height: 1.75rem; flex-shrink: 0; background: var(--bg); font-weight: 600; }
+.steps [aria-current="step"] { color: var(--text); border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 10%, var(--card)); }
+.steps [aria-current="step"] span { background: var(--accent-2); color: white; }
+.empty { padding: 2rem 1rem; text-align: center; border: 1px dashed var(--border); border-radius: .75rem; color: var(--muted); }
+.badge { display: inline-flex; padding: .2rem .6rem; border: 1px solid var(--border); border-radius: 999px; font-size: .7rem; font-weight: 600; letter-spacing: .025em; background: var(--bg); }
+.badge[data-state="FACTURADO"], .badge[data-state="COMPLETA"], .badge[data-state="RESUELTA"] { color: #5eead4; background: #134e4a; border-color: #0f766e; }
+.badge[data-state="PENDIENTE_FACTURA"], .badge[data-state="PARCIAL"], .badge[data-state="PENDIENTE"] { color: #fde68a; background: #713f12; border-color: #a16207; }
+@media (max-width: 640px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; } .steps li { padding: .6rem; font-size: .75rem; } .panel th, .panel td { padding: .75rem; } }

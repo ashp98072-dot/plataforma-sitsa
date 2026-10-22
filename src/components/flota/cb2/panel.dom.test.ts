@@ -84,6 +84,41 @@ async function change(text: string, value: string) { const el = control(text); a
 async function seleccionarConsumo() { await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Seleccionar consumo 3"]')!.click()); }
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
 describe("interfaz CB2 montada: flujos funcionales", () => {
+    it("guía la importación en cuatro pasos sin perder la selección", async () => {
+        await mount(); await click("Importar Excel");
+        const current = () => host.querySelector('[aria-current="step"]')?.textContent;
+        expect(current()).toContain("Seleccionar archivo");
+        expect(btn("Analizar Excel").disabled).toBe(true);
+        await change("Proveedor de la empresa", "1");
+        await act(async () => {
+            const f = control("Excel original");
+            Object.defineProperty(f, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true });
+            f.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        expect(current()).toContain("Analizar Excel");
+        await click("Analizar Excel"); expect(current()).toContain("Revisar coincidencias");
+        await change("Unidad para vale", "1");
+        expect(btn("Confirmar selección parcial").disabled).toBe(true);
+        await act(async () => control("Confirmo el procesamiento").click());
+        expect(current()).toContain("Confirmar selección");
+        expect(btn("Confirmar selección parcial").disabled).toBe(false);
+        expect(calls.filter(c => c.url.endsWith("/confirmar"))).toHaveLength(0);
+    });
+    it("muestra el rechazo de origen comprensible sin intentar confirmar", async () => {
+        const originalFetch = globalThis.fetch;
+        vi.stubGlobal("fetch", vi.fn((url, init) => String(url).endsWith("/preview")
+            ? Promise.resolve(response({ error: "No pudimos verificar el origen de la solicitud. Abre Combustibles desde la plataforma e inténtalo de nuevo." }, 403))
+            : originalFetch(url, init)));
+        await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1");
+        await act(async () => {
+            const f = control("Excel original"); Object.defineProperty(f, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true });
+            f.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        await click("Analizar Excel");
+        expect(host.querySelector('[role="alert"]')?.textContent).toContain("desde la plataforma");
+        expect(calls.some(c => c.url.endsWith("/confirmar"))).toBe(false);
+        expect(btn("Analizar Excel").disabled).toBe(false);
+    });
     it("importa parcialmente y reintenta sin cambiar clave", async () => { await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1"); await act(async () => { const f = control("Excel original"); Object.defineProperty(f, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true }); f.dispatchEvent(new Event("change", { bubbles: true })); }); await click("Analizar Excel"); expect(host.textContent).toContain("0001"); await change("Unidad para vale", "1"); await act(async () => control("Confirmo el procesamiento").click()); failConfirm = true; await click("Confirmar selección parcial"); expect(host.textContent).toContain("solicitud pendiente"); expect(control("Perfil").closest("fieldset")?.disabled).toBe(true); await click("Reintentar exactamente la solicitud"); const posts = calls.filter(c => c.url.endsWith("/confirmar")); expect(posts).toHaveLength(2); expect((posts[0].init!.body as FormData).get("clave")).toBe((posts[1].init!.body as FormData).get("clave")); expect(JSON.parse(String((posts[0].init!.body as FormData).get("seleccion")))).toEqual([{ candidato, vehiculoId: 1 }]); expect(host.textContent).toContain("Operación confirmada"); });
     it("asocia factura con ceros y revisiones exactas", async () => { await mount(); await prepararAsociacion(); await click("Asociar factura al lote"); const p = calls.find(c => c.url.endsWith("/asociar")); expect(p).toBeDefined(); expect(JSON.parse(String(p!.init!.body))).toMatchObject({ documento: { serie: "S", numero: "000001", moneda: "GTQ" }, consumos: [3], revisiones: [{ id: 2, revision: 1 }] }); });
     it("Admin reanuda desde historial y ofrece descarga privada", async () => { await mount(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.querySelector('a[download]')?.getAttribute("href")).toBe("/api/empresas/demo/flota/combustible/cb2/importaciones/2/archivo"); await change("Unidad para vale", "1"); await change("Motivo de reanudación", "Unidad verificada"); await click("Reanudar selección"); expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body))).toMatchObject({ importacionId: 2, revision: 1, seleccion: [{ candidato, vehiculoId: 1 }] }); });

@@ -1,0 +1,19 @@
+{
+  "normalization": "UTF-8 LF",
+  "files": {
+    "src/lib/flota/cb2/origin.ts": "42d78f494ee0c78bce39b65e7bdd4a71119f0706ad03796c3e016ad20f481a28",
+    "src/lib/flota/cb2/origin.test.ts": "a3bdc366f6e0f6687124e65ffe13473d8e0b14e7b95bef1152043c8eb761ebc0",
+    "src/lib/flota/cb2/http.ts": "5507042e7228c3fc1494356075505de3203dd9c9f7c29b3aa1a27688f23ff7ff",
+    "src/lib/flota/cb2/http.test.ts": "f43d1ba0e11b27fa5988097d958b1358801a36e43afc5f43111723bb7ddae40c",
+    "src/lib/flota/cb2/http-origin.test.ts": "74699cdb1cc515f400c9762e8d4ccecc84b4b76ab1be5bf26550904425f50329",
+    "src/components/flota/combustibles-client.tsx": "64459d8c172341899976c2056eb4d85ffe49b4b706251049f0f7e2b54a0b71b6",
+    "src/components/flota/cb2/panel.tsx": "39dde3d934054eb62a66618b9ba8b1d2affda66548da15b2a0d252fc35d4b6a2",
+    "src/components/flota/cb2/presentacion.tsx": "9c0a4b3594ffc8a0c80d5e436db2f7bcebb45a7bfa5a4950cbc236a2567322d4",
+    "src/components/flota/cb2/panel.module.css": "660c45b2bf7a526e3e9af7e3c46c0344c09a3daf2eaf660370b730477a347717",
+    "src/components/flota/cb2/importar.tsx": "0b113bddef4cfadd6d80f41a22549958997d447828b696f1adcd57e826d1d1c6",
+    "src/components/flota/cb2/consumos.tsx": "b1826e41ca41930ea7bb83d81c4a0004732eeb59c9e813ecc3aa0b992665ed11",
+    "src/components/flota/cb2/historial.tsx": "3f14af28f2055175142eba91d68d5e8a777641ddb0941786dc96726bae567dfa",
+    "src/components/flota/cb2/panel.dom.test.ts": "5026c308b98cef88146ddf53af426cc535f0e1130901506a84c243a503136bed",
+    "src/components/flota/cb2/listados.tsx": "881a95ff4bf68095ce93d61116eaca8cb3af821aed66fc155c088b486f72ced0"
+  }
+}
