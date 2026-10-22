@@ -75,11 +75,15 @@ No desactiva controles ni corrige automaticamente otros requisitos incumplidos.
 1. Desde la raiz del repositorio, generar localmente el lote completo:
 
    ```powershell
-   node scripts/ci/combustibles-pr2-lab/build-session-preflight.mjs |
-     Set-Content -Encoding utf8 "$env:TEMP\cb2-preflight-sesion.sql"
+   node scripts/ci/combustibles-pr2-lab/build-session-preflight.mjs --output "$env:TEMP\cb2-preflight-sesion.sql"
+   if ($LASTEXITCODE -ne 0) { throw 'No se genero el archivo' }
+   node scripts/ci/combustibles-pr2-lab/build-session-preflight.mjs --check "$env:TEMP\cb2-preflight-sesion.sql"
+   if ($LASTEXITCODE -ne 0) { throw 'Archivo SQL no verificado' }
    ```
 
-   El generador solo lee el preflight y emite SQL a stdout. No carga .env,
+   El generador lee el preflight y escribe directamente UTF-8 sin BOM con --output
+   (sin argumentos conserva stdout). El archivo empieza con SELECT, sin comentarios
+   iniciales. --check verifica bytes UTF-8, ausencia de BOM e identidad del lote. No carga .env,
    credenciales, drivers ni conexiones. No ejecuta SQL. Revisar el archivo.
 2. En phpMyAdmin seleccionar `u611730801_Plataforma`. Configurar la ejecucion
    para detenerse ante el primer error (no continuar un lote fallido). Pegar TODO
@@ -161,3 +165,63 @@ y los mismos predicados. No cambia el SQL enviado al motor.
 - No se ejecuto SQL, Docker, workflows ni conexiones a Hostinger.
 - Pendiente de MariaDB 11.8.9 real: ejecucion y resultados del lote; persistencia
   concreta de phpMyAdmin, metadata base, CLEAN, migracion y FINAL.
+
+## Incidente #1064 al inicio: codificacion, comentarios y multiples sentencias
+
+La receta anterior con `Set-Content -Encoding utf8` era incorrecta para Windows
+PowerShell 5.1: agrega BOM UTF-8. Reproduccion local con PowerShell 5.1.26100.9711:
+escribir `SELECT 1;` de esa forma produce `EF BB BF 53 45 4C 45 43 54`.
+[Microsoft documenta esta diferencia](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_character_encoding).
+No usar tampoco `>` ni Out-File para generar el archivo en PowerShell 5.1, pues
+pueden escribir UTF-16LE. La nueva opcion --output escribe bytes desde Node y
+funciona sin recodificacion tanto en Windows PowerShell 5.1 como en PowerShell 7.
+
+El comentario original `-- PR #507` contiene el espacio requerido por
+[MariaDB](https://mariadb.com/docs/server/reference/sql-statements/comment-syntax).
+No hay evidencia de que ese comentario, por si solo, sea SQL invalido. El BOM
+antes del comentario es una causa plausible del error en posicion 0, no una
+reproduccion confirmada del parser de Hostinger: no se recibio el archivo fallido
+ni se ejecuto contra ese servicio. El prefijo ahora empieza por SELECT para
+eliminar tambien la dependencia de comentarios iniciales del analizador cliente.
+Los comentarios internos del preflight se conservan literalmente.
+
+El error en posicion 0 no demuestra un problema de multiples sentencias. Si el
+archivo verificado sigue fallando, guardar sentencia exacta, posicion y version
+de phpMyAdmin. No dividir el SET y el preflight entre peticiones para intentar
+solucionarlo: se perderia la garantia de sesion. Tampoco eliminar comentarios o
+validaciones del contrato para silenciar el analizador.
+
+Metodo preferido: generar y verificar con los dos comandos --output/--check de
+arriba; abrir el archivo como UTF-8 y pegar TODO en la pestana SQL de la base en
+un solo envio, solamente tras autorizacion. Como alternativa, phpMyAdmin ofrece
+[Importar archivos SQL](https://docs.phpmyadmin.net/en/latest/import_export.html):
+seleccionar el mismo archivo verificado, formato SQL y juego de caracteres UTF-8.
+No habilitar reanudacion/importacion parcial ni omitir consultas iniciales; no
+continuar tras error. Si la interfaz fragmenta el lote o no muestra las evidencias
+inicial/final, el resultado queda SIN CERTIFICAR. No se ha certificado esta ruta
+en la instalacion de Hostinger. Mantener los criterios de conexion, esquema,
+estrictitud y todas las filas BASE descritos arriba.
+
+Verificacion hexadecimal opcional, sin ejecutar SQL:
+
+```powershell
+$cb2SqlBytes = [System.IO.File]::ReadAllBytes("$env:TEMP\cb2-preflight-sesion.sql")
+[System.BitConverter]::ToString($cb2SqlBytes[0..5])
+```
+
+Debe imprimir `53-45-4C-45-43-54` (SELECT), nunca EF-BB-BF ni FF-FE.
+--check ademas rechaza UTF-8 invalido, cabecera con comentarios, truncamiento y
+cualquier cambio respecto del lote que genera esta version del repositorio.
+No necesita SQL, red, variables de entorno de la aplicacion ni acceso al servidor.
+
+Prueba de regresion:
+
+```powershell
+node --test scripts/ci/combustibles-pr2-lab/build-session-preflight.test.mjs
+```
+
+PASS local: escritura directa, ruta con espacios, equivalencia de stdout, SELECT
+inicial, preflight literal una sola vez y rechazo de BOM UTF-8 (reproduce PS 5.1),
+UTF-16LE, comentarios iniciales, bytes invalidos y archivo truncado. Tambien
+pasaron self-test del arnes, node --check y git diff --check. Los tres contratos
+SQL conservan sus blobs originales; no se ejecuto SQL ni migracion ni Hostinger.

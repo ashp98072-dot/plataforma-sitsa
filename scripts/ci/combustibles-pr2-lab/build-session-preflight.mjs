@@ -1,11 +1,8 @@
-﻿import { readFileSync } from 'node:fs';
+﻿import { readFileSync, writeFileSync } from 'node:fs';
 
 // Solo genera texto SQL para revision manual. No usa cliente, red, .env ni credenciales.
 const preflight = readFileSync(new URL('../../../sql/preflight-2026-10-combustibles-pr2-consumos-facturas.sql', import.meta.url), 'utf8');
-const prefix = `-- PR #507: SOLO LECTURAS DE METADATA Y ESTADO DE SESION; no ejecuta migracion.
--- Revisar y autorizar antes de enviar TODO este archivo en una sola ejecucion.
--- Cliente detenido ante el primer error; no enviar sentencias por separado.
-SELECT 'ANTES' AS fase, CONNECTION_ID() AS conexion,
+const prefix = `SELECT 'ANTES' AS fase, CONNECTION_ID() AS conexion,
  DATABASE() AS esquema, @@SESSION.sql_mode AS sql_mode;
 USE \`u611730801_Plataforma\`;
 SET @cb2_audit_sql_mode_before = @@SESSION.sql_mode,
@@ -49,4 +46,27 @@ SET SESSION sql_mode = @cb2_audit_sql_mode_before;
 SELECT 'RESTAURADO' AS fase, CONNECTION_ID() AS conexion,
  DATABASE() AS esquema, @@SESSION.sql_mode AS sql_mode;
 `;
-process.stdout.write(prefix + preflight + suffix);
+const generated = Buffer.from(prefix + preflight + suffix, 'utf8');
+const [mode, filename, ...extra] = process.argv.slice(2);
+if (extra.length || (mode && (!['--output', '--check'].includes(mode) || !filename))) {
+  throw new Error('Uso: node build-session-preflight.mjs [--output archivo.sql | --check archivo.sql]');
+}
+if (mode === '--output') {
+  // Escritura directa: evita BOM y recodificacion de pipelines de Windows PowerShell.
+  writeFileSync(filename, generated);
+} else if (mode === '--check') {
+  const bytes = readFileSync(filename);
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) {
+    throw new Error('BOM UTF-8 detectado: regenerar con --output, sin Set-Content');
+  }
+  new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  if (!bytes.subarray(0, 6).equals(Buffer.from('SELECT'))) {
+    throw new Error('El archivo debe empezar directamente con SELECT, sin BOM ni comentarios');
+  }
+  if (!bytes.equals(generated)) {
+    throw new Error('El archivo no coincide con el lote generado y el preflight actual');
+  }
+  console.log('PASS: UTF-8 sin BOM, inicio SELECT y lote completo identico al generador actual.');
+} else {
+  process.stdout.write(generated);
+}
