@@ -1,0 +1,19 @@
+{
+    "dateUTC":  "2026-10-22T19:15:05.9734157Z",
+    "base":  "9b1259ba",
+    "status":  "PASS",
+    "directedUnitRegressionTests":  201,
+    "mountedDomTests":  9,
+    "engine":  "MariaDB 11.8.9 Win64",
+    "engineTests":  20,
+    "canonicalPostcheck":  "15 incidencias en cero tras cada caso",
+    "transport":  "UUID local named pipe; TCP disabled",
+    "typecheck":  "PASS",
+    "eslint":  "PASS",
+    "production":  false,
+    "limitations":  [
+                        "DOM con respuestas simuladas; sin navegador real ni UI Hostinger",
+                        "Sin build con servicios productivos",
+                        "Sin prueba al volumen maximo ni CDN"
+                    ]
+}

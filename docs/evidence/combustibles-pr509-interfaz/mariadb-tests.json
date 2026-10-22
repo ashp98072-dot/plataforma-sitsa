@@ -1,0 +1,5 @@
+{
+  "status": 0,
+  "stdout": "\n\u001b[1m\u001b[30m\u001b[46m RUN \u001b[49m\u001b[39m\u001b[22m \u001b[36mv4.1.11 \u001b[39m\u001b[90mC:/Users/Admin/Documents/plataforma-sitsa/.work-pr509\u001b[39m\n\n \u001b[32m✓\u001b[39m src/lib/flota/cb2/service.db.test.ts \u001b[2m(\u001b[22m\u001b[2m20 tests\u001b[22m\u001b[2m)\u001b[22m\u001b[33m 5505\u001b[2mms\u001b[22m\u001b[39m\n     \u001b[33m\u001b[2m✓\u001b[22m\u001b[39m parcial, reanuda sin modificar ORIGEN, asocia un consumo creado en resolucion \u001b[33m 318\u001b[2mms\u001b[22m\u001b[39m\n\n\u001b[2m Test Files \u001b[22m \u001b[1m\u001b[32m1 passed\u001b[39m\u001b[22m\u001b[90m (1)\u001b[39m\n\u001b[2m      Tests \u001b[22m \u001b[1m\u001b[32m20 passed\u001b[39m\u001b[22m\u001b[90m (20)\u001b[39m\n\u001b[2m   Start at \u001b[22m 13:08:44\n\u001b[2m   Duration \u001b[22m 6.21s\u001b[2m (transform 184ms, setup 0ms, import 569ms, tests 5.51s, environment 0ms)\u001b[22m\n\n",
+  "stderr": ""
+}
