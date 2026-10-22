@@ -135,3 +135,46 @@ InnoDB no estricto (DIVERGENTE). Esos escenarios de motor se agregaron pero NO
 se ejecutaron: requieren laboratorio MariaDB autorizado. Las pruebas estaticas
 no demuestran el resultado real de SQL ni reproducen phpMyAdmin.
 No hubo SQL de produccion, Docker, workflows, migraciones ni merge.
+
+## Indice BASE de vehiculos: nombre confirmado por auditoria independiente
+
+La ejecucion del commit 9a02b8de tuvo una unica divergencia BASE: el nombre
+uq_flota_vehiculos_empresa_id. El operador aporta SHOW INDEX con
+uq_multas_vehiculo_empresa_id, UNIQUE BTREE (empresa_id,id), orden exacto, sin
+prefijos ni columnas nulas. No se consulto produccion desde esta auditoria.
+
+La migracion sql/migrate-2026-08-operaciones-multas.sql crea ese nombre. La de
+TMS de septiembre detecta la UNIQUE compuesta existente y no la duplica con el
+nombre uq_flota_vehiculos_empresa_id. Esto explica que la secuencia historica
+produzca el nombre confirmado. Las FK de Multas y TMS referencian las columnas
+(empresa_id,id), no el nombre del indice. La FK fk_cb2c_vehiculo de PR2 referencia
+solo id; no hay hint USE/FORCE INDEX en estos scripts que dependa del nombre viejo.
+
+Se sustituye exclusivamente el nombre esperado por uq_multas_vehiculo_empresa_id
+en los cuatro bloques canonicos. No se agregan alias ni busquedas por equivalencia:
+el nombre anterior y cualquier otro nombre siguen dando DIVERGENTE, aunque tengan
+las mismas columnas. El fixture de laboratorio usa ahora el nombre confirmado.
+No se modifica schema.sql ni las migraciones historicas: el contrato de PR2
+reconoce esta base auditada, no intenta uniformar instalaciones ni renombrar indices.
+
+Se conservan columnas y orden empresa_id,id, dos columnas exactas, NON_UNIQUE=0,
+BTREE, sin SUB_PART, orden ascendente, no IGNORED, y los checks NOT NULL de ambas
+columnas BASE. No cambia DDL de CB2, FK, cotejamiento, controles de sesion ni
+ninguna otra fila esperada. Una instalacion que solo tenga el nombre anterior
+no queda certificada con este contrato; requiere su propia auditoria explicita.
+
+PASS local: las tres pruebas del generador (incluida nueva regresion de nombre,
+orden, unicidad y prefijos), self-test de cuatro contratos iguales, node --check
+y git diff --check. La comparacion contra 9a02b8de confirma que los tres SQL solo
+sustituyen ese nombre (una vez en preflight/postcheck y dos en migrate).
+
+Se agregan cuatro escenarios al arnes aislado: nombre anterior, nombre arbitrario,
+orden invertido e indice no unico; todos deben dar DIVERGENTE y bloquear migrate.
+No se ejecutaron esos escenarios de motor: requieren el laboratorio aprobado.
+El fixture positivo y las pruebas estaticas no sustituyen MariaDB real.
+
+Para repetir el preflight manual autorizado, regenerar y verificar el archivo con
+--output y --check como se indica arriba: el archivo anterior ya no coincide con
+el contrato actual. La fila esperada pasa a llamarse
+indice:flota_vehiculos.uq_multas_vehiculo_empresa_id. No se promete CLEAN antes
+de ejecutar todas las comprobaciones; no ejecutar migracion como parte de la prueba.

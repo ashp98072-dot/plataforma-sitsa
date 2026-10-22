@@ -333,6 +333,19 @@ hoja_indice,hoja_nombre,fila_excel,resultado,datos_origen,decision,motivo,usuari
     assert(!rows(result).some(r => r[0] === 'DATO'));
     query(c, `guard-${label}`, sql.migrate, 1644, 'CB2: se requiere CLEAN y base compatible');
   }));
+  // Solo fixtures aislados: demostrar que equivalencia estructural no permite otro nombre.
+  for (const [label, replacement] of [
+    ['nombre-anterior', 'UNIQUE KEY uq_flota_vehiculos_empresa_id (empresa_id,id)'],
+    ['nombre-arbitrario', 'UNIQUE KEY otro_indice_equivalente (empresa_id,id)'],
+    ['orden-invertido', 'UNIQUE KEY uq_multas_vehiculo_empresa_id (id,empresa_id)'],
+    ['no-unico', 'KEY uq_multas_vehiculo_empresa_id (empresa_id,id)'],
+  ]) record(`indice-base-vehiculos-${label}`, () => laboratory(`vehiculos-${label}`, c => {
+    query(c, 'alterar-indice-base', `ALTER TABLE flota_vehiculos DROP INDEX uq_multas_vehiculo_empresa_id, ADD ${replacement};`);
+    const result = query(c, 'preflight-indice-base', sql.preflight);
+    state(result, 'BASE', 'indice:flota_vehiculos.uq_multas_vehiculo_empresa_id', '0');
+    preState(result, 'DIVERGENTE');
+    query(c, 'guard-indice-base', sql.migrate, 1644, 'CB2: se requiere CLEAN y base compatible');
+  }));
   record('base-incompatible', () => laboratory('base-incompatible', c => {
     query(c, 'alterar-base-sintetica', 'ALTER TABLE auditoria MODIFY usuario VARCHAR(99) NULL;');
     preState(query(c, 'preflight-base-incompatible', sql.preflight), 'DIVERGENTE');

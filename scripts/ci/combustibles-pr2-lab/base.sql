@@ -14,7 +14,7 @@ CREATE TABLE compras_proveedores (
 ) ENGINE=InnoDB;
 CREATE TABLE flota_vehiculos (
  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL,
- UNIQUE KEY uq_flota_vehiculos_empresa_id (empresa_id,id)
+ UNIQUE KEY uq_multas_vehiculo_empresa_id (empresa_id,id)
 ) ENGINE=InnoDB;
 CREATE TABLE flota_vehiculo_acceso (
  vehiculo_id INT NOT NULL, empresa_id INT NOT NULL, PRIMARY KEY (vehiculo_id,empresa_id)

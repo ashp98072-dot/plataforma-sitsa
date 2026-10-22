@@ -72,3 +72,36 @@ test('metadata usa objetivo explicito aunque el contexto sea information_schema'
   assert(generated.includes('SET SESSION innodb_strict_mode = @cb2_audit_innodb_before;'));
   assert(!/SET\s+(?:@@)?GLOBAL/i.test(generated));
 });
+
+test('indice BASE de vehiculos exige el nombre auditado y su estructura exacta', () => {
+  const validate = sql => {
+    const block = sql.match(/indices_esperados AS \(\s*SELECT j\.\* FROM JSON_TABLE\('(\[[\s\S]*?\])',/);
+    assert(block);
+    const expected = JSON.parse(block[1]);
+    const vehicleUnique = expected.filter(row => row[0] === 'BASE' && row[1] === 'flota_vehiculos' && row[2] !== 'PRIMARY');
+    assert.deepEqual(vehicleUnique, [['BASE', 'flota_vehiculos', 'uq_multas_vehiculo_empresa_id', 'empresa_id,id', 0]]);
+    for (const predicate of [
+      'MAX(NON_UNIQUE) AS no_unico', 'SUB_PART IS NOT NULL', "INDEX_TYPE <> 'BTREE'",
+      "COALESCE(COLLATION, '') <> 'A'", "IGNORED <> 'NO'",
+      'GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX)',
+      'r.no_unico = e.no_unico AND r.incompatibles = 0',
+      'r.numero_columnas = 1 + CHAR_LENGTH(e.columnas)',
+      'CONVERT(r.nombre USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.nombre USING utf8mb4) COLLATE utf8mb4_bin',
+      'CONVERT(r.columnas USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(e.columnas USING utf8mb4) COLLATE utf8mb4_bin',
+    ]) assert(sql.includes(predicate), predicate);
+  };
+  for (const name of ['preflight', 'migrate', 'postcheck']) {
+    const sql = readFileSync(new URL(`../../../sql/${name}-2026-10-combustibles-pr2-consumos-facturas.sql`, import.meta.url), 'utf8');
+    validate(sql);
+    for (const mutation of [
+      sql.replaceAll('uq_multas_vehiculo_empresa_id', 'uq_flota_vehiculos_empresa_id'),
+      sql.replaceAll('uq_multas_vehiculo_empresa_id', 'otro_indice_equivalente'),
+      sql.replaceAll('"uq_multas_vehiculo_empresa_id","empresa_id,id",0', '"uq_multas_vehiculo_empresa_id","id,empresa_id",0'),
+      sql.replaceAll('"uq_multas_vehiculo_empresa_id","empresa_id,id",0', '"uq_multas_vehiculo_empresa_id","empresa_id,id",1'),
+      sql.replaceAll('SUB_PART IS NOT NULL', 'FALSE'),
+    ]) assert.throws(() => validate(mutation));
+  }
+  const fixture = readFileSync(new URL('./base.sql', import.meta.url), 'utf8');
+  assert(fixture.includes('UNIQUE KEY uq_multas_vehiculo_empresa_id (empresa_id,id)'));
+  assert(!fixture.includes('uq_flota_vehiculos_empresa_id'));
+});

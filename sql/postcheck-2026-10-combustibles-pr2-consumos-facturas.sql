@@ -143,7 +143,7 @@ SELECT j.* FROM JSON_TABLE('[
   ["BASE","flota_combustible_conciliacion_filas","PRIMARY","id",0],
   ["BASE","auditoria","PRIMARY","id",0],
   ["BASE","compras_proveedores","uq_compras_proveedor_empresa","empresa_id,id",0],
-  ["BASE","flota_vehiculos","uq_flota_vehiculos_empresa_id","empresa_id,id",0],
+  ["BASE","flota_vehiculos","uq_multas_vehiculo_empresa_id","empresa_id,id",0],
   ["BASE","flota_vehiculo_acceso","PRIMARY","vehiculo_id,empresa_id",0],
   ["BASE","flota_combustible_conciliaciones","uq_fcci_archivo","empresa_id,proveedor_id,archivo_sha256",0],
   ["BASE","flota_combustible_conciliaciones","uq_fcci_empresa_id","empresa_id,id",0],
