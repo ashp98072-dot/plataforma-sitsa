@@ -1,0 +1,557 @@
+{
+  "selection": "Paths matching combustible, /cb2/, session, /auth/, tenant, permisos, dashboard, predios, /flota/ (from the full run)",
+  "passed": 1199,
+  "failed": 0,
+  "files": [
+    {
+      "path": "src/components/app-shell-facturacion-permisos.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/components/navigation-session.test.ts",
+      "status": "passed",
+      "passed": 14
+    },
+    {
+      "path": "src/lib/permisos-catalogo.test.ts",
+      "status": "passed",
+      "passed": 13
+    },
+    {
+      "path": "src/lib/permisos-persistencia.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/lib/permisos-request.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/permisos-shared.test.ts",
+      "status": "passed",
+      "passed": 47
+    },
+    {
+      "path": "src/lib/session-activity-client.test.ts",
+      "status": "passed",
+      "passed": 13
+    },
+    {
+      "path": "src/lib/session-lifetime.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/session-navigation.test.ts",
+      "status": "passed",
+      "passed": 4
+    },
+    {
+      "path": "src/lib/session-tokens.test.ts",
+      "status": "passed",
+      "passed": 4
+    },
+    {
+      "path": "src/lib/tenant-acciones-catalogo.test.ts",
+      "status": "passed",
+      "passed": 14
+    },
+    {
+      "path": "src/lib/tenant-combustible.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/lib/tenant-cont-reportes.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/lib/tenant-cotizaciones-ajustes.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/lib/tenant-cotizaciones-costeo.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/lib/tenant-cxc.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/components/flota/combustible-preview-v2.test.ts",
+      "status": "passed",
+      "passed": 1
+    },
+    {
+      "path": "src/components/flota/vehiculo-documentos-texto.test.ts",
+      "status": "passed",
+      "passed": 2
+    },
+    {
+      "path": "src/lib/admin/limpiar-combustible-preview.test.ts",
+      "status": "passed",
+      "passed": 14
+    },
+    {
+      "path": "src/lib/contabilidad/permisos.test.ts",
+      "status": "passed",
+      "passed": 9
+    },
+    {
+      "path": "src/lib/facturacion/permisos-config-requisitos.test.ts",
+      "status": "passed",
+      "passed": 51
+    },
+    {
+      "path": "src/lib/flota/acceso-vehiculo-edicion.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/lib/flota/alertas-km.test.ts",
+      "status": "passed",
+      "passed": 25
+    },
+    {
+      "path": "src/lib/flota/combustible-autorizacion-http.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/lib/flota/combustible-c1-wiring.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/lib/flota/combustible-c1.db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/combustible-c2c-http.test.ts",
+      "status": "passed",
+      "passed": 10
+    },
+    {
+      "path": "src/lib/flota/combustible-c2c-rollout.db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/combustible-c2c-shared.test.ts",
+      "status": "passed",
+      "passed": 11
+    },
+    {
+      "path": "src/lib/flota/combustible-c2c.db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/combustible-coincidencias.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/flota/combustible-conciliacion-consultas.test.ts",
+      "status": "passed",
+      "passed": 20
+    },
+    {
+      "path": "src/lib/flota/combustible-conciliacion-excel.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/lib/flota/combustible-conciliacion-persistencia.test.ts",
+      "status": "passed",
+      "passed": 9
+    },
+    {
+      "path": "src/lib/flota/combustible-conciliacion.test.ts",
+      "status": "passed",
+      "passed": 42
+    },
+    {
+      "path": "src/lib/flota/combustible-estaciones-http.test.ts",
+      "status": "passed",
+      "passed": 20
+    },
+    {
+      "path": "src/lib/flota/combustible-estaciones-wiring.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/lib/flota/combustible-estaciones.test.ts",
+      "status": "passed",
+      "passed": 9
+    },
+    {
+      "path": "src/lib/flota/combustible-fondos-captura.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/lib/flota/combustible-fondos.test.ts",
+      "status": "passed",
+      "passed": 19
+    },
+    {
+      "path": "src/lib/flota/combustible-form-ui.test.ts",
+      "status": "passed",
+      "passed": 21
+    },
+    {
+      "path": "src/lib/flota/combustible-formatos-flexibles.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/flota/combustible-identificadores.test.ts",
+      "status": "passed",
+      "passed": 4
+    },
+    {
+      "path": "src/lib/flota/combustible-importacion-parser.test.ts",
+      "status": "passed",
+      "passed": 13
+    },
+    {
+      "path": "src/lib/flota/combustible-importacion-v2-resumen.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/lib/flota/combustible-importacion-v2.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/lib/flota/combustible-importaciones-rollout-db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/combustible-importaciones-wiring.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/flota/combustible-importaciones.test.ts",
+      "status": "passed",
+      "passed": 15
+    },
+    {
+      "path": "src/lib/flota/combustible-ooxml-v2.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/lib/flota/combustible-permisos-persistencia.test.ts",
+      "status": "passed",
+      "passed": 2
+    },
+    {
+      "path": "src/lib/flota/combustible-permisos.test.ts",
+      "status": "passed",
+      "passed": 13
+    },
+    {
+      "path": "src/lib/flota/combustible-preview-v2-http.test.ts",
+      "status": "passed",
+      "passed": 12
+    },
+    {
+      "path": "src/lib/flota/combustible-staff-http.test.ts",
+      "status": "passed",
+      "passed": 9
+    },
+    {
+      "path": "src/lib/flota/combustible-staff.test.ts",
+      "status": "passed",
+      "passed": 53
+    },
+    {
+      "path": "src/lib/flota/combustible-ux-captura.test.ts",
+      "status": "passed",
+      "passed": 10
+    },
+    {
+      "path": "src/lib/flota/combustible-vale-estacion-ux.test.ts",
+      "status": "passed",
+      "passed": 18
+    },
+    {
+      "path": "src/lib/flota/combustible-vale-estacion.db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/combustible.test.ts",
+      "status": "passed",
+      "passed": 29
+    },
+    {
+      "path": "src/lib/flota/edicion-vehiculos-multiempresa.test.ts",
+      "status": "passed",
+      "passed": 24
+    },
+    {
+      "path": "src/lib/flota/parser-legacy-audit.test.ts",
+      "status": "passed",
+      "passed": 2
+    },
+    {
+      "path": "src/lib/flota/permisos-flota-vehiculos-otras-empresas.test.ts",
+      "status": "passed",
+      "passed": 19
+    },
+    {
+      "path": "src/lib/flota/tipo-unidad-flota.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/lib/flota/tipo-unidad.test.ts",
+      "status": "passed",
+      "passed": 13
+    },
+    {
+      "path": "src/lib/flota/vehiculo-delete.test.ts",
+      "status": "passed",
+      "passed": 18
+    },
+    {
+      "path": "src/lib/flota/vehiculos-compartidos-global.test.ts",
+      "status": "passed",
+      "passed": 32
+    },
+    {
+      "path": "src/lib/flota/viajes-piloto.test.ts",
+      "status": "passed",
+      "passed": 1
+    },
+    {
+      "path": "src/lib/flota/viajes-portal-ui.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/lib/rrhh/dashboard-bajas-totales.test.ts",
+      "status": "passed",
+      "passed": 15
+    },
+    {
+      "path": "src/lib/rrhh/dashboard-gerencial-batch.test.ts",
+      "status": "passed",
+      "passed": 11
+    },
+    {
+      "path": "src/lib/rrhh/dashboard-movimientos.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/lib/rrhh/dashboard-situacion.test.ts",
+      "status": "passed",
+      "passed": 18
+    },
+    {
+      "path": "src/lib/rrhh/dashboard.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/lib/tms/cliente-portal-session.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/tms/cotizacion-pdf-sin-combustible-centrado.test.ts",
+      "status": "passed",
+      "passed": 29
+    },
+    {
+      "path": "src/lib/tms/cotizaciones-credito-combustible.test.ts",
+      "status": "passed",
+      "passed": 25
+    },
+    {
+      "path": "src/components/flota/cb2/catalogos-preview.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/components/flota/cb2/client.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/components/flota/cb2/grupos-origen.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/components/flota/cb2/panel.dom.test.ts",
+      "status": "passed",
+      "passed": 14
+    },
+    {
+      "path": "src/components/flota/cb2/preview-model.test.ts",
+      "status": "passed",
+      "passed": 8
+    },
+    {
+      "path": "src/components/flota/cb2/preview-vista.dom.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/components/flota/cb2/ubicacion.test.ts",
+      "status": "passed",
+      "passed": 2
+    },
+    {
+      "path": "src/lib/flota/cb2/coincidencias-service.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/lib/flota/cb2/http-origin.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/lib/flota/cb2/http.test.ts",
+      "status": "passed",
+      "passed": 12
+    },
+    {
+      "path": "src/lib/flota/cb2/model.test.ts",
+      "status": "passed",
+      "passed": 11
+    },
+    {
+      "path": "src/lib/flota/cb2/origin.test.ts",
+      "status": "passed",
+      "passed": 31
+    },
+    {
+      "path": "src/lib/flota/cb2/originales.test.ts",
+      "status": "passed",
+      "passed": 18
+    },
+    {
+      "path": "src/lib/flota/cb2/parser-version.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/lib/flota/cb2/repository.test.ts",
+      "status": "passed",
+      "passed": 4
+    },
+    {
+      "path": "src/lib/flota/cb2/service.db.test.ts",
+      "status": "passed",
+      "passed": 0
+    },
+    {
+      "path": "src/lib/flota/cb2/storage.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/app/api/auth/cambiar-password/route.test.ts",
+      "status": "passed",
+      "passed": 10
+    },
+    {
+      "path": "src/app/api/auth/activity/route.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/app/e/[slug]/dashboard-rrhh/page.test.ts",
+      "status": "passed",
+      "passed": 7
+    },
+    {
+      "path": "src/app/api/cliente-portal/auth/activity/route.test.ts",
+      "status": "passed",
+      "passed": 2
+    },
+    {
+      "path": "src/app/api/cliente-portal/auth/login/route.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/app/api/portal/auth/activity/route.test.ts",
+      "status": "passed",
+      "passed": 1
+    },
+    {
+      "path": "src/app/api/cliente-portal/auth/cambiar-password/route.test.ts",
+      "status": "passed",
+      "passed": 4
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/route.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/rrhh/dashboard/route.test.ts",
+      "status": "passed",
+      "passed": 11
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/tms/cotizaciones/credito-combustible-api.test.ts",
+      "status": "passed",
+      "passed": 16
+    },
+    {
+      "path": "src/app/api/portal/viajes/[id]/combustible/route.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/conciliaciones/route.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/resumen/route.test.ts",
+      "status": "passed",
+      "passed": 5
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/conciliaciones/[id]/route.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/[id]/vale/route.test.ts",
+      "status": "passed",
+      "passed": 3
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/[id]/revisar/route.test.ts",
+      "status": "passed",
+      "passed": 6
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/flota/combustible/conciliaciones/[id]/archivo/route.test.ts",
+      "status": "passed",
+      "passed": 7
+    }
+  ]
+}

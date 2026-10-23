@@ -1,0 +1,106 @@
+{
+  "node": "v24.18.0",
+  "mode": "production",
+  "host": "127.0.0.1",
+  "devDependenciesAbsent": [
+    "vitest",
+    "vite",
+    "@vitest/mocker",
+    "eslint",
+    "eslint-config-next",
+    "typescript",
+    "happy-dom"
+  ],
+  "databaseConfigured": false,
+  "externalModuleFallback": false,
+  "checks": [
+    {
+      "path": "/login",
+      "method": "GET",
+      "expected": 200,
+      "status": 200,
+      "cacheControl": "private, no-store, no-cache",
+      "location": null
+    },
+    {
+      "path": "/portal/login",
+      "method": "GET",
+      "expected": 200,
+      "status": 200,
+      "cacheControl": "private, no-store, no-cache",
+      "location": null
+    },
+    {
+      "path": "/cliente-portal/login",
+      "method": "GET",
+      "expected": 200,
+      "status": 200,
+      "cacheControl": "private, no-store, no-cache",
+      "location": null
+    },
+    {
+      "path": "/select-empresa",
+      "method": "GET",
+      "expected": 307,
+      "status": 307,
+      "cacheControl": "private, no-store, no-cache",
+      "location": "/login"
+    },
+    {
+      "path": "/e/demo/dashboard-rrhh",
+      "method": "GET",
+      "expected": 307,
+      "status": 307,
+      "cacheControl": "private, no-store, no-cache",
+      "location": "/login"
+    },
+    {
+      "path": "/e/demo/flota",
+      "method": "GET",
+      "expected": 307,
+      "status": 307,
+      "cacheControl": "private, no-store, no-cache",
+      "location": "/login"
+    },
+    {
+      "path": "/e/demo/predios",
+      "method": "GET",
+      "expected": 307,
+      "status": 307,
+      "cacheControl": "private, no-store, no-cache",
+      "location": "/login"
+    },
+    {
+      "path": "/api/auth/me",
+      "method": "GET",
+      "expected": 401,
+      "status": 401,
+      "cacheControl": null,
+      "location": null
+    },
+    {
+      "path": "/api/auth/login",
+      "method": "POST",
+      "expected": 400,
+      "status": 400,
+      "cacheControl": null,
+      "location": null
+    },
+    {
+      "path": "/api/empresas/demo/flota/combustible/cb2/consumos",
+      "method": "GET",
+      "expected": 401,
+      "status": 401,
+      "cacheControl": null,
+      "location": null
+    },
+    {
+      "path": "/api/empresas/demo/flota/combustible/cb2/preview",
+      "method": "POST",
+      "expected": 401,
+      "status": 401,
+      "cacheControl": null,
+      "location": null
+    }
+  ]
+}

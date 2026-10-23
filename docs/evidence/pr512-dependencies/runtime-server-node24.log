@@ -1,0 +1,9 @@
+▲ Next.js 16.4.1
+- Local:         http://127.0.0.1:55283
+- Network:       http://127.0.0.1:55283
+✓ Ready in 149ms
+⚠ `experimental.turbopackPluginRuntimeStrategy = 'workerThreads'` is disabled on Node.js 24.18.0.
+A Node.js worker-thread teardown bug can abort the process when a native addon, such as fsevents, has a live Node-API threadsafe function as a worker exits.
+See https://github.com/nodejs/node/issues/65100.
+Falling back to 'childProcesses'. To override at your own risk, use 'forceWorkerThreads'.
+✓ Running next.config.ts took 36ms
