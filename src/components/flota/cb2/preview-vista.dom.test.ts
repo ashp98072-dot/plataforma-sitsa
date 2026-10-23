@@ -28,7 +28,7 @@ describe("vista previa: asignación, filtros y trazabilidad", () => {
         expect(host.textContent).toContain(nombre); expect(host.querySelector("img")).toBeNull();
     });
     it("aproximadas nunca ofrecen usar sugerencia como identidad exacta", async () => {
-        await mount([{ ...f, placa: "570 BZT", placaNormalizada: "570 BZT" }]);
+        await mount([{ ...f, placa: "C-570BZ7", placaNormalizada: "C-570BZ7" }]);
         expect(host.textContent).toContain("APROXIMADA"); expect(host.textContent).toContain("selección manual");
         expect(host.textContent).not.toContain("Usar sugerencia para vale"); expect(selected).toEqual({});
     });
@@ -52,9 +52,9 @@ describe("vista previa: asignación, filtros y trazabilidad", () => {
         expect(disclosure.open).toBe(false); expect(disclosure.textContent).toContain("Ver filas ignoradas (30)");
         expect(disclosure.querySelectorAll("select")).toHaveLength(0); expect(disclosure.querySelectorAll("tbody tr")).toHaveLength(25);
         await click("Usar sugerencia para vale 0001"); await click("Siguiente"); expect(selected.c0).toBe("1");
-        await change("Lote", "007"); await change("Vale", "0001"); expect(host.textContent).toContain("1 apariciones operativas");
+        await change("Lote", "007"); await change("Vale", "0001"); expect(host.textContent).toContain("1 candidatos filtrados");
         expect(control("Unidad para vale").value).toBe("1");
-        await change("Estado de vista previa", "LISTO"); expect(host.textContent).toContain("1 apariciones operativas");
+        await change("Estado de vista previa", "LISTO"); expect(host.textContent).toContain("1 candidatos filtrados");
         await change("Placa", "INEXISTENTE"); expect(host.textContent).toContain("No hay consumos para estos filtros"); expect(selected.c0).toBe("1");
     });
     it("mantiene errores bloqueantes visibles y excluye bloqueados de asignación", async () => {

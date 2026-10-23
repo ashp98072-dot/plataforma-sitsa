@@ -2,52 +2,122 @@
 import { useMemo, useState } from "react";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
-import { avisos, coincidencias, elegible, estadoVisual, estadosPreview, resumenPreview, seleccionSegura, sugerenciaVehiculo, sugerenciaPiloto } from "./preview-model";
+import { avisosDetallados, estadosPreview, resumirRevision, sugerenciaVehiculo, sugerenciaPiloto, type CandidatoRevision } from "./preview-model";
 import { button, input } from "./controles";
 import { EstadoCB2 } from "./presentacion";
+import styles from "./panel.module.css";
 
-const explicaciones = {
-    LISTO: "✓ Validado y con unidad asignada. El servidor revalidará al confirmar.",
-    ADVERTENCIA: "! Unidad asignada; revisa las advertencias antes de confirmar.",
-    PENDIENTE: "◷ Falta asignar una unidad de la empresa; no se procesará sin selección.",
-    BLOQUEADO: "⊘ El backend impide confirmar este registro. Revisa los errores.",
-    IGNORADO: "— Encabezado, subtotal, nota o fila sin operación; se conserva como evidencia.",
-    RESUELTO: "✓ Ya resuelto en el historial; no puede seleccionarse de nuevo.",
-};
-export function ResumenSeleccionCB2({ filas, cat, seleccion }: { filas: FilaCB2[]; cat: CatalogosCB2; seleccion: Record<string, string> }) {
+type Mapa = Record<string, string>;
+type Marcas = Record<string, boolean>;
+const vacio: Marcas = {};
+type Props = { filas: FilaCB2[]; cat: CatalogosCB2; seleccion: Mapa; omitidos?: Marcas; revisados?: Marcas };
+const importes = (totales: Mapa) => Object.entries(totales).map(([moneda, n]) => `${moneda} ${n}`).join(" · ") || "Sin importe calculable";
+
+function Paginas({ pagina, total, cambiar, anterior, siguiente }: { pagina: number; total: number; cambiar: (p: number) => void; anterior: string; siguiente: string }) {
+    return <div className="flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!pagina} onClick={() => cambiar(pagina - 1)}>{anterior}</button><span>Página {pagina + 1} de {Math.max(1, Math.ceil(total / 25))}</span><button type="button" className={button} disabled={(pagina + 1) * 25 >= total} onClick={() => cambiar(pagina + 1)}>{siguiente}</button></div>;
+}
+export function ResumenSeleccionCB2({ filas, cat, seleccion, omitidos = vacio, revisados = vacio }: Props) {
     const [pagina, setPagina] = useState(0);
-    const r = resumenPreview(filas, cat, seleccion), keys = Object.keys(r.segura), grupos = new Map<string, FilaCB2[]>();
-    filas.forEach(f => { if (f.candidato && r.segura[f.candidato]) { const grupo = grupos.get(f.candidato) ?? []; grupo.push(f); grupos.set(f.candidato, grupo); } });
-    const warnings = [...grupos.values()].filter(g => g.some(f => f.motivos.length || f.errores.length)).length;
-    const page = Math.min(pagina, Math.max(0, Math.ceil(keys.length / 25) - 1));
-    return <aside className="space-y-2" aria-label="Resumen antes de confirmar"><p><strong>{keys.length} consumos seleccionados</strong> · {warnings} con advertencias por revisar.</p>
-        {r.pendientes > 0 && <p role="status">Selección incompleta: {r.pendientes} candidatos sin unidad asignada. Se conservarán como evidencia pendiente.</p>}
-        {r.bloqueados > 0 && <p>{r.bloqueados} candidatos bloqueados quedan excluidos de la selección.</p>}
-        <details><summary className="cursor-pointer">Revisar unidades y advertencias de la selección ({keys.length})</summary><ul className="space-y-3">{[...grupos].slice(page * 25, page * 25 + 25).map(([key, g]) => <li key={key} className="rounded-lg border border-[var(--border)] p-3">Vale {g[0].vale} → <strong>{cat.vehiculos.find(v => String(v.id) === r.segura[key])?.placa}</strong> · {g.length} apariciones<ul>{[...new Set(g.flatMap(avisos))].map(a => <li key={a}>{a}</li>)}</ul></li>)}</ul><div className="flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!page} onClick={() => setPagina(page - 1)}>Resumen anterior</button><span>Página {page + 1}</span><button type="button" className={button} disabled={(page + 1) * 25 >= keys.length} onClick={() => setPagina(page + 1)}>Resumen siguiente</button></div></details>
+    const r = resumirRevision(filas, cat, seleccion, omitidos, revisados), grupos = r.revision.filter(g => g.seleccionado);
+    const invalidas = Object.entries(seleccion).filter(([k, v]) => v && !omitidos[k] && !r.segura[k]).length;
+    const page = Math.min(pagina, Math.max(0, Math.ceil(grupos.length / 25) - 1));
+    return <aside className="space-y-2" aria-label="Resumen antes de confirmar">
+        <p><strong>{r.seleccionados} consumos seleccionados para confirmar</strong> · {grupos.filter(g => g.conAdvertencias).length} con advertencias · {grupos.filter(g => g.advertenciasPendientes).length} pendientes de revisión.</p>
+        <p>Importe de esta selección: <strong>{importes(r.totalesSeleccionados)}</strong>. Cada candidato cuenta una vez.</p>
+        {r.pendientes > 0 && <p role="status">{r.pendientes} candidatos sin unidad compatible. Quedan pendientes y no se procesan.</p>}
+        {r.bloqueados > 0 && <p>{r.bloqueados} candidatos bloqueados quedan excluidos de la confirmación.</p>}
+        {invalidas > 0 && <p role="alert">{invalidas} asignaciones incompatibles o bloqueadas. Corrígelas o exclúyelas antes de confirmar.</p>}
+        <details><summary>Revisar unidades y advertencias de la selección ({grupos.length})</summary>
+            <ul className="space-y-2">{grupos.slice(page * 25, page * 25 + 25).map(g => <li key={g.clave} className="rounded-lg border border-[var(--border)] p-3">Vale {g.fila.vale} → <strong>{cat.vehiculos.find(v => String(v.id) === g.vehiculoId)?.placa}</strong> · {g.apariciones.length} apariciones
+                <ul>{[...new Set(g.activas.flatMap(f => avisosDetallados(f).map(a => `${a.nivel}: ${a.mensaje}`)))].map(a => <li key={a}>{a}</li>)}</ul>
+            </li>)}</ul>
+            <Paginas pagina={page} total={grupos.length} cambiar={setPagina} anterior="Resumen anterior" siguiente="Resumen siguiente"/>
+        </details>
     </aside>;
 }
-export function CandidatosCB2({ filas, cat, seleccion, onChange, disabled = false }: {
-    filas: FilaCB2[]; cat: CatalogosCB2; seleccion: Record<string, string>; onChange: (v: Record<string, string>) => void; disabled?: boolean;
+
+function identificacion(g: CandidatoRevision, cat: CatalogosCB2, manuales: Mapa) {
+    if (Object.hasOwn(manuales, g.clave)) return g.vehiculoId ? "MANUAL" : "PENDIENTE";
+    if (g.vehiculoId) return "AUTOMATICA";
+    const match = sugerenciaVehiculo(g.fila, cat);
+    return match.estado === "AMBIGUA" ? "AMBIGUA" : match.estado === "INEXISTENTE" ? "INEXISTENTE" : "PENDIENTE";
+}
+export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisados, manuales = seleccion, onChange, onAsignar, onSeleccionar, onRevisar, disabled = false }: Props & {
+    manuales?: Mapa; onChange?: (v: Mapa) => void; onAsignar?: (clave: string, unidad: string) => void; onSeleccionar?: (clave: string, valor: boolean) => void; onRevisar?: (clave: string, valor: boolean) => void; disabled?: boolean;
 }) {
-    const [pagina, setPagina] = useState(0), [ignoradasPagina, setIgnoradasPagina] = useState(0), [filtro, setFiltro] = useState(""), [estado, setEstado] = useState(""), [placa, setPlaca] = useState(""), [vale, setVale] = useState(""), [lote, setLote] = useState("");
-    const segura = useMemo(() => seleccionSegura(filas, cat, seleccion), [filas, cat, seleccion]);
-    const resumen = useMemo(() => resumenPreview(filas, cat, seleccion), [filas, cat, seleccion]);
-    const filtradas = useMemo(() => filas.filter(f => (!estado || estadoVisual(f, segura) === estado) && f.placa.toLowerCase().includes(placa.toLowerCase()) && f.vale.toLowerCase().includes(vale.toLowerCase()) && (f.lote ?? "").toLowerCase().includes(lote.toLowerCase()) && `${f.vale} ${f.placa} ${f.hoja} ${f.lote ?? ""} ${f.estado}`.toLowerCase().includes(filtro.toLowerCase())), [filas, segura, estado, placa, vale, lote, filtro]);
-    const rows = filtradas.filter(f => f.estado !== "IGNORADA").sort((a, b) => estadosPreview.indexOf(estadoVisual(a, segura)) - estadosPreview.indexOf(estadoVisual(b, segura)) || a.hoja.localeCompare(b.hoja) || a.fila - b.fila);
-    const ignoradas = filtradas.filter(f => f.estado === "IGNORADA");
-    const page = Math.min(pagina, Math.max(0, Math.ceil(rows.length / 25) - 1)), ignoredPage = Math.min(ignoradasPagina, Math.max(0, Math.ceil(ignoradas.length / 25) - 1));
-    function filtrar(fn: () => void) { fn(); setPagina(0); setIgnoradasPagina(0); }
-    function tabla(apparitions: FilaCB2[]) {
-        return <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="sr-only">Apariciones del Excel y selección de unidades</caption><thead><tr>{["Origen / lote", "Vale / placa", "Fecha / importes", "Validación", "Unidad para procesar"].map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{apparitions.map(f => {
-            const estadoFila = estadoVisual(f, segura), matches = coincidencias(f, cat), unidad = sugerenciaVehiculo(f, cat), piloto = sugerenciaPiloto(f, cat);
-            return <tr key={`${f.hoja}:${f.fila}`}><td>{f.hoja} / {f.fila}<br />Lote: {f.lote || "No informado"}</td><td><strong>{f.vale || "Sin vale"}</strong><br />{f.placa || "Sin placa"}<p>Vehículo: {unidad.estado}</p><p>Piloto leído: {f.origen?.piloto || "No informado"}</p><p>Piloto sugerido: {piloto.estado} · {piloto.candidatos.map(p => p.nombre).join(" / ") || "Sin coincidencia"}</p>{piloto.estado === "APROXIMADA" && <p>Requiere confirmación explícita; compartir nombres o apellidos no identifica a una persona.</p>}</td><td>{f.fecha || "Sin fecha"}<br />{f.galones ?? "—"} gal · {f.moneda} {f.monto ?? "—"}<br />{f.documento ? `${f.documento.serie} / ${f.documento.numero}` : `Sin documento verificable: serie ${f.origen?.serie || "no informada"}, factura ${f.origen?.factura || "no informada"}`}</td><td><EstadoCB2 estado={estadoFila}/><p className="mt-2 text-xs text-[var(--muted)]">{explicaciones[estadoFila]}</p><details className="mt-2" open={estadoFila === "BLOQUEADO"}><summary className="cursor-pointer">Revisar consumo y evidencia ({f.motivos.length + f.errores.length})</summary><ul className="max-w-md space-y-2">{avisos(f).map(a => <li key={a}>{a}</li>)}</ul><dl className="mt-2 text-xs"><dt>Valores originales del Excel</dt><dd>Producto: {f.origen?.producto || "No informado"} · Kilometraje: {f.origen?.km || "No informado"}</dd><dd>Galones: {f.origen?.galones ?? f.galones ?? "No informado"} · Precio: {f.origen?.precio ?? f.precio ?? "No informado"} · Monto: {f.origen?.monto ?? f.monto ?? "No informado"}</dd></dl></details></td><td className="min-w-64">{elegible(f) ? <fieldset disabled={disabled}><p className="mb-2 text-xs">{matches.length === 1 ? `Unidad sugerida: ${matches[0].placa}. Coincidencia exacta normalizada; revisa la asignación antes de confirmar.` : matches.length > 1 ? "Varias unidades coinciden con la placa; selecciona manualmente." : "Vehículo no encontrado. Revisa la placa o asigna una unidad de la empresa."}</p>{unidad.estado === "APROXIMADA" && <p>Sugerencias aproximadas (selección manual): {unidad.candidatos.map(v => v.placa).join(" / ")}. Si difieren caracteres o falta el prefijo, corrige la placa del Excel y vuelve a analizar; el backend exige coincidencia exacta conservadora.</p>}<CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={segura[f.candidato!] ?? ""} onChange={v => onChange({ ...seleccion, [f.candidato!]: v })} options={cat.vehiculos.map(v => ({ value: String(v.id), label: v.placa, detail: v.descripcion }))} inputClassName={input}/>{matches.length === 1 && !segura[f.candidato!] && <button className={`${button} mt-2`} type="button" onClick={() => onChange({ ...seleccion, [f.candidato!]: String(matches[0].id) })}>Usar sugerencia para vale {f.vale}</button>}</fieldset> : "No seleccionable"}</td></tr>;
-        })}</tbody></table></div>;
+    const [pagina, setPagina] = useState(0), [ignoradasPagina, setIgnoradasPagina] = useState(0);
+    const [bloqueadasPagina, setBloqueadasPagina] = useState(0);
+    const [filtro, setFiltro] = useState(""), [estado, setEstado] = useState(""), [placa, setPlaca] = useState(""), [vale, setVale] = useState(""), [lote, setLote] = useState("");
+    const [avisos, setAvisos] = useState(""), [seleccionFiltro, setSeleccionFiltro] = useState(""), [unidadFiltro, setUnidadFiltro] = useState(""), [intervencion, setIntervencion] = useState(false);
+    const [revisadosLocales, setRevisadosLocales] = useState<Marcas>({}), [pilotosPendientes, setPilotosPendientes] = useState<Mapa>({}), [pilotosRevisados, setPilotosRevisados] = useState<Mapa>({});
+    const marcas = revisados ?? revisadosLocales;
+    const r = useMemo(() => resumirRevision(filas, cat, seleccion, omitidos, marcas), [filas, cat, seleccion, omitidos, marcas]);
+    function texto(f: FilaCB2) {
+        return f.placa.toLowerCase().includes(placa.toLowerCase()) && f.vale.toLowerCase().includes(vale.toLowerCase()) && (f.lote ?? "").toLowerCase().includes(lote.toLowerCase()) && `${f.vale} ${f.placa} ${f.hoja} ${f.lote ?? ""} ${f.origen?.piloto ?? ""}`.toLowerCase().includes(filtro.toLowerCase());
     }
-    return <section className="space-y-4" aria-label="Vista previa y validaciones"><p role="note">{cat.limitacionPilotos || "CB2 conserva el piloto leído del Excel sin vínculo al catálogo de pilotos. Las sugerencias son informativas. Para corregir el piloto, corrige el Excel y vuelve a analizar."}</p><p>{filas.length} apariciones · {new Set(filas.flatMap(f => f.candidato ? [f.candidato] : [])).size} candidatos. Las apariciones repetidas conservan su origen y comparten una asignación; no son consumos adicionales.</p>
-        <dl className="grid grid-cols-2 gap-3 lg:grid-cols-3">{[["Consumos detectados", resumen.detectados], ["Registros listos", resumen.listos], ["Pendientes de asignación", resumen.pendientes], ["Con advertencias", resumen.advertencias], ["Bloqueados", resumen.bloqueados], ["Filas ignoradas", resumen.ignoradas]].map(([label, n]) => <div key={label} className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3"><dt className="text-xs text-[var(--muted)]">{label}</dt><dd className="text-2xl font-semibold">{n}</dd></div>)}</dl>
-        {resumen.sinIdentidad > 0 && <p role="alert">{resumen.sinIdentidad} apariciones operativas sin identidad: bloqueadas, sin contabilizarlas como consumos únicos. Revisa sus errores.</p>}<p className="text-sm">Los indicadores operativos cuentan candidatos únicos; las ignoradas cuentan apariciones. {resumen.resueltos} candidatos ya resueltos. Importes calculables de candidatos no bloqueados, una vez por candidato: {Object.entries(resumen.totales).map(([currency, n]) => `${currency} ${n}`).join(" · ") || "No calculable"}. No incluye filas ignoradas. Advertencias y pendientes pueden coincidir; estos indicadores no se suman.</p>
-        <div className="grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 sm:grid-cols-2 lg:grid-cols-3"><label>Buscar en la vista previa<input className={input} value={filtro} onChange={e => filtrar(() => setFiltro(e.target.value))}/></label><label>Estado de vista previa<select className={input} value={estado} onChange={e => filtrar(() => setEstado(e.target.value))}><option value="">Todos los estados</option>{estadosPreview.map(s => <option key={s}>{s}</option>)}</select></label>{[["Placa", placa, setPlaca], ["Vale", vale, setVale], ["Lote", lote, setLote]].map(([label, value, setter]) => <label key={String(label)}>{String(label)}<input className={input} value={String(value)} onChange={e => filtrar(() => (setter as (v: string) => void)(e.target.value))}/></label>)}</div>
-        {tabla(rows.slice(page * 25, page * 25 + 25))}{!rows.length && <p>No hay consumos para estos filtros.</p>}<div className="flex flex-wrap items-center gap-3"><button className={button} disabled={!page} onClick={() => setPagina(page - 1)}>Anterior</button><span>Página {page + 1} · {rows.length} apariciones operativas</span><button className={button} disabled={(page + 1) * 25 >= rows.length} onClick={() => setPagina(page + 1)}>Siguiente</button></div>
-        <details><summary className="cursor-pointer rounded-lg border border-[var(--border)] p-3">Ver filas ignoradas ({ignoradas.length})</summary><div className="mt-3 space-y-3">{tabla(ignoradas.slice(ignoredPage * 25, ignoredPage * 25 + 25))}<p>Página {ignoredPage + 1} · Evidencia sin operación; no se selecciona ni se suma.</p><button className={button} disabled={!ignoredPage} onClick={() => setIgnoradasPagina(ignoredPage - 1)}>Ignoradas anteriores</button><button className={button} disabled={(ignoredPage + 1) * 25 >= ignoradas.length} onClick={() => setIgnoradasPagina(ignoredPage + 1)}>Ignoradas siguientes</button></div></details>
+    const rows = r.revision.filter(g => (!estado || g.estado === estado) && g.apariciones.some(texto)
+        && (!avisos || (avisos === "CON" ? g.conAdvertencias : avisos === "PENDIENTES" ? g.advertenciasPendientes : avisos === "REVISADAS" ? g.conAdvertencias && !g.advertenciasPendientes : !g.conAdvertencias))
+        && (!seleccionFiltro || (seleccionFiltro === "SI" ? g.seleccionado : !g.seleccionado))
+        && (!unidadFiltro || identificacion(g, cat, manuales) === unidadFiltro)
+        && (!intervencion || ["PENDIENTE", "BLOQUEADO"].includes(g.estado) || g.advertenciasPendientes))
+        .sort((a, b) => a.fila.hoja.localeCompare(b.fila.hoja) || a.fila.fila - b.fila.fila);
+    const ignoradas = filas.filter(f => f.estado === "IGNORADA" && texto(f) && (!estado || estado === "IGNORADO") && !seleccionFiltro && !avisos && !unidadFiltro && !intervencion);
+    const sinIdentidad = filas.filter(f => !f.candidato && f.estado !== "IGNORADA" && texto(f) && (!estado || estado === "BLOQUEADO"));
+    const page = Math.min(pagina, Math.max(0, Math.ceil(rows.length / 25) - 1)), ignoredPage = Math.min(ignoradasPagina, Math.max(0, Math.ceil(ignoradas.length / 25) - 1));
+    const blockedPage = Math.min(bloqueadasPagina, Math.max(0, Math.ceil(sinIdentidad.length / 25) - 1));
+    function filtrar(fn: () => void) { fn(); setPagina(0); setIgnoradasPagina(0); setBloqueadasPagina(0); }
+    function asignar(key: string, value: string) { if (onAsignar) onAsignar(key, value); else onChange?.({ ...seleccion, [key]: value }); }
+    function elegir(g: CandidatoRevision, valor: boolean) { if (onSeleccionar) onSeleccionar(g.clave, valor); else onChange?.({ ...seleccion, [g.clave]: valor ? g.vehiculoId : "" }); }
+    function revisar(key: string, valor: boolean) { if (onRevisar) onRevisar(key, valor); else setRevisadosLocales(prev => ({ ...prev, [key]: valor })); }
+
+    function evidencia(f: FilaCB2) {
+        return <><ul className="space-y-2">{avisosDetallados(f).map((a, i) => <li key={i}><strong>{a.nivel === "REVISION" ? "REQUIERE REVISIÓN" : a.nivel}</strong>: {a.mensaje}</li>)}</ul><p className="text-xs">Producto original: {f.origen?.producto || "No informado"} · Kilometraje: {f.origen?.km || "No informado"}<br/>Galones: {f.origen?.galones ?? f.galones ?? "No informado"} · Precio: {f.origen?.precio ?? f.precio ?? "No informado"} · Monto: {f.origen?.monto ?? f.monto ?? "No informado"}<br/>Serie: {f.origen?.serie || f.documento?.serie || "No informada"} · Factura: {f.origen?.factura || f.documento?.numero || "No informada"}</p></>;
+    }
+    return <section className="space-y-3" aria-label="Vista previa y validaciones">
+        <dl className="grid grid-cols-2 gap-2 lg:grid-cols-3" aria-label="Resumen global de candidatos">{[["Total de candidatos", r.detectados], ["Seleccionados", r.seleccionados], ["Elegibles · LISTO", r.elegibles], ["Con advertencias", r.advertencias], ["Bloqueados", r.bloqueados], ["Pendientes de unidad", r.pendientes]].map(([label, n]) => <div key={label} className="rounded-lg border border-[var(--border)] bg-[var(--bg)] p-3"><dt className="text-xs text-[var(--muted)]">{label}</dt><dd className="text-xl font-semibold">{n}</dd></div>)}</dl>
+        <p className="text-xs"><strong>LISTO</strong> = consumo no bloqueado y con unidad compatible; puede tener advertencias y estar desmarcado. Seleccionado = LISTO marcado para esta confirmación. {r.advertenciasPendientes} candidatos con advertencias pendientes de revisión; {r.resueltos} ya resueltos. Los indicadores pueden solaparse.</p>
+        <details><summary>Cómo se conserva la evidencia y se revisan pilotos</summary><p className="text-xs">{filas.length} apariciones. Los contadores, filtros y selección cuentan cada candidato una vez. Buscar por hoja o lote localiza un candidato por cualquiera de sus apariciones; la confirmación conserva todas.</p><p role="note" className="text-xs">{cat.limitacionPilotos || "CB2 conserva el piloto leído del Excel sin vínculo al catálogo de pilotos. Las sugerencias son informativas y no se persisten. Una aproximada o ambigua requiere confirmación explícita de su revisión; no identifica ni asocia al piloto."}</p></details>
+        <div className="flex flex-wrap gap-2"><button type="button" className={button} aria-pressed={intervencion} onClick={() => filtrar(() => setIntervencion(v => !v))}>Requieren intervención</button><button type="button" className={button} onClick={() => filtrar(() => { setEstado(""); setAvisos(""); setSeleccionFiltro(""); setUnidadFiltro(""); setFiltro(""); setPlaca(""); setVale(""); setLote(""); setIntervencion(false); })}>Limpiar filtros</button></div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <label>Buscar en la vista previa<input className={input} value={filtro} onChange={e => filtrar(() => setFiltro(e.target.value))}/></label>
+            <label>Estado de vista previa<select className={input} value={estado} onChange={e => filtrar(() => setEstado(e.target.value))}><option value="">Todos</option>{estadosPreview.map(s => <option key={s}>{s}</option>)}</select></label>
+            <label>Advertencias<select className={input} value={avisos} onChange={e => filtrar(() => setAvisos(e.target.value))}><option value="">Todas</option><option value="CON">Con advertencias</option><option value="PENDIENTES">Pendientes de revisión</option><option value="REVISADAS">Revisadas</option><option value="SIN">Sin advertencias</option></select></label>
+            <label>Selección para confirmar<select className={input} value={seleccionFiltro} onChange={e => filtrar(() => setSeleccionFiltro(e.target.value))}><option value="">Todas</option><option value="SI">Seleccionados</option><option value="NO">No seleccionados</option></select></label>
+            <label>Identificación de unidad<select className={input} value={unidadFiltro} onChange={e => filtrar(() => setUnidadFiltro(e.target.value))}><option value="">Todas</option><option value="AUTOMATICA">Automática</option><option value="MANUAL">Manual</option><option value="AMBIGUA">Ambigua</option><option value="INEXISTENTE">No encontrada</option><option value="PENDIENTE">Requiere revisión</option></select></label>
+            {[["Placa", placa, setPlaca], ["Vale", vale, setVale], ["Lote", lote, setLote]].map(([label, value, setter]) => <label key={String(label)}>{String(label)}<input className={input} value={String(value)} onChange={e => filtrar(() => (setter as (v: string) => void)(e.target.value))}/></label>)}
+        </div>
+        <p role="status">{rows.length} candidatos filtrados de {r.detectados} · {r.seleccionados} seleccionados en todo el archivo.</p>
+        <div className="overflow-x-auto"><table className={styles.reviewTable}><caption className="sr-only">Candidatos únicos del Excel, identificación y revisión</caption><thead><tr>{["Consumo / origen", "Unidad y selección", "Validez", "Advertencias y piloto"].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{rows.slice(page * 25, page * 25 + 25).map(g => {
+            const f = g.fila, unidad = sugerenciaVehiculo(f, cat), piloto = sugerenciaPiloto(f, cat), vehiculo = cat.vehiculos.find(v => String(v.id) === g.vehiculoId);
+            const fuente = identificacion(g, cat, manuales);
+            const avisosGrupo = [...new Set(g.activas.flatMap(f => avisosDetallados(f).map(a => `${a.nivel}: ${a.mensaje}`)))];
+            const pilotoRevisado = piloto.candidatos.find(p => String(p.id) === pilotosRevisados[g.clave]);
+            return <tr key={g.clave} data-candidato={g.clave}>
+                <td data-label="Consumo"><strong>Vale {f.vale || "Sin vale"}</strong><br/>{f.placa || "Sin placa"}<br/>{f.fecha || "Sin fecha"} · {f.moneda} {f.monto ?? "—"}<small className="block text-[var(--muted)]">{f.hoja}:{f.fila} · Lote {f.lote || "No informado"}{g.apariciones.length > 1 ? ` · ${g.apariciones.length} apariciones` : ""}</small></td>
+                <td data-label="Unidad"><label><input type="checkbox" aria-label={`Seleccionar consumo vale ${f.vale}`} checked={g.seleccionado} disabled={disabled || !g.unidadValida} onChange={e => elegir(g, e.target.checked)}/>Seleccionar</label><strong>{vehiculo?.placa || (g.vehiculoId ? `Unidad #${g.vehiculoId} no disponible` : "Sin unidad")}</strong><p className="text-xs">{fuente === "AUTOMATICA" ? "Identificada automáticamente" : fuente === "MANUAL" ? "Elegida manualmente" : fuente === "AMBIGUA" ? "Resolver ambigüedad" : fuente === "INEXISTENTE" ? "Vehículo no encontrado" : "Unidad pendiente"} · {unidad.estado}</p>
+                    {g.estado !== "BLOQUEADO" && g.estado !== "RESUELTO" && <details><summary>Corregir unidad</summary><fieldset disabled={disabled}>
+                        {unidad.candidatos.length === 1 && <p className="text-xs">Unidad sugerida: {unidad.candidatos[0].placa}</p>}
+                        <CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={g.vehiculoId} onChange={value => asignar(g.clave, value)} options={cat.vehiculos.map(v => ({ value: String(v.id), label: v.placa, detail: v.descripcion }))} inputClassName={input}/>
+                        {unidad.candidatos.length === 1 && ["EXACTA", "ABREVIADA"].includes(unidad.estado) && !g.vehiculoId && <button type="button" className={button} onClick={() => asignar(g.clave, String(unidad.candidatos[0].id))}>Usar sugerencia para vale {f.vale}</button>}
+                    </fieldset></details>}
+                    {g.vehiculoId && !g.unidadValida && g.estado !== "RESUELTO" && <><p className="text-xs">Esta asignación no permite confirmar: revisa el bloqueo, el catálogo y la placa.</p>{!omitidos[g.clave] && <button type="button" className={button} disabled={disabled} onClick={() => elegir(g, false)}>Excluir vale {f.vale} de esta confirmación</button>}</>}
+                </td>
+                <td data-label="Validez"><EstadoCB2 estado={g.estado}/><p className="text-xs">{g.estado === "LISTO" ? "✓ Elegible; el servidor revalida al confirmar." : g.estado === "BLOQUEADO" ? "⊘ No se puede confirmar, aunque tenga unidad." : g.estado === "RESUELTO" ? "Ya procesado; solo trazabilidad." : "Requiere unidad compatible; no se confirma."}</p><span className="text-xs">{g.seleccionado ? "SELECCIONADO" : "NO SELECCIONADO"}</span></td>
+                <td data-label="Revisión"><details open={g.estado === "BLOQUEADO"}><summary>Revisar consumo y evidencia ({avisosGrupo.length} avisos)</summary>
+                    {g.apariciones.map(a => <div key={`${a.hoja}:${a.fila}`} className="mb-2 text-xs"><strong>{a.hoja}:{a.fila} · Lote {a.lote || "No informado"}</strong>{evidencia(a)}</div>)}
+                    {unidad.estado === "AMBIGUA" && <p className="text-xs">Varias unidades coinciden: {unidad.candidatos.map(v => v.placa).join(" / ")}. Una placa abreviada ambigua requiere indicar el prefijo en el Excel y reanalizar; nunca se infiere. Una placa completa duplicada admite elección manual.</p>}
+                    {unidad.estado === "APROXIMADA" && <p className="text-xs">Sugerencias aproximadas (selección manual): {unidad.candidatos.map(v => v.placa).join(" / ")}. No se asignan por similitud; caracteres distintos requieren corregir la placa y reanalizar.</p>}
+                    {g.conAdvertencias && <label className="text-xs"><input type="checkbox" checked={!!marcas[g.clave]} disabled={disabled} onChange={e => revisar(g.clave, e.target.checked)}/>Advertencias revisadas para vale {f.vale}</label>}
+                    <details><summary>Piloto: {piloto.estado} · revisión informativa</summary><p>Piloto leído: {f.origen?.piloto || "No informado"}</p><p>Piloto sugerido: {piloto.estado} · {piloto.candidatos.map(p => p.nombre).join(" / ") || "Sin coincidencia"}</p>
+                        {["APROXIMADA", "AMBIGUA"].includes(piloto.estado) && <fieldset disabled={disabled}><p>Requiere confirmación explícita de revisión. No asocia ni persiste una persona y no bloquea el consumo.</p><label>Candidato de piloto para vale {f.vale}<select className={input} value={pilotosPendientes[g.clave] ?? ""} onChange={e => { setPilotosPendientes(prev => ({ ...prev, [g.clave]: e.target.value })); setPilotosRevisados(prev => ({ ...prev, [g.clave]: "" })); }}><option value="">Seleccionar para revisar</option>{piloto.candidatos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select></label><button type="button" className={button} disabled={!piloto.candidatos.some(p => String(p.id) === pilotosPendientes[g.clave])} onClick={() => setPilotosRevisados(prev => ({ ...prev, [g.clave]: pilotosPendientes[g.clave] }))}>Confirmar revisión informativa de piloto para vale {f.vale}</button></fieldset>}
+                        {pilotoRevisado && <p role="status">Sugerencia revisada: {pilotoRevisado.nombre}. Sin asociación persistida.</p>}
+                    </details>
+                </details><span className="text-xs">{g.conAdvertencias ? `${avisosGrupo.length} avisos · ${g.advertenciasPendientes ? "por revisar" : "revisados"}` : "Sin advertencias"} · Piloto {piloto.estado}</span></td>
+            </tr>;
+        })}</tbody></table></div>
+        {!rows.length && <p>No hay consumos para estos filtros.</p>}
+        <Paginas pagina={page} total={rows.length} cambiar={setPagina} anterior="Anterior" siguiente="Siguiente"/>
+        {!!sinIdentidad.length && <details open><summary>{sinIdentidad.length} apariciones bloqueadas sin identidad</summary><p>No cuentan como candidatos ni pueden seleccionarse.</p>{sinIdentidad.slice(blockedPage * 25, blockedPage * 25 + 25).map(f => <div key={`${f.hoja}:${f.fila}`}><strong>{f.hoja}:{f.fila}</strong>{evidencia(f)}</div>)}<Paginas pagina={blockedPage} total={sinIdentidad.length} cambiar={setBloqueadasPagina} anterior="Bloqueadas anteriores" siguiente="Bloqueadas siguientes"/></details>}
+        <details><summary>Ver filas ignoradas ({ignoradas.length})</summary><p className="text-xs">Evidencia sin operación; no se selecciona ni se suma.</p><div className="overflow-x-auto"><table className={styles.reviewTable}><thead><tr><th>Hoja / fila / lote</th><th>Contenido y motivo</th></tr></thead><tbody>{ignoradas.slice(ignoredPage * 25, ignoredPage * 25 + 25).map(f => <tr key={`${f.hoja}:${f.fila}`}><td>{f.hoja}:{f.fila} · {f.lote || "No informado"}</td><td>{f.vale} {f.placa}<details><summary>Ver evidencia ignorada</summary>{evidencia(f)}</details></td></tr>)}</tbody></table></div><Paginas pagina={ignoredPage} total={ignoradas.length} cambiar={setIgnoradasPagina} anterior="Ignoradas anteriores" siguiente="Ignoradas siguientes"/></details>
     </section>;
 }

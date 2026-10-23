@@ -13,7 +13,8 @@ describe("coincidencias conservadoras en catálogo suministrado", () => {
     it("placas con separadores, prefijos preservados y caracteres diferentes", () => {
         const vs = [{ id: 1, placa: "C-570BZT" }];
         for (const s of ["C-570BZT", " C 570 BZT ", "C–570BZT"]) expect(buscarCoincidencias(s, vs, v => v.placa, "placa").estado).toBe("EXACTA");
-        for (const s of ["570 BZT", "C-570BZ7"]) expect(buscarCoincidencias(s, vs, v => v.placa, "placa").estado).toBe("APROXIMADA");
+        expect(buscarCoincidencias("570 BZT", vs, v => v.placa, "placa").estado).toBe("ABREVIADA");
+        expect(buscarCoincidencias("C-570BZ7", vs, v => v.placa, "placa").estado).toBe("APROXIMADA");
         expect(buscarCoincidencias("C-570BZT", [...vs, { id: 2, placa: "C 570 BZT" }], v => v.placa, "placa").estado).toBe("AMBIGUA");
         expect(placaComparable("C/570BZT")).toBe(""); expect(placaComparable("570 BZT")).not.toBe(placaComparable("C-570BZT"));
     });

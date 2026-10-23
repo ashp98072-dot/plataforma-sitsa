@@ -28,6 +28,24 @@ async function preparar(placa: string, repetido = false) {
     return { file, entrada, recibo: await preview(ctx, file, entrada) };
 }
 describe("confirmación real del servicio con BD y almacenamiento simulados", () => {
+    it("acepta abreviada única y consulta únicamente el catálogo autorizado bajo bloqueo", async () => {
+        const { file, entrada, recibo } = await preparar("001 ABC");
+        await confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "abreviada-unica-513", recibo.token);
+        expect(m.insert.mock.calls.filter(([, table]) => table === "flota_cb2_consumos")).toHaveLength(1);
+        const consulta = m.query.mock.calls.find(([sql]) => String(sql).includes("REGEXP_REPLACE"));
+        expect(consulta).toBeDefined();
+        expect(consulta![0]).toContain("FOR UPDATE");
+        expect(consulta![0]).toContain("empresa_id");
+        expect(consulta![1]).toEqual([7, 7, "001ABC"]);
+    });
+    it("rechaza abreviada ambigua aunque el cliente fuerce un ID", async () => {
+        const { file, entrada, recibo } = await preparar("001 ABC");
+        const original = m.query.getMockImplementation()!;
+        m.query.mockImplementation(async (...args) => String(args[0]).includes("REGEXP_REPLACE")
+            ? [[{ id: 1, placa: "C-001ABC" }, { id: 2, placa: "P-001ABC" }], []] : original(...args));
+        await expect(confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "abreviada-ambigua-513", recibo.token)).rejects.toThrow("no coincide con la placa");
+        expect(m.insert.mock.calls.filter(([, table]) => table === "flota_cb2_consumos")).toHaveLength(0);
+    });
     it("acepta separadores conservadores, conserva original y crea un consumo por candidato", async () => {
         const { file, entrada, recibo } = await preparar("C 001 ABC", true);
         await confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "clave-sintetica-511", recibo.token);
@@ -35,7 +53,7 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
         expect(consumos).toHaveLength(1); expect(consumos[0][2]).toMatchObject({ empresa_id: 7, proveedor_id: 3, placa_original: "C 001 ABC", placa_normalizada: "C 001 ABC", vehiculo_id: 1 });
         expect(m.insert.mock.calls.find(([, table]) => table === "flota_cb2_importaciones")![2].version_parser).toBe(2);
     });
-    it.each(["001 ABC", "C-001AB7"])("selección manual no permite placa diferente: %s", async placa => {
+    it.each(["P-001ABC", "C-001AB7"])("selección manual no permite placa diferente: %s", async placa => {
         const { file, entrada, recibo } = await preparar(placa);
         await expect(confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "clave-sintetica-511", recibo.token)).rejects.toThrow("no coincide con la placa");
         expect(m.insert.mock.calls.filter(([, table]) => table === "flota_cb2_consumos")).toHaveLength(0);

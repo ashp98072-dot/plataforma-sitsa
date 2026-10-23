@@ -32,3 +32,20 @@
 .badge[data-state="ADVERTENCIA"] { color: #fde68a; background: #713f12; border-color: #a16207; }
 .badge[data-state="BLOQUEADO"] { color: #fecaca; background: #7f1d1d; border-color: #b91c1c; }
 .badge[data-state="IGNORADO"] { color: var(--muted); }
+
+.panel .reviewTable { min-width: 0; width: 100%; table-layout: fixed; }
+.panel .reviewTable td { padding: .65rem; overflow-wrap: anywhere; }
+.reviewTable details { max-width: 100%; }
+.reviewTable summary { cursor: pointer; font-size: .8rem; color: var(--text); }
+.reviewTable p { margin: .3rem 0; }
+.reviewTable td:nth-child(1) { width: 24%; }
+.reviewTable td:nth-child(2) { width: 25%; }
+.reviewTable td:nth-child(3) { width: 19%; }
+@media (max-width: 640px) {
+  .reviewTable thead { display: none; }
+  .reviewTable, .reviewTable tbody { display: block; }
+  .reviewTable tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid var(--border); }
+  .panel .reviewTable td { display: block; width: auto; min-width: 0; border-top: 0; }
+  .reviewTable td::before { content: attr(data-label); display: block; color: var(--muted); font-size: .7rem; }
+  .reviewTable td:last-child { grid-column: 1 / -1; }
+}

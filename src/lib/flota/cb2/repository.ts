@@ -5,6 +5,8 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { normalizarIdentificador as norm, normalizarPlacaImportada } from "../combustible-identificadores";
 import { ErrorCB2, recuperar, type Documento, type Evento } from "./model";
+import { predicadoVehiculoAccesible } from "../acceso";
+import { esPlacaAbreviada, placaComparable } from "../combustible-coincidencias";
 export type Actor = {
     id: number;
     username: string;
@@ -133,4 +135,17 @@ export async function vehiculos(c: PoolConnection, ctx: Contexto, ids: number[])
         result.set(id, normalizarPlacaImportada(String(v.placa)));
     }
     return result;
+}
+
+/** Revalidación de abreviaturas dentro de la empresa y la transacción actuales.
+ * Bloquea todos los candidatos del sufijo, no solo el ID enviado por el cliente. */
+export async function catalogoAbreviadas(c: PoolConnection, ctx: Contexto, placas: string[]) {
+    const sufijos = [...new Set(placas.filter(esPlacaAbreviada).map(placaComparable))].sort();
+    const catalogo: { id: number; placa: string }[] = [];
+    for (let i = 0; i < sufijos.length; i += 200) {
+        const parte = sufijos.slice(i, i + 200);
+        const found = await rows(c, `SELECT v.id,v.placa FROM flota_vehiculos v WHERE v.activo=1 AND v.estado='Activo' AND ${predicadoVehiculoAccesible("v", "?")} AND RIGHT(REGEXP_REPLACE(UPPER(v.placa),'[[:space:]‐‑–—-]',''),6) IN (${parte.map(() => "?").join(",")}) ORDER BY v.id FOR UPDATE`, [ctx.empresaId, ctx.empresaId, ...parte]);
+        catalogo.push(...found.map(v => ({ id: Number(v.id), placa: String(v.placa) })));
+    }
+    return catalogo;
 }
