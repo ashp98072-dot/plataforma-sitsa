@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import Decimal from "decimal.js";
 import { z } from "zod";
+import { productos } from "./clasificacion";
 import { analizarProveedorV2 } from "../combustible-importacion-v2";
 import { normalizarIdentificador as norm } from "../combustible-identificadores";
 import type { FilaProveedorV2, PerfilProveedor } from "../combustible-importacion-v2-types";
@@ -11,10 +12,11 @@ export const hash = (s: string | Buffer) => createHash("sha256").update(s).diges
 export const id = z.number().int().positive().max(2147483647);
 export const clave = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const moneda = z.enum(["GTQ", "USD"]);
+const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: id, empleadoId: id.nullable().optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict();
 const decisionOriginal = z.object({
     version: z.literal(1), moneda,
     candidato: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
-    vehiculoId: id.nullable(), errores: z.array(z.string()),
+    vehiculoId: id.nullable(), errores: z.array(z.string()), asignacion: eleccion.nullable().optional(),
 }).strict();
 /** Validar TODOS los originales; el resultado no depende de cual sea primero. */
 export function monedaOriginal(originales: Record<string, unknown>[], empresa: number, proveedor: number, importacion: number): "GTQ" | "USD" {
@@ -46,7 +48,7 @@ const decimal = z.string().regex(/^\d{1,12}(?:\.\d{1,6})?$/).transform(s => new 
 const texto = z.string().trim().min(1).max(128).refine(s => !/[\u0000-\u001f\u007f]/.test(s));
 export const documento = z.object({ serie: texto, numero: texto, moneda, fecha: z.iso.date().nullable().default(null), total: decimal.nullable().default(null) }).strict();
 export type Documento = z.infer<typeof documento>;
-export const seleccion = z.array(z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: id }).strict()).max(10000).refine(xs => new Set(xs.map(x => x.candidato)).size === xs.length).transform(xs => xs.sort((a, b) => a.candidato.localeCompare(b.candidato)));
+export const seleccion = z.array(eleccion).max(10000).refine(xs => new Set(xs.map(x => x.candidato)).size === xs.length).transform(xs => xs.sort((a, b) => a.candidato.localeCompare(b.candidato)));
 export const confirmar = z.object({ proveedorId: id, perfil: z.enum(["HALEL", "SHELL"]), moneda, clave, seleccion, token: z.string().min(1).max(8192) }).strict();
 export const reanudar = z.object({ proveedorId: id, importacionId: id, revision: id, clave, seleccion, motivo: z.string().trim().min(1).max(1000) }).strict();
 export const asociar = z.object({ proveedorId: id, clave, documento, consumos: z.array(id).min(1).max(1000).refine(xs => new Set(xs).size === xs.length).transform(xs => xs.sort((a, b) => a - b)), revisiones: z.array(z.object({ id, revision: id }).strict()).min(1).max(1000).refine(xs => new Set(xs.map(x => x.id)).size === xs.length).transform(xs => xs.sort((a, b) => a.id - b.id)), motivo: z.string().trim().min(1).max(1000) }).strict();

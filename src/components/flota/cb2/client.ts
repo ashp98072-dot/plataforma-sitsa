@@ -1,3 +1,4 @@
+import { productos } from "@/lib/flota/cb2/clasificacion";
 export type FilaCB2 = {
     lote?: string | null;
     kilometraje?: string | null;
@@ -35,6 +36,7 @@ export type Registro = {
     [key: string]: unknown;
 };
 export type CatalogosCB2 = {
+    empleados?: { id: number; nombre: string }[];
     pilotos?: { id: number; nombre: string }[];
     limitacionPilotos?: string;
     proveedores: {
@@ -50,6 +52,9 @@ export type CatalogosCB2 = {
 export type SeleccionCB2 = {
     candidato: string;
     vehiculoId: number;
+    empleadoId?: number | null;
+    productoClasificado?: import("@/lib/flota/cb2/clasificacion").Producto;
+    motivoUnidad?: string;
 }[];
 export class FalloCB2 extends Error {
     constructor(message: string, public definitivo = false) { super(message); }
@@ -141,7 +146,7 @@ export function gruposOrigen(rows: Registro[]): FilaOrigenCB2[] {
         const consumoId = consumos.size === 1 ? [...consumos][0] : null;
         const candidato = typeof d.candidato === "string" ? d.candidato : null;
         const estado: EstadoOrigenCB2 = consumos.size > 1 ? "BLOQUEADA" : consumoId !== null ? "RESUELTA" : !candidato && actual.resultado === "IGNORADA" ? "IGNORADA" : candidato && actual.resultado === "OMITIDA" ? "PENDIENTE" : "BLOQUEADA";
-        return { hoja: String(o.hoja_nombre), fila: Number(o.fila_excel), candidato, bloqueada: estado !== "PENDIENTE", documento: null, errores: [], estado, estadoAparicion: estado, estadoCandidato: estado, consumoId, motivos: [String(actual.motivo ?? o.motivo ?? "")], vale: String(f.vale ?? ""), placa: String(f.placaOriginal ?? ""), placaNormalizada: String(f.placaNormalizada ?? ""), fecha: typeof f.fechaConsumo === "string" ? f.fechaConsumo : null, galones: typeof f.galones === "string" ? f.galones : null, precio: typeof f.precio === "string" ? f.precio : null, monto: typeof f.monto === "string" ? f.monto : null, moneda: String(d.moneda ?? "") } satisfies FilaOrigenCB2;
+        return { origen: f.textos as FilaCB2["origen"], lote: f.lote == null ? null : String(f.lote), hoja: String(o.hoja_nombre), fila: Number(o.fila_excel), candidato, bloqueada: estado !== "PENDIENTE", documento: null, errores: [], estado, estadoAparicion: estado, estadoCandidato: estado, consumoId, motivos: [String(actual.motivo ?? o.motivo ?? "")], vale: String(f.vale ?? ""), placa: String(f.placaOriginal ?? ""), placaNormalizada: String(f.placaNormalizada ?? ""), fecha: typeof f.fechaConsumo === "string" ? f.fechaConsumo : null, galones: typeof f.galones === "string" ? f.galones : null, precio: typeof f.precio === "string" ? f.precio : null, monto: typeof f.monto === "string" ? f.monto : null, moneda: String(d.moneda ?? "") } satisfies FilaOrigenCB2;
     });
     const grupos = new Map<string, FilaOrigenCB2[]>();
     for (const f of filas)
@@ -161,7 +166,12 @@ export function seleccionPendienteCB2(filas: FilaOrigenCB2[], seleccion: Record<
     const pendientes = new Set(filas.filter(f => f.estadoCandidato === "PENDIENTE" && f.estadoAparicion === "PENDIENTE" && f.candidato).map(f => f.candidato!));
     return elecciones(seleccion).filter(s => pendientes.has(s.candidato));
 }
-export function resultadoCB2(value: unknown) {
+export function resultadoCB2(value: unknown, accion?: string, identidad?: unknown) {
+    if (accion === "corregir") {
+        const r = leerObjeto(value), a = leerObjeto(r.asignacion), esperada = leerObjeto(identidad);
+        if (Number.isInteger(r.consumoId) && Number(r.consumoId)>0 && Number.isInteger(a.vehiculoId) && Number(a.vehiculoId)>0 && (a.empleadoId === null || (Number.isInteger(a.empleadoId) && Number(a.empleadoId)>0)) && r.consumoId === esperada.consumoId && a.vehiculoId === esperada.vehiculoId && a.empleadoId === esperada.empleadoId && a.productoClasificado === esperada.productoClasificado && productos.some(p => p === a.productoClasificado) && Number.isInteger(a.revision) && a.revision === Number(esperada.revision) + 1) return value;
+        throw new FalloCB2("Respuesta sin certificacion de la correccion. Conserva y reintenta la misma solicitud.");
+    }
     const r = value as {
         existente?: boolean;
         importacionId?: number;
@@ -224,7 +234,7 @@ export class OperacionCB2 {
             this.guardar();
             const pendiente = this.pending;
             try {
-                const r = resultadoCB2(await ejecutar(pendiente.key));
+                const r = resultadoCB2(await ejecutar(pendiente.key), action, identidad);
                 this.pending = null;
                 this.guardar();
                 return r;
@@ -246,7 +256,7 @@ export class OperacionCB2 {
             throw new FalloCB2("Ya hay una operación en curso.");
         this.busy = true;
         try {
-            const r = resultadoCB2(await p.ejecutar!(p.key));
+            const r = resultadoCB2(await p.ejecutar!(p.key), p.action, p.identidad);
             this.pending = null;
             this.guardar();
             return r;

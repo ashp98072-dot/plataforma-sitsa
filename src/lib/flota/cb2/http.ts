@@ -1,3 +1,5 @@
+import { productos } from "./clasificacion";
+import { corregirSchema, corregirAsignacion } from "./asignaciones";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
@@ -30,20 +32,20 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
     const lectura = ["importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
     try {
-        if (accion === "reanudar" && g.session.rol !== "Admin")
-            throw new ErrorCB2("Reanudar requiere Admin hasta disponer de capacidad especifica.", 403);
+        if (["reanudar", "corregir"].includes(accion) && g.session.rol !== "Admin")
+            throw new ErrorCB2("Reanudar o corregir requiere Admin hasta disponer de capacidad especifica.", 403);
         if (!lectura)
             validarOrigenCB2(req);
         const ctx = { empresaId: g.empresa.id, proveedorId: 0, actor: { id: g.session.id, username: g.session.username }, autorizar: async () => {
                 const actual = await requireTenantFlotaCombustible(slug, "conciliar");
-                if (actual.error || actual.session.id !== g.session.id || actual.empresa.id !== g.empresa.id || (accion === "reanudar" && actual.session.rol !== "Admin"))
+                if (actual.error || actual.session.id !== g.session.id || actual.empresa.id !== g.empresa.id || (["reanudar", "corregir"].includes(accion) && actual.session.rol !== "Admin"))
                     throw new ErrorCB2("Autorizacion cambio; operacion cancelada.", 403);
             } };
         let resultado: unknown;
@@ -54,7 +56,11 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                 const f = await service.archivo(ctx.empresaId, iid!);
                 return new Response(new Uint8Array(f.buffer), { headers: { ...headers, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="cb2-${iid}.xlsx"` } });
             }
-            const filtros = z.object({proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+            const filtros = z.object({vehiculoId:id.optional(),empleadoId:id.optional(),importacionId:id.optional(),producto:z.enum(productos).optional(),proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+                vehiculoId:url.searchParams.has("vehiculoId")?Number(url.searchParams.get("vehiculoId")):undefined,
+                empleadoId:url.searchParams.has("empleadoId")?Number(url.searchParams.get("empleadoId")):undefined,
+                importacionId:url.searchParams.has("importacionId")?Number(url.searchParams.get("importacionId")):undefined,
+                producto:url.searchParams.get("producto")||undefined,
                 proveedorId:url.searchParams.has("proveedorId")?Number(url.searchParams.get("proveedorId")):undefined,
                 estado:url.searchParams.get("estado")||undefined,desde:url.searchParams.get("desde")||undefined,hasta:url.searchParams.get("hasta")||undefined,buscar:url.searchParams.get("buscar")||undefined,
             });
@@ -106,7 +112,10 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                     throw e;
                 throw new ErrorCB2("JSON invalido.", 400);
             }
-            if (accion === "reanudar") {
+            if (accion === "corregir") {
+                const op = corregirSchema.parse(json); ctx.proveedorId = op.proveedorId; resultado = await corregirAsignacion(ctx, op);
+            }
+            else if (accion === "reanudar") {
                 const op = reanudar.parse(json);
                 ctx.proveedorId = op.proveedorId;
                 resultado = await service.reanudarArchivo(ctx, op);

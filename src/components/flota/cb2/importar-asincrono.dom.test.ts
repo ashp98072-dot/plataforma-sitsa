@@ -5,11 +5,11 @@ import { expect, it, vi } from "vitest";
 import { ImportarCB2 } from "./importar";
 import type { CatalogosCB2 } from "./client";
 
-it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos elegibles seleccionados, sin pilotos", async () => {
+it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos elegibles seleccionados, sin vincular pilotos aproximados", async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
     const candidato = "a".repeat(64), otro = "c".repeat(64);
-    const fila = { hoja: "Datos", fila: 2, candidato, bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", motivos: ["Producto no informado"], vale: "0001", placa: "633 CBL", placaNormalizada: "633 CBL", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ", origen: { piloto: "JOSE CHAY" } };
+    const fila = { hoja: "Datos", fila: 2, candidato, bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", motivos: ["Producto no informado"], vale: "0001", placa: "633 CBL", placaNormalizada: "633 CBL", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ", origen: { piloto: "JOSE CHAY", producto: "DIESEL" } };
     const preview = { sha256: "b".repeat(64), token: "sintetico", nota: "", filas: [fila, { ...fila, candidato: otro, vale: "0002", fila: 3 }] };
     const requests: { url: string; body: FormData }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => { requests.push({ url, body: init.body as FormData }); return new Response(JSON.stringify(url.endsWith("preview") ? preview : { eventos: [] }), { headers: { "Content-Type": "application/json" } }); }));
@@ -34,7 +34,7 @@ it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos
         await act(async () => aceptar().click()); await act(async () => button("Confirmar selección parcial").click());
         expect(requests.map(r => r.url)).toEqual(["/demo/preview", "/demo/preview", "/demo/confirmar"]);
         const body = requests[2].body;
-        expect(JSON.parse(String(body.get("seleccion")))).toEqual([{ candidato, vehiculoId: 3 }]);
+        expect(JSON.parse(String(body.get("seleccion")))).toEqual([{ candidato, vehiculoId: 3, empleadoId: null, productoClasificado: "DIESEL" }]);
         expect([...body.keys()].some(k => /piloto/i.test(k))).toBe(false);
         expect(body.get("token")).toBe("sintetico"); expect(body.get("clave")).toBe("clave-sintetica-513");
     } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }

@@ -5,8 +5,8 @@ vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: m.connection }) })
 import { cb2Http, type Accion } from "./http";
 import { decodeJwt } from "jose";
 import { fixtureHalelV2, fixtureShellV2 } from "../combustible-importacion-v2.fixture";
-const actions: Accion[] = ["preview", "confirmar", "reanudar", "asociar", "importaciones", "consumos", "facturas", "filas", "archivo"];
-const writes = actions.slice(0, 4);
+const actions: Accion[] = ["preview", "confirmar", "reanudar", "asociar", "corregir", "importaciones", "consumos", "facturas", "filas", "archivo"];
+const writes = actions.slice(0, 5);
 const url = "http://internal:3000/api/empresas/kt-monaco/flota/cb2";
 beforeEach(() => {
     vi.stubEnv("NODE_ENV", "production");

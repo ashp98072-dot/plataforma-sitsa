@@ -1,3 +1,5 @@
+import { consultarConsumos } from "./consumos-lectura";
+import { clasificarProducto } from "./clasificacion";
 import { SignJWT, jwtVerify } from "jose";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
@@ -215,9 +217,11 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         let cid: number | null = null;
         if (resultado === "CREADA" && l.clave) {
             const vehicle = seleccion.get(l.clave)!;
-            if (esPlacaAbreviada(f.placaNormalizada)
-                ? !placaCompatible(f.placaNormalizada, vehicle, abreviadas) || !placaCompatible(f.placaNormalizada, vehicle, [{ id: vehicle, placa: unidades.get(vehicle) ?? "" }])
-                : !placaComparable(f.placaNormalizada) || placaComparable(unidades.get(vehicle) ?? "") !== placaComparable(f.placaNormalizada))
+            const choice = selection.find(s => s.candidato === l.clave)!;
+            const compatible = esPlacaAbreviada(f.placaNormalizada)
+                ? placaCompatible(f.placaNormalizada, vehicle, abreviadas) && placaCompatible(f.placaNormalizada, vehicle, [{ id: vehicle, placa: unidades.get(vehicle) ?? "" }])
+                : !!placaComparable(f.placaNormalizada) && placaComparable(unidades.get(vehicle) ?? "") === placaComparable(f.placaNormalizada);
+            if (!compatible && (choice.motivoUnidad?.trim().length ?? 0) < 10)
                 throw new ErrorCB2("El vehiculo elegido no coincide con la placa original.");
             let resolved = res.get(l.clave);
             if (!resolved) {
@@ -230,7 +234,13 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                     resolved = { id: Number(previous[0].id), resultado: "REUTILIZADA", factura: previous[0].factura_id === null ? null : Number(previous[0].factura_id) };
                 }
                 else {
-                    const id = await insert(c, "flota_cb2_consumos", { empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle, factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
+                    const productoClasificado = choice.productoClasificado ?? clasificarProducto(f.producto);
+                    if (!productoClasificado) throw new ErrorCB2("Clasifica el combustible o confirma NO DETERMINADO antes de importar.", 400);
+                    if (choice.empleadoId) {
+                        const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' FOR UPDATE", [ctx.empresaId, choice.empleadoId]);
+                        if (!empleado) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
+                    }
+                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle, factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
                     resolved = { id, resultado: "CREADA", factura: fid };
                 }
                 if (resolved)
@@ -243,7 +253,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 resultado = resolved.resultado;
             }
         }
-        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ version: 1, moneda: currency, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores }), motivo });
+        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ version: 1, moneda: currency, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, asignacion: l.clave ? selection.find(s => s.candidato === l.clave) ?? null : null }), motivo });
     }
     return eventos;
 }
@@ -307,19 +317,19 @@ export async function asociarFactura(ctx: Contexto, op: {
         return { eventos: await diario(c, ctx, "ASOCIAR_FACTURA", op.clave, request, eventos), repetida: false };
     });
 }
-export type FiltrosCB2 = { proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
+export type FiltrosCB2 = { vehiculoId?: number; empleadoId?: number; importacionId?: number; producto?: string; proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
 export async function consultar(empresa: number, tipo: "importaciones" | "consumos" | "facturas" | "filas", importacion?: number, limite = 100, despues = 0, filtros: FiltrosCB2 = {}) {
     const c = await getPool().getConnection();
     try {
+        if (tipo === "consumos") return consultarConsumos(c, empresa, limite, despues, filtros);
         const table = { importaciones: "flota_cb2_importaciones", consumos: "flota_cb2_consumos", facturas: "flota_cb2_facturas", filas: "flota_cb2_filas" }[tipo];
-        const columns = tipo === "importaciones" ? "id,proveedor_id,proveedor_nombre,perfil,archivo_nombre,archivo_sha256,estado,revision,resumen_actual,creado_en" : tipo === "filas" ? "id,importacion_id,revision,tipo,origen_fila_id,consumo_id,hoja_nombre,fila_excel,resultado,datos_origen,decision,motivo,operacion_clave,creado_en" : "*";
+        const columns = tipo === "importaciones" ? "id,proveedor_id,proveedor_nombre,perfil,archivo_nombre,archivo_sha256,estado,revision,resumen_actual,creado_en" : tipo === "filas" ? "id,importacion_id,revision,tipo,origen_fila_id,consumo_id,hoja_nombre,fila_excel,resultado,datos_origen,decision,motivo,operacion_clave,usuario_id,creado_en" : "*";
         const where = ["empresa_id=?", "id>?"]; const args: (string|number)[] = [empresa, despues];
         if (importacion && tipo === "filas") { where.push("importacion_id=?"); args.push(importacion); }
         if (filtros.proveedorId) { where.push("proveedor_id=?"); args.push(filtros.proveedorId); }
-        if (filtros.estado && (tipo === "consumos" || tipo === "importaciones")) { where.push(`${tipo === "consumos" ? "estado_factura" : "estado"}=?`); args.push(filtros.estado); }
-        if (tipo === "consumos") for (const [op, value] of [[">=", filtros.desde],["<=", filtros.hasta]]) if (value) {where.push(`fecha_consumo ${op} ?`);args.push(value);}
+        if (filtros.estado && tipo === "importaciones") { where.push("estado=?"); args.push(filtros.estado); }
         if (filtros.buscar && tipo !== "filas") {
-            const campos = tipo === "consumos" ? ["vale_norm","placa_normalizada"] : tipo === "facturas" ? ["serie_norm","numero_norm"] : ["archivo_nombre","proveedor_nombre"];
+            const campos = tipo === "facturas" ? ["serie_norm","numero_norm"] : ["archivo_nombre","proveedor_nombre"];
             where.push(`(${campos.map(c => `LOCATE(UPPER(?),UPPER(${c}))>0`).join(" OR ")})`);
             args.push(...campos.map(() => filtros.buscar!));
         }

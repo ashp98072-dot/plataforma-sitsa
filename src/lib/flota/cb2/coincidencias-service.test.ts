@@ -11,6 +11,7 @@ import { preview, confirmarArchivo } from "./service";
 import { analizar } from "./model";
 import { libro, row } from "./fixture";
 import { getAuthSecretBytes } from "@/lib/auth-secret";
+import type { Seleccion } from "./model";
 const ctx = { empresaId: 7, proveedorId: 3, actor: { id: 9, username: "demo" }, autorizar: async () => {} };
 beforeEach(() => {
     vi.stubEnv("AUTH_SECRET", "synthetic-only-no-real-db-service-511"); m.empresaVehiculo = 7;
@@ -20,14 +21,39 @@ beforeEach(() => {
     m.diario.mockImplementation(async (_c, _ctx, _tipo, _clave, _digest, eventos) => eventos);
 });
 afterEach(() => vi.unstubAllEnvs());
-async function preparar(placa: string, repetido = false) {
+async function preparar(placa: string, repetido = false, extra: Partial<Seleccion[number]> = {}, producto = "DIESEL") {
     const r = row(); r[2] = placa;
+    r[9] = producto;
     const file = await libro(repetido ? [r, r] : [r]);
     const lineas = await analizar(file, "HALEL", "GTQ");
-    const entrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato: lineas[1].clave!, vehiculoId: 1 }] };
+    const entrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato: lineas[1].clave!, vehiculoId: 1, ...extra }] };
     return { file, entrada, recibo: await preview(ctx, file, entrada) };
 }
 describe("confirmación real del servicio con BD y almacenamiento simulados", () => {
+    it("empleado ajeno o inactivo no se persiste", async () => {
+        const {file,entrada,recibo}=await preparar("C-001ABC",false,{empleadoId:77});
+        await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"empleado-ajeno-514",recibo.token)).rejects.toThrow("Empleado no autorizado");
+        expect(m.query.mock.calls.find(([sql])=>String(sql).includes("FROM empleados"))).toEqual([expect.stringContaining("estado='Activo' FOR UPDATE"),[7,77]]);
+        expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);
+    });
+    it("persiste clasificación y empleado por separado del texto original", async () => {
+        const original=m.query.getMockImplementation()!;
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77}],[]]:original(...args));
+        const {file,entrada,recibo}=await preparar("C-001ABC",true,{empleadoId:77,productoClasificado:"NO_DETERMINADO"},"");
+        await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"empleado-propio-514",recibo.token);
+        const creados=m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos");expect(creados).toHaveLength(1);
+        expect(creados[0][2]).toMatchObject({empleado_id:77,piloto_informado:"DEMO",producto:null,producto_clasificado:"NO_DETERMINADO"});
+        const eventos=m.diario.mock.calls[0][5];expect(JSON.stringify(eventos)).toContain("empleadoId");
+    });
+    it("producto ausente y V-Power sin variante exigen clasificación explícita", async () => {
+        for(const producto of ["","V-POWER"]){const {file,entrada,recibo}=await preparar("C-001ABC",false,{},producto);await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"producto-pendiente-514",recibo.token)).rejects.toThrow("Clasifica el combustible");}
+        expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);
+    });
+    it("corrección manual justificada acepta otra unidad autorizada conservando la placa original", async () => {
+        const {file,entrada,recibo}=await preparar("P-001ABC",false,{motivoUnidad:"Verificado por Operaciones con el vale original"});
+        await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"unidad-manual-514",recibo.token);
+        expect(m.insert.mock.calls.find(([,table])=>table==="flota_cb2_consumos")![2]).toMatchObject({vehiculo_id:1,placa_original:"P-001ABC"});
+    });
     it("acepta abreviada única y consulta únicamente el catálogo autorizado bajo bloqueo", async () => {
         const { file, entrada, recibo } = await preparar("001 ABC");
         await confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "abreviada-unica-513", recibo.token);
