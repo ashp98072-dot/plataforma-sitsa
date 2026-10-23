@@ -1,0 +1,712 @@
+
+> plataforma@0.1.0 build
+> next build
+
+▲ Next.js 16.4.1 (Turbopack)
+npm.cmd : ⚠ `experimental.turbopackPluginRuntimeStrategy = 'workerThreads'` is disabled on Node.js 24.18.0.
+En línea: 12 Carácter: 1
++ npm.cmd run build *> docs/evidence/pr512-dependencies/build.log
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (⚠ `experimental...ode.js 24.18.0.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+
+A Node.js worker-thread teardown bug can abort the process when a native addon, such as fsevents, has a live Node-API
+threadsafe function as a worker exits.
+See https://github.com/nodejs/node/issues/65100.
+Falling back to 'childProcesses'. To override at your own risk, use 'forceWorkerThreads'.
+✓ Running next.config.ts took 167ms
+Warning: Custom Cache-Control headers detected for the following routes:
+  - /_next/static/:path*
+
+Setting a custom Cache-Control header can break Next.js development behavior.
+- Experiments (use with caution):
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.
+
+  · cpus: 1
+  · turbopackPluginRuntimeStrategy: "workerThreads"
+
+  To migrate automatically, run:
+  npx @next/codemod@canary middleware-to-proxy .
+
+  Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+✓ Compiled successfully in 33.9s
+  Running TypeScript ...
+  Finished TypeScript in 60s ...
+  Collecting page data using 1 worker ...
+  Generating static pages using 1 worker (0/54) ...
+  Generating static pages using 1 worker (13/54)
+  Generating static pages using 1 worker (26/54)
+  Generating static pages using 1 worker (40/54)
+✓ Generating static pages using 1 worker (54/54) in 516ms
+Turbopack build encountered 5 warnings:
+./src/app/api/empresas/[slug]/tms/evidencias/route.ts:64:21
+Warning: Dynamic filesystem access causes tracing of the whole project
+  62 |       try {
+  63 |         const { join } = await import("path");
+> 64 |         const abs = join(process.cwd(),
+String(rows[0].ruta_archivo));
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  65 |         const buf = readFileSync(abs);
+  66 |         const name = String(rows[0].nombre_original);
+  67 |         return new NextResponse(buf, {
+
+  Finalizing page optimization ...
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the
+output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of
+the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: path.join(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import trace:
+  App Route:
+    ./src/app/api/empresas/[slug]/tms/evidencias/route.ts
+    ./src/app/api/empresas/[slug]/tms/gastos/[id]/comprobante/route.ts
+
+
+./src/app/api/empresas/[slug]/tms/gastos/[id]/comprobante/route.ts:80:45
+Warning: Dynamic filesystem access causes tracing of the whole project
+  78 | ...a: gasto.factura_ruta_relativa,
+  79 | ...utaCalculada,
+> 80 | ...c: rutaAbsolutaCalculada ? existsSync(rutaAbsolutaCalculada) : false,
+     |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  81 | ...ess.cwd(),
+  82 | ...Definida: Boolean(process.env.UPLOAD_DIR?.trim()),
+  83 | ...or: error && typeof error === "object" && "code" in error ?
+String(error.code) : null,
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the
+output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of
+the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: fs.existsSync(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import trace:
+  App Route:
+    ./src/app/api/empresas/[slug]/tms/gastos/[id]/comprobante/route.ts
+    ./src/app/api/empresas/[slug]/tms/gastos/[id]/comprobante/route.ts
+
+
+./src/lib/flota/cb2/storage.ts:25:15
+Warning: Dynamic filesystem access causes tracing of the whole project
+  23 |     // la carpeta: evitar escrituras previas a la verificacion del padre final.
+  24 |     for (const segmento of ["empresas", String(empresa),
+"flota", "cb2"]) {
+> 25 |         dir = path.join(dir, segmento);
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^
+  26 |         try { await mkdir(dir); }
+  27 |         catch (e) { if ((e as NodeJS.ErrnoException).code
+!== "EEXIST") throw e; }
+  28 |         const st = await lstat(dir);
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the
+output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of
+the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: path.join(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import traces:
+  #1 [App Route]:
+    ./src/lib/flota/cb2/storage.ts
+    ./src/app/api/empresas/[slug]/tms/evidencias/route.ts
+
+  #2 [App Route]:
+    ./src/lib/flota/cb2/storage.ts
+    ./src/lib/flota/cb2/service.ts
+    ./src/lib/flota/cb2/http.ts
+    ./src/app/api/empresas/[slug]/flota/combustible/cb2/reanudar/route.ts
+
+
+./src/lib/uploads.ts:425:9
+Warning: Dynamic filesystem access causes tracing of the whole project
+  423 |   try {
+  424 |     const abs = absPathFromRelative(relative);
+> 425 |     if (existsSync(abs)) unlinkSync(abs);
+      |         ^^^^^^^^^^^^^^^
+  426 |   } catch {
+  427 |     // ignore
+  428 |   }
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the
+output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of
+the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: fs.existsSync(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import traces:
+  #1 [App Route]:
+    ./src/lib/uploads.ts
+    ./src/app/api/empresas/[slug]/tms/evidencias/route.ts
+
+  #2 [App Route]:
+    ./src/lib/uploads.ts
+    ./src/app/api/empresas/[slug]/empleados/[id]/foto/route.ts
+
+  #3 [Server Component]:
+    ./src/lib/uploads.ts
+    ./src/lib/rrhh/documentos.ts
+    ./src/lib/rrhh/descuentos.ts
+    ./src/lib/rrhh/planilla-conceptos.ts
+    ./src/lib/rrhh/planillas.ts
+    ./src/app/portal/boletas/page.tsx
+
+
+./src/lib/uploads.ts:77:15
+Warning: Dynamic filesystem access causes tracing of the whole project
+  75 |     return resolve(process.env.UPLOAD_DIR.trim());
+  76 |   }
+> 77 |   const cwd = resolve(process.cwd());
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+  78 |   let dir = cwd;
+  79 |   for (;;) {
+  80 |     if (basename(dir) === ".builds") {
+
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the
+output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of
+the server code.
+This can slow down deployments or lead to failures when size limits are exceeded.
+To resolve this, you can
+- make sure the path is statically scoped to some subfolder, for example path.join(process.cwd(), 'data', bar), or
+- only use them in development, or
+- opt out by adding an ignore comment to the highlighted call: path.resolve(/*turbopackIgnore: true*/ ...), or
+- remove them.
+
+Import traces:
+  #1 [App Route]:
+    ./src/lib/uploads.ts
+    ./src/app/api/empresas/[slug]/tms/evidencias/route.ts
+
+  #2 [App Route]:
+    ./src/lib/uploads.ts
+    ./src/app/api/empresas/[slug]/empleados/[id]/foto/route.ts
+
+  #3 [Server Component]:
+    ./src/lib/uploads.ts
+    ./src/lib/rrhh/documentos.ts
+    ./src/lib/rrhh/descuentos.ts
+    ./src/lib/rrhh/planilla-conceptos.ts
+    ./src/lib/rrhh/planillas.ts
+    ./src/app/portal/boletas/page.tsx
+
+
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/admin/limpiar-modulo
+├ ƒ /api/admin/limpiar-modulo/combustible-bloqueante
+├ ƒ /api/admin/vacaciones/inicializar-sync
+├ ƒ /api/auth/activity
+├ ƒ /api/auth/cambiar-password
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/me
+├ ƒ /api/auth/select-empresa
+├ ƒ /api/cliente-portal/auth/activity
+├ ƒ /api/cliente-portal/auth/cambiar-password
+├ ƒ /api/cliente-portal/auth/login
+├ ƒ /api/cliente-portal/auth/logout
+├ ƒ /api/cliente-portal/solicitudes
+├ ƒ /api/cliente-portal/solicitudes/[id]
+├ ƒ /api/cliente-portal/solicitudes/[id]/paradas/[paradaId]/evidencias
+├ ƒ /api/cliente-portal/solicitudes/[id]/paradas/[paradaId]/evidencias/[evidenciaId]/archivo
+├ ƒ /api/cliente-portal/solicitudes/[id]/seguimiento
+├ ƒ /api/cliente-portal/ubicaciones
+├ ƒ /api/empresas/[slug]/auditoria
+├ ƒ /api/empresas/[slug]/clientes
+├ ƒ /api/empresas/[slug]/clientes/[id]
+├ ƒ /api/empresas/[slug]/clientes/[id]/contactos
+├ ƒ /api/empresas/[slug]/clientes/[id]/contactos/[contactoId]
+├ ƒ /api/empresas/[slug]/clientes/[id]/portal-usuarios
+├ ƒ /api/empresas/[slug]/clientes/[id]/portal-usuarios/[usuarioId]
+├ ƒ /api/empresas/[slug]/clientes/export
+├ ƒ /api/empresas/[slug]/clientes/import
+├ ƒ /api/empresas/[slug]/cms
+├ ƒ /api/empresas/[slug]/compras/catalogos
+├ ƒ /api/empresas/[slug]/compras/proveedores
+├ ƒ /api/empresas/[slug]/compras/proveedores/[id]
+├ ƒ /api/empresas/[slug]/compras/requerimientos
+├ ƒ /api/empresas/[slug]/compras/requerimientos/[id]
+├ ƒ /api/empresas/[slug]/compras/requerimientos/[id]/estado
+├ ƒ /api/empresas/[slug]/compras/requerimientos/[id]/excel
+├ ƒ /api/empresas/[slug]/compras/requerimientos/[id]/lineas/[lineaId]/documentos
+├ ƒ /api/empresas/[slug]/compras/requerimientos/[id]/pdf
+├ ƒ /api/empresas/[slug]/compras/requerimientos/documentos/[docId]
+├ ƒ /api/empresas/[slug]/compras/requerimientos/facturas/verificar
+├ ƒ /api/empresas/[slug]/contabilidad/asientos
+├ ƒ /api/empresas/[slug]/contabilidad/cuentas
+├ ƒ /api/empresas/[slug]/contabilidad/cxc
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/bitacora
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/cobros
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/cobros-aplicados
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/cobros-aplicados/[id]/anular
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/cobros-aplicados/clientes
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/cobros-aplicados/facturas
+├ ƒ /api/empresas/[slug]/contabilidad/cxc/documentos
+├ ƒ /api/empresas/[slug]/contabilidad/cxp
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/bitacora
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/cuentas
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/facturas
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/facturas/[id]
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/facturas/[id]/anular
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/facturas/preview
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/pagos
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/pagos/[id]
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/pagos/[id]/reversar
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/proveedores
+├ ƒ /api/empresas/[slug]/contabilidad/cxp/proveedores/[id]/fiscal
+├ ƒ /api/empresas/[slug]/contabilidad/entidades
+├ ƒ /api/empresas/[slug]/contabilidad/reportes/balance
+├ ƒ /api/empresas/[slug]/contabilidad/reportes/diario
+├ ƒ /api/empresas/[slug]/contabilidad/reportes/mayor
+├ ƒ /api/empresas/[slug]/contabilidad/reportes/opciones
+├ ƒ /api/empresas/[slug]/empleados
+├ ƒ /api/empresas/[slug]/empleados/[id]
+├ ƒ /api/empresas/[slug]/empleados/[id]/documentos
+├ ƒ /api/empresas/[slug]/empleados/[id]/expediente-pdf
+├ ƒ /api/empresas/[slug]/empleados/[id]/foto
+├ ƒ /api/empresas/[slug]/empleados/[id]/foto/miniatura
+├ ƒ /api/empresas/[slug]/empleados/[id]/preview-fecha-alta
+├ ƒ /api/empresas/[slug]/empleados/[id]/vacaciones/reparacion
+├ ƒ /api/empresas/[slug]/empleados/[id]/vacaciones/reparacion/preview
+├ ƒ /api/empresas/[slug]/empleados/documentos/[docId]
+├ ƒ /api/empresas/[slug]/empleados/export
+├ ƒ /api/empresas/[slug]/empleados/import
+├ ƒ /api/empresas/[slug]/empleados/supervisores
+├ ƒ /api/empresas/[slug]/facturacion/clientes
+├ ƒ /api/empresas/[slug]/facturacion/clientes/[clienteId]
+├ ƒ /api/empresas/[slug]/facturacion/cuentas-por-cobrar
+├ ƒ /api/empresas/[slug]/facturacion/cuentas-por-cobrar/clientes
+├ ƒ /api/empresas/[slug]/facturacion/cuentas-por-cobrar/clientes/[clienteId]
+├ ƒ /api/empresas/[slug]/facturacion/cuentas-por-cobrar/export
+├ ƒ /api/empresas/[slug]/facturacion/empresa
+├ ƒ /api/empresas/[slug]/facturacion/facturas
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/anular
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/bitacora
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/confirmaciones-bancarias
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/confirmaciones-bancarias/[confirmacionId]/anular
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/confirmaciones-bancarias/[confirmacionId]/evidencia
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/emitir
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/pagos
+├ ƒ /api/empresas/[slug]/facturacion/facturas/[id]/pdf-demo
+├ ƒ /api/empresas/[slug]/facturacion/facturas/catalogos
+├ ƒ /api/empresas/[slug]/facturacion/facturas/contexto
+├ ƒ /api/empresas/[slug]/facturacion/facturas/kpi
+├ ƒ /api/empresas/[slug]/facturacion/facturas/preview
+├ ƒ /api/empresas/[slug]/facturacion/viajes-pendientes
+├ ƒ /api/empresas/[slug]/flota/combustible
+├ ƒ /api/empresas/[slug]/flota/combustible/[id]
+├ ƒ /api/empresas/[slug]/flota/combustible/[id]/revisar
+├ ƒ /api/empresas/[slug]/flota/combustible/[id]/vale
+├ ƒ /api/empresas/[slug]/flota/combustible/catalogos
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/asociar
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/confirmar
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/consumos
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/facturas
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/importaciones
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/importaciones/[id]/archivo
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/importaciones/[id]/filas
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/preview
+├ ƒ /api/empresas/[slug]/flota/combustible/cb2/reanudar
+├ ƒ /api/empresas/[slug]/flota/combustible/conciliacion-proveedor/filas/[id]
+├ ƒ /api/empresas/[slug]/flota/combustible/conciliacion-proveedor/vales-sin-reporte
+├ ƒ /api/empresas/[slug]/flota/combustible/conciliaciones
+├ ƒ /api/empresas/[slug]/flota/combustible/conciliaciones/[id]
+├ ƒ /api/empresas/[slug]/flota/combustible/conciliaciones/[id]/archivo
+├ ƒ /api/empresas/[slug]/flota/combustible/estaciones
+├ ƒ /api/empresas/[slug]/flota/combustible/estaciones/[id]
+├ ƒ /api/empresas/[slug]/flota/combustible/fondos
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones/[id]
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones/[id]/archivo
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones/[id]/conciliacion
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones/preview
+├ ƒ /api/empresas/[slug]/flota/combustible/importaciones/preview-v2
+├ ƒ /api/empresas/[slug]/flota/combustible/resumen
+├ ƒ /api/empresas/[slug]/flota/export
+├ ƒ /api/empresas/[slug]/flota/import
+├ ƒ /api/empresas/[slug]/flota/inventario-equipo
+├ ƒ /api/empresas/[slug]/flota/inventario-equipo/areas
+├ ƒ /api/empresas/[slug]/flota/inventario-equipo/categorias
+├ ƒ /api/empresas/[slug]/flota/inventario-equipo/empleados
+├ ƒ /api/empresas/[slug]/flota/lecturas
+├ ƒ /api/empresas/[slug]/flota/lecturas/[id]/evidencias
+├ ƒ /api/empresas/[slug]/flota/permisos-externos
+├ ƒ /api/empresas/[slug]/flota/planes-salida
+├ ƒ /api/empresas/[slug]/flota/reportes
+├ ƒ /api/empresas/[slug]/flota/servicios
+├ ƒ /api/empresas/[slug]/flota/servicios/[id]/adjuntos
+├ ƒ /api/empresas/[slug]/flota/vehiculos
+├ ƒ /api/empresas/[slug]/flota/vehiculos/[id]/documentos
+├ ƒ /api/empresas/[slug]/flota/vehiculos/[id]/documentos/[docId]
+├ ƒ /api/empresas/[slug]/flota/verificar-piloto
+├ ƒ /api/empresas/[slug]/flota/viajes
+├ ƒ /api/empresas/[slug]/flota/viajes/[id]/evidencias
+├ ƒ /api/empresas/[slug]/flota/viajes/[id]/paradas
+├ ƒ /api/empresas/[slug]/mi-firma
+├ ƒ /api/empresas/[slug]/mi-firma/imagen
+├ ƒ /api/empresas/[slug]/notificaciones
+├ ƒ /api/empresas/[slug]/operaciones/disponibilidad
+├ ƒ /api/empresas/[slug]/operaciones/disponibilidad-personal
+├ ƒ /api/empresas/[slug]/operaciones/multas
+├ ƒ /api/empresas/[slug]/operaciones/multas/[id]
+├ ƒ /api/empresas/[slug]/operaciones/multas/[id]/anular-con-descuento
+├ ƒ /api/empresas/[slug]/operaciones/multas/[id]/documentos
+├ ƒ /api/empresas/[slug]/operaciones/multas/documentos/[docId]
+├ ƒ /api/empresas/[slug]/operaciones/multas/panel
+├ ƒ /api/empresas/[slug]/operaciones/multas/revisiones
+├ ƒ /api/empresas/[slug]/portales-proveedores
+├ ƒ /api/empresas/[slug]/portales-proveedores/[id]
+├ ƒ /api/empresas/[slug]/portales-proveedores/[id]/revelar
+├ ƒ /api/empresas/[slug]/reciclaje
+├ ƒ /api/empresas/[slug]/rrhh/asistencia
+├ ƒ /api/empresas/[slug]/rrhh/bitacora-legal
+├ ƒ /api/empresas/[slug]/rrhh/bitacora-legal/[id]
+├ ƒ /api/empresas/[slug]/rrhh/casos-legales
+├ ƒ /api/empresas/[slug]/rrhh/centros-costo
+├ ƒ /api/empresas/[slug]/rrhh/centros-costo/[id]
+├ ƒ /api/empresas/[slug]/rrhh/configuracion
+├ ƒ /api/empresas/[slug]/rrhh/cumpleanios
+├ ƒ /api/empresas/[slug]/rrhh/cumpleanios/comprobantes
+├ ƒ /api/empresas/[slug]/rrhh/cumpleanios/comprobantes/[docId]
+├ ƒ /api/empresas/[slug]/rrhh/dashboard
+├ ƒ /api/empresas/[slug]/rrhh/descuentos
+├ ƒ /api/empresas/[slug]/rrhh/descuentos/[id]
+├ ƒ /api/empresas/[slug]/rrhh/descuentos/export
+├ ƒ /api/empresas/[slug]/rrhh/descuentos/import
+├ ƒ /api/empresas/[slug]/rrhh/empleados/[id]/portal-acceso
+├ ƒ /api/empresas/[slug]/rrhh/en-ruta
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/[id]
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/[id]/documentos
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/[id]/seguimiento
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/documentos/[docId]
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/entrevistadores
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/puestos
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/reportes
+├ ƒ /api/empresas/[slug]/rrhh/entrevistas/usuarios
+├ ƒ /api/empresas/[slug]/rrhh/fiscal/acumulados/importar
+├ ƒ /api/empresas/[slug]/rrhh/fiscal/acumulados/plantilla
+├ ƒ /api/empresas/[slug]/rrhh/fiscal/empleados/[empleadoId]/[ejercicio]
+├ ƒ /api/empresas/[slug]/rrhh/horas-extra
+├ ƒ /api/empresas/[slug]/rrhh/horas-extra/[id]
+├ ƒ /api/empresas/[slug]/rrhh/incidencias
+├ ƒ /api/empresas/[slug]/rrhh/incidencias/anexo
+├ ƒ /api/empresas/[slug]/rrhh/inventario
+├ ƒ /api/empresas/[slug]/rrhh/inventario/[id]/movimientos
+├ ƒ /api/empresas/[slug]/rrhh/inventario/entregas
+├ ƒ /api/empresas/[slug]/rrhh/inventario/entregas/[id]/cambiar
+├ ƒ /api/empresas/[slug]/rrhh/inventario/entregas/[id]/devolver
+├ ƒ /api/empresas/[slug]/rrhh/justificaciones-faltas
+├ ƒ /api/empresas/[slug]/rrhh/justificaciones-faltas/[id]/revertir
+├ ƒ /api/empresas/[slug]/rrhh/justificaciones-faltas/evidencias
+├ ƒ /api/empresas/[slug]/rrhh/justificaciones-faltas/evidencias/[docId]
+├ ƒ /api/empresas/[slug]/rrhh/marcajes
+├ ƒ /api/empresas/[slug]/rrhh/marcajes/empleado
+├ ƒ /api/empresas/[slug]/rrhh/marcajes/evidencias/[id]
+├ ƒ /api/empresas/[slug]/rrhh/marcajes/importar
+├ ƒ /api/empresas/[slug]/rrhh/multas-pendientes
+├ ƒ /api/empresas/[slug]/rrhh/multas-pendientes/[multaId]
+├ ƒ /api/empresas/[slug]/rrhh/personal-ops
+├ ƒ /api/empresas/[slug]/rrhh/planillas
+├ ƒ /api/empresas/[slug]/rrhh/planillas/[id]
+├ ƒ /api/empresas/[slug]/rrhh/planillas/[id]/export
+├ ƒ /api/empresas/[slug]/rrhh/planillas/[id]/lineas/[lineaId]
+├ ƒ /api/empresas/[slug]/rrhh/planillas/cuadre-igss
+├ ƒ /api/empresas/[slug]/rrhh/planillas/sugerir
+├ ƒ /api/empresas/[slug]/rrhh/prestaciones
+├ ƒ /api/empresas/[slug]/rrhh/prestaciones/[id]
+├ ƒ /api/empresas/[slug]/rrhh/proveedores
+├ ƒ /api/empresas/[slug]/rrhh/proveedores/[id]
+├ ƒ /api/empresas/[slug]/rrhh/recordatorios
+├ ƒ /api/empresas/[slug]/rrhh/recordatorios/[id]
+├ ƒ /api/empresas/[slug]/rrhh/reportes
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos/[id]
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos/[id]/estado
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos/[id]/excel
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos/[id]/pdf
+├ ƒ /api/empresas/[slug]/rrhh/requerimientos/catalogos
+├ ƒ /api/empresas/[slug]/rrhh/ubicaciones-marcaje
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/[id]
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/[id]/evidencias
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/alertas
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/dias-habiles
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/empleados
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/evidencias/[evId]
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/exportar-historial
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/exportar-historial/preview
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/importar-historial/preview
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/modo-carga-historica
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/modo-carga-historica/preflight
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/modo-carga-historica/resincronizar
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/preview-historico
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/reparacion/lote
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/reparacion/lote/preview
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/reparacion/pendientes
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/solicitudes
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/solicitudes/[id]
+├ ƒ /api/empresas/[slug]/rrhh/vacaciones/solicitudes/[id]/boleta
+├ ƒ /api/empresas/[slug]/tarimas
+├ ƒ /api/empresas/[slug]/tms/catalogos
+├ ƒ /api/empresas/[slug]/tms/clientes
+├ ƒ /api/empresas/[slug]/tms/clientes/[clienteId]/contactos
+├ ƒ /api/empresas/[slug]/tms/clientes/[clienteId]/ubicaciones
+├ ƒ /api/empresas/[slug]/tms/clientes/[clienteId]/usuarios
+├ ƒ /api/empresas/[slug]/tms/contactos/[id]
+├ ƒ /api/empresas/[slug]/tms/cotizaciones
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/costeo
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/costeo/historial
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/costeo/seleccionar
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/duplicar
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/estado
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/[id]/pdf
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/ajustes
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/ajustes/parametros
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/ajustes/perfiles
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/ajustes/perfiles/[id]
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/ajustes/presentacion
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/costeo/calcular
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/costeo/config
+├ ƒ /api/empresas/[slug]/tms/cotizaciones/presentacion
+├ ƒ /api/empresas/[slug]/tms/evidencias
+├ ƒ /api/empresas/[slug]/tms/fondos
+├ ƒ /api/empresas/[slug]/tms/fondos/[id]
+├ ƒ /api/empresas/[slug]/tms/fondos/[id]/entregas
+├ ƒ /api/empresas/[slug]/tms/fondos/[id]/exportar
+├ ƒ /api/empresas/[slug]/tms/fondos/[id]/pdf
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/anular
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/constancia
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/evidencia
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/presencial
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/rechazar
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/[entregaId]/recibir
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/por-recibir
+├ ƒ /api/empresas/[slug]/tms/fondos/entregas/resumen
+├ ƒ /api/empresas/[slug]/tms/gastos
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]/autorizar
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]/comprobante
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]/exportar
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]/pdf
+├ ƒ /api/empresas/[slug]/tms/gastos/[id]/rechazar
+├ ƒ /api/empresas/[slug]/tms/gastos/catalogos
+├ ƒ /api/empresas/[slug]/tms/personal-habilitaciones
+├ ƒ /api/empresas/[slug]/tms/planes
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/bitacora
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/cargos
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/cargos/[cargoId]
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/cargos/[cargoId]/anular
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/cargos/[cargoId]/reactivar
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/cerrar
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/liquidacion
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/liquidar
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/reabrir-liquidacion
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/reporte-pdf
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/reporte-recibido
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/resumen-liquidacion
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/viaticos
+├ ƒ /api/empresas/[slug]/tms/planes/[id]/vincular-viaje
+├ ƒ /api/empresas/[slug]/tms/planes/candidatos-cierre
+├ ƒ /api/empresas/[slug]/tms/planes/cargos-cerrados-pendientes
+├ ƒ /api/empresas/[slug]/tms/planes/cargos-resumen
+├ ƒ /api/empresas/[slug]/tms/planes/catalogos
+├ ƒ /api/empresas/[slug]/tms/planes/cerrar-masivo
+├ ƒ /api/empresas/[slug]/tms/planes/cerrar-masivo-periodo
+├ ƒ /api/empresas/[slug]/tms/planes/disponibilidad-recursos
+├ ƒ /api/empresas/[slug]/tms/planes/edicion-rapida
+├ ƒ /api/empresas/[slug]/tms/planes/edicion-rapida/validar
+├ ƒ /api/empresas/[slug]/tms/programacion/copiar
+├ ƒ /api/empresas/[slug]/tms/programacion/copiar/confirmar
+├ ƒ /api/empresas/[slug]/tms/programacion/copiar/validar
+├ ƒ /api/empresas/[slug]/tms/programacion/importar
+├ ƒ /api/empresas/[slug]/tms/programacion/reporte
+├ ƒ /api/empresas/[slug]/tms/reportes/gastos
+├ ƒ /api/empresas/[slug]/tms/reportes/gastos/exportar
+├ ƒ /api/empresas/[slug]/tms/reportes/viajes
+├ ƒ /api/empresas/[slug]/tms/reportes/viajes/export
+├ ƒ /api/empresas/[slug]/tms/rutas
+├ ƒ /api/empresas/[slug]/tms/rutas/[id]
+├ ƒ /api/empresas/[slug]/tms/rutas/[id]/tarifas
+├ ƒ /api/empresas/[slug]/tms/rutas/[id]/tarifas-opciones
+├ ƒ /api/empresas/[slug]/tms/rutas/[id]/tarifas-opciones/[tarifaId]
+├ ƒ /api/empresas/[slug]/tms/rutas/exportar
+├ ƒ /api/empresas/[slug]/tms/rutas/importar
+├ ƒ /api/empresas/[slug]/tms/solicitudes-clientes
+├ ƒ /api/empresas/[slug]/tms/solicitudes-clientes/[id]
+├ ƒ /api/empresas/[slug]/tms/solicitudes-clientes/[id]/programar
+├ ƒ /api/empresas/[slug]/tms/ubicaciones/[id]
+├ ƒ /api/empresas/[slug]/tms/viaticos-config
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]/autorizar
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]/entrega
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]/firmas
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]/liquidar
+├ ƒ /api/empresas/[slug]/tms/viaticos/[id]/rechazar
+├ ƒ /api/empresas/[slug]/tms/viaticos/comprobante-autorizacion-excel
+├ ƒ /api/empresas/[slug]/tms/viaticos/comprobante-autorizacion-pdf
+├ ƒ /api/empresas/[slug]/tms/viaticos/control
+├ ƒ /api/empresas/[slug]/tms/viaticos/entrega-masiva
+├ ƒ /api/empresas/[slug]/tms/viaticos/firmas/[firmaId]/imagen
+├ ƒ /api/empresas/[slug]/tms/viaticos/por-pagar
+├ ƒ /api/empresas/[slug]/tms/viaticos/por-pagar/exportar
+├ ƒ /api/empresas/[slug]/tms/viaticos/reporte
+├ ƒ /api/empresas/[slug]/tms/viaticos/requerimientos
+├ ƒ /api/empresas/[slug]/tms/viaticos/requerimientos/[id]
+├ ƒ /api/empresas/[slug]/tms/viaticos/requerimientos/[id]/estado
+├ ƒ /api/empresas/[slug]/tms/viaticos/requerimientos/[id]/exportar
+├ ƒ /api/empresas/[slug]/tms/viaticos/requerimientos/catalogos
+├ ƒ /api/portal/auth/activity
+├ ƒ /api/portal/auth/cambiar-password
+├ ƒ /api/portal/auth/login
+├ ƒ /api/portal/auth/logout
+├ ƒ /api/portal/boletas
+├ ƒ /api/portal/boletas/[id]
+├ ƒ /api/portal/entrevistas
+├ ƒ /api/portal/ficha
+├ ƒ /api/portal/ficha/foto
+├ ƒ /api/portal/hora-servidor
+├ ƒ /api/portal/horas-extra
+├ ƒ /api/portal/horas-extra/[id]
+├ ƒ /api/portal/marcajes
+├ ƒ /api/portal/vacaciones
+├ ƒ /api/portal/vacaciones/[id]/boleta
+├ ƒ /api/portal/viajes
+├ ƒ /api/portal/viajes/[id]/combustible
+├ ƒ /api/portal/viajes/[id]/evidencias
+├ ƒ /api/usuarios
+├ ƒ /cliente-portal
+├ ○ /cliente-portal/cambiar-password
+├ ○ /cliente-portal/login
+├ ƒ /cliente-portal/solicitudes
+├ ƒ /cliente-portal/solicitudes/[id]
+├ ƒ /cliente-portal/solicitudes/nueva
+├ ƒ /e/[slug]/admin/limpiar
+├ ƒ /e/[slug]/atraccion-talento/entrevistas
+├ ƒ /e/[slug]/atraccion-talento/reportes
+├ ƒ /e/[slug]/cambiar-password
+├ ƒ /e/[slug]/clientes
+├ ƒ /e/[slug]/clientes/[id]/portal
+├ ƒ /e/[slug]/cms
+├ ƒ /e/[slug]/combustibles
+├ ƒ /e/[slug]/combustibles/estaciones
+├ ƒ /e/[slug]/combustibles/importaciones
+├ ƒ /e/[slug]/combustibles/importaciones/[id]
+├ ƒ /e/[slug]/combustibles/importaciones/nueva
+├ ƒ /e/[slug]/combustibles/nuevo
+├ ƒ /e/[slug]/compras
+├ ƒ /e/[slug]/compras/proveedores
+├ ƒ /e/[slug]/compras/requerimientos
+├ ƒ /e/[slug]/compras/requerimientos/[id]
+├ ƒ /e/[slug]/compras/requerimientos/nuevo
+├ ƒ /e/[slug]/contabilidad
+├ ƒ /e/[slug]/contabilidad/cxc
+├ ƒ /e/[slug]/contabilidad/cxp
+├ ƒ /e/[slug]/contabilidad/entidades
+├ ƒ /e/[slug]/contabilidad/reportes
+├ ƒ /e/[slug]/cotizaciones
+├ ƒ /e/[slug]/cotizaciones/ajustes
+├ ƒ /e/[slug]/dashboard
+├ ƒ /e/[slug]/dashboard-operaciones
+├ ƒ /e/[slug]/dashboard-rrhh
+├ ƒ /e/[slug]/disponibilidad
+├ ƒ /e/[slug]/facturacion
+├ ƒ /e/[slug]/flota
+├ ƒ /e/[slug]/fondos
+├ ƒ /e/[slug]/gastos
+├ ƒ /e/[slug]/mi-firma
+├ ƒ /e/[slug]/operaciones/multas
+├ ƒ /e/[slug]/planes
+├ ƒ /e/[slug]/portales-proveedores
+├ ƒ /e/[slug]/programacion
+├ ƒ /e/[slug]/programacion/copiar
+├ ƒ /e/[slug]/programacion/importar
+├ ƒ /e/[slug]/reciclaje
+├ ƒ /e/[slug]/reportes
+├ ƒ /e/[slug]/reportes/diario
+├ ƒ /e/[slug]/reportes/fondos
+├ ƒ /e/[slug]/reportes/gastos
+├ ƒ /e/[slug]/reportes/viajes
+├ ƒ /e/[slug]/reportes/viaticos
+├ ƒ /e/[slug]/rrhh
+├ ƒ /e/[slug]/rrhh/bitacora-legal
+├ ƒ /e/[slug]/rrhh/centros-costo
+├ ƒ /e/[slug]/rrhh/configuracion
+├ ƒ /e/[slug]/rrhh/descuentos
+├ ƒ /e/[slug]/rrhh/descuentos/multas-pendientes
+├ ƒ /e/[slug]/rrhh/empleados
+├ ƒ /e/[slug]/rrhh/en-ruta
+├ ƒ /e/[slug]/rrhh/entrevistas
+├ ƒ /e/[slug]/rrhh/horas-extra
+├ ƒ /e/[slug]/rrhh/incidencias
+├ ƒ /e/[slug]/rrhh/inventario
+├ ƒ /e/[slug]/rrhh/marcajes
+├ ƒ /e/[slug]/rrhh/marcajes/asistencia
+├ ƒ /e/[slug]/rrhh/marcajes/manual
+├ ƒ /e/[slug]/rrhh/planillas
+├ ƒ /e/[slug]/rrhh/prestaciones
+├ ƒ /e/[slug]/rrhh/proveedores
+├ ƒ /e/[slug]/rrhh/recordatorios
+├ ƒ /e/[slug]/rrhh/reportes
+├ ƒ /e/[slug]/rrhh/reportes/cumpleanios
+├ ƒ /e/[slug]/rrhh/requerimientos
+├ ƒ /e/[slug]/rrhh/ubicaciones-marcaje
+├ ƒ /e/[slug]/rrhh/vacaciones
+├ ƒ /e/[slug]/rutas
+├ ƒ /e/[slug]/rutas/importar
+├ ƒ /e/[slug]/tarimas
+├ ƒ /e/[slug]/tms
+├ ƒ /e/[slug]/tms/reportes
+├ ƒ /e/[slug]/tms/solicitudes-clientes
+├ ƒ /e/[slug]/tms/solicitudes-clientes/[id]
+├ ƒ /e/[slug]/usuarios
+├ ƒ /e/[slug]/viaticos
+├ ○ /icon.png
+├ ○ /login
+├ ƒ /portal
+├ ƒ /portal/boletas
+├ ƒ /portal/boletas/[id]
+├ ƒ /portal/boletas/resumen
+├ ○ /portal/cambiar-password
+├ ƒ /portal/entrevistas
+├ ƒ /portal/ficha
+├ ƒ /portal/horas-extra
+├ ○ /portal/login
+├ ƒ /portal/marcajes
+├ ƒ /portal/vacaciones
+├ ƒ /portal/vacaciones/equipo
+├ ƒ /portal/viajes
+├ ƒ /portal/viaticos
+├ ○ /rrhh
+├ ƒ /select-empresa
+└ ƒ /site/[slug]
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand

@@ -1,0 +1,6 @@
+{
+  "node": "v24.18.0",
+  "next": "16.4.1",
+  "cpus": 1,
+  "resolvedPluginRuntimeStrategy": "childProcesses"
+}

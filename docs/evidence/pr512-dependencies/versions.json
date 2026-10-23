@@ -1,0 +1,358 @@
+{
+  "base": "ad219de74d26f339a571e2513aa9cd95f1bf665f",
+  "node": "v24.18.0",
+  "npm": "11.16.0",
+  "changedPackages": [
+    {
+      "path": "node_modules/@next/env",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@next/eslint-plugin-next",
+      "before": "16.2.12",
+      "after": "16.4.1",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@next/eslint-plugin-next/node_modules/@eslint-community/eslint-utils",
+      "before": null,
+      "after": "4.9.1",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@next/eslint-plugin-next/node_modules/eslint-visitor-keys",
+      "before": null,
+      "after": "3.4.3",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@next/swc-darwin-arm64",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-darwin-x64",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-linux-arm64-gnu",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-linux-arm64-musl",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-linux-x64-gnu",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-linux-x64-musl",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-win32-arm64-msvc",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@next/swc-win32-x64-msvc",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@oxc-project/types",
+      "before": "0.147.0",
+      "after": "0.155.0",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@rolldown/binding-android-arm-eabi",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-android-arm64",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-darwin-arm64",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-darwin-x64",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-freebsd-x64",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-arm-gnueabihf",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-arm64-gnu",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-arm64-musl",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-ppc64-gnu",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-s390x-gnu",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-x64-gnu",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-linux-x64-musl",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-openharmony-arm64",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-win32-arm64-msvc",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@rolldown/binding-win32-x64-msvc",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/core",
+      "before": null,
+      "after": "1.11.1",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/runtime",
+      "before": null,
+      "after": "1.11.1",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@emnapi/wasi-threads",
+      "before": null,
+      "after": "1.2.2",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@napi-rs/wasm-runtime",
+      "before": null,
+      "after": "1.1.4",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/@tybys/wasm-util",
+      "before": null,
+      "after": "0.10.2",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@tailwindcss/oxide-wasm32-wasi/node_modules/tslib",
+      "before": null,
+      "after": "2.8.1",
+      "development": true,
+      "optional": true
+    },
+    {
+      "path": "node_modules/@vitest/expect",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/mocker",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/pretty-format",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/runner",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/snapshot",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/spy",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/@vitest/utils",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/chai",
+      "before": "6.2.2",
+      "after": "6.3.0",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/eslint-config-next",
+      "before": "16.2.12",
+      "after": "16.4.1",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/fastq",
+      "before": "1.20.1",
+      "after": "1.20.3",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/next",
+      "before": "16.3.6",
+      "after": "16.4.1",
+      "development": false,
+      "optional": false
+    },
+    {
+      "path": "node_modules/rolldown",
+      "before": "1.2.6",
+      "after": "1.2.15",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/source-map-js",
+      "before": "1.2.1",
+      "after": "1.2.2",
+      "development": false,
+      "optional": false
+    },
+    {
+      "path": "node_modules/tinyrainbow",
+      "before": "3.1.1",
+      "after": "3.2.0",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/vite",
+      "before": "8.2.2",
+      "after": "8.2.4",
+      "development": true,
+      "optional": false
+    },
+    {
+      "path": "node_modules/vitest",
+      "before": "4.1.11",
+      "after": "4.1.12",
+      "development": true,
+      "optional": false
+    }
+  ],
+  "removedPackagePaths": []
+}

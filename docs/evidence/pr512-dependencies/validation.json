@@ -1,0 +1,125 @@
+{
+  "base": "ad219de74d26f339a571e2513aa9cd95f1bf665f",
+  "date": "2026-10-23",
+  "installation": {
+    "baseline": {
+      "node": "v24.18.0",
+      "npm": "11.16.0",
+      "command": "npm ci --no-audit --no-fund",
+      "exitCode": 0
+    },
+    "updated": {
+      "node": "v24.18.0",
+      "npm": "11.16.0",
+      "firstAttempt": "ECONNRESET",
+      "retryCommand": "npm ci --no-audit --no-fund --prefer-offline --fetch-retries=3",
+      "exitCode": 0
+    },
+    "finalRestore": {
+      "node": "v22.23.4",
+      "npm": "10.9.9",
+      "command": "npm ci --no-audit --no-fund --prefer-offline --fetch-retries=3",
+      "exitCode": 0
+    },
+    "lockUnchangedByPruneAndRestore": true
+  },
+  "typescript": {
+    "command": "tsc --noEmit --incremental false",
+    "exitCode": 0
+  },
+  "eslint": {
+    "fullBeforeExitCode": 1,
+    "fullAfterExitCode": 1,
+    "errorsBefore": 40,
+    "errorsAfter": 40,
+    "fullDiagnosticsComparedExactlyEqual": true,
+    "changedCodeAndAuditScriptsExitCode": 0
+  },
+  "tests": {
+    "full": "regression-comparison.json",
+    "critical": "critical-suites.json",
+    "node22Targeted": {
+      "total": 375,
+      "passed": 375,
+      "failed": 0,
+      "skipped": 0,
+      "files": 37
+    }
+  },
+  "builds": [
+    {
+      "node": "v24.18.0",
+      "exitCode": 0,
+      "staticPages": 54,
+      "prerenderWorkers": 1,
+      "loaderStrategy": "childProcesses",
+      "log": "build-node24.log"
+    },
+    {
+      "node": "v22.23.4",
+      "exitCode": 0,
+      "staticPages": 54,
+      "prerenderWorkers": 1,
+      "loaderStrategy": "workerThreads",
+      "log": "build-node22.log"
+    }
+  ],
+  "runtime": [
+    {
+      "node": "v24.18.0",
+      "checks": 11,
+      "exitCode": 0,
+      "developmentPackagesPresent": false,
+      "databaseConfigured": false,
+      "report": "runtime-results-node24.json"
+    },
+    {
+      "node": "v22.23.4",
+      "checks": 11,
+      "exitCode": 0,
+      "developmentPackagesPresent": false,
+      "databaseConfigured": false,
+      "report": "runtime-results.json"
+    }
+  ],
+  "audit": {
+    "allBefore": {
+      "exitCode": 1,
+      "total": 10,
+      "critical": 1,
+      "high": 7,
+      "moderate": 2
+    },
+    "allAfter": {
+      "exitCode": 1,
+      "total": 5,
+      "critical": 0,
+      "high": 5,
+      "moderate": 0,
+      "cause": "GHSA-vfj7-8cjw-p6xm (withdrawn)"
+    },
+    "productionBefore": {
+      "exitCode": 1,
+      "total": 2
+    },
+    "productionAfter": {
+      "exitCode": 0,
+      "total": 0
+    }
+  },
+  "node22Portable": {
+    "archive": "node-v22.23.4-win-x64.zip",
+    "url": "https://nodejs.org/dist/v22.23.4/node-v22.23.4-win-x64.zip",
+    "sha256": "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20",
+    "globalInstallationChanged": false
+  },
+  "limits": {
+    "productionAccess": false,
+    "sqlChanges": false,
+    "realDatabaseTests": false,
+    "authenticatedBrowserSmoke": false,
+    "hostingerDeployment": false,
+    "node20Execution": false
+  },
+  "whitespaceExitCode": 0
+}

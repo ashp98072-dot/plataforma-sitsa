@@ -23,9 +23,9 @@ function selectorNext(defaultCpus: number) {
   }) as (config: { experimental: Record<string, unknown> }, maxTasks?: number) => number;
 }
 
-describe("Hostinger — límite de build verificado en Next 16.3.6", () => {
+describe("Hostinger — límite de build verificado en Next 16.4.1", () => {
   it("la versión fijada y el esquema OFICIAL aceptan cpus=1 sin opciones desconocidas", () => {
-    expect(nextPackage.version).toBe("16.3.6");
+    expect(nextPackage.version).toBe("16.4.1");
     expect(configSchema.safeParse(nextConfig).success).toBe(true);
     expect(nextConfig.experimental?.cpus).toBe(1);
   });
@@ -51,6 +51,6 @@ describe("Hostinger — límite de build verificado en Next 16.3.6", () => {
     expect(nextConfig.serverExternalPackages).toEqual(["exceljs", "pdfkit"]);
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.build).toBe("next build");
-    expect(pkg.dependencies.next).toBe("16.3.6");
+    expect(pkg.dependencies.next).toBe("16.4.1");
   });
 });

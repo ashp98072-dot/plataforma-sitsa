@@ -1,0 +1,256 @@
+{
+  "format": "compact-vitest-failures-v1",
+  "command": "vitest run --maxWorkers=2 --reporter=json",
+  "exitCode": 1,
+  "totals": {
+    "total": 12143,
+    "passed": 11363,
+    "failed": 31,
+    "skipped": 749,
+    "files": 731
+  },
+  "suites": [
+    {
+      "file": "src/components/tms/centro-logistico-resumen.test.ts",
+      "status": "failed",
+      "passed": 14,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "Centro logístico: navegación y resumen visual presenta el título y las secciones en el orden requerido",
+          "reason": "AssertionError: expected false to be true // Object.is equality"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/compras/contratos.test.ts",
+      "status": "failed",
+      "passed": 6,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "no modifica RRHH, credenciales ni esquema SQL",
+          "reason": "AssertionError: expected true to be false // Object.is equality"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/compras/requerimiento-ui.test.ts",
+      "status": "failed",
+      "passed": 28,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "ajuste transversal sin SQL, RRHH, programación ni credenciales",
+          "reason": "AssertionError: expected true to be false // Object.is equality"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/tms/cotizacion-doble-eje-sql.test.ts",
+      "status": "failed",
+      "passed": 1,
+      "failed": 8,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor preview y alta usan exactamente la misma proyección completa",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor aplica únicamente los importes autorizados, sin dividir el valor del camión por IVA",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor mantiene 18 llantas como CABEZAL y el juego equivale a precio por cantidad",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor conserva banderas incluso cuando son null, y todos los parámetros heredados",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor conserva banderas incluso cuando son 0, y todos los parámetros heredados",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor conserva banderas incluso cuando son 1, y todos los parámetros heredados",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor los valores propuestos pasan el contrato de creación existente",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        },
+        {
+          "name": "DOBLE_EJE: alta propuesta basada en CABEZAL, sin cambiar el motor preflight solo lee, no usa information_schema y distingue APLICAR/NOOP/DETENER",
+          "reason": "TypeError: object null is not iterable (cannot read property Symbol(Symbol.iterator))"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/tms/programacion-dependencias-livianas.test.ts",
+      "status": "failed",
+      "passed": 22,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "Equivalencia con BASE exacta (requiere objeto Git) src/app/e/[slug]/programacion/edicion-rapida-helpers.ts: fuera de imports no cambia ninguna instrucción",
+          "reason": "AssertionError: expected [ …(73) ] to deeply equal [ …(72) ]"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/tms/programacion-import-excel.test.ts",
+      "status": "failed",
+      "passed": 62,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "generarPlantillaProgramacion define named ranges de libro para los 3 catálogos usados en dropdowns",
+          "reason": "Error: Command failed: unzip -p \"C:/Users/Admin/AppData/Local/Temp/claude/xlsxtest/plantilla-programacion-test.xlsx\" xl/workbook.xml"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/tms/vehiculo-solicitado.test.ts",
+      "status": "failed",
+      "passed": 28,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "catálogo reutilizado: perfiles de costeo por empresa GET /tms/catalogos lo expone (aditivo) con la empresa de la sesión",
+          "reason": "AssertionError: expected 'import { NextResponse } from \"next/se…' to match /personal,\\n\\s+vehiculosSolicitables,/"
+        }
+      ]
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-sync-invalida.test.ts",
+      "status": "failed",
+      "passed": 8,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "contratos de invalidación y esquema migración aditiva coincide exactamente con schema y protege tenant por FK compuesta",
+          "reason": "AssertionError: expected '-- Plataforma corporativa multiempres…' to contain 'CREATE TABLE IF NOT EXISTS rrhh_vacac…'"
+        }
+      ]
+    },
+    {
+      "file": "src/app/e/[slug]/programacion/programacion-exportar-imagen-wiring.test.ts",
+      "status": "failed",
+      "passed": 12,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "programacion-client.tsx — Exportar imagen «Exportar imagen» solo existe en Programación — ningún otro módulo importa programacion-exportar-imagen ni programacion-imagen",
+          "reason": "AssertionError: expected [ …(2) ] to deeply equal []"
+        }
+      ]
+    },
+    {
+      "file": "src/app/e/[slug]/atraccion-talento/reportes/page.test.ts",
+      "status": "failed",
+      "passed": 14,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "ATRACCION-TALENTO-1/2 — closure de filtros en cargar() 38) el montaje inicial sigue siendo una sola carga: el useEffect que llama cargar() al montar tiene deps [] — cambiar un filtro por sí solo NO dispara fetch",
+          "reason": "AssertionError: expected -1 to be greater than -1"
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/programacion-tc.test.ts",
+      "status": "failed",
+      "passed": 26,
+      "failed": 7,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO editar OTROS campos conserva el TC (no reescribe las columnas TC) y el propio plan se autoexcluye de la validación",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO el mismo TC enviado de nuevo no se re-valida (ni por taller) ni se reescribe",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO cambiar de TC valida el nuevo (acceso + clasificación) y reescribe id + fotografía",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO cambiar a un TC ya asignado ese día a OTRO plan -> 409 (backend, no solo UI)",
+          "reason": "AssertionError: expected 400 to be 409 // Object.is equality"
+        },
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO cambiar la fecha del plan revalida el TC contra la NUEVA fecha",
+          "reason": "AssertionError: expected 400 to be 409 // Object.is equality"
+        },
+        {
+          "name": "PATCH — editar el TC de un viaje PROPIO tcVehiculoId: null quita el TC",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH — TC de un viaje TERCERIZADO y cambio de tipo edición conserva/actualiza el snapshot externo (tcExternoPlaca en mayúsculas) sin tocar el catálogo interno",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/programacion-viajes-tercerizados.test.ts",
+      "status": "failed",
+      "passed": 19,
+      "failed": 1,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "PATCH /tms/planes — patchTipoViaje: cambio de tipo aislado un PATCH sin tipoViaje sigue el flujo normal (no entra a patchTipoViaje, no dispara su SELECT dedicado)",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/regreso-opcional.test.ts",
+      "status": "failed",
+      "passed": 22,
+      "failed": 6,
+      "notExecuted": 0,
+      "failures": [
+        {
+          "name": "PATCH /tms/planes — editar y dejar el regreso estimado en null regresoEstimado: null con piloto asignado no da 400 y guarda NULL (sin inventar una hora)",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH /tms/planes — editar y dejar el regreso estimado en null un plan que ya no tenía regreso estimado se puede seguir editando sin exigirlo",
+          "reason": "AssertionError: expected 400 to be 200 // Object.is equality"
+        },
+        {
+          "name": "PATCH /tms/planes — editar y dejar el regreso estimado en null al editar sin regreso estimado, se valida la fecha efectiva",
+          "reason": "TypeError: Cannot read properties of undefined (reading 'sql')"
+        },
+        {
+          "name": "PATCH /tms/planes — editar y dejar el regreso estimado en null editar y dejar null conserva la validación por empresa y excluye al propio plan",
+          "reason": "TypeError: Cannot read properties of undefined (reading 'sql')"
+        },
+        {
+          "name": "PATCH /tms/planes — editar y dejar el regreso estimado en null editar y conflicto con un viaje abierto de OTRO plan del mismo piloto: 409",
+          "reason": "AssertionError: expected 400 to be 409 // Object.is equality"
+        },
+        {
+          "name": "identidad de personal por empleado — POST y PATCH usan la misma regla PATCH: al mover el viaje, el piloto (personal 12, empleado 55) choca con un viaje donde el mismo empleado es Auxiliar (personal 10): 409",
+          "reason": "AssertionError: expected 400 to be 409 // Object.is equality"
+        }
+      ]
+    }
+  ],
+  "note": "Totals cover the full 731-file run. Only failing suites are retained here; selected successful critical suites are in critical-suites.json."
+}

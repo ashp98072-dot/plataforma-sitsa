@@ -1,0 +1,330 @@
+{
+  "format": "compact-eslint-report-v1",
+  "command": "eslint . --format json",
+  "exitCode": 1,
+  "scannedFiles": 1897,
+  "errorCount": 40,
+  "warningCount": 0,
+  "diagnostics": [
+    {
+      "file": "src/app/e/[slug]/cms/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 26,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 529,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 533,
+      "column": 38,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 590,
+      "column": 7,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 931,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 946,
+      "column": 12,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 963,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 974,
+      "column": 9,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/flota/flota-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 994,
+      "column": 7,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/reciclaje/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 30,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/centros-costo/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 34,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/configuracion/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 42,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/en-ruta/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 44,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/inventario/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 168,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/marcajes/manual/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 198,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/marcajes/manual/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 202,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/marcajes/manual/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 221,
+      "column": 7,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/planillas/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 191,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/recordatorios/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 92,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/rrhh/ubicaciones-marcaje/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 65,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/app/e/[slug]/tarimas/page.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 29,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/facturacion/facturacion-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 104,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/facturacion/facturacion-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 141,
+      "column": 7,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/facturacion/facturacion-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 202,
+      "column": 33,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/flota/inventario-equipo.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 158,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/flota/inventario-equipo.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 166,
+      "column": 12,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/flota/tomar-foto.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 41,
+      "column": 7,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/flota/vehiculo-documentos.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 96,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/operaciones/disponibilidad-client.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 77,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/rrhh/bitacora-legal-empleado.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 48,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/rrhh/documentos-modal.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 121,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/rrhh/evidencias-modal.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 51,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/rrhh/solicitudes-vacaciones-panel.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 69,
+      "column": 10,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/components/theme-toggle.tsx",
+      "rule": "react-hooks/set-state-in-effect",
+      "line": 18,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 55,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 56,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 57,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 58,
+      "column": 19,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 60,
+      "column": 5,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    },
+    {
+      "file": "src/lib/empresa-session.tsx",
+      "rule": "react-hooks/refs",
+      "line": 64,
+      "column": 44,
+      "severity": 2,
+      "message": "Error: Cannot access refs during render"
+    }
+  ]
+}
