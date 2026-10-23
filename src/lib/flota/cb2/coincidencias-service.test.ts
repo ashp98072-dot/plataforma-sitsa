@@ -21,19 +21,46 @@ beforeEach(() => {
     m.diario.mockImplementation(async (_c, _ctx, _tipo, _clave, _digest, eventos) => eventos);
 });
 afterEach(() => vi.unstubAllEnvs());
-async function preparar(placa: string, repetido = false, extra: Partial<Seleccion[number]> = {}, producto = "DIESEL") {
+async function preparar(placa: string, repetido = false, extra: Partial<Seleccion[number]> = {}, producto = "DIESEL", piloto = "DEMO", perfil: "HALEL" | "SHELL" = "HALEL") {
     const r = row(); r[2] = placa;
     r[9] = producto;
+    r[8] = piloto;
     const file = await libro(repetido ? [r, r] : [r]);
-    const lineas = await analizar(file, "HALEL", "GTQ");
-    const entrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato: lineas[1].clave!, vehiculoId: 1, ...extra }] };
+    const lineas = await analizar(file, perfil, "GTQ");
+    const entrada = { perfil, moneda: "GTQ" as const, seleccion: [{ candidato: lineas[1].clave!, vehiculoId: 1, ...extra }] };
     return { file, entrada, recibo: await preview(ctx, file, entrada) };
 }
 describe("confirmación real del servicio con BD y almacenamiento simulados", () => {
+    it.each(["HALEL","SHELL"] as const)("%s revalida tokens y registra método sin reemplazar el piloto original",async perfil=>{
+        const original=m.query.getMockImplementation()!;
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto"}],[]]:original(...args));
+        const piloto="  Álvaro, Pinto. ",extra={empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS" as const};
+        const {file,entrada,recibo}=await preparar("C-001ABC",true,extra,"DIESEL",piloto,perfil);
+        await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-tokens-unicos",recibo.token);
+        const creados=m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos");expect(creados).toHaveLength(1);expect(creados[0][2]).toMatchObject({empleado_id:77,piloto_informado:piloto.trim()});
+        expect(m.query.mock.calls.filter(([sql])=>String(sql).includes("FROM empleados"))).toHaveLength(1);
+        const eventos=m.diario.mock.calls[0][5],evento=eventos.find((e:{resultado:string})=>e.resultado==="CREADA");expect(JSON.parse(evento.decision)).toMatchObject({metodoEmpleadoValidado:"TOKENS_COMPLETOS_UNICOS",asignacion:extra});expect(JSON.parse(evento.datos_origen).textos.piloto).toBe(piloto);
+    });
+    it("homónimo aparecido tras preview impide confirmar una asignación automática",async()=>{
+        const original=m.query.getMockImplementation()!,catalogo=[{id:77,nombre:"Alvaro Antonio León Pinto"}];
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[catalogo,[]]:original(...args));
+        const {file,entrada,recibo}=await preparar("C-001ABC",false,{empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"},"DIESEL","Alvaro Pinto");
+        catalogo.push({id:78,nombre:"Alvaro Pinto"});await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-ambiguo-nuevo",recibo.token)).rejects.toThrow("ambigua");expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);
+    });
+    it("reutilizar un consumo confirmado no modifica su empleado previo",async()=>{
+        const original=m.query.getMockImplementation()!;
+        const {file,entrada,recibo}=await preparar("C-001ABC",false,{empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"},"DIESEL","Alvaro Pinto");
+        const l=(await analizar(file,"HALEL","GTQ"))[1];
+        const previo={id:45,empresa_id:7,proveedor_id:3,vehiculo_id:1,empleado_id:42,version_clave:1,version_huella:1,payload_operacion:l.payload,huella_operacion:l.huella,clave_candidata:l.clave,vale_norm:l.fila.vale,factura_id:null};
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto"}],[]]:String(args[0]).startsWith("SELECT * FROM flota_cb2_consumos")?[[previo],[]]:original(...args));
+        await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-previo-intacto",recibo.token);
+        expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);expect(m.execute.mock.calls.some(([sql])=>String(sql).startsWith("UPDATE flota_cb2_consumos"))).toBe(false);expect(previo.empleado_id).toBe(42);
+        expect(m.diario.mock.calls[0][5].some((e:{resultado:string;consumo_id:number})=>e.resultado==="REUTILIZADA"&&e.consumo_id===45)).toBe(true);
+    });
     it("empleado ajeno o inactivo no se persiste", async () => {
         const {file,entrada,recibo}=await preparar("C-001ABC",false,{empleadoId:77});
         await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"empleado-ajeno-514",recibo.token)).rejects.toThrow("Empleado no autorizado");
-        expect(m.query.mock.calls.find(([sql])=>String(sql).includes("FROM empleados"))).toEqual([expect.stringContaining("estado='Activo' FOR UPDATE"),[7,77]]);
+        expect(m.query.mock.calls.find(([sql])=>String(sql).includes("FROM empleados"))).toEqual([expect.stringContaining("estado='Activo' ORDER BY id FOR UPDATE"),[7]]);
         expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);
     });
     it("persiste clasificación y empleado por separado del texto original", async () => {

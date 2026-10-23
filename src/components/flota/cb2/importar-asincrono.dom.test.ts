@@ -34,7 +34,7 @@ it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos
         await act(async () => aceptar().click()); await act(async () => button("Confirmar selección parcial").click());
         expect(requests.map(r => r.url)).toEqual(["/demo/preview", "/demo/preview", "/demo/confirmar"]);
         const body = requests[2].body;
-        expect(JSON.parse(String(body.get("seleccion")))).toEqual([{ candidato, vehiculoId: 3, empleadoId: null, productoClasificado: "DIESEL" }]);
+        expect(JSON.parse(String(body.get("seleccion")))).toEqual([{ candidato, vehiculoId: 3, empleadoId: null, metodoEmpleado: "SIN_ASIGNACION", productoClasificado: "DIESEL" }]);
         expect([...body.keys()].some(k => /piloto/i.test(k))).toBe(false);
         expect(body.get("token")).toBe("sintetico"); expect(body.get("clave")).toBe("clave-sintetica-513");
     } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }

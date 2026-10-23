@@ -92,7 +92,7 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
         </div>
         <p role="status">{rows.length} candidatos filtrados de {r.detectados} · {r.seleccionados} seleccionados en todo el archivo.</p>
         <div className="overflow-x-auto"><table className={styles.reviewTable}><caption className="sr-only">Candidatos únicos del Excel, identificación y revisión</caption><thead><tr>{["Consumo / origen", "Unidad y selección", "Validez", "Advertencias y piloto"].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{rows.slice(page * 25, page * 25 + 25).map(g => {
-            const f = g.fila, unidad = sugerenciaVehiculo(f, cat), piloto = sugerenciaPiloto(f, cat), vehiculo = cat.vehiculos.find(v => String(v.id) === g.vehiculoId);
+            const f = g.fila, unidad = sugerenciaVehiculo(f, cat), piloto = revisionExtra ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []) : sugerenciaPiloto(f, cat), vehiculo = cat.vehiculos.find(v => String(v.id) === g.vehiculoId);
             const fuente = identificacion(g, cat, manuales);
             const avisosGrupo = [...new Set(g.activas.flatMap(f => avisosDetallados(f).map(a => `${a.nivel}: ${a.mensaje}`)))];
             const pilotoRevisado = piloto.candidatos.find(p => String(p.id) === pilotosRevisados[g.clave]);

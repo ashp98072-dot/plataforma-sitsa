@@ -1,3 +1,4 @@
+import { validarEmpleadosImportacion } from "./empleados-validacion";
 import { consultarConsumos } from "./consumos-lectura";
 import { clasificarProducto } from "./clasificacion";
 import { SignJWT, jwtVerify } from "jose";
@@ -147,6 +148,7 @@ export async function reanudarArchivo(ctx: Contexto, op: {
     });
 }
 async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita") {
+    const decisiones = new Map(selection.map(s => [s.candidato,s]));
     const seleccion = new Map(selection.map(s => [s.candidato, s.vehiculoId]));
     for (const k of seleccion.keys())
         if (!lineas.some(l => l.clave === k))
@@ -199,6 +201,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     }
     const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId));
+    const metodosEmpleados = await validarEmpleadosImportacion(c, ctx, selection, lineas);
     const ids = [...new Set([...previos.values()].flat().map(r => Number(r.id)))].sort((a, b) => a - b);
     for (const id of ids)
         await rows(c, "SELECT id FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? AND id=? FOR UPDATE", [ctx.empresaId, ctx.proveedorId, id]);
@@ -217,7 +220,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         let cid: number | null = null;
         if (resultado === "CREADA" && l.clave) {
             const vehicle = seleccion.get(l.clave)!;
-            const choice = selection.find(s => s.candidato === l.clave)!;
+            const choice = decisiones.get(l.clave)!;
             const compatible = esPlacaAbreviada(f.placaNormalizada)
                 ? placaCompatible(f.placaNormalizada, vehicle, abreviadas) && placaCompatible(f.placaNormalizada, vehicle, [{ id: vehicle, placa: unidades.get(vehicle) ?? "" }])
                 : !!placaComparable(f.placaNormalizada) && placaComparable(unidades.get(vehicle) ?? "") === placaComparable(f.placaNormalizada);
@@ -236,10 +239,6 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 else {
                     const productoClasificado = choice.productoClasificado ?? clasificarProducto(f.producto);
                     if (!productoClasificado) throw new ErrorCB2("Clasifica el combustible o confirma NO DETERMINADO antes de importar.", 400);
-                    if (choice.empleadoId) {
-                        const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' FOR UPDATE", [ctx.empresaId, choice.empleadoId]);
-                        if (!empleado) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
-                    }
                     const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle, factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
                     resolved = { id, resultado: "CREADA", factura: fid };
                 }
@@ -253,7 +252,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 resultado = resolved.resultado;
             }
         }
-        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ version: 1, moneda: currency, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, asignacion: l.clave ? selection.find(s => s.candidato === l.clave) ?? null : null }), motivo });
+        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ version: 1, moneda: currency, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, metodoEmpleadoValidado: l.clave ? metodosEmpleados.get(l.clave) ?? "SIN_ASIGNACION" : "SIN_ASIGNACION", asignacion: l.clave ? decisiones.get(l.clave) ?? null : null }), motivo });
     }
     return eventos;
 }

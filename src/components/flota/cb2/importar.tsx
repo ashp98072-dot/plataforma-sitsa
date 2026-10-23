@@ -1,7 +1,8 @@
 "use client";
 import { PasosImportacionCB2 } from "./presentacion";
 import { AsignacionCB2, type DecisionAsignacion } from "./asignacion";
-import { clasificarProducto, identificarEmpleado } from "@/lib/flota/cb2/clasificacion";
+import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
+import { seleccionarEmpleado } from "@/lib/flota/cb2/empleados-coincidencias";
 import { useState } from "react";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { elecciones, formCB2, jsonCB2, type CatalogosCB2, type PreviewCB2 } from "./client";
@@ -22,7 +23,7 @@ export function ImportarCB2({ api, cat, run, locked }: {
     const [decisiones, setDecisiones] = useState<Record<string, DecisionAsignacion>>({});
     const revision = useRevisionCB2(preview?.filas ?? sinFilas, cat, decisiones);
     const pendientesProducto = revision.resumen.revision.filter(g => g.seleccionado && !decisiones[g.clave]?.productoClasificado && !clasificarProducto(g.fila.origen?.producto)).length;
-    function seleccionActual() { return elecciones(revision.resumen.segura).map(s => { const f = revision.resumen.revision.find(g => g.clave === s.candidato)!.fila; const d = decisiones[s.candidato] ?? {}; const empleado = d.empleadoId === undefined ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []).propuesta?.id : d.empleadoId; return { ...s, empleadoId: empleado ?? null, productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; }); }
+    function seleccionActual() { const porClave = new Map(revision.resumen.revision.map(g => [g.clave,g.fila])); return elecciones(revision.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; const empleado = seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId); return { ...s, ...empleado, productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; }); }
     const firmaRevision = JSON.stringify([preview?.sha256, elecciones(revision.solicitudes), elecciones(revision.resumen.segura), revision.revisados, seleccionActual()]);
     const acepta = aceptacion === firmaRevision;
     function invalidar() { setPreview(null); revision.reset(); setDecisiones({}); setAceptacion(null); setError(""); }

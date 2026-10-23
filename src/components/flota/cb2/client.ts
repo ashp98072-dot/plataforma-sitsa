@@ -53,6 +53,7 @@ export type SeleccionCB2 = {
     candidato: string;
     vehiculoId: number;
     empleadoId?: number | null;
+    metodoEmpleado?: import("@/lib/flota/cb2/empleados-coincidencias").MetodoEmpleado;
     productoClasificado?: import("@/lib/flota/cb2/clasificacion").Producto;
     motivoUnidad?: string;
 }[];
