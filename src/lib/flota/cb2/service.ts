@@ -4,9 +4,9 @@ import { getAuthSecretBytes } from "@/lib/auth-secret";
 import { getPool } from "@/lib/db";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { ErrorCB2, hash, analizar, monedaOriginal, type Linea, type Seleccion, type Evento, type Documento } from "./model";
-import { rows, insert, tx, anterior, diario, factura, vehiculos, type Contexto } from "./repository";
+import { rows, insert, tx, anterior, diario, factura, vehiculos, catalogoAbreviadas, type Contexto } from "./repository";
 import * as storage from "./storage";
-import { placaComparable } from "../combustible-coincidencias";
+import { esPlacaAbreviada, placaComparable, placaCompatible } from "../combustible-coincidencias";
 const audience = "combustibles-cb2-confirmar-v1";
 export type Entrada = {
     perfil: "HALEL" | "SHELL";
@@ -195,6 +195,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         if (!docs.has(key))
             docs.set(key, await factura(c, ctx, l.documento!));
     }
+    const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId));
     const ids = [...new Set([...previos.values()].flat().map(r => Number(r.id)))].sort((a, b) => a - b);
     for (const id of ids)
@@ -214,7 +215,9 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         let cid: number | null = null;
         if (resultado === "CREADA" && l.clave) {
             const vehicle = seleccion.get(l.clave)!;
-            if (!placaComparable(f.placaNormalizada) || placaComparable(unidades.get(vehicle) ?? "") !== placaComparable(f.placaNormalizada))
+            if (esPlacaAbreviada(f.placaNormalizada)
+                ? !placaCompatible(f.placaNormalizada, vehicle, abreviadas) || !placaCompatible(f.placaNormalizada, vehicle, [{ id: vehicle, placa: unidades.get(vehicle) ?? "" }])
+                : !placaComparable(f.placaNormalizada) || placaComparable(unidades.get(vehicle) ?? "") !== placaComparable(f.placaNormalizada))
                 throw new ErrorCB2("El vehiculo elegido no coincide con la placa original.");
             let resolved = res.get(l.clave);
             if (!resolved) {

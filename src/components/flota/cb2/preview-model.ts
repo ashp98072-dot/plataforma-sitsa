@@ -1,21 +1,28 @@
 import DecimalJS from "decimal.js";
 const Decimal = DecimalJS.clone({ precision: 48, rounding: DecimalJS.ROUND_HALF_UP });
-import { buscarCoincidencias, placaComparable } from "@/lib/flota/combustible-coincidencias";
+import { buscarCoincidencias, identificarPlaca, placaCompatible } from "@/lib/flota/combustible-coincidencias";
 import type { CatalogosCB2, FilaCB2 } from "./client";
-export const estadosPreview = ["PENDIENTE", "BLOQUEADO", "ADVERTENCIA", "LISTO", "IGNORADO", "RESUELTO"] as const;
+export const estadosPreview = ["LISTO", "PENDIENTE", "BLOQUEADO", "RESUELTO", "IGNORADO"] as const;
 export function coincidencias(f: FilaCB2, cat: CatalogosCB2) {
-    const placa = placaComparable(f.placaNormalizada || f.placa);
-    return placa ? cat.vehiculos.filter(v => placaComparable(v.placa) === placa) : [];
+    return identificarPlaca(f.placaNormalizada || f.placa, cat.vehiculos, v => v.placa).candidatos;
 }
 export function sugerenciaVehiculo(f: FilaCB2, cat: CatalogosCB2) { return buscarCoincidencias(f.placaNormalizada || f.placa, cat.vehiculos, v => v.placa, "placa"); }
 export function sugerenciaPiloto(f: FilaCB2, cat: CatalogosCB2) { return buscarCoincidencias(f.origen?.piloto ?? "", cat.pilotos ?? [], v => v.nombre, "piloto"); }
 export function asignacionesExactas(filas: FilaCB2[], cat: CatalogosCB2) {
     const seleccion: Record<string, string> = {};
-    for (const f of filas) { const m = coincidencias(f, cat); if (elegible(f) && m.length === 1) seleccion[f.candidato!] = String(m[0].id); }
+    for (const grupo of agruparCandidatos(filas).values()) {
+        const activas = grupo.filter(f => f.estado !== "RESUELTA"), ids = activas.map(f => { const m = coincidencias(f, cat); return elegible(f) && m.length === 1 ? String(m[0].id) : ""; });
+        if (ids.length && ids.every(id => id && id === ids[0])) seleccion[activas[0].candidato!] = ids[0];
+    }
     return seleccionSegura(filas, cat, seleccion);
 }
+export function agruparCandidatos(filas: FilaCB2[]) {
+    const grupos = new Map<string, FilaCB2[]>();
+    for (const f of filas) if (f.candidato && f.estado !== "IGNORADA") { const grupo = grupos.get(f.candidato) ?? []; grupo.push(f); grupos.set(f.candidato, grupo); }
+    return grupos;
+}
 export function elegible(f: FilaCB2) { return !!f.candidato && !f.bloqueada && !["IGNORADA", "RESUELTA"].includes(f.estado); }
-export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>) {
+export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}) {
     const result: Record<string, string> = {};
     const grupos = new Map<string, FilaCB2[]>(), unidades = new Set(cat.vehiculos.map(v => String(v.id)));
     for (const f of filas) if (f.candidato && !["RESUELTA", "IGNORADA"].includes(f.estado)) {
@@ -23,7 +30,7 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     }
     for (const [key, value] of Object.entries(seleccion)) {
         const originales = grupos.get(key) ?? [];
-        if (value && originales.length && originales.every(elegible) && unidades.has(value)) result[key] = value;
+        if (!omitidos[key] && value && originales.length && originales.every(f => elegible(f) && placaCompatible(f.placaNormalizada || f.placa, Number(value), cat.vehiculos)) && unidades.has(value)) result[key] = value;
     }
     return result;
 }
@@ -32,7 +39,13 @@ export function estadoVisual(f: FilaCB2, seleccion: Record<string, string>) {
     if (f.estado === "RESUELTA") return "RESUELTO";
     if (!elegible(f)) return "BLOQUEADO";
     if (!seleccion[f.candidato!]) return "PENDIENTE";
-    return f.motivos.length || f.errores.length ? "ADVERTENCIA" : "LISTO";
+    return "LISTO";
+}
+export type NivelAviso = "INFORMATIVA" | "REVISION" | "BLOQUEO";
+export function nivelAviso(f: FilaCB2, motivo: string): NivelAviso {
+    if (["Piloto sin determinar", "Serie/factura incompleta", "serie", "factura"].includes(motivo)) return "INFORMATIVA";
+    if (["Producto no informado", "Kilometraje conservado como texto"].includes(motivo) || motivo.startsWith("Galones × precio") || motivo.startsWith("Fecha fuera del mes")) return "REVISION";
+    return f.bloqueada ? "BLOQUEO" : "REVISION";
 }
 export function diferencia(f: FilaCB2) {
     const valid = (v: string | null) => v !== null && /^\d+(\.\d+)?$/.test(v) && new Decimal(v).gt(0);
@@ -42,8 +55,9 @@ export function diferencia(f: FilaCB2) {
 }
 export function avisos(f: FilaCB2): string[] {
     const valor = (v: string | undefined) => v?.trim() ? `«${v}»` : "no informado";
-    const impacto = f.bloqueada ? "El servidor bloquea esta aparición; no se puede confirmar." : "Advertencia: no bloquea por sí sola; revisa antes de confirmar.";
     return [...new Set([...f.motivos, ...f.errores])].map(m => {
+        const nivel = nivelAviso(f, m);
+        const impacto = nivel === "BLOQUEO" ? "El servidor bloquea esta aparición; no se puede confirmar." : nivel === "INFORMATIVA" ? "Información: no bloquea por sí sola ni asocia un piloto al catálogo." : "Advertencia: no bloquea por sí sola; revisa antes de confirmar.";
         if (m === "Producto no informado") return `Producto ${valor(f.origen?.producto)}: el archivo no identifica claramente el tipo de combustible. Verifica con el proveedor; no se asume diésel, regular ni superior. ${impacto}`;
         if (m === "Kilometraje conservado como texto") return `Kilometraje original ${valor(f.origen?.km)}: ${f.kilometraje ? `interpretado como ${f.kilometraje}` : "no interpretable como kilometraje numérico con la precisión admitida"}. Revisa el dato con el proveedor; el texto original se conserva. ${impacto}`;
         if (m.startsWith("Galones × precio")) {
@@ -56,23 +70,34 @@ export function avisos(f: FilaCB2): string[] {
         return `${m}.${original} Revisa la evidencia original y corrige el archivo o la asignación cuando corresponda. ${impacto}`;
     });
 }
-export function resumenPreview(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>) {
-    const segura = seleccionSegura(filas, cat, seleccion), grupos = new Map<string, FilaCB2[]>();
-    filas.forEach(f => { if (f.candidato && f.estado !== "IGNORADA") { const grupo = grupos.get(f.candidato) ?? []; grupo.push(f); grupos.set(f.candidato, grupo); } });
-    const gruposValidos = [...grupos.values()];
-    const cantidades = { detectados: grupos.size, listos: 0, pendientes: 0, advertencias: 0, bloqueados: 0, resueltos: 0, sinIdentidad: filas.filter(f => !f.candidato && f.estado !== "IGNORADA").length, ignoradas: filas.filter(f => f.estado === "IGNORADA").length };
-    const totales: Record<string, string> = {};
-    for (const grupo of gruposValidos) {
-        if (grupo.every(g => g.estado === "RESUELTA")) { cantidades.resueltos++; continue; }
-        const activas = grupo.filter(g => g.estado !== "RESUELTA"), f = activas[0], bloqueado = activas.some(g => !elegible(g));
-        if (bloqueado) { cantidades.bloqueados++; continue; }
-        const warning = activas.some(g => g.motivos.length || g.errores.length);
-        if (warning) cantidades.advertencias++;
-        if (!segura[f.candidato!]) cantidades.pendientes++;
-        else if (!warning) cantidades.listos++;
+export function avisosDetallados(f: FilaCB2) {
+    const motivos = [...new Set([...f.motivos, ...f.errores])], mensajes = avisos(f);
+    return motivos.map((m, i) => ({ nivel: nivelAviso(f, m), mensaje: mensajes[i] }));
+}
+export function revisionCandidatos(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
+    const asignadas = seleccionSegura(filas, cat, seleccion);
+    return [...agruparCandidatos(filas)].map(([clave, apariciones]) => {
+        const activas = apariciones.filter(f => f.estado !== "RESUELTA"), resuelto = !activas.length;
+        const bloqueado = !resuelto && activas.some(f => !elegible(f));
+        const unidadValida = !bloqueado && !resuelto && !!asignadas[clave];
+        const estado = resuelto ? "RESUELTO" : bloqueado ? "BLOQUEADO" : unidadValida ? "LISTO" : "PENDIENTE";
+        const conAdvertencias = activas.some(f => f.motivos.length || f.errores.length);
+        return { clave, apariciones, activas, fila: activas[0] ?? apariciones[0], estado, unidadValida, seleccionado: unidadValida && !omitidos[clave], conAdvertencias, advertenciasPendientes: conAdvertencias && !revisados[clave], vehiculoId: seleccion[clave] ?? "" };
+    });
+}
+export type CandidatoRevision = ReturnType<typeof revisionCandidatos>[number];
+export function resumenPreview(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
+    return resumirRevision(filas, cat, seleccion, omitidos, revisados);
+}
+export function resumirRevision(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
+    const segura = seleccionSegura(filas, cat, seleccion, omitidos), revision = revisionCandidatos(filas, cat, seleccion, omitidos, revisados);
+    const cantidades = { detectados: revision.length, listos: revision.filter(g => g.estado === "LISTO").length, elegibles: revision.filter(g => g.unidadValida).length, seleccionados: Object.keys(segura).length, pendientes: revision.filter(g => g.estado === "PENDIENTE").length, advertencias: revision.filter(g => g.conAdvertencias).length, advertenciasPendientes: revision.filter(g => g.advertenciasPendientes).length, bloqueados: revision.filter(g => g.estado === "BLOQUEADO").length, resueltos: revision.filter(g => g.estado === "RESUELTO").length, sinIdentidad: filas.filter(f => !f.candidato && f.estado !== "IGNORADA").length, ignoradas: filas.filter(f => f.estado === "IGNORADA").length };
+    const totales: Record<string, string> = {}, totalesSeleccionados: Record<string, string> = {};
+    for (const { activas, fila: f, unidadValida, seleccionado } of revision) {
+        if (!unidadValida) continue;
         // Never aggregate inconsistent duplicates or invent absent amounts.
         if (activas.every(g => g.monto === f.monto && g.moneda === f.moneda) && f.monto && /^\d+(\.\d+)?$/.test(f.monto) && new Decimal(f.monto).gt(0))
-            totales[f.moneda] = new Decimal(totales[f.moneda] ?? 0).add(f.monto).toFixed();
+            { totales[f.moneda] = new Decimal(totales[f.moneda] ?? 0).add(f.monto).toFixed(); if (seleccionado) totalesSeleccionados[f.moneda] = new Decimal(totalesSeleccionados[f.moneda] ?? 0).add(f.monto).toFixed(); }
     }
-    return { ...cantidades, totales, segura };
+    return { ...cantidades, totales, totalesSeleccionados, segura, revision };
 }

@@ -7,7 +7,8 @@ import { input, primaryButton } from "./controles";
 export { input, button, primaryButton } from "./controles";
 import { CandidatosCB2, ResumenSeleccionCB2 } from "./preview-vista";
 export { CandidatosCB2 } from "./preview-vista";
-import { asignacionesExactas, seleccionSegura } from "./preview-model";
+import { useRevisionCB2 } from "./use-revision";
+const sinFilas: PreviewCB2["filas"] = [];
 export type EjecutarCB2 = (accion: string, identidad: unknown, fn: (key: string) => Promise<unknown>) => Promise<unknown>;
 export function ImportarCB2({ api, cat, run, locked }: {
     api: string;
@@ -15,8 +16,11 @@ export function ImportarCB2({ api, cat, run, locked }: {
     run: EjecutarCB2;
     locked: boolean;
 }) {
-    const [perfil, setPerfil] = useState("HALEL"), [proveedor, setProveedor] = useState(""), [moneda, setMoneda] = useState("GTQ"), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState<PreviewCB2 | null>(null), [sel, setSel] = useState<Record<string, string>>({}), [error, setError] = useState(""), [loading, setLoading] = useState(false), [acepta, setAcepta] = useState(false);
-    function invalidar() { setPreview(null); setSel({}); setAcepta(false); setError(""); }
+    const [perfil, setPerfil] = useState("HALEL"), [proveedor, setProveedor] = useState(""), [moneda, setMoneda] = useState("GTQ"), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState<PreviewCB2 | null>(null), [error, setError] = useState(""), [loading, setLoading] = useState(false), [aceptacion, setAceptacion] = useState<string | null>(null);
+    const revision = useRevisionCB2(preview?.filas ?? sinFilas, cat);
+    const firmaRevision = JSON.stringify([preview?.sha256, elecciones(revision.solicitudes), elecciones(revision.resumen.segura), revision.revisados]);
+    const acepta = aceptacion === firmaRevision;
+    function invalidar() { setPreview(null); revision.reset(); setAceptacion(null); setError(""); }
     async function analizar() {
         if (!file || !proveedor || loading || locked)
             return;
@@ -25,7 +29,7 @@ export function ImportarCB2({ api, cat, run, locked }: {
         try {
             const resultado = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, perfil, proveedor, moneda, []) });
             setPreview(resultado);
-            setSel(asignacionesExactas(resultado.filas, cat)); setAcepta(false);
+            revision.reset(); setAceptacion(null);
         }
         catch (e) {
             setError(e instanceof Error ? e.message : "No se pudo analizar.");
@@ -37,8 +41,8 @@ export function ImportarCB2({ api, cat, run, locked }: {
     async function confirmar() {
         if (!file || !preview || !acepta || locked || loading)
             return;
-        const seguras = seleccionSegura(preview.filas, cat, sel);
-        if (Object.keys(seguras).length !== Object.values(sel).filter(Boolean).length) { setError("La selección contiene candidatos bloqueados o unidades no disponibles. Revisa las asignaciones."); return; }
+        const seguras = revision.resumen.segura;
+        if (Object.keys(seguras).length !== Object.keys(revision.solicitudes).length) { setError("La selección contiene candidatos bloqueados o unidades no compatibles/disponibles. Revisa las asignaciones."); return; }
         const archivo = file, seleccion = elecciones(seguras), identity = { sha256: preview.sha256, perfil, proveedorId: Number(proveedor), moneda, seleccion };
         await run("confirmar", identity, async (key) => {
             const f = formCB2(archivo, identity.perfil, String(identity.proveedorId), identity.moneda, identity.seleccion);
@@ -62,6 +66,6 @@ export function ImportarCB2({ api, cat, run, locked }: {
             else
                 setFile(f);
         }}/></label><button type="button" className={primaryButton} disabled={!file || !proveedor} onClick={() => void analizar()}>{loading ? "Analizando…" : "Analizar Excel"}</button></fieldset>
- {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p>{preview.nota}</p><CandidatosCB2 filas={preview.filas} cat={cat} seleccion={sel} onChange={v => { setSel(v); setAcepta(false); }} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><ResumenSeleccionCB2 filas={preview.filas} cat={cat} seleccion={sel}/><p>{elecciones(sel).length} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAcepta(e.target.checked)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
+ {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p>{preview.nota}</p><CandidatosCB2 key={preview.sha256} filas={preview.filas} cat={cat} seleccion={revision.asignaciones} manuales={revision.manuales} omitidos={revision.omitidos} revisados={revision.revisados} onRevisar={(key, value) => { revision.revisar(key, value); setAceptacion(null); }} onAsignar={(key, value) => { revision.asignar(key, value); setAceptacion(null); }} onSeleccionar={(key, value) => { revision.seleccionar(key, value); setAceptacion(null); }} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><ResumenSeleccionCB2 filas={preview.filas} cat={cat} seleccion={revision.asignaciones} omitidos={revision.omitidos} revisados={revision.revisados}/><p>{revision.resumen.seleccionados} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAceptacion(e.target.checked ? firmaRevision : null)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta || Object.keys(revision.solicitudes).length !== revision.resumen.seleccionados} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
  </section>;
 }
