@@ -1,0 +1,28 @@
+{
+  "normalization": "UTF-8 LF",
+  "files": {
+    "src/app/api/empresas/[slug]/flota/combustible/catalogos/route.ts": "01105cc8ea1ff1cdc8f81073ccf48bd55503d5c67f9af4b27d62b5df3981780b",
+    "src/components/flota/cb2/catalogos-preview.test.ts": "435d8920d11d243d6ec3f710a083b96c6dbb4256dd387dc62fdfa8b18d640c05",
+    "src/components/flota/cb2/client.ts": "88414fc1aa264a822cac288639c1a564ec21fb8c3be88353ac86f4882962c267",
+    "src/components/flota/cb2/controles.ts": "c7d71743d72762557744c5790710b5b253c7d4c6e4ddc99be7fbf9373590a4fe",
+    "src/components/flota/cb2/importar.tsx": "5ca9af80a8473ab9e1212ad6da9c90e98a62906ea23593262bb920467bde9fa0",
+    "src/components/flota/cb2/panel.dom.test.ts": "f13ab908bdce9e43fe0e6ac911dbf013533f249753fd0bd924c6dd1e87f6d55e",
+    "src/components/flota/cb2/panel.module.css": "b9525e3987dbe4ebeeee0e74ad6d528d3a69b005fe09b7c02924ff07019dceb6",
+    "src/components/flota/cb2/preview-model.test.ts": "da607ac49fa07aadccc7f1ede392dcc8bb85912d4940565c2efe9cb76b53548a",
+    "src/components/flota/cb2/preview-model.ts": "86250086052b1b3755d493d1159abed37195acd33bc5bfe39210836efe2335a7",
+    "src/components/flota/cb2/preview-vista.dom.test.ts": "2e6e25c6b0fd150cfd170267d7f8629b816e669f5ad22df709a10d709c70b902",
+    "src/components/flota/cb2/preview-vista.tsx": "b005d69cb9af9ef7725aca6c8ca7e6808791d78c812aa4dffa6c7efd3b5e7933",
+    "src/lib/flota/cb2/coincidencias-service.test.ts": "961d857609b9df2e71bb7e948531f508a021720c2ea32492c7c4c3cabad2d358",
+    "src/lib/flota/cb2/http-origin.test.ts": "6ad0dcb876e0a2bcbfcee0e3e311c95bd71fde0308222449b0dde8daf40fdfe6",
+    "src/lib/flota/cb2/model.ts": "86ffbd22846f42faccdf02ad524f9d952e8c5e235ba32bfbd5efa32fcd7bedf0",
+    "src/lib/flota/cb2/parser-version.test.ts": "bcdbd4d770d395035c98a6f1c5b2aa7deb7ad294bd889ecc1042bcfe3773a863",
+    "src/lib/flota/cb2/service.ts": "af923c47b86f58ade9bf7464121a8eac2a46e743b3e807ad147d4a314f5599b5",
+    "src/lib/flota/combustible-coincidencias.test.ts": "13835d4ebf7b1770798525f5a0d3d8883a40af02f6c473e8a7c2a3dbfd6c99f1",
+    "src/lib/flota/combustible-coincidencias.ts": "0c74c6b2bf34b56cb318eaec4a041f5ec3b7f694ec8b27b3c30b1c0301c15789",
+    "src/lib/flota/combustible-formatos-flexibles.test.ts": "881cd570fb4eb263e509220bf0397df85d529118ef18873dcf8b15e4392c4908",
+    "src/lib/flota/combustible-importacion-v2-types.ts": "d3a5f4a66bdd7585f5dd98ce0c4ff5e4108aa73c199538850bec84a3d802ae9d",
+    "src/lib/flota/combustible-importacion-v2.test.ts": "af60f440f9691ccc89a85e782c677d23bf5083564565ae06d36f5e1f599121a6",
+    "src/lib/flota/combustible-importacion-v2.ts": "c4c4feb943bca931df8a36c6e11e680abe4d668df0c104658140cee92ceffd3e",
+    "src/lib/flota/parser-legacy-audit.test.ts": "012a5ffc492e01552c631312ad81c2424ebeb427856f971922e2092d00e12bb3"
+  }
+}

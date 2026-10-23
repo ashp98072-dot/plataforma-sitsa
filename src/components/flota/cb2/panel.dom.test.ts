@@ -84,6 +84,19 @@ async function change(text: string, value: string) { const el = control(text); a
 async function seleccionarConsumo() { await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Seleccionar consumo 3"]')!.click()); }
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
 describe("interfaz CB2 montada: flujos funcionales", () => {
+    it("usar sugerencia requiere revisión y cambiar asignación invalida la aceptación", async () => {
+        await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1");
+        await act(async () => { const file = control("Excel original"); Object.defineProperty(file, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true }); file.dispatchEvent(new Event("change", { bubbles: true })); });
+        await click("Analizar Excel");
+        expect(control("Unidad para vale").value).toBe("1");
+        expect(host.textContent).toContain("1 consumos seleccionados");
+        expect(btn("Confirmar selección parcial").disabled).toBe(true);
+        await act(async () => control("Confirmo el procesamiento").click());
+        expect(btn("Confirmar selección parcial").disabled).toBe(false);
+        await change("Unidad para vale", "");
+        expect(btn("Confirmar selección parcial").disabled).toBe(true);
+        expect(calls.some(c => c.url.endsWith("/confirmar"))).toBe(false);
+    });
     it("guía la importación en cuatro pasos sin perder la selección", async () => {
         await mount(); await click("Importar Excel");
         const current = () => host.querySelector('[aria-current="step"]')?.textContent;

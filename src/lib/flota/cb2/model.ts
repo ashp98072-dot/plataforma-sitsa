@@ -66,9 +66,9 @@ export function payload(f: FilaProveedorV2, currency: string) {
     return JSON.stringify([1, f.vale, f.fechaConsumo, f.placaNormalizada, f.pilotoInformado === null ? null : norm(f.pilotoInformado), f.producto === null ? null : norm(f.producto), dec(f.galones), dec(f.precio), dec(f.monto), dec(f.kilometraje), f.textos.km ? f.textos.km.normalize("NFC") : null, currency]);
 }
 /** Diagnosticos estructurados emitidos por el parser; nunca clasifica por texto de motivos. */
-export async function analizar(buffer: Buffer, perfil: PerfilProveedor, currency: "GTQ" | "USD") {
+export async function analizar(buffer: Buffer, perfil: PerfilProveedor, currency: "GTQ" | "USD", versionParser: 1 | 2 = 2) {
     const errores = new Map<FilaProveedorV2, string[]>();
-    const p = await analizarProveedorV2(buffer, perfil, (f, campo) => errores.set(f, [...(errores.get(f) ?? []), campo]));
+    const p = await analizarProveedorV2(buffer, perfil, (f, campo) => errores.set(f, [...(errores.get(f) ?? []), campo]), versionParser);
     const hojas = new Map<string, number>();
     const lineas: Linea[] = p.filas.map(f => {
         if (!hojas.has(f.hoja))
