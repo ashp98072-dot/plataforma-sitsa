@@ -3,6 +3,7 @@ const m = vi.hoisted(() => ({ guard: vi.fn(), query: vi.fn(), release: vi.fn(), 
 vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: m.guard }));
 vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: m.connection }) }));
 import { cb2Http, type Accion } from "./http";
+import { decodeJwt } from "jose";
 import { fixtureHalelV2, fixtureShellV2 } from "../combustible-importacion-v2.fixture";
 const actions: Accion[] = ["preview", "confirmar", "reanudar", "asociar", "importaciones", "consumos", "facturas", "filas", "archivo"];
 const writes = actions.slice(0, 4);
@@ -25,7 +26,12 @@ describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
         expect(response.status).toBe(200);
         const data = await response.json();
         expect(data.filas.length).toBeGreaterThan(20);
+        const original = data.filas.find((f: { candidato: string | null }) => f.candidato);
+        expect(original).toHaveProperty("lote"); expect(original).toHaveProperty("kilometraje");
+        expect(Object.keys(original.origen)).toEqual(expect.arrayContaining(["galones", "km", "monto", "precio", "producto", "serie", "factura", "fecha", "lote"]));
+        expect(Object.values(original.origen).every(v => typeof v === "string")).toBe(true);
         expect(data.sha256).toMatch(/^[a-f0-9]{64}$/); expect(data.token.split(".")).toHaveLength(3);
+        expect(decodeJwt(data.token).parser).toBe(2);
         expect(data.filas.every((r: { moneda: string }) => r.moneda === "GTQ")).toBe(true);
         expect(m.guard).toHaveBeenCalledWith("kt-monaco", "conciliar", { soloLectura: true });
         expect(m.query).toHaveBeenCalledExactlyOnceWith("SELECT id FROM compras_proveedores WHERE empresa_id=? AND id=? AND activo=1", [7, 3]);

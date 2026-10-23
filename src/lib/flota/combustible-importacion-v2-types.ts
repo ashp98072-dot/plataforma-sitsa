@@ -30,7 +30,7 @@ export type FilaProveedorV2 = {
 };
 export type PreviewProveedorV2 = {
   versionContrato: 2;
-  versionParser: 1;
+  versionParser: 1 | 2;
   perfil: PerfilProveedor;
   filas: FilaProveedorV2[];
   resumen: {

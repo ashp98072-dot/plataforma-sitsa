@@ -1,4 +1,7 @@
 export type FilaCB2 = {
+    lote?: string | null;
+    kilometraje?: string | null;
+    origen?: { producto: string; km: string; galones: string; precio: string; monto: string; fecha?: string; vale?: string; placa?: string; serie?: string; factura?: string; piloto?: string; lote?: string; auxiliar?: string };
     hoja: string;
     fila: number;
     candidato: string | null;
@@ -32,6 +35,8 @@ export type Registro = {
     [key: string]: unknown;
 };
 export type CatalogosCB2 = {
+    pilotos?: { id: number; nombre: string }[];
+    limitacionPilotos?: string;
     proveedores: {
         id: number;
         nombre: string;

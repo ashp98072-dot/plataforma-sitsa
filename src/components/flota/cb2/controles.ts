@@ -1,0 +1,3 @@
+export const input = "min-h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--text)] transition-colors focus:border-[var(--accent)] disabled:opacity-60";
+export const button = "min-h-10 rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50";
+export const primaryButton = "min-h-10 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";

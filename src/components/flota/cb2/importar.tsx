@@ -1,27 +1,14 @@
 "use client";
-import { PasosImportacionCB2, EstadoCB2 } from "./presentacion";
+import { PasosImportacionCB2 } from "./presentacion";
 import { useState } from "react";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
-import { elecciones, formCB2, jsonCB2, type CatalogosCB2, type PreviewCB2, type FilaCB2 } from "./client";
-export const input = "min-h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--text)] transition-colors focus:border-[var(--accent)] disabled:opacity-60";
-export const button = "min-h-10 rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--bg)] disabled:cursor-not-allowed disabled:opacity-50";
-export const primaryButton = "min-h-10 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
+import { elecciones, formCB2, jsonCB2, type CatalogosCB2, type PreviewCB2 } from "./client";
+import { input, primaryButton } from "./controles";
+export { input, button, primaryButton } from "./controles";
+import { CandidatosCB2, ResumenSeleccionCB2 } from "./preview-vista";
+export { CandidatosCB2 } from "./preview-vista";
+import { asignacionesExactas, seleccionSegura } from "./preview-model";
 export type EjecutarCB2 = (accion: string, identidad: unknown, fn: (key: string) => Promise<unknown>) => Promise<unknown>;
-export function CandidatosCB2({ filas, cat, seleccion, onChange, disabled = false }: {
-    filas: FilaCB2[];
-    cat: CatalogosCB2;
-    seleccion: Record<string, string>;
-    onChange: (v: Record<string, string>) => void;
-    disabled?: boolean;
-}) {
-    const [pagina, setPagina] = useState(0), [filtro, setFiltro] = useState("");
-    const rows = filas.filter(f => `${f.vale} ${f.placa} ${f.hoja} ${f.estado}`.toLowerCase().includes(filtro.toLowerCase()));
-    const page = Math.min(pagina, Math.max(0, Math.ceil(rows.length / 25) - 1));
-    return <div className="space-y-3"><p>{filas.length} apariciones · {new Set(filas.flatMap(f => f.candidato ? [f.candidato] : [])).size} candidatos. Elegir una unidad selecciona todas las apariciones de ese candidato. Sin selección se conserva pendiente.</p>
- <label>Buscar en la vista previa<input className={input} value={filtro} onChange={e => { setFiltro(e.target.value); setPagina(0); }}/></label>
- <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="sr-only">Apariciones del Excel y selección de unidades</caption><thead><tr>{["Origen", "Vale / placa", "Fecha / importes", "Validación", "Unidad para procesar"].map(h => <th key={h} className="p-2 text-left">{h}</th>)}</tr></thead><tbody>{rows.slice(page * 25, page * 25 + 25).map(f => <tr key={`${f.hoja}:${f.fila}`} className="border-t border-[var(--border)] align-top"><td className="p-2">{f.hoja} / {f.fila}</td><td className="p-2">{f.vale || "Sin vale"}<br />{f.placa || "Sin placa"}</td><td className="p-2">{f.fecha || "Sin fecha"}<br />{f.galones ?? "—"} gal · {f.moneda} {f.monto ?? "—"}<br />{f.documento ? `${f.documento.serie} / ${f.documento.numero}` : "Sin documento verificable"}</td><td className="p-2"><EstadoCB2 estado={f.estado === "RESUELTA" ? "RESUELTA" : f.estado === "IGNORADA" ? "IGNORADA" : f.bloqueada ? "BLOQUEADA" : f.estado}/><ul>{[...f.errores, ...f.motivos].map((m, i) => <li key={i}>{m}</li>)}</ul></td><td className="min-w-64 p-2">{f.candidato && !f.bloqueada ? <fieldset disabled={disabled}><CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={seleccion[f.candidato] ?? ""} onChange={v => onChange({ ...seleccion, [f.candidato!]: v })} options={cat.vehiculos.map(v => ({ value: String(v.id), label: v.placa, detail: v.descripcion }))} inputClassName={input}/></fieldset> : "No seleccionable"}</td></tr>)}</tbody></table></div>
- <div className="flex flex-wrap items-center gap-3"><button className={button} disabled={!page} onClick={() => setPagina(page - 1)}>Anterior</button><span>Página {page + 1} · {rows.length} apariciones</span><button className={button} disabled={(page + 1) * 25 >= rows.length} onClick={() => setPagina(page + 1)}>Siguiente</button></div></div>;
-}
 export function ImportarCB2({ api, cat, run, locked }: {
     api: string;
     cat: CatalogosCB2;
@@ -36,7 +23,9 @@ export function ImportarCB2({ api, cat, run, locked }: {
         setLoading(true);
         setError("");
         try {
-            setPreview(await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, perfil, proveedor, moneda, []) }));
+            const resultado = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, perfil, proveedor, moneda, []) });
+            setPreview(resultado);
+            setSel(asignacionesExactas(resultado.filas, cat)); setAcepta(false);
         }
         catch (e) {
             setError(e instanceof Error ? e.message : "No se pudo analizar.");
@@ -48,7 +37,9 @@ export function ImportarCB2({ api, cat, run, locked }: {
     async function confirmar() {
         if (!file || !preview || !acepta || locked || loading)
             return;
-        const archivo = file, seleccion = elecciones(sel), identity = { sha256: preview.sha256, perfil, proveedorId: Number(proveedor), moneda, seleccion };
+        const seguras = seleccionSegura(preview.filas, cat, sel);
+        if (Object.keys(seguras).length !== Object.values(sel).filter(Boolean).length) { setError("La selección contiene candidatos bloqueados o unidades no disponibles. Revisa las asignaciones."); return; }
+        const archivo = file, seleccion = elecciones(seguras), identity = { sha256: preview.sha256, perfil, proveedorId: Number(proveedor), moneda, seleccion };
         await run("confirmar", identity, async (key) => {
             const f = formCB2(archivo, identity.perfil, String(identity.proveedorId), identity.moneda, identity.seleccion);
             const recibo = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: f });
@@ -71,6 +62,6 @@ export function ImportarCB2({ api, cat, run, locked }: {
             else
                 setFile(f);
         }}/></label><button type="button" className={primaryButton} disabled={!file || !proveedor} onClick={() => void analizar()}>{loading ? "Analizando…" : "Analizar Excel"}</button></fieldset>
- {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p>{preview.nota}</p><CandidatosCB2 filas={preview.filas} cat={cat} seleccion={sel} onChange={setSel} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><p>{elecciones(sel).length} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAcepta(e.target.checked)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
+ {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p>{preview.nota}</p><CandidatosCB2 filas={preview.filas} cat={cat} seleccion={sel} onChange={v => { setSel(v); setAcepta(false); }} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><ResumenSeleccionCB2 filas={preview.filas} cat={cat} seleccion={sel}/><p>{elecciones(sel).length} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAcepta(e.target.checked)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
  </section>;
 }

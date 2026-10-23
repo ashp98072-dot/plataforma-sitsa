@@ -27,3 +27,8 @@
 .badge[data-state="FACTURADO"], .badge[data-state="COMPLETA"], .badge[data-state="RESUELTA"] { color: #5eead4; background: #134e4a; border-color: #0f766e; }
 .badge[data-state="PENDIENTE_FACTURA"], .badge[data-state="PARCIAL"], .badge[data-state="PENDIENTE"] { color: #fde68a; background: #713f12; border-color: #a16207; }
 @media (max-width: 640px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; } .steps li { padding: .6rem; font-size: .75rem; } .panel th, .panel td { padding: .75rem; } }
+
+.badge[data-state="LISTO"], .badge[data-state="RESUELTO"] { color: #5eead4; background: #134e4a; border-color: #0f766e; }
+.badge[data-state="ADVERTENCIA"] { color: #fde68a; background: #713f12; border-color: #a16207; }
+.badge[data-state="BLOQUEADO"] { color: #fecaca; background: #7f1d1d; border-color: #b91c1c; }
+.badge[data-state="IGNORADO"] { color: var(--muted); }

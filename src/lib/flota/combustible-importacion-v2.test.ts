@@ -7,7 +7,7 @@ import { fixtureProveedor } from "./combustible-importacion.fixture";
 describe("contrato común v2 y compatibilidad v1", () => {
   it("HALEL: 39 apariciones, 21 candidatos, 18 repetidos y conflicto de precio bloqueado en ambas versiones", async () => {
     const a = await analizarProveedorV2(await fixtureHalelV2(), "HALEL");
-    expect(a).toMatchObject({ versionContrato: 2, perfil: "HALEL", versionParser: 1 });
+    expect(a).toMatchObject({ versionContrato: 2, perfil: "HALEL", versionParser: 2 });
     expect(a.resumen).toMatchObject({ apariciones: 39, candidatos: 21, duplicados: 17, conflictos: 1, elegibles: 20 });
     expect(a.filas.filter(f => f.conflicto)).toHaveLength(2);
     expect(a.filas.filter(f => f.conflicto).map(f => f.precio).sort()).toEqual(["200", "41.59"]);

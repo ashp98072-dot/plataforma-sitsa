@@ -105,7 +105,7 @@ export function resumirProveedorV2(p: PreviewProveedorV2): void {
   };
 }
 
-export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor, diagnostico?: (fila: FilaProveedorV2, campo: string) => void): Promise<PreviewProveedorV2> {
+export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor, diagnostico?: (fila: FilaProveedorV2, campo: string) => void, versionParser: 1 | 2 = 2): Promise<PreviewProveedorV2> {
   validarArchivoImportacion({ name: "reporte.xlsx", size: buffer.length }); validarContenedorXlsx(buffer);
   const originales = leerOoxmlProveedor(buffer);
   const wb = new ExcelJS.Workbook();
@@ -114,10 +114,20 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
   const filas: FilaProveedorV2[] = []; let reconocidas = 0, posiciones = 0, rawBytes = 0;
   for (const ws of wb.worksheets) {
     if (ws.rowCount > 5000 || ws.columnCount > 100 || (posiciones += ws.rowCount) > 10000) throw new ErrorArchivoProveedor("Máximo 10,000 filas, 5,000 por hoja y 100 columnas.", 413);
-    let cols: Columnas | null = null, inicio = 0;
-    for (let n = 1; n <= Math.min(25, ws.rowCount); n++) { const m = encabezado(ws.getRow(n)); if (m) { cols = m; inicio = n; reconocidas++; break; } }
+    let cols: Columnas | null = null, lote = "", inicio = 0;
+    // La versión histórica se reproduce exactamente al reanudar evidencia ya guardada.
+    if (versionParser === 1) for (let n = 1; n <= Math.min(25, ws.rowCount); n++) { const m = encabezado(ws.getRow(n)); if (m) { cols = m; inicio = n; reconocidas++; break; } }
     for (let n = 1; n <= ws.rowCount; n++) {
       const row = ws.getRow(n);
+      const nuevoEncabezado = versionParser === 1 && (!cols || n <= inicio) ? null : encabezado(row);
+      if (nuevoEncabezado && versionParser === 2) { cols = nuevoEncabezado; reconocidas++; }
+      // Un título de lote ocupa una sola celda, nunca se deduce de una nota o consumo.
+      const ocupadas: ExcelJS.Cell[] = [];
+      // Excel suele combinar el título: conservar solo la celda maestra.
+      row.eachCell(c => { if (c.master.address === c.address && texto(c).trim()) ocupadas.push(c); });
+      const titulo = ocupadas.length === 1 && ocupadas[0].type !== ExcelJS.ValueType.Formula
+        ? texto(ocupadas[0]).trim().match(/^LOTE\s*(?:NO\.?\s*|N[°º]\s*|[:#-]\s*)?([A-Z0-9][A-Z0-9_-]*)$/i) : null;
+      if (titulo && versionParser === 2) lote = titulo[1];
       const identificadores = new Map<string, { literal: string; texto: string; seguro: boolean }>();
       for (const k of ["vale", "serie", "factura"] as const) {
         if (!cols?.[k]) continue;
@@ -144,7 +154,7 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
         hoja: ws.name, fila: n, textos, celdas, fechaConsumo: null, placaOriginal: textos.placa,
         placaNormalizada: normalizarPlacaImportada(textos.placa), vale: normalizarIdentificador(textos.vale),
         serie: textos.serie.trim(), factura: textos.factura.trim(), pilotoInformado: textos.piloto.trim() || null,
-        producto: textos.producto.trim() || null, lote: textos.lote.trim() || null,
+        producto: textos.producto.trim() || null, lote: textos.lote.trim() || lote || null,
         galones: null, precio: null, monto: null, kilometraje: null, galonesCalculados: false,
         estado: "VALIDA", motivos: [], identidadCandidata: null, huella: null, duplicadoDe: null, conflicto: false, posiblePrevio: false,
       };
@@ -152,7 +162,8 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
       const tieneVale = !!textos.vale.trim(), tienePlaca = !!textos.placa.trim();
       // Una nota con un nombre en PILOTO no es una operación. Un vale o placa aislados requieren además contexto operativo.
       const contexto = !!(textos.monto.trim() || textos.galones.trim() || (tieneVale && textos.fecha.trim()));
-      if (!cols || n <= inicio || encabezado(row) || (!tieneVale && !tienePlaca) || !contexto || /^(TOTAL|SUBTOTAL)\b/i.test(`${textos.vale.trim()} ${textos.placa.trim()}`)) {
+      const primera = ocupadas[0] ? texto(ocupadas[0]).trim() : "";
+      if (!cols || n <= inicio || nuevoEncabezado || (versionParser === 2 && (titulo || /^(?:TOTAL|SUB\s*TOTAL)(?:\s|:|$)/i.test(primera))) || (!tieneVale && !tienePlaca) || !contexto || /^(TOTAL|SUBTOTAL)\b/i.test(`${textos.vale.trim()} ${textos.placa.trim()}`)) {
         f.estado = "IGNORADA"; f.motivos.push("Cabecera, subtotal, nota o fila sin operación"); continue;
       }
       if (f.vale) f.identidadCandidata = hashImportacion(JSON.stringify([f.vale])); // namespace empresa/proveedor lo aplica el servidor
@@ -206,7 +217,7 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
       else if (f.huella) vistas.set(f.huella, i);
     }
   }
-  const resultado: PreviewProveedorV2 = { versionContrato: 2, versionParser: 1, perfil, filas, resumen: {} as PreviewProveedorV2["resumen"], coberturaPrevios: "Sin búsqueda de historial" };
+  const resultado: PreviewProveedorV2 = { versionContrato: 2, versionParser, perfil, filas, resumen: {} as PreviewProveedorV2["resumen"], coberturaPrevios: "Sin búsqueda de historial" };
   resumirProveedorV2(resultado);
   return resultado;
 }
