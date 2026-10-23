@@ -1,0 +1,25 @@
+﻿{
+    "base_sha":  "ffd58664f124cb2338479314034f280fd69d0b00",
+    "fecha_utc":  "2026-10-23T16:21:42.4369984Z",
+    "node":  "24.18.0",
+    "npm":  "11.16.0",
+    "vitest":  {
+                   "archivos":  71,
+                   "pruebas":  815,
+                   "exit_code":  0,
+                   "alcance":  "src/lib/flota y src/components/flota: *test.ts sin .db.test ni rollout-db.test; src/lib/tenant-combustible.test.ts; maxWorkers=2"
+               },
+    "typescript":  {
+                       "comando":  "tsc --noEmit --incremental false",
+                       "exit_code":  0
+                   },
+    "eslint":  {
+                   "alcance":  "Todos los archivos .ts/.tsx modificados y añadidos",
+                   "exit_code":  0
+               },
+    "diff_check_exit_code":  0,
+    "sql_ejecutado":  false,
+    "operaciones_productivas":  false,
+    "github_actions_ejecutadas":  false,
+    "migracion_sha256":  "c2f50844ffec18b5e0ec2012fa15b2b0546b0ab205e42c56273f75ea94af271e"
+}

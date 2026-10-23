@@ -10,8 +10,8 @@ const calls: {
     init?: RequestInit;
 }[] = [];
 const candidato = "a".repeat(64);
-const preview = { sha256: "b".repeat(64), token: "firmado", nota: "Revalidar historial", filas: [{ hoja: "DEMO", fila: 2, candidato, bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", motivos: ["Sin factura"], vale: "0001", placa: "C-001ABC", placaNormalizada: "C-001ABC", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ" }] };
-const original = { id: 10, proveedor_id: 1, importacion_id: 2, revision: 1, tipo: "ORIGEN", origen_fila_id: null, consumo_id: null, hoja_nombre: "DEMO", fila_excel: 2, resultado: "OMITIDA", datos_origen: JSON.stringify({ vale: "0001", placaOriginal: "C-001ABC", fechaConsumo: "2026-10-01" }), decision: JSON.stringify({ version: 1, moneda: "GTQ", candidato }), motivo: "Pendiente" };
+const preview = { sha256: "b".repeat(64), token: "firmado", nota: "Revalidar historial", filas: [{ hoja: "DEMO", fila: 2, candidato, bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", origen: { producto: "DIESEL" }, motivos: ["Sin factura"], vale: "0001", placa: "C-001ABC", placaNormalizada: "C-001ABC", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ" }] };
+const original = { id: 10, proveedor_id: 1, importacion_id: 2, revision: 1, tipo: "ORIGEN", origen_fila_id: null, consumo_id: null, hoja_nombre: "DEMO", fila_excel: 2, resultado: "OMITIDA", datos_origen: JSON.stringify({ textos: { producto: "DIESEL" }, vale: "0001", placaOriginal: "C-001ABC", fechaConsumo: "2026-10-01" }), decision: JSON.stringify({ version: 1, moneda: "GTQ", candidato }), motivo: "Pendiente" };
 const header = { id: 2, proveedor_id: 1, proveedor_nombre: "PROVEEDOR DEMO", archivo_nombre: "demo.xlsx", archivo_sha256: preview.sha256, revision: 1, estado: "PARCIAL", resumen_actual: '{"pendientes":1}' };
 const consumo = { id: 3, proveedor_id: 1, importacion_origen_id: 2, moneda: "GTQ", numero_vale: "0001", placa_original: "C-001ABC", fecha_consumo: "2026-10-01", galones: "10", precio: "20", monto: "200", factura_id: null, estado_factura: "PENDIENTE_FACTURA" };
 let eventosHistorial: Record<string, unknown>[] = [];
@@ -38,6 +38,11 @@ beforeEach(() => {
             return response({ proveedores: [{ id: 1, nombre: "PROVEEDOR DEMO" }], vehiculos: [{ id: 1, placa: "C-001ABC" }] });
         if (url.endsWith("/preview"))
             return response(preview);
+        if (url.endsWith("/corregir")) {
+            const op=JSON.parse(String(init?.body));
+            if(failConfirm){failConfirm=false;throw new TypeError("respuesta perdida");}
+            return response({consumoId:op.consumoId,asignacion:{vehiculoId:op.vehiculoId,empleadoId:op.empleadoId,productoClasificado:op.productoClasificado,revision:op.revision+1}});
+        }
         if (url.endsWith("/confirmar")) {
             if (failConfirm) {
                 failConfirm = false;
@@ -84,6 +89,14 @@ async function change(text: string, value: string) { const el = control(text); a
 async function seleccionarConsumo() { await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Seleccionar consumo 3"]')!.click()); }
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
 describe("interfaz CB2 montada: flujos funcionales", () => {
+    it("recarga reconstruye la corrección incierta y reintenta la misma clave y revisión",async()=>{
+        await mount();await change("Unidad corregida #3","1");await change("Combustible corregido","DIESEL");await change("Justificacion de correccion","Verificado por Operaciones");
+        await act(async()=>control("Confirmo esta corrección auditada").click());failConfirm=true;await click("Guardar corrección #3");
+        const primera=JSON.parse(String(calls.find(c=>c.url.endsWith("/corregir"))!.init!.body));
+        await act(async()=>{root.unmount();root=createRoot(host);});await mount();await click("Reintentar exactamente la solicitud");
+        const intentos=calls.filter(c=>c.url.endsWith("/corregir")).map(c=>JSON.parse(String(c.init!.body)));
+        expect(intentos).toEqual([primera,primera]);expect(primera).toMatchObject({consumoId:3,revision:0,vehiculoId:1,empleadoId:null,productoClasificado:"DIESEL"});expect(host.textContent).toContain("Asignacion del consumo #3 corregida y auditada");
+    });
     it("usar sugerencia requiere revisión y cambiar asignación invalida la aceptación", async () => {
         await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1");
         await act(async () => { const file = control("Excel original"); Object.defineProperty(file, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true }); file.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -132,9 +145,9 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         expect(calls.some(c => c.url.endsWith("/confirmar"))).toBe(false);
         expect(btn("Analizar Excel").disabled).toBe(false);
     });
-    it("importa parcialmente y reintenta sin cambiar clave", async () => { await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1"); await act(async () => { const f = control("Excel original"); Object.defineProperty(f, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true }); f.dispatchEvent(new Event("change", { bubbles: true })); }); await click("Analizar Excel"); expect(host.textContent).toContain("0001"); await change("Unidad para vale", "1"); await act(async () => control("Confirmo el procesamiento").click()); failConfirm = true; await click("Confirmar selección parcial"); expect(host.textContent).toContain("solicitud pendiente"); expect(control("Perfil").closest("fieldset")?.disabled).toBe(true); await click("Reintentar exactamente la solicitud"); const posts = calls.filter(c => c.url.endsWith("/confirmar")); expect(posts).toHaveLength(2); expect((posts[0].init!.body as FormData).get("clave")).toBe((posts[1].init!.body as FormData).get("clave")); expect(JSON.parse(String((posts[0].init!.body as FormData).get("seleccion")))).toEqual([{ candidato, vehiculoId: 1 }]); expect(host.textContent).toContain("Operación confirmada"); });
+    it("importa parcialmente y reintenta sin cambiar clave", async () => { await mount(); await click("Importar Excel"); await change("Proveedor de la empresa", "1"); await act(async () => { const f = control("Excel original"); Object.defineProperty(f, "files", { value: [new File(["sintetico"], "demo.xlsx")], configurable: true }); f.dispatchEvent(new Event("change", { bubbles: true })); }); await click("Analizar Excel"); expect(host.textContent).toContain("0001"); await change("Unidad para vale", "1"); await act(async () => control("Confirmo el procesamiento").click()); failConfirm = true; await click("Confirmar selección parcial"); expect(host.textContent).toContain("solicitud pendiente"); expect(control("Perfil").closest("fieldset")?.disabled).toBe(true); await click("Reintentar exactamente la solicitud"); const posts = calls.filter(c => c.url.endsWith("/confirmar")); expect(posts).toHaveLength(2); expect((posts[0].init!.body as FormData).get("clave")).toBe((posts[1].init!.body as FormData).get("clave")); expect(JSON.parse(String((posts[0].init!.body as FormData).get("seleccion")))).toEqual([{ candidato, vehiculoId: 1, empleadoId: null, productoClasificado: "DIESEL" }]); expect(host.textContent).toContain("Operación confirmada"); });
     it("asocia factura con ceros y revisiones exactas", async () => { await mount(); await prepararAsociacion(); await click("Asociar factura al lote"); const p = calls.find(c => c.url.endsWith("/asociar")); expect(p).toBeDefined(); expect(JSON.parse(String(p!.init!.body))).toMatchObject({ documento: { serie: "S", numero: "000001", moneda: "GTQ" }, consumos: [3], revisiones: [{ id: 2, revision: 1 }] }); });
-    it("Admin reanuda desde historial y ofrece descarga privada", async () => { await mount(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.querySelector('a[download]')?.getAttribute("href")).toBe("/api/empresas/demo/flota/combustible/cb2/importaciones/2/archivo"); await change("Unidad para vale", "1"); await change("Motivo de reanudación", "Unidad verificada"); await click("Reanudar selección"); expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body))).toMatchObject({ importacionId: 2, revision: 1, seleccion: [{ candidato, vehiculoId: 1 }] }); });
+    it("Admin reanuda desde historial y ofrece descarga privada", async () => { await mount(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.querySelector('a[download]')?.getAttribute("href")).toBe("/api/empresas/demo/flota/combustible/cb2/importaciones/2/archivo"); await change("Unidad para vale", "1"); await change("Motivo de reanudación", "Unidad verificada"); await click("Reanudar selección"); expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body))).toMatchObject({ importacionId: 2, revision: 1, seleccion: [{ candidato, vehiculoId: 1, empleadoId: null, productoClasificado: "DIESEL" }] }); });
     it("solo lectura no presenta escrituras", async () => { await mount(false, false); expect(host.textContent).not.toContain("Importar Excel"); expect(host.textContent).not.toContain("Asociar factura al lote"); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.textContent).not.toContain("Reanudar selección"); expect(calls.every(c => !c.init?.method || c.init.method === "GET")).toBe(true); });
     it("filtra en servidor", async () => { await mount(); await change("Buscar vale o placa", "0001"); await click("Aplicar filtros"); expect(calls.some(c => c.url.includes("/consumos?") && c.url.includes("buscar=0001") && c.url.includes("despues=0"))).toBe(true); });
     it("conciliar no concede reanudacion Admin", async () => { await mount(false, true); expect(btn("Importar Excel")).toBeDefined(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.textContent).toContain("requiere autorización Admin"); expect(host.textContent).not.toContain("Reanudar selección"); });
@@ -156,7 +169,7 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
     });
     it("resolucion parcial de apariciones mantiene solo las pendientes seleccionables", async () => {
         revisionHeader = 2;
-        eventosHistorial = [{ ...original, id: 11, fila_excel: 3, datos_origen: JSON.stringify({ vale: "0001", placaOriginal: "C-001ABC" }) }, { ...original, id: 12, tipo: "RESOLUCION", revision: 2, origen_fila_id: 10, resultado: "CREADA", consumo_id: 3 }];
+        eventosHistorial = [{ ...original, id: 11, fila_excel: 3, datos_origen: JSON.stringify({ textos: { producto: "DIESEL" }, vale: "0001", placaOriginal: "C-001ABC" }) }, { ...original, id: 12, tipo: "RESOLUCION", revision: 2, origen_fila_id: 10, resultado: "CREADA", consumo_id: 3 }];
         await mount();
         await click("Historial");
         await click("Ver trazabilidad #2");
@@ -167,6 +180,6 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await change("Unidad para vale", "1");
         await change("Motivo de reanudación", "Completar apariciones pendientes");
         await click("Reanudar selección");
-        expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion).toEqual([{ candidato, vehiculoId: 1 }]);
+        expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion).toEqual([{ candidato, vehiculoId: 1, empleadoId: null, productoClasificado: "DIESEL" }]);
     });
 });

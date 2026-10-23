@@ -1,3 +1,5 @@
+import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
+import type { DecisionAsignacion } from "./asignacion";
 import DecimalJS from "decimal.js";
 const Decimal = DecimalJS.clone({ precision: 48, rounding: DecimalJS.ROUND_HALF_UP });
 import { buscarCoincidencias, identificarPlaca, placaCompatible } from "@/lib/flota/combustible-coincidencias";
@@ -22,7 +24,8 @@ export function agruparCandidatos(filas: FilaCB2[]) {
     return grupos;
 }
 export function elegible(f: FilaCB2) { return !!f.candidato && !f.bloqueada && !["IGNORADA", "RESUELTA"].includes(f.estado); }
-export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}) {
+type Decisiones = Record<string, DecisionAsignacion>;
+export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
     const result: Record<string, string> = {};
     const grupos = new Map<string, FilaCB2[]>(), unidades = new Set(cat.vehiculos.map(v => String(v.id)));
     for (const f of filas) if (f.candidato && !["RESUELTA", "IGNORADA"].includes(f.estado)) {
@@ -30,7 +33,8 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     }
     for (const [key, value] of Object.entries(seleccion)) {
         const originales = grupos.get(key) ?? [];
-        if (!omitidos[key] && value && originales.length && originales.every(f => elegible(f) && placaCompatible(f.placaNormalizada || f.placa, Number(value), cat.vehiculos)) && unidades.has(value)) result[key] = value;
+        const motivo = decisiones[key]?.motivoUnidad?.trim() ?? "";
+        if (!omitidos[key] && value && (!motivo || motivo.length >= 10) && originales.length && originales.every(f => elegible(f) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))) && (!decisiones[key]?.empleadoId || !!cat.empleados?.some(e => e.id === decisiones[key].empleadoId)) && (placaCompatible(f.placaNormalizada || f.placa, Number(value), cat.vehiculos) || motivo.length >= 10)) && unidades.has(value)) result[key] = value;
     }
     return result;
 }
@@ -74,8 +78,8 @@ export function avisosDetallados(f: FilaCB2) {
     const motivos = [...new Set([...f.motivos, ...f.errores])], mensajes = avisos(f);
     return motivos.map((m, i) => ({ nivel: nivelAviso(f, m), mensaje: mensajes[i] }));
 }
-export function revisionCandidatos(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
-    const asignadas = seleccionSegura(filas, cat, seleccion);
+export function revisionCandidatos(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
+    const asignadas = seleccionSegura(filas, cat, seleccion, {}, decisiones);
     return [...agruparCandidatos(filas)].map(([clave, apariciones]) => {
         const activas = apariciones.filter(f => f.estado !== "RESUELTA"), resuelto = !activas.length;
         const bloqueado = !resuelto && activas.some(f => !elegible(f));
@@ -86,11 +90,11 @@ export function revisionCandidatos(filas: FilaCB2[], cat: CatalogosCB2, seleccio
     });
 }
 export type CandidatoRevision = ReturnType<typeof revisionCandidatos>[number];
-export function resumenPreview(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
-    return resumirRevision(filas, cat, seleccion, omitidos, revisados);
+export function resumenPreview(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
+    return resumirRevision(filas, cat, seleccion, omitidos, revisados, decisiones);
 }
-export function resumirRevision(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}) {
-    const segura = seleccionSegura(filas, cat, seleccion, omitidos), revision = revisionCandidatos(filas, cat, seleccion, omitidos, revisados);
+export function resumirRevision(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, revisados: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
+    const segura = seleccionSegura(filas, cat, seleccion, omitidos, decisiones), revision = revisionCandidatos(filas, cat, seleccion, omitidos, revisados, decisiones);
     const cantidades = { detectados: revision.length, listos: revision.filter(g => g.estado === "LISTO").length, elegibles: revision.filter(g => g.unidadValida).length, seleccionados: Object.keys(segura).length, pendientes: revision.filter(g => g.estado === "PENDIENTE").length, advertencias: revision.filter(g => g.conAdvertencias).length, advertenciasPendientes: revision.filter(g => g.advertenciasPendientes).length, bloqueados: revision.filter(g => g.estado === "BLOQUEADO").length, resueltos: revision.filter(g => g.estado === "RESUELTO").length, sinIdentidad: filas.filter(f => !f.candidato && f.estado !== "IGNORADA").length, ignoradas: filas.filter(f => f.estado === "IGNORADA").length };
     const totales: Record<string, string> = {}, totalesSeleccionados: Record<string, string> = {};
     for (const { activas, fila: f, unidadValida, seleccionado } of revision) {

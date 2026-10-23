@@ -30,7 +30,7 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
                 return;
             const restored = new OperacionCB2(scope, storageSeguro());
             const p = restored.pending;
-            if (p?.identidad && (p.action === "asociar" || p.action === "reanudar"))
+            if (p?.identidad && ["asociar", "reanudar", "corregir"].includes(p.action))
                 p.ejecutar = key => jsonCB2(`${api}/${p.action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...p.identidad as object, clave: key }) });
             setOp(restored);
             setRestaurado(true);
@@ -57,13 +57,15 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
     }, [slug, recargarCat]);
     function aplicado(result: unknown) {
         const r = result as {
+            consumoId?: number;
+            asignacion?: { revision: number };
             existente?: boolean;
             importacionId?: number;
             eventos?: {
                 resultado: string;
             }[];
         };
-        setMessage(r.existente ? `El archivo ya existe como importación #${r.importacionId}. No se creó otra importación; revisa su historial para reanudar.` : `Operación confirmada: ${r.eventos?.length ?? 0} eventos conservados. Consulta el historial para revisar los resultados y candidatos pendientes.`);
+        setMessage(r.asignacion ? `Asignacion del consumo #${r.consumoId} corregida y auditada. Revision ${r.asignacion.revision}. La evidencia original se conserva.` : r.existente ? `El archivo ya existe como importación #${r.importacionId}. No se creó otra importación; revisa su historial para reanudar.` : `Operación confirmada: ${r.eventos?.length ?? 0} eventos conservados. Consulta el historial para revisar los resultados y candidatos pendientes.`);
         setRefresh(n => n + 1);
         setDocumento(documentoVacio);
     }
@@ -102,7 +104,7 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
  {busy && <p role="status">Procesando solicitud. No cierres esta pantalla ni repitas la acción.</p>}{error && <p role="alert" className="text-red-500">{error}</p>}{message && <p role="status" className="rounded border border-[var(--border)] p-3">{message}</p>}
  {op.pending && <aside className="space-y-2 rounded border border-amber-600 p-3"><p>Hay una solicitud pendiente ({op.pending.action}). Conservamos su clave de reintento. No cambies archivo, selección ni revisiones para recuperar un resultado incierto.</p>{op.pending.ejecutar ? <button className={button} disabled={busy} onClick={() => void retry()}>Reintentar exactamente la solicitud</button> : <p>Tras recargar, reproduce el mismo archivo y decisiones. No se guardan archivos ni recibos en el navegador.</p>}<details><summary>Decisiones del intento pendiente</summary><pre className="max-w-xl whitespace-pre-wrap break-all text-xs">{JSON.stringify(op.pending.identidad, null, 2)}</pre></details>{op.pending.definitivo && <button className={button} disabled={busy} onClick={() => { op.editar(); setError(""); setMessage("Solicitud rechazada sin aplicar. Puedes corregirla o actualizar los datos."); }}>Corregir solicitud rechazada</button>}</aside>}
  {catalogosError && <p role="alert">{catalogosError} <button className={button} onClick={() => setRecargarCat(n => n + 1)}>Reintentar catálogos</button></p>}
- <div hidden={tab !== "consumos"}><ConsumosCB2 key={`consumos:${refresh}`} api={api} cat={cat} run={run} canWrite={canWrite && catalogosListos} locked={locked} refresh={refresh} activo={tab === "consumos"} documento={documento} setDocumento={setDocumento}/></div>
+ <div hidden={tab !== "consumos"}><ConsumosCB2 admin={admin} key={`consumos:${refresh}`} api={api} cat={cat} run={run} canWrite={canWrite && catalogosListos} locked={locked} refresh={refresh} activo={tab === "consumos"} documento={documento} setDocumento={setDocumento}/></div>
  {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <ImportarCB2 key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/> : <p role="status">Carga los catálogos para importar.</p>}</div>}
  <div hidden={tab !== "facturas"}><FacturasCB2 key={`facturas:${refresh}`} api={api} cat={cat} refresh={refresh} activo={tab === "facturas"} canWrite={canWrite} locked={locked} elegir={(d, p) => { setDocumento(d); setTab("consumos"); setMessage(`Documento del proveedor #${p} seleccionado. Selecciona sus consumos y confirma la asociación.`); }}/></div>
  <div hidden={tab !== "historial"}><HistorialCB2 key={`historial:${refresh}`} api={api} cat={cat} run={run} locked={locked} admin={admin} canWrite={canWrite && catalogosListos} refresh={refresh} activo={tab === "historial"}/></div>

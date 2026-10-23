@@ -6,18 +6,18 @@ import { GET } from "@/app/api/empresas/[slug]/flota/combustible/catalogos/route
 beforeEach(() => { m.guard.mockResolvedValue({ empresa: { id: 7 } }); m.query.mockResolvedValue([]); });
 describe("catálogo usado para sugerir vehículos en preview", () => {
     it("solo lista pilotos activos de la empresa autenticada y declara la limitación de CB2", async () => {
-        m.query.mockImplementation(async (sql: string) => sql.includes("FROM tms_personal") ? [{ id: 1, nombre: "José Chay" }] : []);
+        m.query.mockImplementation(async (sql: string) => sql.includes("FROM empleados") ? [{ id: 1, nombre: "José Chay" }] : []);
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });
         const data = await r.json();
-        expect(data.pilotos).toEqual([{ id: 1, nombre: "José Chay" }]); expect(data.limitacionPilotos).toContain("no se guarda una asociación");
-        const [sql, args] = m.query.mock.calls.find(([sql]) => sql.includes("FROM tms_personal"))!;
-        expect(args).toEqual([7]); expect(sql).toContain("tipo = 'Piloto'"); expect(sql).toContain("estado = 'Activo'");
+        expect(data.pilotos).toEqual([{ id: 1, nombre: "José Chay" }]); expect(data.empleados).toEqual(data.pilotos); expect(data.limitacionPilotos).toContain("empleados activos");
+        const [sql, args] = m.query.mock.calls.find(([sql]) => sql.includes("FROM empleados"))!;
+        expect(args).toEqual([7]); expect(sql).toContain("estado = 'Activo'");
     });
     it("catálogo ausente declara indisponibilidad sin usar personal de otras empresas", async () => {
-        m.query.mockImplementation(async (sql: string) => { if (sql.includes("FROM tms_personal")) throw new Error("Tabla no disponible"); return []; });
+        m.query.mockImplementation(async (sql: string) => { if (sql.includes("FROM empleados")) throw new Error("Tabla no disponible"); return []; });
         const r = await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); const data = await r.json();
-        expect(data.pilotos).toEqual([]); expect(data.limitacionPilotos).toContain("no disponible");
+        expect(data.empleados).toEqual([]); expect(data.empleadosDisponibles).toBe(false); expect(data.limitacionPilotos).toContain("no disponible");
         expect(m.query).toHaveBeenCalledTimes(4);
     });
     it("deriva empresa del guard, no de parámetros controlados por el navegador", async () => {

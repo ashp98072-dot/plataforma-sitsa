@@ -1,0 +1,10 @@
+import { beforeEach, expect, it, vi } from "vitest";
+const m=vi.hoisted(()=>({guard:vi.fn(),historico:vi.fn(),integrado:vi.fn()}));
+vi.mock("@/lib/tenant",()=>({requireTenantFlotaCombustible:m.guard}));
+vi.mock("../combustible",()=>({resumenCombustibleMensual:m.historico}));
+vi.mock("./resumen-mensual",()=>({resumenIntegrado:m.integrado}));
+import { GET } from "@/app/api/empresas/[slug]/flota/combustible/resumen/route";
+const req=()=>new Request("http://localhost/resumen?mes=2026-10&empresaId=99"),ctx={params:Promise.resolve({slug:"demo"})};
+beforeEach(()=>{m.guard.mockResolvedValue({empresa:{id:7}});m.historico.mockResolvedValue({porVehiculo:[],total:{totalMonto:20}});m.integrado.mockResolvedValue({totalGTQ:{galones:"10",monto:"200"},grupos:[]});});
+it("reporte histórico e integrado conservan tenant del guard y permiso de lectura",async()=>{const r=await GET(req(),ctx);expect(r.status).toBe(200);expect(await r.json()).toMatchObject({mes:"2026-10",total:{totalMonto:20},integrado:{totalGTQ:{monto:"200"}}});expect(m.guard).toHaveBeenCalledWith("demo","ver");expect(m.historico).toHaveBeenCalledWith(7,"2026-10");expect(m.integrado).toHaveBeenCalledWith(7,"2026-10");expect(r.headers.get("cache-control")).toBe("private, no-store");});
+it("un fallo del integrado no presenta histórico parcial como consolidado completo ni cero",async()=>{m.integrado.mockRejectedValueOnce(new Error("SQL privado"));const r=await GET(req(),ctx);expect(r.status).toBe(500);const data=await r.json();expect(data).not.toHaveProperty("total");expect(data).not.toHaveProperty("integrado");expect(JSON.stringify(data)).not.toContain("SQL privado");});

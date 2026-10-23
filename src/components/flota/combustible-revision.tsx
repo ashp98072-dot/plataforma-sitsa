@@ -1,4 +1,5 @@
 "use client";
+import { ResumenIntegradoCB2 } from "./cb2/resumen-integrado";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CombustibleConciliacionView } from "./combustible-conciliacion";
@@ -82,6 +83,7 @@ type ResumenVehiculo = {
 };
 
 type ResumenMensual = {
+  integrado?: ReturnType<typeof import("@/lib/flota/cb2/resumen-mensual").consolidarMes>;
   mes: string;
   porVehiculo: ResumenVehiculo[];
   total: Omit<ResumenVehiculo, "vehiculoId" | "placa">;
@@ -147,6 +149,8 @@ function ResumenMensualView({ slug }: { slug: string }) {
 
       {resumen ? (
         <>
+          {resumen.integrado && <ResumenIntegradoCB2 key={mes} resumen={resumen.integrado} mes={mes}/>}
+          <h3>Reporte historico de cargas aprobadas (criterio conservado)</h3>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-lg border border-[var(--border)] p-3">
               <p className="text-xs text-[var(--muted)]">Diesel</p>

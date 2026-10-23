@@ -1,3 +1,4 @@
+import { resumenIntegrado } from "@/lib/flota/cb2/resumen-mensual";
 import { NextResponse } from "next/server";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
 
@@ -24,8 +25,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
 
   try {
     const resumen = await resumenCombustibleMensual(guard.empresa.id, mes);
-    return NextResponse.json({ mes, ...resumen });
+    return NextResponse.json({ mes, ...resumen, integrado: await resumenIntegrado(guard.empresa.id, mes) }, { headers: { "Cache-Control": "private, no-store" } });
   } catch {
-    return NextResponse.json({ error: "Mes inválido." }, { status: 400 });
+    return NextResponse.json({ error: "No se pudo cargar el resumen completo. Verifica la migración PR514 y vuelve a intentar." }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
   }
 }

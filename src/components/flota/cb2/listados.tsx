@@ -1,4 +1,5 @@
 "use client";
+import { productos, etiquetasProducto } from "@/lib/flota/cb2/clasificacion";
 import { useEffect, useState } from "react";
 import type { Registro, CatalogosCB2 } from "./client";
 import { jsonCB2 } from "./client";
@@ -46,7 +47,7 @@ export function FiltrosCB2({ tipo, cat, onApply }: {
                 if (typeof v === "string" && v.trim())
                     q.set(k, v.trim());
             onApply(q.toString());
-        }}><label>Buscar {tipo === "consumos" ? "vale o placa" : tipo === "facturas" ? "serie o número" : "archivo o proveedor"}<input className={input} name="buscar" maxLength={128}/></label><label>Proveedor<select name="proveedorId" className={input}><option value="">Todos los proveedores</option>{cat.proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select></label>{tipo !== "facturas" && <label>Estado<select className={input} name="estado"><option value="">Todos</option>{(tipo === "consumos" ? ["PENDIENTE_FACTURA", "FACTURADO"] : ["SOLO_EVIDENCIA", "PARCIAL", "COMPLETA"]).map(s => <option key={s}>{s}</option>)}</select></label>}{tipo === "consumos" && <><label>Desde<input className={input} name="desde" type="date"/></label><label>Hasta<input className={input} name="hasta" type="date"/></label></>}<button className={button}>Aplicar filtros</button></form>;
+        }}><label>Buscar {tipo === "consumos" ? "vale o placa" : tipo === "facturas" ? "serie o número" : "archivo o proveedor"}<input className={input} name="buscar" maxLength={128}/></label><label>Proveedor<select name="proveedorId" className={input}><option value="">Todos los proveedores</option>{cat.proveedores.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select></label>{tipo !== "facturas" && <label>Estado<select className={input} name="estado"><option value="">Todos</option>{(tipo === "consumos" ? ["PENDIENTE_FACTURA", "FACTURADO"] : ["SOLO_EVIDENCIA", "PARCIAL", "COMPLETA"]).map(s => <option key={s}>{s}</option>)}</select></label>}{tipo === "consumos" && <><label>Unidad<select className={input} name="vehiculoId"><option value="">Todas</option>{cat.vehiculos.map(v => <option key={v.id} value={v.id}>{v.placa}</option>)}</select></label><label>Empleado<select className={input} name="empleadoId"><option value="">Todos</option>{cat.empleados?.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label><label>Combustible<select className={input} name="producto"><option value="">Todos</option>{productos.map(p => <option key={p} value={p}>{etiquetasProducto[p]}</option>)}</select></label><label>Importacion<input className={input} name="importacionId" type="number" min="1"/></label><label>Desde<input className={input} name="desde" type="date"/></label><label>Hasta<input className={input} name="hasta" type="date"/></label></>}<button className={button}>Aplicar filtros</button></form>;
 }
 export function PaginacionCB2({ list }: {
     list: ListadoCB2;

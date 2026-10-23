@@ -1,0 +1,11 @@
+import { beforeEach, expect, it, vi } from "vitest";
+const m=vi.hoisted(()=>({guard:vi.fn(),corregir:vi.fn()}));
+vi.mock("@/lib/tenant",()=>({requireTenantFlotaCombustible:m.guard}));
+vi.mock("./asignaciones",async original=>({...await original<typeof import("./asignaciones")>(),corregirAsignacion:m.corregir}));
+import { cb2Http } from "./http";
+const op={proveedorId:3,consumoId:10,revision:0,vehiculoId:2,empleadoId:77,productoClasificado:"DIESEL",motivo:"Corregido contra evidencia revisada",clave:"clave-correccion-514"};
+const req=(body:unknown=op,origin="http://localhost")=>new Request("http://localhost/corregir?empresaId=99",{method:"POST",headers:{Origin:origin,"Content-Type":"application/json"},body:JSON.stringify(body)});
+beforeEach(()=>{m.guard.mockResolvedValue({empresa:{id:7},session:{id:9,username:"demo",rol:"Admin"}});m.corregir.mockResolvedValue({asignacion:{revision:1}});});
+it("usa empresa del guard y permisos de conciliar; corrección requiere Admin",async()=>{expect((await cb2Http(req(),"demo","corregir")).status).toBe(200);expect(m.corregir.mock.calls[0][0]).toMatchObject({empresaId:7,proveedorId:3,actor:{id:9}});expect(m.corregir.mock.calls[0][1]).toEqual(op);expect(m.guard).toHaveBeenCalledWith("demo","conciliar",{soloLectura:false});});
+it("rol sin autorización, origen externo y campos de empresa arbitrarios se rechazan",async()=>{m.guard.mockResolvedValueOnce({empresa:{id:7},session:{id:9,rol:"JefeOperaciones"}});expect((await cb2Http(req(),"demo","corregir")).status).toBe(403);expect((await cb2Http(req(op,"https://externo.test"),"demo","corregir")).status).toBe(403);expect((await cb2Http(req({...op,empresaId:99}),"demo","corregir")).status).toBe(400);expect(m.corregir).not.toHaveBeenCalled();});
+it("revalida rol y permiso tras adquirir el bloqueo",async()=>{m.corregir.mockImplementationOnce(async ctx=>{m.guard.mockResolvedValue({empresa:{id:7},session:{id:9,rol:"JefeOperaciones"}});await ctx.autorizar();});expect((await cb2Http(req(),"demo","corregir")).status).toBe(403);});
