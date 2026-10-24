@@ -52,6 +52,8 @@
 .consumptionTable td:last-child { position: sticky; right: 0; background: var(--card); border-left: 1px solid var(--border); }
 .consumptionTable td:first-child { text-align: center; position: sticky; left: 0; z-index: 1; background: var(--card); }
 .panel .consumptionTable .detailRow > td { position: static; text-align: left; background: var(--bg); padding: 1.25rem; }
+.panel .registeredTable td.numeric, .panel .registeredTable th:nth-child(6), .panel .registeredTable th:nth-child(7), .panel .registeredTable th:nth-child(8) { text-align: right; min-width: 0; max-width: none; }
+.registeredTable td:nth-child(5), .registeredTable td:nth-child(10), .registeredTable td:nth-child(11) { min-width: 8rem; max-width: 15rem; overflow-wrap: anywhere; }
 .detailRow[hidden] { display: none; }
 .editGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
 .editGrid section { min-width: 0; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--card); }

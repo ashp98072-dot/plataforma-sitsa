@@ -1,7 +1,6 @@
 "use client";
-import { DetalleConsumoCB2 } from "./detalle-consumo";
-import { CorregirCB2 } from "./corregir";
-import { EstadoCB2, VacioCB2 } from "./presentacion";
+import { TablaConsumosCB2 } from "./tabla-consumos";
+import { VacioCB2 } from "./presentacion";
 import { useRef, useState } from "react";
 import { button, input, type EjecutarCB2 } from "./importar";
 import { FiltrosCB2, PaginacionCB2, useListadoCB2 } from "./listados";
@@ -63,15 +62,15 @@ export function ConsumosCB2({ api, cat, run, canWrite, admin = false, locked, re
             setPreparando(false);
         }
     }
-    return <section className="space-y-4" aria-label="Consumos independientes"><h2 className="text-lg font-semibold">Consumos independientes</h2><FiltrosCB2 tipo="consumos" cat={cat} onApply={list.setQuery}/>{list.loading && <p role="status">Cargando consumos…</p>}{list.error && <p role="alert">{list.error}</p>}
- <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="sr-only">Consumos de la empresa activa</caption><thead><tr>{["Seleccionar", "Fecha / vale", "Unidad / proveedor", "Galones / precio / monto", "Factura", "Procedencia"].map(h => <th key={h} className="p-2 text-left">{h}</th>)}</tr></thead><tbody>{list.rows.map(r => <tr key={r.id} className="border-t border-[var(--border)]"><td className="p-2">{canWrite && <input type="checkbox" aria-label={`Seleccionar consumo ${r.id}`} disabled={locked || preparando} checked={!!seleccion[r.id]} onChange={e => setSeleccion(s => {
+    return <section className="space-y-4" aria-label="Consumos registrados"><h2 className="text-lg font-semibold">Consumos registrados</h2><FiltrosCB2 tipo="consumos" cat={cat} onApply={list.setQuery}/>{list.loading && <p role="status">Cargando consumos…</p>}{list.error && <p role="alert">{list.error}</p>}
+ <TablaConsumosCB2 rows={list.rows} seleccion={seleccion} canWrite={canWrite} admin={admin} locked={locked} preparando={preparando} api={api} cat={cat} run={run} onSeleccionar={(r, valor) => setSeleccion(s => {
                     const next = { ...s };
-                    if (e.target.checked)
+                    if (valor)
                         next[r.id] = r;
                     else
                         delete next[r.id];
                     return next;
-                })}/>}</td><td>{String(r.fecha_consumo).slice(0, 10)}<br />{String(r.numero_vale)}</td><td>{String(r.unidad_placa ?? r.placa_original)}<br />Placa original: {String(r.placa_original)}<br />{cat.proveedores.find(p => p.id === Number(r.proveedor_id))?.nombre ?? `Proveedor #${r.proveedor_id}`}</td><td>{String(r.galones)} gal · {String(r.precio)}<br />{String(r.moneda)} {String(r.monto)}</td><td><EstadoCB2 estado={String(r.estado_factura)}/><br />{r.factura_id != null ? `Documento #${r.factura_id}` : "Sin documento"}</td><td>Importacion #{String(r.importacion_origen_id)} / Consumo #{r.id}<DetalleConsumoCB2 r={r}/>{canWrite && admin && <CorregirCB2 r={r} cat={cat} api={api} run={run} locked={locked}/>}</td></tr>)}</tbody></table></div>{!list.loading && !list.rows.length && <VacioCB2>No hay consumos para estos filtros.</VacioCB2>}<PaginacionCB2 list={list}/>
+                })}/>{!list.loading && !list.rows.length && <VacioCB2>No hay consumos para estos filtros.</VacioCB2>}<PaginacionCB2 list={list}/>
  {canWrite && <section className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Asociar factura al lote seleccionado</h3><p>{elegidas.length} consumos seleccionados entre páginas. Todos deben pertenecer al mismo proveedor y moneda. La asociación es documental; no registra pagos ni permite reasignar una factura diferente.</p><fieldset disabled={locked || preparando} className="grid gap-3 md:grid-cols-3"><button className={button} type="button" onClick={() => setSeleccion({})}>Limpiar selección</button><button className={button} type="button" onClick={() => setDocumento({ ...documentoVacio })}>Capturar otro documento</button><label>Serie (texto)<input className={input} maxLength={128} value={documento.serie} onChange={e => setDocumento({ ...documento, serie: e.target.value })}/></label><label>Número (texto, conserva ceros)<input className={input} maxLength={128} value={documento.numero} onChange={e => setDocumento({ ...documento, numero: e.target.value })}/></label><label>Moneda<select className={input} value={documento.moneda} onChange={e => setDocumento({ ...documento, moneda: e.target.value })}><option>GTQ</option><option>USD</option></select></label><label>Fecha documental opcional<input className={input} type="date" value={documento.fecha} onChange={e => setDocumento({ ...documento, fecha: e.target.value })}/></label><label>Total documental opcional<input className={input} inputMode="decimal" placeholder="Ej. 1250.50" value={documento.total} onChange={e => setDocumento({ ...documento, total: e.target.value })}/></label><label className="md:col-span-3">Motivo<textarea className={input} maxLength={1000} value={motivo} onChange={e => setMotivo(e.target.value)}/></label><button className="rounded bg-sky-700 px-3 py-2 text-white disabled:opacity-50" disabled={!elegidas.length || elegidas.length > 1000 || !documento.serie.trim() || !documento.numero.trim() || !motivo.trim()} onClick={() => void asociar()}>{preparando ? "Preparando lote…" : "Asociar factura al lote"}</button></fieldset>{error && <p role="alert">{error}</p>}</section>}
  </section>;
 }

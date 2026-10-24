@@ -90,7 +90,7 @@ async function seleccionarConsumo() { await act(async () => host.querySelector<H
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
 describe("interfaz CB2 montada: flujos funcionales", () => {
     it("recarga reconstruye la corrección incierta y reintenta la misma clave y revisión",async()=>{
-        await mount();await change("Unidad corregida #3","1");await change("Combustible corregido","DIESEL");await change("Justificacion de correccion","Verificado por Operaciones");
+        await mount();await click("Detalles");await change("Unidad corregida #3","1");await change("Combustible corregido","DIESEL");await change("Justificacion de correccion","Verificado por Operaciones");
         await act(async()=>control("Confirmo esta corrección auditada").click());failConfirm=true;await click("Guardar corrección #3");
         const primera=JSON.parse(String(calls.find(c=>c.url.endsWith("/corregir"))!.init!.body));
         await act(async()=>{root.unmount();root=createRoot(host);});await mount();await click("Reintentar exactamente la solicitud");
