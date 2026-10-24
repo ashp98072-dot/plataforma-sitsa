@@ -25,6 +25,7 @@ describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
         const response = await cb2Http(new Request(`${url}/preview`, { method: "POST", headers: { origin: "https://novalvion.com" }, body: form }), "kt-monaco", "preview");
         expect(response.status).toBe(200);
         const data = await response.json();
+        expect(data.perfilDetectado).toBe(perfil);
         expect(data.filas.length).toBeGreaterThan(20);
         const original = data.filas.find((f: { candidato: string | null }) => f.candidato);
         expect(original).toHaveProperty("lote"); expect(original).toHaveProperty("kilometraje");

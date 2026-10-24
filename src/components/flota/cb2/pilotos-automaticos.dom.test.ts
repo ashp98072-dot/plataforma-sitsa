@@ -12,7 +12,7 @@ it("autopropone nombres abreviados, conserva cambios manuales y registra el mét
     const empleados=[{id:77,nombre:"Alvaro Antonio León Pinto"},{id:88,nombre:"Marta López"}];
     const base:CatalogosCB2={proveedores:[{id:1,nombre:"Demo"}],vehiculos:[{id:1,placa:"C-633CBL"}],empleados:[]};
     const requests:{url:string;body:FormData}[]=[];
-    vi.stubGlobal("fetch",vi.fn(async(url:string,init:RequestInit)=>{requests.push({url,body:init.body as FormData});return new Response(JSON.stringify(url.endsWith("preview")?{sha256:"b".repeat(64),token:"sintetico",nota:"",filas}:{eventos:[]}),{headers:{"Content-Type":"application/json"}});}));
+    vi.stubGlobal("fetch",vi.fn(async(url:string,init:RequestInit)=>{requests.push({url,body:init.body as FormData});return new Response(JSON.stringify(url.endsWith("preview")?{perfilDetectado: "HALEL", sha256:"b".repeat(64),token:"sintetico",nota:"",filas}:{eventos:[]}),{headers:{"Content-Type":"application/json"}});}));
     const run=vi.fn(async(_accion,_id,fn)=>fn("clave-sintetica-pilotos"));
     const render=async(cat:CatalogosCB2)=>act(async()=>root.render(createElement(ImportarCB2,{api:"/demo",cat,run,locked:false})));
     const control=(text:string)=>{const l=[...host.querySelectorAll("label")].find(l=>l.textContent?.startsWith(text))!;return (l.querySelector("input,select")??document.getElementById(l.htmlFor)) as HTMLInputElement;};

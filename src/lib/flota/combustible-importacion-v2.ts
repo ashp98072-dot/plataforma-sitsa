@@ -15,6 +15,8 @@ const alias: Record<CampoProveedor, string[]> = {
   km: ["KM", "KILOMETRAJE"], producto: ["PRODUCTO", "COMBUSTIBLE"], lote: ["LOTE", "NOLOTE"], auxiliar: ["SALDO", "OBS"],
 };
 const campos = Object.keys(alias) as CampoProveedor[];
+// La detección CB2 comparte el mismo reconocimiento de columnas del parser.
+export { norm as normalizarEncabezadoProveedorV2, texto as textoCeldaProveedorV2, encabezado as encabezadoProveedorV2 };
 type Columnas = Partial<Record<CampoProveedor, number>>;
 function texto(c: ExcelJS.Cell): string {
   const v = c.value;

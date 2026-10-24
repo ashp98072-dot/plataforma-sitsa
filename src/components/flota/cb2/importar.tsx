@@ -19,7 +19,7 @@ export function ImportarCB2({ api, cat, run, locked }: {
     run: EjecutarCB2;
     locked: boolean;
 }) {
-    const [perfil, setPerfil] = useState("HALEL"), [proveedor, setProveedor] = useState(""), [moneda, setMoneda] = useState("GTQ"), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState<PreviewCB2 | null>(null), [error, setError] = useState(""), [loading, setLoading] = useState(false), [aceptacion, setAceptacion] = useState<string | null>(null);
+    const [proveedor, setProveedor] = useState(""), [moneda, setMoneda] = useState("GTQ"), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState<PreviewCB2 | null>(null), [error, setError] = useState(""), [loading, setLoading] = useState(false), [aceptacion, setAceptacion] = useState<string | null>(null);
     const [decisiones, setDecisiones] = useState<Record<string, DecisionAsignacion>>({});
     const revision = useRevisionCB2(preview?.filas ?? sinFilas, cat, decisiones);
     const pendientesProducto = revision.resumen.revision.filter(g => g.seleccionado && !decisiones[g.clave]?.productoClasificado && !clasificarProducto(g.fila.origen?.producto)).length;
@@ -32,8 +32,10 @@ export function ImportarCB2({ api, cat, run, locked }: {
             return;
         setLoading(true);
         setError("");
+        setPreview(null); setAceptacion(null);
         try {
-            const resultado = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, perfil, proveedor, moneda, []) });
+            const resultado = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, undefined, proveedor, moneda, []) });
+            if (resultado.perfilDetectado !== "HALEL" && resultado.perfilDetectado !== "SHELL") throw new Error("El servidor no informó un formato reconocido. Vuelve a analizar el archivo con la versión actual de la aplicación.");
             setPreview(resultado);
             revision.reset(); setDecisiones(Object.fromEntries(resultado.filas.filter(f => f.candidato).map(f => [f.candidato!, { exigirProducto: true }]))); setAceptacion(null);
         }
@@ -45,16 +47,16 @@ export function ImportarCB2({ api, cat, run, locked }: {
         }
     }
     async function confirmar() {
-        if (!file || !preview || !acepta || locked || loading || pendientesProducto > 0)
+        if (!file || !preview?.perfilDetectado || !acepta || locked || loading || pendientesProducto > 0)
             return;
         const seguras = revision.resumen.segura;
         if (Object.keys(seguras).length !== Object.keys(revision.solicitudes).length) { setError("La selección contiene candidatos bloqueados o unidades no compatibles/disponibles. Revisa las asignaciones."); return; }
-        const archivo = file, seleccion = seleccionActual(), identity = { sha256: preview.sha256, perfil, proveedorId: Number(proveedor), moneda, seleccion };
+        const archivo = file, seleccion = seleccionActual(), identity = { sha256: preview.sha256, perfil: preview.perfilDetectado, proveedorId: Number(proveedor), moneda, seleccion };
         await run("confirmar", identity, async (key) => {
             const f = formCB2(archivo, identity.perfil, String(identity.proveedorId), identity.moneda, identity.seleccion);
             const recibo = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: f });
-            if (recibo.sha256 !== identity.sha256)
-                throw new Error("El archivo cambió; conserva el intento para revisión.");
+            if (recibo.sha256 !== identity.sha256 || recibo.perfilDetectado !== identity.perfil)
+                throw new Error("El archivo o su formato cambió; conserva el intento para revisión.");
             const body = formCB2(archivo, identity.perfil, String(identity.proveedorId), identity.moneda, identity.seleccion);
             body.set("token", recibo.token);
             body.set("clave", key);
@@ -62,7 +64,7 @@ export function ImportarCB2({ api, cat, run, locked }: {
         }).catch(() => { });
     }
     return <section className="space-y-4" aria-label="Importar consumos"><h2 className="text-lg font-semibold">Importar consumos HALEL / SHELL</h2><p className="text-sm text-[var(--muted)]">Registra consumos independientes de los vales. No crea pagos ni documentos fiscales. Una factura ausente no impide guardar un consumo seguro.</p>
- <PasosImportacionCB2 paso={!file ? 1 : !preview ? 2 : !acepta ? 3 : 4}/><fieldset disabled={locked || loading} className="grid items-end gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 md:grid-cols-3"><CatalogoSearchSelect label="Proveedor de la empresa" placeholder="Buscar proveedor" value={proveedor} onChange={v => { setProveedor(v); invalidar(); }} options={cat.proveedores.map(p => ({ value: String(p.id), label: p.nombre }))} inputClassName={input}/><label>Perfil<select className={input} value={perfil} onChange={e => { setPerfil(e.target.value); invalidar(); }}><option>HALEL</option><option>SHELL</option></select></label><label>Moneda declarada<select className={input} value={moneda} onChange={e => { setMoneda(e.target.value); invalidar(); }}><option>GTQ</option><option>USD</option></select></label><label className="rounded-xl border border-dashed border-[var(--border)] p-4 md:col-span-3">Excel original .xlsx (máximo 50 MB)<input className={input} type="file" accept=".xlsx" onChange={e => {
+ <p className="text-sm text-[var(--muted)]">El formato HALEL o SHELL se detecta automáticamente al analizar el archivo. El proveedor comercial se selecciona de forma independiente.</p><PasosImportacionCB2 paso={!file ? 1 : !preview ? 2 : !acepta ? 3 : 4}/><fieldset disabled={locked || loading} className="grid items-end gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4 md:grid-cols-3"><CatalogoSearchSelect label="Proveedor de la empresa" placeholder="Buscar proveedor" value={proveedor} onChange={v => { setProveedor(v); invalidar(); }} options={cat.proveedores.map(p => ({ value: String(p.id), label: p.nombre }))} inputClassName={input}/><label>Moneda declarada<select className={input} value={moneda} onChange={e => { setMoneda(e.target.value); invalidar(); }}><option>GTQ</option><option>USD</option></select></label><label className="rounded-xl border border-dashed border-[var(--border)] p-4 md:col-span-3">Excel original .xlsx (máximo 50 MB)<input className={input} type="file" accept=".xlsx" onChange={e => {
             const f = e.target.files?.[0] ?? null;
             invalidar();
             if (f && (!f.name.toLowerCase().endsWith(".xlsx") || f.size <= 0 || f.size > 52428800)) {
@@ -72,6 +74,6 @@ export function ImportarCB2({ api, cat, run, locked }: {
             else
                 setFile(f);
         }}/></label><button type="button" className={primaryButton} disabled={!file || !proveedor} onClick={() => void analizar()}>{loading ? "Analizando…" : "Analizar Excel"}</button></fieldset>
- {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p>{preview.nota}</p><CandidatosCB2 key={preview.sha256} filas={preview.filas} cat={cat} seleccion={revision.asignaciones} manuales={revision.manuales} omitidos={revision.omitidos} revisados={revision.revisados} onRevisar={(key, value) => { revision.revisar(key, value); setAceptacion(null); }} onAsignar={(key, value) => { revision.asignar(key, value); setAceptacion(null); }} onSeleccionar={(key, value) => { revision.seleccionar(key, value); setAceptacion(null); }} decisiones={decisiones} revisionExtra={g => g.estado !== "RESUELTO" && <fieldset disabled={locked || loading || g.estado === "BLOQUEADO"}><AsignacionCB2 fila={g.fila} cat={cat} value={decisiones[g.clave] ?? {}} disabled={locked || loading} onChange={v => { setDecisiones(prev => ({ ...prev, [g.clave]: v })); setAceptacion(null); }}/></fieldset>} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><ResumenSeleccionCB2 filas={preview.filas} cat={cat} seleccion={revision.asignaciones} omitidos={revision.omitidos} revisados={revision.revisados} decisiones={decisiones}/>{pendientesProducto > 0 && <p role="alert">{pendientesProducto} seleccionados requieren clasificar el combustible, incluso NO DETERMINADO. No se pueden confirmar.</p>}<p>{revision.resumen.seleccionados} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAceptacion(e.target.checked ? firmaRevision : null)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta || pendientesProducto > 0 || Object.keys(revision.solicitudes).length !== revision.resumen.seleccionados} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
+ {error && <p role="alert" className="text-red-500">{error}</p>}{preview && <><p role="status">Formato detectado: {preview.perfilDetectado}</p><p>{preview.nota}</p><CandidatosCB2 key={preview.sha256} filas={preview.filas} cat={cat} seleccion={revision.asignaciones} manuales={revision.manuales} omitidos={revision.omitidos} revisados={revision.revisados} onRevisar={(key, value) => { revision.revisar(key, value); setAceptacion(null); }} onAsignar={(key, value) => { revision.asignar(key, value); setAceptacion(null); }} onSeleccionar={(key, value) => { revision.seleccionar(key, value); setAceptacion(null); }} decisiones={decisiones} revisionExtra={g => g.estado !== "RESUELTO" && <fieldset disabled={locked || loading || g.estado === "BLOQUEADO"}><AsignacionCB2 fila={g.fila} cat={cat} value={decisiones[g.clave] ?? {}} disabled={locked || loading} onChange={v => { setDecisiones(prev => ({ ...prev, [g.clave]: v })); setAceptacion(null); }}/></fieldset>} disabled={locked || loading}/><fieldset disabled={locked || loading} className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-4"><h3 className="font-semibold">Confirmar los consumos seleccionados</h3><ResumenSeleccionCB2 filas={preview.filas} cat={cat} seleccion={revision.asignaciones} omitidos={revision.omitidos} revisados={revision.revisados} decisiones={decisiones}/>{pendientesProducto > 0 && <p role="alert">{pendientesProducto} seleccionados requieren clasificar el combustible, incluso NO DETERMINADO. No se pueden confirmar.</p>}<p>{revision.resumen.seleccionados} candidatos seleccionados. Las demás apariciones se conservarán como evidencia y podrán quedar pendientes.</p><label className="flex gap-2"><input type="checkbox" checked={acepta} onChange={e => setAceptacion(e.target.checked ? firmaRevision : null)}/>Confirmo el procesamiento parcial y la conservación de todas las apariciones.</label><button className={primaryButton} disabled={!acepta || pendientesProducto > 0 || Object.keys(revision.solicitudes).length !== revision.resumen.seleccionados} onClick={() => void confirmar()}>Confirmar selección parcial</button></fieldset></>}
  </section>;
 }
