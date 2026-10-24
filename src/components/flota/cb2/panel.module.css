@@ -36,17 +36,18 @@
 
 /* The review stays a semantic table at every viewport size. */
 .panel .reviewScroll { max-height: 70vh; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
-.panel .consumptionTable { width: 100%; min-width: 1180px; table-layout: auto; font-size: .8rem; }
-.panel .consumptionTable th { position: sticky; top: 0; z-index: 2; background: var(--thead, var(--card)); padding: .8rem .65rem; text-align: left; box-shadow: 0 1px 0 var(--border); }
+.panel .consumptionTable { --cb2-review-muted: color-mix(in srgb, var(--muted) 85%, var(--text)); width: 100%; min-width: 1180px; table-layout: auto; font-size: .8rem; }
+.panel .consumptionTable th { position: sticky; top: 0; z-index: 2; background: var(--thead, var(--card)); color: var(--cb2-review-muted); padding: .8rem .65rem; text-align: left; box-shadow: 0 1px 0 var(--border); }
 .panel .consumptionTable th:last-child { right: 0; z-index: 3; }
 .panel .consumptionTable th:first-child { left: 0; z-index: 3; }
 .reviewScroll:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
 .panel .consumptionTable td { padding: .65rem; line-height: 1.4; vertical-align: middle; }
-.consumptionTable small { display: block; margin-top: .25rem; color: var(--muted); font-size: .7rem; }
+.consumptionTable small { display: block; margin-top: .25rem; color: var(--cb2-review-muted); font-size: .7rem; }
 .consumptionTable .originalText { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 9rem; max-width: 15rem; }
 .consumptionTable .numeric { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .consumptionRow:nth-of-type(4n + 3) { background: color-mix(in srgb, var(--bg) 55%, var(--card)); }
-.consumptionRow[data-excluded="true"] { color: var(--muted); background: var(--bg); }
+.consumptionRow[data-excluded="true"] { color: var(--cb2-review-muted); background: var(--bg); }
+.consumptionTable .badge[data-state="EXCLUIDO"] { color: var(--cb2-review-muted); }
 .consumptionTable td:nth-child(6), .consumptionTable td:nth-child(7) { min-width: 9rem; max-width: 15rem; overflow-wrap: anywhere; }
 .consumptionTable td:last-child { position: sticky; right: 0; background: var(--card); border-left: 1px solid var(--border); }
 .consumptionTable td:first-child { text-align: center; position: sticky; left: 0; z-index: 1; background: var(--card); }

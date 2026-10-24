@@ -24,13 +24,18 @@ it("autopropone nombres abreviados, conserva cambios manuales y registra el mét
         await render({...base,empleados});expect(control("Confirmo el procesamiento parcial").checked).toBe(false);expect(control("Empleado para vale 0001").value).toBe("77");expect(host.textContent).toContain("Autopropuesta única por tokens completos");expect(host.textContent).toContain(original);
         await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Editar consumo vale 0001"]')!.click());
         await change("Empleado para vale 0001","88");
+        await change("Unidad para vale 0001","1");
+        await change("Combustible para vale 0001","NO_DETERMINADO");
         await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Cerrar consumo vale 0001"]')!.click());
         await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Editar consumo vale 0002"]')!.click());
         await change("Empleado para vale 0002","");
-        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Cerrar consumo vale 0002"]')!.click());await click("Siguiente");await click("Anterior");await render({...base,empleados:[...empleados]});expect(control("Empleado para vale 0001").value).toBe("88");expect(control("Empleado para vale 0002").value).toBe("");
+        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Cerrar consumo vale 0002"]')!.click());
+        await change("Vale","0026");expect(host.querySelector('[aria-label="Editar consumo vale 0001"]')).toBeNull();
+        await change("Vale","");await click("Siguiente");await click("Anterior");await render({...base,empleados:[...empleados]});expect(control("Empleado para vale 0001").value).toBe("88");expect(control("Empleado para vale 0002").value).toBe("");
+        expect(control("Unidad para vale 0001").value).toBe("1");expect(control("Combustible para vale 0001").value).toBe("NO_DETERMINADO");
         await aceptar();await render({...base,empleados:[...empleados,{id:79,nombre:"Alvaro Pinto"}]});expect(control("Confirmo el procesamiento parcial").checked).toBe(false);expect(control("Empleado para vale 0003").value).toBe("");expect(control("Empleado para vale 0001").value).toBe("88");
         await render({...base,empleados:[...empleados]});await change("Vale","0001");expect(control("Empleado para vale 0001").value).toBe("88");if(!control("Confirmo el procesamiento parcial").checked)await aceptar();expect(requests).toHaveLength(1);await click("Confirmar selección parcial");
         expect(requests.map(r=>r.url)).toEqual(["/demo/preview","/demo/preview","/demo/confirmar"]);
-        const choices=JSON.parse(String(requests[2].body.get("seleccion")));expect(choices).toHaveLength(26);expect(choices[0]).toMatchObject({empleadoId:88,metodoEmpleado:"MANUAL"});expect(choices[1]).toMatchObject({empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"});expect(choices[2]).toMatchObject({empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"});expect(filas.every(f=>f.origen.piloto===original)).toBe(true);
+        const choices=JSON.parse(String(requests[2].body.get("seleccion")));expect(choices).toHaveLength(26);expect(choices[0]).toMatchObject({vehiculoId:1,empleadoId:88,metodoEmpleado:"MANUAL",productoClasificado:"NO_DETERMINADO"});expect(choices[1]).toMatchObject({empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"});expect(choices[2]).toMatchObject({empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"});expect(filas.every(f=>f.origen.piloto===original)).toBe(true);
     }finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
