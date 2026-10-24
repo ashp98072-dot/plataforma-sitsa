@@ -32,6 +32,38 @@
 .badge[data-state="ADVERTENCIA"] { color: #fde68a; background: #713f12; border-color: #a16207; }
 .badge[data-state="BLOQUEADO"] { color: #fecaca; background: #7f1d1d; border-color: #b91c1c; }
 .badge[data-state="IGNORADO"] { color: var(--muted); }
+.badge[data-state="EXCLUIDO"] { color: var(--muted); background: var(--bg); }
+
+/* The review stays a semantic table at every viewport size. */
+.panel .reviewScroll { max-height: 70vh; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.panel .consumptionTable { width: 100%; min-width: 1180px; table-layout: auto; font-size: .8rem; }
+.panel .consumptionTable th { position: sticky; top: 0; z-index: 2; background: var(--thead, var(--card)); padding: .8rem .65rem; text-align: left; box-shadow: 0 1px 0 var(--border); }
+.panel .consumptionTable th:last-child { right: 0; z-index: 3; }
+.panel .consumptionTable th:first-child { left: 0; z-index: 3; }
+.reviewScroll:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 3px; }
+.panel .consumptionTable td { padding: .65rem; line-height: 1.4; vertical-align: middle; }
+.consumptionTable small { display: block; margin-top: .25rem; color: var(--muted); font-size: .7rem; }
+.consumptionTable .originalText { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 9rem; max-width: 15rem; }
+.consumptionTable .numeric { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.consumptionRow:nth-of-type(4n + 3) { background: color-mix(in srgb, var(--bg) 55%, var(--card)); }
+.consumptionRow[data-excluded="true"] { color: var(--muted); background: var(--bg); }
+.consumptionTable td:nth-child(6), .consumptionTable td:nth-child(7) { min-width: 9rem; max-width: 15rem; overflow-wrap: anywhere; }
+.consumptionTable td:last-child { position: sticky; right: 0; background: var(--card); border-left: 1px solid var(--border); }
+.consumptionTable td:first-child { text-align: center; position: sticky; left: 0; z-index: 1; background: var(--card); }
+.panel .consumptionTable .detailRow > td { position: static; text-align: left; background: var(--bg); padding: 1.25rem; }
+.detailRow[hidden] { display: none; }
+.editGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+.editGrid section { min-width: 0; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--card); }
+.editGrid h3 { font-size: .9rem; font-weight: 650; margin-bottom: .75rem; }
+.editGrid summary { cursor: pointer; padding: .5rem 0; }
+.quickFilters { display: flex; flex-wrap: wrap; gap: .5rem; }
+.quickFilters [aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 15%, var(--card)); border-color: var(--accent); }
+@media (max-width: 768px) {
+  .panel .reviewScroll { max-height: 65vh; }
+  .editGrid { grid-template-columns: minmax(0, 1fr); }
+  .panel .consumptionTable .detailRow > td { padding: .75rem; }
+  .editGrid section { max-width: calc(100vw - 6rem); padding: .75rem; }
+}
 
 .panel .reviewTable { min-width: 0; width: 100%; table-layout: fixed; }
 .panel .reviewTable td { padding: .65rem; overflow-wrap: anywhere; }

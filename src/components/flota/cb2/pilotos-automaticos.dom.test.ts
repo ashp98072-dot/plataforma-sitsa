@@ -22,7 +22,12 @@ it("autopropone nombres abreviados, conserva cambios manuales y registra el mét
     try{
         await render(base);await change("Proveedor de la empresa","1");await act(async()=>{const el=control("Excel original");Object.defineProperty(el,"files",{value:[new File(["sintetico"],"demo.xlsx")]});el.dispatchEvent(new Event("change",{bubbles:true}));});await click("Analizar Excel");await aceptar();
         await render({...base,empleados});expect(control("Confirmo el procesamiento parcial").checked).toBe(false);expect(control("Empleado para vale 0001").value).toBe("77");expect(host.textContent).toContain("Autopropuesta única por tokens completos");expect(host.textContent).toContain(original);
-        await change("Empleado para vale 0001","88");await change("Empleado para vale 0002","");await click("Siguiente");await click("Anterior");await render({...base,empleados:[...empleados]});expect(control("Empleado para vale 0001").value).toBe("88");expect(control("Empleado para vale 0002").value).toBe("");
+        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Editar consumo vale 0001"]')!.click());
+        await change("Empleado para vale 0001","88");
+        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Cerrar consumo vale 0001"]')!.click());
+        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Editar consumo vale 0002"]')!.click());
+        await change("Empleado para vale 0002","");
+        await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="Cerrar consumo vale 0002"]')!.click());await click("Siguiente");await click("Anterior");await render({...base,empleados:[...empleados]});expect(control("Empleado para vale 0001").value).toBe("88");expect(control("Empleado para vale 0002").value).toBe("");
         await aceptar();await render({...base,empleados:[...empleados,{id:79,nombre:"Alvaro Pinto"}]});expect(control("Confirmo el procesamiento parcial").checked).toBe(false);expect(control("Empleado para vale 0003").value).toBe("");expect(control("Empleado para vale 0001").value).toBe("88");
         await render({...base,empleados:[...empleados]});await change("Vale","0001");expect(control("Empleado para vale 0001").value).toBe("88");if(!control("Confirmo el procesamiento parcial").checked)await aceptar();expect(requests).toHaveLength(1);await click("Confirmar selección parcial");
         expect(requests.map(r=>r.url)).toEqual(["/demo/preview","/demo/preview","/demo/confirmar"]);
