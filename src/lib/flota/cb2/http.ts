@@ -8,6 +8,7 @@ import { ErrorArchivoProveedor, validarArchivoImportacion } from "../combustible
 import { ErrorCB2, confirmar, seleccion, moneda, reanudar, asociar, id } from "./model";
 import * as service from "./service";
 import { validarOrigenCB2 } from "./origin";
+import { detectarFormatoCB2 } from "./detectar-formato";
 const headers = { "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" };
 export async function bodyAcotado(req: Request, max: number) {
     if (!req.body)
@@ -91,14 +92,17 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
             catch {
                 throw new ErrorCB2("Seleccion invalida.", 400);
             }
-            const common = z.object({ proveedorId: id, perfil: z.enum(["HALEL", "SHELL"]), moneda, seleccion }).parse({ proveedorId: Number(form.get("proveedorId")), perfil: form.get("perfil"), moneda: form.get("moneda"), seleccion: choices });
+            const common = z.object({ proveedorId: id, perfil: z.enum(["HALEL", "SHELL"]).optional(), moneda, seleccion }).parse({ proveedorId: Number(form.get("proveedorId")), perfil: form.get("perfil") ?? undefined, moneda: form.get("moneda"), seleccion: choices });
             ctx.proveedorId = common.proveedorId;
-            const entrada = { perfil: common.perfil, moneda: common.moneda, seleccion: common.seleccion };
             const buffer = Buffer.from(await file.arrayBuffer());
+            const perfilDetectado = await detectarFormatoCB2(buffer);
+            if (common.perfil !== undefined && common.perfil !== perfilDetectado)
+                throw new ErrorCB2("El perfil enviado no coincide con el formato detectado en el Excel. Vuelve a analizar el archivo.", 400);
+            const entrada = { perfil: perfilDetectado, moneda: common.moneda, seleccion: common.seleccion };
             if (accion === "preview")
-                resultado = await service.preview(ctx, buffer, entrada);
+                resultado = { ...await service.preview(ctx, buffer, entrada), perfilDetectado };
             else {
-                const op = confirmar.parse({ ...common, clave: form.get("clave"), token: form.get("token") });
+                const op = confirmar.parse({ ...common, perfil: perfilDetectado, clave: form.get("clave"), token: form.get("token") });
                 resultado = await service.confirmarArchivo(ctx, buffer, file.name, entrada, op.clave, op.token);
             }
         }

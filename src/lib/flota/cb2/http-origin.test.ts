@@ -5,6 +5,7 @@ vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: m.connection }) })
 import { cb2Http, type Accion } from "./http";
 import { decodeJwt } from "jose";
 import { fixtureHalelV2, fixtureShellV2 } from "../combustible-importacion-v2.fixture";
+import { fixtureHalelCuatroHojas } from "./detectar-formato.fixture";
 const actions: Accion[] = ["preview", "confirmar", "reanudar", "asociar", "corregir", "importaciones", "consumos", "facturas", "filas", "archivo"];
 const writes = actions.slice(0, 5);
 const url = "http://internal:3000/api/empresas/kt-monaco/flota/cb2";
@@ -18,13 +19,18 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
-    it.each([["HALEL", fixtureHalelV2], ["SHELL", fixtureShellV2]] as const)("preview %s legítimo detrás de proxy analiza el Excel real, sin escrituras", async (perfil, fixture) => {
+    it.each([
+        { perfil: "HALEL", fixture: fixtureHalelV2, estructura: "fixture anterior" },
+        { perfil: "SHELL", fixture: fixtureShellV2, estructura: "tres hojas mensuales sintéticas" },
+        { perfil: "HALEL", fixture: fixtureHalelCuatroHojas, estructura: "cuatro hojas representativas de auditoría" },
+    ])("preview $perfil detrás de proxy: $estructura, parser y recibo reales con conexión simulada", async ({ perfil, fixture }) => {
         const form = new FormData();
         form.set("file", new File([new Uint8Array(await fixture())], "sintetico.xlsx"));
         form.set("perfil", perfil); form.set("proveedorId", "3"); form.set("moneda", "GTQ"); form.set("seleccion", "[]");
         const response = await cb2Http(new Request(`${url}/preview`, { method: "POST", headers: { origin: "https://novalvion.com" }, body: form }), "kt-monaco", "preview");
         expect(response.status).toBe(200);
         const data = await response.json();
+        expect(data.perfilDetectado).toBe(perfil);
         expect(data.filas.length).toBeGreaterThan(20);
         const original = data.filas.find((f: { candidato: string | null }) => f.candidato);
         expect(original).toHaveProperty("lote"); expect(original).toHaveProperty("kilometraje");

@@ -25,6 +25,7 @@ export type FilaCB2 = {
     moneda: string;
 };
 export type PreviewCB2 = {
+    perfilDetectado?: "HALEL" | "SHELL";
     sha256: string;
     token: string;
     filas: FilaCB2[];
@@ -113,7 +114,7 @@ export async function todasCB2(base: string, query = "", signal?: AbortSignal): 
     }
 }
 export function elecciones(value: Record<string, string>): SeleccionCB2 { return Object.entries(value).filter(([, v]) => v).map(([candidato, v]) => ({ candidato, vehiculoId: Number(v) })).sort((a, b) => a.candidato.localeCompare(b.candidato)); }
-export function formCB2(file: File, perfil: string, proveedor: string, moneda: string, seleccion: SeleccionCB2) { const f = new FormData(); f.set("file", file); f.set("perfil", perfil); f.set("proveedorId", proveedor); f.set("moneda", moneda); f.set("seleccion", JSON.stringify(seleccion)); return f; }
+export function formCB2(file: File, perfil: string | undefined, proveedor: string, moneda: string, seleccion: SeleccionCB2) { const f = new FormData(); f.set("file", file); if (perfil !== undefined) f.set("perfil", perfil); f.set("proveedorId", proveedor); f.set("moneda", moneda); f.set("seleccion", JSON.stringify(seleccion)); return f; }
 export function leerObjeto(value: unknown): Record<string, unknown> {
     try {
         const o = typeof value === "string" ? JSON.parse(value) : value;

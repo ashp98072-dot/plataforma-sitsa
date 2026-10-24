@@ -5,12 +5,12 @@ import { expect, it, vi } from "vitest";
 import { ImportarCB2 } from "./importar";
 import type { CatalogosCB2 } from "./client";
 
-it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos elegibles seleccionados, sin vincular pilotos aproximados", async () => {
+it.each(["HALEL", "SHELL"] as const)("%s detectado: el catálogo tardío invalida aceptación y confirmar conserva selección y formato", async perfil => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
     const candidato = "a".repeat(64), otro = "c".repeat(64);
     const fila = { hoja: "Datos", fila: 2, candidato, bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", motivos: ["Producto no informado"], vale: "0001", placa: "633 CBL", placaNormalizada: "633 CBL", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ", origen: { piloto: "JOSE CHAY", producto: "DIESEL" } };
-    const preview = { sha256: "b".repeat(64), token: "sintetico", nota: "", filas: [fila, { ...fila, candidato: otro, vale: "0002", fila: 3 }] };
+    const preview = { perfilDetectado: perfil, sha256: "b".repeat(64), token: "sintetico", nota: "", filas: [fila, { ...fila, candidato: otro, vale: "0002", fila: 3 }] };
     const requests: { url: string; body: FormData }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => { requests.push({ url, body: init.body as FormData }); return new Response(JSON.stringify(url.endsWith("preview") ? preview : { eventos: [] }), { headers: { "Content-Type": "application/json" } }); }));
     const cat: CatalogosCB2 = { proveedores: [{ id: 1, nombre: "Demo" }], vehiculos: [], pilotos: [{ id: 5, nombre: "José Chay" }] };
@@ -24,6 +24,9 @@ it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos
         await act(async () => { const el = control("Proveedor de la empresa"); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(el, "1"); el.dispatchEvent(new Event("change", { bubbles: true })); });
         await act(async () => { const el = control("Excel original"); Object.defineProperty(el, "files", { value: [new File(["solo sintético"], "demo.xlsx")] }); el.dispatchEvent(new Event("change", { bubbles: true })); });
         await act(async () => button("Analizar Excel").click());
+        expect([...host.querySelectorAll("label")].some(l => l.textContent?.startsWith("Perfil"))).toBe(false);
+        expect(host.textContent).toContain(`Formato detectado: ${perfil}`);
+        expect(requests[0].body.get("perfil")).toBeNull(); expect(requests[0].body.get("proveedorId")).toBe("1");
         await act(async () => aceptar().click()); expect(aceptar().checked).toBe(true);
         await render({ ...cat, vehiculos: [{ id: 3, placa: "C-633CBL" }] });
         expect(aceptar().checked).toBe(false); expect(button("Confirmar selección parcial").disabled).toBe(true);
@@ -34,6 +37,7 @@ it("el catálogo tardío invalida aceptación y confirmar envía solo candidatos
         await act(async () => aceptar().click()); await act(async () => button("Confirmar selección parcial").click());
         expect(requests.map(r => r.url)).toEqual(["/demo/preview", "/demo/preview", "/demo/confirmar"]);
         const body = requests[2].body;
+        expect(body.get("perfil")).toBe(perfil);
         expect(JSON.parse(String(body.get("seleccion")))).toEqual([{ candidato, vehiculoId: 3, empleadoId: null, metodoEmpleado: "SIN_ASIGNACION", productoClasificado: "DIESEL" }]);
         expect([...body.keys()].some(k => /piloto/i.test(k))).toBe(false);
         expect(body.get("token")).toBe("sintetico"); expect(body.get("clave")).toBe("clave-sintetica-513");
