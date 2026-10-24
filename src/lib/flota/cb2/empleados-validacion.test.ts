@@ -10,13 +10,16 @@ const choice={candidato:"a".repeat(64),vehiculoId:1,empleadoId:77,metodoEmpleado
 beforeEach(()=>{
     catalogo=[{id:77,nombre:"Alvaro Antonio León Pinto",empresa:7,estado:"Activo"},{id:88,nombre:"Alvaro Manuel Pinto",empresa:99,estado:"Activo"},{id:89,nombre:"Alvaro René Pinto",empresa:7,estado:"Inactivo"}];
     query.mockImplementation(async(sql:string,args:number[])=>{
-        expect(sql).toContain("WHERE empresa_id=? AND estado='Activo'");expect(sql).toContain("ORDER BY id FOR UPDATE");
-        return [catalogo.filter(e=>e.empresa===args[0]&&e.estado==="Activo"),[]];
+        expect(sql).toContain("WHERE empresa_id=? AND estado='Activo'");expect(sql).not.toContain("FOR UPDATE");
+        if (sql.includes("LOCK IN SHARE MODE")) {
+            expect(sql).toContain("FORCE INDEX (PRIMARY)"); expect(sql).toContain("AND id IN (");
+        }
+        return [catalogo.filter(e=>e.empresa===args[0]&&e.estado==="Activo"&&(!sql.includes("LOCK IN SHARE MODE")||args.slice(1).includes(e.id))),[]];
     });
 });
 describe("revalidación de empleados del Excel bajo transacción",()=>{
     it("solo el catálogo activo de la empresa del contexto determina unicidad",async()=>{
-        const r=await validarEmpleadosImportacion(c,ctx,[choice],[linea()]);expect(r.get(choice.candidato)).toBe("TOKENS_COMPLETOS_UNICOS");expect(query).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("SELECT id,nombre FROM empleados"),[7]);
+        const r=await validarEmpleadosImportacion(c,ctx,[choice],[linea()]);expect(r.get(choice.candidato)).toBe("TOKENS_COMPLETOS_UNICOS");expect(query.mock.calls).toEqual([[expect.stringContaining("LOCK IN SHARE MODE"),[7,77]],[expect.stringContaining("SELECT id,nombre FROM empleados"),[7]]]);
         await expect(validarEmpleadosImportacion(c,ctx,[{...choice,empleadoId:88}],[linea()])).rejects.toMatchObject({status:403});await expect(validarEmpleadosImportacion(c,ctx,[{...choice,empleadoId:89}],[linea()])).rejects.toMatchObject({status:403});
     });
     it("homónimo nuevo, cambio de nombre o baja tras preview invalidan la propuesta automática",async()=>{
@@ -33,9 +36,25 @@ describe("revalidación de empleados del Excel bajo transacción",()=>{
         const r=await validarEmpleadosImportacion(c,ctx,[{...choice,metodoEmpleado:"MANUAL"}],[linea(undefined,"Nombre distinto")]);expect(r.get(choice.candidato)).toBe("MANUAL");query.mockClear();
         const borrado=await validarEmpleadosImportacion(c,ctx,[{...choice,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"}],[linea()]);expect(borrado.get(choice.candidato)).toBe("SIN_ASIGNACION");expect(query).not.toHaveBeenCalled();
     });
-    it("10.000 consumos hacen una sola consulta de empleados",async()=>{
+    it("10.000 consumos del mismo empleado comparten un bloqueo y una lectura de catálogo",async()=>{
         const filas=Array.from({length:10000},(_,i)=>linea(i.toString(16).padStart(64,"0")));
-        const choices=filas.map(l=>({...choice,candidato:l.clave!}));const r=await validarEmpleadosImportacion(c,ctx,choices,filas);expect(r.size).toBe(10000);expect(query).toHaveBeenCalledOnce();
+        const choices=filas.map(l=>({...choice,candidato:l.clave!}));const r=await validarEmpleadosImportacion(c,ctx,choices,filas);expect(r.size).toBe(10000);expect(query).toHaveBeenCalledTimes(2);
+    });
+    it("selección manual no lee ni bloquea el catálogo; IDs únicos en orden global y lotes acotados",async()=>{
+        catalogo=Array.from({length:405},(_,i)=>({id:i+1,nombre:"Otro Nombre",empresa:7,estado:"Activo"}));
+        const choices=[...catalogo].reverse().map((p,i)=>({...choice,candidato:i.toString(16).padStart(64,"0"),empleadoId:p.id,metodoEmpleado:"MANUAL" as const}));
+        await validarEmpleadosImportacion(c,ctx,choices,[]);
+        expect(query).toHaveBeenCalledTimes(3);
+        expect(query.mock.calls.map(([,args])=>args.slice(1))).toEqual([catalogo.slice(0,200).map(p=>p.id),catalogo.slice(200,400).map(p=>p.id),[401,402,403,404,405]]);
+        expect(query.mock.calls.every(([sql])=>sql.endsWith("ORDER BY id LOCK IN SHARE MODE"))).toBe(true);
+    });
+    it("el catálogo se consulta después de esperar el bloqueo elegido y detecta un homónimo confirmado",async()=>{
+        const original=query.getMockImplementation()!;
+        query.mockImplementation(async(sql,args)=>{
+            if(sql.includes("LOCK IN SHARE MODE"))catalogo.push({id:90,nombre:"Alvaro Pinto",empresa:7,estado:"Activo"});
+            return original(sql,args);
+        });
+        await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toThrow("ambigua");
     });
     it("conserva compatibilidad de decisiones antiguas sin inventar el método",async()=>{const {metodoEmpleado:_,...antigua}=choice;void _;const r=await validarEmpleadosImportacion(c,ctx,[antigua],[linea()]);expect(r.get(choice.candidato)).toBe("NO_DECLARADO");});
     it("schema impide marcadores desconocidos o contradictorios",()=>{for(const extra of [{metodoEmpleado:"SIMILITUD"},{empleadoId:null},{metodoEmpleado:"SIN_ASIGNACION"}])expect(seleccion.safeParse([{...choice,...extra}]).success).toBe(false);expect(seleccion.safeParse([choice]).success).toBe(true);});

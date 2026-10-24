@@ -23,7 +23,11 @@ El modelo disponible guarda `empleados.nombre` completo; no hay columnas separad
 
 La interfaz envía `metodoEmpleado`: `EXACTA_NORMALIZADA`, `TOKENS_COMPLETOS_UNICOS`, `MANUAL` o `SIN_ASIGNACION`. El recibo firmado y la identidad de reintento incluyen estas decisiones.
 
-Antes de crear consumos se lee el catálogo activo completo de la empresa del contexto autenticado, con `FOR UPDATE`, una sola vez dentro de la transacción. Se valida pertenencia/estado para cualquier ID elegido y se recalcula la coincidencia automática utilizando el **texto original del Excel reanalizado**, sin confiar en nombres ni candidatos del navegador. Una baja, cambio de nombre, homónimo nuevo o método automático incorrecto impide confirmar. Elegir manualmente sigue permitido únicamente para un empleado activo autorizado.
+Antes de crear consumos se validan los IDs elegidos contra la empresa autenticada y el estado activo. Se deduplican y ordenan numéricamente; se consultan por PK en lotes de hasta 200, con `LOCK IN SHARE MODE`. Esos empleados quedan protegidos contra bajas, borrados o renombres hasta terminar la transacción, mientras dos importaciones pueden compartirlos. No se bloquean todos los empleados activos ni se usa `FOR UPDATE` sobre su catálogo.
+
+Solo si hay decisiones automáticas se lee una vez el catálogo activo completo, sin bloqueo, después de obtener los bloqueos elegidos. La transacción existente usa READ COMMITTED: esta lectura ve los cambios confirmados durante la espera. Se recalcula la coincidencia utilizando el **texto original del Excel reanalizado**, sin confiar en nombres ni candidatos del navegador. Una baja del elegido, cambio de su nombre, homónimo visible en esa lectura o método incorrecto impide confirmar. La selección manual no necesita leer todo el catálogo. El borrado manual no consulta empleados.
+
+El orden es proveedor, documentos/vehículos, consumos previos y empleados elegidos; se movió la validación de empleados después del bloqueo de consumos previos para no esperar esos consumos mientras se retienen bloqueos de empleados. El orden de documentos y vehículos y los reintentos acotados de deadlock/timeout del repositorio permanecen vigentes. Esto reduce contención evitable; no certifica ausencia de interbloqueos frente a cualquier escritor externo.
 
 El método se registra en `decision.metodoEmpleadoValidado` del diario existente; `decision.asignacion` conserva la elección enviada. El texto original permanece en `datos_origen` y no se sustituye por el nombre completo del empleado. Solicitudes antiguas sin marcador siguen siendo admitidas: se valida el ID activo y se registra `NO_DECLARADO`, sin atribuirles un método que no declararon.
 
@@ -33,7 +37,7 @@ No se hace backfill de métodos, empleados o eventos antiguos. Una operación ya
 
 `empleados-coincidencias.ts` crea un índice invertido de tokens y una caché acotada de resultados. El backend construye un índice por operación; la interfaz lo reutiliza por identidad del array inmutable del catálogo. Una recarga sustituye el array y construye un índice nuevo. No se debe mutar ese array en el lugar.
 
-No hay consultas de empleados por fila: una consulta para el lote seleccionado, o ninguna si no se seleccionó empleado. Se reemplazan búsquedas repetidas de decisiones por mapas al construir selecciones y eventos. No se cambia el resto del acceso a vehículos/documentos.
+No hay consultas de empleados por fila: `ceil(IDs distintos/200)` consultas compartidas y una lectura adicional de catálogo si hay métodos automáticos. Diez mil consumos del mismo empleado usan dos consultas automáticas o una manual; sin empleado usan cero. Se reemplazan búsquedas repetidas de decisiones por mapas al construir selecciones y eventos. No se cambia el resto del acceso a vehículos/documentos.
 
 Archivos principales:
 
@@ -45,11 +49,11 @@ Archivos principales:
 
 ## Validación
 
-- **74 archivos, 850 pruebas aprobadas** de flota, combustible y tenant, excluyendo suites que requieren BD real.
+- **74 archivos, 854 pruebas aprobadas** de flota, combustible y tenant, excluyendo suites que requieren BD real.
 - Ejemplo Álvaro Pinto, segundos nombres y apellidos, tildes, puntuación, orden invertido, tokens incompletos rechazados, homónimos, inactivos y empresa ajena.
 - Confirmación HALEL/SHELL con Excel sintético real y BD/almacenamiento simulados: método registrado, original literal conservado, homónimo aparecido tras preview rechazado y empleado previamente confirmado intacto.
 - Prueba DOM de 26 consumos: catálogo asíncrono, autopropuesta, corrección y borrado manual, recargas, ambigüedad, filtros, paginación y payload final con métodos independientes por consumo.
-- Rendimiento verificable sin depender de tiempos: 10.000 consumos con una consulta de empleados; 10.000 búsquedas sin volver a normalizar todo el catálogo. Compatibilidad de lectura de diarios viejos y nuevos.
+- Rendimiento verificable sin depender de tiempos: 10.000 consumos con dos consultas de empleados; 405 IDs manuales desordenados se bloquean en tres lotes ordenados; 10.000 búsquedas sin volver a normalizar todo el catálogo. Compatibilidad de lectura de diarios viejos y nuevos y reanudación completa del servicio para HALEL/SHELL con ambas versiones de evidencia, usando persistencia y almacenamiento simulados.
 - `tsc --noEmit --incremental false`, ESLint de todos los archivos TypeScript modificados/añadidos y `git diff --check`: aprobados.
 - Evidencia: `docs/evidence/combustibles-cb2-pilotos/validacion-local.json`.
 
@@ -57,6 +61,16 @@ Archivos principales:
 
 **No requiere migración SQL adicional.** Utiliza `empleados` y las columnas/JSON del PR #514. No se comprobó ni modificó el esquema de ninguna instalación.
 
-Las pruebas de persistencia usan mocks. No se ejecutó SQL contra una BD real, importaciones productivas, despliegue ni merge. Quedan pendientes la inspección visual en navegador, el plan de consulta y la concurrencia real en laboratorio. La lectura transaccional verifica unicidad en ese momento; no establece una unicidad permanente ni serializa las altas futuras de RRHH con todos sus escritores. Bloquear el catálogo activo también puede aumentar contención durante la confirmación de lotes grandes.
+Las pruebas de persistencia usan mocks. No se ejecutó SQL, no se crearon bases de datos, no se accedió a producción y no hubo despliegue ni merge. Quedan pendientes la inspección visual en navegador, el plan de consulta y la concurrencia real en MariaDB, fuera del alcance autorizado. La unicidad se comprueba en el instante de la lectura del catálogo: una alta, reactivación o renombre de OTRO empleado confirmado después puede generar un homónimo antes del commit. No se garantiza unicidad serializable con RRHH. Conseguirla requiere coordinación de todos sus escritores; no se añade aquí. Los IDs elegidos sí conservan pertenencia/estado/nombre bajo bloqueo compartido hasta commit. Un lote que elija miles de IDs todavía retiene miles de bloqueos compartidos; la lectura automática sigue siendo proporcional al catálogo activo.
 
-La aplicación nueva lee los diarios anteriores. Un rollback al lector estricto del PR #514 no reconoce los campos JSON nuevos y podría impedir reanudar importaciones creadas con este cambio: conservar un lector compatible al planificar una reversión, sin borrar evidencia. Desplegar frontend y backend compatibles juntos; un backend anterior rechaza el marcador nuevo. Estas consideraciones requieren revisión antes de integrar, sin ejecutar cambios productivos desde este PR.
+La aplicación nueva lee los diarios anteriores. Un rollback al lector estricto del PR #514 no reconoce `metodoEmpleadoValidado` ni `asignacion.metodoEmpleado` y puede impedir reanudar importaciones creadas con este cambio: conservar el lector compatible de `model.ts`, sin borrar ni reescribir evidencia. No revertir la migración ya aplicada del PR #514.
+
+Compatibilidad durante una futura publicación (no ejecutada aquí):
+
+| Frontend | Backend | Resultado |
+| --- | --- | --- |
+| #514 | #515 | Admite solicitudes sin marcador, valida empleado activo/empresa y registra NO_DECLARADO; conserva el contrato y digest anteriores. |
+| #515 | #515 | Revalida métodos automáticos; las selecciones y borrados manuales prevalecen. |
+| #515 | #514 | El schema estricto anterior rechaza el campo nuevo; no es compatible. |
+
+Publicar primero backend compatible y luego frontend, o cambiar ambos de forma atómica con afinidad de versión. No enviar tráfico nuevo a instancias del backend anterior durante un despliegue mixto. Mantener archivo, selección, clave y recibo exactos para reintentos inciertos; no retirar el marcador de una solicitud que pudo confirmarse: cambiaría el digest. Un recibo vencido sin operación confirmada requiere nuevo preview; la recuperación de una operación ya confirmada precede la comprobación de vencimiento. La ausencia de método en clientes anteriores no demuestra selección manual ni automática y por eso nunca se inventa esa procedencia.

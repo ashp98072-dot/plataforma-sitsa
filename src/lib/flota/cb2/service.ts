@@ -201,10 +201,10 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     }
     const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId));
-    const metodosEmpleados = await validarEmpleadosImportacion(c, ctx, selection, lineas);
     const ids = [...new Set([...previos.values()].flat().map(r => Number(r.id)))].sort((a, b) => a - b);
     for (const id of ids)
         await rows(c, "SELECT id FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? AND id=? FOR UPDATE", [ctx.empresaId, ctx.proveedorId, id]);
+    const metodosEmpleados = await validarEmpleadosImportacion(c, ctx, selection, lineas);
     const res = new Map<string, {
         id: number;
         resultado: string;

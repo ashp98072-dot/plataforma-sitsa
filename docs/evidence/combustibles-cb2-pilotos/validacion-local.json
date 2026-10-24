@@ -1,34 +1,39 @@
-{
-  "base_sha": "237d1c191b30436e96c04cf3aadbc15ddbdc3a73",
-  "fecha_utc": "2026-10-23T20:39:06.203Z",
-  "node": "v24.18.0",
-  "vitest": {
-    "archivos": 74,
-    "pruebas": 850,
-    "exit_code": 0,
-    "alcance": "src/lib/flota y src/components/flota: *test.ts sin .db.test ni rollout-db.test; src/lib/tenant-combustible.test.ts; maxWorkers=2"
-  },
-  "typescript": {
-    "comando": "tsc --noEmit --incremental false",
-    "exit_code": 0
-  },
-  "eslint": {
-    "alcance": "Todos los .ts/.tsx modificados y añadidos",
-    "exit_code": 0
-  },
-  "diff_check_exit_code": 0,
-  "rendimiento": {
-    "consumos_validados": 10000,
-    "consultas_empleados": 1,
-    "catalogo_prueba": 2000,
-    "renormalizaciones_por_consulta": 0
-  },
-  "sql_real_ejecutado": false,
-  "migracion_adicional": false,
-  "operaciones_productivas": false,
-  "limites": [
-    "Persistencia simulada, sin validación de SQL ni concurrencia en MariaDB real",
-    "Sin inspección visual en navegador",
-    "Rollback requiere lector compatible con campos JSON nuevos"
-  ]
+﻿{
+    "base_sha":  "237d1c191b30436e96c04cf3aadbc15ddbdc3a73",
+    "node":  "v24.18.0",
+    "vitest":  {
+                   "archivos":  74,
+                   "pruebas":  854,
+                   "exit_code":  0,
+                   "alcance":  "src/lib/flota y src/components/flota: *test.ts sin .db.test ni rollout-db.test; src/lib/tenant-combustible.test.ts; maxWorkers=2"
+               },
+    "typescript":  {
+                       "comando":  "tsc --noEmit --incremental false",
+                       "exit_code":  0
+                   },
+    "eslint":  {
+                   "alcance":  "Todos los .ts/.tsx modificados y añadidos",
+                   "exit_code":  0
+               },
+    "diff_check_exit_code":  0,
+    "rendimiento":  {
+                        "consumos_validados":  10000,
+                        "consultas_empleados":  2,
+                        "catalogo_prueba":  2000,
+                        "renormalizaciones_por_consulta":  0,
+                        "ids_manuales_regresion":  405,
+                        "lotes_manuales_ordenados":  3
+                    },
+    "sql_real_ejecutado":  false,
+    "migracion_adicional":  false,
+    "operaciones_productivas":  false,
+    "limites":  [
+                    "Persistencia y bloqueos simulados; sin SQL ni concurrencia real en MariaDB",
+                    "Unicidad en el instante de lectura; no serializa altas o renombres posteriores de otros empleados",
+                    "Sin inspeccion visual en navegador",
+                    "Frontend nuevo incompatible con backend #514; backend compatible primero",
+                    "Rollback requiere lector compatible y conserva el esquema del PR #514"
+                ],
+    "fecha_local":  "2026-10-24",
+    "zona_horaria":  "America/Guatemala"
 }
