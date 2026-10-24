@@ -35,8 +35,8 @@ async function change(text: string, value: string) {
     const el = control(text), proto = el.tagName === "SELECT" ? HTMLSelectElement.prototype : el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     await act(async () => { Object.getOwnPropertyDescriptor(proto, "value")!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true })); });
 }
-async function table(rows: Registro[], canWrite = true, admin = true) {
-    await act(async () => root.render(createElement(TablaConsumosCB2, { rows, canWrite, admin, locked: false, preparando: false, seleccion: {}, onSeleccionar: vi.fn(), api: "/demo", cat, run })));
+async function table(rows: Registro[], canWrite = true, admin = true, api = "/demo") {
+    await act(async () => root.render(createElement(TablaConsumosCB2, { rows, canWrite, admin, locked: false, preparando: false, seleccion: {}, onSeleccionar: vi.fn(), api, cat, run })));
 }
 
 it("doce columnas compactas, empleado y combustible visibles, números formateados y originales intactos", async () => {
@@ -45,7 +45,7 @@ it("doce columnas compactas, empleado y combustible visibles, números formatead
     expect([...host.querySelectorAll("th[scope=col]")].map(h => h.textContent)).toEqual(["Selección", "Vale", "Fecha", "Placa / unidad", "Proveedor", "Galones", "Precio unitario", "Monto", "Factura", "Empleado", "Combustible", "Acciones"]);
     const fila = host.querySelector('[data-consumo="3"]')!;
     expect(fila.textContent).toContain("Marta López"); expect(fila.textContent).toContain("DIÉSEL");
-    expect(fila.children[5].textContent).toBe("10"); expect(fila.children[6].textContent).toBe("Q 40.123456"); expect(fila.children[7].textContent).toBe("Q 400.00");
+    expect(fila.children[5].querySelector("span")!.textContent).toBe("10"); expect(fila.children[6].textContent).toBe("Q 40.123456"); expect(fila.children[7].textContent).toBe("Q 400.00");
     expect(fila.children[5].getAttribute("title")).toContain("9.999900");
     const boton = host.querySelector<HTMLButtonElement>('[aria-label="Detalles del consumo 3"]')!, detalle = document.getElementById(boton.getAttribute("aria-controls")!)!;
     expect(detalle.hidden).toBe(true); await click("Detalles"); expect(detalle.hidden).toBe(false);
@@ -54,6 +54,70 @@ it("doce columnas compactas, empleado y combustible visibles, números formatead
     await click("Cerrar"); await click("Detalles"); expect(control("Justificacion de correccion").value).toBe("Borrador conservado al cerrar");
     await act(async () => detalle.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(detalle.hidden).toBe(true); expect(document.activeElement).toBe(boton); expect(JSON.stringify(original)).toBe(antes);
+});
+
+it("el galonaje redondeado ofrece un summary accesible con el original sin abrir la procedencia", async () => {
+    await table([original, { ...original, id: 4, galones: "10.100000" }]);
+    const resumen = host.querySelector<HTMLElement>('summary[aria-label="Consultar galones originales del consumo 3"]')!;
+    expect(resumen.textContent).toBe("Redondeado · ver original");
+    const desplegable = resumen.parentElement as HTMLDetailsElement;
+    expect(desplegable.open).toBe(false);
+    await act(async () => resumen.click());
+    expect(desplegable.open).toBe(true); expect(desplegable.textContent).toContain("Valor original: 9.999900 galones");
+    expect(host.querySelector('[data-consumo="4"]')!.querySelector('summary')).toBeNull();
+    expect(host.querySelector('[aria-label="Detalles del consumo 3"]')!.getAttribute("aria-expanded")).toBe("false");
+    expect(original.galones).toBe("9.999900");
+});
+
+it("conserva borradores independientes al paginar y filtrar, sin conservar la aceptación", async () => {
+    function Vista() {
+        const [documento, setDocumento] = useState(documentoVacio);
+        return createElement(ConsumosCB2, { api: "/demo", cat, run, canWrite: true, admin: true, locked: false, refresh: 0, activo: true, documento, setDocumento });
+    }
+    await act(async () => root.render(createElement(Vista)));
+    await click("Detalles");
+    await change("Empleado corregido #3", ""); await change("Combustible corregido", "NO_DETERMINADO"); await change("Justificacion de correccion", "Borrador del consumo tres");
+    await act(async () => control("Confirmo esta corrección").click());
+    await click("Siguiente"); await click("Detalles");
+    expect(control("Justificacion de correccion").value).toBe(""); expect(control("Empleado corregido #53").value).toBe("77");
+    await change("Justificacion de correccion", "Borrador del consumo cincuenta y tres");
+    await click("Anterior");
+    expect(control("Justificacion de correccion").value).toBe("Borrador del consumo tres");
+    expect(control("Empleado corregido #3").value).toBe(""); expect(control("Combustible corregido").value).toBe("NO_DETERMINADO");
+    expect(control("Confirmo esta corrección").checked).toBe(false);
+    await change("Buscar vale o placa", "0001");
+    await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(control("Justificacion de correccion").value).toBe("Borrador del consumo tres");
+    expect(control("Confirmo esta corrección").checked).toBe(false);
+    await click("Siguiente"); expect(control("Justificacion de correccion").value).toBe("Borrador del consumo cincuenta y tres");
+    expect(requests.some(r => r.url.endsWith("/corregir"))).toBe(false);
+});
+
+it("mantiene la revisión original del borrador y lo elimina solo tras guardar o descartar", async () => {
+    await table([{ ...original, revision_asignacion: 4 }]); await click("Detalles");
+    await change("Justificacion de correccion", "Revisado contra el original");
+    await table([]); await table([{ ...original, revision_asignacion: 5 }]);
+    expect(control("Justificacion de correccion").value).toBe("Revisado contra el original");
+    expect(host.textContent).toContain("Este borrador conserva la revisión 4");
+    run.mockRejectedValueOnce(new Error("Revision obsoleta"));
+    await act(async () => control("Confirmo esta corrección").click()); await click("Guardar corrección #3");
+    expect(run.mock.calls.at(-1)![1]).toMatchObject({ consumoId: 3, revision: 4, motivo: "Revisado contra el original" });
+    await table([]); await table([{ ...original, revision_asignacion: 5 }]);
+    expect(control("Justificacion de correccion").value).toBe("Revisado contra el original");
+    await click("Descartar borrador #3"); expect(control("Justificacion de correccion").value).toBe("");
+    await change("Justificacion de correccion", "Corrección de la revisión actual");
+    await act(async () => control("Confirmo esta corrección").click()); await click("Guardar corrección #3");
+    expect(run.mock.calls.at(-1)![1]).toMatchObject({ consumoId: 3, revision: 5 });
+    await table([]); await table([{ ...original, revision_asignacion: 5 }]);
+    expect(control("Justificacion de correccion").value).toBe(""); expect(control("Confirmo esta corrección").checked).toBe(false);
+});
+
+it("no comparte borradores de un mismo ID entre empresas ni proveedores", async () => {
+    await table([original]); await change("Justificacion de correccion", "Borrador empresa y proveedor originales");
+    await table([{ ...original, proveedor_id: 2 }]); expect(control("Justificacion de correccion").value).toBe("");
+    await change("Justificacion de correccion", "Borrador del proveedor dos");
+    await table([original], true, true, "/otra-empresa"); expect(control("Justificacion de correccion").value).toBe("");
+    await table([original]); expect(control("Justificacion de correccion").value).toBe("Borrador empresa y proveedor originales");
 });
 
 it("no inventa vínculo/clasificación ni ofrece corrección sin permisos; mantiene factura con ceros", async () => {

@@ -22,3 +22,8 @@ export function importeConsumo(valor: unknown, moneda: unknown, precio = false):
     if (cifra === "No informado" || cifra === "No disponible") return cifra;
     return moneda === "GTQ" ? `Q ${cifra}` : moneda === "USD" ? `US$ ${cifra}` : `${cifra} · ${moneda || "Moneda no informada"}`;
 }
+
+export function galonesRedondeados(valor: unknown): boolean {
+    const mostrado = cifraConsumo(valor, 0, 3);
+    return mostrado !== "No informado" && mostrado !== "No disponible" && !new Decimal(String(valor)).eq(mostrado.replaceAll(",", ""));
+}
