@@ -21,7 +21,7 @@ Comparte con el parser v2 la normalización y reconocimiento de columnas existen
 
 FECHA, PILOTO y PLACAS por sí solos no determinan un formato. FechaFactura y FECHA siguen siendo alternativas del parser. Los encabezados pueden aparecer después de títulos, vacíos o lotes, desplazados a otras columnas, reordenados y repetidos. No se limita la búsqueda a A1 ni a las primeras 25 filas.
 
-Se rechazan encabezados completos sin firma clara, híbridos, columnas duplicadas y filas con al menos cuatro indicios de encabezado que no formen una tabla completa compatible. Las hojas de notas sin tablas reconocibles se conservan como auxiliares según el análisis existente. Se rechaza la mezcla de HALEL/SHELL en hojas distintas o en una sola hoja; no se elige el primer formato ignorando el resto. Las variantes no documentadas se rechazan en lugar de adivinar.
+Se rechazan encabezados completos sin firma clara, híbridos, columnas duplicadas y filas con al menos cuatro indicios de encabezado que no formen una tabla completa compatible. Los indicios y las etiquetas de identidad se obtienen de los alias existentes del parser, incluidas sus variantes de fecha, factura, vale y placa. La única excepción para resúmenes rotulados se detalla en la revisión de compatibilidad inferior. Las hojas de notas sin tablas reconocibles se conservan como auxiliares según el análisis existente. Se rechaza la mezcla de HALEL/SHELL en hojas distintas o en una sola hoja; no se elige el primer formato ignorando el resto. Las variantes no documentadas se rechazan en lugar de adivinar.
 
 ## Límites y seguridad
 
@@ -55,6 +55,31 @@ Pruebas de detección y despacho comprueban que analizar con el perfil detectado
 
 Pruebas DOM cubren la ausencia del selector, formato visible para ambos perfiles, proveedor independiente, limpieza al cambiar archivo/error, fallo cerrado ante servidor antiguo y ausencia de confirmar si cambia el formato del recibo. Se ejecutan también las regresiones existentes de CB2/flota, sin suites de BD real, TypeScript, ESLint y git diff --check.
 
-Resultados ejecutados: **80 archivos / 911 pruebas aprobadas**, excluyendo `*.db.test.ts` y `*-rollout-db.test.ts`; se incluyen flota, componentes de flota y `tenant-combustible.test.ts`, con maxWorkers=2. `npx.cmd tsc --noEmit --incremental false`, ESLint de todos los TypeScript modificados/nuevos y `git diff --check`: aprobados. La búsqueda de navegadores devolvió `[]`; no se verificó visualmente la interfaz ni se obtuvieron capturas.
+Resultados actualizados: **80 archivos / 915 pruebas aprobadas**, excluyendo `*.db.test.ts` y `*-rollout-db.test.ts`; se incluyen flota, componentes de flota y `tenant-combustible.test.ts`, con maxWorkers=2. `npx.cmd tsc --noEmit --incremental false`, ESLint de los TypeScript modificados en esta revisión y `git diff --check`: aprobados. La búsqueda de navegadores anterior devolvió `[]`; no se verificó visualmente la interfaz ni se obtuvieron capturas.
 
 No se ejecutó SQL, no se crearon bases de datos ni ambientes, y no se accedió a producción, desplegó o fusionó. El PR queda como borrador. Pendientes: contraste con los dos Excel reales, variantes adicionales de proveedores, medición con archivos máximos y revisión visual/teclado/lector de pantalla en navegador si no está disponible en la sesión.
+
+## Última revisión de compatibilidad del PR #518
+
+Los archivos reales siguen sin estar disponibles: una nueva búsqueda por nombres HALEL/SHELL en los adjuntos no devolvió Excel. **Esta revisión es representativa de la estructura comunicada en auditoría, no una validación directa de los dos archivos reales.** Las posiciones y valores de las filas son sintéticos; no se atribuyen a los archivos originales.
+
+Se añadió una fixture con las cuatro hojas y todas las combinaciones de los dos alias de fecha/factura que ya reconoce el parser:
+
+| Hoja | Encabezado representativo | Fecha | Factura |
+| --- | --- | --- | --- |
+| Hoja1 | Fila 4, columna A | FechaFactura | NRO. DE FACTURA |
+| LOTE 2048 | Fila 8, columna A | FECHA | NO. FACTURA |
+| LOTE 2054 | Fila 37, columna C | FechaFactura | NO. FACTURA |
+| LOTE 2058 | Fila 12, columna B | FECHA | NRO. DE FACTURA |
+
+Cada hoja tiene títulos, vacíos, un encabezado repetido, dos consumos sintéticos únicos y cuatro filas auxiliares: TOTAL, SUB TOTAL, LIQUIDACIÓN, y fecha/importe aislados. Los resúmenes incluyen etiquetas FECHA/Galones/Precio/Costo Total con valores numéricos o fórmulas almacenadas.
+
+La prueba primero reprodujo un falso rechazo del detector: el conteo de cuatro palabras conocidas interpretaba esos resúmenes como encabezados incompletos. Se corrigió exclusivamente la clasificación de encabezados. Si no hay un encabezado completo, una fila solo se excluye de ese conteo si su primer contenido comienza con TOTAL, SUB TOTAL/SUBTOTAL o LIQUIDACIÓN, contiene un valor numérico, fecha o fórmula y no incluye ninguna etiqueta de vale/placa de los alias del parser. No se ejecuta ni valida una fórmula auxiliar para clasificar la fila; el parser sigue conservando su evidencia y reglas actuales.
+
+Los encabezados completos se comprueban antes de esa excepción, por lo que un rótulo LIQUIDACIÓN no oculta una tabla SHELL mezclada con HALEL. Los parciales que incluyen etiquetas de identidad siguen rechazándose, un resumen sin valor no recibe la excepción y un archivo con solo resúmenes no obtiene formato reconocido. No se cambiaron las firmas diferenciales de formatos.
+
+Resultado representativo: HALEL detectado, ocho filas operativas y dieciséis auxiliares con estado IGNORADA e identidad nula, comprobadas por hoja y posición. SHELL mantiene sus tres hojas mensuales con FECHA, VALE, No. Serie, No. factura, MONTO, GLS, PRODUCTO, PRECIO, PILOTO y PLACAS. La fixture HALEL de cuatro hojas también recorre el endpoint de preview con detector, parser y recibo firmado reales y conexión simulada, sin escrituras.
+
+El único cambio del archivo del parser es exportar su tabla de alias para reutilizarla: no se altera ninguna regla de consumos, fórmula, cálculo, identidad, huella o datos históricos. Se conserva el PR #518 en su rama existente y como borrador, sin SQL, producción, fusión ni despliegue.
+
+Validación final de esta revisión: 38 pruebas dirigidas de detector/HTTP aprobadas y suite completa de 80 archivos/915 pruebas aprobadas, sin BD real. TypeScript, ESLint y diff check aprobados. Sigue pendiente la comparación directa con los dos Excel originales.

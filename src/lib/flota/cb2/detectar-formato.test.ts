@@ -1,8 +1,51 @@
 import { expect, it } from "vitest";
 import { detectarFormatoCB2 } from "./detectar-formato";
-import { archivoDeteccion, agregarTablaSintetica } from "./detectar-formato.fixture";
+import { archivoDeteccion, agregarTablaSintetica, fixtureHalelCuatroHojas, hojasHalelRepresentativas } from "./detectar-formato.fixture";
 import { analizarProveedorV2 } from "../combustible-importacion-v2";
 import { fixtureHalelV2, fixtureShellV2 } from "../combustible-importacion-v2.fixture";
+import ExcelJS from "exceljs";
+
+it("HALEL representativo: cuatro hojas, todos los alias y auxiliares no se confunden con encabezados", async () => {
+    const buffer = await fixtureHalelCuatroHojas(), libro = new ExcelJS.Workbook();
+    await libro.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+    expect(libro.worksheets.map(s => s.name)).toEqual(["Hoja1", "LOTE 2048", "LOTE 2054", "LOTE 2058"]);
+    expect(await detectarFormatoCB2(buffer)).toBe("HALEL");
+    const analisis = await analizarProveedorV2(buffer, "HALEL");
+    const consumos = analisis.filas.filter(f => f.identidadCandidata);
+    expect(consumos).toHaveLength(8); expect(consumos.every(f => f.estado === "ADVERTENCIA" || f.estado === "VALIDA")).toBe(true);
+    for (const config of hojasHalelRepresentativas) {
+        expect(consumos.filter(f => f.hoja === config.nombre).map(f => f.fila)).toEqual([config.fila + 1, config.fila + 9]);
+        const auxiliares = analisis.filas.filter(f => f.hoja === config.nombre && [3, 4, 5, 6].includes(f.fila - config.fila));
+        expect(auxiliares).toHaveLength(4);
+        expect(auxiliares.every(f => f.estado === "IGNORADA" && f.identidadCandidata === null)).toBe(true);
+        expect(libro.getWorksheet(config.nombre)!.getCell(config.fila, config.columna).value).toBe(config.fecha);
+        expect(libro.getWorksheet(config.nombre)!.getCell(config.fila, config.columna + 9).value).toBe(config.factura);
+    }
+});
+
+it("SHELL representativo: tres hojas mensuales y encabezados documentados", async () => {
+    const buffer = await fixtureShellV2(), libro = new ExcelJS.Workbook();
+    await libro.xlsx.load(buffer as unknown as ExcelJS.Buffer);
+    expect(libro.worksheets.map(s => s.name)).toEqual(["25-31 AGOSTO", "SEPTIEMBRE", "OCUTUBRE"]);
+    const cabecera = ["FECHA", "VALE", "No. Serie", "No. factura", "MONTO", "GLS", "PRODUCTO", "PRECIO", "PILOTO", "PLACAS"];
+    for (const s of libro.worksheets) expect(Array.from({ length: 10 }, (_, i) => s.getCell(1, i + 1).text)).toEqual(cabecera);
+    expect(await detectarFormatoCB2(buffer)).toBe("SHELL");
+});
+
+it("los resúmenes no relajan la detección de desconocidos, encabezados parciales o mezclas", async () => {
+    await expect(detectarFormatoCB2(await fixtureHalelCuatroHojas(w => {
+        const s = w.addWorksheet("Otra tabla"); s.getRow(1).values = ["LIQUIDACIÓN", "FECHA", "Placas", "No. Vale", "Galones", "Precio", 400];
+    }))).rejects.toThrow("incompleto");
+    await expect(detectarFormatoCB2(await fixtureHalelCuatroHojas(w => {
+        const s = w.addWorksheet("Mezcla"); s.getCell("A1").value = "LIQUIDACIÓN"; agregarTablaSintetica(s, "SHELL", 1, 2);
+    }))).rejects.toThrow("mezcla formatos");
+    await expect(detectarFormatoCB2(await fixtureHalelCuatroHojas(w => {
+        w.addWorksheet("Texto desconocido").addRow(["LIQUIDACIÓN", "FECHA", "Galones", "Precio", "Costo Total"]);
+    }))).rejects.toThrow("incompleto");
+    await expect(detectarFormatoCB2(await archivoDeteccion([], w => {
+        w.addWorksheet("Solo resumen").addRow(["TOTAL", "FECHA", "Galones", "Precio", "Costo Total", 400]);
+    }))).rejects.toThrow("No se reconoce");
+});
 
 it.each(["HALEL", "SHELL"] as const)("detecta %s con encabezados desplazados, normalizados, reordenados y repetidos", async perfil => {
     const buffer = await archivoDeteccion([], w => {
