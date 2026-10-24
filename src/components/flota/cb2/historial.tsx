@@ -1,7 +1,8 @@
 "use client";
 import { useRevisionCB2 } from "./use-revision";
 import { AsignacionCB2, type DecisionAsignacion } from "./asignacion";
-import { clasificarProducto, identificarEmpleado } from "@/lib/flota/cb2/clasificacion";
+import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
+import { seleccionarEmpleado } from "@/lib/flota/cb2/empleados-coincidencias";
 import { EstadoCB2, VacioCB2 } from "./presentacion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CandidatosCB2, input, button, type EjecutarCB2 } from "./importar";
@@ -24,7 +25,8 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
     const asignacion = useRevisionCB2(filas, cat, decisiones);
     const sel = asignacion.asignaciones;
     const pendientes = new Set(filas.filter(f => f.estadoCandidato === "PENDIENTE" && f.candidato).map(f => f.candidato)).size;
-    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = filas.find(f => f.candidato === s.candidato)!; const d = decisiones[s.candidato] ?? {}; return { ...s, empleadoId: d.empleadoId === undefined ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []).propuesta?.id ?? null : d.empleadoId, productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
+    const porClave = new Map(asignacion.resumen.revision.map(g => [g.clave,g.fila]));
+    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; return { ...s, ...seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId), productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
     const revision = useRef(0);
     const [descargando, setDescargando] = useState(false);
     useEffect(() => () => { revision.current++; }, []);

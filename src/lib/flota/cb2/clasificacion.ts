@@ -11,11 +11,4 @@ export function clasificarProducto(original: string | null | undefined): Product
     if (/^(GASOLINA )?(SUPER|SUPERIOR)$/.test(s)) return "GASOLINA_SUPERIOR";
     return null;
 }
-export function identificarEmpleado<T extends { id: number; nombre: string }>(original: string, catalogo: T[]) {
-    const key = nombreComparable(original), tokens = [...new Set(key.split(" ").filter(Boolean))];
-    const exactas = key ? catalogo.filter(p => nombreComparable(p.nombre) === key) : [];
-    if (exactas.length) return { estado: exactas.length === 1 ? "EXACTA" : "AMBIGUA", candidatos: exactas, propuesta: exactas.length === 1 && tokens.length >= 2 ? exactas[0] : null, motivo: "Igualdad de nombre normalizado; autopropuesta requiere al menos dos tokens distintos" };
-    const candidatos = tokens.length >= 2 ? catalogo.filter(p => { const otras = nombreComparable(p.nombre).split(" "); return tokens.every(t => otras.includes(t)); }) : [];
-    // Dos tokens completos ofrecen candidatos, pero no prueban identidad: no se autopropone una persona incompleta.
-    return { estado: candidatos.length === 1 ? "PARCIAL_UNICA" : candidatos.length > 1 ? "AMBIGUA" : "INEXISTENTE", candidatos, propuesta: null, motivo: candidatos.length ? "Tokens completos sin exigir orden; confirmar manualmente el nombre completo" : "No hay coincidencia confiable" };
-}
+export { identificarEmpleado } from "./empleados-coincidencias";
