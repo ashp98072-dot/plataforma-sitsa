@@ -23,6 +23,33 @@ const rows = () => host.querySelectorAll("tr[data-candidato]");
 function numero(label: string) { const dt = [...host.querySelectorAll("dt")].find(d => d.textContent === label)!; return Number(dt.nextElementSibling!.textContent); }
 
 describe("revisión integral: contadores, filtros y resumen sobre los mismos candidatos", () => {
+    it("tabla de once columnas: editar y cerrar con Escape conserva selección, unidad y foco", async () => {
+        await render([fila]);
+        const tabla = host.querySelector('table:has(tr[data-candidato])')!;
+        expect([...tabla.querySelectorAll('thead th')].map(h => h.textContent)).toEqual(["Selección", "Vale", "Fecha", "Placa / unidad", "Piloto original", "Empleado identificado", "Combustible", "Galones", "Monto", "Estado", "Acciones"]);
+        expect(tabla.querySelectorAll('th[scope="col"]')).toHaveLength(11);
+        const boton = host.querySelector<HTMLButtonElement>('[aria-label="Editar consumo vale 0001"]')!;
+        const detalle = document.getElementById(boton.getAttribute("aria-controls")!)!;
+        expect(detalle.hidden).toBe(true); expect(boton.getAttribute("aria-expanded")).toBe("false");
+        await act(async () => boton.click());
+        expect(detalle.hidden).toBe(false); expect(boton.getAttribute("aria-expanded")).toBe("true");
+        await change("Unidad para vale 0001", "");
+        await act(async () => detalle.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+        expect(detalle.hidden).toBe(true); expect(document.activeElement).toBe(boton);
+        await act(async () => boton.click()); expect(control("Unidad para vale 0001").value).toBe("");
+        expect(numero("Seleccionados")).toBe(0);
+    });
+    it("filtros rápidos conservan exclusiones entre páginas y restauran la selección", async () => {
+        const filas = Array.from({ length: 28 }, (_, i) => ({ ...fila, candidato: `c${i}`, fila: i + 2, vale: String(i + 1).padStart(4, "0") }));
+        await render(filas); await check("Seleccionar consumo vale 0001");
+        await click("Siguiente"); await click("Anterior"); await click("Excluidos");
+        expect(rows()).toHaveLength(1); expect(rows()[0].getAttribute("data-excluded")).toBe("true");
+        expect(numero("Excluidos")).toBe(1); expect(numero("Seleccionados")).toBe(27);
+        await check("Seleccionar consumo vale 0001"); expect(rows()).toHaveLength(0);
+        await click("Todos"); expect(rows()).toHaveLength(25); expect(numero("Seleccionados")).toBe(28);
+        await click("Listos"); expect(rows()).toHaveLength(25);
+        await click("Pendientes"); expect(rows()).toHaveLength(0);
+    });
     it("20 consumos advertidos seleccionados se ven en LISTO y resumen, sin duplicar apariciones", async () => {
         const filas = Array.from({ length: 20 }, (_, i) => ({ ...fila, fila: i + 2, candidato: `c${i}`, vale: String(i + 1).padStart(4, "0"), motivos: ["Producto no informado", "Galones × precio difiere del monto; revisar redondeo o precio"] }));
         await render([...filas, { ...filas[0], hoja: "Consolidado", fila: 99 }]);
