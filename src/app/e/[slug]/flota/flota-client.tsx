@@ -1,5 +1,6 @@
 "use client";
 
+import { PropiedadFields, type PropiedadForm } from "./propiedad-fields";
 import {
   useCallback,
   useDeferredValue,
@@ -84,6 +85,13 @@ function normPiloto(nombre: string): string {
 }
 
 type Vehiculo = {
+  empresa_id?: number;
+  tipo_propiedad?: "EMPRESA" | "EXTERNO";
+  empresa_propietaria_id?: number | null;
+  propietario_externo?: string | null;
+  propietario_nombre?: string | null;
+  tipo_vehiculo?: string | null;
+  revision_propiedad?: number;
   id: number;
   placa: string;
   marca: string | null;
@@ -377,6 +385,10 @@ export default function FlotaClient() {
   const [filtroHistorialServicios, setFiltroHistorialServicios] = useState<
     "todos" | "en_taller" | "cerrados" | "compras"
   >("todos");
+  const [propiedadActiva, setPropiedadActiva] = useState(false);
+  const [propiedad, setPropiedad] = useState<PropiedadForm>({ tipoPropiedad: "EMPRESA", empresaPropietariaId: null, propietarioExterno: "", tipoVehiculo: "" });
+  const [revisionPropiedad, setRevisionPropiedad] = useState(0);
+  const [guardandoPropiedad, setGuardandoPropiedad] = useState(false);
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
   const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
   const [empresaActualId, setEmpresaActualId] = useState(0);
@@ -488,6 +500,8 @@ export default function FlotaClient() {
   }
 
   function empresaDe(v: Vehiculo): string {
+    if (v.tipo_propiedad === "EXTERNO") return v.propietario_externo || "Sin propietario declarado";
+    if (v.propietario_nombre) return v.propietario_nombre;
     return etiquetaEmpresaVehiculo({
       empresaActivo: v.empresa_activo,
       empresaDuenaNombre: v.empresa_duena_nombre,
@@ -499,6 +513,12 @@ export default function FlotaClient() {
   // Vehículo que se está editando y si pertenece a OTRA empresa (se edita por el permiso transversal): oculta lo que solo define la empresa dueña.
   const vehiculoEnEdicion = editId != null ? vehiculos.find((x) => x.id === editId) : undefined;
   const editandoAjeno = vehiculoEnEdicion?.esDueno === false;
+  const propiedadPendiente = propiedadActiva && !!vehiculoEnEdicion && !editandoAjeno && (
+    propiedad.tipoPropiedad !== (vehiculoEnEdicion.tipo_propiedad ?? "EMPRESA") ||
+    propiedad.empresaPropietariaId !== (vehiculoEnEdicion.tipo_propiedad === "EXTERNO" ? null : vehiculoEnEdicion.empresa_propietaria_id ?? vehiculoEnEdicion.empresa_id ?? empresaActualId) ||
+    (propiedad.tipoPropiedad === "EXTERNO" && propiedad.propietarioExterno !== (vehiculoEnEdicion.propietario_externo ?? "")) ||
+    propiedad.tipoVehiculo !== (vehiculoEnEdicion.tipo_vehiculo ?? "")
+  );
 
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
@@ -509,7 +529,7 @@ export default function FlotaClient() {
       if (filtroTaller === "ruta" && v.en_taller) return false;
       return matchQ(
         v.placa,
-        `${v.marca ?? ""} ${v.modelo ?? ""} ${v.descripcion ?? ""} ${v.empresa_activo ?? ""}`,
+        `${v.marca ?? ""} ${v.modelo ?? ""} ${v.descripcion ?? ""} ${v.empresa_activo ?? ""} ${v.propietario_nombre ?? ""} ${v.propietario_externo ?? ""}`,
       );
     });
   }, [vehiculos, filtroEstado, filtroTaller, matchQ]);
@@ -870,6 +890,7 @@ export default function FlotaClient() {
           setVehiculos(list);
           setEmpresasFlota((data.empresas as EmpresaOpt[]) ?? []);
           setEmpresaActualId(Number(data.empresaActualId ?? 0));
+          setPropiedadActiva(data.propiedadHabilitada === true);
           setVehiculoId((prev) => prev || (list[0] ? Number(list[0].id) : 0));
           cacheAt.current.vehiculos = Date.now();
         }
@@ -1084,6 +1105,8 @@ export default function FlotaClient() {
       return;
     }
     setEditId(v.id);
+    setRevisionPropiedad(Number(v.revision_propiedad ?? 0));
+    setPropiedad({ tipoPropiedad: v.tipo_propiedad ?? "EMPRESA", empresaPropietariaId: v.tipo_propiedad === "EXTERNO" ? null : v.empresa_propietaria_id ?? v.empresa_id ?? empresaActualId, propietarioExterno: v.propietario_externo ?? "", tipoVehiculo: v.tipo_vehiculo ?? "" });
     setAccesoEmpresaIds(v.accesoEmpresaIds ?? []);
     setForm({
       placa: v.placa,
@@ -1116,6 +1139,8 @@ export default function FlotaClient() {
   }
 
   function irANuevoVehiculo() {
+    setRevisionPropiedad(0);
+    setPropiedad({ tipoPropiedad: "EMPRESA", empresaPropietariaId: empresaActualId, propietarioExterno: "", tipoVehiculo: "" });
     setEditId(null);
     setForm(emptyForm);
     setFiltrosForm([]);
@@ -1125,8 +1150,26 @@ export default function FlotaClient() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function guardarPropietario() {
+    if (!vehiculoEnEdicion || guardandoPropiedad) return;
+    if (!window.confirm("Confirma el cambio de propietario. Los consumos y servicios existentes conservarán su empresa responsable.")) return;
+    setGuardandoPropiedad(true); setErr(""); setMsg("");
+    try {
+      const res = await fetch("/api/empresas/" + slug + "/flota/vehiculos/propiedad", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...propiedad, id: editId, revision: revisionPropiedad }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error ?? "No se guardó el propietario."); return; }
+      setRevisionPropiedad(Number(data.revision));
+      setMsg(data.mensaje); await cargar({ solo: ["vehiculos"] });
+    } catch { setErr("No se pudo confirmar el cambio. Recarga antes de volver a intentarlo."); }
+    finally { setGuardandoPropiedad(false); }
+  }
+
   async function onSubmitVehiculo(e: FormEvent) {
     e.preventDefault();
+    if (propiedadPendiente || guardandoPropiedad) { setErr("Confirma y guarda el propietario antes de guardar los otros cambios."); return; }
     setErr("");
     setMsg("");
     // Editando un vehículo de OTRA empresa (permiso transversal): el tipo de unidad y con quién se comparte los define solo la empresa dueña, así que no viajan.
@@ -1158,10 +1201,10 @@ export default function FlotaClient() {
         .filter((f) => f.tipo && f.codigo),
       accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined,
     };
-    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos`, {
+    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos${!editId && propiedadActiva ? "/propiedad" : ""}`, {
       method: editId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editId ? { id: editId, ...payload } : payload),
+      body: JSON.stringify(editId ? { id: editId, ...payload } : { ...payload, ...(propiedadActiva ? propiedad : {}) }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -2784,7 +2827,7 @@ export default function FlotaClient() {
                   <p className="text-xs text-[var(--muted)]">
                     {usaOdometro ? `Km ${Number(v.km_actual ?? 0).toLocaleString("es-GT")}` : `Sin odómetro · servicio cada ${Number(v.mantenimiento_intervalo_meses ?? 3)} mes(es)`} ·{" "}
                     <span className="font-medium text-sky-300/90">
-                      {empresaDe(v)}
+                      {empresaDe(v)}<span className="block text-[10px] text-[var(--muted)]">{v.tipo_propiedad === "EXTERNO" ? "Externo" : "De empresa"}</span>
                     </span>
                     {" · "}
                     Rin {v.rin_llanta || "—"}
@@ -2989,7 +3032,13 @@ export default function FlotaClient() {
                     <option value="0">Inactivo</option>
                   </select>
                 </label>
-                <label className="text-xs text-[var(--muted)] sm:col-span-2">
+                {propiedadActiva ? <>
+                  <PropiedadFields value={propiedad} onChange={setPropiedad} empresas={empresasFlota} disabled={editandoAjeno || guardandoPropiedad} input={input} />
+                  {editId && <div className="sm:col-span-2 text-xs">
+                    <p>Propietario actual: {vehiculoEnEdicion ? empresaDe(vehiculoEnEdicion) : ""}. Los cambios de propiedad se guardan por separado.</p>
+                    {!editandoAjeno && <button type="button" className="mt-2 rounded border border-[var(--border)] px-3 py-2" disabled={guardandoPropiedad} onClick={guardarPropietario}>{guardandoPropiedad ? "Guardando..." : "Confirmar y guardar propietario"}</button>}
+                  </div>}
+                </> : <>                <label className="text-xs text-[var(--muted)] sm:col-span-2">
                   Empresa / dueño de la unidad
                   <input
                     list="empresas-flota-alias"
@@ -3014,7 +3063,7 @@ export default function FlotaClient() {
                     KT = Kuiqtrans · FSS = Fresco Fresh · Mónaco y KT comparten
                     flota
                   </span>
-                </label>
+                </label></>}
               </div>
 
               <div className="rounded-lg border border-[var(--border)] bg-[var(--input)] p-3">
@@ -3204,7 +3253,7 @@ export default function FlotaClient() {
               <thead className="bg-[#0d9488] text-white">
                 <tr>
                   <th className="px-3 py-2">Placa</th>
-                  <th className="px-3 py-2">Empresa</th>
+                  <th className="px-3 py-2">Propietario / tipo de propiedad</th>
                   <th className="px-3 py-2">Estado</th>
                   <th className="px-3 py-2">Descripción</th>
                   <th className="px-3 py-2">Marca</th>
@@ -3235,6 +3284,7 @@ export default function FlotaClient() {
                     </td>
                     <td className="px-3 py-2 text-xs font-medium text-sky-300/90">
                       {empresaDe(v)}
+                      <span className="block text-[10px] text-[var(--muted)]">{v.tipo_propiedad === "EXTERNO" ? "Externo" : "De empresa"}</span>
                     </td>
                     <td className="px-3 py-2">
                       <span
