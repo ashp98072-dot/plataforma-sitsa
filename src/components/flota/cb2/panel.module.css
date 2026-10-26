@@ -84,3 +84,9 @@
   .reviewTable td::before { content: attr(data-label); display: block; color: var(--muted); font-size: .7rem; }
   .reviewTable td:last-child { grid-column: 1 / -1; }
 }
+
+.documentTable { width: 100%; min-width: 55rem; border-collapse: collapse; font-size: .8rem; }
+.documentTable th { text-align: left; background: var(--thead, var(--card)); color: var(--muted); padding: .75rem; }
+.documentTable td { padding: .75rem; border-bottom: 1px solid var(--border); vertical-align: top; font-variant-numeric: tabular-nums; }
+.documentTable tbody tr:nth-child(even) { background: var(--bg); }
+.documentTable th:nth-child(n+4), .documentTable td:nth-child(n+4) { white-space: nowrap; }
