@@ -1,4 +1,5 @@
 "use client";
+import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
@@ -121,7 +122,7 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
                 <section aria-label={`Unidad y placa del vale ${f.vale}`}><h3>Unidad y placa</h3><strong>{vehiculo?.placa || (g.vehiculoId ? `Unidad #${g.vehiculoId} no disponible` : "Sin unidad")}</strong><p className="text-xs">{fuente === "AUTOMATICA" ? "Identificada automáticamente" : fuente === "MANUAL" ? "Elegida manualmente" : fuente === "AMBIGUA" ? "Resolver ambigüedad" : fuente === "INEXISTENTE" ? "Vehículo no encontrado" : "Unidad pendiente"} · {unidad.estado}</p>
                     {g.estado !== "BLOQUEADO" && g.estado !== "RESUELTO" && <fieldset disabled={disabled}>
                         {unidad.candidatos.length === 1 && <p className="text-xs">Unidad sugerida: {unidad.candidatos[0].placa}</p>}
-                        <CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={g.vehiculoId} onChange={value => asignar(g.clave, value)} options={cat.vehiculos.map(v => ({ value: String(v.id), label: v.placa, detail: v.descripcion }))} inputClassName={input}/>
+                        <CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={g.vehiculoId} onChange={value => asignar(g.clave, value)} options={opcionesVehiculo(cat.vehiculos)} inputClassName={input}/>
                         {unidad.candidatos.length === 1 && ["EXACTA", "ABREVIADA"].includes(unidad.estado) && !g.vehiculoId && <button type="button" className={button} onClick={() => asignar(g.clave, String(unidad.candidatos[0].id))}>Usar sugerencia para vale {f.vale}</button>}
                     </fieldset>}
                     {g.vehiculoId && !g.unidadValida && g.estado !== "RESUELTO" && !omitidos[g.clave] && <button type="button" className={button} disabled={disabled} onClick={() => elegir(g, false)}>Excluir vale {f.vale} de esta confirmación</button>}

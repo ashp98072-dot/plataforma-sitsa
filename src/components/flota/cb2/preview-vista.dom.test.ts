@@ -17,6 +17,14 @@ async function click(text: string) { const btn = Array.from(host.querySelectorAl
 function control(text: string): HTMLInputElement | HTMLSelectElement { const label = Array.from(host.querySelectorAll("label")).find(l => l.textContent?.startsWith(text)); return (label?.querySelector("input,select") ?? document.getElementById(label!.htmlFor)) as HTMLInputElement | HTMLSelectElement; }
 async function change(text: string, value: string) { const el = control(text); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true })); }); }
 describe("vista previa: asignación, filtros y trazabilidad", () => {
+    it("vale 15094 distingue registros de C-035BXR y no repite el mismo ID", async () => {
+        await mount([{ ...f, vale: "15094", placa: "C-035BXR", placaNormalizada: "C-035BXR" }], { ...cat, vehiculos: [{ id: 7, placa: "C-035BXR" }, { id: 7, placa: "C-035BXR" }, { id: 9, placa: "C-035BXR" }] });
+        const select = control("Unidad para vale 15094") as HTMLSelectElement;
+        expect(Array.from(select.options).map(o => o.value)).toEqual(["", "7", "9"]);
+        expect(select.options[1].textContent).toContain("Registro #7"); expect(select.options[2].textContent).toContain("Registro #9");
+        expect(host.textContent).toContain("Varias unidades coinciden"); expect(selected).toEqual({});
+        await change("Unidad para vale 15094", "9"); expect(selected).toEqual({ a: "9" });
+    });
     it("muestra piloto original, sugerencia y límite de asociación", async () => {
         await mount([{ ...f, origen: { piloto: " JOSE  CHAY ", producto: "", km: "", galones: "10", precio: "20", monto: "200" } }], { ...cat, pilotos: [{ id: 1, nombre: "José Chay" }] });
         expect(host.textContent).toContain("Piloto leído:  JOSE  CHAY "); expect(host.textContent).toContain("Piloto sugerido: EXACTA"); expect(host.textContent).toContain("José Chay");

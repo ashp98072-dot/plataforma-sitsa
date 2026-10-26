@@ -1,3 +1,5 @@
+import { propiedadesVehiculos, propiedadHabilitada } from "@/lib/flota/propiedad";
+import { diagnosticarVehiculos } from "@/lib/flota/vehiculos-catalogo";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
@@ -67,6 +69,8 @@ export async function GET(_req: Request, ctx: Ctx) {
     empresasAccesoPorVehiculos(duenosIds),
     listarEmpresasActivasSimple(),
   ]);
+  const propiedadActiva = propiedadHabilitada();
+  const propiedades = propiedadActiva ? await propiedadesVehiculos(ids) : new Map();
   const vehiculos = [];
   for (const r of rows) {
     const vid = Number(r.id);
@@ -91,6 +95,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     const esDueno = Number(r.empresa_id) === guard.empresa.id;
     vehiculos.push({
       ...r,
+      ...propiedades.get(vid),
       compartido: Number(r.compartido ?? 0) === 1,
       accesoEmpresaIds: esDueno ? (accesosMap.get(vid) ?? []) : [],
       esDueno,
@@ -105,8 +110,10 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
   return NextResponse.json({
     vehiculos,
+    posiblesDuplicados: diagnosticarVehiculos(rows.map(r => ({ id: Number(r.id), placa: String(r.placa) }))).posiblesDuplicados,
     empresas,
     empresaActualId: guard.empresa.id,
+    propiedadHabilitada: propiedadActiva,
     puedeEditarOtrasEmpresas: permisoTransversal,
   });
 }

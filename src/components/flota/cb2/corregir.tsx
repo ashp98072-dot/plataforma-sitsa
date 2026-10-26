@@ -1,4 +1,5 @@
 "use client";
+import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { useState } from "react";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { productos, etiquetasProducto, type Producto } from "@/lib/flota/cb2/clasificacion";
@@ -25,7 +26,7 @@ export function CorregirCB2({ r, cat, api, run, locked, borrador, onBorradorChan
     return <details><summary>Corregir asignación registrada #{r.id}</summary><fieldset disabled={locked} className="space-y-2"><p>Actualiza este consumo, conserva su evidencia original y registra anterior, nuevo, motivo y responsable. No reimporta.</p>
         {onBorradorChange && <p role="note">El borrador se conserva por consumo al paginar o filtrar mientras esta pantalla permanezca abierta. Al regresar debes confirmar nuevamente.</p>}
         {borrador && revision !== Number(r.revision_asignacion ?? 0) && <p role="alert">La revisión del consumo cambió. Este borrador conserva la revisión {revision}; descártalo para empezar con los datos actuales.</p>}
-        <CatalogoSearchSelect label={`Unidad corregida #${r.id}`} placeholder="Buscar unidad autorizada" inputClassName={input} value={unidad} options={cat.vehiculos.map(v => ({value:String(v.id),label:v.placa}))} onChange={v => cambiar({ unidad: v })}/>
+        <CatalogoSearchSelect label={`Unidad corregida #${r.id}`} placeholder="Buscar unidad autorizada" inputClassName={input} value={unidad} options={opcionesVehiculo(cat.vehiculos)} onChange={v => cambiar({ unidad: v })}/>
         <CatalogoSearchSelect label={`Empleado corregido #${r.id}`} placeholder="Buscar empleado activo" inputClassName={input} value={empleado} options={(cat.empleados ?? []).map(v => ({value:String(v.id),label:v.nombre}))} onChange={v => cambiar({ empleado: v })}/>
         <label>Combustible corregido<select className={input} value={producto} onChange={e => cambiar({ producto: e.target.value })}><option value="">Seleccionar</option>{productos.map(p => <option key={p} value={p}>{etiquetasProducto[p as Producto]}</option>)}</select></label>
         <label>Justificacion de correccion<textarea className={input} minLength={10} maxLength={1000} value={motivo} onChange={e => cambiar({ motivo: e.target.value })}/></label>

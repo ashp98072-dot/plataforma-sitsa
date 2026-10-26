@@ -1,3 +1,4 @@
+import type { PoolConnection } from "mysql2/promise";
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
 
@@ -75,8 +76,10 @@ export async function guardarFiltrosVehiculo(
   empresaId: number,
   vehiculoId: number,
   filtros: FiltroVehiculo[],
+  conn?: PoolConnection,
 ): Promise<void> {
-  await execute(
+  const escribir = conn ? conn.execute.bind(conn) : execute;
+  await escribir(
     "DELETE FROM flota_vehiculo_filtros WHERE vehiculo_id = ? AND empresa_id = ?",
     [vehiculoId, empresaId],
   );
@@ -88,7 +91,7 @@ export async function guardarFiltrosVehiculo(
     const key = `${tipo.toLowerCase()}|${codigo.toLowerCase()}`;
     if (vistos.has(key)) continue;
     vistos.add(key);
-    await execute(
+    await escribir(
       `INSERT INTO flota_vehiculo_filtros
         (empresa_id, vehiculo_id, tipo, codigo, notas)
        VALUES (?, ?, ?, ?, ?)`,
