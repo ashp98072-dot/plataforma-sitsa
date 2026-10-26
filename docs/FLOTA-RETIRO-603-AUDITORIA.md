@@ -3,6 +3,12 @@
 Estado: **BLOQUEADO: retirado el SQL de eliminación; no ejecutado ni autorizado**.
 No es una migración de esquema ni una herramienta general de limpieza.
 
+Actualización del cierre documental, posterior a la base fd8fb2df:
+[FLOTA-RETIRO-603-CIERRE-AUDITORIA.md](./FLOTA-RETIRO-603-CIERRE-AUDITORIA.md).
+Decisión propuesta: **APTO PARA PREFLIGHT ADICIONAL**, sin autorización de retiro.
+El solicitante confirmó **15 columnas / 13 restricciones FK** y el acceso
+operativo existente **(603,1)**. Ese acceso se conserva y bloquea el retiro actual.
+
 ## Evidencia y alcance
 
 Datos confirmados por el solicitante, no consultados por el agente:
@@ -14,9 +20,11 @@ Datos confirmados por el solicitante, no consultados por el agente:
 
 El 1297 tiene 13 referencias de `tms_solicitud_fondo_lineas` y una en
 `tms_unidades`. El solicitante informó cero referencias del 603 y aclaró que el
-inventario mostraba **15 filas de KEY_COLUMN_USAGE**, no necesariamente 15 FK.
-Falta revisar el inventario físico completo: columnas, restricciones y reglas
-deben contarse y verificarse por separado.
+inventario mostraba **15 filas de KEY_COLUMN_USAGE** y aclaró posteriormente que
+pertenecen a **13 restricciones**. Falta revisar el manifiesto físico completo:
+columnas, restricciones, reglas y huella deben contrastarse por separado. Los
+ceros dirigidos no cubren el positivo conocido en `flota_vehiculo_acceso` ni
+certifican ausencia exhaustiva de dependencias.
 
 La revisión actual entrega documentación, lecturas preparadas y análisis offline.
 Conserva el selector CB2 y el alta/edición de vehículos externos del PR.

@@ -13,6 +13,13 @@ revisión inicial, no el estado actual del caso. El retiro permanece **bloqueado
 se retiró el bloque SQL de eliminación del estado actual del PR. Auditoría:
 [FLOTA-RETIRO-603-AUDITORIA.md](./FLOTA-RETIRO-603-AUDITORIA.md).
 
+El solicitante confirmó después el acceso compartido `(603,1)`: junto con la
+pertenencia del 1297 a KT, explica por la regla de acceso cómo ambos registros
+pueden ofrecerse a KT si cumplen los filtros de actividad. No demuestra quién
+creó ese acceso ni autoriza revocarlo. El cierre propone únicamente preflight
+adicional y conserva la tupla:
+[FLOTA-RETIRO-603-CIERRE-AUDITORIA.md](./FLOTA-RETIRO-603-CIERRE-AUDITORIA.md).
+
 Cadena: `/flota/combustible/catalogos` → `catalogosCombustible` →
 `flota_vehiculos` con el predicado central propio/compartido → vista de revisión
 CB2 o formulario del vale → opciones de unidad. La consulta usa EXISTS, no JOIN

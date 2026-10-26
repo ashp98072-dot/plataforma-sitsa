@@ -6,6 +6,12 @@ armar su copia del commit 0a6f3035.** El paso 02 ahora es un diseño no ejecutab
 sin sentencias DML ni ejecutor. No se ha ejecutado SQL, creado una base de pruebas
 ni accedido a producción; no se autoriza retiro, merge o deploy.
 
+**Seguimiento posterior a fd8fb2df:** el solicitante confirmó 15 columnas de 13
+restricciones y una fila operativa `(603,1)` en accesos. Se propone únicamente
+**APTO PARA PREFLIGHT ADICIONAL**, manteniendo el retiro bloqueado. El contraste
+de evidencia, tratamiento propuesto del acceso y criterios de nueva autorización
+están en [FLOTA-RETIRO-603-CIERRE-AUDITORIA.md](./FLOTA-RETIRO-603-CIERRE-AUDITORIA.md).
+
 Invariantes: conservar 1297/KT/empresa 1/C-035BXR, sus 13 referencias de fondos,
 su unidad TMS y todos los históricos. Solo 603/FRESCOFRESH/empresa 4 es candidato
 a un retiro futuro. No se alteran propietarios, permisos, CB2, asociaciones ni
@@ -106,8 +112,9 @@ NULL permitidos se conservan explícitamente. La huella anterior no es intercamb
 
 Dos FK con igual nombre en tablas/esquemas distintos no se fusionan. Reordenar la
 exportación no cambia la huella; cambiar emparejamiento, posición o regla sí.
-La comparación requiere ambas cantidades y la huella; el inventario aprobado
-todavía no existe. El helper siempre devuelve `retiroHabilitado: false`, incluso
+La comparación requiere ambas cantidades y la huella; se informaron después
+15 columnas/13 restricciones, pero no se aportó el manifiesto completo con huella
+revisada. El helper siempre devuelve `retiroHabilitado: false`, incluso
 si los manifiestos coinciden. No toma decisiones sobre históricos o permisos.
 
 ## 4. MariaDB 11.8: soporte documentado no equivale a prueba de ejecución
@@ -142,7 +149,8 @@ Fuentes oficiales de la matriz:
   lecturas preparadas, no ejecutadas. Generar un SELECT no lo ejecuta.
 - `retiro-603-02-diseno-no-ejecutable.md` describe un contrato futuro sin DML.
 - Se conserva el inventario de dependencias en FLOTA-RETIRO-603-AUDITORIA.md,
-  con la corrección de 15 columnas versus número de restricciones desconocido.
+  con la corrección de 15 columnas y el dato posterior de 13 restricciones, aún
+  pendientes de contraste con el manifiesto físico completo.
 - Ningún archivo habilita retiro; tampoco basta con una huella coincidente.
 
 Pendientes: inventario productivo completo y ambos conteos aprobados; candidatos
