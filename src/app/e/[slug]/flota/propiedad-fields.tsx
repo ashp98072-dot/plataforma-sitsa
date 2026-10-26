@@ -1,14 +1,17 @@
 "use client";
 
 export type PropiedadForm = { tipoPropiedad: "EMPRESA" | "EXTERNO"; empresaPropietariaId: number | null; propietarioExterno: string; tipoVehiculo: string };
-export function PropiedadFields({ value, onChange, empresas, disabled, input }: {
+export function cambiarTipoPropiedad(value: PropiedadForm, tipo: PropiedadForm["tipoPropiedad"], empresaAdministradoraId: number): PropiedadForm {
+  return { ...value, tipoPropiedad: tipo, empresaPropietariaId: tipo === "EXTERNO" ? null : value.empresaPropietariaId ?? (empresaAdministradoraId || null) };
+}
+export function PropiedadFields({ value, onChange, empresas, disabled, input, empresaAdministradoraId }: {
   value: PropiedadForm; onChange: (v: PropiedadForm) => void;
-  empresas: { id: number; nombre: string }[]; disabled?: boolean; input: string;
+  empresas: { id: number; nombre: string }[]; disabled?: boolean; input: string; empresaAdministradoraId?: number;
 }) {
   return <fieldset disabled={disabled} className="grid gap-3 rounded-lg border border-[var(--border)] p-3 sm:col-span-2 sm:grid-cols-2">
     <legend className="px-1 text-sm font-medium">Propiedad de la unidad</legend>
     <label className="text-xs">Tipo de propiedad<select className={`${input} mt-1 w-full`} value={value.tipoPropiedad}
-      onChange={e => onChange({ ...value, tipoPropiedad: e.target.value as PropiedadForm["tipoPropiedad"], empresaPropietariaId: null })}>
+      onChange={e => onChange(cambiarTipoPropiedad(value, e.target.value as PropiedadForm["tipoPropiedad"], empresaAdministradoraId ?? 0))}>
       <option value="EMPRESA">Vehículo propio / de empresa</option><option value="EXTERNO">Vehículo externo</option>
     </select></label>
     {value.tipoPropiedad === "EMPRESA" ? <label className="text-xs">Empresa propietaria<select className={`${input} mt-1 w-full`}

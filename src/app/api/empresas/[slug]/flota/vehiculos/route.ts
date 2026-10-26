@@ -1,4 +1,5 @@
 import { propiedadesVehiculos, propiedadHabilitada } from "@/lib/flota/propiedad";
+import { diagnosticarVehiculos } from "@/lib/flota/vehiculos-catalogo";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
@@ -109,6 +110,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
   return NextResponse.json({
     vehiculos,
+    posiblesDuplicados: diagnosticarVehiculos(rows.map(r => ({ id: Number(r.id), placa: String(r.placa) }))).posiblesDuplicados,
     empresas,
     empresaActualId: guard.empresa.id,
     propiedadHabilitada: propiedadActiva,

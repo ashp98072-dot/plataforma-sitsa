@@ -1,5 +1,6 @@
 import type { CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { opcionesConHistorico } from "@/components/tms/catalogo-search-select";
+import { diagnosticarVehiculos } from "./vehiculos-catalogo";
 
 export type EstacionOpcion = { id: number; proveedorId: number; nombre: string; proveedorNombre?: string | null; direccion?: string | null };
 export type VehiculoOpcion = { id: number; placa: string; descripcion?: string | null };
@@ -23,8 +24,16 @@ export function opcionesEstacion(estaciones: EstacionOpcion[], historica?: { id:
 
 /** Opciones del selector «Unidad / placa»: se ve «Placa · descripción» y se busca por ambas. Conserva la unidad histórica del vale. */
 export function opcionesVehiculo(vehiculos: VehiculoOpcion[], historico?: { id: number | null | undefined; placa: string | null | undefined }): CatalogoSearchOption[] {
-  const opciones = vehiculos.map(v => ({ value: String(v.id), label: v.placa, detail: v.descripcion?.trim() || undefined, searchText: v.descripcion?.trim() || undefined }));
-  return historico?.id ? opcionesConHistorico(opciones, String(historico.id), historico.placa?.trim() || "Unidad anterior") : opciones;
+  // Incluir el histórico ANTES del diagnóstico: puede tener la misma placa y otro ID.
+  const historicoAusente = historico?.id && !vehiculos.some(v => Number(v.id) === Number(historico.id));
+  const filas = historicoAusente
+    ? [{ id: Number(historico.id), placa: historico.placa?.trim() || "Unidad anterior" }, ...vehiculos] : vehiculos;
+  const diagnostico = diagnosticarVehiculos(filas);
+  const ambiguos = new Set(diagnostico.posiblesDuplicados.flatMap(g => g.ids));
+  return diagnostico.vehiculos.map(v => historicoAusente && v.id === Number(historico.id) && !ambiguos.has(v.id)
+    ? { value: String(v.id), label: `${v.placa} (histórico)` } : ({ value: String(v.id), label: `${v.placa}${historicoAusente && v.id === Number(historico.id) ? " (histórico)" : ""}`,
+    detail: [v.descripcion?.trim(), ambiguos.has(v.id) ? `Registro #${v.id} · placa repetida, verificar unidad` : ""].filter(Boolean).join(" · ") || undefined,
+    searchText: v.descripcion?.trim() || undefined }));
 }
 
 export const MENSAJE_SIN_ESTACIONES = "Debes registrar primero la estación de combustible.";

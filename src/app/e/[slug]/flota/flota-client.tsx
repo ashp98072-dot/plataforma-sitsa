@@ -1,5 +1,6 @@
 "use client";
 
+import { useProtegerFormulario } from "@/components/flota/use-proteger-formulario";
 import { PropiedadFields, type PropiedadForm } from "./propiedad-fields";
 import {
   useCallback,
@@ -385,8 +386,11 @@ export default function FlotaClient() {
   const [filtroHistorialServicios, setFiltroHistorialServicios] = useState<
     "todos" | "en_taller" | "cerrados" | "compras"
   >("todos");
+  const [posiblesDuplicados, setPosiblesDuplicados] = useState<{ placa: string; ids: number[] }[]>([]);
   const [propiedadActiva, setPropiedadActiva] = useState(false);
   const [propiedad, setPropiedad] = useState<PropiedadForm>({ tipoPropiedad: "EMPRESA", empresaPropietariaId: null, propietarioExterno: "", tipoVehiculo: "" });
+  const [basePropiedad, setBasePropiedad] = useState("");
+  const [baseFormulario, setBaseFormulario] = useState("");
   const [revisionPropiedad, setRevisionPropiedad] = useState(0);
   const [guardandoPropiedad, setGuardandoPropiedad] = useState(false);
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
@@ -519,6 +523,11 @@ export default function FlotaClient() {
     (propiedad.tipoPropiedad === "EXTERNO" && propiedad.propietarioExterno !== (vehiculoEnEdicion.propietario_externo ?? "")) ||
     propiedad.tipoVehiculo !== (vehiculoEnEdicion.tipo_vehiculo ?? "")
   );
+
+  const cambiosVehiculoPendientes = mostrarFormVehiculo && (propiedadPendiente ||
+    (!!basePropiedad && basePropiedad !== JSON.stringify(propiedad)) ||
+    (!!baseFormulario && baseFormulario !== JSON.stringify({ form, filtrosForm, accesoEmpresaIds })));
+  const confirmarSalidaFormulario = useProtegerFormulario(cambiosVehiculoPendientes, guardandoPropiedad);
 
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
@@ -891,6 +900,7 @@ export default function FlotaClient() {
           setEmpresasFlota((data.empresas as EmpresaOpt[]) ?? []);
           setEmpresaActualId(Number(data.empresaActualId ?? 0));
           setPropiedadActiva(data.propiedadHabilitada === true);
+          setPosiblesDuplicados(Array.isArray(data.posiblesDuplicados) ? data.posiblesDuplicados as { placa: string; ids: number[] }[] : []);
           setVehiculoId((prev) => prev || (list[0] ? Number(list[0].id) : 0));
           cacheAt.current.vehiculos = Date.now();
         }
@@ -1104,11 +1114,13 @@ export default function FlotaClient() {
       setErr(MENSAJE_SOLO_EMPRESA_DUENA);
       return;
     }
+    if (!confirmarSalidaFormulario()) return;
     setEditId(v.id);
     setRevisionPropiedad(Number(v.revision_propiedad ?? 0));
-    setPropiedad({ tipoPropiedad: v.tipo_propiedad ?? "EMPRESA", empresaPropietariaId: v.tipo_propiedad === "EXTERNO" ? null : v.empresa_propietaria_id ?? v.empresa_id ?? empresaActualId, propietarioExterno: v.propietario_externo ?? "", tipoVehiculo: v.tipo_vehiculo ?? "" });
+    const siguientePropiedad: PropiedadForm = { tipoPropiedad: v.tipo_propiedad ?? "EMPRESA", empresaPropietariaId: v.tipo_propiedad === "EXTERNO" ? null : v.empresa_propietaria_id ?? v.empresa_id ?? empresaActualId, propietarioExterno: v.propietario_externo ?? "", tipoVehiculo: v.tipo_vehiculo ?? "" };
+    setPropiedad(siguientePropiedad); setBasePropiedad(JSON.stringify(siguientePropiedad));
     setAccesoEmpresaIds(v.accesoEmpresaIds ?? []);
-    setForm({
+    const siguienteForm = {
       placa: v.placa,
       marca: v.marca ?? "",
       modelo: v.modelo ?? "",
@@ -1127,20 +1139,24 @@ export default function FlotaClient() {
       empresaActivo: v.empresa_activo ?? "",
       notas: v.notas ?? "",
       activo: esVehiculoActivo(v),
-    });
-    setFiltrosForm(
-      (v.filtros ?? [])
+    };
+    setForm(siguienteForm);
+    const siguientesFiltros = (v.filtros ?? [])
         .filter((f) => f.tipo && f.codigo)
-        .map((f) => ({ tipo: f.tipo, codigo: f.codigo })),
-    );
+        .map((f) => ({ tipo: f.tipo, codigo: f.codigo }));
+    setFiltrosForm(siguientesFiltros);
+    setBaseFormulario(JSON.stringify({ form: siguienteForm, filtrosForm: siguientesFiltros, accesoEmpresaIds: v.accesoEmpresaIds ?? [] }));
     setTab("vehiculos");
     setMostrarFormVehiculo(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   function irANuevoVehiculo() {
+    if (!confirmarSalidaFormulario()) return;
+    setBaseFormulario(JSON.stringify({ form: emptyForm, filtrosForm: [], accesoEmpresaIds: [] }));
     setRevisionPropiedad(0);
-    setPropiedad({ tipoPropiedad: "EMPRESA", empresaPropietariaId: empresaActualId, propietarioExterno: "", tipoVehiculo: "" });
+    const nuevaPropiedad: PropiedadForm = { tipoPropiedad: "EMPRESA", empresaPropietariaId: empresaActualId, propietarioExterno: "", tipoVehiculo: "" };
+    setPropiedad(nuevaPropiedad); setBasePropiedad(JSON.stringify(nuevaPropiedad));
     setEditId(null);
     setForm(emptyForm);
     setFiltrosForm([]);
@@ -1160,8 +1176,13 @@ export default function FlotaClient() {
         body: JSON.stringify({ ...propiedad, id: editId, revision: revisionPropiedad }),
       });
       const data = await res.json();
-      if (!res.ok) { setErr(data.error ?? "No se guardó el propietario."); return; }
+      if (!res.ok) {
+        setErr(data.error ?? "No se guardó el propietario.");
+        if (res.status === 409) await cargar({ solo: ["vehiculos"] });
+        return;
+      }
       setRevisionPropiedad(Number(data.revision));
+      setBasePropiedad(JSON.stringify(propiedad));
       setMsg(data.mensaje); await cargar({ solo: ["vehiculos"] });
     } catch { setErr("No se pudo confirmar el cambio. Recarga antes de volver a intentarlo."); }
     finally { setGuardandoPropiedad(false); }
@@ -1224,6 +1245,8 @@ export default function FlotaClient() {
       // poder agregar su papelería (tarjeta de circulación, póliza, etc.)
       // sin tener que buscarlo de nuevo en la tabla.
       setEditId(Number(data.id));
+      setBaseFormulario(JSON.stringify({ form, filtrosForm, accesoEmpresaIds }));
+      setBasePropiedad(JSON.stringify(propiedad));
     }
     await cargar({ solo: ["vehiculos"] });
   }
@@ -2922,6 +2945,7 @@ export default function FlotaClient() {
                   type="button"
                   className="text-xs underline"
                   onClick={() => {
+                    if (!confirmarSalidaFormulario()) return;
                     setEditId(null);
                     setForm(emptyForm);
                     setFiltrosForm([]);
@@ -3033,10 +3057,16 @@ export default function FlotaClient() {
                   </select>
                 </label>
                 {propiedadActiva ? <>
-                  <PropiedadFields value={propiedad} onChange={setPropiedad} empresas={empresasFlota} disabled={editandoAjeno || guardandoPropiedad} input={input} />
+                  <PropiedadFields empresaAdministradoraId={vehiculoEnEdicion?.empresa_id ?? empresaActualId} value={propiedad} onChange={setPropiedad} empresas={empresasFlota} disabled={editandoAjeno || guardandoPropiedad} input={input} />
                   {editId && <div className="sm:col-span-2 text-xs">
                     <p>Propietario actual: {vehiculoEnEdicion ? empresaDe(vehiculoEnEdicion) : ""}. Los cambios de propiedad se guardan por separado.</p>
                     {!editandoAjeno && <button type="button" className="mt-2 rounded border border-[var(--border)] px-3 py-2" disabled={guardandoPropiedad} onClick={guardarPropietario}>{guardandoPropiedad ? "Guardando..." : "Confirmar y guardar propietario"}</button>}
+                    {!editandoAjeno && vehiculoEnEdicion && <button type="button" className="ml-2 underline" disabled={guardandoPropiedad} onClick={() => {
+                      if (!window.confirm("¿Restablecer solo los campos de propietario al último valor consultado? Los demás cambios pendientes se conservan.")) return;
+                      const v = vehiculoEnEdicion;
+                      const actual: PropiedadForm = { tipoPropiedad: v.tipo_propiedad ?? "EMPRESA", empresaPropietariaId: v.tipo_propiedad === "EXTERNO" ? null : v.empresa_propietaria_id ?? v.empresa_id ?? empresaActualId, propietarioExterno: v.propietario_externo ?? "", tipoVehiculo: v.tipo_vehiculo ?? "" };
+                      setPropiedad(actual); setBasePropiedad(JSON.stringify(actual)); setRevisionPropiedad(Number(v.revision_propiedad ?? 0));
+                    }}>Restablecer solo propietario</button>}
                   </div>}
                 </> : <>                <label className="text-xs text-[var(--muted)] sm:col-span-2">
                   Empresa / dueño de la unidad
@@ -3248,6 +3278,7 @@ export default function FlotaClient() {
             </form>
           ) : null}
 
+          {posiblesDuplicados.length > 0 && <p role="status" className="rounded border border-amber-500 p-3 text-sm">Hay {posiblesDuplicados.length} placas con varios registros accesibles. Verifica los identificadores antes de asignar combustible. No se fusionan ni eliminan unidades.</p>}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-[#0d9488] text-white">
@@ -3276,6 +3307,7 @@ export default function FlotaClient() {
                   >
                     <td className="px-3 py-2 font-mono">
                       {v.placa}
+                      {posiblesDuplicados.some(g => g.ids.includes(v.id)) && <span className="block text-xs">Posible duplicado: registro #{v.id}</span>}
                       {v.compartido ? (
                         <span className="ml-1 text-[10px] text-amber-300">
                           compartida

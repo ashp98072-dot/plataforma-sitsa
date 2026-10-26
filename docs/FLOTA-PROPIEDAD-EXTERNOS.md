@@ -1,5 +1,8 @@
 # Propietario y vehículos externos
 
+Seguimiento de auditoría, selector duplicado y protección del formulario:
+[FLOTA-PR522-AUDITORIA-SELECTOR.md](./FLOTA-PR522-AUDITORIA-SELECTOR.md).
+
 ## Auditoría y decisión
 
 La edición anterior solo guardaba un alias libre en `empresa_activo`; no había
