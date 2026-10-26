@@ -1,6 +1,7 @@
 "use client";
 
 import { useProtegerFormulario } from "@/components/flota/use-proteger-formulario";
+import { useGuardadoVehiculo } from "@/components/flota/use-guardado-vehiculo";
 import { PropiedadFields, type PropiedadForm } from "./propiedad-fields";
 import {
   useCallback,
@@ -392,7 +393,8 @@ export default function FlotaClient() {
   const [basePropiedad, setBasePropiedad] = useState("");
   const [baseFormulario, setBaseFormulario] = useState("");
   const [revisionPropiedad, setRevisionPropiedad] = useState(0);
-  const [guardandoPropiedad, setGuardandoPropiedad] = useState(false);
+  const guardadoVehiculo = useGuardadoVehiculo();
+  const guardandoVehiculo = guardadoVehiculo.guardando;
   const [accesoEmpresaIds, setAccesoEmpresaIds] = useState<number[]>([]);
   const [empresasFlota, setEmpresasFlota] = useState<EmpresaOpt[]>([]);
   const [empresaActualId, setEmpresaActualId] = useState(0);
@@ -527,7 +529,8 @@ export default function FlotaClient() {
   const cambiosVehiculoPendientes = mostrarFormVehiculo && (propiedadPendiente ||
     (!!basePropiedad && basePropiedad !== JSON.stringify(propiedad)) ||
     (!!baseFormulario && baseFormulario !== JSON.stringify({ form, filtrosForm, accesoEmpresaIds })));
-  const confirmarSalidaFormulario = useProtegerFormulario(cambiosVehiculoPendientes, guardandoPropiedad);
+  const confirmarSalidaPendiente = useProtegerFormulario(cambiosVehiculoPendientes, guardandoVehiculo);
+  const confirmarSalidaFormulario = () => !guardadoVehiculo.ocupado() && confirmarSalidaPendiente();
 
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
@@ -1167,88 +1170,96 @@ export default function FlotaClient() {
   }
 
   async function guardarPropietario() {
-    if (!vehiculoEnEdicion || guardandoPropiedad) return;
+    if (!vehiculoEnEdicion || guardadoVehiculo.ocupado()) return;
     if (!window.confirm("Confirma el cambio de propietario. Los consumos y servicios existentes conservarán su empresa responsable.")) return;
-    setGuardandoPropiedad(true); setErr(""); setMsg("");
-    try {
-      const res = await fetch("/api/empresas/" + slug + "/flota/vehiculos/propiedad", {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...propiedad, id: editId, revision: revisionPropiedad }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setErr(data.error ?? "No se guardó el propietario.");
-        if (res.status === 409) await cargar({ solo: ["vehiculos"] });
-        return;
-      }
-      setRevisionPropiedad(Number(data.revision));
-      setBasePropiedad(JSON.stringify(propiedad));
-      setMsg(data.mensaje); await cargar({ solo: ["vehiculos"] });
-    } catch { setErr("No se pudo confirmar el cambio. Recarga antes de volver a intentarlo."); }
-    finally { setGuardandoPropiedad(false); }
+    await guardadoVehiculo.ejecutar(async () => {
+      setErr(""); setMsg("");
+      try {
+        const res = await fetch("/api/empresas/" + slug + "/flota/vehiculos/propiedad", {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...propiedad, id: editId, revision: revisionPropiedad }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setErr(data.error ?? "No se guardó el propietario.");
+          if (res.status === 409) await cargar({ solo: ["vehiculos"] });
+          return;
+        }
+        setRevisionPropiedad(Number(data.revision));
+        setBasePropiedad(JSON.stringify(propiedad));
+        setMsg(data.mensaje); await cargar({ solo: ["vehiculos"] });
+      } catch { setErr("No se pudo confirmar el cambio. Recarga antes de volver a intentarlo."); }
+    });
   }
 
   async function onSubmitVehiculo(e: FormEvent) {
     e.preventDefault();
-    if (propiedadPendiente || guardandoPropiedad) { setErr("Confirma y guarda el propietario antes de guardar los otros cambios."); return; }
-    setErr("");
-    setMsg("");
-    // Editando un vehículo de OTRA empresa (permiso transversal): el tipo de unidad y con quién se comparte los define solo la empresa dueña, así que no viajan.
-    const ajeno = editId != null && vehiculos.find((x) => x.id === editId)?.esDueno === false;
-    const payload = {
-      placa: form.placa,
-      marca: form.marca,
-      modelo: form.modelo,
-      descripcion: form.descripcion,
-      color: form.color,
-      // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo se edita desde la empresa dueña
-      // (empezarEdicion ya bloquea las unidades compartidas; el backend también lo exige).
-      tipoUnidad: ajeno ? undefined : form.tipoUnidad,
-      empresaActivo: form.empresaActivo || undefined,
-      kmActual: form.kmActual,
-      kmIntervaloServicio: form.intervalo,
-      odometroFuncional: form.odometroFuncional,
-      mantenimientoIntervaloMeses: form.odometroFuncional ? undefined : form.intervaloMeses,
-      rinLlanta: form.rin,
-      medidaLlanta: form.medidaLlanta,
-      tipoAceite: form.tipoAceite,
-      notas: form.notas,
-      activo: form.activo,
-      filtros: filtrosForm
-        .map((f) => ({
-          tipo: f.tipo.trim(),
-          codigo: f.codigo.trim(),
-        }))
-        .filter((f) => f.tipo && f.codigo),
-      accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined,
-    };
-    const res = await fetch(`/api/empresas/${slug}/flota/vehiculos${!editId && propiedadActiva ? "/propiedad" : ""}`, {
-      method: editId ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(editId ? { id: editId, ...payload } : { ...payload, ...(propiedadActiva ? propiedad : {}) }),
+    if (guardadoVehiculo.ocupado()) return;
+    if (propiedadPendiente || guardandoVehiculo) { setErr("Confirma y guarda el propietario antes de guardar los otros cambios."); return; }
+    await guardadoVehiculo.ejecutar(async () => {
+      try {
+        setErr("");
+        setMsg("");
+        // Editando un vehículo de OTRA empresa (permiso transversal): el tipo de unidad y con quién se comparte los define solo la empresa dueña, así que no viajan.
+        const ajeno = editId != null && vehiculos.find((x) => x.id === editId)?.esDueno === false;
+        const payload = {
+          placa: form.placa,
+          marca: form.marca,
+          modelo: form.modelo,
+          descripcion: form.descripcion,
+          color: form.color,
+          // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo se edita desde la empresa dueña
+          // (empezarEdicion ya bloquea las unidades compartidas; el backend también lo exige).
+          tipoUnidad: ajeno ? undefined : form.tipoUnidad,
+          empresaActivo: form.empresaActivo || undefined,
+          kmActual: form.kmActual,
+          kmIntervaloServicio: form.intervalo,
+          odometroFuncional: form.odometroFuncional,
+          mantenimientoIntervaloMeses: form.odometroFuncional ? undefined : form.intervaloMeses,
+          rinLlanta: form.rin,
+          medidaLlanta: form.medidaLlanta,
+          tipoAceite: form.tipoAceite,
+          notas: form.notas,
+          activo: form.activo,
+          filtros: filtrosForm
+            .map((f) => ({
+              tipo: f.tipo.trim(),
+              codigo: f.codigo.trim(),
+            }))
+            .filter((f) => f.tipo && f.codigo),
+          accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined,
+        };
+        const res = await fetch(`/api/empresas/${slug}/flota/vehiculos${!editId && propiedadActiva ? "/propiedad" : ""}`, {
+          method: editId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(editId ? { id: editId, ...payload } : { ...payload, ...(propiedadActiva ? propiedad : {}) }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setErr(data.error ?? "Error");
+          return;
+        }
+        setMsg(data.mensaje);
+        if (editId) {
+          // Edición: cerramos el formulario como antes.
+          setForm(emptyForm);
+          setFiltrosForm([]);
+          setEditId(null);
+          setAccesoEmpresaIds([]);
+          setMostrarFormVehiculo(false);
+        } else {
+          // Recién creado: nos quedamos en modo edición de ESTE vehículo para
+          // poder agregar su papelería (tarjeta de circulación, póliza, etc.)
+          // sin tener que buscarlo de nuevo en la tabla.
+          setEditId(Number(data.id));
+          setBaseFormulario(JSON.stringify({ form, filtrosForm, accesoEmpresaIds }));
+          setBasePropiedad(JSON.stringify(propiedad));
+        }
+        await cargar({ solo: ["vehiculos"] });
+      } catch {
+        setErr("No se pudo confirmar el guardado. Tus datos se conservan; verifica el resultado antes de volver a intentarlo.");
+      }
     });
-    const data = await res.json();
-    if (!res.ok) {
-      setErr(data.error ?? "Error");
-      return;
-    }
-    setMsg(data.mensaje);
-    if (editId) {
-      // Edición: cerramos el formulario como antes.
-      setForm(emptyForm);
-      setFiltrosForm([]);
-      setEditId(null);
-      setAccesoEmpresaIds([]);
-      setMostrarFormVehiculo(false);
-    } else {
-      // Recién creado: nos quedamos en modo edición de ESTE vehículo para
-      // poder agregar su papelería (tarjeta de circulación, póliza, etc.)
-      // sin tener que buscarlo de nuevo en la tabla.
-      setEditId(Number(data.id));
-      setBaseFormulario(JSON.stringify({ form, filtrosForm, accesoEmpresaIds }));
-      setBasePropiedad(JSON.stringify(propiedad));
-    }
-    await cargar({ solo: ["vehiculos"] });
   }
 
   async function buscarPlanesSalida() {
@@ -1343,6 +1354,7 @@ export default function FlotaClient() {
   }
 
   async function cambiarActivoVehiculo(id: number, activo: boolean) {
+    if (guardadoVehiculo.ocupado()) return;
     setErr("");
     setMsg("");
     if (!activo) {
@@ -1372,6 +1384,7 @@ export default function FlotaClient() {
   }
 
   async function eliminarVehiculo(v: Vehiculo) {
+    if (guardadoVehiculo.ocupado()) return;
     if (v.esDueno === false) {
       setErr("Solo la empresa dueña puede eliminar este vehículo.");
       return;
@@ -2937,6 +2950,8 @@ export default function FlotaClient() {
               onSubmit={onSubmitVehiculo}
               className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"
             >
+              {guardandoVehiculo && <p role="status">Guardando vehículo. Espera antes de editar o cambiar de unidad.</p>}
+              <fieldset disabled={guardandoVehiculo} aria-busy={guardandoVehiculo} className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="font-medium">
                   {editId ? `Editar vehículo` : "Registrar vehículo"}
@@ -3057,11 +3072,11 @@ export default function FlotaClient() {
                   </select>
                 </label>
                 {propiedadActiva ? <>
-                  <PropiedadFields empresaAdministradoraId={vehiculoEnEdicion?.empresa_id ?? empresaActualId} value={propiedad} onChange={setPropiedad} empresas={empresasFlota} disabled={editandoAjeno || guardandoPropiedad} input={input} />
+                  <PropiedadFields empresaAdministradoraId={vehiculoEnEdicion?.empresa_id ?? empresaActualId} value={propiedad} onChange={setPropiedad} empresas={empresasFlota} disabled={editandoAjeno || guardandoVehiculo} input={input} />
                   {editId && <div className="sm:col-span-2 text-xs">
                     <p>Propietario actual: {vehiculoEnEdicion ? empresaDe(vehiculoEnEdicion) : ""}. Los cambios de propiedad se guardan por separado.</p>
-                    {!editandoAjeno && <button type="button" className="mt-2 rounded border border-[var(--border)] px-3 py-2" disabled={guardandoPropiedad} onClick={guardarPropietario}>{guardandoPropiedad ? "Guardando..." : "Confirmar y guardar propietario"}</button>}
-                    {!editandoAjeno && vehiculoEnEdicion && <button type="button" className="ml-2 underline" disabled={guardandoPropiedad} onClick={() => {
+                    {!editandoAjeno && <button type="button" className="mt-2 rounded border border-[var(--border)] px-3 py-2" disabled={guardandoVehiculo} onClick={guardarPropietario}>{guardandoVehiculo ? "Guardando..." : "Confirmar y guardar propietario"}</button>}
+                    {!editandoAjeno && vehiculoEnEdicion && <button type="button" className="ml-2 underline" disabled={guardandoVehiculo} onClick={() => {
                       if (!window.confirm("¿Restablecer solo los campos de propietario al último valor consultado? Los demás cambios pendientes se conservan.")) return;
                       const v = vehiculoEnEdicion;
                       const actual: PropiedadForm = { tipoPropiedad: v.tipo_propiedad ?? "EMPRESA", empresaPropietariaId: v.tipo_propiedad === "EXTERNO" ? null : v.empresa_propietaria_id ?? v.empresa_id ?? empresaActualId, propietarioExterno: v.propietario_externo ?? "", tipoVehiculo: v.tipo_vehiculo ?? "" };
@@ -3275,6 +3290,7 @@ export default function FlotaClient() {
                   <VehiculoDocumentos slug={slug} vehiculoId={editId} can={can} />
                 </>
               ) : null}
+              </fieldset>
             </form>
           ) : null}
 
