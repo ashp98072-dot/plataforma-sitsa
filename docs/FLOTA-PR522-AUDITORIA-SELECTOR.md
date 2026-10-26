@@ -7,6 +7,11 @@ Por tanto **no está confirmado si la unidad real tiene una o varias filas**.
 Los casos con ese número de vale/placa en pruebas son reproducciones sintéticas,
 no datos extraídos de producción.
 
+Actualización posterior del solicitante: confirmado que 1297/KT es el camión real
+y 603/FRESCOFRESH su duplicado. La afirmación anterior describe el límite de la
+revisión inicial, no el estado actual del caso. Preparación de retiro, sin ejecutar:
+[FLOTA-RETIRO-603-AUDITORIA.md](./FLOTA-RETIRO-603-AUDITORIA.md).
+
 Cadena: `/flota/combustible/catalogos` → `catalogosCombustible` →
 `flota_vehiculos` con el predicado central propio/compartido → vista de revisión
 CB2 o formulario del vale → opciones de unidad. La consulta usa EXISTS, no JOIN
