@@ -1,5 +1,6 @@
 -- SOLO LECTURA. PENDIENTE DE AUDITORIA. NO EJECUTADO.
-SELECT DATABASE() AS esquema_objetivo,VERSION() AS motor,@@foreign_key_checks AS fk,@@check_constraint_checks AS checks_activos;
+SELECT DATABASE() AS esquema_objetivo,VERSION() AS motor,@@foreign_key_checks AS fk,@@check_constraint_checks AS checks_activos,
+ @@sql_mode AS sql_mode,@@innodb_strict_mode AS innodb_estricto;
 SHOW CREATE TABLE flota_cb2_facturas;
 SHOW CREATE TABLE flota_cb2_documento_operaciones;
 SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,COLLATION_NAME

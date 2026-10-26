@@ -42,6 +42,36 @@ tras guardar. No se persiste un segundo saldo ni se altera el resumen mensual.
   revalidan identidad/empresa/permisos; corregir se revalida también al conocer
   los valores y al recuperar un recibo de corrección.
 
+### Alcance explícito del bypass Admin (política existente, sin cambios)
+
+Se refiere al **rol global de la aplicación cuyo valor es exactamente `Admin`**
+en una sesión válida. No significa administrador de Hostinger/MariaDB, un usuario
+llamado admin, un responsable operativo ni una etiqueta administrativa de empresa.
+Todos los usuarios con ese rol global que superen `requireTenant` pueden completar
+y corregir documentos cuando la fase esté habilitada. No hay una lista especial
+de administradores CB2. `requireTenant` sigue exigiendo empresa activa y acceso
+según `empresasParaUsuario`; el bypass de combustible ocurre después de ese guard.
+
+En `requireTenantFlotaCombustible`, Admin retorna antes de comprobar módulo TMS
+y matriz granular. También `capacidadesCombustible(..., true)` concede las dos
+capacidades. Por tanto **no marcar los nuevos permisos o guardar una denegación
+granular no restringe a un Admin global**. Para no Admin sí hacen falta Ver y
+concesiones explícitas (corregir requiere además completar); no existe herencia
+desde Editar/Conciliar. No se cambió ningún guard, rol o concesión global en esta
+revisión. Restringir un subconjunto de administradores requeriría otra política
+expresamente autorizada; la matriz actual no ofrece esa separación para Admin.
+
+El bypass no omite el flag apagado, esquema requerido, origen confiable,
+proveedor activo, ámbito empresa/proveedor/factura, clasificación en fila
+bloqueada, revisión, clave/huella/actor, motivo, auditoría o transacción. Un replay
+continúa ligado al actor original: ser Admin no permite recuperar la operación
+de otra identidad. El guard revalida la sesión y capacidades tras esperar el
+bloqueo. Este alcance debe aceptarse conscientemente antes de activar la fase.
+
+Referencias de código: `src/lib/tenant.ts::requireTenant` y
+`requireTenantFlotaCombustible`, `src/lib/flota/combustible-permisos.ts`,
+`src/lib/flota/cb2/documentos-http.ts` y `documentos.ts`.
+
 ## Revisión, idempotencia y atomicidad
 
 `revision_documental` comienza en 0, aumenta en uno solo con un cambio real y
@@ -75,22 +105,69 @@ errores de red, 5xx o respuesta no certificable solo permiten el mismo reintento
 Cerrar la sesión/pestaña puede eliminar sessionStorage: el servidor conserva el
 recibo, pero no se promete recuperar automáticamente una clave perdida.
 
-## SQL pendiente de auditoría
+## SQL pendiente de auditoría: ejecución por pasos
 
-1. `sql/preflight-2026-10-cb2-documentos-fase2.sql`: exclusivamente SELECT;
-   esquema/motor, modos, tipos, índices, CHECK, triggers y estado previo.
-2. `sql/migrate-2026-10-cb2-documentos-fase2.sql`: nueva migración independiente;
-   revisión y CHECK en facturas, tabla de operaciones InnoDB, UNIQUE binario,
-   índices, FK compuesta empresa/proveedor/factura y FK de actor, integridad de
-   clave/huella/tipo/revisiones/JSON y coherencia de la respuesta almacenada.
-3. `sql/postcheck-2026-10-cb2-documentos-fase2.sql`: exclusivamente SELECT/SHOW;
-   comprobar DDL completo, tipos, índices, FKs, CHECK y ausencia de huérfanos.
+El archivo `sql/migrate-2026-10-cb2-documentos-fase2.sql` es ahora un
+**manifiesto de comentarios**, no un lote ejecutable. No importar ese archivo ni
+concatenar los siguientes. Para cada envío, confirmar nuevamente la misma base
+objetivo y sesión/modos. El orden manual obligatorio es:
 
-No reutilizar ni ejecutar la migración CB2 original. La inicialización de revisión
-a cero no altera fecha, total o moneda históricos. El DDL rechaza objetos existentes
-para impedir un reintento ciego ante instalación parcial; no es una certificación
-automática del esquema. MariaDB hace commits implícitos en DDL: ALTER + CREATE no
-forman una unidad atómica. Ver recuperación antes de cualquier ejecución autorizada.
+1. `sql/preflight-2026-10-cb2-documentos-fase2.sql` (solo lectura).
+   **PARAR** y revisar todos los resultados, backup, triggers, motor, modos,
+   tipos, índices y ausencia de objetos/colisiones antes de aprobar paso 1.
+2. `sql/migrate-2026-10-cb2-documentos-fase2-paso1-revision.sql`:
+   una única sentencia ALTER TABLE con revisión y CHECK.
+3. **PARAR**, incluso ante error, timeout o desconexión. Abrir por separado
+   `sql/verificar-2026-10-cb2-documentos-fase2-paso1.sql` (solo lectura).
+   Confirmar columna INT signed NOT NULL DEFAULT 0, CHECK correcto, revisiones
+   iniciales, tabla operativa ausente, contexto/motor/modos y claves base.
+   Exige revisión humana y aprobación independiente antes del segundo DDL.
+4. `sql/migrate-2026-10-cb2-documentos-fase2-paso2-operaciones.sql`:
+   una única sentencia CREATE TABLE, con los mismos índices, UNIQUE binario,
+   FK compuesta y restricciones de integridad del diseño aprobado.
+5. **PARAR**. `sql/postcheck-2026-10-cb2-documentos-fase2.sql` (solo lectura)
+   para auditar la estructura final completa antes de cualquier activación.
+
+Las consultas de comprobación muestran evidencia; **no bloquean automáticamente
+un DDL posterior**. El control es operativo: enviar un archivo DDL por vez solo
+tras aprobación del resultado anterior. La presencia de un objeto no certifica
+su definición. No se usa IF NOT EXISTS, OR REPLACE ni una importación masiva para
+ocultar un estado divergente. No reutilizar la migración CB2 original.
+
+### Compatibilidad revisada: MariaDB 11.8 y Hostinger
+
+- **DELIMITER** es una instrucción de cliente, no una garantía del servidor.
+  El lote anterior dependía de que la herramienta reconociera el delimitador y
+  enviara el bloque compuesto completo. Los pasos nuevos usan solo el terminador
+  SQL estándar; no contienen DELIMITER ni bloques BEGIN NOT ATOMIC.
+- **BEGIN NOT ATOMIC** es sintaxis de MariaDB para bloques fuera de rutinas;
+  no convierte ALTER + CREATE en una transacción reversible. Suprimir el bloque
+  evita depender de su procesamiento por el frontend de la herramienta SQL.
+- **ALTER TABLE y CREATE TABLE** causan commits implícitos. No existe rollback
+  conjunto entre los dos pasos. No se promete ausencia de bloqueo/reconstrucción
+  de tabla; capacidad y ventana deben revisarse antes del paso 1.
+- **CHECK** se mantiene en el DDL para MariaDB 11.8; requiere
+  check_constraint_checks=1, FK activas y modo estricto. Los tipos de FK y motor
+  InnoDB se revisan antes de CREATE. Los nombres FK deben ser únicos en el
+  esquema en 11.8 (la relajación documentada es de 12.1): verificar colisiones.
+- **JSON_VALUE** usa rutas constantes y extrae escalares. Retorna NULL si no hay
+  coincidencia o el JSON es inválido; por ello se conservan JSON_VALID y los
+  COALESCE(...,0) que rechazan respuestas incompletas/incoherentes. No se usa el
+  tipo JSON nativo de MySQL ni se depende de él: resultado sigue siendo LONGTEXT.
+- Hostinger documenta phpMyAdmin como herramienta de importación SQL. No se
+  inspeccionó una instalación de Hostinger ni se probó su parser. Estos archivos
+  reducen esa dependencia a sentencias SQL ordinarias, una por envío DDL; **la
+  revisión documental no certifica ejecución exitosa en el hosting concreto**.
+  Seleccionar explícitamente la base en la herramienta y no subir todos los
+  pasos en un mismo lote. Cambiar de pestaña/conexión puede cambiar el contexto.
+
+Fuentes primarias consultadas en esta revisión:
+
+- [MariaDB: bloques fuera de rutinas](https://mariadb.com/kb/en/using-compound-statements-outside-of-stored-programs/).
+- [MariaDB: commits implícitos](https://mariadb.com/docs/server/reference/sql-statements/transactions/sql-statements-that-cause-an-implicit-commit).
+- [MariaDB: constraints](https://mariadb.com/docs/server/reference/sql-statements/data-definition/constraint).
+- [MariaDB: JSON_VALUE](https://mariadb.com/docs/server/reference/sql-functions/special-functions/json-functions/json_value).
+- [Hostinger: importación SQL con phpMyAdmin](https://www.hostinger.com/support/1884149-how-to-import-a-database-with-phpmyadmin-in-hostinger/).
 
 ## Activación compatible, sin ejecutarla en esta tarea
 
@@ -100,8 +177,8 @@ forman una unidad atómica. Ver recuperación antes de cualquier ejecución auto
 2. Auditar/aprobar por separado SQL y ventana operativa. Revisar preflight sobre
    la base explícitamente seleccionada, verificar backup recuperable y tipos
    compatibles. No interpretar la aprobación de este PR como autorización de DDL.
-3. Solo con autorización productiva independiente: aplicar la nueva migración y
-   revisar postcheck. Estado previo limpio o final completo; detenerse si parcial.
+3. Solo con autorización productiva independiente: seguir los pasos DDL separados y
+   sus puntos de parada; revisar postcheck. Estado previo limpio o final completo; detenerse si parcial.
 4. Desplegar el código nuevo con flag apagado y comprobar que TODOS los nodos y
    rutas están actualizados. El código antiguo puede leer/crear facturas con el
    esquema aditivo (DEFAULT 0) y no actualiza metadatos existentes. No activar en
@@ -123,6 +200,12 @@ forman una unidad atómica. Ver recuperación antes de cualquier ejecución auto
   archivo original ni utilizar DROP para hacer coincidir un estado inicial.
   Preparar una reparación específica del objeto faltante/divergente, auditarla
   y obtener autorización separada; contrastar después el postcheck completo.
+- Después de ALTER, el estado intermedio esperado es revisión y CHECK presentes,
+  tabla operativa ausente. Es válido únicamente mientras el flag siga apagado.
+  Si falla CREATE, no deshacer ALTER ni repetir el paso 1: comprobar el estado
+  intermedio y causa. Si la tabla resulta presente tras un timeout, no repetir
+  CREATE: auditar el postcheck completo. Si no se puede determinar el estado,
+  detenerse y escalar; no asumir rollback a partir de un error de phpMyAdmin.
 - Ante necesidad de restaurar fecha/total: usar una nueva corrección autorizada
   con motivo y revisión vigente, nunca modificar recibos ni deshacer asociaciones.
 - Si se pierde la respuesta de commit, reintentar idéntica solicitud con el mismo
@@ -141,11 +224,14 @@ y rechazo de campos controlados por cliente. DOM verifica confirmación, campos
 protegidos, reintento estable al remontar y actualización de balance. SQL se
 inspecciona como texto, nunca se ejecuta.
 
-Resultados: **181 pruebas aprobadas en 17 archivos**, con Vitest 4.1.12 y las
+Resultados de la revisión: **183 pruebas aprobadas en 17 archivos**, con Vitest 4.1.12 y las
 dependencias ya disponibles de otro worktree. Incluye regresiones de #519/#520,
 repositorio transaccional, catálogo y persistencia de permisos. TypeScript
 (`tsc --noEmit --incremental false`), ESLint de todos los TS/TSX afectados y
 `git diff --check` completados sin errores. No se instalaron dependencias.
+Se añadió verificación estática de una sola sentencia por paso DDL y ausencia
+de SQL ejecutable en el manifiesto, además de comprobar que el editor no muestra
+JSON ni claves pendientes y sigue reintentando el cuerpo idéntico tras remontar.
 
 Riesgos que requieren decisión antes de activar: autorización independiente del
 DDL y backup; revisión real de sintaxis/planes y tipos MariaDB por auditoría

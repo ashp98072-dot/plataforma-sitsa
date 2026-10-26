@@ -40,7 +40,12 @@ it("exige confirmacion, muestra antes/despues y envia solo campos permitidos", a
 it("respuesta perdida conserva misma solicitud y clave incluso al remontar", async () => {
     modo = "perdido"; await render(); await preparar(); await click("Guardar documento confirmado");
     expect(host.textContent).toContain("Solicitud pendiente conservada"); expect(sessionStorage.length).toBe(1);
+    expect(host.querySelector("pre")).toBeNull();
+    const clave = JSON.parse(patches[0]).clave;
+    expect(host.textContent).not.toContain(clave);
+    expect(host.textContent).not.toContain('"proveedorId"');
     await render("dos"); expect(host.textContent).toContain("Reintentar misma solicitud");
+    expect(host.querySelector("pre")).toBeNull(); expect(host.textContent).not.toContain(clave);
     modo = "ok"; await click("Reintentar misma solicitud");
     expect(patches).toHaveLength(2); expect(patches[1]).toBe(patches[0]); expect(guardado).toHaveBeenCalledOnce();
 });

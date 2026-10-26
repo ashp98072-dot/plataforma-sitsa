@@ -1,6 +1,7 @@
 -- SOLO LECTURA. PENDIENTE DE AUDITORIA. NO EJECUTADO.
 -- Elegir explícitamente la base objetivo en la herramienta administrativa.
 -- No autoriza ni ejecuta DDL; validar manualmente TODO antes de autorizarlo.
+-- PARADA OBLIGATORIA: no enviar este archivo junto con ningún DDL.
 SELECT DATABASE() AS esquema_objetivo, VERSION() AS motor,
  @@foreign_key_checks AS fk, @@check_constraint_checks AS checks_activos,
  @@sql_mode AS sql_mode, @@innodb_strict_mode AS innodb_estricto;
@@ -23,3 +24,9 @@ SELECT TRIGGER_NAME,EVENT_OBJECT_TABLE,ACTION_STATEMENT FROM information_schema.
 -- Estado inicial: NO revision_documental NI tabla operaciones. Si existe solo
 -- una parte: DETENERSE, no repetir migración. Si están ambas: usar postcheck.
 SELECT COUNT(*) AS facturas_con_total_invalido FROM flota_cb2_facturas WHERE total_documental<0;
+SELECT TABLE_NAME,CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
+ WHERE CONSTRAINT_SCHEMA=DATABASE() AND CONSTRAINT_NAME IN ('ck_cb2f_revision_documental','fk_cb2do_factura','fk_cb2do_usuario');
+-- En estado inicial limpio esta última consulta no devuelve filas. MariaDB 11.8
+-- requiere nombres FK únicos en el esquema. No omitir colisiones detectadas.
+-- Revisar base elegida, motor 11.8, strict/innodb/fk/check activos, tipos/índices,
+-- auditoria InnoDB, triggers y backup; aprobar antes de abrir el paso 1 por separado.
