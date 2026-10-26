@@ -12,16 +12,25 @@ function firma(r: OperacionResumen) {
     if (!r.proveedor_id || !r.numero_vale?.trim() || !r.fecha_consumo || !r.precio || r.moneda !== "GTQ") return null;
     return JSON.stringify([r.proveedor_id, r.vehiculo_id, normalizarVale(r.numero_vale), r.fecha_consumo.slice(0, 10), new Decimal(r.galones).toFixed(), new Decimal(r.precio).toFixed(), new Decimal(r.monto).toFixed()]);
 }
+/**
+ * Presentación en [desde, hasta): HISTORICO por fecha de registro (creado_at),
+ * CB2 por fecha de consumo. No traslada registros históricos a otro mes.
+ * Firmas, ambigüedades y totales comparten el mismo universo temporal: una
+ * exclusión solo sustituye CB2 por un histórico que contribuye a este período.
+ * Las operaciones recibidas pertenecen a una sola empresa (resumenIntegrado).
+ */
 export function consolidarMes(operaciones: OperacionResumen[], desde: string, hasta: string) {
+    const delPeriodo = operaciones.filter(r => {
+        const corte = r.origen === "HISTORICO" ? r.creado_at : r.fecha_consumo;
+        return !!corte && corte.slice(0, 10) >= desde && corte.slice(0, 10) < hasta;
+    });
     const firmas = new Map<string, OperacionResumen[]>();
-    const identidadesHistoricas = new Set(operaciones.filter(o => o.origen === "HISTORICO").map(identidad).filter((s): s is string => s !== null));
-    for (const op of operaciones) { const f = firma(op); if (f) firmas.set(f, [...(firmas.get(f) ?? []), op]); }
+    const identidadesHistoricas = new Set(delPeriodo.filter(o => o.origen === "HISTORICO").map(identidad).filter((s): s is string => s !== null));
+    for (const op of delPeriodo) { const f = firma(op); if (f) firmas.set(f, [...(firmas.get(f) ?? []), op]); }
     const excluidas: { consumoId: number; cargaId: number; firma: string }[] = [], ambiguas: number[] = [];
     const grupos = new Map<string, { origen: string; vehiculoId: number; placa: string; combustible: string; moneda: string; galones: string; monto: string; operaciones: number }>();
     const subtotales: Record<string, { galones: string; monto: string }> = {};
-    for (const r of operaciones) {
-        const corte = r.origen === "HISTORICO" ? r.creado_at : r.fecha_consumo;
-        if (!corte || corte.slice(0, 10) < desde || corte.slice(0, 10) >= hasta) continue;
+    for (const r of delPeriodo) {
         const key = firma(r), iguales = key ? firmas.get(key)! : [], historicos = iguales.filter(o => o.origen === "HISTORICO"), cb2 = iguales.filter(o => o.origen === "CB2");
         if (r.origen === "CB2" && historicos.length === 1 && cb2.length === 1) { excluidas.push({ consumoId: r.id, cargaId: historicos[0].id, firma: key! }); continue; }
         if (r.origen === "CB2" && (historicos.length || identidadesHistoricas.has(identidad(r) ?? ""))) ambiguas.push(r.id);
