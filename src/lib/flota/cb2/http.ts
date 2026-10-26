@@ -1,3 +1,5 @@
+import { consultarDocumental, consumosDocumentales } from "./conciliacion-documental";
+import { estadosDocumentales } from "./conciliacion-documental-model";
 import { productos } from "./clasificacion";
 import { corregirSchema, corregirAsignacion } from "./asignaciones";
 import { NextResponse } from "next/server";
@@ -33,9 +35,9 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
-    const lectura = ["importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
+    const lectura = ["conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
@@ -53,6 +55,22 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
         if (lectura) {
             const url = new URL(req.url), after = z.coerce.number().int().min(0).max(2147483647).parse(url.searchParams.get("despues") ?? 0), limit = z.coerce.number().int().min(1).max(500).parse(url.searchParams.get("limite") ?? 100);
             const iid = rawId === undefined ? undefined : id.parse(Number(rawId));
+            if (accion === "conciliacion-documental" || accion === "consumos-documentales") {
+                const proveedorId = url.searchParams.has("proveedorId") ? id.parse(Number(url.searchParams.get("proveedorId"))) : undefined;
+                const maximo = Math.min(limit, 100);
+                if (accion === "consumos-documentales") {
+                    if (!proveedorId || !iid) throw new ErrorCB2("Factura y proveedor requeridos.", 400);
+                    return NextResponse.json(await consumosDocumentales(ctx.empresaId, proveedorId, iid, maximo, after), { headers });
+                }
+                const filtros = z.object({ proveedorId: id.optional(), desde: z.iso.date().optional(), hasta: z.iso.date().optional(),
+                    fecha: z.enum(["TODAS", "CON_FECHA", "SIN_FECHA"]).optional(), estado: z.enum(estadosDocumentales).optional(), buscar: z.string().trim().max(128).optional()
+                }).parse({ proveedorId, desde: url.searchParams.get("desde") || undefined, hasta: url.searchParams.get("hasta") || undefined,
+                    fecha: url.searchParams.get("fecha") || undefined, estado: url.searchParams.get("estado") || undefined, buscar: url.searchParams.get("buscar") || undefined });
+                if (filtros.desde && filtros.hasta && filtros.desde > filtros.hasta) throw new ErrorCB2("Rango documental invalido.", 400);
+                if (filtros.fecha === "SIN_FECHA" && (filtros.desde || filtros.hasta)) throw new ErrorCB2("Sin fecha no admite un rango documental.", 400);
+                return NextResponse.json(await consultarDocumental(ctx.empresaId, filtros, maximo, after), { headers });
+            }
+
             if (accion === "archivo") {
                 const f = await service.archivo(ctx.empresaId, iid!);
                 return new Response(new Uint8Array(f.buffer), { headers: { ...headers, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="cb2-${iid}.xlsx"` } });
