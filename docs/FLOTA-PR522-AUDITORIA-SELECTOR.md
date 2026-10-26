@@ -9,7 +9,8 @@ no datos extraídos de producción.
 
 Actualización posterior del solicitante: confirmado que 1297/KT es el camión real
 y 603/FRESCOFRESH su duplicado. La afirmación anterior describe el límite de la
-revisión inicial, no el estado actual del caso. Preparación de retiro, sin ejecutar:
+revisión inicial, no el estado actual del caso. El retiro permanece **bloqueado**;
+se retiró el bloque SQL de eliminación del estado actual del PR. Auditoría:
 [FLOTA-RETIRO-603-AUDITORIA.md](./FLOTA-RETIRO-603-AUDITORIA.md).
 
 Cadena: `/flota/combustible/catalogos` → `catalogosCombustible` →

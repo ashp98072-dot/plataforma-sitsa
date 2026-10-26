@@ -1,6 +1,6 @@
 # Retiro específico del duplicado 603 — PR #522
 
-Estado: **preparado para revisión; no ejecutado ni autorizado para producción**.
+Estado: **BLOQUEADO: retirado el SQL de eliminación; no ejecutado ni autorizado**.
 No es una migración de esquema ni una herramienta general de limpieza.
 
 ## Evidencia y alcance
@@ -13,11 +13,12 @@ Datos confirmados por el solicitante, no consultados por el agente:
 | 603, C-035BXR | FRESCOFRESH, ID 4 | Registro duplicado del mismo camión. Candidato a eliminación posterior. |
 
 El 1297 tiene 13 referencias de `tms_solicitud_fondo_lineas` y una en
-`tms_unidades`. El 603 tiene cero referencias en las 15 FK revisadas por el
-solicitante. Falta recibir/revisar el inventario físico completo con nombres,
-columnas y reglas: el número 15, por sí solo, no certifica el esquema.
+`tms_unidades`. El solicitante informó cero referencias del 603 y aclaró que el
+inventario mostraba **15 filas de KEY_COLUMN_USAGE**, no necesariamente 15 FK.
+Falta revisar el inventario físico completo: columnas, restricciones y reglas
+deben contarse y verificarse por separado.
 
-Este cambio agrega solo documentación, SQL pendiente y pruebas estáticas.
+La revisión actual entrega documentación, lecturas preparadas y análisis offline.
 Conserva el selector CB2 y el alta/edición de vehículos externos del PR.
 No fusiona filas, reasocia referencias, transfiere propietario/empresa, concede
 o revoca accesos ni elimina archivos o registros auxiliares.
@@ -81,102 +82,13 @@ protecciones específicas de viajes/multas, pero no certifica este inventario
 completo. No se invoca ni se cambia como parte de este retiro. La baja lógica
 también altera taller/motivo y no sustituye esta operación específica.
 
-## Archivos SQL separados y procedimiento manual
+## Estado actual y revisión técnica
 
-1. `sql/retiro-603-01-preflight.sql`: solo SELECT/SHOW. Exportar filas completas
-   603/1297, las 13 líneas y la unidad TMS, con sus PK y todas sus columnas.
-   Revisar cuenta/base/versión/motores, FK y reglas, columnas sin FK, triggers,
-   eventos, vistas y rutinas. Definición oculta, metadata incompleta o error = STOP.
-   El DBA debe acreditar visibilidad completa; un catálogo filtrado por permisos
-   no certifica ausencia de tablas o relaciones.
-2. El preflight **genera** consultas de conteo sin ejecutarlas. Revisar y ejecutar
-   manualmente cada SELECT generado, globalmente para el ID 603. Inventariar
-   también extensiones/integraciones fuera del repositorio y dependencias entre
-   esquemas. Inspeccionar almacenamiento de uploads y prefijo `veh603-doc`, sin
-   borrar nada. Revisar los 15 nombres de FK y conservar su huella SHA-256.
-3. Cualquier referencia/candidato de texto, JSON, binario, archivo, acceso o
-   filtro, incluso inesperado o ambiguo, **bloquea**. El barrido de token `603`
-   es deliberadamente conservador: puede detectar otro ID o un importe 603.
-   No es prueba de identidad; no se debe limpiar evidencia o añadir exclusiones
-   ad hoc para hacerlo pasar. Si da positivo, detenerse y presentar otra revisión
-   específica del plan con esa evidencia. No eliminar ni fusionar otros datos.
-4. Aprobar por separado ventana sin escrituras/DDL, backup restaurable, resultados
-   y herramienta de ejecución. Suspender aplicación/jobs/cron/integraciones; no
-   cambiar permisos ni propietarios desde estos scripts. Los locks de las dos
-   unidades no protegen inserciones sin FK: **la ventana es indispensable**.
-5. Auditar `sql/retiro-603-02-eliminacion-pendiente.sql`. Está bloqueado con cuatro
-   certificaciones FALSE y esquema/actor/huella NULL. Solo después de autorización,
-   un operador completa una **copia revisada**, no arma la versión del repositorio.
-   Usa sesión dedicada sin transacción previa y cliente MariaDB 11.8 que envíe el
-   bloque completo, con delimitador `//` configurado externamente. No pegarlo en
-   phpMyAdmin/Hostinger si el editor lo fragmenta por `;`. Si esa es la única
-   herramienta disponible, STOP: falta acordar un ejecutor compatible, sin separar
-   DELETE/INSERT/COMMIT en peticiones web distintas.
-   El DELETE también exige variables locales del bloque y el ID de la auditoría
-   recién insertada: extraerlo como sentencia independiente da error de resolución
-   de variables. Esto es defensa adicional, no soporte para fragmentar el archivo.
-6. El bloque revalida identidad exacta de ambos IDs/empresas/placa, conteos 13/1
-   (todos KT), inventario mínimo, huella y 15 FK, motores, checks, triggers y
-   eventos. Rechaza FK desde otro esquema o sin columna referenciada `id`. Repite
-   el barrido de columnas/JSON/texto/binarios antes de escribir. No tiene bypass
-   para referencias conocidas ni elimina relaciones auxiliares.
-7. Captura snapshots JSON ordenados con **todas las columnas** del 1297, sus 13
-   filas y TMS; conserva además el antes completo del 603. Registra un evento
-   nuevo en la tabla de auditoría existente y ejecuta el único DELETE, acotado a
-   `id=603 AND empresa_id=4 AND placa exacta`. Verifica `ROW_COUNT()=1` y compara
-   hashes completos de los snapshots antes del único COMMIT. No crea rutinas,
-   tablas, índices ni migraciones, y no deshabilita FK/CHECK.
-8. Errores o advertencias hacen rollback de la transacción propia y propagan fallo;
-   un rechazo previo a iniciarla no revierte una transacción ajena. No reintentar
-   automáticamente. Una desconexión durante COMMIT deja resultado incierto: usar
-   lectura independiente y auditoría para determinarlo, no ejecutar otra vez.
-9. Ejecutar posteriormente `sql/retiro-603-03-postcheck.sql` (lectura) y comparar
-   exportaciones completas/PK, no solo 13/1. Repetir inventario/conteos generados.
-   El evento nuevo de retiro es la **única mención nueva esperada** del 603; debe
-   conservarse. Verificar catálogo autorizado y selector: 603 ausente, 1297
-   disponible para KT. Luego, y solo tras aprobación del postcheck, reabrir tráfico.
-   Recargar catálogos/formularios y generar una nueva revisión de importación si
-   había un preview CB2 abierto con el 603. El backend debe rechazar ese ID ya
-   retirado; no modificar recibos, hashes o decisiones antiguas para reutilizarlo.
+El bloque DML anterior fue retirado. No usar sus copias de commits anteriores.
 
-El barrido puede ser costoso en tablas grandes: la ventana y su duración deben
-aprobarse después de evaluar tamaños. No se limita con LIMIT porque podría omitir
-dependencias. Cero candidatos no demuestra ausencia de referencias cifradas,
-comprimidas, codificadas o en servicios externos: requieren revisión humana aparte.
+Ver [FLOTA-RETIRO-603-REVISION-TECNICA.md](./FLOTA-RETIRO-603-REVISION-TECNICA.md)
+para las cuatro correcciones, tratamiento de históricos, manifiesto FK v2,
+bloqueos MariaDB y condiciones de una futura implementación.
 
-## Recuperación y condiciones pendientes para autorizar
-
-Antes del COMMIT, cualquier condición fallida revierte el DELETE y su auditoría.
-Después del COMMIT no hay recuperación automática: mantener tráfico detenido y
-evaluar con DBA la restauración **exclusiva de la fila 603** desde el backup/antes
-conservado, comprobando conflictos nuevos y dejando otro evento de auditoría. No
-restaurar masivamente la base, no tocar el 1297, fondos, TMS ni borrar el evento.
-No se entrega un INSERT de restauración automático porque el esquema y el estado
-posterior requieren revisión; una restauración también necesita autorización.
-
-Faltan para autorizar: resultados del preflight real; listado/huella de las 15 FK;
-ausencia de dependencias no FK, JSON/auditoría y archivos; snapshots completos y
-backup restaurable; confirmación de que las 13 líneas y TMS permanecen en KT;
-inventario visible completo, ventana y ejecutor compatibles; auditoría técnica
-del bloque SQL. Ninguna de estas verificaciones productivas fue ejecutada aquí.
-
-## Validación y límites
-
-Las pruebas de esta entrega son estáticas sobre los archivos SQL: aseguran límites
-del DML, bloqueo por defecto, guards y presencia/orden de rollback, auditoría y
-snapshot. No ejecutan SQL ni demuestran sintaxis/semántica de motor o del cliente
-MariaDB. No se creó ni utilizó base de pruebas. El bloque permanece **pendiente
-de revisión independiente**, sin permiso de ejecución, merge o deploy.
-
-Resultados locales: ocho comprobaciones estáticas nuevas aprobadas; suite de
-regresión del PR con `--maxWorkers=2`: **568 aprobadas, 20 omitidas**, 55 archivos
-aprobados y uno omitido. TypeScript `tsc --noEmit --incremental false`, ESLint del
-nuevo archivo de pruebas y `git diff --check` aprobados. No se modificó código de
-aplicación: los ocho avisos preexistentes de ESLint del cliente general reportados
-en la revisión anterior quedan fuera de estos cambios.
-
-Referencias oficiales revisadas:
-[bloques BEGIN/END y delimitadores](https://mariadb.com/docs/server/reference/sql-statements/programmatic-compound-statements/begin-end),
-[handlers](https://mariadb.com/docs/server/reference/sql-statements/programmatic-compound-statements/declare-handler),
-[transacciones](https://mariadb.com/docs/server/reference/sql-statements/transactions/start-transaction),
-[PREPARE y variables de sesión](https://mariadb.com/docs/server/reference/sql-statements/prepared-statements/prepare-statement).
+No se entrega SQL de eliminación ejecutable. Solo quedan el preflight y el
+postcheck de lectura preparados, sin ejecutar; el paso 02 es un diseño no ejecutable.
