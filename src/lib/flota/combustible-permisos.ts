@@ -1,7 +1,7 @@
 import type { PermisoModulo } from "@/lib/permisos-shared";
 import { tieneAccionCatalogo, tienePermisoBase } from "@/lib/permisos-catalogo";
 
-export const ACCIONES_COMBUSTIBLE = ["ver", "registrar", "editar_pendientes", "revisar", "conciliar", "gestionar_estaciones"] as const;
+export const ACCIONES_COMBUSTIBLE = ["ver", "registrar", "editar_pendientes", "revisar", "conciliar", "gestionar_estaciones", "completar_documentos", "corregir_documentos"] as const;
 export type AccionCombustible = typeof ACCIONES_COMBUSTIBLE[number];
 /** Mismo resolvedor central en servidor/UI. Una denegación explícita prevalece sobre editar legacy. */
 export function puedeCombustible(permisos: PermisoModulo[], accion: AccionCombustible): boolean {
@@ -15,6 +15,8 @@ export function capacidadesCombustible(permisos: PermisoModulo[], admin: boolean
     revisar: admin || puedeCombustible(permisos, "revisar"),
     conciliar: admin || puedeCombustible(permisos, "conciliar"),
     gestionar_estaciones: admin || puedeCombustible(permisos, "gestionar_estaciones"),
+    completar_documentos: admin || puedeCombustible(permisos, "completar_documentos"),
+    corregir_documentos: admin || puedeCombustible(permisos, "corregir_documentos"),
   };
 }
 export type CapacidadesCombustible = ReturnType<typeof capacidadesCombustible>;

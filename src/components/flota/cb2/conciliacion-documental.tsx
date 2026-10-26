@@ -1,4 +1,5 @@
 "use client";
+import { DocumentoEditorCB2 } from "./documento-editor";
 import { Fragment, useEffect, useState } from "react";
 import { jsonCB2, type CatalogosCB2 } from "./client";
 import { button, input } from "./controles";
@@ -43,13 +44,14 @@ function Detalle({ api, factura, refresh }: { api: string; factura: FacturaDocum
     </section>;
 }
 function Tabla({ api, consulta, activo, refresh }: { api: string; consulta: string; activo: boolean; refresh: number }) {
-    const lista = usePagina<FacturaDocumental>(api, consulta, activo, refresh), [abierta, setAbierta] = useState<number | null>(null);
+    const [ediciones, setEdiciones] = useState(0);
+    const lista = usePagina<FacturaDocumental>(api, consulta, activo, refresh + ediciones), [abierta, setAbierta] = useState<number | null>(null);
     return <div className="space-y-3">{lista.cargando && <p role="status">Cargando conciliación documental…</p>}{lista.error && <p role="alert">{lista.error}</p>}
         <div className={styles.reviewScroll} role="region" aria-label="Tabla de conciliación documental" tabIndex={0}><table className={styles.documentTable}>
-            <caption className="sr-only">Balance informativo por factura, sin cierre ni modificaciones</caption>
+            <caption className="sr-only">Balance informativo por factura, sin cierre</caption>
             <thead><tr>{["Proveedor", "Serie / número", "Fecha documental", "Moneda", "Total documental", "Consumos", "Galones", "Monto asociado", "Diferencia documental − consumos", "Estado informativo", "Detalle"].map(t => <th scope="col" key={t}>{t}</th>)}</tr></thead>
-            <tbody>{lista.filas.map(f => <Fragment key={f.id}><tr><td>{f.proveedor}</td><td><strong>{f.serie} / {f.numero}</strong></td><td>{f.fecha ?? "Sin fecha"}</td><td>{f.moneda}</td><td>{importe(f.totalDocumental, f.moneda)}</td><td>{f.cantidad}</td><td>{cifraConsumo(f.galones, 0, 6)}</td><td>{importe(f.montoConsumos, f.moneda)}</td><td><strong>{diferenciaTexto(f)}</strong></td><td><span className="rounded border border-[var(--border)] px-2 py-1 text-xs font-semibold">{f.estado.replaceAll("_", " ")}</span></td><td><button className={button} aria-expanded={abierta === f.id} aria-controls={`documental-${f.id}`} onClick={() => setAbierta(abierta === f.id ? null : f.id)}>{abierta === f.id ? "Cerrar" : "Ver consumos"}</button></td></tr>
-                {abierta === f.id && <tr id={`documental-${f.id}`}><td colSpan={11}><Detalle api={api} factura={f} refresh={refresh}/></td></tr>}
+            <tbody>{lista.filas.map(f => <Fragment key={f.id}><tr><td>{f.proveedor}</td><td><strong>{f.serie} / {f.numero}</strong></td><td>{f.fecha ?? "Sin fecha"}</td><td>{f.moneda}</td><td>{importe(f.totalDocumental, f.moneda)}</td><td>{f.cantidad}</td><td>{cifraConsumo(f.galones, 0, 6)}</td><td>{importe(f.montoConsumos, f.moneda)}</td><td><strong>{diferenciaTexto(f)}</strong></td><td><span className="rounded border border-[var(--border)] px-2 py-1 text-xs font-semibold">{f.estado.replaceAll("_", " ")}</span></td><td><button className={button} aria-expanded={abierta === f.id} aria-controls={`documental-${f.id}`} onClick={() => setAbierta(abierta === f.id ? null : f.id)}>{abierta === f.id ? "Cerrar" : "Ver detalle"}</button></td></tr>
+                {abierta === f.id && <tr id={`documental-${f.id}`}><td colSpan={11}><Detalle api={api} factura={f} refresh={refresh + ediciones}/><DocumentoEditorCB2 api={`${api}/${f.id}/documento`} proveedorId={f.proveedorId} onGuardado={() => setEdiciones(n => n + 1)}/></td></tr>}
             </Fragment>)}</tbody>
         </table></div>{!lista.cargando && !lista.error && !lista.filas.length && <p>No hay facturas para estos filtros.</p>}<Paginacion lista={lista}/>
     </div>;
@@ -57,7 +59,7 @@ function Tabla({ api, consulta, activo, refresh }: { api: string; consulta: stri
 export function ConciliacionDocumentalCB2({ api, cat, activo, refresh }: { api: string; cat: CatalogosCB2; activo: boolean; refresh: number }) {
     const [consulta, setConsulta] = useState(""), [fecha, setFecha] = useState("TODAS"), [error, setError] = useState("");
     return <section className="space-y-4" aria-label="Conciliación documental"><h2 className="text-lg font-semibold">Conciliación documental de facturas</h2>
-        <p>Vista informativa de solo lectura. Cuadrada no significa conciliación definitiva ni cierre. Diferencia = total documental − monto asociado; tolerancia inclusiva de 0.01 en la moneda de la factura.</p>
+        <p>Balance informativo. Cuadrada no significa conciliación definitiva ni cierre. Diferencia = total documental − monto asociado; tolerancia inclusiva de 0.01 en la moneda de la factura.</p>
         <p>Sin total documental tiene prioridad sobre sin consumos. El estado FACTURADO de los consumos se conserva.</p>
         <form className="grid gap-3 rounded-xl border border-[var(--border)] p-3 md:grid-cols-3" onSubmit={e => {
             e.preventDefault(); const data = new FormData(e.currentTarget), q = new URLSearchParams();
