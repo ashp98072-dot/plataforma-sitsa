@@ -87,6 +87,8 @@ export const CATALOGO_PERMISOS: ModuloCatalogo[] = [
     nueva("flota_combustible", "revisar", "Revisar vales", E),
     nueva("flota_combustible", "conciliar", "Conciliar", E),
     nueva("flota_combustible", "gestionar_estaciones", "Gestionar estaciones", E),
+    accion("flota_combustible_completar_documentos", "completar_documentos", "Completar documentos", "puedeVer"),
+    accion("flota_combustible_corregir_documentos", "corregir_documentos", "Corregir documentos declarados", "puedeVer"),
   ] },
   modulo("facturacion","Facturación clientes","contabilidad",[[C,"crear","Crear factura borrador"],[E,"editar","Editar factura borrador"]]),
   modulo("contabilidad","Contabilidad","contabilidad",[[C,"registrar","Registrar datos contables"],[E,"gestionar","Gestionar datos contables"]]),

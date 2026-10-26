@@ -16,13 +16,27 @@ beforeEach(() => {
 it("lectura de matriz legacy no fabrica ceros que anulen editar; guardar/releer conserva revocación individual", async () => {
   m.rows = [{ modulo: "flota_combustible", puede_ver: 1, puede_crear: 0, puede_editar: 1, puede_eliminar: 0 }, { modulo: VERSION_PERMISOS, puede_ver: 1, puede_crear: 0, puede_editar: 0, puede_eliminar: 0 }];
   const efectiva = await permisosEfectivos(9, "JefeOperaciones");
-  for (const accion of ACCIONES_COMBUSTIBLE) expect(puedeCombustible(efectiva, accion)).toBe(true);
+  for (const accion of ACCIONES_COMBUSTIBLE) expect(puedeCombustible(efectiva, accion)).toBe(!["completar_documentos", "corregir_documentos"].includes(accion));
   await guardarPermisosUsuario(9, cambiarAccion(efectiva, "flota_combustible", "revisar", false));
   const releida = await permisosEfectivos(9, "JefeOperaciones");
   expect(puedeCombustible(releida, "revisar")).toBe(false);
+  expect(puedeCombustible(releida, "completar_documentos")).toBe(false);
+  expect(puedeCombustible(releida, "corregir_documentos")).toBe(false);
   for (const accion of ["registrar", "editar_pendientes", "conciliar", "gestionar_estaciones"] as const) expect(puedeCombustible(releida, accion)).toBe(true);
   expect(m.conn.execute).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO usuario_modulo"), [9, "flota_combustible_revisar", 0, 0, 0, 0]);
   expect(m.conn.commit).toHaveBeenCalledOnce();
+});
+it("permisos documentales requieren concesión explícita y persisten su revocación", async () => {
+  const base = [p(VERSION_PERMISOS, true), p("flota_combustible", true, true)];
+  const otorgados = cambiarAccion(cambiarAccion(base, "flota_combustible", "completar_documentos", true), "flota_combustible", "corregir_documentos", true);
+  await guardarPermisosUsuario(9, otorgados);
+  const efectiva = await permisosEfectivos(9, "JefeOperaciones");
+  expect(puedeCombustible(efectiva, "completar_documentos")).toBe(true);
+  expect(puedeCombustible(efectiva, "corregir_documentos")).toBe(true);
+  await guardarPermisosUsuario(9, cambiarAccion(efectiva, "flota_combustible", "corregir_documentos", false));
+  const revocada = await permisosEfectivos(9, "JefeOperaciones");
+  expect(puedeCombustible(revocada, "completar_documentos")).toBe(true);
+  expect(puedeCombustible(revocada, "corregir_documentos")).toBe(false);
 });
 it("Guardar solo registrar persiste filas explícitas y no amplía otras acciones", async () => {
   await guardarPermisosUsuario(9, cambiarAccion([p(VERSION_PERMISOS, true), p("flota_combustible", true)], "flota_combustible", "registrar", true));

@@ -11,6 +11,7 @@ beforeEach(() => {
     host = document.createElement("div"); document.body.append(host); root = createRoot(host); requests.length = 0;
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
         requests.push(String(url));
+        if (String(url).includes("/documento?")) return new Response(JSON.stringify({ habilitado: false }));
         const detalle = String(url).includes("/10/consumos");
         return new Response(JSON.stringify({ filas: detalle ? [{ id: 20, importacionId: 5, vale: "0001", placa: "001ABC", fecha: "2026-08-01", moneda: "GTQ", galones: "3.123456", monto: "100" }] : [factura], siguiente: String(url).includes("despues=0") ? detalle ? 20 : 10 : null }));
     }));
@@ -25,12 +26,12 @@ it("lectura con diferencia textual, precisión y detalle perezoso paginado", asy
     await render(); expect(requests).toHaveLength(1);
     expect(host.textContent).toContain("GTQ 0.010001"); expect(host.textContent).toContain("Documento mayor"); expect(host.textContent).toContain("CON DIFERENCIA"); expect(host.textContent).toContain("Sin fecha");
     expect(host.querySelectorAll('th[scope="col"]')).toHaveLength(11);
-    await click("Ver consumos"); expect(requests).toHaveLength(2);
+    await click("Ver detalle"); expect(requests).toHaveLength(3);
     expect(requests[1]).toContain("/10/consumos?proveedorId=3&limite=25&despues=0");
     expect(host.textContent).toContain("0001"); expect(host.textContent).toContain("3.123456");
     await click("Siguiente"); expect(requests.at(-1)).toContain("/10/consumos?proveedorId=3&limite=25&despues=20");
     await click("Cerrar"); await click("Siguiente"); expect(requests.at(-1)).toContain("despues=10");
-    expect(requests.every(u => u.includes("limite=25"))).toBe(true);
+    expect(requests.filter(u => !u.includes("/documento?")).every(u => u.includes("limite=25"))).toBe(true);
     expect(host.querySelector('button[type="submit"]')?.textContent).not.toBe("Asociar");
 });
 it("los filtros se envían al servidor, reinician cursor y permiten sin fecha", async () => {

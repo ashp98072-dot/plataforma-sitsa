@@ -8,10 +8,10 @@ const ver = p("flota_combustible", { puedeVer: true });
 const version = p(VERSION_PERMISOS, { puedeVer: true });
 
 describe("acciones independientes de Combustibles", () => {
-  it("catálogo central ofrece exactamente seis capacidades y filas VARCHAR(40)", () => {
+  it("catálogo central ofrece exactamente ocho capacidades y filas VARCHAR(40)", () => {
     const acciones = CATALOGO_PERMISOS.find(m => m.id === "flota_combustible")!.acciones;
     expect(acciones.map(a => a.id)).toEqual([...ACCIONES_COMBUSTIBLE]);
-    expect(acciones.map(a => a.label)).toEqual(["Ver", "Registrar vale", "Editar pendientes", "Revisar vales", "Conciliar", "Gestionar estaciones"]);
+    expect(acciones.map(a => a.label)).toEqual(["Ver", "Registrar vale", "Editar pendientes", "Revisar vales", "Conciliar", "Gestionar estaciones", "Completar documentos", "Corregir documentos declarados"]);
     expect(acciones.every(a => a.modulo.length <= 40)).toBe(true);
   });
   it.each(ACCIONES_COMBUSTIBLE)("solo Ver + %s no concede otras capacidades", accion => {
@@ -20,15 +20,19 @@ describe("acciones independientes de Combustibles", () => {
   });
   it("sin Ver ni siquiera una fila de acción aislada da acceso", () => {
     for (const a of ACCIONES_COMBUSTIBLE) expect(puedeCombustible([version, p("flota_combustible_registrar", { puedeVer: true })], a)).toBe(false);
-    expect(Object.values(capacidadesCombustible([], true))).toEqual(Array(6).fill(true));
+    expect(Object.values(capacidadesCombustible([], true))).toEqual(Array(8).fill(true));
   });
   it.each([false, true])("legacy anterior/V2 (v2=%s) conserva editar en las cinco acciones", v2 => {
     const raw = [p("flota_combustible", { puedeVer: true, puedeEditar: true }), ...(v2 ? [version] : [])];
     const efectiva = adaptarPermisosLegacy(raw, "JefeOperaciones");
-    expect(Object.values(capacidadesCombustible(efectiva, false)).every(Boolean)).toBe(true);
+    expect(ACCIONES_COMBUSTIBLE.slice(0,6).every(a => puedeCombustible(efectiva,a))).toBe(true);
+    expect(puedeCombustible(efectiva,"completar_documentos")).toBe(false);
+    expect(puedeCombustible(efectiva,"corregir_documentos")).toBe(false);
     const editada = materializarAcciones(adaptarPermisosLegacy(mergePermisosConCatalogo("JefeOperaciones", efectiva), "JefeOperaciones"));
     const guardada = normalizarMatriz(editada);
-    expect(Object.values(capacidadesCombustible(guardada, false)).every(Boolean)).toBe(true);
+    expect(ACCIONES_COMBUSTIBLE.slice(0,6).every(a => puedeCombustible(guardada,a))).toBe(true);
+    expect(puedeCombustible(guardada,"completar_documentos")).toBe(false);
+    expect(puedeCombustible(guardada,"corregir_documentos")).toBe(false);
     const revocada = normalizarMatriz(cambiarAccion(editada, "flota_combustible", "revisar", false));
     expect(revocada.find(p => p.modulo === "flota_combustible")?.puedeEditar).toBe(true);
     expect(puedeCombustible(revocada, "revisar")).toBe(false);

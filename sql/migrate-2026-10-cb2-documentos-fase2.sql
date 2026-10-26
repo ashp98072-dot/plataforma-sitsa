@@ -1,0 +1,13 @@
+-- MANIFIESTO, NO EJECUTABLE. SUSTITUYE EL LOTE ANTERIOR. NO IMPORTAR.
+-- Ningun SQL de este cambio fue ejecutado. No autoriza produccion.
+-- Orden manual con paradas obligatorias:
+-- 0. preflight-2026-10-cb2-documentos-fase2.sql (solo lectura), revisar y aprobar.
+-- 1. migrate-2026-10-cb2-documentos-fase2-paso1-revision.sql (un ALTER TABLE).
+-- PARAR. verificar-2026-10-cb2-documentos-fase2-paso1.sql (solo lectura).
+-- Aprobar resultado y contexto de sesion antes de cualquier siguiente DDL.
+-- 2. migrate-2026-10-cb2-documentos-fase2-paso2-operaciones.sql (un CREATE TABLE).
+-- PARAR. postcheck-2026-10-cb2-documentos-fase2.sql (solo lectura), auditar.
+-- NO concatenar archivos, importar carpeta ni reutilizar migracion CB2 original.
+-- NO hay rollback entre pasos: cada DDL hace commit implicito.
+-- Error/timeout/desconexion: no repetir; inspeccionar estado con flag apagado.
+-- Procedimiento y fuentes: docs/CB2-DOCUMENTOS-FASE2-AUDITORIA.md.
