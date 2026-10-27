@@ -1456,3 +1456,18 @@ export async function requireTenantFacturacion(
     ),
   };
 }
+
+/** C3C-1: capacidades explícitas. Crear requiere también ver; sin fallback de contabilidad:editar. */
+export async function requireTenantCalendario(slug: string, accion: "ver" | "crear"): Promise<Ok | Fail> {
+  // También se usa desde Server Components: autorizar nunca debe seleccionar empresa ni escribir cookies.
+  const g = await requireTenant(slug, { soloLectura: true });
+  if (g.error || g.session.rol === "Admin") return g;
+  const mods = g.empresa.modulos.length ? g.empresa.modulos : modulosPorRol(g.session.rol);
+  if (!mods.includes("contabilidad")) return { error: NextResponse.json({ error: "Esta empresa no tiene el módulo Contabilidad." }, { status: 403 }) };
+  const p = await permisosEfectivos(g.session.id, g.session.rol);
+  if (!tienePermiso(p, "contabilidad_calendario_ver", "ver") ||
+      (accion === "crear" && !tienePermiso(p, "contabilidad_calendario_crear", "crear"))) {
+    return { error: NextResponse.json({ error: "Sin permiso para el calendario contable." }, { status: 403 }) };
+  }
+  return g;
+}

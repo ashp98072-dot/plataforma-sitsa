@@ -203,6 +203,12 @@ export type PermisoCxc = (typeof PERMISOS_CXC)[number];
 export function esPermisoCxc(m: string): m is PermisoCxc {
   return (PERMISOS_CXC as readonly string[]).includes(m);
 }
+/** C3C-1: filas propias sin grants por rol; no conceden escritura de asientos. */
+export const PERMISOS_CONT_CALENDARIO = ["contabilidad_calendario_ver", "contabilidad_calendario_crear"] as const;
+export function esPermisoContCalendario(m: string): m is (typeof PERMISOS_CONT_CALENDARIO)[number] {
+  return (PERMISOS_CONT_CALENDARIO as readonly string[]).includes(m);
+}
+
 /**
  * REPORTES CONTABLES (M-4): filas propias dentro de "contabilidad", una por reporte (ningún rol las trae por defecto; Admin las recibe por catálogo).
  * Son de SOLO LECTURA sobre cont_asientos / cont_asiento_detalle / cont_cuentas. No conceden registrar asientos ni ver CxC/CxP.
@@ -387,6 +393,7 @@ export const PLATAFORMA_PERMISIBLES = [
   ...PERMISOS_CXC,
   // REPORTES CONTABLES (M-4): ver PERMISOS_CONT_REPORTES arriba (ningún rol por defecto).
   ...PERMISOS_CONT_REPORTES,
+  ...PERMISOS_CONT_CALENDARIO,
 ] as const;
 
 /** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
@@ -481,7 +488,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (esPermisoLiquidacionViaje(m)) return "tms";
   if (esPermisoCxp(m)) return "contabilidad";
   if (esPermisoCxc(m)) return "contabilidad";
-  if (esPermisoContReporte(m)) return "contabilidad";
+  if (esPermisoContReporte(m) || esPermisoContCalendario(m)) return "contabilidad";
   if (m === "flota_combustible") return "tms";
   if (m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
@@ -542,6 +549,8 @@ export function labelPermiso(modulo: string): string {
   if (esPermisoCxp(modulo)) return LABEL_PERMISO_CXP[modulo];
   if (esPermisoCxc(modulo)) return LABEL_PERMISO_CXC[modulo];
   if (esPermisoContReporte(modulo)) return LABEL_PERMISO_CONT_REPORTE[modulo];
+  if (modulo === "contabilidad_calendario_ver") return "Contabilidad: ver calendario";
+  if (modulo === "contabilidad_calendario_crear") return "Contabilidad: crear calendario";
   if (esPlataformaPermisible(modulo)) {
     return MODULO_LABEL[modulo as Modulo] ?? modulo;
   }
@@ -637,7 +646,7 @@ export const GRUPOS_PERMISOS: {
     id: "contabilidad",
     titulo: "Permisos Contabilidad / Facturación",
     descripcion: "Cuentas, asientos, cartera y facturación de la empresa.",
-    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP, ...PERMISOS_CONT_REPORTES],
+    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP, ...PERMISOS_CONT_REPORTES, ...PERMISOS_CONT_CALENDARIO],
   },
   {
     id: "otros",
@@ -994,7 +1003,8 @@ export function modulosPlataformaDesdePermisos(
       !esPermisoLiquidacionViaje(p.modulo) &&
       !esPermisoCxp(p.modulo) &&
       !esPermisoCxc(p.modulo) &&
-      !esPermisoContReporte(p.modulo)
+      !esPermisoContReporte(p.modulo) &&
+      !esPermisoContCalendario(p.modulo)
     ) {
       out.add(p.modulo);
     }
