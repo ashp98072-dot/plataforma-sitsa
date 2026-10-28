@@ -102,6 +102,11 @@ export async function operarPeriodo(ctx:Contexto,input:unknown){
       if(action.accion==='reabrir_solicitar'){
         if(control.estado!=='ACTIVO')throw new ErrorPeriodo('CONTROL_INACTIVO','Control no activo.');
         exigirTransicion(p!.estado,'reabrir');
+        // El lock estable de empresa/libro ya serializa a todos los solicitantes.
+        // También bloquean las pendientes antiguas: deben resolverse por el flujo
+        // autorizado de rechazo, conservando motivo, auditoría y dos actores.
+        const pendientes=await filas(c,"SELECT id FROM cont_periodos_solicitudes WHERE empresa_id=? AND entidad_id=? AND tipo='REABRIR' AND periodo_id=? AND estado='PENDIENTE' ORDER BY id LIMIT 1 FOR UPDATE",[...scope(ctx),p!.id]);
+        if(pendientes.length)throw new ErrorPeriodo('SOLICITUD_PENDIENTE','Ya existe una solicitud de reapertura pendiente para este período. Resuélvela antes de crear otra.');
       }else{
         if(control.estado!=='NO_ACTIVADO')throw new ErrorPeriodo('YA_ACTIVO','El control ya está activo.');
         const d=(await filas(c,'SELECT * FROM cont_control_diagnosticos WHERE empresa_id=? AND entidad_id=? AND id=? FOR UPDATE',[...scope(ctx),action.diagnosticoId]))[0];
