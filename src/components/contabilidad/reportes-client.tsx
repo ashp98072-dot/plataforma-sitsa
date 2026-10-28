@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {SelectorPeriodoReporte,ResumenPeriodoReporte,type OpcionPeriodo} from "./reporte-periodo";
+import type {PeriodoReporte} from "@/lib/contabilidad/reportes/periodo";
 import { NOTA_SALDO_ACUMULADO } from "@/lib/contabilidad/reportes/calculo";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Cuenta = { id: number; codigo: string; nombre: string };
 type Vista = "diario" | "mayor" | "balance";
 
-const campo = "rounded border border-[var(--border)] bg-[var(--input)] p-2 text-sm";
+const campo = "min-h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] p-2 text-sm text-[var(--text)] disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-[var(--accent)]";
 const boton = "rounded border border-[var(--border)] px-3 py-1 text-sm hover:bg-[var(--input)] disabled:opacity-50";
 const q = (n: string) => Number(n).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -27,13 +29,18 @@ type BalanceApi = {
   totales: { totalDebe: string; totalHaber: string; diferencia: string; totalSaldoDeudor: string; totalSaldoAcreedor: string; cuadra: boolean };
 };
 
-export function ReportesContablesClient({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: string; puedeDiario: boolean; puedeMayor: boolean; puedeBalance: boolean }) {
+export function ReportesContablesClient(props: {slug:string;puedeDiario:boolean;puedeMayor:boolean;puedeBalance:boolean}) { return <ReportesLibro key={props.slug} {...props}/>; }
+function ReportesLibro({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: string; puedeDiario: boolean; puedeMayor: boolean; puedeBalance: boolean }) {
   const base = `/api/empresas/${slug}/contabilidad/reportes`;
   const [entidades, setEntidades] = useState<Entidad[]>([]);
-  const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [entidadId, setEntidadId] = useState("");
+  const [opciones,setOpciones]=useState<{entidadId:string;cuentas:Cuenta[];periodos:OpcionPeriodo[];calendarioDisponible:boolean}>();
+  const cuentas=opciones?.entidadId===entidadId?opciones.cuentas:[];
+  const periodos=opciones?.entidadId===entidadId?opciones.periodos:[];
+  const cargandoOpciones=!!entidadId&&opciones?.entidadId!==entidadId;
+
   const [vista, setVista] = useState<Vista>(puedeDiario ? "diario" : puedeMayor ? "mayor" : "balance");
-  const [f, setF] = useState({ desde: "", hasta: "", numero: "", cuentaId: "", sinMovimiento: false });
+  const [f, setF] = useState({ periodo: "", desde: "", hasta: "", numero: "", cuentaId: "", sinMovimiento: false });
   const [page, setPage] = useState(1);
   // El resultado queda ligado a la consulta que lo produjo: al cambiar filtros se descarta solo (sin setState síncrono en el efecto).
   const [resultado, setResultado] = useState<{ clave: string; datos?: unknown; error?: string } | null>(null);
@@ -45,13 +52,14 @@ export function ReportesContablesClient({ slug, puedeDiario, puedeMayor, puedeBa
       .then(({ ok, d }) => {
         if (ac.signal.aborted) return;
         if (!ok) return setErrorOpciones(d.error ?? "No se pudieron cargar las opciones.");
-        setEntidades(d.entidades); setCuentas(d.cuentas);
+        setErrorOpciones("");setEntidades(d.entidades); setOpciones({entidadId,cuentas:d.cuentas,periodos:d.periodos??[],calendarioDisponible:d.calendarioDisponible!==false});
         if (!entidadId && d.entidades.filter((e: Entidad) => Number(e.activa) === 1).length === 1) setEntidadId(String(d.entidades.find((e: Entidad) => Number(e.activa) === 1).id));
       }).catch(() => { if (!ac.signal.aborted) setErrorOpciones("No se pudieron cargar las opciones."); });
     return () => ac.abort();
   }, [base, entidadId]);
 
-  const listo = !!entidadId && (vista !== "mayor" || !!f.cuentaId);
+  const periodoElegido=periodos.find(p=>String(p.id)===f.periodo);
+  const listo = !!entidadId && !cargandoOpciones && (!f.periodo||!!periodoElegido) && (vista !== "mayor" || !!f.cuentaId);
   const consulta = (formato?: string) => {
     const sp = new URLSearchParams({ entidad: entidadId });
     if (f.desde) sp.set("desde", f.desde);
@@ -75,7 +83,7 @@ export function ReportesContablesClient({ slug, puedeDiario, puedeMayor, puedeBa
   const cambiar = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setPage(1); };
   const pestana = (v: Vista, texto: string, permitido: boolean) => permitido && <button type="button" className={boton} aria-pressed={vista === v} onClick={() => { setVista(v); setPage(1); }}>{texto}</button>;
   const actual = resultado?.clave === clave && clave ? resultado : null;
-  const d = (actual?.datos ?? null) as (DiarioApi & MayorApi & BalanceApi) | null;
+  const d = (actual?.datos ?? null) as (DiarioApi & MayorApi & BalanceApi & {periodoSeleccionado?:PeriodoReporte|null}) | null;
   const error = errorOpciones || actual?.error || "";
   const cargando = !!clave && !actual;
 
@@ -83,18 +91,22 @@ export function ReportesContablesClient({ slug, puedeDiario, puedeMayor, puedeBa
     <h1 className="text-2xl font-semibold">Reportes contables</h1>
     <p className="text-sm text-[var(--muted)]">Salen únicamente de los asientos registrados (cont_asientos y su detalle) y del catálogo de cuentas de la entidad. No usan CxC, CxP ni Facturación.</p>
     <label className="block text-sm">Libro contable (entidad)
-      <select className={`${campo} ml-2`} aria-label="Entidad" value={entidadId} onChange={e => { setEntidadId(e.target.value); setF({ ...f, cuentaId: "" }); setPage(1); }}>
+      <select className={`${campo} ml-2`} aria-label="Entidad" value={entidadId} onChange={e => { setEntidadId(e.target.value); setF({ ...f, cuentaId: "", periodo:"",desde:"",hasta:"" }); setPage(1); }}>
         <option value="">Seleccionar entidad</option>{entidades.map(e => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}{Number(e.activa) === 1 ? "" : " (inactiva)"}</option>)}
       </select></label>
-    <div className="flex gap-2">{pestana("diario", "Diario", puedeDiario)}{pestana("mayor", "Mayor", puedeMayor)}{pestana("balance", "Balance de comprobación", puedeBalance)}</div>
-    <div className="flex flex-wrap items-end gap-2">
-      <label className="text-xs">Desde<input type="date" className={`${campo} block`} value={f.desde} onChange={cambiar("desde")} /></label>
-      <label className="text-xs">Hasta<input type="date" className={`${campo} block`} value={f.hasta} onChange={cambiar("hasta")} /></label>
+    <div className="flex flex-wrap gap-2">{pestana("diario", "Diario", puedeDiario)}{pestana("mayor", "Mayor", puedeMayor)}{pestana("balance", "Balance de comprobación", puedeBalance)}</div>
+    <div className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 sm:grid-cols-2 xl:grid-cols-3">
+      <SelectorPeriodoReporte periodos={periodos} value={f.periodo} disabled={!entidadId||cargandoOpciones} onChange={periodo=>{setF({...f,periodo,desde:"",hasta:""});setPage(1);}}/>
+      <label className="text-xs">Desde<input type="date" className={`${campo} block`} value={periodoElegido?.fechaInicio??f.desde} disabled={!!f.periodo} onChange={cambiar("desde")} /></label>
+      <label className="text-xs">Hasta<input type="date" className={`${campo} block`} value={periodoElegido?.fechaFin??f.hasta} disabled={!!f.periodo} onChange={cambiar("hasta")} /></label>
       {vista === "diario" && <input className={campo} placeholder="Número de asiento (exacto)" value={f.numero} onChange={cambiar("numero")} />}
       {vista === "mayor" && <select className={campo} aria-label="Cuenta" value={f.cuentaId} onChange={cambiar("cuentaId")}><option value="">Seleccionar cuenta</option>{cuentas.map(c => <option key={c.id} value={c.id}>{c.codigo} — {c.nombre}</option>)}</select>}
       {vista === "balance" && <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={f.sinMovimiento} onChange={e => { setF({ ...f, sinMovimiento: e.target.checked }); setPage(1); }} />Incluir cuentas sin movimientos</label>}
       <a className={`${boton} ${listo ? "" : "pointer-events-none opacity-50"}`} href={listo ? consulta("xlsx") : undefined} aria-disabled={!listo}>Exportar Excel</a>
     </div>
+    {cargandoOpciones&&<p role="status" className="text-sm text-[var(--muted)]">Cargando cuentas y per?odos del libro?</p>}
+    {opciones?.entidadId===entidadId&&!opciones.calendarioDisponible&&<p role="note" className="rounded-lg border border-[var(--border)] p-3 text-sm">Calendario no disponible. Puedes consultar por fechas manuales; la selecci?n de per?odos requiere el esquema C3C-2.</p>}
+    {d?.periodoSeleccionado&&<ResumenPeriodoReporte periodo={d.periodoSeleccionado}/>}
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
     {!entidadId && <p className="text-sm">Selecciona una entidad para consultar.</p>}
     {entidadId && vista === "mayor" && !f.cuentaId && <p className="text-sm">Selecciona una cuenta.</p>}

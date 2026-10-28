@@ -1,3 +1,4 @@
+import {resolverPeriodoReporte} from './periodo';
 import type { PoolConnection } from "mysql2/promise";
 import type { RowDataPacket } from "mysql2";
 import { getPool } from "@/lib/db";
@@ -12,17 +13,18 @@ import { NOTA_SALDO_ACUMULADO, aCentavos, conSaldoAcumulado, deCentavos, saldosD
  * transacción READ ONLY (instantánea consistente) y SIEMPRE acotado por empresa (de la sesión) y entidad (validada contra la empresa).
  * No usa `bloquearAmbito` (que toma FOR UPDATE): consultar un reporte no debe bloquear a quien registra asientos.
  */
-export type FiltrosFecha = { desde?: string; hasta?: string };
+export type FiltrosFecha = { desde?: string; hasta?: string; periodoId?: number };
 const ESTADO = "Registrado";
 export const MAX_LINEAS_MAYOR = 5000;
 export const MAX_ASIENTOS_DIARIO = 100;
 
-async function enSolicitudDeLectura<T extends object>(fn: (c: PoolConnection) => Promise<T>,empresaId:number,entidadId:number) {
+async function enSolicitudDeLectura<T extends object,F extends FiltrosFecha>(fn: (c: PoolConnection,f:F) => Promise<T>,empresaId:number,entidadId:number,filtros:F) {
   const conn = await getPool().getConnection();
   try {
     await conn.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     await conn.query("START TRANSACTION READ ONLY");
-    const r = await fn(conn);
+    const {filtros:resueltos,periodoSeleccionado}=await resolverPeriodoReporte(conn,empresaId,entidadId,filtros);
+    const r = await fn(conn,resueltos);
     let revisiones:RowDataPacket[]=[];let esquema='DISPONIBLE';
     try{
       [revisiones]=await conn.query<RowDataPacket[]>('SELECT id,estado,version,revision_cierre FROM cont_periodos WHERE empresa_id=? AND entidad_id=? ORDER BY id',[empresaId,entidadId]);
@@ -33,7 +35,7 @@ async function enSolicitudDeLectura<T extends object>(fn: (c: PoolConnection) =>
     const trazabilidadPeriodo={generadoEn:new Date().toISOString(),esquema,empresaId,entidadId,revisiones,
       alcance:'Datos de la instantánea de lectura; no es una reproducción certificada de un cierre anterior.'};
     await conn.commit();
-    return {...r,trazabilidadPeriodo};
+    return {...r,trazabilidadPeriodo,periodoSeleccionado};
   } catch (e) {
     try { await conn.rollback(); } catch { /* conserva el error original */ }
     throw e;
@@ -60,7 +62,7 @@ export type FiltrosDiario = FiltrosFecha & { numero?: string; page?: number };
 
 export async function libroDiario(empresaId: number, entidadId: number, f: FiltrosDiario = {}) {
   const page = Math.max(f.page ?? 1, 1);
-  return enSolicitudDeLectura(async (c) => {
+  return enSolicitudDeLectura(async (c,f) => {
     const entidad = await exigirEntidad(c, empresaId, entidadId);
     const { w, p } = condicionesAsiento(empresaId, entidadId, f);
     if (f.numero?.trim()) { w.push("a.numero = ?"); p.push(f.numero.trim().slice(0, 40)); }
@@ -94,12 +96,12 @@ export async function libroDiario(empresaId: number, entidadId: number, f: Filtr
       entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, page, pageSize: MAX_ASIENTOS_DIARIO, totalAsientos: Number(tot[0]?.n ?? 0), asientos,
       totalesRango: { debe: deCentavos(aCentavos(agg[0]?.debe)), haber: deCentavos(aCentavos(agg[0]?.haber)), diferencia: deCentavos(aCentavos(agg[0]?.debe) - aCentavos(agg[0]?.haber)), asientosDescuadrados: Number(agg[0]?.descuadrados ?? 0) },
     };
-  },empresaId,entidadId);
+  },empresaId,entidadId,f);
 }
 
 /* ------------------------------------------------------------------ Libro Mayor ------------------------------------------------------------------ */
 export async function libroMayor(empresaId: number, entidadId: number, cuentaId: number, f: FiltrosFecha = {}) {
-  return enSolicitudDeLectura(async (c) => {
+  return enSolicitudDeLectura(async (c,f) => {
     const entidad = await exigirEntidad(c, empresaId, entidadId);
     const [cu] = await c.query<RowDataPacket[]>("SELECT id, codigo, nombre, tipo FROM cont_cuentas WHERE empresa_id = ? AND entidad_id = ? AND id = ?", [empresaId, entidadId, cuentaId]);
     if (!cu[0]) throw new AccesoContable("Cuenta no disponible en esta entidad.", 404);
@@ -121,12 +123,12 @@ export async function libroMayor(empresaId: number, entidadId: number, cuentaId:
       totales: { debe: t.debe, haber: t.haber, saldoFinal: movimientos.length ? movimientos[movimientos.length - 1].saldo : "0.00" },
       saldoInicial: null as null, nota: NOTA_SALDO_ACUMULADO,
     };
-  },empresaId,entidadId);
+  },empresaId,entidadId,f);
 }
 
 /* ------------------------------------------------------------------ Balance de comprobación ------------------------------------------------------------------ */
 export async function balanceComprobacion(empresaId: number, entidadId: number, f: FiltrosFecha & { incluirSinMovimiento?: boolean } = {}) {
-  return enSolicitudDeLectura(async (c) => {
+  return enSolicitudDeLectura(async (c,f) => {
     const entidad = await exigirEntidad(c, empresaId, entidadId);
     const { w, p } = condicionesAsiento(empresaId, entidadId, f);
     const [mov] = await c.query<RowDataPacket[]>(
@@ -149,5 +151,5 @@ export async function balanceComprobacion(empresaId: number, entidadId: number, 
       filas.push({ cuentaId: Number(m.cuenta_id), codigo: "(sin cuenta)", nombre: "Cuenta no encontrada en esta entidad", tipo: "", nivel: 0, debito, credito, ...saldosDeCuenta(debito, credito) });
     }
     return { entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, incluyeSinMovimiento: !!f.incluirSinMovimiento, filas, totales: totalesBalance(filas) };
-  },empresaId,entidadId);
+  },empresaId,entidadId,f);
 }

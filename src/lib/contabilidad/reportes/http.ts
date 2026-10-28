@@ -5,6 +5,7 @@ import { requireTenantContReporte } from "@/lib/tenant";
 import { AccesoContable, ambitoDesdeRequest, errorAmbito } from "@/lib/contabilidad/ambito";
 import { fechaValida } from "./calculo";
 import { balanceComprobacion, libroDiario, libroMayor } from "./reportes";
+import {filtroPeriodo} from './periodo';
 
 const NO_STORE = { "Cache-Control": "private, no-store" };
 export type TipoReporte = "diario" | "mayor" | "balance";
@@ -29,7 +30,7 @@ export async function reporteHttp(req: Request, slug: string, tipo: TipoReporte)
   try {
     const entidadId = ambitoDesdeRequest(req, g.session).entidadId;
     const sp = new URL(req.url).searchParams;
-    const f = fechas(sp);
+    const f = {...fechas(sp),...filtroPeriodo(sp)};
     let datos;
     if (tipo === "diario") datos = await libroDiario(g.empresa.id, entidadId, { ...f, numero: sp.get("numero") ?? undefined, page: entero(sp.get("page")) });
     else if (tipo === "mayor") {
@@ -66,10 +67,17 @@ export async function opcionesHttp(req: Request, slug: string) {
   if (g.error) return g.error;
   try {
     const entidades = await query<RowDataPacket[]>("SELECT id, codigo, nombre, activa FROM cont_entidades WHERE empresa_id = ? ORDER BY codigo", [g.empresa.id]);
-    const e = entero(new URL(req.url).searchParams.get("entidad"));
+    const e = new URL(req.url).searchParams.has('entidad') ? ambitoDesdeRequest(req,g.session).entidadId : undefined;
     const cuentas = e ? await query<RowDataPacket[]>(
       "SELECT id, codigo, nombre FROM cont_cuentas WHERE empresa_id = ? AND entidad_id = ? ORDER BY codigo", [g.empresa.id, e]) : [];
-    return NextResponse.json({ entidades, cuentas }, { headers: NO_STORE });
+    let periodos:RowDataPacket[]=[];let calendarioDisponible=true;
+    if(e){
+      if(!entidades.some(en=>Number(en.id)===e))throw new AccesoContable('Libro no disponible.',404);
+      try{periodos=await query<RowDataPacket[]>(
+        "SELECT p.id,p.codigo,p.estado,p.version,p.revision_cierre,DATE_FORMAT(p.fecha_inicio,'%Y-%m-%d') fechaInicio,DATE_FORMAT(p.fecha_fin,'%Y-%m-%d') fechaFin,e.codigo ejercicio FROM cont_periodos p JOIN cont_ejercicios e ON e.empresa_id=p.empresa_id AND e.entidad_id=p.entidad_id AND e.id=p.ejercicio_id WHERE p.empresa_id=? AND p.entidad_id=? ORDER BY p.fecha_inicio,p.id",[g.empresa.id,e]);
+      }catch(err){if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(String((err as {code?:string}).code)))throw err;calendarioDisponible=false;}
+    }
+    return NextResponse.json({ entidades, cuentas,periodos,calendarioDisponible }, { headers: NO_STORE });
   } catch (err) {
     const acceso = errorAmbito(err);
     if (acceso) return acceso;
