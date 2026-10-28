@@ -205,6 +205,8 @@ export function esPermisoCxc(m: string): m is PermisoCxc {
 }
 /** C3C-1: filas propias sin grants por rol; no conceden escritura de asientos. */
 export const PERMISOS_CONT_CALENDARIO = ["contabilidad_calendario_ver", "contabilidad_calendario_crear"] as const;
+export const PERMISOS_CONT_PERIODOS = ['cont_periodos_abrir','cont_periodos_cerrar','cont_periodos_reabrir_solicitar','cont_periodos_reabrir_aprobar','cont_periodos_diagnosticar','cont_periodos_activar_solicitar','cont_periodos_activar_aprobar','cont_periodos_operadores'] as const;
+export function esPermisoContPeriodos(m:string): m is typeof PERMISOS_CONT_PERIODOS[number]{return (PERMISOS_CONT_PERIODOS as readonly string[]).includes(m);}
 export function esPermisoContCalendario(m: string): m is (typeof PERMISOS_CONT_CALENDARIO)[number] {
   return (PERMISOS_CONT_CALENDARIO as readonly string[]).includes(m);
 }
@@ -394,6 +396,7 @@ export const PLATAFORMA_PERMISIBLES = [
   // REPORTES CONTABLES (M-4): ver PERMISOS_CONT_REPORTES arriba (ningún rol por defecto).
   ...PERMISOS_CONT_REPORTES,
   ...PERMISOS_CONT_CALENDARIO,
+  ...PERMISOS_CONT_PERIODOS,
 ] as const;
 
 /** Clave persistida (usuario_modulo.modulo, VARCHAR(40)) de la acción especializada de Vehículos para editar los de otras empresas. */
@@ -488,7 +491,7 @@ export function moduloEmpresaDelPermiso(m: string): Modulo | null {
   if (esPermisoLiquidacionViaje(m)) return "tms";
   if (esPermisoCxp(m)) return "contabilidad";
   if (esPermisoCxc(m)) return "contabilidad";
-  if (esPermisoContReporte(m) || esPermisoContCalendario(m)) return "contabilidad";
+  if (esPermisoContReporte(m) || esPermisoContCalendario(m) || esPermisoContPeriodos(m)) return "contabilidad";
   if (m === "flota_combustible") return "tms";
   if (m === PERMISO_FLOTA_VEHICULOS_OTRAS_EMPRESAS) return "flota";
   if (
@@ -646,7 +649,7 @@ export const GRUPOS_PERMISOS: {
     id: "contabilidad",
     titulo: "Permisos Contabilidad / Facturación",
     descripcion: "Cuentas, asientos, cartera y facturación de la empresa.",
-    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP, ...PERMISOS_CONT_REPORTES, ...PERMISOS_CONT_CALENDARIO],
+    modulos: ["contabilidad", "facturacion", ...PERMISOS_CXC, ...PERMISOS_CXP, ...PERMISOS_CONT_REPORTES, ...PERMISOS_CONT_CALENDARIO, ...PERMISOS_CONT_PERIODOS],
   },
   {
     id: "otros",
@@ -790,7 +793,7 @@ export function catalogoPermisosRol(rol: RolGlobal): string[] {
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
   if (rol === "Admin") {
-    return catalogoPermisosRol("Admin").map((m) => permisoFull(m));
+    return catalogoPermisosRol("Admin").map((m) => esPermisoContPeriodos(m)?permisoVacio(m):permisoFull(m));
   }
 
   const propios = modulosPropiosDelRol(rol);
@@ -1004,7 +1007,7 @@ export function modulosPlataformaDesdePermisos(
       !esPermisoCxp(p.modulo) &&
       !esPermisoCxc(p.modulo) &&
       !esPermisoContReporte(p.modulo) &&
-      !esPermisoContCalendario(p.modulo)
+      !esPermisoContCalendario(p.modulo) && !esPermisoContPeriodos(p.modulo)
     ) {
       out.add(p.modulo);
     }

@@ -2,6 +2,7 @@ import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
 import type { SessionPayload } from "@/lib/session";
+import { ErrorPeriodo } from './periodos-contrato';
 
 export type AmbitoContable = { entidadId: number; usuarioId: number; admin: boolean };
 export class AccesoContable extends Error {
@@ -49,6 +50,7 @@ export async function consultarLibro(tipo: keyof typeof consultas, empresaId: nu
   finally { conn.release(); }
 }
 export function errorAmbito(error: unknown) {
+  if(error instanceof ErrorPeriodo)return NextResponse.json({error:error.message,codigo:error.codigo},{status:error.status});
   if (error instanceof AccesoContable) return NextResponse.json({ error: error.message }, { status: error.status });
   const code = (error as { code?: string })?.code;
   if (code === "ER_NO_SUCH_TABLE" || code === "ER_BAD_FIELD_ERROR") return NextResponse.json(

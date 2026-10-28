@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { fechaValida } from "./reportes/calculo";
 
-export const AVISO_CALENDARIO = "Calendario configurado; todavía no controla el registro de partidas.";
+export const AVISO_CALENDARIO = "Configurar el calendario no activa el control de períodos. La activación se administra expresamente por libro.";
 const codigo = z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9_-]+$/).transform((v) => v.toUpperCase());
 const fecha = z.string().refine((v) => v >= "1000-01-01" && v <= "9999-12-31" && fechaValida(v) === v, "Fecha inválida (AAAA-MM-DD).");
 const periodoSchema = z.object({ codigo, fechaInicio: fecha, fechaFin: fecha }).strict();
@@ -29,5 +29,5 @@ export const calendarioSchema = z.object({
 });
 export type CalendarioEntrada = z.input<typeof calendarioSchema>;
 export type EjercicioCalendario = { id: number; codigo: string; fechaInicio: string; fechaFin: string; estado: "CONFIGURADO" };
-export type PeriodoCalendario = EjercicioCalendario & { ejercicioId: number; orden: number };
+export type PeriodoCalendario = Omit<EjercicioCalendario,'estado'> & { ejercicioId: number; orden: number; estado:'CONFIGURADO'|'ABIERTO'|'CERRADO' };
 export function validarCalendarioContable(input: unknown) { return calendarioSchema.parse(input); }

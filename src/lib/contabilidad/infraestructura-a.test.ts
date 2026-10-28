@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+vi.mock('./periodos-control',()=>({comprobarPeriodoAsiento:vi.fn()}));
 import type { PoolConnection } from "mysql2/promise";
 vi.mock("./ambito", () => ({ bloquearAmbito: vi.fn(), exigirEsquemaC2b: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getPool: vi.fn() }));

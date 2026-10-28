@@ -68,10 +68,10 @@ it("un request nuevo observa revocación inmediatamente; sin caché compartida",
   expect(m.query).toHaveBeenCalledTimes(2);
 });
 
-it("Route Handlers sin dispatcher siguen leyendo en cada llamada; Admin conserva bypass sin query", async () => {
+it("Route Handlers releen permisos; Admin conserva privilegios anteriores pero consulta grants explícitos C3C2", async () => {
   m.scope = null;
   await permisosEfectivos(7, "Operaciones"); await permisosEfectivos(7, "Operaciones");
   expect(m.query).toHaveBeenCalledTimes(2);
   await permisosEfectivos(7, "Admin");
-  expect(m.query).toHaveBeenCalledTimes(2);
+  expect(m.query).toHaveBeenCalledTimes(3);
 });

@@ -1,4 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
+// Validación real de períodos cubierta por periodos.integration.test.ts; aquí se aísla el contrato previo del asiento.
+vi.mock('./periodos-control',()=>({comprobarPeriodoAsiento:vi.fn()}));
 vi.mock("./ambito", () => ({ bloquearAmbito: vi.fn(), exigirEsquemaC2b: vi.fn() }));
 const ambito = { entidadId: 9, usuarioId: 4, admin: false };
 vi.mock("@/lib/db", () => ({ getPool: vi.fn() }));

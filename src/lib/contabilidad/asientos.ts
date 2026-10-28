@@ -3,6 +3,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { bloquearAmbito, exigirEsquemaC2b, type AmbitoContable } from "./ambito";
+import { comprobarPeriodoAsiento } from './periodos-control';
 
 export class AsientoInvalido extends Error {}
 
@@ -42,13 +43,14 @@ function validarAsiento(input: unknown) {
 }
 
 /** El llamador posee la transacción y debe revertirla ante cualquier error.
- * PR A no implementa control de periodos. Su futura validación va antes del INSERT.
+ * C3C-2: todos los callers, incluidos eventos, validan períodos dentro de esta transacción.
  */
 export async function registrarAsientoTx(conn: PoolConnection, empresaId: number, usuario: string, input: unknown, ambito: AmbitoContable) {
   const { d, debe } = validarAsiento(input);
   const ids = [...new Set(d.lineas.map((l) => l.cuentaId))].sort((a, b) => a - b);
   await bloquearAmbito(conn, empresaId, ambito, true);
   await exigirEsquemaC2b(conn);
+  await comprobarPeriodoAsiento(conn,empresaId,ambito.entidadId,d.fecha);
   // Orden estable y current read: no aceptar cuentas desactivadas/borradas mientras se registra.
   const [cuentas] = await conn.query<RowDataPacket[]>(
     `SELECT id, empresa_id, entidad_id, activa FROM cont_cuentas
