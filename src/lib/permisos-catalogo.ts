@@ -144,6 +144,11 @@ agregar("contabilidad",
   { ...accion("contabilidad_diario","contabilidad_ver_diario","Ver Libro Diario","puedeVer"), grupo: "Reportes contables" },
   { ...accion("contabilidad_mayor","contabilidad_ver_mayor","Ver Libro Mayor","puedeVer"), grupo: "Reportes contables" },
   { ...accion("contabilidad_balance","contabilidad_ver_balance","Ver Balance de comprobación","puedeVer"), grupo: "Reportes contables" });
+// C3C-1: calendario configurado, permisos explícitos sin herencia de edición contable.
+agregar("contabilidad",
+  { ...accion("contabilidad_calendario_ver","calendario_ver","Ver calendario contable","puedeVer"), grupo: "Calendario contable" },
+  { ...accion("contabilidad_calendario_crear","calendario_crear","Crear ejercicios y períodos",C), requiere: "calendario_ver", grupo: "Calendario contable" });
+
 // CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
 agregar("contabilidad",
   { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },
