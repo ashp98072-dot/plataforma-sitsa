@@ -11,7 +11,7 @@ import {libroDiario,libroMayor,balanceComprobacion} from './reportes';
 import {reporteHttp,opcionesHttp} from './http';
 import {exportarXlsx} from './exportar';
 import {SelectorPeriodoReporte,ResumenPeriodoReporte} from '@/components/contabilidad/reporte-periodo';
-import {ReportesContablesClient} from '@/components/contabilidad/reportes-client';
+import {ReportesContablesClient,urlReporteContable} from '@/components/contabilidad/reportes-client';
 const periodo={id:3,ejercicio_id:1,ejercicio:'LAB2026',codigo:'ENE2026',desde:'2026-01-01',hasta:'2026-01-31',estado:'CERRADO',version:2,revision_cierre:1};
 beforeEach(()=>{
  vi.resetAllMocks();m.guard.mockResolvedValue({empresa:{id:7},session:{id:41,rol:'Contabilidad'}});
@@ -28,6 +28,24 @@ beforeEach(()=>{
  m.globalQuery.mockImplementation(async(sql:string)=>sql.includes('FROM cont_entidades')?[{id:9}]:[]);
 });
 describe('Reportes por período: contrato, tenant y lectura consistente',()=>{
+ it.each(['diario','mayor','balance'] as const)('URL de %s y su Excel incluye el período y excluye fechas aunque haya valores previos',vista=>{
+  const f={periodo:'37',desde:'2026-01-01',hasta:'2026-01-31',numero:' A-1 ',cuentaId:'12',sinMovimiento:true};
+  for(const formato of [undefined,'xlsx']){
+   const u=new URL(urlReporteContable('/api/empresas/lab-a/contabilidad/reportes','9',vista,f,2,formato),'http://local');
+   expect(u.pathname).toBe(`/api/empresas/lab-a/contabilidad/reportes/${vista}`);expect(u.searchParams.get('entidad')).toBe('9');
+   expect(u.searchParams.get('periodo')).toBe('37');expect(u.searchParams.has('desde')).toBe(false);expect(u.searchParams.has('hasta')).toBe(false);
+   expect(u.searchParams.get('formato')).toBe(formato??null);
+   if(vista==='diario'){expect(u.searchParams.get('page')).toBe('2');expect(u.searchParams.get('numero')).toBe('A-1');}
+   if(vista==='mayor')expect(u.searchParams.get('cuentaId')).toBe('12');
+   if(vista==='balance')expect(u.searchParams.get('sinMovimiento')).toBe('1');
+  }
+ });
+ it('URL sin período conserva las fechas manuales para pantalla y Excel',()=>{
+  for(const formato of [undefined,'xlsx']){
+   const u=new URL(urlReporteContable('/reportes','9','diario',{periodo:'',desde:'2026-01-01',hasta:'2026-01-31',numero:'',cuentaId:'',sinMovimiento:false},1,formato),'http://local');
+   expect(u.searchParams.has('periodo')).toBe(false);expect(u.searchParams.get('desde')).toBe('2026-01-01');expect(u.searchParams.get('hasta')).toBe('2026-01-31');
+  }
+ });
  it.each(['periodo=0','periodo=-1','periodo=abc','periodo=2147483648','periodo=1&periodo=2','periodo=1&desde=','periodo=1&hasta=2026-01-31'])('rechaza filtro ambiguo %s',qs=>{expect(()=>filtroPeriodo(new URLSearchParams(qs))).toThrow();});
  it('conserva fechas manuales y solo acepta un identificador positivo',()=>{expect(filtroPeriodo(new URLSearchParams())).toEqual({});expect(filtroPeriodo(new URLSearchParams('periodo=3'))).toEqual({periodoId:3});});
  it.each(['diario','mayor','balance'] as const)('%s resuelve el rango y versión en la misma transacción READ ONLY sin locks de escritura',async tipo=>{

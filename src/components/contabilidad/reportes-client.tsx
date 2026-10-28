@@ -8,6 +8,19 @@ import { NOTA_SALDO_ACUMULADO } from "@/lib/contabilidad/reportes/calculo";
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Cuenta = { id: number; codigo: string; nombre: string };
 type Vista = "diario" | "mayor" | "balance";
+type FiltrosReporte={periodo:string;desde:string;hasta:string;numero:string;cuentaId:string;sinMovimiento:boolean};
+
+/** Única construcción de URL usada por la consulta en pantalla y la descarga Excel. */
+export function urlReporteContable(base:string,entidadId:string,vista:Vista,f:FiltrosReporte,page:number,formato?:string){
+  const sp=new URLSearchParams({entidad:entidadId});
+  if(f.periodo)sp.set('periodo',f.periodo);
+  else {if(f.desde)sp.set('desde',f.desde);if(f.hasta)sp.set('hasta',f.hasta);}
+  if(vista==='diario'){if(f.numero.trim())sp.set('numero',f.numero.trim());sp.set('page',String(page));}
+  if(vista==='mayor')sp.set('cuentaId',f.cuentaId);
+  if(vista==='balance'&&f.sinMovimiento)sp.set('sinMovimiento','1');
+  if(formato)sp.set('formato',formato);
+  return `${base}/${vista}?${sp}`;
+}
 
 const campo = "min-h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] p-2 text-sm text-[var(--text)] disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-[var(--accent)]";
 const boton = "rounded border border-[var(--border)] px-3 py-1 text-sm hover:bg-[var(--input)] disabled:opacity-50";
@@ -60,16 +73,7 @@ function ReportesLibro({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: 
 
   const periodoElegido=periodos.find(p=>String(p.id)===f.periodo);
   const listo = !!entidadId && !cargandoOpciones && (!f.periodo||!!periodoElegido) && (vista !== "mayor" || !!f.cuentaId);
-  const consulta = (formato?: string) => {
-    const sp = new URLSearchParams({ entidad: entidadId });
-    if (f.desde) sp.set("desde", f.desde);
-    if (f.hasta) sp.set("hasta", f.hasta);
-    if (vista === "diario") { if (f.numero.trim()) sp.set("numero", f.numero.trim()); sp.set("page", String(page)); }
-    if (vista === "mayor") sp.set("cuentaId", f.cuentaId);
-    if (vista === "balance" && f.sinMovimiento) sp.set("sinMovimiento", "1");
-    if (formato) sp.set("formato", formato);
-    return `${base}/${vista}?${sp}`;
-  };
+  const consulta = (formato?: string) => urlReporteContable(base,entidadId,vista,f,page,formato);
   const clave = listo ? consulta() : "";
   useEffect(() => {
     if (!clave) return;
@@ -104,8 +108,8 @@ function ReportesLibro({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: 
       {vista === "balance" && <label className="flex items-center gap-1 text-sm"><input type="checkbox" checked={f.sinMovimiento} onChange={e => { setF({ ...f, sinMovimiento: e.target.checked }); setPage(1); }} />Incluir cuentas sin movimientos</label>}
       <a className={`${boton} ${listo ? "" : "pointer-events-none opacity-50"}`} href={listo ? consulta("xlsx") : undefined} aria-disabled={!listo}>Exportar Excel</a>
     </div>
-    {cargandoOpciones&&<p role="status" className="text-sm text-[var(--muted)]">Cargando cuentas y per?odos del libro?</p>}
-    {opciones?.entidadId===entidadId&&!opciones.calendarioDisponible&&<p role="note" className="rounded-lg border border-[var(--border)] p-3 text-sm">Calendario no disponible. Puedes consultar por fechas manuales; la selecci?n de per?odos requiere el esquema C3C-2.</p>}
+    {cargandoOpciones&&<p role="status" className="text-sm text-[var(--muted)]">Cargando cuentas y períodos del libro…</p>}
+    {opciones?.entidadId===entidadId&&!opciones.calendarioDisponible&&<p role="note" className="rounded-lg border border-[var(--border)] p-3 text-sm">Calendario no disponible. Puedes consultar por fechas manuales; la selección de períodos requiere el esquema C3C-2.</p>}
     {d?.periodoSeleccionado&&<ResumenPeriodoReporte periodo={d.periodoSeleccionado}/>}
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
     {!entidadId && <p className="text-sm">Selecciona una entidad para consultar.</p>}
