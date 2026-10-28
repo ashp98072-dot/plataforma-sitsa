@@ -23,7 +23,7 @@ describe("C3C-1: render y permisos de pantalla, sin fetch ni BD", () => {
   });
   it("muestra alcance CONFIGURADO y selector de libro", () => {
     const html = renderToStaticMarkup(createElement(CalendarioContable, { slug: "ficticio", puedeCrear: false }));
-    expect(html).toContain("todavía no controla el registro de partidas");
+    expect(html).toContain("Configurar el calendario no activa el control de períodos");
     expect(html).toContain("Libro contable");
     expect(html).not.toContain("<form");
   });

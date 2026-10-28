@@ -703,6 +703,10 @@ async function limpiarContabilidad(
 ): Promise<Record<string, number>> {
   // Se serializa con toda operación C2B. Nunca borrar ambos libros por tenant.
   await conn.query("SELECT id FROM empresas WHERE id = ? FOR UPDATE", [empresaId]);
+  if(await tablaExiste(conn,'cont_control_libro')){
+    const [controls]=await conn.query<RowDataPacket[]>("SELECT entidad_id FROM cont_control_libro WHERE empresa_id=? AND estado='ACTIVO' FOR UPDATE",[empresaId]);
+    if(controls.length)throw new Error('No se permite limpieza contable con control de períodos activo.');
+  }
   for (const tabla of ["cont_cuentas", "cont_asientos", "cont_cxc", "cont_cxp"]) {
     if (!(await tablaExiste(conn, tabla))) continue;
     const [columnas] = await conn.query<RowDataPacket[]>(

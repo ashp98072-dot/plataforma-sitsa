@@ -56,5 +56,10 @@ export async function exportarXlsx(tipo: TipoReporte, datos: unknown): Promise<B
     for (const c of [3, 4, 5, 6]) ws.getColumn(c).numFmt = moneda;
     [14, 44, 16, 16, 16, 16].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   }
+  const trazabilidad=(datos as {trazabilidadPeriodo?:Diario['trazabilidadPeriodo']}).trazabilidadPeriodo;
+  if(trazabilidad){
+    ws.addRow([]);ws.addRow(['Generado en',trazabilidad.generadoEn]);ws.addRow([trazabilidad.alcance]);
+    for(const p of trazabilidad.revisiones)ws.addRow([`Período #${p.id}`,p.estado,`versión ${p.version}`,`revisión de cierre ${p.revision_cierre}`]);
+  }
   return Buffer.from(await wb.xlsx.writeBuffer());
 }

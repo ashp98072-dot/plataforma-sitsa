@@ -150,6 +150,11 @@ agregar("contabilidad",
   { ...accion("contabilidad_calendario_crear","calendario_crear","Crear ejercicios y períodos",C), requiere: "calendario_ver", grupo: "Calendario contable" });
 
 // CUENTAS POR PAGAR (M-3A): filas propias (ver PERMISOS_CXP en permisos-shared.ts), sin equivalencia por rol; activar cualquiera activa «Ver» de Contabilidad.
+for(const [clave,label] of [
+  ['abrir','Abrir período'],['cerrar','Cerrar período'],['reabrir_solicitar','Solicitar reapertura'],
+  ['reabrir_aprobar','Aprobar reapertura'],['diagnosticar','Diagnosticar activación'],
+  ['activar_solicitar','Solicitar activación'],['activar_aprobar','Aprobar activación'],['operadores','Administrar operadores'],
+])agregar('contabilidad',{...accion(`cont_periodos_${clave}`,`periodos_${clave}`,label,'puedeVer'),requiere:'calendario_ver',grupo:'Control de períodos'});
 agregar("contabilidad",
   { ...accion("cxp_facturas","cxp_ver","Ver facturas de proveedores (CxP)","puedeVer"), grupo: "Cuentas por pagar" },
   { ...accion("cxp_facturas","cxp_registrar","Registrar facturas de proveedores (CxP)",E), requiere: "cxp_ver", grupo: "Cuentas por pagar" },

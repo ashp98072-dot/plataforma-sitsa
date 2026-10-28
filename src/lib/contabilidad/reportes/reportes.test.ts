@@ -111,12 +111,12 @@ describe("permisos del catálogo", () => {
 describe("arquitectura: fuente única, solo lectura, Excel bajo demanda", () => {
   const dir = "src/lib/contabilidad/reportes";
   const fuentes = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.includes(".test."));
-  it("las consultas leen solo cont_asientos, cont_asiento_detalle, cont_cuentas y cont_entidades; ninguna escribe", () => {
+  it("fuente económica única, con metadatos de períodos; ninguna consulta escribe", () => {
     const src = readFileSync(`${dir}/reportes.ts`, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
     expect(src).not.toMatch(/INSERT|UPDATE |DELETE|DROP|ALTER|TRUNCATE|FOR UPDATE/);
     expect(src).not.toMatch(/cxc|cxp|fact_|bancari|cont_eventos/i);
     expect(src).toContain("READ ONLY");
-    expect(src.match(/FROM (cont_\w+)|JOIN (cont_\w+)/g)?.map((x) => x.split(" ")[1]).filter((v, i, a) => a.indexOf(v) === i).sort()).toEqual(["cont_asiento_detalle", "cont_asientos", "cont_cuentas", "cont_entidades"]);
+    expect(src.match(/FROM (cont_\w+)|JOIN (cont_\w+)/g)?.map((x) => x.split(" ")[1]).filter((v, i, a) => a.indexOf(v) === i).sort()).toEqual(["cont_asiento_detalle", "cont_asientos", "cont_cuentas", "cont_entidades", "cont_periodos"]);
     expect(src).toContain("estado = '${ESTADO}'");
   });
   it("todo SQL está acotado por empresa y entidad", () => {

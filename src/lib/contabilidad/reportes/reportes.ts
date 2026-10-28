@@ -17,14 +17,23 @@ const ESTADO = "Registrado";
 export const MAX_LINEAS_MAYOR = 5000;
 export const MAX_ASIENTOS_DIARIO = 100;
 
-async function enSolicitudDeLectura<T>(fn: (c: PoolConnection) => Promise<T>): Promise<T> {
+async function enSolicitudDeLectura<T extends object>(fn: (c: PoolConnection) => Promise<T>,empresaId:number,entidadId:number) {
   const conn = await getPool().getConnection();
   try {
     await conn.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     await conn.query("START TRANSACTION READ ONLY");
     const r = await fn(conn);
+    let revisiones:RowDataPacket[]=[];let esquema='DISPONIBLE';
+    try{
+      [revisiones]=await conn.query<RowDataPacket[]>('SELECT id,estado,version,revision_cierre FROM cont_periodos WHERE empresa_id=? AND entidad_id=? ORDER BY id',[empresaId,entidadId]);
+    }catch(error){
+      if(!['ER_NO_SUCH_TABLE','ER_BAD_FIELD_ERROR'].includes(String((error as {code?:string}).code)))throw error;
+      esquema='SIN_ESQUEMA_C3C2';
+    }
+    const trazabilidadPeriodo={generadoEn:new Date().toISOString(),esquema,empresaId,entidadId,revisiones,
+      alcance:'Datos de la instantánea de lectura; no es una reproducción certificada de un cierre anterior.'};
     await conn.commit();
-    return r;
+    return {...r,trazabilidadPeriodo};
   } catch (e) {
     try { await conn.rollback(); } catch { /* conserva el error original */ }
     throw e;
@@ -85,7 +94,7 @@ export async function libroDiario(empresaId: number, entidadId: number, f: Filtr
       entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, page, pageSize: MAX_ASIENTOS_DIARIO, totalAsientos: Number(tot[0]?.n ?? 0), asientos,
       totalesRango: { debe: deCentavos(aCentavos(agg[0]?.debe)), haber: deCentavos(aCentavos(agg[0]?.haber)), diferencia: deCentavos(aCentavos(agg[0]?.debe) - aCentavos(agg[0]?.haber)), asientosDescuadrados: Number(agg[0]?.descuadrados ?? 0) },
     };
-  });
+  },empresaId,entidadId);
 }
 
 /* ------------------------------------------------------------------ Libro Mayor ------------------------------------------------------------------ */
@@ -112,7 +121,7 @@ export async function libroMayor(empresaId: number, entidadId: number, cuentaId:
       totales: { debe: t.debe, haber: t.haber, saldoFinal: movimientos.length ? movimientos[movimientos.length - 1].saldo : "0.00" },
       saldoInicial: null as null, nota: NOTA_SALDO_ACUMULADO,
     };
-  });
+  },empresaId,entidadId);
 }
 
 /* ------------------------------------------------------------------ Balance de comprobación ------------------------------------------------------------------ */
@@ -140,5 +149,5 @@ export async function balanceComprobacion(empresaId: number, entidadId: number, 
       filas.push({ cuentaId: Number(m.cuenta_id), codigo: "(sin cuenta)", nombre: "Cuenta no encontrada en esta entidad", tipo: "", nivel: 0, debito, credito, ...saldosDeCuenta(debito, credito) });
     }
     return { entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, incluyeSinMovimiento: !!f.incluirSinMovimiento, filas, totales: totalesBalance(filas) };
-  });
+  },empresaId,entidadId);
 }

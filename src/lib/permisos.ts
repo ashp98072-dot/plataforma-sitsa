@@ -7,6 +7,7 @@ import {
   catalogoPermisosRol,
   esFlotaSubmodulo,
   esPlataformaPermisible,
+  esPermisoContPeriodos,
   modulosPropiosDelRol,
   permisoVacio,
   permisosDefaultPorRol,
@@ -59,7 +60,11 @@ async function permisosEfectivosUncached(
   usuarioId: number,
   rol: RolGlobal,
 ): Promise<PermisoModulo[]> {
-  if (rol === "Admin") return permisosDefaultPorRol("Admin");
+  if (rol === "Admin") {
+    const defaults=permisosDefaultPorRol('Admin');
+    const stored=await listarPermisosUsuario(usuarioId);
+    return defaults.map(p=>esPermisoContPeriodos(p.modulo)?stored.find(s=>s.modulo===p.modulo)??p:p);
+  }
 
   const stored = await listarPermisosUsuario(usuarioId);
   if (stored.length === 0) {
