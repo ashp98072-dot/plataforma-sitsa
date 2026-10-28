@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { requireTenantCalendario } from "@/lib/tenant";
 import { ambitoDesdeRequest, errorAmbito } from "./ambito";
@@ -13,11 +14,17 @@ function error(e: unknown) {
   if (e instanceof ErrorCalendario) return json({ error: e.message }, e.status);
   const acceso = errorAmbito(e);
   if (acceso) { acceso.headers.set("Cache-Control", "private, no-store"); return acceso; }
-  const { tipo } = clasificarErrorCalendario(e);
+  const { tipo, code, errno } = clasificarErrorCalendario(e);
   if (tipo === "unique") return json({ error: "El código ya existe en este libro o ejercicio.", codigo: "CALENDARIO_UNIQUE" }, 409);
   if (tipo === "deadlock" || tipo === "timeout") return json({ error: "Hay otra operación en curso. Consulta el calendario antes de reintentar.", codigo: tipo === "deadlock" ? "CALENDARIO_DEADLOCK" : "CALENDARIO_TIMEOUT" }, 409);
   // ER_CHECKREAD y errores internos siguen siendo fallos, no conflictos funcionales.
-  return json({ error: "No se pudo completar la operación. Consulta el calendario antes de reintentar." }, 500);
+  const referencia = randomUUID();
+  const codes = new Set(["ER_CHECKREAD", "ER_INTERNAL_ERROR", "ER_GET_ERRNO", "HA_ERR_RECORD_CHANGED", "ER_NO_REFERENCED_ROW_2"]);
+  console.error("calendario_error_interno", { referencia, tipo, code: code && codes.has(code) ? code : "NO_CLASIFICADO",
+    errno: Number.isInteger(errno) && errno! >= 0 && errno! <= 65535 ? errno : undefined });
+  const response = json({ error: "No se pudo completar la operación. Consulta el calendario antes de reintentar.", referencia }, 500);
+  response.headers.set("X-Correlation-ID", referencia);
+  return response;
 }
 export async function ejerciciosGet(req: Request, slug: string) {
   const g = await requireTenantCalendario(slug, "ver");

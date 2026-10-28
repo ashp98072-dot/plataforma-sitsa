@@ -14,21 +14,28 @@ async function datos<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function CalendarioContable({ slug, puedeCrear }: { slug: string; puedeCrear: boolean }) {
+  return <SelectorCalendario key={slug} slug={slug} puedeCrear={puedeCrear} />;
+}
+
+function SelectorCalendario({ slug, puedeCrear }: { slug: string; puedeCrear: boolean }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidad, setEntidad] = useState("");
   const [error, setError] = useState("");
+  const [cargandoOpciones, setCargandoOpciones] = useState(true);
   useEffect(() => {
     const c = new AbortController();
     datos<{ entidades: Entidad[] }>(`/api/empresas/${slug}/contabilidad/ejercicios/opciones`, { signal: c.signal })
-      .then((d) => { if (!c.signal.aborted) { setEntidades(d.entidades); setEntidad(libroUnicoActivo(d.entidades)); } })
-      .catch((e) => { if (!c.signal.aborted) setError(e.message); });
+      .then((d) => { if (!c.signal.aborted) { setError(""); setEntidades(d.entidades); setEntidad(libroUnicoActivo(d.entidades)); } })
+      .catch((e) => { if (!c.signal.aborted) setError(e.message); })
+      .finally(() => { if (!c.signal.aborted) setCargandoOpciones(false); });
     return () => c.abort();
   }, [slug]);
   const seleccion = entidades.find((e) => String(e.id) === entidad);
   return <div className="space-y-4">
     <h1 className="text-2xl font-semibold">Calendario contable</h1>
     <p className="rounded border border-[var(--border)] p-3">{AVISO_CALENDARIO}</p>
-    <label className="block">Libro contable <select className={inputClase} value={entidad} onChange={(e) => setEntidad(e.target.value)}>
+    {cargandoOpciones && <p role="status">Cargando libros contables…</p>}
+    <label className="block">Libro contable <select disabled={cargandoOpciones} className={inputClase} value={entidad} onChange={(e) => setEntidad(e.target.value)}>
       <option value="">Seleccionar libro</option>
       {entidades.map((e) => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}{e.activa ? "" : " (inactivo)"}</option>)}
     </select></label>

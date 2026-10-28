@@ -6,6 +6,13 @@ import { CalendarioContable, CalendarioLibro, FormularioCalendario, ErrorConsult
 import CalendarioPage from "@/app/e/[slug]/contabilidad/calendario/page";
 import { requireTenantCalendario } from "@/lib/tenant";
 describe("C3C-1: render y permisos de pantalla, sin fetch ni BD", () => {
+  it('reinicia el selector por identidad de empresa; render inicial cargando y sin opciones previas',()=>{
+    const a=CalendarioContable({slug:'lab-a',puedeCrear:false});
+    const b=CalendarioContable({slug:'lab-b',puedeCrear:false});
+    expect(a.key).toBe('lab-a');expect(b.key).toBe('lab-b');
+    const html=renderToStaticMarkup(b);expect(html).toContain('Cargando libros contables');expect(html).toContain('disabled');
+    // Contrato estático: no acredita ejecución de efectos ni interacción DOM.
+  });
   it("error de períodos ofrece reintento independiente del formulario", () => {
     const reintentar = vi.fn();
     const vista = ErrorConsultaPeriodos({ error: "Fallo ficticio", cargando: false, reintentar })!;

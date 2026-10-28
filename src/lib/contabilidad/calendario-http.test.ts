@@ -19,6 +19,18 @@ describe("C3C-1: HTTP y rutas sin BD", () => {
     for (const f of [() => ejerciciosGet(req(), "e"), () => ejerciciosPost(req("entidad=9", {}), "e"), () => periodosGet(req(), "e", "12"), () => calendarioOpcionesGet("e")]) expect((await f()).status).toBe(403);
     for (const f of [m.crear, m.ejercicios, m.periodos, m.entidades]) expect(f).not.toHaveBeenCalled();
   });
+  it('correlaciona errores internos sin registrar datos sensibles ni aceptar referencias externas',async()=>{
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    try{
+      m.crear.mockRejectedValue({code:'SECRET_TOKEN',errno:1030,message:'PASSWORD',sql:'SELECT PRIVATE',sqlMessage:'FINANCIAL',parameters:['COOKIE'],stack:'BEARER'});
+      const r=await ejerciciosPost(req('entidad=9',{codigo:'SECRET_BODY'}),'e');
+      const body=await r.json();expect(r.status).toBe(500);
+      expect(body.referencia).toMatch(/^[a-f0-9-]{36}$/);expect(r.headers.get('X-Correlation-ID')).toBe(body.referencia);
+      expect(log).toHaveBeenCalledOnce();expect(log.mock.calls[0][1]).toMatchObject({referencia:body.referencia,code:'NO_CLASIFICADO'});
+      const recorded=JSON.stringify(log.mock.calls)+JSON.stringify(body);
+      for(const secret of ['SECRET_TOKEN','PASSWORD','SELECT PRIVATE','FINANCIAL','COOKIE','BEARER','SECRET_BODY'])expect(recorded).not.toContain(secret);
+    }finally{log.mockRestore();}
+  });
   it.each(["", "entidad=0", "entidad=x", "entidad=9&entidad=10"])("rechaza ámbito inválido %s", async (qs) => {
     expect((await ejerciciosGet(req(qs), "e")).status).toBe(400);
     expect((await ejerciciosPost(req(qs, {}), "e")).status).toBe(400);

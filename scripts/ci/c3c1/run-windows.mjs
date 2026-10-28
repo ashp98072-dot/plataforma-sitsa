@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import cp from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import mysql from 'mysql2/promise';
+import { observarServidor, cerrarServidor } from './lifecycle.mjs';
 import { validarManifiesto, configuracionInicializador, opcionesPipe, validarOpciones, verificarConexion, prepararMigracion, sentencias } from './safety.mjs';
 import { comprobarPid, conectarRaw, crearPoolLaboratorio, controles } from './connection.mjs';
 
@@ -33,10 +34,11 @@ export async function ejecutarLaboratorio(args) {
   const log = fs.openSync(path.join(runDir, 'server.log'), 'wx');
   const server = cp.spawn(path.join(home, 'bin/mariadbd.exe'), ['--no-defaults', `--basedir=${home}`, `--datadir=${m.datadir}`, `--pid-file=${m.pidFile}`, '--skip-networking', '--enable-named-pipe', `--socket=${m.pipe}`, '--sql-mode=STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE', '--innodb-buffer-pool-size=64M', '--console'], { env, windowsHide: true, stdio: ['ignore', log, log] });
   fs.closeSync(log);
+  const ownedServer = observarServidor(server,runDir);
   let spawnError;
   server.on('error', (error) => { spawnError = error; });
   m.pid = server.pid ?? 0;
-  let pool;
+  let pool, functionalError;
   try {
     validarManifiesto(m, os.tmpdir());
     let admin;
@@ -82,13 +84,26 @@ export async function ejecutarLaboratorio(args) {
     });
     fs.writeFileSync(path.join(runDir, 'tests.log'), `${result.stdout}\n${result.stderr}`);
     if (result.status !== 0) throw Error('Pruebas reales rechazadas; revisar evidencia del laboratorio');
-    console.log('C3C-1: laboratorio aprobado; evidencia local:', runDir);
+    fs.writeFileSync(path.join(runDir,'functional-result.json'),JSON.stringify({passed:true,status:result.status}),{flag:'wx'});
+  } catch(error) {
+    functionalError=error;
+    fs.writeFileSync(path.join(runDir,'functional-result.json'),JSON.stringify({passed:false}),{flag:'wx'});
+    throw error;
   } finally {
-    if (pool) await pool.end();
-    try { const c = await conectarRaw(m, false); try { await c.query('SHUTDOWN'); } finally { await c.end(); } }
-    catch { if (server.exitCode === null) server.kill(); } // Solo el handle hijo creado por este runner.
+    try { if (pool) await pool.end(); }
+    finally {
+      let closingConnection;
+      try { await cerrarServidor(ownedServer,runDir,async()=>{
+        const c=closingConnection=await conectarRaw(m,false);
+        await c.query('SHUTDOWN');
+      }); } catch(error) {
+        if(functionalError)throw new AggregateError([functionalError,error],'Pruebas y apagado rechazados; conservar evidencia');
+        throw error;
+      } finally { closingConnection?.destroy(); }
+    }
     // No DROP DATABASE ni borrados de directorios. Conservar evidencia incluso ante fallo.
   }
+  console.log('C3C-1: pruebas y apagado confirmados; evidencia local:', runDir);
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   ejecutarLaboratorio(process.argv.slice(2)).catch((e) => { console.error(e.message); process.exitCode = 1; });
