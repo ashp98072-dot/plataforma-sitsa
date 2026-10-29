@@ -11,7 +11,7 @@ const cuenta=(tipo:string,debe='0.00',haber='0.00',id=1):CuentaSimulacion=>({cue
 beforeEach(()=>{
  vi.resetAllMocks();m.getConnection.mockResolvedValue(m);m.guard.mockResolvedValue({empresa:{id:7},session:{id:41,rol:'Contabilidad'}});
  m.diagnostico.mockResolvedValue({ejercicio:{id:1,codigo:'LAB2030',fechaInicio:'2030-01-01',fechaFin:'2030-12-31'},bloqueantes:[],advertencias:[],periodos:[],abiertos:[],noCerrados:[],control:{disponible:true,estado:'ACTIVO'},asientos:{registrados:0,noRegistrados:0,debe:'0.00',haber:'0.00',diferencia:'0.00',descuadrados:{total:0,muestra:[]},integridad:{total:0,muestra:[]}},generadoEn:'2030-01-01T00:00:00Z'});
- m.query.mockImplementation(async(sql:string)=>sql.includes('FROM cont_cuentas')?[[{id:1,codigo:'1',nombre:'Ingreso ficticio',tipo:'Ingreso',activa:1}]]:[[]]);
+ m.query.mockImplementation(async(sql:string)=>sql.includes('FROM cont_cuentas WHERE')?[[{id:1,codigo:'1',nombre:'Ingreso ficticio',tipo:'Ingreso',activa:1}]]:[[]]);
 });
 describe('C3C6 calculo puro',()=>{
  it.each([['100.00','40.00','60.00'],['40.00','100.00','-60.00']])('ingreso %s gasto %s resultado %s', (ingreso,gasto,resultado)=>{

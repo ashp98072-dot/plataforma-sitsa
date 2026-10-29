@@ -1,3 +1,4 @@
+import {consultarCuentaResultadoTx} from './cuenta-resultado';
 import type {RowDataPacket} from 'mysql2/promise';
 import {getPool} from '@/lib/db';
 import {AccesoContable} from './ambito';
@@ -26,13 +27,15 @@ export async function simularRegularizacion(empresaId:number,entidadId:number,ej
   const conocidas=new Set(cuentas.map(c=>c.cuentaId));
   for(const m of movimientos)if(!conocidas.has(Number(m.cuenta_id)))cuentas.push({cuentaId:Number(m.cuenta_id),codigo:'(sin cuenta)',nombre:'Cuenta no disponible en este libro',tipo:'SIN_CLASIFICAR',activa:0,debe:String(m.debe),haber:String(m.haber),debeAnterior:String(m.debeAnterior),haberAnterior:String(m.haberAnterior)});
   const calculo=calcularRegularizacion(cuentas);
-  const bloqueantes=[...diagnostico.bloqueantes,'CUENTA_RESULTADO_NO_CONFIGURADA','POLITICA_REGULARIZACION_PENDIENTE'];
+  const configuracionResultado=await consultarCuentaResultadoTx(c,empresaId,entidadId);
+  const bloqueantes=[...diagnostico.bloqueantes,'POLITICA_REGULARIZACION_PENDIENTE'];
+  if(!configuracionResultado.cuenta)bloqueantes.push(configuracionResultado.estado==='INVALIDA'?'CUENTA_RESULTADO_INVALIDA':'CUENTA_RESULTADO_NO_CONFIGURADA');
   if(calculo.sinClasificar.length)bloqueantes.push('CLASIFICACION_INSUFICIENTE');
   if(calculo.inactivasConSaldo.length)bloqueantes.push('NOMINALES_INACTIVAS_CON_SALDO');
   const datosValidos=!diagnostico.bloqueantes.some(c=>['ASIENTOS_DESCUADRADOS','INTEGRIDAD_MOVIMIENTOS','DETALLES_HUERFANOS_LIBRO'].includes(c));
   const resultado={empresaId,entidadId,ejercicioId,ejercicio:diagnostico.ejercicio,diagnostico,calculo,
    resultadoConfiable:datosValidos&&calculo.resultadoCompleto,estado:'INCOMPLETA' as const,
-   cuentaResultado:null,propuestaCompleta:null,bloqueantes:[...new Set(bloqueantes)],
+   cuentaResultado:configuracionResultado.cuenta,configuracionResultado:configuracionResultado.estado,propuestaCompleta:null,bloqueantes:[...new Set(bloqueantes)],
    advertencias:[...diagnostico.advertencias,...(calculo.saldosContrarios.length?['SALDOS_NOMINALES_CONTRARIOS']:[])],
    generadoEn:new Date().toISOString(),
    aviso:'SIMULACIÓN INCOMPLETA. No es un asiento formal ni está lista para contabilizar. Las inversas son indicativas y carecen de contrapartida aprobada. Solo movimientos Registrados del ejercicio; los saldos históricos se muestran separados y no se regularizan. No se guarda ni contabiliza nada.'};

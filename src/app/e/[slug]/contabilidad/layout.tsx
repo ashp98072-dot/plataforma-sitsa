@@ -11,6 +11,7 @@ export default async function ContabilidadLayout({ children, params }: { childre
       <Link href={`/e/${slug}/contabilidad/reportes`}>Reportes</Link>
       <Link href={`/e/${slug}/contabilidad/calendario`}>Calendario contable</Link>
       <Link href={`/e/${slug}/contabilidad/periodos`}>Control de períodos</Link>
+      <Link href={`/e/${slug}/contabilidad/configuracion`}>Configuración contable</Link>
       <Link href={`/e/${slug}/contabilidad/entidades`} className="underline">Configurar libros contables</Link>
     </nav>
     {children}
