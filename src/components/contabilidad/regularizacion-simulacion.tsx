@@ -2,6 +2,8 @@
 import {useEffect,useRef,useState} from 'react';
 import type {SimulacionRegularizacion} from '@/lib/contabilidad/regularizacion';
 import {ResultadoDiagnosticoCierre} from './cierre-diagnostico';
+import type {PropuestaRegularizacion} from '@/lib/contabilidad/propuesta-regularizacion';
+import {ResultadoPropuestaRegularizacion} from './propuesta-regularizacion';
 const mensajes:Record<string,string>={
  CUENTA_RESULTADO_INVALIDA:'La cuenta configurada ya no cumple las validaciones técnicas del rol. Revisa Configuración contable.',
  CUENTA_RESULTADO_NO_CONFIGURADA:'No existe un rol configurado para la cuenta de resultado del ejercicio. Debe aprobarse su identificación y validación por empresa/libro.',
@@ -30,15 +32,15 @@ export function ResultadoRegularizacion({d}:{d:SimulacionRegularizacion}){
   <details><summary>Diagnóstico C3C-5 de la misma instantánea</summary><ResultadoDiagnosticoCierre d={d.diagnostico}/></details>
  </section>;
 }
-export function RegularizacionPanel({slug,entidadId,ejercicioId}:{slug:string;entidadId:number;ejercicioId:string}){
- const [resultado,setResultado]=useState<SimulacionRegularizacion>();const [error,setError]=useState('');const [ocupado,setOcupado]=useState(false);
+export function RegularizacionPanel({slug,entidadId,ejercicioId,propuesta=false}:{slug:string;entidadId:number;ejercicioId:string;propuesta?:boolean}){
+ const [resultado,setResultado]=useState<SimulacionRegularizacion|PropuestaRegularizacion>();const [error,setError]=useState('');const [ocupado,setOcupado]=useState(false);
  const actual=useRef<AbortController|null>(null);useEffect(()=>()=>actual.current?.abort(),[]);
  async function consultar(){
   actual.current?.abort();const ac=new AbortController();actual.current=ac;setOcupado(true);setError('');setResultado(undefined);
-  try{const r=await fetch(`/api/empresas/${slug}/contabilidad/ejercicios/${ejercicioId}/simulacion-regularizacion?entidad=${entidadId}`,{cache:'no-store',signal:ac.signal});const d=await r.json();
+  try{const r=await fetch(`/api/empresas/${slug}/contabilidad/ejercicios/${ejercicioId}/${propuesta?'propuesta-regularizacion':'simulacion-regularizacion'}?entidad=${entidadId}`,{cache:'no-store',signal:ac.signal});const d=await r.json();
    if(!r.ok)throw Error(d.error??'No se pudo simular.');if(!ac.signal.aborted)setResultado(d);
   }catch(e){if(!ac.signal.aborted)setError(e instanceof Error?e.message:'No se pudo consultar.');}finally{if(!ac.signal.aborted)setOcupado(false);}
  }
- return <div className="space-y-3"><button type="button" disabled={ocupado} onClick={consultar} className="min-h-11 rounded border border-[var(--border)] bg-[var(--input)] px-3">{ocupado?'Simulando…':'Simular regularización (solo lectura)'}</button>
-  {ocupado&&<p role="status">Consultando movimientos del ejercicio…</p>}{error&&<p role="alert">{error}</p>}{resultado&&<ResultadoRegularizacion d={resultado}/>}</div>;
+ return <div className="space-y-3"><button type="button" disabled={ocupado} onClick={consultar} className="min-h-11 rounded border border-[var(--border)] bg-[var(--input)] px-3">{ocupado?'Simulando…':propuesta?'Simular propuesta de regularización':'Simular regularización (solo lectura)'}</button>
+  {ocupado&&<p role="status">Consultando movimientos del ejercicio…</p>}{error&&<p role="alert">{error}</p>}{resultado&&('propuestaSimulada' in resultado?<ResultadoPropuestaRegularizacion d={resultado}/>:<ResultadoRegularizacion d={resultado}/>)}</div>;
 }

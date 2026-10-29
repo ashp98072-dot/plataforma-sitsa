@@ -1,3 +1,4 @@
+import {aCentavos,deCentavos} from './reportes/calculo';
 import {consultarCuentaResultadoTx} from './cuenta-resultado';
 import type {RowDataPacket} from 'mysql2/promise';
 import {getPool} from '@/lib/db';
@@ -35,7 +36,8 @@ export async function simularRegularizacion(empresaId:number,entidadId:number,ej
   const datosValidos=!diagnostico.bloqueantes.some(c=>['ASIENTOS_DESCUADRADOS','INTEGRIDAD_MOVIMIENTOS','DETALLES_HUERFANOS_LIBRO'].includes(c));
   const resultado={empresaId,entidadId,ejercicioId,ejercicio:diagnostico.ejercicio,diagnostico,calculo,
    resultadoConfiable:datosValidos&&calculo.resultadoCompleto,estado:'INCOMPLETA' as const,
-   cuentaResultado:configuracionResultado.cuenta,configuracionResultado:configuracionResultado.estado,propuestaCompleta:null,bloqueantes:[...new Set(bloqueantes)],
+   cuentaResultado:configuracionResultado.cuenta,configuracionResultado:configuracionResultado.estado,propuestaCompleta:null,
+   movimientoCuentaResultado:configuracionResultado.cuenta?{debe:deCentavos(aCentavos(mov.get(configuracionResultado.cuenta.id)?.debe)),haber:deCentavos(aCentavos(mov.get(configuracionResultado.cuenta.id)?.haber))}:null,bloqueantes:[...new Set(bloqueantes)],
    advertencias:[...diagnostico.advertencias,...(calculo.saldosContrarios.length?['SALDOS_NOMINALES_CONTRARIOS']:[])],
    generadoEn:new Date().toISOString(),
    aviso:'SIMULACIÓN INCOMPLETA. No es un asiento formal ni está lista para contabilizar. Las inversas son indicativas y carecen de contrapartida aprobada. Solo movimientos Registrados del ejercicio; los saldos históricos se muestran separados y no se regularizan. No se guarda ni contabiliza nada.'};

@@ -7,11 +7,31 @@ vi.mock('./cierre-diagnostico',()=>({consultarDiagnosticoCierre:m.diagnostico}))
 vi.mock('@/lib/tenant',()=>({requireTenantCalendario:m.guard}));
 import {simularRegularizacion} from './regularizacion';import {regularizacionGet} from './regularizacion-http';
 import {ResultadoRegularizacion} from '@/components/contabilidad/regularizacion-simulacion';
+import {ResultadoPropuestaRegularizacion} from '@/components/contabilidad/propuesta-regularizacion';
+import type {PropuestaRegularizacion} from './propuesta-regularizacion';
 const cuenta=(tipo:string,debe='0.00',haber='0.00',id=1):CuentaSimulacion=>({cuentaId:id,codigo:String(id),nombre:'Ficticia',tipo,activa:1,debe,haber,debeAnterior:'999.00',haberAnterior:'0.00'});
 beforeEach(()=>{
  vi.resetAllMocks();m.getConnection.mockResolvedValue(m);m.guard.mockResolvedValue({empresa:{id:7},session:{id:41,rol:'Contabilidad'}});
  m.diagnostico.mockResolvedValue({ejercicio:{id:1,codigo:'LAB2030',fechaInicio:'2030-01-01',fechaFin:'2030-12-31'},bloqueantes:[],advertencias:[],periodos:[],abiertos:[],noCerrados:[],control:{disponible:true,estado:'ACTIVO'},asientos:{registrados:0,noRegistrados:0,debe:'0.00',haber:'0.00',diferencia:'0.00',descuadrados:{total:0,muestra:[]},integridad:{total:0,muestra:[]}},generadoEn:'2030-01-01T00:00:00Z'});
  m.query.mockImplementation(async(sql:string)=>sql.includes('FROM cont_cuentas WHERE')?[[{id:1,codigo:'1',nombre:'Ingreso ficticio',tipo:'Ingreso',activa:1}]]:[[]]);
+});
+
+describe('C3C8 HTTP y presentación',()=>{
+ it('GET comparte permiso de consulta y no inicia lectura si se deniega',async()=>{m.guard.mockResolvedValue({error:new Response(null,{status:403})});expect((await regularizacionGet(new Request('http://local?entidad=9'),'lab','1',true)).status).toBe(403);expect(m.guard).toHaveBeenCalledWith('lab','ver');expect(m.getConnection).not.toHaveBeenCalled();});
+ it.each(['0','abc','2147483648'])('GET rechaza ejercicio invalido %s',async id=>{expect((await regularizacionGet(new Request('http://local?entidad=9'),'lab',id,true)).status).toBe(400);expect(m.getConnection).not.toHaveBeenCalled();});
+ it('GET no acepta ambito ambiguo',async()=>{expect((await regularizacionGet(new Request('http://local?entidad=9&entidad=10'),'lab','1',true)).status).toBe(400);expect(m.getConnection).not.toHaveBeenCalled();});
+ it('GET usa empresa de sesion, una transaccion y presenta propuesta sin acciones de escritura',async()=>{
+  m.query.mockImplementation(async(sql:string)=>{
+   if(sql.includes('FROM cont_cuentas_rol'))return [[{cuenta_id:5,rol_activo:1,id:5,codigo:'RES',nombre:'Capital ficticio',tipo:'Capital',nivel:1,activa:1}]];
+   if(sql.includes('FROM cont_cuentas WHERE'))return [[{id:1,codigo:'ING',nombre:'Ingreso ficticio',tipo:'Ingreso',activa:1},{id:5,codigo:'RES',nombre:'Capital ficticio',tipo:'Capital',activa:1}]];
+   if(sql.includes('FROM cont_asientos'))return [[{cuenta_id:1,debe:'0.00',haber:'1.01',debeAnterior:'0.00',haberAnterior:'900.00'}]];
+   return [[]];
+  });
+  const r=await regularizacionGet(new Request('http://local?entidad=9&empresa_id=8&aprobada=true'),'lab','1',true);expect(r.status).toBe(200);expect(r.headers.get('Cache-Control')).toBe('private, no-store');const d:PropuestaRegularizacion=await r.json();expect(d.empresaId).toBe(7);expect(d.propuestaSimulada?.totales).toMatchObject({debe:'1.01',haber:'1.01',cuadra:true});expect(d.propuestaCompleta).toBeNull();expect(d.politicaAprobada).toBe(false);
+  expect(m.getConnection).toHaveBeenCalledOnce();expect(m.commit).toHaveBeenCalledOnce();expect(m.query.mock.calls.some(([s])=>/INSERT|UPDATE |DELETE|FOR UPDATE|ALTER|CREATE /i.test(s))).toBe(false);
+  const html=renderToStaticMarkup(createElement(ResultadoPropuestaRegularizacion,{d}));expect(html).toContain('SIMULACIÓN — NO CONTABILIZADA');expect(html).toContain('Lista para contabilizar: NO');expect(html).toContain('Requisitos formales pendientes');expect(html).not.toContain('<button');expect(html).not.toContain('<form');
+ });
+ it('GET sin configuracion muestra razon sin propuesta',async()=>{const r=await regularizacionGet(new Request('http://local?entidad=9'),'lab','1',true);const d:PropuestaRegularizacion=await r.json();expect(d.propuestaSimulada).toBeNull();const html=renderToStaticMarkup(createElement(ResultadoPropuestaRegularizacion,{d}));expect(html).toContain('Falta configurar');expect(html).toContain('Propuesta no disponible');});
 });
 describe('C3C6 calculo puro',()=>{
  it.each([['100.00','40.00','60.00'],['40.00','100.00','-60.00']])('ingreso %s gasto %s resultado %s', (ingreso,gasto,resultado)=>{

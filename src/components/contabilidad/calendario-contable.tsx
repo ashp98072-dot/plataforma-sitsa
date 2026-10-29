@@ -85,6 +85,7 @@ export function CalendarioLibro({ slug, entidadId, puedeCrear }: { slug: string;
     </li>)}</ul>
     {ejercicio && <DiagnosticoCierrePanel key={`${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`sim:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
+    {ejercicio && <RegularizacionPanel key={`propuesta:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio} propuesta/>}
     {ejercicio && <section aria-label="Períodos del ejercicio"><h2 className="font-semibold">Períodos</h2>
       {cargandoPeriodos && <p role="status">Cargando períodos…</p>}
       <ErrorConsultaPeriodos error={errorPeriodos} cargando={cargandoPeriodos} reintentar={() => {
