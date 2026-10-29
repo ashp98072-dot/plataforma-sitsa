@@ -1,4 +1,4 @@
-import type {RowDataPacket} from 'mysql2/promise';
+import type {PoolConnection,RowDataPacket} from 'mysql2/promise';
 import {getPool} from '@/lib/db';
 import {AccesoContable} from './ambito';
 import {diagnosticoCalendario,type PeriodoControl} from './periodos-evidencia';
@@ -22,6 +22,12 @@ export async function diagnosticarCierre(empresaId:number,entidadId:number,ejerc
  const c=await getPool().getConnection();
  try{
   await c.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');await c.query('START TRANSACTION READ ONLY');
+  const resultado=await consultarDiagnosticoCierre(c,empresaId,entidadId,ejercicioId);
+  await c.commit();return resultado;
+ }catch(e){try{await c.rollback();}catch{}throw e;}finally{c.release();}
+}
+/** Reutiliza la instantanea del llamador; no inicia ni finaliza transacciones. */
+export async function consultarDiagnosticoCierre(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
   const [entidades]=await c.query<RowDataPacket[]>('SELECT id,codigo,nombre FROM cont_entidades WHERE empresa_id=? AND id=?',[empresaId,entidadId]);
   if(!entidades[0])throw new AccesoContable('Libro no disponible.',404);
   const [ejercicios]=await c.query<RowDataPacket[]>("SELECT id,codigo,estado,DATE_FORMAT(fecha_inicio,'%Y-%m-%d') fechaInicio,DATE_FORMAT(fecha_fin,'%Y-%m-%d') fechaFin FROM cont_ejercicios WHERE empresa_id=? AND entidad_id=? AND id=?",[empresaId,entidadId,ejercicioId]);
@@ -65,7 +71,6 @@ export async function diagnosticarCierre(empresaId:number,entidadId:number,ejerc
    bloqueantes:[...new Set(bloqueantes)],advertencias,generadoEn:new Date().toISOString(),
    estado:bloqueantes.length?'CON_BLOQUEANTES':'SIN_BLOQUEANTES_TECNICOS',
    alcance:'Instantánea de solo lectura. No certifica cierre ni regularización. Los saldos C3C-4 incluyen historia anterior entre ejercicios y no representan apertura formal. No se generan asientos ni se cambian períodos.'};
-  await c.commit();return resultado;
- }catch(e){try{await c.rollback();}catch{}throw e;}finally{c.release();}
+  return resultado;
 }
 export type DiagnosticoCierre=Awaited<ReturnType<typeof diagnosticarCierre>>;
