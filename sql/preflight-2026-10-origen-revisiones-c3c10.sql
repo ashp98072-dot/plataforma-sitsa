@@ -1,0 +1,4 @@
+-- Solo lectura. Todos los controles deben devolver cero errores.
+SELECT 'dependencias_c10' control,3-COUNT(*) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND ENGINE='InnoDB' AND TABLE_NAME IN ('cont_asientos_origen','cont_regularizacion_borradores','auditoria');
+SELECT 'origen_columnas_c10' control,10-COUNT(*) errores FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_asientos_origen' AND COLUMN_NAME IN ('empresa_id','entidad_id','asiento_id','ejercicio_id','clase','fuente','referencia','huella_asiento','registrado_por','creado_en');
+SELECT 'origen_pk_c10' control,1-COUNT(*) errores FROM (SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) cols FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_asientos_origen' AND INDEX_NAME='PRIMARY' GROUP BY INDEX_NAME) i WHERE cols='empresa_id,entidad_id,asiento_id';
