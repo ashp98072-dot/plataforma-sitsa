@@ -37,7 +37,7 @@ export async function asientosOrigenTx(c:PoolConnection,empresaId:number,entidad
  for(const r of rows){const key=Number(r.id);let a=map.get(key);if(!a){a={id:key,fecha:String(r.fecha),numero:String(r.numero),estado:String(r.estado),glosa:r.glosa===null?null:String(r.glosa),creadoPor:r.creadoPor===null?null:String(r.creadoPor),lineas:[]};map.set(key,a);}if(r.lineaId!==null)a.lineas.push({id:Number(r.lineaId),cuentaId:Number(r.cuentaId),debe:String(r.debe),haber:String(r.haber)});}
  return [...map.values()];
 }
-async function prepararTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
+export async function prepararTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
  const base=await consultarRegularizacionTx(c,empresaId,entidadId,ejercicioId);
  const anterior=construirPropuestaRegularizacion(base);
  const {fechaInicio,fechaFin}=base.ejercicio;
