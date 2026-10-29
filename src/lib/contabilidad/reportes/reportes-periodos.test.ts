@@ -54,7 +54,7 @@ describe('Reportes por período: contrato, tenant y lectura consistente',()=>{
   expect(m.query.mock.calls[0][0]).toContain('SET TRANSACTION');expect(m.query.mock.calls[1][0]).toBe('START TRANSACTION READ ONLY');
   expect(m.query.mock.calls[2][1]).toEqual([7,9,3]);
   const scoped=m.query.mock.calls.filter(([sql])=>String(sql).includes('a.estado'));
-  expect(scoped.length).toBeGreaterThan(0);for(const [,params] of scoped)expect(params).toEqual(expect.arrayContaining([7,9,'2026-01-01','2026-01-31']));
+  expect(scoped.length).toBeGreaterThan(0);for(const [sql,params] of scoped)expect(params).toEqual(expect.arrayContaining(String(sql).includes('a.fecha < ?')?[7,9,'2026-01-01']:[7,9,'2026-01-01','2026-01-31']));
   expect(m.query.mock.calls.some(([sql])=>/FOR UPDATE|INSERT|DELETE|UPDATE cont_/.test(sql))).toBe(false);expect(m.commit).toHaveBeenCalledOnce();
  });
  it('período ajeno/inexistente revierte sin consultar movimientos',async()=>{

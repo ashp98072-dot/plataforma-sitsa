@@ -113,13 +113,13 @@ describe.skipIf(!port)("Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL", () 
         ["A-1", "1000.00", "0.00", "1000.00"], ["A-2", "0.00", "100.25", "899.75"], ["A-3", "2000.75", "0.00", "2900.50"],
       ]);
       expect(r.totales).toEqual({ debe: "3000.75", haber: "100.25", saldoFinal: "2900.50" });
-      expect(r.saldoInicial).toBeNull();
+      expect(r.saldoInicial).toBe("0.00");
       expect(r.nota).toContain("saldo inicial");
     });
     it("el saldo acumulado corresponde SOLO al rango consultado", async () => {
       const r = await libroMayor(1, 5, C.cajaM, { desde: "2026-02-01" });
-      expect(r.movimientos.map((m) => m.saldo)).toEqual(["-100.25", "1900.50"]);
-      expect(r.totales.saldoFinal).toBe("1900.50");
+      expect(r.movimientos.map((m) => m.saldo)).toEqual(["899.75", "2900.50"]);
+      expect(r.totales.saldoFinal).toBe("2900.50");
     });
     it("cuenta sin movimientos: vacío con saldo 0; cuenta de otra entidad/empresa: 404; el mismo código en otra entidad no se mezcla", async () => {
       expect(await libroMayor(1, 5, C.vacioM)).toMatchObject({ movimientos: [], totales: { debe: "0.00", haber: "0.00", saldoFinal: "0.00" } });

@@ -39,6 +39,24 @@ describe.skipIf(!manifest).sequential('C3C3 real: reportes por período con pipe
   const mayor=await libroMayor(7,9,1,{periodoId:periodo}),balance=await balanceComprobacion(7,9,{periodoId:periodo});
   expect(mayor.movimientos).toHaveLength(2);expect(mayor.totales.debe).toBe('24.68');expect(balance.totales.totalDebe).toBe('24.68');expect(balance.totales.totalHaber).toBe('24.68');
  });
+ it('C3C4 febrero conserva enero, separa rango y exporta saldo inicial y final',async()=>{
+  const m=await libroMayor(7,9,1,{periodoId:febrero});
+  expect(m).toMatchObject({saldoInicial:'24.68',saldoRango:'12.34',totales:{debe:'12.34',haber:'0.00',saldoFinal:'37.02'},calculoSaldo:{lineasAnteriores:2,aperturaFormal:false}});
+  expect(m.movimientos[0].saldo).toBe('37.02');
+  const acreedor=await libroMayor(7,9,2,{periodoId:febrero});
+  expect(acreedor).toMatchObject({saldoInicial:'-24.68',saldoRango:'-12.34',totales:{saldoFinal:'-37.02'}});
+  const b=await balanceComprobacion(7,9,{periodoId:febrero});
+  expect(b.filas.find(r=>r.cuentaId===1)).toMatchObject({debito:'12.34',saldoInicial:'24.68',saldoFinal:'37.02'});
+  expect(b.totales.cuadra).toBe(true);expect(b.totalesContinuidad.cuadra).toBe(true);
+  const ExcelJS=(await import('exceljs')).default;
+  for(const [tipo,data] of [['mayor',m],['balance',b]] as const){const wb=new ExcelJS.Workbook();await wb.xlsx.load(new Uint8Array(await exportarXlsx(tipo,data)).buffer);const values=JSON.stringify(wb.worksheets[0].getSheetValues());expect(values).toContain('Saldo inicial');expect(values).toContain('37.02');}
+ });
+ it('C3C4 rango vacio y cambio de ejercicio conservan historia sin apertura automatica',async()=>{
+  for(const desde of ['2030-03-01','2031-01-01']){
+   const m=await libroMayor(7,9,1,{desde,hasta:desde});expect(m.movimientos).toEqual([]);expect(m).toMatchObject({saldoInicial:'37.02',saldoRango:'0.00',totales:{saldoFinal:'37.02'}});
+   const b=await balanceComprobacion(7,9,{desde,hasta:desde});expect(b.filas).toHaveLength(2);expect(b.totales.totalDebe).toBe('0.00');expect(b.totalesContinuidad.cuadra).toBe(true);
+  }
+ });
  it('rechaza empresa y libro ajenos y cuenta de otro libro',async()=>{
   await expect(libroDiario(8,11,{periodoId:periodo})).rejects.toMatchObject({status:404});await expect(libroDiario(7,10,{periodoId:periodo})).rejects.toMatchObject({status:404});await expect(libroMayor(7,9,3,{periodoId:periodo})).rejects.toMatchObject({status:404});
  });
@@ -51,16 +69,29 @@ describe.skipIf(!manifest).sequential('C3C3 real: reportes por período con pipe
  it('cierre concurrente conserva lectura consistente y bloquea nuevos asientos sin impedir reportes',async()=>{
   const [d]=await Promise.all([libroDiario(7,9,{periodoId:periodo}),operarPeriodo(ctx(),{...base(),accion:'cerrar',periodoId:periodo,version:1})]);
   const rev=d.trazabilidadPeriodo.revisiones.find(p=>p.id===periodo)!;expect(d.periodoSeleccionado?.version).toBe(Number(rev.version));expect(d.periodoSeleccionado?.estado).toBe(rev.estado);expect([1,2]).toContain(d.periodoSeleccionado?.version);
+  expect((await libroMayor(7,9,1,{periodoId:febrero})).saldoInicial).toBe('24.68');
   await expect(asiento('NO-PASA','2030-01-15')).rejects.toMatchObject({codigo:'PERIODO_NO_ABIERTO'});
   expect((await libroDiario(7,9,{periodoId:periodo})).periodoSeleccionado).toMatchObject({estado:'CERRADO',revisionCierre:1,version:2});
  });
  it('reapertura cambia revisión visible sin alterar la evidencia de cierre anterior',async()=>{
   const antes=await filas('SELECT huella,evidencia FROM cont_periodos_cierres');
   const s=await operarPeriodo(ctx(),{...base(),accion:'reabrir_solicitar',periodoId:periodo,version:2});await operarPeriodo(ctx(42),{...base(),accion:'resolver',solicitudId:s.solicitudId,version:0,aprobar:true});
-  expect((await libroDiario(7,9,{periodoId:periodo})).periodoSeleccionado).toMatchObject({estado:'ABIERTO',version:3,revisionCierre:1});expect(await filas('SELECT huella,evidencia FROM cont_periodos_cierres')).toEqual(antes);
+  expect((await libroDiario(7,9,{periodoId:periodo})).periodoSeleccionado).toMatchObject({estado:'ABIERTO',version:3,revisionCierre:1});expect(await filas('SELECT huella,evidencia FROM cont_periodos_cierres')).toEqual(antes);expect((await libroMayor(7,9,1,{periodoId:febrero})).saldoInicial).toBe('24.68');
  });
  it('fechas manuales mantienen resultados existentes sin asignar períodos a asientos',async()=>{
   const antes=await filas('SELECT * FROM cont_asientos ORDER BY id');const d=await libroDiario(7,9,{desde:'2030-02-01',hasta:'2030-02-28'});expect(d.periodoSeleccionado).toBeNull();expect(d.asientos.map(a=>a.numero)).toEqual(['FEB-FUERA']);expect(await filas('SELECT * FROM cont_asientos ORDER BY id')).toEqual(antes);
   const m=manifestC3c2(manifest!);fs.writeFileSync(m.runDir+'/reportes-c3c3-summary.json',JSON.stringify({pruebas:8,empresaId:7,entidadId:9,periodo,febrero}));
  });
+ it('C3C4 negativos, borradores y centavos exactos quedan aislados en otro libro',async()=>{
+  const c=await pool.getConnection();try{
+   await c.query("INSERT INTO cont_asientos(id,empresa_id,entidad_id,fecha,numero,estado) VALUES (101,7,10,'2029-12-31','ANT','Registrado'),(102,7,10,'2030-01-01','BOR','Borrador'),(103,7,10,'2030-02-01','MOV','Registrado')");
+   await c.query("INSERT INTO cont_asiento_detalle(empresa_id,entidad_id,asiento_id,cuenta_id,debe,haber) VALUES (7,10,101,3,0,0.30),(7,10,101,4,0.30,0),(7,10,102,3,999,0),(7,10,102,4,0,999),(7,10,103,3,0.10,0),(7,10,103,4,0,0.10)");
+  }finally{c.release();}
+  const m=await libroMayor(7,10,3,{desde:'2030-02-01',hasta:'2030-02-28'});
+  expect(m).toMatchObject({saldoInicial:'-0.30',saldoRango:'0.10',totales:{saldoFinal:'-0.20'}});
+  expect(m.movimientos.map(r=>r.numero)).toEqual(['MOV']);expect(m.movimientos[0].saldo).toBe('-0.20');
+  const b=await balanceComprobacion(7,10,{desde:'2030-02-01',hasta:'2030-02-28'});expect(b.totalesContinuidad.cuadra).toBe(true);
+  expect((await libroMayor(7,9,1,{periodoId:febrero})).saldoInicial).toBe('24.68');
+ });
+
 });
