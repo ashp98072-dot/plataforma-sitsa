@@ -3,6 +3,7 @@ import {useEffect,useRef,useState} from 'react';
 import type {SimulacionRegularizacion} from '@/lib/contabilidad/regularizacion';
 import {ResultadoDiagnosticoCierre} from './cierre-diagnostico';
 const mensajes:Record<string,string>={
+ CUENTA_RESULTADO_INVALIDA:'La cuenta configurada ya no cumple las validaciones técnicas del rol. Revisa Configuración contable.',
  CUENTA_RESULTADO_NO_CONFIGURADA:'No existe un rol configurado para la cuenta de resultado del ejercicio. Debe aprobarse su identificación y validación por empresa/libro.',
  POLITICA_REGULARIZACION_PENDIENTE:'Pendiente aprobar alcance y política de regularización. No se infieren ajustes previos ni se certifica ausencia de regularizaciones ya registradas.',
  CLASIFICACION_INSUFICIENTE:'Hay cuentas sin clasificación reconocida. El resumen solo incluye tipos exactos Ingreso/Gasto y puede ser parcial.',
@@ -16,7 +17,7 @@ export function ResultadoRegularizacion({d}:{d:SimulacionRegularizacion}){
   <p>Fecha: <time dateTime={d.generadoEn}>{d.generadoEn}</time> · Estado: {d.estado}</p>
   <p>Ingresos netos: {d.calculo.ingresos} · Gastos netos: {d.calculo.gastos} · Resultado preliminar: {d.calculo.resultadoPreliminar}</p>
   {!d.resultadoConfiable&&<p role="alert">Resultado parcial o con integridad pendiente. No utilizar como resultado validado del ejercicio.</p>}
-  <p>Cuenta de resultado: no configurada. Propuesta de asiento completo: no disponible.</p>
+  <p>Cuenta de resultado: {d.cuentaResultado ? `${d.cuentaResultado.codigo} - ${d.cuentaResultado.nombre} (validada técnicamente; idoneidad formal pendiente)` : `no disponible (${d.configuracionResultado})`}. Propuesta de asiento completo: no disponible.</p>
   <h4 className="font-semibold">Bloqueantes</h4>
   <ul className="list-disc pl-5">{d.bloqueantes.map(c=><li key={c}>{mensajes[c]??`Ver diagnóstico técnico: ${c}`}</li>)}</ul>
   <h4 className="font-semibold">Advertencias de simulación</h4>
