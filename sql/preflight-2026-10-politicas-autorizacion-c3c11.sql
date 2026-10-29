@@ -1,0 +1,4 @@
+-- Solo lectura; además ejecutar postchecks C3C-9 y C3C-10. Todos los errores deben ser cero.
+SELECT 'dependencias_c11' control,6-COUNT(*) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND ENGINE='InnoDB' AND TABLE_NAME IN ('cont_asientos_origen','cont_asientos_origen_revisiones','cont_regularizacion_borradores','cont_ejercicios','usuarios','auditoria');
+SELECT 'fk_borrador_c11' control,1-COUNT(*) errores FROM (SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) cols FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_regularizacion_borradores' AND NON_UNIQUE=0 GROUP BY INDEX_NAME) i WHERE cols='empresa_id,entidad_id,ejercicio_id,version';
+SELECT 'permisos_edicion_c11' control,1-COUNT(*) errores FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='usuario_modulo' AND COLUMN_NAME='puede_editar';
