@@ -138,3 +138,5 @@ describe("PATCH /tms/gastos/[id] — schema de líneas (GASTOS-MULTIPLES-LINEAS-
     expect(actualizarGasto).not.toHaveBeenCalled();
   });
 });
+
+it('PATCH acepta Viaticos sin normalizar la categoria',async()=>{const res=await PATCH(patchReq({categoria:'Viáticos'}),ctx);expect(res.status).toBe(200);expect(vi.mocked(actualizarGasto).mock.calls[0][2]).toHaveProperty('categoria','Viáticos');});

@@ -844,3 +844,13 @@ describe("actualizarSolicitudFondo", () => {
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"))).toBe(false);
   });
 });
+
+describe('categoria Viaticos en lineas de fondo',()=>{
+ it('guarda el valor literal al crear y al editar',async()=>{
+  const conn=conexion();vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+  await crearSolicitudFondo(7,{requirenteUsuarioId:9,fechaRequerimiento:'2026-09-01',lineas:[{categoria:'Viáticos',monto:100}]});
+  expect(conn.execute.mock.calls.find(c=>String(c[0]).includes('INSERT INTO tms_solicitud_fondo_lineas'))?.[1]).toEqual(expect.arrayContaining(['Viáticos']));
+  conn.execute.mockClear();await actualizarSolicitudFondo(7,1,{lineas:[{categoria:'Viáticos',monto:100}]});
+  expect(conn.execute.mock.calls.find(c=>String(c[0]).includes('INSERT INTO tms_solicitud_fondo_lineas'))?.[1]).toEqual(expect.arrayContaining(['Viáticos']));
+ });
+});

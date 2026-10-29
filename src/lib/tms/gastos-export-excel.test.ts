@@ -408,3 +408,9 @@ describe("Excel de Fondos — Observaciones", () => {
     expect(ws.getColumn(16).alignment?.wrapText).toBe(true);
   });
 });
+
+it('exporta Viaticos literalmente en el detalle operativo y el agregado',async()=>{
+ for(const buf of [await exportarGastosDetalleExcel([filaGasto({categoria:'Viáticos'})]),await exportarAgregadoGastosExcel('Categorias','Categoria',[{clave:'Viáticos',etiqueta:'Viáticos',registros:1,totalMonto:100}])]){
+  const ws=await primeraHoja(buf);expect(JSON.stringify(ws.getSheetValues())).toContain('Viáticos');
+ }
+});

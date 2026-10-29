@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantGastos: vi.fn() }));
-vi.mock("@/lib/tms/gastos", () => ({
+vi.mock("@/lib/tms/gastos", async (importOriginal) => ({
   // GASTOS-COMPROBANTE-404-1 — incluye "Bonificación" y "Reintegro de
   // gastos" (catálogo COMPARTIDO real con Gastos, ver gastos.ts) para que
   // el test de aceptación de categoría (más abajo) ejercite el mismo
   // z.enum(CATEGORIAS_GASTO) que corre en producción.
-  CATEGORIAS_GASTO: ["Combustible", "Bonificación", "Reintegro de gastos", "Otros"],
+  CATEGORIAS_GASTO: (await importOriginal<typeof import("@/lib/tms/gastos")>()).CATEGORIAS_GASTO,
   // FONDOS-GASTOS-METODO-PAGO-1 — la ruta hace z.enum(METODOS_PAGO_GASTO) al cargar el módulo; sin este mock, undefined revienta el schema.
   METODOS_PAGO_GASTO: ["Efectivo", "Transferencia", "Transferencia móvil", "Tarjeta", "Cheque", "Otro"],
 }));
@@ -113,7 +113,7 @@ describe("POST /tms/fondos — schema de metodoPago por línea", () => {
  * no solo mostrarlas en el selector del formulario.
  */
 describe("POST /tms/fondos — acepta las categorías compartidas nuevas (GASTOS-COMPROBANTE-404-1)", () => {
-  it.each(["Bonificación", "Reintegro de gastos"])("categoría '%s' -> 200, se guarda", async (categoria) => {
+  it.each(["Bonificación", "Reintegro de gastos", "Viáticos"])("categoría '%s' -> 200, se guarda", async (categoria) => {
     vi.mocked(crearSolicitudFondo).mockResolvedValue({ id: 1 } as never);
     const res = await POST(postReq({ ...bodyBase, lineas: [{ ...lineaBase, categoria }] }), ctx);
     expect(res.status).toBe(200);

@@ -117,6 +117,7 @@ export const CATEGORIAS_GASTO = [
   // ambos módulos acepten/muestren "Reintegro de gastos", sin duplicar
   // el catálogo en ningún otro lugar.
   "Reintegro de gastos",
+  "Viáticos",
   "Otros",
 ] as const;
 export type CategoriaGasto = (typeof CATEGORIAS_GASTO)[number];
