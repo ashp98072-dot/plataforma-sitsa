@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn() }));
@@ -184,4 +185,13 @@ describe("GET catálogos — vehículos propios + compartidos", () => {
     expect(sql).not.toContain("fv.empresa_id = p.empresa_id AND");
     expect(params).toEqual([7]);
   });
+});
+
+it('sirve Viaticos una sola vez para los dos formularios y los filtros',async()=>{
+ datosCatalogos();const body=await (await GET(new Request('http://local'),ctx)).json();
+ expect(body.categorias.filter((c:string)=>c==='Viáticos')).toHaveLength(1);
+ expect(body.categorias).toEqual(expect.arrayContaining(['Comida','Hospedaje','Transporte','Otros']));
+ const fondos=readFileSync('src/app/e/[slug]/fondos/page.tsx','utf8');const gastos=readFileSync('src/app/e/[slug]/gastos/page.tsx','utf8');
+ expect(fondos).toContain('categorias: data.categorias ?? []');expect(fondos).toContain('catalogos.categorias.map');
+ expect(gastos).toContain('setCategorias(dGastos.categorias ?? [])');expect(gastos.match(/categorias.map/g)?.length).toBeGreaterThanOrEqual(3);
 });

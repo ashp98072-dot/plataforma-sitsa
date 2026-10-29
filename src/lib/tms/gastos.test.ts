@@ -223,6 +223,7 @@ describe("catálogo de categorías", () => {
       "Mantenimiento", "Arbitrios", "Transporte",
       "Comida", "Aceite", "Medicamento", "Bonificación",
       "Reintegro de gastos",
+      "Viáticos",
       "Otros",
     ]);
   });
@@ -1321,4 +1322,19 @@ describe("código administrativo persistido del gasto (GASTO-<id con 6 dígitos>
     expect(sql).toContain("SELECT g.id, g.codigo, g.empresa_id");
     expect(sql).toContain("g.empresa_id = ?");
   });
+});
+
+describe('categoria Viaticos: persistencia y consulta',()=>{
+ it('guarda el valor literal en la transaccion de creacion',async()=>{
+  const conn=conexion();vi.mocked(query).mockResolvedValue([filaGasto({categoria:'Viáticos'})] as never);
+  await crearGasto(7,{fechaSolicitud:'2026-09-01',categoria:'Viáticos',monto:100});
+  const insert=conn.execute.mock.calls.find(c=>String(c[0]).includes('INSERT INTO tms_gastos_operativos'));
+  expect(insert?.[1]).toEqual(expect.arrayContaining(['Viáticos']));expect(conn.commit).toHaveBeenCalled();
+  conn.execute.mockClear();await actualizarGasto(7,1,{categoria:'Viáticos'});
+  expect(conn.execute.mock.calls.find(c=>String(c[0]).includes('UPDATE tms_gastos_operativos SET')&&String(c[0]).includes('categoria = ?'))?.[1]).toEqual(expect.arrayContaining(['Viáticos']));
+ });
+ it('consulta y filtro conservan la categoria sin conversion',async()=>{
+  vi.mocked(query).mockResolvedValue([filaGasto({categoria:'Viáticos'})] as never);
+  const rows=await listarGastos(7,{categoria:'Viáticos'});expect(rows[0].categoria).toBe('Viáticos');expect(vi.mocked(query).mock.calls[0][1]).toEqual(expect.arrayContaining(['Viáticos']));
+ });
 });

@@ -181,3 +181,5 @@ describe("POST /tms/gastos — claveIdempotencia", () => {
     expect((await res.json()).error).toContain("ya se registró con datos distintos");
   });
 });
+
+it('POST acepta Viaticos sin normalizar la categoria',async()=>{const res=await POST(postReq({...bodyBase,categoria:'Viáticos'}),ctx);expect(res.status).toBe(200);expect(crearGasto).toHaveBeenCalledWith(7,expect.objectContaining({categoria:'Viáticos'}),'ops1');});
