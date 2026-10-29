@@ -7,13 +7,15 @@ import {consultarRegularizacionTx} from './regularizacion';
 import {construirPropuestaRegularizacion} from './propuesta-regularizacion-calculo';
 import {DECISIONES_PENDIENTES,huellaCondiciones,identificarOrigen,type AsientoOrigen,type MetadatoOrigen} from './regularizacion-control-contrato';
 
+import {resolverRevisiones,revisionesOrigenTx} from './origen-revisiones-contrato';
+
 const id=z.number().int().positive().max(2147483647);
 export const borradorEntrada=z.strictObject({huellaCondiciones:z.string().regex(/^[0-9a-f]{64}$/),versionEsperada:z.number().int().min(0).max(2147483646),claveIdempotencia:z.uuid().transform(s=>s.toLowerCase()),nota:z.string().trim().min(5).max(500)});
 export const origenEntrada=z.strictObject({asientoId:id,huellaAsiento:z.string().regex(/^[0-9a-f]{64}$/),clase:z.enum(['REGULARIZACION','NORMAL']),referencia:z.string().trim().min(5).max(120),confirmacion:z.literal('DOCUMENTACION_DE_ORIGEN_REVISADA')});
 type Actor={id:number;username:string};
 type Revision={id:string;version:number;estado:string;huellaCondiciones:string;nota:string;creadoPor:number;creadoEn:string};
 function ids(...values:number[]){for(const v of values)id.parse(v);}
-async function permisoEscritura(c:PoolConnection,empresaId:number,usuarioId:number){
+export async function permisoEscritura(c:PoolConnection,empresaId:number,usuarioId:number){
  // También Admin necesita asignación y permiso explícitos. No se crea un permiso nuevo.
  const [rows]=await c.query<RowDataPacket[]>(`SELECT u.id FROM usuarios u WHERE u.id=? AND u.activo=1
   AND EXISTS(SELECT 1 FROM usuario_empresa e WHERE e.usuario_id=u.id AND e.empresa_id=?)
@@ -40,10 +42,12 @@ async function prepararTx(c:PoolConnection,empresaId:number,entidadId:number,eje
  const anterior=construirPropuestaRegularizacion(base);
  const {fechaInicio,fechaFin}=base.ejercicio;
  const asientos=await asientosOrigenTx(c,empresaId,entidadId,String(fechaInicio),String(fechaFin));
- const [origenRows]=await c.query<RowDataPacket[]>(`SELECT o.asiento_id asientoId,o.ejercicio_id ejercicioId,o.clase,o.fuente,o.referencia,o.huella_asiento huella,o.registrado_por registradoPor
+ const [origenRows]=await c.query<RowDataPacket[]>(`SELECT o.asiento_id asientoId,o.ejercicio_id ejercicioId,o.clase,o.fuente,o.referencia,o.huella_asiento huella,o.registrado_por registradoPor,DATE_FORMAT(o.creado_en,'%Y-%m-%dT%H:%i:%s') creadoEn
  FROM cont_asientos_origen o JOIN cont_asientos a ON a.id=o.asiento_id AND a.empresa_id=o.empresa_id AND a.entidad_id=o.entidad_id
  WHERE o.empresa_id=? AND o.entidad_id=? AND a.fecha>=? AND a.fecha<=? ORDER BY o.asiento_id`,[empresaId,entidadId,fechaInicio,fechaFin]);
- const origenes=asientos.map(a=>identificarOrigen(a,origenRows as MetadatoOrigen[],ejercicioId,base.cuentaResultado?.id??null));
+ const historialOrigen=await revisionesOrigenTx(c,empresaId,entidadId,String(fechaInicio),String(fechaFin));
+ const procedencia=(origenRows as MetadatoOrigen[]).map(o=>({original:o,...resolverRevisiones(o,historialOrigen.filter(r=>r.asientoId===o.asientoId))}));
+ const origenes=asientos.map(a=>{const p=procedencia.find(p=>p.original.asientoId===a.id);return {...identificarOrigen(a,procedencia.map(p=>p.vigente),ejercicioId,base.cuentaResultado?.id??null),revisionDocumental:p?{original:p.original,vigente:p.vigente,version:p.version,huellaVigente:p.huellaVigente,cadenaInvalida:p.invalida}:null};});
  const registradas=origenes.filter(a=>a.estado==='Registrado');
  const identificadas=registradas.filter(a=>a.origen==='REGULARIZACION_IDENTIFICADA').length;
  const indicios=registradas.filter(a=>a.origen==='INDICIO').length;
@@ -53,7 +57,7 @@ async function prepararTx(c:PoolConnection,empresaId:number,entidadId:number,eje
  const [versionesPeriodos]=await c.query<RowDataPacket[]>('SELECT id,version,revision_cierre FROM cont_periodos WHERE empresa_id=? AND entidad_id=? AND ejercicio_id=? ORDER BY id',[empresaId,entidadId,ejercicioId]);
  const condiciones={contrato:'C3C9-PREP-1',empresaId,entidadId,ejercicioId,politicaBase:anterior.politica,
   resumenMonetario:{ingresos:base.calculo.ingresos,gastos:base.calculo.gastos,resultado:base.calculo.resultadoPreliminar},
-  validaciones:[...anterior.bloqueantesTecnicos,...adicionales],calendario:{ejercicio:base.ejercicio,periodos:base.diagnostico.periodos,versionesPeriodos,control:base.diagnostico.control},catalogo,rol,asientos,metadatos:origenRows};
+  validaciones:[...anterior.bloqueantesTecnicos,...adicionales],calendario:{ejercicio:base.ejercicio,periodos:base.diagnostico.periodos,versionesPeriodos,control:base.diagnostico.control},catalogo,rol,asientos,metadatos:origenRows,historialOrigen};
  const huella=huellaCondiciones(condiciones);
  const politica={contrato:'C3C9-PREP-1',version:1,base:anterior.politica.version,empresaId,entidadId,ejercicioId,estado:'BORRADOR_NO_APROBADO',
   cuentasNominales:base.calculo.nominales.map(a=>({id:a.cuentaId,codigo:a.codigo,tipo:a.tipo,activa:a.activa,saldoEjercicio:a.saldoEjercicio})),
@@ -64,7 +68,7 @@ async function prepararTx(c:PoolConnection,empresaId:number,entidadId:number,eje
  const vigente=!revisiones[0]||revisiones[0].huellaCondiciones===huella;
  const bloqueantes=[...new Set([...anterior.bloqueantesTecnicos,...adicionales,...(!vigente?['BORRADOR_DESACTUALIZADO']:[])])];
  return {empresaId,entidadId,ejercicioId,ejercicio:base.ejercicio,estadoPreparacion:!vigente?'DESACTUALIZADA':bloqueantes.length?'CON_BLOQUEANTES':'PREPARACION_TECNICA',politica,
-  bloqueantes,pendientesFormales:DECISIONES_PENDIENTES,origenes,revisiones,borradorVigente:vigente,
+  bloqueantes,pendientesFormales:DECISIONES_PENDIENTES,origenes,historialOrigen,revisiones,borradorVigente:vigente,
   resumen:base.calculo,propuestaSimulada:bloqueantes.length?null:anterior.propuestaSimulada,
   aprobado:false,contabilizado:false,listaParaContabilizar:false,generadoEn:base.generadoEn,
   aviso:'PREPARACIÓN TÉCNICA — NO APROBADA NI CONTABILIZADA. Guardar un borrador no autoriza regularizar. La procedencia histórica sin evidencia explícita permanece NO VERIFICADA.'};
@@ -75,13 +79,13 @@ export async function consultarPreparacion(empresaId:number,entidadId:number,eje
  catch(e){try{await c.rollback();}catch{}throw e;}finally{c.release();}
 }
 /** Bloqueos antes de la primera lectura consistente: catálogo, períodos, configuración y movimientos no pueden cambiar durante el guardado. */
-async function bloquearFuentes(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number,actor:Actor){
+export async function bloquearFuentes(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number,actor:Actor){
  await bloquearAmbito(c,empresaId,{entidadId,usuarioId:actor.id,admin:false},true);
  const [e]=await c.query<RowDataPacket[]>('SELECT id,fecha_inicio,fecha_fin FROM cont_ejercicios WHERE empresa_id=? AND entidad_id=? AND id=? FOR UPDATE',[empresaId,entidadId,ejercicioId]);
  if(e.length!==1)throw new AccesoContable('Ejercicio no disponible en este libro.',404);
- for(const table of ['cont_periodos','cont_cuentas','cont_cuentas_rol','cont_asientos','cont_asiento_detalle','cont_asientos_origen','cont_regularizacion_borradores']){
+ for(const table of ['cont_periodos','cont_cuentas','cont_cuentas_rol','cont_asientos','cont_asiento_detalle','cont_asientos_origen','cont_regularizacion_borradores','cont_asientos_origen_revisiones']){
   // Nombres constantes, no aportados por la petición. Se serializa el libro completo.
-  await c.query(`SELECT ${table==='cont_cuentas_rol'?'cuenta_id':table==='cont_asientos_origen'?'asiento_id':'id'} FROM ${table} WHERE empresa_id=? AND entidad_id=? FOR UPDATE`,[empresaId,entidadId]);
+  await c.query(`SELECT ${table==='cont_cuentas_rol'?'cuenta_id':['cont_asientos_origen','cont_asientos_origen_revisiones'].includes(table)?'asiento_id':'id'} FROM ${table} WHERE empresa_id=? AND entidad_id=? FOR UPDATE`,[empresaId,entidadId]);
  }
  // La revocación de usuario, asignación o permiso tampoco puede intercalarse con la escritura.
  await c.query('SELECT id FROM usuarios WHERE id=? FOR UPDATE',[actor.id]);
@@ -119,7 +123,7 @@ export async function registrarOrigenDocumentado(empresaId:number,entidadId:numb
   if(huellaCondiciones(a)!==d.huellaAsiento)throw new AccesoContable('El asiento cambió; vuelve a consultar su huella.',409);
   const [existing]=await c.query<RowDataPacket[]>('SELECT * FROM cont_asientos_origen WHERE empresa_id=? AND entidad_id=? AND asiento_id=?',[empresaId,entidadId,d.asientoId]);
   if(existing[0]){const x=existing[0];if(x.fuente!=='REVISION_DOCUMENTADA'||x.clase!==d.clase||x.referencia!==d.referencia||x.huella_asiento!==d.huellaAsiento||Number(x.registrado_por)!==actor.id||Number(x.ejercicio_id)!==ejercicioId)throw new AccesoContable('Existe una identificación distinta; no se sobrescribe evidencia de origen.',409);await c.commit();return {registrado:true,reutilizado:true};}
-  const [reference]=await c.query<RowDataPacket[]>("SELECT asiento_id FROM cont_asientos_origen WHERE empresa_id=? AND entidad_id=? AND fuente='REVISION_DOCUMENTADA' AND referencia=?",[empresaId,entidadId,d.referencia]);
+  const [reference]=await c.query<RowDataPacket[]>("SELECT asiento_id FROM cont_asientos_origen WHERE empresa_id=? AND entidad_id=? AND fuente='REVISION_DOCUMENTADA' AND referencia=? UNION ALL SELECT asiento_id FROM cont_asientos_origen_revisiones WHERE empresa_id=? AND entidad_id=? AND referencia=? AND asiento_id<>?",[empresaId,entidadId,d.referencia,empresaId,entidadId,d.referencia,d.asientoId]);
   if(reference.length)throw new AccesoContable('La referencia documental ya identifica otro asiento.',409);
   await c.execute("INSERT INTO cont_asientos_origen(empresa_id,entidad_id,asiento_id,ejercicio_id,clase,fuente,referencia,huella_asiento,registrado_por) VALUES (?,?,?,?,?,'REVISION_DOCUMENTADA',?,?,?)",[empresaId,entidadId,d.asientoId,ejercicioId,d.clase,d.referencia,d.huellaAsiento,actor.id]);
   await registrarAuditoriaTx(c,{empresaId,usuario:actor.username,modulo:'contabilidad',accion:'regularizacion_origen_documentar',detalle:JSON.stringify({usuarioId:actor.id,empresaId,entidadId,ejercicioId,asientoId:d.asientoId,anterior:null,clase:d.clase,fuente:'REVISION_DOCUMENTADA',referencia:d.referencia,huellaAsiento:d.huellaAsiento,aprobacionContable:false})});

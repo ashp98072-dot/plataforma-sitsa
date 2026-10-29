@@ -1,0 +1,28 @@
+import {beforeEach,describe,it,expect,vi} from 'vitest';
+import {createElement} from 'react';import {renderToStaticMarkup} from 'react-dom/server';
+import {ZodError} from 'zod';
+import {resolverRevisiones,type RevisionOrigen} from './origen-revisiones-contrato';
+import {huellaCondiciones,type MetadatoOrigen} from './regularizacion-control-contrato';
+import {HistorialDocumental,RevisionDocumentalForm} from '@/components/contabilidad/origen-revisiones';
+import type {PreparacionRegularizacion} from './regularizacion-control';
+const mocks=vi.hoisted(()=>({guard:vi.fn(),revisar:vi.fn()}));
+vi.mock('@/lib/tenant',()=>({requireTenantCalendario:mocks.guard}));
+vi.mock('./origen-revisiones',()=>({revisarOrigen:mocks.revisar}));
+vi.mock('./regularizacion-control',()=>({consultarPreparacion:vi.fn(),guardarPreparacion:vi.fn(),registrarOrigenDocumentado:vi.fn()}));
+import {preparacionHttp} from './regularizacion-control-http';
+import {AccesoContable} from './ambito';
+const raiz:MetadatoOrigen={asientoId:1,ejercicioId:2,clase:'NORMAL',fuente:'REVISION_DOCUMENTADA',referencia:'DOC-ORIGINAL',huella:'a'.repeat(64),registradoPor:41,creadoEn:'2030-01-01T00:00:00'};
+const revision:RevisionOrigen={asientoId:1,ejercicioId:2,version:1,tipo:'RECTIFICACION_DOCUMENTAL',claseAnterior:'NORMAL',clase:'REGULARIZACION',referencia:'DOC-RECTIFICACION',justificacion:'Documentación ficticia revisada y contrastada',huellaAnterior:huellaCondiciones(raiz),huella:'a'.repeat(64),registradoPor:42,creadoEn:'2030-01-02T00:00:00'};
+describe('cadena documental C3C10',()=>{
+ it('raíz versión cero permanece intacta',()=>{const before=structuredClone(raiz);expect(resolverRevisiones(raiz,[])).toMatchObject({version:0,invalida:false,vigente:raiz});expect(raiz).toEqual(before);});
+ it('resuelve rectificación explícita sin modificar originales',()=>{const before=structuredClone([raiz,revision]);const r=resolverRevisiones(raiz,[revision]);expect(r).toMatchObject({version:1,invalida:false,vigente:{clase:'REGULARIZACION',registradoPor:42,fuente:'REVISION_DOCUMENTADA'}});expect([raiz,revision]).toEqual(before);});
+ it.each([{version:2},{ejercicioId:3},{asientoId:2},{huellaAnterior:'b'.repeat(64)},{claseAnterior:'REGULARIZACION'},{registradoPor:41},{justificacion:'corta'},{tipo:'APROBACION'},{tipo:'REVISION_DOCUMENTAL'},{referencia:''}])('cadena incompatible falla cerrada %j',patch=>{const r=resolverRevisiones(raiz,[{...revision,...patch}]);expect(r.invalida).toBe(true);expect(r.vigente.fuente).toBe('CADENA_INVALIDA');});
+ it('revisión conserva clasificación y puede renovar huella',()=>{const r=resolverRevisiones(raiz,[{...revision,tipo:'REVISION_DOCUMENTAL',clase:'NORMAL',huella:'c'.repeat(64),registradoPor:41}]);expect(r).toMatchObject({invalida:false,version:1,vigente:{clase:'NORMAL',huella:'c'.repeat(64)}});});
+ it('volver a clasificación original conserva todas las transiciones',()=>{const first=resolverRevisiones(raiz,[revision]);const second={...revision,version:2,claseAnterior:'REGULARIZACION',clase:'NORMAL',huellaAnterior:first.huellaVigente,registradoPor:41};expect(resolverRevisiones(raiz,[revision,second])).toMatchObject({version:2,invalida:false,vigente:{clase:'NORMAL'}});expect(huellaCondiciones([revision,second])).not.toBe(huellaCondiciones([]));});
+ it('no sana una raíz corrupta o un prefijo inválido',()=>{expect(resolverRevisiones({...raiz,fuente:'INFERIDA'},[]).invalida).toBe(true);expect(resolverRevisiones(raiz,[{...revision,version:2},revision]).invalida).toBe(true);});
+});
+beforeEach(()=>{vi.resetAllMocks();mocks.guard.mockResolvedValue({empresa:{id:7},session:{id:41,username:'lab'}});mocks.revisar.mockResolvedValue({version:1,aprobacionContable:false});});
+it('HTTP delega tenant, libro, ejercicio, actor y cuerpo al servicio separado',async()=>{const r=await preparacionHttp(new Request('http://local?entidad=9',{method:'POST',body:'{"nota":"ficticia"}'}),'lab','2',true,false,true);expect(r.status).toBe(200);expect(mocks.revisar).toHaveBeenCalledWith(7,9,2,{id:41,username:'lab'},{nota:'ficticia'});expect(r.headers.get('Cache-Control')).toBe('private, no-store');});
+it('denegación del guard impide revisión',async()=>{mocks.guard.mockResolvedValue({error:new Response(null,{status:403})});expect((await preparacionHttp(new Request('http://local?entidad=9'),'lab','2',true,false,true)).status).toBe(403);expect(mocks.revisar).not.toHaveBeenCalled();});
+it.each([[new AccesoContable('Conflicto',409),409],[new AccesoContable('Sin autorización',403),403],[new ZodError([]),400],[{code:'ER_NO_SUCH_TABLE'},503],[new Error('interno secreto'),500]])('errores HTTP seguros %j',async(error,status)=>{mocks.revisar.mockRejectedValue(error);const r=await preparacionHttp(new Request('http://local?entidad=9',{method:'POST',body:'{}'}),'lab','2',true,false,true);expect(r.status).toBe(status);expect(await r.text()).not.toContain('interno secreto');expect(r.headers.get('Cache-Control')).toBe('private, no-store');});
+it('presenta historial y diferencias, sin aprobación formal ni escritura para lector',()=>{const vigente=resolverRevisiones(raiz,[revision]);const d={puedeGuardar:false,origenes:[{asientoId:1,numero:'LAB-1',revisionDocumental:{original:raiz,...vigente}}],historialOrigen:[revision]} as unknown as PreparacionRegularizacion;const html=renderToStaticMarkup(createElement(HistorialDocumental,{d}));expect(html).toContain('DOC-ORIGINAL');expect(html).toContain('DOC-RECTIFICACION');expect(html).toContain('NORMAL');expect(html).toContain('REGULARIZACION');expect(html).toContain('formal');expect(html).not.toContain('<button');expect(renderToStaticMarkup(createElement(RevisionDocumentalForm,{d,url:'/local',actualizado:async()=>{}}))).toBe('');});

@@ -11,7 +11,7 @@ export function huellaCondiciones(valor:unknown):string{
  return createHash('sha256').update(canonical(valor)).digest('hex');
 }
 export type AsientoOrigen={id:number;fecha:string;numero:string;estado:string;glosa:string|null;creadoPor:string|null;lineas:{id:number;cuentaId:number;debe:string;haber:string}[]};
-export type MetadatoOrigen={asientoId:number;ejercicioId:number;clase:string;fuente:string;referencia:string;huella:string;registradoPor:number};
+export type MetadatoOrigen={asientoId:number;ejercicioId:number;clase:string;fuente:string;referencia:string;huella:string;registradoPor:number;creadoEn?:string};
 export function identificarOrigen(a:AsientoOrigen,metadatos:MetadatoOrigen[],ejercicioId:number,cuentaResultadoId:number|null){
  const rows=metadatos.filter(m=>m.asientoId===a.id),m=rows[0];
  const valido=a.estado==='Registrado'&&rows.length===1&&m.ejercicioId===ejercicioId&&['EMISION_CONTROLADA','REVISION_DOCUMENTADA'].includes(m.fuente)&&m.referencia.trim().length>0&&Number.isInteger(m.registradoPor)&&m.registradoPor>0&&m.huella===huellaCondiciones(a)&&['REGULARIZACION','NORMAL'].includes(m.clase);
