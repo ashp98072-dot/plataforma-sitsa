@@ -1,6 +1,6 @@
 import {aCentavos,deCentavos} from './reportes/calculo';
 import {consultarCuentaResultadoTx} from './cuenta-resultado';
-import type {RowDataPacket} from 'mysql2/promise';
+import type {PoolConnection,RowDataPacket} from 'mysql2/promise';
 import {getPool} from '@/lib/db';
 import {AccesoContable} from './ambito';
 import {consultarDiagnosticoCierre} from './cierre-diagnostico';
@@ -11,6 +11,12 @@ export async function simularRegularizacion(empresaId:number,entidadId:number,ej
  const c=await getPool().getConnection();
  try{
   await c.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');await c.query('START TRANSACTION READ ONLY');
+  const resultado=await consultarRegularizacionTx(c,empresaId,entidadId,ejercicioId);
+  await c.commit();return resultado;
+ }catch(e){try{await c.rollback();}catch{/* conserva el error original */}throw e;}finally{c.release();}
+}
+/** Reutiliza la transacción del llamador; no escribe ni abre conexiones adicionales. */
+export async function consultarRegularizacionTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
   const diagnostico=await consultarDiagnosticoCierre(c,empresaId,entidadId,ejercicioId);
   const {fechaInicio,fechaFin}=diagnostico.ejercicio;
   const [catalogo]=await c.query<RowDataPacket[]>('SELECT id,codigo,nombre,tipo,activa FROM cont_cuentas WHERE empresa_id=? AND entidad_id=? ORDER BY codigo',[empresaId,entidadId]);
@@ -41,7 +47,6 @@ export async function simularRegularizacion(empresaId:number,entidadId:number,ej
    advertencias:[...diagnostico.advertencias,...(calculo.saldosContrarios.length?['SALDOS_NOMINALES_CONTRARIOS']:[])],
    generadoEn:new Date().toISOString(),
    aviso:'SIMULACIÓN INCOMPLETA. No es un asiento formal ni está lista para contabilizar. Las inversas son indicativas y carecen de contrapartida aprobada. Solo movimientos Registrados del ejercicio; los saldos históricos se muestran separados y no se regularizan. No se guarda ni contabiliza nada.'};
-  await c.commit();return resultado;
- }catch(e){try{await c.rollback();}catch{/* conserva el error original */}throw e;}finally{c.release();}
+  return resultado;
 }
 export type SimulacionRegularizacion=Awaited<ReturnType<typeof simularRegularizacion>>;

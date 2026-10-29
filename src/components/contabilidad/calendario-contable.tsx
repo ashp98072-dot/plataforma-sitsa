@@ -5,6 +5,7 @@ import { AVISO_CALENDARIO, calendarioSchema, type CalendarioEntrada, type Ejerci
 import { libroUnicoActivo } from "@/lib/contabilidad/seleccion-libro";
 import { DiagnosticoCierrePanel } from './cierre-diagnostico';
 import { RegularizacionPanel } from './regularizacion-simulacion';
+import { PreparacionRegularizacionPanel } from './regularizacion-control';
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 const inputClase = "rounded border border-[var(--border)] bg-[var(--input)] p-2";
@@ -86,6 +87,7 @@ export function CalendarioLibro({ slug, entidadId, puedeCrear }: { slug: string;
     {ejercicio && <DiagnosticoCierrePanel key={`${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`sim:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`propuesta:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio} propuesta/>}
+    {ejercicio && <PreparacionRegularizacionPanel key={`preparacion:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <section aria-label="Períodos del ejercicio"><h2 className="font-semibold">Períodos</h2>
       {cargandoPeriodos && <p role="status">Cargando períodos…</p>}
       <ErrorConsultaPeriodos error={errorPeriodos} cargando={cargandoPeriodos} reintentar={() => {
