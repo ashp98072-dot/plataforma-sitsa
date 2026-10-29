@@ -30,6 +30,11 @@ describe("aritmética en centavos (sin punto flotante)", () => {
     const t = totalesBalance([{ debito: "100.00", credito: "30.00", saldoDeudor: "70.00", saldoAcreedor: "0.00" }, { debito: "30.00", credito: "100.00", saldoDeudor: "0.00", saldoAcreedor: "70.00" }]);
     expect(t).toMatchObject({ totalDebe: "130.00", totalHaber: "130.00", diferencia: "0.00", cuadra: true });
   });
+  it('C3C4 suma desde saldo anterior y admite cambio de signo sin perder centavos', () => {
+    expect(conSaldoAcumulado([{debe:'0.10',haber:'0.00'},{debe:'0.30',haber:'0.00'}],aCentavos('-0.30')).map(l=>l.saldo)).toEqual(['-0.20','0.10']);
+    expect(conSaldoAcumulado([{debe:'0.00',haber:'0.01'}],aCentavos('99999999999999.99'))[0].saldo).toBe('99999999999999.98');
+    expect(conSaldoAcumulado([],aCentavos('12.34'))).toEqual([]);
+  });
   it("fechas estrictas", () => {
     expect(fechaValida("2026-02-28")).toBe("2026-02-28");
     for (const f of ["2026-02-30", "26-01-01", "", null, undefined, "2026-13-01"]) expect(fechaValida(f as never)).toBeUndefined();

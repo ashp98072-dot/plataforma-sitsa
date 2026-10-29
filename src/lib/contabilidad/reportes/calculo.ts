@@ -63,6 +63,5 @@ export function fechaValida(v: string | null | undefined): string | undefined {
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : undefined;
 }
 
-/** Nota que acompaña SIEMPRE al Mayor mientras no exista un saldo inicial formal (ver docs/CONTABILIDAD-REPORTES-M4.md). */
-export const NOTA_SALDO_ACUMULADO =
-  "El saldo acumulado se calcula únicamente con los asientos registrados dentro del rango consultado. La plataforma aún no tiene saldo inicial certificado: no se arrastra ningún saldo anterior al rango.";
+/** Alcance del saldo calculado. */
+export const NOTA_SALDO_ACUMULADO = "Saldo inicial calculado con todos los asientos Registrados anteriores al inicio; saldo final = inicial + Debe - Haber del rango. Signo positivo deudor y negativo acreedor, independientemente del tipo de cuenta. Sin fecha inicial, el saldo inicial es cero. Incluye historia entre ejercicios sin regularizar ingresos/gastos ni certificar arrastres: no es un asiento formal de apertura.";

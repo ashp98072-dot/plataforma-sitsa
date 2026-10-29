@@ -42,19 +42,23 @@ export async function exportarXlsx(tipo: TipoReporte, datos: unknown): Promise<B
     const d = datos as Mayor;
     cabecera(ws, `Libro Mayor — ${d.cuenta.codigo} ${d.cuenta.nombre}`, d.entidad, d.desde, d.hasta, d.nota);
     encabezado(ws, ["Fecha", "Asiento", "Glosa", "Debe", "Haber", "Saldo acumulado"]);
+    ws.addRow(["Saldo inicial calculado", "", "", "", "", num(d.saldoInicial ?? "0.00")]);
+    if(d.calculoSaldo) ws.addRow(["Historia anterior: Debe / Haber / lineas", d.calculoSaldo.debeAnterior, d.calculoSaldo.haberAnterior, d.calculoSaldo.lineasAnteriores]);
+    ws.addRow(["Saldo propio del rango", d.saldoRango]);
     for (const m of d.movimientos) ws.addRow([m.fecha, m.numero, m.glosa ?? "", num(m.debe), num(m.haber), num(m.saldo)]);
     ws.addRow(["Totales", "", "", num(d.totales.debe), num(d.totales.haber), num(d.totales.saldoFinal)]).font = { bold: true };
     for (const c of [4, 5, 6]) ws.getColumn(c).numFmt = moneda;
     [12, 14, 44, 16, 16, 18].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   } else {
     const d = datos as Balance;
-    cabecera(ws, "Balance de comprobación", d.entidad, d.desde, d.hasta);
-    encabezado(ws, ["Código", "Cuenta", "Débito", "Crédito", "Saldo deudor", "Saldo acreedor"]);
-    for (const f of d.filas) ws.addRow([f.codigo, f.nombre, num(f.debito), num(f.credito), num(f.saldoDeudor), num(f.saldoAcreedor)]);
+    cabecera(ws, "Balance de comprobación", d.entidad, d.desde, d.hasta, d.nota);
+    encabezado(ws, ["Código", "Cuenta", "Débito", "Crédito", "Saldo deudor del rango", "Saldo acreedor del rango", "Saldo inicial", "Saldo final"]);
+    for (const f of d.filas) ws.addRow([f.codigo, f.nombre, num(f.debito), num(f.credito), num(f.saldoDeudor), num(f.saldoAcreedor), num(f.saldoInicial ?? "0.00"), num(f.saldoFinal ?? "0.00")]);
     ws.addRow(["Totales", "", num(d.totales.totalDebe), num(d.totales.totalHaber), num(d.totales.totalSaldoDeudor), num(d.totales.totalSaldoAcreedor)]).font = { bold: true };
+    if(d.totalesContinuidad) ws.addRow(["Saldos finales: deudor / acreedor", "", num(d.totalesContinuidad.totalSaldoDeudor), num(d.totalesContinuidad.totalSaldoAcreedor)]);
     ws.addRow(["Diferencia debe − haber", "", num(d.totales.diferencia)]);
-    for (const c of [3, 4, 5, 6]) ws.getColumn(c).numFmt = moneda;
-    [14, 44, 16, 16, 16, 16].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    for (const c of [3, 4, 5, 6, 7, 8]) ws.getColumn(c).numFmt = moneda;
+    [14, 44, 16, 16, 22, 22, 18, 18].forEach((w, i) => { ws.getColumn(i + 1).width = w; });
   }
   const periodo=(datos as {periodoSeleccionado?:Diario['periodoSeleccionado']}).periodoSeleccionado;
   if(periodo){

@@ -57,6 +57,17 @@ function condicionesAsiento(empresaId: number, entidadId: number, f: FiltrosFech
   return { w, p };
 }
 
+/** Historia anterior al rango; no representa un asiento de apertura. */
+async function anteriores(c: PoolConnection, empresaId: number, entidadId: number, desde?: string, cuentaId?: number) {
+  if (!desde) return [] as RowDataPacket[];
+  const {w,p} = condicionesAsiento(empresaId, entidadId, {});
+  w.push("a.fecha < ?"); p.push(desde);
+  if (cuentaId !== undefined) { w.push("d.cuenta_id = ?"); p.push(cuentaId); }
+  return (await c.query<RowDataPacket[]>(`SELECT d.cuenta_id, SUM(d.debe) AS debito, SUM(d.haber) AS credito,
+    COUNT(*) AS lineas FROM cont_asiento_detalle d JOIN cont_asientos a ON a.id=d.asiento_id
+    WHERE ${w.join(" AND ")} GROUP BY d.cuenta_id`,p))[0];
+}
+
 /* ------------------------------------------------------------------ Libro Diario ------------------------------------------------------------------ */
 export type FiltrosDiario = FiltrosFecha & { numero?: string; page?: number };
 
@@ -112,16 +123,22 @@ export async function libroMayor(empresaId: number, entidadId: number, cuentaId:
          FROM cont_asiento_detalle d JOIN cont_asientos a ON a.id = d.asiento_id
         WHERE ${w.join(" AND ")} ORDER BY a.fecha, a.id, d.id LIMIT ?`, [...p, MAX_LINEAS_MAYOR + 1]);
     if (rows.length > MAX_LINEAS_MAYOR) throw new AccesoContable(`El rango tiene más de ${MAX_LINEAS_MAYOR} movimientos en esta cuenta: acota las fechas.`, 422);
+    const anterior = (await anteriores(c, empresaId, entidadId, f.desde, cuentaId))[0];
+    const inicial = aCentavos(anterior?.debito) - aCentavos(anterior?.credito);
     const movimientos = conSaldoAcumulado(rows.map((r) => ({
       asientoId: Number(r.asiento_id), numero: String(r.numero), fecha: String(r.fecha), glosa: r.glosa != null ? String(r.glosa) : null,
       debe: deCentavos(aCentavos(r.debe)), haber: deCentavos(aCentavos(r.haber)),
-    })));
+    })), inicial);
     const t = totalizar(movimientos);
     return {
       entidad, cuenta: { id: Number(cu[0].id), codigo: String(cu[0].codigo), nombre: String(cu[0].nombre), tipo: String(cu[0].tipo) },
       desde: f.desde ?? null, hasta: f.hasta ?? null, movimientos,
-      totales: { debe: t.debe, haber: t.haber, saldoFinal: movimientos.length ? movimientos[movimientos.length - 1].saldo : "0.00" },
-      saldoInicial: null as null, nota: NOTA_SALDO_ACUMULADO,
+      totales: { debe: t.debe, haber: t.haber, saldoFinal: deCentavos(inicial + aCentavos(t.debe) - aCentavos(t.haber)) },
+      saldoInicial: deCentavos(inicial), saldoRango: t.diferencia, nota: NOTA_SALDO_ACUMULADO,
+      calculoSaldo: {metodo: 'HISTORIA_REGISTRADA', empresaId, entidadId, cuentaId, anteriorA: f.desde ?? null,
+        debeAnterior: deCentavos(aCentavos(anterior?.debito)), haberAnterior: deCentavos(aCentavos(anterior?.credito)),
+        lineasAnteriores: Number(anterior?.lineas ?? 0), aperturaFormal: false,
+        formula: 'saldoInicial + debe del rango - haber del rango'},
     };
   },empresaId,entidadId,f);
 }
@@ -135,21 +152,33 @@ export async function balanceComprobacion(empresaId: number, entidadId: number, 
       `SELECT d.cuenta_id, SUM(d.debe) AS debito, SUM(d.haber) AS credito FROM cont_asiento_detalle d JOIN cont_asientos a ON a.id = d.asiento_id
         WHERE ${w.join(" AND ")} GROUP BY d.cuenta_id`, p);
     const [cuentas] = await c.query<RowDataPacket[]>("SELECT id, codigo, nombre, tipo, nivel FROM cont_cuentas WHERE empresa_id = ? AND entidad_id = ? ORDER BY codigo", [empresaId, entidadId]);
+    const previos = await anteriores(c, empresaId, entidadId, f.desde);
+    const prev = new Map(previos.map(m => [Number(m.cuenta_id), m]));
+    const continuidad = (id: number, debito: string, credito: string) => {
+      const a = prev.get(id);
+      const inicial = aCentavos(a?.debito) - aCentavos(a?.credito);
+      const final = inicial + aCentavos(debito) - aCentavos(credito);
+      return {saldoInicial: deCentavos(inicial), saldoFinal: deCentavos(final),
+        debeAnterior: deCentavos(aCentavos(a?.debito)), haberAnterior: deCentavos(aCentavos(a?.credito)),
+        saldoFinalDeudor: deCentavos(final > BigInt(0) ? final : BigInt(0)), saldoFinalAcreedor: deCentavos(final < BigInt(0) ? -final : BigInt(0))};
+    };
     const movs = new Map(mov.map((m) => [Number(m.cuenta_id), m]));
     const filas = cuentas
-      .filter((cu) => f.incluirSinMovimiento || movs.has(Number(cu.id)))
+      .filter((cu) => f.incluirSinMovimiento || movs.has(Number(cu.id)) || prev.has(Number(cu.id)))
       .map((cu) => {
         const m = movs.get(Number(cu.id));
         const debito = deCentavos(aCentavos(m?.debito)), credito = deCentavos(aCentavos(m?.credito));
-        return { cuentaId: Number(cu.id), codigo: String(cu.codigo), nombre: String(cu.nombre), tipo: String(cu.tipo), nivel: Number(cu.nivel), debito, credito, ...saldosDeCuenta(debito, credito) };
+        return { cuentaId: Number(cu.id), codigo: String(cu.codigo), nombre: String(cu.nombre), tipo: String(cu.tipo), nivel: Number(cu.nivel), debito, credito, ...saldosDeCuenta(debito, credito), ...continuidad(Number(cu.id), debito, credito) };
       });
     // Movimientos de líneas cuya cuenta no pertenece a esta entidad (inconsistencia): se muestran, nunca se ocultan.
     const conocidas = new Set(cuentas.map((cu) => Number(cu.id)));
-    for (const m of mov) {
+    for (const m of [...mov, ...previos.filter(a => !movs.has(Number(a.cuenta_id))).map(a => ({...a, cuenta_id:a.cuenta_id, debito: "0.00", credito: "0.00"}))]) {
       if (conocidas.has(Number(m.cuenta_id))) continue;
       const debito = deCentavos(aCentavos(m.debito)), credito = deCentavos(aCentavos(m.credito));
-      filas.push({ cuentaId: Number(m.cuenta_id), codigo: "(sin cuenta)", nombre: "Cuenta no encontrada en esta entidad", tipo: "", nivel: 0, debito, credito, ...saldosDeCuenta(debito, credito) });
+      filas.push({ cuentaId: Number(m.cuenta_id), codigo: "(sin cuenta)", nombre: "Cuenta no encontrada en esta entidad", tipo: "", nivel: 0, debito, credito, ...saldosDeCuenta(debito, credito), ...continuidad(Number(m.cuenta_id), debito, credito) });
     }
-    return { entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, incluyeSinMovimiento: !!f.incluirSinMovimiento, filas, totales: totalesBalance(filas) };
+    return { entidad, desde: f.desde ?? null, hasta: f.hasta ?? null, incluyeSinMovimiento: !!f.incluirSinMovimiento, filas, nota: NOTA_SALDO_ACUMULADO,
+      totalesContinuidad: totalesBalance(filas.map(r => ({...r, saldoDeudor:r.saldoFinalDeudor, saldoAcreedor:r.saldoFinalAcreedor}))),
+      totales: totalesBalance(filas) };
   },empresaId,entidadId,f);
 }

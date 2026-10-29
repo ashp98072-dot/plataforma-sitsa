@@ -33,12 +33,14 @@ type DiarioApi = {
   totalesRango: { debe: string; haber: string; diferencia: string; asientosDescuadrados: number };
 };
 type MayorApi = {
-  cuenta: { codigo: string; nombre: string }; nota: string;
+  cuenta: { codigo: string; nombre: string }; nota: string; saldoInicial:string; saldoRango:string;
+  calculoSaldo: {debeAnterior:string;haberAnterior:string;lineasAnteriores:number};
   movimientos: { asientoId: number; numero: string; fecha: string; glosa: string | null; debe: string; haber: string; saldo: string }[];
   totales: { debe: string; haber: string; saldoFinal: string };
 };
 type BalanceApi = {
-  filas: { cuentaId: number; codigo: string; nombre: string; debito: string; credito: string; saldoDeudor: string; saldoAcreedor: string }[];
+  totalesContinuidad: {totalSaldoDeudor:string;totalSaldoAcreedor:string;cuadra:boolean};
+  filas: { cuentaId: number; codigo: string; nombre: string; debito: string; credito: string; saldoDeudor: string; saldoAcreedor: string; saldoInicial:string; saldoFinal:string }[];
   totales: { totalDebe: string; totalHaber: string; diferencia: string; totalSaldoDeudor: string; totalSaldoAcreedor: string; cuadra: boolean };
 };
 
@@ -136,6 +138,7 @@ function ReportesLibro({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: 
     {d && vista === "mayor" && <section className="space-y-3">
       <p className="text-sm font-medium">{d.cuenta.codigo} — {d.cuenta.nombre}</p>
       <p role="note" className="rounded border border-[var(--border)] p-2 text-xs text-[var(--muted)]">{d.nota ?? NOTA_SALDO_ACUMULADO}</p>
+      <p className="text-sm">Saldo inicial: {q(d.saldoInicial)} | Debe anterior: {q(d.calculoSaldo.debeAnterior)} | Haber anterior: {q(d.calculoSaldo.haberAnterior)} | Lineas anteriores: {d.calculoSaldo.lineasAnteriores} | Saldo propio del rango: {q(d.saldoRango)}</p>
       <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Fecha", "Asiento", "Glosa", "Debe", "Haber", "Saldo acumulado"].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
         <tbody>{d.movimientos.map((m, i) => <tr key={i} className="border-t border-[var(--border)]"><td className="p-2">{m.fecha}</td><td>{m.numero}</td><td>{m.glosa ?? ""}</td><td>{Number(m.debe) ? q(m.debe) : ""}</td><td>{Number(m.haber) ? q(m.haber) : ""}</td><td className="font-medium">{q(m.saldo)}</td></tr>)}
           <tr className="border-t border-[var(--border)] font-medium"><td className="p-2" colSpan={3}>Totales</td><td>{q(d.totales.debe)}</td><td>{q(d.totales.haber)}</td><td>{q(d.totales.saldoFinal)}</td></tr></tbody></table></div>
@@ -143,9 +146,11 @@ function ReportesLibro({ slug, puedeDiario, puedeMayor, puedeBalance }: { slug: 
     </section>}
 
     {d && vista === "balance" && <section className="space-y-3">
-      <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Código", "Cuenta", "Débito", "Crédito", "Saldo deudor", "Saldo acreedor"].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
-        <tbody>{d.filas.map(r => <tr key={r.cuentaId} className="border-t border-[var(--border)]"><td className="p-2">{r.codigo}</td><td>{r.nombre}</td><td>{q(r.debito)}</td><td>{q(r.credito)}</td><td>{Number(r.saldoDeudor) ? q(r.saldoDeudor) : ""}</td><td>{Number(r.saldoAcreedor) ? q(r.saldoAcreedor) : ""}</td></tr>)}
-          <tr className="border-t border-[var(--border)] font-medium"><td className="p-2" colSpan={2}>Totales</td><td>{q(d.totales.totalDebe)}</td><td>{q(d.totales.totalHaber)}</td><td>{q(d.totales.totalSaldoDeudor)}</td><td>{q(d.totales.totalSaldoAcreedor)}</td></tr></tbody></table></div>
+      <p role="note" className="text-xs">{d.nota} Debito, credito y saldos deudor/acreedor conservan el alcance del rango.</p>
+      <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Código", "Cuenta", "Débito", "Crédito", "Saldo deudor del rango", "Saldo acreedor del rango", "Saldo inicial", "Saldo final"].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
+        <tbody>{d.filas.map(r => <tr key={r.cuentaId} className="border-t border-[var(--border)]"><td className="p-2">{r.codigo}</td><td>{r.nombre}</td><td>{q(r.debito)}</td><td>{q(r.credito)}</td><td>{Number(r.saldoDeudor) ? q(r.saldoDeudor) : ""}</td><td>{Number(r.saldoAcreedor) ? q(r.saldoAcreedor) : ""}</td><td>{q(r.saldoInicial)}</td><td>{q(r.saldoFinal)}</td></tr>)}
+          <tr className="border-t border-[var(--border)] font-medium"><td className="p-2" colSpan={2}>Totales</td><td>{q(d.totales.totalDebe)}</td><td>{q(d.totales.totalHaber)}</td><td>{q(d.totales.totalSaldoDeudor)}</td><td>{q(d.totales.totalSaldoAcreedor)}</td><td colSpan={2}>Ver saldos finales debajo</td></tr></tbody></table></div>
+      <p className="text-sm">Saldos finales: Deudor {q(d.totalesContinuidad.totalSaldoDeudor)} | Acreedor {q(d.totalesContinuidad.totalSaldoAcreedor)}{d.totalesContinuidad.cuadra ? "" : " - NO CUADRA"}</p>
       {d.filas.length === 0 && !cargando && <p className="text-sm">No hay movimientos en el rango.</p>}
       <p className={`text-sm font-medium ${d.totales.cuadra ? "" : "text-red-500"}`} role={d.totales.cuadra ? undefined : "alert"}>Total debe {q(d.totales.totalDebe)} · Total haber {q(d.totales.totalHaber)} · Diferencia {q(d.totales.diferencia)}{d.totales.cuadra ? "" : " — NO CUADRA: revisa los asientos."}</p>
     </section>}
