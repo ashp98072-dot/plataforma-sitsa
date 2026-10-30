@@ -1,4 +1,6 @@
 "use client";
+import { ExpedientesPanel } from './expedientes';
+
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AVISO_CALENDARIO, calendarioSchema, type CalendarioEntrada, type EjercicioCalendario, type PeriodoCalendario } from "@/lib/contabilidad/calendario-schema";
@@ -88,6 +90,7 @@ export function CalendarioLibro({ slug, entidadId, puedeCrear }: { slug: string;
     {ejercicio && <DiagnosticoCierrePanel key={`${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`sim:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`propuesta:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio} propuesta/>}
+    {ejercicio && <ExpedientesPanel key={slug+entidadId+ejercicio} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <PoliticasAutorizacionPanel key={`politicas:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <PreparacionRegularizacionPanel key={`preparacion:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <section aria-label="Períodos del ejercicio"><h2 className="font-semibold">Períodos</h2>

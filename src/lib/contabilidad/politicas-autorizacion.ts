@@ -17,14 +17,14 @@ type FuenteSolicitud={id:string;codigo:string;politicaVersion:number;borradorVer
 const tablas=['cont_regularizacion_politicas','cont_regularizacion_solicitudes','cont_regularizacion_decisiones'] as const;
 const fecha="'%Y-%m-%dT%H:%i:%s'";
 
-async function permisoGestion(c:PoolConnection,empresaId:number,usuarioId:number){
+export async function permisoGestion(c:PoolConnection,empresaId:number,usuarioId:number){
  if(!await permisoEscritura(c,empresaId,usuarioId))return false;
  const [rows]=await c.query<RowDataPacket[]>("SELECT COUNT(*) n FROM usuario_modulo WHERE usuario_id=? AND empresa_id IS NULL AND modulo='contabilidad'",[usuarioId]);
  // Una matriz ambigua no puede conferir autoridad para este flujo nuevo.
  return Number(rows[0].n)===1;
 }
 
-async function bloquearGestion(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number,actor:Actor,extras:number[]){
+export async function bloquearGestion(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number,actor:Actor,extras:number[]){
  await bloquearFuentes(c,empresaId,entidadId,ejercicioId,actor);
  const usuarios=new Set([actor.id,...extras]);
  for(const t of tablas){
@@ -39,7 +39,7 @@ async function bloquearGestion(c:PoolConnection,empresaId:number,entidadId:numbe
  }
 }
 
-async function contextoTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
+export async function contextoTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
  const preparacion=await prepararTx(c,empresaId,entidadId,ejercicioId);
  const [personas]=await c.query<RowDataPacket[]>(`SELECT DISTINCT u.id,u.username FROM usuarios u JOIN usuario_empresa e ON e.usuario_id=u.id AND e.empresa_id=?
  WHERE u.activo=1 AND (SELECT COUNT(*) FROM usuario_modulo m WHERE m.usuario_id=u.id AND m.empresa_id IS NULL AND m.modulo='contabilidad')=1

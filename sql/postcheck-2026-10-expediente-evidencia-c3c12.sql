@@ -1,0 +1,5 @@
+SELECT 'tabla_c12' control, IF(COUNT(*)=1,0,1) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_regularizacion_evidencias';
+SELECT 'inmutabilidad_c12' control, IF(COUNT(*)=2,0,1) errores FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME IN ('c12_evidencia_no_update','c12_evidencia_no_delete');
+SELECT 'huerfanos_c12' control, COUNT(*) errores FROM cont_regularizacion_evidencias e LEFT JOIN cont_regularizacion_solicitudes s ON s.empresa_id=e.empresa_id AND s.entidad_id=e.entidad_id AND s.ejercicio_id=e.ejercicio_id AND s.id=e.solicitud_id WHERE s.id IS NULL;
+SELECT 'integridad_metadatos_c12' control,COUNT(*) errores FROM cont_regularizacion_evidencias WHERE NOT JSON_VALID(metadatos_json) OR huella_metadatos NOT REGEXP '^[0-9a-f]{64}$';
+SELECT 'continuidad_c12' control,COUNT(*) errores FROM (SELECT empresa_id,entidad_id,ejercicio_id,solicitud_id,codigo FROM cont_regularizacion_evidencias GROUP BY empresa_id,entidad_id,ejercicio_id,solicitud_id,codigo HAVING MIN(version)<>1 OR MAX(version)<>COUNT(*)) c;
