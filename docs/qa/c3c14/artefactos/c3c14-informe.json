@@ -1,0 +1,489 @@
+{
+  "contrato": "C3C13-INFORME-1",
+  "empresaId": 7,
+  "entidadId": 213,
+  "ejercicioId": 13,
+  "solicitudId": "13",
+  "evaluadoEn": "2026-10-30T17:25:29.904Z",
+  "componentes": {
+    "movimientos": "72c6e3c2306e9c27c84b76448a2ef62ee6501cad8b60c41fe08e46748fa9b0a6",
+    "permisos": "668256ed694fc53fb8e738cb2d9e21f908a414cdb55ca1cc1689f62d1d4d4aa1",
+    "calendario": "233b77c6e3415842af6ab6f84592f696c59716637cbe64362c1028b3c22ac080",
+    "condicionesC3C9": "37b698a503300163131f368843bcc7c6770e7b15b01e4a77fb1f236170791c68",
+    "politicas": "23f623f85c170dca271c3ad7cfd02601f64de830827254012f534eef8f892575",
+    "solicitudes": "d510ee281d3e4de6796e1a4c8facda2322ee57c4407d463393def2675b39b753",
+    "decisiones": "7dc33a1ca9889baa9ff7b7e4a4fd71b7ae2de1e6ac09bda542c776abc4df0318",
+    "evidencias": "d98e005a85e0bc3c00e0c661f1b84c43f1e969c09fe5ed8e0930ac399a637a22",
+    "procedencia": "d5db641724ef1406a4f6fd4bc360978c54c67c453c727eb8631d230f3acdac18",
+    "borradores": "b16aadc7e006087749f8ff381acb3029cdf0348fd7af4561a5cf31b2c326c341",
+    "catalogoConfiguracion": "8438b87103d5b92a0d435f4c3dfc9158e6342ab04f37840efce971425a3eeeb2",
+    "identificacion": "34161a7439ffdb5df5af650a116fbeacbe929c292083a07054b0d26fe3b7e39e"
+  },
+  "huellaIntegral": "4d5840483e2161c09fb9b0bff9c8351a4f88f649d6fbbb03011a9936ba1ec5ac",
+  "originales": {
+    "ejercicio": {
+      "id": 13,
+      "codigo": "QA-EXPORT",
+      "estado": "CONFIGURADO",
+      "fechaInicio": "2035-01-01",
+      "fechaFin": "2035-01-31"
+    },
+    "periodos": [
+      {
+        "id": 13,
+        "ejercicio_id": 13,
+        "orden": 1,
+        "codigo": "ENE",
+        "estado": "CERRADO",
+        "fechaInicio": "2035-01-01",
+        "fechaFin": "2035-01-31",
+        "inicioEjercicio": "2035-01-01",
+        "finEjercicio": "2035-01-31"
+      }
+    ],
+    "control": {
+      "disponible": true,
+      "estado": "ACTIVO",
+      "version": 0
+    },
+    "movimientos": {
+      "registrados": 2,
+      "noRegistrados": 1,
+      "debe": "140.00",
+      "haber": "140.00",
+      "diferencia": "0.00",
+      "descuadrados": {
+        "total": 0,
+        "muestra": []
+      },
+      "integridad": {
+        "total": 0,
+        "muestra": []
+      }
+    },
+    "saldos": {
+      "ingresos": "100.00",
+      "gastos": "40.00",
+      "resultadoPreliminar": "60.00",
+      "resultadoCompleto": true,
+      "nominales": [
+        {
+          "cuentaId": 2132,
+          "codigo": "GAS",
+          "nombre": "Cuenta QA GAS",
+          "tipo": "Gasto",
+          "activa": 1,
+          "debe": "40.00",
+          "haber": "0.00",
+          "debeAnterior": "0.00",
+          "haberAnterior": "0.00",
+          "saldoEjercicio": "40.00",
+          "saldoHistoricoAnterior": "0.00",
+          "inversaIndicativa": {
+            "debe": "0.00",
+            "haber": "40.00"
+          }
+        },
+        {
+          "cuentaId": 2131,
+          "codigo": "ING",
+          "nombre": "Cuenta QA ING",
+          "tipo": "Ingreso",
+          "activa": 1,
+          "debe": "0.00",
+          "haber": "100.00",
+          "debeAnterior": "0.00",
+          "haberAnterior": "900.00",
+          "saldoEjercicio": "-100.00",
+          "saldoHistoricoAnterior": "-900.00",
+          "inversaIndicativa": {
+            "debe": "100.00",
+            "haber": "0.00"
+          }
+        }
+      ],
+      "sinClasificar": [],
+      "inactivasConSaldo": [],
+      "saldosContrarios": []
+    },
+    "cuentaResultado": {
+      "id": 2133,
+      "codigo": "RES",
+      "nombre": "Cuenta QA RES",
+      "tipo": "Capital",
+      "nivel": 1
+    }
+  },
+  "simulacion": {
+    "fuente": "MOTOR_C3C8_C3C9",
+    "propuesta": {
+      "lineas": [
+        {
+          "cuentaId": 2132,
+          "codigo": "GAS",
+          "nombre": "Cuenta QA GAS",
+          "origen": "NOMINAL",
+          "debe": "0.00",
+          "haber": "40.00"
+        },
+        {
+          "cuentaId": 2131,
+          "codigo": "ING",
+          "nombre": "Cuenta QA ING",
+          "origen": "NOMINAL",
+          "debe": "100.00",
+          "haber": "0.00"
+        },
+        {
+          "cuentaId": 2133,
+          "codigo": "RES",
+          "nombre": "Cuenta QA RES",
+          "origen": "RESULTADO",
+          "debe": "0.00",
+          "haber": "60.00"
+        }
+      ],
+      "totales": {
+        "debe": "100.00",
+        "haber": "100.00",
+        "diferencia": "0.00",
+        "cuadra": true
+      },
+      "hayMovimientos": true
+    },
+    "politicaBase": {
+      "contrato": "C3C9-PREP-1",
+      "version": 1,
+      "base": "C3C8-SIM-1",
+      "empresaId": 7,
+      "entidadId": 213,
+      "ejercicioId": 13,
+      "estado": "BORRADOR_NO_APROBADO",
+      "cuentasNominales": [
+        {
+          "id": 2132,
+          "codigo": "GAS",
+          "tipo": "Gasto",
+          "activa": 1,
+          "saldoEjercicio": "40.00"
+        },
+        {
+          "id": 2131,
+          "codigo": "ING",
+          "tipo": "Ingreso",
+          "activa": 1,
+          "saldoEjercicio": "-100.00"
+        }
+      ],
+      "cuentaResultado": {
+        "id": 2133,
+        "codigo": "RES",
+        "nombre": "Cuenta QA RES",
+        "tipo": "Capital",
+        "nivel": 1
+      },
+      "tratamiento": "Invertir el neto Debe-Haber de cada nominal sin valores absolutos del resultado.",
+      "incluirHistoriaAnterior": false,
+      "idoneidad": {
+        "tecnica": "VALIDADA_TECNICAMENTE",
+        "formal": "PENDIENTE",
+        "requisitos": [
+          "ACTIVA",
+          "CAPITAL",
+          "MISMO_LIBRO",
+          "IMPUTABILIDAD_FORMAL_PENDIENTE"
+        ]
+      },
+      "decisionesPendientes": [
+        "POLITICA_REGULARIZACION_PENDIENTE",
+        "IDONEIDAD_FORMAL_CUENTA_PENDIENTE",
+        "VALIDACION_PROCEDENCIA_HISTORICA_PENDIENTE"
+      ],
+      "huellaCondiciones": "9f04e632be9904eb1102cc180649a5355fe023732f14b3529c58f7b9642c5759",
+      "aprobada": false
+    },
+    "contabilizada": false
+  },
+  "expediente": {
+    "solicitud": {
+      "id": "13",
+      "codigo": "EXPORT",
+      "politicaVersion": 1,
+      "borradorVersion": 1,
+      "huellaCondiciones": "9f04e632be9904eb1102cc180649a5355fe023732f14b3529c58f7b9642c5759",
+      "justificacion": "Solicitud de revision integral QA sin autorizacion formal",
+      "creadoPor": 41,
+      "creadoEn": "2026-10-30T11:25:29",
+      "estado": "PREPARADA",
+      "estadoActual": "PREPARADA",
+      "version": 0,
+      "motivos": [],
+      "obsoleta": false,
+      "politica": {
+        "codigo": "EXPORT",
+        "version": 1,
+        "contrato": {
+          "contrato": "C3C11-POL-1",
+          "codigo": "EXPORT",
+          "version": 1,
+          "empresaId": 7,
+          "entidadId": 213,
+          "ejercicioId": 13,
+          "huellaCondiciones": "9f04e632be9904eb1102cc180649a5355fe023732f14b3529c58f7b9642c5759",
+          "cuentasNominales": [
+            {
+              "id": 2132,
+              "codigo": "GAS",
+              "tipo": "Gasto"
+            },
+            {
+              "id": 2131,
+              "codigo": "ING",
+              "tipo": "Ingreso"
+            }
+          ],
+          "cuentaResultado": {
+            "id": 2133,
+            "codigo": "RES",
+            "nombre": "Cuenta QA RES",
+            "tipo": "Capital",
+            "nivel": 1
+          },
+          "tratamientoSignos": "INVERSION_SALDO_EJERCICIO",
+          "reglasVigencia": "Solo fixture QA de este libro y ejercicio, formal pendiente",
+          "justificacion": "Politica propuesta para recorrido reproducible QA",
+          "responsables": {
+            "preparadorId": 41,
+            "revisorId": 42,
+            "resolutorId": 44
+          },
+          "vigencia": {
+            "inicio": "2035-01-01",
+            "fin": "2035-01-31"
+          },
+          "estado": "PROPUESTA_NO_APROBADA",
+          "aprobada": false
+        },
+        "integra": true,
+        "responsables": {
+          "preparadorId": 41,
+          "revisorId": 42,
+          "resolutorId": 44
+        },
+        "huellaCondiciones": "9f04e632be9904eb1102cc180649a5355fe023732f14b3529c58f7b9642c5759",
+        "huellaPolitica": "e92e91804e61c6f5524f453e1db5222cd2dbcb8fa934fc354f89c84381a4fb4c",
+        "creadoPor": 41,
+        "creadoEn": "2026-10-30T11:25:29"
+      },
+      "historial": [],
+      "bloqueantes": [],
+      "aprobacionContable": false,
+      "contabilizado": false
+    },
+    "borrador": {
+      "id": "13",
+      "version": 1,
+      "estado": "BORRADOR",
+      "huellaCondiciones": "9f04e632be9904eb1102cc180649a5355fe023732f14b3529c58f7b9642c5759",
+      "nota": "Borrador tecnico QA no contabilizable",
+      "creadoPor": 41,
+      "creadoEn": "2026-10-30T11:25:29"
+    },
+    "revisionDocumental": [
+      {
+        "asientoId": 10061,
+        "ejercicioId": 13,
+        "version": 1,
+        "tipo": "REVISION_DOCUMENTAL",
+        "claseAnterior": "NORMAL",
+        "clase": "NORMAL",
+        "referencia": "QA-REV-10061-1",
+        "justificacion": "Revision documental QA sin cambiar el movimiento original",
+        "huellaAnterior": "92aefa6cdebedb6dd79957b9450d2de463cc6eb7c2a4345a6e744676d6f90a6a",
+        "huella": "5303a5940edd506d6b30d22a7cd1771c8c68b9aa27afb98aeb1ec6a6bb4f6f73",
+        "registradoPor": 42,
+        "creadoEn": "2026-10-30T11:25:29"
+      }
+    ],
+    "evidencias": [
+      {
+        "codigo": "BORRADOR",
+        "version": 2,
+        "estado": "VERIFICADA_TECNICAMENTE",
+        "referencia": "QA-DOC-BORRADOR",
+        "huellaDocumento": "cd1d414cc1d558c7964f6d1cf5068469d4745699baefb767b75e9dfd1633d24d",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 42,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      },
+      {
+        "codigo": "BORRADOR",
+        "version": 1,
+        "estado": "NO_VERIFICADA",
+        "referencia": "QA-DOC-BORRADOR",
+        "huellaDocumento": "cd1d414cc1d558c7964f6d1cf5068469d4745699baefb767b75e9dfd1633d24d",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 41,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      },
+      {
+        "codigo": "POLITICA",
+        "version": 2,
+        "estado": "VERIFICADA_TECNICAMENTE",
+        "referencia": "QA-DOC-POLITICA",
+        "huellaDocumento": "664341033d2cebf7ea4e257f35a44f3554adb20f50c8dcbaef376acf76f19bc0",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 42,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      },
+      {
+        "codigo": "POLITICA",
+        "version": 1,
+        "estado": "NO_VERIFICADA",
+        "referencia": "QA-DOC-POLITICA",
+        "huellaDocumento": "664341033d2cebf7ea4e257f35a44f3554adb20f50c8dcbaef376acf76f19bc0",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 41,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      },
+      {
+        "codigo": "REVISION_DOCUMENTAL",
+        "version": 2,
+        "estado": "VERIFICADA_TECNICAMENTE",
+        "referencia": "QA-DOC-REVISION_DOCUMENTAL",
+        "huellaDocumento": "3e50717fbefee796f28873b85ab7c88ac519a68d91307dc00a4960bfe325a493",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 42,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      },
+      {
+        "codigo": "REVISION_DOCUMENTAL",
+        "version": 1,
+        "estado": "NO_VERIFICADA",
+        "referencia": "QA-DOC-REVISION_DOCUMENTAL",
+        "huellaDocumento": "3e50717fbefee796f28873b85ab7c88ac519a68d91307dc00a4960bfe325a493",
+        "justificacion": "Referencia sintetica QA, autenticidad no acreditada",
+        "creadoPor": 41,
+        "creadoEn": "2026-10-30T11:25:29",
+        "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+        "integra": true
+      }
+    ],
+    "huellaBase": "310af7cb0b3c425cf8f2d4b1a8b2ea3a786eea5ca2088a4eaecdcdc088812eda",
+    "huellaExpediente": "817168e93a74084af83d7edfd0298b167fbadd5e298528ed6a555da7cdbfd544",
+    "motivos": [],
+    "completoTecnicamente": true,
+    "aprobadoFormalmente": false
+  },
+  "hallazgos": [
+    {
+      "codigo": "POLITICA_CIERRE_PENDIENTE",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "REGULARIZACION_NO_VERIFICADA",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "HISTORIA_ANTERIOR_AL_EJERCICIO",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "ASIENTOS_NO_REGISTRADOS",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "POLITICA_REGULARIZACION_PENDIENTE",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "IDONEIDAD_FORMAL_CUENTA_PENDIENTE",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "VALIDACION_PROCEDENCIA_HISTORICA_PENDIENTE",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    },
+    {
+      "codigo": "AUTENTICIDAD_DOCUMENTAL_NO_CERTIFICADA",
+      "nivel": "ADVERTENCIA",
+      "referencias": [
+        {
+          "tipo": "SOLICITUD_C3C11",
+          "id": "13"
+        }
+      ]
+    }
+  ],
+  "completoTecnicamente": true,
+  "estadoFormal": "PENDIENTE",
+  "aprobacionFormalHabilitada": false,
+  "contabilizado": false,
+  "aviso": "INFORME PRECONTABLE: propuesta y evaluación técnica. Sin aprobación formal, firma de autenticidad ni asiento contabilizado.",
+  "identificacion": {
+    "empresa": {
+      "id": 7,
+      "nombre": "Empresa ficticia",
+      "activa": 1,
+      "modulos_json": "[\"contabilidad\"]"
+    },
+    "libro": {
+      "id": 213,
+      "codigo": "EXPORT",
+      "nombre": "Libro QA EXPORT",
+      "activa": 1
+    }
+  }
+}
