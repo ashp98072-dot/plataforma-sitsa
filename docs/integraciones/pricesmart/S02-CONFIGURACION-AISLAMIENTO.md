@@ -1,5 +1,9 @@
 # PRICESMART-SANDBOX-S02 — configuración privada
 
+**Evidencia inicial histórica.** El [preflight posterior](S02-PREFLIGHT-AUDITORIA.md)
+actualiza las pruebas, corrige entradas de arranque y endurece las conexiones DB.
+Consultar ese reporte para resultados vigentes y límites operativos.
+
 Fecha: 2026-10-30. Implementación de controles; no acredita un sandbox desplegado.
 Base: `3737a5891e33b1349ce867cce816f1cc0e1925e3` (`origin/main` consultado).
 D01–D16 permanecen pendientes. Sin endpoints, worker, DNS, migraciones ni conexiones externas.

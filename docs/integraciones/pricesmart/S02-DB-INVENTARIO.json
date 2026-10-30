@@ -1,0 +1,3761 @@
+{
+  "source": "working-tree",
+  "filesScanned": 1296,
+  "driverImports": [
+    {
+      "file": "scripts/ci/c3c1/connection.mjs",
+      "line": 4,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 8,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c10/run-windows.mjs",
+      "line": 39,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c11/run-windows.mjs",
+      "line": 39,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c12/run-windows.mjs",
+      "line": 39,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c13/run-windows.mjs",
+      "line": 39,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 45,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c2/connection.mjs",
+      "line": 4,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 40,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/crear-colaborador-prueba.mjs",
+      "line": 17,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "scripts/init-db.mjs",
+      "line": 7,
+      "module": "mysql2/promise"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 1,
+      "module": "mysql2/promise"
+    }
+  ],
+  "dbConsumers": [
+    {
+      "file": "src/app/api/empresas/[slug]/cms/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/facturacion/facturas/catalogos/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/combustible/catalogos/route.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/export/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/import/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/inventario-equipo/areas/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/inventario-equipo/categorias/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/inventario-equipo/empleados/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/inventario-equipo/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams, type SqlValue }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/lecturas/[id]/evidencias/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/lecturas/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/permisos-externos/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/reportes/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/servicios/[id]/adjuntos/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/servicios/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/vehiculos/route.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/[id]/evidencias/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/[id]/paradas/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/notificaciones/route.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/portales-proveedores/[id]/revelar/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/portales-proveedores/[id]/route.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/portales-proveedores/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/reciclaje/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/descuentos/import/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/anexo/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/route.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/justificaciones-faltas/evidencias/route.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/marcajes/evidencias/[id]/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/marcajes/importar/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/marcajes/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/personal-ops/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/[id]/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/ubicaciones-marcaje/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/vacaciones/[id]/evidencias/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/vacaciones/alertas/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tarimas/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/catalogos/route.ts",
+      "line": 14,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/evidencias/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/gastos/[id]/comprobante/route.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/gastos/catalogos/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/personal-habilitaciones/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/[id]/liquidacion/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/catalogos/route.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/programacion/reporte/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/viaticos/[id]/firmas/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/viaticos/firmas/[firmaId]/imagen/route.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/portal/viajes/[id]/evidencias/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/app/api/portal/viajes/route.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/app/site/[slug]/page.tsx",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/admin/limpiar-combustible-preview.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/admin/limpiar-modulo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/admin/limpiar-pruebas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/auditoria.ts",
+      "line": 3,
+      "module": "./db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/auth.ts",
+      "line": 2,
+      "module": "./db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/clientes/repository.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/clientes/schema.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/compras/linea-documentos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/compras/proveedores.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/compras/requerimiento-api.ts",
+      "line": 7,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/compras/requerimiento-firma-reporte.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/contabilidad/ambito.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/asientos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/cierre-diagnostico.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/consulta-partida.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/cuenta-resultado.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/cuentas-rol.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxc/cxc.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/aplicaciones.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/bitacora.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/proveedor-fiscal.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/contabilidad/entidades.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/contabilidad/expediente.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/origen-revisiones.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/politicas-autorizacion.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/precontable.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/registros.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{getPool}"
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/http.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/reportes.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/empresas.ts",
+      "line": 3,
+      "module": "./db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/entregas/adaptadores.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/entregas/entregas.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/entregas/evidencia.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/entregas/resumen.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/facturacion/bitacora.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/facturacion/cobros.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/facturacion/contexto-factura.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/facturacion/cuentas-por-cobrar.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlValue }"
+    },
+    {
+      "file": "src/lib/facturacion/factura-demo-pdf.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/facturacion/facturas.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/facturacion/repository.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/facturacion/schema.ts",
+      "line": 1,
+      "module": "@/lib/db",
+      "bindings": "{ execute }"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/firmas/firmas-lectura.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/firmas/usuario-firmas.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/acceso.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/cb2/conciliacion-documental.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/flota/cb2/documentos.ts",
+      "line": 1,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/flota/cb2/repository.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, type SqlValue }"
+    },
+    {
+      "file": "src/lib/flota/cb2/resumen-mensual.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 7,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-conciliacion-consultas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-conciliacion-persistencia.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/flota/combustible-estaciones.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-fondos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-importaciones.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-preview-v2-http.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/flota/combustible-staff.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/combustible.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/filtros.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/inventario-equipo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/flota/km-vehiculo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/lectura-evidencias.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/pilotos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/propiedad.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/schema.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/flota/vehiculo-documentos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/flota/viaje-evidencias.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/flota/viajes-piloto.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/multas/backend.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams, type SqlValue }"
+    },
+    {
+      "file": "src/lib/multas/documentos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/operaciones/disponibilidad-personal.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/operaciones/disponibilidad.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/permisos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/asistencia-diaria.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/bitacora-legal.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/casos-legales.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/centros-costo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/colaborador-auth.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/config.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/cumpleanios.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/dashboard.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/documentos-por-tipo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/documentos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/empleado-cambios.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/empleados-schema.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/empleados.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/en-ruta.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/entrevista-documentos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/entrevistas-reportes.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/entrevistas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/evidencias.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-antecedentes.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-importacion.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/foto-empleado-existencia.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/foto-empleado-miniatura.ts",
+      "line": 7,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/foto-empleado.ts",
+      "line": 5,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/geocerca.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/horas-extra.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/justificaciones-faltas-mapa.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/justificaciones-faltas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/marcajes.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/marcajes.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute as executeDirect, query as queryDirect, getPool, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/planilla-control.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/rrhh/planilla-faltas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/planillas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/proveedores.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/reclutamiento-seguimiento.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/recordatorios.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/reportes.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/resumen-mensual.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/solicitudes-vacaciones.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/supervisores-catalogo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-eliminar.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-empleados-catalogo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-equipo.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-historial-actual.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-historial-preview.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-db.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-preflight-db.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-resync-db.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-rebase-db.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-registro.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-reparacion-db.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-sync-estado.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/rrhh/viaticos-portal.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/session.ts",
+      "line": 7,
+      "module": "./db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/cierre-manual-planes.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/cierre-masivo.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/cierre-viaje.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/tms/cliente-contactos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/cliente-portal-datos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/cliente-portal-seguimiento.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/cliente-rutas.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/cliente-ubicaciones.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/cliente-usuarios.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/clientes-busqueda.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/codigo-plan.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-ajustes.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-db.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-historial.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-presentacion.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/cuadrilla.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/disponibilidad-programacion-dia.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/disponibilidad-programacion-intervalos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/disponibilidad-recursos-lista.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/disponibilidad-traslapes.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/edicion-rapida-guardar.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/tms/edicion-rapida-validar.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/fondos-constancia-entrega-pdf.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/fondos-control-entrega-pdf.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/fondos-solicitud-pdf.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/gastos-individual-pdf.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje-reporte.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/paradas.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/personal-habilitaciones.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query, execute }"
+    },
+    {
+      "file": "src/lib/tms/personal-resolucion.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/piloto-extra.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/plan-comunes.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/planes-salida.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/programacion-copia.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/programacion-import-excel.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/programacion-import.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/programacion-lote.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/programacion-validacion-recursos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    },
+    {
+      "file": "src/lib/tms/reportes-gastos.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/reportes-viajes.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/resumen-liquidacion.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool }"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/rutas-import.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente-operaciones.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tms/unidad-flota.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/vehiculo-solicitado-db.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/viaticos-comprobante-pdf.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos-export.ts",
+      "line": 6,
+      "module": "@/lib/db",
+      "bindings": "{ query }"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos.ts",
+      "line": 4,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 3,
+      "module": "@/lib/db",
+      "bindings": "{ execute, getPool, query, type SqlParams }"
+    },
+    {
+      "file": "src/lib/tms/vincular-viaje-plan.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ getPool, query }"
+    },
+    {
+      "file": "src/lib/tz-guatemala-migrate.ts",
+      "line": 2,
+      "module": "@/lib/db",
+      "bindings": "{ execute, query }"
+    }
+  ],
+  "constructors": [
+    {
+      "file": "scripts/ci/c3c1/connection.mjs",
+      "line": 23,
+      "call": "mysql.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c1/connection.mjs",
+      "line": 31,
+      "call": "mysql.createPool"
+    },
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 58,
+      "call": "mysql.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c10/run-windows.mjs",
+      "line": 39,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c11/run-windows.mjs",
+      "line": 39,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c12/run-windows.mjs",
+      "line": 39,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c13/run-windows.mjs",
+      "line": 39,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 45,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c2/connection.mjs",
+      "line": 28,
+      "call": "mysql.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c2/connection.mjs",
+      "line": 30,
+      "call": "mysql.createPool"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 40,
+      "call": "mysql.default.createConnection"
+    },
+    {
+      "file": "scripts/crear-colaborador-prueba.mjs",
+      "line": 61,
+      "call": "mysql.createConnection"
+    },
+    {
+      "file": "scripts/init-db.mjs",
+      "line": 73,
+      "call": "mysql.createConnection"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 31,
+      "call": "mysql.createPool"
+    }
+  ],
+  "checkouts": [
+    {
+      "file": "scripts/ci/c3c1/connection.mjs",
+      "line": 34,
+      "call": "pool.getConnection"
+    },
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 70,
+      "call": "pool.getConnection"
+    },
+    {
+      "file": "scripts/ci/c3c2/connection.mjs",
+      "line": 31,
+      "call": "pool.getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/servicios/route.ts",
+      "line": 343,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/servicios/route.ts",
+      "line": 343,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/vehiculos/route.ts",
+      "line": 649,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/vehiculos/route.ts",
+      "line": 649,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/[id]/evidencias/route.ts",
+      "line": 221,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/[id]/evidencias/route.ts",
+      "line": 221,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/route.ts",
+      "line": 385,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/flota/viajes/route.ts",
+      "line": 385,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/anexo/route.ts",
+      "line": 57,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/anexo/route.ts",
+      "line": 57,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/route.ts",
+      "line": 75,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/incidencias/route.ts",
+      "line": 75,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/[id]/route.ts",
+      "line": 66,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/[id]/route.ts",
+      "line": 66,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/[id]/route.ts",
+      "line": 166,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/[id]/route.ts",
+      "line": 166,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/route.ts",
+      "line": 60,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/rrhh/prestaciones/route.ts",
+      "line": 60,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/[id]/liquidacion/route.ts",
+      "line": 31,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1086,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1086,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1094,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1094,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1487,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 1487,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 2048,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/empresas/[slug]/tms/planes/route.ts",
+      "line": 2048,
+      "call": "getPool"
+    },
+    {
+      "file": "src/app/api/portal/viajes/route.ts",
+      "line": 249,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/app/api/portal/viajes/route.ts",
+      "line": 249,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/admin/limpiar-combustible-preview.ts",
+      "line": 119,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/admin/limpiar-combustible-preview.ts",
+      "line": 119,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/admin/limpiar-modulo.ts",
+      "line": 65,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/admin/limpiar-modulo.ts",
+      "line": 65,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/admin/limpiar-modulo.ts",
+      "line": 830,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/admin/limpiar-modulo.ts",
+      "line": 831,
+      "call": "pool.getConnection"
+    },
+    {
+      "file": "src/lib/admin/limpiar-pruebas.ts",
+      "line": 112,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/admin/limpiar-pruebas.ts",
+      "line": 112,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/compras/proveedores.ts",
+      "line": 57,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/compras/proveedores.ts",
+      "line": 57,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 99,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 99,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 416,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 416,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 518,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/compras/requerimientos.ts",
+      "line": 518,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/ambito.ts",
+      "line": 42,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/ambito.ts",
+      "line": 42,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/asientos.ts",
+      "line": 84,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/asientos.ts",
+      "line": 84,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 21,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 21,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 50,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 50,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 60,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/calendario.ts",
+      "line": 60,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cierre-diagnostico.ts",
+      "line": 22,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cierre-diagnostico.ts",
+      "line": 22,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/consulta-partida.ts",
+      "line": 18,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/consulta-partida.ts",
+      "line": 18,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cuenta-resultado.ts",
+      "line": 27,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cuenta-resultado.ts",
+      "line": 27,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cuenta-resultado.ts",
+      "line": 39,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cuenta-resultado.ts",
+      "line": 39,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cuentas-rol.ts",
+      "line": 20,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/aplicaciones.ts",
+      "line": 27,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 94,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 124,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 124,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 207,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/facturas.ts",
+      "line": 207,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 133,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 133,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 177,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 205,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/pagos.ts",
+      "line": 205,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/proveedor-fiscal.ts",
+      "line": 92,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/cxp/proveedor-fiscal.ts",
+      "line": 92,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/entidades.ts",
+      "line": 28,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/entidades.ts",
+      "line": 28,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/expediente.ts",
+      "line": 19,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/expediente.ts",
+      "line": 19,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/expediente.ts",
+      "line": 21,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/expediente.ts",
+      "line": 21,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/origen-revisiones.ts",
+      "line": 18,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/origen-revisiones.ts",
+      "line": 18,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 52,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 52,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 150,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 150,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 167,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/periodos.ts",
+      "line": 167,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/politicas-autorizacion.ts",
+      "line": 84,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/politicas-autorizacion.ts",
+      "line": 84,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/politicas-autorizacion.ts",
+      "line": 94,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/politicas-autorizacion.ts",
+      "line": 94,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/precontable.ts",
+      "line": 112,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/precontable.ts",
+      "line": 112,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/precontable.ts",
+      "line": 120,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/precontable.ts",
+      "line": 120,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/registros.ts",
+      "line": 50,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/registros.ts",
+      "line": 50,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 77,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 77,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 96,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 96,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 116,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion-control.ts",
+      "line": 116,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion.ts",
+      "line": 11,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/regularizacion.ts",
+      "line": 11,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/reportes.ts",
+      "line": 22,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/reportes.ts",
+      "line": 22,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 52,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 60,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/entregas/entregas.ts",
+      "line": 222,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/entregas/entregas.ts",
+      "line": 222,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/facturacion/cobros.ts",
+      "line": 74,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/facturacion/cobros.ts",
+      "line": 74,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.ts",
+      "line": 27,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.ts",
+      "line": 27,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.ts",
+      "line": 130,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.ts",
+      "line": 130,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/facturacion/facturas.ts",
+      "line": 208,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/facturacion/facturas.ts",
+      "line": 208,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 128,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 128,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 830,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 839,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/fel/servicio.ts",
+      "line": 849,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/firmas/usuario-firmas.ts",
+      "line": 89,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/firmas/usuario-firmas.ts",
+      "line": 89,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/firmas/usuario-firmas.ts",
+      "line": 150,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/firmas/usuario-firmas.ts",
+      "line": 150,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/conciliacion-documental.ts",
+      "line": 40,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/conciliacion-documental.ts",
+      "line": 40,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/conciliacion-documental.ts",
+      "line": 47,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/conciliacion-documental.ts",
+      "line": 47,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/documentos.ts",
+      "line": 12,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/documentos.ts",
+      "line": 12,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/repository.ts",
+      "line": 45,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/repository.ts",
+      "line": 45,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 21,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 21,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 116,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 116,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 321,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 321,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 342,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/cb2/service.ts",
+      "line": 342,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c.ts",
+      "line": 50,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c.ts",
+      "line": 50,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-c2c.ts",
+      "line": 281,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-conciliacion-persistencia.ts",
+      "line": 98,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/combustible-conciliacion-persistencia.ts",
+      "line": 98,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-estaciones.ts",
+      "line": 33,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/combustible-estaciones.ts",
+      "line": 33,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-importaciones.ts",
+      "line": 57,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/combustible-importaciones.ts",
+      "line": 57,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/combustible-staff.ts",
+      "line": 32,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/combustible-staff.ts",
+      "line": 32,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/propiedad.ts",
+      "line": 55,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/propiedad.ts",
+      "line": 55,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/flota/schema.ts",
+      "line": 96,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/flota/schema.ts",
+      "line": 96,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/multas/backend.ts",
+      "line": 21,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/multas/backend.ts",
+      "line": 21,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/permisos.ts",
+      "line": 118,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/permisos.ts",
+      "line": 118,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/asistencia-diaria.ts",
+      "line": 290,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/asistencia-diaria.ts",
+      "line": 290,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/casos-legales.ts",
+      "line": 41,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/casos-legales.ts",
+      "line": 41,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 770,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 770,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 869,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 869,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 953,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 953,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1060,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1060,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1108,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1108,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1231,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/descuentos.ts",
+      "line": 1231,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/empleados.ts",
+      "line": 614,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/empleados.ts",
+      "line": 614,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/empleados.ts",
+      "line": 788,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/empleados.ts",
+      "line": 788,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-antecedentes.ts",
+      "line": 105,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-antecedentes.ts",
+      "line": 105,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-antecedentes.ts",
+      "line": 124,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/fiscal-antecedentes.ts",
+      "line": 124,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 313,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 313,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 658,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 658,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 942,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 942,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 1051,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/inventario.ts",
+      "line": 1051,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/justificaciones-faltas.ts",
+      "line": 99,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/justificaciones-faltas.ts",
+      "line": 99,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/marcajes.ts",
+      "line": 869,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/marcajes.ts",
+      "line": 869,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/planilla-control.ts",
+      "line": 34,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/planilla-control.ts",
+      "line": 34,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/planillas.ts",
+      "line": 377,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/planillas.ts",
+      "line": 377,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/planillas.ts",
+      "line": 852,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/planillas.ts",
+      "line": 852,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/proveedores.ts",
+      "line": 38,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/proveedores.ts",
+      "line": 38,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/reclutamiento-seguimiento.ts",
+      "line": 48,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/reclutamiento-seguimiento.ts",
+      "line": 48,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 75,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 75,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 213,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 213,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 241,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/requerimientos.ts",
+      "line": 241,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/solicitudes-vacaciones.ts",
+      "line": 112,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/solicitudes-vacaciones.ts",
+      "line": 112,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/solicitudes-vacaciones.ts",
+      "line": 230,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/solicitudes-vacaciones.ts",
+      "line": 230,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-eliminar.ts",
+      "line": 66,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-eliminar.ts",
+      "line": 66,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-db.ts",
+      "line": 61,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-db.ts",
+      "line": 61,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-resync-db.ts",
+      "line": 33,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-modo-resync-db.ts",
+      "line": 33,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-registro.ts",
+      "line": 125,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-registro.ts",
+      "line": 125,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-reparacion-db.ts",
+      "line": 172,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-reparacion-db.ts",
+      "line": 172,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-reparacion-db.ts",
+      "line": 325,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-reparacion-db.ts",
+      "line": 325,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-sync-estado.ts",
+      "line": 60,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones-sync-estado.ts",
+      "line": 60,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 349,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 349,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 722,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 722,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 810,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/rrhh/vacaciones.ts",
+      "line": 810,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/sandbox-db.ts",
+      "line": 19,
+      "call": "raw.getConnection"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 119,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 119,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 348,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 371,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 450,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 510,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cargos-adicionales.ts",
+      "line": 520,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cierre-viaje.ts",
+      "line": 117,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cierre-viaje.ts",
+      "line": 117,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cierre-viaje.ts",
+      "line": 281,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cierre-viaje.ts",
+      "line": 281,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cliente-rutas.ts",
+      "line": 614,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cliente-rutas.ts",
+      "line": 614,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cliente-rutas.ts",
+      "line": 683,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cliente-rutas.ts",
+      "line": 683,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-ajustes.ts",
+      "line": 152,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-ajustes.ts",
+      "line": 152,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-historial.ts",
+      "line": 45,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cotizacion-costeo-historial.ts",
+      "line": 45,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 519,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 519,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 617,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 617,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 715,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/cotizaciones.ts",
+      "line": 715,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/edicion-rapida-guardar.ts",
+      "line": 67,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/edicion-rapida-guardar.ts",
+      "line": 67,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 460,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 460,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 652,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 652,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 840,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/fondos.ts",
+      "line": 840,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 823,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 823,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 971,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 971,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 1248,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 1248,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 1307,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/gastos.ts",
+      "line": 1307,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje-reporte.ts",
+      "line": 37,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 122,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 122,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 387,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 396,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/liquidacion-viaje.ts",
+      "line": 426,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/programacion-import.ts",
+      "line": 817,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/programacion-import.ts",
+      "line": 817,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/programacion-import.ts",
+      "line": 865,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/programacion-import.ts",
+      "line": 865,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/programacion-lote.ts",
+      "line": 445,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/programacion-lote.ts",
+      "line": 445,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/programacion-lote.ts",
+      "line": 470,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/programacion-lote.ts",
+      "line": 470,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/resumen-liquidacion.ts",
+      "line": 47,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/resumen-liquidacion.ts",
+      "line": 124,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/resumen-liquidacion.ts",
+      "line": 160,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 288,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 288,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 347,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 347,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 393,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 393,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 441,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/ruta-tarifas.ts",
+      "line": 441,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/rutas-import.ts",
+      "line": 463,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/rutas-import.ts",
+      "line": 463,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente-operaciones.ts",
+      "line": 352,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente-operaciones.ts",
+      "line": 352,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente.ts",
+      "line": 288,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/solicitudes-cliente.ts",
+      "line": 288,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos.ts",
+      "line": 92,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos.ts",
+      "line": 92,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos.ts",
+      "line": 144,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos-requerimientos.ts",
+      "line": 144,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 636,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 636,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 794,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 794,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 919,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 919,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 1106,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 1106,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 1269,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/viaticos.ts",
+      "line": 1269,
+      "call": "getPool"
+    },
+    {
+      "file": "src/lib/tms/vincular-viaje-plan.ts",
+      "line": 181,
+      "call": "getPool().getConnection"
+    },
+    {
+      "file": "src/lib/tms/vincular-viaje-plan.ts",
+      "line": 181,
+      "call": "getPool"
+    }
+  ],
+  "subprocesses": [
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 32,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 35,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c1/run-windows.mjs",
+      "line": 82,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c10/run-windows.mjs",
+      "line": 24,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c10/run-windows.mjs",
+      "line": 28,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c10/run-windows.mjs",
+      "line": 68,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c11/run-windows.mjs",
+      "line": 24,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c11/run-windows.mjs",
+      "line": 28,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c11/run-windows.mjs",
+      "line": 71,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c12/run-windows.mjs",
+      "line": 24,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c12/run-windows.mjs",
+      "line": 28,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c12/run-windows.mjs",
+      "line": 72,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c13/run-windows.mjs",
+      "line": 24,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c13/run-windows.mjs",
+      "line": 28,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c13/run-windows.mjs",
+      "line": 74,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 30,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 34,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 80,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c14/run-windows.mjs",
+      "line": 91,
+      "call": "cp.execFileSync"
+    },
+    {
+      "file": "scripts/ci/c3c15/diagnose-runtime.mjs",
+      "line": 12,
+      "call": "spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c2/run-windows.mjs",
+      "line": 51,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c3/run-windows.mjs",
+      "line": 51,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c4/run-windows.mjs",
+      "line": 55,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c5/run-windows.mjs",
+      "line": 55,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c6/run-windows.mjs",
+      "line": 55,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c7/run-windows.mjs",
+      "line": 60,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c8/run-windows.mjs",
+      "line": 60,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 22,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 25,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 29,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/c3c9/run-windows.mjs",
+      "line": 66,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr2-lab/run-portable-windows.mjs",
+      "line": 27,
+      "call": "spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr2-lab/run-portable-windows.mjs",
+      "line": 69,
+      "call": "spawn"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr2-lab/run.mjs",
+      "line": 87,
+      "call": "spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr508-backend/run-windows.mjs",
+      "line": 9,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr508-backend/run-windows.mjs",
+      "line": 10,
+      "call": "cp.spawn"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr508-backend/run-windows.mjs",
+      "line": 12,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr508-backend/run-windows.mjs",
+      "line": 13,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/combustibles-pr508-backend/run-windows.mjs",
+      "line": 14,
+      "call": "cp.spawnSync"
+    },
+    {
+      "file": "scripts/ci/sandbox-inventory.mjs",
+      "line": 14,
+      "call": "execFileSync"
+    },
+    {
+      "file": "scripts/next-command.mjs",
+      "line": 16,
+      "call": "spawn"
+    },
+    {
+      "file": "scripts/pack-hostinger.mjs",
+      "line": 70,
+      "call": "execFileSync"
+    },
+    {
+      "file": "scripts/pack-hostinger.mjs",
+      "line": 80,
+      "call": "execFileSync"
+    },
+    {
+      "file": "scripts/start-hostinger.mjs",
+      "line": 61,
+      "call": "spawn"
+    }
+  ],
+  "configLoaders": [
+    {
+      "file": "scripts/crear-colaborador-prueba.mjs",
+      "line": 22,
+      "call": "config"
+    },
+    {
+      "file": "scripts/crear-colaborador-prueba.mjs",
+      "line": 23,
+      "call": "config"
+    },
+    {
+      "file": "scripts/init-db.mjs",
+      "line": 12,
+      "call": "config"
+    },
+    {
+      "file": "scripts/init-db.mjs",
+      "line": 13,
+      "call": "config"
+    },
+    {
+      "file": "src/instrumentation.ts",
+      "line": 4,
+      "call": "loadRuntimeEnv"
+    },
+    {
+      "file": "src/lib/compras/requerimiento-exportaciones-api.ts",
+      "line": 14,
+      "call": "loadRuntimeEnv"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 19,
+      "call": "loadRuntimeEnv"
+    },
+    {
+      "file": "src/lib/db.ts",
+      "line": 22,
+      "call": "loadRuntimeEnv"
+    }
+  ],
+  "runtimeAssertions": {
+    "soleConstructor": true,
+    "soleDriverImport": true,
+    "noAppSubprocesses": true
+  }
+}

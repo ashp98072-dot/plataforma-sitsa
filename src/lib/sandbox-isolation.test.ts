@@ -91,6 +91,9 @@ describe("sandbox configuration without services", () => {
     const mysql = (await import("mysql2/promise")).default;
     expect(mysql.createPool).not.toHaveBeenCalled();
   });
+  it("blocks the direct collaborator script before dotenv or a connection", async () => {
+    await expect(import("../../scripts/crear-colaborador-prueba.mjs")).rejects.toThrow(/no permitido en sandbox/);
+  });
   it.each([".env", ".env.local", ".env.production", ".env.production.local", ".env.development", ".env.test.local"])("rejects Next automatic input %s", (name) => {
     writeFileSync(join(cwd, name), "AUTH_SECRET=CANARY");
     expect(() => validateSandboxConfig()).toThrow();
@@ -135,7 +138,7 @@ describe("sandbox configuration without services", () => {
 
 describe("read-only DB identity gate", () => {
   function fake(rows = [{ db: "sandbox_qa", environment: "sandbox", sandbox_id: "qa-s02" }]) {
-    const conn = { query: vi.fn().mockResolvedValue([rows]), execute: vi.fn().mockResolvedValue([{ affectedRows: 1 }]), release: vi.fn(), destroy: vi.fn() };
+    const conn = { query: vi.fn().mockResolvedValue([rows]), execute: vi.fn().mockResolvedValue([{ affectedRows: 1 }]), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(), destroy: vi.fn() };
     const raw = { getConnection: vi.fn().mockResolvedValue(conn) };
     return { conn, raw, pool: sandboxPool(raw as unknown as Pool) };
   }
@@ -145,8 +148,43 @@ describe("read-only DB identity gate", () => {
     expect(conn.query.mock.calls[0][0]).toMatch(/^SELECT DATABASE\(\)/);
     expect(conn.query.mock.invocationCallOrder[0]).toBeLessThan(conn.execute.mock.invocationCallOrder[0]);
     expect(conn.release).toHaveBeenCalledOnce();
-    expect(await pool.getConnection()).toBe(conn);
-    expect(conn.query).toHaveBeenCalledTimes(2);
+    expect(Object.is(await pool.getConnection(), conn)).toBe(false);
+    expect(conn.query).toHaveBeenCalledTimes(3);
+  });
+  it("rechecks an acquired connection before every operation", async () => {
+    const { pool, conn } = fake();
+    const acquired = await pool.getConnection();
+    conn.query.mockRejectedValue(new Error("identity changed after checkout"));
+    await expect(acquired.execute("UPDATE synthetic SET value = 1")).rejects.toThrow(/identidad/);
+    expect(conn.execute).not.toHaveBeenCalled();
+    expect(conn.destroy).toHaveBeenCalledOnce();
+  });
+  it("does not expose raw connection or changeUser/prepare escape hatches", async () => {
+    const { pool } = fake();
+    const acquired = await pool.getConnection();
+    for (const key of ["connection", "pool", "changeUser", "prepare", "constructor"]) {
+      expect(() => Reflect.get(acquired, key)).toThrow(/permitida/);
+    }
+  });
+  it("cannot reuse a released connection", async () => {
+    const { pool, conn } = fake();
+    const acquired = await pool.getConnection(); acquired.release();
+    await expect(acquired.execute("UPDATE synthetic SET value = 1")).rejects.toThrow(/liberada/);
+    expect(conn.execute).not.toHaveBeenCalled();
+  });
+  it("validates before begin, execute, commit and rollback on the same driver connection", async () => {
+    const { pool, conn } = fake();
+    const acquired = await pool.getConnection();
+    await acquired.beginTransaction(); await acquired.execute("UPDATE synthetic SET value = 1");
+    await acquired.commit(); await acquired.rollback(); acquired.release();
+    expect(conn.query).toHaveBeenCalledTimes(5);
+    const order = conn.query.mock.invocationCallOrder;
+    expect(order[1]).toBeLessThan(conn.beginTransaction.mock.invocationCallOrder[0]);
+    expect(order[2]).toBeLessThan(conn.execute.mock.invocationCallOrder[0]);
+    expect(order[3]).toBeLessThan(conn.commit.mock.invocationCallOrder[0]);
+    expect(order[4]).toBeLessThan(conn.rollback.mock.invocationCallOrder[0]);
+    expect(Object.getOwnPropertyNames(acquired)).toEqual([]);
+    expect(Object.getPrototypeOf(acquired)).toBeNull();
   });
   it.each([[], [{ db: "production", environment: "sandbox", sandbox_id: "qa-s02" }], [{ db: "sandbox_qa", environment: "production", sandbox_id: "qa-s02" }], [{ db: "sandbox_qa", environment: "sandbox", sandbox_id: "other" }]].map((rows) => [rows]))("rejects mismatched identity without application SQL", async (rows) => {
     const { pool, conn } = fake(rows);
@@ -173,10 +211,24 @@ describe("read-only DB identity gate", () => {
     await execute("UPDATE synthetic SET value = 1");
     await query("SELECT synthetic FROM fixture");
     expect(conn.query.mock.calls.map(([sql]) => sql)).toEqual([
+      expect.stringMatching(/^SELECT DATABASE/), expect.stringMatching(/^SELECT DATABASE/),
       expect.stringMatching(/^SELECT DATABASE/), expect.stringMatching(/^SELECT DATABASE/), "SELECT synthetic FROM fixture",
     ]);
     vi.stubEnv("NOVALVION_ENV", "production"); vi.stubEnv("SANDBOX_ROOT", undefined); vi.stubEnv("SANDBOX_ID", undefined);
     expect(() => getPool()).toThrow(/entorno/);
+  });
+  it("rejects a photo read through an escaping junction", async () => {
+    const mysql = (await import("mysql2/promise")).default;
+    const { raw, conn } = fake();
+    vi.mocked(mysql.createPool).mockReturnValue(raw as unknown as Pool);
+    conn.query.mockImplementation(async (sql: string) => [sql.startsWith("SELECT DATABASE()")
+      ? [{ db: "sandbox_qa", environment: "sandbox", sandbox_id: "qa-s02" }]
+      : [{ id: 1, ruta_archivo: "empresas/1/documentos/photo.png" }]]);
+    mkdirSync(join(root, "uploads", "empresas", "1"), { recursive: true });
+    writeFileSync(join(cwd, "photo.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    symlinkSync(cwd, join(root, "uploads", "empresas", "1", "documentos"), "junction");
+    const { respuestaFotoEmpleado } = await import("./rrhh/foto-empleado");
+    await expect(respuestaFotoEmpleado(1, 1)).rejects.toThrow(/sandbox/);
   });
 });
 

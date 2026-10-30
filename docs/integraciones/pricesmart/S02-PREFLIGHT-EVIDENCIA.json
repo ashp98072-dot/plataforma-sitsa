@@ -1,0 +1,137 @@
+{
+  "auditedCommit": "9d2cfe73b9e4d8b017fbc3f84ecb9a561ca9d289",
+  "correctedSource": "commit containing this evidence (see PR history)",
+  "date": "2026-10-30",
+  "platform": "win32",
+  "versions": {
+    "node": "v24.18.0",
+    "npm": "11.16.0",
+    "next": "16.4.1",
+    "vitest": "4.1.12",
+    "vite": "8.2.4",
+    "typescript": "5.9.3",
+    "eslint": "9.39.5",
+    "mysql2": "3.23.2"
+  },
+  "lockfile": {
+    "before": "d41410a952adfd432b3f2ee7de20a9ef161c4d0554e532e2a28245082965c3e9",
+    "after": "d41410a952adfd432b3f2ee7de20a9ef161c4d0554e532e2a28245082965c3e9",
+    "unchanged": true
+  },
+  "install": {
+    "command": "npm.cmd ci --no-audit --no-fund --cache .npm-cache --fetch-retries=0",
+    "exitCode": 0,
+    "packagesAdded": 532,
+    "originalCheckoutOfflineCiExitCode": 0
+  },
+  "original": {
+    "tests": {
+      "passed": 151,
+      "failed": 0,
+      "skipped": 2,
+      "files": 6,
+      "skippedNames": [
+        "verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks intermedios) 'rechazado' cuando el directorio padre es un symlink que resuelve FUERA de la raíz de la empresa",
+        "verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks intermedios) 'ok' cuando el symlink intermedio resuelve DENTRO de la propia raíz de la empresa"
+      ]
+    },
+    "typescriptExitCode": 0,
+    "eslintExitCode": 0
+  },
+  "negativeReproduction": {
+    "passed": 151,
+    "failed": 4,
+    "skipped": 2,
+    "files": 6,
+    "skippedNames": [
+      "verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks intermedios) 'rechazado' cuando el directorio padre es un symlink que resuelve FUERA de la raíz de la empresa",
+      "verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks intermedios) 'ok' cuando el symlink intermedio resuelve DENTRO de la propia raíz de la empresa"
+    ],
+    "expectedFailures": [
+      "sandbox configuration without services blocks the direct collaborator script before dotenv or a connection",
+      "read-only DB identity gate rechecks an acquired connection before every operation",
+      "read-only DB identity gate does not expose raw connection or changeUser/prepare escape hatches",
+      "read-only DB identity gate cannot reuse a released connection"
+    ]
+  },
+  "corrected": {
+    "tests": {
+      "passed": 195,
+      "failed": 0,
+      "skipped": 0,
+      "files": 8,
+      "skippedNames": []
+    },
+    "typescriptExitCode": 0,
+    "eslintExitCode": 0,
+    "eslintFiles": [
+      "src/lib/runtime-environment.ts",
+      "src/lib/sandbox-db.ts",
+      "src/lib/sandbox-isolation.test.ts",
+      "src/lib/sandbox-startup.test.ts",
+      "src/lib/load-env.ts",
+      "src/lib/db.ts",
+      "src/lib/uploads.ts",
+      "src/lib/uploads.test.ts",
+      "src/lib/dominios.ts",
+      "src/lib/auth-secret.ts",
+      "src/lib/flota/cb2/origin.ts",
+      "src/lib/rrhh/foto-empleado.ts",
+      "scripts/sandbox-config.mjs",
+      "scripts/start-sandbox.mjs",
+      "scripts/start-hostinger.mjs",
+      "scripts/init-db.mjs",
+      "scripts/crear-colaborador-prueba.mjs",
+      "scripts/next-command.mjs",
+      "scripts/ci/sandbox-no-network.ts",
+      "scripts/ci/sandbox-inventory.mjs",
+      "vitest.sandbox.config.mts"
+    ],
+    "diffCheckExitCode": 0
+  },
+  "network": {
+    "tests": "driver and application spawn mocked; TCP/TLS/HTTP(S)/UDP/DNS lookup/fetch denied by setup",
+    "databaseConnections": 0,
+    "realSqlStatements": 0,
+    "installation": "npm registry download only; original checkout installed offline"
+  },
+  "links": {
+    "fileSymlinkElevatedProbe": "EPERM",
+    "wsl": "not installed; no installation attempted",
+    "directoryTests": "real Windows junctions; original skipped directory assertions now executed",
+    "systemSecurityChanged": false
+  },
+  "operationalControls": {
+    "acl": "NOT VERIFIED",
+    "firewall": "NOT VERIFIED",
+    "databaseGrants": "NOT VERIFIED",
+    "realDatabase": "NOT TESTED",
+    "deployment": false,
+    "merge": false,
+    "dnsChanges": false
+  },
+  "sourceGitBlobHashes": {
+    "src/lib/runtime-environment.ts": "18b22ab6dec29b2eeb02d0f09a8a84476ed728f6",
+    "src/lib/sandbox-db.ts": "a845d49e425132d59fa451de23f2eeadabf21a74",
+    "src/lib/sandbox-isolation.test.ts": "8a1ceac57ef40e8d77c99679a33037f67eac7c93",
+    "src/lib/sandbox-startup.test.ts": "a85159ed48cb6cc9b8644b65068537f595481940",
+    "src/lib/load-env.ts": "49c64fa5493d2259c6a466041caab29e96f0190d",
+    "src/lib/db.ts": "b1c69e7e85445c496a731f4c8edc6babbccf745f",
+    "src/lib/uploads.ts": "87dbde195a1f6a474f36e4184e5746b2b27952f8",
+    "src/lib/uploads.test.ts": "8af437011ed103d572022984e6813a516d6fd94e",
+    "src/lib/dominios.ts": "f3abf97e6bd215b9228f68834e1adfe2ca422c7b",
+    "src/lib/auth-secret.ts": "5fe98fb7e95b5608303fa5817d181c90bf96b29a",
+    "src/lib/flota/cb2/origin.ts": "c52a8eb874e53e88001a28667b9e27106b50ad4b",
+    "src/lib/rrhh/foto-empleado.ts": "c9b6ef96f126e37724216db6172b782b3113052e",
+    "scripts/sandbox-config.mjs": "a6817778b5a2f7a3afd39da7d9556fff8d17ccab",
+    "scripts/start-sandbox.mjs": "e0dbf0d6f04cd04c9d23bd4e26fa2b5b08106e34",
+    "scripts/start-hostinger.mjs": "8c66463b61f8aa0e3e42e5023d2f53720ae9a8dc",
+    "scripts/init-db.mjs": "def854dbf09c0c575d2fd2d124248658756100c4",
+    "scripts/crear-colaborador-prueba.mjs": "454024b1214eda7c41626412694aecc82bc96c02",
+    "scripts/next-command.mjs": "9c5cb2eb876bbf9246af0a0ec47614690c988403",
+    "scripts/ci/sandbox-no-network.ts": "d7de624fb051484e9cbf8d8ebeb56821fc156d73",
+    "scripts/ci/sandbox-inventory.mjs": "eff660764995ccf8b95affad25640ac1388067b6",
+    "vitest.sandbox.config.mts": "ff03d1eb3723d144aa5d8c05a8818d13e4ec5bb5"
+  },
+  "inventorySha256": "22d84528f28fbaab05d327ce314ded44ca5962ac9a9a5b7e7b821b22c65c6d95"
+}
