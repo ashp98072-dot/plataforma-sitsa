@@ -1,0 +1,555 @@
+{
+  "dir": "C:\\Users\\Admin\\AppData\\Local\\Temp\\novalvion-c3c15b-test-f079b46f7a6a603ad77add44865073a9",
+  "port": 52556,
+  "httpPort": 52557,
+  "checks": [
+    "base no vacia rechazada",
+    "segunda inicializacion rechazada",
+    "nonce incorrecto rechazado antes de entregar conexion",
+    "PID de servidor inesperado rechazado",
+    "sondas reales de red externa, MySQL80, .env y conexion inesperada bloqueadas",
+    "Next iniciado y handshake autenticado",
+    "HTTP login/empresa/calendario/permisos preparador",
+    "HTTP login/empresa/calendario/permisos revisor",
+    "HTTP login/empresa/calendario/permisos resolutor",
+    "HTTP login/empresa/calendario/permisos lector",
+    "XLSX real recibido por HTTP (no navegador)",
+    "ruta de contabilizacion bloqueada por servidor de laboratorio",
+    "Next detenido; MariaDB sigue respondiendo",
+    "reinicio de Next y segunda parada sin cerrar MariaDB"
+  ],
+  "estado": "APROBADA",
+  "bootstrap": {
+    "contrato": "C3C15B-BOOTSTRAP-1",
+    "etapas": [
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "destino",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "version",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "fk_habilitadas",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "padres_innodb",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "claves_padres",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "columnas_servicio",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "indices_padres",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "calendario_ausente",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "auditoria_automaticos",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "auditoria_sin_obligatorias_extra",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "entidad_empresa_fk",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "destino",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "tablas_innodb",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "columnas",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "numero_columnas",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "indices_unicos",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "fk_compuestas_y_acciones",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "checks_declarados",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "ejercicios_solapados",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "cobertura",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "periodos_validos",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "consecutivos",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-calendario-c3c1.sql",
+        "control": "estado_ejercicios",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "destino_aislado",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "motor",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "fk",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "padres",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "cuentas",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "control_ausente",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "calendario_c3c1",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "version_ausente",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "sin_estados_anticipados",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "tablas",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "versiones",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "sin_activaciones",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "sin_operadores_auto",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-contabilidad-periodos-c3c2.sql",
+        "control": "sin_historial_auto",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-regularizacion-control-c3c9.sql",
+        "control": "dependencias_innodb_c3c1_c3c2_c3c7",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-regularizacion-control-c3c9.sql",
+        "control": "permiso_editar_existente",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-regularizacion-control-c3c9.sql",
+        "control": "rol_resultado_c3c7",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-regularizacion-control-c3c9.sql",
+        "control": "indices_padres_compuestos",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "tablas_c3c9_innodb",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "columnas_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "restricciones_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "unicidad_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-origen-revisiones-c3c10.sql",
+        "control": "dependencias_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-origen-revisiones-c3c10.sql",
+        "control": "origen_columnas_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-origen-revisiones-c3c10.sql",
+        "control": "origen_pk_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "tabla_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "columnas_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "constraints_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "indices_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "inmutabilidad_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "dependencias_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "fk_borrador_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "permisos_edicion_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "tablas_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "columnas_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "restricciones_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "triggers_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "unicidad_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "dependencias_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "motores_dependencias",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "indice_solicitud",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "tabla_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "inmutabilidad_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "huerfanos_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "integridad_metadatos_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "continuidad_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-validacion-precontable-c3c13.sql",
+        "control": "dependencias_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-validacion-precontable-c3c13.sql",
+        "control": "indice_solicitud_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/preflight-2026-10-validacion-precontable-c3c13.sql",
+        "control": "triggers_evidencia_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "tabla_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "triggers_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "huerfanos_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "continuidad_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "contrato_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "tablas_c3c9_innodb",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "columnas_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "restricciones_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-regularizacion-control-c3c9.sql",
+        "control": "unicidad_c3c9",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "tabla_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "columnas_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "constraints_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "indices_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-origen-revisiones-c3c10.sql",
+        "control": "inmutabilidad_c10",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "tablas_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "columnas_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "restricciones_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "triggers_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-politicas-autorizacion-c3c11.sql",
+        "control": "unicidad_c11",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "tabla_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "inmutabilidad_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "huerfanos_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "integridad_metadatos_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-expediente-evidencia-c3c12.sql",
+        "control": "continuidad_c12",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "tabla_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "triggers_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "huerfanos_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "continuidad_c13",
+        "errores": 0
+      },
+      {
+        "archivo": "sql/postcheck-2026-10-validacion-precontable-c3c13.sql",
+        "control": "contrato_c13",
+        "errores": 0
+      }
+    ],
+    "estado": "READY",
+    "accounts": [
+      {
+        "id": 41,
+        "username": "qa-preparador",
+        "role": "preparador"
+      },
+      {
+        "id": 42,
+        "username": "qa-revisor",
+        "role": "revisor"
+      },
+      {
+        "id": 44,
+        "username": "qa-resolutor",
+        "role": "resolutor"
+      },
+      {
+        "id": 45,
+        "username": "qa-lector",
+        "role": "lector"
+      }
+    ]
+  }
+}

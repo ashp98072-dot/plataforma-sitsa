@@ -4,6 +4,8 @@
 
 ## 1. Puerta de entrada: entorno local sintético
 
+**Actualización C3C-15B:** para la instancia persistente `127.0.0.1:43306`, base vacía `c3c15_lab`, usar [el bootstrap específico y sus comandos](../c3c15b/README.md). Sustituye la preparación genérica y el arranque por variables descritos en esta sección. No ejecutar ambos procedimientos. Los apartados 2–6 siguen siendo el protocolo visual pendiente; al finalizar, `Lab.ps1 -Action Stop` detiene exclusivamente Next y conserva MariaDB.
+
 1. Usar una copia aislada de este commit creada con `git archive`, sin copiar `.env`, `.env.local`, `.env.production`, uploads ni configuraciones externas del checkout de trabajo. Instalar las dependencias del lockfile en esa copia.
 2. Aprovisionar una **MariaDB 11.8.9 nueva y desechable**, datadir exclusivo y enlace solo a loopback, con un puerto no usado. Crear una base `c3c15_lab_<identificador>`, un usuario exclusivo sin permisos sobre otras bases y contraseña local temporal. Registrar versión, datadir, puerto, nombre de base y operador. No reutilizar un servicio ni el laboratorio C3C-8.
 3. Aplicar en esa base vacía el esquema y dependencias existentes C3C-1 a C3C-13 según el proceso de aprovisionamiento del proyecto, con sus preflight/postcheck. **No se proporciona ni se ha probado en C3C-15 un bootstrap UI autocontenido.** No asumir que `schema.sql` por sí solo basta: el calendario y dependencias previas se gestionan en migraciones existentes. Si falta cualquier tabla, detener la aceptación y registrar el bloqueo; no omitir checks o FK.
