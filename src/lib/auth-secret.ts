@@ -10,6 +10,8 @@
  * (incluida una sesión de Admin, o una de colaborador en el portal).
  */
 
+import { isSandbox } from "./runtime-environment";
+
 const DEV_FALLBACK_SECRET = "dev-insecure-secret-change-me-32";
 const MIN_LENGTH = 16;
 
@@ -17,6 +19,9 @@ let warned = false;
 
 export function getAuthSecretBytes(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
+  if (isSandbox() && (!process.env.SANDBOX_ID || !secret?.startsWith(`sandbox:${process.env.SANDBOX_ID}:`) || !/^[a-f0-9]{64}$/.test(secret.split(":")[2] ?? "") || secret.split(":").length !== 3)) {
+    throw new Error("AUTH_SECRET sandbox inválido.");
+  }
 
   if (secret && secret.length >= MIN_LENGTH) {
     return new TextEncoder().encode(secret);

@@ -6,6 +6,8 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
+    "start:sandbox": "node scripts/start-sandbox.mjs",
+    "test:sandbox": "vitest run --config vitest.sandbox.config.mts",
     "start:hostinger": "node scripts/start-hostinger.mjs",
     "lint": "eslint",
     "test": "vitest run",

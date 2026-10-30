@@ -4,14 +4,21 @@ import mysql, {
   type RowDataPacket,
 } from "mysql2/promise";
 import { loadRuntimeEnv } from "./load-env";
+import { sandboxMode } from "../../scripts/sandbox-config.mjs";
+import { sandboxPool } from "./sandbox-db";
 
 let pool: Pool | null = null;
+let poolSandbox: boolean | null = null;
 
 export type SqlValue = string | number | boolean | Date | null;
 export type SqlParams = SqlValue[];
 
 export function getPool(): Pool {
-  if (pool) return pool;
+  if (pool) {
+    if (sandboxMode() !== poolSandbox) throw new Error("No se puede cambiar el entorno de un pool activo.");
+    if (sandboxMode()) loadRuntimeEnv();
+    return pool;
+  }
   loadRuntimeEnv();
   const user = process.env.DB_USER;
   const database = process.env.DB_NAME;
@@ -21,7 +28,7 @@ export function getPool(): Pool {
   // Hostinger: localhost/@'%' falla; forzar IPv4
   let host = (process.env.DB_HOST ?? "127.0.0.1").trim();
   if (host === "localhost") host = "127.0.0.1";
-  pool = mysql.createPool({
+  const raw = mysql.createPool({
     host,
     port: Number(process.env.DB_PORT ?? "3306"),
     user,
@@ -33,6 +40,8 @@ export function getPool(): Pool {
     enableKeepAlive: true,
     timezone: "local",
   });
+  poolSandbox = sandboxMode();
+  pool = poolSandbox ? sandboxPool(raw) : raw;
   return pool;
 }
 

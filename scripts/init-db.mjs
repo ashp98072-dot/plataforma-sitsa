@@ -1,3 +1,5 @@
+import { sandboxMode } from "./sandbox-config.mjs";
+if (sandboxMode()) throw new Error("db:init no está permitido en sandbox; requiere aprovisionamiento aislado revisado.");
 import { createHash, randomBytes } from "crypto";
 import { readFileSync } from "fs";
 import { dirname, join } from "path";
@@ -9,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 config({ path: join(root, ".env.local") });
 config({ path: join(root, ".env") });
+if (sandboxMode()) throw new Error("db:init no está permitido en sandbox.");
 
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   const passwordHash = createHash("sha256")

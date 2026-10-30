@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
+import { sandboxMode, validateSandboxConfig } from "../../scripts/sandbox-config.mjs";
 
 let loadedFromFile: string | null = null;
 
@@ -43,6 +44,10 @@ function candidatePaths(): string[] {
 
 /** Carga .builds/config/.env (Hostinger) con prioridad sobre el panel. */
 export function loadRuntimeEnv(): void {
+  if (sandboxMode()) {
+    validateSandboxConfig();
+    return;
+  }
   if (loadedFromFile) {
     applyEnvFile(loadedFromFile, true);
     return;
