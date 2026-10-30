@@ -1,0 +1,184 @@
+{
+  "contrato": "C3C15-MATRIZ-1",
+  "estadoGlobal": "NO APROBADO",
+  "base": "5d58a69036151b318c8c42c030cb1dcd5ef7f8ff",
+  "casos": [
+    {
+      "id": "M00",
+      "prueba": "Preparacion y arranque de servidor local completo con login sintetico",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "No hay bootstrap UI autocontenido ensayado; runners C14 cierran la BD al terminar",
+      "evidencias": []
+    },
+    {
+      "id": "M01",
+      "prueba": "Login incorrecto y correcto en navegador real",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M02",
+      "prueba": "Seleccion de empresa y cambio de tenant",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M03",
+      "prueba": "Seleccion de entidad y ejercicio",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M04",
+      "prueba": "Actualizar evaluacion y navegar detalles",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M05",
+      "prueba": "Bloqueantes, evidencias y responsables visibles",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M06",
+      "prueba": "Lector sin formulario y POST denegado desde sesion real",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M07",
+      "prueba": "Preparador y resolutor sin facultad de emitir constancia",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M08",
+      "prueba": "Revisor designado emite constancia",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M09",
+      "prueba": "Validacion nativa de justificacion y casilla de confirmacion",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M10",
+      "prueba": "Historial, version e idempotencia en UI",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M11",
+      "prueba": "Actualizacion de fuentes, huellas y desactualizacion",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M12",
+      "prueba": "Ausencia de aprobacion formal y contabilizacion en todas las acciones",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M13",
+      "prueba": "Descargas JSON actual e historico desde navegador",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M14",
+      "prueba": "Descarga XLSX desde navegador",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M15",
+      "prueba": "Apertura visual de archivo descargado en Microsoft Excel",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M16",
+      "prueba": "Hojas, importes, legibilidad, ajuste y vista previa de impresion",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    },
+    {
+      "id": "M17",
+      "prueba": "Capturas reales de navegador y Excel",
+      "estado": "NO EJECUTADA",
+      "obligatoria": true,
+      "motivo": "Las herramientas de navegador/Windows no inician Node runtime (os error 3)",
+      "evidencias": []
+    }
+  ],
+  "infraestructura": [
+    {
+      "id": "I01",
+      "prueba": "cua.getState()",
+      "estado": "FALLIDA",
+      "error": "failed to start Node runtime: El sistema no puede encontrar la ruta especificada. (os error 3)"
+    },
+    {
+      "id": "I02",
+      "prueba": "mcp__node_repl import @oai/sky",
+      "estado": "FALLIDA",
+      "error": "failed to start Node runtime: El sistema no puede encontrar la ruta especificada. (os error 3)"
+    },
+    {
+      "id": "I03",
+      "prueba": "node sistema y empaquetado --version",
+      "estado": "APROBADA",
+      "evidencia": "diagnostico-runtime.json"
+    },
+    {
+      "id": "I04",
+      "prueba": "Intento adicional de DOM simulado",
+      "estado": "FALLIDA",
+      "error": "ERR_MODULE_NOT_FOUND: happy-dom; no se ejecutaron casos y el archivo experimental fue retirado"
+    }
+  ],
+  "regresion": {
+    "estado": "APROBADA",
+    "sql": 162,
+    "unitarias": 216,
+    "evidencia": "regresion.json",
+    "noSustituyePruebasObligatorias": true
+  }
+}

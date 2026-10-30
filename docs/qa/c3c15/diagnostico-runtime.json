@@ -1,0 +1,30 @@
+{
+  "contrato": "C3C15-DIAGNOSTICO-1",
+  "plataforma": "win32",
+  "arquitectura": "x64",
+  "nodeSistema": {
+    "presente": true,
+    "codigo": 0,
+    "error": null,
+    "version": "v24.18.0"
+  },
+  "nodeEmpaquetado": {
+    "presente": true,
+    "codigo": 0,
+    "error": null,
+    "version": "v24.22.1"
+  },
+  "paquete": {
+    "version": "26.1029.11837",
+    "plataforma": "win32",
+    "arquitectura": "x64",
+    "nodeDeclarado": "24.22.1-cua.1"
+  },
+  "aplicaciones": {
+    "chrome": true,
+    "edge": true,
+    "excel": true
+  },
+  "happyDomInstalado": false,
+  "alcance": "Solo existencia de rutas conocidas y node --version. No demuestra funcionamiento de navegador/Excel ni identifica la ruta interna que falta al lanzador MCP."
+}
