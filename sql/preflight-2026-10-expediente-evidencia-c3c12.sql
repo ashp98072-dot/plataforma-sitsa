@@ -1,0 +1,3 @@
+SELECT 'dependencias_c11' control, IF(COUNT(*)=3,0,1) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('cont_regularizacion_politicas','cont_regularizacion_solicitudes','cont_regularizacion_decisiones');
+SELECT 'motores_dependencias' control,COUNT(*) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('cont_regularizacion_solicitudes','cont_regularizacion_borradores','cont_asientos_origen_revisiones') AND ENGINE<>'InnoDB';
+SELECT 'indice_solicitud' control,IF(COUNT(*)=4,0,1) errores FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_regularizacion_solicitudes' AND INDEX_NAME='uq_c11_solicitud_ambito' AND NON_UNIQUE=0;
