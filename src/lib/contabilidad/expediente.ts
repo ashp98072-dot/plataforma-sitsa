@@ -5,8 +5,8 @@ import {AccesoContable} from './ambito';
 import {contextoTx,bloquearGestion,permisoGestion} from './politicas-autorizacion';
 import {huellaCondiciones} from './regularizacion-control-contrato';
 import {evidenciaEntrada,evaluarEvidencias,type Evidencia} from './expediente-contrato';
-async function expedienteTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number){
- const ctx=await contextoTx(c,empresaId,entidadId,ejercicioId);
+export async function expedienteTx(c:PoolConnection,empresaId:number,entidadId:number,ejercicioId:number,contexto?:Awaited<ReturnType<typeof contextoTx>>){
+ const ctx=contexto??await contextoTx(c,empresaId,entidadId,ejercicioId);
  const [rows]=await c.query<RowDataPacket[]>(`SELECT *,CAST(solicitud_id AS CHAR) solicitudId,DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%s') fechaCreacion FROM cont_regularizacion_evidencias WHERE empresa_id=? AND entidad_id=? AND ejercicio_id=? ORDER BY solicitud_id,codigo,version DESC`,[empresaId,entidadId,ejercicioId]);
  const expedientes=ctx.solicitudes.map(s=>{
  const borrador=ctx.preparacion.revisiones.find(b=>b.version===s.borradorVersion);

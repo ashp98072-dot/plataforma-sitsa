@@ -1,0 +1,3 @@
+SELECT 'dependencias_c13' control,IF(COUNT(*)=5,0,1) errores FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('cont_regularizacion_solicitudes','cont_regularizacion_politicas','cont_regularizacion_decisiones','cont_regularizacion_borradores','cont_regularizacion_evidencias') AND ENGINE='InnoDB';
+SELECT 'indice_solicitud_c13' control,IF(COUNT(*)=4,0,1) errores FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='cont_regularizacion_solicitudes' AND INDEX_NAME='uq_c11_solicitud_ambito' AND NON_UNIQUE=0;
+SELECT 'triggers_evidencia_c13' control,IF(COUNT(*)=2,0,1) errores FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME IN ('c12_evidencia_no_update','c12_evidencia_no_delete');
