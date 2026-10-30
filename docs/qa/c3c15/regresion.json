@@ -1,0 +1,1960 @@
+{
+  "contrato": "C3C15-REGRESION-1",
+  "base": "5d58a69036151b318c8c42c030cb1dcd5ef7f8ff",
+  "fecha": "2026-10-30",
+  "suites": [
+    {
+      "suite": "c3c5",
+      "estado": "APROBADA",
+      "total": 9,
+      "aprobadas": 9,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-fe17631a32964d46995fef6ad77b5a86",
+      "cierre": {
+        "time": "2026-10-30T17:37:26.977Z",
+        "event": "shutdown-confirmed",
+        "pid": 29180,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "bc01eaa229d1b098e4529aaca07ac98ada5440b0252e26d09ff9d551704e5f57",
+      "casos": [
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada ejercicio configurado muestra control no activado, borrador e historia anterior",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada no revela ejercicios de otra empresa o libro",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada identifica periodos abiertos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada periodos cerrados y control activo no certifican regularizacion",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada diagnostico no modifica datos, control ni auditoria",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada mantiene instantanea consistente durante una reapertura concurrente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada descuadre individual e importes incompatibles se detectan con centavos exactos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada cuenta ausente y detalle huerfano no quedan ocultos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C5 MariaDB temporal con identidad verificada reapertura es visible en una nueva instantanea sin modificarla",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c6",
+      "estado": "APROBADA",
+      "total": 8,
+      "aprobadas": 8,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-143e1fb80b6349efb4a8951adaf17394",
+      "cierre": {
+        "time": "2026-10-30T17:38:05.968Z",
+        "event": "shutdown-confirmed",
+        "pid": 43208,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "1aab25447eedc36ef4e1df794da0241b6f729ab0131dbf4a335333b72524b94e",
+      "casos": [
+        {
+          "nombre": "C3C6 MariaDB temporal verificada utilidad solo del ejercicio, historico separado, borrador y futuro excluidos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada perdida y ejercicios distintos no se mezclan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada saldos contrarios conservan signo y precision",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada empresa o libro ajenos no revelan ejercicios ni importes",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada consulta no modifica cuentas, asientos, periodos, control ni auditoria",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada una sola instantanea incluso si cambian cuentas concurrentemente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada asientos descuadrados producen resultado no confiable",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C6 MariaDB temporal verificada clasificacion insuficiente y nominal inactiva son bloqueantes visibles",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c7",
+      "estado": "APROBADA",
+      "total": 12,
+      "aprobadas": 12,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-c8e5d299082a43a997a728ad74e9359d",
+      "cierre": {
+        "time": "2026-10-30T17:37:27.137Z",
+        "event": "shutdown-confirmed",
+        "pid": 4368,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "02b04a1ecf2accc313eee2ea2d7906cb34575e5bc5ccf7b18ab2664e05793dde",
+      "casos": [
+        {
+          "nombre": "C3C7 MariaDB temporal verificada lector consulta pero no puede modificar ni auditar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada configura inicialmente con permiso explicito y registra auditoria",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada rechaza cuenta inexistente/inactiva/nominal/ajena 999",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada rechaza cuenta inexistente/inactiva/nominal/ajena 7",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada rechaza cuenta inexistente/inactiva/nominal/ajena 1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada rechaza cuenta inexistente/inactiva/nominal/ajena 8",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada empresa ajena no revela configuracion y no permite guardar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada modifica sin inferir aptitud por nivel y audita antes/despues",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada concurrencia rechaza version anterior y conserva una sola configuracion",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada C3C6 muestra cuenta, mantiene politica y propuesta null sin generar asientos ni auditoria",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada revalida una cuenta desactivada despues de configurar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C7 MariaDB temporal verificada dos configuraciones iniciales concurrentes no duplican el rol en otro libro",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c8",
+      "estado": "APROBADA",
+      "total": 10,
+      "aprobadas": 10,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-b4605ca2210e4aa3ba8d6565e384318f",
+      "cierre": {
+        "time": "2026-10-30T17:37:49.302Z",
+        "event": "shutdown-confirmed",
+        "pid": 35976,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "984ae964459f15ee9a588efd69db0587a3f7d7735659eb13546de13e406da8a3",
+      "casos": [
+        {
+          "nombre": "C3C8 MariaDB temporal verificada utilidad exacta, historia separada y borradores excluidos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada perdida de otro ejercicio conserva signo",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada empresa y libro ajenos no revelan datos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada no escribe asientos, configuracion, periodos ni auditoria",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada una instantanea conserva catalogo y cuenta de resultado ante cambio concurrente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada periodos abiertos bloquean",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada cuenta configurada inactiva bloquea",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada asiento descuadrado bloquea",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada clasificacion insuficiente bloquea incluso sin movimientos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C8 MariaDB temporal verificada indicios previos se advierten sin certificar ausencia de regularizacion",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c9",
+      "estado": "APROBADA",
+      "total": 30,
+      "aprobadas": 30,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-4920947faa894e8f8bc8ac5680e24913",
+      "cierre": {
+        "time": "2026-10-30T17:38:26.309Z",
+        "event": "shutdown-confirmed",
+        "pid": 25552,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "c8ef4e05172f85b49ddc6677184850712f804d6f5c2141876ddce5fbe8cd0ddd",
+      "casos": [
+        {
+          "nombre": "C3C9 MariaDB temporal verificada historia ambigua permanece no verificada, política no aprobada y C3C5–8 compatibles",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada lector consulta; Admin sin editar no obtiene escritura implícita",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada Admin con editar pero sin asignación a empresa también es denegado",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada ámbitos ajenos no revelan ejercicio ni permiten metadatos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada lectura no persiste borradores, auditoría ni movimientos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada borrador inicial y reintento idempotente producen una sola revisión/auditoría",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada nueva versión exige revisión anterior correcta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada dos revisiones concurrentes con distintas claves no sobrescriben",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada dos solicitudes concurrentes idénticas reutilizan una revisión",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_cuentas SET nombre='Cambio ficticio' WHERE id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_asientos SET glosa='Cambio ficticio' WHERE id=201",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_asiento_detalle SET haber=100.01 WHERE asiento_id=201 AND cuenta_id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_cuentas_rol SET activa=0 WHERE cuenta_id=5",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_periodos SET estado='ABIERTO' WHERE ejercicio_id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cambio fuente invalida huella y borrador: UPDATE cont_periodos SET version=version+1 WHERE ejercicio_id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada cuenta resultado inexistente/inactiva y nominal desconocida bloquean sin fabricar propuesta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada una instantánea de lectura conserva el catálogo ante cambio concurrente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada fallo de auditoría revierte borrador completo",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada fuente documental normal es explícita, inmutable, idempotente y auditada sin cambiar el asiento",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada huella documental anterior y referencia duplicada se rechazan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada no identifica borradores ni acepta campos de aprobación",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada fallo de auditoría revierte metadato de procedencia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada regularización documental bloquea la preparación; metadato alterado vuelve NO VERIFICADO",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada indicios no se confunden con normal identificado ni certifican ausencia histórica",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada metadatos de otro ejercicio no se mezclan y FK impide ámbito cruzado",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada revocar edición después de consultar impide guardar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada borrador con bloqueantes conserva evidencia incompleta sin autorizar ejecución",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada UUID canónico y notas Unicode conservan idempotencia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada dos revisiones documentales concurrentes idénticas crean una sola identificación",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C9 MariaDB temporal verificada migración repetible conserva versiones y evidencia; no concede permisos",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c10",
+      "estado": "APROBADA",
+      "total": 20,
+      "aprobadas": 20,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-5c10efbb48564fc5ac965ad620dac431",
+      "cierre": {
+        "time": "2026-10-30T17:37:51.612Z",
+        "event": "shutdown-confirmed",
+        "pid": 39300,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "79a19b9259fdd151e536441459c99a7ccebc885c02e00fa60d36a728d0cb1fc5",
+      "casos": [
+        {
+          "nombre": "C3C10 MariaDB temporal verificada consulta sin escrituras, compatible con C3C5–9",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada crea identificación original sin revisiones y no inventa historial",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada no permite autorrectificación ni excepción Admin",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada lector y Admin sin asignación no pueden escribir",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada rollback de revisión si auditoría falla",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada rectifica con otro editor, conserva raíz y movimientos e invalida borrador",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada reintento idéntico no duplica auditoría y clave diferente exige versión actual",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada revisión documental mantiene clase y conserva cadena incluso si se vuelve al origen",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada historial SQL impide UPDATE y DELETE, incluso sobre todas sus filas",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada concurrencia distinta: una transición gana y otra recibe conflicto",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada concurrencia idéntica: una transición y una reutilización",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada ejercicio/empresa/libro ajenos y raíz inexistente no permiten revisión",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada rechaza huellaAsiento obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada rechaza huellaVigente obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada revocación después de consulta bloquea revisión",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada campos de aprobación, justificación vacía y tipo incompatible son rechazados",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada referencia de otro asiento no puede reutilizarse por revisión ni identificación inicial",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada cambio posterior del asiento invalida procedencia; revisión documentada renueva huella sin alterar historia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada períodos abiertos siguen bloqueando; revisar no cambia períodos ni aprueba",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C10 MariaDB temporal verificada migración repetible conserva historia/auditoría/permisos y controles; no genera asientos",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c11",
+      "estado": "APROBADA",
+      "total": 31,
+      "aprobadas": 31,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-932ac3196aa64c45951cb677c95cd9ee",
+      "cierre": {
+        "time": "2026-10-30T17:38:39.085Z",
+        "event": "shutdown-confirmed",
+        "pid": 36136,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "0dad07ea3217b95256962a9cf819fd01f5b4d6f62ae210d05d8906dc7a8d79f4",
+      "casos": [
+        {
+          "nombre": "C3C11 MariaDB temporal verificada consulta consistente sin escrituras ni cambios en contratos C3C5–10",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada lector consulta sin candidatos de edición, pero no escribe; Admin no asignado tampoco",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada responsables deben ser tres editores distintos, activos y asignados",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada política versionada, explícita, inmutable e idempotente; no decide corrección contable",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cuentas de otro libro, no nominales e inactivas y resultado incorrecto no se aceptan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada solicitud asocia política y borrador de su autor; duplicados no generan evidencia repetida",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada separación de preparador, revisor y resolutor, sin autoaprobaciones",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada resolución DEVOLVER conserva historial y finaliza sin borrar ni contabilizar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada resolución RECHAZAR conserva historial y finaliza sin borrar ni contabilizar",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada revisión técnica no supera procedencia pendiente ni alcance parcial",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios de fuentes detectados e invalidación persistida: UPDATE cont_cuentas SET nombre='Cambio C11' WHERE id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios de fuentes detectados e invalidación persistida: UPDATE cont_asientos SET glosa='Cambio C11' WHERE id=201",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios de fuentes detectados e invalidación persistida: UPDATE cont_asiento_detalle SET haber=100.01 WHERE asiento_id=201 AND cuenta_id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios de fuentes detectados e invalidación persistida: UPDATE cont_periodos SET estado='ABIERTO' WHERE ejercicio_id=1",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios de fuentes detectados e invalidación persistida: UPDATE cont_cuentas_rol SET activa=0 WHERE cuenta_id=5",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada rectificación C3C10 invalida condiciones y solicitudes anteriores sin modificar asientos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada nueva versión de política o borrador invalida solicitudes sin editar su raíz",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada revocar responsable después de preparación bloquea acción e identifica obsolescencia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada fallo de auditoría revierte política, solicitud y decisión completas",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada dos decisiones distintas concurrentes: un ganador y un conflicto",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada dos reintentos idénticos concurrentes generan una sola decisión/auditoría",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada ámbito ajeno, autor ajeno y entradas de aprobación efectiva se rechazan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada conflicto de filas de permisos falla cerrado sin asignaciones implícitas",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada revocación concurrente se observa antes de aceptar una revisión",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada versiones de política concurrentes no sobrescriben y reintentos idénticos se reutilizan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada solicitudes concurrentes y políticas alternativas no duplican el mismo borrador",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada no se apropia un borrador C3C9 preparado por otro actor",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada solicitud con períodos abiertos puede devolverse pero no superar revisión técnica",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada una instantánea de lectura no mezcla condiciones con un catálogo concurrente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada tablas técnicas inmutables; ningún estado APROBADO admitido en SQL",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada migración repetible conserva políticas, solicitudes, decisiones, permisos y asientos",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c12",
+      "estado": "APROBADA",
+      "total": 9,
+      "aprobadas": 9,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-be4d74827069405fbf2ad0416ce249f9",
+      "cierre": {
+        "time": "2026-10-30T17:38:45.705Z",
+        "event": "shutdown-confirmed",
+        "pid": 18964,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "76e22016c9aaed0ea6afcfa7584cf98b899d9c4c62e153c56f90cc8561d05627",
+      "casos": [
+        {
+          "nombre": "C3C11 MariaDB temporal verificada expediente reutiliza cadena y exige las tres evidencias",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada idempotencia y auditor?a transaccional",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada permisos y aislamiento empresa entidad ejercicio",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada concurrencia optimista y ausencia de duplicados",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada revision independiente conserva referencia y huella",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada completo tecnicamente permanece sin aprobacion formal",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada fallo de auditoria revierte evidencia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada triggers rechazan alteraci?n y borrado hist?rico",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C11 MariaDB temporal verificada cambios posteriores invalidan cadena documental",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c13",
+      "estado": "APROBADA",
+      "total": 20,
+      "aprobadas": 20,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-475dedf702fa4c14972233d4dbe404c1",
+      "cierre": {
+        "time": "2026-10-30T17:38:57.653Z",
+        "event": "shutdown-confirmed",
+        "pid": 13396,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "7430d53abf567f60af867cc1afc868c7b63b7816d6524cf01180f04b1f4bced7",
+      "casos": [
+        {
+          "nombre": "C3C13 MariaDB temporal verificada reutiliza calculos C3C5-12 y distingue originales de propuesta sin escrituras",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada huella reproducible excluye fecha y actor de consulta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada constancia con bloqueantes no concede aprobacion y es idempotente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada expediente completo tecnicamente sigue formal pendiente",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada separacion de funciones y permisos explicitos",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada multiempresa multientidad y ejercicio no se contaminan",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada concurrencia: misma clave produce una escritura; claves distintas compiten por version",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada auditoria fallida revierte constancia",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada triggers impiden UPDATE y DELETE",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada cambio movimientos invalida historial y rechaza huella obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada cambio catalogoConfiguracion invalida historial y rechaza huella obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada cambio permisos invalida historial y rechaza huella obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada cambio calendario invalida historial y rechaza huella obsoleta",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada evidencias decisiones politica y borrador cambian componentes",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada render de informe real conserva separacion y referencias",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada Excel reutilizado no ejecuta formulas externas y separa simulacion",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada revocacion del revisor bloquea incluso reintentos y no duplica",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada corrupcion historica v1 invalida toda la cadena",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada corrupcion historica v2 invalida toda la cadena",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C13 MariaDB temporal verificada restricciones SQL rechazan contrato incompleto y solicitud fuera del ambito",
+          "estado": "APROBADA"
+        }
+      ]
+    },
+    {
+      "suite": "c3c14",
+      "estado": "APROBADA",
+      "total": 13,
+      "aprobadas": 13,
+      "fallidas": 0,
+      "omitidas": 0,
+      "directorio": "novalvion-c3c2-20cfaae0c0af4243bdb78ce1a58e01a2",
+      "cierre": {
+        "time": "2026-10-30T17:39:13.791Z",
+        "event": "shutdown-confirmed",
+        "pid": 18620,
+        "code": 0,
+        "signal": null
+      },
+      "postcheck": [
+        {
+          "control": "tabla_c13",
+          "errores": 0
+        },
+        {
+          "control": "triggers_c13",
+          "errores": 0
+        },
+        {
+          "control": "huerfanos_c13",
+          "errores": 0
+        },
+        {
+          "control": "continuidad_c13",
+          "errores": 0
+        },
+        {
+          "control": "contrato_c13",
+          "errores": 0
+        }
+      ],
+      "sha256": "25ad83bdcab9c1e8425638572b759737a6a5aa2e2d9f2720bb3b370e055d7992",
+      "casos": [
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal BENEFICIO: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal PERDIDA: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal CERO: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal CONTRARIOS: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal CENTAVOS: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal SIN_SALDOS: cadena completa, conciliacion y originales inmutables",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal multiempresa y multientidad positivos, ademas de rechazo cruzado",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal fuente nueva invalida sin modificar ninguna fila original anterior",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal decision posterior desactualiza evidencias hasta nueva declaracion y revision",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal evidencia revocada no restaura version anterior y bloquea integridad tecnica",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal lector y responsable revocado no registran constancias",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal exportacion real y render preservan datos, formulas inertes y estado formal",
+          "estado": "APROBADA"
+        },
+        {
+          "nombre": "C3C14 recorrido integral sobre MariaDB temporal API con JWT real: 401, lector, revisor, idempotencia y exportacion protegida",
+          "estado": "APROBADA"
+        }
+      ]
+    }
+  ],
+  "totalSQL": 162,
+  "unitarias": {
+    "estado": "APROBADA",
+    "total": 216,
+    "aprobadas": 216,
+    "fallidas": 0,
+    "omitidas": 0,
+    "casos": [
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura detecta descuadres individuales aunque el neto global cuadre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura distingue borradores, integridad y exactitud con importes grandes",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura no oculta totales al limitar las muestras",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura reutiliza reglas de calendario y devuelve fecha y advertencias sin certificar cierre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura control no disponible se informa como bloqueante: ER_NO_SUCH_TABLE",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura control no disponible se informa como bloqueante: ER_BAD_FIELD_ERROR",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura error inesperado revierte y no produce resultado parcial",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura libro ajeno no consulta ejercicios ni movimientos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura ejercicio ajeno devuelve 404",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura identificador invalido 0 no abre conexion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura identificador invalido -1 no abre conexion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura identificador invalido 1.5 no abre conexion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura identificador invalido 2147483648 no abre conexion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP exige permiso existente y no consulta sin autorizacion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza ejercicio invalido 0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza ejercicio invalido -1",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza ejercicio invalido x",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza ejercicio invalido 2147483648",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza entidad ambigua ",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza entidad ambigua ?entidad=9&entidad=10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP rechaza entidad ambigua ?entidad=-1",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C5 aritmetica y contrato de solo lectura HTTP usa empresa autorizada e impide cache compartido",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible Ingreso",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible Gasto",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible Activo",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible Pasivo",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible Otro",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "rechaza tipo incompatible capital",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "solo Capital activa es elegible, sin inferir por codigo/nombre o nivel",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "no configurada conserva null y no escribe",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cuenta valida se informa con su nivel sin certificar imputabilidad",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "configuracion invalida se rechaza: {\"id\":5,\"tipo\":\"Ingreso\",\"activa\":1,\"rol_activo\":1}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "configuracion invalida se rechaza: {\"id\":5,\"tipo\":\"Capital\",\"activa\":0,\"rol_activo\":1}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "configuracion invalida se rechaza: {\"id\":null}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "configuracion invalida se rechaza: {\"id\":5,\"tipo\":\"Capital\",\"activa\":1,\"rol_activo\":0}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "esquema ausente no se instala ni se confunde con cuenta valida",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "error inesperado no se oculta como falta de configuracion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "guard HTTP no permite lectura ni escritura sin permiso de consulta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "HTTP rechaza cuerpo extra, cuenta invalida y entidad duplicada",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "fallo de escritura hace rollback sin commit",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "si falla auditoria la configuracion no se confirma",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz deriva empresa y actor del guard, no del cliente",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz POST delega permisos y contrato al servicio transaccional",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz rechaza ambitos ambiguos y ejercicio invalido",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz rechazo del guard no lee expediente",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz errores de contrato y migracion son explicitos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 HTTP e interfaz interfaz accesible no ofrece aprobacion formal",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental rechaza corrupcion historica aun con sucesora integra",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental rechaza huecos y versiones duplicadas",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental revocacion no restaura una version anterior",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental detecta huellas desactualizadas",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental referencia y hash no conceden verificacion ni autenticidad",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C12 integridad documental contrato rechaza campos desconocidos y estados formales",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 raíz versión cero permanece intacta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 resuelve rectificación explícita sin modificar originales",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"version\":2}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"ejercicioId\":3}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"asientoId\":2}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"huellaAnterior\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"claseAnterior\":\"REGULARIZACION\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"registradoPor\":41}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"justificacion\":\"corta\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"tipo\":\"APROBACION\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"tipo\":\"REVISION_DOCUMENTAL\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 cadena incompatible falla cerrada {\"referencia\":\"\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 revisión conserva clasificación y puede renovar huella",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 volver a clasificación original conserva todas las transiciones",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "cadena documental C3C10 no sana una raíz corrupta o un prefijo inválido",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "HTTP delega tenant, libro, ejercicio, actor y cuerpo al servicio separado",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "denegación del guard impide revisión",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "errores HTTP seguros {\"status\":409}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "errores HTTP seguros {\"status\":403}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "errores HTTP seguros {\"name\":\"ZodError\",\"message\":\"[]\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "errores HTTP seguros {\"code\":\"ER_NO_SUCH_TABLE\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "errores HTTP seguros {}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "presenta historial y diferencias, sin aprobación formal ni escritura para lector",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 normaliza identidad de política y clave; nominales explícitas sin duplicados",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"aprobada\":true}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"contabilizar\":true}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"empresaId\":8}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"tratamientoSignos\":\"RESULTADO_ABSOLUTO\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"justificacion\":\"   \"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"cuentasNominales\":[]}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"reglasVigencia\":\"   \"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no admite autoridad, reglas o cuentas implícitas: {\"confirmacion\":\"APROBADA\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 estados separan revisión técnica, pendientes y resolución, sin aprobación",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 actor 41 no puede autorrevisar o asumir revisión",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 actor 44 no puede autorrevisar o asumir revisión",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 solo revisión técnica designada con condiciones verificadas",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 solo resolutor puede DEVOLVER",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 solo resolutor puede RECHAZAR",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 solo resolutor puede DEJAR_PENDIENTE",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 pendiente formal exige revisión previa y no se repite",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 estado terminal DEVUELTA no se reabre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 estado terminal RECHAZADA no se reabre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 estado terminal INVALIDADA no se reabre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 invalidar solo con obsolescencia y responsabilidad explícita",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 roles coincidentes son conflicto aunque el actor tenga permisos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "contratos y estados C3C11 no existe operación API de aprobación formal",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP consulta usa ámbito tenant y no se contamina con empresa proporcionada",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP escritura deriva actor del guard y delega validación explícita",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP denegación del guard no llega al servicio, escritura=false",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP denegación del guard no llega al servicio, escritura=true",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP ejercicio inválido 0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP ejercicio inválido abc",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP ejercicio inválido 2147483648",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP entidad inválida o ambigua ",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP entidad inválida o ambigua ?entidad=0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP entidad inválida o ambigua ?entidad=9&entidad=10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"name\":\"ZodError\",\"message\":\"[]\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"status\":403}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"status\":404}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"status\":409}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"status\":422}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {\"code\":\"ER_NO_SUCH_TABLE\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C11 HTTP respuesta segura {}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "render identifica estados sin botones de aprobación ni contabilización",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos contrato estricto e idempotencia normalizada",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"aprobado\":true}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"empresaId\":8}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"contabilizar\":true}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"accion\":\"APROBAR\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"confirmacion\":\"APROBACION_FORMAL\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"versionEsperada\":-1}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"huellaIntegral\":\"abc\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"justificacion\":\"corta\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos rechaza autoridad o campos fuera del contrato {\"solicitudId\":\"0\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos compara componentes incluso eliminados o añadidos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 contratos solo revisor distinto de preparador y responsables elegibles",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP deriva tenant y actor del guard, cabeceras privadas",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP POST delega permiso, contrato y concurrencia a transaccion",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9&entidad=10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9&formato=pdf",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9&formato=xlsx",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP rechaza ámbito/formato ambiguo http://local?entidad=9&formato=xlsx&solicitud=1&solicitud=2",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP guard denegado no lee ni escribe",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP errores controlados {\"name\":\"ZodError\",\"message\":\"[]\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP errores controlados {\"status\":409}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP errores controlados {\"code\":\"ER_NO_SUCH_TABLE\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP errores controlados {}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP Excel limitado a solicitud del ámbito y nombre seguro",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C13 HTTP interfaz inicial no ofrece aprobación formal",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura cuadra utilidad/perdida/centavos 1500.00 900.00",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura cuadra utilidad/perdida/centavos 40.00 100.00",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura cuadra utilidad/perdida/centavos 0.30 0.10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura resultado cero no fabrica contrapartida ni linea cero",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura sin saldos no propone movimientos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura saldos contrarios conservan signo e historia no participa",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura sin cuenta no inventa contrapartida",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura cuenta nominal no es cuenta de resultado",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura bloqueo tecnico PERIODOS_NO_CERRADOS impide propuesta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura bloqueo tecnico ASIENTOS_DESCUADRADOS impide propuesta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura bloqueo tecnico INTEGRIDAD_MOVIMIENTOS impide propuesta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura bloqueo tecnico CUENTA_RESULTADO_INVALIDA impide propuesta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura clasificacion insuficiente e inactiva con saldo bloquean",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura no oculta inconsistencia del neto calculado",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura advierte imposibilidad de identificar regularizaciones e indicios aun con neto cero",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 propuesta pura cuadre no aprueba politica ni contabiliza y conserva ambito",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia huella estable por claves y sensible a condiciones y orden de movimientos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia historia sin metadatos es NO VERIFICADA, no NORMAL ni regularizacion por nombre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia cuenta resultado solo es indicio aun con neto cero",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia metadato explicito documentado identifica REGULARIZACION",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia metadato explicito documentado identifica NORMAL",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia emision controlada tiene soporte sin inferencias",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia evidencia incompatible no certifica origen {\"huella\":\"0000000000000000000000000000000000000000000000000000000000000000\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia evidencia incompatible no certifica origen {\"ejercicioId\":2}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia evidencia incompatible no certifica origen {\"fuente\":\"NOMBRE_CUENTA\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia evidencia incompatible no certifica origen {\"referencia\":\"\"}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia evidencia incompatible no certifica origen {\"registradoPor\":0}",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia metadatos duplicados y asiento alterado no verifican procedencia",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 contrato y procedencia borrador contable no adquiere procedencia registrada",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP permiso lectura es requisito previo, guardar=false",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP permiso lectura es requisito previo, guardar=true",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP ejercicio invalido 0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP ejercicio invalido abc",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP ejercicio invalido 2147483648",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP libro ambiguo/invalido ",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP libro ambiguo/invalido ?entidad=0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP libro ambiguo/invalido ?entidad=9&entidad=10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP GET deriva empresa de sesion e ignora aprobaciones aportadas",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP POST delega autorizacion especifica al servicio y no admite bypass Admin en helper",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP endpoint documental separado delega actor y ambito",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C9 HTTP validacion 400, conflicto 409 y falta de esquema 503 sin detalles internos",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "presentacion distingue preparacion, aprobacion, origen y contabilizacion sin acciones reales",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET comparte permiso de consulta y no inicia lectura si se deniega",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET rechaza ejercicio invalido 0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET rechaza ejercicio invalido abc",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET rechaza ejercicio invalido 2147483648",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET no acepta ambito ambiguo",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET usa empresa de sesion, una transaccion y presenta propuesta sin acciones de escritura",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C8 HTTP y presentación GET sin configuracion muestra razon sin propuesta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro ingreso 100.00 gasto 40.00 resultado 60.00",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro ingreso 40.00 gasto 100.00 resultado -60.00",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro saldos contrarios conservan signo e invierten la columna correcta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro historico separado y cuentas sin movimientos no alteran el resultado",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro no infiere clasificaciones ni cuentas de resultado por codigo o nombre",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 calculo puro precision grande e inactiva con saldo",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP una sola transaccion compartida con C3C5 y sin propuesta completa",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP descuadre bloquea confiabilidad y nunca se fabrica contrapartida",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP no oculta movimientos cuya cuenta no pertenece al catalogo autorizado",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP errores cancelan la transaccion sin devolver datos parciales",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP identificador invalido 0 no consulta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP identificador invalido -1 no consulta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP identificador invalido 1.5 no consulta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP identificador invalido 2147483648 no consulta",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP exige permiso de calendario",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida ejercicio 0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida ejercicio -1",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida ejercicio abc",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida ejercicio 2147483648",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida entidad ",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida entidad ?entidad=0",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP valida entidad ?entidad=9&entidad=10",
+        "estado": "APROBADA"
+      },
+      {
+        "nombre": "C3C6 servicio y HTTP HTTP usa empresa de sesion y cache privado",
+        "estado": "APROBADA"
+      }
+    ]
+  },
+  "intentosFallidos": [
+    {
+      "suite": "c3c6",
+      "estado": "FALLIDA",
+      "capa": "preparacion SQL temporal, sin results.json",
+      "directorio": "novalvion-c3c2-1651cd6dcb094b50a781dad2b220660b",
+      "error": "EE_DELETE",
+      "cierre": "shutdown-confirmed",
+      "resolucion": "Repeticion secuencial en instancia nueva aprobada"
+    },
+    {
+      "suite": "c3c9",
+      "estado": "FALLIDA",
+      "capa": "preflight SQL temporal, antes de tests",
+      "directorio": "novalvion-c3c2-7812b31a4a1943ff9f6612cd64c622e8",
+      "error": "C3C1_SHUTDOWN_UNCONFIRMED",
+      "observado": "server.log registra ha_maria::drop_table durante SELECT de information_schema, codigo 3221225477; shutdown-failed",
+      "resolucion": "Repeticion secuencial en instancia nueva aprobada; causa raiz no confirmada"
+    }
+  ],
+  "c3c15Funcional": "NO APROBADO; pruebas obligatorias de usuario final NO EJECUTADAS"
+}
