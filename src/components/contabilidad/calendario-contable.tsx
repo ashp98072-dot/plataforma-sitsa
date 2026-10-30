@@ -1,4 +1,5 @@
 "use client";
+import { PrecontablePanel } from './precontable';
 import { ExpedientesPanel } from './expedientes';
 
 
@@ -90,6 +91,7 @@ export function CalendarioLibro({ slug, entidadId, puedeCrear }: { slug: string;
     {ejercicio && <DiagnosticoCierrePanel key={`${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`sim:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <RegularizacionPanel key={`propuesta:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio} propuesta/>}
+    {ejercicio && <PrecontablePanel key={`precontable:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <ExpedientesPanel key={slug+entidadId+ejercicio} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <PoliticasAutorizacionPanel key={`politicas:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
     {ejercicio && <PreparacionRegularizacionPanel key={`preparacion:${slug}:${entidadId}:${ejercicio}`} slug={slug} entidadId={entidadId} ejercicioId={ejercicio}/>}
