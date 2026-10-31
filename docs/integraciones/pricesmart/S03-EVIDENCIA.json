@@ -1,0 +1,300 @@
+{
+  "date": "2026-10-31",
+  "timezone": "America/Guatemala",
+  "scope": "S03 static/offline proposal only",
+  "base": "492dd7c3dc83e434b504f3827652cc6a5785be49",
+  "s02Head": "137f48151b82e81d4c87cdb3feb3f134c190d4f5",
+  "s02Included": true,
+  "s02FilesUnchanged": true,
+  "s02FileCount": 26,
+  "lockfileSha256": "d41410a952adfd432b3f2ee7de20a9ef161c4d0554e532e2a28245082965c3e9",
+  "dependencies": {
+    "method": "Reuse local S02 node_modules through ignored junction; identical lockfile; no install/download in S03",
+    "node": "v24.18.0",
+    "vitest": "4.1.12",
+    "next": "16.4.1"
+  },
+  "tests": {
+    "passed": 237,
+    "failed": 0,
+    "pending": 0,
+    "files": [
+      {
+        "file": "scripts/infra/pricesmart-s03.test.mjs",
+        "status": "passed",
+        "passed": 42,
+        "tests": [
+          {
+            "name": "S03 proposed infrastructure, offline only accepts the private review profile without installing anything",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only materialized synthetic templates pass the EXISTING S02 validator",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only unprovisioned placeholders fail S02 rather than creating resources",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only a reviewed template with a mismatched manifest still fails S02",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects external target",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects public ingress",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects PriceSmart activation",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects ratified decisions",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects foreign data path",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects foreign SQL database",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects manifest drift",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects real secret in template",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects inherited proxy",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects missing mode",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects duplicate mode",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects root runtime",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects alternate start path",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects extra privileged command",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects writable manifest parent",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects missing firewall dependency",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects separate runtime namespace breaks DB loopback",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects outbound public allow",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects default outbound allow",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects DNS bypass",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects firewall stop removes rules",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects public MariaDB",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects public TLS",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects schema-wide grants",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects marker writable",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects old database adoption",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only rejects CI scripts in artifact",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only clean build input passes without runtime credentials",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects DB_PASSWORD even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects NOVALVION_ENV even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects SANDBOX_ID even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects AUTH_SECRET even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects NODE_OPTIONS even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects HTTPS_PROXY even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects NEXT_PUBLIC_SECRET even empty",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects an env file before launching Next",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only build rejects ancestor persistent configuration",
+            "status": "passed"
+          },
+          {
+            "name": "S03 proposed infrastructure, offline only root identities have no login shell and runtime is not in privileged groups",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "file": "src/lib/sandbox-isolation.test.ts",
+        "status": "passed",
+        "passed": 53
+      },
+      {
+        "file": "src/lib/sandbox-startup.test.ts",
+        "status": "passed",
+        "passed": 15
+      },
+      {
+        "file": "src/lib/session-tokens.test.ts",
+        "status": "passed",
+        "passed": 4
+      },
+      {
+        "file": "src/lib/uploads.test.ts",
+        "status": "passed",
+        "passed": 47
+      },
+      {
+        "file": "src/lib/rrhh/foto-empleado-miniatura.test.ts",
+        "status": "passed",
+        "passed": 17
+      },
+      {
+        "file": "src/lib/rrhh/foto-empleado.test.ts",
+        "status": "passed",
+        "passed": 9
+      },
+      {
+        "file": "src/lib/flota/cb2/http-origin.test.ts",
+        "status": "passed",
+        "passed": 19
+      },
+      {
+        "file": "src/lib/flota/cb2/origin.test.ts",
+        "status": "passed",
+        "passed": 31
+      }
+    ],
+    "detail": "S03 cases listed individually; unchanged S02 suite summarized by file (195 pass)."
+  },
+  "staticChecks": [
+    {
+      "name": "eslint",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "bash-syntax",
+      "exitCode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "name": "plan",
+      "exitCode": 0,
+      "stdout": "{\n  \"result\": \"PASS_STATIC_ONLY\",\n  \"profile\": \"pricesmart-qa\",\n  \"externalDestinations\": 0,\n  \"services\": [\n    \"app\",\n    \"db\",\n    \"proxy\",\n    \"firewall\",\n    \"build\",\n    \"backup\"\n  ],\n  \"s02Controls\": \"reused unchanged\",\n  \"decisions\": \"D01-D16_PENDING_RATIFICATION\"\n}",
+      "stderr": ""
+    }
+  ],
+  "typescript": {
+    "command": "node node_modules/typescript/bin/tsc --noEmit --incremental false",
+    "exitCode": 0
+  },
+  "inventory": {
+    "filesScanned": 1298,
+    "runtimeAssertions": {
+      "soleConstructor": true,
+      "soleDriverImport": true,
+      "noAppSubprocesses": true
+    },
+    "runtimeDriverImports": [
+      {
+        "file": "src/lib/db.ts",
+        "line": 1,
+        "module": "mysql2/promise"
+      }
+    ],
+    "runtimeConstructors": [
+      {
+        "file": "src/lib/db.ts",
+        "line": 31,
+        "call": "mysql.createPool"
+      }
+    ],
+    "runtimeSubprocesses": []
+  },
+  "notExecuted": [
+    "Linux systemd-analyze verify/security",
+    "nft --check and effective packet filtering",
+    "nginx -t and TLS",
+    "MariaDB bootstrap SQL grants and identity real",
+    "Linux build and reduced runtime artifact launch",
+    "Backup encryption and restore",
+    "VM provisioning and permissions",
+    "Private operator access"
+  ],
+  "decisions": "D01-D16_PENDING_RATIFICATION",
+  "productionResourcesUsed": false,
+  "s02Comparison": "Git blob hashes after working-tree clean filters (CRLF-safe), 26 files"
+}

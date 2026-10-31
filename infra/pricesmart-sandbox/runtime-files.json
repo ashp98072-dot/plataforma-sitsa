@@ -1,0 +1,5 @@
+{
+  "directories": [".next", "public", "node_modules"],
+  "files": ["package.json", "package-lock.json", "next.config.ts", "scripts/start-sandbox.mjs", "scripts/start-hostinger.mjs", "scripts/sandbox-config.mjs"],
+  "forbidden": [".git", "src", "sql", "docs", "infra", "scripts/ci", "scripts/init-db.mjs", "scripts/crear-colaborador-prueba.mjs", "scripts/pack-hostinger.mjs", ".env", "uploads"]
+}

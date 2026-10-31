@@ -1,0 +1,31 @@
+[Unit]
+Description=Private loopback TLS for Novalvion sandbox
+Requires=novalvion-ps-firewall.service novalvion-ps-app.service
+After=novalvion-ps-firewall.service novalvion-ps-app.service
+Conflicts=novalvion-ps-backup.service
+
+[Service]
+Type=simple
+User=novalvion-ps-proxy
+Group=novalvion-ps-proxy
+UMask=0077
+ExecStart=/usr/sbin/nginx -c /etc/novalvion-ps-sandbox/nginx.conf -g "daemon off;"
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+RuntimeDirectory=novalvion-ps-proxy
+RuntimeDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+ReadWritePaths=/run/novalvion-ps-proxy
+InaccessiblePaths=/srv/novalvion-ps-sandbox /var/lib/novalvion-ps-db /var/backups/novalvion-ps-sandbox /opt/novalvion-ps-sandbox
+
+[Install]
+WantedBy=multi-user.target

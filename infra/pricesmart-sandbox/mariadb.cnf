@@ -1,0 +1,16 @@
+[mariadbd]
+bind-address=127.0.0.1
+port=43306
+datadir=/var/lib/novalvion-ps-db
+socket=/run/novalvion-ps-db/mariadb.sock
+pid-file=/run/novalvion-ps-db/mariadb.pid
+skip-name-resolve
+local-infile=0
+skip-symbolic-links
+event-scheduler=OFF
+general-log=0
+slow-query-log=0
+max-connections=40
+character-set-server=utf8mb4
+collation-server=utf8mb4_unicode_ci
+# No include dirs, replication, production credentials or remote listeners.

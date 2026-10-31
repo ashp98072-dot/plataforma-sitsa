@@ -1,0 +1,36 @@
+[Unit]
+Description=Exclusive Novalvion sandbox MariaDB
+Requires=novalvion-ps-firewall.service
+After=novalvion-ps-firewall.service
+
+[Service]
+Type=notify
+User=novalvion-ps-db
+Group=novalvion-ps-db
+UMask=0077
+ExecStart=/usr/sbin/mariadbd --defaults-file=/etc/novalvion-ps-sandbox/mariadb.cnf
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=120
+KillMode=control-group
+RuntimeDirectory=novalvion-ps-db
+RuntimeDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+ReadWritePaths=/var/lib/novalvion-ps-db /run/novalvion-ps-db
+InaccessiblePaths=/srv/novalvion-ps-sandbox /opt/novalvion-ps-sandbox /var/backups/novalvion-ps-sandbox
+
+[Install]
+WantedBy=multi-user.target

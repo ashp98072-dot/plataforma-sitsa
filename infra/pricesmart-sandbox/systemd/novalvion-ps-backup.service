@@ -1,0 +1,24 @@
+[Unit]
+Description=Offline encrypted sandbox backup; leaves application stopped
+Requires=novalvion-ps-db.service
+After=novalvion-ps-db.service novalvion-ps-app.service novalvion-ps-proxy.service
+Conflicts=novalvion-ps-app.service novalvion-ps-proxy.service
+
+[Service]
+Type=oneshot
+# Backup is an operator-only privileged task, NOT the application identity.
+User=root
+UMask=0077
+ExecStart=/usr/local/libexec/novalvion-ps-backup
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ReadWritePaths=/var/backups/novalvion-ps-sandbox
+InaccessiblePaths=/etc/novalvion-ps-sandbox/runtime.env /etc/novalvion-ps-sandbox/tls /opt/novalvion-ps-sandbox /var/lib/novalvion-ps-db
+TimeoutStartSec=1800
+# No timer and no automatic retention/deletion until backup policy is approved.

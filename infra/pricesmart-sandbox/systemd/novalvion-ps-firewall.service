@@ -1,0 +1,19 @@
+[Unit]
+Description=Novalvion sandbox dedicated VM deny-by-default firewall
+Before=novalvion-ps-db.service novalvion-ps-app.service novalvion-ps-proxy.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/sbin/nft -f /etc/novalvion-ps-sandbox/nftables.conf
+RemainAfterExit=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# No ExecStop: stopping a unit must NEVER remove isolation.
+
+[Install]
+WantedBy=multi-user.target

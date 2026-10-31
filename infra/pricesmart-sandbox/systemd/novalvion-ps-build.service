@@ -1,0 +1,23 @@
+[Unit]
+Description=Offline sandbox build from sanitized source (manual only)
+
+[Service]
+Type=oneshot
+User=novalvion-ps-build
+Group=novalvion-ps-build
+UMask=0077
+WorkingDirectory=/var/lib/novalvion-ps-build/source
+# env -i drops the manager environment. No runtime EnvironmentFile here.
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent NEXT_TELEMETRY_DISABLED=1 /usr/bin/node scripts/infra/pricesmart-build.mjs
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/novalvion-ps-build/source
+InaccessiblePaths=/srv/novalvion-ps-sandbox /etc/novalvion-ps-sandbox /var/lib/novalvion-ps-db /var/backups/novalvion-ps-sandbox
+TimeoutStartSec=1800
+# No Install section: never build on boot or as the runtime user.

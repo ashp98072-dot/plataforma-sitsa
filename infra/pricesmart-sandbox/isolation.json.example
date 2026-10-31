@@ -1,0 +1,11 @@
+{
+  "environment": "sandbox",
+  "id": "pricesmart-qa",
+  "database": {"DB_HOST": "127.0.0.1", "DB_PORT": "43306", "DB_NAME": "sandbox_pricesmart", "DB_USER": "sandbox_pricesmart"},
+  "origin": "https://localhost:4316",
+  "secretSha256": {
+    "AUTH_SECRET": "@AUTH_SECRET_SHA256@",
+    "DB_PASSWORD": "@DB_PASSWORD_SHA256@",
+    "PORTAL_CREDENTIALS_KEY": "@PORTAL_CREDENTIALS_KEY_SHA256@"
+  }
+}
