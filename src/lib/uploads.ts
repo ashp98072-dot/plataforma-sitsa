@@ -7,6 +7,7 @@ import {
 import { writeFile } from "fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "path";
 import { randomBytes } from "crypto";
+import { assertSandboxPath, sandboxMode, validateSandboxConfig } from "../../scripts/sandbox-config.mjs";
 import { EXT_PERMITIDAS, MAX_UPLOAD_BYTES } from "@/lib/uploads-constants";
 
 // RRHH-EXPEDIENTES-UPLOAD-STABILITY: re-exportadas tal cual desde
@@ -71,6 +72,7 @@ export { EXT_PERMITIDAS, MAX_UPLOAD_BYTES };
  *      - fuera de producción: `cwd/uploads` (desarrollo local).
  */
 export function getUploadsRoot(): string {
+  if (sandboxMode()) return validateSandboxConfig()!.uploads;
   if (process.env.UPLOAD_DIR?.trim()) {
     return resolve(process.env.UPLOAD_DIR.trim());
   }
@@ -103,6 +105,7 @@ export function getUploadsRoot(): string {
 export function absPathFromRelative(relative: string): string {
   const root = getUploadsRoot();
   const abs = resolve(root, relative);
+  if (sandboxMode()) return assertSandboxPath(root, abs);
   const rootNorm = root.endsWith(sep) ? root : root + sep;
   if (abs !== root && !abs.startsWith(rootNorm) && !abs.startsWith(root)) {
     throw new Error("Ruta de archivo inválida.");
@@ -230,6 +233,7 @@ export function verificarDirectorioPadreReal(empresaId: number, absPath: string)
 }
 
 export function ensureDir(dir: string): void {
+  if (sandboxMode()) assertSandboxPath(getUploadsRoot(), resolve(dir));
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 }
 
@@ -327,6 +331,7 @@ export async function guardarUpload(
   // (req.formData() ya materializa el archivo completo antes de llegar
   // aquí) y no hay un patrón de streaming ya existente en el repo para
   // reutilizar; ver el reporte final.
+  if (sandboxMode()) assertSandboxPath(root, resolve(abs));
   await writeFile(abs, buffer);
 
   return {
@@ -408,6 +413,7 @@ export async function guardarUploadExcel(
 
   ensureDir(dirname(abs));
 
+  if (sandboxMode()) assertSandboxPath(root, resolve(abs));
   await writeFile(abs, buffer);
 
   return {

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { spawn } from "child_process";
+import { sandboxMode, validateSandboxConfig } from "./sandbox-config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
@@ -40,8 +41,13 @@ const candidates = [
   join(root, ".env"),
 ];
 
-for (const file of candidates) {
-  if (loadEnvFile(file)) break;
+if (sandboxMode()) {
+  validateSandboxConfig(process.env, root);
+} else {
+  for (const file of candidates) {
+    if (loadEnvFile(file)) break;
+  }
+  if (sandboxMode()) throw new Error("El modo sandbox debe definirse fuera de archivos env.");
 }
 
 if (!process.env.DB_USER) {
@@ -52,7 +58,7 @@ if (!process.env.DB_USER) {
 
 const port = process.env.PORT || "3000";
 const nextBin = join(root, "node_modules", "next", "dist", "bin", "next");
-const child = spawn(process.execPath, [nextBin, "start", "-p", String(port)], {
+const child = spawn(process.execPath, [nextBin, "start", "-p", String(port), ...(sandboxMode() ? ["-H", "127.0.0.1"] : [])], {
   cwd: root,
   stdio: "inherit",
   env: process.env,

@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2";
 import { NextResponse } from "next/server";
 import { query } from "@/lib/db";
 import { getUploadsRoot } from "@/lib/uploads";
+import { assertSandboxPath, sandboxMode } from "../../../scripts/sandbox-config.mjs";
 import { FILTRO_FOTO_EMPLEADO } from "./foto-empleado-existencia";
 
 export const MAX_FOTO_EMPLEADO = 5 * 1024 * 1024;
@@ -24,6 +25,7 @@ export async function respuestaFotoEmpleado(empresaId: number, empleadoId: numbe
   const dir = resolve(getUploadsRoot(), "empresas", String(empresaId), "documentos");
   const archivo = resolve(getUploadsRoot(), String(rows[0].ruta_archivo));
   if (!archivo.startsWith(dir + sep)) throw new Error("Ruta de fotografía inválida.");
+  if (sandboxMode()) assertSandboxPath(getUploadsRoot(), archivo);
   try {
     const info = await stat(archivo);
     if (!info.isFile() || info.size > MAX_FOTO_EMPLEADO) return NextResponse.json({ error: "Fotografía no disponible." }, { status: 404, headers: privadas });

@@ -9,6 +9,8 @@
 // de `empleados`) — usa uno que ya exista y solo le crea el acceso al portal
 // en `colaborador_credenciales`.
 
+import { sandboxMode } from "./sandbox-config.mjs";
+if (sandboxMode()) throw new Error("Script de colaboradores no permitido en sandbox.");
 import { createHash, randomBytes } from "crypto";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
@@ -19,6 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 config({ path: join(root, ".env.local") });
 config({ path: join(root, ".env") });
+if (sandboxMode()) throw new Error("Script de colaboradores no permitido en sandbox.");
 
 // Mismo algoritmo que @/lib/password (así lo usan admin/rrhh en init-db.mjs).
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {

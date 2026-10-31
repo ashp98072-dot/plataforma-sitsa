@@ -38,7 +38,19 @@ export const DOMINIOS_DEFAULT: Record<string, string> = {
   // "www.fuginsa.com": "francisco",
 };
 
+import { isSandbox } from "./runtime-environment";
+
 export function mapaDominios(): Record<string, string> {
+  if (isSandbox()) {
+    let parsed;
+    try { parsed = JSON.parse(process.env.EMPRESA_DOMINIOS ?? "null"); }
+    catch { throw new Error("Dominios sandbox inválidos."); }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object" ||
+        Object.entries(parsed).some(([host, slug]) => !["localhost", "127.0.0.1", "[::1]"].includes(host) || slug !== "kt-monaco")) {
+      throw new Error("Dominios sandbox inválidos.");
+    }
+    return parsed;
+  }
   const raw = process.env.EMPRESA_DOMINIOS?.trim();
   if (raw) {
     try {

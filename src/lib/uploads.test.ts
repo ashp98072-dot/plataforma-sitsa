@@ -14,18 +14,16 @@ import {
 } from "./uploads";
 
 /**
- * ADMIN-LIMPIAR-ARCHIVOS-FISICOS (hardening symlinks) — crear symlinks sin
- * privilegios de administrador está bloqueado (EPERM) en Windows salvo que
- * el "Modo desarrollador" esté activo. Se detecta UNA vez aquí (no en cada
- * test) para saltar (`skipIf`), nunca fallar, los tests que dependen de
- * symlinks reales en un entorno donde el sistema operativo los deniega —
- * el resto de la suite (incluida la ruta NO-symlink de
- * verificarDirectorioPadreReal) sigue corriendo siempre.
+ * Directory-link tests use actual junctions on Windows and directory symlinks
+ * on POSIX. Both exercise realpath escapes without enabling Developer Mode or
+ * changing system privileges. Probe the same link type used by the tests.
  */
+const DIRECTORY_LINK = process.platform === "win32" ? "junction" : "dir";
 function symlinksSoportados(): boolean {
   const probe = mkdtempSync(join(tmpdir(), "sitsa-symlink-probe-"));
   try {
-    symlinkSync(join(probe, "destino-inexistente"), join(probe, "enlace"));
+    mkdirSync(join(probe, "destino"));
+    symlinkSync(join(probe, "destino"), join(probe, "enlace"), DIRECTORY_LINK);
     return true;
   } catch {
     return false;
@@ -226,7 +224,7 @@ describe("verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (harde
   it.skipIf(!SYMLINKS_OK)("'rechazado' cuando el directorio padre es un symlink que resuelve FUERA de la raíz de la empresa", () => {
     const afuera = mkdtempSync(join(tmpdir(), "sitsa-afuera-"));
     mkdirSync(join(dir, "empresas", "7"), { recursive: true });
-    symlinkSync(afuera, join(dir, "empresas", "7", "evidencias"));
+    symlinkSync(afuera, join(dir, "empresas", "7", "evidencias"), DIRECTORY_LINK);
     const abs = absPathFromRelative("empresas/7/evidencias/a.jpg");
     const r = verificarDirectorioPadreReal(7, abs);
     expect(r.estado).toBe("rechazado");
@@ -235,7 +233,7 @@ describe("verificarDirectorioPadreReal — ADMIN-LIMPIAR-ARCHIVOS-FISICOS (harde
 
   it.skipIf(!SYMLINKS_OK)("'ok' cuando el symlink intermedio resuelve DENTRO de la propia raíz de la empresa", () => {
     mkdirSync(join(dir, "empresas", "7", "evidencias-real"), { recursive: true });
-    symlinkSync(join(dir, "empresas", "7", "evidencias-real"), join(dir, "empresas", "7", "evidencias-alias"));
+    symlinkSync(join(dir, "empresas", "7", "evidencias-real"), join(dir, "empresas", "7", "evidencias-alias"), DIRECTORY_LINK);
     const abs = absPathFromRelative("empresas/7/evidencias-alias/a.jpg");
     expect(verificarDirectorioPadreReal(7, abs)).toEqual({ estado: "ok" });
   });
