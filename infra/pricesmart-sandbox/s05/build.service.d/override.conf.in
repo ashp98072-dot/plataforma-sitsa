@@ -1,0 +1,5 @@
+# PROPOSAL ONLY. Source must be a new stage, dependencies installed offline beforehand.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent NEXT_TELEMETRY_DISABLED=1 /usr/bin/node scripts/sandbox-s05/build.mjs /var/lib/novalvion-ps-build/source/artifact REPLACE_WITH_REVIEWED_40_HEX_COMMIT
+# S03 PrivateNetwork, InaccessiblePaths, user and capability restrictions remain mandatory.

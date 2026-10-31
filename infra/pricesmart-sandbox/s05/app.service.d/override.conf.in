@@ -1,0 +1,8 @@
+# PROPOSAL ONLY. S06 must replace the digest out of band after independent review.
+# Preserve every S03 restriction, especially KillMode=control-group and Restart limits.
+[Service]
+ExecStart=
+ExecStart=/usr/bin/node scripts/start-sandbox-s05.mjs
+Environment=S05_ARTIFACT_SHA256=REPLACE_WITH_INDEPENDENTLY_APPROVED_SHA256
+# Block file uploads as well as SQL writes. No expansion of S03 writable paths.
+ReadOnlyPaths=/srv/novalvion-ps-sandbox/uploads
