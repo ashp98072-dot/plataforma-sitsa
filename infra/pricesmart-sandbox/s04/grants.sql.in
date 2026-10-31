@@ -1,0 +1,28 @@
+-- REVIEW ONLY: future S06, never execute directly.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='S04_REQUIRES_APPROVED_NEW_INSTANCE';
+GRANT SELECT ON `sandbox_pricesmart`.`novalvion_environment` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`empresas` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`usuarios` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`usuario_empresa` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`usuario_modulo` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`auditoria` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`clientes` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`empleados` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_clientes` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_lugares` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`flota_vehiculos` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_unidades` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_personal` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`flota_vehiculo_acceso` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_ubicaciones` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_contactos` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_rutas` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_ruta_personal` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_ruta_paradas` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_ruta_tarifas` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_ruta_tarifas` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cliente_usuarios` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_cotizacion_costeo_perfiles` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_planes_viaje` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_solicitudes_cliente` TO 'sandbox_pricesmart'@'127.0.0.1';
+GRANT SELECT ON `sandbox_pricesmart`.`tms_solicitud_paradas` TO 'sandbox_pricesmart'@'127.0.0.1';

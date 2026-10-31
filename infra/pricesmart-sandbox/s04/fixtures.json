@@ -1,0 +1,293 @@
+{
+  "kind": "SYNTHETIC_ONLY_S04",
+  "branchesRepresentation": "tms_lugares and tms_cliente_ubicaciones; no standalone sucursales entity exists",
+  "tables": {
+    "empresas": [
+      {
+        "id": 710001,
+        "codigo": "QA_MONACO_S04",
+        "nombre": "QA Monaco Laboratorio S04 - FICTICIO",
+        "slug": "kt-monaco",
+        "activa": 1,
+        "modulos_json": "[\"tms\",\"clientes\",\"flota\",\"programacion\"]"
+      },
+      {
+        "id": 710002,
+        "codigo": "QA_DENIED_S04",
+        "nombre": "QA Tenant Denegado - FICTICIO",
+        "slug": "qa-denied-s04",
+        "activa": 1,
+        "modulos_json": "[\"tms\"]"
+      }
+    ],
+    "usuarios": [
+      {
+        "id": 720001,
+        "username": "qa-s04-reader",
+        "password_hash": "@HASH:qa-s04-reader@",
+        "salt": "@SALT:qa-s04-reader@",
+        "nombre": "QA Lector Ficticio",
+        "email": "reader@example.invalid",
+        "rol_global": "Visualizador",
+        "activo": 1,
+        "acceso_todas_empresas": 0
+      },
+      {
+        "id": 720002,
+        "username": "qa-s04-other",
+        "password_hash": "@HASH:qa-s04-other@",
+        "salt": "@SALT:qa-s04-other@",
+        "nombre": "QA Otro Tenant Ficticio",
+        "email": "other@example.invalid",
+        "rol_global": "Visualizador",
+        "activo": 1,
+        "acceso_todas_empresas": 0
+      }
+    ],
+    "usuario_empresa": [
+      {
+        "usuario_id": 720001,
+        "empresa_id": 710001
+      },
+      {
+        "usuario_id": 720002,
+        "empresa_id": 710002
+      }
+    ],
+    "usuario_modulo": [
+      {
+        "id": 730001,
+        "usuario_id": 720001,
+        "empresa_id": null,
+        "modulo": "tms",
+        "puede_ver": 1,
+        "puede_crear": 0,
+        "puede_editar": 0,
+        "puede_eliminar": 0
+      },
+      {
+        "id": 730002,
+        "usuario_id": 720001,
+        "empresa_id": null,
+        "modulo": "programacion",
+        "puede_ver": 1,
+        "puede_crear": 0,
+        "puede_editar": 0,
+        "puede_eliminar": 0
+      },
+      {
+        "id": 730003,
+        "usuario_id": 720001,
+        "empresa_id": null,
+        "modulo": "clientes",
+        "puede_ver": 1,
+        "puede_crear": 0,
+        "puede_editar": 0,
+        "puede_eliminar": 0
+      },
+      {
+        "id": 730004,
+        "usuario_id": 720001,
+        "empresa_id": null,
+        "modulo": "flota",
+        "puede_ver": 1,
+        "puede_crear": 0,
+        "puede_editar": 0,
+        "puede_eliminar": 0
+      }
+    ],
+    "empleados": [
+      {
+        "id": 740001,
+        "empresa_id": 710001,
+        "codigo": "QA-PILOTO-01",
+        "nombre": "QA Piloto Ficticio S04",
+        "categoria_ops": "Piloto",
+        "estado": "Activo"
+      }
+    ],
+    "tms_clientes": [
+      {
+        "id": 750001,
+        "empresa_id": 710001,
+        "nombre": "QA Cliente Ficticio S04",
+        "estado": "Activo"
+      },
+      {
+        "id": 750002,
+        "empresa_id": 710002,
+        "nombre": "QA Cliente Denegado S04",
+        "estado": "Activo"
+      }
+    ],
+    "clientes": [
+      {
+        "id": 750101,
+        "empresa_id": 710001,
+        "codigo": "QA-CLI-01",
+        "nombre": "QA Cliente Ficticio S04",
+        "email": "cliente@example.invalid",
+        "tms_cliente_id": 750001
+      }
+    ],
+    "tms_lugares": [
+      {
+        "id": 760001,
+        "empresa_id": 710001,
+        "nombre": "QA Sucursal Origen Ficticia",
+        "tipo": "Carga",
+        "direccion": "QA Direccion ficticia sin coordenadas reales"
+      },
+      {
+        "id": 760002,
+        "empresa_id": 710001,
+        "nombre": "QA Sucursal Destino Ficticia",
+        "tipo": "Descarga",
+        "direccion": "QA Direccion ficticia sin coordenadas reales"
+      }
+    ],
+    "tms_cliente_ubicaciones": [
+      {
+        "id": 761001,
+        "empresa_id": 710001,
+        "cliente_id": 750001,
+        "nombre": "QA Punto Cliente Ficticio",
+        "tipo": "AMBOS",
+        "direccion": "QA Direccion inexistente para laboratorio"
+      }
+    ],
+    "flota_vehiculos": [
+      {
+        "id": 770001,
+        "empresa_id": 710001,
+        "placa": "QA-S04-01",
+        "marca": "QA FICTICIA",
+        "modelo": "QA SINTETICO",
+        "tipo_unidad": "VEHICULO",
+        "estado": "Activo",
+        "activo": 1
+      }
+    ],
+    "tms_unidades": [
+      {
+        "id": 770101,
+        "empresa_id": 710001,
+        "placa": "QA-S04-01",
+        "flota_vehiculo_id": 770001,
+        "tipo": "Camion",
+        "estado": "Disponible"
+      }
+    ],
+    "tms_personal": [
+      {
+        "id": 740101,
+        "empresa_id": 710001,
+        "id_empleado": 740001,
+        "codigo": "QA-PILOTO-01",
+        "nombre": "QA Piloto Ficticio S04",
+        "tipo": "Piloto",
+        "estado": "Activo"
+      }
+    ],
+    "tms_cliente_contactos": [
+      {
+        "id": 762001,
+        "empresa_id": 710001,
+        "cliente_id": 750001,
+        "nombre": "QA Contacto Ficticio",
+        "email": "contacto@example.invalid"
+      }
+    ],
+    "tms_cliente_rutas": [
+      {
+        "id": 780001,
+        "empresa_id": 710001,
+        "cliente_id": 750001,
+        "codigo": "R-900001",
+        "nombre": "QA Ruta Ficticia S04",
+        "ubicacion_carga_id": 761001,
+        "unidad_recurrente_id": 770001,
+        "contacto_cliente_id": 762001,
+        "tarifa_referencia": 0,
+        "activo": 1
+      }
+    ],
+    "tms_cliente_ruta_personal": [
+      {
+        "id": 780101,
+        "empresa_id": 710001,
+        "ruta_id": 780001,
+        "empleado_id": 740001,
+        "rol": "Piloto",
+        "orden": 1,
+        "viatico_monto": 0
+      }
+    ],
+    "tms_cliente_ruta_paradas": [
+      {
+        "id": 780201,
+        "empresa_id": 710001,
+        "ruta_id": 780001,
+        "orden": 1,
+        "tipo": "Entrega",
+        "lugar_nombre": "QA Entrega Ficticia",
+        "cliente_ubicacion_id": 761001,
+        "activo": 1
+      }
+    ],
+    "tms_cliente_usuarios": [
+      {
+        "id": 790001,
+        "empresa_id": 710001,
+        "cliente_id": 750001,
+        "nombre": "QA Portal DESHABILITADO",
+        "email": "portal@example.invalid",
+        "password_hash": "@HASH:qa-s04-portal@",
+        "salt": "@SALT:qa-s04-portal@",
+        "activo": 0,
+        "debe_cambiar_password": 1
+      }
+    ],
+    "tms_solicitudes_cliente": [
+      {
+        "id": 791001,
+        "empresa_id": 710001,
+        "cliente_id": 750001,
+        "creado_por_usuario_cliente_id": 790001,
+        "estado": "SOLICITADA",
+        "fecha_solicitada": "2035-01-15",
+        "referencia_cliente": "QA-S04-SINTETICA",
+        "observaciones": "QA Sin entrega real",
+        "plan_id": null,
+        "version": 1
+      }
+    ],
+    "tms_solicitud_paradas": [
+      {
+        "id": 792001,
+        "empresa_id": 710001,
+        "solicitud_id": 791001,
+        "orden": 1,
+        "tipo": "Carga",
+        "lugar_nombre": "QA Carga Ficticia"
+      },
+      {
+        "id": 792002,
+        "empresa_id": 710001,
+        "solicitud_id": 791001,
+        "orden": 2,
+        "tipo": "Entrega",
+        "lugar_nombre": "QA Entrega Ficticia",
+        "cliente_ubicacion_id": 761001
+      },
+      {
+        "id": 792003,
+        "empresa_id": 710001,
+        "solicitud_id": 791001,
+        "orden": 3,
+        "tipo": "Descarga",
+        "lugar_nombre": "QA Descarga Ficticia"
+      }
+    ]
+  }
+}

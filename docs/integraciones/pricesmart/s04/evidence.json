@@ -1,0 +1,369 @@
+{
+  "date": "2026-10-31",
+  "timezone": "America/Guatemala",
+  "base": "99bc0799c18bc5cea1245b91a7c363173edc608e",
+  "scope": "S04 preparation for future authorized S06; no SQL engine execution",
+  "baseline": {
+    "s02AndS03Merged": true,
+    "filesCompared": 52,
+    "allUnchanged": true,
+    "comparison": "Git blob hashes with clean filters"
+  },
+  "inventory": {
+    "kind": "STATIC_SOURCE_NOT_LIVE_DATABASE",
+    "tables": 108,
+    "indexDefinitions": 337,
+    "inlineForeignKeys": 252,
+    "deferredAlters": 6,
+    "sqlFiles": 280,
+    "runtimeCandidates": 42,
+    "runtimeCandidateFiles": 12,
+    "schemaCalls": 151,
+    "qualifiedMetadataSites": 14,
+    "additionalDefinitions": 70,
+    "additionalTableNames": 64
+  },
+  "profile": {
+    "tables": 26,
+    "foreignKeys": 49,
+    "ddlStatements": 34,
+    "fixtureRows": 29,
+    "runtimeOperations": [
+      "SELECT"
+    ],
+    "markerWrites": false,
+    "runtimeAccount": "LOCKED_REQUIRES_S06",
+    "pricesmartEndpoints": false
+  },
+  "tools": {
+    "node": "v24.18.0",
+    "vitest": "4.1.12",
+    "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "method": "Ignored local junction to previously installed S03/S02 node_modules; no npm install/download",
+    "lockfileSha256": "d41410a952adfd432b3f2ee7de20a9ef161c4d0554e532e2a28245082965c3e9"
+  },
+  "tests": {
+    "passed": 295,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      {
+        "file": "scripts/infra/pricesmart-s03.test.mjs",
+        "passed": 42,
+        "status": "passed"
+      },
+      {
+        "file": "scripts/sandbox-s04/navigation.test.ts",
+        "passed": 6,
+        "status": "passed",
+        "cases": [
+          {
+            "name": "modern synthetic user authenticates with existing function using SELECT only",
+            "status": "passed"
+          },
+          {
+            "name": "invalid synthetic password is rejected without DDL or UPDATE",
+            "status": "passed"
+          },
+          {
+            "name": "existing company selector filters the synthetic user assignment in the DB double",
+            "status": "passed"
+          },
+          {
+            "name": "existing request reader and real stop validator accept synthetic request",
+            "status": "passed"
+          },
+          {
+            "name": "existing route reader uses the SELECT table allowlist without ensureSchema",
+            "status": "passed"
+          },
+          {
+            "name": "permission model denies marker update, DDL and a foreign schema",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "file": "scripts/sandbox-s04/provision.test.mjs",
+        "passed": 52,
+        "status": "passed",
+        "cases": [
+          {
+            "name": "source SQL splitter respects comments, quotes and semicolons",
+            "status": "passed"
+          },
+          {
+            "name": "source inventory and generated DDL are reproducible across CRLF and LF",
+            "status": "passed"
+          },
+          {
+            "name": "pins generated schema, FK closure and table permissions to reviewed sources",
+            "status": "passed"
+          },
+          {
+            "name": "static inventory includes source tables, deferred FKs, migrations and runtime DDL",
+            "status": "passed"
+          },
+          {
+            "name": "synthetic fixture has complete physical and logical references",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture orphan customer",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture cross-tenant simple FK",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture duplicate key",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture unknown column",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture real email domain",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture active portal",
+            "status": "passed"
+          },
+          {
+            "name": "rejects fixture missing required value",
+            "status": "passed"
+          },
+          {
+            "name": "uses real password helper with scrypt hashes (no legacy rehash grant)",
+            "status": "passed"
+          },
+          {
+            "name": "model completes fresh initialization but leaves runtime ACCOUNT LOCK",
+            "status": "passed"
+          },
+          {
+            "name": "rejects repeated Prepare without any further query or secret changes",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects existing database before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects database created during lock acquisition before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects foreign user before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects PUBLIC grant before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects foreign datadir before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects foreign port before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects remote bind before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects wrong installer before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects disabled FK before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects wrong version before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects lock held before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects not MariaDB before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model rejects non-strict SQL mode before DDL",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"changeAfter\":5}",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"engine\":\"MyISAM\"}",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"missingFk\":true}",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"missingIndex\":true}",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"extraObjects\":true}",
+            "status": "passed"
+          },
+          {
+            "name": "model aborts unsafe intermediate state {\"orphan\":true}",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 1 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 3 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 12 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 34 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 45 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 64 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "model injected mutation failure 88 stops without cleanup/adoption",
+            "status": "passed"
+          },
+          {
+            "name": "requires new-instance approval before any SQL",
+            "status": "passed"
+          },
+          {
+            "name": "rejects TCP or password-based installer before any SQL",
+            "status": "passed"
+          },
+          {
+            "name": "rejects foreign runtime secret through unchanged S02 before SQL",
+            "status": "passed"
+          },
+          {
+            "name": "runtime grants require exact SELECT per table, marker included",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT ALL PRIVILEGES ON *.* TO `sandbox_pricesmart`@`127.0.0.1`",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT SELECT ON `other`.`usuarios` TO `sandbox_pricesmart`@`127.0.0.1`",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT UPDATE ON `sandbox_pricesmart`.`novalvion_environment` TO `sandbox_pricesmart`@`127.0.0.1`",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT SELECT ON `sandbox_pricesmart`.* TO `sandbox_pricesmart`@`127.0.0.1`",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT SELECT ON `sandbox_pricesmart`.`usuarios` TO `sandbox_pricesmart`@`127.0.0.1` WITH GRANT OPTION",
+            "status": "passed"
+          },
+          {
+            "name": "rejects broad/foreign grant GRANT some_role TO `sandbox_pricesmart`@`127.0.0.1`",
+            "status": "passed"
+          },
+          {
+            "name": "durable journal rejects non-root Linux owner or cannot be claimed twice after failure",
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "file": "src/lib/sandbox-isolation.test.ts",
+        "passed": 53,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/sandbox-startup.test.ts",
+        "passed": 15,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/session-tokens.test.ts",
+        "passed": 4,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/uploads.test.ts",
+        "passed": 47,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/flota/cb2/http-origin.test.ts",
+        "passed": 19,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/flota/cb2/origin.test.ts",
+        "passed": 31,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/rrhh/foto-empleado-miniatura.test.ts",
+        "passed": 17,
+        "status": "passed"
+      },
+      {
+        "file": "src/lib/rrhh/foto-empleado.test.ts",
+        "passed": 9,
+        "status": "passed"
+      }
+    ]
+  },
+  "checks": {
+    "typescript": {
+      "exitCode": 0,
+      "command": "node node_modules/typescript/bin/tsc --noEmit --incremental false"
+    },
+    "eslint": {
+      "exitCode": 0,
+      "warnings": 0,
+      "command": "node node_modules/eslint/bin/eslint.js scripts/sandbox-s04 vitest.s04.config.mts"
+    },
+    "diffCheck": "PASS"
+  },
+  "notExecuted": [
+    "MariaDB real bootstrap/DDL/fixtures",
+    "Native FK/index/type verification",
+    "Effective runtime grants and marker/foreign DB denial",
+    "HTTP/browser navigation and cold-start ensureSchema",
+    "Account unlock/login and real durable installer journal",
+    "Linux VM identity/filesystem/firewall/backups/recovery"
+  ],
+  "decisions": "D01-D16_PENDING_RATIFICATION",
+  "productionOrHostingerUsed": false,
+  "serversCreated": false,
+  "sqlEngineUsed": false
+}
