@@ -14,7 +14,7 @@ export function stage(source, destination) {
   const fixed = new Set(['package.json', 'package-lock.json', 'next.config.ts', 'tsconfig.json', 'postcss.config.mjs',
     'scripts/next-command.mjs', 'scripts/sandbox-config.mjs', 'scripts/infra/pricesmart-build.mjs',
     'scripts/sandbox-s05/build.mjs', 'scripts/sandbox-s05/build-guard.cjs', 'scripts/sandbox-s05/artifact.mjs', 'scripts/sandbox-s05/start-sandbox-s05.mjs']);
-  const names = result.stdout.split('\0').filter(name => fixed.has(name) || /^(src|public)\//.test(name)).sort();
+  const names = result.stdout.split('\0').filter(name => fixed.has(name) || (/^(src|public)\//.test(name) && !/(?:\.(?:test|spec)\.[^/]+$|(?:^|\/)__tests__\/)/.test(name))).sort();
   for (const name of fixed) if (!names.includes(name)) throw new Error('S05_STAGE_MISSING');
   const inputs = names.map(name => {
     const path = checked(source, name);
