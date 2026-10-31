@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "phase": "S06-A-PREPARATION",
+  "environment": "sandbox",
+  "decisions": "D01-D16_PENDING_RATIFICATION",
+  "controls": [
+    {
+      "id": "PF01",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF02",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF03",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF04",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF05",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF06",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF07",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF08",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF09",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF10",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF11",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF12",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF13",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF14",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF15",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "PF16",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    }
+  ],
+  "gates": [
+    {
+      "id": "GATE1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE3",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE4",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE5",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE6",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "GATE7",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    }
+  ],
+  "tests": [
+    {
+      "id": "A1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "A2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "B1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "B2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "C1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "C2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "C3",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "D1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "D2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "D3",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "E1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "E2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "F1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "F2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "F3",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "G1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "G2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "H1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "I1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "I2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "J1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "J2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "K1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "L1",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    },
+    {
+      "id": "L2",
+      "status": "NO EJECUTADA",
+      "method": "NOT_RUN",
+      "evidenceSha256": null,
+      "reviewedAt": null,
+      "reviewer": null
+    }
+  ]
+}
