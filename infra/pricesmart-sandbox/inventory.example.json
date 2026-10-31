@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "environment": "sandbox",
+  "id": "pricesmart-qa",
+  "tenant": "kt-monaco",
+  "root": "/srv/novalvion-ps-sandbox",
+  "app": "/opt/novalvion-ps-sandbox/app",
+  "runtimeUser": "novalvion-ps-sandbox",
+  "database": {"DB_HOST": "127.0.0.1", "DB_PORT": "43306", "DB_NAME": "sandbox_pricesmart", "DB_USER": "sandbox_pricesmart"},
+  "ports": {"app": 3000, "tls": 4316},
+  "origin": "https://localhost:4316",
+  "externalDestinations": [],
+  "publicIngress": false,
+  "pricesmartEndpointsEnabled": false,
+  "decisions": "D01-D16_PENDING_RATIFICATION"
+}

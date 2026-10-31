@@ -1,0 +1,19 @@
+-- REVIEW TEMPLATE ONLY. No IF NOT EXISTS: fail instead of adopting an old DB.
+-- Use ONLY a new dedicated instance; administrator verifies datadir/socket first.
+-- Replace password locally from the approved S02 secret; never use CLI -pVALUE.
+-- Remove this deliberate stop ONLY after rendering and independent approval.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'S03_TEMPLATE_REQUIRES_REVIEW';
+CREATE DATABASE sandbox_pricesmart CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'sandbox_pricesmart'@'127.0.0.1' IDENTIFIED BY '@DB_PASSWORD@';
+CREATE TABLE sandbox_pricesmart.novalvion_environment (
+  id TINYINT NOT NULL PRIMARY KEY CHECK (id = 1),
+  environment VARCHAR(16) NOT NULL CHECK (environment = 'sandbox'),
+  sandbox_id VARCHAR(48) NOT NULL
+) ENGINE=InnoDB;
+INSERT INTO sandbox_pricesmart.novalvion_environment VALUES (1, 'sandbox', 'pricesmart-qa');
+GRANT SELECT ON sandbox_pricesmart.novalvion_environment TO 'sandbox_pricesmart'@'127.0.0.1';
+-- Application schema/fixtures and table-by-table grants require an approved list.
+-- NO application grants are issued by this template. App must remain stopped.
+-- Do not grant CREATE/ALTER/DROP, FILE, EXECUTE, global/schema-wide privileges,
+-- roles or GRANT OPTION. Do not grant writes on the identity marker.
+SHOW GRANTS FOR 'sandbox_pricesmart'@'127.0.0.1';

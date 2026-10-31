@@ -1,0 +1,41 @@
+[Unit]
+Description=Private Novalvion PriceSmart sandbox (S02 start path)
+Requires=novalvion-ps-firewall.service novalvion-ps-db.service
+After=novalvion-ps-firewall.service novalvion-ps-db.service
+Conflicts=novalvion-ps-backup.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=novalvion-ps-sandbox
+Group=novalvion-ps-sandbox
+UMask=0077
+WorkingDirectory=/opt/novalvion-ps-sandbox/app
+EnvironmentFile=/etc/novalvion-ps-sandbox/runtime.env
+ExecStart=/usr/bin/node scripts/start-sandbox.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillMode=control-group
+RuntimeDirectory=novalvion-ps-app
+RuntimeDirectoryMode=0700
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
+ReadWritePaths=/srv/novalvion-ps-sandbox/uploads /opt/novalvion-ps-sandbox/app/.next/cache /run/novalvion-ps-app
+InaccessiblePaths=/var/lib/novalvion-ps-db /var/backups/novalvion-ps-sandbox
+# Explicitly NOT MemoryDenyWriteExecute: V8 JIT needs executable memory.
+
+[Install]
+WantedBy=multi-user.target
