@@ -1,0 +1,58 @@
+{
+  "date": "2026-10-31",
+  "timezone": "America/Guatemala",
+  "reviewBase": "9ce37afc94d0f85538de10a5a0e347da290ac82a",
+  "powershell": "5.1.26100.9711",
+  "administrator": false,
+  "security": {
+    "passed": 18,
+    "failed": 0,
+    "command": "node --test scripts/ci/c3c15b/safety.test.mjs",
+    "simulations": [
+      "expected owner SID substitution",
+      "PowerShell failure after creation injected in test copy"
+    ]
+  },
+  "regression": {
+    "passed": 43,
+    "failed": 0,
+    "files": [
+      "src/lib/contabilidad/precontable.test.ts",
+      "src/lib/contabilidad/expediente.test.ts",
+      "src/lib/contabilidad/expediente-http.test.ts",
+      "src/lib/tenant-calendario.test.ts"
+    ]
+  },
+  "typescript": {
+    "command": "npx.cmd tsc --noEmit",
+    "exitCode": 0
+  },
+  "eslint": {
+    "command": "npx.cmd eslint scripts/ci/c3c15b",
+    "exitCode": 0
+  },
+  "diffCheck": {
+    "command": "git diff --check",
+    "exitCode": 0
+  },
+  "psWrapper": {
+    "parserErrors": 0,
+    "execution": "BLOCKED_BY_EXISTING_POLICY",
+    "error": "UnauthorizedAccess"
+  },
+  "nodePrepareNonInteractive": {
+    "exitCode": 1,
+    "error": "C15B_INTERACTIVE_REQUIRED"
+  },
+  "browser": {
+    "error": "The browser access host is unavailable",
+    "visualAcceptance": "PENDING"
+  },
+  "pending": [
+    "foreign owner real fixture",
+    "interactive PS wrapper and Node password prompt",
+    "browser manual acceptance matrix",
+    "Excel visual inspection"
+  ],
+  "scope": "Only scripts/ci/c3c15b and docs/qa/c3c15b; no business code, migration or production configuration changes"
+}

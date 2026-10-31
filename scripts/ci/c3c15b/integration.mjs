@@ -1,10 +1,11 @@
 // Prueba explícita. Crea su propia instancia; JAMÁS se conecta a 43306 ni cierra la instancia manual.
 import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import crypto from 'node:crypto';import cp from 'node:child_process';import net from 'node:net';import assert from 'node:assert/strict';import mysql from 'mysql2/promise';import {fileURLToPath} from 'node:url';
+import {secureDirectory} from './private-directory.mjs';
 import {initialize} from './initialize.mjs';import {control} from './control.mjs';import policy from './policy.cjs';import database from './database.cjs';
 import {observarServidor,cerrarServidor} from '../c3c1/lifecycle.mjs';
 if(process.argv[2]!=='--run-owned-instance')throw Error('C15B_EXPLICIT_TEST');
 const repo=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../..'),id=crypto.randomBytes(16).toString('hex'),dir=path.join(os.tmpdir(),'novalvion-c3c15b-test-'+id);
-fs.mkdirSync(dir);fs.mkdirSync(path.join(dir,'private'));
+secureDirectory(path.join(dir,'private'));
 const freePort=()=>new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
 const port=await freePort(),httpPort=await freePort();
 const basedir=path.join(repo,'.lab-runtime/mariadb-11.8.9-winx64'),binary=path.join(basedir,'bin/mariadbd.exe');
@@ -28,7 +29,8 @@ try{
  await assert.rejects(initialize(config,password,stateDir),{code:'C15B_DATABASE_NOT_EMPTY'});evidence.checks.push('base no vacia rechazada');
  await root.query('DROP TABLE c3c15_lab.sentinel');
  const result=await initialize(config,password,stateDir);assert.equal(result.estado,'READY');evidence.bootstrap=result;
- await assert.rejects(initialize(config,password,path.join(dir,'other-state')),{code:'C15B_DATABASE_NOT_EMPTY'});evidence.checks.push('segunda inicializacion rechazada');
+ const beforeSecret=fs.readFileSync(file);
+ await assert.rejects(initialize(config,password,stateDir),{code:'C15B_STATE_EXISTS'});assert.deepEqual(fs.readFileSync(file),beforeSecret);evidence.checks.push('segunda inicializacion rechazada');
  const ctx=JSON.parse(fs.readFileSync(file));const initialRoot=await root.query('SELECT COUNT(*) n FROM c3c15_lab.cont_asientos');
  const badPool=database.verifiedPool({...ctx,token:'0'.repeat(64)});try{await assert.rejects(badPool.getConnection(),{code:'C15B_MARKER'});}finally{await badPool.end();}
  evidence.checks.push('nonce incorrecto rechazado antes de entregar conexion');

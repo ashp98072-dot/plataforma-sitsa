@@ -1,7 +1,7 @@
 {
-  "dir": "C:\\Users\\Admin\\AppData\\Local\\Temp\\novalvion-c3c15b-test-f079b46f7a6a603ad77add44865073a9",
-  "port": 52556,
-  "httpPort": 52557,
+  "dir": "C:\\Users\\Admin\\AppData\\Local\\Temp\\novalvion-c3c15b-test-afd7c46756e1b797b82efae0c224d34a",
+  "port": 51732,
+  "httpPort": 51733,
   "checks": [
     "base no vacia rechazada",
     "segunda inicializacion rechazada",

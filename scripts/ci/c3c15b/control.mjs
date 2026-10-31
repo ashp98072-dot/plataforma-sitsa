@@ -1,6 +1,8 @@
 import fs from 'node:fs';import path from 'node:path';import cp from 'node:child_process';import {fileURLToPath} from 'node:url';
+import {secureDirectory} from './private-directory.mjs';
 import policy from './policy.cjs';import db from './database.cjs';
 export async function verify(file){
+ secureDirectory(path.dirname(file));
  const ctx=JSON.parse(fs.readFileSync(file,'utf8'));policy.validateConfig(ctx.config);policy.assertCleanEnvironment(ctx.config.repo);
  const c=await db.open(ctx.config,ctx.password);try{await db.marker(c.query.bind(c),ctx,true);}finally{await c.end();}return ctx;
 }

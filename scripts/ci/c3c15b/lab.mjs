@@ -29,9 +29,7 @@ try {
   try{console.log(JSON.stringify(await initialize(policy.config(repo),password,state)));}
   finally{password=undefined;}
  }else if(action==='credentials'){
-  if(!process.stdout.isTTY)policy.fail('C15B_INTERACTIVE_REQUIRED');
-  console.log('Credenciales sinteticas privadas: no capturar ni publicar.');
-  console.table(JSON.parse(fs.readFileSync(file,'utf8')).accounts.map(({username,role,password})=>({username,role,password})));
+  policy.fail('C15B_CREDENTIALS_CONSOLE_DISABLED');
  }else{
   if(!['verify','start','stop'].includes(action))policy.fail('C15B_ACTION');
   console.log(JSON.stringify(await control(action,file)));

@@ -10,21 +10,6 @@ $statePath = Join-Path $env:TEMP 'novalvion-c3c15-manual\acceptance-private'
 $privateFile = Join-Path $statePath 'private.json'
 $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
 
-function Assert-PrivateDirectory {
- if (-not (Test-Path -LiteralPath $statePath)) { New-Item -ItemType Directory -Path $statePath | Out-Null }
- if ((Get-Item -LiteralPath $statePath).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Directorio privado no puede ser junction o enlace' }
- $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User
- $acl = New-Object Security.AccessControl.DirectorySecurity
- $acl.SetOwner($sid)
- $acl.SetAccessRuleProtection($true, $false)
- $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
- $propagation = [Security.AccessControl.PropagationFlags]::None
- foreach ($identity in @($sid, (New-Object Security.Principal.SecurityIdentifier 'S-1-5-18'))) {
-  $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl',$inherit,$propagation,'Allow')
-  $acl.AddAccessRule($rule)
- }
- Set-Acl -LiteralPath $statePath -AclObject $acl
-}
 function Invoke-LabNode([string]$Script, [string[]]$NodeArgs, [string]$InputText) {
  $info = New-Object Diagnostics.ProcessStartInfo
  $info.FileName = $nodePath
@@ -52,7 +37,7 @@ function Invoke-LabNode([string]$Script, [string[]]$NodeArgs, [string]$InputText
 
 if ($Action -eq 'Prepare') {
  if (Test-Path -LiteralPath $privateFile) { throw 'Estado previo encontrado. No se reutiliza ni se borra.' }
- Assert-PrivateDirectory
+ Invoke-LabNode 'private-directory.mjs' @($statePath) ''
  $secure = Read-Host 'Password local de c3c15_app (no se registra)' -AsSecureString
  $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
  try {
@@ -65,9 +50,7 @@ if ($Action -eq 'Prepare') {
   $password = $null; $inputJson = $null; $secure.Dispose()
  }
 } elseif ($Action -eq 'Credentials') {
- if (-not (Test-Path -LiteralPath $privateFile)) { throw 'Falta Prepare' }
- # Solo para el operador local. No usar Start-Transcript ni copiar esta salida al PR.
- (Get-Content -LiteralPath $privateFile -Raw | ConvertFrom-Json).accounts | Format-Table username,role,password
+ throw 'C15B_CREDENTIALS_CONSOLE_DISABLED'
 } else {
  if (-not (Test-Path -LiteralPath $privateFile)) { throw 'Falta Prepare' }
  Invoke-LabNode 'control.mjs' @($Action.ToLowerInvariant(),$privateFile) ''

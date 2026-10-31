@@ -1,4 +1,5 @@
 import fs from 'node:fs';import path from 'node:path';import crypto from 'node:crypto';import cp from 'node:child_process';import {pathToFileURL} from 'node:url';
+import {secureDirectory} from './private-directory.mjs';
 import policy from './policy.cjs';import database from './database.cjs';
 import {sentencias,aprobarControles} from '../c3c1/safety.mjs';
 const read=(repo,file)=>fs.readFileSync(path.join(repo,file),'utf8');
@@ -6,6 +7,7 @@ export async function initialize(config,password,stateDir){
  policy.validateConfig(config);policy.assertCleanEnvironment(config.repo);
  if(!password||password.length<12)policy.fail('C15B_PASSWORD');
  if(fs.existsSync(path.join(stateDir,'private.json')))policy.fail('C15B_STATE_EXISTS');
+ secureDirectory(stateDir);
  const c=await database.open(config,password),evidence={contrato:'C3C15B-BOOTSTRAP-1',etapas:[],estado:'INITIALIZING'};
  const server=await database.identity(c.query.bind(c),config);config.serverPid=Number(fs.readFileSync(server.pidFile,'utf8').trim());
  const ctx={config,password,id:crypto.randomUUID(),token:crypto.randomBytes(32).toString('hex'),authSecret:crypto.randomBytes(48).toString('hex'),accounts:[]};

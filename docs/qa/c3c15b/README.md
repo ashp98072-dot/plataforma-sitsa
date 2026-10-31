@@ -30,19 +30,17 @@ $lab = Join-Path $PWD 'scripts\ci\c3c15b\Lab.ps1'
 ```powershell
 & $lab -Action Verify -RepoRoot $PWD.Path
 & $lab -Action Start -RepoRoot $PWD.Path
-& $lab -Action Credentials -RepoRoot $PWD.Path
 Start-Process 'http://127.0.0.1:4315/login'
 ```
 
-`Credentials` muestra las claves sintéticas al operador local: no capturar esa salida ni usar `Start-Transcript`. `Start` comprueba de nuevo identidad, estado READY y candidatos de entorno. Arranca un Next real en loopback, con entorno filtrado y preload local; no modifica configuración global. La caché `.next-c3c15b` queda ignorada. Usa el servidor personalizado de Next para restringir rutas al login, selección y contabilidad QA: las escrituras de asientos, cierres y módulos ajenos quedan rechazadas. Las conexiones de aplicación se limitan a este puerto SQL y al HTTP local, se impiden lecturas de configuración operativa y conexiones mysql inesperadas. Estos controles son defensas del laboratorio, no una sandbox contra código deliberadamente hostil ni sustituyen los permisos del servidor.
+`Credentials` devuelve `C15B_CREDENTIALS_CONSOLE_DISABLED`: no imprime claves. El operador consulta el archivo privado en un editor local, sin transcript ni capturas. `Start` comprueba de nuevo identidad, estado READY y candidatos de entorno. Arranca un Next real en loopback, con entorno filtrado y preload local; no modifica configuración global. La caché `.next-c3c15b` queda ignorada. Usa el servidor personalizado de Next para restringir rutas al login, selección y contabilidad QA: las escrituras de asientos, cierres y módulos ajenos quedan rechazadas. Las conexiones de aplicación se limitan a este puerto SQL y al HTTP local, se impiden lecturas de configuración operativa y conexiones mysql inesperadas. Estos controles son defensas del laboratorio, no una sandbox contra código deliberadamente hostil ni sustituyen los permisos del servidor.
 
-Si la política vigente impide ejecutar `Lab.ps1`, **no cambiarla ni usar ExecutionPolicy Bypass**. La entrada Node siguiente usa el mismo inicializador y control, solicita la contraseña sin eco en una consola interactiva y aplica la misma ACL mediante cmdlets nativos de PowerShell 5.1. Elegir una sola entrada para Prepare:
+Si la política vigente impide ejecutar `Lab.ps1`, **no cambiarla ni usar ExecutionPolicy Bypass**. La entrada Node siguiente usa el mismo inicializador y control, solicita la contraseña sin eco en una consola interactiva y aplica la misma ACL mediante .NET Framework en PowerShell 5.1. Elegir una sola entrada para Prepare:
 
 ```powershell
 node scripts/ci/c3c15b/lab.mjs prepare
 node scripts/ci/c3c15b/lab.mjs verify
 node scripts/ci/c3c15b/lab.mjs start
-node scripts/ci/c3c15b/lab.mjs credentials
 # Al finalizar:
 node scripts/ci/c3c15b/lab.mjs stop
 ```
@@ -91,3 +89,7 @@ La integración requiere binarios portables ya verificados en `.lab-runtime/mari
 ## Errores que requieren detenerse
 
 `C15B_TARGET`, `C15B_IDENTITY`, `C15B_GRANTS`, `C15B_SERVER_PID`: identidad o aislamiento no conforme; ninguna relajación automática. `C15B_ENV_FILE` / `C15B_INHERITED_ENV`: ubicación/consola no aislada. `C15B_DATABASE_NOT_EMPTY` / `C15B_STATE_EXISTS`: preservar, no resetear. `C15B_SEED_FAILED`: evidencia parcial; no iniciar. `C15B_START_ALREADY_ATTEMPTED` / `C15B_STOP_UNCONFIRMED`: no borrar manifiestos ni matar PID arbitrarios; revisar solo el proceso propio. Los errores se comunican mediante códigos, sin mensajes SQL con credenciales.
+
+## Revision de cierre 2026-10-31
+
+La evidencia vigente y los pendientes estan en [CLOSURE.md](CLOSURE.md). Los directorios existentes con ACL heredada o incorrecta se rechazan; no se reparan automaticamente ni se borran para repetir Prepare.

@@ -1,3 +1,5 @@
+> Informe historico de 2026-10-30. Para la revision del bloqueo NTFS y resultados vigentes, consultar [CLOSURE.md](CLOSURE.md). La evidencia JSON adjunta fue reemplazada por la ejecucion del 2026-10-31.
+
 # C3C-15B — Evidencia técnica del bootstrap
 
 Fecha: 2026-10-30. Base: `3737a5891e33b1349ce867cce816f1cc0e1925e3`. Alcance: preparación local persistente y arranque seguro para aceptación manual. **C3C-15 continúa pendiente de aprobación funcional.** No se usó Hostinger, MySQL80, una base existente ni el laboratorio C3C-8.
