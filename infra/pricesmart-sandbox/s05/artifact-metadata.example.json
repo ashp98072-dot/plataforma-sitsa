@@ -1,0 +1,8 @@
+{
+  "next": "16.4.1",
+  "node": "24.18.0",
+  "platform": "linux",
+  "arch": "x64",
+  "commit": "REPLACE_WITH_REVIEWED_40_HEX_COMMIT",
+  "lockSha256": "REPLACE_WITH_REVIEWED_LOCK_SHA256"
+}
