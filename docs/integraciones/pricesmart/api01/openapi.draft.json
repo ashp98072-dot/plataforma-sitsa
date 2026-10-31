@@ -1,0 +1,423 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PriceSmart API-01 ? PROVISIONAL / NON EXECUTABLE",
+    "version": "api01-draft-1",
+    "description": "Draft for independent review. D01?D16 UNRATIFIED. No HTTP routes are installed. Authentication profile unresolved: absence of securitySchemes does NOT authorize anonymous access. Only synthetic technical envelope, not commercial order acceptance."
+  },
+  "servers": [],
+  "x-executable": false,
+  "x-default-enabled": false,
+  "x-m2m-required": true,
+  "x-m2m-profile": "UNRESOLVED_D02",
+  "x-decisions": "D01-D16_PENDING_RATIFICATION",
+  "x-max-body-bytes": 65536,
+  "x-json-profile": "flat string objects; reject duplicate properties, invalid UTF-8, BOM, unknown fields; IDs case sensitive; no trimming",
+  "x-order-identity": "sandbox + stable integration principal + tenant + contractual client + externalOrderId; club uniqueness D03 pending",
+  "x-http-idempotency-key": "UNRATIFIED_D10; not implemented or inferred from order identity",
+  "x-proposed-cancellation": {
+    "status": "UNRATIFIED_D09_D12",
+    "method": null,
+    "candidates": [
+      "POST /api/integrations/pricesmart/v1/orders/{externalOrderId}/cancellation-requests",
+      "DELETE /api/integrations/pricesmart/v1/orders/{externalOrderId}"
+    ],
+    "requestSchema": {
+      "$ref": "#/components/schemas/CancellationInput"
+    },
+    "result": "CANCELLATION_REQUESTED only; never cancellation of a TMS plan",
+    "repeatedSameReason": "same committed snapshot",
+    "changedReason": "409"
+  },
+  "paths": {
+    "/api/integrations/pricesmart/v1/orders": {
+      "post": {
+        "operationId": "receiveOrderDraft",
+        "description": "PROPOSED ONLY. Future 202 requires approved M2M + durable transaction confirmed, including audit/event/outbox. Replay returns immutable original receipt. Unknown commit => 503 and safe retry; no TMS creation.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Durably received, NOT programmed/dispatched/delivered; never for a SIMULATED repository",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Receipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "M2M identity missing or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope or authorized origin denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or outside authorized scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Immutable identity/content conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds provisional 64 KiB limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Only UTF-8 application/json (no content encoding)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Abuse/replay controls to ratify",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled or durability unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/integrations/pricesmart/v1/orders/{externalOrderId}": {
+      "get": {
+        "operationId": "getOrderDraft",
+        "description": "PROPOSED ONLY. Tenant/client/integration/environment and club from trusted principal. Outside scope and missing return same 404. No payload, PII, TMS IDs or internal errors.",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "externalOrderId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current provisional local state, no PriceSmart/TMS equivalence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "M2M identity missing or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Scope or authorized origin denied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown or outside authorized scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Immutable identity/content conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds provisional 64 KiB limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Only UTF-8 application/json (no content encoding)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Abuse/replay controls to ratify",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Disabled or durability unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "externalOrderId",
+          "originClubReference"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "api01-draft-1"
+          },
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "originClubReference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          }
+        }
+      },
+      "CancellationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ORIGIN_REQUEST",
+              "DUPLICATE"
+            ]
+          }
+        }
+      },
+      "Receipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "const": "RECEIVED"
+          },
+          "processingStatus": {
+            "type": "string",
+            "const": "PENDING"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "OrderView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "REVIEW_REQUIRED",
+              "CANCELLATION_REQUESTED",
+              "CANCELLED"
+            ]
+          },
+          "processingStatus": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "PAUSED",
+              "CANCELLED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "DISABLED",
+              "UNAUTHENTICATED",
+              "FORBIDDEN",
+              "INVALID_INPUT",
+              "TOO_LARGE",
+              "UNSUPPORTED_MEDIA_TYPE",
+              "RATE_LIMITED",
+              "NOT_FOUND",
+              "CONFLICT",
+              "UNAVAILABLE"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

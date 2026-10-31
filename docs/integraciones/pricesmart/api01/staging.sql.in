@@ -1,0 +1,115 @@
+-- DESIGN ONLY. Separate future staging, NOT S04 or a production migration.
+-- No installer, connection, USE, credentials or GRANT is provided.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API01_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+-- Trusted namespace registration is administrative, never selected by request body.
+CREATE TABLE ps_api01_scopes (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id),
+  CHECK (environment = _binary'sandbox'),
+  CHECK (OCTET_LENGTH(integration_id) BETWEEN 1 AND 120),
+  CHECK (tenant_id > 0 AND client_id > 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE ps_api01_orders (
+  id BINARY(16) NOT NULL,
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  external_order_id VARBINARY(120) NOT NULL,
+  origin_club_reference VARBINARY(64) NOT NULL,
+  payload_version VARBINARY(48) NOT NULL,
+  payload_ciphertext LONGBLOB NOT NULL,
+  payload_key_reference VARBINARY(120) NOT NULL,
+  input_hash BINARY(32) NOT NULL,
+  state VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  version INT UNSIGNED NOT NULL,
+  correlation_id BINARY(16) NOT NULL,
+  received_at DATETIME(6) NOT NULL,
+  receipt_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  cancellation_hash BINARY(32) NULL,
+  cancellation_reason VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  cancellation_receipt_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
+  tms_linked TINYINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ps_api01_identity (environment, tenant_id, client_id, integration_id, external_order_id),
+  UNIQUE KEY uq_ps_api01_scoped_row (environment, tenant_id, client_id, integration_id, id),
+  INDEX ix_ps_api01_queue (environment, tenant_id, client_id, integration_id, state, received_at),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  CHECK (JSON_VALID(receipt_json)),
+  CHECK (OCTET_LENGTH(external_order_id) BETWEEN 1 AND 120),
+  CHECK (OCTET_LENGTH(origin_club_reference) BETWEEN 1 AND 64),
+  CHECK (cancellation_receipt_json IS NULL OR JSON_VALID(cancellation_receipt_json)),
+  CHECK ((cancellation_hash IS NULL) = (cancellation_receipt_json IS NULL)),
+  CHECK ((cancellation_hash IS NULL) = (cancellation_reason IS NULL)),
+  CHECK (cancellation_reason IS NULL OR cancellation_reason IN ('ORIGIN_REQUEST','DUPLICATE')),
+  CHECK (state IN ('RECEIVED','REVIEW_REQUIRED','CANCELLATION_REQUESTED','CANCELLED')),
+  CHECK (state NOT IN ('CANCELLATION_REQUESTED','CANCELLED') OR cancellation_hash IS NOT NULL),
+  CHECK (version >= 1),
+  CHECK (tms_linked = 0)
+) ENGINE=InnoDB;
+
+CREATE TABLE ps_api01_events (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  order_version INT UNSIGNED NOT NULL,
+  event_type VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  reason VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  correlation_id BINARY(16) NOT NULL,
+  recorded_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id, order_version),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id),
+  CHECK (event_type IN ('RECEIVED','CANCELLATION_REQUESTED')),
+  CHECK ((event_type = 'RECEIVED' AND reason IS NULL)
+    OR (event_type = 'CANCELLATION_REQUESTED' AND reason IS NOT NULL AND reason IN ('ORIGIN_REQUEST','DUPLICATE'))),
+  CHECK (order_version >= 1)
+) ENGINE=InnoDB;
+
+CREATE TABLE ps_api01_outbox (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  order_version INT UNSIGNED NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING',
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  next_attempt_at DATETIME(6) NOT NULL,
+  lease_until DATETIME(6) NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id, order_version),
+  INDEX ix_ps_api01_dispatch (status, next_attempt_at, lease_until),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id, order_version)
+    REFERENCES ps_api01_events(environment, tenant_id, client_id, integration_id, order_id, order_version),
+  CHECK (status IN ('PENDING','LEASED','REVIEW','DONE'))
+) ENGINE=InnoDB;
+
+CREATE TABLE ps_api01_audit (
+  id BINARY(16) NOT NULL,
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  operation VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  result VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  correlation_id BINARY(16) NOT NULL,
+  recorded_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (id),
+  INDEX ix_ps_api01_audit_order (environment, tenant_id, client_id, integration_id, order_id, recorded_at),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id),
+  CHECK (operation IN ('RECEIVE','REPLAY','READ','CANCEL','CANCEL_REPLAY')),
+  CHECK ((operation = 'RECEIVE' AND result = 'CREATED')
+    OR (operation IN ('REPLAY','CANCEL_REPLAY') AND result = 'REPLAYED')
+    OR (operation = 'READ' AND result = 'FOUND')
+    OR (operation = 'CANCEL' AND result = 'REQUESTED'))
+) ENGINE=InnoDB;
