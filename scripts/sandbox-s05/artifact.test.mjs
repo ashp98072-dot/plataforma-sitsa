@@ -6,7 +6,7 @@ import { allowed, checked, pack, verify } from './artifact.mjs';
 
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
-const metadata = { next: '16.4.1', platform: 'linux', commit: 'a'.repeat(40), lockSha256: 'b'.repeat(64) };
+const metadata = { next: '16.4.1', node: '24.18.0', arch: 'x64', platform: 'linux', commit: 'a'.repeat(40), lockSha256: 'b'.repeat(64) };
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 's05-test-')); roots.push(root);
   const source = join(root, 'source'); mkdirSync(source);
@@ -68,6 +68,7 @@ describe('S05 real filesystem, synthetic content (not a Next runtime)', () => {
   });
   it('rejects unapproved build metadata', () => {
     const f = fixture(); expect(() => pack(f.source, f.destination, { ...metadata, next: '16.0.0' })).toThrow();
+    expect(() => pack(f.source, f.destination, { ...metadata, DB_PASSWORD: 'synthetic-secret' })).toThrow();
   });
   it('does not allow administrative or source directories', () => {
     for (const name of ['infra/a', 'docs/a', 'scripts/ci/a', '.git/config', 'next.config.ts']) expect(allowed(name)).toBe(false);

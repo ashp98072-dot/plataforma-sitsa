@@ -4,6 +4,10 @@ import { resolve, dirname, join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const fail = () => { throw new Error('S05_ARTIFACT_REJECTED'); };
+function validateMetadata(metadata) {
+  const keys = ['next', 'node', 'platform', 'arch', 'commit', 'lockSha256'];
+  if (!metadata || Object.keys(metadata).some(key => !keys.includes(key)) || keys.some(key => typeof metadata[key] !== 'string') || metadata.next !== '16.4.1' || !/^24\.\d+\.\d+$/.test(metadata.node) || metadata.platform !== 'linux' || !['x64', 'arm64'].includes(metadata.arch) || !/^[a-f0-9]{40}$/.test(metadata.commit) || !/^[a-f0-9]{64}$/.test(metadata.lockSha256)) fail();
+}
 export const sha = value => createHash('sha256').update(value).digest('hex');
 export function checkRoot(root) {
   for (let p = resolve(root);; p = dirname(p)) {
@@ -48,7 +52,8 @@ export function verify(root, expectedDigest, runtimeCache = false) {
   if (sha(bytes) !== expectedDigest) fail();
   const manifest = JSON.parse(bytes);
   if (manifest.version !== 1 || manifest.profile !== 'S05-standalone-candidate' || !Array.isArray(manifest.files)) fail();
-  if (manifest.next !== '16.4.1' || manifest.platform !== 'linux' || !/^[a-f0-9]{40}$/.test(manifest.commit ?? '') || !/^[a-f0-9]{64}$/.test(manifest.lockSha256 ?? '')) fail();
+  const metadata = Object.fromEntries(Object.entries(manifest).filter(([key]) => !['version', 'profile', 'mutablePaths', 'files'].includes(key)));
+  validateMetadata(metadata);
   if (JSON.stringify(manifest.mutablePaths) !== JSON.stringify(['.next/cache'])) fail();
   const names = manifest.files.map(x => x.path);
   if (new Set(names.map(x => x.toLowerCase())).size !== names.length || JSON.stringify(names) !== JSON.stringify([...names].sort())) fail();
@@ -62,7 +67,7 @@ export function verify(root, expectedDigest, runtimeCache = false) {
   return manifest;
 }
 export function pack(source, destination, metadata) {
-  if (metadata?.next !== '16.4.1' || metadata?.platform !== 'linux' || !/^[a-f0-9]{40}$/.test(metadata?.commit ?? '') || !/^[a-f0-9]{64}$/.test(metadata?.lockSha256 ?? '')) fail();
+  validateMetadata(metadata);
   // Source is the isolated build's standalone directory, never an application checkout.
   const names = files(source).sort();
   if (names.some(name => !allowed(name))) fail();

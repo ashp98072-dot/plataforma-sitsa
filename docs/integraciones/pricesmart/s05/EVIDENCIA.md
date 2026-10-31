@@ -20,7 +20,7 @@ Base auditada: `388dd33cc61abcc3dd830b4f3acae93e3ca5b3bc` (merge #544). S02–S0
 | TypeScript | PASS | `tsc --noEmit`, exit 0 |
 | ESLint del alcance | PASS | `--max-warnings 0`, exit 0 |
 | Diff/alcance | PASS | `git diff --check` y revisión de nombres agregados; sin cambios a módulos de negocio ni controles anteriores |
-| Stage de fuente versionada limpia | Pendiente de registro posterior al commit | Se ejecutará sin dependencias, servicios ni secretos; ver actualización inferior |
+| Stage de fuente versionada limpia | PASS | CLI real: `S05_STAGE_FILES=1268`; sin node_modules/.env/sql. Repetición: `S05_STAGE_REJECTED`, sin sobrescribir. No ejecuta build |
 | Build Next Linux aislado y dos builds comparados | NO EJECUTADA | Falta laboratorio Linux aprobado y caché npm para arquitectura/libc. No hay artefacto Novalvion ni hash final de release |
 | Trazas reales / contenido mínimo definitivo / bundles sin secretos | NO EJECUTADA | Requieren salida del build real; auditoría de fuentes y pruebas sintéticas no equivalen |
 | Carga real de sharp/SWC, PDF/XLSX/imágenes | NO EJECUTADA | Requiere paquete Linux; incluidos como dependencias a auditar, no declarados funcionales |
@@ -43,5 +43,7 @@ git diff --binary origin/main...HEAD
 ```
 
 El diff completo es el del PR y puede obtenerse con el último comando o la URL `.diff` del PR. No se incluye un diff autorreferente dentro del propio commit.
+
+Stage ejecutado en el checkout limpio `de0ffe2e` con `node scripts/sandbox-s05/stage.mjs . .lab-runtime/s05-source`. La primera validación detectó credenciales sintéticas de tests y rechazó el origen antes de crear el destino. Se excluyeron `*.test.*`, `*.spec.*` y `__tests__` de la lista positiva de construcción; no se debilitó la regla de secretos. Tras esa corrección se copió la fuente y se comprobó el rechazo al repetir. Un intento con entorno Windows reducido a PATH/SystemRoot fue rechazado por Git antes de copiar (no reconoció el worktree); el PASS corresponde al comando normal indicado, sin variables DB/secretos operativos. Los archivos de stage permanecen ignorados bajo `.lab-runtime`, no se publican.
 
 El perfil Linux, comandos de instalación/rollback y pendientes están en [README.md](README.md). No se ejecutaron comandos systemctl, nft, SQL, DNS, desbloqueo de cuentas ni despliegue. D01–D16 pendientes. No se modifica PR #541. El resultado es preparación parcial auditada estáticamente; no satisface todavía la validación real de artefacto Linux.
