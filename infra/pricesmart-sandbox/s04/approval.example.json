@@ -1,0 +1,7 @@
+{
+  "authorizedForS06": false,
+  "newDedicatedInstance": false,
+  "evidenceSha256": "@SHA256_APPROVED_VM_IDENTITY_AND_FILESYSTEM_EVIDENCE@",
+  "datadir": "/var/lib/novalvion-ps-db",
+  "socket": "/run/novalvion-ps-db/mariadb.sock"
+}

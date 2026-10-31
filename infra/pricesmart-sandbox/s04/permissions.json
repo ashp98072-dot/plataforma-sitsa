@@ -1,0 +1,262 @@
+[
+  {
+    "table": "novalvion_environment",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S02 identity guard only"
+  },
+  {
+    "table": "empresas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "usuarios",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "usuario_empresa",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "usuario_modulo",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "auditoria",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "clientes",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "empleados",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_clientes",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_lugares",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "flota_vehiculos",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_unidades",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_personal",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "flota_vehiculo_acceso",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_ubicaciones",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_contactos",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_rutas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_ruta_personal",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_ruta_paradas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_ruta_tarifas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_ruta_tarifas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cliente_usuarios",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_cotizacion_costeo_perfiles",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_planes_viaje",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_solicitudes_cliente",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  },
+  {
+    "table": "tms_solicitud_paradas",
+    "SELECT": true,
+    "INSERT": false,
+    "UPDATE": false,
+    "DELETE": false,
+    "DDL": false,
+    "GRANT_OPTION": false,
+    "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+  }
+]

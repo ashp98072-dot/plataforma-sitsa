@@ -1,0 +1,2928 @@
+{
+  "profile": "S04_READ_ONLY_SYNTHETIC",
+  "database": "sandbox_pricesmart",
+  "user": "sandbox_pricesmart",
+  "id": "pricesmart-qa",
+  "sources": [
+    {
+      "file": "sql/schema.sql",
+      "sha256": "aee442755154833fa7a7598cbd8f166f2008f4664221c26f2d59d10d3aee52ae"
+    },
+    {
+      "file": "sql/migrate-2026-09-rutas-tarifario-historial.sql",
+      "sha256": "159e56cc115e3a2e6cf12f7949f33724842b16f2e3cbf98b69bf29285de0eacc"
+    },
+    {
+      "file": "src/lib/flota/schema.ts",
+      "sha256": "596b99e25ce073a89946c68e23a649bf182e45a34ca407d76c3bb6d2ae6b0e5f"
+    },
+    {
+      "file": "sql/migrate-2026-08-fase0-tms-personal-empleado.sql",
+      "sha256": "4cf03003a77cf9934357e05315c66b85a6cff107578ee27dde5639e5408f3ddd"
+    },
+    {
+      "file": "src/lib/clientes/schema.ts",
+      "sha256": "3e2e28f657bf20aebe82e2e9858a361dbf9b796f98ff10c01a7ff3032a2d6c19"
+    },
+    {
+      "file": "infra/pricesmart-sandbox/provision-identity.sql.in",
+      "sha256": "751b2123e09276c8a4d055a835ccd7875d8dc4948f51d69ccf9a060e425a5403"
+    },
+    {
+      "file": "infra/pricesmart-sandbox/s04/fixtures.json",
+      "sha256": "a3d5ce8ef0c771b64821ff53759db76304f29c08b6e4da69f81ad94a415f3d96"
+    }
+  ],
+  "tables": [
+    {
+      "name": "empresas",
+      "line": 5,
+      "sha256": "651e0fbdbca5b4e2664d1b7bc03a82613724519b08bafc76695d702f24ccf498",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(40) NOT NULL UNIQUE"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "slug",
+          "definition": "slug VARCHAR(80) NOT NULL UNIQUE"
+        },
+        {
+          "name": "logo_url",
+          "definition": "logo_url VARCHAR(500) NULL"
+        },
+        {
+          "name": "activa",
+          "definition": "activa TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "modulos_json",
+          "definition": "modulos_json JSON NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (id)",
+        "UNIQUE KEY (codigo)",
+        "UNIQUE KEY (slug)"
+      ],
+      "foreignKeys": [],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "usuarios",
+      "line": 16,
+      "sha256": "dd4b5f76f5ea60052d8dcede3ae8a865762674bf82a38c734d3b282e63380417",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "username",
+          "definition": "username VARCHAR(80) NOT NULL UNIQUE"
+        },
+        {
+          "name": "password_hash",
+          "definition": "password_hash VARCHAR(128) NOT NULL"
+        },
+        {
+          "name": "salt",
+          "definition": "salt VARCHAR(64) NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NULL"
+        },
+        {
+          "name": "email",
+          "definition": "email VARCHAR(200) NULL"
+        },
+        {
+          "name": "rol_global",
+          "definition": "rol_global VARCHAR(40) NOT NULL DEFAULT 'Operaciones'"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "acceso_todas_empresas",
+          "definition": "acceso_todas_empresas TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (id)",
+        "UNIQUE KEY (username)"
+      ],
+      "foreignKeys": [],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "usuario_empresa",
+      "line": 35,
+      "sha256": "70b49bb77abac038ff1c33b5e2adf3b10e42965fcf9d10569cbbf6c656ffb850",
+      "columns": [
+        {
+          "name": "usuario_id",
+          "definition": "usuario_id INT NOT NULL"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (usuario_id, empresa_id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ue_usuario",
+          "columns": [
+            "usuario_id"
+          ],
+          "target": "usuarios",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_ue_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "usuario_modulo",
+      "line": 43,
+      "sha256": "aa64fb7e59325b8656eb9748fee35879dd046ad4678409b0e2c6e7add55100b9",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "usuario_id",
+          "definition": "usuario_id INT NOT NULL"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NULL"
+        },
+        {
+          "name": "modulo",
+          "definition": "modulo VARCHAR(40) NOT NULL"
+        },
+        {
+          "name": "puede_ver",
+          "definition": "puede_ver TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "puede_crear",
+          "definition": "puede_crear TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "puede_editar",
+          "definition": "puede_editar TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "puede_eliminar",
+          "definition": "puede_eliminar TINYINT(1) NOT NULL DEFAULT 0"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_um_usuario_modulo (usuario_id, modulo)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_um_usuario",
+          "columns": [
+            "usuario_id"
+          ],
+          "target": "usuarios",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_um_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "auditoria",
+      "line": 587,
+      "sha256": "bfa28ed5c72e241e7f3756df19f232e6925865c4d7c71b21bdf88e5bdfe2e898",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id BIGINT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NULL"
+        },
+        {
+          "name": "usuario",
+          "definition": "usuario VARCHAR(100) NULL"
+        },
+        {
+          "name": "accion",
+          "definition": "accion VARCHAR(80) NOT NULL"
+        },
+        {
+          "name": "modulo",
+          "definition": "modulo VARCHAR(40) NULL"
+        },
+        {
+          "name": "detalle",
+          "definition": "detalle TEXT NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "KEY idx_aud_empresa (empresa_id)",
+        "KEY idx_aud_cuando (creado_en)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "clientes",
+      "line": 1394,
+      "sha256": "8774e0a476a3e9a93fd714fe22e9ce609103611111f41c5c6643ac8c80c6fe22",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(40) NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "razon_social",
+          "definition": "razon_social VARCHAR(250) NULL"
+        },
+        {
+          "name": "nit",
+          "definition": "nit VARCHAR(40) NULL"
+        },
+        {
+          "name": "telefono",
+          "definition": "telefono VARCHAR(80) NULL"
+        },
+        {
+          "name": "email",
+          "definition": "email VARCHAR(160) NULL"
+        },
+        {
+          "name": "direccion",
+          "definition": "direccion VARCHAR(300) NULL"
+        },
+        {
+          "name": "contacto_nombre",
+          "definition": "contacto_nombre VARCHAR(160) NULL"
+        },
+        {
+          "name": "contacto_telefono",
+          "definition": "contacto_telefono VARCHAR(80) NULL"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(40) NOT NULL DEFAULT 'comercial'"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(20) NOT NULL DEFAULT 'Activo'"
+        },
+        {
+          "name": "notas",
+          "definition": "notas TEXT NULL"
+        },
+        {
+          "name": "tms_cliente_id",
+          "definition": "tms_cliente_id INT NULL"
+        },
+        {
+          "name": "creado_at",
+          "definition": "creado_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_at",
+          "definition": "actualizado_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "rtu",
+          "definition": "rtu VARCHAR(60) NULL"
+        },
+        {
+          "name": "condicion_credito",
+          "definition": "condicion_credito VARCHAR(100) NULL"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_clientes_tms (empresa_id, tms_cliente_id)",
+        "KEY idx_clientes_empresa_nombre (empresa_id, nombre)",
+        "KEY idx_clientes_empresa_estado (empresa_id, estado)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_clientes_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "empleados",
+      "line": 78,
+      "sha256": "68f6febf62e6e3b8b68e093a3740de94dd431bfbd96e61f3e8f07e0836ec3838",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(80) NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "puesto",
+          "definition": "puesto VARCHAR(120) NULL"
+        },
+        {
+          "name": "categoria_ops",
+          "definition": "categoria_ops VARCHAR(40) NULL"
+        },
+        {
+          "name": "tipo_horario",
+          "definition": "tipo_horario VARCHAR(40) NOT NULL DEFAULT 'Fijo'"
+        },
+        {
+          "name": "fecha_alta",
+          "definition": "fecha_alta DATE NULL"
+        },
+        {
+          "name": "fecha_inicio_laboral",
+          "definition": "fecha_inicio_laboral DATE NULL"
+        },
+        {
+          "name": "hora_entrada_teorica",
+          "definition": "hora_entrada_teorica VARCHAR(20) NOT NULL DEFAULT '08:00:00'"
+        },
+        {
+          "name": "hora_salida_teorica",
+          "definition": "hora_salida_teorica VARCHAR(20) NOT NULL DEFAULT '17:00:00'"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(20) NOT NULL DEFAULT 'Activo'"
+        },
+        {
+          "name": "horas_extra_habilitado",
+          "definition": "horas_extra_habilitado TINYINT(1) NOT NULL DEFAULT 0"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_emp_empresa_codigo (empresa_id, codigo)",
+        "UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_emp_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_clientes",
+      "line": 600,
+      "sha256": "cef42c2843fb8ad46bc0b2371f326a476afbf31d07960b48d1ed138ea46e65e2",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "nit",
+          "definition": "nit VARCHAR(40) NULL"
+        },
+        {
+          "name": "telefono",
+          "definition": "telefono VARCHAR(80) NULL"
+        },
+        {
+          "name": "direccion",
+          "definition": "direccion VARCHAR(300) NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(20) NOT NULL DEFAULT 'Activo'"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_tmsclientes_empresa_id (empresa_id, id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmscli_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_lugares",
+      "line": 617,
+      "sha256": "e5e450c1cf1ba80c32faf97d2d394cea44c532002e84e6fc9204d82688f24068",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(40) NOT NULL DEFAULT 'Carga'"
+        },
+        {
+          "name": "direccion",
+          "definition": "direccion VARCHAR(300) NULL"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmslug_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "flota_vehiculos",
+      "line": 1078,
+      "sha256": "c25191f733be8fe28fb7ef1c7cc6174b8a73b3ce51b7ea1a0a69e2116fdb06d9",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "placa",
+          "definition": "placa VARCHAR(40) NOT NULL"
+        },
+        {
+          "name": "marca",
+          "definition": "marca VARCHAR(80) NULL"
+        },
+        {
+          "name": "modelo",
+          "definition": "modelo VARCHAR(80) NULL"
+        },
+        {
+          "name": "descripcion",
+          "definition": "descripcion VARCHAR(200) NULL"
+        },
+        {
+          "name": "tipo_unidad",
+          "definition": "tipo_unidad VARCHAR(20) NOT NULL DEFAULT 'VEHICULO'"
+        },
+        {
+          "name": "color",
+          "definition": "color VARCHAR(80) NULL"
+        },
+        {
+          "name": "tipo_combustible",
+          "definition": "tipo_combustible VARCHAR(40) NULL DEFAULT 'diesel'"
+        },
+        {
+          "name": "chasis",
+          "definition": "chasis VARCHAR(80) NULL"
+        },
+        {
+          "name": "capacidad",
+          "definition": "capacidad VARCHAR(80) NULL"
+        },
+        {
+          "name": "credito",
+          "definition": "credito VARCHAR(80) NULL"
+        },
+        {
+          "name": "empresa_activo",
+          "definition": "empresa_activo VARCHAR(120) NULL"
+        },
+        {
+          "name": "nit",
+          "definition": "nit VARCHAR(40) NULL"
+        },
+        {
+          "name": "condicion_propiedad",
+          "definition": "condicion_propiedad VARCHAR(120) NULL"
+        },
+        {
+          "name": "seguros",
+          "definition": "seguros VARCHAR(120) NULL"
+        },
+        {
+          "name": "km_actual",
+          "definition": "km_actual INT NULL"
+        },
+        {
+          "name": "km_intervalo_servicio",
+          "definition": "km_intervalo_servicio INT NOT NULL DEFAULT 5000"
+        },
+        {
+          "name": "km_ultimo_servicio",
+          "definition": "km_ultimo_servicio INT NULL"
+        },
+        {
+          "name": "fecha_ultimo_servicio",
+          "definition": "fecha_ultimo_servicio DATE NULL"
+        },
+        {
+          "name": "odometro_funcional",
+          "definition": "odometro_funcional TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "mantenimiento_intervalo_meses",
+          "definition": "mantenimiento_intervalo_meses SMALLINT NULL"
+        },
+        {
+          "name": "en_taller",
+          "definition": "en_taller TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "fecha_entrada_taller",
+          "definition": "fecha_entrada_taller DATE NULL"
+        },
+        {
+          "name": "motivo_taller",
+          "definition": "motivo_taller VARCHAR(300) NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(40) NOT NULL DEFAULT 'Activo'"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "notas",
+          "definition": "notas TEXT NULL"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_flota_placa (empresa_id, placa)",
+        "UNIQUE KEY uq_flota_vehiculos_empresa_id (empresa_id, id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_flota_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_unidades",
+      "line": 626,
+      "sha256": "332d8cc1043f92686b6c60326e6bfd56dfe0f683a9fcdc478fc182ee39a7ac1c",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "placa",
+          "definition": "placa VARCHAR(40) NOT NULL"
+        },
+        {
+          "name": "flota_vehiculo_id",
+          "definition": "flota_vehiculo_id INT NULL"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(40) NOT NULL DEFAULT 'Camion'"
+        },
+        {
+          "name": "marca",
+          "definition": "marca VARCHAR(80) NULL"
+        },
+        {
+          "name": "modelo",
+          "definition": "modelo VARCHAR(80) NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(40) NOT NULL DEFAULT 'Disponible'"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_unidad (empresa_id, placa)",
+        "INDEX idx_tmsuni_flota (flota_vehiculo_id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsuni_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_personal",
+      "line": 645,
+      "sha256": "47489dc131d69ab65bdfea4bbe518e58c2b8c3a97da7230fb3e196afd387a163",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(80) NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(40) NOT NULL DEFAULT 'Piloto'"
+        },
+        {
+          "name": "telefono",
+          "definition": "telefono VARCHAR(80) NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(20) NOT NULL DEFAULT 'Activo'"
+        },
+        {
+          "name": "id_empleado",
+          "definition": "id_empleado INT NULL AFTER empresa_id"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmspers_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "flota_vehiculo_acceso",
+      "line": 430,
+      "sha256": "0318f83a06fed5409ef68743dbd32da78bc767b783a32fb43b236b5dce5169ff",
+      "columns": [
+        {
+          "name": "vehiculo_id",
+          "definition": "vehiculo_id INT NOT NULL"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        }
+      ],
+      "indexes": [
+        "PRIMARY KEY (vehiculo_id, empresa_id)",
+        "INDEX idx_fva_emp (empresa_id)"
+      ],
+      "foreignKeys": [],
+      "file": "src/lib/flota/schema.ts"
+    },
+    {
+      "name": "tms_cliente_ubicaciones",
+      "line": 884,
+      "sha256": "939ac6b0647c781d023c9d57d2bc483676ff0054daf35a734101871b7fea3e35",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(160) NOT NULL"
+        },
+        {
+          "name": "direccion",
+          "definition": "direccion VARCHAR(300) NULL"
+        },
+        {
+          "name": "municipio",
+          "definition": "municipio VARCHAR(120) NULL"
+        },
+        {
+          "name": "departamento",
+          "definition": "departamento VARCHAR(120) NULL"
+        },
+        {
+          "name": "referencia",
+          "definition": "referencia VARCHAR(300) NULL"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(20) NOT NULL DEFAULT 'AMBOS'"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmscliub_cliente (empresa_id, cliente_id, activo)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmscliub_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmscliub_cliente",
+          "columns": [
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_contactos",
+      "line": 907,
+      "sha256": "49c9a1c5c9804fc8e1c3406664f12dc11afb638caf8c717f3b06505b8aa77372",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(160) NOT NULL"
+        },
+        {
+          "name": "cargo",
+          "definition": "cargo VARCHAR(120) NULL"
+        },
+        {
+          "name": "telefono",
+          "definition": "telefono VARCHAR(80) NULL"
+        },
+        {
+          "name": "email",
+          "definition": "email VARCHAR(160) NULL"
+        },
+        {
+          "name": "observaciones",
+          "definition": "observaciones VARCHAR(300) NULL"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmsclicont_cliente (empresa_id, cliente_id, activo)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsclicont_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsclicont_cliente",
+          "columns": [
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_rutas",
+      "line": 923,
+      "sha256": "1b8b9cc368aa9705e08fab8c8df0f37c7968e9b18e847000485a236263d3206c",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(40) NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(200) NULL"
+        },
+        {
+          "name": "ubicacion_carga_id",
+          "definition": "ubicacion_carga_id INT NULL"
+        },
+        {
+          "name": "lugar_carga_texto",
+          "definition": "lugar_carga_texto VARCHAR(300) NULL"
+        },
+        {
+          "name": "destino_descripcion",
+          "definition": "destino_descripcion VARCHAR(300) NULL"
+        },
+        {
+          "name": "hora_habitual",
+          "definition": "hora_habitual VARCHAR(20) NULL"
+        },
+        {
+          "name": "tarifa_referencia",
+          "definition": "tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "servicio_refrigerado_habitual",
+          "definition": "servicio_refrigerado_habitual TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "costo_operativo",
+          "definition": "costo_operativo DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "unidad_recurrente_id",
+          "definition": "unidad_recurrente_id INT NULL DEFAULT NULL"
+        },
+        {
+          "name": "contacto_cliente_id",
+          "definition": "contacto_cliente_id INT NULL"
+        },
+        {
+          "name": "observaciones",
+          "definition": "observaciones VARCHAR(300) NULL"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, codigo)",
+        "UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id)",
+        "INDEX idx_tmsclirutas_cliente (empresa_id, cliente_id, activo)",
+        "INDEX idx_tmsclirutas_codigo (empresa_id, codigo)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsclirutas_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsclirutas_cliente",
+          "columns": [
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_ruta_personal",
+      "line": 964,
+      "sha256": "107b1ce7e92928c0a65cb1494d7add8fca98dcaefc780780dd0aa0c5fde039ca",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "ruta_id",
+          "definition": "ruta_id INT NOT NULL"
+        },
+        {
+          "name": "empleado_id",
+          "definition": "empleado_id INT NOT NULL"
+        },
+        {
+          "name": "rol",
+          "definition": "rol VARCHAR(20) NOT NULL"
+        },
+        {
+          "name": "orden",
+          "definition": "orden TINYINT UNSIGNED NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "viatico_monto",
+          "definition": "viatico_monto DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_ruta_personal_empleado (ruta_id, empleado_id)",
+        "UNIQUE KEY uq_ruta_personal_orden (ruta_id, rol, orden)",
+        "INDEX idx_ruta_personal_empresa (empresa_id, ruta_id, rol, orden)",
+        "INDEX idx_ruta_personal_empleado (empresa_id, empleado_id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ruta_personal_ruta_ambito",
+          "columns": [
+            "empresa_id",
+            "ruta_id"
+          ],
+          "target": "tms_cliente_rutas",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        },
+        {
+          "name": "fk_ruta_personal_empleado_ambito",
+          "columns": [
+            "empresa_id",
+            "empleado_id"
+          ],
+          "target": "empleados",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_ruta_paradas",
+      "line": 984,
+      "sha256": "3e58a141226810e120b612f25a98c49692af7b0124c87b892c695ea9d59b2d5a",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "ruta_id",
+          "definition": "ruta_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_ubicacion_id",
+          "definition": "cliente_ubicacion_id INT NULL"
+        },
+        {
+          "name": "orden",
+          "definition": "orden TINYINT NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(40) NOT NULL DEFAULT 'Entrega'"
+        },
+        {
+          "name": "lugar_nombre",
+          "definition": "lugar_nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmscliparadas_ruta (ruta_id, activo, orden)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmscliparadas_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmscliparadas_ruta",
+          "columns": [
+            "ruta_id"
+          ],
+          "target": "tms_cliente_rutas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_ruta_tarifas",
+      "line": 35,
+      "sha256": "e2e3d64ae5c41eac1c0eebb04523808eb481948ac5ad00f0435de2568be63608",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "ruta_id",
+          "definition": "ruta_id INT NOT NULL"
+        },
+        {
+          "name": "tarifa",
+          "definition": "tarifa DECIMAL(12,2) NOT NULL"
+        },
+        {
+          "name": "moneda",
+          "definition": "moneda VARCHAR(10) NOT NULL DEFAULT 'GTQ'"
+        },
+        {
+          "name": "vigente_desde",
+          "definition": "vigente_desde DATE NOT NULL"
+        },
+        {
+          "name": "motivo",
+          "definition": "motivo VARCHAR(300) NULL"
+        },
+        {
+          "name": "usuario_id",
+          "definition": "usuario_id INT NULL"
+        },
+        {
+          "name": "usuario_nombre",
+          "definition": "usuario_nombre VARCHAR(200) NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmsclirutatarifas_ruta (empresa_id, ruta_id, vigente_desde DESC, id DESC)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsclirutatarifas_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsclirutatarifas_ruta_ambito",
+          "columns": [
+            "empresa_id",
+            "ruta_id"
+          ],
+          "target": "tms_cliente_rutas",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsclirutatarifas_usuario",
+          "columns": [
+            "usuario_id"
+          ],
+          "target": "usuarios",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/migrate-2026-09-rutas-tarifario-historial.sql"
+    },
+    {
+      "name": "tms_ruta_tarifas",
+      "line": 1157,
+      "sha256": "a734041e2c2ce332a322efb2d4f48fbfac7337a03e6e519b6b335f308e9f3270",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "ruta_id",
+          "definition": "ruta_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(120) NOT NULL"
+        },
+        {
+          "name": "descripcion",
+          "definition": "descripcion VARCHAR(300) NULL"
+        },
+        {
+          "name": "monto",
+          "definition": "monto DECIMAL(12,2) NOT NULL"
+        },
+        {
+          "name": "moneda",
+          "definition": "moneda VARCHAR(10) NOT NULL DEFAULT 'GTQ'"
+        },
+        {
+          "name": "vigente_desde",
+          "definition": "vigente_desde DATE NOT NULL"
+        },
+        {
+          "name": "vigente_hasta",
+          "definition": "vigente_hasta DATE NULL DEFAULT NULL"
+        },
+        {
+          "name": "activa",
+          "definition": "activa TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "predeterminada",
+          "definition": "predeterminada TINYINT(1) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "observacion",
+          "definition": "observacion VARCHAR(300) NULL"
+        },
+        {
+          "name": "creado_por",
+          "definition": "creado_por INT NULL"
+        },
+        {
+          "name": "creado_por_nombre",
+          "definition": "creado_por_nombre VARCHAR(200) NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_por",
+          "definition": "actualizado_por INT NULL"
+        },
+        {
+          "name": "actualizado_por_nombre",
+          "definition": "actualizado_por_nombre VARCHAR(200) NULL"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmsrutatarifas_ruta (empresa_id, ruta_id, activa, predeterminada)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsrutatarifas_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsrutatarifas_ruta_ambito",
+          "columns": [
+            "empresa_id",
+            "ruta_id"
+          ],
+          "target": "tms_cliente_rutas",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsrutatarifas_creador",
+          "columns": [
+            "creado_por"
+          ],
+          "target": "usuarios",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsrutatarifas_editor",
+          "columns": [
+            "actualizado_por"
+          ],
+          "target": "usuarios",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cliente_usuarios",
+      "line": 1007,
+      "sha256": "a625241af71c6b80bb5b5a5fda73ea19539a8b5dc2816966304c1376ea4edd6f",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(160) NOT NULL"
+        },
+        {
+          "name": "email",
+          "definition": "email VARCHAR(160) NOT NULL"
+        },
+        {
+          "name": "password_hash",
+          "definition": "password_hash VARCHAR(255) NOT NULL"
+        },
+        {
+          "name": "salt",
+          "definition": "salt VARCHAR(255) NOT NULL"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "debe_cambiar_password",
+          "definition": "debe_cambiar_password TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "ultimo_acceso",
+          "definition": "ultimo_acceso DATETIME NULL"
+        },
+        {
+          "name": "creado_por",
+          "definition": "creado_por VARCHAR(100) NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_tmscliusr_email (email)",
+        "UNIQUE KEY uq_tmscliusr_empresa_cliente_id (empresa_id, cliente_id, id)",
+        "INDEX idx_tmscliusr_cliente (empresa_id, cliente_id, activo)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmscliusr_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmscliusr_empresa_cliente",
+          "columns": [
+            "empresa_id",
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_cotizacion_costeo_perfiles",
+      "line": 1676,
+      "sha256": "07896d9870f89b5332e9f2134a77434635a96e9b1945fa2e5a3cbd5a13f35336",
+      "columns": [
+        {
+          "name": "viajes_mes",
+          "definition": "viajes_mes DECIMAL(10,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "precio_llanta",
+          "definition": "precio_llanta DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "cantidad_llantas",
+          "definition": "cantidad_llantas INT NULL DEFAULT NULL"
+        },
+        {
+          "name": "salario_piloto_mensual",
+          "definition": "salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "salario_auxiliar_mensual",
+          "definition": "salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "viaticos_hotel_viaje",
+          "definition": "viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "auxiliar_multiplica_dias",
+          "definition": "auxiliar_multiplica_dias TINYINT(1) NULL DEFAULT NULL"
+        },
+        {
+          "name": "viaticos_hotel_multiplica_dias",
+          "definition": "viaticos_hotel_multiplica_dias TINYINT(1) NULL DEFAULT NULL"
+        },
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(40) NOT NULL"
+        },
+        {
+          "name": "nombre",
+          "definition": "nombre VARCHAR(120) NOT NULL"
+        },
+        {
+          "name": "activo",
+          "definition": "activo TINYINT(1) NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "costo_adquisicion",
+          "definition": "costo_adquisicion DECIMAL(14,2) NULL"
+        },
+        {
+          "name": "dias_operacion_mes",
+          "definition": "dias_operacion_mes DECIMAL(5,2) NOT NULL"
+        },
+        {
+          "name": "gps_mensual",
+          "definition": "gps_mensual DECIMAL(12,2) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "seguro_vehiculo_mensual",
+          "definition": "seguro_vehiculo_mensual DECIMAL(12,2) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "costo_aceite_servicio",
+          "definition": "costo_aceite_servicio DECIMAL(12,2) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "vida_util_aceite_km",
+          "definition": "vida_util_aceite_km DECIMAL(12,2) NOT NULL"
+        },
+        {
+          "name": "costo_juego_llantas",
+          "definition": "costo_juego_llantas DECIMAL(14,2) NOT NULL DEFAULT 0"
+        },
+        {
+          "name": "vida_util_llantas_km",
+          "definition": "vida_util_llantas_km DECIMAL(12,2) NOT NULL"
+        },
+        {
+          "name": "rendimiento_km_galon",
+          "definition": "rendimiento_km_galon DECIMAL(8,3) NOT NULL"
+        },
+        {
+          "name": "deprec_valor_base",
+          "definition": "deprec_valor_base DECIMAL(14,2) NULL"
+        },
+        {
+          "name": "deprec_anios",
+          "definition": "deprec_anios DECIMAL(5,2) NULL"
+        },
+        {
+          "name": "deprec_dias_operacion_mes",
+          "definition": "deprec_dias_operacion_mes DECIMAL(5,2) NULL"
+        },
+        {
+          "name": "refrig_valor_base",
+          "definition": "refrig_valor_base DECIMAL(14,2) NULL"
+        },
+        {
+          "name": "refrig_anios",
+          "definition": "refrig_anios DECIMAL(5,2) NULL"
+        },
+        {
+          "name": "refrig_dias_operacion_mes",
+          "definition": "refrig_dias_operacion_mes DECIMAL(5,2) NULL"
+        },
+        {
+          "name": "creado_por",
+          "definition": "creado_por VARCHAR(100) NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_costeo_perfil_codigo (empresa_id, codigo)",
+        "UNIQUE KEY uq_costeo_perfil_empresa_id (empresa_id, id)",
+        "INDEX idx_costeo_perfil_activo (empresa_id, activo, nombre)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_costeo_perfil_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_planes_viaje",
+      "line": 656,
+      "sha256": "a7a788c6883b623b56fbd29be303d041b2d3582147d6eba4348ca4015955d3e0",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "codigo",
+          "definition": "codigo VARCHAR(80) NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NULL"
+        },
+        {
+          "name": "lugar_carga_id",
+          "definition": "lugar_carga_id INT NULL"
+        },
+        {
+          "name": "lugar_descarga_id",
+          "definition": "lugar_descarga_id INT NULL"
+        },
+        {
+          "name": "unidad_id",
+          "definition": "unidad_id INT NULL"
+        },
+        {
+          "name": "tc_vehiculo_id",
+          "definition": "tc_vehiculo_id INT NULL"
+        },
+        {
+          "name": "tc_placa_historica",
+          "definition": "tc_placa_historica VARCHAR(40) NULL"
+        },
+        {
+          "name": "tc_externo_placa",
+          "definition": "tc_externo_placa VARCHAR(40) NULL"
+        },
+        {
+          "name": "vehiculo_solicitado_perfil_id",
+          "definition": "vehiculo_solicitado_perfil_id INT NULL"
+        },
+        {
+          "name": "vehiculo_solicitado_nombre",
+          "definition": "vehiculo_solicitado_nombre VARCHAR(120) NULL"
+        },
+        {
+          "name": "piloto_id",
+          "definition": "piloto_id INT NULL"
+        },
+        {
+          "name": "auxiliar_id",
+          "definition": "auxiliar_id INT NULL"
+        },
+        {
+          "name": "fecha_plan",
+          "definition": "fecha_plan DATE NOT NULL"
+        },
+        {
+          "name": "hora_carga",
+          "definition": "hora_carga VARCHAR(20) NULL"
+        },
+        {
+          "name": "tipo_traslado",
+          "definition": "tipo_traslado VARCHAR(80) NULL"
+        },
+        {
+          "name": "regreso_estimado",
+          "definition": "regreso_estimado DATETIME NULL"
+        },
+        {
+          "name": "tarifa_comercial",
+          "definition": "tarifa_comercial DECIMAL(12,2) NULL"
+        },
+        {
+          "name": "tarifa_id",
+          "definition": "tarifa_id INT NULL DEFAULT NULL"
+        },
+        {
+          "name": "tarifa_nombre_historico",
+          "definition": "tarifa_nombre_historico VARCHAR(120) NULL DEFAULT NULL"
+        },
+        {
+          "name": "tarifa_monto_historico",
+          "definition": "tarifa_monto_historico DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "tarifa_moneda_historico",
+          "definition": "tarifa_moneda_historico VARCHAR(10) NULL DEFAULT NULL"
+        },
+        {
+          "name": "costo_operativo_referencia",
+          "definition": "costo_operativo_referencia DECIMAL(12,2) NULL DEFAULT NULL"
+        },
+        {
+          "name": "referencia_cliente",
+          "definition": "referencia_cliente VARCHAR(160) NULL"
+        },
+        {
+          "name": "ruta_id",
+          "definition": "ruta_id INT NULL"
+        },
+        {
+          "name": "ruta_codigo_historico",
+          "definition": "ruta_codigo_historico VARCHAR(40) NULL"
+        },
+        {
+          "name": "lugar_descarga_historico",
+          "definition": "lugar_descarga_historico VARCHAR(300) NULL"
+        },
+        {
+          "name": "contacto_nombre_historico",
+          "definition": "contacto_nombre_historico VARCHAR(160) NULL"
+        },
+        {
+          "name": "contacto_cargo_historico",
+          "definition": "contacto_cargo_historico VARCHAR(120) NULL"
+        },
+        {
+          "name": "contacto_telefono_historico",
+          "definition": "contacto_telefono_historico VARCHAR(80) NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(40) NOT NULL DEFAULT 'Programado'"
+        },
+        {
+          "name": "tipo_viaje",
+          "definition": "tipo_viaje VARCHAR(20) NOT NULL DEFAULT 'Propio'"
+        },
+        {
+          "name": "piloto_externo_nombre",
+          "definition": "piloto_externo_nombre VARCHAR(160) NULL"
+        },
+        {
+          "name": "auxiliares_externos",
+          "definition": "auxiliares_externos TEXT NULL"
+        },
+        {
+          "name": "unidad_externa_placa",
+          "definition": "unidad_externa_placa VARCHAR(40) NULL"
+        },
+        {
+          "name": "unidad_externa_descripcion",
+          "definition": "unidad_externa_descripcion VARCHAR(160) NULL"
+        },
+        {
+          "name": "transportista_externo",
+          "definition": "transportista_externo VARCHAR(160) NULL"
+        },
+        {
+          "name": "costo_tercerizado",
+          "definition": "costo_tercerizado DECIMAL(12,2) NULL"
+        },
+        {
+          "name": "cerrado_por",
+          "definition": "cerrado_por VARCHAR(100) NULL"
+        },
+        {
+          "name": "cerrado_en",
+          "definition": "cerrado_en DATETIME NULL"
+        },
+        {
+          "name": "notas",
+          "definition": "notas TEXT NULL"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_plan (empresa_id, codigo)",
+        "UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id)",
+        "PRIMARY KEY (id)",
+        "INDEX idx_tmsplan_tc_fecha (empresa_id, tc_vehiculo_id, fecha_plan)",
+        "INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmsplan_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_cli",
+          "columns": [
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_lc",
+          "columns": [
+            "lugar_carga_id"
+          ],
+          "target": "tms_lugares",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_ld",
+          "columns": [
+            "lugar_descarga_id"
+          ],
+          "target": "tms_lugares",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_uni",
+          "columns": [
+            "unidad_id"
+          ],
+          "target": "tms_unidades",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_pil",
+          "columns": [
+            "piloto_id"
+          ],
+          "target": "tms_personal",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmsplan_aux",
+          "columns": [
+            "auxiliar_id"
+          ],
+          "target": "tms_personal",
+          "targetColumns": [
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_solicitudes_cliente",
+      "line": 1029,
+      "sha256": "c149f32206764f546bbb372fa010dbb9e16ebc81709dd9d687be313fe0a0dad1",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "cliente_id",
+          "definition": "cliente_id INT NOT NULL"
+        },
+        {
+          "name": "creado_por_usuario_cliente_id",
+          "definition": "creado_por_usuario_cliente_id INT NOT NULL"
+        },
+        {
+          "name": "estado",
+          "definition": "estado VARCHAR(20) NOT NULL DEFAULT 'SOLICITADA'"
+        },
+        {
+          "name": "fecha_solicitada",
+          "definition": "fecha_solicitada DATE NOT NULL"
+        },
+        {
+          "name": "hora_solicitada",
+          "definition": "hora_solicitada TIME NULL"
+        },
+        {
+          "name": "referencia_cliente",
+          "definition": "referencia_cliente VARCHAR(120) NULL"
+        },
+        {
+          "name": "observaciones",
+          "definition": "observaciones VARCHAR(500) NULL"
+        },
+        {
+          "name": "motivo_rechazo",
+          "definition": "motivo_rechazo VARCHAR(500) NULL"
+        },
+        {
+          "name": "plan_id",
+          "definition": "plan_id INT NULL"
+        },
+        {
+          "name": "version",
+          "definition": "version INT NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        },
+        {
+          "name": "actualizado_en",
+          "definition": "actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "UNIQUE KEY uq_tmssolicli_empresa_id (empresa_id, id)",
+        "UNIQUE KEY uq_tmssolicli_plan (empresa_id, plan_id)",
+        "INDEX idx_tmssolicli_cliente (empresa_id, cliente_id, estado)",
+        "INDEX idx_tmssolicli_usuario (empresa_id, cliente_id, creado_por_usuario_cliente_id)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmssolicli_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmssolicli_empresa_cliente",
+          "columns": [
+            "empresa_id",
+            "cliente_id"
+          ],
+          "target": "tms_clientes",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmssolicli_usuario",
+          "columns": [
+            "empresa_id",
+            "cliente_id",
+            "creado_por_usuario_cliente_id"
+          ],
+          "target": "tms_cliente_usuarios",
+          "targetColumns": [
+            "empresa_id",
+            "cliente_id",
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmssolicli_plan",
+          "columns": [
+            "empresa_id",
+            "plan_id"
+          ],
+          "target": "tms_planes_viaje",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    },
+    {
+      "name": "tms_solicitud_paradas",
+      "line": 1061,
+      "sha256": "0f6ea025521317a618e40ed944b1cd923f3c12349e7db2e0bab2bd7c2614ba18",
+      "columns": [
+        {
+          "name": "id",
+          "definition": "id INT AUTO_INCREMENT PRIMARY KEY"
+        },
+        {
+          "name": "empresa_id",
+          "definition": "empresa_id INT NOT NULL"
+        },
+        {
+          "name": "solicitud_id",
+          "definition": "solicitud_id INT NOT NULL"
+        },
+        {
+          "name": "orden",
+          "definition": "orden TINYINT NOT NULL DEFAULT 1"
+        },
+        {
+          "name": "tipo",
+          "definition": "tipo VARCHAR(20) NOT NULL"
+        },
+        {
+          "name": "lugar_nombre",
+          "definition": "lugar_nombre VARCHAR(200) NOT NULL"
+        },
+        {
+          "name": "cliente_ubicacion_id",
+          "definition": "cliente_ubicacion_id INT NULL"
+        },
+        {
+          "name": "referencia",
+          "definition": "referencia VARCHAR(300) NULL"
+        },
+        {
+          "name": "creado_en",
+          "definition": "creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        }
+      ],
+      "indexes": [
+        "INDEX idx_tmssolpar_solicitud (empresa_id, solicitud_id, orden)",
+        "PRIMARY KEY (id)"
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_tmssolpar_empresa",
+          "columns": [
+            "empresa_id"
+          ],
+          "target": "empresas",
+          "targetColumns": [
+            "id"
+          ]
+        },
+        {
+          "name": "fk_tmssolpar_empresa_solicitud",
+          "columns": [
+            "empresa_id",
+            "solicitud_id"
+          ],
+          "target": "tms_solicitudes_cliente",
+          "targetColumns": [
+            "empresa_id",
+            "id"
+          ]
+        }
+      ],
+      "file": "sql/schema.sql"
+    }
+  ],
+  "foreignKeys": [
+    {
+      "table": "usuario_empresa",
+      "name": "fk_ue_usuario",
+      "columns": [
+        "usuario_id"
+      ],
+      "target": "usuarios",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "usuario_empresa",
+      "name": "fk_ue_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "usuario_modulo",
+      "name": "fk_um_usuario",
+      "columns": [
+        "usuario_id"
+      ],
+      "target": "usuarios",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "usuario_modulo",
+      "name": "fk_um_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "clientes",
+      "name": "fk_clientes_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "empleados",
+      "name": "fk_emp_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_clientes",
+      "name": "fk_tmscli_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_lugares",
+      "name": "fk_tmslug_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "flota_vehiculos",
+      "name": "fk_flota_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_unidades",
+      "name": "fk_tmsuni_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_personal",
+      "name": "fk_tmspers_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ubicaciones",
+      "name": "fk_tmscliub_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ubicaciones",
+      "name": "fk_tmscliub_cliente",
+      "columns": [
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_contactos",
+      "name": "fk_tmsclicont_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_contactos",
+      "name": "fk_tmsclicont_cliente",
+      "columns": [
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_rutas",
+      "name": "fk_tmsclirutas_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_rutas",
+      "name": "fk_tmsclirutas_cliente",
+      "columns": [
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_personal",
+      "name": "fk_ruta_personal_ruta_ambito",
+      "columns": [
+        "empresa_id",
+        "ruta_id"
+      ],
+      "target": "tms_cliente_rutas",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_personal",
+      "name": "fk_ruta_personal_empleado_ambito",
+      "columns": [
+        "empresa_id",
+        "empleado_id"
+      ],
+      "target": "empleados",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_paradas",
+      "name": "fk_tmscliparadas_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_paradas",
+      "name": "fk_tmscliparadas_ruta",
+      "columns": [
+        "ruta_id"
+      ],
+      "target": "tms_cliente_rutas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_tarifas",
+      "name": "fk_tmsclirutatarifas_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_tarifas",
+      "name": "fk_tmsclirutatarifas_ruta_ambito",
+      "columns": [
+        "empresa_id",
+        "ruta_id"
+      ],
+      "target": "tms_cliente_rutas",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_ruta_tarifas",
+      "name": "fk_tmsclirutatarifas_usuario",
+      "columns": [
+        "usuario_id"
+      ],
+      "target": "usuarios",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_ruta_tarifas",
+      "name": "fk_tmsrutatarifas_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_ruta_tarifas",
+      "name": "fk_tmsrutatarifas_ruta_ambito",
+      "columns": [
+        "empresa_id",
+        "ruta_id"
+      ],
+      "target": "tms_cliente_rutas",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_ruta_tarifas",
+      "name": "fk_tmsrutatarifas_creador",
+      "columns": [
+        "creado_por"
+      ],
+      "target": "usuarios",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_ruta_tarifas",
+      "name": "fk_tmsrutatarifas_editor",
+      "columns": [
+        "actualizado_por"
+      ],
+      "target": "usuarios",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_usuarios",
+      "name": "fk_tmscliusr_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_usuarios",
+      "name": "fk_tmscliusr_empresa_cliente",
+      "columns": [
+        "empresa_id",
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cotizacion_costeo_perfiles",
+      "name": "fk_costeo_perfil_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_cli",
+      "columns": [
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_lc",
+      "columns": [
+        "lugar_carga_id"
+      ],
+      "target": "tms_lugares",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_ld",
+      "columns": [
+        "lugar_descarga_id"
+      ],
+      "target": "tms_lugares",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_uni",
+      "columns": [
+        "unidad_id"
+      ],
+      "target": "tms_unidades",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_pil",
+      "columns": [
+        "piloto_id"
+      ],
+      "target": "tms_personal",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_aux",
+      "columns": [
+        "auxiliar_id"
+      ],
+      "target": "tms_personal",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitudes_cliente",
+      "name": "fk_tmssolicli_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitudes_cliente",
+      "name": "fk_tmssolicli_empresa_cliente",
+      "columns": [
+        "empresa_id",
+        "cliente_id"
+      ],
+      "target": "tms_clientes",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitudes_cliente",
+      "name": "fk_tmssolicli_usuario",
+      "columns": [
+        "empresa_id",
+        "cliente_id",
+        "creado_por_usuario_cliente_id"
+      ],
+      "target": "tms_cliente_usuarios",
+      "targetColumns": [
+        "empresa_id",
+        "cliente_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitudes_cliente",
+      "name": "fk_tmssolicli_plan",
+      "columns": [
+        "empresa_id",
+        "plan_id"
+      ],
+      "target": "tms_planes_viaje",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitud_paradas",
+      "name": "fk_tmssolpar_empresa",
+      "columns": [
+        "empresa_id"
+      ],
+      "target": "empresas",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_solicitud_paradas",
+      "name": "fk_tmssolpar_empresa_solicitud",
+      "columns": [
+        "empresa_id",
+        "solicitud_id"
+      ],
+      "target": "tms_solicitudes_cliente",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_unidades",
+      "name": "fk_tmsuni_flota",
+      "columns": [
+        "flota_vehiculo_id"
+      ],
+      "target": "flota_vehiculos",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_tc_vehiculo",
+      "columns": [
+        "tc_vehiculo_id"
+      ],
+      "target": "flota_vehiculos",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_cliente_rutas",
+      "name": "fk_tmsclirutas_unidad_recurrente",
+      "columns": [
+        "unidad_recurrente_id"
+      ],
+      "target": "flota_vehiculos",
+      "targetColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "tms_planes_viaje",
+      "name": "fk_tmsplan_vehiculo_solicitado",
+      "columns": [
+        "empresa_id",
+        "vehiculo_solicitado_perfil_id"
+      ],
+      "target": "tms_cotizacion_costeo_perfiles",
+      "targetColumns": [
+        "empresa_id",
+        "id"
+      ]
+    },
+    {
+      "table": "tms_personal",
+      "name": "fk_tmspers_empleado",
+      "columns": [
+        "id_empleado"
+      ],
+      "target": "empleados",
+      "targetColumns": [
+        "id"
+      ]
+    }
+  ],
+  "ddl": [
+    "CREATE TABLE sandbox_pricesmart.novalvion_environment (\n  id TINYINT NOT NULL PRIMARY KEY CHECK (id = 1),\n  environment VARCHAR(16) NOT NULL CHECK (environment = 'sandbox'),\n  sandbox_id VARCHAR(48) NOT NULL\n) ENGINE=InnoDB",
+    "CREATE TABLE empresas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  codigo VARCHAR(40) NOT NULL UNIQUE,\n  nombre VARCHAR(200) NOT NULL,\n  slug VARCHAR(80) NOT NULL UNIQUE,\n  logo_url VARCHAR(500) NULL,\n  activa TINYINT(1) NOT NULL DEFAULT 1,\n  modulos_json JSON NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE usuarios (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  username VARCHAR(80) NOT NULL UNIQUE,\n  password_hash VARCHAR(128) NOT NULL,\n  salt VARCHAR(64) NOT NULL,\n  nombre VARCHAR(200) NULL,\n  email VARCHAR(200) NULL,\n  rol_global VARCHAR(40) NOT NULL DEFAULT 'Operaciones',\n                                                                   \n                                                                 \n                                                                    \n                                                                        \n                                                                              \n                                                                     \n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  acceso_todas_empresas TINYINT(1) NOT NULL DEFAULT 0,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE usuario_empresa (\n  usuario_id INT NOT NULL,\n  empresa_id INT NOT NULL,\n  PRIMARY KEY (usuario_id, empresa_id),\n  CONSTRAINT fk_ue_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,\n  CONSTRAINT fk_ue_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE usuario_modulo (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  usuario_id INT NOT NULL,\n  empresa_id INT NULL,\n  modulo VARCHAR(40) NOT NULL,\n  puede_ver TINYINT(1) NOT NULL DEFAULT 1,\n  puede_crear TINYINT(1) NOT NULL DEFAULT 0,\n  puede_editar TINYINT(1) NOT NULL DEFAULT 0,\n  puede_eliminar TINYINT(1) NOT NULL DEFAULT 0,\n  INDEX idx_um_usuario_modulo (usuario_id, modulo),\n  CONSTRAINT fk_um_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE CASCADE,\n  CONSTRAINT fk_um_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE auditoria (\n  id BIGINT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NULL,\n  usuario VARCHAR(100) NULL,\n  accion VARCHAR(80) NOT NULL,\n  modulo VARCHAR(40) NULL,\n  detalle TEXT NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  KEY idx_aud_empresa (empresa_id),\n  KEY idx_aud_cuando (creado_en)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE clientes (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  codigo VARCHAR(40) NULL,\n  nombre VARCHAR(200) NOT NULL,\n  razon_social VARCHAR(250) NULL,\n  nit VARCHAR(40) NULL,\n  telefono VARCHAR(80) NULL,\n  email VARCHAR(160) NULL,\n  direccion VARCHAR(300) NULL,\n  contacto_nombre VARCHAR(160) NULL,\n  contacto_telefono VARCHAR(80) NULL,\n  tipo VARCHAR(40) NOT NULL DEFAULT 'comercial',\n  estado VARCHAR(20) NOT NULL DEFAULT 'Activo',\n  notas TEXT NULL,\n  tms_cliente_id INT NULL,\n  creado_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  UNIQUE KEY uq_clientes_tms (empresa_id, tms_cliente_id),\n  KEY idx_clientes_empresa_nombre (empresa_id, nombre),\n  KEY idx_clientes_empresa_estado (empresa_id, estado),\n  CONSTRAINT fk_clientes_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE empleados (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  codigo VARCHAR(80) NOT NULL,\n  nombre VARCHAR(200) NOT NULL,\n  puesto VARCHAR(120) NULL,\n  categoria_ops VARCHAR(40) NULL,\n                                                       \n  tipo_horario VARCHAR(40) NOT NULL DEFAULT 'Fijo',\n  fecha_alta DATE NULL,\n  fecha_inicio_laboral DATE NULL,\n  hora_entrada_teorica VARCHAR(20) NOT NULL DEFAULT '08:00:00',\n  hora_salida_teorica VARCHAR(20) NOT NULL DEFAULT '17:00:00',\n  estado VARCHAR(20) NOT NULL DEFAULT 'Activo',\n                                                                           \n                                                                      \n                                        \n  horas_extra_habilitado TINYINT(1) NOT NULL DEFAULT 0,\n  UNIQUE KEY uq_emp_empresa_codigo (empresa_id, codigo),\n  UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id),\n  CONSTRAINT fk_emp_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_clientes (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  nombre VARCHAR(200) NOT NULL,\n  nit VARCHAR(40) NULL,\n  telefono VARCHAR(80) NULL,\n  direccion VARCHAR(300) NULL,\n  estado VARCHAR(20) NOT NULL DEFAULT 'Activo',\n                                                                           \n                                                                         \n                                                                       \n                                                   \n                                                                \n  UNIQUE KEY uq_tmsclientes_empresa_id (empresa_id, id),\n  CONSTRAINT fk_tmscli_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_lugares (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  nombre VARCHAR(200) NOT NULL,\n  tipo VARCHAR(40) NOT NULL DEFAULT 'Carga',\n  direccion VARCHAR(300) NULL,\n  CONSTRAINT fk_tmslug_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE flota_vehiculos (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  placa VARCHAR(40) NOT NULL,\n  marca VARCHAR(80) NULL,\n  modelo VARCHAR(80) NULL,\n  descripcion VARCHAR(200) NULL,\n                                                                                      \n                                                                         \n  tipo_unidad VARCHAR(20) NOT NULL DEFAULT 'VEHICULO',\n  color VARCHAR(80) NULL,\n  tipo_combustible VARCHAR(40) NULL DEFAULT 'diesel',\n  chasis VARCHAR(80) NULL,\n  capacidad VARCHAR(80) NULL,\n  credito VARCHAR(80) NULL,\n  empresa_activo VARCHAR(120) NULL,\n  nit VARCHAR(40) NULL,\n  condicion_propiedad VARCHAR(120) NULL,\n  seguros VARCHAR(120) NULL,\n  km_actual INT NULL,\n  km_intervalo_servicio INT NOT NULL DEFAULT 5000,\n  km_ultimo_servicio INT NULL,\n  fecha_ultimo_servicio DATE NULL,\n  odometro_funcional TINYINT(1) NOT NULL DEFAULT 1,\n  mantenimiento_intervalo_meses SMALLINT NULL,\n  en_taller TINYINT(1) NOT NULL DEFAULT 0,\n  fecha_entrada_taller DATE NULL,\n  motivo_taller VARCHAR(300) NULL,\n  estado VARCHAR(40) NOT NULL DEFAULT 'Activo',\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  notas TEXT NULL,\n  UNIQUE KEY uq_flota_placa (empresa_id, placa),\n                                                         \n                                                         \n                                                          \n                                                               \n  UNIQUE KEY uq_flota_vehiculos_empresa_id (empresa_id, id),\n  CONSTRAINT fk_flota_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_unidades (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  placa VARCHAR(40) NOT NULL,\n                                                                  \n                                                                       \n                                                                      \n                                                                    \n                                                                     \n  flota_vehiculo_id INT NULL,\n  tipo VARCHAR(40) NOT NULL DEFAULT 'Camion',\n  marca VARCHAR(80) NULL,\n  modelo VARCHAR(80) NULL,\n  estado VARCHAR(40) NOT NULL DEFAULT 'Disponible',\n  UNIQUE KEY uq_unidad (empresa_id, placa),\n  INDEX idx_tmsuni_flota (flota_vehiculo_id),\n  CONSTRAINT fk_tmsuni_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_personal (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  codigo VARCHAR(80) NULL,\n  nombre VARCHAR(200) NOT NULL,\n  tipo VARCHAR(40) NOT NULL DEFAULT 'Piloto',\n  telefono VARCHAR(80) NULL,\n  estado VARCHAR(20) NOT NULL DEFAULT 'Activo',\n  CONSTRAINT fk_tmspers_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE flota_vehiculo_acceso (\n      vehiculo_id INT NOT NULL,\n      empresa_id INT NOT NULL,\n      PRIMARY KEY (vehiculo_id, empresa_id),\n      INDEX idx_fva_emp (empresa_id)\n    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_ubicaciones (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  cliente_id INT NOT NULL,\n  nombre VARCHAR(160) NOT NULL,\n  direccion VARCHAR(300) NULL,\n  municipio VARCHAR(120) NULL,\n  departamento VARCHAR(120) NULL,\n  referencia VARCHAR(300) NULL,\n  tipo VARCHAR(20) NOT NULL DEFAULT 'AMBOS',\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  INDEX idx_tmscliub_cliente (empresa_id, cliente_id, activo),\n  CONSTRAINT fk_tmscliub_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmscliub_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_contactos (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  cliente_id INT NOT NULL,\n  nombre VARCHAR(160) NOT NULL,\n  cargo VARCHAR(120) NULL,\n  telefono VARCHAR(80) NULL,\n  email VARCHAR(160) NULL,\n  observaciones VARCHAR(300) NULL,\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  INDEX idx_tmsclicont_cliente (empresa_id, cliente_id, activo),\n  CONSTRAINT fk_tmsclicont_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsclicont_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_rutas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  cliente_id INT NOT NULL,\n  codigo VARCHAR(40) NOT NULL,\n  nombre VARCHAR(200) NULL,\n  ubicacion_carga_id INT NULL,\n  lugar_carga_texto VARCHAR(300) NULL,\n                                                                      \n                                                                        \n                                                                              \n                                                            \n  destino_descripcion VARCHAR(300) NULL,\n  hora_habitual VARCHAR(20) NULL,\n  tarifa_referencia DECIMAL(12,2) NULL DEFAULT NULL,\n  servicio_refrigerado_habitual TINYINT(1) NOT NULL DEFAULT 0,\n  costo_operativo DECIMAL(12,2) NULL DEFAULT NULL,\n                                                                        \n                                                                   \n                                                    \n                                                                           \n                                                                \n  unidad_recurrente_id INT NULL DEFAULT NULL,\n  contacto_cliente_id INT NULL,\n  observaciones VARCHAR(300) NULL,\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n                                                                       \n                                                                     \n                         \n  UNIQUE KEY uq_tmsclirutas_codigo (empresa_id, codigo),\n  UNIQUE KEY uq_ruta_personal_empresa_id (empresa_id, id),\n  INDEX idx_tmsclirutas_cliente (empresa_id, cliente_id, activo),\n  INDEX idx_tmsclirutas_codigo (empresa_id, codigo),\n  CONSTRAINT fk_tmsclirutas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsclirutas_cliente FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_ruta_personal (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  ruta_id INT NOT NULL,\n  empleado_id INT NOT NULL,\n  rol VARCHAR(20) NOT NULL,\n  orden TINYINT UNSIGNED NOT NULL DEFAULT 1,\n  viatico_monto DECIMAL(12,2) NULL DEFAULT NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  UNIQUE KEY uq_ruta_personal_empleado (ruta_id, empleado_id),\n  UNIQUE KEY uq_ruta_personal_orden (ruta_id, rol, orden),\n  INDEX idx_ruta_personal_empresa (empresa_id, ruta_id, rol, orden),\n  INDEX idx_ruta_personal_empleado (empresa_id, empleado_id),\n  CONSTRAINT fk_ruta_personal_ruta_ambito FOREIGN KEY (empresa_id, ruta_id)\n    REFERENCES tms_cliente_rutas (empresa_id, id) ON DELETE CASCADE,\n  CONSTRAINT fk_ruta_personal_empleado_ambito FOREIGN KEY (empresa_id, empleado_id)\n    REFERENCES empleados (empresa_id, id) ON DELETE RESTRICT\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_ruta_paradas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  ruta_id INT NOT NULL,\n  cliente_ubicacion_id INT NULL,\n  orden TINYINT NOT NULL DEFAULT 1,\n  tipo VARCHAR(40) NOT NULL DEFAULT 'Entrega',\n  lugar_nombre VARCHAR(200) NOT NULL,\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  INDEX idx_tmscliparadas_ruta (ruta_id, activo, orden),\n  CONSTRAINT fk_tmscliparadas_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmscliparadas_ruta FOREIGN KEY (ruta_id) REFERENCES tms_cliente_rutas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_ruta_tarifas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  ruta_id INT NOT NULL,\n  tarifa DECIMAL(12,2) NOT NULL,\n  moneda VARCHAR(10) NOT NULL DEFAULT 'GTQ',\n  vigente_desde DATE NOT NULL,\n  motivo VARCHAR(300) NULL,\n  usuario_id INT NULL,\n  usuario_nombre VARCHAR(200) NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  INDEX idx_tmsclirutatarifas_ruta (empresa_id, ruta_id, vigente_desde DESC, id DESC),\n  CONSTRAINT fk_tmsclirutatarifas_empresa\n    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsclirutatarifas_ruta_ambito\n    FOREIGN KEY (empresa_id, ruta_id) REFERENCES tms_cliente_rutas (empresa_id, id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsclirutatarifas_usuario\n    FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE SET NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_ruta_tarifas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  ruta_id INT NOT NULL,\n  nombre VARCHAR(120) NOT NULL,\n  descripcion VARCHAR(300) NULL,\n  monto DECIMAL(12,2) NOT NULL,\n  moneda VARCHAR(10) NOT NULL DEFAULT 'GTQ',\n  vigente_desde DATE NOT NULL,\n  vigente_hasta DATE NULL DEFAULT NULL,\n  activa TINYINT(1) NOT NULL DEFAULT 1,\n  predeterminada TINYINT(1) NOT NULL DEFAULT 0,\n  observacion VARCHAR(300) NULL,\n  creado_por INT NULL,\n  creado_por_nombre VARCHAR(200) NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_por INT NULL,\n  actualizado_por_nombre VARCHAR(200) NULL,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  INDEX idx_tmsrutatarifas_ruta (empresa_id, ruta_id, activa, predeterminada),\n  CONSTRAINT fk_tmsrutatarifas_empresa\n    FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsrutatarifas_ruta_ambito\n    FOREIGN KEY (empresa_id, ruta_id) REFERENCES tms_cliente_rutas (empresa_id, id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsrutatarifas_creador\n    FOREIGN KEY (creado_por) REFERENCES usuarios (id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsrutatarifas_editor\n    FOREIGN KEY (actualizado_por) REFERENCES usuarios (id) ON DELETE SET NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cliente_usuarios (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  cliente_id INT NOT NULL,\n  nombre VARCHAR(160) NOT NULL,\n  email VARCHAR(160) NOT NULL,\n  password_hash VARCHAR(255) NOT NULL,\n  salt VARCHAR(255) NOT NULL,\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  debe_cambiar_password TINYINT(1) NOT NULL DEFAULT 1,\n  ultimo_acceso DATETIME NULL,\n  creado_por VARCHAR(100) NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  UNIQUE KEY uq_tmscliusr_email (email),\n  UNIQUE KEY uq_tmscliusr_empresa_cliente_id (empresa_id, cliente_id, id),\n  INDEX idx_tmscliusr_cliente (empresa_id, cliente_id, activo),\n  CONSTRAINT fk_tmscliusr_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmscliusr_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)\n    REFERENCES tms_clientes(empresa_id, id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_cotizacion_costeo_perfiles (\n                                                                           \n  viajes_mes DECIMAL(10,2) NULL DEFAULT NULL,\n  precio_llanta DECIMAL(12,2) NULL DEFAULT NULL,\n  cantidad_llantas INT NULL DEFAULT NULL,\n  salario_piloto_mensual DECIMAL(12,2) NULL DEFAULT NULL,\n  salario_auxiliar_mensual DECIMAL(12,2) NULL DEFAULT NULL,\n                                                                                                                           \n  viaticos_hotel_viaje DECIMAL(12,2) NULL DEFAULT NULL,\n                                                                                                                                   \n  auxiliar_multiplica_dias TINYINT(1) NULL DEFAULT NULL,\n  viaticos_hotel_multiplica_dias TINYINT(1) NULL DEFAULT NULL,\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  codigo VARCHAR(40) NOT NULL,                                             \n  nombre VARCHAR(120) NOT NULL,\n  activo TINYINT(1) NOT NULL DEFAULT 1,\n  costo_adquisicion DECIMAL(14,2) NULL,                      \n  dias_operacion_mes DECIMAL(5,2) NOT NULL,                                           \n  gps_mensual DECIMAL(12,2) NOT NULL DEFAULT 0,\n  seguro_vehiculo_mensual DECIMAL(12,2) NOT NULL DEFAULT 0,\n  costo_aceite_servicio DECIMAL(12,2) NOT NULL DEFAULT 0,\n  vida_util_aceite_km DECIMAL(12,2) NOT NULL,\n  costo_juego_llantas DECIMAL(14,2) NOT NULL DEFAULT 0,                                                         \n  vida_util_llantas_km DECIMAL(12,2) NOT NULL,\n  rendimiento_km_galon DECIMAL(8,3) NOT NULL,\n                                                          \n  deprec_valor_base DECIMAL(14,2) NULL,\n  deprec_anios DECIMAL(5,2) NULL,\n  deprec_dias_operacion_mes DECIMAL(5,2) NULL,\n                                                                       \n  refrig_valor_base DECIMAL(14,2) NULL,\n  refrig_anios DECIMAL(5,2) NULL,\n  refrig_dias_operacion_mes DECIMAL(5,2) NULL,\n  creado_por VARCHAR(100) NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  UNIQUE KEY uq_costeo_perfil_codigo (empresa_id, codigo),\n  UNIQUE KEY uq_costeo_perfil_empresa_id (empresa_id, id),\n  INDEX idx_costeo_perfil_activo (empresa_id, activo, nombre),\n  CONSTRAINT fk_costeo_perfil_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_planes_viaje (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  codigo VARCHAR(80) NOT NULL,\n  cliente_id INT NULL,\n  lugar_carga_id INT NULL,\n  lugar_descarga_id INT NULL,\n  unidad_id INT NULL,\n                                                                                     \n                                                                                \n                                                                           \n                                                                        \n                                       \n  tc_vehiculo_id INT NULL,\n  tc_placa_historica VARCHAR(40) NULL,\n  tc_externo_placa VARCHAR(40) NULL,\n                                                                                                  \n                                                                                                  \n                                                                                                  \n                                                              \n  vehiculo_solicitado_perfil_id INT NULL,\n  vehiculo_solicitado_nombre VARCHAR(120) NULL,\n  piloto_id INT NULL,\n  auxiliar_id INT NULL,\n  fecha_plan DATE NOT NULL,\n  hora_carga VARCHAR(20) NULL,\n  tipo_traslado VARCHAR(80) NULL,\n  regreso_estimado DATETIME NULL,\n  tarifa_comercial DECIMAL(12,2) NULL,\n                                                                        \n                                                                      \n                                                                    \n                                                                         \n                                                                    \n                                                                       \n                                                                       \n                                                                   \n              \n  tarifa_id INT NULL DEFAULT NULL,\n  tarifa_nombre_historico VARCHAR(120) NULL DEFAULT NULL,\n  tarifa_monto_historico DECIMAL(12,2) NULL DEFAULT NULL,\n  tarifa_moneda_historico VARCHAR(10) NULL DEFAULT NULL,\n                                                                    \n                                                                          \n                                                             \n  costo_operativo_referencia DECIMAL(12,2) NULL DEFAULT NULL,\n  referencia_cliente VARCHAR(160) NULL,\n                                                                         \n                                                                       \n                                                                \n                                                                        \n                                                                      \n                                                          \n  ruta_id INT NULL,\n  ruta_codigo_historico VARCHAR(40) NULL,\n                                                                       \n                                                                   \n                                                                      \n                                                                         \n                                                                      \n                              \n  lugar_descarga_historico VARCHAR(300) NULL,\n  contacto_nombre_historico VARCHAR(160) NULL,\n  contacto_cargo_historico VARCHAR(120) NULL,\n  contacto_telefono_historico VARCHAR(80) NULL,\n  estado VARCHAR(40) NOT NULL DEFAULT 'Programado',\n                                                                         \n                                                                       \n                                                                          \n                                                 \n                                                                          \n                                                                       \n                                                                  \n                                                                      \n                                                                   \n                                                                       \n                                                                          \n                                                                        \n                      \n  tipo_viaje VARCHAR(20) NOT NULL DEFAULT 'Propio',\n  piloto_externo_nombre VARCHAR(160) NULL,\n  auxiliares_externos TEXT NULL,\n  unidad_externa_placa VARCHAR(40) NULL,\n  unidad_externa_descripcion VARCHAR(160) NULL,\n  transportista_externo VARCHAR(160) NULL,\n                                                                        \n                                                                          \n  costo_tercerizado DECIMAL(12,2) NULL,\n  cerrado_por VARCHAR(100) NULL,\n  cerrado_en DATETIME NULL,\n  notas TEXT NULL,\n  UNIQUE KEY uq_plan (empresa_id, codigo),\n                                                                  \n                                                                     \n                                                                 \n  UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id),\n  CONSTRAINT fk_tmsplan_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmsplan_cli FOREIGN KEY (cliente_id) REFERENCES tms_clientes(id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsplan_lc FOREIGN KEY (lugar_carga_id) REFERENCES tms_lugares(id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsplan_ld FOREIGN KEY (lugar_descarga_id) REFERENCES tms_lugares(id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsplan_uni FOREIGN KEY (unidad_id) REFERENCES tms_unidades(id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsplan_pil FOREIGN KEY (piloto_id) REFERENCES tms_personal(id) ON DELETE SET NULL,\n  CONSTRAINT fk_tmsplan_aux FOREIGN KEY (auxiliar_id) REFERENCES tms_personal(id) ON DELETE SET NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_solicitudes_cliente (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  cliente_id INT NOT NULL,\n  creado_por_usuario_cliente_id INT NOT NULL,\n  estado VARCHAR(20) NOT NULL DEFAULT 'SOLICITADA',\n  fecha_solicitada DATE NOT NULL,\n  hora_solicitada TIME NULL,\n  referencia_cliente VARCHAR(120) NULL,\n  observaciones VARCHAR(500) NULL,\n  motivo_rechazo VARCHAR(500) NULL,\n  plan_id INT NULL,\n  version INT NOT NULL DEFAULT 1,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  UNIQUE KEY uq_tmssolicli_empresa_id (empresa_id, id),\n  UNIQUE KEY uq_tmssolicli_plan (empresa_id, plan_id),\n  INDEX idx_tmssolicli_cliente (empresa_id, cliente_id, estado),\n  INDEX idx_tmssolicli_usuario (empresa_id, cliente_id, creado_por_usuario_cliente_id),\n  CONSTRAINT fk_tmssolicli_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmssolicli_empresa_cliente FOREIGN KEY (empresa_id, cliente_id)\n    REFERENCES tms_clientes(empresa_id, id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmssolicli_usuario FOREIGN KEY (empresa_id, cliente_id, creado_por_usuario_cliente_id)\n    REFERENCES tms_cliente_usuarios(empresa_id, cliente_id, id) ON DELETE RESTRICT,\n                                                                   \n                                                                     \n                                                                        \n                                                 \n  CONSTRAINT fk_tmssolicli_plan FOREIGN KEY (empresa_id, plan_id)\n    REFERENCES tms_planes_viaje(empresa_id, id) ON DELETE RESTRICT\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE tms_solicitud_paradas (\n  id INT AUTO_INCREMENT PRIMARY KEY,\n  empresa_id INT NOT NULL,\n  solicitud_id INT NOT NULL,\n  orden TINYINT NOT NULL DEFAULT 1,\n  tipo VARCHAR(20) NOT NULL,\n  lugar_nombre VARCHAR(200) NOT NULL,\n  cliente_ubicacion_id INT NULL,\n  referencia VARCHAR(300) NULL,\n  creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  INDEX idx_tmssolpar_solicitud (empresa_id, solicitud_id, orden),\n  CONSTRAINT fk_tmssolpar_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE CASCADE,\n  CONSTRAINT fk_tmssolpar_empresa_solicitud FOREIGN KEY (empresa_id, solicitud_id)\n    REFERENCES tms_solicitudes_cliente(empresa_id, id) ON DELETE CASCADE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "ALTER TABLE tms_unidades\n  ADD CONSTRAINT fk_tmsuni_flota\n  FOREIGN KEY (flota_vehiculo_id) REFERENCES flota_vehiculos(id)\n  ON DELETE SET NULL",
+    "ALTER TABLE tms_planes_viaje\n  ADD INDEX idx_tmsplan_tc_fecha (empresa_id, tc_vehiculo_id, fecha_plan),\n  ADD CONSTRAINT fk_tmsplan_tc_vehiculo\n  FOREIGN KEY (tc_vehiculo_id) REFERENCES flota_vehiculos(id)\n  ON DELETE SET NULL",
+    "ALTER TABLE tms_cliente_rutas\n  ADD CONSTRAINT fk_tmsclirutas_unidad_recurrente\n  FOREIGN KEY (unidad_recurrente_id) REFERENCES flota_vehiculos(id)\n  ON DELETE SET NULL",
+    "ALTER TABLE tms_planes_viaje\n  ADD INDEX idx_tmsplan_vehiculo_solicitado (empresa_id, vehiculo_solicitado_perfil_id),\n  ADD CONSTRAINT fk_tmsplan_vehiculo_solicitado\n  FOREIGN KEY (empresa_id, vehiculo_solicitado_perfil_id)\n  REFERENCES tms_cotizacion_costeo_perfiles(empresa_id, id)\n  ON DELETE RESTRICT\n  ON UPDATE RESTRICT",
+    "ALTER TABLE tms_personal\n  ADD COLUMN id_empleado INT NULL AFTER empresa_id",
+    "ALTER TABLE tms_personal\n  ADD CONSTRAINT fk_tmspers_empleado\n  FOREIGN KEY (id_empleado) REFERENCES empleados(id) ON DELETE SET NULL",
+    "ALTER TABLE clientes ADD COLUMN rtu VARCHAR(60) NULL",
+    "ALTER TABLE clientes ADD COLUMN condicion_credito VARCHAR(100) NULL"
+  ],
+  "grants": [
+    {
+      "table": "novalvion_environment",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S02 identity guard only"
+    },
+    {
+      "table": "empresas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "usuarios",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "usuario_empresa",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "usuario_modulo",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "auditoria",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "clientes",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "empleados",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_clientes",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_lugares",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "flota_vehiculos",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_unidades",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_personal",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "flota_vehiculo_acceso",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_ubicaciones",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_contactos",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_rutas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_ruta_personal",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_ruta_paradas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_ruta_tarifas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_ruta_tarifas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cliente_usuarios",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_cotizacion_costeo_perfiles",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_planes_viaje",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_solicitudes_cliente",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    },
+    {
+      "table": "tms_solicitud_paradas",
+      "operations": [
+        "SELECT"
+      ],
+      "reason": "S04 synthetic read-only navigation; installation writes use administrator"
+    }
+  ],
+  "scope": {
+    "login": true,
+    "tenantSelection": true,
+    "readOnlyCatalogsRoutesRequests": true,
+    "fullTmsUi": "PENDING_S06",
+    "writes": false,
+    "pricesmart": false,
+    "decisions": "D01-D16_PENDING_RATIFICATION"
+  }
+}
