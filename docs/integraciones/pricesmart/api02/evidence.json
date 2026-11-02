@@ -1,0 +1,18 @@
+{
+  "stage": "API-02",
+  "date": "2026-11-02",
+  "base": "d6222b31",
+  "draftOnly": true,
+  "decisionsD01D16": "PENDING",
+  "vitest": { "files": 17, "passed": 408, "failed": 0, "installedVersion": "4.1.11", "requestedVersion": "4.1.12", "method": "OFFLINE_DOUBLES_AND_STATIC" },
+  "nodePreflight": { "passed": 12, "failed": 0, "method": "DOCUMENTARY_OFFLINE" },
+  "typescript": "PASS",
+  "eslint": "PASS",
+  "realMariaDB": "NO EJECUTADA",
+  "twoConnections": "NO EJECUTADA",
+  "durabilityRecovery": "NO EJECUTADA",
+  "effectivePermissions": "NO EJECUTADA",
+  "cryptographyRetention": "NO EJECUTADA",
+  "httpM2M": "NO EJECUTADA",
+  "productionSafe": false
+}

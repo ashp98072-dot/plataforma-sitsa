@@ -27,6 +27,6 @@ export interface OrderRepository {
   // Atomic transaction: insert/update + event + audit + outbox, rollback on any failure.
   // Resolve ONLY after commit; reject unknown commit outcomes. UniqueOrderCollision must
   // be mapped ONLY from the order identity unique constraint, never an unrelated duplicate.
-  // No driver/SQL implementation is supplied. A test fake MUST report SIMULATED.
+  // API-02 supplies an optional disconnected SQL adapter. A test fake MUST report SIMULATED.
   runAtomic<T>(scope: Scope, action: (tx: Transaction) => Promise<T>): Promise<Committed<T>>;
 }
