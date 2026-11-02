@@ -1,0 +1,36 @@
+{
+  "stage": "API-04",
+  "date": "2026-11-02",
+  "base": "e05afa76",
+  "draftOnly": true,
+  "decisionsD01D16": "PENDING",
+  "nextRoutesInstalled": false,
+  "listenersStarted": false,
+  "realCredentialsUsed": false,
+  "api02WiredToRealDatabase": false,
+  "vitest": {
+    "files": 20,
+    "passed": 601,
+    "failed": 0,
+    "newTransportSimulated": 95,
+    "newContractStatic": 5,
+    "regression": 501,
+    "installedVersion": "4.1.11",
+    "requestedVersion": "4.1.12",
+    "method": "SYNTHETIC_REQUEST_RESPONSE_DOUBLES_STATIC"
+  },
+  "nodePreflight": {
+    "passed": 12,
+    "failed": 0,
+    "method": "DOCUMENTARY_OFFLINE"
+  },
+  "typescript": "PASS",
+  "eslint": "PASS",
+  "realHTTP": "NO EJECUTADA",
+  "realTLSGateway": "NO EJECUTADA",
+  "realM2M": "NO EJECUTADA",
+  "distributedRateAndReplay": "NO EJECUTADA",
+  "realMariaDBDurability": "NO EJECUTADA",
+  "realLinuxSandbox": "NO EJECUTADA",
+  "productionSafe": false
+}
