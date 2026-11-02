@@ -1,0 +1,36 @@
+{
+  "stage": "API-03",
+  "date": "2026-11-02",
+  "base": "187e84b5",
+  "draftOnly": true,
+  "decisionsD01D16": "PENDING",
+  "authenticationMechanism": "UNRESOLVED_D02",
+  "httpEnabled": false,
+  "identityPortWired": false,
+  "api02Wired": false,
+  "vitest": {
+    "files": 18,
+    "passed": 501,
+    "failed": 0,
+    "newSimulatedCases": 93,
+    "regressionCases": 408,
+    "installedVersion": "4.1.11",
+    "requestedVersion": "4.1.12",
+    "method": "OFFLINE_DOUBLES_AND_STATIC"
+  },
+  "nodePreflight": {
+    "passed": 12,
+    "failed": 0,
+    "method": "DOCUMENTARY_OFFLINE"
+  },
+  "typescript": "PASS",
+  "eslint": "PASS",
+  "realOAuth": "NO EJECUTADA",
+  "realPKI": "NO EJECUTADA",
+  "realRedis": "NO EJECUTADA",
+  "realMariaDB": "NO EJECUTADA",
+  "realHTTP": "NO EJECUTADA",
+  "realLinux": "NO EJECUTADA",
+  "distributedReplayAndQuotas": "NO EJECUTADA",
+  "realM2MCertified": false
+}
