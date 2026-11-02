@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { MAX_BODY_BYTES, principalSchema, type Principal } from './contracts';
+import { MAX_BODY_BYTES, reference, principalSchema, type Principal } from './contracts';
 import {
   assertionSchema, integrationSchema, targetSchema, operationSchema, policySchema,
   counterResultSchema, replayResultSchema, SecurityFailure,
@@ -102,6 +102,18 @@ export function createM2MSecurity(ports: {
         const handle = Object.freeze(Object.create(null)) as VerifiedIdentity;
         identities.set(handle, { assertion: assertion.data, namespace: namespace(record) });
         return handle;
+      });
+    },
+    // Namespace is derived only from the freshly verified administrative catalog.
+    async resourceTarget(identity: unknown, club: string, externalOrderId: string): Promise<ResourceTarget> {
+      return safe(async () => {
+        const stored = owned(identity);
+        const parsedClub = reference.max(64).safeParse(club), parsedId = reference.safeParse(externalOrderId);
+        if (!parsedClub.success || !parsedId.success) throw new SecurityFailure('DENIED');
+        const record = await current(stored.assertion);
+        if (namespace(record) !== stored.namespace || !record.allowedClubs.includes(parsedClub.data)) throw new SecurityFailure('DENIED');
+        return { environment: record.environment, tenantId: record.tenantId, clientId: record.clientId,
+          integrationId: record.integrationId, originClubReference: parsedClub.data, externalOrderId: parsedId.data };
       });
     },
     authorize,
