@@ -1,0 +1,80 @@
+﻿{
+    "phase":  "S06-B1-PREPARATION",
+    "base":  "1eb1e6b906d6fa8a8554d07b03f7eb25079ef7d8",
+    "planningDate":  "2026-11-02",
+    "hashMethod":  "SHA256 raw checkout bytes; CRLF/LF differences change hashes; not a deployed artifact attestation",
+    "authorizedToExecute":  false,
+    "operationalIsolationCertified":  false,
+    "realTestsStatus":  "NO EJECUTADA",
+    "decisions":  "D01-D16_PENDING_RATIFICATION",
+    "sourceInventory":  [
+                            {
+                                "path":  "scripts/sandbox-config.mjs",
+                                "sha256":  "3f5ad6934402298caa7b6d90e6c54367a1a1f829fc81ba54969469a485f09f0e"
+                            },
+                            {
+                                "path":  "src/lib/sandbox-db.ts",
+                                "sha256":  "c7ee6df0b2e7fe3bea558a355d266e17be30c4dbef65af50180eee8bf1671fb8"
+                            },
+                            {
+                                "path":  "scripts/infra/pricesmart-plan.mjs",
+                                "sha256":  "445075036b40f9a19109a408f690c36dfc33ffc1efccccc64825918dbfdca2c2"
+                            },
+                            {
+                                "path":  "scripts/infra/pricesmart-build.mjs",
+                                "sha256":  "2fc657aeb19f727c20f58a98465876b1b6925faa1dae6b9bf59b44f5c22f27c1"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/nftables.conf",
+                                "sha256":  "71e668174fd986959d1bdec32cdc280aad96014b448a09196e8f09df40caa9ea"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/mariadb.cnf",
+                                "sha256":  "62794e96f5e9f1b0f23aec663ac79f677485d2b9840d9683539c9810871369fe"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/nginx.conf",
+                                "sha256":  "bc97c98c13a939f6b8ff31633c55ed2555eeb7b4054ae681c945aaba34224fc6"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/backup.sh",
+                                "sha256":  "d91f6a1eba72852d72836c08abf820c92ad314e46b6f02cb949f023f91210137"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/s04/plan.json",
+                                "sha256":  "3d429688c1415429ca1517d11351d58558e291878c2fa9cc51abef6b1d621fdf"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/s04/fixtures.json",
+                                "sha256":  "a3d5ce8ef0c771b64821ff53759db76304f29c08b6e4da69f81ad94a415f3d96"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/s04/permissions.json",
+                                "sha256":  "c6f1c7f241db4b1414b1e20f9b18c0905ff29e5231727bf184115618ff896c0f"
+                            },
+                            {
+                                "path":  "scripts/sandbox-s05/artifact.mjs",
+                                "sha256":  "d2389dbd578804027eeaba9ea38780d94fd9a9b86d79333addb7b7b84ae4b62e"
+                            },
+                            {
+                                "path":  "scripts/sandbox-s06a/preflight.mjs",
+                                "sha256":  "10b560a0970c401494aa2c24fa0a29ae76a48eb052fa16e2a753b6dc16a9d50c"
+                            },
+                            {
+                                "path":  "infra/pricesmart-sandbox/s06a/dossier.example.json",
+                                "sha256":  "a62a1ab8995d219218821e9d4e43735582972d3e415dbc66dd4fbd3511605d03"
+                            },
+                            {
+                                "path":  "docs/integraciones/pricesmart/s06a/MATRIZ-S06.md",
+                                "sha256":  "6a59edad6bf1204bdbc16bd9131f2ca9d3a34542a2d7d26b3368d3ae7773ad3b"
+                            },
+                            {
+                                "path":  "docs/integraciones/pricesmart/s06a/PREFLIGHT-Y-GATES.md",
+                                "sha256":  "ef744e869bb00b156f2f10e8be9cb3bbe69ab8ed9323bab5b2cfac59349d77d6"
+                            },
+                            {
+                                "path":  "docs/integraciones/pricesmart/s06a/RECUPERACION.md",
+                                "sha256":  "0b2b94260e86dcbaf4c931cbeedd02e0746b57ee317454143fdf625d7c708e02"
+                            }
+                        ]
+}
