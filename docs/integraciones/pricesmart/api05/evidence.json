@@ -1,0 +1,39 @@
+{
+  "stage": "API-05",
+  "date": "2026-11-02",
+  "base": "c8b3cf57",
+  "draftOnly": true,
+  "decisionsD01D16": "PENDING",
+  "operationalWrites": false,
+  "api04Modified": false,
+  "simulatedReceptionHttpStatus": 503,
+  "simulatedReceiptAcknowledged": false,
+  "realTmsRequestId": null,
+  "externalPriceSmartStatus": null,
+  "sourceOutboxAcknowledged": false,
+  "vitest": {
+    "files": 22,
+    "passed": 663,
+    "failed": 0,
+    "newAdaptationSimulated": 56,
+    "newSyntheticCircuit": 6,
+    "regression": 601,
+    "installedVersion": "4.1.11",
+    "requestedVersion": "4.1.12",
+    "method": "SIMULATED_MODELS_SYNTHETIC_REQUEST_RESPONSE_STATIC"
+  },
+  "nodePreflight": {
+    "passed": 12,
+    "failed": 0,
+    "method": "DOCUMENTARY_OFFLINE"
+  },
+  "typescript": "PASS",
+  "eslint": "PASS",
+  "realSQL": "NO EJECUTADA",
+  "operationalTMS": "NO EJECUTADA",
+  "realHTTP": "NO EJECUTADA",
+  "realLinux": "NO EJECUTADA",
+  "priceSmartCommunication": "NO EJECUTADA",
+  "durableRecoveryAndNoLostJobs": "NO EJECUTADA",
+  "productionSafe": false
+}
