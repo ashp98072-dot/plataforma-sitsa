@@ -1,6 +1,9 @@
 import type { Pool, PoolConnection, RowDataPacket } from "mysql2/promise";
 import { validateSandboxConfig } from "../../scripts/sandbox-config.mjs";
 
+const verifiedPools = new WeakSet<object>();
+export function isSandboxVerifiedPool(pool: object): boolean { return verifiedPools.has(pool); }
+
 /** Never expose a connection to application SQL before the read-only identity check. */
 export function sandboxPool(raw: Pool): Pool {
   const snapshot = ["DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"]
@@ -64,7 +67,7 @@ export function sandboxPool(raw: Pool): Pool {
     });
   }
   // Restrict the facade to the API used by Novalvion. No raw pool escape hatch.
-  return new Proxy(Object.create(null) as Pool, {
+  const facade = new Proxy(Object.create(null) as Pool, {
     get(_target, property) {
       if (property === "then") return undefined;
       if (property === "getConnection") return verifiedConnection;
@@ -79,4 +82,6 @@ export function sandboxPool(raw: Pool): Pool {
       throw new Error("Operación de pool no permitida en sandbox.");
     },
   });
+  verifiedPools.add(facade);
+  return facade;
 }

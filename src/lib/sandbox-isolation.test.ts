@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pool } from "mysql2/promise";
 import { assertSandboxPath, validateSandboxConfig } from "../../scripts/sandbox-config.mjs";
-import { sandboxPool } from "./sandbox-db";
+import { sandboxPool, isSandboxVerifiedPool } from "./sandbox-db";
 import { mapaDominios } from "./dominios";
 import { getAuthSecretBytes } from "./auth-secret";
 import { validarOrigenCB2 } from "./flota/cb2/origin";
@@ -142,6 +142,14 @@ describe("read-only DB identity gate", () => {
     const raw = { getConnection: vi.fn().mockResolvedValue(conn) };
     return { conn, raw, pool: sandboxPool(raw as unknown as Pool) };
   }
+  it("brands only the guarded facade without exposing or registering the raw pool", () => {
+    const { pool, raw } = fake();
+    expect(isSandboxVerifiedPool(pool)).toBe(true);
+    expect(isSandboxVerifiedPool(raw)).toBe(false);
+    expect(isSandboxVerifiedPool(Object.create(pool))).toBe(false);
+    expect(isSandboxVerifiedPool({ getConnection: raw.getConnection })).toBe(false);
+    expect(raw.getConnection).not.toHaveBeenCalled();
+  });
   it("checks the SAME connection before writes and transaction checkout", async () => {
     const { pool, conn } = fake();
     await pool.execute("UPDATE synthetic SET value = 1");
