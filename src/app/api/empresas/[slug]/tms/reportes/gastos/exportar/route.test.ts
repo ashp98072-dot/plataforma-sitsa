@@ -8,7 +8,13 @@ vi.mock("@/lib/tms/reportes-gastos", () => ({
     fechaHasta: url.searchParams.get("fechaHasta") ?? undefined,
     fechaSolicitudDesde: url.searchParams.get("fechaSolicitudDesde") ?? undefined,
     fechaSolicitudHasta: url.searchParams.get("fechaSolicitudHasta") ?? undefined,
+    categoria: url.searchParams.get("categoria") || undefined,
   })),
+  // OP-FONDOS-REP-01 — stubs mínimos de los helpers puros (la lógica real se prueba en reportes-gastos.test.ts).
+  mensajeCategoriaFondosInvalida: vi.fn((tipo: string, c?: string) => (tipo === "fondos" && c !== undefined && !["Combustible", "Hospedaje"].includes(c) ? "Categoría inválida." : null)),
+  exactoDeFila: vi.fn((f: { total: number }) => BigInt(Math.round(f.total * 10000))),
+  aCentavos: vi.fn((v: bigint) => (v + BigInt(50)) / BigInt(100)),
+  centavosANumero: vi.fn((v: bigint) => Number(v) / 100),
   obtenerReporteGastosPorTipo: vi.fn(),
   resumirViaticosPorEstado: vi.fn(() => ({})),
   agruparSolicitudesFondo: vi.fn((filas: unknown[]) => filas),
@@ -383,5 +389,65 @@ describe("GET /tms/reportes/gastos/exportar", () => {
         expect(body).toBeNull();
       });
     });
+  });
+});
+
+/** OP-FONDOS-REP-01 — cableado del filtro de categoría en la exportación (helpers puros stubbeados; la lógica real se prueba en reportes-gastos-categoria.test.ts). */
+describe("GET /tms/reportes/gastos/exportar — categoría (OP-FONDOS-REP-01)", () => {
+  const fondosFilas = [
+    { lineaId: 1, solicitudId: 10, solicitudCodigo: "F-10", fechaSolicitud: "2026-09-05", fechaViaje: null, empleadoNombre: "A", cargo: null, placa: null, clienteNombre: null, cantidad: 2, descripcion: "x", monto: 100, total: 200, categoria: "Combustible", estadoFondo: "Autorizada", cuenta: null, requirenteNombre: "Mario", entidadRequirenteNombre: "Kuiqtrans" },
+  ];
+  const resumen = { categoria: "Combustible", cantidad: 1, totalSolicitado: 200, totalAutorizado: 200, totalLiquidado: 0, totalRechazado: 0, totalPendiente: 0 };
+  const llamar = (qs: string) => GET(new Request(`http://localhost/x?tipo=fondos&${qs}`), ctx);
+
+  it("categoría inválida: 400 FILTRO_INVALIDO antes de consultar o generar archivos (xlsx, pdf tabular y pdf mensual)", async () => {
+    for (const extra of ["", "&formato=pdf&variante=tabular", "&formato=pdf&fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-30"]) {
+      const res = await llamar(`categoria=Inexistente${extra}`);
+      expect(res.status, extra).toBe(400);
+      expect((await res.json()).codigo).toBe("FILTRO_INVALIDO");
+    }
+    expect(obtenerReporteGastosPorTipo).not.toHaveBeenCalled();
+    expect(exportarReporteFondosExcel).not.toHaveBeenCalled();
+    expect(generarPdfMensualSolicitudesFondo).not.toHaveBeenCalled();
+    expect(tablaAPdf).not.toHaveBeenCalled();
+  });
+
+  it("sin permiso: 403 aunque la categoría sea inválida", async () => {
+    vi.mocked(requireTenantGastos).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantGastos>>);
+    expect((await llamar("categoria=Inexistente")).status).toBe(403);
+  });
+
+  it("Excel con categoría: mismo resultado del reporte + el resumen y la categoría; sin categoría la firma anterior (solo filas)", async () => {
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: fondosFilas, resumen } as never);
+    await llamar("categoria=Combustible");
+    expect(vi.mocked(obtenerReporteGastosPorTipo).mock.calls[0][2]).toMatchObject({ categoria: "Combustible" });
+    expect(exportarReporteFondosExcel).toHaveBeenCalledWith(fondosFilas, resumen, "Combustible");
+    vi.mocked(exportarReporteFondosExcel).mockClear();
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: fondosFilas, resumen: {} } as never);
+    await llamar("");
+    expect(exportarReporteFondosExcel).toHaveBeenCalledWith(fondosFilas);
+  });
+
+  it("PDF mensual con categoría: la categoría llega al generador y al resumen mensual", async () => {
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: fondosFilas, resumen } as never);
+    const res = await llamar("categoria=Combustible&formato=pdf&fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-30");
+    expect(res.status).toBe(200);
+    const args = vi.mocked(generarPdfMensualSolicitudesFondo).mock.calls[0];
+    expect(args[5]).toBe("Combustible");
+  });
+
+  it("PDF mensual sin categoría: la llamada conserva su forma anterior (categoría undefined)", async () => {
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: fondosFilas, resumen: {} } as never);
+    await llamar("formato=pdf&fechaSolicitudDesde=2026-09-01&fechaSolicitudHasta=2026-09-30");
+    expect(vi.mocked(generarPdfMensualSolicitudesFondo).mock.calls[0][5]).toBeUndefined();
+  });
+
+  it("PDF tabular con categoría: rotula la categoría en el encabezado y en la fila TOTAL", async () => {
+    vi.mocked(obtenerReporteGastosPorTipo).mockResolvedValue({ tipo: "fondos", filas: fondosFilas, resumen } as never);
+    await llamar("categoria=Combustible&formato=pdf&variante=tabular");
+    const arg = vi.mocked(tablaAPdf).mock.calls[0][0];
+    expect(arg.subtitle).toContain("CATEGORÍA: Combustible");
+    expect(arg.rows[arg.rows.length - 1]).toContain("TOTAL COMBUSTIBLE:");
+    expect(arg.rows[arg.rows.length - 1]).toContain("Q200.00");
   });
 });

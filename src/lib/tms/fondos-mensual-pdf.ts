@@ -68,6 +68,7 @@ function dibujarBloqueSolicitud(
   pageWidth: number,
   marginL: number,
   pageBottom: () => number,
+  categoria?: string,
 ): void {
   doc.font("Helvetica-Bold").fontSize(13).fillColor("#0f172a")
     .text(`SOLICITUD ${g.solicitudCodigo}`, { width: pageWidth });
@@ -77,6 +78,7 @@ function dibujarBloqueSolicitud(
   doc.text(`Empresa requirente: ${(g.entidadRequirenteNombre ?? empresaNombre).toUpperCase()}`, { width: pageWidth });
   doc.text(`Persona que requiere: ${(g.requirenteNombre ?? "—").toUpperCase()}`, { width: pageWidth });
   doc.text(`Estado: ${g.estadoFondo}`, { width: pageWidth });
+  if (categoria) doc.text(`Categoría filtrada: ${categoria} (solo se listan las líneas de esta categoría)`, { width: pageWidth });
   doc.moveDown(0.55);
 
   const fechaSolicitudVisible = formatearFechaVisible(g.fechaSolicitud);
@@ -103,8 +105,16 @@ function dibujarBloqueSolicitud(
 
   if (doc.y + 22 > pageBottom()) doc.addPage();
   doc.moveDown(0.3);
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
-    .text(`TOTAL SOLICITUD: ${moneda(g.totalSolicitud)}`, { width: pageWidth, align: "right" });
+  if (categoria) {
+    // OP-FONDOS-REP-01 — el subtotal de la categoría y el total de la solicitud se rotulan distinto: son números distintos.
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
+      .text(`SUBTOTAL ${categoria.toUpperCase()}: ${moneda(g.subtotalCategoria ?? 0)}`, { width: pageWidth, align: "right" });
+    doc.font("Helvetica").fontSize(8.5).fillColor("#334155")
+      .text(`Total de la solicitud (todas las categorías): ${moneda(g.totalSolicitud)}`, { width: pageWidth, align: "right" });
+  } else {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a")
+      .text(`TOTAL SOLICITUD: ${moneda(g.totalSolicitud)}`, { width: pageWidth, align: "right" });
+  }
 
   // Observaciones de ESTA solicitud (mismo campo de BD que el PDF individual). Sin texto, no se dibuja.
   dibujarObservacionesPdf(doc, g.observaciones, pageWidth, marginL, pageBottom);
@@ -145,10 +155,12 @@ function dibujarResumenMes(
   for (const [k, v] of filas) doc.text(`${k}: ${v}`, { width: pageWidth });
   doc.moveDown(0.5);
   doc.font("Helvetica-Bold").fontSize(12)
-    .text(`TOTAL GENERAL DEL MES: ${moneda(resumen.totalGeneral)}`, { width: pageWidth });
+    .text(resumen.categoria ? `TOTAL ${resumen.categoria.toUpperCase()} DEL MES: ${moneda(resumen.totalGeneral)}` : `TOTAL GENERAL DEL MES: ${moneda(resumen.totalGeneral)}`, { width: pageWidth });
   doc.moveDown(0.3);
   doc.font("Helvetica").fontSize(8).fillColor("#334155")
-    .text("Estados sumados en el TOTAL GENERAL: Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez.", { width: pageWidth });
+    .text(resumen.categoria
+      ? `Categoría filtrada: ${resumen.categoria}. Se suman SOLO las líneas de esa categoría (cantidad × monto) de las solicitudes Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez.`
+      : "Estados sumados en el TOTAL GENERAL: Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez.", { width: pageWidth });
 }
 
 export async function generarPdfMensualSolicitudesFondo(
@@ -157,6 +169,7 @@ export async function generarPdfMensualSolicitudesFondo(
   grupos: SolicitudFondoAgrupada[],
   resumen: ResumenMensualFondos,
   periodo: { anio: number; mes: number },
+  categoria?: string,
 ): Promise<Buffer> {
   const firmasPorSolicitud = new Map<number, FirmasSolicitud>();
   const controlPorSolicitud = new Map<number, ControlEntregaPdf>();
@@ -192,7 +205,7 @@ export async function generarPdfMensualSolicitudesFondo(
       .text("SOLICITUDES DE FONDO — REPORTE MENSUAL CONSOLIDADO", { width: pageWidth, align: "center" });
     doc.moveDown(0.3);
     doc.font("Helvetica").fontSize(10).fillColor("#0f172a")
-      .text(`${empresaNombre.toUpperCase()} · Período: ${etiqueta}`, { width: pageWidth, align: "center" });
+      .text(`${empresaNombre.toUpperCase()} · Período: ${etiqueta}${categoria ? ` · Categoría: ${categoria}` : ""}`, { width: pageWidth, align: "center" });
     doc.moveDown(0.7);
 
     grupos.forEach((g, i) => {
@@ -201,7 +214,7 @@ export async function generarPdfMensualSolicitudesFondo(
         doc, g, empresaNombre,
         firmasPorSolicitud.get(g.solicitudId) ?? { requirente: null, solicitante: null, autorizante: null },
         controlPorSolicitud.get(g.solicitudId) ?? CONTROL_ENTREGA_VACIO,
-        pageWidth, marginL, pageBottom,
+        pageWidth, marginL, pageBottom, categoria,
       );
     });
 
@@ -213,7 +226,7 @@ export async function generarPdfMensualSolicitudesFondo(
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
       doc.font("Helvetica").fontSize(7.5).fillColor("#94a3b8").text(
-        `Página ${i + 1} de ${range.count} · Período: ${etiqueta} · Generado el ${formatearTimestampVisible(ahoraLocal())} (Guatemala)`,
+        `Página ${i + 1} de ${range.count} · Período: ${etiqueta}${categoria ? ` · Categoría: ${categoria}` : ""} · Generado el ${formatearTimestampVisible(ahoraLocal())} (Guatemala)`,
         marginL, doc.page.height - doc.page.margins.bottom - 12,
         { width: pageWidth, align: "center", lineBreak: false },
       );

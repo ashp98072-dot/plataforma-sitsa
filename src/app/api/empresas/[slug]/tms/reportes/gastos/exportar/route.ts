@@ -3,8 +3,12 @@ import { requireTenantGastos } from "@/lib/tenant";
 import {
   TIPOS_REPORTE_GASTOS,
   agruparSolicitudesFondo,
+  aCentavos,
+  centavosANumero,
   filtrosReporteGastosDesdeUrl,
+  mensajeCategoriaFondosInvalida,
   obtenerReporteGastosPorTipo,
+  exactoDeFila,
   resumenMensualFondos,
   resumirViaticosPorEstado,
   type FilaSolicitudFondoReporte,
@@ -132,6 +136,9 @@ export async function GET(req: Request, ctx: Ctx) {
   const variante = url.searchParams.get("variante") === "tabular" ? "tabular" : null;
   // Mismo criterio de filtros/consulta que el GET de solo lectura — nunca dos parseos que puedan divergir.
   const filtros = filtrosReporteGastosDesdeUrl(url);
+  // OP-FONDOS-REP-01 — mismo criterio y mismo catálogo que el listado: categoría inválida => 400, antes de generar nada.
+  const errorCategoria = mensajeCategoriaFondosInvalida(tipo, filtros.categoria);
+  if (errorCategoria) return NextResponse.json({ error: errorCategoria, codigo: "FILTRO_INVALIDO" }, { status: 400 });
 
   // REPORTES-MENSUALES-CONSOLIDADOS-1 — el PDF MENSUAL CONSOLIDADO de
   // solicitudes de fondo (variante distinta de "tabular") exige que
@@ -213,9 +220,11 @@ export async function GET(req: Request, ctx: Ctx) {
     // todas las filas filtradas comparten requirente, "VARIOS
     // REQUIRIENTES" si no (ver personaQueRequiereTexto).
     const subtitulo = `${guard.empresa.nombre} · Período: ${periodoTexto(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)} · Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ${resultado.filas.length} registro(s)`
-      + `\nEMPRESA REQUIRIENTE: ${empresaRequirenteTexto(resultado.filas, guard.empresa.nombre)}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`;
-    const totalGeneral = resultado.filas.reduce((s, f) => s + f.total, 0);
-    const filaTotal = ["", "", "", "", "", "", "", "", "TOTAL:", moneda(totalGeneral)];
+      + `\nEMPRESA REQUIRIENTE: ${empresaRequirenteTexto(resultado.filas, guard.empresa.nombre)}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`
+      + (filtros.categoria ? `\nCATEGORÍA: ${filtros.categoria} (solo las líneas de esta categoría)` : "");
+    // Suma EXACTA (BigInt) de cantidad × monto; sin filtro el resultado es el mismo valor de antes.
+    const totalGeneral = centavosANumero(aCentavos(resultado.filas.reduce((s, f) => s + exactoDeFila(f), BigInt(0))));
+    const filaTotal = ["", "", "", "", "", "", "", "", filtros.categoria ? `TOTAL ${filtros.categoria.toUpperCase()}:` : "TOTAL:", moneda(totalGeneral)];
     const buffer = await tablaAPdf({
       title: "Reporte de solicitudes de fondo — detalle",
       subtitle: subtitulo,
@@ -242,7 +251,7 @@ export async function GET(req: Request, ctx: Ctx) {
   // solicitud de fondo (fondos/[id]/pdf) ni el Excel de este reporte.
   if (formato === "pdf" && resultado.tipo === "fondos" && periodoMensualFondos) {
     const grupos = agruparSolicitudesFondo(resultado.filas);
-    const resumenMes = resumenMensualFondos(grupos);
+    const resumenMes = resumenMensualFondos(grupos, filtros.categoria);
     const { anio, mes } = periodoMensualFondos;
     const buffer = await generarPdfMensualSolicitudesFondo(
       guard.empresa.id,
@@ -250,6 +259,7 @@ export async function GET(req: Request, ctx: Ctx) {
       grupos,
       resumenMes,
       periodoMensualFondos,
+      filtros.categoria,
     );
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
@@ -265,7 +275,7 @@ export async function GET(req: Request, ctx: Ctx) {
     : resultado.tipo === "rentabilidad"
       ? exportarRentabilidadExcel(resultado.filas)
       : resultado.tipo === "fondos"
-        ? exportarReporteFondosExcel(resultado.filas)
+        ? (filtros.categoria ? exportarReporteFondosExcel(resultado.filas, resultado.resumen, filtros.categoria) : exportarReporteFondosExcel(resultado.filas))
         : resultado.tipo === "gastosDetalle"
           ? exportarGastosDetalleExcel(resultado.filas)
           : exportarAgregadoGastosExcel(`Gastos por ${resultado.tipo}`, resultado.etiqueta, resultado.filas));
