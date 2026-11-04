@@ -1,7 +1,7 @@
-import type { PoolConnection, RowDataPacket } from "mysql2/promise";
+import type { RowDataPacket } from "mysql2/promise";
 import Decimal from "decimal.js";
-import { getPool, type SqlValue } from "@/lib/db";
-import { ErrorCxp } from "./errores";
+import type { SqlValue } from "@/lib/db";
+import { PAGADO, conLecturaCxp, enInstantanea, exigirEntidadEnEmpresa, exprsVencimiento as exprs, literalFecha, paramsPagos, subPagos } from "./lectura-cxp";
 import {
   LIMITE_EXPORTACION_ANT,
   ROTULO_ANTIGUEDAD_CXP,
@@ -30,38 +30,10 @@ import {
  * `obtenerAplicado` en lecturas); si falta `cxp_facturas` (M-3A) responde MIGRACION_PENDIENTE (503).
  */
 
-const esTablaInexistente = (e: unknown) => {
-  const err = e as { code?: string; errno?: number };
-  return err?.errno === 1146 || err?.code === "ER_NO_SUCH_TABLE";
-};
-const mencionaPagos = (e: unknown) => /cxp_pago/i.test(String((e as { sqlMessage?: string; message?: string })?.sqlMessage ?? (e as Error)?.message ?? ""));
-
-function literalFecha(corte: string): string {
-  // Se interpola como literal (se reutiliza en varias expresiones) SOLO tras validarla estrictamente.
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(corte) || new Date(`${corte}T00:00:00Z`).toISOString().slice(0, 10) !== corte) {
-    throw new ErrorCxp("Fecha de corte inválida.", 400, "CORTE_INVALIDO");
-  }
-  return `'${corte}'`;
-}
-
-const PAGADO = "COALESCE(pg.total, 0)";
-const SUBPAGOS = `(SELECT a.factura_id, SUM(a.monto) AS total
-       FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id
-      WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.estado = 'REGISTRADO' GROUP BY a.factura_id) pg ON pg.factura_id = x.id`;
-// Sin tablas de pagos: subconsulta vacía (sin parámetros) → pagado 0.00 exacto.
-const SUBPAGOS_VACIA = "(SELECT NULL AS factura_id, 0 AS total FROM DUAL WHERE 1 = 0) pg ON pg.factura_id = x.id";
-
 function from(conPagos: boolean) {
   return `FROM cxp_facturas x
      JOIN compras_proveedores p ON p.empresa_id = x.empresa_id AND p.id = x.proveedor_id
-     LEFT JOIN ${conPagos ? SUBPAGOS : SUBPAGOS_VACIA}`;
-}
-
-function exprs(corteSql: string) {
-  const dias = `GREATEST(0, DATEDIFF(${corteSql}, x.fecha_documento))`;
-  const tramo = `CASE WHEN ${dias} <= 15 THEN '0-15' WHEN ${dias} <= 30 THEN '16-30' WHEN ${dias} <= 60 THEN '31-60' WHEN ${dias} <= 90 THEN '61-90' ELSE '90+' END`;
-  const situacion = `CASE WHEN x.fecha_vencimiento IS NULL THEN 'SIN_VENCIMIENTO' WHEN x.fecha_vencimiento < ${corteSql} THEN 'VENCIDA' ELSE 'VIGENTE' END`;
-  return { dias, tramo, situacion };
+     LEFT JOIN ${subPagos(conPagos)}`;
 }
 
 function condiciones(empresaId: number, entidadId: number, f: FiltrosAntiguedadCxp, conPagos: boolean, ex: ReturnType<typeof exprs>) {
@@ -71,17 +43,7 @@ function condiciones(empresaId: number, entidadId: number, f: FiltrosAntiguedadC
   if (f.tramo) { w.push(`${ex.tramo} = ?`); p.push(f.tramo); }
   if (f.situacion) { w.push(`${ex.situacion} = ?`); p.push(f.situacion); }
   // Los `?` de la subconsulta de pagos (empresa, entidad) aparecen PRIMERO en el texto SQL.
-  return { where: w.join(" AND "), params: conPagos ? [empresaId, entidadId, ...p] : p };
-}
-
-async function enInstantanea<T>(fn: (c: PoolConnection) => Promise<T>): Promise<T> {
-  const c = await getPool().getConnection();
-  try {
-    await c.query("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY");
-    try { return await fn(c); } finally { await c.query("COMMIT"); }
-  } finally {
-    c.release();
-  }
+  return { where: w.join(" AND "), params: [...paramsPagos(conPagos, empresaId, entidadId), ...p] };
 }
 
 type FilaSql = RowDataPacket & {
@@ -95,10 +57,7 @@ async function consultarUnaVez(empresaId: number, entidadId: number, filtros: Fi
   const { where, params } = condiciones(empresaId, entidadId, filtros, conPagos, ex);
   const FROM = from(conPagos);
   return enInstantanea(async (c) => {
-    // La entidad debe pertenecer a la empresa de la sesión (404 si es de otra empresa o no existe). Las inactivas siguen siendo consultables
-    // (historia). Esto NO es autorización por usuario: ver docs/CXP-ANTIGUEDAD-MIL-CXP-01.md («Alcance de la autorización por entidad»).
-    const [ent] = await c.query<RowDataPacket[]>("SELECT id FROM cont_entidades WHERE empresa_id = ? AND id = ? LIMIT 1", [empresaId, entidadId]);
-    if (!ent[0]) throw new ErrorCxp("Entidad no disponible.", 404, "ENTIDAD_NO_DISPONIBLE");
+    await exigirEntidadEnEmpresa(c, empresaId, entidadId); // 404 si la entidad no es de la empresa (política vigente; ticket #555)
     const [filas] = await c.query<FilaSql[]>(
       `SELECT x.id, x.proveedor_id, p.nombre_comercial AS proveedor, x.serie, x.numero,
               DATE_FORMAT(x.fecha_documento, '%Y-%m-%d') AS fecha_documento, DATE_FORMAT(x.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,
@@ -118,16 +77,7 @@ async function consultarUnaVez(empresaId: number, entidadId: number, filtros: Fi
 }
 
 async function consultar(empresaId: number, entidadId: number, filtros: FiltrosAntiguedadCxp, corte: string, limite: { limit: number; offset: number }) {
-  try {
-    return await consultarUnaVez(empresaId, entidadId, filtros, corte, limite, true);
-  } catch (e) {
-    if (!esTablaInexistente(e)) throw e;
-    // Faltan las tablas de pagos (M-3B1): no puede existir ningún pago → pagado 0.00 exacto. Si falta otra tabla, se informa la migración pendiente.
-    if (mencionaPagos(e)) {
-      try { return await consultarUnaVez(empresaId, entidadId, filtros, corte, limite, false); } catch (e2) { if (!esTablaInexistente(e2)) throw e2; }
-    }
-    throw new ErrorCxp("Esquema de Cuentas por pagar pendiente. Aplica las migraciones CxP (M-3A y M-3B1) antes de usar este reporte.", 503, "MIGRACION_PENDIENTE");
-  }
+  return conLecturaCxp((conPagos) => consultarUnaVez(empresaId, entidadId, filtros, corte, limite, conPagos), "este reporte");
 }
 
 function aFila(r: FilaSql): FilaAntiguedadCxp {
