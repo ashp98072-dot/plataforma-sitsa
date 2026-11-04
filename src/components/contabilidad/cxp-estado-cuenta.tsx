@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { ETIQUETA_SITUACION, estadoCargaVacio, formatearImporte, puedeExportarAntiguedad, reducirCargaAntiguedad } from "@/lib/contabilidad/cxp/antiguedad-shared";
-import { ETIQUETA_ESTADO_DOCUMENTO, ETIQUETA_ESTADO_FINANCIERO, NOTA_SIN_PERMISO_PAGOS, type RespuestaEstadoCuenta } from "@/lib/contabilidad/cxp/estado-cuenta-shared";
+import { NOTA_SIN_PERMISO_PAGOS, textoEstadoDocumento, type RespuestaEstadoCuenta } from "@/lib/contabilidad/cxp/estado-cuenta-shared";
 
 /**
  * MIL-CXP-02 — Estado de cuenta por proveedor (saldos ACTUALES, no históricos). SOLO LECTURA.
@@ -152,6 +152,7 @@ export function CxpEstadoCuenta({ slug, entidadId }: { slug: string; entidadId: 
         </table>
         <p className="p-2 text-xs text-[var(--muted)]" data-testid="cxp-estado-resumen">
           Abiertas: {t.abiertas.facturas} · Pagadas: {t.pagadas.facturas}
+          {t.sobreaplicadas.facturas > 0 ? <span> · Sobreaplicadas (revisar): {t.sobreaplicadas.facturas}, exceso aplicado {q(t.sobreaplicadas.exceso)}</span> : null}
           {t.porSituacion.map(s => <span key={s.situacion}> · {ETIQUETA_SITUACION[s.situacion]}: {q(s.saldo)} ({s.facturas})</span>)}
           {t.anuladas.facturas > 0 ? <span> · Anuladas (informativo, no suman; saldo exigible Q 0.00): {t.anuladas.facturas}, monto pagadero {q(t.anuladas.montoPagadero)}</span> : null}
         </p>
@@ -166,7 +167,7 @@ export function CxpEstadoCuenta({ slug, entidadId }: { slug: string; entidadId: 
               <tr className={`border-t border-[var(--border)] ${f.estado === "ANULADA" ? "opacity-60" : ""}`} data-estado={f.estado}>
                 <td className="p-2">{f.documento}</td><td className="p-2">{f.fechaDocumento}</td><td className="p-2">{f.fechaVencimiento ?? "Sin vencimiento"}</td>
                 <td className="p-2">{f.diasVencidos == null ? "—" : f.diasVencidos}</td>
-                <td className="p-2">{f.estado === "ANULADA" ? "Anulada (importes informativos)" : `${ETIQUETA_ESTADO_DOCUMENTO[f.estado]} · ${ETIQUETA_ESTADO_FINANCIERO[f.estadoFinanciero]}`}</td>
+                <td className={`p-2 ${f.estado === "SOBREAPLICADA" ? "font-medium text-amber-600" : ""}`}>{textoEstadoDocumento(f)}</td>
                 <td className="p-2">{q(f.totalDocumento)}</td><td className="p-2">{q(f.retencionIsr)}</td><td className="p-2">{q(f.montoPagadero)}</td><td className="p-2">{q(f.pagado)}</td>
                 <td className="p-2 font-medium">{q(f.saldo)}</td>
               </tr>

@@ -25,9 +25,24 @@ export const NOTA_EXPORTACION_ESTADO_CUENTA =
   "Saldos ACTUALES al momento de generar el archivo (pueden variar si se registraron pagos después de la consulta en pantalla). La fecha de corte solo fija el cálculo de días; no representa un saldo histórico. Las facturas anuladas muestran sus importes solo como información: su saldo exigible es cero y no suman a los totales.";
 export const NOTA_SIN_PERMISO_PAGOS = "El detalle de pagos (líneas, referencias, medios y reversos) requiere además el permiso de Pagos de CxP.";
 
-export type EstadoDocumento = "ABIERTA" | "PAGADA" | "ANULADA";
-export const ETIQUETA_ESTADO_DOCUMENTO: Record<EstadoDocumento, string> = { ABIERTA: "Abierta", PAGADA: "Pagada", ANULADA: "Anulada" };
-export const ETIQUETA_ESTADO_FINANCIERO: Record<EstadoFinancieroCxp, string> = { PENDIENTE: "Pendiente", PARCIAL: "Pago parcial", PAGADA: "Pagada", ANULADA: "Anulada" };
+/**
+ * SOBREAPLICADA = factura REGISTRADA cuyo pagado vigente SUPERA su monto pagadero (inconsistencia que el servicio de pagos impide; solo puede existir por datos alterados).
+ * NO se presenta como «Pagada»: se clasifica aparte y se acompaña de la advertencia SOBREAPLICACION. Los importes originales no se modifican.
+ */
+export type EstadoDocumento = "ABIERTA" | "PAGADA" | "SOBREAPLICADA" | "ANULADA";
+export type EstadoFinancieroFila = EstadoFinancieroCxp | "SOBREAPLICADA";
+export const ETIQUETA_ESTADO_DOCUMENTO: Record<EstadoDocumento, string> = { ABIERTA: "Abierta", PAGADA: "Pagada", SOBREAPLICADA: "Sobreaplicada", ANULADA: "Anulada" };
+export const ETIQUETA_ESTADO_FINANCIERO: Record<EstadoFinancieroFila, string> = { PENDIENTE: "Pendiente", PARCIAL: "Pago parcial", PAGADA: "Pagada", SOBREAPLICADA: "Sobreaplicada", ANULADA: "Anulada" };
+export const TEXTO_SOBREAPLICADA = "Sobreaplicada (revisar: el pagado supera el monto pagadero)";
+export const TEXTO_ANULADA = "Anulada (importes informativos)";
+export const TEXTO_ANULADA_EXCEL = "Anulada (importes informativos; saldo exigible 0.00)";
+
+/** Texto de estado ÚNICO para pantalla y Excel (misma clasificación en API, UI y archivo). `paraExcel` solo alarga el texto de las anuladas. */
+export function textoEstadoDocumento(f: { estado: EstadoDocumento; estadoFinanciero: EstadoFinancieroFila }, paraExcel = false): string {
+  if (f.estado === "ANULADA") return paraExcel ? TEXTO_ANULADA_EXCEL : TEXTO_ANULADA;
+  if (f.estado === "SOBREAPLICADA") return TEXTO_SOBREAPLICADA;
+  return paraExcel ? ETIQUETA_ESTADO_DOCUMENTO[f.estado] : `${ETIQUETA_ESTADO_DOCUMENTO[f.estado]} · ${ETIQUETA_ESTADO_FINANCIERO[f.estadoFinanciero]}`;
+}
 
 export type FiltrosEstadoCuenta = {
   proveedorId: number;
@@ -137,7 +152,7 @@ export type FilaEstadoCuenta = {
   /** null en facturas anuladas (no adeudan). */
   situacion: SituacionVencimiento | null;
   estado: EstadoDocumento;
-  estadoFinanciero: EstadoFinancieroCxp;
+  estadoFinanciero: EstadoFinancieroFila;
   totalDocumento: string;
   retencionIsr: string;
   montoPagadero: string;
@@ -154,10 +169,12 @@ export type CodigoAdvertencia = "SOBREAPLICACION" | "PAGO_VIGENTE_EN_ANULADA" | 
 export type AdvertenciaIntegridad = { codigo: CodigoAdvertencia; mensaje: string; facturaId?: number; pagoId?: number; detalle: Record<string, string> };
 
 export type TotalesEstadoCuenta = {
-  /** Facturas REGISTRADAS (abiertas + pagadas) del filtro. */
+  /** Facturas REGISTRADAS (abiertas + pagadas + sobreaplicadas) del filtro. */
   registradas: { facturas: number; totalDocumento: string; retencionIsr: string; montoPagadero: string; pagado: string; saldoExigible: string };
   abiertas: { facturas: number; saldo: string };
   pagadas: { facturas: number };
+  /** Registradas con pagado > pagadero: NO cuentan como pagadas; `exceso` = Σ (pagado − pagadero) solo informativo (no compensa saldos exigibles). */
+  sobreaplicadas: { facturas: number; exceso: string };
   porSituacion: { situacion: SituacionVencimiento; facturas: number; saldo: string }[];
   /** Anuladas del filtro: importes INFORMATIVOS; no suman a ningún total ni adeudan. */
   anuladas: { facturas: number; totalDocumento: string; retencionIsr: string; montoPagadero: string };
@@ -194,10 +211,12 @@ export type RespuestaEstadoCuenta = {
 /** Saldo exigible de una factura registrada: monto pagadero − pagado vigente (CRUDO: puede ser negativo solo si hay sobreaplicación, que se advierte). */
 export const saldoCrudo = (montoPagadero: unknown, pagado: unknown): string => new Decimal(String(montoPagadero ?? "0")).minus(String(pagado ?? "0")).toFixed(2);
 
-/** Clasificación del documento para el estado de cuenta (misma que usa el servidor en SQL). */
+/** Clasificación del documento para el estado de cuenta (la misma que usa el servidor en SQL): anulada · sobreaplicada · abierta · pagada. */
 export function claseDocumento(estadoAdmin: "REGISTRADA" | "ANULADA", montoPagadero: unknown, pagado: unknown): EstadoDocumento {
   if (estadoAdmin === "ANULADA") return "ANULADA";
-  return new Decimal(String(montoPagadero)).greaterThan(new Decimal(String(pagado ?? "0"))) ? "ABIERTA" : "PAGADA";
+  const pagadero = new Decimal(String(montoPagadero)), vigente = new Decimal(String(pagado ?? "0"));
+  if (vigente.greaterThan(pagadero)) return "SOBREAPLICADA";
+  return pagadero.greaterThan(vigente) ? "ABIERTA" : "PAGADA";
 }
 
 export const COLUMNAS_FACTURAS_ESTADO = [

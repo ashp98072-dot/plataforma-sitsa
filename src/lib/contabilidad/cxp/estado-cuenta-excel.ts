@@ -3,11 +3,11 @@ import { ETIQUETA_SITUACION, valorCeldaImporte } from "./antiguedad-shared";
 import {
   COLUMNAS_FACTURAS_ESTADO,
   COLUMNAS_PAGOS_ESTADO,
-  ETIQUETA_ESTADO_DOCUMENTO,
   NOTA_EXPORTACION_ESTADO_CUENTA,
   NOTA_MONEDA_ESTADO_CUENTA,
   NOTA_SIN_PERMISO_PAGOS,
   ROTULO_ESTADO_CUENTA,
+  textoEstadoDocumento,
   type RespuestaEstadoCuenta,
 } from "./estado-cuenta-shared";
 
@@ -38,10 +38,9 @@ export async function estadoCuentaAExcel(d: RespuestaEstadoCuenta): Promise<Buff
   enc.font = { bold: true };
   ws.getRow(1).font = { bold: true };
   for (const f of d.filas) {
-    const anulada = f.estado === "ANULADA";
     const r = ws.addRow([
       f.documento, f.fechaDocumento, f.fechaVencimiento ?? "", f.diasVencidos == null ? "" : f.diasVencidos,
-      f.situacion ? ETIQUETA_SITUACION[f.situacion] : "—", anulada ? "Anulada (importes informativos; saldo exigible 0.00)" : ETIQUETA_ESTADO_DOCUMENTO[f.estado],
+      f.situacion ? ETIQUETA_SITUACION[f.situacion] : "—", textoEstadoDocumento(f, true),
       celda(f.totalDocumento), celda(f.retencionIsr), celda(f.montoPagadero), celda(f.pagado), celda(f.saldo),
     ]);
     conFormato(r, [7, 8, 9, 10, 11]);
@@ -67,6 +66,7 @@ export async function estadoCuentaAExcel(d: RespuestaEstadoCuenta): Promise<Buff
   lin("Pagado vigente", "", t.registradas.pagado);
   lin("Saldo exigible", t.abiertas.facturas, t.registradas.saldoExigible);
   lin("Facturas pagadas (saldo 0.00)", t.pagadas.facturas, "");
+  if (t.sobreaplicadas.facturas > 0) lin("Facturas sobreaplicadas (revisar; no cuentan como pagadas)", t.sobreaplicadas.facturas, t.sobreaplicadas.exceso);
   for (const s of t.porSituacion) lin(`Saldo ${ETIQUETA_SITUACION[s.situacion]}`, s.facturas, s.saldo);
   wr.addRow([]);
   wr.addRow(["Anuladas (informativo; no suman a ningún total, saldo exigible 0.00)", "Facturas", "Importe (GTQ)"]).font = { bold: true };

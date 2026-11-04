@@ -17,7 +17,7 @@ import { obtenerAplicado } from "./aplicaciones";
 import { listarAntiguedadCxp } from "./antiguedad";
 import { exportarEstadoCuentaCxp, obtenerEstadoCuentaCxp, type OpcionesEstado } from "./estado-cuenta";
 import { estadoCuentaAExcel } from "./estado-cuenta-excel";
-import type { FiltrosEstadoCuenta } from "./estado-cuenta-shared";
+import { TEXTO_SOBREAPLICADA, textoEstadoDocumento, type FiltrosEstadoCuenta } from "./estado-cuenta-shared";
 
 /**
  * MIL-CXP-02 (estado de cuenta por proveedor, ACTUAL) contra MariaDB 11.8.9 DESECHABLE (LIQ_TEST_DB_PORT=3399|3407, solo local, datos SINTÉTICOS).
@@ -282,7 +282,24 @@ describe.skipIf(!port)("MIL-CXP-02 estado de cuenta por proveedor / MariaDB 11.8
     const r1 = await estado(p1, { incluirPagadas: true });
     const w1 = r1.advertencias.find((a) => a.codigo === "SOBREAPLICACION")!;
     expect(w1).toMatchObject({ facturaId: f.id, detalle: { montoPagadero: "100.00", pagado: "110.00", exceso: "10.00" } });
-    expect(r1.filas[0]).toMatchObject({ pagado: "110.00", saldo: "-10.00", estado: "PAGADA", montoPagadero: "100.00" }); // crudo: no se normaliza
+    expect(r1.filas[0]).toMatchObject({ pagado: "110.00", saldo: "-10.00", estado: "SOBREAPLICADA", estadoFinanciero: "SOBREAPLICADA", montoPagadero: "100.00" }); // crudo: no se normaliza, y NO es «Pagada»
+    expect(r1.totales.pagadas.facturas).toBe(0); // no cuenta como pagada
+    expect(r1.totales.sobreaplicadas).toEqual({ facturas: 1, exceso: "10.00" });
+    expect(r1.totales.registradas).toMatchObject({ facturas: 1, pagado: "110.00", montoPagadero: "100.00" });
+    expect((await estado(p1)).filas).toEqual([]); // por defecto (abiertas) no aparece; la advertencia sí (proveedor completo)
+    expect((await estado(p1)).advertencias.map((a) => a.codigo)).toContain("SOBREAPLICACION");
+    // API (respuesta), pantalla (texto) y Excel coinciden en la clasificación
+    const ex1 = await exportarEstadoCuentaCxp(1, E1, { proveedorId: p1, incluirPagadas: true, incluirAnuladas: false }, TODO, CORTE);
+    if (!ex1.ok) throw new Error(ex1.error);
+    expect(ex1.datos.filas).toEqual(r1.filas);
+    expect(textoEstadoDocumento(r1.filas[0])).toBe(TEXTO_SOBREAPLICADA);
+    const wb1 = new ExcelJS.Workbook();
+    await wb1.xlsx.load((await estadoCuentaAExcel(ex1.datos)) as never);
+    const fx = wb1.getWorksheet("Estado de cuenta")!.getRow(9);
+    expect([fx.getCell(6).value, fx.getCell(10).value, fx.getCell(11).value]).toEqual([textoEstadoDocumento(r1.filas[0], true), 110, -10]);
+    const resumen: unknown[][] = []; wb1.getWorksheet("Resumen")!.eachRow((row) => resumen.push(row.values as unknown[]));
+    expect(resumen.find((x) => x[1] === "Facturas pagadas (saldo 0.00)")![2]).toBe(0);
+    expect(resumen.find((x) => String(x[1]).startsWith("Facturas sobreaplicadas (revisar"))!.slice(2, 4)).toEqual([1, 10]);
     expect(r1.totales.registradas.saldoExigible).toBe("0.00"); // el exceso no compensa saldos de otras facturas
     expect((await estado(p1, { incluirPagadas: true }, SOLO_FACTURAS)).advertencias.map((a) => a.codigo)).toContain("SOBREAPLICACION");
 

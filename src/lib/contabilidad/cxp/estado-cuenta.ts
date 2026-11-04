@@ -3,7 +3,7 @@ import Decimal from "decimal.js";
 import type { SqlValue } from "@/lib/db";
 import { ErrorCxp } from "./errores";
 import { PAGADO, conLecturaCxp, enInstantanea, exigirEntidadEnEmpresa, exprsVencimiento, literalFecha, paramsPagos, subPagos } from "./lectura-cxp";
-import { desgloseFinanciero, type EstadoFinancieroCxp } from "./saldo";
+import { desgloseFinanciero } from "./saldo";
 import { SITUACIONES_VENCIMIENTO, hoyGuatemala, type SituacionVencimiento } from "./antiguedad-shared";
 import {
   LIMITE_EXPORTACION_ANT,
@@ -13,6 +13,8 @@ import {
   paginacionCxp,
   saldoCrudo,
   type AdvertenciaIntegridad,
+  type EstadoDocumento,
+  type EstadoFinancieroFila,
   type FilaEstadoCuenta,
   type FiltrosEstadoCuenta,
   type LineaPagoEstado,
@@ -53,7 +55,7 @@ function condiciones(empresaId: number, entidadId: number, f: FiltrosEstadoCuent
 }
 
 const FROM = (conPagos: boolean) => `FROM cxp_facturas x LEFT JOIN ${subPagos(conPagos)}`;
-const CLASE = `CASE WHEN x.estado_admin = 'ANULADA' THEN 'ANULADA' WHEN x.total_neto_pagar > ${PAGADO} THEN 'ABIERTA' ELSE 'PAGADA' END`;
+const CLASE = `CASE WHEN x.estado_admin = 'ANULADA' THEN 'ANULADA' WHEN ${PAGADO} > x.total_neto_pagar THEN 'SOBREAPLICADA' WHEN x.total_neto_pagar > ${PAGADO} THEN 'ABIERTA' ELSE 'PAGADA' END`;
 const dec = (v: unknown) => new Decimal(String(v ?? "0"));
 
 async function proveedor(c: PoolConnection, empresaId: number, entidadId: number, proveedorId: number, verFiscal: boolean): Promise<ProveedorEstado> {
@@ -75,7 +77,7 @@ async function proveedor(c: PoolConnection, empresaId: number, entidadId: number
 function aFila(r: FilaSql, lineas: LineaPagoEstado[] | undefined, advertencias: AdvertenciaIntegridad[]): FilaEstadoCuenta {
   const anulada = r.estado_admin === "ANULADA";
   const importes = { totalDocumento: String(r.total_documento), isrMonto: String(r.isr_monto), totalNetoPagar: String(r.total_neto_pagar) };
-  let estadoFinanciero: EstadoFinancieroCxp, saldo: string;
+  let estadoFinanciero: EstadoFinancieroFila, saldo: string;
   try {
     // Misma lógica que Facturas/Pagos. Lanza RangeError si hay sobreaplicación (no representable): se informa y NO se normaliza.
     const fin = desgloseFinanciero(r.estado_admin, importes, String(r.pagado));
@@ -83,7 +85,7 @@ function aFila(r: FilaSql, lineas: LineaPagoEstado[] | undefined, advertencias: 
     saldo = fin.saldo;
   } catch (e) {
     if (!(e instanceof RangeError)) throw e;
-    estadoFinanciero = "PAGADA";
+    estadoFinanciero = "SOBREAPLICADA"; // no se presenta como «Pagada»
     saldo = saldoCrudo(r.total_neto_pagar, r.pagado); // crudo (negativo): se muestra tal cual, con su advertencia
   }
   const fila: FilaEstadoCuenta = {
@@ -174,15 +176,16 @@ async function advertenciasIntegridad(c: PoolConnection, empresaId: number, enti
 
 function totalizar(tot: RowDataPacket[]): TotalesEstadoCuenta {
   const filas = tot.map((r) => ({
-    clase: String(r.clase) as "ABIERTA" | "PAGADA" | "ANULADA", situacion: String(r.situacion) as SituacionVencimiento, n: Number(r.n),
-    td: dec(r.td), isr: dec(r.isr), pag: dec(r.pag), pagado: dec(r.pagado), saldo: dec(r.saldo_pos),
+    clase: String(r.clase) as EstadoDocumento, situacion: String(r.situacion) as SituacionVencimiento, n: Number(r.n),
+    td: dec(r.td), isr: dec(r.isr), pag: dec(r.pag), pagado: dec(r.pagado), saldo: dec(r.saldo_pos), exceso: dec(r.exceso),
   }));
-  const suma = (xs: typeof filas, k: "td" | "isr" | "pag" | "pagado" | "saldo") => xs.reduce((a, x) => a.plus(x[k]), new Decimal(0)).toFixed(2);
-  const reg = filas.filter((x) => x.clase !== "ANULADA"), ab = filas.filter((x) => x.clase === "ABIERTA"), pg = filas.filter((x) => x.clase === "PAGADA"), an = filas.filter((x) => x.clase === "ANULADA");
+  const suma = (xs: typeof filas, k: "td" | "isr" | "pag" | "pagado" | "saldo" | "exceso") => xs.reduce((a, x) => a.plus(x[k]), new Decimal(0)).toFixed(2);
+  const reg = filas.filter((x) => x.clase !== "ANULADA"), ab = filas.filter((x) => x.clase === "ABIERTA"), pg = filas.filter((x) => x.clase === "PAGADA"), so = filas.filter((x) => x.clase === "SOBREAPLICADA"), an = filas.filter((x) => x.clase === "ANULADA");
   return {
     registradas: { facturas: reg.reduce((a, x) => a + x.n, 0), totalDocumento: suma(reg, "td"), retencionIsr: suma(reg, "isr"), montoPagadero: suma(reg, "pag"), pagado: suma(reg, "pagado"), saldoExigible: suma(reg, "saldo") },
     abiertas: { facturas: ab.reduce((a, x) => a + x.n, 0), saldo: suma(ab, "saldo") },
     pagadas: { facturas: pg.reduce((a, x) => a + x.n, 0) },
+    sobreaplicadas: { facturas: so.reduce((a, x) => a + x.n, 0), exceso: suma(so, "exceso") },
     porSituacion: SITUACIONES_VENCIMIENTO.map((s) => {
       const xs = ab.filter((x) => x.situacion === s);
       return { situacion: s, facturas: xs.reduce((a, x) => a + x.n, 0), saldo: suma(xs, "saldo") };
@@ -206,7 +209,8 @@ async function consultarUnaVez(empresaId: number, entidadId: number, f: FiltrosE
     );
     const [tot] = await c.query<RowDataPacket[]>(
       `SELECT ${CLASE} AS clase, ${ex.situacion} AS situacion, COUNT(*) AS n, SUM(x.total_documento) AS td, SUM(x.isr_monto) AS isr, SUM(x.total_neto_pagar) AS pag,
-              SUM(${PAGADO}) AS pagado, SUM(GREATEST(x.total_neto_pagar - ${PAGADO}, 0)) AS saldo_pos
+              SUM(${PAGADO}) AS pagado, SUM(GREATEST(x.total_neto_pagar - ${PAGADO}, 0)) AS saldo_pos,
+              SUM(GREATEST(${PAGADO} - x.total_neto_pagar, 0)) AS exceso
          ${FROM(conPagos)} WHERE ${where} GROUP BY ${CLASE}, ${ex.situacion}`,
       params,
     );

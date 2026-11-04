@@ -8,6 +8,8 @@ import {
   claseDocumento,
   filtrosEstadoCuentaDesdeParams,
   saldoCrudo,
+  textoEstadoDocumento,
+  TEXTO_SOBREAPLICADA,
   type FilaEstadoCuenta,
   type RespuestaEstadoCuenta,
 } from "./estado-cuenta-shared";
@@ -79,7 +81,9 @@ describe("MIL-CXP-02 · saldos y clasificación (precisión decimal)", () => {
     expect(claseDocumento("REGISTRADA", "100.00", "0.00")).toBe("ABIERTA");
     expect(claseDocumento("REGISTRADA", "100.00", "99.99")).toBe("ABIERTA");
     expect(claseDocumento("REGISTRADA", "100.00", "100.00")).toBe("PAGADA");
-    expect(claseDocumento("REGISTRADA", "100.00", "100.01")).toBe("PAGADA");
+    expect(claseDocumento("REGISTRADA", "100.00", "100.01")).toBe("SOBREAPLICADA"); // pagado > pagadero: NO es «Pagada»
+    expect(claseDocumento("REGISTRADA", "0.30", "0.31")).toBe("SOBREAPLICADA");
+    expect(claseDocumento("REGISTRADA", "999999999999.99", "1000000000000.00")).toBe("SOBREAPLICADA");
     expect(claseDocumento("ANULADA", "100.00", "0.00")).toBe("ANULADA");
   });
 });
@@ -94,7 +98,7 @@ const respuesta = (filas: FilaEstadoCuenta[], over: Partial<RespuestaEstadoCuent
   filtros: { incluirPagadas: true, incluirAnuladas: true, desde: null, hasta: null }, filas, totalReal: filas.length, page: 1, pageSize: 25, fechaCorte: "2026-11-30", moneda: "GTQ",
   totales: {
     registradas: { facturas: 1, totalDocumento: "35000.00", retencionIsr: "1587.50", montoPagadero: "33412.50", pagado: "10000.00", saldoExigible: "23412.50" },
-    abiertas: { facturas: 1, saldo: "23412.50" }, pagadas: { facturas: 0 }, porSituacion: [{ situacion: "VIGENTE", facturas: 1, saldo: "23412.50" }],
+    abiertas: { facturas: 1, saldo: "23412.50" }, pagadas: { facturas: 0 }, sobreaplicadas: { facturas: 0, exceso: "0.00" }, porSituacion: [{ situacion: "VIGENTE", facturas: 1, saldo: "23412.50" }],
     anuladas: { facturas: 1, totalDocumento: "300.00", retencionIsr: "0.00", montoPagadero: "300.00" },
   },
   advertencias: [], advertenciasOmitidas: 0, pagosVisibles: false, rotulo: ROTULO_ESTADO_CUENTA, notaMoneda: NOTA_MONEDA_ESTADO_CUENTA, ...over,
@@ -102,6 +106,43 @@ const respuesta = (filas: FilaEstadoCuenta[], over: Partial<RespuestaEstadoCuent
 
 async function leer(buf: Buffer) { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(buf as never); return wb; }
 const todoElTexto = (wb: ExcelJS.Workbook) => { const out: string[] = []; wb.eachSheet((ws) => ws.eachRow((r) => r.eachCell((c) => out.push(String(c.value ?? ""))))); return out.join("\n"); };
+
+describe("MIL-CXP-02 · sobreaplicación: clasificación y texto únicos para API, pantalla y Excel", () => {
+  it("claseDocumento / textoEstadoDocumento: la sobreaplicada no se presenta como pagada en ninguna superficie", () => {
+    expect(claseDocumento("REGISTRADA", "100.00", "100.00")).toBe("PAGADA"); // exacto: pagada
+    expect(textoEstadoDocumento({ estado: "PAGADA", estadoFinanciero: "PAGADA" })).toBe("Pagada · Pagada");
+    expect(textoEstadoDocumento({ estado: "SOBREAPLICADA", estadoFinanciero: "SOBREAPLICADA" })).toBe(TEXTO_SOBREAPLICADA);
+    expect(textoEstadoDocumento({ estado: "SOBREAPLICADA", estadoFinanciero: "SOBREAPLICADA" }, true)).toBe(TEXTO_SOBREAPLICADA); // pantalla y Excel: el mismo texto
+    expect(TEXTO_SOBREAPLICADA).toMatch(/revisar/);
+    expect(TEXTO_SOBREAPLICADA).not.toMatch(/^Pagada/);
+    expect(textoEstadoDocumento({ estado: "ANULADA", estadoFinanciero: "ANULADA" })).toBe("Anulada (importes informativos)");
+    expect(textoEstadoDocumento({ estado: "ANULADA", estadoFinanciero: "ANULADA" }, true)).toMatch(/^Anulada \(importes informativos; saldo exigible 0\.00\)/);
+  });
+  it("pantalla y Excel usan la MISMA función de texto (no hay textos paralelos que puedan divergir)", () => {
+    const ui = readFileSync("src/components/contabilidad/cxp-estado-cuenta.tsx", "utf8");
+    const xl = readFileSync("src/lib/contabilidad/cxp/estado-cuenta-excel.ts", "utf8");
+    expect(ui).toMatch(/textoEstadoDocumento\(f\)/);
+    expect(xl).toMatch(/textoEstadoDocumento\(f, true\)/);
+    expect(ui).not.toMatch(/ETIQUETA_ESTADO_DOCUMENTO|ETIQUETA_ESTADO_FINANCIERO/);
+    expect(ui).toMatch(/Sobreaplicadas \(revisar\)/);
+  });
+  it("Excel: la fila sobreaplicada lleva el texto «Sobreaplicada (revisar…)», conserva importes crudos (saldo −10.00) y el Resumen no la cuenta como pagada", async () => {
+    const sobre = fila({ facturaId: 5, numero: "105", documento: "A-105", estado: "SOBREAPLICADA", estadoFinanciero: "SOBREAPLICADA", totalDocumento: "100.00", retencionIsr: "0.00", montoPagadero: "100.00", pagado: "110.00", saldo: "-10.00" });
+    const r = respuesta([sobre], {
+      totales: { ...respuesta([]).totales, registradas: { facturas: 1, totalDocumento: "100.00", retencionIsr: "0.00", montoPagadero: "100.00", pagado: "110.00", saldoExigible: "0.00" }, abiertas: { facturas: 0, saldo: "0.00" }, pagadas: { facturas: 0 }, sobreaplicadas: { facturas: 1, exceso: "10.00" }, porSituacion: [] },
+      advertencias: [{ codigo: "SOBREAPLICACION", facturaId: 5, mensaje: "exceso 10.00", detalle: {} }],
+    });
+    const wb = await leer(await estadoCuentaAExcel(r));
+    const ws = wb.getWorksheet("Estado de cuenta")!;
+    const f = ws.getRow(9);
+    expect([f.getCell(1).value, f.getCell(6).value, f.getCell(10).value, f.getCell(11).value]).toEqual(["A-105", TEXTO_SOBREAPLICADA, 110, -10]);
+    const res = wb.getWorksheet("Resumen")!; const filas: unknown[][] = []; res.eachRow((row) => filas.push(row.values as unknown[]));
+    expect(filas.find((x) => x[1] === "Facturas pagadas (saldo 0.00)")![2]).toBe(0);
+    expect(filas.find((x) => String(x[1]).startsWith("Facturas sobreaplicadas (revisar"))!.slice(2, 4)).toEqual([1, 10]);
+    expect(filas.find((x) => x[1] === "Saldo exigible")![3]).toBe(0);
+    expect(todoElTexto(wb)).toMatch(/SOBREAPLICACION: exceso 10\.00/);
+  });
+});
 
 describe("MIL-CXP-02 · Excel propio de Novalvion", () => {
   const pagos = [

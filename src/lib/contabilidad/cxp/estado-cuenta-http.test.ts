@@ -21,7 +21,7 @@ const url = (qs = "entidad=5&proveedorId=3") => new Request(`http://x/api?${qs}`
 const datos = {
   proveedor: { id: 3, nombre: "P", nit: null, diasCredito: null, regimenFiscal: null, sujetoIsr: null }, filtros: { incluirPagadas: false, incluirAnuladas: false, desde: null, hasta: null },
   filas: [], totalReal: 0, page: 1, pageSize: 25, fechaCorte: "2026-11-30", moneda: "GTQ",
-  totales: { registradas: { facturas: 0, totalDocumento: "0.00", retencionIsr: "0.00", montoPagadero: "0.00", pagado: "0.00", saldoExigible: "0.00" }, abiertas: { facturas: 0, saldo: "0.00" }, pagadas: { facturas: 0 }, porSituacion: [], anuladas: { facturas: 0, totalDocumento: "0.00", retencionIsr: "0.00", montoPagadero: "0.00" } },
+  totales: { registradas: { facturas: 0, totalDocumento: "0.00", retencionIsr: "0.00", montoPagadero: "0.00", pagado: "0.00", saldoExigible: "0.00" }, abiertas: { facturas: 0, saldo: "0.00" }, pagadas: { facturas: 0 }, sobreaplicadas: { facturas: 0, exceso: "0.00" }, porSituacion: [], anuladas: { facturas: 0, totalDocumento: "0.00", retencionIsr: "0.00", montoPagadero: "0.00" } },
   advertencias: [], advertenciasOmitidas: 0, pagosVisibles: false, rotulo: ROTULO_ESTADO_CUENTA, notaMoneda: NOTA_MONEDA_ESTADO_CUENTA,
 };
 
