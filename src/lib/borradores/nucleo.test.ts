@@ -416,6 +416,260 @@ describe("transacciones IndexedDB (abortos reales)", () => {
   });
 });
 
+/** Escribe directamente en el almacén un registro válido «dañado» por `mutar` (simula corrupción fuera del núcleo). */
+async function corromper(almacen: ReturnType<typeof crearAlmacenIndexedDB>, a: AmbitoBorrador, mutar: (r: Record<string, unknown>) => void) {
+  const clave = claveBorrador(a);
+  const actual = ok(await almacen.obtener(clave)) as Record<string, unknown>;
+  const copia = structuredClone(actual);
+  mutar(copia);
+  ok(await almacen.modificar(clave, () => ({ accion: "escribir", resultado: null, registro: copia as never })));
+}
+
+describe("registros recuperados: validación estructural completa (corrección 1)", () => {
+  const A = FONDO1;
+  const casos: [string, (r: Record<string, unknown>) => void][] = [
+    ["payload ausente", (r) => { delete r.payload; }],
+    ["payload con NaN", (r) => { r.payload = { monto: NaN }; }],
+    ["payload con Infinity", (r) => { r.payload = { lineas: [Infinity] }; }],
+    ["payload con Date", (r) => { r.payload = { fecha: new Date() }; }],
+    ["payload con Map", (r) => { r.payload = { m: new Map() }; }],
+    ["payload con undefined", (r) => { r.payload = { u: undefined }; }],
+    ["payload con arreglo con huecos", (r) => { r.payload = { l: [1, , 3] }; }],
+    ["payload con clave de credencial", (r) => { r.payload = { anidado: { Password: "x" } }; }],
+    ["payload demasiado anidado", (r) => { let o: unknown = 1; for (let i = 0; i < 40; i++) o = { o }; r.payload = o; }],
+    ["revision 0", (r) => { r.revision = 0; }],
+    ["revision negativa", (r) => { r.revision = -2; }],
+    ["revision fraccionaria", (r) => { r.revision = 1.5; }],
+    ["revision como texto", (r) => { r.revision = "1"; }],
+    ["esquemaVersion 0", (r) => { r.esquemaVersion = 0; }],
+    ["empresaId 0", (r) => { r.empresaId = 0; }],
+    ["ownerKey vacío", (r) => { r.ownerKey = ""; }],
+    ["ownerKey con caracteres de control", (r) => { r.ownerKey = "a\nb"; }],
+    ["empresaSlug vacío", (r) => { r.empresaSlug = ""; }],
+    ["tipo desconocido", (r) => { r.tipo = "otro"; }],
+    ["borradorId vacío", (r) => { r.borradorId = ""; }],
+    ["appBuild no es texto", (r) => { r.appBuild = 7; }],
+    ["actualizadoEn NaN", (r) => { r.actualizadoEn = NaN; }],
+    ["expiraEn anterior a actualizadoEn", (r) => { r.expiraEn = (r.actualizadoEn as number) - 1; }],
+    ["claveEnvio con formato inválido", (r) => { r.claveEnvio = "corta"; }],
+    ["claveEnvio numérica", (r) => { r.claveEnvio = 123; }],
+    ["estadoEnvio desconocido", (r) => { r.estadoEnvio = "raro"; }],
+    ["clave primaria que no corresponde al contenido", (r) => { r.ownerKey = U2; }],
+    ["clave de índice (ámbito) alterada", (r) => { r.ambitoClave = claveAmbitoUsuarioEmpresa({ ownerKey: U2, empresaId: 1 }); }],
+  ];
+
+  it.each(casos)("%s → datos_corruptos, sin entregarse como vigente y sin tocar el registro", async (_nombre, mutar) => {
+    const { nucleo, almacen } = entorno();
+    ok(await nucleo.guardar(A, { payload: { lineas: [{ monto: "1" }] }, esquemaVersion: 1, revisionBase: null }));
+    await corromper(almacen, A, mutar);
+    const antes = ok(await almacen.obtener(claveBorrador(A)));
+
+    expect(await nucleo.leer(A, { esquemaVersion: 1 })).toMatchObject({ ok: false, motivo: "datos_corruptos" });
+    expect(await nucleo.guardar(A, { payload: { x: 1 }, esquemaVersion: 1, revisionBase: 1 })).toMatchObject({ ok: false, motivo: "datos_corruptos" });
+    expect(await nucleo.guardar(A, { payload: { x: 1 }, esquemaVersion: 1, revisionBase: null })).toMatchObject({ ok: false });
+    expect(ok(await almacen.obtener(claveBorrador(A)))).toEqual(antes); // intacto
+  });
+
+  it("un payload corrupto con esquema FUTURO no es «corrupto»: se conserva intacto como incompatible", async () => {
+    const { nucleo, almacen } = entorno();
+    ok(await nucleo.guardar(A, { payload: {}, esquemaVersion: 3, revisionBase: null }));
+    await corromper(almacen, A, (r) => { r.payload = { formatoNuevo: new Date(0) }; }); // algo que esta versión no sabe juzgar
+    const antes = ok(await almacen.obtener(claveBorrador(A)));
+    expect(ok(await nucleo.leer(A, { esquemaVersion: 2 })).estado).toBe("incompatible");
+    expect(await nucleo.guardar(A, { payload: {}, esquemaVersion: 2, revisionBase: 1 })).toMatchObject({ ok: false, motivo: "version_incompatible" });
+    expect(ok(await almacen.obtener(claveBorrador(A)))).toEqual(antes);
+  });
+
+  it("un payload corrupto y expirado tampoco se entrega como «expirado» ni «esquema anterior»", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(A, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    await corromper(almacen, A, (r) => { r.payload = { n: NaN }; });
+    avanzar(30 * DIA);
+    expect(await nucleo.leer(A, { esquemaVersion: 1 })).toMatchObject({ ok: false, motivo: "datos_corruptos" });
+    expect(await nucleo.leer(A, { esquemaVersion: 2 })).toMatchObject({ ok: false, motivo: "datos_corruptos" });
+  });
+
+  it("un registro dañado se cuenta como ilegible en el listado y su descarte explícito sí lo elimina", async () => {
+    const { nucleo, almacen } = entorno();
+    ok(await nucleo.guardar(A, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    ok(await nucleo.guardar(ambito(U1, 1, "gasto_operativo"), { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    await corromper(almacen, A, (r) => { r.revision = 0; });
+    const l = ok(await nucleo.listarMetadatos({ ownerKey: U1, empresaId: 1 }));
+    expect(l.borradores).toHaveLength(1);
+    expect(l.ilegibles).toBe(1);
+    ok(await nucleo.eliminar(A));
+    expect(ok(await nucleo.existe(A))).toBe(false);
+  });
+
+  it("un payload corrupto no se borra por retención", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(A, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    await corromper(almacen, A, (r) => { r.payload = { n: Infinity }; });
+    avanzar(30 * DIA);
+    expect(ok(await nucleo.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, { solicitud_fondo: 1 }))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect(ok(await nucleo.existe(A))).toBe(true);
+  });
+});
+
+describe("limpiarExpirados: revalidación atómica (corrección 2)", () => {
+  const VERS = { solicitud_fondo: 1, gasto_operativo: 1, requerimiento_compra: 1 } as const;
+
+  /** Almacén que ejecuta `entreListadoYBorrado` justo DESPUÉS de listar y ANTES de las decisiones de borrado. */
+  function conCarrera(almacen: ReturnType<typeof crearAlmacenIndexedDB>, entreListadoYBorrado: () => Promise<void>) {
+    return { ...almacen, listar: async (...args: Parameters<typeof almacen.listar>) => { const r = await almacen.listar(...args); await entreListadoYBorrado(); return r; } } as typeof almacen;
+  }
+
+  it("un guardado concurrente tras el listado renueva el borrador: no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: { v: 1 }, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, async () => { ok(await nucleo.guardar(FONDO1, { payload: { v: 2 }, esquemaVersion: 1, revisionBase: 1 })); }), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect((ok(await nucleo.leer(FONDO1, { esquemaVersion: 1 })) as { borrador: { revision: number } }).borrador.revision).toBe(2);
+  });
+
+  it("un guardado concurrente que NO renueva la expiración (reloj atrasado) cambia la revisión: no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: { v: 1 }, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const otraPestana = crearNucleoBorradores({ almacen, appBuild: "b", ahora: () => T0 }); // reloj atrasado: expiraEn sigue en el pasado
+    const carrera = async () => { ok(await otraPestana.guardar(FONDO1, { payload: { v: 2 }, esquemaVersion: 1, revisionBase: 1 })); };
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, carrera), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    const l = ok(await nucleo.leer(FONDO1, { esquemaVersion: 1 })) as { borrador: { revision: number; payload: unknown } };
+    expect(l.borrador).toMatchObject({ revision: 2, payload: { v: 2 } }); // el contenido nuevo sobrevive
+  });
+
+  it("si tras el listado el borrador es eliminado y recreado (otro borradorId, también expirado), no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: { v: "viejo" }, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const otraPestana = crearNucleoBorradores({ almacen, appBuild: "b", ahora: () => T0 });
+    const carrera = async () => {
+      ok(await otraPestana.eliminar(FONDO1));
+      ok(await otraPestana.guardar(FONDO1, { payload: { v: "nuevo" }, esquemaVersion: 1, revisionBase: null })); // revisión 1 otra vez
+    };
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, carrera), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect((ok(await nucleo.leer(FONDO1, { esquemaVersion: 1 })) as { borrador: { payload: unknown } }).borrador.payload).toEqual({ v: "nuevo" });
+  });
+
+  it("si tras el listado el registro es reemplazado por uno de otra identidad, no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const otro = ok(await entorno().nucleo.guardar(ambito(U2, 7, "gasto_operativo"), { payload: { ajeno: true }, esquemaVersion: 1, revisionBase: null }));
+    const clave = claveBorrador(FONDO1);
+    const carrera = async () => { // mismo lugar (clave primaria), contenido de OTRO usuario/empresa/tipo, ya expirado
+      ok(await almacen.modificar(clave, () => ({ accion: "escribir", resultado: null, registro: { ...otro, expiraEn: T0, actualizadoEn: T0 - 1, clave, ambitoClave: claveAmbitoUsuarioEmpresa(FONDO1), formato: FORMATO_REGISTRO } as never })));
+    };
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, carrera), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect((ok(await almacen.obtener(clave)) as { ownerKey: string }).ownerKey).toBe(U2); // el registro ajeno sigue ahí
+  });
+
+  it("si tras el listado el registro pasa a un esquema futuro (aún expirado), no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const carrera = async () => { await corromper(almacen, FONDO1, (r) => { r.esquemaVersion = 9; r.revision = 2; }); };
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, carrera), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect(ok(await nucleo.existe(FONDO1))).toBe(true);
+  });
+
+  it("si tras el listado el registro queda dañado (clave que no corresponde), no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(FONDO1, { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    avanzar(20 * DIA);
+    const carrera = async () => { await corromper(almacen, FONDO1, (r) => { r.tipo = "gasto_operativo"; }); };
+    const n2 = crearNucleoBorradores({ almacen: conCarrera(almacen, carrera), appBuild: "b", ahora: () => T0 + 20 * DIA });
+    expect(ok(await n2.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS))).toEqual({ eliminados: 0, omitidos: 1 });
+    expect(ok(await nucleo.existe(FONDO1))).toBe(true);
+  });
+
+  it("un registro listado con identidad inconsistente (indexado en el ámbito de otro) no se elimina", async () => {
+    const { nucleo, almacen, avanzar } = entorno();
+    ok(await nucleo.guardar(ambito(U2, 1, "solicitud_fondo"), { payload: {}, esquemaVersion: 1, revisionBase: null }));
+    // Registro de U2 con la clave de índice del ámbito de U1: aparece al listar a U1 pero NO es de U1.
+    await corromper(almacen, ambito(U2, 1, "solicitud_fondo"), (r) => { r.ambitoClave = claveAmbitoUsuarioEmpresa({ ownerKey: U1, empresaId: 1 }); });
+    avanzar(30 * DIA);
+    const r = ok(await nucleo.limpiarExpirados({ ownerKey: U1, empresaId: 1 }, VERS));
+    expect(r.eliminados).toBe(0);
+    expect(ok(await nucleo.existe(ambito(U2, 1, "solicitud_fondo")))).toBe(true);
+  });
+});
+
+describe("validación defensiva del payload (corrección 3)", () => {
+  async function esperarPayloadInvalido(payload: unknown) {
+    const { nucleo } = entorno();
+    let r: Resultado<unknown> | undefined;
+    await expect((async () => { r = await nucleo.guardar(FONDO1, { payload, esquemaVersion: 1, revisionBase: null }); })()).resolves.toBeUndefined(); // jamás rechaza
+    expect(r).toMatchObject({ ok: false, motivo: "payload_invalido" });
+    expect(ok(await nucleo.existe(FONDO1))).toBe(false);
+    return (r as { mensaje: string }).mensaje;
+  }
+
+  it("un getter que lanza → payload_invalido, sin rechazo no manejado ni filtrar su texto", async () => {
+    const consola = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error"), vi.spyOn(console, "info"), vi.spyOn(console, "debug")];
+    const malo = Object.defineProperty({ ok: 1 }, "x", { enumerable: true, get() { throw new Error("TEXTO-SECRETO-DEL-GETTER"); } });
+    const msg = await esperarPayloadInvalido({ lineas: [malo] });
+    expect(msg).not.toContain("TEXTO-SECRETO-DEL-GETTER");
+    for (const c of consola) expect(c).not.toHaveBeenCalled();
+  });
+
+  it("un getter benigno también se rechaza (no se ejecutan propiedades calculadas)", async () => {
+    let llamadas = 0;
+    const calculado = Object.defineProperty({}, "x", { enumerable: true, get() { llamadas++; return 1; } });
+    await esperarPayloadInvalido({ calculado });
+    expect(llamadas).toBe(0);
+  });
+
+  it("un setter sin getter se rechaza", async () => {
+    await esperarPayloadInvalido(Object.defineProperty({}, "x", { enumerable: true, set() { /* nada */ } }));
+  });
+
+  it.each<[string, () => unknown]>([
+    ["proxy que lanza en ownKeys", () => new Proxy({}, { ownKeys() { throw new Error("boom"); } })],
+    ["proxy que lanza en getPrototypeOf", () => new Proxy({}, { getPrototypeOf() { throw new Error("boom"); } })],
+    ["proxy que lanza en getOwnPropertyDescriptor", () => new Proxy({ a: 1 }, { getOwnPropertyDescriptor() { throw new Error("boom"); } })],
+    ["proxy revocado", () => { const { proxy, revoke } = Proxy.revocable({}, {}); revoke(); return proxy; }],
+    ["proxy de arreglo que lanza al leer", () => new Proxy([1, 2, 3], { getOwnPropertyDescriptor() { throw new Error("boom"); } })],
+    ["proxy anidado en un payload válido", () => ({ lineas: [{ ok: 1 }, new Proxy({}, { ownKeys() { throw new Error("boom"); } })] })],
+  ])("%s → payload_invalido", async (_n, fabricar) => {
+    await esperarPayloadInvalido(fabricar());
+  });
+
+  it("arreglos con huecos o con elementos calculados se rechazan", async () => {
+    await esperarPayloadInvalido({ l: [1, , 3] });
+    const a: unknown[] = [1];
+    Object.defineProperty(a, 1, { enumerable: true, get() { return 2; } });
+    await esperarPayloadInvalido({ l: a });
+  });
+
+  it("validarPayload y validarEstructuraPayload nunca lanzan, con cualquier entrada exótica", async () => {
+    const { validarPayload, validarEstructuraPayload } = await import("./payload");
+    const entradas: unknown[] = [
+      Object.defineProperty({}, "x", { enumerable: true, get() { throw new Error("x"); } }), new Proxy({}, { ownKeys() { throw new Error("x"); } }),
+      (() => { const { proxy, revoke } = Proxy.revocable({}, {}); revoke(); return proxy; })(), Symbol("s"), BigInt(5), () => 1, new Error("e"),
+      Object.create(null), { [Symbol("k")]: 1 }, new Proxy([], { get() { throw new Error("x"); } }),
+    ];
+    for (const e of entradas) {
+      expect(() => validarPayload(e, 1000)).not.toThrow();
+      expect(() => validarEstructuraPayload(e)).not.toThrow();
+    }
+    expect(validarEstructuraPayload(Object.create(null))).toBeNull(); // objeto sin prototipo: válido
+    expect(validarEstructuraPayload({ [Symbol("k")]: 1 })).toBeNull(); // símbolos: ignorados por el clonado
+  });
+
+  it("no toca el almacén cuando el payload es inválido", async () => {
+    const { nucleo, almacen } = entorno();
+    const espia = vi.spyOn(almacen, "modificar");
+    expect(await nucleo.guardar(FONDO1, { payload: new Proxy({}, { ownKeys() { throw new Error("boom"); } }), esquemaVersion: 1, revisionBase: null })).toMatchObject({ ok: false, motivo: "payload_invalido" });
+    expect(espia).not.toHaveBeenCalled();
+  });
+});
+
 describe("payload y privacidad", () => {
   it("conserva números y cadenas EXACTOS (flotantes, -0, enormes, ceros a la izquierda, espacios, unicode)", async () => {
     const { nucleo } = entorno();

@@ -1,13 +1,12 @@
 import { CLAVE_ENVIO_REGEX, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
 import { claveAmbitoUsuarioEmpresa, claveBorrador, problemaAmbito, problemaAmbitoUsuarioEmpresa } from "./ambito";
 import { exito, fallo, type AlmacenBorradores, type Resultado } from "./almacen";
-import { validarPayload } from "./payload";
+import { validarEstructuraPayload, validarPayload } from "./payload";
 import {
   ESTADOS_ENVIO,
   FORMATO_REGISTRO,
   MAX_PAYLOAD_CHARS_POR_DEFECTO,
   RETENCION_MS_POR_DEFECTO,
-  TIPOS_BORRADOR,
   type AmbitoBorrador,
   type AmbitoUsuarioEmpresa,
   type Borrador,
@@ -63,32 +62,46 @@ export type LecturaBorrador =
 
 export type ResumenLimpieza = { eliminados: number; omitidos: number };
 
-type Parseo = { tipo: "ok"; borrador: Borrador } | { tipo: "corrupto" } | { tipo: "formato_futuro" };
+/**
+ * `ok`: la envoltura (metadatos, identidad y claves) es coherente. La ESTRUCTURA DEL PAYLOAD se comprueba aparte y solo
+ * cuando hace falta (`payloadValido`): un borrador de esquema FUTURO puede tener un payload que esta versión no sabe juzgar y
+ * debe conservarse intacto como «incompatible», no declararse corrupto.
+ */
+type Parseo = { tipo: "ok"; borrador: Borrador; payloadValido: () => boolean } | { tipo: "corrupto" } | { tipo: "formato_futuro" };
 
 const esEntero = (v: unknown, min: number): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= min;
 const esObjeto = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Valida la FORMA de un registro leído del almacén. Datos de otra versión del contenedor o dañados no se «arreglan». */
+/**
+ * Valida la FORMA de un registro leído del almacén. Datos de otra versión del contenedor o dañados no se «arreglan» ni se
+ * entregan como vigentes: identidad (ownerKey/empresa/slug/tipo con las mismas reglas que un ámbito), coherencia con la clave
+ * primaria y la clave de índice, numéricos enteros, fechas finitas con `expiraEn >= actualizadoEn`, clave de envío con su
+ * formato y estado conocido.
+ */
 function parsear(crudo: unknown): Parseo {
   if (!esObjeto(crudo)) return { tipo: "corrupto" };
   if (!esEntero(crudo.formato, 1)) return { tipo: "corrupto" };
   if (crudo.formato > FORMATO_REGISTRO) return { tipo: "formato_futuro" };
   const r = crudo;
-  const cadena = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+  if (problemaAmbito({ ownerKey: r.ownerKey, empresaId: r.empresaId, empresaSlug: r.empresaSlug, tipo: r.tipo })) return { tipo: "corrupto" };
+  const ownerKey = r.ownerKey as string;
+  const empresaId = r.empresaId as number;
+  const tipo = r.tipo as TipoBorrador;
   if (
-    !cadena(r.borradorId) || !cadena(r.ownerKey) || !cadena(r.empresaSlug) || typeof r.appBuild !== "string" ||
-    !(TIPOS_BORRADOR as readonly unknown[]).includes(r.tipo) || !esEntero(r.empresaId, 1) ||
+    typeof r.borradorId !== "string" || r.borradorId.length === 0 || typeof r.appBuild !== "string" ||
     !esEntero(r.esquemaVersion, 1) || !esEntero(r.revision, 1) ||
     typeof r.actualizadoEn !== "number" || !Number.isFinite(r.actualizadoEn) ||
-    typeof r.expiraEn !== "number" || !Number.isFinite(r.expiraEn) ||
-    !(r.claveEnvio === null || typeof r.claveEnvio === "string") ||
-    !(ESTADOS_ENVIO as readonly unknown[]).includes(r.estadoEnvio) || !("payload" in r)
+    typeof r.expiraEn !== "number" || !Number.isFinite(r.expiraEn) || r.expiraEn < r.actualizadoEn ||
+    !(r.claveEnvio === null || (typeof r.claveEnvio === "string" && CLAVE_ENVIO_REGEX.test(r.claveEnvio))) ||
+    !(ESTADOS_ENVIO as readonly unknown[]).includes(r.estadoEnvio) || !("payload" in r) ||
+    r.clave !== claveBorrador({ ownerKey, empresaId, tipo }) || r.ambitoClave !== claveAmbitoUsuarioEmpresa({ ownerKey, empresaId })
   ) return { tipo: "corrupto" };
   return {
     tipo: "ok",
+    payloadValido: () => validarEstructuraPayload(r.payload) === null,
     borrador: {
-      borradorId: r.borradorId, tipo: r.tipo as TipoBorrador, ownerKey: r.ownerKey, empresaId: r.empresaId, empresaSlug: r.empresaSlug,
-      esquemaVersion: r.esquemaVersion, appBuild: r.appBuild as string, revision: r.revision, payload: r.payload,
+      borradorId: r.borradorId, tipo, ownerKey, empresaId, empresaSlug: r.empresaSlug as string,
+      esquemaVersion: r.esquemaVersion, appBuild: r.appBuild, revision: r.revision, payload: r.payload,
       actualizadoEn: r.actualizadoEn, expiraEn: r.expiraEn, claveEnvio: r.claveEnvio as string | null, estadoEnvio: r.estadoEnvio as EstadoEnvio,
     },
   };
@@ -129,6 +142,8 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
       if (p.tipo === "corrupto" || !perteneceA(p.borrador, ambito)) return fallo("datos_corruptos", "El borrador guardado en este equipo está dañado.");
       const b = p.borrador;
       if (b.esquemaVersion > esquemaVersion) return exito({ estado: "incompatible", borrador: b });
+      // Esquema soportado: el payload debe ser estructuralmente válido para entregarse (ni vigente, ni expirado, ni a migrar).
+      if (!p.payloadValido()) return fallo("datos_corruptos", "El borrador guardado en este equipo está dañado.");
       if (b.expiraEn <= ahora()) return exito({ estado: "expirado", borrador: b });
       if (b.esquemaVersion < esquemaVersion) return exito({ estado: "esquema_anterior", borrador: b });
       return exito({ estado: "vigente", borrador: b });
@@ -158,6 +173,7 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
           if (p.tipo === "corrupto" || !perteneceA(p.borrador, ambito)) return { accion: "ninguna", resultado: fallo("datos_corruptos", "El borrador guardado en este equipo está dañado.") };
           previo = p.borrador;
           if (previo.esquemaVersion > entrada.esquemaVersion) return { accion: "ninguna", resultado: fallo("version_incompatible", "El borrador pertenece a una versión más nueva del formulario.", { revisionActual: previo.revision }) };
+          if (!p.payloadValido()) return { accion: "ninguna", resultado: fallo("datos_corruptos", "El borrador guardado en este equipo está dañado.") };
           if (entrada.revisionBase !== previo.revision) return { accion: "ninguna", resultado: fallo("revision_obsoleta", "El borrador cambió desde la última lectura.", { revisionActual: previo.revision }) };
         } else if (entrada.revisionBase !== null) {
           return { accion: "ninguna", resultado: fallo("revision_obsoleta", "El borrador ya no existe en este equipo.") };
@@ -222,8 +238,9 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
     /**
      * Retención: elimina SOLO los borradores expirados del usuario+empresa indicados. `versionesSoportadas` indica, por tipo,
      * la versión de esquema que la aplicación entiende: los de esquema futuro y los tipos sin versión declarada se OMITEN
-     * (no se borran datos que esta versión no sabe interpretar), y los ilegibles/corruptos también. Cada borrado revalida
-     * dentro de su transacción que el registro sigue expirado (un guardado concurrente lo habrá renovado).
+     * (no se borran datos que esta versión no sabe interpretar), y los ilegibles/corruptos (incluido un payload dañado)
+     * también. Cada borrado revalida DENTRO de su transacción identidad (ownerKey, empresa, tipo, clave primaria,
+     * borradorId), revisión, expiración y versión soportada: un registro que cambió desde el listado no se elimina.
      */
     async limpiarExpirados(ambito: AmbitoUsuarioEmpresa, versionesSoportadas: Partial<Record<TipoBorrador, number>>): Promise<Resultado<ResumenLimpieza>> {
       const p0 = problemaAmbitoUsuarioEmpresa(ambito);
@@ -235,15 +252,23 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
       let omitidos = 0;
       for (const crudo of lista.valor) {
         const p = parsear(crudo);
-        if (p.tipo !== "ok" || p.borrador.ownerKey !== ambito.ownerKey || p.borrador.empresaId !== ambito.empresaId) { omitidos++; continue; }
+        const claveListada = esObjeto(crudo) && typeof crudo.clave === "string" ? crudo.clave : null;
+        // Lo listado debe pertenecer al ámbito pedido y su clave primaria debe corresponder a su contenido.
+        if (p.tipo !== "ok" || p.borrador.ownerKey !== ambito.ownerKey || p.borrador.empresaId !== ambito.empresaId || claveListada === null || claveListada !== claveBorrador(p.borrador)) { omitidos++; continue; }
         const b = p.borrador;
-        const soportada = versionesSoportadas[b.tipo];
         if (b.expiraEn > corte) continue; // vigente: no es candidato
-        if (soportada === undefined || b.esquemaVersion > soportada) { omitidos++; continue; }
-        const r = await almacen.modificar<boolean>(claveBorrador(b), (actual) => {
+        const soportada = versionesSoportadas[b.tipo];
+        if (soportada === undefined || b.esquemaVersion > soportada || !p.payloadValido()) { omitidos++; continue; }
+        // Se revalida TODO dentro de la transacción: si desde el listado el registro cambió de identidad, de revisión
+        // (cualquier guardado la incrementa), de versión o de estado, o ya no corresponde a su clave, NO se elimina.
+        const r = await almacen.modificar<boolean>(claveListada, (actual) => {
           const q = parsear(actual);
-          if (q.tipo === "ok" && q.borrador.expiraEn <= corte && q.borrador.esquemaVersion <= soportada) return { accion: "eliminar", resultado: true };
-          return { accion: "ninguna", resultado: false };
+          const sigueIgual = q.tipo === "ok" &&
+            q.borrador.ownerKey === ambito.ownerKey && q.borrador.empresaId === ambito.empresaId && q.borrador.tipo === b.tipo &&
+            claveBorrador(q.borrador) === claveListada && // `parsear` ya exige clave primaria coherente con el contenido
+            q.borrador.borradorId === b.borradorId && q.borrador.revision === b.revision &&
+            q.borrador.expiraEn <= corte && q.borrador.esquemaVersion <= soportada && q.payloadValido();
+          return sigueIgual ? { accion: "eliminar", resultado: true } : { accion: "ninguna", resultado: false };
         });
         // Un fallo puntual no aborta la limpieza ni borra nada: el registro queda para la próxima.
         if (r.ok && r.valor) eliminados++;
@@ -269,7 +294,7 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
         const clave = esObjeto(crudo) && typeof crudo.clave === "string" ? crudo.clave : null;
         if (clave === null) { fallidos++; continue; }
         const r = await almacen.modificar<boolean>(clave, (actual) =>
-          esObjeto(actual) && actual.ownerKey === ownerKey ? { accion: "eliminar", resultado: true } : { accion: "ninguna", resultado: false });
+          esObjeto(actual) && actual.ownerKey === ownerKey && actual.clave === clave ? { accion: "eliminar", resultado: true } : { accion: "ninguna", resultado: false });
         if (r.ok && r.valor) eliminados++;
         else fallidos++;
       }
