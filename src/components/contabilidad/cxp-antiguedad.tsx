@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import {
   ETIQUETA_SITUACION,
   ETIQUETA_TRAMO,
   SITUACIONES_VENCIMIENTO,
   TRAMOS_ANTIGUEDAD,
+  estadoCargaInicial,
   formatearImporte,
+  puedeExportarAntiguedad,
+  reducirCargaAntiguedad,
   type RespuestaAntiguedadCxp,
 } from "@/lib/contabilidad/cxp/antiguedad-shared";
 
@@ -26,11 +29,15 @@ export function CxpAntiguedad({ slug, entidadId }: { slug: string; entidadId: st
   const [borrador, setBorrador] = useState(vacio);
   const [aplicados, setAplicados] = useState(vacio);
   const [page, setPage] = useState(1);
-  const [lista, setLista] = useState<RespuestaAntiguedadCxp | null>(null);
+  // Estado de carga: la exportación solo se habilita con la lista de la solicitud VIGENTE y sin recarga en curso (ver reducirCargaAntiguedad).
+  const [carga, dispatch] = useReducer(reducirCargaAntiguedad, estadoCargaInicial);
+  const { lista, cargando } = carga;
   const [proveedores, setProveedores] = useState<ProveedorOpcion[]>([]);
-  const [cargando, setCargando] = useState(false);
   const [exportando, setExportando] = useState(false);
-  const [error, setError] = useState("");
+  const clave = useMemo(() => JSON.stringify([entidadId, aplicados, page]), [entidadId, aplicados, page]);
+  // El error de exportación pertenece a la solicitud (clave) en la que ocurrió: al cambiar filtros/página/entidad deja de mostrarse.
+  const [errorExport, setErrorExport] = useState<{ clave: string; msg: string } | null>(null);
+  const error = carga.error || (errorExport && errorExport.clave === clave ? errorExport.msg : "");
 
   const params = useCallback((conPagina: boolean) => {
     const sp = new URLSearchParams({ entidad: entidadId });
@@ -52,25 +59,23 @@ export function CxpAntiguedad({ slug, entidadId }: { slug: string; entidadId: st
 
   useEffect(() => {
     const ac = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setCargando(true);
-    setError("");
+    dispatch({ tipo: "SOLICITAR", clave });
     fetch(`${base}/antiguedad?${params(true)}`, { cache: "no-store", signal: ac.signal })
       .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({ error: "Respuesta inválida del servidor." })) }))
       .then(({ ok, d }) => {
         if (ac.signal.aborted) return;
-        if (!ok) { setLista(null); setError(d.error ?? "No se pudo cargar el reporte."); } else setLista(d as RespuestaAntiguedadCxp);
+        if (!ok) dispatch({ tipo: "FALLO", clave, error: d.error ?? "No se pudo cargar el reporte." });
+        else dispatch({ tipo: "RESPUESTA", clave, lista: d as RespuestaAntiguedadCxp });
       })
-      .catch(() => { if (!ac.signal.aborted) { setLista(null); setError("No se pudo cargar el reporte."); } })
-      .finally(() => { if (!ac.signal.aborted) setCargando(false); });
+      .catch(() => { if (!ac.signal.aborted) dispatch({ tipo: "FALLO", clave, error: "No se pudo cargar el reporte." }); });
     return () => ac.abort();
-  }, [base, params]);
+  }, [base, params, clave]);
 
   // La exportación conserva la fecha de corte de la pantalla (el servidor la valida: solo hoy/ayer). Los saldos son los actuales al generar el archivo.
   const descargar = useCallback(async () => {
-    if (!lista) return;
+    if (!lista || !puedeExportarAntiguedad(carga)) return; // nunca exportar con una lista anterior o mientras se recarga
     setExportando(true);
-    setError("");
+    setErrorExport(null);
     try {
       const sp = params(false);
       sp.set("corte", lista.fechaCorte);
@@ -85,11 +90,11 @@ export function CxpAntiguedad({ slug, entidadId }: { slug: string; entidadId: st
       a.remove();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo generar el archivo.");
+      setErrorExport({ clave, msg: e instanceof Error ? e.message : "No se pudo generar el archivo." });
     } finally {
       setExportando(false);
     }
-  }, [base, lista, params]);
+  }, [base, lista, carga, params, clave]);
 
   const totalPaginas = Math.max(1, Math.ceil((lista?.totalReal ?? 0) / PAGE_SIZE));
   const porTramo = useMemo(() => new Map((lista?.totalesPorTramo ?? []).map(t => [t.tramo, t])), [lista]);
@@ -119,7 +124,7 @@ export function CxpAntiguedad({ slug, entidadId }: { slug: string; entidadId: st
         </select></label>
       <button type="button" className={boton} onClick={() => { setPage(1); setAplicados(borrador); }}>Buscar</button>
       <button type="button" className={boton} onClick={() => { setBorrador(vacio); setAplicados(vacio); setPage(1); }}>Limpiar filtros</button>
-      <button type="button" className={boton} disabled={!lista || exportando} onClick={() => void descargar()} data-testid="cxp-antiguedad-export">{exportando ? "Generando…" : "Exportar Excel"}</button>
+      <button type="button" className={boton} disabled={!puedeExportarAntiguedad(carga) || exportando} onClick={() => void descargar()} data-testid="cxp-antiguedad-export">{exportando ? "Generando…" : "Exportar Excel"}</button>
     </div>
     <p className="text-xs text-[var(--muted)]" data-testid="cxp-antiguedad-nota-corte">
       El Excel conserva la fecha de corte de esta pantalla solo para calcular los días; sus saldos son los actuales al generarlo y pueden variar si se registraron pagos entre ambas consultas. No es un saldo histórico.

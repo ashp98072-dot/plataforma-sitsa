@@ -95,6 +95,10 @@ async function consultarUnaVez(empresaId: number, entidadId: number, filtros: Fi
   const { where, params } = condiciones(empresaId, entidadId, filtros, conPagos, ex);
   const FROM = from(conPagos);
   return enInstantanea(async (c) => {
+    // La entidad debe pertenecer a la empresa de la sesión (404 si es de otra empresa o no existe). Las inactivas siguen siendo consultables
+    // (historia). Esto NO es autorización por usuario: ver docs/CXP-ANTIGUEDAD-MIL-CXP-01.md («Alcance de la autorización por entidad»).
+    const [ent] = await c.query<RowDataPacket[]>("SELECT id FROM cont_entidades WHERE empresa_id = ? AND id = ? LIMIT 1", [empresaId, entidadId]);
+    if (!ent[0]) throw new ErrorCxp("Entidad no disponible.", 404, "ENTIDAD_NO_DISPONIBLE");
     const [filas] = await c.query<FilaSql[]>(
       `SELECT x.id, x.proveedor_id, p.nombre_comercial AS proveedor, x.serie, x.numero,
               DATE_FORMAT(x.fecha_documento, '%Y-%m-%d') AS fecha_documento, DATE_FORMAT(x.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,

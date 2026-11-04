@@ -173,7 +173,18 @@ describe.skipIf(!port)("MIL-CXP-01 antigüedad de saldos CxP / MariaDB 11.8.9 SO
     expect((await listar({ proveedorId: p2 }, E2, 2)).filas.map((f) => f.facturaId)).toEqual([fz.id]);
     expect((await listar({ proveedorId: p2 }, E1, 1)).totalReal).toBe(0); // proveedor de otra empresa pedido desde la empresa 1
     expect((await listar({ proveedorId: p1 }, E2, 2)).totalReal).toBe(0);
-    expect((await listar({ proveedorId: p1 }, E1, 2)).totalReal).toBe(0); // empresa 2 con entidad de la empresa 1
+    await expect(listar({ proveedorId: p1 }, E1, 2)).rejects.toMatchObject({ status: 404, codigo: "ENTIDAD_NO_DISPONIBLE" }); // empresa 2 con entidad de la empresa 1: 404, no una lista vacía
+  });
+
+  it("entidad de OTRA empresa o inexistente → 404 ENTIDAD_NO_DISPONIBLE (lista y exportación); una inactiva sigue siendo consultable (historia)", async () => {
+    const p = await proveedor();
+    await factura(p, { neto: "10.00" });
+    await expect(listarAntiguedadCxp(1, E2, {}, CORTE)).rejects.toMatchObject({ status: 404, codigo: "ENTIDAD_NO_DISPONIBLE" }); // E2 es de la empresa 2
+    await expect(listarAntiguedadCxp(2, E1, {}, CORTE)).rejects.toMatchObject({ status: 404, codigo: "ENTIDAD_NO_DISPONIBLE" });
+    await expect(listarAntiguedadCxp(1, 9999, {}, CORTE)).rejects.toMatchObject({ status: 404, codigo: "ENTIDAD_NO_DISPONIBLE" });
+    await expect(listarAntiguedadCxpParaExportar(1, E2, {}, CORTE)).rejects.toMatchObject({ status: 404, codigo: "ENTIDAD_NO_DISPONIBLE" });
+    await q("UPDATE cont_entidades SET activa = 0 WHERE empresa_id = 1 AND id = ?", [E1B]);
+    try { expect((await listar({}, E1B)).totalReal).toBeGreaterThanOrEqual(0); } finally { await q("UPDATE cont_entidades SET activa = 1 WHERE empresa_id = 1 AND id = ?", [E1B]); }
   });
 
   it("paginación: totalReal y totales no dependen de la página; las páginas suman exactamente el total", async () => {

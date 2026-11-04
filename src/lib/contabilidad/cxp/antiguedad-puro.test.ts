@@ -1,16 +1,23 @@
+import { readFileSync } from "node:fs";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { antiguedadCxpAExcel } from "./antiguedad-excel";
 import {
   ETIQUETA_SITUACION,
   ETIQUETA_TRAMO,
+  estadoCargaInicial,
   filaExportacionCxp,
   filtrosAntiguedadCxpDesdeParams,
   paginacionCxp,
+  puedeExportarAntiguedad,
+  reducirCargaAntiguedad,
   saldoCxp,
   situacionVencimiento,
   tramoDe,
+  type AccionCargaAntiguedad,
+  type EstadoCargaAntiguedad,
   type FilaAntiguedadCxp,
+  type RespuestaAntiguedadCxp,
 } from "./antiguedad-shared";
 
 const AHORA = new Date("2026-11-30T18:00:00Z"); // 2026-11-30 en Guatemala
@@ -121,5 +128,66 @@ describe("MIL-CXP-01 · exportación", () => {
     expect(String(ws.getRow(2).getCell(1).value)).toMatch(/ACTUALES/);
     expect(String(ws.getRow(2).getCell(1).value)).toMatch(/no representa un saldo histórico/);
     expect(ws.getRow(3).getCell(1).value).toBe("Fecha de corte: 2026-11-29");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+const listaDe = (marca: string): RespuestaAntiguedadCxp => ({
+  filas: [], totalReal: 0, page: 1, pageSize: 25, fechaCorte: marca, moneda: "GTQ", totalesPorTramo: [], totalesPorSituacion: [], saldoTotal: "0.00", rotulo: "r",
+});
+const aplicar = (acciones: AccionCargaAntiguedad[], desde: EstadoCargaAntiguedad = estadoCargaInicial) => acciones.reduce(reducirCargaAntiguedad, desde);
+const K1 = '["5",{"proveedorId":"","tramo":"","situacion":""},1]';
+const K2 = '["5",{"proveedorId":"3","tramo":"","situacion":""},1]'; // cambio de filtros
+const K3 = '["5",{"proveedorId":"3","tramo":"","situacion":""},2]'; // cambio de página
+const K4 = '["6",{"proveedorId":"","tramo":"","situacion":""},1]'; // cambio de entidad
+
+describe("MIL-CXP-01 · transición de recarga: no se exporta con una lista anterior", () => {
+  it("sin lista cargada no se puede exportar; durante la primera carga tampoco", () => {
+    expect(puedeExportarAntiguedad(estadoCargaInicial)).toBe(false);
+    expect(puedeExportarAntiguedad(aplicar([{ tipo: "SOLICITAR", clave: K1 }]))).toBe(false);
+  });
+  it("lista cargada de la solicitud vigente → se puede exportar", () => {
+    expect(puedeExportarAntiguedad(aplicar([{ tipo: "SOLICITAR", clave: K1 }, { tipo: "RESPUESTA", clave: K1, lista: listaDe("A") }]))).toBe(true);
+  });
+  it.each([["filtros", K2], ["página", K3], ["entidad", K4]])("al recargar por cambio de %s la lista anterior sigue visible pero la exportación se BLOQUEA hasta que llegue la nueva", (_n, k) => {
+    const cargada = aplicar([{ tipo: "SOLICITAR", clave: K1 }, { tipo: "RESPUESTA", clave: K1, lista: listaDe("A") }]);
+    expect(puedeExportarAntiguedad(cargada)).toBe(true);
+    const recargando = aplicar([{ tipo: "SOLICITAR", clave: k }], cargada);
+    expect(recargando.lista).not.toBeNull(); // no parpadea
+    expect(recargando.cargando).toBe(true);
+    expect(puedeExportarAntiguedad(recargando)).toBe(false); // la lista anterior NO es exportable
+    const nueva = aplicar([{ tipo: "RESPUESTA", clave: k, lista: listaDe("B") }], recargando);
+    expect(puedeExportarAntiguedad(nueva)).toBe(true);
+    expect(nueva.lista?.fechaCorte).toBe("B");
+  });
+  it("respuestas fuera de orden: una respuesta tardía de una solicitud superada se descarta y no habilita la exportación", () => {
+    const e = aplicar([{ tipo: "SOLICITAR", clave: K1 }, { tipo: "SOLICITAR", clave: K2 }, { tipo: "SOLICITAR", clave: K3 }]);
+    const tarde = aplicar([{ tipo: "RESPUESTA", clave: K2, lista: listaDe("vieja") }], e);
+    expect(tarde).toBe(e); // ignorada: mismo estado
+    expect(puedeExportarAntiguedad(tarde)).toBe(false);
+    const ok = aplicar([{ tipo: "RESPUESTA", clave: K3, lista: listaDe("vigente") }], tarde);
+    expect(puedeExportarAntiguedad(ok)).toBe(true);
+    // una respuesta vieja que llega DESPUÉS de la vigente tampoco pisa la lista
+    const despues = aplicar([{ tipo: "RESPUESTA", clave: K1, lista: listaDe("muy vieja") }], ok);
+    expect(despues).toBe(ok);
+    expect(despues.lista?.fechaCorte).toBe("vigente");
+  });
+  it("fallo de la solicitud vigente: sin lista, con error y sin exportar; un fallo de una solicitud superada se ignora", () => {
+    const cargada = aplicar([{ tipo: "SOLICITAR", clave: K1 }, { tipo: "RESPUESTA", clave: K1, lista: listaDe("A") }, { tipo: "SOLICITAR", clave: K2 }]);
+    expect(aplicar([{ tipo: "FALLO", clave: K1, error: "viejo" }], cargada)).toBe(cargada);
+    const fallo = aplicar([{ tipo: "FALLO", clave: K2, error: "No se pudo cargar el reporte." }], cargada);
+    expect(fallo).toMatchObject({ lista: null, claveLista: null, cargando: false, error: "No se pudo cargar el reporte." });
+    expect(puedeExportarAntiguedad(fallo)).toBe(false);
+    expect(aplicar([{ tipo: "SOLICITAR", clave: K2 }], fallo).error).toBe(""); // reintentar limpia el error
+  });
+  it("cableado de la pantalla: el botón y descargar() usan puedeExportarAntiguedad; la entidad remonta el componente; la clave incluye entidad, filtros y página", () => {
+    const ui = readFileSync("src/components/contabilidad/cxp-antiguedad.tsx", "utf8");
+    expect(ui).toContain("useReducer(reducirCargaAntiguedad, estadoCargaInicial)");
+    expect(ui).toMatch(/disabled=\{!puedeExportarAntiguedad\(carga\) \|\| exportando\}/);
+    expect(ui).toMatch(/if \(!lista \|\| !puedeExportarAntiguedad\(carga\)\) return/);
+    expect(ui).toContain("JSON.stringify([entidadId, aplicados, page])");
+    expect(ui).toContain('dispatch({ tipo: "SOLICITAR", clave })');
+    expect(ui).toContain('dispatch({ tipo: "RESPUESTA", clave, lista:');
+    expect(readFileSync("src/components/contabilidad/cxp-client.tsx", "utf8")).toContain("<CxpAntiguedad key={" + String.fromCharCode(96) + "a");
   });
 });

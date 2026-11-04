@@ -112,6 +112,23 @@ describe("MIL-CXP-01 · fecha de corte conservada al exportar", () => {
   });
 });
 
+describe("MIL-CXP-01 · entidad que no pertenece a la empresa", () => {
+  it("el servicio responde 404 ENTIDAD_NO_DISPONIBLE y la ruta lo propaga en lista y exportación", async () => {
+    const e = new ErrorCxp("Entidad no disponible.", 404, "ENTIDAD_NO_DISPONIBLE");
+    m.listar.mockRejectedValue(e);
+    m.exportar.mockRejectedValue(e);
+    for (const r of [await antiguedadCxpHttp(url("entidad=99"), "kt"), await exportarAntiguedadCxpHttp(url("entidad=99"), "kt")]) {
+      expect(r.status).toBe(404);
+      expect((await r.json()).codigo).toBe("ENTIDAD_NO_DISPONIBLE");
+    }
+  });
+  it("política vigente (CONTABILIDAD-ACCESO-UNIFICADO): el permiso central cubre todos los libros de la empresa; cont_entidad_usuarios no concede ni restringe", async () => {
+    // Cualquier entidad de la empresa de la sesión se entrega al servicio sin consultar cont_entidad_usuarios (no es un hueco nuevo: es la política de todo CxP/Contabilidad).
+    for (const entidad of ["5", "6", "42"]) expect((await antiguedadCxpHttp(url("entidad=" + entidad), "kt")).status).toBe(200);
+    expect(m.listar.mock.calls.map((c) => [c[0], c[1]])).toEqual([[7, 5], [7, 6], [7, 42]]);
+  });
+});
+
 describe("MIL-CXP-01 · errores controlados", () => {
   it("MIGRACION_PENDIENTE (ErrorCxp 503) en lista y exportación", async () => {
     const e = new ErrorCxp("Esquema de Cuentas por pagar pendiente.", 503, "MIGRACION_PENDIENTE");
