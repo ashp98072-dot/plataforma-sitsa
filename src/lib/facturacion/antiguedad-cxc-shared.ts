@@ -10,7 +10,8 @@ import { TEXTO_SIN_ENTIDAD, importe } from "./cuentas-por-cobrar-shared";
 
 export const ROTULO_ANTIGUEDAD =
   "Antigüedad desde la fecha de emisión, a la fecha de corte indicada. No indica morosidad ni vencimiento (la plataforma no guarda fecha de vencimiento). Saldo actual informativo; no sustituye la cartera legal de Milenium.";
-export const NOTA_EXPORTACION_ANTIGUEDAD = "Saldo actual al momento de generar el reporte. Importes en la moneda de cada factura; nunca se suman monedas distintas.";
+export const NOTA_EXPORTACION_ANTIGUEDAD =
+  "Saldos ACTUALES al momento de generar el archivo (pueden variar si se registraron cobros después de la consulta en pantalla). La fecha de corte solo fija el cálculo de días desde emisión; no representa un saldo histórico. Importes en la moneda de cada factura; nunca se suman monedas distintas.";
 export const TEXTO_DIAS_VENCIDOS_NO_DISPONIBLE = "No disponible";
 
 export const TRAMOS_ANTIGUEDAD = ["0-15", "16-30", "31-60", "61-90", "90+"] as const;
@@ -67,30 +68,102 @@ export const PAGE_SIZE_ANT_DEFECTO = 25;
 export const PAGE_SIZE_ANT_MAXIMO = 100;
 export const LIMITE_EXPORTACION_ANT = 20000;
 
-const MONEDA_RE = /^[A-Z]{3}$/;
-const entero = (v: string | null): number | undefined => {
-  if (v == null || v.trim() === "") return undefined;
+const ENTERO_RE = /^[0-9]{1,10}$/;
+const INT_MAX = 2_147_483_647;
+const PAGE_MAX = 1_000_000;
+
+const entero = (v: string, max: number): number | undefined => {
+  if (!ENTERO_RE.test(v)) return undefined;
   const n = Number(v);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+  return n >= 1 && n <= max ? n : undefined;
 };
 
-/** Filtros desde la query string. Valores inválidos se ignoran (nunca se interpolan en SQL). */
-export function filtrosAntiguedadDesdeParams(p: URLSearchParams): FiltrosAntiguedad {
+/**
+ * Fecha de corte conservada para la EXPORTACIÓN: solo hoy o ayer (Guatemala). Sirve únicamente para que el Excel calcule los días
+ * desde emisión con la misma fecha que la pantalla cuando la medianoche se cruzó entre ambas solicitudes. NO habilita reportes
+ * históricos: los saldos siempre son los ACTUALES al generar el archivo (pueden variar si se registraron cobros entre ambas
+ * solicitudes) y una fecha conservada no representa un saldo histórico.
+ */
+export function validarCorte(valor: string, ahora: Date = new Date()): { ok: true; corte: string } | { ok: false; error: string } {
+  const v = fechaValida(valor);
+  if (!v) return { ok: false, error: "Fecha de corte inválida: use AAAA-MM-DD (fecha real)." };
+  const hoy = hoyGuatemala(ahora);
+  if (v !== hoy && diasEntre(v, hoy) !== 1) {
+    return { ok: false, error: "La fecha de corte solo puede ser la de hoy o la de ayer; actualice el reporte para generar el archivo. Los reportes históricos no están disponibles." };
+  }
+  return { ok: true, corte: v };
+}
+
+export type ResultadoFiltros = { ok: true; filtros: FiltrosAntiguedad; corte?: string } | { ok: false; error: string };
+
+/**
+ * Filtros desde la query string, ESTRICTOS: un valor explícito inválido (vacío, repetido, fuera de rango o desconocido) se RECHAZA
+ * —nunca se convierte en «todos»—. Parámetros que no son filtros (p. ej. empresaId) se ignoran: la empresa sale de la sesión.
+ * `corte` solo se acepta si `permitirCorte` (exportación).
+ */
+export function filtrosAntiguedadDesdeParams(p: URLSearchParams, opciones: { permitirCorte?: boolean; ahora?: Date } = {}): ResultadoFiltros {
   const f: FiltrosAntiguedad = {};
-  const cliente = entero(p.get("clienteId"));
-  if (cliente) f.clienteId = cliente;
-  const ent = (p.get("entidad") ?? "").trim();
-  if (ent === "sin") f.entidad = "sin";
-  else if (entero(ent)) f.entidad = entero(ent);
-  const mon = (p.get("moneda") ?? "").trim().toUpperCase();
-  if (MONEDA_RE.test(mon)) f.moneda = mon;
-  const tr = (p.get("tramo") ?? "").trim();
-  if ((TRAMOS_ANTIGUEDAD as readonly string[]).includes(tr)) f.tramo = tr as TramoAntiguedad;
-  const page = entero(p.get("page"));
-  if (page) f.page = page;
-  const size = entero(p.get("pageSize"));
-  if (size) f.pageSize = Math.min(size, PAGE_SIZE_ANT_MAXIMO);
-  return f;
+  const leer = (k: string): string | null | { error: string } => {
+    const vs = p.getAll(k);
+    if (vs.length === 0) return null;
+    if (vs.length > 1) return { error: `Parámetro «${k}» repetido.` };
+    const v = vs[0].trim();
+    return v === "" ? { error: `Parámetro «${k}» vacío: omítalo o indique un valor.` } : v;
+  };
+  const invalido = (k: string, detalle: string) => ({ ok: false as const, error: `Valor inválido en «${k}»: ${detalle}.` });
+
+  const cliente = leer("clienteId");
+  if (cliente !== null) {
+    if (typeof cliente !== "string") return { ok: false, error: cliente.error };
+    const n = entero(cliente, INT_MAX);
+    if (!n) return invalido("clienteId", "se espera un entero positivo");
+    f.clienteId = n;
+  }
+  const ent = leer("entidad");
+  if (ent !== null) {
+    if (typeof ent !== "string") return { ok: false, error: ent.error };
+    if (ent === "sin") f.entidad = "sin";
+    else {
+      const n = entero(ent, INT_MAX);
+      if (!n) return invalido("entidad", "se espera un entero positivo o «sin»");
+      f.entidad = n;
+    }
+  }
+  const mon = leer("moneda");
+  if (mon !== null) {
+    if (typeof mon !== "string") return { ok: false, error: mon.error };
+    if (!/^[A-Za-z]{3}$/.test(mon)) return invalido("moneda", "se espera un código de 3 letras (p. ej. GTQ)");
+    f.moneda = mon.toUpperCase();
+  }
+  const tr = leer("tramo");
+  if (tr !== null) {
+    if (typeof tr !== "string") return { ok: false, error: tr.error };
+    if (!(TRAMOS_ANTIGUEDAD as readonly string[]).includes(tr)) return invalido("tramo", `use uno de ${TRAMOS_ANTIGUEDAD.join(", ")}`);
+    f.tramo = tr as TramoAntiguedad;
+  }
+  const page = leer("page");
+  if (page !== null) {
+    if (typeof page !== "string") return { ok: false, error: page.error };
+    const n = entero(page, PAGE_MAX);
+    if (!n) return invalido("page", "se espera un entero positivo");
+    f.page = n;
+  }
+  const size = leer("pageSize");
+  if (size !== null) {
+    if (typeof size !== "string") return { ok: false, error: size.error };
+    const n = entero(size, PAGE_SIZE_ANT_MAXIMO);
+    if (!n) return invalido("pageSize", `se espera un entero entre 1 y ${PAGE_SIZE_ANT_MAXIMO}`);
+    f.pageSize = n;
+  }
+  const corte = leer("corte");
+  if (corte !== null) {
+    if (typeof corte !== "string") return { ok: false, error: corte.error };
+    if (!opciones.permitirCorte) return { ok: false, error: "«corte» solo se admite al exportar." };
+    const c = validarCorte(corte, opciones.ahora);
+    if (!c.ok) return c;
+    return { ok: true, filtros: f, corte: c.corte };
+  }
+  return { ok: true, filtros: f };
 }
 
 export function paginacionAntiguedad(f: { page?: number; pageSize?: number }) {
@@ -144,4 +217,31 @@ export function filaExportacionAnt(f: FilaAntiguedad): string[] {
     f.cliente, f.numeroFactura ?? "", f.fechaEmision, String(f.diasDesdeEmision), ETIQUETA_TRAMO[f.tramo],
     f.montoOriginal, f.montoCobrado, f.saldoPendiente, f.moneda, f.entidad,
   ];
+}
+
+/**
+ * Presentación de importes SIN pasar por Number: el servidor ya entrega cadenas con 2 decimales (DECIMAL(14,2) y sus sumas). Se
+ * agrupan los miles sobre la cadena, de modo que ningún centavo se pierde, sea cual sea la magnitud.
+ */
+export function formatearImporte(moneda: string, v: unknown): string {
+  const t = importe(v);
+  const neg = t.startsWith("-");
+  const [ent, dec] = (neg ? t.slice(1) : t).split(".");
+  const miles = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${moneda} ${neg ? "-" : ""}${miles}.${dec ?? "00"}`;
+}
+
+/** Máximo de dígitos significativos que un número de Excel (doble IEEE-754) conserva exactos como decimal. */
+const DIGITOS_EXACTOS_EXCEL = 15;
+
+/**
+ * Valor de celda de Excel para un importe: NÚMERO (sumable) solo si ida y vuelta es exacta (≤ 15 dígitos significativos y
+ * `Number(v).toFixed(2) === v`); si no, TEXTO con la cadena exacta del servidor. Cubre todo DECIMAL(14,2) (≤ 14 dígitos); solo las
+ * sumas gigantes (≥ 16 dígitos) caen a texto, nunca se redondean en silencio.
+ */
+export function valorCeldaImporte(v: unknown): number | string {
+  const t = importe(v);
+  const digitos = t.replace(/[-.]/g, "").replace(/^0+(?=\d)/, "").length;
+  const n = Number(t);
+  return digitos <= DIGITOS_EXACTOS_EXCEL && Number.isFinite(n) && n.toFixed(2) === t ? n : t;
 }

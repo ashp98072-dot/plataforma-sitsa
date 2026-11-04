@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import Decimal from "decimal.js";
+import ExcelJS from "exceljs";
 import mysql, { type Connection, type Pool, type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -220,6 +221,40 @@ describe.skipIf(!port)("MIL-CXC-ANT-01 antigüedad de saldos CxC / MariaDB 11.8.
     const filtrado = await listarAntiguedadParaExportar(E1, { ...f, moneda: "USD" }, CORTE);
     if (!filtrado.ok) throw new Error(filtrado.error);
     expect(filtrado.filas).toHaveLength(1);
+  });
+
+  it("importes en el máximo de DECIMAL(14,2) y centavos: la BD, el Decimal y las cadenas conservan cada centavo (lista y exportación)", async () => {
+    const c = await nuevoCliente();
+    const MAX = "999999999999.99";
+    const a = await factura({ cliente: c, monto: MAX, dias: 10 });
+    const b = await factura({ cliente: c, monto: MAX, dias: 11 });
+    await pagoLegado(a, "0.01");
+    const r = await listar({ clienteId: c });
+    const porId = new Map(r.filas.map((f) => [f.facturaId, f]));
+    expect(porId.get(a)).toMatchObject({ montoOriginal: MAX, montoCobrado: "0.01", saldoPendiente: "999999999999.98" });
+    expect(porId.get(b)).toMatchObject({ montoOriginal: MAX, montoCobrado: "0.00", saldoPendiente: MAX });
+    expect(r.totalesPorMoneda).toEqual([{ moneda: "GTQ", facturas: 2, saldo: "1999999999999.97" }]);
+    const ex = await listarAntiguedadParaExportar(E1, { clienteId: c }, CORTE);
+    if (!ex.ok) throw new Error(ex.error);
+    const xlsx = await antiguedadAExcel(ex.filas, ex.totales, ex.totalesPorMoneda, ex.fechaCorte);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(xlsx as never);
+    const ws = wb.getWorksheet("Antigüedad")!;
+    const saldos = [5, 6].map((n) => (ws.getRow(n).getCell(8).value as number).toFixed(2)).sort();
+    expect(saldos).toEqual(["999999999999.98", MAX]);
+    expect((wb.getWorksheet("Totales")!.getRow(4).getCell(4).value as number).toFixed(2)).toBe("1999999999999.97");
+  });
+
+  it("corte conservado en la exportación: cambia solo los días/tramos, no el saldo (sigue siendo el actual)", async () => {
+    const c = await nuevoCliente();
+    await factura({ cliente: c, monto: "50.00", dias: 15 }); // al corte 2026-11-30: 15 días → 0-15
+    const hoy = await listarAntiguedadParaExportar(E1, { clienteId: c }, "2026-11-30");
+    const ayer = await listarAntiguedadParaExportar(E1, { clienteId: c }, "2026-11-29");
+    if (!hoy.ok || !ayer.ok) throw new Error("export");
+    expect([hoy.filas[0].diasDesdeEmision, hoy.filas[0].tramo]).toEqual([15, "0-15"]);
+    expect([ayer.filas[0].diasDesdeEmision, ayer.filas[0].tramo]).toEqual([14, "0-15"]);
+    expect(ayer.filas[0].saldoPendiente).toBe(hoy.filas[0].saldoPendiente);
+    expect(ayer.fechaCorte).toBe("2026-11-29");
   });
 
   it("concurrencia: cobros simultáneos no desfasan filas y totales de una misma lectura (instantánea consistente)", async () => {

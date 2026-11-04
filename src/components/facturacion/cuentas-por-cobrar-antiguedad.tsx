@@ -6,6 +6,7 @@ import {
   ETIQUETA_TRAMO,
   TEXTO_DIAS_VENCIDOS_NO_DISPONIBLE,
   TRAMOS_ANTIGUEDAD,
+  formatearImporte,
   type RespuestaAntiguedad,
 } from "@/lib/facturacion/antiguedad-cxc-shared";
 
@@ -21,10 +22,8 @@ const PAGE_SIZE = 25;
 const inputCls = "rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--text)]";
 const vacio = { clienteId: "", entidad: "", moneda: "", tramo: "" };
 
-function monto(moneda: string, v: string): string {
-  const n = Number(v);
-  return Number.isFinite(n) ? `${moneda} ${n.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—";
-}
+/** Formato sobre la cadena exacta del servidor (sin Number): no se pierde ningún centavo. */
+const monto = formatearImporte;
 
 export function AntiguedadCxc({ slug }: { slug: string }) {
   const base = `/api/empresas/${slug}/facturacion/cuentas-por-cobrar/antiguedad`;
@@ -70,7 +69,34 @@ export function AntiguedadCxc({ slug }: { slug: string }) {
   }, [cargar]);
 
   const totalPaginas = Math.max(1, Math.ceil((lista?.totalReal ?? 0) / PAGE_SIZE));
-  const urlExport = useMemo(() => `${base}/export?${params(false)}`, [base, params]);
+  const [exportando, setExportando] = useState(false);
+  // La exportación conserva la fecha de corte de la pantalla (validada por el servidor: solo hoy/ayer). Saldos = actuales al generar.
+  const descargar = useCallback(async () => {
+    if (!lista) return;
+    setExportando(true);
+    setError("");
+    try {
+      const sp = params(false);
+      sp.set("corte", lista.fechaCorte);
+      const res = await fetch(`${base}/export?${sp}`);
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error ?? "No se pudo generar el archivo.");
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `cuentas-por-cobrar-antiguedad-${lista.fechaCorte}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el archivo.");
+    } finally {
+      setExportando(false);
+    }
+  }, [base, lista, params]);
   const monedas = useMemo(() => [...new Set((lista?.totalesPorMoneda ?? []).map((t) => t.moneda))], [lista]);
 
   return (
@@ -103,8 +129,11 @@ export function AntiguedadCxc({ slug }: { slug: string }) {
           </label>
           <button type="button" className="rounded bg-[var(--accent)] px-3 py-1.5 text-xs font-medium text-white" onClick={() => { setPage(1); setAplicados(borrador); }}>Buscar</button>
           <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" onClick={() => { setBorrador(vacio); setAplicados(vacio); setPage(1); }}>Limpiar filtros</button>
-          <a className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)]" href={urlExport} data-testid="cxc-antiguedad-export">Exportar Excel</a>
+          <button type="button" className="rounded border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--text)] disabled:opacity-40" disabled={!lista || exportando} onClick={() => void descargar()} data-testid="cxc-antiguedad-export">{exportando ? "Generando…" : "Exportar Excel"}</button>
         </div>
+        <p className="mt-2 text-xs text-[var(--muted)]" data-testid="cxc-antiguedad-nota-corte">
+          El Excel conserva la fecha de corte de esta pantalla solo para calcular los días desde emisión; sus saldos son los actuales al generarlo y pueden variar si se registraron cobros entre ambas consultas. No es un saldo histórico.
+        </p>
       </section>
 
       {error ? <p role="alert" className="rounded-lg border border-red-700 px-3 py-2 text-sm text-red-400">{error}</p> : null}

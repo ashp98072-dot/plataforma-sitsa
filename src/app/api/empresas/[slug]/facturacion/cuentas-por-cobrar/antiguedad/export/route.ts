@@ -11,9 +11,11 @@ export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFacturacion(slug, "ver");
   if (guard.error) return guard.error;
-  const filtros = filtrosAntiguedadDesdeParams(new URL(req.url).searchParams);
+  // `corte` (opcional) conserva la fecha de la pantalla: solo hoy/ayer (Guatemala). No es un saldo histórico: el saldo es el actual.
+  const parsed = filtrosAntiguedadDesdeParams(new URL(req.url).searchParams, { permitirCorte: true });
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error, codigo: "FILTRO_INVALIDO" }, { status: 400 });
   try {
-    const r = await listarAntiguedadParaExportar(guard.empresa.id, filtros);
+    const r = await listarAntiguedadParaExportar(guard.empresa.id, parsed.filtros, parsed.corte);
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 400 });
     const buffer = await antiguedadAExcel(r.filas, r.totales, r.totalesPorMoneda, r.fechaCorte);
     return new NextResponse(new Uint8Array(buffer), {

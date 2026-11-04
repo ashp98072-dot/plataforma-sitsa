@@ -14,7 +14,9 @@ export async function GET(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFacturacion(slug, "ver");
   if (guard.error) return guard.error;
-  const filtros = filtrosAntiguedadDesdeParams(new URL(req.url).searchParams);
+  const parsed = filtrosAntiguedadDesdeParams(new URL(req.url).searchParams);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error, codigo: "FILTRO_INVALIDO" }, { status: 400 });
+  const filtros = parsed.filtros;
   try {
     const [resultado, entidades] = await Promise.all([listarAntiguedadCxc(guard.empresa.id, filtros), listarEntidadesEmisoras(guard.empresa.id)]);
     return NextResponse.json({ ...resultado, entidades }, { headers: { "Cache-Control": "private, no-store" } });
