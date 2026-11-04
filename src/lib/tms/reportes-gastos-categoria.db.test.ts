@@ -190,4 +190,21 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA})`, () => {
     expect(filas).toHaveLength(600);
     expect(resumirSolicitudesFondo(filas, "Parqueo")).toMatchObject({ cantidad: 1, totalSolicitado: 600, totalAutorizado: 600 });
   });
+  it("fracciones de centavo (REGLA ÚNICA de redondeo): dos solicitudes de Q0.005 y una de 3 líneas de Q0.005 — el resumen es la suma de los subtotales por solicitud, igual que el oráculo ROUND(SUM) por solicitud de la base", async () => {
+    const nueva = async (codigo: string, lineas: number) => {
+      const [r] = await getPool().query("INSERT INTO tms_solicitudes_fondo (empresa_id, codigo, fecha_requerimiento, estado, total) VALUES (?, ?, '2026-12-01', 'Autorizada', 0.01)", [E1, codigo]);
+      const sid = (r as { insertId: number }).insertId;
+      for (let i = 0; i < lineas; i++) await getPool().query("INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, categoria, cantidad, monto) VALUES (?, ?, 'Aceite', 0.50, 0.01)", [E1, sid]);
+    };
+    await nueva("F-FR1", 1); await nueva("F-FR2", 1); await nueva("F-FR3", 3);
+    const filas = await reporteSolicitudesFondo(E1, { categoria: "Aceite" });
+    const resumen = resumirSolicitudesFondo(filas, "Aceite");
+    const [o] = await getPool().query("SELECT CAST(ROUND(SUM(sub) * 100) AS CHAR) AS c FROM (SELECT ROUND(SUM(l.cantidad * l.monto), 2) AS sub FROM tms_solicitud_fondo_lineas l WHERE l.empresa_id = ? AND l.categoria = 'Aceite' GROUP BY l.solicitud_id) x", [E1]);
+    const oraculo = Number((o as { c: string }[])[0].c);
+    expect(resumen.cantidad).toBe(3);
+    expect(Math.round(resumen.totalSolicitado * 100)).toBe(oraculo); // 0.01 + 0.01 + 0.02 = 0.04
+    expect(resumen.totalSolicitado).toBe(0.04);
+    const subtotales = new Map<number, number>(filas.map((f) => [f.solicitudId, f.subtotalCategoria ?? 0]));
+    expect(Math.round([...subtotales.values()].reduce((a, b) => a + b, 0) * 100)).toBe(oraculo);
+  });
 });

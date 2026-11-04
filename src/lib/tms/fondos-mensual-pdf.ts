@@ -5,7 +5,7 @@ import { dibujarFirmas, firmaHistorica, moneda, type FirmaSnapshot, type PdfDoc 
 import { dibujarObservacionesPdf } from "@/lib/tms/observaciones-export";
 import { CONTROL_ENTREGA_VACIO, cargarControlEntregaPdf, dibujarControlEntregaPdf, type ControlEntregaPdf } from "@/lib/tms/fondos-control-entrega-pdf";
 import { etiquetaMes } from "@/lib/tms/reportes-mes";
-import type { ResumenMensualFondos, SolicitudFondoAgrupada } from "@/lib/tms/reportes-gastos";
+import { REGLA_REDONDEO_FONDOS, type ResumenMensualFondos, type SolicitudFondoAgrupada } from "@/lib/tms/reportes-gastos";
 
 /**
  * REPORTES-MENSUALES-CONSOLIDADOS-1 — PDF MENSUAL CONSOLIDADO de
@@ -159,7 +159,7 @@ function dibujarResumenMes(
   doc.moveDown(0.3);
   doc.font("Helvetica").fontSize(8).fillColor("#334155")
     .text(resumen.categoria
-      ? `Categoría filtrada: ${resumen.categoria}. Se suman SOLO las líneas de esa categoría (cantidad × monto) de las solicitudes Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez.`
+      ? `Categoría filtrada: ${resumen.categoria}. Se suman SOLO las líneas de esa categoría (cantidad × monto) de las solicitudes Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez. ${REGLA_REDONDEO_FONDOS}`
       : "Estados sumados en el TOTAL GENERAL: Autorizada + Liquidada. Se excluyen Rechazada y Pendiente. Cada solicitud se cuenta una sola vez.", { width: pageWidth });
 }
 

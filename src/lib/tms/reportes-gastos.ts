@@ -762,21 +762,47 @@ export function resumirSolicitudesFondo(filas: FilaSolicitudFondoReporte[], cate
 }
 
 /**
+ * REGLA ÚNICA DE REDONDEO (OP-FONDOS-REP-01, corrección de auditoría PR #557). cantidad DECIMAL(10,2) × monto DECIMAL(12,2) puede
+ * producir fracciones de centavo (hasta 4 decimales). Con filtro de categoría: cada SOLICITUD se redondea UNA vez a centavos
+ * (half-up) sobre la suma exacta de sus líneas filtradas — igual que se guarda tms_solicitudes_fondo.total — y TODO total general
+ * (resumen de pantalla, hoja Resumen del Excel, total del mes del PDF y total del PDF tabular) es la SUMA de esos subtotales por
+ * solicitud ya redondeados; así los totales concilian siempre con los subtotales visibles. El importe de cada línea es informativo
+ * y puede traer fracciones de centavo. No altera la política monetaria de ningún otro módulo.
+ */
+export const REGLA_REDONDEO_FONDOS =
+  "Regla de redondeo: cada solicitud se redondea una sola vez a centavos (half-up) sobre la suma exacta de sus líneas filtradas; los totales son la suma de esos subtotales por solicitud. El importe de cada línea es informativo y puede tener fracciones de centavo.";
+
+/** Subtotal en centavos (BigInt) por solicitud DISTINTA, ya redondeado, con el estado real de la solicitud. */
+function centavosPorSolicitud(filas: FilaSolicitudFondoReporte[]): Map<number, { estado: string; centavos: bigint }> {
+  const exactas = new Map<number, { estado: string; suma: bigint }>();
+  for (const f of filas) {
+    const actual = exactas.get(f.solicitudId) ?? { estado: f.estadoFondo, suma: BigInt(0) };
+    actual.suma += exactoDeFila(f);
+    exactas.set(f.solicitudId, actual);
+  }
+  const redondeadas = new Map<number, { estado: string; centavos: bigint }>();
+  for (const [id, v] of exactas) redondeadas.set(id, { estado: v.estado, centavos: aCentavos(v.suma) });
+  return redondeadas;
+}
+
+/** Suma de los subtotales por solicitud redondeados (misma regla que el resumen); la usa el total del PDF tabular filtrado por categoría. */
+export function sumaSubtotalesPorSolicitud(filas: FilaSolicitudFondoReporte[]): number {
+  let acc = BigInt(0);
+  for (const v of centavosPorSolicitud(filas).values()) acc += v.centavos;
+  return centavosANumero(acc);
+}
+
+/**
  * OP-FONDOS-REP-01 — resumen CON filtro de categoría: suma SOLO cantidad × monto de las líneas coincidentes
  * (nunca s.total, que incluye otras categorías), con aritmética exacta (BigInt) y agrupando por el estado real
  * de la solicitud. Cuenta solicitudes DISTINTAS aunque tengan varias líneas de la categoría.
  */
 function resumirSolicitudesFondoPorCategoria(filas: FilaSolicitudFondoReporte[], categoria: string): ResumenSolicitudesFondo {
-  const porSolicitud = new Map<number, { estado: string; suma: bigint }>();
-  for (const f of filas) {
-    const actual = porSolicitud.get(f.solicitudId) ?? { estado: f.estadoFondo, suma: BigInt(0) };
-    actual.suma += exactoDeFila(f);
-    porSolicitud.set(f.solicitudId, actual);
-  }
+  const porSolicitud = centavosPorSolicitud(filas);
   const suma = (aceptar: (estado: string) => boolean) => {
     let acc = BigInt(0);
-    for (const v of porSolicitud.values()) if (aceptar(v.estado)) acc += v.suma;
-    return centavosANumero(aCentavos(acc));
+    for (const v of porSolicitud.values()) if (aceptar(v.estado)) acc += v.centavos;
+    return centavosANumero(acc);
   };
   return {
     categoria,
@@ -966,9 +992,10 @@ export function resumenMensualFondos(grupos: SolicitudFondoAgrupada[], categoria
     pendientes: cuenta("Pendiente"),
     ...(categoria !== undefined ? { categoria } : {}),
     totalGeneral: categoria !== undefined
-      ? centavosANumero(aCentavos(grupos
+      ? centavosANumero(grupos
         .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
-        .reduce((suma, g) => suma + desdeTextoExacto(g.subtotalCategoriaExacto ?? "0.0000"), BigInt(0))))
+        // Regla única: suma de los subtotales POR SOLICITUD ya redondeados (REGLA_REDONDEO_FONDOS), nunca un redondeo único del acumulado.
+        .reduce((suma, g) => suma + aCentavos(desdeTextoExacto(g.subtotalCategoriaExacto ?? "0.0000")), BigInt(0)))
       : grupos
         .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
         .reduce((suma, g) => suma + (g.totalSolicitud ?? 0), 0),

@@ -64,4 +64,15 @@ describe("PDF mensual con filtro de categoría", () => {
     expect(t).toContain("TOTAL GENERAL DEL MES: Q 561.15"); // 501 + 60.15
     expect(t.some((x) => x.includes("Categoría"))).toBe(false);
   });
+
+  it("fracciones de centavo: dos solicitudes de Q0.005 → dos SUBTOTAL Q 0.01 y TOTAL DEL MES Q 0.02 (concilia), con la regla de redondeo impresa", async () => {
+    const spy = vi.spyOn(PDFDocument.prototype, "text");
+    const fr = (n: number): FilaSolicitudFondoReporte => linea({ lineaId: n, solicitudId: n, solicitudCodigo: `F-${n}`, cantidad: 0.5, monto: 0.01, total: 0.005, totalExacto: "0.0050", totalSolicitud: 0.01, estadoFondo: "Autorizada", subtotalCategoria: 0.01 });
+    const grupos = agruparSolicitudesFondo([fr(1), fr(2)]);
+    await generarPdfMensualSolicitudesFondo(7, "SITSA", grupos, resumenMensualFondos(grupos, "Combustible"), { anio: 2026, mes: 9 }, "Combustible");
+    const t = textos(spy);
+    expect(t.filter((x) => x === "SUBTOTAL COMBUSTIBLE: Q 0.01")).toHaveLength(2);
+    expect(t).toContain("TOTAL COMBUSTIBLE DEL MES: Q 0.02");
+    expect(t.some((x) => x.includes("cada solicitud se redondea una sola vez a centavos (half-up)"))).toBe(true);
+  });
 });

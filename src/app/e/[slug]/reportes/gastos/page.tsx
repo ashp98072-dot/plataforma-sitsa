@@ -578,7 +578,7 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
               <th className="px-2 py-1">Fecha solicitud</th><th className="px-2 py-1">Fecha viaje</th><th className="px-2 py-1">Nombre</th>
               <th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th><th className="px-2 py-1">Cliente</th>
               <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th>
-              {resumenFondos?.categoria ? <><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Total línea</th><th className="px-2 py-1">Subtotal {resumenFondos.categoria} de la solicitud</th><th className="px-2 py-1">Total solicitud (todas las categorías)</th></> : <th className="px-2 py-1">Total</th>}
+              {resumenFondos?.categoria ? <><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Total línea</th><th className="px-2 py-1 font-normal italic" title="Informativo: se repite en cada línea de la misma solicitud; no se suma por fila.">Subtotal {resumenFondos.categoria} de la solicitud <span className="block text-[10px]">(informativo, se repite por línea; no sumar)</span></th><th className="px-2 py-1 font-normal italic" title="Informativo: se repite en cada línea de la misma solicitud; no se suma por fila.">Total solicitud (todas las categorías) <span className="block text-[10px]">(informativo, se repite por línea; no sumar)</span></th></> : <th className="px-2 py-1">Total</th>}
               <th className="px-2 py-1">Estado</th>
             </tr>
           </thead>
@@ -589,11 +589,15 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                 <td className="px-2 py-1">{f.empleadoNombre ?? "—"}</td><td className="px-2 py-1">{f.cargo ?? "—"}</td>
                 <td className="px-2 py-1">{f.placa ?? "—"}</td><td className="px-2 py-1">{f.clienteNombre ?? "—"}</td>
                 <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td>
-                {resumenFondos?.categoria ? <><td className="px-2 py-1">{f.categoria ?? "—"}</td><td className="px-2 py-1">{money(f.total)}</td><td className="px-2 py-1">{money(f.subtotalCategoria ?? 0)}</td><td className="px-2 py-1">{money(f.totalSolicitud ?? 0)}</td></> : <td className="px-2 py-1">{money(f.total)}</td>}<td className="px-2 py-1">{f.estadoFondo}</td>
+                {resumenFondos?.categoria ? <><td className="px-2 py-1">{f.categoria ?? "—"}</td><td className="px-2 py-1">{money(f.total)}</td><td className="px-2 py-1 italic text-[var(--muted)]">{money(f.subtotalCategoria ?? 0)}</td><td className="px-2 py-1 italic text-[var(--muted)]">{money(f.totalSolicitud ?? 0)}</td></> : <td className="px-2 py-1">{money(f.total)}</td>}<td className="px-2 py-1">{f.estadoFondo}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      ) : null}
+
+      {!loading && tipo === "fondos" && resumenFondos?.categoria ? (
+        <p className="text-xs text-[var(--muted)]">Solo “Total línea” es un importe por fila. El subtotal y el total de la solicitud se repiten en cada línea de la misma solicitud (informativos, no se suman por fila). Cada solicitud se redondea una sola vez a centavos (half-up) sobre la suma exacta de sus líneas filtradas, y los totales de arriba son la suma de esos subtotales por solicitud.</p>
       ) : null}
 
       {/* §1 del ticket — total general + cantidad de registros, visible también en pantalla (no solo en el export). */}

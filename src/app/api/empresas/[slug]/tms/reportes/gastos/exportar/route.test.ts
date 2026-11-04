@@ -15,6 +15,7 @@ vi.mock("@/lib/tms/reportes-gastos", () => ({
   exactoDeFila: vi.fn((f: { total: number }) => BigInt(Math.round(f.total * 10000))),
   aCentavos: vi.fn((v: bigint) => (v + BigInt(50)) / BigInt(100)),
   centavosANumero: vi.fn((v: bigint) => Number(v) / 100),
+  sumaSubtotalesPorSolicitud: vi.fn((filas: { total: number }[]) => filas.reduce((s, f) => s + f.total, 0)),
   obtenerReporteGastosPorTipo: vi.fn(),
   resumirViaticosPorEstado: vi.fn(() => ({})),
   agruparSolicitudesFondo: vi.fn((filas: unknown[]) => filas),

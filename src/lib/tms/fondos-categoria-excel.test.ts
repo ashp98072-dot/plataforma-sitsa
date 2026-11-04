@@ -35,8 +35,8 @@ describe("Excel del reporte de fondos", () => {
     const ws = wb.getWorksheet("Solicitudes de fondo")!;
     const headers = (ws.getRow(1).values as unknown[]).slice(1);
     expect(headers).toHaveLength(22);
-    expect(headers[18]).toBe("Total solicitud (todas las categorías)");
-    expect(headers.slice(20)).toEqual(["Categoría", "Subtotal Combustible de la solicitud"]);
+    expect(headers[18]).toBe("Total solicitud (todas las categorías) — informativo, se repite en cada línea; no sumar");
+    expect(headers.slice(20)).toEqual(["Categoría", "Subtotal Combustible de la solicitud — informativo, se repite en cada línea; no sumar"]);
     expect(ws.rowCount).toBe(3);
     const r2 = (ws.getRow(2).values as unknown[]).slice(1);
     expect([r2[13], r2[18], r2[20], r2[21]]).toEqual([201, 501, "Combustible", 201]); // total línea, total solicitud (cabecera), categoría, subtotal

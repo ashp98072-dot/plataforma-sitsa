@@ -9,6 +9,7 @@ import {
   mensajeCategoriaFondosInvalida,
   obtenerReporteGastosPorTipo,
   exactoDeFila,
+  sumaSubtotalesPorSolicitud,
   resumenMensualFondos,
   resumirViaticosPorEstado,
   type FilaSolicitudFondoReporte,
@@ -222,8 +223,11 @@ export async function GET(req: Request, ctx: Ctx) {
     const subtitulo = `${guard.empresa.nombre} · Período: ${periodoTexto(filtros.fechaSolicitudDesde, filtros.fechaSolicitudHasta)} · Generado ${formatearTimestampVisible(ahoraLocal())} (Guatemala) · ${resultado.filas.length} registro(s)`
       + `\nEMPRESA REQUIRIENTE: ${empresaRequirenteTexto(resultado.filas, guard.empresa.nombre)}\nPERSONA QUE REQUIERE: ${personaQueRequiereTexto(resultado.filas)}`
       + (filtros.categoria ? `\nCATEGORÍA: ${filtros.categoria} (solo las líneas de esta categoría)` : "");
-    // Suma EXACTA (BigInt) de cantidad × monto; sin filtro el resultado es el mismo valor de antes.
-    const totalGeneral = centavosANumero(aCentavos(resultado.filas.reduce((s, f) => s + exactoDeFila(f), BigInt(0))));
+    // Sin categoría: suma exacta (BigInt) de cantidad × monto, redondeada una vez. Con categoría: suma de los subtotales por solicitud
+    // redondeados (misma regla que el resumen de pantalla y el Excel; ver REGLA_REDONDEO_FONDOS).
+    const totalGeneral = filtros.categoria
+      ? sumaSubtotalesPorSolicitud(resultado.filas)
+      : centavosANumero(aCentavos(resultado.filas.reduce((s, f) => s + exactoDeFila(f), BigInt(0))));
     const filaTotal = ["", "", "", "", "", "", "", "", filtros.categoria ? `TOTAL ${filtros.categoria.toUpperCase()}:` : "TOTAL:", moneda(totalGeneral)];
     const buffer = await tablaAPdf({
       title: "Reporte de solicitudes de fondo — detalle",
