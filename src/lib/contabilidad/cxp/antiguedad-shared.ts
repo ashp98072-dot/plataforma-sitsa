@@ -183,8 +183,8 @@ export function filaExportacionCxp(f: FilaAntiguedadCxp, etiquetaTramo: (t: Tram
  * + página). La lista solo se acepta si su respuesta corresponde a la ÚLTIMA clave solicitada (una respuesta tardía de una solicitud vieja se
  * ignora) y solo se puede exportar cuando NO hay recarga en curso y la lista mostrada es exactamente la de la clave vigente.
  */
-export type EstadoCargaAntiguedad = {
-  lista: RespuestaAntiguedadCxp | null;
+export type EstadoCargaAntiguedad<T = RespuestaAntiguedadCxp> = {
+  lista: T | null;
   /** Clave de la solicitud a la que pertenece `lista`. */
   claveLista: string | null;
   /** Clave de la última solicitud emitida. */
@@ -192,14 +192,16 @@ export type EstadoCargaAntiguedad = {
   cargando: boolean;
   error: string;
 };
-export type AccionCargaAntiguedad =
+export type AccionCargaAntiguedad<T = RespuestaAntiguedadCxp> =
   | { tipo: "SOLICITAR"; clave: string }
-  | { tipo: "RESPUESTA"; clave: string; lista: RespuestaAntiguedadCxp }
+  | { tipo: "RESPUESTA"; clave: string; lista: T }
   | { tipo: "FALLO"; clave: string; error: string };
 
 export const estadoCargaInicial: EstadoCargaAntiguedad = { lista: null, claveLista: null, claveSolicitada: null, cargando: false, error: "" };
+/** Estado inicial para otro tipo de lista (p. ej. el estado de cuenta de MIL-CXP-02): misma máquina de estados, tipo propio. */
+export const estadoCargaVacio = <T,>(): EstadoCargaAntiguedad<T> => ({ lista: null, claveLista: null, claveSolicitada: null, cargando: false, error: "" });
 
-export function reducirCargaAntiguedad(s: EstadoCargaAntiguedad, a: AccionCargaAntiguedad): EstadoCargaAntiguedad {
+export function reducirCargaAntiguedad<T = RespuestaAntiguedadCxp>(s: EstadoCargaAntiguedad<T>, a: AccionCargaAntiguedad<T>): EstadoCargaAntiguedad<T> {
   switch (a.tipo) {
     case "SOLICITAR":
       return { ...s, claveSolicitada: a.clave, cargando: true, error: "" };
@@ -213,5 +215,5 @@ export function reducirCargaAntiguedad(s: EstadoCargaAntiguedad, a: AccionCargaA
 }
 
 /** ¿Se puede exportar AHORA? Solo con una lista cargada que corresponde a la solicitud vigente y sin recarga en curso. */
-export const puedeExportarAntiguedad = (s: EstadoCargaAntiguedad): boolean =>
+export const puedeExportarAntiguedad = <T>(s: EstadoCargaAntiguedad<T>): boolean =>
   s.lista !== null && !s.cargando && s.claveLista !== null && s.claveLista === s.claveSolicitada;
