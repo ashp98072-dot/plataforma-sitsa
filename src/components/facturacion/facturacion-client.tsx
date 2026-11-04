@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CuestionarioFields } from "@/components/clientes/cuestionario-fields";
 import { CuentasPorCobrarPanel } from "@/components/facturacion/cuentas-por-cobrar-panel";
+import { SeccionAntiguedadCxc } from "@/components/facturacion/cuentas-por-cobrar-antiguedad";
 import { FacturasPanel } from "@/components/facturacion/facturas-panel";
 import { ViajesPendientesPanel } from "@/components/facturacion/viajes-pendientes-panel";
 import { useEmpresaSession } from "@/lib/empresa-session";
@@ -318,7 +319,7 @@ export function FacturacionClient({
         />
       ) : null}
 
-      {tab === "cuentas-por-cobrar" && puedeVerFacturas ? <CuentasPorCobrarPanel slug={slug} /> : null}
+      {tab === "cuentas-por-cobrar" && puedeVerFacturas ? (<><CuentasPorCobrarPanel slug={slug} /><SeccionAntiguedadCxc slug={slug} /></>) : null}
 
       {tab === "viajes-pendientes" && puedeVerFacturas ? (
         <ViajesPendientesPanel
