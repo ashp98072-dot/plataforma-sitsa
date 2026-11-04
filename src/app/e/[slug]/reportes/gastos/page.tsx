@@ -55,8 +55,9 @@ type FilaSolicitudFondo = {
   lineaId: number; solicitudCodigo: string; fechaSolicitud: string; fechaViaje: string | null;
   empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteNombre: string | null;
   cantidad: number; descripcion: string | null; monto: number; total: number; estadoFondo: string;
+  categoria?: string; subtotalCategoria?: number; totalSolicitud?: number;
 };
-type ResumenFondos = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number };
+type ResumenFondos = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number; categoria?: string; totalPendiente?: number };
 type ClienteCat = { id: number; nombre: string };
 type EmpleadoCat = { id: number; nombre: string };
 type VehiculoCat = { id: number; placa: string };
@@ -109,6 +110,9 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
   const [fEstadoFondo, setFEstadoFondo] = useState("");
   const [fRequirenteId, setFRequirenteId] = useState("");
   const [fDescripcion, setFDescripcion] = useState("");
+  // OP-FONDOS-REP-01 — categoría del reporte de fondos; el catálogo sale de /tms/gastos/catalogos (CATEGORIAS_GASTO), sin lista local.
+  const [fCategoriaFondo, setFCategoriaFondo] = useState("");
+  const [categoriasCat, setCategoriasCat] = useState<string[]>([]);
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   const [empleadosCat, setEmpleadosCat] = useState<EmpleadoCat[]>([]);
   const [vehiculosCat, setVehiculosCat] = useState<VehiculoCat[]>([]);
@@ -147,6 +151,7 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
         setVehiculosCat((data.vehiculos ?? []) as VehiculoCat[]);
         setPlanesCat((data.planes ?? []) as PlanCat[]);
         setUsuariosCat((data.usuarios ?? []) as UsuarioCat[]);
+        setCategoriasCat((data.categorias ?? []) as string[]);
       })
       .catch(() => undefined);
   }, [slug, necesitaCatalogos, clientesCat.length]);
@@ -173,7 +178,8 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
     if (fEstadoFondo) p.set("estadoFondo", fEstadoFondo);
     if (fRequirenteId) p.set("requirenteUsuarioId", fRequirenteId);
     if (fDescripcion) p.set("descripcion", fDescripcion);
-  }, [fMes, fAnio, fSolicitudDesde, fSolicitudHasta, fViajeDesde, fViajeHasta, fClienteId, fPlaca, fEmpleadoNombre, fCargo, fEstadoFondo, fRequirenteId, fDescripcion]);
+    if (fCategoriaFondo) p.set("categoria", fCategoriaFondo);
+  }, [fMes, fAnio, fSolicitudDesde, fSolicitudHasta, fViajeDesde, fViajeHasta, fClienteId, fPlaca, fEmpleadoNombre, fCargo, fEstadoFondo, fRequirenteId, fDescripcion, fCategoriaFondo]);
 
   /**
    * REPORTES-VIATICOS-GASTOS-DETALLE-1 (§3 del ticket) — filtros de
@@ -368,6 +374,12 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
               {["Pendiente", "Autorizada", "Rechazada", "Liquidada"].map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
           </label>
+          <label className="text-xs text-[var(--muted)]">Categoría de la línea
+            <select className={`${inputCls} mt-0.5 block`} value={fCategoriaFondo} onChange={(e) => setFCategoriaFondo(e.target.value)}>
+              <option value="">Todas</option>
+              {categoriasCat.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
           {/* REPORTES-MENSUALES-CONSOLIDADOS-1 — Requirente (usuario requirente real de la solicitud). */}
           <label className="text-xs text-[var(--muted)]">Requirente
             <select className={`${inputCls} mt-0.5 block`} value={fRequirenteId} onChange={(e) => setFRequirenteId(e.target.value)}>
@@ -465,7 +477,9 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
 
       {!loading && tipo === "fondos" && resumenFondos ? (
         <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-          {[["Solicitudes", String(resumenFondos.cantidad)], ["Total solicitado", money(resumenFondos.totalSolicitado)], ["Total autorizado", money(resumenFondos.totalAutorizado)], ["Total liquidado", money(resumenFondos.totalLiquidado)], ["Total rechazado", money(resumenFondos.totalRechazado)]].map(([label, value]) => (
+          {(resumenFondos.categoria
+            ? [["Solicitudes distintas", String(resumenFondos.cantidad)], [`Subtotal ${resumenFondos.categoria} solicitado`, money(resumenFondos.totalSolicitado)], [`Subtotal ${resumenFondos.categoria} autorizado`, money(resumenFondos.totalAutorizado)], [`Subtotal ${resumenFondos.categoria} liquidado`, money(resumenFondos.totalLiquidado)], [`Subtotal ${resumenFondos.categoria} rechazado`, money(resumenFondos.totalRechazado)]]
+            : [["Solicitudes", String(resumenFondos.cantidad)], ["Total solicitado", money(resumenFondos.totalSolicitado)], ["Total autorizado", money(resumenFondos.totalAutorizado)], ["Total liquidado", money(resumenFondos.totalLiquidado)], ["Total rechazado", money(resumenFondos.totalRechazado)]]).map(([label, value]) => (
             <div key={label} className="rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3"><p className="text-xs text-[var(--muted)]">{label}</p><p className="font-semibold">{value}</p></div>
           ))}
         </div>
@@ -563,7 +577,8 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
             <tr>
               <th className="px-2 py-1">Fecha solicitud</th><th className="px-2 py-1">Fecha viaje</th><th className="px-2 py-1">Nombre</th>
               <th className="px-2 py-1">Cargo</th><th className="px-2 py-1">Placa</th><th className="px-2 py-1">Cliente</th>
-              <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th><th className="px-2 py-1">Total</th>
+              <th className="px-2 py-1">Cantidad</th><th className="px-2 py-1">Descripción</th>
+              {resumenFondos?.categoria ? <><th className="px-2 py-1">Categoría</th><th className="px-2 py-1">Total línea</th><th className="px-2 py-1 font-normal italic" title="Informativo: se repite en cada línea de la misma solicitud; no se suma por fila.">Subtotal {resumenFondos.categoria} de la solicitud <span className="block text-[10px]">(informativo, se repite por línea; no sumar)</span></th><th className="px-2 py-1 font-normal italic" title="Informativo: se repite en cada línea de la misma solicitud; no se suma por fila.">Total solicitud (todas las categorías) <span className="block text-[10px]">(informativo, se repite por línea; no sumar)</span></th></> : <th className="px-2 py-1">Total</th>}
               <th className="px-2 py-1">Estado</th>
             </tr>
           </thead>
@@ -574,11 +589,15 @@ export function ReportesGastosView({ tipoFijo, titulo }: Props) {
                 <td className="px-2 py-1">{f.empleadoNombre ?? "—"}</td><td className="px-2 py-1">{f.cargo ?? "—"}</td>
                 <td className="px-2 py-1">{f.placa ?? "—"}</td><td className="px-2 py-1">{f.clienteNombre ?? "—"}</td>
                 <td className="px-2 py-1">{f.cantidad}</td><td className="px-2 py-1">{f.descripcion ?? "—"}</td>
-                <td className="px-2 py-1">{money(f.total)}</td><td className="px-2 py-1">{f.estadoFondo}</td>
+                {resumenFondos?.categoria ? <><td className="px-2 py-1">{f.categoria ?? "—"}</td><td className="px-2 py-1">{money(f.total)}</td><td className="px-2 py-1 italic text-[var(--muted)]">{money(f.subtotalCategoria ?? 0)}</td><td className="px-2 py-1 italic text-[var(--muted)]">{money(f.totalSolicitud ?? 0)}</td></> : <td className="px-2 py-1">{money(f.total)}</td>}<td className="px-2 py-1">{f.estadoFondo}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      ) : null}
+
+      {!loading && tipo === "fondos" && resumenFondos?.categoria ? (
+        <p className="text-xs text-[var(--muted)]">Solo “Total línea” es un importe por fila. El subtotal y el total de la solicitud se repiten en cada línea de la misma solicitud (informativos, no se suman por fila). Cada solicitud se redondea una sola vez a centavos (half-up) sobre la suma exacta de sus líneas filtradas, y los totales de arriba son la suma de esos subtotales por solicitud.</p>
       ) : null}
 
       {/* §1 del ticket — total general + cantidad de registros, visible también en pantalla (no solo en el export). */}

@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
+import { CATEGORIAS_GASTO } from "@/lib/tms/gastos";
 
 /**
  * TMS-GASTOS-REPORTES-1 (fase 1) — reportes iniciales sobre
@@ -90,6 +91,63 @@ export function filtrosReporteGastosDesdeUrl(url: URL): FiltrosReporteGastos {
   };
 }
 
+/**
+ * OP-FONDOS-REP-01 — validación y aritmética EXACTA del reporte de fondos con filtro de categoría.
+ *
+ * La categoría se valida contra el catálogo real (CATEGORIAS_GASTO, gastos.ts); nunca contra una lista
+ * duplicada. Solo el reporte "fondos" la valida (los demás tipos conservan su comportamiento anterior).
+ */
+export function mensajeCategoriaFondosInvalida(tipo: string, categoria: string | undefined): string | null {
+  if (tipo !== "fondos" || categoria === undefined) return null;
+  if ((CATEGORIAS_GASTO as readonly string[]).includes(categoria)) return null;
+  return `Categoría inválida. Usa una del catálogo: ${CATEGORIAS_GASTO.join(", ")}.`;
+}
+
+/** Decimal -> centésimas exactas (BigInt). Los campos de BD son DECIMAL(x,2); lo que exceda se redondea half-up. */
+export function aCentesimas(valor: unknown): bigint {
+  let texto = String(valor ?? "0").trim();
+  if (/e/i.test(texto) || !/^-?\d+(\.\d+)?$/.test(texto)) texto = Number(valor ?? 0).toFixed(2);
+  const negativo = texto.startsWith("-");
+  const [entera, fraccion = ""] = texto.replace("-", "").split(".");
+  const base = BigInt(entera + (fraccion + "00").slice(0, 2));
+  const redondea = fraccion.length > 2 && fraccion.charCodeAt(2) >= 53 ? BigInt(1) : BigInt(0);
+  return negativo ? -(base + redondea) : base + redondea;
+}
+
+/** cantidad × monto exacto, en diez-milésimas (escala 1e-4). */
+export function productoExacto(cantidad: unknown, monto: unknown): bigint {
+  return aCentesimas(cantidad) * aCentesimas(monto);
+}
+
+/** Diez-milésimas -> centavos, half-up (away from zero). Se redondea la SUMA, nunca cada línea. */
+export function aCentavos(diezMilesimas: bigint): bigint {
+  const signo = diezMilesimas < BigInt(0) ? -BigInt(1) : BigInt(1);
+  const abs = diezMilesimas < BigInt(0) ? -diezMilesimas : diezMilesimas;
+  return signo * ((abs + BigInt(50)) / BigInt(100));
+}
+
+export function centavosANumero(centavos: bigint): number {
+  return Number(centavos) / 100;
+}
+
+export function formatearDiezMilesimas(v: bigint): string {
+  const neg = v < BigInt(0);
+  const abs = (neg ? -v : v).toString().padStart(5, "0");
+  return `${neg ? "-" : ""}${abs.slice(0, -4)}.${abs.slice(-4)}`;
+}
+
+/** Valor exacto (1e-4) de la línea: usa totalExacto; sin él (filas armadas fuera de la consulta) cae al `total` ya calculado. */
+export function exactoDeFila(f: { totalExacto?: string; total: number }): bigint {
+  return f.totalExacto !== undefined ? desdeTextoExacto(f.totalExacto) : aCentesimas(f.total) * BigInt(100);
+}
+
+function desdeTextoExacto(v: string): bigint {
+  const neg = v.startsWith("-");
+  const [e, fr = ""] = v.replace("-", "").split(".");
+  const n = BigInt(e + (fr + "0000").slice(0, 4));
+  return neg ? -n : n;
+}
+
 export const TIPOS_REPORTE_GASTOS = ["viaje", "unidad", "cliente", "categoria", "periodo", "viaticos", "rentabilidad", "fondos", "gastosDetalle"] as const;
 export type TipoReporteGastos = (typeof TIPOS_REPORTE_GASTOS)[number];
 
@@ -121,7 +179,7 @@ export async function obtenerReporteGastosPorTipo(
     case "rentabilidad": return { tipo, filas: await reporteRentabilidadPorViaje(empresaId, filtros) };
     case "fondos": {
       const filas = await reporteSolicitudesFondo(empresaId, filtros);
-      return { tipo, filas, resumen: resumirSolicitudesFondo(filas) };
+      return { tipo, filas, resumen: resumirSolicitudesFondo(filas, filtros.categoria) };
     }
     case "gastosDetalle": return { tipo, filas: await reporteGastosDetalle(empresaId, filtros) };
   }
@@ -645,10 +703,17 @@ export type FilaSolicitudFondoReporte = {
   clienteId: number | null;
   clienteNombre: string | null;
   planId: number | null;
+  /** OP-FONDOS-REP-01 — categoría de LA LÍNEA (tms_solicitud_fondo_lineas.categoria). */
+  categoria?: string;
   cantidad: number;
   descripcion: string | null;
   monto: number;
+  /** cantidad × monto de la línea (valor exacto en número). */
   total: number;
+  /** cantidad × monto EXACTO con 4 decimales (texto), base de todas las sumas del reporte. */
+  totalExacto?: string;
+  /** Solo con filtro de categoría: suma de las líneas de ESTA solicitud que coinciden con el filtro (subtotal de la categoría, no el total de la solicitud). */
+  subtotalCategoria?: number;
   cuenta?: string | null;
   metodoPago?: string | null;
   requirenteNombre?: string | null;
@@ -675,10 +740,15 @@ export function resumirViaticosPorEstado(filas: FilaViaticoReporte[]): ResumenPo
   return resumen;
 }
 
-export type ResumenSolicitudesFondo = { cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number };
+export type ResumenSolicitudesFondo = {
+  cantidad: number; totalSolicitado: number; totalAutorizado: number; totalLiquidado: number; totalRechazado: number;
+  /** OP-FONDOS-REP-01 — solo con filtro de categoría: categoría usada y total de las líneas filtradas en solicitudes Pendientes. */
+  categoria?: string; totalPendiente?: number;
+};
 
 /** Resume encabezados únicos aunque el reporte tenga varias líneas por solicitud. */
-export function resumirSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): ResumenSolicitudesFondo {
+export function resumirSolicitudesFondo(filas: FilaSolicitudFondoReporte[], categoria?: string): ResumenSolicitudesFondo {
+  if (categoria !== undefined) return resumirSolicitudesFondoPorCategoria(filas, categoria);
   const solicitudes = new Map<number, { total: number; estado: string }>();
   for (const f of filas) solicitudes.set(f.solicitudId, { total: f.totalSolicitud ?? f.total, estado: f.estadoFondo });
   const valores = [...solicitudes.values()];
@@ -688,6 +758,60 @@ export function resumirSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): Res
     totalAutorizado: valores.filter((v) => v.estado === "Autorizada" || v.estado === "Liquidada").reduce((s, v) => s + v.total, 0),
     totalLiquidado: valores.filter((v) => v.estado === "Liquidada").reduce((s, v) => s + v.total, 0),
     totalRechazado: valores.filter((v) => v.estado === "Rechazada").reduce((s, v) => s + v.total, 0),
+  };
+}
+
+/**
+ * REGLA ÚNICA DE REDONDEO (OP-FONDOS-REP-01, corrección de auditoría PR #557). cantidad DECIMAL(10,2) × monto DECIMAL(12,2) puede
+ * producir fracciones de centavo (hasta 4 decimales). Con filtro de categoría: cada SOLICITUD se redondea UNA vez a centavos
+ * (half-up) sobre la suma exacta de sus líneas filtradas — igual que se guarda tms_solicitudes_fondo.total — y TODO total general
+ * (resumen de pantalla, hoja Resumen del Excel, total del mes del PDF y total del PDF tabular) es la SUMA de esos subtotales por
+ * solicitud ya redondeados; así los totales concilian siempre con los subtotales visibles. El importe de cada línea es informativo
+ * y puede traer fracciones de centavo. No altera la política monetaria de ningún otro módulo.
+ */
+export const REGLA_REDONDEO_FONDOS =
+  "Regla de redondeo: cada solicitud se redondea una sola vez a centavos (half-up) sobre la suma exacta de sus líneas filtradas; los totales son la suma de esos subtotales por solicitud. El importe de cada línea es informativo y puede tener fracciones de centavo.";
+
+/** Subtotal en centavos (BigInt) por solicitud DISTINTA, ya redondeado, con el estado real de la solicitud. */
+function centavosPorSolicitud(filas: FilaSolicitudFondoReporte[]): Map<number, { estado: string; centavos: bigint }> {
+  const exactas = new Map<number, { estado: string; suma: bigint }>();
+  for (const f of filas) {
+    const actual = exactas.get(f.solicitudId) ?? { estado: f.estadoFondo, suma: BigInt(0) };
+    actual.suma += exactoDeFila(f);
+    exactas.set(f.solicitudId, actual);
+  }
+  const redondeadas = new Map<number, { estado: string; centavos: bigint }>();
+  for (const [id, v] of exactas) redondeadas.set(id, { estado: v.estado, centavos: aCentavos(v.suma) });
+  return redondeadas;
+}
+
+/** Suma de los subtotales por solicitud redondeados (misma regla que el resumen); la usa el total del PDF tabular filtrado por categoría. */
+export function sumaSubtotalesPorSolicitud(filas: FilaSolicitudFondoReporte[]): number {
+  let acc = BigInt(0);
+  for (const v of centavosPorSolicitud(filas).values()) acc += v.centavos;
+  return centavosANumero(acc);
+}
+
+/**
+ * OP-FONDOS-REP-01 — resumen CON filtro de categoría: suma SOLO cantidad × monto de las líneas coincidentes
+ * (nunca s.total, que incluye otras categorías), con aritmética exacta (BigInt) y agrupando por el estado real
+ * de la solicitud. Cuenta solicitudes DISTINTAS aunque tengan varias líneas de la categoría.
+ */
+function resumirSolicitudesFondoPorCategoria(filas: FilaSolicitudFondoReporte[], categoria: string): ResumenSolicitudesFondo {
+  const porSolicitud = centavosPorSolicitud(filas);
+  const suma = (aceptar: (estado: string) => boolean) => {
+    let acc = BigInt(0);
+    for (const v of porSolicitud.values()) if (aceptar(v.estado)) acc += v.centavos;
+    return centavosANumero(acc);
+  };
+  return {
+    categoria,
+    cantidad: porSolicitud.size,
+    totalSolicitado: suma(() => true),
+    totalAutorizado: suma((e) => e === "Autorizada" || e === "Liquidada"),
+    totalLiquidado: suma((e) => e === "Liquidada"),
+    totalRechazado: suma((e) => e === "Rechazada"),
+    totalPendiente: suma((e) => e === "Pendiente"),
   };
 }
 
@@ -704,6 +828,8 @@ function condicionesFondos(empresaId: number, f: FiltrosReporteGastos): { where:
   if (f.empleadoNombre) { condiciones.push("l.empleado_nombre = ?"); params.push(f.empleadoNombre); }
   if (f.cargo) { condiciones.push("l.cargo = ?"); params.push(f.cargo); }
   if (f.estadoFondo) { condiciones.push("s.estado = ?"); params.push(f.estadoFondo); }
+  // OP-FONDOS-REP-01 — categoría de LA LÍNEA (no de la cabecera). El valor ya fue validado contra CATEGORIAS_GASTO.
+  if (f.categoria) { condiciones.push("l.categoria = ?"); params.push(f.categoria); }
   if (f.descripcion) { condiciones.push("l.descripcion LIKE ?"); params.push(`%${f.descripcion}%`); }
   if (f.requirenteUsuarioId) { condiciones.push("s.requirente_usuario_id = ?"); params.push(f.requirenteUsuarioId); }
   return { where: condiciones.join(" AND "), params };
@@ -721,7 +847,7 @@ export async function reporteSolicitudesFondo(
             l.empleado_id, l.empleado_nombre, l.cuenta, l.metodo_pago, l.cargo,
             l.vehiculo_id, l.placa,
             l.cliente_id, l.cliente_nombre,
-            l.plan_id, l.cantidad, l.descripcion, l.monto,
+            l.plan_id, l.categoria, l.cantidad, l.descripcion, l.monto,
             s.entidad_requirente_nombre, s.requirente_nombre, s.solicitante_nombre, s.autorizante_nombre,
             DATE_FORMAT(s.autorizado_en, '%Y-%m-%d') AS fecha_autorizacion,
             s.total AS total_solicitud, s.estado, s.observaciones
@@ -731,9 +857,10 @@ export async function reporteSolicitudesFondo(
      ORDER BY s.fecha_requerimiento DESC, l.solicitud_id DESC, l.orden, l.id`,
     params,
   );
-  return rows.map((r) => {
+  const resultado = rows.map((r) => {
     const cantidad = Number(r.cantidad ?? 1);
     const monto = Number(r.monto ?? 0);
+    const exacto = productoExacto(r.cantidad ?? 1, r.monto ?? 0);
     return {
       lineaId: Number(r.linea_id),
       solicitudId: Number(r.solicitud_id),
@@ -750,10 +877,12 @@ export async function reporteSolicitudesFondo(
       clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
       clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
       planId: r.plan_id != null ? Number(r.plan_id) : null,
+      categoria: String(r.categoria),
       cantidad,
       descripcion: r.descripcion != null ? String(r.descripcion) : null,
       monto,
-      total: cantidad * monto,
+      total: Number(exacto) / 10000,
+      totalExacto: formatearDiezMilesimas(exacto),
       requirenteNombre: r.requirente_nombre != null ? String(r.requirente_nombre) : null,
       entidadRequirenteNombre: r.entidad_requirente_nombre != null ? String(r.entidad_requirente_nombre) : null,
       solicitanteNombre: r.solicitante_nombre != null ? String(r.solicitante_nombre) : null,
@@ -762,8 +891,15 @@ export async function reporteSolicitudesFondo(
       totalSolicitud: Number(r.total_solicitud ?? 0),
       observaciones: r.observaciones != null ? String(r.observaciones) : null,
       estadoFondo: String(r.estado),
-    };
-  });
+    } satisfies FilaSolicitudFondoReporte;
+  }) as FilaSolicitudFondoReporte[];
+  // OP-FONDOS-REP-01 — con filtro de categoría cada fila lleva el subtotal (exacto) de las líneas coincidentes de su solicitud.
+  if (f.categoria) {
+    const sumas = new Map<number, bigint>();
+    for (const fila of resultado) sumas.set(fila.solicitudId, (sumas.get(fila.solicitudId) ?? BigInt(0)) + exactoDeFila(fila));
+    for (const fila of resultado) fila.subtotalCategoria = centavosANumero(aCentavos(sumas.get(fila.solicitudId) ?? BigInt(0)));
+  }
+  return resultado;
 }
 
 /**
@@ -787,6 +923,9 @@ export type SolicitudFondoAgrupada = {
   totalSolicitud: number;
   observaciones: string | null;
   lineas: FilaSolicitudFondoReporte[];
+  /** OP-FONDOS-REP-01 — solo con filtro de categoría: suma exacta (4 decimales) y redondeada de las líneas coincidentes. */
+  subtotalCategoriaExacto?: string;
+  subtotalCategoria?: number;
 };
 
 export function agruparSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): SolicitudFondoAgrupada[] {
@@ -811,6 +950,14 @@ export function agruparSolicitudesFondo(filas: FilaSolicitudFondoReporte[]): Sol
     }
     g.lineas.push(f);
   }
+  // OP-FONDOS-REP-01 — subtotal de la categoría filtrada por solicitud (solo si el reporte vino filtrado por categoría).
+  for (const g of mapa.values()) {
+    if (g.lineas.some((l) => l.subtotalCategoria !== undefined)) {
+      const suma = g.lineas.reduce((acc, l) => acc + exactoDeFila(l), BigInt(0));
+      g.subtotalCategoriaExacto = formatearDiezMilesimas(suma);
+      g.subtotalCategoria = centavosANumero(aCentavos(suma));
+    }
+  }
   // `reporteSolicitudesFondo` ya ordena por fecha desc, solicitud desc,
   // orden, id — el Map preserva ese orden de inserción.
   return [...mapa.values()];
@@ -831,9 +978,11 @@ export type ResumenMensualFondos = {
   rechazadas: number;
   pendientes: number;
   totalGeneral: number;
+  /** OP-FONDOS-REP-01 — si viene, totalGeneral suma SOLO las líneas de esta categoría. */
+  categoria?: string;
 };
 
-export function resumenMensualFondos(grupos: SolicitudFondoAgrupada[]): ResumenMensualFondos {
+export function resumenMensualFondos(grupos: SolicitudFondoAgrupada[], categoria?: string): ResumenMensualFondos {
   const cuenta = (estado: string) => grupos.filter((g) => g.estadoFondo === estado).length;
   return {
     totalSolicitudes: grupos.length,
@@ -841,8 +990,14 @@ export function resumenMensualFondos(grupos: SolicitudFondoAgrupada[]): ResumenM
     liquidadas: cuenta("Liquidada"),
     rechazadas: cuenta("Rechazada"),
     pendientes: cuenta("Pendiente"),
-    totalGeneral: grupos
-      .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
-      .reduce((suma, g) => suma + (g.totalSolicitud ?? 0), 0),
+    ...(categoria !== undefined ? { categoria } : {}),
+    totalGeneral: categoria !== undefined
+      ? centavosANumero(grupos
+        .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
+        // Regla única: suma de los subtotales POR SOLICITUD ya redondeados (REGLA_REDONDEO_FONDOS), nunca un redondeo único del acumulado.
+        .reduce((suma, g) => suma + aCentavos(desdeTextoExacto(g.subtotalCategoriaExacto ?? "0.0000")), BigInt(0)))
+      : grupos
+        .filter((g) => g.estadoFondo === "Autorizada" || g.estadoFondo === "Liquidada")
+        .reduce((suma, g) => suma + (g.totalSolicitud ?? 0), 0),
   };
 }

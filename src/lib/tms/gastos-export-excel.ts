@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { tablaAExcel } from "@/lib/rrhh/export-files";
 import { formatearFechaVisible } from "@/lib/rrhh/dates";
-import { resumirViaticosPorEstado, type FilaAgregadaGasto, type FilaGastoDetalle, type FilaRentabilidadViaje, type FilaSolicitudFondoReporte, type FilaViaticoReporte } from "@/lib/tms/reportes-gastos";
+import { REGLA_REDONDEO_FONDOS, resumirViaticosPorEstado, type FilaAgregadaGasto, type FilaGastoDetalle, type FilaRentabilidadViaje, type FilaSolicitudFondoReporte, type FilaViaticoReporte, type ResumenSolicitudesFondo } from "@/lib/tms/reportes-gastos";
 import type { SolicitudFondo } from "@/lib/tms/fondos";
 import type { GastoOperativo } from "@/lib/tms/gastos";
 import { alturaFilaExcel, observacionesVisibles } from "@/lib/tms/observaciones-export";
@@ -172,12 +172,18 @@ export async function exportarRentabilidadExcel(filas: FilaRentabilidadViaje[]):
  * formato monetario GTQ, Cantidad numérica, autofiltro y anchos de
  * columna legibles — mismo estilo ya usado en rutas-export-excel.ts.
  */
-export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReporte[]): Promise<Buffer> {
+export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReporte[], resumen?: ResumenSolicitudesFondo, categoria?: string): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   wb.creator = "Plataforma corporativa";
   const ws = wb.addWorksheet("Solicitudes de fondo", { views: [{ state: "frozen", ySplit: 1, showGridLines: false }] });
 
   const headers = ["Código solicitud", "Estado", "Fecha solicitud", "Fecha viaje", "Nombre", "Cuenta", "Método de pago", "Cargo", "Placa", "Cliente", "Cantidad", "Descripción", "Monto unitario", "Total línea", "Requirente", "Solicitante", "Autorizante", "Fecha autorización", "Total solicitud", "Observaciones"];
+  // OP-FONDOS-REP-01 — SOLO con filtro de categoría: "Total solicitud" se rotula como total de TODAS las categorías y se agregan
+  // la categoría de la línea y el subtotal de la categoría filtrada. Sin filtro el layout es exactamente el anterior.
+  if (categoria) {
+    headers[18] = "Total solicitud (todas las categorías) — informativo, se repite en cada línea; no sumar";
+    headers.push("Categoría", `Subtotal ${categoria} de la solicitud — informativo, se repite en cada línea; no sumar`);
+  }
   ws.addRow(headers);
   const header = ws.getRow(1);
   header.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -195,13 +201,21 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
       f.fechaAutorizacion ? formatearFechaVisible(f.fechaAutorizacion) : "—", f.totalSolicitud,
       // Observaciones de la cabecera (mismo campo de BD); vacío si no hay: no se inventa texto.
       observacionesVisibles(f.observaciones) ?? "",
+      ...(categoria ? [f.categoria ?? "", f.subtotalCategoria ?? 0] : []),
     ]);
   }
 
   const COL_OBSERVACIONES = 20;
   const ANCHO_OBSERVACIONES = 40;
-  ws.autoFilter = { from: "A1", to: `T${Math.max(1, filas.length + 1)}` };
-  ws.columns = [18,14,14,14,26,20,24,20,14,26,12,40,16,16,24,24,24,18,18,ANCHO_OBSERVACIONES].map((width) => ({ width }));
+  ws.autoFilter = { from: "A1", to: `${categoria ? "V" : "T"}${Math.max(1, filas.length + 1)}` };
+  ws.columns = [18,14,14,14,26,20,24,20,14,26,12,40,16,16,24,24,24,18,categoria ? 26 : 18,ANCHO_OBSERVACIONES, ...(categoria ? [20, 26] : [])].map((width) => ({ width }));
+  if (categoria) {
+    ws.getColumn(22).numFmt = '"Q"#,##0.00';
+    // Los dos importes repetidos por línea se distinguen visualmente de los importes sumables (Total línea): gris cursiva.
+    for (let i = 2; i <= filas.length + 1; i++) for (const col of [19, 22]) ws.getRow(i).getCell(col).font = { italic: true, color: { argb: "FF6B7280" } };
+    ws.getRow(1).height = 48;
+    ws.getRow(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  }
   ws.getColumn(11).numFmt = "0.00";
   for (const col of [13, 14, 19]) ws.getColumn(col).numFmt = '"Q"#,##0.00';
   ws.getColumn(12).alignment = { vertical: "top", wrapText: true };
@@ -212,6 +226,32 @@ export async function exportarReporteFondosExcel(filas: FilaSolicitudFondoReport
     // Texto completo y saltos de línea: altura suficiente para las líneas estimadas (solo cuando hay más de una).
     const alto = alturaFilaExcel(filas[i - 2].observaciones, ANCHO_OBSERVACIONES);
     if (alto) ws.getRow(i).height = alto;
+  }
+
+  // OP-FONDOS-REP-01 — hoja "Resumen" del filtro por categoría: los MISMOS números que muestra la pantalla (resumen del servidor).
+  if (categoria && resumen) {
+    const hr = wb.addWorksheet("Resumen");
+    hr.addRow(["Filtro de categoría", categoria]);
+    hr.addRow(["Solo se suman las líneas de esa categoría (cantidad × monto), no el total de la solicitud.", ""]);
+    hr.addRow([]);
+    hr.addRow(["Concepto", "Valor"]);
+    hr.getRow(4).font = { bold: true };
+    const lineas: [string, number, boolean][] = [
+      ["Solicitudes distintas", resumen.cantidad, false],
+      [`Subtotal ${categoria} solicitado (todas las solicitudes del filtro)`, resumen.totalSolicitado, true],
+      [`Subtotal ${categoria} en solicitudes Autorizadas + Liquidadas`, resumen.totalAutorizado, true],
+      [`Subtotal ${categoria} en solicitudes Liquidadas`, resumen.totalLiquidado, true],
+      [`Subtotal ${categoria} en solicitudes Rechazadas`, resumen.totalRechazado, true],
+      [`Subtotal ${categoria} en solicitudes Pendientes`, resumen.totalPendiente ?? 0, true],
+    ];
+    for (const [etiqueta, valor, esMonto] of lineas) {
+      const fila = hr.addRow([etiqueta, valor]);
+      if (esMonto) fila.getCell(2).numFmt = '"Q"#,##0.00';
+    }
+    hr.addRow([]);
+    hr.addRow([REGLA_REDONDEO_FONDOS, ""]);
+    hr.addRow(["Las columnas \"Total solicitud\" y \"Subtotal de la solicitud\" de la hoja de detalle se repiten en cada línea de la misma solicitud: son informativas, no se suman por fila.", ""]);
+    hr.columns = [{ width: 70 }, { width: 18 }];
   }
 
   return Buffer.from(await wb.xlsx.writeBuffer());
