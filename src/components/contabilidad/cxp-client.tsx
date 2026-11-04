@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
+import { CxpAntiguedad } from "@/components/contabilidad/cxp-antiguedad";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Config = { regimenFiscal: "GENERAL" | "PEQUENO_CONTRIBUYENTE"; sujetoIsr: boolean; cuentaProveedorId: number | null; cuentaAnticipoId: number | null; cuentaGastoId: number | null; activo: boolean };
@@ -40,7 +41,7 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
 }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidadId, setEntidadId] = useState("");
-  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores" | "bitacora">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : puedeVerFiscal ? "proveedores" : "bitacora");
+  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores" | "bitacora" | "antiguedad">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : puedeVerFiscal ? "proveedores" : "bitacora");
   const [error, setError] = useState("");
   useEffect(() => {
     const ac = new AbortController();
@@ -68,10 +69,12 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
         {puedeVer && <button type="button" className={boton} aria-pressed={vista === "facturas"} onClick={() => setVista("facturas")}>Facturas</button>}
         {puedeVerPagos && <button type="button" className={boton} aria-pressed={vista === "pagos"} onClick={() => setVista("pagos")}>Pagos</button>}
         {(puedeVerFiscal || puedeVer) && <button type="button" className={boton} aria-pressed={vista === "proveedores"} onClick={() => setVista("proveedores")}>Proveedores y configuración fiscal</button>}
+        {puedeVer && <button type="button" className={boton} aria-pressed={vista === "antiguedad"} onClick={() => setVista("antiguedad")}>Antigüedad de saldos</button>}
         {puedeVerBitacora && <button type="button" className={boton} aria-pressed={vista === "bitacora"} onClick={() => setVista("bitacora")}>Bitácora</button>}
       </div>
       {vista === "facturas" && puedeVer && <Facturas key={`f${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrar} puedeAnular={puedeAnular} />}
       {vista === "pagos" && puedeVerPagos && <Pagos key={`g${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrarPago} puedeReversar={puedeReversarPago} />}
+      {vista === "antiguedad" && puedeVer && <CxpAntiguedad key={`a${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "bitacora" && puedeVerBitacora && <Bitacora key={`b${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "proveedores" && <Proveedores key={`p${entidadId}`} slug={slug} entidadId={entidadId} puedeVerFiscal={puedeVerFiscal} puedeEditar={puedeEditarFiscal} />}
     </>}
