@@ -1,6 +1,13 @@
 import type { RegistroAlmacenado } from "./tipos";
 
 /**
+ * BORR-1c — MARCA DE PURGA por propietario: registro con su propia clave (`["__purga__", ownerKey]`, distinta de toda clave de borrador)
+ * y SIN los campos indexados (`ownerKey`, `ambitoClave`), así que ningún listado la ve. `purgas` es la ÉPOCA: crece de forma estricta
+ * con cada purga. Una escritura de una sesión anterior (época menor) es rechazada DENTRO de su transacción.
+ */
+export type RegistroMarcaPurga = { clave: string; tipo: "marca_purga"; formato: number; usuario: string; purgas: number; purgadoEn: number };
+
+/**
  * Interfaz de almacenamiento SUSTITUIBLE (IndexedDB en producción; cualquier doble en pruebas). Opera sobre registros
  * crudos (`unknown`): validar la forma de lo leído es responsabilidad del núcleo, no del almacén.
  */
@@ -14,6 +21,7 @@ export type MotivoFallo =
   | "datos_corruptos" // el registro existe pero no tiene la forma esperada (NO se borra ni se sobrescribe)
   | "version_incompatible" // registro de una versión futura: se conserva intacto
   | "revision_obsoleta" // otra escritura se adelantó; hay que releer antes de guardar
+  | "purga_posterior" // el usuario eligió eliminar sus borradores (cierre de sesión) DESPUÉS de empezar la sesión de quien escribe
   | "ambito_invalido"
   | "payload_invalido"
   | "payload_demasiado_grande"
@@ -28,7 +36,7 @@ export const fallo = (motivo: MotivoFallo, mensaje: string, extra: { revisionAct
 
 /** Decisión de una modificación atómica: se evalúa sobre el valor actual DENTRO de la misma transacción de escritura. */
 export type Decision<R> =
-  | { accion: "escribir"; registro: RegistroAlmacenado; resultado: R }
+  | { accion: "escribir"; registro: RegistroAlmacenado | RegistroMarcaPurga; resultado: R }
   | { accion: "eliminar"; resultado: R }
   | { accion: "ninguna"; resultado: R };
 
@@ -39,7 +47,17 @@ export interface AlmacenBorradores {
    * Lee y decide en UNA transacción de lectura/escritura (compare-and-set). `decidir` es síncrona. Solo devuelve éxito
    * cuando la transacción se CONFIRMÓ; si `decidir` lanza, la transacción se aborta y no queda nada escrito.
    */
-  modificar<R>(clave: string, decidir: (actual: unknown | undefined) => Decision<R>): Promise<Resultado<R>>;
+  modificar<R>(
+    clave: string,
+    decidir: (actual: unknown | undefined, adicionales: (unknown | undefined)[]) => Decision<R>,
+    opciones?: {
+      /**
+       * BORR-1c — claves cuyo valor se lee en LA MISMA transacción y se entrega a `decidir` (en el mismo orden). Permite verificar la
+       * marca de purga de forma atómica junto con la escritura del borrador.
+       */
+      tambienLeer?: readonly string[];
+    },
+  ): Promise<Resultado<R>>;
   /** Registros crudos por índice: `ownerKey` (todas las empresas del usuario) o `ambito` (usuario+empresa). */
   listar(indice: "ownerKey" | "ambito", valor: string): Promise<Resultado<unknown[]>>;
 }

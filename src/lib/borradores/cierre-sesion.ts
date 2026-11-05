@@ -238,7 +238,7 @@ export async function resolverTrasExcepcionInesperada(
  * Tras «borrar», solo devuelve `continuar: true` con `limpieza: "borrados"` si TODO se confirmó; en cualquier otro caso exige
  * `decidirTrasFallo` (y sin él, o si falla, CANCELA la salida).
  */
-export async function prepararCierreSesionExplicito(opciones: {
+export type OpcionesCierreSesion = {
   ownerKey: string | null;
   nucleo: NucleoLimpieza;
   /** Interfaz de consentimiento: recibe el resumen y devuelve la decisión. Si falla, se conserva. */
@@ -247,7 +247,24 @@ export async function prepararCierreSesionExplicito(opciones: {
   decidirTrasFallo?: (informe: InformeLimpieza) => Promise<DecisionTrasFallo>;
   tiempoMaxMs?: number;
   graciaCancelacionMs?: number;
-}): Promise<ResultadoCierreSesion> {
+  /**
+   * BORR-1c — se invoca tras autorizar «borrar» y ANTES de la primera purga: los controladores de autoguardado suspenden sus
+   * escrituras y se espera a las que estén en vuelo, para que un guardado pendiente o tardío no recree lo que se va a eliminar.
+   * Mejor esfuerzo (con tope): si falla, la purga sigue adelante.
+   */
+  antesDeBorrar?: () => Promise<unknown>;
+  /** BORR-1c — se invoca si, tras `antesDeBorrar`, la salida NO se realiza (cancelada): los controladores se vuelven a sincronizar. */
+  alNoSalir?: () => void;
+};
+
+export async function prepararCierreSesionExplicito(opciones: OpcionesCierreSesion): Promise<ResultadoCierreSesion> {
+  const estado = { suspendido: false };
+  const r = await prepararInterno(opciones, estado);
+  if (estado.suspendido && !r.continuar) { try { opciones.alNoSalir?.(); } catch { /* mejor esfuerzo */ } }
+  return r;
+}
+
+async function prepararInterno(opciones: OpcionesCierreSesion, estado: { suspendido: boolean }): Promise<ResultadoCierreSesion> {
   const { ownerKey, nucleo, decidir, decidirTrasFallo } = opciones;
   const ms = opciones.tiempoMaxMs ?? TIEMPO_MAX_LIMPIEZA_MS;
   const gracia = opciones.graciaCancelacionMs ?? GRACIA_CANCELACION_MS;
@@ -273,6 +290,8 @@ export async function prepararCierreSesionExplicito(opciones: {
     if (decision !== "borrar") return sin("conservados", detectados);
 
     borradoAutorizado = true; // a partir de aquí, cualquier excepción es de una eliminación AUTORIZADA
+    try { await opciones.antesDeBorrar?.(); } catch { /* mejor esfuerzo: la purga autorizada sigue adelante */ }
+    estado.suspendido = true;
     const consentidoEn = Date.now();
     for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
       const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
@@ -313,6 +332,8 @@ export async function desactivarPersistencia(opciones: {
   confirmar: (resumen: ResumenBorradoresUsuario) => Promise<boolean>;
   tiempoMaxMs?: number;
   graciaCancelacionMs?: number;
+  /** BORR-1c — tras fijar la preferencia y ANTES de la purga: avisar a los autoguardados y esperar a sus escrituras en vuelo (mejor esfuerzo). */
+  antesDeBorrar?: () => Promise<unknown>;
 }): Promise<ResultadoDesactivacion> {
   const { ownerKey, nucleo, prefs, confirmar } = opciones;
   const ms = opciones.tiempoMaxMs ?? TIEMPO_MAX_LIMPIEZA_MS;
@@ -342,6 +363,7 @@ export async function desactivarPersistencia(opciones: {
     preferenciaFijada = true;
     if (!hayQueBorrar || ownerKey === null) return { estado: "desactivada", detectados, eliminados: 0 };
 
+    try { await opciones.antesDeBorrar?.(); } catch { /* mejor esfuerzo */ }
     const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
     if (purga.estado === "borrados") return { estado: "desactivada", detectados, eliminados: purga.eliminados };
     return { estado: "desactivada_con_residuos", detectados, eliminados: purga.informe.eliminados, informe: { ...purga.informe, intento: 1 } };

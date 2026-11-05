@@ -10,3 +10,8 @@ export * from "./cierre-sesion";
 export { prepararSalidaDelNavegador } from "./salida-navegador";
 export { ESTADO_GUARDADO_INICIAL, reducirEstadoGuardado } from "./estado-guardado";
 export type { EstadoGuardado, EventoGuardado, NombreEstadoGuardado } from "./estado-guardado";
+// BORR-1c
+export * from "./controlador";
+export * from "./canal";
+export { registrarControlador, suspenderEscriturasDe, reanudarEscriturasDe, reiniciarCoordinacionParaPruebas, TOPE_ESPERA_SUSPENSION_MS } from "./coordinacion";
+export type { ControladorCoordinable, MotivoSuspension } from "./coordinacion";

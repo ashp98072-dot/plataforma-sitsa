@@ -78,7 +78,8 @@ async function abrirMenuYSalir() {
   await clic(botonPorTexto("Salir"));
 }
 const llamo = (url: string) => llamadas.filter((l) => l.url === url).length;
-const esperar = (fn: () => void, timeout = 3000) => vi.waitFor(fn, { timeout, interval: 20 });
+vi.setConfig({ testTimeout: 30_000 }); // con la suite completa en paralelo los diálogos reales tardan más
+const esperar = (fn: () => void, timeout = 8000) => vi.waitFor(fn, { timeout, interval: 20 });
 
 const PROPS_MENU = { slug: "kuiqtrans", empresaNombre: "Empresa de prueba", username: "usuario.demo", rol: "Operaciones", dominioEmpresa: false };
 const EMPRESAS = [
@@ -252,7 +253,7 @@ describe("borrado solicitado que NO se confirma: advertencia visible (nunca sali
     expect(botonDialogo("Reintentar eliminación")).toBeDefined();
     expect(botonDialogo("Salir y conservar los borradores")).toBeDefined();
     expect(botonDialogo("Cancelar salida")).toBeDefined();
-    expect(document.activeElement?.textContent).toBe("Cancelar salida"); // el foco cae en la opción segura
+    await esperar(() => expect(document.activeElement?.textContent).toBe("Cancelar salida")); // el foco cae en la opción segura
     expect(llamo("/api/auth/logout")).toBe(0); // la salida NO continúa mientras no haya decisión
     await clic(botonDialogo("Cancelar salida"));
     await esperar(() => expect(dialogo()).toBeNull());

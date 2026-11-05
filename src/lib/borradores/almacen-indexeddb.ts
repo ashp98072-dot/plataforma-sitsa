@@ -108,7 +108,7 @@ export function crearAlmacenIndexedDB(opciones: Opciones = {}): AlmacenBorradore
       });
     },
 
-    async modificar<R>(clave: string, decidir: (actual: unknown | undefined) => Decision<R>): Promise<Resultado<R>> {
+    async modificar<R>(clave: string, decidir: (actual: unknown | undefined, adicionales: (unknown | undefined)[]) => Decision<R>, opciones?: { tambienLeer?: readonly string[] }): Promise<Resultado<R>> {
       const a = await abrir();
       if (!a.ok) return a;
       const tx = transaccion(a.valor, "readwrite");
@@ -119,11 +119,12 @@ export function crearAlmacenIndexedDB(opciones: Opciones = {}): AlmacenBorradore
         const abortar = (f: Fallo) => { interno = f; try { tx.abort(); } catch { /* ya cerrada */ } };
         try {
           const tienda = tx.objectStore(TIENDA);
-          const lectura = tienda.get(clave);
-          lectura.onsuccess = () => {
+          const extras = opciones?.tambienLeer ?? [];
+          const adicionales: (unknown | undefined)[] = [];
+          const decidirYEscribir = (principal: unknown) => {
             let d: Decision<R>;
             try {
-              d = decidir(lectura.result);
+              d = decidir(principal, adicionales);
             } catch (e) {
               return abortar(clasificar(e, "escritura_fallida"));
             }
@@ -135,6 +136,19 @@ export function crearAlmacenIndexedDB(opciones: Opciones = {}): AlmacenBorradore
               abortar(clasificar(e, "escritura_fallida"));
             }
           };
+          // Las lecturas adicionales se encadenan DENTRO de la misma transacción (cada petición se emite desde el `onsuccess` de la
+          // anterior): la decisión y la escritura ven un estado coherente y nada puede intercalarse entre ellas.
+          const leerAdicionales = (principal: unknown) => {
+            if (adicionales.length >= extras.length) return decidirYEscribir(principal);
+            try {
+              const rq = tienda.get(extras[adicionales.length]!);
+              rq.onsuccess = () => { adicionales.push(rq.result); leerAdicionales(principal); };
+            } catch (e) {
+              abortar(clasificar(e, "lectura_fallida"));
+            }
+          };
+          const lectura = tienda.get(clave);
+          lectura.onsuccess = () => leerAdicionales(lectura.result);
         } catch (e) {
           return resolve(clasificar(e, "escritura_fallida"));
         }

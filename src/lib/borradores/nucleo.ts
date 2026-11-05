@@ -1,6 +1,6 @@
 import { CLAVE_ENVIO_REGEX, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
 import { claveAmbitoUsuarioEmpresa, claveBorrador, problemaAmbito, problemaAmbitoUsuarioEmpresa } from "./ambito";
-import { exito, fallo, type AlmacenBorradores, type Resultado } from "./almacen";
+import { exito, fallo, type AlmacenBorradores, type RegistroMarcaPurga, type Resultado } from "./almacen";
 import { validarEstructuraPayload, validarPayload } from "./payload";
 import {
   ESTADOS_ENVIO,
@@ -49,7 +49,26 @@ export type EntradaGuardado = {
   claveEnvio?: string | null;
   /** `undefined` conserva el actual. */
   estadoEnvio?: EstadoEnvio;
+  /**
+   * BORR-1c — época de purga que tenía la SESIÓN de quien escribe (ver `leerEpocaPurga`). Si el propietario eliminó sus borradores al
+   * cerrar sesión DESPUÉS de esa época, la escritura se rechaza (`purga_posterior`) DENTRO de la misma transacción, aunque quien
+   * escribe no haya recibido ningún aviso. `undefined` = sin verificación (contrato anterior; solo para llamadores heredados).
+   */
+  epocaPurga?: number;
 };
+
+/** Clave de la marca de purga de un propietario: nunca coincide con una clave de borrador (esas tienen 3 elementos). */
+export const claveMarcaPurga = (ownerKey: string): string => JSON.stringify(["__purga__", ownerKey]);
+const FORMATO_MARCA = 1;
+
+type ParseoMarca = { tipo: "ausente" } | { tipo: "ok"; purgas: number } | { tipo: "corrupta" };
+function parsearMarca(crudo: unknown, ownerKey: string): ParseoMarca {
+  if (crudo === undefined) return { tipo: "ausente" };
+  if (!esObjeto(crudo)) return { tipo: "corrupta" };
+  if (crudo.tipo !== "marca_purga" || crudo.clave !== claveMarcaPurga(ownerKey) || crudo.usuario !== ownerKey) return { tipo: "corrupta" };
+  if (!esEntero(crudo.formato, 1) || !esEntero(crudo.purgas, 1) || typeof crudo.purgadoEn !== "number" || !Number.isFinite(crudo.purgadoEn)) return { tipo: "corrupta" };
+  return { tipo: "ok", purgas: crudo.purgas };
+}
 
 export type LecturaBorrador =
   | { estado: "vacio" }
@@ -215,12 +234,21 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
       if (!(entrada.revisionBase === null || esEntero(entrada.revisionBase, 1))) return fallo("argumento_invalido", "La revisión base no es válida.");
       if (entrada.estadoEnvio !== undefined && !(ESTADOS_ENVIO as readonly unknown[]).includes(entrada.estadoEnvio)) return fallo("argumento_invalido", "El estado de envío no es válido.");
       if (typeof entrada.claveEnvio === "string" && !CLAVE_ENVIO_REGEX.test(entrada.claveEnvio)) return fallo("argumento_invalido", "La clave de envío no es válida.");
+      if (entrada.epocaPurga !== undefined && !esEntero(entrada.epocaPurga, 0)) return fallo("argumento_invalido", "La época de purga no es válida.");
       const pp = validarPayload(entrada.payload, maxPayloadChars);
       if (pp) return fallo(pp.motivo, pp.mensaje);
 
       const clave = claveBorrador(ambito);
       const marca = ahora();
-      const r = await almacen.modificar<Resultado<Borrador>>(clave, (actual) => {
+      const verificarEpoca = entrada.epocaPurga !== undefined;
+      const r = await almacen.modificar<Resultado<Borrador>>(clave, (actual, adicionales) => {
+        if (verificarEpoca) {
+          // Misma transacción que la escritura: o la purga ya ocurrió (se rechaza) o ocurrirá después y verá este borrador.
+          if (!Array.isArray(adicionales) || adicionales.length < 1) return { accion: "ninguna", resultado: fallo("escritura_fallida", "El almacenamiento no permite verificar la purga; no se guarda.") };
+          const m = parsearMarca(adicionales[0], ambito.ownerKey);
+          if (m.tipo === "corrupta") return { accion: "ninguna", resultado: fallo("datos_corruptos", "La marca de purga de este equipo está dañada; no se guarda.") };
+          if (m.tipo === "ok" && m.purgas > (entrada.epocaPurga as number)) return { accion: "ninguna", resultado: fallo("purga_posterior", "Los borradores de este usuario se eliminaron al cerrar sesión; esta sesión ya no puede guardar.") };
+        }
         let previo: Borrador | null = null;
         if (actual !== undefined) {
           const p = parsear(actual);
@@ -243,8 +271,23 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
         };
         const registro: RegistroAlmacenado = { ...borrador, clave, ambitoClave: claveAmbitoUsuarioEmpresa(ambito), formato: FORMATO_REGISTRO };
         return { accion: "escribir", registro, resultado: exito(borrador) };
-      });
+      }, verificarEpoca ? { tambienLeer: [claveMarcaPurga(ambito.ownerKey)] } : undefined);
       return r.ok ? r.valor : r;
+    },
+
+    /**
+     * BORR-1c — época de purga vigente del propietario: 0 si nunca eliminó sus borradores al cerrar sesión. Una sesión (formulario)
+     * la lee al EMPEZAR y la pasa en cada `guardar`; una purga posterior invalida las escrituras de esa sesión, no las de sesiones
+     * nuevas (que leerán la época vigente). Una marca dañada falla cerrada (`datos_corruptos`) hasta que la siguiente purga la repare.
+     */
+    async leerEpocaPurga(ownerKey: string): Promise<Resultado<number>> {
+      const p0 = problemaAmbitoUsuarioEmpresa({ ownerKey, empresaId: 1 });
+      if (p0) return fallo("ambito_invalido", p0);
+      const r = await almacen.obtener(claveMarcaPurga(ownerKey));
+      if (!r.ok) return r;
+      const m = parsearMarca(r.valor, ownerKey);
+      if (m.tipo === "corrupta") return fallo("datos_corruptos", "La marca de purga de este equipo está dañada.");
+      return exito(m.tipo === "ok" ? m.purgas : 0);
     },
 
     async existe(ambito: AmbitoBorrador): Promise<Resultado<boolean>> {
@@ -255,10 +298,21 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
     },
 
     /** Elimina el borrador del ámbito (descarte explícito). Idempotente: borrar algo inexistente no es un error. */
-    async eliminar(ambito: AmbitoBorrador): Promise<Resultado<{ existia: boolean }>> {
+    async eliminar(ambito: AmbitoBorrador, opciones: { epocaPurga?: number } = {}): Promise<Resultado<{ existia: boolean }>> {
       const inv = ambitoInvalido(ambito);
       if (inv) return inv;
-      return almacen.modificar(claveBorrador(ambito), (actual) => ({ accion: "eliminar", resultado: { existia: actual !== undefined } }));
+      const { epocaPurga } = opciones;
+      if (epocaPurga === undefined) return almacen.modificar(claveBorrador(ambito), (actual) => ({ accion: "eliminar", resultado: { existia: actual !== undefined } }));
+      if (!esEntero(epocaPurga, 0)) return fallo("argumento_invalido", "La época de purga no es válida.");
+      // BORR-1c — una sesión anterior (época menor) no puede descartar el borrador de la sesión nueva: se verifica en la misma transacción.
+      const r = await almacen.modificar<Resultado<{ existia: boolean }>>(claveBorrador(ambito), (actual, adicionales) => {
+        if (!Array.isArray(adicionales) || adicionales.length < 1) return { accion: "ninguna", resultado: fallo("escritura_fallida", "El almacenamiento no permite verificar la purga; no se elimina.") };
+        const m = parsearMarca(adicionales[0], ambito.ownerKey);
+        if (m.tipo === "corrupta") return { accion: "ninguna", resultado: fallo("datos_corruptos", "La marca de purga de este equipo está dañada; no se elimina.") };
+        if (m.tipo === "ok" && m.purgas > epocaPurga) return { accion: "ninguna", resultado: fallo("purga_posterior", "Los borradores de este usuario se eliminaron al cerrar sesión; esta sesión ya no puede modificarlos.") };
+        return { accion: "eliminar", resultado: exito({ existia: actual !== undefined }) };
+      }, { tambienLeer: [claveMarcaPurga(ambito.ownerKey)] });
+      return r.ok ? r.valor : r;
     },
 
     /** Metadatos (sin payload ni clave de envío) de UN borrador. */
@@ -370,6 +424,23 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
       const resumen: ResumenPurga = { total: 0, eliminados: 0, fallidos: 0, cambiados: 0, pendientes: 0, indeterminados: 0, cancelado: false };
       const avisar = () => { try { alProgresar?.({ ...resumen }); } catch { /* un observador defectuoso no debe afectar la purga */ } };
       if (signal?.aborted) { resumen.cancelado = true; avisar(); return exito({ ...resumen }); }
+
+      // MARCA DE PURGA, ANTES de listar y de borrar: desde que esta transacción se confirma, ninguna escritura de una sesión anterior
+      // (época menor) puede crear o modificar borradores; las que ya se confirmaron las verá el listado y se eliminarán. Si la marca no
+      // se puede escribir NO se elimina nada (falla cerrada): sin la valla no habría garantía.
+      const claveMarca = claveMarcaPurga(ownerKey);
+      const marcaOp = almacen.modificar<number | "cancelado">(claveMarca, (actual) => {
+        if (signal?.aborted) return { accion: "ninguna", resultado: "cancelado" };
+        const m = parsearMarca(actual, ownerKey); // dañada o ausente: se (re)escribe con una época mayor que cualquier anterior
+        const t = ahora();
+        const nueva = Math.max(m.tipo === "ok" ? m.purgas + 1 : 1, Math.trunc(t) > 0 ? Math.trunc(t) : 1);
+        const registro: RegistroMarcaPurga = { clave: claveMarca, tipo: "marca_purga", formato: FORMATO_MARCA, usuario: ownerKey, purgas: nueva, purgadoEn: t };
+        return { accion: "escribir", registro, resultado: nueva };
+      });
+      const marcaR = await frenarSiSeCancela(signal, marcaOp);
+      if (marcaR === ABORTADO) { resumen.cancelado = true; avisar(); return exito({ ...resumen }); } // nada se eliminó
+      if (!marcaR.ok) return marcaR;
+      if (marcaR.valor === "cancelado") { resumen.cancelado = true; avisar(); return exito({ ...resumen }); }
 
       const listado = await frenarSiSeCancela(signal, almacen.listar("ownerKey", ownerKey));
       if (listado === ABORTADO) { resumen.cancelado = true; avisar(); return exito({ ...resumen }); } // listar solo lee: nada que deshacer
