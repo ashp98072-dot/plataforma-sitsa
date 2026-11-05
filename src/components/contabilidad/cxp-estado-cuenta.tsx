@@ -17,10 +17,11 @@ const vacio = { proveedorId: "", incluirPagadas: false, incluirAnuladas: false, 
 const q = (v: string) => formatearImporte("Q", v);
 const reductor = reducirCargaAntiguedad<RespuestaEstadoCuenta>;
 
-export function CxpEstadoCuenta({ slug, entidadId }: { slug: string; entidadId: string }) {
+export function CxpEstadoCuenta({ slug, entidadId, proveedorInicial }: { slug: string; entidadId: string; proveedorInicial?: number }) {
   const base = `/api/empresas/${slug}/contabilidad/cxp`;
-  const [borrador, setBorrador] = useState(vacio);
-  const [aplicados, setAplicados] = useState(vacio);
+  const inicial = { ...vacio, ...(proveedorInicial ? { proveedorId: String(proveedorInicial), incluirPagadas: true, incluirAnuladas: true } : {}) };
+  const [borrador, setBorrador] = useState(inicial);
+  const [aplicados, setAplicados] = useState(inicial);
   const [page, setPage] = useState(1);
   const [carga, dispatch] = useReducer(reductor, estadoCargaVacio<RespuestaEstadoCuenta>());
   const [proveedores, setProveedores] = useState<ProveedorOpcion[]>([]);

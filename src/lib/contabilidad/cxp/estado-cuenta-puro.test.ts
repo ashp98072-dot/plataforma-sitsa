@@ -256,6 +256,6 @@ describe("MIL-CXP-02 · transición de recarga y arquitectura", () => {
     expect(ui).toMatch(/if \(!lista \|\| !exportable\) return/);
     const cli = readFileSync("src/components/contabilidad/cxp-client.tsx", "utf8");
     expect(cli).toMatch(/puedeVer && <button .*>Estado de cuenta<\/button>/);
-    expect(cli).toContain("<CxpEstadoCuenta key={`e${entidadId}`}");
+    expect(cli).toContain('<CxpEstadoCuenta key={`e${entidadId}-${proveedorConsulta ?? ""}`}');
   });
 });

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
 import { CxpAntiguedad } from "@/components/contabilidad/cxp-antiguedad";
 import { CxpEstadoCuenta } from "@/components/contabilidad/cxp-estado-cuenta";
+import { CxpIntegridad } from "@/components/contabilidad/cxp-integridad";
 import { CxpSituacionFactura } from "@/components/contabilidad/cxp-situacion-factura";
 import type { DesgloseFacturaLectura } from "@/lib/contabilidad/cxp/saldo-lectura";
 
@@ -42,7 +43,8 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
 }) {
   const [entidades, setEntidades] = useState<Entidad[]>([]);
   const [entidadId, setEntidadId] = useState("");
-  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores" | "bitacora" | "antiguedad" | "estado">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : puedeVerFiscal ? "proveedores" : "bitacora");
+  const [vista, setVista] = useState<"facturas" | "pagos" | "proveedores" | "bitacora" | "antiguedad" | "estado" | "integridad">(puedeVer ? "facturas" : puedeVerPagos ? "pagos" : puedeVerFiscal ? "proveedores" : "bitacora");
+  const [proveedorConsulta, setProveedorConsulta] = useState<number>();
   const [error, setError] = useState("");
   useEffect(() => {
     const ac = new AbortController();
@@ -61,7 +63,7 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
     <h1 className="text-2xl font-semibold">Cuentas por pagar</h1>
     <p className="text-sm text-[var(--muted)]">Facturas y pagos a proveedores registrados en plataforma. Informativo: no genera pólizas ni sustituye aún a Milenium. La retención de ISR se resta del total de la factura (no es un pago al proveedor). Siguen bloqueados, sin regla confirmada: factura especial y retención de IVA. El ISR se redondea a 2 decimales (mitad hacia arriba).</p>
     <label className="block text-sm">Libro contable (entidad)
-      <select className={`${campo} ml-2`} value={entidadId} onChange={e => setEntidadId(e.target.value)} aria-label="Entidad">
+      <select className={`${campo} ml-2`} value={entidadId} onChange={e => { setEntidadId(e.target.value); setProveedorConsulta(undefined); }} aria-label="Entidad">
         <option value="">Seleccionar entidad</option>{entidades.map(e => <option key={e.id} value={e.id}>{e.codigo} — {e.nombre}</option>)}
       </select></label>
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
@@ -72,11 +74,13 @@ export function CxpClient({ slug, puedeVer, puedeRegistrar, puedeAnular, puedeVe
         {(puedeVerFiscal || puedeVer) && <button type="button" className={boton} aria-pressed={vista === "proveedores"} onClick={() => setVista("proveedores")}>Proveedores y configuración fiscal</button>}
         {puedeVer && <button type="button" className={boton} aria-pressed={vista === "estado"} onClick={() => setVista("estado")}>Estado de cuenta</button>}
         {puedeVer && <button type="button" className={boton} aria-pressed={vista === "antiguedad"} onClick={() => setVista("antiguedad")}>Antigüedad de saldos</button>}
+        {puedeVer && <button type="button" className={boton} aria-pressed={vista === "integridad"} onClick={() => setVista("integridad")}>Integridad</button>}
         {puedeVerBitacora && <button type="button" className={boton} aria-pressed={vista === "bitacora"} onClick={() => setVista("bitacora")}>Bitácora</button>}
       </div>
       {vista === "facturas" && puedeVer && <Facturas key={`f${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrar} puedeAnular={puedeAnular} />}
       {vista === "pagos" && puedeVerPagos && <Pagos key={`g${entidadId}`} slug={slug} entidadId={entidadId} puedeRegistrar={puedeRegistrarPago} puedeReversar={puedeReversarPago} />}
-      {vista === "estado" && puedeVer && <CxpEstadoCuenta key={`e${entidadId}`} slug={slug} entidadId={entidadId} />}
+      {vista === "estado" && puedeVer && <CxpEstadoCuenta key={`e${entidadId}-${proveedorConsulta ?? ""}`} slug={slug} entidadId={entidadId} proveedorInicial={proveedorConsulta} />}
+      {vista === "integridad" && puedeVer && <CxpIntegridad key={`i${entidadId}`} slug={slug} entidadId={entidadId} onConsultarProveedor={id=>{ setProveedorConsulta(id); setVista("estado"); }} />}
       {vista === "antiguedad" && puedeVer && <CxpAntiguedad key={`a${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "bitacora" && puedeVerBitacora && <Bitacora key={`b${entidadId}`} slug={slug} entidadId={entidadId} />}
       {vista === "proveedores" && <Proveedores key={`p${entidadId}`} slug={slug} entidadId={entidadId} puedeVerFiscal={puedeVerFiscal} puedeEditar={puedeEditarFiscal} />}

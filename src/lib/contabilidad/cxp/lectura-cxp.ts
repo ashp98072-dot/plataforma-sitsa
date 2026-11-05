@@ -49,9 +49,10 @@ export function exprsVencimiento(corteSql: string) {
 }
 
 /** UNA transacción de solo lectura con instantánea consistente: filas, líneas y totales de una misma lectura no se desfasan. */
-export async function enInstantanea<T>(fn: (c: PoolConnection) => Promise<T>): Promise<T> {
+export async function enInstantanea<T>(fn: (c: PoolConnection) => Promise<T>, opciones: { lecturaRepetible?: boolean } = {}): Promise<T> {
   const c = await getPool().getConnection();
   try {
+    if (opciones.lecturaRepetible) await c.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     await c.query("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY");
     try { return await fn(c); } finally { await c.query("COMMIT"); }
   } finally {
