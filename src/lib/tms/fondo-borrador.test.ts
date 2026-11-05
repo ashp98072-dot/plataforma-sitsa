@@ -109,8 +109,8 @@ describe("contrato de envío de Fondos", () => {
 
 describe("alcance de BORR-1e", () => {
   const leer = (r: string) => readFileSync(join(process.cwd(), r), "utf8").replace(/\r\n/g, "\n");
-  it("Gastos (BORR-1f) no se toca y el autoguardado solo se monta al CREAR", () => {
-    for (const r of ["src/app/e/[slug]/gastos/page.tsx", "src/lib/tms/gastos.ts", "src/lib/tms/gastos-envio-cliente.ts"]) expect(leer(r)).not.toMatch(/fondo-borrador|fondo-autoguardado|requerimiento-borrador|lib\/borradores/);
+  it("La lógica de Gastos no usa el autoguardado de Fondos y el autoguardado solo se monta al CREAR", () => {
+    for (const r of ["src/lib/tms/gastos.ts", "src/lib/tms/gastos-envio-cliente.ts"]) expect(leer(r)).not.toMatch(/fondo-borrador|fondo-autoguardado|requerimiento-borrador|lib\/borradores/);
     const pagina = leer("src/app/e/[slug]/fondos/page.tsx");
     expect(pagina).toMatch(/\{!editandoId \? <AutoguardadoFondo /);
     expect(pagina).toMatch(/if \(!editandoId\) \{\s+const preparado = await prepararEnvioBorrador/);

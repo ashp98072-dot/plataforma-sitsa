@@ -49,8 +49,31 @@ export async function enviarGasto(opts: {
   if (comprobante && gastoId) {
     const archivos = new FormData();
     archivos.set("file", comprobante);
-    const subida = await fetchFn(`/api/empresas/${slug}/tms/gastos/${gastoId}/comprobante`, { method: "POST", body: archivos });
+    // BORR-1f: una red caída DURANTE la subida no puede presentarse como «creación incierta»: el gasto ya está confirmado.
+    let subida: RespuestaHttp;
+    try {
+      subida = await fetchFn(`/api/empresas/${slug}/tms/gastos/${gastoId}/comprobante`, { method: "POST", body: archivos });
+    } catch {
+      return { fase: "comprobante", ok: false, gastoId, data, subidaData: {} };
+    }
     if (!subida.ok) return { fase: "comprobante", ok: false, gastoId, data, subidaData: await leerJson(subida) };
   }
   return { fase: "completo", ok: true, gastoId, data };
+}
+
+/**
+ * BORR-1f — reintento de SOLO la subida del comprobante a un gasto ya creado y confirmado (sin volver a llamar al POST de creación).
+ * Nunca crea nada: si falla, el gasto sigue existiendo y se puede volver a intentar.
+ */
+export async function subirComprobanteGasto(opts: { fetchFn: FetchGasto; slug: string; gastoId: number; comprobante: File }): Promise<{ ok: true } | { ok: false; error: string }> {
+  const archivos = new FormData();
+  archivos.set("file", opts.comprobante);
+  try {
+    const res = await opts.fetchFn(`/api/empresas/${opts.slug}/tms/gastos/${opts.gastoId}/comprobante`, { method: "POST", body: archivos });
+    if (res.ok) return { ok: true };
+    const data = await leerJson(res);
+    return { ok: false, error: typeof data.error === "string" ? data.error : "No se pudo adjuntar el comprobante." };
+  } catch {
+    return { ok: false, error: "No se pudo contactar al servidor para adjuntar el comprobante." };
+  }
 }

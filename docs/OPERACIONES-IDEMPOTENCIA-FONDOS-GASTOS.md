@@ -156,3 +156,26 @@ desplegado, no aprobado para producción. **Sin SQL, sin cambios de API, permiso
   el listado) hasta una fase posterior con un endpoint de consulta.
 - Confirmada la creación: se marca «completado», se elimina el borrador solo si quedó marcado, se cierra el formulario y se recarga el listado.
 - «Cancelar» conserva lo escrito (se guarda al cerrar) y al volver a abrir se ofrece recuperarlo; nunca se sobrescribe sin decisión.
+
+## Borrador local de «Nuevo gasto» (BORR-1f)
+
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (happy-dom + fake-indexeddb). No probado en navegador real ni en Hostinger, no
+desplegado, no aprobado para producción. **Sin SQL, sin cambios de API, permisos, reglas contables ni gastos históricos.** Solo la
+**creación** (`editandoId` nulo): editar, autorizar, rechazar, eliminar comprobantes y reportes no cambian.
+
+- **Qué se guarda (solo IndexedDB):** `src/lib/tms/gasto-borrador.ts` (esquema v1, tipo `gasto_operativo`): cabecera («Línea 1»), líneas
+  adicionales en orden, tieneFactura, observaciones, empresa requirente, requirente y solicitante. Importes y cantidades **como texto exacto**.
+  El destino de pago autocompletado desde RRHH **no se guarda** (solo si el usuario lo sobrescribió); nombre y cargo de solo lectura tampoco.
+  **El comprobante (File) nunca se guarda**; al recuperar un gasto con factura se avisa que hay que volver a seleccionarlo.
+- **Recuperación:** como BORR-1d/1e: voluntaria, el adaptador valida antes de activar el controlador (también al adoptar otra pestaña),
+  catálogos revalidados (se bloquea el envío si algo recuperado ya no es válido).
+- **Envío (clasificación según el contrato real de POST /tms/gastos):** solo **400/401/403/404** garantizan que nada se creó y liberan el
+  intento; **409 (conflicto de idempotencia), 5xx, 408/425/429, 2xx sin `gasto.id` y la red caída son inciertos** (contenido congelado,
+  clave conservada, «Reconciliación pendiente»). Tras recargar con un envío incierto no se crea otro gasto. Sin consulta por clave: la
+  reconciliación es manual (revisar el listado) — límite documentado para una fase posterior.
+- **Crear y adjuntar son dos operaciones:** confirmada la creación (POST 2xx con id), el borrador se marca `completado`. Si el comprobante
+  falla (HTTP o red), la página pasa a «gasto creado, falta el comprobante»: el contenido queda congelado, el reintento **solo vuelve a
+  subir el archivo a ese id** (`subirComprobanteGasto`, sin POST de creación) y, al lograrlo, se elimina el borrador. Si se recarga, el
+  gasto ya está en el listado (se adjunta desde «Editar»); el borrador queda como «ya enviado» (no recuperable, descartable) y **no se
+  finge conservar el archivo**. `enviarGasto` ahora devuelve la fase «comprobante» también ante una red caída durante la subida (antes
+  lanzaba y parecía una creación incierta); en ese caso el aviso ya no se borraba al recargar el listado (se recarga primero).
