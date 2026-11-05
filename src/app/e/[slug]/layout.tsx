@@ -13,6 +13,9 @@ import {
 } from "@/lib/permisos-shared";
 import { derivarModulosEmpresa, modulosPorRol, type Modulo, type RolGlobal } from "@/lib/roles";
 import { getSession } from "@/lib/session";
+import { construirContextoBorradores } from "@/lib/borradores/contexto";
+import { RegistroSalidaBorradores } from "@/components/borradores/registro-salida";
+import { ownerKeyDeUsuario } from "@/lib/borradores/owner-key";
 import { CATALOGO_PERMISOS, tienePermisoBase } from "@/lib/permisos-catalogo";
 
 export const dynamic = "force-dynamic";
@@ -86,6 +89,14 @@ export default async function EmpresaLayout({ children, params }: Props) {
           ]),
         ] as Modulo[]);
 
+  // BORR-1b — identidad para borradores locales: ownerKey derivado en el SERVIDOR del id interno de la sesión + empresa YA
+  // validada arriba. `null` (sin secreto adecuado) desactiva la función; no afecta autenticación ni permisos.
+  const borradores = construirContextoBorradores({
+    ownerKey: ownerKeyDeUsuario(session.id),
+    empresaId: empresa.id,
+    empresaSlug: empresa.slug,
+  });
+
   return (
     <AppShell
       slug={empresa.slug}
@@ -94,7 +105,9 @@ export default async function EmpresaLayout({ children, params }: Props) {
       rol={session.rol}
       modulos={finalMods}
       permisos={permisos}
+      borradores={borradores}
     >
+      <RegistroSalidaBorradores ownerKey={borradores?.ownerKey ?? null} />
       <div className="pb-10">{children}</div>
     </AppShell>
   );

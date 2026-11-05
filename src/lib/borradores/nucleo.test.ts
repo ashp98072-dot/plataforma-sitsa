@@ -124,7 +124,7 @@ describe("aislamiento lógico (usuario, empresa, tipo)", () => {
     ok(await nucleo.guardar(ambito(U1, 1, "solicitud_fondo"), { payload: {}, esquemaVersion: 1, revisionBase: null }));
     ok(await nucleo.guardar(ambito(U1, 2, "gasto_operativo"), { payload: {}, esquemaVersion: 9, revisionBase: null })); // incluso de esquema futuro
     ok(await nucleo.guardar(ambito(U2, 1, "solicitud_fondo"), { payload: {}, esquemaVersion: 1, revisionBase: null }));
-    expect(ok(await nucleo.purgarUsuario(U1))).toEqual({ eliminados: 2, fallidos: 0 });
+    expect(ok(await nucleo.purgarUsuario(U1))).toEqual({ total: 2, eliminados: 2, fallidos: 0, cambiados: 0, pendientes: 0, indeterminados: 0, cancelado: false });
     expect(ok(await nucleo.listarMetadatos({ ownerKey: U1, empresaId: 1 })).borradores).toHaveLength(0);
     expect(ok(await nucleo.listarMetadatos({ ownerKey: U2, empresaId: 1 })).borradores).toHaveLength(1);
   });

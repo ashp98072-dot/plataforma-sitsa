@@ -63,6 +63,61 @@ export type LecturaBorrador =
 export type ResumenLimpieza = { eliminados: number; omitidos: number };
 
 /**
+ * Resultado de una purga por usuario. Todos los contadores son de lo CONFIRMADO por transacciones ya cerradas, salvo
+ * `indeterminados`: operaciones que seguían en vuelo cuando se canceló y cuyo resultado real se desconoce.
+ *   total = eliminados + fallidos + cambiados + pendientes + indeterminados
+ */
+export type ResumenPurga = {
+  /** Borradores del usuario que eran objetivo al iniciar. */
+  total: number;
+  /** Eliminados con la transacción confirmada, o confirmados como ya ausentes. */
+  eliminados: number;
+  /** La operación falló (error de almacenamiento): el registro sigue ahí. */
+  fallidos: number;
+  /** Cambiaron (otra versión, otra identidad) desde el listado: NO se eliminan. */
+  cambiados: number;
+  /** No se llegaron a iniciar porque la purga se canceló. */
+  pendientes: number;
+  /** Operación en vuelo al cancelar: pudo (o no) confirmarse; resultado incierto. */
+  indeterminados: number;
+  /** La purga se detuvo por cancelación antes de terminar. */
+  cancelado: boolean;
+};
+
+export type OpcionesPurga = {
+  /** Cancelación COOPERATIVA: impide iniciar nuevas eliminaciones; no revierte una transacción ya confirmada. */
+  signal?: AbortSignal;
+  /** Solo se eliminan borradores guardados hasta este instante (epoch ms): los creados/modificados después se conservan. */
+  consentidoEn?: number;
+  /** Observador del avance (para informar un estado real aunque la purga no llegue a terminar). */
+  alProgresar?: (resumen: Readonly<ResumenPurga>) => void;
+};
+
+const ABORTADO: unique symbol = Symbol("abortado");
+
+/** Resuelve con `ABORTADO` en cuanto se cancela, sin esperar a `promesa` (que sigue su curso y no se cancela). */
+function frenarSiSeCancela<T>(signal: AbortSignal | undefined, promesa: Promise<T>): Promise<T | typeof ABORTADO> {
+  if (!signal) return promesa;
+  if (signal.aborted) { promesa.catch(() => undefined); return Promise.resolve(ABORTADO); }
+  return new Promise((resolve, reject) => {
+    const alAbortar = () => resolve(ABORTADO);
+    signal.addEventListener("abort", alAbortar, { once: true });
+    promesa.then(
+      (v) => { signal.removeEventListener("abort", alAbortar); resolve(v); },
+      (e) => { signal.removeEventListener("abort", alAbortar); reject(e); },
+    );
+  });
+}
+
+/** Identifica la VERSIÓN exacta de un registro crudo (para no borrar una versión distinta de la listada). */
+function huellaRegistro(crudo: unknown): string {
+  if (esObjeto(crudo) && typeof crudo.borradorId === "string" && typeof crudo.revision === "number") {
+    return `${crudo.borradorId}|${crudo.revision}|${String(crudo.actualizadoEn)}`;
+  }
+  try { return `x:${JSON.stringify(crudo)}`; } catch { return "x:?"; }
+}
+
+/**
  * `ok`: la envoltura (metadatos, identidad y claves) es coherente. La ESTRUCTURA DEL PAYLOAD se comprueba aparte y solo
  * cuando hace falta (`payloadValido`): un borrador de esquema FUTURO puede tener un payload que esta versión no sabe juzgar y
  * debe conservarse intacto como «incompatible», no declararse corrupto.
@@ -236,6 +291,25 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
     },
 
     /**
+     * Metadatos de TODOS los borradores de UN usuario (todas sus empresas y tipos). Para decidir qué ofrecer al cerrar sesión
+     * o al desactivar la persistencia; no entrega payloads. Los registros ilegibles se cuentan aparte.
+     */
+    async listarMetadatosUsuario(ownerKey: string): Promise<Resultado<{ borradores: MetadatosBorrador[]; ilegibles: number }>> {
+      const p0 = problemaAmbitoUsuarioEmpresa({ ownerKey, empresaId: 1 });
+      if (p0) return fallo("ambito_invalido", p0);
+      const r = await almacen.listar("ownerKey", ownerKey);
+      if (!r.ok) return r;
+      const borradores: MetadatosBorrador[] = [];
+      let ilegibles = 0;
+      for (const crudo of r.valor) {
+        const p = parsear(crudo);
+        if (p.tipo === "ok" && p.borrador.ownerKey === ownerKey) borradores.push(metadatosDe(p.borrador));
+        else ilegibles++;
+      }
+      return exito({ borradores, ilegibles });
+    },
+
+    /**
      * Retención: elimina SOLO los borradores expirados del usuario+empresa indicados. `versionesSoportadas` indica, por tipo,
      * la versión de esquema que la aplicación entiende: los de esquema futuro y los tipos sin versión declarada se OMITEN
      * (no se borran datos que esta versión no sabe interpretar), y los ilegibles/corruptos (incluido un payload dañado)
@@ -278,27 +352,61 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
     },
 
     /**
-     * Borra TODOS los borradores de un usuario (todas sus empresas y tipos), incluidos los incompatibles o dañados que
-     * `limpiarExpirados` omite. Pensado para cierre de sesión y «no guardar en este equipo» (BORR-1b/1c): es una orden
-     * explícita. Devuelve cuántos se borraron y cuántos fallaron. Limitación: un registro sin el campo `ownerKey` (dañado
-     * de forma que el índice no lo ve) no puede localizarse por usuario.
+     * Borra los borradores de un usuario (todas sus empresas y tipos), incluidos los incompatibles o dañados que
+     * `limpiarExpirados` omite. Pensado para cierre de sesión y «no guardar en este equipo»: es una orden explícita.
+     *
+     * CANCELACIÓN COOPERATIVA (`signal`): antes de CADA eliminación y DENTRO de su transacción se comprueba la cancelación;
+     * una vez cancelada no se inicia ninguna eliminación nueva (una operación en espera cuya decisión aún no corrió ya no
+     * borra). Una transacción que YA emitió su borrado se confirmará aunque se cancele: eso no es reversible y se informa como
+     * `indeterminados`. Cada borrado solo procede si el registro sigue siendo la MISMA versión que se listó (mismo borradorId y
+     * revisión): una versión nueva creada después se conserva y se cuenta en `cambiados`. `consentidoEn` excluye además lo
+     * guardado después del consentimiento (útil en reintentos). Limitación: un registro sin el campo `ownerKey` (dañado de
+     * forma que el índice no lo ve) no puede localizarse por usuario.
      */
-    async purgarUsuario(ownerKey: string): Promise<Resultado<{ eliminados: number; fallidos: number }>> {
+    async purgarUsuario(ownerKey: string, opciones: OpcionesPurga = {}): Promise<Resultado<ResumenPurga>> {
+      const { signal, consentidoEn, alProgresar } = opciones;
       const p0 = problemaAmbitoUsuarioEmpresa({ ownerKey, empresaId: 1 });
       if (p0) return fallo("ambito_invalido", p0);
-      const lista = await almacen.listar("ownerKey", ownerKey);
-      if (!lista.ok) return lista;
-      let eliminados = 0;
-      let fallidos = 0;
-      for (const crudo of lista.valor) {
+      const resumen: ResumenPurga = { total: 0, eliminados: 0, fallidos: 0, cambiados: 0, pendientes: 0, indeterminados: 0, cancelado: false };
+      const avisar = () => { try { alProgresar?.({ ...resumen }); } catch { /* un observador defectuoso no debe afectar la purga */ } };
+      if (signal?.aborted) { resumen.cancelado = true; avisar(); return exito({ ...resumen }); }
+
+      const listado = await frenarSiSeCancela(signal, almacen.listar("ownerKey", ownerKey));
+      if (listado === ABORTADO) { resumen.cancelado = true; avisar(); return exito({ ...resumen }); } // listar solo lee: nada que deshacer
+      if (!listado.ok) return listado;
+
+      const objetivos = listado.valor.filter((crudo) =>
+        !(consentidoEn !== undefined && esObjeto(crudo) && typeof crudo.actualizadoEn === "number" && crudo.actualizadoEn > consentidoEn));
+      resumen.total = objetivos.length;
+      resumen.pendientes = objetivos.length;
+      avisar();
+
+      for (const crudo of objetivos) {
+        if (signal?.aborted) { resumen.cancelado = true; break; }
         const clave = esObjeto(crudo) && typeof crudo.clave === "string" ? crudo.clave : null;
-        if (clave === null) { fallidos++; continue; }
-        const r = await almacen.modificar<boolean>(clave, (actual) =>
-          esObjeto(actual) && actual.ownerKey === ownerKey && actual.clave === clave ? { accion: "eliminar", resultado: true } : { accion: "ninguna", resultado: false });
-        if (r.ok && r.valor) eliminados++;
-        else fallidos++;
+        if (clave === null) { resumen.fallidos++; resumen.pendientes--; avisar(); continue; }
+        const huellaListada = huellaRegistro(crudo);
+        const operacion = almacen.modificar<"eliminado" | "ausente" | "cambiado" | "cancelado">(clave, (actual) => {
+          if (signal?.aborted) return { accion: "ninguna", resultado: "cancelado" }; // comprobación DENTRO de la transacción
+          if (actual === undefined) return { accion: "ninguna", resultado: "ausente" };
+          if (!esObjeto(actual) || actual.ownerKey !== ownerKey || actual.clave !== clave || huellaRegistro(actual) !== huellaListada) {
+            return { accion: "ninguna", resultado: "cambiado" };
+          }
+          return { accion: "eliminar", resultado: "eliminado" };
+        });
+        const r = await frenarSiSeCancela(signal, operacion);
+        if (r === ABORTADO) { // operación en vuelo: puede confirmarse después; su resultado real se desconoce
+          resumen.cancelado = true; resumen.indeterminados++; resumen.pendientes--; avisar(); break;
+        }
+        if (!r.ok) resumen.fallidos++;
+        else if (r.valor === "cancelado") { resumen.cancelado = true; avisar(); break; }
+        else if (r.valor === "cambiado") resumen.cambiados++;
+        else if (r.valor === "eliminado" || r.valor === "ausente") resumen.eliminados++; // transacción confirmada / confirmado ausente
+        else resumen.fallidos++; // cualquier otra cosa NO se da por eliminada
+        resumen.pendientes--;
+        avisar();
       }
-      return exito({ eliminados, fallidos });
+      return exito({ ...resumen });
     },
   };
 }
