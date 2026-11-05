@@ -46,12 +46,30 @@ sesiones. Para evitar el efecto sobre los borradores: definir `BORRADORES_OWNER_
 | **Expiración de sesión** (inactividad, 401) | Se conservan; no hay limpieza. Quedan aislados por `ownerKey`: el siguiente usuario del equipo no los ve; el dueño los recupera al volver a entrar. |
 | **Salir explícitamente** (menú de cuenta, selector de empresa) con borradores | Se muestra una decisión informada: *conservar* (por defecto), *borrar* (equipo compartido, **irreversible**: aún no hay respaldo en servidor) o *cancelar* la salida. Ante cualquier duda se conserva. |
 | Salir sin borradores / sin `ownerKey` | Sin preguntas. |
-| Error o lentitud de IndexedDB al salir | La salida **no se bloquea** (tiempo máximo de 3 s por operación); no se borra nada y se informa el resultado. |
+| Error o lentitud de IndexedDB en la **consulta previa** (solo lectura) | La salida no se bloquea (3 s máx.); no se pidió destruir nada y no se toca nada. |
+| **Borrar elegido y no confirmado por completo** (parcial, error, plazo vencido, resultado incierto) | La salida **NO continúa en silencio**: aparece una advertencia con lo ocurrido y tres opciones: *Reintentar eliminación*, *Salir* (conservando lo que pueda quedar; si el resultado es incierto la etiqueta es «Salir sin confirmar el estado de los borradores») o *Cancelar salida*. Sin decisión, o si la interfaz falla, la salida se cancela. «Borrados» solo se informa con todas las transacciones confirmadas. |
 | «No guardar en este equipo» | Con confirmación, desactiva la persistencia (preferencia no sensible en `localStorage`, por equipo) y elimina **solo** los borradores del usuario. Si el borrado falla, queda desactivada con residuos informados; si no se puede guardar la preferencia, no se borra nada. |
 
 La salida por expiración la dispara `SessionInactivityGuard` mediante `cerrarSesion`, que **no** invoca la limpieza. La limpieza se
 engancha solo en los dos puntos de salida explícita mediante `permitirSalidaExplicita()` (`session-navigation.ts`), registrado por
 `RegistroSalidaBorradores`.
+
+### Cancelación de la purga y resultados
+
+`purgarUsuario(ownerKey, { signal, consentidoEn, alProgresar })` implementa una **cancelación cooperativa** con `AbortSignal`:
+
+* Cada operación (consulta y borrado) tiene un plazo de 3 s. Al vencer se **cancela** la purga: no se inicia ninguna eliminación
+  nueva, y una transacción que aún no ejecutó su decisión **ya no borra** (la señal se comprueba también dentro de la decisión
+  transaccional). Se espera una gracia de 0,5 s a que la purga informe su estado real.
+* Una transacción que **ya emitió su borrado** no puede revertirse: se confirmará aunque se cancele. Por eso el resultado se
+  informa como **incierto** (`indeterminados`) y la advertencia no promete conservación ni afirma haber borrado.
+* Resultados distintos: *completo y confirmado*, *parcial* (conocido), *fallido* (error de almacenamiento), *tiempo agotado*
+  (con o sin operación en vuelo), *conservación voluntaria* y *cancelación de la salida*. El resumen cuenta `eliminados`,
+  `fallidos`, `cambiados`, `pendientes` e `indeterminados`.
+* Solo se borra la **misma versión** que se listó (`borradorId` + revisión): una versión creada o editada después se conserva
+  (`cambiados`). `consentidoEn` excluye además todo lo guardado tras el consentimiento, también en los reintentos.
+* Si el usuario vuelve a iniciar sesión mientras una purga cancelada sigue en cola, esa operación ya no borra (cancelada) y, de
+  hacerlo, la comparación de versión protege cualquier borrador nuevo.
 
 Nunca se eliminan borradores de otros usuarios; el borrado por usuario usa el índice `ownerKey` y revalida en la transacción.
 Los borradores **vencidos de otros usuarios** del mismo navegador permanecen hasta que su dueño vuelva (no se borran ajenos).
@@ -59,6 +77,7 @@ Los borradores **vencidos de otros usuarios** del mismo navegador permanecen has
 ## 3. Limitaciones asumidas
 
 * IndexedDB **no cifra** ni aísla con fuerza a usuarios del mismo perfil del navegador: el aislamiento por `ownerKey` es lógico.
-* El diálogo de consentimiento actual usa `window.confirm` (marcador de posición); BORR-1c/1d proveerán el diálogo propio.
+* El diálogo inicial de consentimiento (conservar / borrar) usa `window.confirm` (marcador de posición); la advertencia posterior a un borrado no confirmado ya es un diálogo propio (`alertdialog`). BORR-1c/1d unificarán ambos.
+* La cancelación es **cooperativa**: no revierte una transacción de borrado ya emitida (resultado incierto, informado como tal).
 * Ningún formulario guarda borradores aún: hoy la política es inerte hasta que un adaptador escriba.
 * La preferencia «No guardar en este equipo» no tiene aún interfaz para activarla (solo la lógica y sus pruebas).

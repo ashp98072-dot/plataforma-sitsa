@@ -113,7 +113,7 @@ describe("cierre de sesión EXPLÍCITO: política de limpieza", () => {
     await sembrar(nucleo, U1, [1, 2]);
     await sembrar(nucleo, U2, [1]);
     const r = await prepararCierreSesionExplicito({ ownerKey: U1, nucleo, decidir: async () => "borrar" });
-    expect(r).toEqual({ continuar: true, limpieza: "borrados", detectados: 6, eliminados: 6 });
+    expect(r).toEqual({ continuar: true, limpieza: "borrados", detectados: 6, eliminados: 6, intentos: 1 });
     expect(ok(await nucleo.listarMetadatosUsuario(U1)).borradores).toHaveLength(0);
     expect(ok(await nucleo.listarMetadatosUsuario(U2)).borradores).toHaveLength(3); // el otro usuario, intacto
   });
@@ -154,18 +154,19 @@ describe("cierre de sesión EXPLÍCITO: política de limpieza", () => {
   it("falla de IndexedDB: la salida NO se bloquea, no se borra nada y se informa", async () => {
     const nucleoSinIdb = crearNucleoBorradores({ almacen: crearAlmacenIndexedDB({ fabrica: null }), appBuild: "p" });
     const decidir = vi.fn(async () => "borrar" as const);
-    expect(await prepararCierreSesionExplicito({ ownerKey: U1, nucleo: nucleoSinIdb, decidir })).toEqual({ continuar: true, limpieza: "fallida", detectados: 0, eliminados: 0 });
+    expect(await prepararCierreSesionExplicito({ ownerKey: U1, nucleo: nucleoSinIdb, decidir })).toEqual({ continuar: true, limpieza: "consulta_fallida", detectados: 0, eliminados: 0 }); // solo lectura: no se pidió destruir nada
     expect(decidir).not.toHaveBeenCalled();
   });
 
-  it("falla durante el borrado: continúa la salida, se informa «fallida» y los borradores permanecen", async () => {
+  it("falla durante el borrado pedido: la salida NO continúa en silencio (sin decisión se cancela) y los borradores permanecen", async () => {
     const { nucleo } = entorno();
     await sembrar(nucleo, U1);
     vi.spyOn(IDBObjectStore.prototype, "delete").mockImplementation(() => { throw new Error("fallo simulado de borrado"); });
     const r = await prepararCierreSesionExplicito({ ownerKey: U1, nucleo, decidir: async () => "borrar" });
-    expect(r.continuar).toBe(true);
-    expect(["fallida", "parcial"]).toContain(r.limpieza);
+    expect(r.continuar).toBe(false); // sin interfaz de advertencia, jamás se sale como si todo se hubiera eliminado
+    expect(r.limpieza).toBe("fallida");
     expect(r.eliminados).toBe(0);
+    expect(r.informe).toMatchObject({ estado: "fallida", total: 3, eliminados: 0, restantes: 3, incierto: false });
     vi.restoreAllMocks();
     expect(ok(await nucleo.listarMetadatosUsuario(U1)).borradores).toHaveLength(3);
   });
@@ -175,7 +176,7 @@ describe("cierre de sesión EXPLÍCITO: política de limpieza", () => {
     const nucleo = crearNucleoBorradores({ almacen: colgado, appBuild: "p" });
     const t0 = Date.now();
     const r = await prepararCierreSesionExplicito({ ownerKey: U1, nucleo, decidir: async () => "borrar", tiempoMaxMs: 40 });
-    expect(r).toMatchObject({ continuar: true, limpieza: "tiempo_agotado" });
+    expect(r).toMatchObject({ continuar: true, limpieza: "consulta_tiempo_agotado" }); // solo lectura: no se pidió destruir nada
     expect(Date.now() - t0).toBeLessThan(1500);
   });
 

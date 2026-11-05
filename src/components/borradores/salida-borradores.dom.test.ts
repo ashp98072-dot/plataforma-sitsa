@@ -206,17 +206,6 @@ describe("menú de cuenta: salida EXPLÍCITA con el gancho registrado", () => {
     expect(await contar(U1)).toBe(3); // nada se eliminó
   });
 
-  it("falla del almacenamiento DURANTE el borrado: el logout continúa y los borradores NO se dan por eliminados", async () => {
-    await sembrar(U1);
-    confirmar.mockReturnValueOnce(false).mockReturnValueOnce(true);
-    vi.spyOn(IDBObjectStore.prototype, "delete").mockImplementation(() => { throw new Error("fallo simulado"); });
-    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
-    await abrirMenuYSalir();
-    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
-    vi.restoreAllMocks();
-    expect(await contar(U1)).toBe(3);
-  });
-
   it("IndexedDB que no responde: el logout continúa tras el tiempo máximo", async () => {
     await sembrar(U1);
     const colgada = { open: () => new Proxy({}, {}) } as unknown as IDBFactory; // open() devuelve una petición que nunca dispara eventos
@@ -228,6 +217,180 @@ describe("menú de cuenta: salida EXPLÍCITA con el gancho registrado", () => {
     expect(Date.now() - t0).toBeLessThan(7000);
     expect(confirmar).not.toHaveBeenCalled();
   }, 12000);
+});
+
+const dialogo = () => document.querySelector('[role="alertdialog"]');
+const textoDialogo = () => dialogo()?.textContent ?? "";
+const botonDialogo = (texto: string) => [...(dialogo()?.querySelectorAll("button") ?? [])].find((b) => b.textContent?.trim() === texto);
+const fallarBorrado = () => vi.spyOn(IDBObjectStore.prototype, "delete").mockImplementation(() => { throw new Error("fallo simulado de borrado"); });
+const abrirBD = () => new Promise<IDBDatabase>((res, rej) => { const r = indexedDB.open("novalvion-borradores", 1); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+/** Mantiene abierta una transacción de escritura ~`ms` ms: cualquier operación posterior sobre la tienda queda en cola (lentitud real). */
+function iniciarBloqueo(db: IDBDatabase, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const tx = db.transaction("borradores", "readwrite");
+    const tienda = tx.objectStore("borradores");
+    const fin = Date.now() + ms;
+    const paso = () => { if (Date.now() >= fin) return; tienda.get("__bloqueo__").onsuccess = paso; };
+    tx.oncomplete = () => { db.close(); resolve(); };
+    paso();
+  });
+}
+
+describe("borrado solicitado que NO se confirma: advertencia visible (nunca salida silenciosa)", () => {
+  const consentirBorrar = () => confirmar.mockReturnValueOnce(false).mockReturnValueOnce(true); // 1.º «¿conservar?» no → 2.º «¿borrar?» sí
+
+  it("fallo de IndexedDB (menú): advertencia clara, sin «borrado correctamente», la salida espera; «Cancelar salida» no cierra sesión ni borra", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(textoDialogo()).toMatch(/No se pudieron eliminar los borradores/);
+    expect(textoDialogo()).toMatch(/siguen guardados en este equipo/);
+    expect(textoDialogo()).not.toMatch(/correctamente|con éxito/i);
+    expect(botonDialogo("Reintentar eliminación")).toBeDefined();
+    expect(botonDialogo("Salir y conservar los borradores")).toBeDefined();
+    expect(botonDialogo("Cancelar salida")).toBeDefined();
+    expect(document.activeElement?.textContent).toBe("Cancelar salida"); // el foco cae en la opción segura
+    expect(llamo("/api/auth/logout")).toBe(0); // la salida NO continúa mientras no haya decisión
+    await clic(botonDialogo("Cancelar salida"));
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    expect(reemplazar).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain("Saliendo…"); // el menú queda libre
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(3);
+  });
+
+  it("fallo de IndexedDB → «Salir y conservar»: la salida continúa, informada, y los borradores permanecen", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    await clic(botonDialogo("Salir y conservar los borradores"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    expect(dialogo()).toBeNull();
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(3);
+  });
+
+  it("fallo → «Reintentar eliminación»: tras resolverse la causa se elimina, desaparece la advertencia y la salida continúa", async () => {
+    await sembrar(U1); await sembrar(U2);
+    consentirBorrar();
+    const espia = fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    espia.mockRestore(); // la causa desaparece
+    await clic(botonDialogo("Reintentar eliminación"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    expect(dialogo()).toBeNull();
+    expect(await contar(U1)).toBe(0);
+    expect(await contar(U2)).toBe(3); // el otro usuario, intacto
+  });
+
+  it("reintentar con el fallo persistente vuelve a advertir (no sale) y permite cancelar después de un fallo", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    await clic(botonDialogo("Reintentar eliminación"));
+    await esperar(() => expect(botonDialogo("Cancelar salida")?.disabled).toBe(false)); // volvió a advertir tras el 2.º intento
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Cancelar salida"));
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(3);
+  });
+
+  it("borrado PARCIAL: la advertencia dice cuántos se eliminaron y cuántos quedan", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    const original = IDBObjectStore.prototype.delete;
+    let n = 0;
+    vi.spyOn(IDBObjectStore.prototype, "delete").mockImplementation(function (this: IDBObjectStore, ...a: Parameters<IDBObjectStore["delete"]>) {
+      if (++n === 1) return original.apply(this, a);
+      throw new Error("fallo simulado");
+    });
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(textoDialogo()).toMatch(/No se pudieron eliminar todos los borradores/);
+    expect(textoDialogo()).toMatch(/Se eliminaron 1 de 3 borradores/);
+    expect(textoDialogo()).toMatch(/2 siguen guardados/);
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Salir y conservar los borradores restantes"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(2);
+  });
+
+  it("Escape cancela la salida; mientras la advertencia está abierta no hay cierre de sesión", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    await act(async () => { dialogo()!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+  });
+
+  it("selector de empresa: mismo comportamiento (fallo → advertencia → reintentar → sale)", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    const espia = fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [SelectEmpresaClient, { empresas: EMPRESAS, user: { username: "usuario.demo", rol: "Operaciones" } }]);
+    await clic(botonPorTexto("Salir"));
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(textoDialogo()).not.toMatch(/correctamente/i);
+    expect(llamo("/api/auth/logout")).toBe(0);
+    espia.mockRestore();
+    await clic(botonDialogo("Reintentar eliminación"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    expect(await contar(U1)).toBe(0);
+  });
+
+  it("selector de empresa: cancelar tras un fallo no cierra sesión y deja el botón «Salir» libre", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [SelectEmpresaClient, { empresas: EMPRESAS, user: { username: "usuario.demo", rol: "Operaciones" } }]);
+    await clic(botonPorTexto("Salir"));
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    await clic(botonDialogo("Cancelar salida"));
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    expect(botonPorTexto("Salir")?.disabled).toBe(false);
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(3);
+  });
+
+  it("operación LENTA real (tienda ocupada): al vencer el plazo se cancela, se advierte y NO hay borrados tardíos cuando la tienda se libera", async () => {
+    await sembrar(U1);
+    const db = await abrirBD();
+    let bloqueo: Promise<void> = Promise.resolve();
+    confirmar.mockReturnValueOnce(false).mockImplementationOnce(() => { bloqueo = iniciarBloqueo(db, 4200); return true; }); // la tienda se ocupa justo al consentir
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull(), 6000);
+    expect(textoDialogo()).toMatch(/no terminó a tiempo/i);
+    expect(textoDialogo()).toMatch(/Se eliminaron 0 de 3/);
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Salir y conservar los borradores restantes"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    await bloqueo; // la tienda queda libre y las operaciones en cola se ejecutan
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await contar(U1)).toBe(3); // la cancelación cooperativa impidió cualquier borrado tardío
+  }, 15000);
 });
 
 describe("selector de empresa", () => {
@@ -277,6 +440,7 @@ describe("salida AUTOMÁTICA (guard de inactividad): nunca limpia", () => {
     await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
     expect(reemplazar).toHaveBeenCalledWith("/login");
     expect(confirmar).not.toHaveBeenCalled();
+    expect(dialogo()).toBeNull(); // ni advertencia ni diálogo de ningún tipo
     expect(await contar(U1)).toBe(3); // conservados (aislados por ownerKey)
   });
 
@@ -287,6 +451,7 @@ describe("salida AUTOMÁTICA (guard de inactividad): nunca limpia", () => {
     await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [SessionInactivityGuard, {}]);
     await esperar(() => expect(llamo("/api/auth/logout")).toBe(1), 6000);
     expect(confirmar).not.toHaveBeenCalled();
+    expect(dialogo()).toBeNull();
     expect(await contar(U1)).toBe(3);
   }, 10000);
 
