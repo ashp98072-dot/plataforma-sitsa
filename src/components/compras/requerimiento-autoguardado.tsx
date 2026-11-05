@@ -12,7 +12,7 @@ import { ControlPersistenciaLocal } from "@/components/borradores/control-persis
 import { DialogoRecuperacion } from "@/components/borradores/dialogo-recuperacion";
 import { IndicadorAutoguardado } from "@/components/borradores/indicador-autoguardado";
 import {
-  aEstado, avisosDeRecuperacion, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, hayContenidoEscrito, motivoBloqueoPorBorrador,
+  aEstado, avisosDeRecuperacion, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, excedeMaxLineasRequerimiento, hayContenidoEscrito, mensajeExcesoLineasRequerimiento, motivoBloqueoPorBorrador,
   restaurarPayload, type EstadoFormularioRequerimiento, type LineaFormularioOrigen,
 } from "@/lib/compras/requerimiento-borrador";
 import type { PuenteBorrador } from "@/lib/compras/requerimiento-borrador-envio";
@@ -49,7 +49,8 @@ export function AutoguardadoRequerimiento({ fecha, entidad, requirente, encargad
   const [errorAplicar, setErrorAplicar] = useState("");
 
   const avisos = useMemo(() => (recuperado ? avisosDeRecuperacion(estado, catalogos) : []), [recuperado, estado, catalogos]);
-  const motivo = motivoBloqueoPorBorrador(snapshot) ?? (avisos.length ? "Revisa los datos recuperados antes de enviar." : null);
+  const exceso = excedeMaxLineasRequerimiento(lineas.length);
+  const motivo = motivoBloqueoPorBorrador(snapshot) ?? (exceso ? mensajeExcesoLineasRequerimiento(lineas.length) : null) ?? (avisos.length ? "Revisa los datos recuperados antes de enviar." : null);
 
   const congelado = snapshot.bloqueo === "envio_en_curso";
   useEffect(() => { onBloqueo({ motivo, congelado }); }, [motivo, congelado, onBloqueo]);
@@ -83,6 +84,7 @@ export function AutoguardadoRequerimiento({ fecha, entidad, requirente, encargad
       <p className="text-sm text-[var(--muted)]">El borrador se guarda solo en este equipo y no es un requerimiento registrado hasta que lo envíes con «Guardar requerimiento».</p>
       <ControlPersistenciaLocal ownerKey={ctx?.ownerKey ?? null} prefs={prefs} nucleo={nucleo} />
       {recuperado ? <p role="note" className="text-sm text-amber-300">Borrador recuperado. Los documentos adjuntos no se guardan: vuelve a seleccionarlos antes de enviar. Los datos se revalidan al enviar.</p> : null}
+      {exceso ? <p role="alert" data-exceso-lineas className="text-sm text-amber-300">{mensajeExcesoLineasRequerimiento(lineas.length)}</p> : null}
       {avisos.length ? <ul role="alert" className="list-disc space-y-1 pl-5 text-sm text-amber-300">{avisos.map((a) => <li key={a}>{a}</li>)}</ul> : null}
       {errorAplicar ? <p role="alert" className="text-sm text-red-300">{errorAplicar}</p> : null}
       {reconciliacion ? (

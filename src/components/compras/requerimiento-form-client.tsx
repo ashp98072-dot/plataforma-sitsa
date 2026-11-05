@@ -15,7 +15,7 @@ import { FacturaEstadoLinea } from "@/components/compras/factura-estado-linea";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS } from "@/lib/compras/factura-compra";
 import { crearEnvioUnico } from "@/lib/idempotencia/clave-envio";
 import { AutoguardadoRequerimiento, type OpcionesInyectablesAutoguardado } from "@/components/compras/requerimiento-autoguardado";
-import type { EstadoFormularioRequerimiento } from "@/lib/compras/requerimiento-borrador";
+import { excedeMaxLineasRequerimiento, mensajeExcesoLineasRequerimiento, type EstadoFormularioRequerimiento } from "@/lib/compras/requerimiento-borrador";
 import { clasificarResultadoEnvio, crearPuenteBorrador, limpiarBorradorEnviado, liberarEnvioRechazado, marcarEnvioCompletado, prepararEnvioBorrador } from "@/lib/compras/requerimiento-borrador-envio";
 
 type Opcion = { id: number; nombre: string };
@@ -109,6 +109,8 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
     if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError(""); setErrores([{ campo: "requirente_usuario_id", etiqueta: "Requirente", mensaje: "selecciona un requirente de Operaciones." }]); return; }
     // El proveedor de cada línea lo valida el servidor junto con el resto de campos ("Línea 2 — Proveedor: …"): se listan todos a la vez.
     if (repetidas.size) { setError(MSG_FACTURAS_REPETIDAS); return; }
+    // El servidor rechaza más de 500 líneas (crear y editar): no se registra ningún intento ni se envía; no se elimina nada.
+    if (excedeMaxLineasRequerimiento(lineas.length)) { setError(mensajeExcesoLineasRequerimiento(lineas.length)); return; }
     // BORR-1d — antes del PRIMER POST se registra el intento (clave + contenido final) en el borrador local; si no se puede, no se envía.
     let registrado = false;
     if (!detalle) {
@@ -181,7 +183,8 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       {detalle && l.id ? <LineaDocumentosClient slug={slug} requerimientoId={detalle.id} lineaId={l.id} puedeSubir={puedeSubirDocumentos} puedeEliminar={puedeEliminar && detalle.estado === "Pendiente"} /> : null}
       {editable && !l.id && puedeSubirDocumentos && <DocumentosPendientesClient documentos={l.documentosPendientes ?? []} disabled={camposBloqueados} onChange={docs => cambiar(l.key, { documentosPendientes: docs })} />}
     </section>; })}
-    {editable && <button className={boton} type="button" disabled={camposBloqueados || lineas.length >= 500} onClick={() => setLineas(actual => [...actual, nuevaLinea(fecha, crypto.randomUUID())])}>+ Agregar línea</button>}
+    {editable && <button className={boton} type="button" disabled={camposBloqueados || lineas.length >= 500} onClick={() => setLineas(actual => (actual.length >= 500 ? actual : [...actual, nuevaLinea(fecha, crypto.randomUUID())]))}>+ Agregar línea</button>}
+    {editable ? <p data-limite-lineas className="text-sm text-[var(--muted)]">Máximo 500 líneas por requerimiento ({lineas.length}/500).</p> : null}
     <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{repetidas.size > 0 && <p role="alert" className="text-red-300">{MSG_FACTURAS_REPETIDAS}</p>}{error && <p role="alert">{error}</p>}{!detalle && borrador.motivo && <p role="status" className="text-sm text-amber-300">{borrador.motivo}</p>}<ErroresFormulario errores={errores} />
     {conflicto && <button className={boton} type="button" onClick={() => window.location.reload()}>Actualizar información (descarta cambios locales)</button>}
     {editable && <button className={boton} disabled={deshabilitado || !catalogos || bloqueoFactura || borrador.motivo !== null} type="submit">{guardando ? "Guardando…" : "Guardar requerimiento"}</button>}
