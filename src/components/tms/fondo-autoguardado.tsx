@@ -12,7 +12,7 @@ import { ControlPersistenciaLocal } from "@/components/borradores/control-persis
 import { DialogoRecuperacion } from "@/components/borradores/dialogo-recuperacion";
 import { IndicadorAutoguardado } from "@/components/borradores/indicador-autoguardado";
 import {
-  aFormularioFondo, avisosDeRecuperacionFondo, construirPayloadFondo, ESQUEMA_FONDO_BORRADOR, hayContenidoFondo, motivoBloqueoFondo, restaurarPayloadFondo,
+  aFormularioFondo, avisosDeRecuperacionFondo, construirPayloadFondo, ESQUEMA_FONDO_BORRADOR, excedeMaxLineasFondo, hayContenidoFondo, mensajeExcesoLineasFondo, motivoBloqueoFondo, restaurarPayloadFondo,
   type CatalogosFondoMin, type EstadoFondoForm,
 } from "@/lib/tms/fondo-borrador";
 import type { PuenteBorrador } from "@/lib/compras/requerimiento-borrador-envio";
@@ -47,7 +47,8 @@ export function AutoguardadoFondo({ estadoForm, catalogos, catalogosCargados, pu
   const [errorAplicar, setErrorAplicar] = useState("");
 
   const avisos = useMemo(() => (recuperado && catalogosCargados ? avisosDeRecuperacionFondo(estadoForm, catalogos) : []), [recuperado, catalogosCargados, estadoForm, catalogos]);
-  const motivo = motivoBloqueoFondo(snapshot) ?? (avisos.length ? "Revisa los datos recuperados antes de enviar." : null);
+  const exceso = excedeMaxLineasFondo(estadoForm.lineas.length);
+  const motivo = motivoBloqueoFondo(snapshot) ?? (exceso ? mensajeExcesoLineasFondo(estadoForm.lineas.length) : null) ?? (avisos.length ? "Revisa los datos recuperados antes de enviar." : null);
   const congelado = snapshot.bloqueo === "envio_en_curso";
   useEffect(() => { onBloqueo({ motivo, congelado }); }, [motivo, congelado, onBloqueo]);
   useEffect(() => () => onBloqueo({ motivo: null, congelado: false }), [onBloqueo]); // al cerrar el formulario no queda ningún bloqueo viejo
@@ -82,6 +83,7 @@ export function AutoguardadoFondo({ estadoForm, catalogos, catalogosCargados, pu
       <p className="text-xs text-[var(--muted)]">El borrador se guarda solo en este equipo y no es una solicitud registrada hasta que pulses «Crear solicitud».</p>
       <ControlPersistenciaLocal ownerKey={ctx?.ownerKey ?? null} prefs={prefs} nucleo={nucleo} />
       {recuperado ? <p role="note" className="text-xs text-amber-300">Borrador recuperado. Los datos se revalidan al enviar.</p> : null}
+      {exceso ? <p role="alert" data-exceso-lineas className="text-xs text-amber-300">{mensajeExcesoLineasFondo(estadoForm.lineas.length)}</p> : null}
       {avisos.length ? <ul role="alert" className="list-disc space-y-1 pl-5 text-xs text-amber-300">{avisos.map((a) => <li key={a}>{a}</li>)}</ul> : null}
       {errorAplicar ? <p role="alert" className="text-xs text-red-300">{errorAplicar}</p> : null}
       {reconciliacion ? (

@@ -6,7 +6,7 @@ import { ESTADO_GUARDADO_INICIAL } from "@/lib/borradores/estado-guardado";
 import type { SnapshotBorrador } from "@/lib/borradores/controlador";
 import { CLAVE_ENVIO_REGEX } from "@/lib/idempotencia/clave-envio";
 import {
-  aFormularioFondo, avisosDeRecuperacionFondo, construirPayloadFondo, ESQUEMA_FONDO_BORRADOR, hayContenidoFondo, motivoBloqueoFondo, restaurarPayloadFondo,
+  aFormularioFondo, avisosDeRecuperacionFondo, construirPayloadFondo, ESQUEMA_FONDO_BORRADOR, excedeMaxLineasFondo, hayContenidoFondo, MAX_LINEAS_FONDO, mensajeExcesoLineasFondo, motivoBloqueoFondo, restaurarPayloadFondo,
   type EstadoFondoForm,
 } from "./fondo-borrador";
 import { clasificarResultadoEnvioFondo, envioDesdeRef } from "./fondo-borrador-envio";
@@ -59,7 +59,7 @@ describe("adaptador JSON de lista blanca", () => {
     expect(malo((p) => { p.lineas[0].empleadoId = "7; DROP"; })).toBe(false);
     expect(malo((p) => { p.cabecera.entidadRequirenteId = 4; })).toBe(false);
     expect(malo((p) => { p.lineas[1].cuentaOverride = 5; })).toBe(false);
-    expect(malo((p) => { p.lineas = Array.from({ length: 101 }, () => bueno.lineas[0]); })).toBe(false);
+    expect(malo((p) => { p.lineas = Array.from({ length: 101 }, () => bueno.lineas[0]); })).toBe(true); // sin tope arbitrario (BORR-1e-FIX-01)
   });
 
   it("revalida contra catálogos vigentes (sin catálogos aún no afirma nada)", () => {
@@ -82,6 +82,36 @@ describe("adaptador JSON de lista blanca", () => {
     expect(motivoBloqueoFondo(snap({ fase: "bloqueado", bloqueo: "envio_en_curso" }))).toBeNull();
     expect(motivoBloqueoFondo(snap({ fase: "decision_pendiente" }))).toMatch(/sin resolver/);
     expect(motivoBloqueoFondo(snap({ fase: "conflicto" }))).toMatch(/conflicto/);
+  });
+});
+
+describe("REGRESIÓN BORR-1e-FIX-01: ninguna línea desaparece en silencio y el límite de 40 es de ENVÍO", () => {
+  it("con 39, 40, 41, 101, 250 y 1000 líneas el payload conserva TODAS en orden, con descripciones, cantidades y montos exactos", () => {
+    for (const n of [39, 40, 41, 101, 250, 1000]) {
+      const e = estado();
+      e.lineas = Array.from({ length: n }, (_, i) => linea(i + 1, { descripcion: `Gasto ${i + 1}`, cantidad: `${(i % 9) + 1}.5`, monto: `${i + 1}.07` }));
+      const p = construirPayloadFondo(e, EMPLEADOS);
+      expect(p.lineas).toHaveLength(n);
+      const r = restaurarPayloadFondo(JSON.parse(JSON.stringify(p)));
+      expect(r.ok).toBe(true);
+      if (!r.ok) continue;
+      expect(aFormularioFondo(r.estado, EMPLEADOS).lineas).toEqual(e.lineas);
+    }
+  });
+
+  it("el máximo de envío es el del backend (40) y solo bloquea el envío, no el borrador", () => {
+    expect(MAX_LINEAS_FONDO).toBe(40);
+    expect(excedeMaxLineasFondo(40)).toBe(false);
+    expect(excedeMaxLineasFondo(41)).toBe(true);
+    expect(mensajeExcesoLineasFondo(101)).toMatch(/101 líneas.*máximo permitido es 40.*quita 61/);
+    const ruta = readFileSync(join(process.cwd(), "src/app/api/empresas/[slug]/tms/fondos/route.ts"), "utf8");
+    expect(ruta).toMatch(/lineas: z\.array\(lineaSchema\)\.min\(1\)\.max\(40\)/); // si el backend cambia, esta constante debe revisarse
+  });
+
+  it("MUTACIÓN: el adaptador no puede volver a truncar con slice ni declarar un tope propio de borrador", () => {
+    const src = readFileSync(join(process.cwd(), "src/lib/tms/fondo-borrador.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(src).not.toMatch(/\.slice\(0,/);
+    expect(src).not.toMatch(/MAX_LINEAS_FONDO_BORRADOR/);
   });
 });
 

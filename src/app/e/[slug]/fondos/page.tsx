@@ -17,7 +17,7 @@ import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormular
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
 import { AutoguardadoFondo } from "@/components/tms/fondo-autoguardado";
-import type { EstadoFondoForm } from "@/lib/tms/fondo-borrador";
+import { MAX_LINEAS_FONDO, type EstadoFondoForm } from "@/lib/tms/fondo-borrador";
 import { crearPuenteBorrador, limpiarBorradorEnviado, liberarEnvioRechazado, marcarEnvioCompletado, prepararEnvioBorrador } from "@/lib/compras/requerimiento-borrador-envio";
 import { clasificarResultadoEnvioFondo, envioDesdeRef } from "@/lib/tms/fondo-borrador-envio";
 import { EntregasPorRecibir, HistorialEntregas, RegistrarEntregaModal } from "@/components/tms/fondo-entregas";
@@ -305,6 +305,8 @@ export default function FondosPage() {
     // decir «Línea 2 — Monto: …». Las filas totalmente en blanco se omiten; `lineasPantalla` conserva su número visible.
     const lineasLlenas = indicesLlenos(lineas, LINEA_VACIA);
     if (!lineasLlenas.length) { setError("Agrega al menos una línea de gasto."); return; }
+    // Defensa: el servidor rechaza más de 40 líneas; no se registra ni se envía un intento que no puede ser válido (no se elimina nada).
+    if (!editandoId && lineas.length > MAX_LINEAS_FONDO) { setError(`La solicitud tiene ${lineas.length} líneas y el máximo es ${MAX_LINEAS_FONDO}. Quita las que sobran para enviarla.`); return; }
     const lineasPantalla = lineasLlenas.map((i) => i + 1);
     const lineasPayload = lineasLlenas.map((i) => lineas[i]).map((l) => {
       const empleado = catalogos.empleados.find((e) => String(e.id) === l.empleadoId);
@@ -573,9 +575,11 @@ export default function FondosPage() {
                 </div>
               );
             })}
-            <button type="button" onClick={() => setLineas((ls) => [...ls, { ...LINEA_VACIA }])} className="rounded border border-[var(--border)] px-2 py-1 text-xs">
+            {/* BORR-1e-FIX-01 — el backend acepta como máximo 40 líneas: al CREAR no se puede pasar de ahí (la guarda funcional evita una línea 41 por clics simultáneos). */}
+            <button type="button" disabled={!editandoId && lineas.length >= MAX_LINEAS_FONDO} onClick={() => setLineas((ls) => (!editandoId && ls.length >= MAX_LINEAS_FONDO ? ls : [...ls, { ...LINEA_VACIA }]))} className="rounded border border-[var(--border)] px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
               + Agregar línea
             </button>
+            {!editandoId ? <p data-limite-lineas className="text-[11px] text-[var(--muted)]">Máximo {MAX_LINEAS_FONDO} líneas por solicitud ({lineas.length}/{MAX_LINEAS_FONDO}).</p> : null}
             <p className="text-sm font-medium">Total: Q{totalForm().toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>
           </div>
           <label className="block text-xs text-[var(--muted)]">Observaciones

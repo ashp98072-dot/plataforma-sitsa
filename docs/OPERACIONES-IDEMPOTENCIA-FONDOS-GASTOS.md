@@ -179,3 +179,16 @@ desplegado, no aprobado para producción. **Sin SQL, sin cambios de API, permiso
   gasto ya está en el listado (se adjunta desde «Editar»); el borrador queda como «ya enviado» (no recuperable, descartable) y **no se
   finge conservar el archivo**. `enviarGasto` ahora devuelve la fase «comprobante» también ante una red caída durante la subida (antes
   lanzaba y parecía una creación incierta); en ese caso el aviso ya no se borraba al recargar el listado (se recarga primero).
+
+### BORR-1e-FIX-01 — límite de líneas de «Nueva solicitud de fondo»
+
+El backend acepta **como máximo 40 líneas** (`POST` y `PATCH` de `/tms/fondos`: `lineas: z.array(...).min(1).max(40)`), pero el
+borrador local cortaba en silencio a 100 (`slice`) y el botón «+ Agregar línea» no tenía límite. Corrección:
+
+- El adaptador **no trunca ni limita nunca**: conserva cantidad, orden y valores (importes/cantidades como texto). El único límite de
+  almacenamiento es el técnico del núcleo (2 000 000 de caracteres por borrador): al excederlo el indicador muestra «Error al guardar»,
+  jamás «Guardado».
+- Al **crear**, «+ Agregar línea» se deshabilita en 40 (contador visible «Máximo 40 líneas por solicitud (n/40)») y su manejador
+  rechaza una línea 41 aunque lleguen clics simultáneos. La edición no cambia.
+- Un borrador **heredado** con más de 40 líneas se recupera íntegro, avisa que el servidor acepta 40, **bloquea el envío** (también
+  defensivamente en `guardarSolicitud`, sin registrar intento ni enviar) y permite revisar, editar y quitar líneas hasta llegar a 40.
