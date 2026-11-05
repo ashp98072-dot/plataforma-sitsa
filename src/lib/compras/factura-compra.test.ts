@@ -75,7 +75,7 @@ describe("FORMULARIO — duplicados dentro del requerimiento", () => {
     expect(bloqueaGuardarPorFactura(new Set([0, 1]), {})).toBe(true);
     expect(bloqueaGuardarPorFactura(new Set(), { a: { clave: "x", estado: "duplicada" } })).toBe(true);
     expect(bloqueaGuardarPorFactura(new Set(), { a: { clave: "x", estado: "disponible" }, b: { clave: "y", estado: "validando" }, c: { clave: "z", estado: "error" } })).toBe(false);
-    expect(form).toContain("disabled={deshabilitado || !catalogos || bloqueoFactura}");
+    expect(form).toContain("disabled={deshabilitado || !catalogos || bloqueoFactura || borrador.motivo !== null}"); // BORR-1d
     expect(form).toContain("const bloqueoFactura = repetidas.size > 0 || Object.values(existentes).some(Boolean);");
     expect(form).toContain("if (repetidas.size) { setError(MSG_FACTURAS_REPETIDAS); return; }"); // ni siquiera envía
   });

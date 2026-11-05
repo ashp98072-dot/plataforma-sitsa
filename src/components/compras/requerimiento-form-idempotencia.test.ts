@@ -37,12 +37,12 @@ describe("Formulario de Requerimientos de Compras — doble envío e idempotenci
 
   it("tras el éxito confirmado el formulario queda bloqueado mientras navega (un envío tardío no puede crear otro)", () => {
     expect(src).toContain("const [completado, setCompletado] = useState(false)");
-    expect(src).toMatch(/setCompletado\(true\);[^\n]*\n\s+const fallidos = await subirPendientesCompra/);
+    expect(src).toMatch(/setCompletado\(true\);[^\n]*\n\s+const marcado = [^\n]*\n\s+const fallidos = await subirPendientesCompra/); // BORR-1d: entre ambos solo se marca el borrador local
     expect(src).toContain("const deshabilitado = !editable || guardando || conflicto || completado;");
   });
 
   it("el botón de guardar se deshabilita mientras guarda y muestra «Guardando…»", () => {
-    expect(src).toContain("disabled={deshabilitado || !catalogos || bloqueoFactura}");
+    expect(src).toContain("disabled={deshabilitado || !catalogos || bloqueoFactura || borrador.motivo !== null}"); // BORR-1d: el borrador local puede pedir esperar
     expect(src).toContain('{guardando ? "Guardando…" : "Guardar requerimiento"}');
   });
 });
