@@ -5,7 +5,7 @@ import { ErrorCxp } from "./errores";
 import { conLecturaCxp, enInstantanea, exigirEntidadEnEmpresa, PAGADO, paramsPagos, subPagos } from "./lectura-cxp";
 import { desgloseFacturaLectura } from "./saldo-lectura";
 import { paginacionCxp } from "./antiguedad-shared";
-import { CODIGOS_INTEGRIDAD, CODIGOS_SOLO_PAGOS, filtrosIntegridadDesdeParams, LIMITE_LINEAS, ROTULO_INTEGRIDAD, type FilaIntegridad, type FiltrosIntegridad, type RespuestaIntegridad } from "./integridad-shared";
+import { CODIGOS_INTEGRIDAD, CODIGOS_SOLO_PAGOS, filtrosIntegridadDesdeParams, LIMITE_LINEAS, LIMITE_EXPORTACION_INTEGRIDAD, ROTULO_INTEGRIDAD, type ExportacionIntegridad, type FilaIntegridad, type FiltrosIntegridad, type RespuestaIntegridad } from "./integridad-shared";
 import type { CodigoAdvertencia } from "./estado-cuenta-shared";
 import type { EstadoAdminCxp } from "./saldo";
 
@@ -98,13 +98,13 @@ export function filaIntegridad(r: RowDataPacket, entidadId: number, verPagos: bo
   return fila;
 }
 
-export async function obtenerIntegridadCxp(empresaId: number, entidadId: number, filtros: FiltrosIntegridad, op: { verPagos: boolean }): Promise<RespuestaIntegridad> {
-  const parsed = filtrosIntegridadDesdeParams(new URLSearchParams(Object.entries(filtros).filter(([,v])=>v!==undefined).map(([k,v])=>[k,String(v)])));
+async function consultarIntegridad(empresaId: number, entidadId: number, filtros: FiltrosIntegridad, op: { verPagos: boolean }, exportacion = false): Promise<RespuestaIntegridad> {
+  const parsed = filtrosIntegridadDesdeParams(new URLSearchParams(Object.entries(filtros).filter(([,v])=>v!==undefined).map(([k,v])=>[k,String(v)])), { exportacion });
   if (!parsed.ok) throw new ErrorCxp(parsed.error, 400, "FILTRO_INVALIDO");
   const f = parsed.filtros;
   if (f.codigo && CODIGOS_SOLO_PAGOS.includes(f.codigo) && !op.verPagos) throw new ErrorCxp("Este tipo de anomalía requiere permiso de Pagos de CxP.", 403, "SIN_PERMISO_PAGOS");
   if (f.codigo === "PAGADO_NO_COINCIDE_CON_LINEAS") throw new ErrorCxp(LIMITE_LINEAS, 422, "ANOMALIA_NO_EVALUABLE");
-  const { page, pageSize, offset } = paginacionCxp(f);
+  const { page, pageSize, offset } = exportacion ? { page: 1, pageSize: LIMITE_EXPORTACION_INTEGRIDAD + 1, offset: 0 } : paginacionCxp(f);
   return conLecturaCxp(conPagos => enInstantanea(async c => {
     await exigirEntidadEnEmpresa(c, empresaId, entidadId);
     if (f.proveedorId) {
@@ -114,8 +114,10 @@ export async function obtenerIntegridadCxp(empresaId: number, entidadId: number,
     const q = consultasIntegridad(empresaId, entidadId, f, conPagos, op.verPagos);
     const [reviewed] = await c.query<RowDataPacket[]>(q.reviewedSql, q.reviewedParams);
     const [totals] = await c.query<RowDataPacket[]>(`SELECT COUNT(*) AS n, COUNT(DISTINCT factura_id) AS facturas FROM (${q.sql}) hallazgos`, q.params);
+    if (exportacion && Number(totals[0].n) > LIMITE_EXPORTACION_INTEGRIDAD) throw new ErrorCxp(`El conjunto supera ${LIMITE_EXPORTACION_INTEGRIDAD} advertencias. Reduce los filtros antes de exportar.`, 422, "LIMITE_EXPORTACION");
     const [counts] = await c.query<RowDataPacket[]>(`SELECT codigo, COUNT(*) AS n FROM (${q.sql}) hallazgos GROUP BY codigo`, q.params);
     const [rows] = await c.query<RowDataPacket[]>(`SELECT * FROM (${q.sql}) hallazgos ORDER BY codigo, factura_id, pago_id LIMIT ? OFFSET ?`, [...q.params, pageSize, offset]);
+    if (exportacion && (rows.length !== Number(totals[0].n) || rows.length > LIMITE_EXPORTACION_INTEGRIDAD)) throw new ErrorCxp("No se pudo verificar la integridad del conjunto exportado. Vuelve a consultar y exportar.", 409, "EXPORTACION_INCONSISTENTE");
     const porCodigo: RespuestaIntegridad["porCodigo"] = {};
     if (conPagos) for (const codigo of CODIGOS_INTEGRIDAD) {
       if (codigo === "PAGADO_NO_COINCIDE_CON_LINEAS" || (!op.verPagos && CODIGOS_SOLO_PAGOS.includes(codigo))) continue;
@@ -134,4 +136,12 @@ export async function obtenerIntegridadCxp(empresaId: number, entidadId: number,
         ...(!conPagos ? ["Tablas de pagos pendientes: no se completó la revisión de aplicaciones; cero hallazgos no demuestra ausencia de anomalías."] : [])], rotulo: ROTULO_INTEGRIDAD,
     };
   }, { lecturaRepetible: true }), "el panel de integridad");
+}
+
+export function obtenerIntegridadCxp(empresaId: number, entidadId: number, filtros: FiltrosIntegridad, op: { verPagos: boolean }): Promise<RespuestaIntegridad> {
+  return consultarIntegridad(empresaId, entidadId, filtros, op);
+}
+
+export async function exportarIntegridadCxp(empresaId: number, entidadId: number, filtros: FiltrosIntegridad, op: { verPagos: boolean }): Promise<ExportacionIntegridad> {
+  return { ...await consultarIntegridad(empresaId, entidadId, filtros, op, true), generadoEn: new Date().toISOString() };
 }

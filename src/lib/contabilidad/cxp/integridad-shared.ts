@@ -5,6 +5,8 @@ export const CODIGOS_INTEGRIDAD = ["SOBREAPLICACION", "PAGO_VIGENTE_EN_ANULADA",
 export const CODIGOS_SOLO_PAGOS: readonly CodigoAdvertencia[] = ["PAGO_DE_OTRO_PROVEEDOR", "PAGO_DESCUADRADO", "PAGADO_NO_COINCIDE_CON_LINEAS"];
 export const LIMITE_LINEAS = "PAGADO_NO_COINCIDE_CON_LINEAS no se evalúa en este panel: sin una fuente independiente, comparar dos sumas de las mismas aplicaciones en la misma instantánea no demuestra una discrepancia. El estado de cuenta conserva su comprobación de líneas visibles.";
 export const ROTULO_INTEGRIDAD = "Integridad de documentos registrados en Novalvion. Lectura actual, sin correcciones automáticas; no certifica equivalencia completa con Milenium ni incluye necesariamente documentos pendientes de migración.";
+export const LIMITE_EXPORTACION_INTEGRIDAD = 10_000;
+export const NOTA_EXPORTACION_INTEGRIDAD = "Conjunto filtrado completo y autorizado al generar el archivo, no sólo la página visible. Los datos pueden variar respecto de la pantalla. Los excesos son informativos: no representan crédito ni saldo a favor. Cero hallazgos no certifica integridad.";
 export type FiltrosIntegridad = { proveedorId?: number; codigo?: CodigoAdvertencia; estado?: EstadoAdminCxp; page?: number; pageSize?: number };
 export type FilaIntegridad = {
   entidadId: number; facturaId: number | null; proveedorId: number; proveedor: string; documento: string | null;
@@ -19,10 +21,11 @@ export type RespuestaIntegridad = {
   filas: FilaIntegridad[]; page: number; pageSize: number; pagosVisibles: boolean; pagosDisponibles: boolean;
   limitaciones: string[]; rotulo: string;
 };
+export type ExportacionIntegridad = RespuestaIntegridad & { generadoEn: string };
 
 /** Estricto: ausente es opcional, vacío/repetido/desconocido es error; nunca convierte entrada inválida en «todos». */
-export function filtrosIntegridadDesdeParams(params: URLSearchParams): { ok: true; filtros: FiltrosIntegridad } | { ok: false; error: string } {
-  const allowed = ["entidad", "proveedorId", "codigo", "estado", "page", "pageSize"];
+export function filtrosIntegridadDesdeParams(params: URLSearchParams, opciones: { exportacion?: boolean } = {}): { ok: true; filtros: FiltrosIntegridad } | { ok: false; error: string } {
+  const allowed = ["entidad", "proveedorId", "codigo", "estado", ...(opciones.exportacion ? [] : ["page", "pageSize"])];
   const f: FiltrosIntegridad = {};
   for (const [key] of params) if (!allowed.includes(key)) return { ok: false, error: `Parámetro no admitido: ${key}.` };
   for (const key of allowed) {

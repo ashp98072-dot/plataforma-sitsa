@@ -2,8 +2,8 @@ import type { RowDataPacket } from "mysql2/promise";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({ connection: vi.fn() }));
 vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: m.connection }) }));
-import { consultasIntegridad, filaIntegridad, obtenerIntegridadCxp } from "./integridad";
-import { filtrosIntegridadDesdeParams, LIMITE_LINEAS } from "./integridad-shared";
+import { consultasIntegridad, exportarIntegridadCxp, filaIntegridad, obtenerIntegridadCxp } from "./integridad";
+import { filtrosIntegridadDesdeParams, LIMITE_EXPORTACION_INTEGRIDAD, LIMITE_LINEAS } from "./integridad-shared";
 
 export const datoFactura = (extra: Record<string, unknown> = {}) => ({
   codigo: "SOBREAPLICACION", factura_id: 1, proveedor_id: 3, proveedor: "Proveedor QA", documento: "A-1", estado_admin: "REGISTRADA",
@@ -144,5 +144,41 @@ describe("servicio en una instantánea, contadores globales y filas limitadas", 
     await expect(obtenerIntegridadCxp(7,5,{codigo:"PAGO_DESCUADRADO"},{verPagos:false})).rejects.toMatchObject({status:403});
     await expect(obtenerIntegridadCxp(7,5,{codigo:"PAGADO_NO_COINCIDE_CON_LINEAS"},{verPagos:true})).rejects.toMatchObject({status:422,message:LIMITE_LINEAS});
     expect(m.connection).not.toHaveBeenCalled();
+  });
+  it("exporta más de una página usando la misma consulta/contadores, una conexión y sin N+1",async()=>{
+    events=Array.from({length:30},(_,i)=>datoFactura({factura_id:i+1}));
+    const r=await exportarIntegridadCxp(7,5,{proveedorId:3,estado:"REGISTRADA"},{verPagos:false});
+    expect(r.filas).toHaveLength(30);expect(r.totalAdvertencias).toBe(30);expect(r.facturasConAnomalias).toBe(30);
+    expect(r.filtros).toEqual({proveedorId:3,estado:"REGISTRADA"});expect(r.generadoEn).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(m.connection).toHaveBeenCalledOnce();expect(conn.query).toHaveBeenCalledTimes(9);
+    const call=conn.query.mock.calls.find(([s])=>s.startsWith("SELECT * FROM"))!;expect(call[1].slice(-2)).toEqual([LIMITE_EXPORTACION_INTEGRIDAD+1,0]);
+  });
+  it("límite exacto permitido; nunca se trunca silenciosamente",async()=>{
+    events=Array.from({length:LIMITE_EXPORTACION_INTEGRIDAD},(_,i)=>datoFactura({factura_id:i+1}));
+    expect((await exportarIntegridadCxp(7,5,{}, {verPagos:false})).filas).toHaveLength(LIMITE_EXPORTACION_INTEGRIDAD);
+  });
+  it("rechaza exceso antes de cargar filas, sin generar un conjunto parcial",async()=>{
+    const original=conn.query.getMockImplementation() as (sql:string,params?:unknown[])=>Promise<unknown>;
+    conn.query.mockImplementation((s:string,p:unknown[])=>s.startsWith("SELECT COUNT(*) AS n, COUNT(DISTINCT")?Promise.resolve([[{n:LIMITE_EXPORTACION_INTEGRIDAD+1,facturas:1}]]):original(s,p));
+    await expect(exportarIntegridadCxp(7,5,{}, {verPagos:false})).rejects.toMatchObject({status:422,codigo:"LIMITE_EXPORTACION"});
+    expect(conn.query.mock.calls.some(([s])=>s.startsWith("SELECT * FROM"))).toBe(false);
+  });
+  it("si el conjunto no coincide con el contador rechaza el archivo incompleto",async()=>{
+    const original=conn.query.getMockImplementation() as (sql:string,params?:unknown[])=>Promise<unknown>;
+    conn.query.mockImplementation((s:string,p:unknown[])=>s.startsWith("SELECT COUNT(*) AS n, COUNT(DISTINCT")?Promise.resolve([[{n:10,facturas:2}]]):original(s,p));
+    await expect(exportarIntegridadCxp(7,5,{}, {verPagos:false})).rejects.toMatchObject({status:409,codigo:"EXPORTACION_INCONSISTENTE"});
+  });
+  it("exportación vuelve a exigir permisos, no evaluable y prohíbe paginación antes de DB",async()=>{
+    await expect(exportarIntegridadCxp(7,5,{codigo:"PAGO_DESCUADRADO"},{verPagos:false})).rejects.toMatchObject({status:403});
+    await expect(exportarIntegridadCxp(7,5,{codigo:"PAGADO_NO_COINCIDE_CON_LINEAS"},{verPagos:true})).rejects.toMatchObject({status:422});
+    await expect(exportarIntegridadCxp(7,5,{page:1},{verPagos:false})).rejects.toMatchObject({status:400});
+    await expect(exportarIntegridadCxp(7,5,{pageSize:25},{verPagos:false})).rejects.toMatchObject({status:400});
+    expect(m.connection).not.toHaveBeenCalled();
+  });
+  it("exportación mantiene la validación de entidad/proveedor y la limitación de pagos ausentes",async()=>{
+    entity=false;await expect(exportarIntegridadCxp(7,5,{}, {verPagos:false})).rejects.toMatchObject({status:404});
+    entity=true;provider=false;await expect(exportarIntegridadCxp(7,5,{proveedorId:3},{verPagos:false})).rejects.toMatchObject({status:404});
+    provider=true;missingPayments=true;const r=await exportarIntegridadCxp(7,5,{}, {verPagos:true});
+    expect(r).toMatchObject({pagosDisponibles:false,facturasRevisadas:0,filas:[],totalAdvertencias:0});expect(r.limitaciones.join(" ")).toContain("no se completó");
   });
 });
