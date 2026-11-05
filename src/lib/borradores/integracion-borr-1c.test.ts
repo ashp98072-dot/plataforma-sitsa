@@ -44,7 +44,9 @@ describe("el autoguardado no está instalado en formularios ni rutas (eso es BOR
   it("ningún archivo de producción fuera de lib/borradores y components/borradores usa el hook, el controlador, la demo o los diálogos", () => {
     // BORR-1d: ÚNICA integración autorizada = el componente de autoguardado de Nuevo requerimiento de compra (y su adaptador/puente,
     // que importan tipos del controlador). Fondos (BORR-1e) y Gastos (BORR-1f) siguen sin instalarse.
-    const AUTORIZADOS = new Set(["src/components/compras/requerimiento-autoguardado.tsx", "src/lib/compras/requerimiento-borrador.ts", "src/lib/compras/requerimiento-borrador-envio.ts"]);
+    const AUTORIZADOS = new Set(["src/components/compras/requerimiento-autoguardado.tsx", "src/lib/compras/requerimiento-borrador.ts", "src/lib/compras/requerimiento-borrador-envio.ts",
+      // BORR-1e: Solicitudes de fondo (solo creación).
+      "src/components/tms/fondo-autoguardado.tsx", "src/lib/tms/fondo-borrador.ts"]);
     const ajenos = produccion.filter((f) => !f.startsWith("src/lib/borradores/") && !f.startsWith("src/components/borradores/") && !AUTORIZADOS.has(f));
     const usan = ajenos.filter((f) => /use-borrador-local|borradores\/controlador|demo-autoguardado|dialogo-recuperacion|advertencia-conflicto|indicador-autoguardado|control-persistencia-local/.test(leer(f)));
     expect(usan).toEqual([]);
@@ -57,8 +59,8 @@ describe("el autoguardado no está instalado en formularios ni rutas (eso es BOR
     expect(leer("src/components/borradores/demo-autoguardado.tsx")).toMatch(/SOLO PRUEBAS Y DEMOSTRACIÓN LOCAL/);
   });
 
-  it("los únicos importadores del hook son la demostración y el autoguardado de Nuevo requerimiento (BORR-1d)", () => {
-    expect(produccion.filter((f) => /use-borrador-local/.test(leer(f))).sort()).toEqual(["src/components/borradores/demo-autoguardado.tsx", "src/components/compras/requerimiento-autoguardado.tsx"]); // BORR-1d
+  it("los únicos importadores del hook son la demostración y los autoguardados de Nuevo requerimiento y Nueva solicitud de fondo (BORR-1d/1e)", () => {
+    expect(produccion.filter((f) => /use-borrador-local/.test(leer(f))).sort()).toEqual(["src/components/borradores/demo-autoguardado.tsx", "src/components/compras/requerimiento-autoguardado.tsx", "src/components/tms/fondo-autoguardado.tsx"]); // BORR-1d / BORR-1e
   });
 });
 

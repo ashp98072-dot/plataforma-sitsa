@@ -16,6 +16,10 @@ import { ErrorCampo, ErroresFormulario, claseCampo } from "@/components/errores-
 import { indicesLlenos, leerErroresRespuesta, remapearLineas, type ErrorFormulario } from "@/lib/validacion-formulario";
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
+import { AutoguardadoFondo } from "@/components/tms/fondo-autoguardado";
+import type { EstadoFondoForm } from "@/lib/tms/fondo-borrador";
+import { crearPuenteBorrador, limpiarBorradorEnviado, liberarEnvioRechazado, marcarEnvioCompletado, prepararEnvioBorrador } from "@/lib/compras/requerimiento-borrador-envio";
+import { clasificarResultadoEnvioFondo, envioDesdeRef } from "@/lib/tms/fondo-borrador-envio";
 import { EntregasPorRecibir, HistorialEntregas, RegistrarEntregaModal } from "@/components/tms/fondo-entregas";
 import { opcionesRegistro, type ResumenEntregaDocumento } from "@/lib/entregas/presentacion";
 import { areasRecepcionDelActor, type ActorEntrega } from "@/lib/entregas/reglas";
@@ -148,6 +152,19 @@ export default function FondosPage() {
   const [guardEnvio] = useState(() => crearGuardEnvio());
   const [guardando, setGuardando] = useState(false);
   const claveEnvioRef = useRef<string | null>(null);
+  // BORR-1e — borrador LOCAL (solo al CREAR). `puente` conecta el envío oficial con el borrador; `borrador` indica si el envío debe
+  // esperar (decisión pendiente, conflicto, reconciliación…) y si el contenido debe quedar congelado (envío sin resultado confirmado).
+  const [puente] = useState(() => crearPuenteBorrador());
+  const [borrador, setBorrador] = useState<{ motivo: string | null; congelado: boolean }>({ motivo: null, congelado: false });
+  const [catalogosCargados, setCatalogosCargados] = useState(false);
+  const estadoForm = useMemo<EstadoFondoForm>(
+    () => ({ entidadRequirenteId, requirenteUsuarioId, solicitanteUsuarioId, fechaRequerimiento, observaciones, lineas }),
+    [entidadRequirenteId, requirenteUsuarioId, solicitanteUsuarioId, fechaRequerimiento, observaciones, lineas],
+  );
+  const aplicarBorrador = (e: EstadoFondoForm) => {
+    setEntidadRequirenteId(e.entidadRequirenteId); setRequirenteUsuarioId(e.requirenteUsuarioId); setSolicitanteUsuarioId(e.solicitanteUsuarioId);
+    setFechaRequerimiento(e.fechaRequerimiento); setObservaciones(e.observaciones); setRequirenteNombre(""); setLineas(e.lineas.map((l) => ({ ...l })));
+  };
 
   const [expandido, setExpandido] = useState<number | null>(null);
   const [cacheLineas] = useState(() => new Map<string, DetalleLineasFondo>());
@@ -170,6 +187,7 @@ export default function FondosPage() {
         metodosPago: data.metodosPago ?? [],
         categorias: data.categorias ?? [],
       }))
+      .then(() => setCatalogosCargados(true))
       .catch((e) => setError(e instanceof Error ? e.message : "No se pudieron cargar los catálogos."));
   }, [slug]);
 
@@ -218,6 +236,7 @@ export default function FondosPage() {
 
   function cerrarFormulario() {
     claveEnvioRef.current = null;
+    setBorrador({ motivo: null, congelado: false });
     setMostrarForm(false);
     setErrores([]);
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
@@ -306,6 +325,13 @@ export default function FondosPage() {
         metodoPago: l.metodoPago || null,
       };
     });
+    // BORR-1e — solo al CREAR: antes del PRIMER POST se registra el intento (clave + contenido final) en el borrador local; si no se puede, no se envía.
+    let registrado = false;
+    if (!editandoId) {
+      const preparado = await prepararEnvioBorrador(puente, envioDesdeRef(claveEnvioRef), "solicitud");
+      if (!preparado.ok) { setError(preparado.mensaje); return; }
+      registrado = preparado.registrado;
+    }
     const res = editandoId
       ? await fetch(`/api/empresas/${slug}/tms/fondos/${editandoId}`, {
           method: "PATCH",
@@ -335,7 +361,9 @@ export default function FondosPage() {
           }),
         });
     const data = await res.json().catch(() => ({}));
+    const resultado = registrado ? clasificarResultadoEnvioFondo({ lanzo: false, ok: res.ok, status: res.status, id: data?.solicitud?.id }) : null;
     if (!res.ok) {
+      if (registrado && resultado === "rechazo_definitivo") await liberarEnvioRechazado(puente); // nada se creó: se puede corregir y reenviar con la MISMA clave
       const leidos = leerErroresRespuesta(data, editandoId ? "No se pudo editar la solicitud." : "No se pudo crear la solicitud.");
       const delServidor = remapearLineas(leidos.errores, "lineas", lineasPantalla);
       setErrores(delServidor);
@@ -344,8 +372,11 @@ export default function FondosPage() {
       if (res.status === 409) await cargar();
       return;
     }
+    if (registrado && resultado === "incierto") { setError("El servidor respondió sin confirmar la solicitud. Se conserva la clave de envío: vuelve a pulsar «Crear solicitud» para reintentar el mismo envío sin duplicarla."); return; }
     setErrores([]);
     setMsg(data.mensaje ?? (editandoId ? "Solicitud actualizada." : "Solicitud creada."));
+    // BORR-1e — creación confirmada: se marca «completado» y el borrador local se elimina solo si quedó marcado (antes de cerrar el formulario).
+    if (registrado) await limpiarBorradorEnviado(puente, await marcarEnvioCompletado(puente));
     cerrarFormulario();
     await cargar();
   }
@@ -442,6 +473,9 @@ export default function FondosPage() {
       {mostrarForm ? (
         <div className="space-y-3 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
           <p className="text-sm font-medium">{editandoId ? "Editar solicitud (Pendiente)" : "Nueva solicitud"}</p>
+          {!editandoId ? <AutoguardadoFondo estadoForm={estadoForm} catalogos={catalogos} catalogosCargados={catalogosCargados} puente={puente} onAplicar={aplicarBorrador} onBloqueo={setBorrador} /> : null}
+          {/* Con un envío sin resultado confirmado el contenido queda congelado: el reintento debe ser EXACTAMENTE lo mismo (misma clave). */}
+          <fieldset disabled={!editandoId && borrador.congelado} className="m-0 min-w-0 space-y-3 border-0 p-0">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente *
               <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
@@ -547,11 +581,13 @@ export default function FondosPage() {
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={observaciones} onChange={(e) => setObservaciones(e.target.value)} />
           </label>
+          </fieldset>
+          {!editandoId && borrador.motivo ? <p role="status" className="text-xs text-amber-300">{borrador.motivo}</p> : null}
           <ErroresFormulario errores={errores} />
           <button
             type="button"
             onClick={() => void guardar()}
-            disabled={guardando}
+            disabled={guardando || (!editandoId && borrador.motivo !== null)}
             aria-busy={guardando}
             className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
           >

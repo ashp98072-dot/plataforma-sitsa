@@ -29,7 +29,7 @@ describe.each(PAGINAS)("Formulario de $nombre — protección de doble envío", 
   });
 
   it("el botón principal se deshabilita mientras guarda y muestra «Guardando…»", () => {
-    expect(src).toContain("disabled={guardando}");
+    expect(src).toMatch(/disabled=\{guardando[ }]/); // BORR-1e: Fondos añade la espera del borrador local
     expect(src).toContain('aria-busy={guardando}');
     expect(src).toContain('guardando ? "Guardando…"');
     expect(src).toContain(etiqueta);
