@@ -167,8 +167,8 @@ describe("envío: plan, clasificación y puente", () => {
 
 describe("alcance de BORR-1d", () => {
   const leer = (r: string) => readFileSync(join(process.cwd(), r), "utf8");
-  it("Gastos (BORR-1f) y las líneas de Fondos no usan el autoguardado (Fondos creación = BORR-1e) y la edición de Compras no monta el componente", () => {
-    for (const r of ["src/app/e/[slug]/gastos/page.tsx", "src/components/tms/fondo-lineas-client.tsx", "src/components/tms/gastos-listado.tsx", "src/lib/tms/fondos.ts", "src/lib/tms/gastos.ts"]) {
+  it("Gastos (lógica) y las líneas de Fondos no usan el autoguardado (Fondos creación = BORR-1e) y la edición de Compras no monta el componente", () => {
+    for (const r of ["src/components/tms/fondo-lineas-client.tsx", "src/components/tms/gastos-listado.tsx", "src/lib/tms/fondos.ts", "src/lib/tms/gastos.ts"]) {
       expect(leer(r)).not.toMatch(/requerimiento-autoguardado|requerimiento-borrador|useBorradorLocal|lib\/borradores/);
     }
     const form = leer("src/components/compras/requerimiento-form-client.tsx");

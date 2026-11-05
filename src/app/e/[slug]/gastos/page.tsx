@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { CatalogoSearchSelect, opcionesConHistorico, type CatalogoSearchOption } from "@/components/tms/catalogo-search-select";
 import { destinoPagoEmpleado } from "@/lib/tms/destino-pago-empleado";
@@ -16,7 +16,12 @@ import { procesarConfirmacionAutorizacion } from "@/lib/tms/autorizacion-confirm
 import { GastosListado, type GastoVista } from "@/components/tms/gastos-listado";
 import { detalleVehiculoCatalogo } from "@/lib/tms/vehiculo-detalle";
 import { crearGuardEnvio, nuevaClaveEnvio } from "@/lib/idempotencia/clave-envio";
-import { enviarGasto } from "@/lib/tms/gastos-envio-cliente";
+import { enviarGasto, subirComprobanteGasto } from "@/lib/tms/gastos-envio-cliente";
+import { AutoguardadoGasto } from "@/components/tms/gasto-autoguardado";
+import type { EstadoGastoForm } from "@/lib/tms/gasto-borrador";
+import { clasificarCreacionGasto } from "@/lib/tms/gasto-borrador-envio";
+import { envioDesdeRef } from "@/lib/tms/fondo-borrador-envio";
+import { crearPuenteBorrador, limpiarBorradorEnviado, liberarEnvioRechazado, marcarEnvioCompletado, prepararEnvioBorrador } from "@/lib/compras/requerimiento-borrador-envio";
 
 type Gasto = {
   id: number;
@@ -217,6 +222,19 @@ export default function GastosPage() {
   const [guardEnvio] = useState(() => crearGuardEnvio());
   const [guardando, setGuardando] = useState(false);
   const claveEnvioRef = useRef<string | null>(null);
+  // BORR-1f — borrador LOCAL (solo al CREAR). `puente` conecta el envío oficial con el borrador; `borrador` indica si el envío debe esperar
+  // (decisión pendiente, conflicto, reconciliación…) y si el contenido debe quedar congelado (envío sin resultado confirmado).
+  const [puente] = useState(() => crearPuenteBorrador());
+  const [borrador, setBorrador] = useState<{ motivo: string | null; congelado: boolean }>({ motivo: null, congelado: false });
+  const [catalogosCargados, setCatalogosCargados] = useState(false);
+  // Creación CONFIRMADA cuyo comprobante no se pudo adjuntar: el gasto ya existe (id); el reintento solo vuelve a subir el archivo a ese id.
+  const [subidaPendiente, setSubidaPendiente] = useState<{ gastoId: number } | null>(null);
+  const estadoForm = useMemo<EstadoGastoForm>(() => ({ form, lineasAdicionales }), [form, lineasAdicionales]);
+  const catalogosBorrador = useMemo(() => ({ ...catalogos, categorias, metodosPago }), [catalogos, categorias, metodosPago]);
+  const aplicarBorrador = (e: EstadoGastoForm) => { setForm(e.form); setLineasAdicionales(e.lineasAdicionales); };
+  function cancelarFormulario() {
+    setBorrador({ motivo: null, congelado: false }); setSubidaPendiente(null); setMostrarForm(false);
+  }
   const comprobanteActual = editandoId ? gastos.find((g) => g.id === editandoId) : null;
   const tieneComprobanteAlmacenado = Boolean(comprobanteActual?.facturaNombreOriginal);
   /** GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón que motivoRechazo en fondos/page.tsx: un input por fila, por id. */
@@ -244,10 +262,13 @@ export default function GastosPage() {
       setGastos(dGastos.gastos ?? []);
       setCategorias(dGastos.categorias ?? []);
       setMetodosPago(dGastos.metodosPago ?? []);
-      if (rCat.ok) setCatalogos({
-        empleados: dCat.empleados ?? [], vehiculos: dCat.vehiculos ?? [], clientes: dCat.clientes ?? [], planes: dCat.planes ?? [],
-        usuarios: dCat.usuarios ?? [], usuariosOperaciones: dCat.usuariosOperaciones ?? dCat.solicitantes ?? [], solicitantes: dCat.solicitantes ?? [], entidadesRequirentes: dCat.entidadesRequirentes ?? [],
-      });
+      if (rCat.ok) {
+        setCatalogos({
+          empleados: dCat.empleados ?? [], vehiculos: dCat.vehiculos ?? [], clientes: dCat.clientes ?? [], planes: dCat.planes ?? [],
+          usuarios: dCat.usuarios ?? [], usuariosOperaciones: dCat.usuariosOperaciones ?? dCat.solicitantes ?? [], solicitantes: dCat.solicitantes ?? [], entidadesRequirentes: dCat.entidadesRequirentes ?? [],
+        });
+        setCatalogosCargados(true);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar.");
     } finally {
@@ -262,6 +283,7 @@ export default function GastosPage() {
 
   function nuevo() {
     claveEnvioRef.current = null;
+    setBorrador({ motivo: null, congelado: false }); setSubidaPendiente(null);
     setEditandoId(null); setRequirenteHistorico({ id: "", nombre: "" });
     setForm(FORM_VACIO);
     setLineasAdicionales([]);
@@ -285,6 +307,7 @@ export default function GastosPage() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setError(data.error ?? "No se pudo cargar el gasto para editarlo."); return; }
     const g = data.gasto as Gasto;
+    setBorrador({ motivo: null, congelado: false }); setSubidaPendiente(null);
     setEditandoId(g.id);
     setRequirenteHistorico({ id: String(g.requirenteUsuarioId ?? ""), nombre: g.requirenteNombre ?? "" });
     const lineasGuardadas = g.lineas ?? [];
@@ -397,11 +420,32 @@ export default function GastosPage() {
       setError("El comprobante debe ser PDF, JPG, JPEG o PNG."); return;
     }
     if (comprobante && comprobante.size > MAX_UPLOAD_BYTES) { setError("El comprobante supera el máximo de 50 MB."); return; }
+    // BORR-1f — creación YA confirmada con el comprobante pendiente: se reintenta SOLO la subida a ese gasto (no hay POST de creación).
+    if (!editandoId && subidaPendiente) {
+      if (!comprobante) { setError("Selecciona de nuevo el comprobante: el gasto ya está creado y solo falta adjuntarlo."); return; }
+      const s = await subirComprobanteGasto({ fetchFn: fetch, slug, gastoId: subidaPendiente.gastoId, comprobante });
+      if (!s.ok) { setError(`${s.error} El gasto ya está creado; vuelve a presionar Guardar para reintentar la carga del comprobante; no se creará otro gasto.`); return; }
+      setMsg("Gasto y comprobante guardados.");
+      await limpiarBorradorEnviado(puente, true); // el gasto y su comprobante están completos: ya no hace falta el borrador marcado
+      setSubidaPendiente(null); setBorrador({ motivo: null, congelado: false }); claveEnvioRef.current = null;
+      setMostrarForm(false);
+      await cargar();
+      return;
+    }
+    // BORR-1f — solo al CREAR: antes del PRIMER POST se registra el intento (clave + contenido final) en el borrador local; si no se puede, no se envía.
+    let registrado = false;
+    if (!editandoId) {
+      const preparado = await prepararEnvioBorrador(puente, envioDesdeRef(claveEnvioRef), "gasto");
+      if (!preparado.ok) { setError(preparado.mensaje); return; }
+      registrado = preparado.registrado;
+    }
     // Solo al CREAR se manda la clave de envío (la edición actúa sobre un id existente y no crea registros). Si el comprobante falla tras
     // crear, la clave se conserva y el reintento recupera el MISMO gasto en vez de crear otro (ver enviarGasto).
     const clave = editandoId ? "" : (claveEnvioRef.current ??= nuevaClaveEnvio());
     const r = await enviarGasto({ fetchFn: fetch, slug, editandoId, payload, claveIdempotencia: clave, comprobante });
     if (r.fase === "crear") {
+      // Solo 400/401/403/404 garantizan que nada se creó (contrato de POST /tms/gastos); 409/5xx/otros siguen siendo inciertos.
+      if (registrado && clasificarCreacionGasto({ lanzo: false, ok: false, status: r.status }) === "rechazo_definitivo") await liberarEnvioRechazado(puente);
       const leidos = leerErroresRespuesta(r.data, "No se pudo guardar.");
       setErrores(leidos.errores);
       setError(leidos.errores.length ? "" : leidos.mensaje);
@@ -409,14 +453,25 @@ export default function GastosPage() {
       if (r.status === 409) await cargar();
       return;
     }
-    setErrores([]);
-    if (r.fase === "comprobante") {
-      const subidaError = typeof r.subidaData.error === "string" ? r.subidaData.error : "No se pudo adjuntar el comprobante.";
-      const guardado = typeof r.data.mensaje === "string" ? r.data.mensaje : "Gasto guardado.";
-      setError(`${guardado} ${subidaError} Vuelve a presionar Guardar para reintentar la carga del comprobante; no se creará otro gasto.`);
-      await cargar();
+    // 2xx sin id de gasto: no se puede confirmar la creación (ni adjuntar el comprobante): incierto, se conserva la clave.
+    if (registrado && clasificarCreacionGasto({ lanzo: false, ok: true, gastoId: r.gastoId }) === "incierto") {
+      setError("El servidor respondió sin confirmar el gasto. Se conserva la clave de envío: vuelve a presionar Guardar para reintentar el mismo envío sin duplicarlo.");
       return;
     }
+    setErrores([]);
+    if (r.fase === "comprobante") {
+      // La creación está CONFIRMADA: el borrador deja de ser un envío pendiente y el reintento será solo de la subida.
+      if (!editandoId) {
+        if (registrado) await marcarEnvioCompletado(puente);
+        setSubidaPendiente({ gastoId: r.gastoId });
+      }
+      const subidaError = typeof r.subidaData.error === "string" ? r.subidaData.error : "No se pudo adjuntar el comprobante.";
+      const guardado = typeof r.data.mensaje === "string" ? r.data.mensaje : "Gasto guardado.";
+      await cargar(); // cargar() limpia el error: se recarga PRIMERO para que el aviso siga visible
+      setError(`${guardado} ${subidaError} Vuelve a presionar Guardar para reintentar la carga del comprobante; no se creará otro gasto.`);
+      return;
+    }
+    if (registrado) await limpiarBorradorEnviado(puente, await marcarEnvioCompletado(puente)); // creación confirmada: el borrador se elimina solo si quedó marcado
     claveEnvioRef.current = null;
     setMsg(comprobante ? "Gasto y comprobante guardados." : (typeof r.data.mensaje === "string" ? r.data.mensaje : "Guardado."));
     setMostrarForm(false);
@@ -525,6 +580,14 @@ export default function GastosPage() {
 
       {mostrarForm ? (
         <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--panel)] p-3">
+          {!editandoId ? <AutoguardadoGasto estadoForm={estadoForm} formVacio={FORM_VACIO} comprobanteSeleccionado={comprobante !== null} catalogos={catalogosBorrador} catalogosCargados={catalogosCargados} puente={puente} onAplicar={aplicarBorrador} onBloqueo={setBorrador} /> : null}
+          {!editandoId && subidaPendiente ? (
+            <p role="status" data-subida-pendiente className="rounded border border-amber-300/60 px-3 py-2 text-xs text-amber-300">
+              El gasto n.º {subidaPendiente.gastoId} ya está creado; solo falta adjuntar el comprobante. Selecciónalo de nuevo (el archivo no se conserva si recargas) y pulsa Guardar. Si cierras o recargas, el gasto queda en el listado y puedes adjuntarlo desde «Editar».
+            </p>
+          ) : null}
+          {/* BORR-1f — con un envío sin resultado confirmado (o ya creado, a la espera del comprobante) el contenido queda congelado. */}
+          <fieldset disabled={!editandoId && (borrador.congelado || subidaPendiente !== null)} className="m-0 min-w-0 space-y-2 border-0 p-0">
           {/*
             GASTOS-ADMINISTRATIVO-1 (Fase 4) — mismo patrón EXACTO que el
             bloque de encabezado de fondos/page.tsx (Empresa requirente,
@@ -607,6 +670,8 @@ export default function GastosPage() {
               <input className={`${inputCls} mt-0.5 w-full`} readOnly value={catalogos.empleados.find((x) => x.id === form.empleadoId)?.puesto ?? ""} />
             </label>
           </div>
+          </fieldset>
+          <fieldset disabled={!editandoId && borrador.congelado} className="m-0 min-w-0 space-y-2 border-0 p-0">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <label className="mt-4 flex items-center gap-2 text-xs text-[var(--muted)]">
               <input type="checkbox" checked={tieneComprobanteAlmacenado || form.tieneFactura} disabled={tieneComprobanteAlmacenado} onChange={(e) => setForm((f) => ({ ...f, tieneFactura: e.target.checked }))} />
@@ -619,6 +684,8 @@ export default function GastosPage() {
               {comprobanteActual?.facturaNombreOriginal ? <span className="mt-1 block">Actual: {comprobanteActual.facturaNombreOriginal}</span> : null}
             </label>
           </div>
+          </fieldset>
+          <fieldset disabled={!editandoId && (borrador.congelado || subidaPendiente !== null)} className="m-0 min-w-0 space-y-2 border-0 p-0">
           <label className="block text-xs text-[var(--muted)]">Observaciones
             <textarea className={`${inputCls} mt-0.5 w-full`} value={form.observaciones} onChange={(e) => setForm((f) => ({ ...f, observaciones: e.target.value }))} />
           </label>
@@ -685,18 +752,20 @@ export default function GastosPage() {
             </button>
             {lineasAdicionales.length ? <p className="text-sm font-medium">Total del gasto: Q{totalFormulario().toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p> : null}
           </div>
+          </fieldset>
+          {!editandoId && borrador.motivo ? <p role="status" className="text-xs text-amber-300">{borrador.motivo}</p> : null}
           <div className="flex gap-2">
             <ErroresFormulario errores={errores} />
             <button
               type="button"
               onClick={() => void guardar()}
-              disabled={guardando}
+              disabled={guardando || (!editandoId && borrador.motivo !== null)}
               aria-busy={guardando}
               className="rounded bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
             >
               {guardando ? "Guardando…" : "Guardar"}
             </button>
-            <button type="button" onClick={() => setMostrarForm(false)} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
+            <button type="button" onClick={cancelarFormulario} className="rounded border border-[var(--border)] px-3 py-1.5 text-sm">Cancelar</button>
           </div>
         </div>
       ) : null}
