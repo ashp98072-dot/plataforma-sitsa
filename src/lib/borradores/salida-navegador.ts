@@ -7,6 +7,7 @@ import {
   type InformeLimpieza,
   type ResultadoCierreSesion,
 } from "./cierre-sesion";
+import { reanudarEscriturasDe, suspenderEscriturasDe } from "./coordinacion";
 import { crearNucleoBorradores } from "./nucleo";
 
 /**
@@ -34,6 +35,9 @@ export async function prepararSalidaDelNavegador(
       nucleo,
       decidir: decidirSalidaConDialogoNativo((mensaje) => window.confirm(mensaje)),
       decidirTrasFallo: opciones.decidirTrasFallo,
+      // BORR-1c: los autoguardados pendientes/tardíos no deben recrear lo que se va a eliminar.
+      antesDeBorrar: () => suspenderEscriturasDe(ownerKey),
+      alNoSalir: () => reanudarEscriturasDe(ownerKey),
     });
   } catch {
     // `prepararCierreSesionExplicito` es TOTAL (clasifica sus excepciones por fase): llegar aquí es un defecto. Como ya pudo

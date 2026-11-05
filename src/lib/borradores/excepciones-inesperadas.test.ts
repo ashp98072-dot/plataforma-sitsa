@@ -239,9 +239,10 @@ describe("E. ninguna ruta posterior al consentimiento realiza logout silencioso"
     let n = 0;
     const almacen: AlmacenBorradores = {
       ...e.real,
-      modificar: ((clave: string, decidir: never) => {
+      modificar: ((clave: string, decidir: never, opciones?: never) => {
+        if (clave.startsWith('["__purga__"')) return e.real.modificar(clave, decidir, opciones); // la marca de purga no es una eliminación
         const c = cual(++n);
-        const ejecutar = (): Promise<Resultado<unknown>> => e.real.modificar(clave, decidir);
+        const ejecutar = (): Promise<Resultado<unknown>> => e.real.modificar(clave, decidir, opciones);
         if (c.resolverTardeMs) { const p = ejecutar(); return new Promise<Resultado<unknown>>((res) => setTimeout(() => res(p), c.resolverTardeMs)); }
         if (c.antesMs) return new Promise<Resultado<unknown>>((res) => setTimeout(() => res(ejecutar()), c.antesMs));
         return ejecutar();

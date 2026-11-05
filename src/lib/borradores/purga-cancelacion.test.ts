@@ -50,9 +50,11 @@ function conRetrasos(real: AlmacenBorradores, comportamiento: (n: number) => Com
   const almacen: AlmacenBorradores = {
     obtener: real.obtener,
     listar: real.listar,
-    modificar: ((clave: string, decidir: never) => {
+    modificar: ((clave: string, decidir: never, opciones?: never) => {
+      // La marca de purga (BORR-1c) no es una «eliminación»: no cuenta ni se retrasa; las pruebas numeran solo las operaciones sobre borradores.
+      if (clave.startsWith('["__purga__"')) return real.modificar(clave, decidir, opciones);
       const c = comportamiento(++estado.llamadas);
-      const ejecutar = (): Promise<Resultado<unknown>> => real.modificar(clave, decidir);
+      const ejecutar = (): Promise<Resultado<unknown>> => real.modificar(clave, decidir, opciones);
       if (c.resolverTardeMs) { const p = ejecutar(); return new Promise<Resultado<unknown>>((res) => setTimeout(() => res(p), c.resolverTardeMs)); }
       if (c.antesMs) return new Promise<Resultado<unknown>>((res) => setTimeout(() => res(ejecutar()), c.antesMs));
       return ejecutar();

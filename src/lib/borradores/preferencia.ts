@@ -11,6 +11,17 @@ import { crearAlmacenDesactivado, type AlmacenBorradores } from "./almacen";
 export const CLAVE_PREFERENCIA_PERSISTENCIA = "novalvion.borradores.persistencia";
 const VALOR_DESACTIVADA = "desactivada";
 
+/**
+ * BORR-1c — evento de ESTA pestaña cuando cambia la preferencia (el evento `storage` solo llega a las OTRAS pestañas). Los
+ * controladores de autoguardado lo escuchan para pausar o reanudar al instante.
+ */
+export const EVENTO_PREFERENCIA = "novalvion:borradores-preferencia";
+
+/** Avisa a los controladores de esta pestaña de que cambió la preferencia. No-op fuera del navegador. */
+export function notificarCambioPreferencia(): void {
+  try { if (typeof window !== "undefined") window.dispatchEvent(new Event(EVENTO_PREFERENCIA)); } catch { /* sin DOM */ }
+}
+
 export type AlmacenPreferencias = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 /** `localStorage` del navegador o `null` (SSR, modo restringido, acceso bloqueado). */
@@ -53,7 +64,7 @@ export function crearAlmacenSegunPreferencia(base: AlmacenBorradores, prefs: Alm
   const elegir = () => (persistenciaActiva(prefs) ? base : desactivado);
   return {
     obtener: (clave) => elegir().obtener(clave),
-    modificar: (clave, decidir) => elegir().modificar(clave, decidir),
+    modificar: (clave, decidir, opciones) => elegir().modificar(clave, decidir, opciones),
     listar: (indice, valor) => elegir().listar(indice, valor),
   };
 }
