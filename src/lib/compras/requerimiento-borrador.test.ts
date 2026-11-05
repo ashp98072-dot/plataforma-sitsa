@@ -5,7 +5,7 @@ import type { SnapshotBorrador } from "@/lib/borradores/controlador";
 import { ESTADO_GUARDADO_INICIAL } from "@/lib/borradores/estado-guardado";
 import { crearEnvioUnico } from "@/lib/idempotencia/clave-envio";
 import {
-  aEstado, avisosDeRecuperacion, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, hayContenidoEscrito, motivoBloqueoPorBorrador, restaurarPayload,
+  aEstado, avisosDeRecuperacion, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, excedeMaxLineasRequerimiento, hayContenidoEscrito, MAX_LINEAS_REQUERIMIENTO, mensajeExcesoLineasRequerimiento, motivoBloqueoPorBorrador, restaurarPayload,
   type EstadoFormularioRequerimiento,
 } from "./requerimiento-borrador";
 import {
@@ -54,7 +54,7 @@ describe("adaptador JSON explícito", () => {
     expect(malo((p) => { p.lineas[0].proveedorId = "9"; })).toBe(false);
     expect(malo((p) => { p.lineas[0].condicionPago = "Otro"; })).toBe(false);
     expect(malo((p) => { p.cabecera.entidadRequirenteId = -1; })).toBe(false);
-    expect(malo((p) => { p.lineas = Array.from({ length: 501 }, (_, i) => ({ ...bueno.lineas[0], clave: `x${i}` })); })).toBe(false);
+    expect(malo((p) => { p.lineas = Array.from({ length: 501 }, (_, i) => ({ ...bueno.lineas[0], clave: `x${i}` })); })).toBe(true); // sin tope arbitrario (BORR-1d-FIX-01): se recupera íntegro y el envío se bloquea
   });
 
   it("revalida contra el catálogo vigente: lo que ya no existe se avisa y no se presenta como vigente", () => {
@@ -81,6 +81,35 @@ const snap = (parcial: Partial<SnapshotBorrador>): SnapshotBorrador => ({
 });
 const api = (s: SnapshotBorrador, extra: Partial<ApiBorradorEnvio> = {}): ApiBorradorEnvio => ({
   snapshot: s, registrarEnvio: vi.fn(async () => ({ ok: true as const })), resolverEnvio: vi.fn(async () => ({ ok: true as const })), descartar: vi.fn(async () => ({ ok: true as const })), ...extra,
+});
+
+describe("REGRESIÓN BORR-1d-FIX-01: ninguna línea desaparece en silencio", () => {
+  it("con 499, 500, 501 y 1000 líneas el payload conserva TODAS, en orden y con valores exactos, y la restauración las devuelve idénticas", () => {
+    for (const n of [499, 500, 501, 1000]) {
+      const e = aEstado({ fecha: "2026-10-01", entidad: 4, requirente: 2, encargado: 0, observaciones: "", lineas: Array.from({ length: n }, (_, i) => ({ ...linea(1), key: `k${i}`, repuesto_descripcion: `Filtro ${i + 1}`, total: `${i + 1}.07` })) });
+      const p = construirPayload(e);
+      expect(p.lineas).toHaveLength(n);
+      const r = restaurarPayload(JSON.parse(JSON.stringify(p)));
+      expect(r.ok && r.estado.lineas).toEqual(e.lineas);
+    }
+  });
+
+  it("el máximo de envío es el del backend (500, crear y editar) y el exceso solo bloquea el envío", () => {
+    expect(MAX_LINEAS_REQUERIMIENTO).toBe(500);
+    expect(excedeMaxLineasRequerimiento(500)).toBe(false);
+    expect(excedeMaxLineasRequerimiento(501)).toBe(true);
+    expect(mensajeExcesoLineasRequerimiento(503)).toMatch(/503 líneas.*máximo permitido es 500.*quita 3/);
+    const esquema = readFileSync(join(process.cwd(), "src/lib/compras/requerimiento-schema.ts"), "utf8");
+    expect(esquema).toMatch(/lineas: z\.array\(lineaCompraSchema\)\.min\(1, "Agrega al menos una línea\."\)\.max\(500\)/); // cabecera compartida por crear y editar
+  });
+
+  it("MUTACIÓN: el adaptador no puede volver a truncar con slice, y el formulario conserva la guarda funcional y el bloqueo de envío", () => {
+    const adaptador = readFileSync(join(process.cwd(), "src/lib/compras/requerimiento-borrador.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(adaptador).not.toMatch(/\.slice\(0,/);
+    const form = readFileSync(join(process.cwd(), "src/components/compras/requerimiento-form-client.tsx"), "utf8").replace(/\r\n/g, "\n");
+    expect(form).toMatch(/setLineas\(actual => \(actual\.length >= 500 \? actual : \[\.\.\.actual,/);
+    expect(form).toMatch(/if \(excedeMaxLineasRequerimiento\(lineas\.length\)\) \{ setError\(mensajeExcesoLineasRequerimiento\(lineas\.length\)\); return; \}/);
+  });
 });
 
 describe("envío: plan, clasificación y puente", () => {

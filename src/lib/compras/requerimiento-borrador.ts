@@ -10,7 +10,17 @@ import { CLAVE_ENVIO_REGEX } from "@/lib/idempotencia/clave-envio";
  * campo (lista blanca): un campo nuevo del formulario NO entra al borrador salvo que se agregue aquí a propósito.
  */
 export const ESQUEMA_REQUERIMIENTO_BORRADOR = 1;
-export const MAX_LINEAS_BORRADOR = 500;
+/**
+ * Máximo de líneas que ACEPTA el backend (`crearRequerimientoSchema` y `editarRequerimientoSchema`: `lineas ... .max(500)`). Es un límite de
+ * ENVÍO, no de borrador: el adaptador NO trunca nunca. Un borrador heredado con más líneas se recupera íntegro (el único límite de
+ * almacenamiento es el técnico del núcleo: si se excede, el indicador muestra «Error al guardar», jamás «Guardado») y solo se bloquea su envío.
+ */
+export const MAX_LINEAS_REQUERIMIENTO = 500;
+/** Alias conservado por compatibilidad con pruebas anteriores; significa «máximo de envío», no un tope de borrador. */
+export const MAX_LINEAS_BORRADOR = MAX_LINEAS_REQUERIMIENTO;
+export const excedeMaxLineasRequerimiento = (cantidad: number) => cantidad > MAX_LINEAS_REQUERIMIENTO;
+export const mensajeExcesoLineasRequerimiento = (cantidad: number) =>
+  `Este requerimiento tiene ${cantidad} líneas y el máximo permitido es ${MAX_LINEAS_REQUERIMIENTO}. No se ha eliminado ninguna: quita ${cantidad - MAX_LINEAS_REQUERIMIENTO} para poder enviarlo.`;
 
 export type LineaBorrador = {
   /** Identificador ESTABLE de la línea en el formulario (key de React): conserva orden e identidad entre recargas. */
@@ -64,7 +74,7 @@ export function aEstado(f: { fecha: string; entidad: number; requirente: number;
 export function construirPayload(e: EstadoFormularioRequerimiento): PayloadRequerimientoBorrador {
   return {
     cabecera: { fechaRequerimiento: e.fecha, entidadRequirenteId: e.entidad, requirenteUsuarioId: e.requirente, encargadoComprasUsuarioId: e.encargado, observaciones: e.observaciones },
-    lineas: e.lineas.slice(0, MAX_LINEAS_BORRADOR).map((l) => ({
+    lineas: e.lineas.map((l) => ({
       clave: l.clave, vehiculoId: l.vehiculo_id, unidadDescripcion: l.unidad_descripcion, fecha: l.fecha, serieFactura: l.serie_factura, numeroFactura: l.numero_factura,
       proveedorId: l.proveedor_id, repuestoDescripcion: l.repuesto_descripcion, metodoPago: l.metodo_pago, condicionPago: l.condicion_pago, total: l.total, observaciones: l.observaciones,
     })),
@@ -85,7 +95,7 @@ export function restaurarPayload(bruto: unknown): ResultadoRestauracion {
   if (!esObjeto(bruto) || !esObjeto(bruto.cabecera) || !Array.isArray(bruto.lineas)) return { ok: false, motivo: "estructura" };
   const c = bruto.cabecera;
   if (typeof c.fechaRequerimiento !== "string" || !esId(c.entidadRequirenteId) || !esId(c.requirenteUsuarioId) || !esId(c.encargadoComprasUsuarioId) || typeof c.observaciones !== "string") return { ok: false, motivo: "cabecera" };
-  if (bruto.lineas.length < 1 || bruto.lineas.length > MAX_LINEAS_BORRADOR) return { ok: false, motivo: "lineas" };
+  if (bruto.lineas.length < 1) return { ok: false, motivo: "lineas" }; // sin tope: un borrador con más de 500 líneas se recupera íntegro y su envío se bloquea
   const vistas = new Set<string>();
   const lineas: LineaBorrador[] = [];
   for (const crudo of bruto.lineas) {
