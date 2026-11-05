@@ -133,3 +133,26 @@ compararse directamente; #77 además fue editada después.
 cabeceras muestra solo #77; las comparaciones campo a campo y el resumen (que unen #77 con #78) **no devuelven filas**; las
 consultas de firmas y auditoría **sí** siguen mostrando la evidencia de #78. Un resultado vacío de esas comparaciones se debe a
 que #78 no existe, **no** a que los registros fueran distintos.
+
+## Borrador local de «Nueva solicitud de fondo» (BORR-1e)
+
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (happy-dom + fake-indexeddb). No probado en navegador real ni en Hostinger, no
+desplegado, no aprobado para producción. **Sin SQL, sin cambios de API, permisos ni reglas de Fondos.** Solo la **creación**
+(`editandoId` nulo): editar, autorizar, liquidar, entregas, rechazo y reportes no cambian. Gastos operativos (BORR-1f) no se toca.
+
+- **Qué se guarda (solo IndexedDB):** adaptador `src/lib/tms/fondo-borrador.ts` (esquema v1): empresa requirente, requirente,
+  solicitante, fecha, observaciones y, por línea, categoría, descripción, cantidad, monto (**como texto exacto**), fecha de viaje,
+  empleado, unidad, cliente, plan, nombre, cargo y método de pago. La **cuenta de pago** autocompletada desde RRHH **no se guarda**:
+  solo si el usuario la sobrescribió (`cuentaOverride`); al recuperar se re-sugiere desde el catálogo vigente. Sin archivos, catálogos,
+  permisos, errores ni sesión.
+- **Recuperación:** diálogo de BORR-1c; el adaptador valida **antes** de que el controlador salga de la decisión pendiente (patrón
+  BORR-1d), también al adoptar la versión de otra pestaña. Se revalidan empleados, unidades, clientes, planes, categorías, métodos de pago y
+  personas contra los catálogos vigentes; lo que ya no existe se avisa y el envío espera. Recuperar espera a que carguen los catálogos.
+- **Envío (idempotencia):** misma mecánica que Compras (BORR-1d) sobre `claveEnvioRef`/`crearGuardEnvio`: antes del primer POST se registra
+  clave + contenido final; si falla, no se envía. Clasificación según el contrato REAL del backend: **solo 400/401/403/404** liberan el
+  intento (nada se creó); **409 (conflicto de idempotencia), 5xx, 408/425/429, 2xx sin `solicitud.id`, red caída y cualquier otro código son
+  inciertos** → contenido congelado, clave conservada, «Reconciliación pendiente», reintento solo del mismo contenido con la misma clave.
+  Tras recargar con un envío incierto no se envía otra solicitud. **Límite:** no existe consulta por clave; la reconciliación es manual (revisar
+  el listado) hasta una fase posterior con un endpoint de consulta.
+- Confirmada la creación: se marca «completado», se elimina el borrador solo si quedó marcado, se cierra el formulario y se recarga el listado.
+- «Cancelar» conserva lo escrito (se guarda al cerrar) y al volver a abrir se ofrece recuperarlo; nunca se sobrescribe sin decisión.

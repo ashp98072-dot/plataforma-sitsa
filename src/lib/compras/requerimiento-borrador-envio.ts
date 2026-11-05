@@ -34,7 +34,7 @@ export type PlanEnvio =
   | { tipo: "reintento" } // intento ya registrado con la misma clave y el mismo contenido (respuesta incierta previa)
   | { tipo: "bloqueado"; mensaje: string };
 
-export function planearEnvio(api: ApiBorradorEnvio | null, claveActual: string): PlanEnvio {
+export function planearEnvio(api: ApiBorradorEnvio | null, claveActual: string, documento = "requerimiento"): PlanEnvio {
   if (!api) return { tipo: "sin_borrador" };
   const s = api.snapshot;
   switch (s.fase) {
@@ -42,7 +42,7 @@ export function planearEnvio(api: ApiBorradorEnvio | null, claveActual: string):
     case "activo": return { tipo: "registrar" };
     case "bloqueado":
       if (s.bloqueo === "envio_en_curso" && s.estadoEnvio === "enviando" && s.claveEnvio === claveActual) return { tipo: "reintento" };
-      return { tipo: "bloqueado", mensaje: s.bloqueo === "enviado" ? "Este requerimiento ya se envió oficialmente." : s.bloqueo === "envio_en_curso" ? "Hay un envío anterior sin resultado confirmado con otra clave: no se envía otro documento." : "El borrador guardado en este equipo no permite enviar. Recarga la página o descártalo." };
+      return { tipo: "bloqueado", mensaje: s.bloqueo === "enviado" ? `Este ${documento} ya se envió oficialmente.` : s.bloqueo === "envio_en_curso" ? "Hay un envío anterior sin resultado confirmado con otra clave: no se envía otro documento." : "El borrador guardado en este equipo no permite enviar. Recarga la página o descártalo." };
     case "decision_pendiente": case "en_espera":
       return { tipo: "bloqueado", mensaje: s.recuperacion?.situacion === "envio_incierto" || s.estadoEnvio === "enviando" ? "Reconciliación pendiente: un envío anterior no tiene resultado confirmado. No se envía otro documento mientras tanto." : "Hay un borrador guardado sin resolver. Recupéralo o descártalo antes de enviar." };
     default: return { tipo: "bloqueado", mensaje: "El autoguardado no está listo para enviar. Espera un momento o recarga la página." };
@@ -67,11 +67,12 @@ export function clasificarResultadoEnvio(r: { lanzo: boolean; ok?: boolean; stat
 export async function prepararEnvioBorrador(
   puente: PuenteBorrador,
   envio: { clave(): string; adoptarClave(c: string): boolean },
+  documento = "requerimiento",
 ): Promise<{ ok: true; registrado: boolean } | { ok: false; mensaje: string }> {
   const api = puente.api;
   if (api && api.snapshot.fase === "activo" && api.snapshot.claveEnvio && CLAVE_ENVIO_REGEX.test(api.snapshot.claveEnvio)) envio.adoptarClave(api.snapshot.claveEnvio);
   const clave = envio.clave();
-  const plan = planearEnvio(api, clave);
+  const plan = planearEnvio(api, clave, documento);
   if (plan.tipo === "sin_borrador") return { ok: true, registrado: false };
   if (plan.tipo === "bloqueado") return { ok: false, mensaje: plan.mensaje };
   if (plan.tipo === "reintento") return { ok: true, registrado: true };
