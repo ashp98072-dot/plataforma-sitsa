@@ -58,11 +58,13 @@ export function AutoguardadoRequerimiento({ fecha, entidad, requirente, encargad
 
   const hayContenido = hayContenidoEscrito(estado, fechaHoy) || lineas.some((l) => (l.documentosPendientes?.length ?? 0) > 0);
 
+  const aceptaAdaptador = (p: unknown) => restaurarPayload(p).ok;
   function recuperar() {
-    const r = borrador.recuperar();
+    // El adaptador valida ANTES de que el controlador salga de la decisión pendiente (no destructivo).
+    const r = borrador.recuperar(aceptaAdaptador);
     if (!r.ok) { setErrorAplicar(r.mensaje); return; }
     const restaurado = restaurarPayload(r.payload);
-    if (!restaurado.ok) { setErrorAplicar("El borrador guardado no tiene un formato válido y no se aplicó. Puedes descartarlo."); return; }
+    if (!restaurado.ok) { setErrorAplicar("El borrador guardado no tiene un formato válido y no se aplicó."); return; }
     setErrorAplicar("");
     onAplicar(restaurado.estado);
     setRecuperado(true);
@@ -104,7 +106,7 @@ export function AutoguardadoRequerimiento({ fecha, entidad, requirente, encargad
           motivo={snapshot.conflicto.motivo}
           onReleer={async () => { const r = await borrador.releer(); return r.ok ? r : { ok: false, mensaje: r.mensaje }; }}
           onAdoptarRemoto={async () => {
-            const r = await borrador.adoptarRemoto();
+            const r = await borrador.adoptarRemoto(aceptaAdaptador);
             if (!r.ok) return { ok: false, mensaje: r.mensaje };
             const restaurado = restaurarPayload(r.payload);
             if (!restaurado.ok) return { ok: false, mensaje: "La otra versión no tiene un formato válido." };

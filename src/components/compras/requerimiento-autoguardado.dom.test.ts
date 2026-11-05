@@ -266,14 +266,48 @@ describe("autoguardado y recuperación en el formulario real", () => {
     expect(llamadas.filter((l) => l.metodo !== "GET")).toEqual([]); // nada se creó automáticamente (ni proveedores ni requerimientos)
   });
 
-  it("11) datos inválidos al recuperar: no se aplican a medias, se avisa y el borrador sigue pudiéndose descartar", async () => {
-    ok(await nucleo.guardar(ambito(), { payload: { cabecera: { fechaRequerimiento: 5 }, lineas: "x" }, esquemaVersion: ESQUEMA_REQUERIMIENTO_BORRADOR, revisionBase: null }));
+  it("11) payload válido para el núcleo pero INVÁLIDO para el adaptador: «Recuperar» no cambia nada (sigue pendiente de decisión), no se sobrescribe al editar y se puede descartar", async () => {
+    const invalido = { cabecera: { fechaRequerimiento: 5 }, lineas: "x" };
+    const sembrado = ok(await nucleo.guardar(ambito(), { payload: invalido, esquemaVersion: ESQUEMA_REQUERIMIENTO_BORRADOR, revisionBase: null }));
     const h = await montar(formulario());
     await hasta(() => expect(dialogo()).not.toBeNull());
     await clic(boton("Recuperar borrador"));
     await hasta(() => expect(h.host.textContent).toMatch(/no tiene un formato válido y no se aplicó/));
+    // NO pasó a «activo»: el diálogo sigue, el indicador sigue en decisión pendiente y el formulario no cambió
+    expect(dialogo()).not.toBeNull();
+    expect(textoInd(h)).toMatch(/borrador guardado sin recuperar/);
     expect(etiqueta(h, "Observaciones").value).toBe("");
-    expect(etiqueta(h, "Fecha de requerimiento").value).toBe(HOY);
+    // editar el formulario NO sobrescribe el registro
+    await escribir(etiqueta(h, "Observaciones") as HTMLTextAreaElement, "Texto nuevo que no debe pisar el borrador");
+    await esperar(300);
+    expect(await guardado()).toMatchObject({ revision: sembrado.revision, payload: invalido });
+    expect(guardar(h).disabled).toBe(true);
+    // el descarte explícito sigue disponible
+    await clic(boton("Descartar borrador"));
+    await clic(boton("Sí, descartar definitivamente"));
+    await hasta(() => expect(dialogo()).toBeNull());
+    expect(await guardado()).toBeNull();
+  });
+
+  it("11b) conflicto con una versión remota inválida: «Usar la versión de la otra pestaña» no la activa ni cambia el formulario", async () => {
+    const a = await montar(formulario());
+    const b = await montar(formulario());
+    await hasta(() => expect(estadoInd(a)).toBe("inicial"));
+    await hasta(() => expect(estadoInd(b)).toBe("inicial"));
+    await escribir(etiqueta(a, "Observaciones") as HTMLTextAreaElement, "Desde A");
+    await hasta(() => expect(estadoInd(a)).toBe("guardado"));
+    await escribir(etiqueta(b, "Observaciones") as HTMLTextAreaElement, "Desde B");
+    await hasta(() => expect(dialogo()).not.toBeNull());
+    const actual = (await guardado())!;
+    const invalido = { cabecera: null, lineas: [] };
+    const nuevo = ok(await nucleo.guardar(ambito(), { payload: invalido, esquemaVersion: ESQUEMA_REQUERIMIENTO_BORRADOR, revisionBase: actual.revision }));
+    await clic(boton("Ver la versión guardada"));
+    await hasta(() => expect(boton("Usar la versión de la otra pestaña")!.disabled).toBe(false));
+    await clic(boton("Usar la versión de la otra pestaña"));
+    await hasta(() => expect(document.body.textContent).toMatch(/no tiene un formato válido y no se aplicó/));
+    expect(dialogo()).not.toBeNull(); // sigue en conflicto: nada se activó
+    expect(etiqueta(b, "Observaciones").value).toBe("Desde B");
+    expect(await guardado()).toMatchObject({ revision: nuevo.revision, payload: invalido }); // no se tocó
   });
 
   it("12) y 13) los archivos NO se guardan; tras recuperar se avisa que hay que adjuntarlos otra vez", async () => {

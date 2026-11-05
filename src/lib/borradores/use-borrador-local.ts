@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "r
 import { useContextoBorradores } from "@/lib/empresa-session";
 import { crearAlmacenIndexedDB } from "./almacen-indexeddb";
 import type { FabricaCanal } from "./canal";
-import { ControladorBorrador, DEBOUNCE_POR_DEFECTO_MS, MAX_ESPERA_POR_DEFECTO_MS, type FalloAccion, type SnapshotBorrador } from "./controlador";
+import { ControladorBorrador, type ValidadorPayload, DEBOUNCE_POR_DEFECTO_MS, MAX_ESPERA_POR_DEFECTO_MS, type FalloAccion, type SnapshotBorrador } from "./controlador";
 import { ESTADO_GUARDADO_INICIAL } from "./estado-guardado";
 import { crearNucleoBorradores, type NucleoBorradores } from "./nucleo";
 import { almacenPreferenciasDelNavegador, crearAlmacenSegunPreferencia, EVENTO_PREFERENCIA, type AlmacenPreferencias, CLAVE_PREFERENCIA_PERSISTENCIA } from "./preferencia";
@@ -44,7 +44,8 @@ export type OpcionesBorradorLocal<T> = {
 export type BorradorLocal = {
   snapshot: SnapshotBorrador;
   /** Entrega el payload del borrador pendiente de decisión para que el formulario lo adopte. Nunca se aplica solo. */
-  recuperar: () => ReturnType<ControladorBorrador["recuperar"]>;
+  /** `validar` (opcional) se ejecuta ANTES de confirmar: si rechaza, no cambia ningún estado. */
+  recuperar: (validar?: ValidadorPayload) => ReturnType<ControladorBorrador["recuperar"]>;
   /** «Decidir después»: no se escribe ni se elimina nada. */
   mantener: () => void;
   /** Elimina el borrador. Exige `{ confirmado: true }` (la confirmación la pide la interfaz). */
@@ -52,7 +53,7 @@ export type BorradorLocal = {
   flush: () => Promise<void>;
   reintentar: () => Promise<void>;
   releer: () => Promise<{ ok: true; remoto: Borrador | null } | FalloAccion>;
-  adoptarRemoto: () => Promise<{ ok: true; payload: unknown } | FalloAccion>;
+  adoptarRemoto: (validar?: ValidadorPayload) => Promise<{ ok: true; payload: unknown } | FalloAccion>;
   conservarLocal: () => Promise<{ ok: true } | FalloAccion>;
   registrarEnvio: (claveEnvio: string) => Promise<{ ok: true } | FalloAccion>;
   resolverEnvio: (o: { estadoEnvio: "completado" | "ninguno"; claveEnvio?: string | null }) => Promise<{ ok: true } | FalloAccion>;
@@ -167,13 +168,13 @@ export function useBorradorLocal<T>(opciones: OpcionesBorradorLocal<T>): Borrado
 
   return useMemo<BorradorLocal>(() => ({
     snapshot,
-    recuperar: () => usar((c) => c.recuperar(), SIN_CONTROLADOR),
+    recuperar: (v) => usar((c) => c.recuperar(v), SIN_CONTROLADOR),
     mantener: () => usar((c) => c.mantener(), undefined),
     descartar: (o) => usar((c) => c.descartar(o), Promise.resolve(SIN_CONTROLADOR)),
     flush: () => usar((c) => c.flush(), Promise.resolve()),
     reintentar: () => usar((c) => c.reintentar(), Promise.resolve()),
     releer: () => usar((c) => c.releer(), Promise.resolve(SIN_CONTROLADOR)),
-    adoptarRemoto: () => usar((c) => c.adoptarRemoto(), Promise.resolve(SIN_CONTROLADOR)),
+    adoptarRemoto: (v) => usar((c) => c.adoptarRemoto(v), Promise.resolve(SIN_CONTROLADOR)),
     conservarLocal: () => usar((c) => c.conservarLocal(), Promise.resolve(SIN_CONTROLADOR)),
     registrarEnvio: (k) => usar((c) => c.registrarEnvio(k), Promise.resolve(SIN_CONTROLADOR)),
     resolverEnvio: (o) => usar((c) => c.resolverEnvio(o), Promise.resolve(SIN_CONTROLADOR)),

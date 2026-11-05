@@ -243,6 +243,39 @@ describe("recuperación", () => {
     expect((await guardados(e))!.payload).toEqual({ lineas: [{ monto: "5" }] });
   });
 
+  it("BORR-1d: recuperar con un validador que rechaza NO cambia el estado (sigue pendiente, descartable y sin escrituras)", async () => {
+    const e = entorno();
+    const sembrado = await sembrar(e, { v: "mala" });
+    const c = await activo(e, { v: "" });
+    const antes = c.getSnapshot();
+    const guardar = vi.spyOn(e.nucleo, "guardar");
+    expect(c.recuperar(() => false)).toMatchObject({ ok: false, motivo: "payload_invalido" });
+    expect(c.recuperar(() => { throw new Error("boom"); })).toMatchObject({ ok: false, motivo: "payload_invalido" });
+    expect(c.getSnapshot()).toEqual(antes);
+    expect(c.getSnapshot().fase).toBe("decision_pendiente");
+    c.actualizarPayload({ v: "edición" });
+    await esperar(100);
+    expect(guardar).not.toHaveBeenCalled();
+    expect((await guardados(e))!.revision).toBe(sembrado.revision);
+    expect(c.recuperar(() => true)).toMatchObject({ ok: true }); // la recuperación válida sigue funcionando
+    expect(c.getSnapshot().fase).toBe("activo");
+  });
+
+  it("BORR-1d: adoptarRemoto con un validador que rechaza no activa la versión remota", async () => {
+    const e = entorno();
+    const c = await activo(e, { v: 0 });
+    c.actualizarPayload({ v: 1 });
+    await hasta(() => expect(c.getSnapshot().guardado.estado).toBe("guardado"));
+    const b = (await guardados(e))!;
+    ok(await e.nucleo.guardar(ambito(), { payload: { v: "remota-mala" }, esquemaVersion: 1, revisionBase: b.revision }));
+    c.actualizarPayload({ v: 2 });
+    await hasta(() => expect(c.getSnapshot().fase).toBe("conflicto"));
+    expect(await c.adoptarRemoto(() => false)).toMatchObject({ ok: false, motivo: "payload_invalido" });
+    expect(c.getSnapshot().fase).toBe("conflicto");
+    expect(await c.adoptarRemoto(() => true)).toMatchObject({ ok: true });
+    expect(c.getSnapshot().fase).toBe("activo");
+  });
+
   it("recuperar: entrega el payload, sigue sobre la revisión existente y conserva borradorId y claveEnvio (identidad e idempotencia)", async () => {
     const e = entorno();
     const sembrado = await sembrar(e, { v: "a" }, { claveEnvio: "7f3c2a9e-1b4d-4e8a-9c6f-0a1b2c3d4e5f" });
