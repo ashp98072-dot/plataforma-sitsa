@@ -12,7 +12,9 @@ import { destinoPagoEmpleado } from "./destino-pago-empleado";
  * solo lectura (derivados del catálogo) y tampoco se guardan.
  */
 export const ESQUEMA_GASTO_BORRADOR = 1;
-export const MAX_LINEAS_GASTO_BORRADOR = 100;
+// SIN tope de líneas propio: el backend de Gastos no limita `lineas` (route.ts: `z.array(lineaSchema).min(1).optional()`) y el formulario permite
+// agregar las que se quiera. Un tope aquí truncaría en silencio. El único límite es el técnico del almacén (tamaño del payload):
+// si se excede, el núcleo responde `payload_demasiado_grande` y el indicador muestra «Error al guardar» (nunca «Guardado»).
 
 export type FormGasto = {
   fechaSolicitud: string; fechaViaje: string; empleadoId: number; vehiculoId: number; clienteId: number; planId: number;
@@ -52,7 +54,7 @@ export function construirPayloadGasto(e: EstadoGastoForm, empleados: EmpleadoPag
       ...lineaPayload(f, empleados), fechaSolicitud: f.fechaSolicitud, tieneFactura: f.tieneFactura, observaciones: f.observaciones,
       entidadRequirenteId: f.entidadRequirenteId, requirenteUsuarioId: f.requirenteUsuarioId, solicitanteUsuarioId: f.solicitanteUsuarioId,
     },
-    lineasAdicionales: e.lineasAdicionales.slice(0, MAX_LINEAS_GASTO_BORRADOR).map((l) => lineaPayload(l, empleados)),
+    lineasAdicionales: e.lineasAdicionales.map((l) => lineaPayload(l, empleados)),
   };
 }
 
@@ -85,7 +87,6 @@ export function restaurarPayloadGasto(bruto: unknown): ResultadoRestauracionGast
   const c = bruto.cabecera;
   const base = lineaValida(c);
   if (!base || !esTexto(c.fechaSolicitud) || typeof c.tieneFactura !== "boolean" || !esTexto(c.observaciones) || !esId(c.entidadRequirenteId) || !esId(c.requirenteUsuarioId) || !esId(c.solicitanteUsuarioId)) return { ok: false, motivo: "cabecera" };
-  if (bruto.lineasAdicionales.length > MAX_LINEAS_GASTO_BORRADOR) return { ok: false, motivo: "lineas" };
   const lineas: LineaRestaurada[] = [];
   for (const l of bruto.lineasAdicionales) {
     const v = lineaValida(l);

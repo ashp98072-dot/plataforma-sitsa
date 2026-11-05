@@ -235,6 +235,40 @@ describe("autoguardado y recuperación en la pantalla real", () => {
     expect(entrada(h, "Descripción", 1).value).toBe("Extra 2");
   });
 
+  it("3b) REGRESIÓN: 101 líneas adicionales se guardan y se recuperan TODAS, en orden y con sus valores (nada desaparece en silencio)", async () => {
+    const e = estadoCompleto(0);
+    e.lineasAdicionales = Array.from({ length: 101 }, (_, i) => lineaG(i + 1, { descripcion: `Extra ${i + 1}`, monto: `${i + 1}.07` }));
+    await sembrar(e);
+    const h = await abrirFormulario();
+    await recuperar(h);
+    const quitar = () => [...formEl(h).querySelectorAll("button")].filter((b) => b.textContent === "Quitar");
+    expect(quitar()).toHaveLength(101);
+    expect(entrada(h, "Descripción", 100).value).toBe("Extra 101");
+    expect(entrada(h, "Monto (Q)", 100).value).toBe("101.07");
+    await escribir(entrada(h, "Descripción", 100), "Extra 101 editada");
+    await hasta(() => expect(estadoInd(h)).toBe("guardado"));
+    const p = (await guardado())!.payload as { lineasAdicionales: { descripcion: string; monto: string }[] };
+    expect(p.lineasAdicionales).toHaveLength(101);
+    expect(p.lineasAdicionales.map((l) => l.monto)).toEqual(e.lineasAdicionales.map((l) => l.monto));
+    expect(p.lineasAdicionales[100].descripcion).toBe("Extra 101 editada");
+    await desmontar(h);
+    const h2 = await abrirFormulario();
+    await recuperar(h2);
+    expect([...formEl(h2).querySelectorAll("button")].filter((b) => b.textContent === "Quitar")).toHaveLength(101);
+    expect(entrada(h2, "Descripción", 100).value).toBe("Extra 101 editada");
+  });
+
+  it("3c) si el borrador excede el límite TÉCNICO de almacenamiento, se muestra «Error al guardar» (nunca «Guardado») y no se pierde nada de la pantalla", async () => {
+    const pequeno = crearNucleoBorradores({ almacen: crearAlmacenSegunPreferencia(almacenReal, prefs), appBuild: "prueba-dom", maxPayloadChars: 3000 });
+    const h = await abrirFormulario({ nucleo: pequeno });
+    await hasta(() => expect(estadoInd(h)).toBe("inicial"));
+    for (let i = 0; i < 25; i++) await clic(boton("+ Agregar línea", formEl(h)));
+    await hasta(() => expect(textoInd(h)).toMatch(/Error al guardar/));
+    expect(textoInd(h)).toMatch(/demasiado grande/);
+    expect(textoInd(h)).not.toMatch(/^Guardado/);
+    expect([...formEl(h).querySelectorAll("button")].filter((b) => b.textContent === "Quitar")).toHaveLength(25); // nada se eliminó de la pantalla
+  });
+
   it("6) «Descartar» (con segunda confirmación) elimina el borrador y no toca la pantalla", async () => {
     await sembrar();
     const h = await abrirFormulario();

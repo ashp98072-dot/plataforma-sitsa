@@ -69,7 +69,7 @@ describe("adaptador JSON de lista blanca", () => {
     expect(malo((p) => { p.cabecera.tieneFactura = "si"; })).toBe(false);
     expect(malo((p) => { p.lineasAdicionales[1].monto = null; })).toBe(false);
     expect(malo((p) => { p.lineasAdicionales[0].numeroCuentaOverride = 5; })).toBe(false);
-    expect(malo((p) => { p.lineasAdicionales = Array.from({ length: 101 }, () => bueno.lineasAdicionales[0]); })).toBe(false);
+    expect(malo((p) => { p.lineasAdicionales = Array.from({ length: 101 }, () => bueno.lineasAdicionales[0]); })).toBe(true); // sin tope arbitrario
     expect(malo((p) => { p.lineasAdicionales = []; })).toBe(true); // sin líneas adicionales es válido (gasto simple)
   });
 
@@ -97,6 +97,28 @@ describe("adaptador JSON de lista blanca", () => {
     expect(motivoBloqueoGasto(snap({ fase: "decision_pendiente" }))).toMatch(/sin resolver/);
     expect(motivoBloqueoGasto(snap({ fase: "decision_pendiente", recuperacion: { situacion: "envio_incierto" } as never }))).toMatch(/Reconciliación pendiente/);
     expect(motivoBloqueoGasto(snap({ fase: "conflicto" }))).toMatch(/conflicto/);
+  });
+});
+
+describe("REGRESIÓN: ninguna línea desaparece en silencio (sin truncamiento)", () => {
+  it("con 101, 250 y 1000 líneas adicionales el payload conserva TODAS, en orden y con sus valores exactos, y la restauración también", () => {
+    for (const n of [101, 250, 1000]) {
+      const e = estado();
+      e.lineasAdicionales = Array.from({ length: n }, (_, i) => lin(i + 1, { descripcion: `Extra ${i + 1}`, monto: `${i + 1}.07`, cantidad: `${(i % 9) + 1}.5` }));
+      const p = construirPayloadGasto(e, EMPLEADOS);
+      expect(p.lineasAdicionales).toHaveLength(n);
+      const r = restaurarPayloadGasto(JSON.parse(JSON.stringify(p)));
+      expect(r.ok).toBe(true);
+      if (!r.ok) continue;
+      const f = aFormularioGasto(r.estado, EMPLEADOS);
+      expect(f.lineasAdicionales).toHaveLength(n);
+      expect(f.lineasAdicionales).toEqual(e.lineasAdicionales); // cantidad, orden y valores idénticos
+      expect(f.lineasAdicionales[n - 1].descripcion).toBe(`Extra ${n}`);
+    }
+  });
+
+  it("el adaptador ya no declara ningún tope propio de líneas", () => {
+    expect(readFileSync(join(process.cwd(), "src/lib/tms/gasto-borrador.ts"), "utf8")).not.toMatch(/\.slice\(0,|MAX_LINEAS_GASTO_BORRADOR\s*=/);
   });
 });
 
