@@ -236,6 +236,25 @@ export function crearNucleoBorradores(opciones: OpcionesNucleo) {
     },
 
     /**
+     * Metadatos de TODOS los borradores de UN usuario (todas sus empresas y tipos). Para decidir qué ofrecer al cerrar sesión
+     * o al desactivar la persistencia; no entrega payloads. Los registros ilegibles se cuentan aparte.
+     */
+    async listarMetadatosUsuario(ownerKey: string): Promise<Resultado<{ borradores: MetadatosBorrador[]; ilegibles: number }>> {
+      const p0 = problemaAmbitoUsuarioEmpresa({ ownerKey, empresaId: 1 });
+      if (p0) return fallo("ambito_invalido", p0);
+      const r = await almacen.listar("ownerKey", ownerKey);
+      if (!r.ok) return r;
+      const borradores: MetadatosBorrador[] = [];
+      let ilegibles = 0;
+      for (const crudo of r.valor) {
+        const p = parsear(crudo);
+        if (p.tipo === "ok" && p.borrador.ownerKey === ownerKey) borradores.push(metadatosDe(p.borrador));
+        else ilegibles++;
+      }
+      return exito({ borradores, ilegibles });
+    },
+
+    /**
      * Retención: elimina SOLO los borradores expirados del usuario+empresa indicados. `versionesSoportadas` indica, por tipo,
      * la versión de esquema que la aplicación entiende: los de esquema futuro y los tipos sin versión declarada se OMITEN
      * (no se borran datos que esta versión no sabe interpretar), y los ilegibles/corruptos (incluido un payload dañado)

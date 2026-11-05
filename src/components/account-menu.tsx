@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { labelRol } from "@/lib/permisos-shared";
-import { cerrarSesion } from "@/lib/session-navigation";
+import { cerrarSesion, permitirSalidaExplicita } from "@/lib/session-navigation";
 export { cerrarSesion } from "@/lib/session-navigation";
 
 /**
@@ -84,8 +84,11 @@ export function AccountMenu({
     enCurso.current = "salir";
     setPendiente("salir");
     setError("");
-    try { await cerrarSesion(fetch, (ruta) => window.location.replace(ruta)); }
-    catch {
+    try {
+      // BORR-1b: salida EXPLÍCITA → decisión informada sobre borradores locales (gancho opcional; nunca bloquea por errores).
+      if (!(await permitirSalidaExplicita())) { enCurso.current = null; setPendiente(null); return; }
+      await cerrarSesion(fetch, (ruta) => window.location.replace(ruta));
+    } catch {
       enCurso.current = null;
       setPendiente(null);
       setError("No se pudo cerrar sesión. Intenta nuevamente.");

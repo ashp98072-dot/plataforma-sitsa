@@ -55,3 +55,21 @@ export function cerrarSesion(fetchFn: typeof fetch, irA: (ruta: string) => void)
   }).finally(() => { salidaEnCurso = null; });
   return salidaEnCurso;
 }
+
+// BORR-1b — gancho OPCIONAL previo a la salida EXPLÍCITA (menú de cuenta y selector de empresa). Aquí solo vive la referencia a una
+// función registrada por un componente; este módulo no conoce ni guarda usuario, tenant ni borradores. `cerrarSesion` (que también
+// usa SessionInactivityGuard al expirar la sesión) NO invoca el gancho: la expiración nunca limpia nada.
+let antesDeSalidaExplicita: (() => Promise<boolean>) | null = null;
+
+/** Registra el gancho; devuelve la función que lo retira. El gancho devuelve `false` si el usuario canceló la salida. */
+export function registrarAntesDeSalidaExplicita(gancho: () => Promise<boolean>): () => void {
+  antesDeSalidaExplicita = gancho;
+  return () => { if (antesDeSalidaExplicita === gancho) antesDeSalidaExplicita = null; };
+}
+
+/** `true` si la salida explícita puede continuar. Sin gancho → `true`. Un error del gancho nunca bloquea la salida. */
+export async function permitirSalidaExplicita(): Promise<boolean> {
+  const gancho = antesDeSalidaExplicita;
+  if (!gancho) return true;
+  try { return await gancho(); } catch { return true; }
+}

@@ -19,6 +19,7 @@ import { AccountMenu } from "@/components/account-menu";
 import { NovalvionIcono } from "@/components/novalvion-brand";
 import { ShellNavLink } from "@/components/shell-nav-link";
 import { EmpresaSessionProvider } from "@/lib/empresa-session";
+import type { ContextoBorradores } from "@/lib/borradores/contexto";
 import { capacidadesFacturacion } from "@/lib/facturacion/capacidades";
 import { puedeUsarPortalesProveedores } from "@/lib/proveedores/acceso";
 import type { RolGlobal } from "@/lib/roles";
@@ -30,6 +31,8 @@ type Props = {
   rol: string;
   modulos: Modulo[];
   permisos?: PermisoModulo[];
+  /** BORR-1b — calculado en el layout (servidor); el shell solo lo reenvía al provider. */
+  borradores?: ContextoBorradores | null;
   children: React.ReactNode;
 };
 
@@ -151,6 +154,7 @@ export function AppShell({
   rol,
   modulos,
   permisos = [],
+  borradores = null,
   children,
 }: Props) {
   const pathname = usePathname();
@@ -718,6 +722,7 @@ export function AppShell({
       permisos={permisos ?? []}
       empresaNombre={empresaNombre}
       username={username}
+      borradores={borradores}
     >
     <div
       className={[

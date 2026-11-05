@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NovalvionIcono } from "@/components/novalvion-brand";
-import { cerrarSesion, seleccionarEmpresa, salidaStaffSolicitada } from "@/lib/session-navigation";
+import { cerrarSesion, permitirSalidaExplicita, seleccionarEmpresa, salidaStaffSolicitada } from "@/lib/session-navigation";
 
 type Empresa = { id: number; codigo: string; nombre: string; slug: string; modulos: string[] };
 type Props = { empresas: Empresa[]; user: { username: string; rol: string } };
@@ -45,8 +45,11 @@ export function SelectEmpresaClient({ empresas, user }: Props) {
     enCurso.current = "salir";
     setPendiente("salir");
     setError("");
-    try { await cerrarSesion(fetch, (ruta) => window.location.replace(ruta)); }
-    catch {
+    try {
+      // BORR-1b: salida EXPLÍCITA → decisión informada sobre borradores locales (gancho opcional; nunca bloquea por errores).
+      if (!(await permitirSalidaExplicita())) { enCurso.current = null; setPendiente(null); return; }
+      await cerrarSesion(fetch, (ruta) => window.location.replace(ruta));
+    } catch {
       enCurso.current = null;
       setPendiente(null);
       setError("No se pudo cerrar sesión. Intenta nuevamente.");
