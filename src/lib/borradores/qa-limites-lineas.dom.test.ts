@@ -10,7 +10,7 @@ import {
   crearAlmacenIndexedDB, crearAlmacenSegunPreferencia, crearNucleoBorradores, establecerFabricaCanal, reiniciarCoordinacionParaPruebas,
   type AlmacenPreferencias, type AmbitoBorrador, type NucleoBorradores, type Resultado,
 } from "@/lib/borradores";
-import { aEstado, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, MAX_LINEAS_BORRADOR, restaurarPayload } from "@/lib/compras/requerimiento-borrador";
+import { aEstado, construirPayload, ESQUEMA_REQUERIMIENTO_BORRADOR, excedeMaxLineasRequerimiento, MAX_LINEAS_BORRADOR, restaurarPayload } from "@/lib/compras/requerimiento-borrador";
 import { construirPayloadFondo, restaurarPayloadFondo, aFormularioFondo, MAX_LINEAS_FONDO } from "@/lib/tms/fondo-borrador";
 import { construirPayloadGasto, restaurarPayloadGasto, aFormularioGasto, type EstadoGastoForm } from "@/lib/tms/gasto-borrador";
 import { crearRequerimientoSchema } from "@/lib/compras/requerimiento-schema";
@@ -43,17 +43,18 @@ describe("QA-F · Requerimientos de compra: máximo real de 500 líneas coherent
     expect(crearRequerimientoSchema.safeParse({ ...base, lineas: Array.from({ length: 501 }, (_, i) => linea(i)) }).success).toBe(false);
   });
 
-  it("F2) 1, 499, 500 líneas: ida y vuelta idéntica (orden y valores); 501 NO se restaura (se conserva y se avisa, no se aplica a medias)", () => {
-    for (const n of [1, 499, 500]) {
+  it("F2) 1, 499, 500 líneas: ida y vuelta idéntica; 501 y 600 TAMBIÉN se restauran íntegras (se conservan como borrador, pero NO se pueden enviar al backend)", () => {
+    for (const n of [1, 499, 500, 501, 600]) {
       const e = aEstado({ fecha: HOY, entidad: 4, requirente: 2, encargado: 0, observaciones: "", lineas: Array.from({ length: n }, (_, i) => lc(i + 1)) });
       const p = construirPayload(e);
       expect(p.lineas).toHaveLength(n);
       const r = restaurarPayload(JSON.parse(JSON.stringify(p)));
-      expect(r.ok && r.estado.lineas.map((l) => [l.clave, l.repuesto_descripcion, l.total])).toEqual(e.lineas.map((l) => [l.clave, l.repuesto_descripcion, l.total]));
+      expect(r.ok).toBe(true);
+      // ninguna línea desaparece ni cambia: mismas claves, orden y valores
+      expect(r.ok && r.estado.lineas).toEqual(e.lineas);
+      // el límite de 500 es de ENVÍO: hasta 500 es enviable, más solo se conserva como borrador
+      expect(excedeMaxLineasRequerimiento(n)).toBe(n > 500);
     }
-    const sobra = JSON.parse(JSON.stringify(construirPayload(aEstado({ fecha: HOY, entidad: 4, requirente: 2, encargado: 0, observaciones: "", lineas: Array.from({ length: 500 }, (_, i) => lc(i + 1)) }))));
-    sobra.lineas.push({ ...sobra.lineas[0], clave: "L501" });
-    expect(restaurarPayload(sobra).ok).toBe(false); // el borrador no se pierde: la recuperación avisa (prueba DOM de BORR-1d) y el registro sigue descartable
   });
 });
 
@@ -136,29 +137,29 @@ describe("QA-F · Compras: la línea 501 no puede aparecer ni perderse en silenc
     await hasta(async () => { const l = ok(await nucleo.leer(ambito, { esquemaVersion: ESQUEMA_REQUERIMIENTO_BORRADOR })); expect(l.estado !== "vacio" && (l.borrador.payload as { lineas: unknown[] }).lineas.length).toBe(500); });
   });
 
-  // HALLAZGO F-02 (P1 candidato). El botón «+ Agregar línea» de Compras se protege SOLO con el atributo `disabled`
-  // (requerimiento-form-client.tsx: `disabled={deshabilitado || lineas.length >= 500}` y `setLineas(actual => [...actual, ...])` sin guarda
-  // funcional). Varios clics dentro del mismo tick (antes del re-render) pasan el atributo y agregan líneas por encima de 500;
-  // `construirPayload` hace `slice(0, 500)` y el borrador queda con 500 mientras la pantalla tiene más: truncamiento silencioso con «Guardado».
-  // Esta prueba describe el comportamiento CORRECTO esperado y está marcada `fails` para dejar el defecto reproducido sin ocultarlo.
-  it.fails("F6) [F-02 REPRODUCIDO] clics simultáneos en la línea 499 no deben pasar de 500 líneas (ni dejar líneas fuera del borrador)", async () => {
+  // F-02 (RESUELTO por BORR-1d-FIX-01 / PR #571): el manejador de «+ Agregar línea» tiene una guarda funcional y el adaptador ya no recorta.
+  it("F6) clics simultáneos en la línea 499 producen EXACTAMENTE 500 líneas y el botón queda deshabilitado", async () => {
     const h = await con499();
     await hasta(() => expect(secciones(h)).toBe(499));
     await act(async () => { const b = agregar(h); b.click(); b.click(); b.click(); });
-    expect(secciones(h)).toBeLessThanOrEqual(500);
+    expect(secciones(h)).toBe(500);
+    expect(agregar(h).disabled).toBe(true);
+    await act(async () => { const b = agregar(h); b.click(); b.click(); });
+    expect(secciones(h)).toBe(500); // ningún clic posterior crea la 501
   });
 
-  it("F6b) [F-02 CARACTERIZACIÓN] con clics simultáneos la pantalla supera 500 líneas y el borrador guardado queda en 500 con «Guardado» (truncamiento silencioso)", async () => {
+  it("F6b) tras clics simultáneos el formulario no supera 500 líneas y las líneas persistidas coinciden EXACTAMENTE con las del formulario (sin truncamiento)", async () => {
     const h = await con499();
     await hasta(() => expect(secciones(h)).toBe(499));
     await act(async () => { const b = agregar(h); b.click(); b.click(); b.click(); });
     const enPantalla = secciones(h);
-    expect(enPantalla).toBeGreaterThan(500); // reproduce el defecto: el formulario permite más de 500
+    expect(enPantalla).toBeLessThanOrEqual(500);
     await hasta(() => expect(h.host.querySelector("[data-estado-autoguardado]")?.getAttribute("data-estado-autoguardado")).toBe("guardado"), 90000);
     const l = ok(await nucleo.leer(ambito, { esquemaVersion: ESQUEMA_REQUERIMIENTO_BORRADOR }));
-    const guardadas = l.estado !== "vacio" ? (l.borrador.payload as { lineas: unknown[] }).lineas.length : -1;
-    console.info(`F-02: líneas en pantalla=${enPantalla}, líneas guardadas=${guardadas}`);
-    expect(guardadas).toBe(500); // truncado por slice(0, 500) mientras el indicador dice «Guardado»: P1 abierto (ver expediente)
-    expect(guardadas).toBeLessThan(enPantalla);
+    const guardadas = l.estado !== "vacio" ? (l.borrador.payload as { lineas: { repuestoDescripcion: string; total: string }[] }).lineas : [];
+    expect(guardadas).toHaveLength(enPantalla);
+    const delFormulario = [...h.host.querySelectorAll("label")].filter((x) => (x.firstChild?.textContent ?? "").trim() === "Repuesto a comprar").map((x) => (x.querySelector("input") as HTMLInputElement).value);
+    expect(delFormulario).toHaveLength(enPantalla);
+    expect(guardadas.map((g) => g.repuestoDescripcion)).toEqual(delFormulario); // mismo contenido y mismo orden, línea por línea
   });
 });
