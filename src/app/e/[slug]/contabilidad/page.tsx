@@ -40,6 +40,7 @@ function SeleccionContable({ slug }: { slug: string }) {
   const entidad = entidades.find((e) => String(e.id) === seleccion);
   return <div className="space-y-4">
     <h1 className="text-2xl font-semibold">Contabilidad{empresa ? ` — ${empresa}` : ""}</h1>
+    <a className="underline" href={`/e/${encodeURIComponent(slug)}/contabilidad/bancos`}>Consultar cuentas bancarias contables</a>
     <p>Se usa la empresa donde ingresaste. Los permisos se administran en Administración → Usuarios.</p>
     {entidades.length > 1 ? <label>Libro contable <select aria-label="Libro contable" value={seleccion} onChange={(e) => setSeleccion(e.target.value)} className="rounded border border-[var(--border)] bg-[var(--input)] p-2">
       <option value="">Seleccionar libro</option>

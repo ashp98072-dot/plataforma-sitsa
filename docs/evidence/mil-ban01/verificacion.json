@@ -1,0 +1,57 @@
+﻿{
+    "base":  "0862cdcf852a47bc4e4ae9802a38b2f1942d018b",
+    "unitHttpDomRegression":  {
+                                  "files":  6,
+                                  "failed":  0,
+                                  "passed":  48
+                              },
+    "mariadb":  {
+                    "skipped":  0,
+                    "failed":  0,
+                    "passed":  3
+                },
+    "typescriptGlobal":  "PASS",
+    "eslint":  "PASS --max-warnings 0",
+    "sources":  [
+                    {
+                        "file":  "src/lib/contabilidad/bancos.ts",
+                        "sha256":  "c8b907dadf286e80fae06355cfc02a93687542f73d35d5a18f95b6bab0f6ec60"
+                    },
+                    {
+                        "file":  "src/lib/contabilidad/bancos-shared.ts",
+                        "sha256":  "f249175eb27140d314cd17d04e4a00c0add32cda076c6f44b6f7cfe41301e96e"
+                    },
+                    {
+                        "file":  "src/lib/contabilidad/bancos.test.ts",
+                        "sha256":  "2b44ba1b518622179f2a43c56264725e084f3de04eb6f4f3f42635e5323a933e"
+                    },
+                    {
+                        "file":  "src/lib/contabilidad/bancos-http.test.ts",
+                        "sha256":  "d11f287c878dc997303ba65d2727a9bad140a1ddc8d931f268673b064573e520"
+                    },
+                    {
+                        "file":  "src/lib/contabilidad/bancos.dom.test.ts",
+                        "sha256":  "3753fa4afea8e31c7f01d4891a300f068d642e4122cbc597f97025ff971cc885"
+                    },
+                    {
+                        "file":  "src/lib/contabilidad/bancos.db.test.ts",
+                        "sha256":  "4cdfdf43b9f89dba053f08064ac3b34ca7549e8a2e5e6ddf9b5a115f3954c13a"
+                    },
+                    {
+                        "file":  "src/components/contabilidad/bancos-client.tsx",
+                        "sha256":  "4479f12a72c15c27845fc2a544397adb49966d42a9fe44297c84062dbdb88751"
+                    },
+                    {
+                        "file":  "src/app/api/empresas/[slug]/contabilidad/bancos/route.ts",
+                        "sha256":  "0d245808c97d7ae9a9b0e28f006511f085144b61c6841d7573c1ccc15c09f005"
+                    },
+                    {
+                        "file":  "src/app/e/[slug]/contabilidad/bancos/page.tsx",
+                        "sha256":  "85d0f44bd611e9960ac69e9a05367daa6bc85523e57d0bc41a492658f396436d"
+                    },
+                    {
+                        "file":  "src/app/e/[slug]/contabilidad/page.tsx",
+                        "sha256":  "00c5a307732dc10922d166da67c5a185cd0ba9693e3f47febefbd31d1c0c74e6"
+                    }
+                ]
+}

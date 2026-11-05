@@ -1,0 +1,49 @@
+﻿{
+    "alias":  "qa-desechable-ban01",
+    "suite":  "src/lib/contabilidad/bancos.db.test.ts",
+    "identity":  {
+                     "version":  "11.8.9-MariaDB",
+                     "port":  3399,
+                     "bindAddress":  "127.0.0.1",
+                     "fk":  1,
+                     "checksEnabled":  1,
+                     "datadirSha256":  "74ca42a985e809eff177c9975f31626edd4929c22a3905176901c73480f94ac2"
+                 },
+    "exitCode":  0,
+    "tests":  {
+                  "passed":  3,
+                  "failed":  0,
+                  "skipped":  0
+              },
+    "residualSchemas":  [
+
+                        ],
+    "poolClosed":  true,
+    "evidence":  [
+                     {
+                         "alias":  "qa-desechable-ban01",
+                         "version":  "11.8.9-MariaDB",
+                         "port":  3399,
+                         "datadirSha256":  "74ca42a985e809eff177c9975f31626edd4929c22a3905176901c73480f94ac2",
+                         "database":  "ban_qa01_7366536dabab48afb2426866b18aa58b",
+                         "migration":  "FACT-4 bloque cont_cuentas_bancarias original",
+                         "migrationSha256":  "e9840f2f37621a66f72c5db6fec4f25773b3154d2ad2d23259b17e178512fe2a",
+                         "ddlSha256":  "7e7803f9b1aaf750aeae63bf432825d046bb118bd9b45dd800b5ec70635d647e"
+                     },
+                     {
+                         "cleanup":  true,
+                         "ownershipVerified":  true
+                     }
+                 ],
+    "shutdownRequested":  true,
+    "binarySha256":  "de2c4350e36bcdff6a18b614a21701a8a827509f44f51274411bb52a2849f9e5",
+    "cierre":  {
+                   "pid":  13056,
+                   "pidTerminated":  true,
+                   "port3399Free":  true,
+                   "shutdownConfirmed":  true,
+                   "mySQL80State":  "Running",
+                   "mySQL80Pid":  5796,
+                   "datadirRetained":  true
+               }
+}
