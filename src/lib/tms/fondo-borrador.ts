@@ -10,7 +10,18 @@ import { destinoPagoEmpleado } from "./destino-pago-empleado";
  * guarda si el usuario la sobrescribió (`cuentaOverride`); si no, se vuelve a sugerir desde el catálogo vigente al recuperar.
  */
 export const ESQUEMA_FONDO_BORRADOR = 1;
-export const MAX_LINEAS_FONDO_BORRADOR = 100;
+/**
+ * Máximo de líneas que ACEPTA el backend al crear (y al editar) una solicitud: `lineas: z.array(lineaSchema).min(1).max(40)` en
+ * `POST /tms/fondos` y en `PATCH /tms/fondos/[id]`. Es un límite de ENVÍO, no de borrador: el adaptador NO trunca nunca. Un borrador
+ * heredado con más líneas se conserva íntegro (el único límite de almacenamiento es el técnico del núcleo: si se excede, el indicador
+ * muestra «Error al guardar», jamás «Guardado») y solo se bloquea su envío hasta reducirlo.
+ */
+export const MAX_LINEAS_FONDO = 40;
+
+/** ¿Se excede el máximo de líneas que acepta el servidor? (bloquea el envío; nunca elimina nada). */
+export const excedeMaxLineasFondo = (cantidad: number) => cantidad > MAX_LINEAS_FONDO;
+export const mensajeExcesoLineasFondo = (cantidad: number) =>
+  `Esta solicitud tiene ${cantidad} líneas y el máximo permitido es ${MAX_LINEAS_FONDO}. No se ha eliminado ninguna: quita ${cantidad - MAX_LINEAS_FONDO} para poder enviarla.`;
 
 export type LineaFondoForm = {
   categoria: string; descripcion: string; cantidad: string; monto: string;
@@ -37,7 +48,7 @@ const derivada = (l: { metodoPago: string; empleadoId: string }, empleados: Empl
 export function construirPayloadFondo(e: EstadoFondoForm, empleados: EmpleadoPago[]): PayloadFondoBorrador {
   return {
     cabecera: { entidadRequirenteId: e.entidadRequirenteId, requirenteUsuarioId: e.requirenteUsuarioId, solicitanteUsuarioId: e.solicitanteUsuarioId, fechaRequerimiento: e.fechaRequerimiento, observaciones: e.observaciones },
-    lineas: e.lineas.slice(0, MAX_LINEAS_FONDO_BORRADOR).map((l) => ({
+    lineas: e.lineas.map((l) => ({
       categoria: l.categoria, descripcion: l.descripcion, cantidad: l.cantidad, monto: l.monto, fechaViaje: l.fechaViaje, empleadoId: l.empleadoId, vehiculoId: l.vehiculoId,
       clienteId: l.clienteId, planId: l.planId, empleadoNombre: l.empleadoNombre, cargo: l.cargo, metodoPago: l.metodoPago,
       cuentaOverride: l.cuenta.trim() === derivada(l, empleados) ? null : l.cuenta,
@@ -58,7 +69,7 @@ export function restaurarPayloadFondo(bruto: unknown): ResultadoRestauracionFond
   if (!esObjeto(bruto) || !esObjeto(bruto.cabecera) || !Array.isArray(bruto.lineas)) return { ok: false, motivo: "estructura" };
   const c = bruto.cabecera;
   if (!esIdTexto(c.entidadRequirenteId) || !esIdTexto(c.requirenteUsuarioId) || !esIdTexto(c.solicitanteUsuarioId) || !esTexto(c.fechaRequerimiento) || !esTexto(c.observaciones)) return { ok: false, motivo: "cabecera" };
-  if (bruto.lineas.length < 1 || bruto.lineas.length > MAX_LINEAS_FONDO_BORRADOR) return { ok: false, motivo: "lineas" };
+  if (bruto.lineas.length < 1) return { ok: false, motivo: "lineas" }; // sin tope: un borrador con más de 40 líneas se recupera íntegro
   const lineas: LineaRestaurada[] = [];
   for (const l of bruto.lineas) {
     if (!esObjeto(l)) return { ok: false, motivo: "linea" };

@@ -515,6 +515,124 @@ describe("envío oficial e idempotencia", () => {
   });
 });
 
+describe("BORR-1e-FIX-01: límite de 40 líneas y borradores heredados", () => {
+  const mas = (n: number): EstadoFondoForm => ({ ...estadoCompleto(0), lineas: Array.from({ length: n }, (_, i) => lineaF(i + 1, { descripcion: `Gasto ${i + 1}`, monto: `${i + 1}.07`, cantidad: `${(i % 9) + 1}` })) });
+  const filas = (h: { host: HTMLElement }) => [...formEl(h).querySelectorAll("button")].filter((b) => b.textContent === "Quitar");
+  const agregar = (h: { host: HTMLElement }) => boton("+ Agregar línea", formEl(h))!;
+
+  it("1) a 3) y 5) 39 líneas → se agrega la 40 → el botón queda deshabilitado, con el máximo visible, y ninguna línea desaparece", async () => {
+    await sembrar(mas(39));
+    const h = await abrirFormulario();
+    await recuperar(h);
+    expect(filas(h)).toHaveLength(39);
+    expect(agregar(h).disabled).toBe(false);
+    expect(h.host.querySelector("[data-limite-lineas]")?.textContent).toMatch(/Máximo 40 líneas por solicitud \(39\/40\)/);
+    await clic(agregar(h));
+    expect(filas(h)).toHaveLength(40);
+    expect(agregar(h).disabled).toBe(true);
+    expect(h.host.querySelector("[data-limite-lineas]")?.textContent).toMatch(/\(40\/40\)/);
+    expect(entrada(h, "Descripción", 0).value).toBe("Gasto 1");
+    expect(entrada(h, "Descripción", 38).value).toBe("Gasto 39");
+  });
+
+  it("4) clics simultáneos en la línea 39 no pueden crear una línea 41", async () => {
+    await sembrar(mas(39));
+    const h = await abrirFormulario();
+    await recuperar(h);
+    await act(async () => { const b = agregar(h); b.click(); b.click(); b.click(); });
+    expect(filas(h)).toHaveLength(40);
+    await act(async () => { agregar(h).click(); });
+    expect(filas(h)).toHaveLength(40);
+  });
+
+  it("6) y 12) un borrador de 40 líneas se recupera íntegro: orden, descripciones, cantidades y montos", async () => {
+    await sembrar(mas(40));
+    const h = await abrirFormulario();
+    await recuperar(h);
+    expect(filas(h)).toHaveLength(40);
+    expect([0, 17, 39].map((i) => entrada(h, "Descripción", i).value)).toEqual(["Gasto 1", "Gasto 18", "Gasto 40"]);
+    expect([0, 17, 39].map((i) => entrada(h, "Monto (Q)", i).value)).toEqual(["1.07", "18.07", "40.07"]);
+    expect([0, 17, 39].map((i) => entrada(h, "Cantidad", i).value)).toEqual(["1", "9", "4"]);
+    expect(guardarBtn(h).disabled).toBe(false);
+  });
+
+  it("8) y 9) y 10) un borrador heredado de 101 líneas se recupera ÍNTEGRO, avisa del máximo y bloquea el POST (sin eliminar nada)", { timeout: 90_000 }, async () => {
+    await sembrar(mas(101));
+    const h = await abrirFormulario();
+    await hasta(() => expect(dialogo()).not.toBeNull());
+    await hasta(() => expect(llamadas.some((l) => l.url.endsWith("/catalogos"))).toBe(true));
+    await esperar(80);
+    await clic(boton("Recuperar borrador"));
+    await hasta(() => expect(dialogo()).toBeNull(), 30_000);
+    await hasta(() => expect(filas(h)).toHaveLength(101), 30_000); // nada se truncó
+    expect(entrada(h, "Descripción", 100).value).toBe("Gasto 101");
+    expect(h.host.querySelector("[data-exceso-lineas]")?.textContent).toMatch(/101 líneas.*máximo permitido es 40/);
+    expect(guardarBtn(h).disabled).toBe(true);
+    await clic(guardarBtn(h));
+    await esperar(80);
+    expect(posts()).toHaveLength(0); // el POST está bloqueado
+    expect(await guardado()).toMatchObject({ estadoEnvio: "ninguno" });
+  });
+
+  it("11) y 15) reducir de 41 a 40 líneas habilita el envío, que usa la clave de idempotencia y las 40 líneas en orden", { timeout: 60_000 }, async () => {
+    await sembrar(mas(41));
+    const h = await abrirFormulario();
+    await recuperar(h).catch(() => undefined);
+    await hasta(() => expect(filas(h)).toHaveLength(41), 30_000);
+    expect(h.host.querySelector("[data-exceso-lineas]")?.textContent).toMatch(/41 líneas.*quita 1/);
+    expect(guardarBtn(h).disabled).toBe(true);
+    await clic(filas(h)[40]);
+    expect(filas(h)).toHaveLength(40);
+    await hasta(() => expect(h.host.querySelector("[data-exceso-lineas]")).toBeNull());
+    await hasta(() => expect(guardarBtn(h).disabled).toBe(false));
+    await hasta(() => expect(estadoInd(h)).toBe("guardado"));
+    await enviar(h);
+    await hasta(() => expect(posts()).toHaveLength(1));
+    expect((posts()[0].cuerpo!.lineas as unknown[]).length).toBe(40);
+    expect(posts()[0].cuerpo!.claveIdempotencia).toMatch(CLAVE_ENVIO_REGEX);
+    expect((posts()[0].cuerpo!.lineas as { descripcion: string }[]).map((l) => l.descripcion).slice(0, 3)).toEqual(["Gasto 1", "Gasto 2", "Gasto 3"]);
+  });
+
+  it("7) el borrador de 101 líneas conserva TODAS al volver a guardarse (no se trunca al editar)", { timeout: 90_000 }, async () => {
+    await sembrar(mas(101));
+    const h = await abrirFormulario();
+    await hasta(() => expect(dialogo()).not.toBeNull());
+    await hasta(() => expect(llamadas.some((l) => l.url.endsWith("/catalogos"))).toBe(true));
+    await esperar(80);
+    await clic(boton("Recuperar borrador"));
+    await hasta(() => expect(filas(h)).toHaveLength(101));
+    await escribir(entrada(h, "Descripción", 100), "Gasto 101 editada");
+    await hasta(() => expect(estadoInd(h)).toBe("guardado"));
+    const p = (await guardado())!.payload as { lineas: { descripcion: string }[] };
+    expect(p.lineas).toHaveLength(101);
+    expect(p.lineas[100].descripcion).toBe("Gasto 101 editada");
+  });
+
+  it("13) si se excede el límite TÉCNICO de almacenamiento: «Error al guardar» (nunca «Guardado») y no se pierde nada de la pantalla", async () => {
+    const pequeno = crearNucleoBorradores({ almacen: crearAlmacenSegunPreferencia(almacenReal, prefs), appBuild: "prueba-dom", maxPayloadChars: 3000 });
+    const h = await abrirFormulario({ nucleo: pequeno });
+    await hasta(() => expect(estadoInd(h)).toBe("inicial"));
+    for (let i = 0; i < 25; i++) await clic(agregar(h));
+    await hasta(() => expect(textoInd(h)).toMatch(/Error al guardar/));
+    expect(textoInd(h)).toMatch(/demasiado grande/);
+    expect(textoInd(h)).not.toMatch(/^Guardado/);
+    expect(filas(h)).toHaveLength(26);
+  });
+
+  it("16) la edición de una solicitud existente no cambia: sin límite de creación y PATCH sin clave", async () => {
+    const h = nuevoHost();
+    await montar(pagina(), h);
+    await hasta(() => expect(boton("Editar", h.host)).toBeDefined());
+    await clic(boton("Editar", h.host));
+    await hasta(() => expect(boton("Guardar cambios", h.host)).toBeDefined());
+    expect(h.host.querySelector("[data-limite-lineas]")).toBeNull();
+    expect(h.host.querySelector("[data-estado-autoguardado]")).toBeNull();
+    await clic(boton("Guardar cambios", h.host));
+    await hasta(() => expect(llamadas.some((l) => l.metodo === "PATCH")).toBe(true));
+    expect(llamadas.find((l) => l.metodo === "PATCH")!.cuerpo).not.toHaveProperty("claveIdempotencia");
+  });
+});
+
 describe("alcance", () => {
   it("24) editar una solicitud existente no cambia: sin autoguardado, sin escrituras locales, PATCH con acción «editar» y sin clave", async () => {
     await sembrar();
