@@ -1,0 +1,22 @@
+﻿{
+    "passed":  3,
+    "failed":  0,
+    "skipped":  0,
+    "cases":  [
+                  {
+                      "title":  "catálogo real por entidad/empresa, inactivas explícitas y referencia nunca devuelta",
+                      "status":  "passed",
+                      "duration":  10.49369999999999
+                  },
+                  {
+                      "title":  "entidad ajena/inactiva denegada, Admin conserva consulta histórica vacía",
+                      "status":  "passed",
+                      "duration":  5.647299999999973
+                  },
+                  {
+                      "title":  "FK original rechaza cuenta contable de otra entidad/empresa e inexistente",
+                      "status":  "passed",
+                      "duration":  8.814200000000028
+                  }
+              ]
+}
