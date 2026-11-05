@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { lineaBitacora, type EventoBitacoraVista } from "@/lib/facturacion/bitacora-formato";
 import { CxpAntiguedad } from "@/components/contabilidad/cxp-antiguedad";
 import { CxpEstadoCuenta } from "@/components/contabilidad/cxp-estado-cuenta";
+import { CxpSituacionFactura } from "@/components/contabilidad/cxp-situacion-factura";
+import type { DesgloseFacturaLectura } from "@/lib/contabilidad/cxp/saldo-lectura";
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Config = { regimenFiscal: "GENERAL" | "PEQUENO_CONTRIBUYENTE"; sujetoIsr: boolean; cuentaProveedorId: number | null; cuentaAnticipoId: number | null; cuentaGastoId: number | null; activo: boolean };
@@ -12,8 +14,7 @@ type Cuenta = { id: number; codigo: string; nombre: string; tipo: string };
 type Factura = {
   id: number; proveedorId: number; proveedorNombre: string; serie: string; numero: string; fechaDocumento: string; fechaVencimiento: string | null; baseNeto: string; ivaMonto: string;
   totalDocumento: string; isrMonto: string; isrPorcentaje: string; totalNetoPagar: string; estadoAdmin: string; motivoAnulacion: string | null;
-  retencionIsr: string; montoPagadero: string; pagado: string; saldo: string; estadoFinanciero: "PENDIENTE" | "PARCIAL" | "PAGADA" | "ANULADA";
-};
+} & Omit<DesgloseFacturaLectura, "totalDocumento">;
 type Calculo = {
   baseNeto: string; ivaMonto: string; totalDocumento: string; isrPorcentaje: string; isrMonto: string; isrTramo: string; isrFijo: string; isrVariable: string;
   totalNetoPagar: string; reglaIsr: string; advertencias: string[]; proveedorNombre: string;
@@ -26,7 +27,6 @@ type Pago = {
 const campo = "rounded border border-[var(--border)] bg-[var(--input)] p-2 text-sm";
 const boton = "rounded border border-[var(--border)] px-3 py-1 text-sm hover:bg-[var(--input)] disabled:opacity-50";
 const q = (n: string) => `Q${Number(n).toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const ESTADO_FIN: Record<Factura["estadoFinanciero"], string> = { PENDIENTE: "Pendiente", PARCIAL: "Pago parcial", PAGADA: "Pagada", ANULADA: "Anulada" };
 async function api(url: string, init?: RequestInit) {
   const res = await fetch(url, { cache: "no-store", ...init });
   const data = await res.json().catch(() => ({ error: "Respuesta inválida del servidor." }));
@@ -167,8 +167,8 @@ function Facturas({ slug, entidadId, puedeRegistrar, puedeAnular }: { slug: stri
         <td className="p-2">{x.fechaDocumento}{x.fechaVencimiento && <small className="block">Vence {x.fechaVencimiento}</small>}</td><td>{x.proveedorNombre}</td><td>{x.serie ? `${x.serie}-` : ""}{x.numero}</td>
         <td>{q(x.baseNeto)}</td><td>{q(x.ivaMonto)}</td><td>{q(x.totalDocumento)}</td>
         <td>{q(x.retencionIsr)}{Number(x.isrMonto) > 0 && <small className="block">tasa {x.isrPorcentaje}%</small>}</td><td>{q(x.montoPagadero)}</td>
-        <td>{q(x.pagado)}</td><td className="font-medium">{q(x.saldo)}</td>
-        <td>{ESTADO_FIN[x.estadoFinanciero]}{x.motivoAnulacion && <small className="block">{x.motivoAnulacion}</small>}</td>
+        <td>{q(x.pagado)}</td><td className="font-medium">{x.saldo === null ? "Revisión de integridad pendiente" : q(x.saldo)}</td>
+        <td><CxpSituacionFactura factura={x} />{x.motivoAnulacion && <small className="block">{x.motivoAnulacion}</small>}</td>
         <td>{puedeAnular && x.estadoAdmin === "REGISTRADA" && (anulando === x.id
           ? <span className="flex gap-1"><input className={campo} placeholder="Motivo" value={motivo} onChange={e => setMotivo(e.target.value)} /><button type="button" className={boton} disabled={busy || motivo.trim().length < 3} onClick={() => anular(x.id)}>Confirmar</button><button type="button" className={boton} onClick={() => setAnulando(null)}>Cancelar</button></span>
           : <button type="button" className={boton} onClick={() => { setAnulando(x.id); setMotivo(""); }}>Anular</button>)}</td>
@@ -210,7 +210,7 @@ function Pagos({ slug, entidadId, puedeRegistrar, puedeReversar }: { slug: strin
     if (!puedeRegistrar || !f.proveedorId) return;
     const ac = new AbortController();
     fetch(`${base}/facturas?entidad=${entidadId}&proveedorId=${f.proveedorId}&estado=REGISTRADA&pageSize=100`, { cache: "no-store", signal: ac.signal }).then(async r => ({ ok: r.ok, d: await r.json() }))
-      .then(({ ok, d }) => { if (!ac.signal.aborted && ok) setFacturas((d.facturas as Factura[]).filter(x => Number(x.saldo) > 0)); }).catch(() => undefined);
+      .then(({ ok, d }) => { if (!ac.signal.aborted && ok) setFacturas((d.facturas as Factura[]).filter(x => x.saldo !== null && Number(x.saldo) > 0)); }).catch(() => undefined);
     return () => ac.abort();
   }, [base, entidadId, puedeRegistrar, f.proveedorId, version]);
 
@@ -247,9 +247,9 @@ function Pagos({ slug, entidadId, puedeRegistrar, puedeReversar }: { slug: strin
       {f.proveedorId && (facturas.length === 0 ? <p className="text-sm">Este proveedor no tiene facturas con saldo pendiente.</p>
         : <table className="w-full text-sm"><thead><tr>{["Documento", "Total", "Retención ISR", "Monto pagadero", "Pagado", "Saldo", "Aplicar a este pago"].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
           <tbody>{facturas.map(x => <tr key={x.id} className="border-t border-[var(--border)]">
-            <td className="p-2">{x.serie ? `${x.serie}-` : ""}{x.numero}</td><td>{q(x.totalDocumento)}</td><td>{q(x.retencionIsr)}</td><td>{q(x.montoPagadero)}</td><td>{q(x.pagado)}</td><td className="font-medium">{q(x.saldo)}</td>
+            <td className="p-2">{x.serie ? `${x.serie}-` : ""}{x.numero}</td><td>{q(x.totalDocumento)}</td><td>{q(x.retencionIsr)}</td><td>{q(x.montoPagadero)}</td><td>{q(x.pagado)}</td><td className="font-medium">{x.saldo === null ? "Revisión de integridad pendiente" : q(x.saldo)}</td>
             <td><span className="flex gap-1"><input className={`${campo} w-32`} inputMode="decimal" aria-label={`Monto a aplicar a ${x.numero}`} placeholder="0.00" value={montos[x.id] ?? ""} onChange={e => setMontos({ ...montos, [x.id]: e.target.value })} />
-              <button type="button" className={boton} onClick={() => setMontos({ ...montos, [x.id]: x.saldo })}>Pagar saldo</button></span></td>
+              <button type="button" className={boton} disabled={x.saldo === null} onClick={() => { if (x.saldo !== null) setMontos({ ...montos, [x.id]: x.saldo }); }}>Pagar saldo</button></span></td>
           </tr>)}</tbody></table>)}
       <div className="flex items-center gap-3"><button type="button" className={boton} onClick={registrar} disabled={busy || !f.proveedorId || !f.fechaPago || totalCentavos === 0}>Registrar pago</button>
         <span className="text-sm">Total a pagar: <strong>{q((totalCentavos / 100).toFixed(2))}</strong></span></div>

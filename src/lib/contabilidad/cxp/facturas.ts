@@ -5,7 +5,8 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCxp, esConflictoTransitorio, esErrorDuplicado } from "./errores";
 import { obtenerAplicado } from "./aplicaciones";
 import { calcularIsrProveedor, type RegimenFiscal, type ResultadoIsr, type TramoIsr } from "./isr-proveedor";
-import { desgloseFinanciero, type EstadoAdminCxp, type EstadoFinancieroCxp } from "./saldo";
+import type { EstadoAdminCxp } from "./saldo";
+import { desgloseFacturaLectura, type DesgloseFacturaLectura } from "./saldo-lectura";
 import { documentoNormalizado, fechaIso, idPositivo, importe, textoOpcional } from "./validacion";
 
 /**
@@ -30,10 +31,9 @@ export type FacturaCxp = {
   creadoPor: number; creadoEn: string; anuladoPor: number | null; anuladoEn: string | null; motivoAnulacion: string | null;
   /**
    * Situación financiera DERIVADA (nunca columna): retención = isrMonto (se resta del total, NO es un pago), montoPagadero = total − retención,
-   * pagado = pagos REGISTRADOS aplicados, saldo = montoPagadero − pagado.
+   * pagado = pagos REGISTRADOS aplicados. Ante anomalía, saldo es null y requiere revisión explícita (no es crédito ni cero).
    */
-  retencionIsr: string; montoPagadero: string; pagado: string; saldo: string; estadoFinanciero: EstadoFinancieroCxp;
-};
+} & Omit<DesgloseFacturaLectura, "totalDocumento">;
 
 const TASA_IVA_REFERENCIA = "0.12";
 
@@ -105,7 +105,7 @@ const SELECT = `SELECT x.id, x.empresa_id, x.entidad_id, x.proveedor_id, p.nombr
 function mapear(r: RowDataPacket, aplicado = "0.00"): FacturaCxp {
   const estadoAdmin = String(r.estado_admin) as EstadoAdminCxp;
   const totalNetoPagar = new Decimal(String(r.total_neto_pagar)).toFixed(2);
-  const fin = desgloseFinanciero(estadoAdmin, { totalDocumento: String(r.total_documento), isrMonto: String(r.isr_monto), totalNetoPagar }, aplicado);
+  const fin = desgloseFacturaLectura(Number(r.id), estadoAdmin, { totalDocumento: String(r.total_documento), isrMonto: String(r.isr_monto), totalNetoPagar }, aplicado);
   return {
     id: Number(r.id), empresaId: Number(r.empresa_id), entidadId: Number(r.entidad_id), proveedorId: Number(r.proveedor_id), proveedorNombre: String(r.nombre_comercial),
     tipoDocumento: String(r.tipo_documento), serie: String(r.serie), numero: String(r.numero), fechaDocumento: String(r.fecha_documento),
@@ -116,6 +116,7 @@ function mapear(r: RowDataPacket, aplicado = "0.00"): FacturaCxp {
     creadoPor: Number(r.creado_por), creadoEn: String(r.creado_en), anuladoPor: r.anulado_por == null ? null : Number(r.anulado_por),
     anuladoEn: r.anulado_en == null ? null : String(r.anulado_en), motivoAnulacion: r.motivo_anulacion == null ? null : String(r.motivo_anulacion),
     retencionIsr: fin.retencionIsr, montoPagadero: fin.montoPagadero, pagado: fin.pagado, saldo: fin.saldo, estadoFinanciero: fin.estadoFinanciero,
+    excesoAplicado: fin.excesoAplicado, advertenciasIntegridad: fin.advertenciasIntegridad,
   };
 }
 
