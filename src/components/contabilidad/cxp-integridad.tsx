@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { estadoCargaVacio, formatearImporte, reducirCargaAntiguedad } from "@/lib/contabilidad/cxp/antiguedad-shared";
 import { CODIGOS_INTEGRIDAD, CODIGOS_SOLO_PAGOS, ROTULO_INTEGRIDAD, type RespuestaIntegridad } from "@/lib/contabilidad/cxp/integridad-shared";
 
@@ -16,6 +16,11 @@ export function CxpIntegridad({ slug, entidadId, onConsultarProveedor }: { slug:
   const [version, setVersion] = useState(0);
   const [carga, dispatch] = useReducer(reductor, estadoCargaVacio<RespuestaIntegridad>());
   const clave = useMemo(() => JSON.stringify([slug, entidadId, filtros, page, version]), [slug, entidadId, filtros, page, version]);
+  const claveExportacion = useMemo(() => JSON.stringify([slug, entidadId, filtros, version]), [slug, entidadId, filtros, version]);
+  const descarga = useRef<AbortController | null>(null);
+  const [exportacion,setExportacion] = useState<{ clave: string; controlador: AbortController } | null>(null);
+  const [errorExport,setErrorExport] = useState<{ clave: string; mensaje: string } | null>(null);
+  const exportando = exportacion?.clave === claveExportacion && !exportacion.controlador.signal.aborted;
   const lista = !carga.cargando && carga.claveLista === clave ? carga.lista : null;
   const pagosVisibles = carga.lista?.pagosVisibles ?? false;
   useEffect(() => {
@@ -32,11 +37,37 @@ export function CxpIntegridad({ slug, entidadId, onConsultarProveedor }: { slug:
       }).catch(() => { if (!ac.signal.aborted) dispatch({ tipo: "FALLO", clave, error: "No se pudo consultar la integridad." }); });
     return () => ac.abort();
   }, [slug, entidadId, filtros, page, version, clave]);
+  useLayoutEffect(() => () => { descarga.current?.abort(); descarga.current = null; }, [claveExportacion]);
+  async function exportar() {
+    if (!lista || exportando || descarga.current) return;
+    const controlador = new AbortController();
+    descarga.current = controlador;
+    setExportacion({ clave: claveExportacion, controlador });
+    setErrorExport(null);
+    let objectUrl: string | undefined;
+    try {
+      const sp = new URLSearchParams({ entidad: entidadId });
+      for (const [k,v] of Object.entries(filtros)) if (v) sp.set(k,v);
+      const res = await fetch(`/api/empresas/${slug}/contabilidad/cxp/integridad/export?${sp}`, { cache: "no-store", signal: controlador.signal });
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).error ?? "No se pudo exportar la integridad.");
+      if (!res.headers.get("content-type")?.startsWith("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) throw new Error("Archivo de exportación inválido.");
+      const blob = await res.blob();
+      if (controlador.signal.aborted || descarga.current !== controlador) return;
+      objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = objectUrl; a.download = `cxp-integridad-entidad-${entidadId}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) {
+      if (!controlador.signal.aborted && descarga.current === controlador) setErrorExport({ clave: claveExportacion, mensaje: e instanceof Error ? e.message : "No se pudo exportar la integridad." });
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (descarga.current === controlador) { descarga.current = null; setExportacion(null); }
+    }
+  }
   const paginas = Math.max(1, Math.ceil((lista?.totalAdvertencias ?? 0) / 25));
   return <section className="space-y-3" data-testid="cxp-integridad">
     <h2 className="text-lg font-semibold">Integridad · Entidad #{entidadId}</h2>
     <p role="note" className="rounded border border-[var(--border)] p-3 text-xs text-[var(--muted)]">{ROTULO_INTEGRIDAD} Los excesos son informativos y no representan crédito ni saldo a favor.</p>
-    <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); setFiltros({ ...borrador }); setPage(1); setVersion(v => v + 1); }}>
+    <form className="flex flex-wrap items-end gap-2" onSubmit={e => { e.preventDefault(); descarga.current?.abort(); descarga.current = null; setFiltros({ ...borrador }); setPage(1); setVersion(v => v + 1); }}>
       <label className="text-sm">Proveedor (ID opcional)<input className={`${campo} block`} aria-label="Proveedor (ID opcional)" inputMode="numeric" value={borrador.proveedorId} onChange={e=>setBorrador({...borrador,proveedorId:e.target.value})} /></label>
       <label className="text-sm">Tipo de anomalía<select className={`${campo} block`} value={borrador.codigo} onChange={e=>setBorrador({...borrador,codigo:e.target.value})}>
         <option value="">Todas las autorizadas</option>
@@ -46,8 +77,10 @@ export function CxpIntegridad({ slug, entidadId, onConsultarProveedor }: { slug:
         <option value="">Todos</option><option value="REGISTRADA">Registrada</option><option value="ANULADA">Anulada</option>
       </select></label>
       <button type="submit" className={boton}>Consultar</button>
+      <button type="button" className={boton} disabled={!lista || exportando} onClick={exportar}>{exportando ? "Exportando…" : "Exportar Excel"}</button>
     </form>
     {carga.error && <p role="alert" className="text-sm text-red-500">{carga.error}</p>}
+    {errorExport?.clave === claveExportacion && <p role="alert" className="text-sm text-red-500">{errorExport.mensaje}</p>}
     {(!lista && !carga.error) && <p role="status">Cargando revisión…</p>}
     {lista && <>
       <div className="rounded border border-[var(--border)] p-3 text-sm" role="status">
