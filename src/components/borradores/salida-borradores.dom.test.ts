@@ -393,6 +393,79 @@ describe("borrado solicitado que NO se confirma: advertencia visible (nunca sali
   }, 15000);
 });
 
+describe("excepción INESPERADA tras autorizar el borrado: advertencia visible, nunca salida silenciosa", () => {
+  const consentirBorrar = () => confirmar.mockReturnValueOnce(false).mockReturnValueOnce(true);
+  /** Hace que la preparación de la purga lance justo después del consentimiento (AbortController de la purga acotada). */
+  const romperPurga = () => {
+    const original = globalThis.AbortController;
+    vi.stubGlobal("AbortController", class { constructor() { throw new Error("excepción inesperada simulada"); } });
+    return () => { vi.stubGlobal("AbortController", original); };
+  };
+
+  it("menú: se advierte como resultado incierto (sin afirmar que los borradores siguen intactos); cancelar no cierra sesión", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    const restaurar = romperPurga();
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(textoDialogo()).toMatch(/No se pudo confirmar la eliminación/);
+    expect(textoDialogo()).toMatch(/error inesperado/i);
+    expect(textoDialogo()).not.toMatch(/correctamente|con éxito|intactos|siguen guardados/i);
+    expect(botonDialogo("Salir sin confirmar el estado de los borradores")).toBeDefined();
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Cancelar salida"));
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    expect(reemplazar).not.toHaveBeenCalled();
+    restaurar();
+    expect(await contar(U1)).toBe(3);
+  });
+
+  it("menú: solo «Salir sin confirmar…» (decisión explícita) permite continuar", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    romperPurga();
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Salir sin confirmar el estado de los borradores"));
+    await esperar(() => expect(llamo("/api/auth/logout")).toBe(1));
+    expect(dialogo()).toBeNull();
+  });
+
+  it("selector de empresa: mismo comportamiento", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [SelectEmpresaClient, { empresas: EMPRESAS, user: { username: "usuario.demo", rol: "Operaciones" } }]);
+    romperPurga();
+    await clic(botonPorTexto("Salir"));
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    expect(textoDialogo()).toMatch(/error inesperado/i);
+    expect(llamo("/api/auth/logout")).toBe(0);
+    await clic(botonDialogo("Cancelar salida"));
+    await esperar(() => expect(dialogo()).toBeNull());
+    expect(llamo("/api/auth/logout")).toBe(0);
+    expect(botonPorTexto("Salir")?.disabled).toBe(false);
+  });
+
+  it("fallo de la interfaz de advertencia: si el registro se desmonta con la advertencia abierta, la salida se cancela (no continúa)", async () => {
+    await sembrar(U1);
+    consentirBorrar();
+    fallarBorrado();
+    await renderizar([RegistroSalidaBorradores, { ownerKey: U1 }], [AccountMenu, PROPS_MENU]);
+    await abrirMenuYSalir();
+    await esperar(() => expect(dialogo()).not.toBeNull());
+    await renderizar([AccountMenu, PROPS_MENU]); // desaparece la interfaz de advertencia
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(llamo("/api/auth/logout")).toBe(0);
+    expect(reemplazar).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(await contar(U1)).toBe(3);
+  });
+});
+
 describe("selector de empresa", () => {
   const props = { empresas: EMPRESAS, user: { username: "usuario.demo", rol: "Operaciones" } };
 

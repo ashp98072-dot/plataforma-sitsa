@@ -54,6 +54,20 @@ La salida por expiración la dispara `SessionInactivityGuard` mediante `cerrarSe
 engancha solo en los dos puntos de salida explícita mediante `permitirSalidaExplicita()` (`session-navigation.ts`), registrado por
 `RegistroSalidaBorradores`.
 
+### Excepciones inesperadas durante la salida
+
+La política clasifica cualquier excepción por **fase**:
+
+* **Antes de que el usuario autorice borrar** (consulta previa de solo lectura, interfaz de consentimiento): no se pidió destruir
+  nada → la salida puede continuar sin borrar (`consulta_fallida`).
+* **Durante o después de autorizar el borrado** (la purga, la interpretación de su resultado, la propia advertencia): el resultado
+  es **incierto** (`error_inesperado`). Se advierte con el mismo diálogo (sin afirmar que los borradores siguen intactos ni que se
+  borraron; se informa el progreso confirmado cuando existe) y la salida **no continúa** salvo que el usuario elija «Salir sin
+  confirmar el estado de los borradores». Sin interfaz de advertencia, o si ésta falla, la salida se cancela.
+* La preparación del almacenamiento (antes de leer o borrar) puede fallar sin bloquear la salida; una excepción que escapara de
+  toda la política (defecto) se trata como incierta: se advierte y, sin decisión, se cancela.
+* El informe de una purga que rechaza usa el **progreso registrado** (borrados ya confirmados), no «cero».
+
 ### Cancelación de la purga y resultados
 
 `purgarUsuario(ownerKey, { signal, consentidoEn, alProgresar })` implementa una **cancelación cooperativa** con `AbortSignal`:

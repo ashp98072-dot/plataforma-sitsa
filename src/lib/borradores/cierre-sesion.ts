@@ -1,5 +1,5 @@
 import type { NucleoBorradores, ResumenPurga } from "./nucleo";
-import { fallo, type Resultado } from "./almacen";
+import type { Resultado } from "./almacen";
 import type { AlmacenPreferencias } from "./preferencia";
 import { fijarPersistencia } from "./preferencia";
 import type { TipoBorrador } from "./tipos";
@@ -49,12 +49,13 @@ export type EstadoLimpieza =
   | "parcial" // se eliminaron algunos; otros siguen (conocido)
   | "fallida" // error de almacenamiento: no se eliminó nada (conocido)
   | "tiempo_agotado" // la eliminación no terminó a tiempo; ver `informe.incierto`
+  | "error_inesperado" // excepción inesperada tras autorizar el borrado: resultado INCIERTO
   | "consulta_fallida" // no se pudo ni consultar (solo lectura; no se pidió destruir nada)
   | "consulta_tiempo_agotado";
 
 /** Qué ocurrió con una eliminación solicitada que NO se confirmó por completo. */
 export type InformeLimpieza = {
-  estado: "parcial" | "fallida" | "tiempo_agotado";
+  estado: "parcial" | "fallida" | "tiempo_agotado" | "error_inesperado";
   /** Borradores objetivo al iniciar. */
   total: number;
   /** Confirmados como eliminados. */
@@ -64,8 +65,9 @@ export type InformeLimpieza = {
   /** De los restantes, los que cambiaron durante la limpieza y se conservaron a propósito. */
   cambiados: number;
   /**
-   * true si al vencer el plazo había una transacción de borrado EN CURSO: algunos borradores pueden haberse eliminado ya sin
-   * que se haya podido confirmar, y la operación podría terminar unos instantes después.
+   * true si no se puede asegurar el resultado real: había una transacción de borrado EN CURSO al vencer el plazo, o ocurrió una
+   * excepción inesperada tras autorizar el borrado. Algunos borradores pueden haberse eliminado ya sin confirmación, y la
+   * operación podría terminar unos instantes después. `eliminados` es solo lo CONFIRMADO.
    */
   incierto: boolean;
   /** Número de intento (1 = el primero). */
@@ -141,53 +143,98 @@ type Purga = { estado: "borrados"; eliminados: number } | { estado: "informe"; i
  * una breve gracia a que la purga informe su estado real; si no responde, el resultado es INCIERTO con lo último confirmado.
  */
 async function purgarAcotado(nucleo: NucleoLimpieza, ownerKey: string, ms: number, graciaMs: number, consentidoEn: number, detectados: number): Promise<Purga> {
-  const controlador = new AbortController();
+  let controlador: AbortController | undefined;
   let ultimo: ResumenPurga | null = null;
-  let operacion: Promise<Resultado<ResumenPurga>>;
-  try {
-    operacion = nucleo.purgarUsuario(ownerKey, { signal: controlador.signal, consentidoEn, alProgresar: (r) => { ultimo = { ...r }; } });
-  } catch {
-    operacion = Promise.resolve(fallo("escritura_fallida", "No se pudo iniciar la eliminación."));
-  }
-  const fin = operacion.then((r) => ({ tipo: "fin" as const, r }), () => ({ tipo: "error" as const }));
-
-  const t1 = temporizador(ms);
-  const primero = await Promise.race([fin, t1.promesa]);
-  t1.cancelar();
-  let terminado: Awaited<typeof fin> | null;
-  if (primero === "tiempo") {
-    controlador.abort(); // cooperativo: nada nuevo se inicia a partir de aquí
-    const t2 = temporizador(graciaMs);
-    const segundo = await Promise.race([fin, t2.promesa]);
-    t2.cancelar();
-    terminado = segundo === "tiempo" ? null : segundo;
-  } else {
-    terminado = primero;
-  }
-
   const informe = (estado: InformeLimpieza["estado"], total: number, eliminados: number, cambiados: number, incierto: boolean): Purga => ({
     estado: "informe",
     informe: { estado, total, eliminados, restantes: Math.max(total - eliminados, 0), cambiados, incierto },
   });
-
-  if (terminado === null) { // no respondió ni tras cancelar: no se puede saber qué terminó
+  /** Lo último CONFIRMADO por la purga (si llegó a registrar algo); nunca se informa «0» ignorando ese progreso. */
+  const progreso = () => {
     const s = ultimo as ResumenPurga | null;
-    return informe("tiempo_agotado", s?.total ?? detectados, s?.eliminados ?? 0, s?.cambiados ?? 0, true);
-  }
-  if (terminado.tipo === "error" || !terminado.r.ok) return informe("fallida", detectados, 0, 0, false);
+    return { total: s && s.total > 0 ? s.total : detectados, eliminados: s?.eliminados ?? 0, cambiados: s?.cambiados ?? 0 };
+  };
+  try {
+    controlador = new AbortController();
+    const senal = controlador.signal;
+    let operacion: Promise<Resultado<ResumenPurga>>;
+    try {
+      operacion = nucleo.purgarUsuario(ownerKey, { signal: senal, consentidoEn, alProgresar: (r) => { ultimo = { ...r }; } });
+    } catch {
+      // Lanzó de forma síncrona al iniciar: no se sabe si llegó a emitir algún borrado → se trata como inesperado/incierto.
+      controlador.abort();
+      const p = progreso();
+      return informe("error_inesperado", p.total, p.eliminados, p.cambiados, true);
+    }
+    const fin = operacion.then((r) => ({ tipo: "fin" as const, r }), () => ({ tipo: "error" as const }));
 
-  const s = terminado.r.valor;
-  if (s.cancelado) {
-    // Cancelada durante el LISTADO (solo lectura, `total` aún 0): no se eliminó nada y se conserva lo que se detectó al consentir.
-    const total = s.total === 0 ? detectados : s.total;
-    return informe("tiempo_agotado", total, s.eliminados, s.cambiados, s.indeterminados > 0);
+    const t1 = temporizador(ms);
+    const primero = await Promise.race([fin, t1.promesa]);
+    t1.cancelar();
+    let terminado: Awaited<typeof fin> | null;
+    if (primero === "tiempo") {
+      controlador.abort(); // cooperativo: nada nuevo se inicia a partir de aquí
+      const t2 = temporizador(graciaMs);
+      const segundo = await Promise.race([fin, t2.promesa]);
+      t2.cancelar();
+      terminado = segundo === "tiempo" ? null : segundo;
+    } else {
+      terminado = primero;
+    }
+
+    if (terminado === null) { // no respondió ni tras cancelar: no se puede saber qué terminó
+      const p = progreso();
+      return informe("tiempo_agotado", p.total, p.eliminados, p.cambiados, true);
+    }
+    if (terminado.tipo === "error") { // la purga RECHAZÓ de forma inesperada: pudo haber confirmado borrados antes
+      controlador.abort();
+      const p = progreso();
+      return informe("error_inesperado", p.total, p.eliminados, p.cambiados, true);
+    }
+    if (!terminado.r.ok) { // fallo de listado/ámbito: no empezó a borrar. Si hubiera progreso, el resultado es incoherente → incierto.
+      const p = progreso();
+      return p.eliminados > 0 ? informe("error_inesperado", p.total, p.eliminados, p.cambiados, true) : informe("fallida", detectados, 0, 0, false);
+    }
+
+    const s = terminado.r.valor;
+    if (s.cancelado) {
+      // Cancelada durante el LISTADO (solo lectura, `total` aún 0): no se eliminó nada y se conserva lo que se detectó al consentir.
+      const total = s.total === 0 ? detectados : s.total;
+      return informe("tiempo_agotado", total, s.eliminados, s.cambiados, s.indeterminados > 0);
+    }
+    if (s.eliminados === s.total) return { estado: "borrados", eliminados: s.eliminados }; // incluye total 0
+    return informe(s.eliminados > 0 || s.cambiados > 0 ? "parcial" : "fallida", s.total, s.eliminados, s.cambiados, false);
+  } catch {
+    // Cualquier excepción inesperada tras autorizar el borrado: se detiene lo que quede por iniciar y el resultado es INCIERTO.
+    try { controlador?.abort(); } catch { /* ya cancelado */ }
+    const p = progreso();
+    return informe("error_inesperado", p.total, p.eliminados, p.cambiados, true);
   }
-  if (s.eliminados === s.total) return { estado: "borrados", eliminados: s.eliminados }; // incluye total 0
-  return informe(s.eliminados > 0 || s.cambiados > 0 ? "parcial" : "fallida", s.total, s.eliminados, s.cambiados, false);
+}
+
+/** Resultado cuando una excepción inesperada ocurre DESPUÉS de autorizar el borrado: se advierte (resultado incierto); jamás se sale en silencio. */
+export async function resolverTrasExcepcionInesperada(
+  decidirTrasFallo: ((informe: InformeLimpieza) => Promise<DecisionTrasFallo>) | undefined,
+  detectados: number,
+  eliminados = 0,
+): Promise<ResultadoCierreSesion> {
+  const informe: InformeLimpieza = { estado: "error_inesperado", total: detectados, eliminados, restantes: Math.max(detectados - eliminados, 0), cambiados: 0, incierto: true, intento: 1 };
+  let siguiente: DecisionTrasFallo = "cancelar";
+  try { if (decidirTrasFallo) siguiente = await decidirTrasFallo(informe); } catch { siguiente = "cancelar"; }
+  // «reintentar» no está disponible en esta vía de último recurso: equivale a cancelar la salida (nunca a continuar).
+  return siguiente === "salir"
+    ? { continuar: true, limpieza: "error_inesperado", detectados, eliminados, informe, salidaInformada: true }
+    : { continuar: false, limpieza: "error_inesperado", detectados, eliminados, informe, salidaInformada: false };
 }
 
 /**
  * Se ejecuta ANTES de la salida EXPLÍCITA. Nunca lanza. `ownerKey === null` (función desactivada en el servidor) → nada que hacer.
+ *
+ * EXCEPCIONES INESPERADAS, por fase:
+ *  - Antes de que el usuario autorice borrar (consulta previa de solo lectura, decisión): no se pidió destruir nada → la salida
+ *    puede continuar sin tocar datos (`consulta_fallida`).
+ *  - Durante o después de autorizar el borrado (la purga, su interpretación, la advertencia): resultado INCIERTO → se advierte
+ *    con la misma interfaz; sin ella, o si falla, la salida se CANCELA. Nunca se continúa en silencio.
  * Tras «borrar», solo devuelve `continuar: true` con `limpieza: "borrados"` si TODO se confirmó; en cualquier otro caso exige
  * `decidirTrasFallo` (y sin él, o si falla, CANCELA la salida).
  */
@@ -207,35 +254,43 @@ export async function prepararCierreSesionExplicito(opciones: {
   const sin = (limpieza: EstadoLimpieza, detectados = 0, eliminados = 0): ResultadoCierreSesion => ({ continuar: true, limpieza, detectados, eliminados });
   if (ownerKey === null) return sin("no_requerida");
 
-  const resumen = await resumenDe(nucleo, ownerKey, ms);
-  if (resumen.tipo === "tiempo_agotado") return sin("consulta_tiempo_agotado"); // solo lectura: no se pidió destruir nada
-  if (resumen.tipo === "error") return sin("consulta_fallida");
-  const detectados = resumen.valor.total;
-  if (detectados === 0) return sin("no_requerida");
-
-  let decision: DecisionSalida;
+  let borradoAutorizado = false;
+  let detectados = 0;
   try {
-    decision = await decidir(resumen.valor);
+    const resumen = await resumenDe(nucleo, ownerKey, ms);
+    if (resumen.tipo === "tiempo_agotado") return sin("consulta_tiempo_agotado"); // solo lectura: no se pidió destruir nada
+    if (resumen.tipo === "error") return sin("consulta_fallida");
+    detectados = resumen.valor.total;
+    if (detectados === 0) return sin("no_requerida");
+
+    let decision: DecisionSalida;
+    try {
+      decision = await decidir(resumen.valor);
+    } catch {
+      decision = "conservar"; // sin consentimiento claro, jamás se borra
+    }
+    if (decision === "cancelar") return { continuar: false, limpieza: "no_requerida", detectados, eliminados: 0 };
+    if (decision !== "borrar") return sin("conservados", detectados);
+
+    borradoAutorizado = true; // a partir de aquí, cualquier excepción es de una eliminación AUTORIZADA
+    const consentidoEn = Date.now();
+    for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
+      const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
+      if (purga.estado === "borrados") return { continuar: true, limpieza: "borrados", detectados, eliminados: purga.eliminados, intentos: intento };
+
+      const informe: InformeLimpieza = { ...purga.informe, intento };
+      let siguiente: DecisionTrasFallo = "cancelar";
+      try { if (decidirTrasFallo) siguiente = await decidirTrasFallo(informe); } catch { siguiente = "cancelar"; }
+      if (siguiente === "reintentar") continue;
+      const base = { limpieza: informe.estado, detectados, eliminados: informe.eliminados, informe, intentos: intento };
+      return siguiente === "salir" ? { continuar: true, salidaInformada: true, ...base } : { continuar: false, salidaInformada: false, ...base };
+    }
+    // Demasiados reintentos sin confirmar: no se sale en silencio.
+    return { continuar: false, limpieza: "fallida", detectados, eliminados: 0, intentos: MAX_INTENTOS };
   } catch {
-    decision = "conservar"; // sin consentimiento claro, jamás se borra
+    if (!borradoAutorizado) return sin("consulta_fallida"); // excepción de solo lectura / previa al consentimiento
+    return resolverTrasExcepcionInesperada(decidirTrasFallo, detectados);
   }
-  if (decision === "cancelar") return { continuar: false, limpieza: "no_requerida", detectados, eliminados: 0 };
-  if (decision !== "borrar") return sin("conservados", detectados);
-
-  const consentidoEn = Date.now();
-  for (let intento = 1; intento <= MAX_INTENTOS; intento++) {
-    const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
-    if (purga.estado === "borrados") return { continuar: true, limpieza: "borrados", detectados, eliminados: purga.eliminados, intentos: intento };
-
-    const informe: InformeLimpieza = { ...purga.informe, intento };
-    let siguiente: DecisionTrasFallo = "cancelar";
-    try { if (decidirTrasFallo) siguiente = await decidirTrasFallo(informe); } catch { siguiente = "cancelar"; }
-    if (siguiente === "reintentar") continue;
-    const base = { limpieza: informe.estado, detectados, eliminados: informe.eliminados, informe, intentos: intento };
-    return siguiente === "salir" ? { continuar: true, salidaInformada: true, ...base } : { continuar: false, salidaInformada: false, ...base };
-  }
-  // Demasiados reintentos sin confirmar: no se sale en silencio.
-  return { continuar: false, limpieza: "fallida", detectados, eliminados: 0, intentos: MAX_INTENTOS };
 }
 
 export type ResultadoDesactivacion = {
@@ -264,39 +319,57 @@ export async function desactivarPersistencia(opciones: {
   const gracia = opciones.graciaCancelacionMs ?? GRACIA_CANCELACION_MS;
   let detectados = 0;
   let hayQueBorrar = false;
+  let preferenciaFijada = false; // hasta aquí una excepción no deja nada cambiado; después, puede haber residuos inciertos
 
-  if (ownerKey !== null) {
-    const resumen = await resumenDe(nucleo, ownerKey, ms);
-    if (resumen.tipo !== "ok") {
-      // No se puede saber si hay borradores: no se desactiva a ciegas, para no dejar residuos sin informar.
-      return { estado: "no_aplicada", detectados: 0, eliminados: 0 };
+  try {
+    if (ownerKey !== null) {
+      const resumen = await resumenDe(nucleo, ownerKey, ms);
+      if (resumen.tipo !== "ok") {
+        // No se puede saber si hay borradores: no se desactiva a ciegas, para no dejar residuos sin informar.
+        return { estado: "no_aplicada", detectados: 0, eliminados: 0 };
+      }
+      detectados = resumen.valor.total;
+      if (detectados > 0) {
+        let acepto = false;
+        try { acepto = await confirmar(resumen.valor); } catch { acepto = false; }
+        if (!acepto) return { estado: "cancelada", detectados, eliminados: 0 };
+        hayQueBorrar = true;
+      }
     }
-    detectados = resumen.valor.total;
-    if (detectados > 0) {
-      let acepto = false;
-      try { acepto = await confirmar(resumen.valor); } catch { acepto = false; }
-      if (!acepto) return { estado: "cancelada", detectados, eliminados: 0 };
-      hayQueBorrar = true;
-    }
+
+    const consentidoEn = Date.now();
+    if (!fijarPersistencia(prefs, false)) return { estado: "no_aplicada", detectados, eliminados: 0 };
+    preferenciaFijada = true;
+    if (!hayQueBorrar || ownerKey === null) return { estado: "desactivada", detectados, eliminados: 0 };
+
+    const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
+    if (purga.estado === "borrados") return { estado: "desactivada", detectados, eliminados: purga.eliminados };
+    return { estado: "desactivada_con_residuos", detectados, eliminados: purga.informe.eliminados, informe: { ...purga.informe, intento: 1 } };
+  } catch {
+    if (!preferenciaFijada) return { estado: "no_aplicada", detectados, eliminados: 0 };
+    return {
+      estado: "desactivada_con_residuos", detectados, eliminados: 0,
+      informe: { estado: "error_inesperado", total: detectados, eliminados: 0, restantes: detectados, cambiados: 0, incierto: true, intento: 1 },
+    };
   }
-
-  const consentidoEn = Date.now();
-  if (!fijarPersistencia(prefs, false)) return { estado: "no_aplicada", detectados, eliminados: 0 };
-  if (!hayQueBorrar || ownerKey === null) return { estado: "desactivada", detectados, eliminados: 0 };
-
-  const purga = await purgarAcotado(nucleo, ownerKey, ms, gracia, consentidoEn, detectados);
-  if (purga.estado === "borrados") return { estado: "desactivada", detectados, eliminados: purga.eliminados };
-  return { estado: "desactivada_con_residuos", detectados, eliminados: purga.informe.eliminados, informe: { ...purga.informe, intento: 1 } };
 }
 
 /** Texto de la advertencia cuando la eliminación solicitada no se confirmó por completo. Nunca afirma «borrado correctamente». */
 export function textoAdvertenciaLimpieza(informe: InformeLimpieza): { titulo: string; detalle: string; salir: string } {
   const de = `${informe.eliminados} de ${informe.total}`;
   const cambiados = informe.cambiados > 0 ? ` (${informe.cambiados} cambiaron durante la limpieza y se conservaron a propósito)` : "";
+  const confirmados = informe.eliminados > 0 ? ` Antes de interrumpirse se confirmó la eliminación de ${de} borradores, pero no se puede asegurar el resto.` : "";
+  if (informe.estado === "error_inesperado") {
+    return {
+      titulo: "No se pudo confirmar la eliminación",
+      detalle: `Ocurrió un error inesperado durante la eliminación. No se puede confirmar qué borradores se eliminaron: es posible que algunos ya se hayan borrado y que otros sigan guardados en este equipo, y una operación en curso podría terminar unos instantes después.${confirmados}`,
+      salir: "Salir sin confirmar el estado de los borradores",
+    };
+  }
   if (informe.incierto) {
     return {
       titulo: "No se pudo confirmar la eliminación",
-      detalle: `La eliminación no respondió a tiempo. No se puede confirmar qué borradores se eliminaron: es posible que algunos ya se hayan borrado y que otros sigan guardados en este equipo, y una operación en curso podría terminar unos instantes después.`,
+      detalle: `La eliminación no respondió a tiempo. No se puede confirmar qué borradores se eliminaron: es posible que algunos ya se hayan borrado y que otros sigan guardados en este equipo, y una operación en curso podría terminar unos instantes después.${confirmados}`,
       salir: "Salir sin confirmar el estado de los borradores",
     };
   }
