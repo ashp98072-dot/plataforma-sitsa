@@ -98,6 +98,13 @@ export type OpcionesControlador = {
 export type FalloAccion = { ok: false; motivo: string; mensaje: string };
 const fallo = (motivo: string, mensaje: string): FalloAccion => ({ ok: false, motivo, mensaje });
 
+/** Validación NO destructiva del adaptador del formulario: se ejecuta ANTES de cambiar el estado del controlador. */
+export type ValidadorPayload = (payload: unknown) => boolean;
+function payloadAceptado(validar: ValidadorPayload | undefined, payload: unknown): boolean {
+  if (!validar) return true;
+  try { return validar(payload) === true; } catch { return false; }
+}
+
 export const DEBOUNCE_POR_DEFECTO_MS = 800;
 export const MAX_ESPERA_POR_DEFECTO_MS = 5000;
 
@@ -444,7 +451,7 @@ export class ControladorBorrador implements ControladorCoordinable {
 
   // ───────────────────────────── recuperación ─────────────────────────────
   /** Entrega el payload del borrador pendiente de decisión (no lo aplica: lo hace el formulario). Empieza a autoguardar sobre su revisión. */
-  recuperar(): { ok: true; payload: unknown; revision: number } | FalloAccion {
+  recuperar(validar?: ValidadorPayload): { ok: true; payload: unknown; revision: number } | FalloAccion {
     if ((this.fase !== "decision_pendiente" && this.fase !== "en_espera") || !this.recuperacion || !this.borradorLeido) return fallo("sin_decision_pendiente", "No hay un borrador pendiente de decisión.");
     if (!this.recuperacion.puedeRecuperar) return fallo("no_recuperable", "Este borrador no se puede recuperar.");
     const b = this.borradorLeido;
@@ -457,6 +464,8 @@ export class ControladorBorrador implements ControladorCoordinable {
     let json: string | undefined;
     try { json = JSON.stringify(payload); } catch { json = undefined; }
     if (typeof json !== "string") return fallo("no_recuperable", "El contenido del borrador no es válido.");
+    // Sin cambiar NADA (fase, revisión, diálogo): si el adaptador no lo acepta, el borrador sigue pendiente de decisión y descartable.
+    if (!payloadAceptado(validar, payload)) return fallo("payload_invalido", "El borrador guardado no tiene un formato válido y no se aplicó. Puedes descartarlo.");
     this.revision = b.revision;
     this.estadoEnvio = b.estadoEnvio; this.claveEnvio = b.claveEnvio;
     this.guardadoEn = b.actualizadoEn;
@@ -531,13 +540,14 @@ export class ControladorBorrador implements ControladorCoordinable {
   }
 
   /** Decisión explícita: quedarse con la versión de la otra pestaña (el formulario debe adoptar el payload devuelto). */
-  async adoptarRemoto(): Promise<{ ok: true; payload: unknown } | FalloAccion> {
+  async adoptarRemoto(validar?: ValidadorPayload): Promise<{ ok: true; payload: unknown } | FalloAccion> {
     const l = await this.releer();
     if (!l.ok) return l;
     if (!l.remoto) return fallo("ya_no_existe", "El borrador ya no existe en este equipo.");
     let json: string | undefined;
     try { json = JSON.stringify(l.remoto.payload); } catch { json = undefined; }
     if (typeof json !== "string" || l.remoto.esquemaVersion > this.esquemaVersion) return fallo("no_recuperable", "La versión de la otra pestaña no se puede usar aquí.");
+    if (!payloadAceptado(validar, l.remoto.payload)) return fallo("payload_invalido", "La versión de la otra pestaña no tiene un formato válido y no se aplicó.");
     this.revision = l.remoto.revision; this.estadoEnvio = l.remoto.estadoEnvio; this.claveEnvio = l.remoto.claveEnvio;
     this.payload = l.remoto.payload; this.jsonActual = json; this.ultimoJson = json; this.guardadoEn = l.remoto.actualizadoEn;
     this.otraPestana = false;

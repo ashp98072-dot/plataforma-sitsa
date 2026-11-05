@@ -69,6 +69,15 @@ export function crearEnvioUnico() {
     reiniciarClave() {
       clave = null;
     },
+    /**
+     * BORR-1d — alinea la clave con la persistida en un borrador local recuperado (misma creación lógica). Solo acepta claves
+     * con formato válido; devuelve `false` (y no cambia nada) si no lo son. Se llama ANTES de registrar el intento y del POST.
+     */
+    adoptarClave(nueva: string): boolean {
+      if (typeof nueva !== "string" || !CLAVE_ENVIO_REGEX.test(nueva)) return false;
+      clave = nueva;
+      return true;
+    },
   };
 }
 

@@ -77,3 +77,36 @@ bloqueo tras éxito, formulario nuevo = otra clave, 409). Verificación contra M
 - Duplicados **históricos**: solo hay una consulta de revisión de solo lectura.
 - La edición (`PATCH`) no usa clave: actúa sobre un id existente (control de versión propio de Compras).
 - Subidas de documentos de línea repetidas por el usuario: son acciones distintas, fuera de esta idempotencia.
+
+## 8. Borrador local de «Nuevo requerimiento» (BORR-1d)
+
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (happy-dom + fake-indexeddb). No probado en navegador real ni en Hostinger, no
+desplegado, no aprobado para producción. **Sin SQL, sin cambios de API ni de reglas de Compras.** Solo la **creación**; con `detalle`
+(edición) el formulario no cambia y no ofrece ni escribe borradores.
+
+**Qué se guarda (solo en IndexedDB, nunca en MariaDB):** adaptador explícito `requerimiento-borrador.ts` (esquema v1) con cabecera
+(fecha, empresa requirente, requirente, encargado, observaciones) y hasta 500 líneas (clave estable, unidad/vehículo, descripción manual,
+fecha, serie/número de factura, proveedor, repuesto, método y condición de pago, total, observaciones), en el mismo orden. **No** se
+guardan archivos ni documentos pendientes, catálogos, datos derivados del proveedor, errores ni estado visual. Tras recuperar hay que
+**volver a seleccionar los adjuntos**.
+
+**Recuperación:** diálogo de BORR-1c (Recuperar / Descartar / Decidir después); nunca se aplica solo. Los ids recuperados se revalidan
+contra los catálogos vigentes: lo que ya no existe se avisa, se conserva en pantalla y **bloquea el envío** hasta volver a elegirlo.
+El servidor sigue revalidando todo al enviar (recuperar ≠ validar).
+
+**Envío oficial (idempotencia):**
+1. Validaciones del formulario como siempre (requirente, facturas repetidas…).
+2. Antes del **primer** POST se registra en el borrador `estadoEnvio: "enviando"` + la clave (`crearEnvioUnico()`, alineada con la
+   persistida si el borrador se recuperó) + el contenido final. **Si ese registro falla, no se hace el POST.**
+3. Respuesta **incierta** (red caída, timeout, 5xx/408/425/429, 2xx sin `id`): el intento queda «enviando», el contenido se **congela** y
+   se muestra «Reconciliación pendiente». Reintentar en la misma página reenvía **exactamente lo mismo con la misma clave** (el
+   servidor devuelve la creación original).
+4. **Tras recargar** con un envío incierto: el núcleo no permite recuperar ni descartar; el formulario **no envía** otro documento y
+   muestra la clave (prefijo) y la instrucción de revisar el listado. **Límite documentado:** no existe un endpoint para consultar el
+   resultado por clave, así que la reconciliación automática queda para una fase posterior (p. ej. `GET …/requerimientos?clave=`); hasta
+   entonces este navegador no crea otro requerimiento desde ese borrador (no hay descarte manual a propósito: perdería la clave).
+5. Rechazo definitivo (otros 4xx): el intento se libera conservando la clave y se puede corregir y reenviar.
+6. Creación confirmada: se marca «completado», se suben los adjuntos (un fallo de adjuntos **no** repite la creación) y el borrador
+   se elimina solo si quedó marcado.
+
+Si el autoguardado está desactivado («No guardar en este equipo») o no hay contexto, el envío funciona como antes (clave en memoria).

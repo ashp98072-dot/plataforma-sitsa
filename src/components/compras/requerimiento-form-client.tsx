@@ -14,6 +14,9 @@ import { RequerimientoDecisionClient, formatearTimestampCompra } from "@/compone
 import { FacturaEstadoLinea } from "@/components/compras/factura-estado-linea";
 import { indicesFacturasRepetidas, MSG_FACTURAS_REPETIDAS } from "@/lib/compras/factura-compra";
 import { crearEnvioUnico } from "@/lib/idempotencia/clave-envio";
+import { AutoguardadoRequerimiento, type OpcionesInyectablesAutoguardado } from "@/components/compras/requerimiento-autoguardado";
+import type { EstadoFormularioRequerimiento } from "@/lib/compras/requerimiento-borrador";
+import { clasificarResultadoEnvio, crearPuenteBorrador, limpiarBorradorEnviado, liberarEnvioRechazado, marcarEnvioCompletado, prepararEnvioBorrador } from "@/lib/compras/requerimiento-borrador-envio";
 
 type Opcion = { id: number; nombre: string };
 type Proveedor = ProveedorPickerOpt;
@@ -46,7 +49,7 @@ export function lineaEditable(l: DetalleCompra["lineas"][number]): LineaForm {
   // No devolver snapshots en PATCH: solo IDs y campos editables.
   return { key: `id-${l.id}`, id: l.id, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones };
 }
-export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeCrearProveedores = false, puedeEditarProveedores = false, puedeSubirDocumentos, puedeAutorizar, fechaHoy }: { slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeCrearProveedores?: boolean; puedeEditarProveedores?: boolean; puedeSubirDocumentos: boolean; puedeAutorizar: boolean; fechaHoy: string }) {
+export function RequerimientoFormClient({ slug, detalle, editable, solicitante, puedeEliminar, puedeVerProveedores, puedeCrearProveedores = false, puedeEditarProveedores = false, puedeSubirDocumentos, puedeAutorizar, fechaHoy, opcionesAutoguardado }: { opcionesAutoguardado?: OpcionesInyectablesAutoguardado; slug: string; detalle?: DetalleCompra; editable: boolean; solicitante: string; puedeEliminar: boolean; puedeVerProveedores: boolean; puedeCrearProveedores?: boolean; puedeEditarProveedores?: boolean; puedeSubirDocumentos: boolean; puedeAutorizar: boolean; fechaHoy: string }) {
   const router = useRouter();
   const [fecha, setFecha] = useState(detalle?.fecha_requerimiento ?? fechaHoy);
   const [entidad, setEntidad] = useState(detalle?.entidad_requirente_id ?? 0);
@@ -69,6 +72,14 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
   // FACTURAS DUPLICADAS — claves de línea cuya factura YA existe en la BD (la consulta con debounce vive en <FacturaEstadoLinea>).
   const [existentes, setExistentes] = useState<Record<string, boolean>>({});
   const marcarExistente = (clave: string, duplicada: boolean) => setExistentes(a => (Boolean(a[clave]) === duplicada ? a : { ...a, [clave]: duplicada }));
+  // BORR-1d — borrador LOCAL (solo al CREAR). `puente` conecta el envío oficial con el borrador; `borrador` indica si el envío debe
+  // esperar (decisión pendiente, conflicto, reconciliación…) y si el contenido debe quedar congelado (envío sin resultado confirmado).
+  const [puente] = useState(() => crearPuenteBorrador());
+  const [borrador, setBorrador] = useState<{ motivo: string | null; congelado: boolean }>({ motivo: null, congelado: false });
+  const aplicarBorrador = (e: EstadoFormularioRequerimiento) => {
+    setFecha(e.fecha); setEntidad(e.entidad); setRequirente(e.requirente); setEncargado(e.encargado); setObservaciones(e.observaciones); setExistentes({});
+    setLineas(e.lineas.map(l => ({ key: l.clave, vehiculo_id: l.vehiculo_id, unidad_descripcion: l.unidad_descripcion, fecha: l.fecha, serie_factura: l.serie_factura, numero_factura: l.numero_factura, proveedor_id: l.proveedor_id, repuesto_descripcion: l.repuesto_descripcion, metodo_pago: l.metodo_pago, condicion_pago: l.condicion_pago, total: l.total, observaciones: l.observaciones })));
+  };
   useEffect(() => {
     if (!editable) return;
     const controller = new AbortController();
@@ -98,25 +109,39 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
     if (!requirente && (!detalle || detalle.requirente_usuario_id !== null)) { setError(""); setErrores([{ campo: "requirente_usuario_id", etiqueta: "Requirente", mensaje: "selecciona un requirente de Operaciones." }]); return; }
     // El proveedor de cada línea lo valida el servidor junto con el resto de campos ("Línea 2 — Proveedor: …"): se listan todos a la vez.
     if (repetidas.size) { setError(MSG_FACTURAS_REPETIDAS); return; }
+    // BORR-1d — antes del PRIMER POST se registra el intento (clave + contenido final) en el borrador local; si no se puede, no se envía.
+    let registrado = false;
+    if (!detalle) {
+      const preparado = await prepararEnvioBorrador(puente, envio);
+      if (!preparado.ok) { setError(preparado.mensaje); return; }
+      registrado = preparado.registrado;
+    }
     setGuardando(true); setError("");
     try {
       const r = await fetch(`/api/empresas/${slug}/compras/requerimientos${detalle ? `/${detalle.id}` : ""}`, { method: detalle ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha_requerimiento: fecha, entidad_requirente_id: entidad, requirente_usuario_id: requirente || null, ...(detalle && encargado === (detalle.encargado_compras_usuario_id ?? 0) ? {} : { encargado_compras_usuario_id: encargado || null }), observaciones: observaciones || null, ...(detalle ? { version: detalle.version } : { clave_idempotencia: envio.clave() }), lineas: lineas.map(l => Object.fromEntries(Object.entries(l).filter(([campo]) => campo !== "key" && campo !== "documentosPendientes"))) }) });
       const data = await r.json().catch(() => ({}));
+      const resultado = registrado ? clasificarResultadoEnvio({ lanzo: false, ok: r.ok, status: r.status, id: data?.id }) : null;
       if (!r.ok) {
+        if (registrado && resultado === "rechazo_definitivo") await liberarEnvioRechazado(puente); // nada se creó: se puede corregir y reenviar con la MISMA clave
         if (r.status === 409) setConflicto(true);
         const leidos = leerErroresRespuesta(data, "No se pudo guardar.");
         setErrores(leidos.errores);
         setError(leidos.errores.length ? "" : leidos.mensaje);
         return;
       }
+      if (registrado && resultado === "incierto") { setError("El servidor respondió sin confirmar el requerimiento. Se conserva la clave de envío: vuelve a pulsar «Guardar requerimiento» para reintentar el mismo envío sin duplicarlo."); return; }
       setCompletado(true); // creación/edición confirmada: el formulario ya no admite otro envío mientras navega
+      const marcado = registrado ? await marcarEnvioCompletado(puente) : false; // BORR-1d — el borrador deja de ser un envío pendiente
       const fallidos = await subirPendientesCompra(slug, data.id, lineas);
       if (fallidos) window.alert(`El requerimiento fue ${detalle ? "actualizado" : "creado"} correctamente, pero algunos documentos no pudieron subirse. Puede agregarlos desde el detalle.`);
+      await limpiarBorradorEnviado(puente, marcado); // solo tras el éxito confirmado y marcado: ya no hace falta la clave
       router.push(`/e/${slug}/compras/requerimientos/${data.id}`); router.refresh();
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar."); }
     finally { setGuardando(false); }
   }
   const deshabilitado = !editable || guardando || conflicto || completado;
+  // Con un envío sin resultado confirmado el contenido queda congelado: el reintento debe ser EXACTAMENTE lo mismo (misma clave).
+  const camposBloqueados = deshabilitado || borrador.congelado;
   const bloqueoFactura = repetidas.size > 0 || Object.values(existentes).some(Boolean);
   const total = lineas.reduce((sum, l) => sum + (Number.isFinite(Number(l.total)) ? Number(l.total) : 0), 0);
   return <main className="space-y-5 p-6"><h1 className="text-2xl font-semibold">{detalle?.codigo ?? "Nuevo requerimiento de compra"}</h1>{detalle && <p>Estado: {detalle.estado} · Versión: {detalle.version}</p>}
@@ -124,9 +149,10 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
     {detalle && detalle.estado === "Autorizada" ? <p className="text-sm text-[var(--muted)]">Autorizado por: {detalle.autorizante_nombre ?? "—"} · Fecha autorización: {formatearTimestampCompra(detalle.autorizado_en)}</p> : null}
     {detalle && detalle.estado === "Rechazada" ? <div className="text-sm text-[var(--muted)]"><p>Fecha rechazo: {formatearTimestampCompra(detalle.rechazado_en)}</p><p>Motivo: {detalle.motivo_rechazo ?? "—"}</p></div> : null}
     {detalle && detalle.estado === "Pendiente" && puedeAutorizar ? <RequerimientoDecisionClient slug={slug} requerimientoId={detalle.id} version={detalle.version} /> : null}
-    <form onSubmit={guardar} className="space-y-5"><fieldset disabled={deshabilitado} className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2">
+    {!detalle && editable ? <AutoguardadoRequerimiento fecha={fecha} entidad={entidad} requirente={requirente} encargado={encargado} observaciones={observaciones} lineas={lineas} catalogos={catalogos} fechaHoy={fechaHoy} puente={puente} onAplicar={aplicarBorrador} onBloqueo={setBorrador} {...opcionesAutoguardado} /> : null}
+    <form onSubmit={guardar} className="space-y-5"><fieldset disabled={camposBloqueados} className="grid gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4 md:grid-cols-2">
       <label>Fecha de requerimiento<input className={estilo} type="date" required value={fecha} onChange={e => setFecha(e.target.value)} /></label>
-      {editable ? <><label>Empresa requirente<select className={estilo} required value={entidad || ""} onChange={e => setEntidad(Number(e.target.value))}><option value="">Seleccionar</option>{entidad && !catalogos?.entidades.some(v => v.id === entidad) && <option value={entidad}>{detalle?.entidad_requirente_nombre} (revalidar)</option>}{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>
+      {editable ? <><label>Empresa requirente<select className={estilo} required value={entidad || ""} onChange={e => setEntidad(Number(e.target.value))}><option value="">Seleccionar</option>{entidad && !catalogos?.entidades.some(v => v.id === entidad) && <option value={entidad}>{detalle?.entidad_requirente_nombre ?? "Empresa no disponible"} (revalidar)</option>}{catalogos?.entidades.map(v => <option key={v.id} value={v.id}>{v.nombre}</option>)}</select></label>
         <div><CatalogoSearchSelect label="Persona que requiere" placeholder="Buscar requirente..." value={String(requirente || "")} options={opcionesIdentidad(catalogos?.requirentesOperaciones ?? [], requirente === detalle?.requirente_usuario_id ? requirente : 0, detalle?.requirente_nombre)} inputClassName={estilo} onChange={value => setRequirente(Number(value) || 0)} />{detalle?.requirente_usuario_id === null && <p>Requirente histórico: {detalle.requirente_nombre || "Sin dato histórico"}</p>}</div></> : <><p>Empresa requirente: {detalle?.entidad_requirente_nombre || "Sin dato histórico"}</p><p>Persona que requiere: {detalle?.requirente_nombre || "—"}</p></>}
       {editable ? <CatalogoSearchSelect label="Encargado de compras" placeholder="Buscar encargado de compras..." value={String(encargado || "")} options={opcionesIdentidad(catalogos?.usuarios ?? [], encargado === detalle?.encargado_compras_usuario_id ? encargado : 0, detalle?.encargado_compras_nombre)} inputClassName={estilo} emptyLabel="Sin asignar" onChange={value => setEncargado(Number(value) || 0)} /> : <p>Encargado de compras: {detalle?.encargado_compras_nombre || "Sin asignar"}</p>}
       <p>Solicitante: {detalle?.solicitante_nombre ?? solicitante} (solo lectura)</p><label className="md:col-span-2">Observaciones<textarea className={estilo} maxLength={10000} value={observaciones} onChange={e => setObservaciones(e.target.value)} /></label>
@@ -135,7 +161,7 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       const proveedor = catalogos?.proveedores.find(p => p.id === l.proveedor_id);
       const original = detalle?.lineas.find(v => v.id === l.id);
       const ayuda = proveedor ? [["NIT", proveedor.nit], ["Contacto", proveedor.contacto_nombre], ["Teléfono", proveedor.contacto_telefono || proveedor.telefono], ["Método habitual", proveedor.metodo_pago_habitual], ["Banco", proveedor.banco], ["Cuenta", proveedor.numero_cuenta], ["Días de crédito", proveedor.dias_credito]] : [];
-      return <section key={l.key} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><h3 className="font-semibold">Línea {indice + 1}</h3><fieldset disabled={deshabilitado} className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      return <section key={l.key} className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><h3 className="font-semibold">Línea {indice + 1}</h3><fieldset disabled={camposBloqueados} className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {editable ? <CatalogoSearchSelect label="Unidad / placa" placeholder="Buscar placa o unidad..." value={String(l.vehiculo_id || "")} options={opcionesUnidadesCompra(catalogos?.vehiculos ?? [], l.vehiculo_id, l.unidad_descripcion)} inputClassName={estilo} emptyLabel="Unidad manual / sin unidad" onChange={value => cambiar(l.key, { vehiculo_id: value ? Number(value) : null, unidad_descripcion: null })} /> : <p>Unidad / placa: {l.unidad_descripcion || "—"}</p>}
         {editable && !l.vehiculo_id && <label>Descripción manual de unidad<input className={estilo} maxLength={200} value={l.unidad_descripcion ?? ""} onChange={e => cambiar(l.key, { unidad_descripcion: e.target.value || null })} /></label>}
         <label>Fecha<input className={estilo} type="date" required value={l.fecha} onChange={e => cambiar(l.key, { fecha: e.target.value })} /></label>
@@ -151,13 +177,13 @@ export function RequerimientoFormClient({ slug, detalle, editable, solicitante, 
       </fieldset>
       {ayuda.some(([, valor]) => valor !== null && valor !== "") && <dl className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-[var(--muted)]">{ayuda.filter(([, valor]) => valor !== null && valor !== "").map(([nombre, valor]) => <div key={String(nombre)}><dt>{nombre}</dt><dd>{valor}</dd></div>)}</dl>}
       {editable && puedeVerProveedores && <Link className="text-sm underline" href={`/e/${slug}/compras/proveedores`}>Administrar proveedores comerciales</Link>}
-      {editable && (!l.id || puedeEliminar) && <button className={boton} type="button" disabled={deshabilitado || lineas.length === 1} onClick={() => setLineas(actual => actual.filter(v => v.key !== l.key))}>Eliminar línea</button>}
+      {editable && (!l.id || puedeEliminar) && <button className={boton} type="button" disabled={camposBloqueados || lineas.length === 1} onClick={() => setLineas(actual => actual.filter(v => v.key !== l.key))}>Eliminar línea</button>}
       {detalle && l.id ? <LineaDocumentosClient slug={slug} requerimientoId={detalle.id} lineaId={l.id} puedeSubir={puedeSubirDocumentos} puedeEliminar={puedeEliminar && detalle.estado === "Pendiente"} /> : null}
-      {editable && !l.id && puedeSubirDocumentos && <DocumentosPendientesClient documentos={l.documentosPendientes ?? []} disabled={deshabilitado} onChange={docs => cambiar(l.key, { documentosPendientes: docs })} />}
+      {editable && !l.id && puedeSubirDocumentos && <DocumentosPendientesClient documentos={l.documentosPendientes ?? []} disabled={camposBloqueados} onChange={docs => cambiar(l.key, { documentosPendientes: docs })} />}
     </section>; })}
-    {editable && <button className={boton} type="button" disabled={deshabilitado || lineas.length >= 500} onClick={() => setLineas(actual => [...actual, nuevaLinea(fecha, crypto.randomUUID())])}>+ Agregar línea</button>}
-    <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{repetidas.size > 0 && <p role="alert" className="text-red-300">{MSG_FACTURAS_REPETIDAS}</p>}{error && <p role="alert">{error}</p>}<ErroresFormulario errores={errores} />
+    {editable && <button className={boton} type="button" disabled={camposBloqueados || lineas.length >= 500} onClick={() => setLineas(actual => [...actual, nuevaLinea(fecha, crypto.randomUUID())])}>+ Agregar línea</button>}
+    <p className="text-lg font-semibold">Total requerimiento: Q {total.toFixed(2)}</p>{repetidas.size > 0 && <p role="alert" className="text-red-300">{MSG_FACTURAS_REPETIDAS}</p>}{error && <p role="alert">{error}</p>}{!detalle && borrador.motivo && <p role="status" className="text-sm text-amber-300">{borrador.motivo}</p>}<ErroresFormulario errores={errores} />
     {conflicto && <button className={boton} type="button" onClick={() => window.location.reload()}>Actualizar información (descarta cambios locales)</button>}
-    {editable && <button className={boton} disabled={deshabilitado || !catalogos || bloqueoFactura} type="submit">{guardando ? "Guardando…" : "Guardar requerimiento"}</button>}
+    {editable && <button className={boton} disabled={deshabilitado || !catalogos || bloqueoFactura || borrador.motivo !== null} type="submit">{guardando ? "Guardando…" : "Guardar requerimiento"}</button>}
     </form><Link href={`/e/${slug}/compras/requerimientos`}>Volver al listado</Link></main>;
 }
