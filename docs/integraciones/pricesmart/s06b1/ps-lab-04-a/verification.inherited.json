@@ -1,0 +1,111 @@
+[
+  {
+    "name": "ubuntu-noble",
+    "signature_valid": true,
+    "fingerprint": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+    "inrelease_sha256": "cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0",
+    "catalogs": [
+      {
+        "name": "ubuntu-noble-main-Packages.gz",
+        "url": "https://archive.ubuntu.com/ubuntu/dists/noble/main/binary-amd64/Packages.gz",
+        "size": 1808488,
+        "sha256": "e0d7e4cbb09d2aa7f9e104a1488817417bc9d85f3e5d9a21156a52ec641ae531",
+        "uncompressed_sha256": "8f6f71ae839c8cba390a7643fcbbdacddb0bc7d12c1583a2dd80a1f8443a30e5",
+        "hashes_verified": true
+      },
+      {
+        "name": "ubuntu-noble-universe-Packages.gz",
+        "url": "https://archive.ubuntu.com/ubuntu/dists/noble/universe/binary-amd64/Packages.gz",
+        "size": 19315644,
+        "sha256": "ce57756edcce0a5f7993ceb89057e1510148e04e3b85a066d780e4bc00485c8a",
+        "uncompressed_sha256": "687ffc969e7700137677b9cfe2f614ee2d638052a91a7c9bf31f3f6a3040a99a",
+        "hashes_verified": true
+      }
+    ],
+    "date": "Thu, 25 Apr 2024 15:10:33 UTC",
+    "valid_until": null,
+    "freshness": "NO_VALID_UNTIL_REQUIRES_SNAPSHOT_POLICY"
+  },
+  {
+    "name": "ubuntu-noble-updates",
+    "signature_valid": true,
+    "fingerprint": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+    "inrelease_sha256": "e8ce2678df12889714a37d3571fd6d31717d57bf0a32ec716358175056125779",
+    "catalogs": [
+      {
+        "name": "ubuntu-noble-updates-main-Packages.gz",
+        "url": "https://archive.ubuntu.com/ubuntu/dists/noble-updates/main/binary-amd64/Packages.gz",
+        "size": 1741338,
+        "sha256": "ce6e257e33bedf6d2c0f32786b51095ee780e9b62d78960f4a742ddfad7d2c1b",
+        "uncompressed_sha256": "0570c13095702992261ca9d2c6dbb8383160b1b8ead6f7e274bb11dd2e3b0280",
+        "hashes_verified": true
+      },
+      {
+        "name": "ubuntu-noble-updates-universe-Packages.gz",
+        "url": "https://archive.ubuntu.com/ubuntu/dists/noble-updates/universe/binary-amd64/Packages.gz",
+        "size": 2172249,
+        "sha256": "9e92aa49782db5894f7394d645eb5bd9853b1a4f6d9fa7c199c81913b78a0539",
+        "uncompressed_sha256": "864a57a0daa7da8d0e0921516752f8cd1ea26b2c93d70fa9aa2365208af8a6d9",
+        "hashes_verified": true
+      }
+    ],
+    "date": "Tue, 03 Nov 2026 18:28:16 UTC",
+    "valid_until": null,
+    "freshness": "NO_VALID_UNTIL_REQUIRES_SNAPSHOT_POLICY"
+  },
+  {
+    "name": "ubuntu-noble-security",
+    "signature_valid": true,
+    "fingerprint": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+    "inrelease_sha256": "2eddddb92d70a4600c91d6ebd39b2961ae4ec91a1df31f822bc3484573096db1",
+    "catalogs": [
+      {
+        "name": "ubuntu-noble-security-main-Packages.gz",
+        "url": "https://security.ubuntu.com/ubuntu/dists/noble-security/main/binary-amd64/Packages.gz",
+        "size": 1422415,
+        "sha256": "83390229c3d130ce91963b525085b7c28ff836df44b8ca7a7c7c13442b4e7c8a",
+        "uncompressed_sha256": "6cd43768467b888f6f16b784d4bff48ad508ca892f024964e9cea5e3b36db7fd",
+        "hashes_verified": true
+      },
+      {
+        "name": "ubuntu-noble-security-universe-Packages.gz",
+        "url": "https://security.ubuntu.com/ubuntu/dists/noble-security/universe/binary-amd64/Packages.gz",
+        "size": 1552090,
+        "sha256": "a8f94178f5178462969f6c554323e0f1872de3d29b4f7d71cf205d5324220d8b",
+        "uncompressed_sha256": "18239b7d8b3f5312f0239fec0713acdeb8d1d80c45d3cbd8238e8a9b8c45103d",
+        "hashes_verified": true
+      }
+    ],
+    "date": "Tue, 03 Nov 2026 17:27:31 UTC",
+    "valid_until": null,
+    "freshness": "NO_VALID_UNTIL_REQUIRES_SNAPSHOT_POLICY"
+  },
+  {
+    "name": "mariadb",
+    "signature_valid": true,
+    "fingerprint": "177F4010FE56CA3336300305F1656F24C74CD1D8",
+    "inrelease_sha256": "f17449bf8921f70085b0d6abb6c780c35c0abe62fa1378571f3925206faeb349",
+    "catalogs": [
+      {
+        "name": "mariadb-main-Packages.gz",
+        "url": "https://archive.mariadb.org/mariadb-11.8.9/repo/ubuntu/dists/noble/main/binary-amd64/Packages.gz",
+        "size": 14481,
+        "sha256": "56acee1b1efc379d13b4a615587d00c48b72d3c31e5f1900604a043bb50dcd77",
+        "uncompressed_sha256": "8069c9b21b6eb5875dadcb563ad8b2833426aeb9c60478c7c96f88306b1b2fc6",
+        "hashes_verified": true
+      }
+    ],
+    "date": "Tue, 25 Aug 2026 08:03:38 UTC",
+    "valid_until": null,
+    "freshness": "NO_VALID_UNTIL_REQUIRES_SNAPSHOT_POLICY"
+  },
+  {
+    "name": "node-SHASUMS256.txt.asc",
+    "signature_valid": true,
+    "fingerprint": "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C",
+    "inrelease_sha256": "2f70f136714c94decfcc3a6f47e8550375e934c956fb4df9e5a69fafd1e58fcf",
+    "catalogs": [],
+    "plaintext_matches": true,
+    "node_linux_x64": "55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  node-v24.18.0-linux-x64.tar.xz"
+  }
+]

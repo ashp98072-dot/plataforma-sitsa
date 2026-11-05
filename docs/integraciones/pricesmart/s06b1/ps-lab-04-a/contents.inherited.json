@@ -1,0 +1,26 @@
+{
+  "contents": {
+    "url": "https://archive.mariadb.org/mariadb-11.8.9/repo/ubuntu/dists/noble/Contents-amd64.gz",
+    "size": 148860,
+    "sha256": "3d29bb370c23ebce61265e45913465260317fac158ba34a28f35e6a88aeac38b",
+    "authenticated": true,
+    "files": [
+      "etc/init.d/mariadb database/mariadb-server",
+      "etc/logrotate.d/mariadb database/mariadb-server",
+      "usr/bin/mariadb database/mariadb-client-core",
+      "usr/bin/mariadb-admin database/mariadb-client",
+      "usr/bin/mariadb-dump database/mariadb-client",
+      "usr/bin/mariadb-install-db database/mariadb-server-core",
+      "usr/bin/mariadb-upgrade database/mariadb-server-core",
+      "usr/sbin/mariadbd database/mariadb-server-core"
+    ]
+  },
+  "node_head": {
+    "method": "HEAD",
+    "payload_downloaded": false,
+    "status": 200,
+    "content_length": "31511588",
+    "size_authenticated": false,
+    "note": "Estimate from HTTPS HEAD, not size covered by signed SHASUMS"
+  }
+}

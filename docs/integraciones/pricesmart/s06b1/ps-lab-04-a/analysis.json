@@ -1,0 +1,60 @@
+{
+  "status": "PROPOSED_NOT_INSTALLABLE",
+  "apt_simulation": "NOT_EXECUTED",
+  "selected_profile": null,
+  "download_authorized": false,
+  "operational_isolation_certified": false,
+  "baseline_packages": 690,
+  "errors": [],
+  "profiles": [
+    {
+      "profile": "core",
+      "new_packages": 10,
+      "total_packages": 700,
+      "payload_bytes": 11008492,
+      "baseline_changes": [],
+      "dump_owner_included": false,
+      "recommends": [],
+      "static_errors": []
+    },
+    {
+      "profile": "hybrid",
+      "new_packages": 13,
+      "total_packages": 703,
+      "payload_bytes": 12926548,
+      "baseline_changes": [],
+      "dump_owner_included": true,
+      "recommends": [
+        {
+          "package": "mariadb-client",
+          "relation": "libdbd-mariadb-perl | libdbd-mysql-perl, libdbi-perl, libterm-readkey-perl, mariadb-client-compat"
+        }
+      ],
+      "static_errors": []
+    },
+    {
+      "profile": "full",
+      "new_packages": 18,
+      "total_packages": 708,
+      "payload_bytes": 27258326,
+      "baseline_changes": [],
+      "dump_owner_included": true,
+      "recommends": [
+        {
+          "package": "mariadb-server",
+          "relation": "libhtml-template-perl, mariadb-server-compat, pv, stunnel"
+        },
+        {
+          "package": "mariadb-client",
+          "relation": "libdbd-mariadb-perl | libdbd-mysql-perl, libdbi-perl, libterm-readkey-perl, mariadb-client-compat"
+        }
+      ],
+      "static_errors": []
+    }
+  ],
+  "limits": [
+    "Static selected-set checks only; no APT transaction, ordering or full Multi-Arch proof",
+    "No payload/maintscript/ELF inspection or installed file integrity",
+    "Historical signatures do not establish current freshness or security approval"
+  ]
+}

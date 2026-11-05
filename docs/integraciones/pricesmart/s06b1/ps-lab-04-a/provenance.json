@@ -1,0 +1,266 @@
+{
+  "ticket": "PS-LAB-04-A",
+  "date": "2026-11-05",
+  "base_commit": "b7eb8d5e46febe050cc2fb4bf5393689b76ca86a",
+  "source_worktree_alias": "pricesmart-s06b1",
+  "source_git_state": "untracked PS-LAB-02/03/04; not changed",
+  "copied": [
+    {
+      "file": "baseline-relations.json",
+      "source": "ps-lab-03/baseline-relations.json",
+      "sha256": "eb4f093e9c45a8442a90bdd2184e363a340a6ba80d81d462e398462a0b9f6c3e",
+      "bytes": 242549
+    },
+    {
+      "file": "manifest.proposed.json",
+      "source": "ps-lab-04/manifest.final.proposed.json",
+      "sha256": "cb849da35df0f330d951a002e7d7a55ddabc7c1a4c09168910bf5e5794cee186",
+      "bytes": 69144
+    },
+    {
+      "file": "verification.inherited.json",
+      "source": "ps-lab-04/verification.json",
+      "sha256": "19e57d5d69646ea6e5fb340290ec120799010a9fe571b510a3bdaf52c3331183",
+      "bytes": 4838
+    },
+    {
+      "file": "contents.inherited.json",
+      "source": "ps-lab-04/contents-verification.json",
+      "sha256": "9fe00ebf151a3a2886eaff66f38ec8d06cbf66206ef2583bc2c7ffe76541ca85",
+      "bytes": 965
+    }
+  ],
+  "original_inventory_checksums": [
+    {
+      "file": "PAYLOADS-PROPUESTOS.md",
+      "sha256": "8e46cce177d27cc362d5dd063bf1195d176618a0656ba20bb70311361335170f",
+      "bytes": 3521
+    },
+    {
+      "file": "acquisition.json",
+      "sha256": "016aa1f75b8be0e9e7f6519883da84988557459ab4e0d9459c5fa2529c8f7414",
+      "bytes": 3108
+    },
+    {
+      "file": "closure.candidate.json",
+      "sha256": "5aa7be69fedff2018ede63aff3ef6ed81f8b99a4998017ff1d81a623042d0a26",
+      "bytes": 1946115
+    },
+    {
+      "file": "contents-verification.json",
+      "sha256": "9fe00ebf151a3a2886eaff66f38ec8d06cbf66206ef2583bc2c7ffe76541ca85",
+      "bytes": 965
+    },
+    {
+      "file": "manifest.final.proposed.json",
+      "sha256": "cb849da35df0f330d951a002e7d7a55ddabc7c1a4c09168910bf5e5794cee186",
+      "bytes": 69144
+    },
+    {
+      "file": "metadata/mariadb-Contents-amd64.gz",
+      "sha256": "3d29bb370c23ebce61265e45913465260317fac158ba34a28f35e6a88aeac38b",
+      "bytes": 148860
+    },
+    {
+      "file": "metadata/mariadb-InRelease",
+      "sha256": "f17449bf8921f70085b0d6abb6c780c35c0abe62fa1378571f3925206faeb349",
+      "bytes": 27853
+    },
+    {
+      "file": "metadata/mariadb-InRelease.gpg.log",
+      "sha256": "cd9abc6291cc0331f07e9cb920b487368898d657bf054307608c6d93b7321ef8",
+      "bytes": 847
+    },
+    {
+      "file": "metadata/mariadb-InRelease.verified",
+      "sha256": "8f5a39a0fccecb7e4f6831ad9260028ec58749aa2def9db50e03d2929f8d5ba8",
+      "bytes": 26970
+    },
+    {
+      "file": "metadata/mariadb-keyring.gpg",
+      "sha256": "0caed67ec619ef635a48edee9abca6882a32e4864a97444616f0335ccd3669ec",
+      "bytes": 27481
+    },
+    {
+      "file": "metadata/mariadb-main-Packages",
+      "sha256": "8069c9b21b6eb5875dadcb563ad8b2833426aeb9c60478c7c96f88306b1b2fc6",
+      "bytes": 65220
+    },
+    {
+      "file": "metadata/mariadb-main-Packages.gz",
+      "sha256": "56acee1b1efc379d13b4a615587d00c48b72d3c31e5f1900604a043bb50dcd77",
+      "bytes": 14481
+    },
+    {
+      "file": "metadata/node-README.md",
+      "sha256": "1848190658802f5b5fff0738debe786d8dc4353214b87fc3d56d4cd17bf3d055",
+      "bytes": 41467
+    },
+    {
+      "file": "metadata/node-SHASUMS256.txt",
+      "sha256": "3927bab574a00ca0560c9583fe19655ba19603a1c5851414e4325d34ac50e469",
+      "bytes": 2967
+    },
+    {
+      "file": "metadata/node-SHASUMS256.txt.asc",
+      "sha256": "2f70f136714c94decfcc3a6f47e8550375e934c956fb4df9e5a69fafd1e58fcf",
+      "bytes": 3849
+    },
+    {
+      "file": "metadata/node-SHASUMS256.txt.asc.gpg.log",
+      "sha256": "bb348d6ba90988aa9cd263458847eb6e977191b27d33371c48030b0a881bfd01",
+      "bytes": 890
+    },
+    {
+      "file": "metadata/node-SHASUMS256.txt.asc.verified",
+      "sha256": "fc257b57db9b22f9baccacb453db25f030e0cf0b6c9f8b40feed0e62e464cb86",
+      "bytes": 2966
+    },
+    {
+      "file": "metadata/node-key.asc",
+      "sha256": "9f8d6678b705750bfc9e36f64dea47196b04320a009a692347b99f4880b46854",
+      "bytes": 6461
+    },
+    {
+      "file": "metadata/ubuntu-archive-key.asc",
+      "sha256": "85309b698b7bdac6f21de64aa1eaa998470bbd9c8c853ea274d0c27a95013210",
+      "bytes": 4747
+    },
+    {
+      "file": "metadata/ubuntu-noble-InRelease",
+      "sha256": "cdb2f31d809f589719a53c6ad15f255b27569c4059542ada282aaa21b8e164b0",
+      "bytes": 255850
+    },
+    {
+      "file": "metadata/ubuntu-noble-InRelease.gpg.log",
+      "sha256": "b1fd13444accf277fd0aa269aa67607768ceafc69d136ed3d60d87796c30cdde",
+      "bytes": 890
+    },
+    {
+      "file": "metadata/ubuntu-noble-InRelease.verified",
+      "sha256": "58716ccd6ce78bf798b0f643bb4d0ebc71b5688cc8871aff81c2363ba9fa5755",
+      "bytes": 254967
+    },
+    {
+      "file": "metadata/ubuntu-noble-main-Packages",
+      "sha256": "8f6f71ae839c8cba390a7643fcbbdacddb0bc7d12c1583a2dd80a1f8443a30e5",
+      "bytes": 7165069
+    },
+    {
+      "file": "metadata/ubuntu-noble-main-Packages.gz",
+      "sha256": "e0d7e4cbb09d2aa7f9e104a1488817417bc9d85f3e5d9a21156a52ec641ae531",
+      "bytes": 1808488
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-InRelease",
+      "sha256": "2eddddb92d70a4600c91d6ebd39b2961ae4ec91a1df31f822bc3484573096db1",
+      "bytes": 126127
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-InRelease.gpg.log",
+      "sha256": "30dbd18bc8494ee14566f0700fe076e3b27fdd8391ff147969974f787855f44a",
+      "bytes": 890
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-InRelease.verified",
+      "sha256": "3dc3ca1fb39c32e9efed487fe55119e1857e3d27f654cb9334e3b8b32f779c61",
+      "bytes": 125244
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-main-Packages",
+      "sha256": "6cd43768467b888f6f16b784d4bff48ad508ca892f024964e9cea5e3b36db7fd",
+      "bytes": 6288086
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-main-Packages.gz",
+      "sha256": "83390229c3d130ce91963b525085b7c28ff836df44b8ca7a7c7c13442b4e7c8a",
+      "bytes": 1422415
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-universe-Packages",
+      "sha256": "18239b7d8b3f5312f0239fec0713acdeb8d1d80c45d3cbd8238e8a9b8c45103d",
+      "bytes": 7685583
+    },
+    {
+      "file": "metadata/ubuntu-noble-security-universe-Packages.gz",
+      "sha256": "a8f94178f5178462969f6c554323e0f1872de3d29b4f7d71cf205d5324220d8b",
+      "bytes": 1552090
+    },
+    {
+      "file": "metadata/ubuntu-noble-universe-Packages",
+      "sha256": "687ffc969e7700137677b9cfe2f614ee2d638052a91a7c9bf31f3f6a3040a99a",
+      "bytes": 73379142
+    },
+    {
+      "file": "metadata/ubuntu-noble-universe-Packages.gz",
+      "sha256": "ce57756edcce0a5f7993ceb89057e1510148e04e3b85a066d780e4bc00485c8a",
+      "bytes": 19315644
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-InRelease",
+      "sha256": "e8ce2678df12889714a37d3571fd6d31717d57bf0a32ec716358175056125779",
+      "bytes": 126125
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-InRelease.gpg.log",
+      "sha256": "b8b70b6c29a4dca2d7ab0245f1bf31c69ced4111aa67b1e49ced2bcddda7717a",
+      "bytes": 890
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-InRelease.verified",
+      "sha256": "1093c16cb1051fd5f24362659eb5f83d16685ed0952356f8b5017837aaeef62d",
+      "bytes": 125242
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-main-Packages",
+      "sha256": "0570c13095702992261ca9d2c6dbb8383160b1b8ead6f7e274bb11dd2e3b0280",
+      "bytes": 7615549
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-main-Packages.gz",
+      "sha256": "ce6e257e33bedf6d2c0f32786b51095ee780e9b62d78960f4a742ddfad7d2c1b",
+      "bytes": 1741338
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-universe-Packages",
+      "sha256": "864a57a0daa7da8d0e0921516752f8cd1ea26b2c93d70fa9aa2365208af8a6d9",
+      "bytes": 10641725
+    },
+    {
+      "file": "metadata/ubuntu-noble-updates-universe-Packages.gz",
+      "sha256": "9e92aa49782db5894f7394d645eb5bd9853b1a4f6d9fa7c199c81913b78a0539",
+      "bytes": 2172249
+    },
+    {
+      "file": "verification.json",
+      "sha256": "19e57d5d69646ea6e5fb340290ec120799010a9fe571b510a3bdaf52c3331183",
+      "bytes": 4838
+    }
+  ],
+  "guest_evidence": {
+    "checksums_verified": 4,
+    "packages": 690,
+    "holds": 0,
+    "architectures": [
+      "amd64"
+    ],
+    "audit_exit_recorded": 0,
+    "status_sha256": "3cda4875642cbd278ec769c322022839b947d5ea05f92402d95eb5aa31f1000e",
+    "limit": "Local consistency only; guest not accessed; installed file integrity not checked."
+  },
+  "apt_simulation": "NOT_EXECUTED",
+  "runtime": {
+    "checked": "Windows PATH and current user HKCU Lxss; no guest started",
+    "commands_not_found": [
+      "apt",
+      "apt-get",
+      "dpkg",
+      "docker",
+      "podman"
+    ],
+    "wsl_executable_present": true,
+    "registered_distribution_found": false,
+    "scope_limit": "Not a machine-wide absence claim"
+  },
+  "status": "PROPOSED_NOT_INSTALLABLE"
+}

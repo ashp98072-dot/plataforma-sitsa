@@ -1,0 +1,16 @@
+{
+  "ticket": "PS-LAB-04-A",
+  "date": "2026-11-05",
+  "original_checksums": 41,
+  "guest_checksums": 4,
+  "baseline_packages": 690,
+  "holds": 0,
+  "signatures_reverified": 5,
+  "signed_catalogs": 7,
+  "contents_verified": true,
+  "exact_selected_records_verified": true,
+  "trust_anchor": "Inherited official fingerprints; independent source provenance not re-researched",
+  "freshness_approved": false,
+  "apt_simulation": "NOT_EXECUTED",
+  "status": "PROPOSED_NOT_INSTALLABLE"
+}
