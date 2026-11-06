@@ -134,7 +134,7 @@ function Facturas({ slug, entidadId, puedeRegistrar, puedeAnular }: { slug: stri
     catch (e) { setError(e instanceof Error ? e.message : "Error"); if (/Actualiza/.test(String(e))) setVersion(v => v + 1); } finally { setBusy(false); }
   }
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => { setF({ ...f, [k]: e.target.value }); setCalculo(null); };
-  const configurados = proveedores.filter(p => p.fiscal?.activo);
+  const seleccionables = proveedores.filter(p => p.activo);
 
   return <section className="space-y-4">
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
@@ -142,7 +142,7 @@ function Facturas({ slug, entidadId, puedeRegistrar, puedeAnular }: { slug: stri
     {puedeRegistrar && <fieldset disabled={busy} className="space-y-2 rounded border border-[var(--border)] p-3">
       <legend className="px-1 text-sm font-medium">Registrar factura de proveedor</legend>
       <div className="grid gap-2 sm:grid-cols-4">
-        <select className={campo} aria-label="Proveedor" value={f.proveedorId} onChange={set("proveedorId")}><option value="">Proveedor (configurado)</option>{configurados.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
+        <select className={campo} aria-label="Proveedor" value={f.proveedorId} onChange={set("proveedorId")}><option value="">Proveedor activo</option>{seleccionables.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
         <input className={campo} placeholder="Serie (opcional)" value={f.serie} onChange={set("serie")} />
         <input className={campo} placeholder="Número" value={f.numero} onChange={set("numero")} />
         <label className="text-xs">Fecha<input type="date" className={`${campo} block w-full`} value={f.fechaDocumento} onChange={set("fechaDocumento")} /></label>
@@ -233,7 +233,7 @@ function Pagos({ slug, entidadId, puedeRegistrar, puedeReversar }: { slug: strin
     try { await post(`${base}/pagos/${id}/reversar?entidad=${entidadId}`, "POST", { motivo }); setReversando(null); setMotivo(""); setMsg("Pago reversado: el saldo de sus facturas se recuperó."); setVersion(v => v + 1); }
     catch (e) { setError(e instanceof Error ? e.message : "Error"); } finally { setBusy(false); }
   }
-  const configurados = proveedores.filter(p => p.fiscal?.activo);
+  const seleccionables = proveedores.filter(p => p.activo);
 
   return <section className="space-y-4">
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
@@ -242,7 +242,7 @@ function Pagos({ slug, entidadId, puedeRegistrar, puedeReversar }: { slug: strin
       <legend className="px-1 text-sm font-medium">Registrar pago a proveedor</legend>
       <p className="text-xs text-[var(--muted)]">Un pago se aplica a una o varias facturas de UN proveedor; el total es la suma de lo aplicado. Se paga el monto pagadero (total − retención de ISR).</p>
       <div className="grid gap-2 sm:grid-cols-4">
-        <select className={campo} aria-label="Proveedor del pago" value={f.proveedorId} onChange={e => { setF({ ...f, proveedorId: e.target.value }); setMontos({}); setFacturas([]); }}><option value="">Proveedor</option>{configurados.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
+        <select className={campo} aria-label="Proveedor del pago" value={f.proveedorId} onChange={e => { setF({ ...f, proveedorId: e.target.value }); setMontos({}); setFacturas([]); }}><option value="">Proveedor activo</option>{seleccionables.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
         <label className="text-xs">Fecha del pago<input type="date" className={`${campo} block w-full`} value={f.fechaPago} onChange={e => setF({ ...f, fechaPago: e.target.value })} /></label>
         <input className={campo} placeholder="Medio (transferencia, cheque…)" value={f.medioPago} onChange={e => setF({ ...f, medioPago: e.target.value })} />
         <input className={campo} placeholder="Referencia" value={f.referencia} onChange={e => setF({ ...f, referencia: e.target.value })} />
@@ -299,12 +299,12 @@ function Proveedores({ slug, entidadId, puedeVerFiscal, puedeEditar }: { slug: s
     {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
     {msg && <p role="status" className="text-sm text-emerald-400">{msg}</p>}
     <p className="text-xs text-[var(--muted)]">Un proveedor debe tener configuración fiscal para esta entidad antes de registrarle facturas. El maestro comercial se edita en Compras → Proveedores.</p>
-    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Proveedor", "NIT", "Régimen", "Sujeto a ISR", "Estado", ""].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
+    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Proveedor", "NIT", ...(puedeVerFiscal ? ["Régimen", "Sujeto a ISR", "Estado", ""] : [])].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
       <tbody>{lista.map(p => <tr key={p.id} className="border-t border-[var(--border)]">
         <td className="p-2">{p.nombre}{!p.activo && <small className="block">Inactivo en Compras</small>}</td><td>{p.nit ?? "—"}</td>
-        <td>{p.fiscal ? (p.fiscal.regimenFiscal === "GENERAL" ? "General" : "Pequeño contribuyente") : "Sin configurar"}</td><td>{p.fiscal ? (p.fiscal.sujetoIsr ? "Sí" : "No") : "—"}</td>
+        {puedeVerFiscal && <><td>{p.fiscal ? (p.fiscal.regimenFiscal === "GENERAL" ? "General" : "Pequeño contribuyente") : "Sin configurar"}</td><td>{p.fiscal ? (p.fiscal.sujetoIsr ? "Sí" : "No") : "—"}</td>
         <td>{p.fiscal ? (p.fiscal.activo ? "Activa" : "Inactiva") : "Pendiente"}</td>
-        <td>{puedeEditar && <button type="button" className={boton} onClick={() => { setEdit(p); setCfg(p.fiscal ?? { regimenFiscal: "GENERAL", sujetoIsr: false, cuentaProveedorId: null, cuentaAnticipoId: null, cuentaGastoId: null, activo: true }); }}>{p.fiscal ? "Editar" : "Configurar"}</button>}</td>
+        <td>{puedeEditar && <button type="button" className={boton} onClick={() => { setEdit(p); setCfg(p.fiscal ?? { regimenFiscal: "GENERAL", sujetoIsr: false, cuentaProveedorId: null, cuentaAnticipoId: null, cuentaGastoId: null, activo: true }); }}>{p.fiscal ? "Editar" : "Configurar"}</button>}</td></>}
       </tr>)}</tbody></table></div>
     {edit && <fieldset disabled={busy} className="space-y-2 rounded border border-[var(--border)] p-3">
       <legend className="px-1 text-sm font-medium">Configuración fiscal — {edit.nombre}</legend>

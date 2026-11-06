@@ -37,22 +37,21 @@ export async function obtenerConfigFiscal(empresaId: number, entidadId: number, 
   return rows[0] ? mapear(rows[0]) : null;
 }
 
-/** Proveedores comerciales de la empresa con su configuración fiscal para la entidad (null = pendiente de configurar). */
-export async function listarProveedoresCxp(empresaId: number, entidadId: number, { buscar = "", soloActivos = false }: { buscar?: string; soloActivos?: boolean } = {}) {
+/** La capacidad fiscal procede del servidor. Sin ella no se consulta el maestro fiscal ni se revela si existe/configura un proveedor. */
+export async function listarProveedoresCxp(empresaId: number, entidadId: number, { buscar = "", soloActivos = false, verFiscal = false }: { buscar?: string; soloActivos?: boolean; verFiscal?: boolean } = {}) {
   const termino = buscar.trim().slice(0, 100);
   const rows = await query<RowDataPacket[]>(
-    `SELECT p.id, p.nombre_comercial, p.nit, p.dias_credito, p.activo AS proveedor_activo,
-            f.proveedor_id, f.entidad_id, f.regimen_fiscal, f.sujeto_isr, f.cuenta_proveedor_id, f.cuenta_anticipo_id, f.cuenta_gasto_id, f.activo
+    `SELECT p.id, p.nombre_comercial, p.nit, p.dias_credito, p.activo AS proveedor_activo${verFiscal ? ", f.proveedor_id, f.entidad_id, f.regimen_fiscal, f.sujeto_isr, f.cuenta_proveedor_id, f.cuenta_anticipo_id, f.cuenta_gasto_id, f.activo" : ""}
        FROM compras_proveedores p
-       LEFT JOIN cxp_proveedor_fiscal f ON f.empresa_id = p.empresa_id AND f.proveedor_id = p.id AND f.entidad_id = ?
+       ${verFiscal ? "LEFT JOIN cxp_proveedor_fiscal f ON f.empresa_id = p.empresa_id AND f.proveedor_id = p.id AND f.entidad_id = ?" : ""}
       WHERE p.empresa_id = ? AND (? = '' OR LOCATE(?, p.nombre_comercial) > 0 OR LOCATE(?, COALESCE(p.nit, '')) > 0) AND (? = 0 OR p.activo = 1)
       ORDER BY p.nombre_comercial LIMIT 300`,
-    [entidadId, empresaId, termino, termino, termino, soloActivos ? 1 : 0],
+    [...(verFiscal ? [entidadId] : []), empresaId, termino, termino, termino, soloActivos ? 1 : 0],
   );
   return rows.map(r => ({
     id: Number(r.id), nombre: String(r.nombre_comercial), nit: r.nit == null ? null : String(r.nit),
     diasCredito: r.dias_credito == null ? null : Number(r.dias_credito), activo: Number(r.proveedor_activo) === 1,
-    fiscal: r.proveedor_id == null ? null : mapear(r),
+    fiscal: !verFiscal || r.proveedor_id == null ? null : mapear(r),
   }));
 }
 

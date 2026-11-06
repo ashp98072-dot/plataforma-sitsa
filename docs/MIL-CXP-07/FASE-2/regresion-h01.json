@@ -1,0 +1,46 @@
+{
+  "synthetic": true,
+  "scope": "real route/tenant guard/permission resolver/mapper; synthetic session, memberships and DB query boundary",
+  "profile": "invoices-only",
+  "permissions": {
+    "cxp_facturas_ver": true,
+    "cxp_proveedor_fiscal_ver": false
+  },
+  "listStatus": 200,
+  "directFiscalStatus": 403,
+  "response": {
+    "proveedores": [
+      {
+        "id": 1001,
+        "nombre": "SYNTHETIC-A",
+        "nit": "QA-A",
+        "diasCredito": 30,
+        "activo": true,
+        "fiscal": null
+      },
+      {
+        "id": 1002,
+        "nombre": "SYNTHETIC-NO-CONFIG",
+        "nit": null,
+        "diasCredito": 30,
+        "activo": true,
+        "fiscal": null
+      }
+    ]
+  },
+  "realDatabaseAccess": false,
+  "realNetworkHttp": false,
+  "securityAcceptance": "PASS: no fiscal configuration queried or disclosed without effective fiscal permission",
+  "syntheticQueryBoundaryCalls": [
+    {
+      "sql": "SELECT p.id, p.nombre_comercial, p.nit, p.dias_credito, p.activo AS proveedor_activo\n       FROM compras_proveedores p\n       \n      WHERE p.empresa_id = ? AND (? = '' OR LOCATE(?, p.nombre_comercial) > 0 OR LOCATE(?, COALESCE(p.nit, '')) > 0) AND (? = 0 OR p.activo = 1)\n      ORDER BY p.nombre_comercial LIMIT 300",
+      "params": [
+        101,
+        "",
+        "",
+        "",
+        0
+      ]
+    }
+  ]
+}
