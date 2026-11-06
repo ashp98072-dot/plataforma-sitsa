@@ -1,0 +1,34 @@
+﻿[
+    {
+        "file":  "01-INVENTARIO-Y-DIAGNOSTICO.md",
+        "sha256":  "438032c51510ed8d90bff66c02cf9028da4106cabb3049e753fe96ac8286e861"
+    },
+    {
+        "file":  "02-MATRIZ-MILENIUM.md",
+        "sha256":  "0afa15e9c454d7627558cbea92f639add48e4e21bfaa7b81a5ad82ee3e8c8323"
+    },
+    {
+        "file":  "03-PLAN-OPERATIVO.md",
+        "sha256":  "dd899cdaaa41066cf30187a620842bf9f428afe17c93595f4f36aba9be76246f"
+    },
+    {
+        "file":  "04-VERIFICACION.md",
+        "sha256":  "db83a7e947f222c46d758535bad18256f429c5cc523070ae9eab73171d276a73"
+    },
+    {
+        "file":  "evidencia.json",
+        "sha256":  "06d37fb6e80699aea60a8f662c2585816cb97a77a1fce2a92f10962b282185b8"
+    },
+    {
+        "file":  "README.md",
+        "sha256":  "78048d450ce26686d2a53a500ba3a00cf2cd02761f210f65fba3007130f4b97f"
+    },
+    {
+        "file":  "verificacion-offline.log",
+        "sha256":  "305445c668e5733cc610dbf1f564eec2188b98cfe8920927b9b8427bda4b8aea"
+    },
+    {
+        "file":  "verificacion-offline-final.log",
+        "sha256":  "194dda31e2b86a544670ec333c2e61a86365e9611c706fbaa0b2eb0feff29d4f"
+    }
+]
