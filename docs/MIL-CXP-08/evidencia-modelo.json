@@ -1,0 +1,49 @@
+{
+  "realDatabase": false,
+  "realConnections": false,
+  "fixture": "synthetic versions 0 and 1",
+  "inheritedIsolation": "READ COMMITTED",
+  "pagePaid": "0.00",
+  "totalPaid": "20.02",
+  "details": [
+    {
+      "pagoId": 901,
+      "fechaPago": "2026-11-06",
+      "medioPago": "SYNTHETIC",
+      "referencia": "QA-08",
+      "monto": "20.02",
+      "estado": "REGISTRADO",
+      "vigente": true,
+      "reversadoEn": null,
+      "motivoReversion": null
+    }
+  ],
+  "warnings": [
+    {
+      "codigo": "PAGADO_NO_COINCIDE_CON_LINEAS",
+      "facturaId": 1,
+      "mensaje": "El pagado vigente de QA-1 (0.00) no coincide con la suma de sus líneas de pago registradas (20.02).",
+      "detalle": {
+        "pagado": "0.00",
+        "sumaLineas": "20.02"
+      }
+    }
+  ],
+  "events": [
+    "reader-1:START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY",
+    "reader-1:SELECT id FROM cont_entidades WHERE empresa_id = ? AND id = ? LIMIT 1",
+    "reader-1:SELECT id, nombre_comercial, nit, dias_credito FROM compras_proveedores WHERE empresa_id = ? AND id = ? LIMIT 1",
+    "reader-1:SELECT regimen_fiscal, sujeto_isr FROM cxp_proveedor_fiscal WHERE empresa_id = ? AND entidad_id = ? AND proveedor_id = ? LIMIT 1",
+    "reader-1:SELECT x.id, x.serie, x.numero, DATE_FORMAT(x.fecha_documento, '%Y-%m-%d') AS fecha_documento, DATE_FORMAT(x.fecha_vencimiento, '%Y-%m-%d') AS fecha_vencimiento,\n              GREATEST(0, DATEDIFF('2026-11-06', x.fecha_documento)) AS dias, CASE WHEN x.fecha_vencimiento IS NULL THEN NULL ELSE GREATEST(0, DATEDIFF('2026-11-06', x.fecha_vencimiento)) END AS dias_vencidos, CASE WHEN x.fecha_vencimiento IS NULL THEN 'SIN_VENCIMIENTO' WHEN x.fecha_vencimiento < '2026-11-06' THEN 'VENCIDA' ELSE 'VIGENTE' END AS situacion, x.total_documento, x.isr_monto, x.total_neto_pagar,\n              x.estado_admin, x.motivo_anulacion, COALESCE(pg.total, 0) AS pagado\n         FROM cxp_facturas x LEFT JOIN (SELECT a.factura_id, SUM(a.monto) AS total\n       FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n      WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.estado = 'REGISTRADO' GROUP BY a.factura_id) pg ON pg.factura_id = x.id WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.proveedor_id = ? AND ((x.estado_admin = 'REGISTRADA' AND x.total_neto_pagar > COALESCE(pg.total, 0))) ORDER BY x.fecha_documento ASC, x.id ASC LIMIT ? OFFSET ?",
+    "MODEL-WRITER:commit-version-1-after-page",
+    "reader-1:SELECT CASE WHEN x.estado_admin = 'ANULADA' THEN 'ANULADA' WHEN COALESCE(pg.total, 0) > x.total_neto_pagar THEN 'SOBREAPLICADA' WHEN x.total_neto_pagar > COALESCE(pg.total, 0) THEN 'ABIERTA' ELSE 'PAGADA' END AS clase, CASE WHEN x.fecha_vencimiento IS NULL THEN 'SIN_VENCIMIENTO' WHEN x.fecha_vencimiento < '2026-11-06' THEN 'VENCIDA' ELSE 'VIGENTE' END AS situacion, COUNT(*) AS n, SUM(x.total_documento) AS td, SUM(x.isr_monto) AS isr, SUM(x.total_neto_pagar) AS pag,\n              SUM(COALESCE(pg.total, 0)) AS pagado, SUM(GREATEST(x.total_neto_pagar - COALESCE(pg.total, 0), 0)) AS saldo_pos,\n              SUM(GREATEST(COALESCE(pg.total, 0) - x.total_neto_pagar, 0)) AS exceso\n         FROM cxp_facturas x LEFT JOIN (SELECT a.factura_id, SUM(a.monto) AS total\n       FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n      WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.estado = 'REGISTRADO' GROUP BY a.factura_id) pg ON pg.factura_id = x.id WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.proveedor_id = ? AND ((x.estado_admin = 'REGISTRADA' AND x.total_neto_pagar > COALESCE(pg.total, 0))) GROUP BY CASE WHEN x.estado_admin = 'ANULADA' THEN 'ANULADA' WHEN COALESCE(pg.total, 0) > x.total_neto_pagar THEN 'SOBREAPLICADA' WHEN x.total_neto_pagar > COALESCE(pg.total, 0) THEN 'ABIERTA' ELSE 'PAGADA' END, CASE WHEN x.fecha_vencimiento IS NULL THEN 'SIN_VENCIMIENTO' WHEN x.fecha_vencimiento < '2026-11-06' THEN 'VENCIDA' ELSE 'VIGENTE' END",
+    "reader-1:SELECT a.factura_id, a.pago_id, a.monto, DATE_FORMAT(g.fecha_pago, '%Y-%m-%d') AS fecha_pago, g.medio_pago, g.referencia, g.estado,\n              DATE_FORMAT(g.reversado_en, '%Y-%m-%d %H:%i:%s') AS reversado_en, g.motivo_reversion\n         FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n        WHERE a.empresa_id = ? AND a.entidad_id = ? AND a.factura_id IN (?) ORDER BY g.fecha_pago ASC, g.id ASC",
+    "reader-1:SELECT x.id, x.serie, x.numero, x.total_neto_pagar, COALESCE(pg.total, 0) AS pagado FROM cxp_facturas x LEFT JOIN (SELECT a.factura_id, SUM(a.monto) AS total\n       FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n      WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.estado = 'REGISTRADO' GROUP BY a.factura_id) pg ON pg.factura_id = x.id WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.proveedor_id = ? AND x.estado_admin = 'REGISTRADA' AND COALESCE(pg.total, 0) > x.total_neto_pagar ORDER BY x.id LIMIT 51",
+    "reader-1:SELECT x.id, x.serie, x.numero, COALESCE(pg.total, 0) AS pagado FROM cxp_facturas x LEFT JOIN (SELECT a.factura_id, SUM(a.monto) AS total\n       FROM cxp_pago_aplicaciones a JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n      WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.estado = 'REGISTRADO' GROUP BY a.factura_id) pg ON pg.factura_id = x.id WHERE x.empresa_id = ? AND x.entidad_id = ? AND x.proveedor_id = ? AND x.estado_admin = 'ANULADA' AND COALESCE(pg.total, 0) > 0 ORDER BY x.id LIMIT 51",
+    "reader-1:SELECT a.pago_id, a.factura_id, a.monto FROM cxp_pago_aplicaciones a\n         JOIN cxp_pagos g ON g.empresa_id = a.empresa_id AND g.entidad_id = a.entidad_id AND g.id = a.pago_id\n         JOIN cxp_facturas f ON f.empresa_id = a.empresa_id AND f.entidad_id = a.entidad_id AND f.id = a.factura_id\n        WHERE a.empresa_id = ? AND a.entidad_id = ? AND g.proveedor_id <> f.proveedor_id AND (g.proveedor_id = ? OR f.proveedor_id = ?) ORDER BY a.pago_id, a.factura_id LIMIT 51",
+    "reader-1:SELECT g.id, g.monto_total, COALESCE(SUM(a.monto), 0) AS suma FROM cxp_pagos g\n         LEFT JOIN cxp_pago_aplicaciones a ON a.empresa_id = g.empresa_id AND a.entidad_id = g.entidad_id AND a.pago_id = g.id\n        WHERE g.empresa_id = ? AND g.entidad_id = ? AND g.proveedor_id = ? GROUP BY g.id, g.monto_total HAVING g.monto_total <> COALESCE(SUM(a.monto), 0) ORDER BY g.id LIMIT 51",
+    "reader-1:COMMIT",
+    "reader-1:release"
+  ],
+  "limitation": "Report/helper code executed against a deterministic MVCC model; not proof of MariaDB behavior or deployed isolation"
+}
