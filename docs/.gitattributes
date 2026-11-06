@@ -1,0 +1,12 @@
+/MIL-CXP-06-CIERRE-DOCUMENTAL.md -text
+/MIL-CXP-06-auditoria.zip -text
+/MIL-CXP-06-auditoria.zip.sha256 -text
+/MIL-CXP-06/01-INVENTARIO-Y-DIAGNOSTICO.md -text
+/MIL-CXP-06/02-MATRIZ-MILENIUM.md -text
+/MIL-CXP-06/03-PLAN-OPERATIVO.md -text
+/MIL-CXP-06/04-VERIFICACION.md -text
+/MIL-CXP-06/README.md -text
+/MIL-CXP-06/SHA256SUMS.json -text
+/MIL-CXP-06/evidencia.json -text
+/MIL-CXP-06/verificacion-offline-final.log -text
+/MIL-CXP-06/verificacion-offline.log -text

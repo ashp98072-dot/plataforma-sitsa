@@ -1,0 +1,353 @@
+﻿{
+    "ticket":  "MIL-CXP-06",
+    "dateGuatemala":  "2026-11-06",
+    "scope":  "Auditoria y diseno; sin SQL, migraciones ni cambios funcionales",
+    "main":  "a85df2648121cb419ca7e9d866512f2f326415b7",
+    "worktree":  ".worktrees/mil-cxp06",
+    "previousQaCommit":  "59aef47a99fd12d287915a16c169cce7d8c7604a",
+    "cxpDiffFromQa":  [
+
+                      ],
+    "labEvidence":  "artifacts/auditoria-mil-cxp05-lab02-20261105 (workspace principal)",
+    "labPassed":  12,
+    "labFailed":  0,
+    "labSkipped":  0,
+    "sanitizedHashes":  [
+                            {
+                                "file":  "INFORME.md",
+                                "sha256":  "d2794b623818028a285b5d9d89ba16038ff9d80ee25df53c5cd1aea6e52a0def",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "LEEME.md",
+                                "sha256":  "92ab1bfdc7a958e8a134a69ad7bd8e55ff88d2b6bac8ef0054e4ca226f692236",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "ORIGINALES-SHA256.json",
+                                "sha256":  "27c3fcf135757599708e18f0367895452e663ea64d0ef1dac2655e7ec6700348",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "ejecucion-y-limpieza.json",
+                                "sha256":  "9266fc89fbcd70fb92c59b9cbe110efdb160828c7b7237e628c3550f6888b3c6",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "final.json",
+                                "sha256":  "f60a60207488e78bffb736b3d0692acda82a4c282218db08ab6c918dd43e1bdd",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "identidad-y-hashes.json",
+                                "sha256":  "8abb803d60c161b65057aca7dc00b286a631385caf2bd6f368104f236e41659d",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "metrics.json",
+                                "sha256":  "e834e6efd0f4fc42a5f3a11a1d929554d3d17b5d7639fadfa6a55f490b5550c5",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "preflight.json",
+                                "sha256":  "6e955d382099cfe892ac317c61a8b0642782aee9ea1429d9d959801feaa5e547",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "server-stderr.log",
+                                "sha256":  "ab546f9e2f09971f00bdd4677830901ec7836b2cc59dcbbdfba8c802f7055cf4",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "vitest-results.json",
+                                "sha256":  "36bf0b1f83d91d08b110e2aa24107cdf36393a70ae733c6f422fc5d1919445e8",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "vitest-resumen-original.txt",
+                                "sha256":  "cda02adee6e40555ddbddf616bab2ad946b22bce3a9b3595d67cf6e13448d3a8",
+                                "matches":  true
+                            },
+                            {
+                                "file":  "vitest.log",
+                                "sha256":  "19d81eb79f74084da2d77513e11484984673ea43a23d5c17452bf520b2f45384",
+                                "matches":  true
+                            }
+                        ],
+    "privateOriginalsReverified":  false,
+    "productionSchemaVerified":  false,
+    "remoteIssuesPrInventoryVerified":  false,
+    "sourceHashes":  [
+                         {
+                             "file":  "sql/migrate-2026-11-cxp-m3a-base.sql",
+                             "sha256":  "58f1925639253417e4facf922bd99f20dbfa699819369f20808814fab0154db4"
+                         },
+                         {
+                             "file":  "sql/migrate-2026-11-cxp-m3b1-pagos.sql",
+                             "sha256":  "14c5a10576d22b2abccc970031818e55c4c98a43a1b9f53883327f37002cb821"
+                         },
+                         {
+                             "file":  "sql/postcheck-2026-11-cxp-m3a-base.sql",
+                             "sha256":  "e3be5b16948ac660427955e0ce58fcd2519bb011f8b7e4311e08a6a0df051b90"
+                         },
+                         {
+                             "file":  "sql/postcheck-2026-11-cxp-m3b1-pagos.sql",
+                             "sha256":  "669da5b946011870d9b43580e95656545e3ac0caaf836f3593b9929db8601e32"
+                         },
+                         {
+                             "file":  "sql/preflight-2026-11-cxp-m3a-base.sql",
+                             "sha256":  "b71c9b5e9839f268ac9df91dc15b86a2a0107ec8f488bbf05fc605abed0e451d"
+                         },
+                         {
+                             "file":  "sql/preflight-2026-11-cxp-m3b1-pagos.sql",
+                             "sha256":  "96f1213b3eca41fe6d3cb65642ab67dbaae4b5e372a0942240f4d712021f323d"
+                         },
+                         {
+                             "file":  "sql/rollback-2026-11-cxp-m3b1-pagos.sql",
+                             "sha256":  "35b69e3da40c4dbeee1417c0f8eb92442d38ca419a91a077368bafd6aa5d5e8b"
+                         },
+                         {
+                             "file":  "src/components/contabilidad/cxp-antiguedad.tsx",
+                             "sha256":  "35af8101806e9283204de31137f31f3c7328a856b72110fb92d0a80f7e799573"
+                         },
+                         {
+                             "file":  "src/components/contabilidad/cxp-client.tsx",
+                             "sha256":  "c7243899a030032eb247f9bee68f4ce68ead803d995e0aa6c4d182aedd42fdf0"
+                         },
+                         {
+                             "file":  "src/components/contabilidad/cxp-estado-cuenta.tsx",
+                             "sha256":  "32dc6d4e4590e07755849d0038bd18c4ad27e1ad76299df6d7121770e90e68c0"
+                         },
+                         {
+                             "file":  "src/components/contabilidad/cxp-integridad.tsx",
+                             "sha256":  "fa53f6d2e77be44f2b0b180460c82b084f85aa086f416c32b2bfae840e108edb"
+                         },
+                         {
+                             "file":  "src/components/contabilidad/cxp-situacion-factura.tsx",
+                             "sha256":  "14a2ce6a37a7ee7b6fcac63b7f75423b81ed1646ecc59b9a606ff972454597f4"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/__tests__/integridad-export-fixture.ts",
+                             "sha256":  "f22e42ddb4a99afcd6987fb374001f3711bcf750547b1886c45546e02152e8dd"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/__tests__/integridad-lab.test.ts",
+                             "sha256":  "20275e4178ecec4be1792f93f069daa68db9a006dc92d3039965a8940eba3fcd"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/__tests__/integridad-lab.ts",
+                             "sha256":  "0a6e0ca83dd92522caf7a692720ffb9b3c32e83e873f4ad5e74a3c2d92183472"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad-excel.ts",
+                             "sha256":  "5f2661c4185d746c0415d191687a35f9e892639200592fc9f7ded476df63f620"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad-http.test.ts",
+                             "sha256":  "93855654544834a1745e63985e388525600a972220b253c9cd8f48297f3be1f3"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad-puro.test.ts",
+                             "sha256":  "343e38d3569707db0c3bdbbec96d3df86caf17fc6e4d2f0b6813f1937fc2d86f"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad-shared.ts",
+                             "sha256":  "3ded643147136bd99ea5367294f8f023d8e344b2869e549496ed12c2eaafe217"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad.db.test.ts",
+                             "sha256":  "1a68e8edd898aa64a35c519480f2f2e8c4649163e39710ccee9f96c580d3dad4"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/antiguedad.ts",
+                             "sha256":  "f475023573e29c30b9e8e4b7c1cfc3d81de0467acc8bf4c57395737e114815a6"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/aplicaciones.ts",
+                             "sha256":  "88780adba4357f75f53ee38ed09299ec38880ae2ec4233647c7d90bdc000ea93"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/bitacora.db.test.ts",
+                             "sha256":  "01a467043547d4e9b5c41089912c59cc9c591c3830bd4baca89996fc6425c844"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/bitacora.test.ts",
+                             "sha256":  "cee19e552ced7da57084af67dd153634ee27ba02a8ccdbed48b636e2215fd5f5"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/bitacora.ts",
+                             "sha256":  "dc153963421182edcd8241457ab99dc0cfb10d851743fc7fd1491c571a3940dc"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-http.test.ts",
+                             "sha256":  "f9608cc733c228a9ba4c5ed97a114ded57ba6b86b3294c4923c9880aa9db551f"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-m3a-rollout.db.test.ts",
+                             "sha256":  "e76a3a3c1b51a30703256e5d8c7cc442677c4351d3a07efe69aaf9cdeb0b62e1"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-m3a.db.test.ts",
+                             "sha256":  "681f157e3ce5826785c67c11dda0b9efa1256b4085c4d10fb861459f0f00f727"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-m3b1-rollout.db.test.ts",
+                             "sha256":  "1ba95580fd64dfcc221569da62cd63fe39ce5e9c9c72e7543f67c5ce5d052843"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-m3b1.db.test.ts",
+                             "sha256":  "e8c4791ae89eed322b053564b21304a2c69d40d5ffa089fc3e1a5b1644a2d8b7"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-puro.test.ts",
+                             "sha256":  "8ebe3dd9d50f810066d1189a756ea410b007a97ffbf643a8fbf4a9873948fa13"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/cxp-ui.test.ts",
+                             "sha256":  "28e6d6c73abbc65a8f2e3bae041f09eefe53436264376cf3aa26506169fb04fc"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/errores.ts",
+                             "sha256":  "17a2867fb1b077f8937ca6adbbf54dc8f2af63f5619927761e0854e174c95caf"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta-excel.ts",
+                             "sha256":  "1e9928922a515c2b69eec84e14d4ea8a2d079f97dfd8c7334b21dad1ba017a23"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta-http.test.ts",
+                             "sha256":  "b699b161f65ea7b650924e7ea4a5de8ed7b8d4e5cb4152cd16cf98df39abd007"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta-puro.test.ts",
+                             "sha256":  "3c54f9d57f88beb16ba9c016c21a58917d4efd2f25d33bb91bfb17756bb3a722"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta-shared.ts",
+                             "sha256":  "a9f8f6b7adeb39fec7f4615a1412ae8b116ecdc26a87746d80b1f25e4d5e20e5"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta.db.test.ts",
+                             "sha256":  "92734b072c263e7d2be68e762a4e5569017c00b200a277d4f1a84ae9317c80cd"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/estado-cuenta.ts",
+                             "sha256":  "236ca0f8755e98470f8211ca06b8195083280d24f930d95d9804b61473797704"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/facturas-integridad.dom.test.ts",
+                             "sha256":  "427a92f39e013e941d51673a5d99e9d07c226068533c8d9bb9b02a554d9cdf86"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/facturas-integridad.test.ts",
+                             "sha256":  "b3826237fc1cdf907ec1e8a68a383f5f73cae0f2a276a2b78c76bab3fd1b4a2a"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/facturas.ts",
+                             "sha256":  "8d2b11f5fc26b16ab2163b8f221e641edbcdc768f5cf12b22050fe026803aef1"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/http-antiguedad.ts",
+                             "sha256":  "5d4ac01fd2c9e27e1030155744cdc948d1288c6e5e4d120c1764d0a971e0903a"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/http-estado-cuenta.ts",
+                             "sha256":  "a28d2cb2164c1040b24d06410be73f2f5effba9f05710125aebfcd804ce02ee8"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/http-integridad.ts",
+                             "sha256":  "af7660a0515438fb9e50ef53cb0e90e77da6d3d252e294402ac20896ab0495c1"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/http.ts",
+                             "sha256":  "c65c44fcb24df295e792db6f806049a9c28534c27eaf1cea7be417e53da01222"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-excel.test.ts",
+                             "sha256":  "4e2d2bd14950c1d543abe7cc9424359a39443384cb10bfffbfebcddc5276d8c8"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-excel.ts",
+                             "sha256":  "cc737cb2a2035eea78debf8898656d63ae9f9d0201e4fa5cccdc3c452641afb3"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-export-http.test.ts",
+                             "sha256":  "f5daabf5daa869538a6c2ae39975ce52a9d542726a2159fb781130c545bf9251"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-export.dom.test.ts",
+                             "sha256":  "cb2b91bb36f5aa0ac1bcb4345b8963e60c739b98f0a17a3195e26f927c95ff88"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-http.test.ts",
+                             "sha256":  "ba2918b8e893e5b20c3586de4610684841d6f4286161c1edd19c4f2fd2329503"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad-shared.ts",
+                             "sha256":  "17a5d57945b1a7a88c4f2df1647e0df7380c8d4ff54932e153855887716bc2fb"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad.db.test.ts",
+                             "sha256":  "84481c0b43ed8e31e544a5ed475cae8f0b3cb444ac0025e43ecef8149a0a25f4"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad.dom.test.ts",
+                             "sha256":  "e2294bb7b624275dc6b7db84aad2fbec524b24de7342475e9677b182a38bb6ff"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad.test.ts",
+                             "sha256":  "bafe82bd074d1520ef7e6865b5c706f5c0a216a57e3126917f2d5218e493a047"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/integridad.ts",
+                             "sha256":  "6284c9451c7e415572fe9a78804a7af2bc40147a04b82cdc6eb5877947547ac1"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/isr-proveedor.ts",
+                             "sha256":  "30cc07b6525da04c61a6f5f0e36a0000fb92e8487891166daca6cfbf000eafd1"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/lectura-cxp.ts",
+                             "sha256":  "9faee488c62992a5705d08f0920d6bc2fa647ac1778d670b20fa7c009c27d2e5"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/pagos-invariantes.test.ts",
+                             "sha256":  "6aa7fb0555949ccc14ad8307bbb5acc460cf90e691633622055c29f1c8ef4832"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/pagos-puro.test.ts",
+                             "sha256":  "db35eea3edcaafe6ac89c416660743e17a45318793ee7ee846e3003f1dba9e09"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/pagos.ts",
+                             "sha256":  "d71c87719b02cb963a9ce23d97dad51b182e6c5c0aa77c896dba8c837170889c"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/proveedor-fiscal.ts",
+                             "sha256":  "5b35cfdc7834b7eb4ed9291cbcec96e58f2c4393a1ef680d9792936af81af54c"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/saldo-lectura.test.ts",
+                             "sha256":  "8672b20b1826fd2aa188844543ecadf3600a72bcb9bcb3094152952bd42d9c34"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/saldo-lectura.ts",
+                             "sha256":  "af60db95a56b245282f0b4c0aadd5b55c73ded74dd4f572143c9be348d39b133"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/saldo.ts",
+                             "sha256":  "69e773ed6c7361970f2753562f02568bfd51efe1bc4ebe55827607919860c336"
+                         },
+                         {
+                             "file":  "src/lib/contabilidad/cxp/validacion.ts",
+                             "sha256":  "cdbec92a5ef1e7a854a06567643b7fb4ea9f641efcd158a3f3ba057d16b0d6dd"
+                         }
+                     ],
+    "offlineFinal":  {
+                         "passed":  300,
+                         "filesPassed":  20,
+                         "exitCode":  0,
+                         "dbSuitesExcluded":  true,
+                         "command":  "node node_modules/vitest/vitest.mjs run src/lib/contabilidad/cxp --exclude \u0027**/*.db.test.ts\u0027 --no-file-parallelism --reporter=verbose"
+                     }
+}
