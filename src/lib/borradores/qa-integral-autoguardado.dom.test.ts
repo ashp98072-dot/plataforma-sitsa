@@ -470,8 +470,9 @@ describe.each(DRIVERS)("QA-E · $nombre", (d) => {
     const h = await listo(d, "incierto");
     await d.enviar(h);
     await hasta(() => expect(h.host.querySelector("[data-reconciliacion-pendiente]")).not.toBeNull());
-    expect(d.obs(h).closest("fieldset")?.disabled).toBe(true); // congelado
-    expect((await guardadoDe(d))!.estadoEnvio).toBe("enviando");
+    // congelado: el bloqueo de la edición y el estado persistido se aplican un render/transacción después del aviso; se espera sin sleeps
+    await hasta(() => expect(d.obs(h).closest("fieldset")?.disabled).toBe(true));
+    await hasta(async () => expect((await guardadoDe(d))!.estadoEnvio).toBe("enviando"));
     await hasta(() => expect(d.botonEnviar(h).disabled).toBe(false));
     await d.enviar(h);
     await hasta(() => expect(posts(d.k)).toHaveLength(2));

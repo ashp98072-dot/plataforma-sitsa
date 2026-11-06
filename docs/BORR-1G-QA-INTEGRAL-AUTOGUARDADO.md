@@ -1,7 +1,9 @@
 # BORR-1g — QA integral de autoguardado, recuperación e idempotencia
 
-**Estado: NO APROBADO PARA MERGE** mientras el hallazgo **F-02 (P1)** siga abierto (ver §9). El PR contiene solo pruebas y este expediente; **no se modificó ningún código productivo**.
-Todo lo medido es **simulado** (happy-dom + fake-indexeddb + `fetch` simulado). **No hay validación en navegador real ni contra Hostinger.**
+**Estado actual: CERRADO CON RIESGOS DOCUMENTADOS** (tras BORR-1d-FIX-01 / PR #571 y BORR-1g-CIERRE-FIX-01). No hay hallazgos P0/P1 abiertos ni defectos funcionales conocidos de pérdida silenciosa o duplicación. Los riesgos residuales están en §11. El PR original (#570) contiene solo pruebas y este expediente; **ningún cambio de BORR-1g modifica código productivo**.
+Todo lo medido es **simulado** (happy-dom + fake-indexeddb + `fetch` simulado). **No hay validación en navegador real ni contra Hostinger** (pendiente, ver §10).
+
+> *Trazabilidad histórica.* La primera versión de este expediente (PR #570, SHA `5c2d61e6`) declaró **NO APROBADO PARA MERGE** por el hallazgo F-02 (P1), reproducido entonces con las pruebas F6 (`it.fails`) y F6b (caracterización). #571 lo corrigió; las pruebas F2/F6/F6b se convirtieron en pruebas positivas en BORR-1g-CIERRE-FIX-01 y la carrera de E3 se estabilizó. Las cifras de §7 conservan la medición original; el estado actual de la comparación se añade en §7b.
 
 ## 1. SHA base
 `0ca4036d538ca23c17ca11a67b80a7ea3110d19d` (merge de #569), comprobado como HEAD real de `origin/main` antes de crear la rama `feature/borr-1g-qa-integral-autoguardado`.
@@ -15,7 +17,7 @@ Todo lo medido es **simulado** (happy-dom + fake-indexeddb + `fetch` simulado). 
 | Fondos | `fondos/page.tsx`, `fondo-autoguardado.tsx`, `fondo-borrador.ts`, `fondo-borrador-envio.ts`; POST `/tms/fondos` (`claveIdempotencia`, **máx. 40**) |
 | Gastos | `gastos/page.tsx`, `gasto-autoguardado.tsx`, `gasto-borrador.ts`, `gasto-borrador-envio.ts`, `gastos-envio-cliente.ts` (crear + comprobante); POST `/tms/gastos` (sin tope de líneas) |
 | Suites existentes | 15 de núcleo (`src/lib/borradores`, `src/components/borradores`), DOM de los 3 módulos (31 / 39 / 34), puras (`requerimiento-borrador` 14, `fondo-borrador` 13, `gasto-borrador` 13), idempotencia, `errores-formulario`, `formularios-wiring` |
-| **Nuevas (BORR-1g)** | `qa-integral-autoguardado.dom.test.ts` (68 pruebas: 21 escenarios × 3 módulos + 5 cruzadas), `qa-limites-lineas.dom.test.ts` (7: 6 pasan + 1 `fails` documentando F-02) |
+| **Nuevas (BORR-1g)** | `qa-integral-autoguardado.dom.test.ts` (68 pruebas: 21 escenarios × 3 módulos + 5 cruzadas), `qa-limites-lineas.dom.test.ts` (7, todas positivas; F2/F6/F6b reescritas tras #571, sin `it.fails`) |
 
 **Contratos de idempotencia revisados:** Compras — clave opcional en backend, misma clave+mismo contenido → original, distinto → 409; **el 409 de Compras también significa factura duplicada o bloqueo concurrente (nada se creó)**. Fondos/Gastos — mismo contrato; el 409 de POST es siempre `ConflictoIdempotencia`. Gastos: crear y subir el comprobante son operaciones distintas.
 
@@ -48,15 +50,15 @@ Leyenda: **E** = ya existía (BORR-1d/1e/1f/núcleo), **N** = nueva en 1g (los t
 | E4 409 según contrato | reintento inseguro / bloqueo incorrecto | ✔ (ver F-01) | ✔ | ✔ | **N** |
 | E5 recarga durante estado incierto: 0 POST | duplicación | ✔ | ✔ | ✔ | E + **N** |
 | Gastos: creado + comprobante falla → reintento solo sube | segundo gasto | — | — | ✔ | E (BORR-1f) |
-| F Compras 500 (coherencia backend/adaptador/botón; 501 no se aplica a medias) | truncamiento | ✔ | — | — | **N** |
+| F Compras 500 (coherencia backend/adaptador/botón; 501 y 600 se restauran íntegras pero no son enviables) | truncamiento | ✔ | — | — | **N** |
 | F Fondos 39/40/41/101, #569 intacta | truncamiento | — | ✔ | — | E + **N** (estático) |
 | F Gastos 101/250/1000 | truncamiento | — | — | ✔ | E + **N** |
-| F clics simultáneos en el límite | truncamiento silencioso | **✘ F-02** | ✔ (#569) | n/a | **N** |
+| F clics simultáneos en el límite | truncamiento silencioso | ✔ (F-02 resuelto por #571) | ✔ (#569) | n/a | **N** |
 | G1–G5 cruzadas (3 módulos a la vez) | contaminación entre módulos | ✔ | ✔ | ✔ | **N** |
 Los 3 módulos × (preferencia «no guardar», IndexedDB/cuota, borrador inválido, versión incompatible, error de persistencia) quedan cubiertos entre las columnas anteriores.
 
 ## 4. Resultados por módulo (Fases B–F, simulados)
-Los 21 escenarios del driver (B/C/D/E) pasan en **Compras, Fondos y Gastos** (63/63) y se suman a las suites propias de cada módulo. Límites: ver §3 (F) y §9 (F-02).
+Los 21 escenarios del driver (B/C/D/E) pasan en **Compras, Fondos y Gastos** (63/63) y se suman a las suites propias de cada módulo. Límites: ver §3 (F) y §9.
 
 ## 5. Resultados cruzados (Fase G, 5/5)
 G1 tres borradores coexisten con identidades distintas · G2 recuperar uno no escribe en los otros y descartar uno conserva los demás (revisiones intactas) · G3 enviar Gastos no limpia ni altera Compras/Fondos (0 POST ajenos) · G4 cambiar de empresa aísla los tres · G5 la purga elimina los tres y las pestañas vivas no los recrean.
@@ -75,16 +77,21 @@ G1 tres borradores coexisten con identidades distintas · G2 recuperar uno no es
 `main` limpio (`0ca4036d`) **35 fallos / 14342 pruebas / 1009 omitidas**; rama **35 / 14417 / 1009**. Conjuntos de fallos **idénticos** (0 exclusivos de la rama, 0 exclusivos de `main`); +75 pruebas nuevas (68 + 7, de ellas 1 `fails` esperado). Los 35 son heredados (guardas de diff RRHH/SQL, `flota/cb2`, `factura-emitida`, pricesmart, etc.; varios intermitentes por timeouts bajo carga); ninguno atribuible a esta rama.
 Clasificación: *heredados* — guardas que comparan contra SHAs antiguos; *intermitentes* — `flota/cb2/*` (timeouts de 5 s, pasan en aislado en `main` y en la rama, evidencia de BORR-1e/1f); *regresiones de la rama* — ninguna; *defectos de prueba* — ninguno abierto. No se declara «sin regresiones» por un pase aislado: se comparó el conjunto completo bajo la misma carga.
 
+## 7b. Comparación posterior a #571 y al cierre
+Medición sobre `0862cdcf` (HEAD tras #569–#571) contra `59aef47a` (antes de #569), misma carga: 35 → 41 fallos. Los 6 adicionales se explican por nombre y causa: 3 pruebas obsoletas F2/F6/F6b (F-04, **defecto de prueba**, determinista), E3 de Compras (F-05, **defecto de prueba**, carrera, pasa 3/3 en aislado) y 2 de `flota/cb2` (`consumos-registrados`, `pilotos-automaticos`: **intermitentes** por carga, `STACK_TRACE_ERROR`, pasan 8/8 en aislado en ambas ramas). 0 fallos exclusivos de la base. Ningún **defecto funcional** ni regresión de producción. Los 35 restantes son heredados (guardas de diff RRHH/SQL, etc.). Tras BORR-1g-CIERRE-FIX-01 se eliminan los 4 defectos de prueba; los 2 intermitentes de `flota/cb2` no pertenecen a este frente.
+
 ## 8. Evidencia de idempotencia y no duplicación
 Para los tres módulos (E1–E5): clave registrada antes del POST y coincidente con la enviada; 3 envíos simultáneos → 1 POST; IndexedDB roto → 0 POST; 5xx → congelado, reintento con **mismo cuerpo y misma clave**, éxito → borrador limpio; 409 conservado/liberado según contrato; recarga en estado incierto → 0 POST, clave y contenido intactos; conflicto con otra pestaña durante el envío → 0 POST. Gastos: creación confirmada + fallo del comprobante → el reintento solo sube el archivo (0 POST adicional; pruebas de BORR-1f).
 
-## 9. Hallazgos
-| ID | Sev. | Módulo | Descripción | Evidencia |
+## 9. Hallazgos (estado final)
+| ID | Sev. | Módulo | Estado | Descripción y evidencia |
 |---|---|---|---|---|
-| **F-02** | **P1 (abierto)** | Compras | El botón «+ Agregar línea» solo se protege con `disabled`; `setLineas(a => [...a, …])` no tiene guarda funcional y `construirPayload` hace `slice(0, 500)`. Con varios clics en el mismo lote de eventos en la línea 499, la pantalla supera 500 líneas y el borrador guarda 500 mostrando «Guardado» (pérdida silenciosa; además el backend rechazaría >500). Fondos no lo sufre (#569 añadió la guarda). | `qa-limites-lineas.dom.test.ts` F6 (`it.fails`: el comportamiento correcto falla) y F6b (caracterización: pantalla > 500, guardadas = 500) |
-| F-01 | P2 | Compras | El 409 de `POST /compras/requerimientos` mezcla ConflictoIdempotencia, factura duplicada y bloqueo concurrente; BORR-1d lo trata como rechazo definitivo (libera el intento conservando la clave). No hay duplicación posible (el servidor protege la clave) pero un 409 por clave ya usada no pasa a «reconciliación». | E4 (Compras) |
-| F-03 | P3 | Los 3 | Las comprobaciones son simuladas; `console` y tiempos de las pruebas pesadas (500 líneas) dependen de la carga. | — |
-**Nota de alcance de F-02:** en un navegador real React vacía los eventos discretos de forma síncrona entre clics, de modo que un doble clic humano probablemente ya vea el botón deshabilitado; la prueba lo reproduce con eventos agrupados (`act`). Sigue siendo un camino de truncamiento silencioso en el adaptador, de ahí P1 hasta decidir. **No se corrigió aquí (el PR es solo QA).** Ticket separado propuesto: guarda funcional en Compras (`actual.length >= 500 ? actual : [...]`) y, de forma defensiva, que `construirPayload` no recorte (error visible en su lugar), con prueba que invierta F6.
+| F-01 | P2 | Compras | **PENDIENTE NO BLOQUEANTE** | El 409 de `POST /compras/requerimientos` tiene **cuatro causas** en `guardarRequerimiento`: (1) factura repetida dentro del propio payload; (2) factura duplicada contra la BD; (3) bloqueo concurrente del proveedor («otra operación en curso»); (4) `ConflictoIdempotencia` (la clave ya se usó con otro contenido). En (1)–(3) el INSERT se revierte y no se crea nada: tratarlo como rechazo definitivo (libera el intento conservando la clave) es correcto. Solo (4) significa que ya existe un documento con esa clave; el servidor lo resuelve **antes** de cualquier otra comprobación y su mensaje indica «Revisa el listado antes de volver a intentarlo». No se encontró un camino de interfaz que lo alcance: tras una respuesta incierta el contenido queda congelado, tras recargar el envío se bloquea, y la revisión compartida (CAS) del borrador impide que una segunda pestaña envíe otro contenido con la misma clave. **No hay pérdida ni duplicación posibles** (el servidor protege la clave). Condición: si la migración de idempotencia de Compras no estuviera aplicada, el servidor opera en modo legado y un reintento tras una creación confirmada da 409 «factura duplicada» (sin duplicación por sí solo; es una limitación de esa migración, no de este cambio). Corregirlo exigiría un código de error estable en la API (cambio de contrato, fuera de alcance). Evidencia: E4 (Compras) caracteriza el comportamiento actual. |
+| F-02 | P1 | Compras | **RESUELTO** por PR #571 (BORR-1d-FIX-01) | Guarda funcional en `setLineas`, sin `slice`, borrador heredado de >500 líneas recuperado íntegro con envío bloqueado. Evidencia: `requerimiento-limite-lineas.dom.test.ts` (5 mutaciones detectadas) y, en este expediente, F2/F6/F6b ahora positivas: tres clics agrupados desde 499 → exactamente 500 y botón deshabilitado; líneas persistidas = líneas del formulario (mismo contenido y orden); 501 y 600 se restauran íntegras pero no son enviables. |
+| F-03 | P3 | Los 3 | **RESIDUAL** | Las pruebas pesadas (500 líneas) y algunas ajenas (`flota/cb2`) fallan por timeout bajo carga y pasan en aislado en `main` y en la rama. |
+| F-04 | — | Pruebas | **RESUELTO** | F2, F6 y F6b de `qa-limites-lineas.dom.test.ts` describían el defecto F-02 ya corregido y fallaban siempre en `main` tras fusionar #571 antes que #570. Reescritas como pruebas positivas; sin `it.fails`. |
+| F-05 | — | Pruebas | **RESUELTO** | E3 (Compras) leía `fieldset.disabled` y `estadoEnvio` inmediatamente tras aparecer el aviso de reconciliación (carrera de un render/transacción); ahora usa `hasta(...)`. Se mantienen todas las comprobaciones funcionales. |
+**Reconciliación manual tras una respuesta incierta (comportamiento implementado en los tres módulos).** Ninguna API ofrece consulta por clave. Si el resultado de un envío es incierto (red, 5xx, 408/425/429 y, en Fondos/Gastos, 409): en la misma página se puede reintentar **exactamente el mismo contenido con la misma clave** (el servidor devuelve la creación original); tras recargar, el borrador queda en «reconciliación pendiente»: no se puede recuperar ni descartar y **no se envía otro documento**; el usuario debe revisar el listado para saber si la operación se creó. Hasta que exista un endpoint de consulta por clave, ese borrador no se libera.
 
 ## 10. Limitaciones y pruebas no ejecutadas
 - Sin navegador real: existe el panel de navegador del entorno, pero no hay un servidor de la aplicación con base de datos de prueba y sesión disponibles para esta tarea (y está prohibido usar producción); por eso **no se afirma validación de navegador real**. Pendiente: prueba manual de dos pestañas reales, cierre de sesión real y `BroadcastChannel` real.
@@ -94,10 +101,10 @@ Para los tres módulos (E1–E5): clave registrada antes del POST y coincidente 
 - Sin pruebas de rendimiento ni de accesibilidad; IndexedDB no cifra (limitación de diseño documentada).
 
 ## 11. Riesgos residuales
-F-02 abierto; reconciliación manual tras recargar en estado incierto (no existe consulta por clave en ninguna API); posible cierre de pestaña entre la creación confirmada y marcarla completada; el comprobante de Gastos no sobrevive a una recarga (por diseño); dependencia de timeouts en entornos cargados.
+F-01 (409 de Compras, P2, sin pérdida ni duplicación); reconciliación manual tras recargar en estado incierto (no existe consulta por clave en ninguna API); posible cierre de pestaña entre la creación confirmada y marcarla completada; el comprobante de Gastos no sobrevive a una recarga (por diseño); dependencia de timeouts en entornos cargados.
 
 ## 12. Recomendación técnica
-1. **No aprobar BORR-1g para merge** hasta decidir F-02: abrir un ticket de corrección separado para Compras (guarda funcional + no truncar en silencio) y, tras él, invertir la prueba F6/F6b.
-2. Evaluar F-01 (distinguir el 409 de idempotencia del de factura duplicada, p. ej. con un código de error estable en la respuesta) en una fase con autorización de cambio de API.
-3. Antes de producción: prueba manual en navegador real y propuesta de un endpoint de consulta por clave para reconciliar envíos inciertos.
+1. **BORR-1g puede considerarse cerrado con riesgos documentados.** «Cerrado» no equivale a aprobación para producción ni a un despliegue autorizado.
+2. Antes de producción: prueba manual en navegador real (dos pestañas, cierre de sesión real, `BroadcastChannel`, almacenamiento lleno) y verificar en Hostinger el estado de las migraciones de idempotencia.
+3. Futuro, con autorización de cambio de API: endpoint de consulta por clave para liberar la reconciliación manual y un código de error estable para distinguir el 409 de idempotencia en Compras (F-01).
 4. No iniciar otra fase de desarrollo sin autorización.
