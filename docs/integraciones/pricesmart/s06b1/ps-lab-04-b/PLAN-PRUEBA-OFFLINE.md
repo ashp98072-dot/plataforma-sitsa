@@ -4,7 +4,7 @@
 
 ## 1. Estrategia
 
-0. **Inventario de solo lectura** de las cachés existentes (F2a), sin ejecutar APT: es la única fuente posible de evidencia *indirecta* sobre lo que había en la caché histórica.
+0. **Inspección pasiva** de las cachés existentes (F2a), sin ejecutar APT, con un **directorio de evidencias exclusivo** y separado de los `<RUN>` de F2 y F4: es la única fuente posible de evidencia *indirecta* sobre lo que había en la caché histórica. Exige encender la VM, lo cual **no es una operación sin escrituras** (sección 4.7.4).
 1. **Reproducir el mecanismo** sin cambiar nada (F2, caché nueva y vacía): confirma que ese estado produce el bloqueo (N=2) y captura las evidencias que hoy faltan. **Esto no demuestra la causa de la ejecución histórica** (ver sección 7).
 2. **Solo si se autoriza por separado**, obtener y verificar los 10 `.deb` fuera del laboratorio (F3).
 3. **Control positivo** con la caché verificada (F4): si el bloqueo desaparece, queda demostrado que la causa era la disponibilidad local de los archivos.
@@ -14,7 +14,7 @@ No se asume que haya que descargar archivos: F2 puede mostrar otra causa (A2-A7 
 
 | Fase | Contenido | Requiere autorización de |
 |---|---|---|
-| F2a | Inventario de solo lectura de cachés existentes (sin APT) | lectura en la VM del laboratorio |
+| F2a | Inspección pasiva de cachés existentes (sin APT), en cinco etapas: preparación con la VM apagada, autorización de encendido, inspección en el invitado, exportación y custodia, apagado y comprobaciones (sección 4.7) | **una autorización por etapa**; encender la VM requiere autorización expresa propia; cualquier copia de discos o instantánea, otra autorización expresa |
 | F2 | 2 corridas formales con caché **nueva** y vacía + capturas | ejecutar APT en simulación en la VM del laboratorio |
 | F3 | Obtención y verificación de los 10 `.deb` | adquisición de archivos (hoy `downloads_authorized: false`) |
 | F4 | 2 corridas formales con caché verificada | ejecutar APT en simulación |
@@ -23,7 +23,7 @@ No se asume que haya que descargar archivos: F2 puede mostrar otra causa (A2-A7 
 ## 2. Precondiciones y entradas
 
 1. VM Ubuntu Server 24.04.3 aislada ya existente; no se crea ni modifica ninguna VM, y la VM histórica del baseline no se toca.
-2. Un `<RUN>` nuevo por ejecución (`ps-apt-run3`, `run4`, …), nunca reutilizado. Los `<RUN>` previos (`run1`, `run2`) se conservan intactos. Su subdirectorio `log/` se crea vacío.
+2. Un `<RUN>` nuevo por ejecución (`ps-apt-run3`, `run4`, …), nunca reutilizado. Los `<RUN>` previos (`run1`, `run2`) se conservan intactos. Su subdirectorio `log/` se crea vacío. Los `<RUN>` de F2 y F4 **nunca** son el directorio de evidencias de F2a (precondición 9).
 3. Entradas copiadas desde originales de solo lectura **dentro de `<RUN>`**, siempre con ruta **relativa a `<RUN>`**:
 
    | Entrada (ruta relativa a `<RUN>`) | Valor de referencia (obtenido de las evidencias de PS-LAB-04-A) |
@@ -40,6 +40,7 @@ No se asume que haya que descargar archivos: F2 puede mostrar otra causa (A2-A7 
 6. Usuario **sin privilegios elevados**; nunca se ejecuta nada sin `-s`.
 7. Se registra la versión real de APT (E1). Si no es `2.8.3`, o si el comportamiento observado difiere del código leído (idéntico en Ubuntu `2.7.14build2` y `2.8.4ubuntu0.1`; `2.8.3` no se leyó directamente), se documenta antes de continuar (hipótesis A7).
 8. **Cachés existentes = solo evidencia, nunca espacio de trabajo.** `ps-apt-run1`, `ps-apt-run2` y `/var/cache/apt/archives` no se usan como `Dir::Cache::Archives` de ninguna corrida, no se copian ni se renombran sus archivos y no se escribe en ellos. Cada corrida usa un directorio de archivos **nuevo** dentro de su `<RUN>`, que contiene únicamente un subdirectorio `partial/` (modo `0555`, vacío) y, solo en F4, los 10 `.deb` verificados.
+9. **Directorio de evidencias de F2a exclusivo.** F2a escribe únicamente en `~/ps-f2a-<UTC>/` (nuevo, modo `0700`, con la marca `.f2a-evidencia`), nunca en `ps-apt-run1`, `ps-apt-run2`, `/var/cache/apt` ni en un `<RUN>` de F2/F4. El script de F2/F4 rechaza como `<RUN>`, **sobre la ruta canónica y por límites de directorio**, cualquier ruta que sea, esté dentro de o contenga `ps-apt-run1`, `ps-apt-run2` o `/var/cache/apt`; cualquier ruta con un componente `ps-f2a-*`; y cualquier directorio con la marca `.f2a-evidencia` (sección 4.1). F2a tiene sus propias funciones (`fcap`, `fneed`, `fabort`) y no usa `cap`, `need`, `assert`, `abort` ni `finalize` de F2/F4.
 
 ## 3. Aislamiento, rutas privadas y escrituras
 
@@ -52,7 +53,13 @@ No se asume que haya que descargar archivos: F2 puede mostrar otra causa (A2-A7 
 
 ## 4. Comandos propuestos (plantilla de script, NO ejecutada)
 
-Todo se ejecuta como un script (`run-fase.sh <RUN> <F2|F4>`) por usuario sin privilegios. Es una **plantilla**. Estado de su validación en esta fase (sin APT, sin laboratorio): ensamblada tal cual desde este documento, pasa `bash -n`; se probó su lógica de control en un directorio temporal con `apt-config`, `apt-cache`, `apt-get` y `dpkg-query` **simulados** y rutas históricas ficticias, en 17 escenarios: 2 caminos felices (F2 y F4) y 15 de aborto, cada uno detenido por el motivo previsto (ruta efectiva histórica, enlace simbólico, modo incorrecto, archivos o directorios extra en la caché o en `partial/`, entrada sin listar, entrada o árbol alterados, borrado simulado de un `.deb`, `.deb` con hash alterado, aviso `Problem unlinking`, tráfico de red, exit inesperado, `RUN/log` no vacío, ejecución como root), conservando las evidencias originales y sin ejecutar `apt-cache`/`apt-get` cuando falla la validación de rutas. `shellcheck` no estaba disponible y no se ejecutó. **Esto no sustituye** la validación con APT real: el formato de salida de `apt-config shell`, el efecto del modo `0555` sobre APT y los demás supuestos siguen sin confirmar hasta la fase autorizada.
+Todo se ejecuta como un script (`run-fase.sh <RUN> <F2|F4>`) por usuario sin privilegios. Es una **plantilla**. Estado de su validación (sin APT, sin laboratorio, sin VirtualBox):
+
+- **Script de F2/F4** (4.1-4.6), ensamblado tal cual desde este documento: pasa `bash -n`. Su lógica de control se probó en un directorio temporal con `apt-config`, `apt-cache`, `apt-get` y `dpkg-query` **simulados** y rutas históricas ficticias, en 30 casos: 2 caminos felices (F2 y F4); 13 abortos, cada uno por el motivo previsto (ruta efectiva histórica, enlace simbólico, modo incorrecto, archivos o directorios extra en la caché o en `partial/`, entrada sin listar, entrada o árbol alterados, borrado simulado de un `.deb`, `.deb` con hash alterado, aviso `Problem unlinking`, tráfico de red, exit inesperado); 10 rechazos de `<RUN>` con exit 2 (ruta histórica exacta, **descendientes** de `ps-apt-run1`/`ps-apt-run2`/caché del sistema, directorio de F2a y descendiente, marca `.f2a-evidencia`, enlace simbólico a una ruta protegida y a un descendiente, y `..` que resuelve a una ruta protegida); 5 aceptaciones de rutas hermanas y de nombres parecidos (`ps-apt-run10`, `ps-apt-run1-copy`, `ps-apt-run1x`, `sysapt2`, `ps-f2aX`); y, aparte, el rechazo de un `RUN/log` no vacío y la negativa a ejecutarse como root. Las funciones de guarda de `<RUN>` (`path_within`, `run_is_forbidden`, `run_in_f2a_dir`) se probaron además sobre un sistema de archivos sintético en 38 casos (exactas, descendientes, ancestros, `..`, enlaces simbólicos como ruta y como padre, ruta protegida que es un enlace, hermanas y nombres parecidos). La regla anterior, por coincidencia de texto, **admitía** un descendiente de `ps-apt-run1`; la actual compara rutas canónicas por límite de directorio y lo rechaza. Las evidencias originales se conservaron y, cuando falló la validación de rutas, no se invocó `apt-cache` ni `apt-get`. **Limitación:** un montaje `bind` de un directorio protegido en otro lugar solo se detecta por coincidencia exacta de `dispositivo:inodo`, no para sus descendientes.
+- **Script de F2a** (4.7.5): pasa `bash -n`. **No se ejecutó contra el laboratorio.** Con datos sintéticos y en directorios temporales se probaron: las funciones de guarda `f2a_evid_ok` y `f2a_allowed` (casos de rutas de evidencias y de órdenes permitidas y rechazadas); el **corte por `mtime` y por `ctime`** (`g47a-c`) con archivos construidos a propósito —uno con solo `ctime` posterior y otro con solo `mtime` posterior—, donde `-newermt` solo omite el primero y `-newerct` y la comparación por epoch lo detectan; el **cierre `g98`/`g99`** (camino normal, aborto, idempotencia, intento tardío de sobrescribir y cinco manipulaciones, todas detectadas por el verificador de 4.7.6); y la **comparación de contadores de red** (`g14a`/`g14b`) con muestras de `/proc/net/dev`. Estas pruebas se hicieron como `root`, por lo que **no** prueban la protección por modo de `EVID` frente a un usuario sin privilegios. Se comprobó además por búsqueda de texto que el script no usa `cap`, `need`, `assert`, `abort`, `finalize`, `FORBIDDEN` ni otra función o variable de F2/F4.
+- **No pudo verificarse:** la sintaxis de los bloques PowerShell del checklist (no hay PowerShell en el entorno; solo una comprobación estructural de paréntesis, llaves y corchetes), `shellcheck` (no disponible) y todo comportamiento frente a VirtualBox, al invitado o a APT real.
+
+Esto **no sustituye** la validación con APT real: el formato de salida de `apt-config shell`, el efecto del modo `0555` sobre APT, los nombres de clave de `VBoxManage` y los demás supuestos siguen sin confirmar hasta la fase autorizada.
 
 ### 4.1 Entorno y funciones de control
 
@@ -66,7 +73,33 @@ RUN="${1:?ruta del RUN nuevo}"
 PHASE="${2:?F2 o F4}"
 case "$PHASE" in F2) WANT_FORMAL=100;; F4) WANT_FORMAL=0;; *) echo "fase inválida" >&2; exit 2;; esac
 [ "$(id -u)" -ne 0 ] || { echo "no ejecutar con privilegios elevados" >&2; exit 2; }
-RUN=$(realpath -e -- "$RUN") || exit 2
+RUN=$(realpath -e -- "$RUN") || exit 2          # ruta canónica: resuelve enlaces simbólicos, "." y ".."
+PROTECTED_RUN=(/home/labadmin/ps-apt-run1 /home/labadmin/ps-apt-run2 /var/cache/apt)   # árboles históricos y caché del sistema
+
+path_within() {   # path_within <ruta> <base>: 0 si <ruta> es <base> o está dentro de <base>; por límite de directorio, no por texto
+  local p="${1%/}" b="${2%/}"
+  [ -n "$b" ] || return 0                       # la base "/" abarca todo
+  [ "$p" = "$b" ] && return 0
+  case "$p" in "$b"/*) return 0;; esac
+  return 1
+}
+run_is_forbidden() {   # 0 (prohibido) si RUN es, está dentro de o CONTIENE una ruta protegida, o comparte su identidad dispositivo:inodo
+  local r="$1" q cq
+  for q in "${PROTECTED_RUN[@]}"; do
+    cq=$(realpath -m -- "$q") || return 0       # si no se puede canonizar la ruta protegida, se rechaza (falla cerrada)
+    path_within "$r" "$cq" && return 0          # igual a o dentro de la ruta protegida
+    path_within "$cq" "$r" && return 0          # RUN que contiene la ruta protegida (p. ej. el directorio padre)
+    if [ -e "$cq" ] && [ "$(stat -c '%d:%i' -- "$r")" = "$(stat -c '%d:%i' -- "$cq")" ]; then return 0; fi
+  done
+  return 1
+}
+run_in_f2a_dir() {   # 0 si algún componente de la ruta empieza por "ps-f2a-" (el propio directorio o un descendiente)
+  case "/$1/" in */ps-f2a-*/*) return 0;; esac
+  return 1
+}
+run_in_f2a_dir "$RUN" && { echo "RUN no puede ser ni estar dentro de un directorio de evidencias de F2a" >&2; exit 2; }
+run_is_forbidden "$RUN" && { echo "RUN no puede ser, estar dentro de ni contener un árbol histórico o la caché del sistema" >&2; exit 2; }
+[ ! -e "$RUN/.f2a-evidencia" ] || { echo "RUN marcado como directorio de evidencias de F2a" >&2; exit 2; }
 [ -d "$RUN/log" ] && [ -z "$(ls -A "$RUN/log")" ] || { echo "RUN/log debe existir y estar vacío" >&2; exit 2; }
 ARCH="$RUN/cache/archives"
 FORBIDDEN=(/home/labadmin/ps-apt-run1/cache/archives /home/labadmin/ps-apt-run2/cache/archives /var/cache/apt/archives)
@@ -254,20 +287,242 @@ if [ "$PHASE" = F2 ]; then assert "F2: sin acciones Inst/Conf/Remv" formal_ok_f2
 echo "FASE $PHASE: criterios cumplidos (no es aprobación; ver sección 7)" > "$RUN/log/RESULT.txt"
 ```
 
-### 4.7 F2a — inventario de solo lectura de cachés existentes
+### 4.7 F2a — procedimiento independiente en cinco etapas
 
-Se ejecuta antes de F2, con el mismo `cap`/`need`, y **solo con órdenes de lectura de metadatos** (`stat`, `find -printf`). No hay `-exec`, `-delete`, hash de contenido ni escritura en esos directorios; la salida va al `log/` del `<RUN>` nuevo.
+F2a **no reutiliza** el script de F2/F4: tiene su propio directorio de evidencias y sus propias funciones. Los comandos de **Windows (PowerShell, host)** viven en [F2A-CHECKLIST-PREVIO.md](F2A-CHECKLIST-PREVIO.md) (etapas 1, 2 y 5) y los de **Ubuntu (Bash, invitado)** en este documento (etapa 3); nunca se mezclan en un mismo bloque. Nada de esto se ha ejecutado.
+
+#### 4.7.1 Directorios y garantías contra sobrescritura
+
+| Directorio | Quién escribe | Observación |
+|---|---|---|
+| `/home/labadmin/ps-apt-run1`, `…/ps-apt-run2` | **nadie** | históricos; solo `stat`/`find -printf` |
+| `/var/cache/apt` y el resto del sistema | **nadie en F2a** | solo lectura; el arranque sí puede escribir (4.7.4) |
+| `~/ps-f2a-<UTC>/` (en adelante `EVID`) | solo F2a | nuevo, modo `0700`, marca `.f2a-evidencia`, no reutilizable |
+| `<RUN>` de F2/F4 (`ps-apt-run3`, …) | solo F2/F4 | aún no existen; el script de F2/F4 rechaza (ruta canónica, por límites de directorio) las rutas iguales a, dentro de o que contengan `ps-apt-run1`, `ps-apt-run2` o `/var/cache/apt`, las que tengan un componente `ps-f2a-*`, y la marca `.f2a-evidencia` |
+
+Garantías que aplica el script de F2a (todas fallan cerradas): el nombre de `EVID` no puede coincidir con ni estar dentro de una ruta protegida ni parecerse a un `ps-apt-run*`; `EVID` se crea con `mkdir` **sin `-p`** (falla si existe); `noclobber` y comprobación de existencia antes de cada captura; archivos en modo `0444`; **lista cerrada** de órdenes de solo lectura (`f2a_allowed`) y rechazo de verbos y opciones que modifican; comparación de metadatos (`mtime`/`ctime`) de las rutas protegidas antes y después.
+
+#### 4.7.2 Etapa 1 — Preparación con la VM apagada (host Windows, PowerShell)
+
+Detalle y comandos en el checklist, fase P. En resumen: consultas de solo lectura de VirtualBox; comprobación de que la VM está apagada, sin red, sin carpetas compartidas ni portapapeles; recursos del host; identificación **exacta** de los medios (UUID, ruta, formato, capacidad, tamaño del archivo y cadena de padres); copia de lectura de las bitácoras de VirtualBox del host **antes** de cualquier arranque; hash de medios y configuración. **No se copia ni se modifica ningún disco en esta etapa.** Una copia de archivos o una instantánea solo se hace con autorización expresa, espacio verificado y medios identificados (checklist P5).
+
+#### 4.7.3 Etapa 2 — Autorización posterior para encender la VM
+
+Es una autorización **separada** de las anteriores. Debe nombrar: la VM (nombre y UUID), la ventana UTC, el operador, la protección del disco elegida y verificada, el canal de exportación de evidencias (D2), las escrituras del arranque que se aceptan (4.7.4), los criterios de parada y el apagado. Sin ella la VM no se enciende, y encenderla no autoriza por sí mismo la etapa 3.
+
+#### 4.7.4 Un arranque normal de Ubuntu no es una operación sin escrituras
+
+Aunque F2a solo lea, encender el invitado y la VM **puede** escribir en los siguientes lugares. Qué ocurre realmente depende de la configuración del invitado y no se asume:
+
+- **Sistema de archivos:** recuperación del journal de ext4 o `fsck` si el apagado anterior no fue limpio; actualización de metadatos y de `atime` según las opciones de montaje.
+- **Registros:** `journald`, `syslog`, `auth.log`, `kern.log`, `wtmp`, `btmp`, `lastlog`, registros de `cloud-init`, rotación de `logrotate`.
+- **Servicios y temporizadores automáticos** que corren al arrancar o recuperan un disparo pendiente (`Persistent=`): `apt-daily`, `apt-daily-upgrade` y `unattended-upgrades`, `man-db`, `fstrim`, `e2scrub`, `motd-news`, `systemd-tmpfiles-clean`. Pueden tocar `/var/lib/apt`, `/var/cache/apt` o `/var/lib/dpkg` aunque no haya red (por ejemplo, intentar una actualización que falla y deja archivos parciales, bloqueos o registros).
+- **`cloud-init`**, si está instalado y activo, puede reescribir configuración de red o de equipo.
+- **`systemd`:** sellos de temporizadores, semilla aleatoria, reloj y sincronización de hora.
+- **Sesión del operador:** historial de la shell y cachés en `/home/labadmin`, en el mismo árbol que `ps-apt-run1` y `ps-apt-run2` (aunque no dentro de ellos).
+- **VirtualBox (host):** reescribe el `.vbox` y el estado de la VM; **rota `VBox.log`**, con riesgo de perder los registros del laboratorio anterior; si no hay instantánea, las escrituras van al **disco original**; si la hay, a un disco diferencial.
+
+Consecuencias: el estado del invitado tras el arranque **no** es el estado previo; el contenido de `ps-apt-run1|2` no debería cambiar por el arranque pero **no está garantizado** (se comprueba, no se supone); y por eso el estado previo se preserva **antes** de encender (etapa 1) y la caché del sistema se interpreta con salvedad (checklist, S16).
+
+#### 4.7.5 Etapa 3 — Inspección pasiva en el invitado (Ubuntu, Bash)
+
+Solo con la autorización de la etapa 2. Usuario sin privilegios. **No se ejecuta ningún binario de APT.** Plantilla, no ejecutada.
 
 ```bash
-for d in "${FORBIDDEN[@]}"; do
-  tag=$(printf '%s' "$d" | tr '/' '_')
-  cap "05-stat-before$tag" stat -c $'%n\t%F\t%a\t%U\t%x\t%y\t%z' -- "$d"
-  cap "05-list$tag"        find "$d" -printf '%p\t%y\t%s\t%m\t%u\t%g\t%T@\n'
-  cap "05-stat-after$tag"  stat -c $'%n\t%F\t%a\t%U\t%x\t%y\t%z' -- "$d"
+#!/usr/bin/env bash
+# F2a — inspección pasiva. INDEPENDIENTE de run-fase.sh: define fcap/fneed/fabort y no usa cap/need/assert/abort/finalize.
+set -u -o pipefail -o noclobber
+umask 077
+[ "$(id -u)" -ne 0 ] || { echo "no ejecutar con privilegios elevados" >&2; exit 2; }
+
+H1=/home/labadmin/ps-apt-run1; H2=/home/labadmin/ps-apt-run2; SYS=/var/cache/apt
+PROTECTED=("$H1" "$H2" "$SYS")
+ARCHDIRS=("$H1/cache/archives" "$H2/cache/archives" "$SYS/archives")
+CUT_ISO='2026-11-06T17:29:00Z'   # cierre histórico (informe generado a las 17:28:01,47Z) + 59 s de margen declarado
+CUT_EPOCH=$(date -u -d "$CUT_ISO" +%s) || { echo "no se pudo interpretar el instante de corte" >&2; exit 2; }
+
+f2a_evid_ok() {   # EVID no puede coincidir con, ni estar dentro de, una ruta protegida; ni parecerse a un RUN
+  local p="${1%/}" q                      # sin barra final; "/" queda como cadena vacía y coincide con todo
+  case "$p" in */ps-apt-run*) return 1;; esac
+  for q in "${PROTECTED[@]}"; do
+    case "$p/" in "$q"/*) return 1;; esac
+    case "$q/" in "$p"/*) return 1;; esac
+  done
+  return 0
+}
+f2a_allowed() {   # lista cerrada de órdenes de solo lectura; cualquier otra cosa devuelve 1
+  local c="${1:-}" a; shift || true
+  case "$c" in
+    id|uname|uptime|last|findmnt|zcat|grep|sha256sum|stat|dpkg-query|cat|f2a_*) return 0 ;;
+    date)       [ "$*" = '-u +%FT%TZ' ]; return $? ;;
+    systemctl)  case "${1:-}" in list-timers|is-enabled) return 0;; esac; return 1 ;;
+    dpkg)       case "${1:-}" in -S|--verify) return 0;; esac; return 1 ;;
+    ss)         for a in "$@"; do case "$a" in -K|--kill) return 1;; esac; done; return 0 ;;
+    ip)         for a in "$@"; do case "$a" in add|del|delete|set|flush|replace|change|append|up|down|netns) return 1;; esac; done; return 0 ;;
+    journalctl) for a in "$@"; do case "$a" in --rotate|--vacuum-*|--flush|--sync|--relinquish-var|--smart-relinquish-var|--setup-keys|--update-catalog) return 1;; esac; done; return 0 ;;
+    find)       for a in "$@"; do case "$a" in -delete|-exec|-execdir|-ok|-okdir|-fprint|-fprint0|-fprintf|-fls) return 1;; esac; done; return 0 ;;
+    *)          return 1 ;;
+  esac
+}
+
+EVID="$HOME/ps-f2a-$(date -u +%Y%m%dT%H%M%SZ)"
+f2a_evid_ok "$EVID" || { echo "ruta de evidencias no permitida" >&2; exit 2; }
+mkdir -m 0700 -- "$EVID"     || { echo "no se pudo crear $EVID (¿ya existe?)" >&2; exit 2; }   # sin -p: falla si existe
+mkdir -m 0700 -- "$EVID/log" || exit 2
+: > "$EVID/.f2a-evidencia"
+
+fabort() {   # si la evidencia ya está sellada no se escribe nada en ella; si no, se registra el motivo y se cierra y sella
+  [ "${CLOSED:-0}" -eq 1 ] || echo "ABORT: $*" >> "$EVID/log/ABORT.txt"
+  echo "ABORT: $*" >&2; f2a_finish; exit 1
+}
+fcap() {   # fcap <nombre> <orden...>: guarda argv, stdout, stderr y exit originales; no decide nada
+  local n="$1"; shift
+  case "$n" in ''|*[!A-Za-z0-9._-]*) fabort "nombre de captura no válido: $n";; esac
+  f2a_allowed "$@" || fabort "orden no permitida en F2a: $*"
+  local b="$EVID/log/$n"
+  [ ! -e "$b.exit" ] || fabort "$n ya existe; no se sobrescribe"
+  printf '%s\0' "$@" > "$b.argv0"
+  "$@" > "$b.stdout" 2> "$b.stderr"
+  echo "$?" > "$b.exit"
+  chmod 0444 "$b.argv0" "$b.stdout" "$b.stderr" "$b.exit"
+}
+fneed() {  # fneed <nombre> <exit esperado>: solo lee
+  local f="$EVID/log/$1.exit" got
+  [ -s "$f" ] || fabort "$1: falta el archivo .exit"
+  got=$(<"$f")
+  case "$got" in ''|*[!0-9]*) fabort "$1: exit no numérico";; esac
+  [ "$got" -eq "$2" ] || fabort "$1: exit $got, esperado $2"
+}
+
+f2a_pkgs()      { dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' | LC_ALL=C sort; }
+f2a_pkgs_hash() { f2a_pkgs | sha256sum; }
+f2a_sources()   { cat /etc/apt/sources.list 2>/dev/null; ls -l /etc/apt/sources.list.d/ 2>/dev/null; cat /etc/apt/sources.list.d/* 2>/dev/null; }
+f2a_history()   { grep -nE 'apt|dpkg|archives|cache|\.deb|rm |cp |mv |wget|curl' "$HOME/.bash_history" 2>/dev/null; }
+f2a_cutoff()    { printf '%s\t%s\n' "$CUT_ISO" "$CUT_EPOCH"; }
+f2a_after_close() {   # entradas con mtime O ctime > corte, a partir de árboles ya capturados (columnas 7 y 8 = epoch); no relee el sistema de archivos
+  awk -F'\t' -v c="$CUT_EPOCH" '($7+0)>c || ($8+0)>c {print $1 "\t" $7 "\t" $8}' "$@"
+}
+f2a_net_rx_zero() {   # recepción desde el arranque: los contadores rx (campos 1-8) de toda interfaz distinta de lo deben ser 0
+  awk -F'[: ]+' 'NR>2 && $2!="lo" { for (i=3;i<=10;i++) if ($i+0!=0) bad=1 } END { exit bad }' "$1"
+}
+f2a_net_unchanged() { # los contadores (rx y tx) de las interfaces distintas de lo no cambian entre dos capturas
+  [ "$(grep -v '^ *lo:' "$1" | sed '1,2d')" = "$(grep -v '^ *lo:' "$2" | sed '1,2d')" ]
+}
+f2a_hash_all()  { ( cd "$EVID" && find . -type f ! -name 'g98-*' ! -name 'g99-*' -print0 | LC_ALL=C sort -z | xargs -0 sha256sum ); }   # manifiesto: todo salvo g98/g99
+f2a_hash_seal() { ( cd "$EVID/log" && sha256sum -- g98-evid-hashes.argv0 g98-evid-hashes.stdout g98-evid-hashes.stderr g98-evid-hashes.exit ); }   # sello: cubre el manifiesto
+f2a_finish() {        # cierre verificable de dos niveles; una sola vez, también al abortar; no sobrescribe nada
+  [ "${CLOSING:-0}" -eq 0 ] || return 0; CLOSING=1
+  fcap g98-evid-hashes f2a_hash_all
+  fcap g99-seal        f2a_hash_seal
+  chmod -R a-w "$EVID"; CLOSED=1
+  ( cd "$EVID/log" && sha256sum -- g99-seal.argv0 g99-seal.stdout g99-seal.stderr g99-seal.exit )   # RAÍZ: se muestra por consola y se transcribe aparte
+}
+
+# --- Identidad, hora y arranque
+fcap g01-id         id;                                  fneed g01-id 0
+fcap g02-os-release cat /etc/os-release;                 fneed g02-os-release 0
+fcap g03-uname      uname -a
+fcap g04-date-utc   date -u +%FT%TZ;                     fneed g04-date-utc 0
+fcap g04b-timezone  cat /etc/timezone
+fcap g05-uptime     uptime -s
+fcap g05b-boot-id   cat /proc/sys/kernel/random/boot_id
+fcap g06-last       last -x -F -n 30
+# --- Red (pasivo)
+fcap g10-links      ip -brief link
+fcap g11-addr       ip -brief address
+fcap g12-route4     ip route
+fcap g13-route6     ip -6 route
+fcap g14a-netdev-before cat /proc/net/dev;           fneed g14a-netdev-before 0
+f2a_net_rx_zero "$EVID/log/g14a-netdev-before.stdout" || fabort "S13: recepción en una interfaz distinta de lo desde el arranque"
+fcap g15-listen     ss -tulnH
+# --- Tareas automáticas y configuración periódica de apt (lectura de archivos; no se ejecuta APT)
+fcap g20-timers     systemctl list-timers --all --no-pager
+fcap g21-enabled    systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service
+fcap g22-periodic   cat /etc/apt/apt.conf.d/10periodic /etc/apt/apt.conf.d/20auto-upgrades
+fcap g23-sources    f2a_sources
+# --- Versión real de APT y comparación con el baseline (sin ejecutar APT)
+fcap g30-apt-pkgs   dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\t${db:Status-Abbrev}\n' apt apt-utils libapt-pkg6.0t64 dpkg; fneed g30-apt-pkgs 0
+fcap g31-apt-owner  dpkg -S /usr/bin/apt-get /usr/bin/apt-cache /usr/bin/apt-config
+fcap g32-apt-sha256 sha256sum /usr/bin/apt-get /usr/bin/apt-cache /usr/bin/apt-config /usr/lib/x86_64-linux-gnu/libapt-pkg.so.6.0*
+fcap g33-apt-verify dpkg --verify apt libapt-pkg6.0t64      # exit distinto de 0 = diferencias: se registra como hallazgo
+fcap g34-all-pkgs   f2a_pkgs
+fcap g35-all-hash   f2a_pkgs_hash
+# --- Rutas protegidas: estado inicial (solo metadatos; sin hashes ni lectura del contenido)
+for d in "${PROTECTED[@]}"; do t=$(printf '%s' "$d" | tr '/' '_')
+  fcap "g40a-stat$t" stat -c $'%n\t%F\t%a\t%U\t%x\t%y\t%z' -- "$d";                        fneed "g40a-stat$t" 0
+  fcap "g41a-tree$t" find "$d" -printf '%p\t%y\t%s\t%m\t%u\t%g\t%T@\t%C@\n';             fneed "g41a-tree$t" 0
 done
+# --- Cachés: cuatro inventarios separados por caché (archivos, directorios, partial/, otros tipos)
+for d in "${ARCHDIRS[@]}"; do t=$(printf '%s' "$d" | tr '/' '_')
+  fcap "g43-files$t"   find "$d" -mindepth 1 -maxdepth 1 -type f -printf '%f\t%s\t%m\t%T@\n'
+  fcap "g44-dirs$t"    find "$d" -mindepth 1 -type d -printf '%P\t%m\n'
+  fcap "g45-partial$t" find "$d/partial" -mindepth 1 -printf '%P\t%y\t%s\t%m\t%T@\n'
+  fcap "g46-other$t"   find "$d" -mindepth 1 ! -type f ! -type d -printf '%P\t%y\n'
+done
+# --- Entradas de ps-apt-run1/2 modificadas después del cierre histórico: mtime Y ctime, con tres comprobaciones independientes
+T1=$(printf '%s' "$H1" | tr '/' '_'); T2=$(printf '%s' "$H2" | tr '/' '_')
+fcap g47-cutoff        f2a_cutoff;                                                                      fneed g47-cutoff 0
+TZ=UTC fcap g47a-mtime-after-close find "$H1" "$H2" -newermt "$CUT_ISO" -printf '%p\t%y\t%T@\t%C@\n'    # solo mtime
+TZ=UTC fcap g47b-ctime-after-close find "$H1" "$H2" -newerct "$CUT_ISO" -printf '%p\t%y\t%T@\t%C@\n'    # solo ctime
+fcap g47c-epoch-check  f2a_after_close "$EVID/log/g41a-tree$T1.stdout" "$EVID/log/g41a-tree$T2.stdout"   # mtime o ctime, por epoch numérico
+for n in g47a-mtime-after-close g47b-ctime-after-close g47c-epoch-check; do
+  fneed "$n" 0
+  [ ! -s "$EVID/log/$n.stdout" ] || fabort "S14: entradas con mtime o ctime posteriores al corte (ver $n)"
+done
+fcap g48-system-cache-top find "$SYS" -maxdepth 1 -printf '%p\t%y\t%s\t%m\t%T@\n'
+fcap g49-debs-anywhere    find / -xdev -type f -name '*.deb' -printf '%p\t%s\t%T@\n'
+fcap g50-mounts           findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS
+# --- Bitácoras (lectura; solo con los grupos que ya tiene el usuario)
+fcap g60-apt-history zcat -f /var/log/apt/history.log*
+fcap g61-dpkg-log    zcat -f /var/log/dpkg.log*
+fcap g62-boots       journalctl --list-boots --no-pager
+fcap g63-journal-apt journalctl --no-pager --since '2026-11-06 16:00:00' --until '2026-11-06 18:00:00' -u apt-daily.service -u apt-daily-upgrade.service
+fcap g64-history     f2a_history
+# --- Rutas protegidas: estado final y comparación (detecta cambios de contenido o de metadatos distintos de atime)
+for d in "${PROTECTED[@]}"; do t=$(printf '%s' "$d" | tr '/' '_')
+  fcap "g40b-stat$t" stat -c $'%n\t%F\t%a\t%U\t%x\t%y\t%z' -- "$d";                        fneed "g40b-stat$t" 0
+  fcap "g41b-tree$t" find "$d" -printf '%p\t%y\t%s\t%m\t%u\t%g\t%T@\t%C@\n';             fneed "g41b-tree$t" 0
+  cmp -s "$EVID/log/g41a-tree$t.stdout" "$EVID/log/g41b-tree$t.stdout" || fabort "$d cambió durante F2a (S14/S16)"
+done
+# --- Red: segunda captura y comparación (sin transmitir tráfico)
+fcap g14b-netdev-after cat /proc/net/dev;                fneed g14b-netdev-after 0
+f2a_net_rx_zero "$EVID/log/g14b-netdev-after.stdout" || fabort "S13: recepción en una interfaz distinta de lo durante F2a"
+f2a_net_unchanged "$EVID/log/g14a-netdev-before.stdout" "$EVID/log/g14b-netdev-after.stdout" || fabort "S13: los contadores de red cambiaron durante F2a"
+# --- Cierre verificable: RESULT.txt se escribe ANTES del manifiesto para que quede cubierto
+echo "F2a pasiva completada; no es aprobación ni establece la causa histórica" > "$EVID/log/RESULT.txt"
+f2a_finish
 ```
 
-Aquí **no** se usa `need`: el resultado (incluso "directorio inexistente") se registra tal cual. Es evidencia **indirecta** de la caché de `run1`: solo tiene valor si hay prueba de que no cambió desde entonces. Limitación declarada: leer un directorio puede actualizar su `atime` según las opciones de montaje; el contenido, `mtime` y `ctime` no cambian, y por eso se registran `stat` antes y después. Evitarlo del todo exigiría una instantánea o un montaje de solo lectura, que son cambios de infraestructura no solicitados.
+Notas: `fneed` solo exige exit 0 donde la ausencia del dato impediría interpretar (identidad, paquetes de APT, existencia de las rutas protegidas, fecha de corte). Los demás exits —`find` sobre una caché inexistente, `dpkg --verify` con diferencias, `systemctl is-enabled` de una unidad deshabilitada, permisos insuficientes en `journalctl`— se **registran tal cual** y se interpretan en el informe. Un orden fuera de la lista cerrada, un nombre de captura inválido o un cambio en las rutas protegidas entre la lectura inicial y la final **abortan**.
+
+**Corte histórico (`g47*`).** `find -newermt` solo evalúa `mtime`; por eso el corte se comprueba tres veces: `g47a` (solo `mtime`, `-newermt`), `g47b` (solo `ctime`, `-newerct`) y `g47c`, que compara por epoch numérico las columnas `mtime` y `ctime` de los árboles ya capturados (`g41a`) sin releer el sistema de archivos. Cualquiera de las tres con contenido aborta (S14). El corte es `2026-11-06T17:29:00Z`: el informe de cierre se generó a las `17:28:01,47Z`, así que el archivo del propio informe (`ps-apt-run2/log/PS-LAB-APT-CORE-CIERRE.json`) tiene un `mtime` posterior a las `17:28:01` y un corte sin margen lo marcaría. **Limitaciones:** (i) el margen de 59 s es una suposición declarada; una modificación ocurrida dentro de ese margen no es detectable; (ii) `ctime` también cambia con `chmod`, `rename` o enlaces, no solo con escrituras; (iii) `g47c` desalinea columnas con rutas que contengan tabuladores o saltos de línea (`g47a`/`g47b` no dependen de columnas); (iv) se asume que el reloj del invitado estaba en UTC en el laboratorio (el listado del paquete de evidencias coincide con `generated_utc`), lo que se contrasta con `g04`/`g04b`; (v) `-newerct` debe confirmarse en el `find` del invitado: si no existe, `g47b` falla y aborta.
+
+**Cierre verificable (`g98`, `g99`).** `RESULT.txt` se escribe **antes** del manifiesto. `g98-evid-hashes` hashea todos los archivos de `EVID` (capturas, `RESULT.txt`, `ABORT.txt` si existe y la marca `.f2a-evidencia`) **excepto** los propios `g98-*`/`g99-*`, por lo que no se autocita. `g99-seal` hashea los cuatro archivos de `g98-evid-hashes` (nivel 2). Los `sha256` de los cuatro archivos de `g99-seal` son la **raíz**: se muestran por consola y se transcriben por un canal aparte (D2); nada posterior los modifica. Ningún archivo se sobrescribe (cada captura se crea una vez con `fcap`), el cierre se ejecuta una sola vez (también al abortar, por `fabort`) y después `EVID` queda sin permisos de escritura (`chmod -R a-w`; los modos no están cubiertos por los hashes, solo el contenido). Una vez sellada la evidencia, `fabort` ya no escribe en ella. La verificación de completitud detecta cualquier archivo añadido después del cierre (por ejemplo, un `ABORT.txt` tardío). *Limitación:* las pruebas sintéticas se hicieron como `root`, para el que los bits de modo no restringen la escritura; la protección por modo de `EVID` frente a un usuario sin privilegios **no se probó** aquí.
+
+**Red (`g14a`/`g14b`).** Se capturan los contadores de `/proc/net/dev` al empezar y al terminar, sin transmitir tráfico. Aborta (S13) si hay **recepción** (campos rx) distinta de cero en una interfaz distinta de `lo` en cualquiera de las dos capturas, o si **cualquier** contador de esas interfaces cambia entre ambas. *Qué puede comprobarse:* que, mientras duró la sesión, el invitado no recibió ni transmitió por una interfaz visible, y que no recibió nada desde el arranque. *Qué no:* tráfico desde el hipervisor o por interfaces que el invitado no ve, tráfico por `lo`, ni lo ocurrido antes del arranque; y un adaptador `null` (conectado a ninguna red) puede mostrar intentos de **transmisión** desde el arranque (por ejemplo, de DHCP) con `tx` distinto de cero que no prueban salida real: eso se registra como hallazgo en el informe, y la evidencia de aislamiento sigue siendo la configuración de VirtualBox (fases P y Z). Con adaptadores en `none` no hay interfaz distinta de `lo` y la comprobación es trivialmente satisfecha.
+
+#### 4.7.6 Etapa 4 — Exportación y custodia de evidencias
+
+- El canal de salida del invitado (sin red, sin carpetas compartidas ni portapapeles) es una **decisión abierta (D2)**: no se asume ninguno. Opciones a decidir por la auditoría: transcribir los hashes y salidas cortas desde la consola con capturas de pantalla, un medio de evidencia agregado con la VM apagada (cambio de infraestructura, requiere autorización), o lectura offline de una copia (si D1 la contempla).
+- Lo que se exporta: todo `EVID` (capturas, `RESULT.txt`/`ABORT.txt`, marca, `g98-evid-hashes.*` y `g99-seal.*`) y, aparte, la **raíz** (cuatro `sha256` de `g99-seal.*`) que el script muestra por consola.
+- Verificación del cierre en el destino (solo lectura; script de Bash cuyo código de salida es distinto de 0 si falla el sello, el manifiesto o la completitud; la comparación con la raíz transcrita aparte es manual; sin validar para Windows):
+
+```bash
+cd "$EVID" || exit 2
+rc=0
+( cd log && sha256sum -c --strict g99-seal.stdout )   || rc=1      # el sello cubre el manifiesto
+sha256sum -c --strict log/g98-evid-hashes.stdout      || rc=1      # el manifiesto cubre todo lo demás
+[ "$(find . -type f ! -name 'g98-*' ! -name 'g99-*' | LC_ALL=C sort)" = "$(cut -c67- log/g98-evid-hashes.stdout | LC_ALL=C sort)" ] \
+  && echo "completitud OK" || { echo "completitud FALLA"; rc=1; }
+( cd log && sha256sum -- g99-seal.argv0 g99-seal.stdout g99-seal.stderr g99-seal.exit )   # RAÍZ: comparar a mano con la transcrita aparte
+exit "$rc"
+```
+- Custodia: se registran operador, hora UTC, canal usado y hash de cada archivo exportado; el custodio firma solo si existe; no se inventa firma. `EVID` se deja en solo lectura y no se reutiliza.
+- Nada de esto se sube al repositorio ni se copia a ninguna ruta histórica.
+
+#### 4.7.7 Etapa 5 — Apagado y comprobaciones posteriores (host Windows, PowerShell)
+
+Detalle y comandos en el checklist, fase Z. En resumen: apagado ordenado **autorizado**, comprobación de `poweroff`, nueva lectura de la configuración de red y de los medios, hash de los medios y del `.vbox` **registrado aparte** del anterior (cambiará tras el arranque), copia de las bitácoras de VirtualBox generadas, y verificación de que la copia o la instantánea de la etapa 1 siguen intactas. No se restaura nada ni se borra la instantánea sin una autorización nueva.
 
 ### 4.8 Revisión de escrituras y privilegios de las correcciones
 
@@ -277,9 +532,11 @@ Aquí **no** se usa `need`: el resultado (incluso "directorio inexistente") se r
 | `inv_*`, `tree_state`, `in_check`, `in_listing`, `stat`, `realpath`, `id` | nada (lectura) | no |
 | `apt-config dump/shell` | nada | no |
 | `apt-cache policy`, `apt-get -s --no-download` | nada previsto; riesgo de `unlink` en la caché mitigado con `0555` y usuario sin privilegios (3.4) | no |
-| F2a | nada; lectura de metadatos de directorios históricos | no |
+| F2a, etapa 3 (`fcap`, `fneed`, `fabort`, `f2a_*`) | solo `EVID/log/` (archivos nuevos, `0444`) y `EVID/.f2a-evidencia`; lee metadatos de las rutas protegidas | no |
+| F2a, etapas 1 y 5 (PowerShell, host) | solo la carpeta nueva de evidencias del host; consultas de solo lectura de VirtualBox | no |
+| Arranque del invitado (etapa 2) | **sí escribe** (4.7.4): disco del invitado, registros, `.vbox`, rotación de `VBox.log` | no; requiere autorización de encendido |
 
-Ninguna de las correcciones añade escritura sobre `ps-apt-run1`, `ps-apt-run2` ni `/var/cache/apt/archives`, y ninguna requiere privilegios elevados; el script se niega a ejecutarse con ellos.
+Ninguna orden de F2a o F2/F4 escribe sobre `ps-apt-run1`, `ps-apt-run2` ni `/var/cache/apt`, y ninguna requiere privilegios elevados; los scripts se niegan a ejecutarse con ellos. Lo que **sí** puede escribir en esas áreas es el arranque normal del invitado y de VirtualBox, no los comandos del plan (4.7.4).
 
 ## 5. Dos ejecuciones independientes y comparación
 
@@ -303,6 +560,8 @@ El script los aplica con `need`/`assert`; al detenerse conserva las evidencias y
 - En F2: exit distinto de 100 o cualquier línea `Inst`/`Conf`/`Remv` (el mecanismo esperado no se reproduce: se investiga A2-A7 y **no** se pasa a F3).
 - En F4: exit distinto de 0, archivo de caché que cambia de nombre, tamaño o hash, cualquier `Remv`, o paquetes distintos de los 10.
 - Necesidad de privilegios elevados, de escribir fuera de `<RUN>` o de ejecutar sin `-s`.
+- **F2a:** `EVID` ya existente, dentro de una ruta protegida o con nombre de RUN; orden fuera de la lista cerrada; captura que intenta sobrescribir; `mtime`/`ctime` de `ps-apt-run1`, `ps-apt-run2` o `/var/cache/apt` distintos entre la lectura inicial y la final; y todos los criterios S01-S19 del checklist.
+- Un `<RUN>` de F2/F4 que (en ruta canónica) sea, esté dentro de o contenga `ps-apt-run1`, `ps-apt-run2` o `/var/cache/apt`; que tenga un componente `ps-f2a-*`; o que lleve la marca `.f2a-evidencia`. Los enlaces simbólicos se resuelven antes de comparar.
 
 ## 7. Criterios de aceptación y rechazo
 
@@ -351,6 +610,10 @@ Solo se diseña; no se descarga ni incorpora nada en este ticket.
 | `sha256sum -c` verifica rutas contra el directorio equivocado, o hay archivos de entrada sin listar | Verificación siempre desde `<RUN>` con `--strict`, rutas relativas y comprobación de completitud (precondición 4, 4.3) |
 | El flujo continúa tras un fallo | `need`/`assert` tras cada paso crítico; `abort` detiene, conserva evidencias y captura el estado posterior |
 | Las evidencias se sobrescriben o se reinterpretan | `noclobber`, comprobación de existencia en `cap`, archivos en solo lectura y hash de `log/` |
+| F2a y F2 comparten directorio y se invalidan o sobrescriben mutuamente | `EVID` exclusivo para F2a, con marca; F2/F4 rechazan `ps-f2a-*`, los árboles históricos (incluidos sus descendientes), la caché del sistema y la marca; funciones propias en cada procedimiento (4.1, 4.7) |
+| Se presenta el arranque del invitado como lectura pura | 4.7.4 describe las escrituras posibles; la protección previa se hace con la VM apagada; la autorización de encendido las acepta de forma explícita |
+| El arranque rota `VBox.log` y se pierde la evidencia histórica de red del host | Copia de lectura y hash de las bitácoras **antes** de encender (checklist P4) |
+| Una copia de discos o instantánea se hace sin autorización, sin espacio o con medios mal identificados | Solo con autorización expresa, medios identificados por UUID y ruta, espacio verificado y sin registrar la copia (checklist P5); nada se copia en esta fase |
 | Se atribuye la causa histórica a un resultado de reproducción | Sección 7: reproducir ≠ demostrar la causa histórica |
 | Nombre de caché incorrecto por epoch (`%3a`) | Tabla de nombres esperados; `expected-archives.tsv`; comparación contra `inv_files` |
 | `APT_CONFIG` no aplicado y uso de rutas del sistema | `env -i`, `APT_CONFIG` explícito, validación de rutas efectivas que falla cerrada |
@@ -365,7 +628,7 @@ Solo se diseña; no se descarga ni incorpora nada en este ticket.
 
 ## 10. Dependencias y bloqueantes para continuar con S06
 
-1. Autorización expresa de F2a y F2 (APT en simulación) y, si procede, de F3 (adquisición).
+1. Autorización expresa **por etapa** de F2a (preparación, encendido, inspección, exportación, apagado), de F2 (APT en simulación) y, si procede, de F3 (adquisición); además, autorización expresa para cualquier copia de discos o instantánea.
 2. Decisión de la auditoría sobre las desviaciones del `apt.conf` de laboratorio y sobre el criterio de aceptación.
 3. Registro de la versión real de APT del laboratorio.
 4. Siguen abiertos todos los pendientes de PS-LAB-04-A: frescura (Release base Noble de 2024, MariaDB histórico, Node), D01–D16, inspección de payloads/maintscripts/ELF, build Linux S05, autorización física, aislamiento y recuperación, y la aprobación de perfil (`hybrid` y `full` sin autorización).
