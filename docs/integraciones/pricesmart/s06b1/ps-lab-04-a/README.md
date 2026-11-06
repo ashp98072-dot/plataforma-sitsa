@@ -2,7 +2,7 @@
 
 Fecha: 2026-11-05, America/Guatemala. Base `origin/main`: `b7eb8d5e46febe050cc2fb4bf5393689b76ca86a`. Rama independiente `docs/pricesmart-lab04a`.
 
-**PROPOSED_NOT_INSTALLABLE. APT NO EJECUTADO. S06 NO CERTIFICADA.** No se selecciona perfil, autoriza adquisición ni habilita etapa B. La autorización de este ticket cubre expediente, pruebas, commit, push y PR Draft.
+**PROPOSED_NOT_INSTALLABLE. S06 NO CERTIFICADA (S06 NOT CERTIFIED).** Actualización 2026-11-06: el laboratorio APT aislado ejecutó el perfil `core`; el diagnóstico es reproducible pero la prueba formal `--no-download` quedó **bloqueada (exit 100)**. Ver [RESULTADOS-LAB-APT-CORE.md](RESULTADOS-LAB-APT-CORE.md). `hybrid` y `full` no se simularon ni están autorizados. Lo descrito abajo como "APT no ejecutado" corresponde al ticket del 2026-11-05. No se selecciona perfil, autoriza adquisición ni habilita etapa B. La autorización del ticket original cubría expediente, pruebas, commit, push y PR Draft.
 
 ## Qué se comprobó de nuevo
 
@@ -40,6 +40,8 @@ Se conservan los Recommends del cliente/servidor, sin incorporarlos por defecto 
 La política heredada de 72 horas para suites Ubuntu mutables no sirve aplicada literalmente al Release base Noble de 2024. Debe distinguirse explícitamente el snapshot base histórico de updates/security y ratificar la excepción o reemplazo; no se cambia la política silenciosamente. MariaDB es archivo histórico y requiere aceptación del patch y revisión vigente de avisos. También falta revisar Node histórico y revocaciones actuales. No se hicieron consultas web ni adquisiciones: este ticket utiliza sólo evidencia existente. Las firmas válidas no aprueban frescura. La fecha de ejecución se registra sin convertirla en fecha de descarga ni de aprobación.
 
 ## Bloqueo real y continuidad
+
+> **Nota 2026-11-06 (no elimina lo histórico):** el texto siguiente describe el bloqueo del **2026-11-05** (sin runtime APT disponible en el equipo Windows). El **2026-11-06** se realizó un diagnóstico APT aislado del perfil `core` en un laboratorio Ubuntu externo: dos diagnósticos sin `--no-download` fueron reproducibles, y la única prueba formal con `--no-download` (en `run1`) terminó con exit 100, es decir, sigue **bloqueada**. Detalle, hipótesis sobre el bloqueo y pendientes (incluida la diferencia entre la rama documentada arriba y la rama de trabajo actual) en [RESULTADOS-LAB-APT-CORE.md](RESULTADOS-LAB-APT-CORE.md). Esos resultados no autorizan instalar, descargar, desplegar, migrar ni modificar producción; `S06 NOT CERTIFIED`; `hybrid` y `full` siguen sin autorización.
 
 No se encontraron `apt`, `apt-get`, `dpkg`, Docker o Podman en PATH, ni distribución registrada bajo HKCU Lxss. `wsl.exe` está presente; no se inició. Esta comprobación no asegura ausencia en todo el equipo. Git Bash/GPG y Node no ofrecen un resolver APT. No hay un runtime Noble confiable utilizable bajo los límites actuales; no se instaló, descargó ni improvisó uno.
 

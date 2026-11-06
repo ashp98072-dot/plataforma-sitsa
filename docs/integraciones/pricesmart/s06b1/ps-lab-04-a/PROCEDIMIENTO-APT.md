@@ -1,6 +1,6 @@
 # Procedimiento condicionado de simulación APT
 
-Estado: **NO EJECUTADO — runtime Noble confiable no disponible**. Este documento no habilita adquisición ni instalación. El comprobador JavaScript sólo inspecciona conjuntos ya propuestos, nunca sustituye este procedimiento.
+Estado: **formal `--no-download` BLOQUEADA (exit 100) para `core`; diagnóstico reproducible, ver [RESULTADOS-LAB-APT-CORE.md](RESULTADOS-LAB-APT-CORE.md)**. No se retiró `--no-download` del criterio. La prueba formal se ejecutó una sola vez (`run1`, exit 100); solo el diagnóstico sin esa opción fue reproducible. Estos resultados no autorizan instalar, descargar, desplegar, migrar ni modificar producción. Este documento no habilita adquisición ni instalación. El comprobador JavaScript sólo inspecciona conjuntos ya propuestos, nunca sustituye este procedimiento.
 
 ## Entradas inmutables
 
