@@ -1,0 +1,533 @@
+{
+  "success": true,
+  "passed": 93,
+  "failed": 0,
+  "skipped": 0,
+  "suites": [
+    {
+      "file": "src/lib/facturacion/confirmaciones-bancarias.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "PR B contratos bancarios normaliza monto/referencia sin orden JSON y conserva pago NULL",
+          "status": "passed",
+          "durationMs": 4.5096000000000345
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto 0",
+          "status": "passed",
+          "durationMs": 0.6496000000000208
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto -1",
+          "status": "passed",
+          "durationMs": 0.3580000000000041
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto 1.234",
+          "status": "passed",
+          "durationMs": 0.19119999999998072
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto NaN",
+          "status": "passed",
+          "durationMs": 0.573599999999999
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto 1e4",
+          "status": "passed",
+          "durationMs": 0.21620000000001482
+        },
+        {
+          "name": "PR B contratos bancarios rechaza monto 1000000000000",
+          "status": "passed",
+          "durationMs": 0.20019999999999527
+        },
+        {
+          "name": "PR B contratos bancarios rechaza fecha inexistente, referencia vacía y payload con nombre/cuenta arbitraria",
+          "status": "passed",
+          "durationMs": 0.8050000000000068
+        },
+        {
+          "name": "PR B contratos bancarios GTQ sin retención habilitada; retención y moneda ajena bloqueadas",
+          "status": "passed",
+          "durationMs": 0.2592999999999961
+        },
+        {
+          "name": "PR B contratos bancarios evidencia válida %PDF-1.7 fixture",
+          "status": "passed",
+          "durationMs": 0.8851000000000226
+        },
+        {
+          "name": "PR B contratos bancarios evidencia válida �PNG\r\n\u001a\n\u0001",
+          "status": "passed",
+          "durationMs": 0.198599999999999
+        },
+        {
+          "name": "PR B contratos bancarios evidencia válida ����",
+          "status": "passed",
+          "durationMs": 0.12479999999999336
+        },
+        {
+          "name": "PR B contratos bancarios rechaza MIME/extensión falsa, ejecutable, vacío y exceso",
+          "status": "passed",
+          "durationMs": 0.7798999999999978
+        },
+        {
+          "name": "PR B contratos bancarios sin automatización ni modificación de pagos; permisos independientes sin legacy",
+          "status": "passed",
+          "durationMs": 2.398399999999981
+        },
+        {
+          "name": "PR B contratos bancarios DDL schema=migrate; preflight solo lectura; sin seeds ni ALTER",
+          "status": "passed",
+          "durationMs": 2.376199999999983
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos-http.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "guard real obtiene empresa y actor de sesión; respuesta privada",
+          "status": "passed",
+          "durationMs": 7.204800000000034
+        },
+        {
+          "name": "revocación y empresa no autorizada deniegan antes del servicio",
+          "status": "passed",
+          "durationMs": 1.0290999999999713
+        },
+        {
+          "name": "sin sesión no consulta; no revela nombres bancarios",
+          "status": "passed",
+          "durationMs": 0.47740000000004557
+        },
+        {
+          "name": "rechaza entrada entidad=",
+          "status": "passed",
+          "durationMs": 0.5005999999999631
+        },
+        {
+          "name": "rechaza entrada entidad=0",
+          "status": "passed",
+          "durationMs": 0.3376999999999839
+        },
+        {
+          "name": "rechaza entrada entidad=abc",
+          "status": "passed",
+          "durationMs": 0.3013000000000261
+        },
+        {
+          "name": "rechaza entrada entidad=1&entidad=2",
+          "status": "passed",
+          "durationMs": 0.36990000000002965
+        },
+        {
+          "name": "rechaza entrada entidad=2147483648",
+          "status": "passed",
+          "durationMs": 0.3756999999999948
+        },
+        {
+          "name": "rechaza entrada entidad=5&empresaId=2",
+          "status": "passed",
+          "durationMs": 0.2751999999999839
+        },
+        {
+          "name": "rechaza entrada usuarioId=1",
+          "status": "passed",
+          "durationMs": 0.2780999999999949
+        },
+        {
+          "name": "errores controlados privados sin SQL ni rutas sensibles",
+          "status": "passed",
+          "durationMs": 1.553200000000004
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos-mayor-http.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "guard real del Mayor, empresa y actor de sesión, fechas y vacío privado",
+          "status": "passed",
+          "durationMs": 6.948299999999904
+        },
+        {
+          "name": "catálogo Contabilidad no autoriza Mayor; revocación y empresa ajena bloquean",
+          "status": "passed",
+          "durationMs": 1.0528000000000475
+        },
+        {
+          "name": "sin sesión o módulo no consulta",
+          "status": "passed",
+          "durationMs": 0.661899999999946
+        },
+        {
+          "name": "rechaza filtros  antes del servicio",
+          "status": "passed",
+          "durationMs": 0.6261000000000649
+        },
+        {
+          "name": "rechaza filtros entidad= antes del servicio",
+          "status": "passed",
+          "durationMs": 0.3790000000000191
+        },
+        {
+          "name": "rechaza filtros entidad=5&entidad=6 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.2800000000000864
+        },
+        {
+          "name": "rechaza filtros entidad=5&empresa=8 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.3100000000000591
+        },
+        {
+          "name": "rechaza filtros entidad=5&desde= antes del servicio",
+          "status": "passed",
+          "durationMs": 0.404700000000048
+        },
+        {
+          "name": "rechaza filtros entidad=5&desde=2026-02-30 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.37779999999997926
+        },
+        {
+          "name": "rechaza filtros entidad=5&desde=2026-02-01&hasta=2026-01-31 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.3106999999999971
+        },
+        {
+          "name": "rechaza filtros entidad=5&hasta=2026-01-01&hasta=2026-01-02 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.2159000000000333
+        },
+        {
+          "name": "rechaza filtros entidad=5&periodo=0 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.19000000000005457
+        },
+        {
+          "name": "rechaza filtros entidad=5&periodo=1&desde=2026-01-01 antes del servicio",
+          "status": "passed",
+          "durationMs": 0.2215999999999667
+        },
+        {
+          "name": "banco inválido 0",
+          "status": "passed",
+          "durationMs": 0.21090000000003783
+        },
+        {
+          "name": "banco inválido -1",
+          "status": "passed",
+          "durationMs": 0.14429999999993015
+        },
+        {
+          "name": "banco inválido abc",
+          "status": "passed",
+          "durationMs": 0.13400000000001455
+        },
+        {
+          "name": "banco inválido 2147483648",
+          "status": "passed",
+          "durationMs": 0.13960000000008677
+        },
+        {
+          "name": "reutiliza período del Mayor sin combinar fechas",
+          "status": "passed",
+          "durationMs": 0.8983000000000629
+        },
+        {
+          "name": "errores scoped y esquema privados, sin filtrar SQL",
+          "status": "passed",
+          "durationMs": 1.2845000000000937
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos-mayor.dom.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "consulta explícita, exactitud visual y advertencia de cobertura",
+          "status": "passed",
+          "durationMs": 28.821900000000028
+        },
+        {
+          "name": "permiso denegado limpia resultados y permite reintentar mismos filtros",
+          "status": "passed",
+          "durationMs": 8.995600000000081
+        },
+        {
+          "name": "desmontar cuenta aborta y descarta respuesta tardía",
+          "status": "passed",
+          "durationMs": 4.524199999999951
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos-mayor.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "comparte consulta del Mayor, exactitud DECIMAL, sin saldo ni glosas",
+          "status": "passed",
+          "durationMs": 4.106200000000001
+        },
+        {
+          "name": "vacío no inventa movimientos; líneas iguales conservan identidades",
+          "status": "passed",
+          "durationMs": 0.4725999999999999
+        },
+        {
+          "name": "entidad inexistente/inactiva o banco ajeno no consulta líneas",
+          "status": "passed",
+          "durationMs": 1.1978000000000293
+        },
+        {
+          "name": "Admin consulta entidad inactiva; banco inactivo no oculta historia",
+          "status": "passed",
+          "durationMs": 0.8226999999999975
+        },
+        {
+          "name": "más de 5000 líneas falla explícitamente sin truncar",
+          "status": "passed",
+          "durationMs": 0.32150000000001455
+        },
+        {
+          "name": "período se resuelve por empresa/entidad y usa sus fechas inclusivas",
+          "status": "passed",
+          "durationMs": 0.4543000000000461
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos.dom.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "vacío sin datos inventados, consulta no-store y navegación contable",
+          "status": "passed",
+          "durationMs": 23.661399999999958
+        },
+        {
+          "name": "muestra estado inactivo, moneda ausente y advertencia sin saldos",
+          "status": "passed",
+          "durationMs": 5.493099999999913
+        },
+        {
+          "name": "error de permisos no muestra tabla ni datos anteriores",
+          "status": "passed",
+          "durationMs": 2.1820000000000164
+        },
+        {
+          "name": "cambio de entidad descarta respuesta tardía de la anterior",
+          "status": "passed",
+          "durationMs": 7.346000000000004
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/bancos.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "DTO mínimo sin referencia ni campos arbitrarios; no inventa valores",
+          "status": "passed",
+          "durationMs": 2.8092000000000326
+        },
+        {
+          "name": "cuenta inactiva/incompleta y estado desconocido tienen advertencias explícitas",
+          "status": "passed",
+          "durationMs": 0.43070000000000164
+        },
+        {
+          "name": "consulta sólo lectura scoped, orden determinista y conexión liberada",
+          "status": "passed",
+          "durationMs": 0.9870000000000232
+        },
+        {
+          "name": "entidad ausente/ajena o inactiva no consulta bancos",
+          "status": "passed",
+          "durationMs": 1.4920999999999935
+        },
+        {
+          "name": "entidad ausente/ajena o inactiva no consulta bancos",
+          "status": "passed",
+          "durationMs": 0.5307999999999993
+        },
+        {
+          "name": "Admin puede consultar historia de una entidad inactiva de su empresa",
+          "status": "passed",
+          "durationMs": 0.3523000000000138
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/periodos-reportes.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "Reporte: revisión de períodos en la misma instantánea lee revisiones antes del commit sin bloquear escritores",
+          "status": "passed",
+          "durationMs": 3.736099999999965
+        },
+        {
+          "name": "Reporte: revisión de períodos en la misma instantánea esquema antiguo no convierte datos vigentes en evidencia de cierre",
+          "status": "passed",
+          "durationMs": 0.47350000000000136
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/permisos.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "rol Contabilidad con solo lectura puede consultar pero no escribir",
+          "status": "passed",
+          "durationMs": 3.8489999999999895
+        },
+        {
+          "name": "conserva escritura explícita crear=true editar=false",
+          "status": "passed",
+          "durationMs": 0.3059000000000083
+        },
+        {
+          "name": "conserva escritura explícita crear=false editar=true",
+          "status": "passed",
+          "durationMs": 0.14680000000004156
+        },
+        {
+          "name": "conserva los permisos predeterminados del rol",
+          "status": "passed",
+          "durationMs": 0.4187999999999761
+        },
+        {
+          "name": "revocación total bloquea lectura",
+          "status": "passed",
+          "durationMs": 0.3824999999999932
+        },
+        {
+          "name": "sin sesión o sin empresa autorizada no permite acceder",
+          "status": "passed",
+          "durationMs": 0.38900000000001
+        },
+        {
+          "name": "Admin conserva acceso",
+          "status": "passed",
+          "durationMs": 0.1671999999999798
+        },
+        {
+          "name": "no cambia la autorización existente de otro módulo",
+          "status": "passed",
+          "durationMs": 0.16280000000000427
+        },
+        {
+          "name": "API permite leer ambos libros sin asignaciones secundarias, pero no crear",
+          "status": "passed",
+          "durationMs": 5.0625
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/reportes.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "aritmética en centavos (sin punto flotante) convierte y formatea importes DECIMAL(14,2) sin perder centavos",
+          "status": "passed",
+          "durationMs": 1.934500000000071
+        },
+        {
+          "name": "aritmética en centavos (sin punto flotante) totales de un asiento y cuadre",
+          "status": "passed",
+          "durationMs": 1.11749999999995
+        },
+        {
+          "name": "aritmética en centavos (sin punto flotante) saldo acumulado, saldos deudor/acreedor y totales del balance",
+          "status": "passed",
+          "durationMs": 0.894800000000032
+        },
+        {
+          "name": "aritmética en centavos (sin punto flotante) C3C4 suma desde saldo anterior y admite cambio de signo sin perder centavos",
+          "status": "passed",
+          "durationMs": 0.35820000000001073
+        },
+        {
+          "name": "aritmética en centavos (sin punto flotante) fechas estrictas",
+          "status": "passed",
+          "durationMs": 1.8426000000000613
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito diario exige la fila contabilidad_diario y no consulta sin permiso",
+          "status": "passed",
+          "durationMs": 5.677999999999997
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito mayor exige la fila contabilidad_mayor y no consulta sin permiso",
+          "status": "passed",
+          "durationMs": 0.7348000000000638
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito balance exige la fila contabilidad_balance y no consulta sin permiso",
+          "status": "passed",
+          "durationMs": 0.5629000000000133
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito la empresa sale de la sesión (nunca del cuerpo/URL) y la entidad del parámetro validado",
+          "status": "passed",
+          "durationMs": 4.169699999999921
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito entidad ausente/repetida/ inválida, fechas inválidas o invertidas y mayor sin cuenta → 400 sin consultar",
+          "status": "passed",
+          "durationMs": 2.0657999999999674
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito opciones: basta cualquiera de los tres permisos; sin ninguno, 403",
+          "status": "passed",
+          "durationMs": 2.136100000000056
+        },
+        {
+          "name": "HTTP de reportes: permiso propio por reporte y ámbito exporta Excel solo bajo demanda (formato=xlsx)",
+          "status": "passed",
+          "durationMs": 28.942400000000134
+        },
+        {
+          "name": "Excel genera libros válidos para los tres reportes",
+          "status": "passed",
+          "durationMs": 21.063000000000102
+        },
+        {
+          "name": "permisos del catálogo tres filas propias de Contabilidad, ningún rol las trae por defecto, ver Diario no concede Mayor ni Balance",
+          "status": "passed",
+          "durationMs": 2.361099999999851
+        },
+        {
+          "name": "arquitectura: fuente única, solo lectura, Excel bajo demanda fuente económica única, con metadatos de períodos; ninguna consulta escribe",
+          "status": "passed",
+          "durationMs": 1.4791000000000167
+        },
+        {
+          "name": "arquitectura: fuente única, solo lectura, Excel bajo demanda todo SQL está acotado por empresa y entidad",
+          "status": "passed",
+          "durationMs": 0.9429000000000087
+        },
+        {
+          "name": "arquitectura: fuente única, solo lectura, Excel bajo demanda ExcelJS solo se importa en exportar.ts y se carga con import() dinámico",
+          "status": "passed",
+          "durationMs": 2.5728999999998905
+        },
+        {
+          "name": "arquitectura: fuente única, solo lectura, Excel bajo demanda la página y el menú de Contabilidad",
+          "status": "passed",
+          "durationMs": 1.6617999999998574
+        }
+      ]
+    }
+  ]
+}

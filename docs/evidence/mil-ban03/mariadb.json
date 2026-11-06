@@ -1,0 +1,18 @@
+[
+  {
+    "alias": "qa-desechable-ban03",
+    "database": "ban_qa03_c98164f388b9445ba28487d6b70c547b",
+    "version": "11.8.9-MariaDB",
+    "port": 3399,
+    "datadirSha256": "83dae44735b2f73c356bbda4547253effc7691490465636a9ed632966666ce32",
+    "foreignKeys": 1,
+    "checks": 1,
+    "fixtures": "Tablas contables originales + FACT-4 original; empresas mínima sintética; sin históricos"
+  },
+  {
+    "ownershipVerified": true,
+    "dropped": true,
+    "residualSchemas": 0,
+    "poolClosed": true
+  }
+]

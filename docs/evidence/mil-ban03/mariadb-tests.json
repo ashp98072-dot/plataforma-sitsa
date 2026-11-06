@@ -1,0 +1,90 @@
+{
+  "success": true,
+  "passed": 14,
+  "failed": 0,
+  "skipped": 0,
+  "suites": [
+    {
+      "file": "src/lib/contabilidad/bancos-mayor.db.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "MIL-BAN-03 / MariaDB real aislada misma fuente, fechas inclusivas, orden e importes exactos frente al Mayor",
+          "status": "passed",
+          "durationMs": 13.193500000000085
+        },
+        {
+          "name": "MIL-BAN-03 / MariaDB real aislada empresa/entidad y banco ajenos rechazados, cuentas inactivas y vacíos",
+          "status": "passed",
+          "durationMs": 14.56499999999994
+        },
+        {
+          "name": "MIL-BAN-03 / MariaDB real aislada FK real impide ámbito cruzado en banco/detalle; lecturas no cambian filas",
+          "status": "passed",
+          "durationMs": 5.193700000000035
+        },
+        {
+          "name": "MIL-BAN-03 / MariaDB real aislada transacción del reporte es READ ONLY real",
+          "status": "passed",
+          "durationMs": 1.53550000000007
+        }
+      ]
+    },
+    {
+      "file": "src/lib/contabilidad/reportes/reportes.db.test.ts",
+      "status": "passed",
+      "tests": [
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Diario lista los asientos Registrados de la entidad con cuenta, nombre, debe, haber, total por asiento, usuario y cuadre",
+          "status": "passed",
+          "durationMs": 15.65949999999998
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Diario rango de fechas (inclusivo) y número de asiento",
+          "status": "passed",
+          "durationMs": 13.73969999999997
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Diario aislamiento: otra entidad de la misma empresa y otra empresa nunca se mezclan",
+          "status": "passed",
+          "durationMs": 10.126899999999978
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Diario un asiento que no cuadra se marca y se cuenta (nunca se oculta)",
+          "status": "passed",
+          "durationMs": 9.271100000000047
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Mayor saldo acumulado por cuenta, orden cronológico, sin saldo inicial inventado",
+          "status": "passed",
+          "durationMs": 4.0779999999999745
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Mayor el saldo acumulado corresponde SOLO al rango consultado",
+          "status": "passed",
+          "durationMs": 3.2817000000000007
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Libro Mayor cuenta sin movimientos: vacío con saldo 0; cuenta de otra entidad/empresa: 404; el mismo código en otra entidad no se mezcla",
+          "status": "passed",
+          "durationMs": 7.8659000000000106
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Balance de comprobación débito/crédito acumulados y saldos por cuenta; total debe = total haber",
+          "status": "passed",
+          "durationMs": 3.1961000000000013
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Balance de comprobación rango de fechas, cuentas sin movimientos opcionales y varias entidades sin mezclarse",
+          "status": "passed",
+          "durationMs": 13.191600000000108
+        },
+        {
+          "name": "Reportes contables M-4 / MariaDB 11.8.9 SOLO LOCAL Balance de comprobación un asiento descuadrado se refleja en la diferencia (no se oculta)",
+          "status": "passed",
+          "durationMs": 4.6194000000000415
+        }
+      ]
+    }
+  ]
+}

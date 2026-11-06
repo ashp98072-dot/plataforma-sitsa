@@ -1,0 +1,57 @@
+{
+  "base": "d4efd59d4caed140c9811a20f3911062c03a74c6",
+  "typescript": {
+    "command": "tsc --noEmit --incremental false",
+    "exitCode": 0
+  },
+  "eslint": {
+    "files": 10,
+    "maxWarnings": 0,
+    "exitCode": 0
+  },
+  "diffCheck": {
+    "exitCode": 0
+  },
+  "sources": [
+    {
+      "path": "src/components/contabilidad/bancos-client.tsx",
+      "sha256": "eff254a0393db52e0fc667c19c3629b341ad2452509a82c402affd7e7af2567d"
+    },
+    {
+      "path": "src/components/contabilidad/bancos-mayor-panel.tsx",
+      "sha256": "870b86f2145d3db7475300a3d47711612ddffb5f60452920a0faf6b4c20f8e61"
+    },
+    {
+      "path": "src/lib/contabilidad/reportes/reportes.ts",
+      "sha256": "05d2decdd09babc547419e1cd3008c3f6a950e48574d5d2a3393a1cc4e89a247"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor.ts",
+      "sha256": "caad54a57df1862b1792bb22f276d1d3d311eafc024b5deae7847107f0a8fba2"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor-http.ts",
+      "sha256": "95591a2dc2b82a93959ec96d3036c74859b7ccea8d489e64b17ed5f0d88ceda6"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor.test.ts",
+      "sha256": "18d392dac450115505b52f609b4591c1080bdd7becbb8ba07145211e816221f7"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor-http.test.ts",
+      "sha256": "bce1fffed9805cbd911bf8ff1d05a95cd7898efdcbd46b88665efde0b7490120"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor.dom.test.ts",
+      "sha256": "8a505d8246cbf239bec7bf42edc834720377dcea66a0a6bdbbbe0427a0a647d2"
+    },
+    {
+      "path": "src/lib/contabilidad/bancos-mayor.db.test.ts",
+      "sha256": "e1d969cb61b13a4fcd04d39d7f333f6a1df4bd22feac547b15ea6ac21ad7cf64"
+    },
+    {
+      "path": "src/app/api/empresas/[slug]/contabilidad/bancos/[bancoId]/mayor/route.ts",
+      "sha256": "6ab550e226ac8a608d63e4b45a0f3c94585419e86c4a1b28f983f465d18be622"
+    }
+  ]
+}
