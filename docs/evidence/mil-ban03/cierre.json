@@ -1,0 +1,13 @@
+{
+  "alias": "qa-desechable-ban03",
+  "version": "11.8.9-MariaDB",
+  "datadirSha256": "83dae44735b2f73c356bbda4547253effc7691490465636a9ed632966666ce32",
+  "residualSchemas": [],
+  "shutdownRequested": true,
+  "pidTerminated": true,
+  "port3399Free": true,
+  "configDisabled": true,
+  "datadirRetainedOffline": true,
+  "mySQL80State": "Running",
+  "mySQL80Pid": 5796
+}

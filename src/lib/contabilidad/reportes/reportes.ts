@@ -18,7 +18,7 @@ const ESTADO = "Registrado";
 export const MAX_LINEAS_MAYOR = 5000;
 export const MAX_ASIENTOS_DIARIO = 100;
 
-async function enSolicitudDeLectura<T extends object,F extends FiltrosFecha>(fn: (c: PoolConnection,f:F) => Promise<T>,empresaId:number,entidadId:number,filtros:F) {
+export async function enSolicitudDeLectura<T extends object,F extends FiltrosFecha>(fn: (c: PoolConnection,f:F) => Promise<T>,empresaId:number,entidadId:number,filtros:F) {
   const conn = await getPool().getConnection();
   try {
     await conn.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
@@ -111,18 +111,24 @@ export async function libroDiario(empresaId: number, entidadId: number, f: Filtr
 }
 
 /* ------------------------------------------------------------------ Libro Mayor ------------------------------------------------------------------ */
+export async function lineasMayor(c: PoolConnection, empresaId: number, entidadId: number, cuentaId: number, f: FiltrosFecha) {
+  const { w, p } = condicionesAsiento(empresaId, entidadId, f);
+  w.push("d.cuenta_id = ?", "d.empresa_id = a.empresa_id", "d.entidad_id = a.entidad_id"); p.push(cuentaId);
+  const [rows] = await c.query<RowDataPacket[]>(
+    `SELECT d.id AS detalle_id, a.id AS asiento_id, a.numero, DATE_FORMAT(a.fecha, '%Y-%m-%d') AS fecha, a.glosa,
+       CAST(d.debe AS CHAR) AS debe, CAST(d.haber AS CHAR) AS haber
+     FROM cont_asiento_detalle d JOIN cont_asientos a ON a.id = d.asiento_id
+     WHERE ${w.join(" AND ")} ORDER BY a.fecha, a.id, d.id LIMIT ?`, [...p, MAX_LINEAS_MAYOR + 1]);
+  if (rows.length > MAX_LINEAS_MAYOR) throw new AccesoContable(`El rango tiene más de ${MAX_LINEAS_MAYOR} movimientos en esta cuenta: acota las fechas.`, 422);
+  return rows;
+}
+
 export async function libroMayor(empresaId: number, entidadId: number, cuentaId: number, f: FiltrosFecha = {}) {
   return enSolicitudDeLectura(async (c,f) => {
     const entidad = await exigirEntidad(c, empresaId, entidadId);
     const [cu] = await c.query<RowDataPacket[]>("SELECT id, codigo, nombre, tipo FROM cont_cuentas WHERE empresa_id = ? AND entidad_id = ? AND id = ?", [empresaId, entidadId, cuentaId]);
     if (!cu[0]) throw new AccesoContable("Cuenta no disponible en esta entidad.", 404);
-    const { w, p } = condicionesAsiento(empresaId, entidadId, f);
-    w.push("d.cuenta_id = ?"); p.push(cuentaId);
-    const [rows] = await c.query<RowDataPacket[]>(
-      `SELECT a.id AS asiento_id, a.numero, DATE_FORMAT(a.fecha, '%Y-%m-%d') AS fecha, a.glosa, d.debe, d.haber
-         FROM cont_asiento_detalle d JOIN cont_asientos a ON a.id = d.asiento_id
-        WHERE ${w.join(" AND ")} ORDER BY a.fecha, a.id, d.id LIMIT ?`, [...p, MAX_LINEAS_MAYOR + 1]);
-    if (rows.length > MAX_LINEAS_MAYOR) throw new AccesoContable(`El rango tiene más de ${MAX_LINEAS_MAYOR} movimientos en esta cuenta: acota las fechas.`, 422);
+    const rows = await lineasMayor(c, empresaId, entidadId, cuentaId, f);
     const anterior = (await anteriores(c, empresaId, entidadId, f.desde, cuentaId))[0];
     const inicial = aCentavos(anterior?.debito) - aCentavos(anterior?.credito);
     const movimientos = conSaldoAcumulado(rows.map((r) => ({
