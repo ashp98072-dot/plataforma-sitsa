@@ -94,13 +94,13 @@ export async function anularFacturaHttp(req: Request, slug: string, id: string) 
 
 /** El listado de proveedores sirve a quien registra facturas y a quien configura lo fiscal: basta cualquiera de los dos permisos de lectura. */
 export async function listarProveedoresHttp(req: Request, slug: string) {
-  let g = await requireTenantCxp(slug, "cxp_facturas", "ver", "Sin permiso para ver proveedores de CxP.");
-  if (g.error) g = await requireTenantCxp(slug, "cxp_proveedor_fiscal", "ver", "Sin permiso para ver proveedores de CxP.");
-  if (g.error) return g.error;
-  const ok = g as Ok;
+  const facturas = await requireTenantCxp(slug, "cxp_facturas", "ver", "Sin permiso para ver proveedores de CxP.");
+  const fiscal = await requireTenantCxp(slug, "cxp_proveedor_fiscal", "ver", "Sin permiso para ver proveedores de CxP.");
+  if (facturas.error && fiscal.error) return fiscal.error;
+  const ok = (facturas.error ? fiscal : facturas) as Ok;
   return conAmbito(req, ok, async entidadId => {
     const sp = new URL(req.url).searchParams;
-    return json({ proveedores: await listarProveedoresCxp(ok.empresa.id, entidadId, { buscar: sp.get("q") ?? "", soloActivos: sp.get("activos") === "1" }) });
+    return json({ proveedores: await listarProveedoresCxp(ok.empresa.id, entidadId, { buscar: sp.get("q") ?? "", soloActivos: sp.get("activos") === "1", verFiscal: !fiscal.error }) });
   });
 }
 

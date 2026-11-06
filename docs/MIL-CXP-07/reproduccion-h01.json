@@ -1,0 +1,56 @@
+{
+  "synthetic": true,
+  "scope": "real route/tenant guard/permission resolver/mapper; synthetic session, memberships and DB query boundary",
+  "profile": "invoices-only",
+  "permissions": {
+    "cxp_facturas_ver": true,
+    "cxp_proveedor_fiscal_ver": false
+  },
+  "listStatus": 200,
+  "directFiscalStatus": 403,
+  "response": {
+    "proveedores": [
+      {
+        "id": 1001,
+        "nombre": "SYNTHETIC-A",
+        "nit": "QA-A",
+        "diasCredito": 30,
+        "activo": true,
+        "fiscal": {
+          "proveedorId": 1001,
+          "entidadId": 11,
+          "regimenFiscal": "GENERAL",
+          "sujetoIsr": true,
+          "cuentaProveedorId": 11001,
+          "cuentaAnticipoId": 11002,
+          "cuentaGastoId": 11003,
+          "activo": true
+        }
+      },
+      {
+        "id": 1002,
+        "nombre": "SYNTHETIC-NO-CONFIG",
+        "nit": null,
+        "diasCredito": 30,
+        "activo": true,
+        "fiscal": null
+      }
+    ]
+  },
+  "realDatabaseAccess": false,
+  "realNetworkHttp": false,
+  "securityAcceptance": "FAIL: fiscal configuration disclosed without fiscal permission",
+  "syntheticQueryBoundaryCalls": [
+    {
+      "sql": "SELECT p.id, p.nombre_comercial, p.nit, p.dias_credito, p.activo AS proveedor_activo,\n            f.proveedor_id, f.entidad_id, f.regimen_fiscal, f.sujeto_isr, f.cuenta_proveedor_id, f.cuenta_anticipo_id, f.cuenta_gasto_id, f.activo\n       FROM compras_proveedores p\n       LEFT JOIN cxp_proveedor_fiscal f ON f.empresa_id = p.empresa_id AND f.proveedor_id = p.id AND f.entidad_id = ?\n      WHERE p.empresa_id = ? AND (? = '' OR LOCATE(?, p.nombre_comercial) > 0 OR LOCATE(?, COALESCE(p.nit, '')) > 0) AND (? = 0 OR p.activo = 1)\n      ORDER BY p.nombre_comercial LIMIT 300",
+      "params": [
+        11,
+        101,
+        "",
+        "",
+        "",
+        0
+      ]
+    }
+  ]
+}

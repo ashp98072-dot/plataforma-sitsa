@@ -96,10 +96,10 @@ describe.skipIf(!port)("CxP M-3A servicios / MariaDB 11.8.9 SOLO LOCAL", () => {
       await guardarConfigFiscal(1, E1, 5, actor, { regimenFiscal: "GENERAL", sujetoIsr: false });
       await guardarConfigFiscal(1, E1, 6, actor, { regimenFiscal: "GENERAL", sujetoIsr: false });
       await guardarConfigFiscal(1, E1B, 3, actor, { regimenFiscal: "GENERAL", sujetoIsr: false, cuentaProveedorId: 20 });
-      const lista = await listarProveedoresCxp(1, E1);
+      const lista = await listarProveedoresCxp(1, E1, { verFiscal: true });
       expect(lista.find(p => p.id === 3)?.fiscal).toMatchObject({ regimenFiscal: "GENERAL" });
       expect(lista.find(p => p.id === 9)).toBeUndefined(); // proveedor de otra empresa
-      expect((await listarProveedoresCxp(1, E1B)).find(p => p.id === 4)?.fiscal).toBeNull();
+      expect((await listarProveedoresCxp(1, E1B, { verFiscal: true })).find(p => p.id === 4)?.fiscal).toBeNull();
     });
     it("actualizar conserva creador y audita antes/después", async () => {
       await guardarConfigFiscal(1, E1, 4, actor, { regimenFiscal: "PEQUENO_CONTRIBUYENTE", sujetoIsr: false, cuentaGastoId: 12 });
