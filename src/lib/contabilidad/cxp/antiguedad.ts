@@ -73,7 +73,7 @@ async function consultarUnaVez(empresaId: number, entidadId: number, filtros: Fi
       params,
     );
     return { filas, tot };
-  });
+  }, { lecturaRepetible: true });
 }
 
 async function consultar(empresaId: number, entidadId: number, filtros: FiltrosAntiguedadCxp, corte: string, limite: { limit: number; offset: number }) {

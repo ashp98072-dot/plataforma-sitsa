@@ -219,7 +219,7 @@ async function consultarUnaVez(empresaId: number, entidadId: number, f: FiltrosE
     const lineas = op.verPagos ? (conPagos ? await lineasDePagos(c, empresaId, entidadId, ids) : new Map<number, LineaPagoEstado[]>(ids.map((id) => [id, []]))) : null;
     const integ = await advertenciasIntegridad(c, empresaId, entidadId, f.proveedorId, conPagos, op.verPagos);
     return { prov, filas, tot, lineas, integ };
-  });
+  }, { lecturaRepetible: true });
 }
 
 async function consultar(empresaId: number, entidadId: number, f: FiltrosEstadoCuenta, op: OpcionesEstado, corte: string, limite: { limit: number; offset: number }) {
