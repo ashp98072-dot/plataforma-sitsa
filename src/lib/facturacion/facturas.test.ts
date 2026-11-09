@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Contrato previo de factura aislado; la integración MIL04A real se verifica en credito.db.test.ts.
+vi.mock('./credito',()=>({congelarVencimientoTx:vi.fn()}));
 
 vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));

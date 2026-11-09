@@ -2,6 +2,7 @@ import type { RowDataPacket } from "mysql2/promise";
 import { query } from "@/lib/db";
 import { AccesoContable } from "@/lib/contabilidad/ambito";
 import { listarCuentasPorCobrar } from "@/lib/facturacion/cuentas-por-cobrar";
+import { leerVencimientos } from '@/lib/facturacion/credito';
 import { importe, paginacionEfectiva, type FiltrosCxc, type RespuestaListaCxc } from "@/lib/facturacion/cuentas-por-cobrar-shared";
 import { registrarPago } from "@/lib/facturacion/facturas";
 import { listarBitacoraCxc, type FiltrosBitacoraCxc } from "@/lib/facturacion/bitacora";
@@ -24,7 +25,9 @@ export async function exigirEntidadActiva(empresaId: number, entidadId: number):
 /** Documentos de CxC (facturas Emitidas y Anuladas) de UN libro. El filtro de entidad del cliente HTTP se ignora: manda `entidadId`. */
 export async function listarDocumentosCxc(empresaId: number, entidadId: number, filtros: FiltrosCxc): Promise<RespuestaListaCxc> {
   await exigirEntidadActiva(empresaId, entidadId);
-  return listarCuentasPorCobrar(empresaId, { ...filtros, vista: "historial", entidad: entidadId });
+  const resultado = await listarCuentasPorCobrar(empresaId, { ...filtros, vista: "historial", entidad: entidadId });
+  const fechas = await leerVencimientos(empresaId, resultado.filas.map(f=>f.facturaId));
+  return { ...resultado, filas: resultado.filas.map(f=>({ ...f, vencimiento: fechas.get(f.facturaId) ?? f.vencimiento })) };
 }
 
 /** Bitácora de CxC (auditoría de Facturación) de UN libro. Solo lectura; reutiliza la tabla `auditoria`. */

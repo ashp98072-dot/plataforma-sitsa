@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { congelarVencimientoTx } from './credito';
 import { SQL_COBRADO } from "./cobrado";
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
@@ -1511,7 +1512,7 @@ export async function actualizarFacturaBorrador(
   }
 }
 
-export type EmitirInput = { numeroFactura?: string | null; fechaEmision?: string | null };
+export type EmitirInput = { numeroFactura?: string | null; fechaEmision?: string | null; vencimientoToken?: string };
 
 export async function emitirFactura(
   actor: ActorFacturacion,
@@ -1561,6 +1562,7 @@ export async function emitirFactura(
       };
     }
 
+    await congelarVencimientoTx(conn, actor, facturaId, String(fechaFinal), input.vencimientoToken);
     let upd: ResultSetHeader;
     try {
       [upd] = await conn.execute<ResultSetHeader>(
