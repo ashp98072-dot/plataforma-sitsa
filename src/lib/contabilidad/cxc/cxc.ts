@@ -26,7 +26,7 @@ export async function exigirEntidadActiva(empresaId: number, entidadId: number):
 export async function listarDocumentosCxc(empresaId: number, entidadId: number, filtros: FiltrosCxc): Promise<RespuestaListaCxc> {
   await exigirEntidadActiva(empresaId, entidadId);
   const resultado = await listarCuentasPorCobrar(empresaId, { ...filtros, vista: "historial", entidad: entidadId });
-  const fechas = await leerVencimientos(empresaId, resultado.filas.map(f=>f.facturaId));
+  const fechas = await leerVencimientos(empresaId, entidadId, resultado.filas.map(f=>f.facturaId));
   return { ...resultado, filas: resultado.filas.map(f=>({ ...f, vencimiento: fechas.get(f.facturaId) ?? f.vencimiento })) };
 }
 

@@ -79,14 +79,14 @@ async function propuesta(c: PoolConnection, actor: ActorCredito, facturaId: numb
       if(base[0].estado_admin!=='Borrador') throw new ErrorCredito('Solo se calcula el vencimiento de un borrador.');
       const [columnas] = await c.query<RowDataPacket[]>("SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='fact_facturas' AND COLUMN_NAME IN ('entidad_id','condicion_pago')");
       if(Number(columnas[0].n)!==0) throw new ErrorCredito('Esquema FACT-4 parcial o divergente.',503);
-      return { certificado: false as const, motivo: 'Esquema anterior a FACT-4: sin vencimiento determinado.' };
+      return { certificado: false as const, motivo: 'Emisión bloqueada: esquema anterior a FACT-4, sin vencimiento determinado. Requiere preparación autorizada.' };
     }
     throw e;
   }
   if (!f[0]) throw new ErrorCredito('Factura no encontrada.', 404);
   if (f[0].estado_admin !== 'Borrador') throw new ErrorCredito('Solo se calcula el vencimiento de un borrador.');
   if (f[0].entidad_id == null || !['CREDITO', 'CONTADO'].includes(String(f[0].condicion_pago))) {
-    return { certificado: false as const, motivo: 'Sin entidad o condición explícita: emisión compatible sin vencimiento determinado.' };
+    return { certificado: false as const, motivo: 'Emisión bloqueada: completa entidad y condición de pago explícitas antes de revisar el vencimiento.' };
   }
   const entidad = Number(f[0].entidad_id), cliente = Number(f[0].cliente_id);
   await exigirEsquema(c);
@@ -113,7 +113,9 @@ export async function previsualizarVencimiento(actor: ActorCredito, facturaId: n
 /** Caller posee la transacción y el lock de factura. Nunca confiar en fecha/plazo final del HTTP. */
 export async function congelarVencimientoTx(c: PoolConnection, actor: ActorCredito, facturaId: number, fecha: string, token?: string) {
   const p = await propuesta(c, actor, facturaId, fecha);
-  if (!p.certificado) return; // Legado sin entidad/condición: NO inventar snapshot.
+  // Una lectura histórica indeterminada no autoriza una transición nueva sin snapshot.
+  // Incluye borradores antiguos: corregir su contexto explícitamente, nunca inferirlo.
+  if (!p.certificado) throw new ErrorCredito('Emisión bloqueada: completa entidad y condición de pago explícitas; un documento histórico sin vencimiento no autoriza una nueva emisión sin snapshot.');
   if (!verificarToken(token, { p, usuarioId: actor.usuarioId })) throw new ErrorCredito('Revisa y confirma de nuevo el vencimiento: cambió la factura, fecha o perfil, o expiró la vista previa.');
   const s = p.snapshot;
   await c.execute('INSERT INTO fact_vencimientos (factura_id,empresa_id,entidad_id,cliente_id,fecha_base,dias,vencimiento,regla,fuente,revision,creado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [facturaId, actor.empresaId, s.entidadId, s.clienteId, s.fechaBase, s.dias, s.vencimiento, s.regla, s.fuente, s.revision, actor.usuarioId]);
@@ -126,10 +128,10 @@ export async function leerVencimiento(empresa: number, factura: number) {
   } catch (e) { if (ausente(e)) return null; throw e; }
 }
 /** Lote de lectura: sin N+1 y sin recalcular con perfiles actuales. Compatible con esquema anterior. */
-export async function leerVencimientos(empresa: number, ids: number[]): Promise<Map<number, string>> {
+export async function leerVencimientos(empresa: number, entidad: number, ids: number[]): Promise<Map<number, string>> {
   if (!ids.length) return new Map();
   try {
-    const [rows] = await getPool().query<RowDataPacket[]>(`SELECT factura_id,DATE_FORMAT(vencimiento,'%Y-%m-%d') AS fecha FROM fact_vencimientos WHERE empresa_id=? AND factura_id IN (${ids.map(()=>'?').join(',')})`, [empresa, ...ids]);
+    const [rows] = await getPool().query<RowDataPacket[]>(`SELECT factura_id,DATE_FORMAT(vencimiento,'%Y-%m-%d') AS fecha FROM fact_vencimientos WHERE empresa_id=? AND entidad_id=? AND factura_id IN (${ids.map(()=>'?').join(',')})`, [empresa, entidad, ...ids]);
     return new Map(rows.map(r=>[Number(r.factura_id),String(r.fecha)]));
   } catch(e) { if(ausente(e)) return new Map(); throw e; }
 }

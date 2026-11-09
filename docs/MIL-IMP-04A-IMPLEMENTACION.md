@@ -16,9 +16,11 @@ El detalle de Facturación consulta el snapshot mediante endpoint propio y lo mu
 
 ## Compatibilidad y condiciones de esquema
 
+Actualización posterior a auditoría de a243f7f9: ver MIL-IMP-04A-REVISION-A243F7F9.md. Las cifras del apartado de pruebas de este documento corresponden al commit inicial; los resultados de revisión están separados.
+
 - Facturas emitidas históricas sin snapshot continúan sin vencimiento determinado. No backfill ni lectura del perfil actual para completarlas.
-- Nuevos borradores sin entidad o condición explícita conservan la vía compatible sin snapshot; la vista previa informa que quedan fuera del circuito determinado. No se les asigna entidad ni plazo automáticamente.
-- Modelo completamente anterior a FACT-4: compatibilidad sin snapshot, verificando primero factura/empresa/estado y ausencia de ambas columnas. Modelo FACT-4 parcial: rechazo 503, sin tratarlo silenciosamente como legado.
+- Ningún borrador, nuevo o antiguo, puede pasar a Emitida sin snapshot: falta de entidad o condición explícita bloquea con 409. La consulta histórica sigue tolerando ausencia de snapshot. No se asigna entidad ni plazo automáticamente.
+- Modelo completamente anterior a FACT-4: la vista previa identifica falta de información, pero la emisión nueva se bloquea con 409. Modelo FACT-4 parcial: rechazo 503, sin tratarlo silenciosamente como legado. No hay excepción por fecha de creación ni bandera enviada por cliente.
 - Para entidad+CONTADO/CREDITO explícitos se exige contrato de esquema FINAL, también al escribir un perfil. CLEAN/DIVERGENTE bloquean la incorporación al circuito. No crear ni reparar tablas desde servicios.
 - La consulta de snapshot tolera tabla ausente devolviendo no determinado; nunca calcula uno ficticio. No significa que el esquema esté listo para emitir con vencimiento.
 

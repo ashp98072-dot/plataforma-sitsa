@@ -5,7 +5,7 @@ const state = vi.hoisted(()=>({pool:null as Pool|null}));
 vi.mock('@/lib/db',()=>({getPool:()=>{if(!state.pool)throw Error('Pool normal prohibido');return state.pool;},query:async(s:string,p:unknown[]=[])=>{if(!state.pool)throw Error('Pool normal prohibido');return (await state.pool.query(s,p))[0];}}));
 vi.mock('@/lib/clientes/repository',()=>({asegurarVinculosTmsClientes:()=>{throw Error('No inicializar clientes');}}));
 vi.mock('@/lib/clientes/schema',()=>({asegurarSchemaClientes:()=>{throw Error('No inicializar clientes');}}));
-import { guardarPerfilCredito, leerVencimiento, previsualizarVencimiento } from './credito';
+import { guardarPerfilCredito, leerVencimiento, leerVencimientos, previsualizarVencimiento } from './credito';
 import { emitirFactura } from './facturas';
 const manifest=process.env.MIL04A_LAB_MANIFEST;
 const actor={empresaId:7,usuarioId:3,usuario:'qa-sintetico'};
@@ -63,7 +63,9 @@ describe.skipIf(!manifest).sequential('MIL04A MariaDB exclusivamente datadir tem
     await expect(guardarPerfilCredito(actor,9,21,{dias:30,aprobada:true,revision:0,motivo:'Prueba autorizada'})).rejects.toThrow('ámbito');
     expect(await leerVencimiento(7,1)).toBeNull();
     await factura(2,'CREDITO',null);const p=await previsualizarVencimiento(actor,2,'2026-07-15');expect(p.certificado).toBe(false);
-    expect(await emitirFactura(actor,2,{})).toEqual({ok:true});expect(await leerVencimiento(7,2)).toBeNull();
+    await expect(emitirFactura(actor,2,{})).rejects.toThrow('Emisión bloqueada');
+    expect(await leerVencimiento(7,2)).toBeNull();
+    const [b]=await query('SELECT estado_admin FROM fact_facturas WHERE id=2');expect(b[0].estado_admin).toBe('Borrador');
   });
   it('perfil cambia 30→60 entre preview/emisión: reconfirmación, snapshot congelado y original monetario intacto',async()=>{
     await guardarPerfilCredito(actor,9,20,{dias:30,aprobada:true,revision:0,motivo:'Plazo aprobado inicial'});
@@ -113,5 +115,44 @@ describe.skipIf(!manifest).sequential('MIL04A MariaDB exclusivamente datadir tem
     finally { await pool.query('DROP TRIGGER qa_auditoria'); }
     expect(await leerVencimiento(7,6)).toBeNull();
     const [f]=await query('SELECT estado_admin FROM fact_facturas WHERE id=6');expect(f[0].estado_admin).toBe('Borrador');
+  });
+  it('lote CxC aísla empresa/entidad y usa búsqueda indexada para una página',async()=>{
+    expect(await leerVencimientos(7,9,[1,3,5])).toEqual(new Map([[1,'2026-09-13'],[3,'2026-07-15'],[5,'2026-08-14']]));
+    expect(await leerVencimientos(8,9,[1,3,5])).toEqual(new Map());
+    expect(await leerVencimientos(7,10,[1,3,5])).toEqual(new Map());
+    const [plan]=await query('EXPLAIN SELECT factura_id,vencimiento FROM fact_vencimientos WHERE empresa_id=7 AND entidad_id=9 AND factura_id IN (1,3,5)');
+    expect(plan[0].possible_keys).toContain('PRIMARY');
+    const m=JSON.parse(fs.readFileSync(manifest!,'utf8'));fs.writeFileSync(path.join(m.dir,'explain-cxc.json'),JSON.stringify(plan,null,2));
+  });
+  it('contrato detecta nulabilidad, orden de índice, FK ausente y trigger divergente',async()=>{
+    const cambios = [
+      ['ALTER TABLE fact_credito_perfiles MODIFY dias INT NULL','ALTER TABLE fact_credito_perfiles MODIFY dias INT NOT NULL'],
+      ['ALTER TABLE fact_vencimientos DROP INDEX ix_fv_ambito, ADD INDEX ix_fv_ambito(entidad_id,empresa_id,vencimiento,factura_id)','ALTER TABLE fact_vencimientos DROP INDEX ix_fv_ambito, ADD INDEX ix_fv_ambito(empresa_id,entidad_id,vencimiento,factura_id)'],
+      ['ALTER TABLE fact_credito_perfiles DROP FOREIGN KEY fk_fcp_cliente','ALTER TABLE fact_credito_perfiles ADD CONSTRAINT fk_fcp_cliente FOREIGN KEY(empresa_id,cliente_id) REFERENCES clientes(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT'],
+    ];
+    for(const [romper,restaurar] of cambios){await pool.query(romper);try{expect(await estado()).toBe('DIVERGENTE');await expect(script('migrate.sql')).rejects.toThrow('DIVERGENTE');}finally{await pool.query(restaurar);}expect(await estado()).toBe('FINAL');}
+    await pool.query('DROP TRIGGER fv_no_update');
+    await pool.query("CREATE TRIGGER fv_no_update BEFORE UPDATE ON fact_vencimientos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Otro contrato'");
+    try{expect(await estado()).toBe('DIVERGENTE');}finally{await pool.query('DROP TRIGGER fv_no_update');await pool.query("CREATE TRIGGER fv_no_update BEFORE UPDATE ON fact_vencimientos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Snapshot de vencimiento inmutable'");}
+    expect(await estado()).toBe('FINAL');
+  });
+  it('DDL parcial confirmado no se repara ni continúa automáticamente',async()=>{
+    // Interrumpir después de un DDL confirmado reproduce el estado persistente de una falla intermedia.
+    await pool.query('DROP TRIGGER fv_no_delete');
+    await expect(pool.query('ALTER TABLE tabla_qa_inexistente ADD COLUMN prueba INT')).rejects.toThrow();
+    expect(await estado()).toBe('DIVERGENTE');await expect(script('migrate.sql')).rejects.toThrow('DIVERGENTE');
+    const [r]=await query('SELECT COUNT(*) n FROM fact_vencimientos');expect(Number(r[0].n)).toBe(3);
+    await pool.query("CREATE TRIGGER fv_no_delete BEFORE DELETE ON fact_vencimientos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Snapshot de vencimiento inmutable'");
+    expect(await estado()).toBe('FINAL');
+  });
+  it('coste de lote acotado con mil snapshots sintéticos del mismo libro',async()=>{
+    const ids=Array.from({length:1000},(_,i)=>i+1000);
+    await pool.query(`INSERT INTO fact_facturas(id,empresa_id,cliente_id,entidad_id,condicion_pago,estado_admin,numero_factura,fecha_emision,monto_total) VALUES ${ids.map(()=>"(?,7,20,9,'CONTADO','Emitida',?,'2026-07-15',1)").join(',')}`,ids.flatMap(id=>[id,`QA-VOLUMEN-${id}`]));
+    await pool.query(`INSERT INTO fact_vencimientos(factura_id,empresa_id,entidad_id,cliente_id,fecha_base,dias,vencimiento,regla,fuente,revision,creado_por) VALUES ${ids.map(()=>"(?,7,9,20,'2026-07-15',0,'2026-07-15','MIL04A_CALENDARIO_V1','CONTADO',0,3)").join(',')}`,ids);
+    await pool.query('ANALYZE TABLE fact_vencimientos');
+    const start=performance.now();expect((await leerVencimientos(7,9,[1,3,5])).size).toBe(3);const ms=performance.now()-start;
+    const [plan]=await query('EXPLAIN SELECT factura_id,vencimiento FROM fact_vencimientos WHERE empresa_id=7 AND entidad_id=9 AND factura_id IN (1,3,5)');
+    expect(Number(plan[0].rows)).toBeLessThanOrEqual(3);
+    const m=JSON.parse(fs.readFileSync(manifest!,'utf8'));fs.writeFileSync(path.join(m.dir,'explain-cxc-volumen.json'),JSON.stringify({filasLibro:1003,ms,plan},null,2));
   });
 });
