@@ -69,6 +69,22 @@ it.each([200,403,409,503])('guardar perfil aprobado (%s) conserva revisión obse
  await click('Guardar perfil');const sent=fetcher.mock.calls.find(([,i])=>i?.method==='PUT');expect(JSON.parse(sent![1].body)).toMatchObject({dias:30,aprobada:true,revision:4});expect(host.textContent).toContain(status===200?'Perfil guardado':`perfil-${status}`);expect(token).toHaveBeenLastCalledWith(undefined);
 });
 const cambiosContexto: Array<Partial<typeof props>>=[{fecha:'2026-07-16'},{cliente:21},{factura:2},{entidad:10}];
+it.each(['fecha','estado'] as const)('volver al contexto original (%s) no recupera carga ni confirmación anterior',async cambio=>{
+ const pendientes: Array<(r:Response)=>void>=[];
+ fetcher.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'
+  ?new Promise<Response>(resolve=>pendientes.push(resolve))
+  :Promise.resolve(url.includes('/clientes/')?reply({error:'Sin permiso'},403):reply({vencimiento:null})));
+ await mount();await click(preview);
+ await mount(cambio==='fecha'?{fecha:'2026-07-16'}:{borrador:false});await mount();
+ const boton=()=>[...host.querySelectorAll('button')].find(b=>b.textContent===preview)!;
+ expect(boton().disabled).toBe(false);expect(token).toHaveBeenLastCalledWith(undefined);
+ await click(preview);expect(pendientes).toHaveLength(2);expect(boton().disabled).toBe(true);
+ const antes=host.innerHTML,tokens=token.mock.calls.slice();
+ await act(async()=>pendientes[0](reply({certificado:true,snapshot:{vencimiento:'2099-01-01',dias:99,fechaBase:props.fecha},token:'obsoleto'})));
+ expect(host.innerHTML).toBe(antes);expect(token.mock.calls).toEqual(tokens);expect(boton().disabled).toBe(true);
+ await act(async()=>pendientes[1](reply({certificado:true,snapshot:{vencimiento:'2026-08-14',dias:30,fechaBase:props.fecha},token:'nuevo'})));
+ expect(boton().disabled).toBe(false);expect(token).toHaveBeenLastCalledWith('nuevo');
+});
 it.each(cambiosContexto.flatMap(cambio=>['POST','PUT'].flatMap(method=>[200,503].flatMap(status=>[false,true].map(nuevaPendiente=>({cambio,method,status,nuevaPendiente}))))))(
  'invalida $method con contexto $cambio, respuesta $status y nueva pendiente $nuevaPendiente',async({cambio,method,status,nuevaPendiente})=>{
  const pendientes: Array<(r:Response)=>void>=[];
