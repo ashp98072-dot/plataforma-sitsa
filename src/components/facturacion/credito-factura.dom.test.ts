@@ -17,6 +17,43 @@ afterEach(async()=>{await act(async()=>root.unmount());host.remove();vi.unstubAl
 async function mount(extra: Partial<typeof props>={}) {await act(async()=>root.render(createElement(CreditoFactura,{...props,...extra})));}
 async function click(text: string) {const b=[...host.querySelectorAll('button')].find(b=>b.textContent===text);expect(b).toBeTruthy();await act(async()=>b!.click());}
 const preview='Revisar vencimiento para emisión';
+it.each([
+ ['POST',200,false],['POST',503,false],['PUT',200,false],['PUT',503,false],
+ ['POST',200,true],['POST',503,true],['PUT',200,true],['PUT',503,true],
+] as const)('solicitud obsoleta %s (%s), vigente termina primero: %s',async(method,status,vigentePrimero)=>{
+ const pendientes: Array<(r:Response)=>void>=[];
+ fetcher.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'||init?.method==='PUT'
+  ?new Promise<Response>(resolve=>pendientes.push(resolve))
+  :Promise.resolve(url.includes('/clientes/')?reply({perfil:{dias:30,aprobada:1,revision:4}}):reply({vencimiento:null})));
+ await mount();
+ const motivo=host.querySelector('input[maxlength="500"]') as HTMLInputElement;
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(motivo,'Motivo autorizado QA');motivo.dispatchEvent(new Event('input',{bubbles:true}));});
+ const botones=[...host.querySelectorAll('button')];
+ const revisar=botones.find(b=>b.textContent===preview)!;
+ const guardar=botones.find(b=>b.textContent==='Guardar perfil')!;
+ // Ambos eventos se despachan antes del siguiente render que deshabilita los botones.
+ await act(async()=>{(method==='PUT'?guardar:revisar).click();revisar.click();});
+ expect(pendientes).toHaveLength(2);
+ const obsoleta=()=>act(async()=>pendientes[0](reply(status===200
+  ?{perfil:{revision:99},certificado:true,snapshot:{vencimiento:'2099-01-01',dias:99,fechaBase:props.fecha},token:'obsoleto'}
+  :{error:'error obsoleto'},status)));
+ const vigente=()=>act(async()=>pendientes[1](reply({certificado:true,snapshot:{vencimiento:'2026-08-14',dias:30,fechaBase:props.fecha},token:'vigente'})));
+ if(vigentePrimero) await vigente();
+ const antes=host.innerHTML, tokens=token.mock.calls.slice();
+ await obsoleta();
+ expect(host.innerHTML).toBe(antes);expect(token.mock.calls).toEqual(tokens);
+ expect(revisar.disabled).toBe(!vigentePrimero);expect(guardar.disabled).toBe(!vigentePrimero);
+ expect(host.querySelector('[role=alert]')).toBeNull();
+ expect(token).not.toHaveBeenCalledWith('obsoleto');
+ if(!vigentePrimero) await vigente();
+ expect(revisar.disabled).toBe(false);expect(token).toHaveBeenLastCalledWith('vigente');
+ expect(host.textContent).toContain('Confirma: vence 2026-08-14');
+ // La revisión del perfil no es visible: verificarla en la siguiente petición de guardado.
+ await click('Guardar perfil');
+ const puts=fetcher.mock.calls.filter(([,init])=>init?.method==='PUT');
+ expect(JSON.parse(puts.at(-1)![1].body).revision).toBe(4);
+ await act(async()=>pendientes[2](reply({perfil:{revision:5}})));
+});
 it('403 de perfil oculta administración pero permite revisar con permiso de emisión',async()=>{
  fetcher.mockImplementation((url:string,init?:RequestInit)=>Promise.resolve(url.includes('/clientes/')?reply({error:'Sin permiso'},403):init?.method==='POST'?reply({certificado:true,snapshot:{vencimiento:'2026-08-14',dias:30,fechaBase:props.fecha},token:'confirmado'}):reply({vencimiento:null})));
  await mount();expect(host.textContent).not.toContain('Guardar perfil');await click(preview);expect(token).toHaveBeenLastCalledWith('confirmado');expect(host.textContent).toContain('2026-08-14');

@@ -40,7 +40,7 @@ export function CreditoFactura({ slug, factura, cliente, entidad, fecha, borrado
       setMensaje(b.certificado ? `Confirma: vence ${b.snapshot.vencimiento}; ${b.snapshot.dias} días calendario desde ${b.snapshot.fechaBase}.` : b.motivo);
       onToken(b.token);
     } catch (e) { if (actual === solicitud.current) setError(e instanceof Error ? e.message : 'No se pudo previsualizar.'); }
-    finally { setOcupado(false); }
+    finally { if (actual === solicitud.current) setOcupado(false); }
   }
   async function guardar() {
     const actual = ++solicitud.current;
@@ -51,7 +51,7 @@ export function CreditoFactura({ slug, factura, cliente, entidad, fecha, borrado
       setPerfil({ dias: Number(dias), aprobada: aprobada ? 1 : 0, revision: b.perfil.revision });
       setMensaje('Perfil guardado. Revisa y confirma el vencimiento antes de emitir.'); setMotivo('');
     } catch (e) { if (actual === solicitud.current) setError(e instanceof Error ? e.message : 'No se pudo guardar.'); }
-    finally { setOcupado(false); }
+    finally { if (actual === solicitud.current) setOcupado(false); }
   }
   return <section aria-label="Crédito y vencimiento" className="space-y-2 rounded border p-3">
     <h4>Crédito y vencimiento</h4><p>{mensaje}</p>
