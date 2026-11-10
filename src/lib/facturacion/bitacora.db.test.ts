@@ -14,11 +14,14 @@ vi.mock("@/lib/db", () => ({
 import { asegurarSchemaClientes } from "@/lib/clientes/schema";
 import { actualizarFacturaBorrador, anularFactura, crearFactura, emitirFactura, registrarPago, type ActorFacturacion } from "./facturas";
 import { listarBitacoraCxc, listarBitacoraFactura } from "./bitacora";
+import { guardarPerfilCredito } from "./credito";
+import { aplicarContratoCreditoAud09, tokenEmisionAud09, verificarLaboratorioAud09 } from "./aud09.test-support";
 
 /**
  * Bitácora de Facturación + CxC contra MariaDB 11.8.9 DESECHABLE (LIQ_TEST_DB_PORT=3399|3407, solo local). Ejecuta el código REAL de facturas.ts sobre
  * el esquema real (sql/schema.sql + migraciones FACT-1..4). Una base nueva por corrida; no toca ninguna base real.
- *   LIQ_TEST_DB_PORT=3399 npx vitest run src/lib/facturacion/bitacora.db.test.ts --no-file-parallelism
+ * Requiere además AUD09_LAB_MANIFEST: identidad de la instancia recién creada por el runner aislado.
+ *   LIQ_TEST_DB_PORT=3399 AUD09_LAB_MANIFEST=<manifiesto> npx vitest run src/lib/facturacion/bitacora.db.test.ts --no-file-parallelism
  */
 const port = Number(process.env.LIQ_TEST_DB_PORT ?? 0);
 const database = `bit_test_${randomUUID().replaceAll("-", "")}`;
@@ -27,6 +30,7 @@ const ana: ActorFacturacion = { empresaId: E1, usuarioId: 31, usuario: "ana" };
 const beto: ActorFacturacion = { empresaId: E1, usuarioId: 32, usuario: "beto" };
 const otra: ActorFacturacion = { empresaId: E2, usuarioId: 99, usuario: "zeta" };
 let admin: Connection;
+let laboratorioVerificado = false;
 let entKT = 0, entMON = 0, seq = 0;
 
 const leer = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
@@ -57,26 +61,31 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
   beforeAll(async () => {
     if (![3399, 3407].includes(port)) throw new Error("Solo puertos locales desechables 3399/3407");
     admin = await mysql.createConnection({ host: "127.0.0.1", port, user: "root", password: "", multipleStatements: true });
+    await verificarLaboratorioAud09(admin, port);
+    laboratorioVerificado = true;
     expect(String((await admin.query<RowDataPacket[]>("SELECT VERSION() v"))[0][0].v)).toContain("11.8.9");
     await admin.query(`CREATE DATABASE ${database} CHARACTER SET utf8mb4`);
     await admin.query(`USE ${database}`);
     const schema = leer("sql/schema.sql");
-    for (const t of ["empresas", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes", "cont_entidades", "cont_cuentas", "fact_cliente_perfil"]) await admin.query(extraerCreate(schema, t));
+    for (const t of ["empresas", "usuarios", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes", "cont_entidades", "cont_cuentas", "fact_cliente_perfil"]) await admin.query(extraerCreate(schema, t));
     holder.pool = mysql.createPool({ host: "127.0.0.1", port, user: "root", password: "", database, connectionLimit: 8, timezone: "local" });
     await asegurarSchemaClientes();
     for (const f of ["migrate-2026-08-fact-1-facturas-pagos", "migrate-2026-10-fact-2-borrador-snapshots-iva", "migrate-2026-10-fact-3-anuladas-historico", "migrate-2026-10-fact-4-lineas-contado-retencion"]) await admin.query(leer(`sql/${f}.sql`));
-    // CxC-1: SQL_COBRADO (saldos) necesita las tablas de cobros; se crean con el DDL REAL de schema.sql (sin usuarios FK: fixture sin tabla usuarios).
-    for (const t of ["fact_cobros", "fact_cobro_aplicaciones"]) await admin.query(extraerCreate(schema, t).replace(/^\s*CONSTRAINT fk_fcobro_(actor|anulador)[^\n]*\n/gm, ""));
+    // CxC-1 y MIL04A: DDL real, incluidas las FKs de actores.
+    for (const t of ["fact_cobros", "fact_cobro_aplicaciones"]) await admin.query(extraerCreate(schema, t));
+    await admin.query("INSERT INTO usuarios (id,username,password_hash,salt) VALUES (31,'ana','fixture','fixture'),(32,'beto','fixture','fixture'),(99,'zeta','fixture','fixture')");
     await admin.query(`INSERT INTO empresas (id, codigo, nombre, slug) VALUES (${E1}, 'E7', 'Empresa 7', 'e7'), (${E2}, 'E8', 'Empresa 8', 'e8')`);
     await admin.query(`INSERT INTO tms_clientes (id, empresa_id, nombre) VALUES (501, ${E1}, 'Cliente X'), (601, ${E2}, 'Cliente Z')`);
     await admin.query(`INSERT INTO clientes (id, empresa_id, nombre, razon_social, nit, direccion, tms_cliente_id) VALUES (20, ${E1}, 'Comercial X', 'Cliente X, S.A.', '1234567-8', 'Zona 1', 501), (30, ${E2}, 'Comercial Z', NULL, NULL, NULL, 601)`);
     await admin.query(`INSERT INTO tms_lugares (id, empresa_id, nombre) VALUES (11, ${E1}, 'Guatemala'), (12, ${E1}, 'Quetzaltenango')`);
     entKT = (await admin.query<mysql.ResultSetHeader>("INSERT INTO cont_entidades (empresa_id, codigo, nombre) VALUES (?, 'KT', 'Kuiqtrans')", [E1]))[0].insertId;
     entMON = (await admin.query<mysql.ResultSetHeader>("INSERT INTO cont_entidades (empresa_id, codigo, nombre) VALUES (?, 'MON', 'Mónaco')", [E1]))[0].insertId;
+    await aplicarContratoCreditoAud09(admin);
+    for (const entidad of [entKT, entMON]) await guardarPerfilCredito(ana, entidad, 20, { dias: 30, aprobada: true, revision: 0, motivo: 'Perfil sintético de pruebas de bitácora' });
   }, 90000);
   afterAll(async () => {
     await holder.pool?.end().catch(() => undefined);
-    if (admin) { if (/^bit_test_[a-f0-9]{32}$/.test(database)) await admin.query(`DROP DATABASE IF EXISTS ${database}`); await admin.end(); }
+    if (admin) { if (laboratorioVerificado && /^bit_test_[a-f0-9]{32}$/.test(database)) await admin.query(`DROP DATABASE IF EXISTS ${database}`); await admin.end(); }
   });
 
   describe("ciclo completo: cada evento con actor, entidad, documento y valores", () => {
@@ -109,7 +118,7 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
       expect(campos.cliente).toBeUndefined(); // no cambió
     });
     it("emitir: usuario, número, fecha, monto y entidad; cambio de estado", async () => {
-      const r = await emitirFactura(ana, id, {});
+      const r = await emitirFactura(ana, id, { vencimientoToken: await tokenEmisionAud09(ana, id, '2026-10-20') });
       expect(r.ok).toBe(true);
       const ev = (await listarBitacoraFactura(E1, id))[0];
       expect(ev).toMatchObject({ accion: "emitir_factura", etiqueta: "Emitió factura", usuario: "ana", usuarioId: 31, numeroFactura: "TEST-CXC-001B", entidadId: entMON, monto: "1500.00" });
@@ -135,7 +144,7 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
     });
     it("anular: conserva el actor y el MOTIVO (y es opcional)", async () => {
       const b1 = await borrador(ana, "ANU-001", entKT);
-      expect((await emitirFactura(ana, b1.id, {})).ok).toBe(true);
+      expect((await emitirFactura(ana, b1.id, { vencimientoToken: await tokenEmisionAud09(ana, b1.id, '2026-10-19') })).ok).toBe(true);
       expect((await anularFactura(beto, b1.id, "  Error de captura \n del cliente ")).ok).toBe(true);
       const ev = (await listarBitacoraFactura(E1, b1.id))[0];
       expect(ev).toMatchObject({ accion: "anular_factura", etiqueta: "Anuló factura", usuario: "beto", usuarioId: 32, numeroFactura: "ANU-001", entidadId: entKT, motivo: "Error de captura del cliente" });
@@ -154,7 +163,7 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
       const antes = await total();
       expect(await registrarPago(ana, b.id, { fechaPago: "2026-10-21", monto: 10 })).toMatchObject({ ok: false, status: 409 }); // borrador: no cobrable
       expect(await total()).toBe(antes);
-      expect((await emitirFactura(ana, b.id, {})).ok).toBe(true);
+      expect((await emitirFactura(ana, b.id, { vencimientoToken: await tokenEmisionAud09(ana, b.id, '2026-10-19') })).ok).toBe(true);
       const trasEmitir = await total();
       expect(await registrarPago(ana, b.id, { fechaPago: "2026-10-21", monto: 1000.01 })).toMatchObject({ ok: false, status: 409 }); // sobrepago
       expect(await total()).toBe(trasEmitir);
@@ -166,7 +175,7 @@ describe.skipIf(!port)("Bitácora de Facturación + CxC / MariaDB 11.8.9 SOLO LO
     });
     it("si la bitácora falla, TODO el movimiento se deshace (la auditoría vive en la misma transacción)", async () => {
       const b = await borrador(ana, "TX-002", entKT);
-      expect((await emitirFactura(ana, b.id, {})).ok).toBe(true);
+      expect((await emitirFactura(ana, b.id, { vencimientoToken: await tokenEmisionAud09(ana, b.id, '2026-10-19') })).ok).toBe(true);
       await admin.query("CREATE TRIGGER trg_forzado BEFORE INSERT ON auditoria FOR EACH ROW BEGIN IF NEW.accion = 'registrar_pago' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'bitacora forzada a fallar'; END IF; END");
       try {
         await expect(registrarPago(ana, b.id, { fechaPago: "2026-10-21", monto: 100 })).rejects.toBeTruthy();

@@ -15,7 +15,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  *   - se BORRA y se recrea «fact_test_fase1» en cada corrida.
  *
  * Cómo correrla (instancia MariaDB desechable en el puerto 3399):
- *   FACT_TEST_DB_PORT=3399 npx vitest run src/lib/facturacion/integracion-mariadb.test.ts
+ * Requiere además AUD09_LAB_MANIFEST: identidad de la instancia recién creada por el runner aislado.
+ *   FACT_TEST_DB_PORT=3399 AUD09_LAB_MANIFEST=<manifiesto> npx vitest run src/lib/facturacion/integracion-mariadb.test.ts
  *
  * El esquema base (empresas, auditoria, tms_*, clientes) se extrae de `sql/schema.sql`; `fact_*` viene del
  * archivo de migración de FACT-1. No hay datos reales.
@@ -66,6 +67,8 @@ import { fact4Disponible, guardarRetencionIvaCliente, leerRetencionIvaCliente } 
 import { resolverEntradaFact4, retencionVigenteParaEdicion } from "./entrada-fact4";
 import { requireTenantFacturacion } from "@/lib/tenant";
 import { proponerPartidaVenta } from "./poliza-venta";
+import { guardarPerfilCredito } from "./credito";
+import { aplicarContratoCreditoAud09, tokenEmisionAud09, verificarLaboratorioAud09 } from "./aud09.test-support";
 
 const RAIZ = process.cwd();
 const E1 = 7; // empresa de la sesión
@@ -115,6 +118,14 @@ async function ejecutarArchivo(rel: string): Promise<unknown> {
   return r;
 }
 
+/** Solo semilla histórica sintética: una emisión nueva del legado incompleto sigue prohibida. */
+async function sembrarHistoricaEmitida(id: number) {
+  await expect(emitirFactura(actorA, id, {})).rejects.toMatchObject({ status: 409 });
+  const [r] = await admin.execute<mysql.ResultSetHeader>("UPDATE fact_facturas SET estado_admin='Emitida' WHERE id=? AND empresa_id=? AND estado_admin='Borrador'", [id, E1]);
+  expect(r.affectedRows).toBe(1);
+  expect((await filas('SELECT estado_admin FROM fact_facturas WHERE id=?', [id]))[0].estado_admin).toBe('Emitida');
+}
+
 const conteo = async (sql: string, p: unknown[] = []) => Number((await filas(sql, p))[0]?.n ?? 0);
 /**
  * Texto de la sección «LATEST DETECTED DEADLOCK» de InnoDB (vacío si nunca hubo uno). Se compara antes/después:
@@ -131,19 +142,23 @@ const ultimoDeadlock = async (): Promise<string> => {
 beforeAll(async () => {
   if (!PUERTO) return;
   admin = await mysql.createConnection({ host: "127.0.0.1", port: PUERTO, user: "root", password: "", multipleStatements: true });
+  await verificarLaboratorioAud09(admin, PUERTO);
   await admin.query(`DROP DATABASE IF EXISTS ${DB_NAME}`);
   await admin.query(`CREATE DATABASE ${DB_NAME} CHARACTER SET utf8mb4`);
   await admin.query(`USE ${DB_NAME}`);
 
   const schema = sqlArchivo("sql/schema.sql");
   // cont_entidades / cont_cuentas (C2B ya aplicado en producción): FACT-4 les referencia con FKs compuestas.
-  for (const t of ["empresas", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes", "cont_entidades", "cont_cuentas"]) {
+  for (const t of ["empresas", "usuarios", "auditoria", "tms_clientes", "tms_lugares", "tms_unidades", "tms_personal", "tms_planes_viaje", "clientes", "cont_entidades", "cont_cuentas", "fact_cliente_perfil"]) {
     await admin.query(extraerCreate(schema, t));
   }
   // El código de la app completa columnas de `clientes` (rtu, condicion_credito…) con su propio asegurador.
   await asegurarSchemaClientes();
   // fact_* tal como existe hoy en producción (migración de FACT-1, ya aplicada allí).
   await ejecutarArchivo("sql/migrate-2026-08-fact-1-facturas-pagos.sql");
+  // Dependencias actuales de las lecturas/saldos; no se cambia ningún archivo SQL.
+  for (const t of ["fact_cobros", "fact_cobro_aplicaciones"]) await admin.query(extraerCreate(schema, t));
+  await admin.query("INSERT INTO usuarios (id,username,password_hash,salt) VALUES (3,'facturador-a','fixture','fixture'),(4,'facturador-b','fixture','fixture'),(9,'otra','fixture','fixture')");
 
   await admin.query(`INSERT INTO empresas (id, codigo, nombre, slug) VALUES (${E1}, 'E7', 'Empresa 7', 'e7'), (${E2}, 'E8', 'Empresa 8', 'e8')`);
   await admin.query(`INSERT INTO tms_clientes (id, empresa_id, nombre) VALUES (501, ${E1}, 'Cliente X'), (502, ${E1}, 'Cliente Y'), (601, ${E2}, 'Cliente Z')`);
@@ -417,51 +432,6 @@ describe.skipIf(!PUERTO)("MariaDB real — fecha_emision llega como YYYY-MM-DD (
     expect(ids).not.toContain(fuera);
   });
 
-  describe("emitir (emitirFactura lee fecha_emision con su propia consulta)", () => {
-    const borrador = async (codigo: string, fecha: string | null): Promise<number> => {
-      const plan = await crearPlan({ codigo });
-      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], numeroFactura: `NUM-${codigo}`, fechaEmision: fecha });
-      expect(c.ok).toBe(true);
-      return c.ok ? c.facturaId : 0;
-    };
-    const fechaEnDb = async (id: number) => (await filas("SELECT DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS f FROM fact_facturas WHERE id = ?", [id]))[0].f as string | null;
-    const auditoriaEmitir = async (id: number) => String((await filas("SELECT detalle FROM auditoria WHERE accion = 'emitir_factura' AND detalle LIKE ? ORDER BY id DESC LIMIT 1", [`Factura #${id} %`]))[0]?.detalle);
-
-    it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: conserva «2026-08-27» (BD, lectura y auditoría)", async () => {
-      const id = await borrador("EMIT-1", "2026-08-27");
-      const r = await emitirFactura(actorA, id, {});
-      expect(r.ok).toBe(true);
-      expect(await fechaEnDb(id)).toBe("2026-08-27");
-      const d = await obtenerFactura(E1, id);
-      expect(d?.factura).toMatchObject({ estadoAdmin: "Emitida", fechaEmision: "2026-08-27", numeroFactura: "NUM-EMIT-1" });
-      const aud = await auditoriaEmitir(id);
-      expect(aud).toContain("fecha 2026-08-27");
-      expect(aud).not.toMatch(/GMT|Thu|Aug/);
-    });
-
-    it("6) emitir CON fechaEmision nueva usa la nueva", async () => {
-      const id = await borrador("EMIT-2", "2026-08-27");
-      const r = await emitirFactura(actorA, id, { fechaEmision: "2026-09-01" });
-      expect(r.ok).toBe(true);
-      expect(await fechaEnDb(id)).toBe("2026-09-01");
-      expect(await auditoriaEmitir(id)).toContain("fecha 2026-09-01");
-    });
-
-    it("7) sin fecha en el borrador y sin fecha nueva → error de fecha obligatoria y NO se emite", async () => {
-      const id = await borrador("EMIT-3", null);
-      const r = await emitirFactura(actorA, id, {});
-      expect(r).toEqual({ ok: false, status: 400, error: "La fecha de emisión es obligatoria para emitir." });
-      expect((await filas("SELECT estado_admin FROM fact_facturas WHERE id = ?", [id]))[0].estado_admin).toBe("Borrador");
-      expect(await fechaEnDb(id)).toBeNull();
-    });
-
-    it("sin fecha en el borrador pero CON fecha nueva → emite con la nueva", async () => {
-      const id = await borrador("EMIT-4", null);
-      expect((await emitirFactura(actorA, id, { fechaEmision: "2026-10-09" })).ok).toBe(true);
-      expect(await fechaEnDb(id)).toBe("2026-10-09");
-    });
-  });
-
   it("editar un borrador con fecha de emisión la conserva como YYYY-MM-DD de ida y vuelta", async () => {
     const plan = await crearPlan({ codigo: "FECHA-EDIT" });
     const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], fechaEmision: "2026-08-27" });
@@ -604,7 +574,7 @@ describe.skipIf(!PUERTO)("MariaDB real — tratamiento de IVA POR LÍNEA (inclui
     expect((await lineasDb(f.insertId))[0]).toMatchObject({ incluye: 0, pct: 12, base: 750, iva: 90, total: 840 });
   });
 
-  it("10) una factura EMITIDA no puede cambiar el tratamiento de ninguna línea (409) y emitir tampoco lo altera", async () => {
+  it("10) una factura histórica EMITIDA no puede cambiar el tratamiento de ninguna línea (409); sin reemitir el legado", async () => {
     const a = await crearPlan({ codigo: "IVA-EMI-1", tarifa_comercial: 100 });
     const b = await crearPlan({ codigo: "IVA-EMI-2", tarifa_comercial: 100, fecha_plan: "2026-08-28" });
     const c = await crearFactura(actorA, { clienteId: 20, planes: [inc(a), agr(b)], numeroFactura: "NUM-IVA-MIX", fechaEmision: "2026-08-27" });
@@ -612,7 +582,7 @@ describe.skipIf(!PUERTO)("MariaDB real — tratamiento de IVA POR LÍNEA (inclui
     if (!c.ok) return;
     const antesL = await lineasDb(c.facturaId);
     const antesC = await cabecera(c.facturaId);
-    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    await sembrarHistoricaEmitida(c.facturaId);
     expect(await lineasDb(c.facturaId)).toEqual(antesL);
     const emitida = await cabecera(c.facturaId);
     expect([emitida.precio_incluye_iva, emitida.porcentaje_iva, emitida.subtotal, emitida.iva_monto, emitida.monto_total]).toEqual([antesC.precio_incluye_iva, antesC.porcentaje_iva, antesC.subtotal, antesC.iva_monto, antesC.monto_total]);
@@ -1226,7 +1196,7 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-3: la factura anulada conserva s
     const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pe, precioIncluyeIva: true }], numeroFactura: "F-FACT3-1", fechaEmision: "2026-10-01" });
     expect(c.ok).toBe(true);
     if (!c.ok) return;
-    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    await sembrarHistoricaEmitida(c.facturaId);
     expect((await registrarPago(actorA, c.facturaId, { fechaPago: "2026-10-02", monto: 100 })).ok).toBe(true);
     const conPagos = await anularFactura(actorA, c.facturaId);
     expect(conPagos).toMatchObject({ ok: false, status: 409 });
@@ -1237,7 +1207,7 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-3: la factura anulada conserva s
     const c2 = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: pf, precioIncluyeIva: false }], numeroFactura: "F-FACT3-2", fechaEmision: "2026-10-03" });
     expect(c2.ok).toBe(true);
     if (!c2.ok) return;
-    expect((await emitirFactura(actorA, c2.facturaId, {})).ok).toBe(true);
+    await sembrarHistoricaEmitida(c2.facturaId);
     expect((await anularFactura(actorA, c2.facturaId)).ok).toBe(true);
     const d = await obtenerFactura(E1, c2.facturaId);
     expect(d?.factura).toMatchObject({ estadoAdmin: "Anulada", numeroFactura: "F-FACT3-2", fechaEmision: "2026-10-03", montoTotal: 784 });
@@ -1339,7 +1309,7 @@ describe.skipIf(!PUERTO)("MariaDB real — PDF DEMO (no fiscal) desde lo congela
     const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: p, precioIncluyeIva: false }], numeroFactura: "F-PDF-1", fechaEmision: "2026-08-27" });
     expect(c.ok).toBe(true);
     if (!c.ok) return;
-    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    await sembrarHistoricaEmitida(c.facturaId);
     const t = await textoPdf(() => generarPdfFacturaDemo(empresa1, c.facturaId));
     expect(t).toContain("F-PDF-1");
     expect(t).toContain("27/08/2026");
@@ -1495,6 +1465,11 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/c
     // las tablas de líneas NO llevan UNIQUE(plan_id) (un viaje puede estar en flete + descarga)
     const u = await filas("SHOW INDEX FROM fact_factura_linea_viajes WHERE Non_unique = 0 AND Key_name <> 'PRIMARY'");
     expect(u.map((r) => r.Column_name)).toEqual(["linea_id", "plan_id"]);
+  });
+
+  it("MIL04A: prepara contrato FINAL y perfiles sintéticos sin modificar los documentos históricos", async () => {
+    await aplicarContratoCreditoAud09(admin);
+    for (const entidad of [entKT, entMON]) await guardarPerfilCredito(actorA, entidad, 20, { dias: 30, aprobada: true, revision: 0, motivo: 'Perfil sintético de regresión histórica' });
   });
 
   it("tras la migración: fact4Disponible=true y el borde HTTP acepta el payload FACT-4 pero sigue rechazando el anterior (400)", async () => {
@@ -1848,7 +1823,7 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/c
     });
     expect(c).toMatchObject({ ok: true });
     if (!c.ok) return;
-    expect((await emitirFactura(actorA, c.facturaId, {})).ok).toBe(true);
+    expect((await emitirFactura(actorA, c.facturaId, { vencimientoToken: await tokenEmisionAud09(actorA, c.facturaId, "2026-09-10") })).ok).toBe(true);
     expect((await anularFactura(actorA, c.facturaId)).ok).toBe(true);
     const d = await obtenerFactura(E1, c.facturaId);
     expect(d?.factura.estadoAdmin).toBe("Anulada");
@@ -1936,4 +1911,50 @@ describe.skipIf(!PUERTO)("MariaDB real — FACT-4: líneas agrupables, contado/c
     const cruzada = await filas(`SELECT id FROM cont_cuentas_bancarias WHERE id = ?`, [bancoE2]);
     expect(cruzada).toHaveLength(1); // el banco existe: solo el filtro por empresa lo oculta
   });
+  // Las transiciones nuevas se verifican después de preparar FACT-4 y MIL04A.
+  describe("emitir (emitirFactura lee fecha_emision con su propia consulta)", () => {
+    const borrador = async (codigo: string, fecha: string | null): Promise<number> => {
+      const plan = await crearPlan({ codigo });
+      const c = await crearFactura(actorA, { clienteId: 20, planes: [{ planId: plan, precioIncluyeIva: true }], lineas: [linea([plan])], entidadId: entKT, condicionPago: "CREDITO", retencionIvaPct: 0, numeroFactura: `NUM-${codigo}`, fechaEmision: fecha });
+      expect(c.ok).toBe(true);
+      return c.ok ? c.facturaId : 0;
+    };
+    const fechaEnDb = async (id: number) => (await filas("SELECT DATE_FORMAT(fecha_emision, '%Y-%m-%d') AS f FROM fact_facturas WHERE id = ?", [id]))[0].f as string | null;
+    const auditoriaEmitir = async (id: number) => String((await filas("SELECT detalle FROM auditoria WHERE accion = 'emitir_factura' AND detalle LIKE ? ORDER BY id DESC LIMIT 1", [`Factura #${id} %`]))[0]?.detalle);
+
+    it("1-5) borrador con 2026-08-27 emitido SIN fecha nueva: conserva «2026-08-27» (BD, lectura y auditoría)", async () => {
+      const id = await borrador("EMIT-1", "2026-08-27");
+      const r = await emitirFactura(actorA, id, { vencimientoToken: await tokenEmisionAud09(actorA, id, "2026-08-27") });
+      expect(r.ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-08-27");
+      const d = await obtenerFactura(E1, id);
+      expect(d?.factura).toMatchObject({ estadoAdmin: "Emitida", fechaEmision: "2026-08-27", numeroFactura: "NUM-EMIT-1" });
+      const aud = await auditoriaEmitir(id);
+      expect(aud).toContain("fecha 2026-08-27");
+      expect(aud).not.toMatch(/GMT|Thu|Aug/);
+    });
+
+    it("6) emitir CON fechaEmision nueva usa la nueva", async () => {
+      const id = await borrador("EMIT-2", "2026-08-27");
+      const r = await emitirFactura(actorA, id, { fechaEmision: "2026-09-01", vencimientoToken: await tokenEmisionAud09(actorA, id, "2026-09-01") });
+      expect(r.ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-09-01");
+      expect(await auditoriaEmitir(id)).toContain("fecha 2026-09-01");
+    });
+
+    it("7) sin fecha en el borrador y sin fecha nueva → error de fecha obligatoria y NO se emite", async () => {
+      const id = await borrador("EMIT-3", null);
+      const r = await emitirFactura(actorA, id, {});
+      expect(r).toEqual({ ok: false, status: 400, error: "La fecha de emisión es obligatoria para emitir." });
+      expect((await filas("SELECT estado_admin FROM fact_facturas WHERE id = ?", [id]))[0].estado_admin).toBe("Borrador");
+      expect(await fechaEnDb(id)).toBeNull();
+    });
+
+    it("sin fecha en el borrador pero CON fecha nueva → emite con la nueva", async () => {
+      const id = await borrador("EMIT-4", null);
+      expect((await emitirFactura(actorA, id, { fechaEmision: "2026-10-09", vencimientoToken: await tokenEmisionAud09(actorA, id, "2026-10-09") })).ok).toBe(true);
+      expect(await fechaEnDb(id)).toBe("2026-10-09");
+    });
+  });
+
 });
