@@ -2,7 +2,7 @@
 
 Estado: propuesta documental para auditoría; no aprobada para implementación. Fecha: 2026-11-10.
 
-Base: `docs/TMS-COMBUSTIBLES-FASE1-AUDITORIA-DISENO.md`, commit `8714d01407a637ddefb35b7dbfab1e2c68e40bce`. Rama: `audit/tms-combustibles-fase1`. El informe aprobado permanece intacto. No se consultó producción ni se modificaron código, SQL, pruebas o datos. Este documento no autoriza commit/push.
+Base: `docs/TMS-COMBUSTIBLES-FASE1-AUDITORIA-DISENO.md`, commit `8714d01407a637ddefb35b7dbfab1e2c68e40bce`. Rama: `audit/tms-combustibles-fase1`. Contratos publicados mediante commit y push normal en `a57876fce9bc890e6c26e051ec225f2de8a7c581`; diseño dictaminado técnicamente favorable. El informe aprobado permanece intacto. No se consultó producción ni se modificaron código, SQL, pruebas o datos. El cierre actual autoriza exclusivamente un incremento documental y su push, no implementación.
 
 ## 1. Convenciones y decisiones
 
@@ -19,6 +19,8 @@ Base: `docs/TMS-COMBUSTIBLES-FASE1-AUDITORIA-DISENO.md`, commit `8714d01407a637d
 | D5: consolidación | Alias sin cambiar IDs, FKs ni snapshots históricos. | Flota acredita identidad física y propietarios/seguridad aprueban alcance compartido. |
 
 Los casos no resueltos se conservan para revisión con motivo concreto; no se silencian, inventan ni descartan. No es necesario resolver todos los proveedores para documentar contratos, pero sí certificar el proveedor/flujo antes de habilitar una regla nueva.
+
+Recomendación consolidada: aprobar D1 como pendiente sin consumo nuevo, sin cambiar retrospectivamente SIN_ASIGNACION; D2 con identidades empresariales y revisión independiente, incluida validación de jurisdicción/evidencia del vehículo externo; D3 conservando barrera histórica hasta certificar numeración y correspondencias; D4 con fuente de imputación validada sin ampliar identidad del vale; D5 mediante alias con autorización por ámbito y sin alterar FKs históricas. **Todas siguen NO APROBADAS funcionalmente**. El dictamen técnico y este cierre documental no sustituyen la aceptación de operaciones, finanzas, seguridad y flota indicada en la tabla.
 
 ## 2. Contrato de conductor
 
@@ -188,10 +190,37 @@ Fixtures: IDs 101/202 misma placa con VIN coincidente y expediente válido; IDs 
 
 ## 10. Puerta de aprobación y evidencia de este trabajo
 
-Orden propuesto: aprobar contratos y decisiones → inventario autorizado en copia/laboratorio y expedientes de proveedor → diseñar migraciones aditivas y reserva de identidad → implementar tickets con flags/escritores coordinados → ensayar restauración/compatibilidad → solicitar autorización operativa separada. No habilitar externos antes de que la idempotencia común los cubra; no desplegar mezcla de escritores que conozcan reglas incompatibles.
+Secuencia propuesta: autorizar expresamente un primer desarrollo aislado → construir contratos y pruebas sin conectar escritores → cerrar decisiones/evidencias para integración → implementar persistencia e idempotencia compatibles → ensayar restauración/compatibilidad → solicitar autorización operativa separada. No habilitar externos antes de que la idempotencia común los cubra; no desplegar mezcla de escritores que conozcan reglas incompatibles.
+
+### 10.1 Matriz de dependencias
+
+| Entregable | Puede desarrollarse aisladamente | Dependencia para integrar/habilitar | No depende de |
+|---|---|---|---|
+| 03-A: contratos puros y UI de laboratorio | Sí, con fixtures y validadores sin efectos; nueva autorización de desarrollo requerida. | Aceptación de alcance experimental; no conectar confirmaciones ni persistencia. | Implementación de 04/05, esquema productivo o decisiones comerciales definitivamente aprobadas. |
+| 03-B: catálogo externo, revisión y persistencia | Diseño/ensayo en laboratorio tras autorización específica. | D1/D2/D4 aprobadas; permisos/ámbito, esquema y migraciones revisados; lector compatible y auditoría. | Activación de alias 05. |
+| 03-C: confirmar consumos con externos | No habilitar durante 03-A. | 03-B y 04 certificados conjuntamente, D1–D4 para proveedor/ámbito habilitado, inventario y control de escritores, ensayo y autorización operativa separados. | 05, si no se usan alias y se preserva validación actual de catálogo. |
+| 04: idempotencia/importación | Pruebas puras/simuladas posibles; concurrencia requiere DB desechable. | D3/D4 y correspondencias históricas certificadas; contrato de identidad de 03 para admitir externos. No requiere 03-C ya habilitado. | Catálogo externo habilitado o saneamiento real de vehículos. |
+| 05: alias de vehículos | Expediente/resolución y simulación posibles sin datos reales. | D5, permisos compartidos y escritores inventariados; compatibilidad 04 antes de usar alias en importación. Activación real requiere aprobación adicional. | Confirmaciones externas 03-C; no bloquear su desarrollo esperando consolidación real. |
+
+No hay dependencia circular: 03 aporta contrato de identidad a 04 sin habilitar escrituras; ambos se prueban juntos antes de activar 03-C. 05 consume esa compatibilidad al integrarse con importación. Desarrollo aislado no equivale a despliegue ni a saneamiento.
+
+### 10.2 Primer incremento propuesto: 03-A
+
+Alcance mínimo: tipos discriminados y validadores puros de conductor/vehículo; diagnósticos estructurados; componentes de selección con repositorios simulados en laboratorio/Storybook o harness local existente, sin añadir dependencias por defecto. Probar exclusión de IDs, campos faltantes, homónimos, ámbito simulado, estados pendiente/verificado/inactivo y respuestas fuera de orden. Casos D1/D2/D4 se parametrizan como propuestas, sin convertirlos en reglas de rutas existentes.
+
+Límite verificable: sin endpoints nuevos o modificados, SQL, migraciones, catálogo persistente, flags que activen confirmación, conexión al cliente de confirmación ni acceso a credenciales/red productiva. No alterar el comportamiento vigente de SIN_ASIGNACION. UI experimental fuera del flujo operativo; acción de confirmar ausente/deshabilitada sin handler de escritura. Pruebas con spies deben demostrar cero llamadas a confirmar, registrar, guardar identidad y acceso DB. No presentar validación simulada como autorización real ni afirmar aislamiento real por entidad a partir de mocks.
+
+Evidencias/decisiones mínimas para comenzar 03-A:
+
+- Autorización explícita del usuario para ese alcance experimental, rama aislada y SHA base elegidos; este cierre aún no la concede.
+- Aceptación del subconjunto de contrato a prototipar (variantes, campos mínimos y diagnósticos); D1–D5 permanecen NO APROBADAS para integración/operación. Si se pretende fijar sus reglas como definitivas, detenerse y solicitar aprobación funcional antes.
+- Fixtures exclusivamente sintéticos revisables: empresas A/B, empleados, homónimos externos, vehículo compartido/no autorizado, jurisdicción faltante y evidencia simulada claramente marcada. Sin reconstruir datos reales ni requerir consulta productiva.
+- Inventario local del harness y pruebas disponibles; plan de comandos focales, TypeScript y ESLint, más prueba negativa de cero escrituras/confirmaciones. Evidencia de laboratorio sin variables/credenciales productivas y componentes no alcanzables desde flujo operativo.
+
+Para pasar a 03-B/03-C, además: decisiones funcionales firmadas por responsables de la tabla D1–D5 según alcance, permisos aprobados, reglas de numeración por proveedor, resolución de entidad, inventario físico en copia autorizada, diseño aditivo/recuperación y pruebas de compatibilidad 04. Nada de esto se considera satisfecho por el dictamen técnico.
 
 Revisión realizada: HEAD y limpieza de rama; lectura estática de `cb2/model.ts`, `cb2/service.ts`, `cb2/empleados-validacion.ts`, `combustible-importacion-v2.ts`, `combustible-importaciones.ts`, `combustible-identificadores.ts` y `combustible-permisos.ts`, además del informe base. No se volvieron a inspeccionar Excel ni se consultó catálogo productivo. Las cifras de libros se citan del informe aprobado, sin nuevas afirmaciones de numeración real.
 
-No se ejecutaron pruebas funcionales, TypeScript, ESLint, build o SQL: cambio exclusivamente documental. Matrices y criterios son propuestas pendientes de implementación/ejecución, no resultados PASS. El único cambio previsto es agregar este documento; informe base y todos los archivos existentes deben permanecer idénticos al commit auditado.
+No se ejecutaron pruebas funcionales, TypeScript, ESLint, build o SQL: cambio exclusivamente documental. Matrices y criterios son propuestas pendientes de implementación/ejecución, no resultados PASS. En este cierre se modifica únicamente este documento; informe base y todos los demás archivos permanecen idénticos al HEAD auditado `a57876fce9bc890e6c26e051ec225f2de8a7c581`.
 
-Entrega de revisión: diff del nuevo documento respecto a `8714d01407a637ddefb35b7dbfab1e2c68e40bce`, sin commit/push. La implementación, regularización de datos y cualquier cambio productivo siguen sin autorización. Detenerse para auditoría independiente de ChatGPT.
+Entrega de cierre: incremento documental respecto a `a57876fce9bc890e6c26e051ec225f2de8a7c581`, autorizado para commit y push normal en la misma rama. La implementación, regularización de datos y cualquier cambio productivo siguen sin autorización. Detenerse para decisión de implementación tras auditoría independiente de ChatGPT.
