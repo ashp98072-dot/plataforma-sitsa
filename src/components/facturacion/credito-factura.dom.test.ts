@@ -68,12 +68,42 @@ it.each([200,403,409,503])('guardar perfil aprobado (%s) conserva revisión obse
  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'Motivo autorizado QA');input.dispatchEvent(new Event('input',{bubbles:true}));});
  await click('Guardar perfil');const sent=fetcher.mock.calls.find(([,i])=>i?.method==='PUT');expect(JSON.parse(sent![1].body)).toMatchObject({dias:30,aprobada:true,revision:4});expect(host.textContent).toContain(status===200?'Perfil guardado':`perfil-${status}`);expect(token).toHaveBeenLastCalledWith(undefined);
 });
-it('cambio de fecha descarta respuesta tardía sin devolver token obsoleto',async()=>{
- let finish!: (r:Response)=>void;
- fetcher.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'?new Promise<Response>(r=>{finish=r;}):Promise.resolve(url.includes('/clientes/')?reply({error:'Sin permiso'},403):reply({vencimiento:null})));
- await mount();await click(preview);await mount({fecha:'2026-07-16'});
- await act(async()=>finish(reply({certificado:true,snapshot:{vencimiento:'2026-08-14',dias:30,fechaBase:props.fecha},token:'obsoleto'})));
- expect(token).not.toHaveBeenCalledWith('obsoleto');expect(host.textContent).not.toContain('Confirma: vence 2026-08-14');
+const cambiosContexto: Array<Partial<typeof props>>=[{fecha:'2026-07-16'},{cliente:21},{factura:2},{entidad:10}];
+it.each(cambiosContexto.flatMap(cambio=>['POST','PUT'].flatMap(method=>[200,503].flatMap(status=>[false,true].map(nuevaPendiente=>({cambio,method,status,nuevaPendiente}))))))(
+ 'invalida $method con contexto $cambio, respuesta $status y nueva pendiente $nuevaPendiente',async({cambio,method,status,nuevaPendiente})=>{
+ const pendientes: Array<(r:Response)=>void>=[];
+ fetcher.mockImplementation((url:string,init?:RequestInit)=>init?.method==='POST'||init?.method==='PUT'
+  ?new Promise<Response>(resolve=>pendientes.push(resolve))
+  :Promise.resolve(url.includes('/clientes/')?reply({perfil:{dias:30,aprobada:1,revision:4}}):reply({vencimiento:null})));
+ await mount();
+ const motivo=host.querySelector('input[maxlength="500"]') as HTMLInputElement;
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(motivo,'Motivo autorizado QA');motivo.dispatchEvent(new Event('input',{bubbles:true}));});
+ const boton=()=>[...host.querySelectorAll('button')].find(b=>b.textContent===preview)!;
+ await click(method==='PUT'?'Guardar perfil':preview);
+ expect(boton().disabled).toBe(true);
+ await mount(cambio);
+ expect(boton().disabled).toBe(false);expect(token).toHaveBeenLastCalledWith(undefined);
+ if(nuevaPendiente) await click(preview);
+ const antes=host.innerHTML, tokens=token.mock.calls.slice();
+ await act(async()=>pendientes[0](reply(status===200
+  ?{perfil:{revision:99},certificado:true,snapshot:{vencimiento:'2099-01-01',dias:99,fechaBase:props.fecha},token:'obsoleto'}
+  :{error:'error obsoleto'},status)));
+ expect(host.innerHTML).toBe(antes);expect(token.mock.calls).toEqual(tokens);
+ expect(host.querySelector('[role=alert]')).toBeNull();
+ expect(boton().disabled).toBe(nuevaPendiente);
+ if(!nuevaPendiente) await click(preview);
+ expect(pendientes).toHaveLength(2);
+ const post=fetcher.mock.calls.filter(([,init])=>init?.method==='POST').at(-1)!;
+ expect(post[0]).toContain(`/facturas/${cambio.factura??props.factura}/vencimiento`);
+ expect(JSON.parse(post[1].body).fechaEmision).toBe(cambio.fecha??props.fecha);
+ await act(async()=>pendientes[1](reply({certificado:true,snapshot:{vencimiento:'2026-08-15',dias:30,fechaBase:cambio.fecha??props.fecha},token:'nuevo'})));
+ expect(boton().disabled).toBe(false);expect(token).toHaveBeenLastCalledWith('nuevo');
+ expect(host.textContent).toContain('Confirma: vence 2026-08-15');
+ await click('Guardar perfil');
+ const put=fetcher.mock.calls.filter(([,init])=>init?.method==='PUT').at(-1)!;
+ expect(put[0]).toContain(`/clientes/${cambio.cliente??props.cliente}/credito?entidad=${cambio.entidad??props.entidad}`);
+ expect(JSON.parse(put[1].body).revision).toBe(4);
+ await act(async()=>pendientes[2](reply({perfil:{revision:5}})));
 });
 it.each([200,403,409,503])('panel real revisa, envía token y procesa emisión %s sin ocultar errores',async status=>{
  let emitida=false;

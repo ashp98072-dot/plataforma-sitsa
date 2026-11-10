@@ -14,6 +14,7 @@ export function CreditoFactura({ slug, factura, cliente, entidad, fecha, borrado
     let vigente = true;
     const invalidar = () => { solicitud.current++; };
     invalidar();
+    setOcupado(false);
     onToken(undefined);
     void fetch(`${base}/facturas/${factura}/vencimiento`, { cache: 'no-store' }).then(async r => {
       const b = await r.json(); if (!vigente) return;
