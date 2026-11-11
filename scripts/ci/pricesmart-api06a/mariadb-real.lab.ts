@@ -8,6 +8,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sandboxPool } from "../../../src/lib/sandbox-db";
 import { mariaDbOrderRepository, PersistenceError } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
 import { OrderApplication } from "../../../src/lib/integrations/pricesmart/service";
+import { mariaDbAdaptationRepository } from "../../../src/lib/integrations/pricesmart/adaptation-mariadb";
+import { mariaDbSourceOrderPort } from "../../../src/lib/integrations/pricesmart/source-order-mariadb";
+import { createMariaDbSimulatedBridge, createSyntheticCandidateResolver } from "../../../src/lib/integrations/pricesmart/outbox-bridge";
+import { createTmsAdaptation } from "../../../src/lib/integrations/pricesmart/tms-adaptation";
+import type { AdaptationCommand, AdaptationScope, CandidateResolutionPort, LogisticsCandidate } from "../../../src/lib/integrations/pricesmart/tms-adaptation-contracts";
 import { mariaDbOutboxStore } from "../../../src/lib/integrations/pricesmart/outbox-mariadb";
 import { DEFAULT_OUTBOX_POLICY, OutboxDispatcher, type OutboxClaim, type OutboxHandler, type OutboxStore } from "../../../src/lib/integrations/pricesmart/outbox";
 import { OrderError, type Principal, type Scope } from "../../../src/lib/integrations/pricesmart/contracts";
@@ -79,9 +84,9 @@ describe.skipIf(!MAIN)("B0 aislamiento observado desde el proceso de pruebas", (
 });
 
 describe.skipIf(!MAIN)("B1 DDL efectivo (information_schema)", () => {
-  it("B1.1 las 6 tablas son InnoDB", async () => {
+  it("B1.1 las 9 tablas son InnoDB", async () => {
     const rows = await admin("SELECT TABLE_NAME AS t, ENGINE AS e FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME", [manifest.schema]);
-    expect(rows.map((r) => r.t)).toEqual(["novalvion_environment", "ps_api01_audit", "ps_api01_events", "ps_api01_orders", "ps_api01_outbox", "ps_api01_scopes"]);
+    expect(rows.map((r) => r.t)).toEqual(["novalvion_environment", "ps_api01_audit", "ps_api01_events", "ps_api01_orders", "ps_api01_outbox", "ps_api01_scopes", "ps_api09_adapt_jobs", "ps_api09_adapt_links", "ps_api09_adapt_traces"]);
     expect(rows.every((r) => r.e === "InnoDB")).toBe(true);
   });
   it("B1.2 CHECK de orders presentes (≥ 11) y UNIQUE de identidad con el orden de columnas del contrato", async () => {
@@ -90,9 +95,9 @@ describe.skipIf(!MAIN)("B1 DDL efectivo (information_schema)", () => {
     const cols = await admin("SELECT COLUMN_NAME AS c FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ps_api01_orders' AND INDEX_NAME = 'uq_ps_api01_identity' ORDER BY SEQ_IN_INDEX", [manifest.schema]);
     expect(cols.map((r) => r.c)).toEqual(["environment", "tenant_id", "client_id", "integration_id", "external_order_id"]);
   });
-  it("B1.3 4 claves foráneas efectivas; identificadores externos son binarios", async () => {
+  it("B1.3 10 claves foráneas efectivas (4 de API-01 + 6 de API-09); identificadores externos son binarios", async () => {
     const fks = await admin("SELECT COUNT(*) AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ?", [manifest.schema]);
-    expect(Number(fks[0].n)).toBe(4);
+    expect(Number(fks[0].n)).toBe(10);
     const t = await admin("SELECT DATA_TYPE AS d FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ps_api01_orders' AND COLUMN_NAME = 'external_order_id'", [manifest.schema]);
     expect(t[0].d).toBe("varbinary");
   });
@@ -277,11 +282,11 @@ describe.skipIf(!MAIN)("B8 privilegios efectivos de la cuenta de ejecución", ()
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const workerPools: ReturnType<typeof sandboxPool>[] = [];
 afterAll(async () => { await Promise.all(workerPools.map((p) => p.end())); });
-function workerStore(): OutboxStore {
+function workerPool() {
   const raw = mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: manifest.workerUser, password: process.env.PS06A_WORKER_PASSWORD, database: manifest.schema, connectionLimit: 4 });
-  const facade = sandboxPool(raw); workerPools.push(facade);
-  return mariaDbOutboxStore(facade, { schema: manifest.schema, workerUser: manifest.workerUser });
+  const facade = sandboxPool(raw); workerPools.push(facade); return facade;
 }
+function workerStore(): OutboxStore { return mariaDbOutboxStore(workerPool(), { schema: manifest.schema, workerUser: manifest.workerUser }); }
 const hexToUuid = (h: string) => `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`.toLowerCase();
 const uuidHex = (u: string) => u.replaceAll("-", "");
 async function orderIdOf(externalId: string, tenant = 1, client = 1) {
@@ -387,7 +392,8 @@ describe.skipIf(!MAIN)("B10 outbox contra el motor real (API-07)", () => {
       await denied("USE mysql", [1044]);
       const [rows] = await c.query("SHOW GRANTS FOR CURRENT_USER()");
       const text = (rows as Record<string, string>[]).map((r) => Object.values(r)[0]).join("\n");
-      expect(text).not.toMatch(/ALL PRIVILEGES|GRANT OPTION|DELETE|INSERT|DROP|CREATE|ALTER|SUPER|FILE|PROCESS/);
+      expect(text).not.toMatch(/ALL PRIVILEGES|GRANT OPTION|DELETE|DROP|CREATE|ALTER|SUPER|FILE|PROCESS/);
+      for (const line of text.split("\n").filter((l) => /INSERT/.test(l))) expect(line).toMatch(/ps_api09_adapt_(jobs|links|traces)/);   // API-09: INSERT solo en el diario de adaptación; ninguno sobre la outbox, eventos u órdenes
       for (const line of text.split("\n")) if (!/^GRANT USAGE ON \*\.\*/.test(line)) expect(line).toContain(manifest.schema);
     } finally { await c.end(); }
   });
@@ -400,6 +406,127 @@ describe.skipIf(!MAIN)("B10 outbox contra el motor real (API-07)", () => {
     expect(byOrder.get(a)).toMatchObject({ tenantId: 1, clientId: 1, originClubReference: "QA-CLUB" });
     expect(byOrder.get(b)).toMatchObject({ tenantId: 2, clientId: 1, originClubReference: "QA-CLUB" });
     expect(byOrder.get(c)).toMatchObject({ tenantId: 1, clientId: 1, originClubReference: "QA-CLUB-2" });
+  });
+});
+
+// ---- B11 adaptación durable (API-09): diario de adaptación, lectura de órdenes y puente SIMULATED contra el motor REAL, con la cuenta de WORKER (privilegios mínimos).
+// El puente sigue sin crear solicitudes/viajes/entregas del TMS: el resolutor es sintético y el esquema no tiene columna de id de TMS.
+const aScope = (tenantId = 1, club = "QA-CLUB"): AdaptationScope => ({ environment: "sandbox", tenantId, clientId: 1, integrationId: "qa-integration", originClubReference: club });
+const adaptRepo = (pool = workerPool()) => mariaDbAdaptationRepository(pool, { schema: manifest.schema, account: manifest.workerUser });
+const adaptSource = (pool = workerPool()) => mariaDbSourceOrderPort(pool, { schema: manifest.schema, account: manifest.workerUser });
+function adaptationFor(nowMs: () => number, resolver: CandidateResolutionPort = createSyntheticCandidateResolver(), leaseMs = 10_000) {
+  const pool = workerPool(); return createTmsAdaptation({ source: adaptSource(pool), resolver, repository: adaptRepo(pool), nowMs }, leaseMs);
+}
+const dashed = (hex: string) => hexToUuid(hex.toLowerCase());
+const cmdReceive = async (orderId: string): Promise<AdaptationCommand> => ({ kind: "RECEIVE", orderId, sourceVersion: 1, correlationId: dashed(String((await admin(`SELECT HEX(correlation_id) AS c FROM ${T}.ps_api01_orders WHERE id = UNHEX(?)`, [uuidHex(orderId)]))[0].c)) });
+const linkRowOf = async (orderId: string) => (await admin(`SELECT request_reference AS r, local_delivery_state AS s, cancellation_requested AS c, version AS v, source_state AS ss FROM ${T}.ps_api09_adapt_links WHERE order_id = UNHEX(?)`, [uuidHex(orderId)]))[0];
+const jobsOf = (orderId: string) => admin(`SELECT status, attempt, version FROM ${T}.ps_api09_adapt_jobs WHERE order_id = UNHEX(?) ORDER BY job_key`, [uuidHex(orderId)]);
+const tracesOf = async (orderId: string) => (await admin(`SELECT phase, attempt, failure FROM ${T}.ps_api09_adapt_traces WHERE order_id = UNHEX(?) ORDER BY seq`, [uuidHex(orderId)])).map((r) => `${r.phase}:${r.attempt}:${r.failure ?? "-"}`);
+
+describe.skipIf(!MAIN)("B11 adaptación durable contra el motor real (API-09)", () => {
+  it("B11.1 puente de punta a punta: recepción y cancelación quedan en el diario (trabajos DONE, vínculo, bitácora) sin crear nada en el TMS", async () => {
+    const [a, b] = await seedOrders("P1", 2);
+    const extB = String((await admin(`SELECT external_order_id AS e FROM ${T}.ps_api01_orders WHERE id = UNHEX(?)`, [uuidHex(b)]))[0].e);
+    await appFor(principal()).requestCancellation(extB, bytes({ reason: "ORIGIN_REQUEST" }));
+    const bridge = createMariaDbSimulatedBridge({ pool: workerPool(), schema: manifest.schema, workerUser: manifest.workerUser, nowMs: Date.now, policy: { ...DEFAULT_OUTBOX_POLICY, batchSize: 100, backoffBaseMs: 1, backoffMaxMs: 1 } });
+    expect(bridge.mode).toBe("SIMULATED");
+    for (let i = 0; i < 10 && !((await linkRowOf(a)) && (await linkRowOf(b))); i++) await bridge.runOnce();
+    expect(await linkRowOf(a)).toMatchObject({ s: "LOGISTICS_REVIEW", c: 0, ss: "RECEIVED" }); expect(String((await linkRowOf(a)).r)).toBe(`synthetic:${a}`);
+    expect(await linkRowOf(b)).toMatchObject({ s: "CANCELLATION_REVIEW", c: 1, ss: "CANCELLATION_REQUESTED" });
+    expect((await jobsOf(a)).map((j) => j.status)).toEqual(["DONE"]); expect((await jobsOf(b)).map((j) => j.status)).toEqual(["DONE", "DONE"]);
+    expect(await tracesOf(a)).toEqual(["STARTED:1:-", "SUCCEEDED:1:-"]);
+    expect(await outboxRow(a, 1)).toMatchObject({ status: "DONE" }); expect(await outboxRow(b, 2)).toMatchObject({ status: "DONE" });
+    const orders = await admin(`SELECT state, tms_linked AS t FROM ${T}.ps_api01_orders WHERE id IN (UNHEX(?), UNHEX(?)) ORDER BY state`, [uuidHex(a), uuidHex(b)]);
+    expect(orders.map((o) => `${o.state}:${o.t}`)).toEqual(["CANCELLATION_REQUESTED:0", "RECEIVED:0"]);   // la orden de origen no cambia; nada enlazado al TMS
+    const cols = await admin("SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 'ps_api09_adapt_%' AND COLUMN_NAME LIKE '%tms%'", [manifest.schema]);
+    expect(cols).toHaveLength(0);
+  });
+  it("B11.2 idempotencia: repetir el mismo comando devuelve el resultado guardado (replay), sin duplicar trabajo ni vínculo, y deja una traza REPLAY", async () => {
+    const [id] = await seedOrders("P2", 1); const adaptation = adaptationFor(Date.now); const command = await cmdReceive(id);
+    const first = await adaptation.process(aScope(), command); const again = await adaptation.process(aScope(), command);
+    expect(first.replayed).toBe(false); expect(again.replayed).toBe(true); expect(again.value).toEqual(first.value);
+    expect(await jobsOf(id)).toHaveLength(1); expect(await tracesOf(id)).toEqual(["STARTED:1:-", "SUCCEEDED:1:-", "REPLAY:1:-"]); expect((await linkRowOf(id)).v).toBe(1);
+  });
+  it("B11.3 concurrencia: dos procesos adaptan la MISMA orden a la vez → exactamente uno gana, el otro recibe CONFLICT, un solo vínculo y una sola referencia", async () => {
+    const [id] = await seedOrders("P3", 1); const command = await cmdReceive(id);
+    const slow: CandidateResolutionPort = { resolve: async (c: LogisticsCandidate) => { await sleep(400); return createSyntheticCandidateResolver().resolve(c); } };
+    const results = await Promise.allSettled([adaptationFor(Date.now, slow).process(aScope(), command), adaptationFor(Date.now, slow).process(aScope(), command)]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    // El perdedor NO ejecuta nada: CONFLICT (vio el trabajo ya reclamado) o UNAVAILABLE (víctima de interbloqueo al crear el MISMO trabajo a la vez; reintentable por diseño).
+    // La ejecución 7 observó UNAVAILABLE: es el camino previsto (el despachador lo reintenta); se comprueba que el reintento converge sin duplicar nada.
+    const losers = results.filter((r) => r.status === "rejected").map((r) => (r as PromiseRejectedResult).reason.code);
+    expect(losers).toHaveLength(1); expect(["CONFLICT", "UNAVAILABLE"]).toContain(losers[0]);
+    expect((await adaptationFor(Date.now).process(aScope(), command)).replayed).toBe(true);   // el reintento recupera el resultado ya guardado
+    expect(await jobsOf(id)).toHaveLength(1); expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE" });
+    expect(await count("ps_api09_adapt_links", "order_id = UNHEX(?)", [uuidHex(id)])).toBe(1);
+  });
+  it("B11.4 recuperación: un intento caído deja el trabajo PROCESSING; con la lease vencida otro lo recupera (LEASE_RECLAIMED, intento 2) y el rezagado ya no puede confirmar", async () => {
+    const [id] = await seedOrders("P4", 1); const command = await cmdReceive(id); const gate = deferred();
+    const hang: CandidateResolutionPort = { resolve: async (c: LogisticsCandidate) => { await gate.promise; return createSyntheticCandidateResolver().resolve(c); } };
+    const settled = adaptationFor(Date.now, hang).process(aScope(), command).then(() => "ok", (e: { code?: string }) => e.code);
+    for (let i = 0; i < 50 && (await jobsOf(id)).length === 0; i++) await sleep(50);
+    expect((await jobsOf(id))[0]).toMatchObject({ status: "PROCESSING", attempt: 1 });
+    const recovered = await adaptationFor(() => Date.now() + 60_000).process(aScope(), command);   // el reloj del segundo proceso ya pasó la lease
+    expect(recovered.replayed).toBe(false); expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE", attempt: 2 }); expect(await tracesOf(id)).toEqual(["STARTED:1:-", "LEASE_RECLAIMED:2:-", "SUCCEEDED:2:-"]);
+    gate.resolve(); expect(await settled).toBe("CONFLICT");   // el rezagado despierta, ve otra versión del trabajo y NO escribe
+    expect(await count("ps_api09_adapt_links", "order_id = UNHEX(?)", [uuidHex(id)])).toBe(1); expect((await linkRowOf(id)).v).toBe(1);
+  });
+  it("B11.5 fallos: un resolutor caído deja el trabajo RETRYABLE con su traza FAILED (transacción aparte, sin vínculo) y el reintento lo completa", async () => {
+    const [id] = await seedOrders("P5", 1); const command = await cmdReceive(id);
+    const down: CandidateResolutionPort = { resolve: async (): Promise<unknown> => { throw new Error("caído"); } };
+    await expect(adaptationFor(Date.now, down).process(aScope(), command)).rejects.toMatchObject({ code: "UNAVAILABLE" });
+    expect((await jobsOf(id))[0]).toMatchObject({ status: "RETRYABLE", attempt: 1 }); expect(await linkRowOf(id)).toBeUndefined();
+    expect(await tracesOf(id)).toEqual(["STARTED:1:-", "FAILED:1:DEPENDENCY_FAILURE"]);
+    await adaptationFor(Date.now).process(aScope(), command);
+    expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE", attempt: 2 }); expect(await tracesOf(id)).toEqual(["STARTED:1:-", "FAILED:1:DEPENDENCY_FAILURE", "STARTED:2:-", "SUCCEEDED:2:-"]); expect((await linkRowOf(id)).s).toBe("LOGISTICS_REVIEW");
+  });
+  it("B11.6 atomicidad: si la acción falla después de escribir, NADA queda (ni trabajo ni traza); sin fallo, todo queda", async () => {
+    const [bad, good] = await seedOrders("P6", 2); const repo = adaptRepo();
+    const job = (orderId: string) => ({ key: `lab-${uid()}`, orderId, inputHash: "a".repeat(64), version: 1, attempt: 1, status: "PROCESSING" as const, leaseUntilMs: Date.now() + 1000, result: null });
+    const trace = (j: ReturnType<typeof job>) => ({ jobKey: j.key, orderId: j.orderId, attempt: 1, phase: "STARTED" as const, correlationId: randomUUID(), recordedAt: new Date().toISOString(), failure: null, observation: null });
+    const jb = job(bad); await expect(repo.runAtomic(aScope(), async (tx) => { await tx.saveJob(jb, null); await tx.appendTrace(trace(jb)); throw new Error("fallo después de escribir"); })).rejects.toMatchObject({ code: "UNAVAILABLE" });
+    expect(await count("ps_api09_adapt_jobs", "order_id = UNHEX(?)", [uuidHex(bad)])).toBe(0); expect(await count("ps_api09_adapt_traces", "order_id = UNHEX(?)", [uuidHex(bad)])).toBe(0);
+    const jg = job(good); await repo.runAtomic(aScope(), async (tx) => { await tx.saveJob(jg, null); await tx.appendTrace(trace(jg)); });
+    expect(await count("ps_api09_adapt_jobs", "order_id = UNHEX(?)", [uuidHex(good)])).toBe(1); expect(await count("ps_api09_adapt_traces", "order_id = UNHEX(?)", [uuidHex(good)])).toBe(1);
+    await expect(repo.runAtomic(aScope(), (tx) => tx.saveJob(jg, null))).rejects.toMatchObject({ code: "CONFLICT" });   // misma clave: el motor impide un segundo trabajo
+    await expect(repo.runAtomic(aScope(), (tx) => tx.saveJob({ ...jg, version: 5, attempt: 2 }, 4))).rejects.toMatchObject({ code: "CONFLICT" });   // versión obsoleta: CAS
+  });
+  it("B11.7 privilegios efectivos del WORKER sobre la adaptación: sin DELETE, sin tocar claves/hash, bitácora solo INSERT, y sin payload cifrado ni recibos", async () => {
+    const c = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: manifest.workerUser, password: process.env.PS06A_WORKER_PASSWORD, database: manifest.schema });
+    try {
+      const denied = async (sql: string, errno: number[]) => { await expect(c.query(sql)).rejects.toSatisfy((e: { errno?: number }) => errno.includes(e.errno ?? 0)); };
+      await c.query(`SELECT status, version FROM ${T}.ps_api09_adapt_jobs LIMIT 1`); await c.query(`SELECT version FROM ${T}.ps_api09_adapt_links LIMIT 1`);
+      await c.query(`UPDATE ${T}.ps_api09_adapt_jobs SET status = status WHERE 1=0`); await c.query(`UPDATE ${T}.ps_api09_adapt_links SET link_json = link_json WHERE 1=0`);
+      await c.query(`SELECT external_order_id, payload_version, state, version, correlation_id, cancellation_reason, received_at FROM ${T}.ps_api01_orders LIMIT 1`);   // exactamente las columnas de la lectura
+      for (const table of ["jobs", "links", "traces"]) await denied(`DELETE FROM ${T}.ps_api09_adapt_${table} WHERE 1=0`, [1142]);
+      await denied(`UPDATE ${T}.ps_api09_adapt_jobs SET job_key = job_key WHERE 1=0`, [1143, 1142]); await denied(`UPDATE ${T}.ps_api09_adapt_jobs SET input_hash = input_hash WHERE 1=0`, [1143, 1142]);
+      await denied(`UPDATE ${T}.ps_api09_adapt_jobs SET order_id = order_id WHERE 1=0`, [1143, 1142]); await denied(`UPDATE ${T}.ps_api09_adapt_links SET order_id = order_id WHERE 1=0`, [1143, 1142]);
+      await denied(`UPDATE ${T}.ps_api09_adapt_traces SET phase = phase WHERE 1=0`, [1142, 1143]); await denied(`SELECT * FROM ${T}.ps_api09_adapt_traces`, [1142, 1143]);
+      for (const col of ["payload_ciphertext", "payload_key_reference", "input_hash", "receipt_json", "cancellation_hash", "cancellation_receipt_json", "tms_linked"]) await denied(`SELECT ${col} FROM ${T}.ps_api01_orders LIMIT 1`, [1143, 1142]);
+      await denied(`INSERT INTO ${T}.ps_api01_orders (id) VALUES (UNHEX('00'))`, [1142, 1143]); await denied(`UPDATE ${T}.ps_api01_orders SET state = state WHERE 1=0`, [1143, 1142]);
+      await denied(`CREATE TABLE ${T}.intruso9 (id INT)`, [1142]); await denied(`DROP TABLE ${T}.ps_api09_adapt_jobs`, [1142]);
+      const [rows] = await c.query("SHOW GRANTS FOR CURRENT_USER()"); const lines = (rows as Record<string, string>[]).map((r) => Object.values(r)[0]);
+      const text = lines.join("\n"); expect(text).not.toMatch(/ALL PRIVILEGES|GRANT OPTION|DELETE|DROP|CREATE|ALTER|SUPER|FILE|PROCESS/);
+      for (const line of lines.filter((l) => /INSERT/.test(l))) expect(line).toMatch(/ps_api09_adapt_(jobs|links|traces)/);   // INSERT solo en el diario de adaptación
+      for (const line of lines) if (!/^GRANT USAGE ON \*\.\*/.test(line)) expect(line).toContain(manifest.schema);
+    } finally { await c.end(); }
+  });
+  it("B11.8 multiempresa: la lectura, el diario y las claves foráneas respetan el alcance completo, incluso con el mismo identificador externo", async () => {
+    const ext = `P8${uid()}`; await appFor(principal(1, 1, "qa-integration", "QA-CLUB")).receive(bytes(body(ext))); await appFor(principal(2, 1, "qa-integration", "QA-CLUB")).receive(bytes(body(ext)));
+    const a = await orderIdOf(ext, 1, 1); const b = await orderIdOf(ext, 2, 1); const source = adaptSource();
+    expect(await source.load(aScope(1), a)).toMatchObject({ orderId: a, scope: aScope(1), state: "RECEIVED", version: 1, assurance: "SIMULATED", input: { externalOrderId: ext, originClubReference: "QA-CLUB" } });
+    expect(await source.load(aScope(1), b)).toBeNull();   // la orden de OTRA empresa es invisible
+    expect(await source.load(aScope(1, "OTRO-CLUB"), a)).toBeNull();   // y la de otro club también
+    expect(await source.load(aScope(2), b)).toMatchObject({ orderId: b, scope: aScope(2) });
+    const ad1 = adaptationFor(Date.now); const ad2 = adaptationFor(Date.now);
+    await ad1.process(aScope(1), await cmdReceive(a)); await ad2.process(aScope(2), await cmdReceive(b));
+    expect(String((await linkRowOf(a)).r)).toBe(`synthetic:${a}`); expect(String((await linkRowOf(b)).r)).toBe(`synthetic:${b}`);
+    await expect(ad1.process(aScope(1), await cmdReceive(b))).rejects.toMatchObject({ code: "NOT_FOUND" });   // el alcance 1 no puede adaptar la orden del 2
+    const repo = adaptRepo();
+    expect((await repo.runAtomic(aScope(1), (tx) => tx.link(b))).value).toBeNull();   // ni leer su vínculo
+    const foreignJob = { key: `lab-${uid()}`, orderId: b, inputHash: "b".repeat(64), version: 1, attempt: 1, status: "PROCESSING" as const, leaseUntilMs: Date.now() + 1000, result: null };
+    await expect(repo.runAtomic(aScope(1), (tx) => tx.saveJob(foreignJob, null))).rejects.toMatchObject({ code: "UNAVAILABLE" });   // la clave foránea compuesta impide colgar un trabajo del alcance 1 a la orden del 2
+    expect(await count("ps_api09_adapt_jobs", "order_id = UNHEX(?)", [uuidHex(b)])).toBe(1);
   });
 });
 

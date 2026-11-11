@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { adminStatements, deriveLabDdl, labDdlStatements, LAB_NOTE, SIGNAL_LINE, splitStatements, TABLES } from "./ddl.mjs";
+import { adminStatements, adaptationDdlStatements, ADAPT_SIGNAL_LINE, ADAPT_TABLES, deriveLabDdl, labDdlStatements, LAB_NOTE, SIGNAL_LINE, splitStatements, TABLES } from "./ddl.mjs";
 import { createManifest, IDENTITY_QUERIES, SqlGate } from "./safety.mjs";
 import { LAB_SCOPES } from "./constants.mjs";
 
@@ -80,5 +80,50 @@ describe("lista cerrada de SQL administrativo", () => {
   it("la forma de la contraseña es obligatoria (no se acepta un valor libre)", () => {
     const x = mk(); x.secrets.DB_PASSWORD = "contraseña-libre";
     expect(() => adminStatements(x, staging)).toThrow(/contraseña/);
+  });
+});
+
+// ---- API-09: DDL de adaptación y permisos del worker
+const adaptPath = path.join(here, "../../../docs/integraciones/pricesmart/api09/staging.sql.in");
+const adaptText = fs.readFileSync(adaptPath, "utf8"); const adaptLf = adaptText.replace(/\r\n/g, "\n");
+describe("DDL de adaptación (API-09) y permisos del worker", () => {
+  it("el diseño conserva el SIGNAL de bloqueo (no ejecutable tal cual) y el laboratorio solo lo retira en su copia", () => {
+    expect(adaptLf).toContain(ADAPT_SIGNAL_LINE); const st = adaptationDdlStatements(adaptText);
+    expect(st).toHaveLength(3); st.forEach((s, i) => expect(s.startsWith(`CREATE TABLE ${ADAPT_TABLES[i]} (`)).toBe(true));
+    expect(st.join("\n")).not.toMatch(/SIGNAL|\bDROP\b|\bALTER\b|\bGRANT\b|\bDELETE\b/i);
+  });
+  it("rechaza un DDL alterado: SIGNAL ausente, sentencia añadida o tabla renombrada", () => {
+    expect(() => adaptationDdlStatements(adaptLf.replace(ADAPT_SIGNAL_LINE, "SELECT 1;"))).toThrow(/SIGNAL/);
+    expect(() => adaptationDdlStatements(`${adaptLf}\nDROP TABLE ps_api01_orders;\n`)).toThrow();
+    expect(() => adaptationDdlStatements(adaptLf.replace("CREATE TABLE ps_api09_adapt_jobs", "CREATE TABLE ps_api09_adapt_x"))).toThrow(/tabla inesperado/);
+  });
+  it("el esquema no tiene ninguna columna de id del TMS y la bitácora no admite más que INSERT", () => {
+    expect(adaptLf).not.toMatch(/tms_/i);
+    const m = mk(); const list = adminStatements(m, staging, adaptText); const worker = `\`${m.workerUser}\`@\`127.0.0.1\``;
+    const traces = list.filter((g) => g.startsWith("GRANT ") && g.includes("ps_api09_adapt_traces")); expect(traces).toHaveLength(1); expect(traces[0]).toMatch(/^GRANT INSERT ON /); expect(traces[0]).toContain(worker);
+  });
+  it("sin el texto de adaptación la lista es idéntica a la de API-07 (compatibilidad); con él solo se SUMAN sentencias, ninguna destructiva", () => {
+    const m = mk(); const base = adminStatements(m, staging); const extended = adminStatements(m, staging, adaptText);
+    expect(base).toHaveLength(extended.length - 3 - 4); expect(base.every((s) => extended.includes(s))).toBe(true);
+    const added = extended.filter((s) => !base.includes(s)); expect(added.filter((s) => s.startsWith("CREATE TABLE "))).toHaveLength(3); expect(added.filter((s) => s.startsWith("GRANT "))).toHaveLength(4);
+    expect(added.join("\n")).not.toMatch(/\b(DELETE|DROP|TRUNCATE|ALTER|GRANT OPTION|ALL PRIVILEGES)\b/);
+  });
+  it("la lectura de órdenes concede SOLO columnas no sensibles; nunca payload cifrado, hash de entrada ni recibos", () => {
+    const m = mk(); const list = adminStatements(m, staging, adaptText); const grant = list.find((g) => g.startsWith("GRANT ") && g.includes("received_at") && g.includes("ps_api01_orders"))!;
+    expect(grant).toMatch(/^GRANT SELECT \(external_order_id, payload_version, state, version, correlation_id, cancellation_reason, received_at\) ON /);
+    const added = list.filter((g) => g.startsWith("GRANT ") && g.includes("ps_api01_orders") && g.includes(m.workerUser)).join("\n");
+    expect(added).not.toMatch(/payload_ciphertext|payload_key_reference|input_hash|receipt_json|cancellation_hash|cancellation_receipt_json|tms_linked|\bINSERT\b|\bUPDATE\b/);
+  });
+  it("trabajos y vínculos: UPDATE solo de columnas mutables (no la clave, el hash, el alcance ni el id de orden); ningún permiso de DELETE", () => {
+    const m = mk(); const list = adminStatements(m, staging, adaptText);
+    const jobs = list.find((g) => g.includes("ps_api09_adapt_jobs") && g.startsWith("GRANT "))!; const links = list.find((g) => g.includes("ps_api09_adapt_links") && g.startsWith("GRANT "))!;
+    for (const g of [jobs, links]) { expect(g).not.toMatch(/\bDELETE\b/); expect(g).not.toMatch(/UPDATE \([^)]*\b(job_key|job_key_hash|input_hash|order_id|environment|tenant_id|client_id|integration_id)\b/); }
+    expect(jobs).toContain("UPDATE (version, attempt, status, lease_until_ms, result_json)");
+  });
+  it("todas las sentencias de adaptación están en la lista cerrada del ejecutor (SqlGate) y nada fuera de ella pasa", async () => {
+    const m = mk(); const list = adminStatements(m, staging, adaptText); const gate = new SqlGate(IDENTITY_QUERIES, [...list, "SHUTDOWN"]); gate.confirm();
+    const calls: string[] = []; const conn = { query: async (sql: string) => { calls.push(sql); return [[]]; } };
+    for (const sql of list) await gate.run(conn as never, sql); expect(calls).toHaveLength(list.length);
+    await expect(gate.run(conn as never, "DROP TABLE ps_api09_adapt_jobs")).rejects.toThrow();
   });
 });

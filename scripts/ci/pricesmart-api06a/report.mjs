@@ -1,10 +1,11 @@
 // PRICESMART-API-06A — evaluación de ejecuciones de Vitest y resumen B0–B9. PURO. Nunca convierte "no ejecutada", "incompleta" o "con SKIP" en PASS.
-export const BLOCKS = Object.freeze(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10']);
+export const BLOCKS = Object.freeze(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10', 'B11']);
 // AUD-04: casos OBLIGATORIOS por fase (ids exactos de mariadb-real.lab.ts; una prueba estática verifica que coinciden con el archivo). Un caso obligatorio debe estar presente
 // y en PASS: ausente, duplicado u OMITIDO (skip) hace la fase INCOMPLETA. Los casos de OTRA fase aparecen como omitidos en esta y no cuentan.
 export const REQUIRED_CASES = Object.freeze({
   main: Object.freeze(['B0.t1', 'B0.t2', 'B0.t3', 'B1.1', 'B1.2', 'B1.3', 'B1.4', 'B2.1', 'B2.2', 'B3.1', 'B3.2', 'B3.3', 'B4.1', 'B4.2', 'B4.3', 'B4.4', 'B5.1', 'B5.2', 'B5.3', 'B6.1', 'B6.2', 'B6.3', 'B8.1', 'B8.2',
-    'B10.1', 'B10.2', 'B10.3', 'B10.4', 'B10.5', 'B10.6', 'B10.7', 'B10.8']),
+    'B10.1', 'B10.2', 'B10.3', 'B10.4', 'B10.5', 'B10.6', 'B10.7', 'B10.8',
+    'B11.1', 'B11.2', 'B11.3', 'B11.4', 'B11.5', 'B11.6', 'B11.7', 'B11.8']),
   'crash-prepare': Object.freeze(['B7.1']),
   'crash-verify': Object.freeze(['B7.2', 'B7.3', 'B7.4']),
 });

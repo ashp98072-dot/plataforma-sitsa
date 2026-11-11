@@ -76,6 +76,7 @@ export async function main(argv, env = process.env) {
     return;
   }
   const stagingText = fs.readFileSync(path.join(loc.repo, 'docs/integraciones/pricesmart/api01/staging.sql.in'), 'utf8');
+  const adaptationText = fs.readFileSync(path.join(loc.repo, 'docs/integraciones/pricesmart/api09/staging.sql.in'), 'utf8');   // API-09
   const mysql = (await import('mysql2/promise')).default;
   const m = createManifest({ randomBytes: crypto.randomBytes, tempRoot });
   validateManifest(m, tempRoot);
@@ -156,7 +157,7 @@ export async function main(argv, env = process.env) {
     // 3) Arranque y comprobación de identidad ANTES de cualquier SQL administrativo
     await startServer();
     admin = await connectAdmin();
-    gate = new SqlGate(IDENTITY_QUERIES, [...adminStatements(m, stagingText), 'SHUTDOWN']);
+    gate = new SqlGate(IDENTITY_QUERIES, [...adminStatements(m, stagingText, adaptationText), 'SHUTDOWN']);
     const [[ident]] = await gate.run(admin, IDENTITY_QUERY);
     validateServerIdentity(ident, m, loc.home);
     if (fs.existsSync(m.pidFile) && parsePidFile(fs.readFileSync(m.pidFile, 'utf8')) !== m.pid) fail('El PID del archivo no coincide con el proceso lanzado.');
@@ -170,7 +171,7 @@ export async function main(argv, env = process.env) {
     note('B0.3', 'Único socket en escucha del PID: 127.0.0.1:<puerto del run>', 'PASS', `puerto ${m.port}`);
     note('B0.4', 'Base y usuario del laboratorio inexistentes antes de crear (no se reutiliza nada)', 'PASS');
     // 4) DDL de laboratorio y cuenta mínima, SOLO sentencias exactas aprobadas
-    for (const sql of adminStatements(m, stagingText)) await gate.run(admin, sql);
+    for (const sql of adminStatements(m, stagingText, adaptationText)) await gate.run(admin, sql);
     note('B0.5', 'SQL administrativo = lista cerrada aprobada (DDL derivado + cuenta mínima); nada fuera de ella', 'PASS', `${gate.executed.length} sentencias`);
     fs.writeFileSync(path.join(m.evidenceDir, 'sql-ejecutado.json'), JSON.stringify(gate.executed, null, 2), { flag: 'wx' });
     // 5) Manifiestos para el proceso de pruebas
