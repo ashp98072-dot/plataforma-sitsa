@@ -1,21 +1,14 @@
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCB2, hash } from "./model";
-import { rows, insert, tx, type Contexto } from "./repository";
-import { altaTercero, reconocerTercero, type AsociacionExterna } from "./terceros-model";
+import { rows, insert, type Contexto } from "./repository";
+import { altaPiloto, altaUnidad, altaAsociacion, reconocerTercero, type AsociacionExterna, type CatalogosTerceros, type PilotoTercero, type UnidadTercera } from "./terceros-model";
+import { exigirTerceros, txTerceros, type ContextoTerceros } from "./terceros-transaccion";
+export { exigirTerceros, tercerosHabilitados } from "./terceros-transaccion";
+import { tercerosHabilitados } from "./terceros-transaccion";
 import { nombreComparable, placaComparable } from "../combustible-coincidencias";
 import type { PoolConnection } from "mysql2/promise";
 
-// Política D2 aprobada. Su activación operativa sigue siendo explícita y cerrada por defecto.
-export const tercerosHabilitados = () => process.env.CB2_TERCEROS_D2_APROBADA === "1";
-export function exigirTerceros() { if (!tercerosHabilitados()) throw new ErrorCB2("Tercerizados deshabilitados por configuración. La activación corresponde al propietario.", 403); }
-async function autorizarGestion(c: PoolConnection, ctx: Contexto) {
-  // Revalidar después de esperar empresa, incluso si el proveedor era distinto.
-  exigirTerceros(); await ctx.autorizar();
-  const [empresa] = await rows(c, "SELECT activa FROM empresas WHERE id=? FOR UPDATE", [ctx.empresaId]);
-  const [actor] = await rows(c, "SELECT id,activo,rol_global FROM usuarios WHERE id=? LOCK IN SHARE MODE", [ctx.actor.id]);
-  if (!empresa || Number(empresa.activa) !== 1 || !actor || Number(actor.activo) !== 1 || actor.rol_global !== "Admin") throw new ErrorCB2("La gestión requiere administrador activo y empresa vigente.", 403);
-}
 export async function catalogoTerceros(c: PoolConnection, empresa: number, lock = false): Promise<AsociacionExterna[]> {
   return await rows(c, `SELECT a.id,a.piloto_id,a.unidad_id,p.nombre,u.placa,u.tipo,u.descripcion,a.relacion,a.estado,a.revision,a.creado_por,a.verificado_por,p.referencia AS piloto_referencia,u.referencia AS unidad_referencia
     FROM flota_cb2_externos_asociaciones a JOIN flota_cb2_externos_pilotos p ON p.empresa_id=a.empresa_id AND p.id=a.piloto_id
@@ -27,20 +20,44 @@ export async function listarTerceros(empresa: number) {
   const c = await getPool().getConnection();
   try { return await catalogoTerceros(c, empresa); } finally { c.release(); }
 }
-export async function registrarTerceros(ctx: Contexto, entrada: unknown) {
-  exigirTerceros(); const op = altaTercero.parse(entrada);
-  if (op.proveedorId !== ctx.proveedorId) throw new ErrorCB2("Proveedor incompatible con el contexto.", 400);
-  return tx(ctx, async c => {
-    // Cerrojo empresarial, compartido entre proveedores: evita altas y verificaciones cruzadas concurrentes.
-    await rows(c, "SELECT id FROM empresas WHERE id=? FOR UPDATE", [ctx.empresaId]);
-    await autorizarGestion(c, ctx);
-    const referenciaPiloto = hash(nombreComparable(op.pilotoReferencia)), referenciaUnidad = hash(nombreComparable(op.unidadReferencia));
-    const [p] = await rows(c, "SELECT * FROM flota_cb2_externos_pilotos WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, referenciaPiloto]);
-    const [u] = await rows(c, "SELECT * FROM flota_cb2_externos_unidades WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, referenciaUnidad]);
+export async function catalogosTercerosTx(c: PoolConnection, empresa: number): Promise<CatalogosTerceros> {
+  const pilotos = await rows(c, "SELECT id,referencia,nombre FROM flota_cb2_externos_pilotos WHERE empresa_id=? ORDER BY id", [empresa]) as unknown as PilotoTercero[];
+  const unidades = await rows(c, "SELECT id,referencia,placa,tipo,descripcion FROM flota_cb2_externos_unidades WHERE empresa_id=? ORDER BY id", [empresa]) as unknown as UnidadTercera[];
+  return { pilotos, unidades, asociaciones: await catalogoTerceros(c, empresa) };
+}
+export async function listarCatalogosTerceros(empresa: number): Promise<CatalogosTerceros> {
+  if (!tercerosHabilitados()) return { pilotos: [], unidades: [], asociaciones: [] };
+  const c = await getPool().getConnection(); try { return await catalogosTercerosTx(c, empresa); } finally { c.release(); }
+}
+export async function registrarPiloto(ctx: ContextoTerceros, entrada: unknown) {
+  exigirTerceros(); const op = altaPiloto.parse(entrada);
+  return txTerceros(ctx, async c => {
+    const [p] = await rows(c, "SELECT * FROM flota_cb2_externos_pilotos WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (p && nombreComparable(String(p.nombre)) !== nombreComparable(op.nombre)) throw new ErrorCB2("Referencia de piloto con datos contradictorios; requiere revisión.");
+    if (p) return { id: Number(p.id), existente: true };
+    const id = await insert(c, "flota_cb2_externos_pilotos", { empresa_id: ctx.empresaId, referencia: op.referencia, referencia_hash: hash(nombreComparable(op.referencia)), nombre: op.nombre });
+    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_piloto_tercero_creado", detalle: JSON.stringify({ id, actorId: ctx.actor.id }) });
+    return { id, existente: false };
+  });
+}
+export async function registrarUnidad(ctx: ContextoTerceros, entrada: unknown) {
+  exigirTerceros(); const op = altaUnidad.parse(entrada);
+  return txTerceros(ctx, async c => {
+    const [u] = await rows(c, "SELECT * FROM flota_cb2_externos_unidades WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (u && (placaComparable(String(u.placa)) !== placaComparable(op.placa) || u.tipo !== op.tipo)) throw new ErrorCB2("Referencia de unidad con datos contradictorios; requiere revisión.");
-    const piloto = p ? Number(p.id) : await insert(c, "flota_cb2_externos_pilotos", { empresa_id: ctx.empresaId, referencia: op.pilotoReferencia, referencia_hash: referenciaPiloto, nombre: op.nombre });
-    const unidad = u ? Number(u.id) : await insert(c, "flota_cb2_externos_unidades", { empresa_id: ctx.empresaId, referencia: op.unidadReferencia, referencia_hash: referenciaUnidad, placa: op.placa, tipo: op.tipo, descripcion: op.descripcion });
+    if (u) return { id: Number(u.id), existente: true };
+    const id = await insert(c, "flota_cb2_externos_unidades", { empresa_id: ctx.empresaId, referencia: op.referencia, referencia_hash: hash(nombreComparable(op.referencia)), placa: op.placa, tipo: op.tipo, descripcion: op.descripcion });
+    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_unidad_tercera_creada", detalle: JSON.stringify({ id, actorId: ctx.actor.id }) });
+    return { id, existente: false };
+  });
+}
+export async function crearAsociacion(ctx: ContextoTerceros, entrada: unknown) {
+  exigirTerceros(); const op = altaAsociacion.parse(entrada);
+  return txTerceros(ctx, async c => {
+    const [p] = await rows(c, "SELECT id FROM flota_cb2_externos_pilotos WHERE empresa_id=? AND id=? FOR UPDATE", [ctx.empresaId, op.pilotoId]);
+    const [u] = await rows(c, "SELECT id FROM flota_cb2_externos_unidades WHERE empresa_id=? AND id=? FOR UPDATE", [ctx.empresaId, op.unidadId]);
+    if (!p || !u) throw new ErrorCB2("Piloto o unidad no disponibles en esta empresa.", 404);
+    const piloto = Number(p.id), unidad = Number(u.id);
     const [a] = await rows(c, "SELECT id,relacion FROM flota_cb2_externos_asociaciones WHERE empresa_id=? AND piloto_id=? AND unidad_id=? FOR UPDATE", [ctx.empresaId, piloto, unidad]);
     if (a && a.relacion !== op.relacion) throw new ErrorCB2("Relación contradictoria; no se sobrescribe la asociación.");
     if (a) return { id: Number(a.id), existente: true };
@@ -49,11 +66,9 @@ export async function registrarTerceros(ctx: Contexto, entrada: unknown) {
     return { id, existente: false };
   });
 }
-export async function revisarTerceros(ctx: Contexto, id: number, revision: number, estado: "VERIFICADA" | "REVOCADA") {
+export async function revisarTerceros(ctx: ContextoTerceros, id: number, revision: number, estado: "VERIFICADA" | "REVOCADA") {
   exigirTerceros();
-  return tx(ctx, async c => {
-    await rows(c, "SELECT id FROM empresas WHERE id=? FOR UPDATE", [ctx.empresaId]);
-    await autorizarGestion(c, ctx);
+  return txTerceros(ctx, async c => {
     const [a] = await rows(c, "SELECT * FROM flota_cb2_externos_asociaciones WHERE empresa_id=? AND id=? FOR UPDATE", [ctx.empresaId, id]);
     if (!a) throw new ErrorCB2("Asociación no disponible en la empresa.", 404);
     if (Number(a.revision) !== revision) throw new ErrorCB2("Revisión obsoleta.");

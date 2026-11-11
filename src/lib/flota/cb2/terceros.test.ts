@@ -1,5 +1,6 @@
+import { registrarTerceros } from "./terceros-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const m = vi.hoisted(() => ({ query: vi.fn(), execute: vi.fn(), insert: vi.fn(), diario: vi.fn(), guardar: vi.fn(), release: vi.fn(), auditar: vi.fn(), autorizar: vi.fn(), guard: vi.fn() }));
+const m = vi.hoisted(() => ({ query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), destroy: vi.fn(), insert: vi.fn(), diario: vi.fn(), guardar: vi.fn(), release: vi.fn(), auditar: vi.fn(), autorizar: vi.fn(), guard: vi.fn() }));
 vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: m.guard }));
 vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: async () => m }) }));
 vi.mock("@/lib/load-env", () => ({ loadRuntimeEnv: () => { throw Error("ENV_PROHIBIDO"); } }));
@@ -10,7 +11,7 @@ vi.mock("./repository", async original => ({ ...await original<typeof import("./
   tx: async (ctx: { autorizar: () => Promise<void> }, fn: (c: unknown, p: unknown) => unknown) => { await ctx.autorizar(); return fn(m, { nombre_comercial: "Proveedor sintético" }); },
   anterior: async () => null, insert: m.insert, diario: m.diario,
 }));
-import { registrarTerceros, revisarTerceros, reconocerTercero, validarTercero, listarTerceros } from "./terceros";
+import { revisarTerceros, reconocerTercero, validarTercero, listarTerceros, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros } from "./terceros";
 import { tercerosHttp } from "./terceros-http";
 import { seleccion } from "./model";
 import { preview, confirmarArchivo } from "./service";
@@ -37,13 +38,15 @@ beforeEach(() => {
     if (table === "flota_cb2_externos_asociaciones") { registro = { id: 31, ...values }; return 31; }
     return 100;
   });
-  m.query.mockImplementation(async (sql: string, p: unknown[]) => {
+  m.query.mockImplementation(async (sql: string, p: unknown[] = []) => {
+    if (sql.includes("@@SESSION.sql_mode")) return [[{ mode: "STRICT_ALL_TABLES", innodb: 1, fk: 1, ck: 1 }]];
+    if (sql.startsWith("SET ")) return [[]];
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3 }]];
-    if (sql.includes("FROM empresas")) return [[{ id: 1, activa: 1 }]];
+    if (sql.includes("FROM empresas")) return [[{ id: p[0], activa: 1 }]];
     if (sql.includes("FROM usuarios")) return [[{ id: p[0], activo: 1, rol_global: "Admin" }]];
     if (sql.includes("FROM flota_cb2_externos_asociaciones a JOIN")) return [p[0] === 1 ? catalogo : []];
-    if (sql.includes("FROM flota_cb2_externos_pilotos")) return [piloto ? [piloto] : []];
-    if (sql.includes("FROM flota_cb2_externos_unidades")) return [unidad ? [unidad] : []];
+    if (sql.includes("FROM flota_cb2_externos_pilotos")) return [p[0] === 1 && piloto ? [piloto] : []];
+    if (sql.includes("FROM flota_cb2_externos_unidades")) return [p[0] === 1 && unidad ? [unidad] : []];
     if (sql.includes("FROM flota_cb2_externos_asociaciones")) return [p[0] === 1 && registro ? [registro] : []];
     if (/FROM flota_combustible_cargas|FROM flota_cb2_consumos|FROM flota_cb2_filas|FROM flota_cb2_importaciones|FROM flota_combustible_conciliacion_filas/.test(sql)) return [[]];
     throw Error(`Consulta mock inesperada: ${sql}`);
@@ -78,6 +81,22 @@ describe("terceros: reconocimiento estricto, sin empleados ficticios", () => {
 });
 
 describe("persistencia y confirmación: servicios reales con adaptadores mock; no motor real", () => {
+  it("altas independientes sin proveedor no crean asociaciones y son consultables sin relaciones", async () => {
+    const empresa = { empresaId: 1, actor: ctx.actor, autorizar: ctx.autorizar };
+    await registrarPiloto(empresa, { referencia: alta.pilotoReferencia, nombre: alta.nombre });
+    expect(m.insert.mock.calls.map(([, tabla]) => tabla)).toEqual(["flota_cb2_externos_pilotos"]);
+    await registrarUnidad(empresa, { referencia: alta.unidadReferencia, placa: alta.placa, tipo: alta.tipo, descripcion: alta.descripcion });
+    const catalogos = await listarCatalogosTerceros(1);
+    expect(catalogos.pilotos).toHaveLength(1); expect(catalogos.unidades).toHaveLength(1); expect(catalogos.asociaciones).toEqual([]);
+    expect(m.query.mock.calls.some(([sql]) => sql.includes("compras_proveedores"))).toBe(false);
+    await expect(crearAsociacion({ ...empresa, empresaId: 2 }, { pilotoId: 11, unidadId: 21, relacion: alta.relacion, evidencia: alta.evidencia })).rejects.toMatchObject({ status: 404 });
+  });
+  it("identidades ambiguas sin asociación bloquean reconocimiento; múltiples relaciones con los mismos IDs no lo hacen", async () => {
+    const a = asociacion(), pilotos = [{ id: 11, referencia: "p", nombre: alta.nombre }], unidades = [{ id: 21, referencia: "u", placa: alta.placa, tipo: alta.tipo, descripcion: alta.descripcion }];
+    expect(reconocerTercero(alta.nombre, alta.placa, [a], { pilotos, unidades }).asociacion?.id).toBe(31);
+    expect(reconocerTercero(alta.nombre, alta.placa, [a], { pilotos: [...pilotos, { ...pilotos[0], id: 12 }], unidades }).asociacion).toBeNull();
+    expect(reconocerTercero(alta.nombre, alta.placa, [a], { pilotos, unidades: [...unidades, { ...unidades[0], id: 22 }] }).asociacion).toBeNull();
+  });
   it("D2 apagada deniega altas y selección aun con solicitud manipulada; no lee tablas nuevas", async () => {
     vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "");
     await expect(registrarTerceros(ctx, alta)).rejects.toMatchObject({ status: 403 });
@@ -114,7 +133,7 @@ describe("persistencia y confirmación: servicios reales con adaptadores mock; n
     await registrarTerceros(ctx, alta); const n = m.insert.mock.calls.length;
     expect(await registrarTerceros(ctx, alta)).toMatchObject({ id: 31, existente: true });
     expect(m.insert).toHaveBeenCalledTimes(n);
-    expect(m.query).toHaveBeenCalledWith("SELECT id FROM empresas WHERE id=? FOR UPDATE", [1]);
+    expect(m.query).toHaveBeenCalledWith("SELECT id,activa FROM empresas WHERE id=? FOR UPDATE", [1]);
   });
   it("referencia estable con nombre o placa contradictorios no sobrescribe el catálogo", async () => {
     await registrarTerceros(ctx, alta);
@@ -164,15 +183,17 @@ describe("persistencia y confirmación: servicios reales con adaptadores mock; n
     const original = m.query.getMockImplementation()!;
     m.query.mockImplementation(async (sql, args) => {
       const r = await original(sql, args);
-      if (sql === "SELECT id FROM empresas WHERE id=? FOR UPDATE") vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "");
+      if (sql === "SELECT id,activa FROM empresas WHERE id=? FOR UPDATE") vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "");
       return r;
     });
     await expect(registrarTerceros(ctx, alta)).rejects.toMatchObject({ status: 403 }); expect(m.insert).not.toHaveBeenCalled();
   });
   it("API real con SQL mock: cuenta creadora no verifica tras cambiar sesion; otro Admin verifica", async () => {
     const request = (method: string, body: object) => new Request("http://localhost/api/terceros", { method, headers: { origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    expect((await tercerosHttp(request("POST", alta), "demo")).status).toBe(201);
-    const op = { proveedorId: 3, id: 31, revision: 0, estado: "VERIFICADA" };
+    expect((await tercerosHttp(request("POST", { recurso: "PILOTO", referencia: alta.pilotoReferencia, nombre: alta.nombre }), "demo")).status).toBe(201);
+    expect((await tercerosHttp(request("POST", { recurso: "UNIDAD", referencia: alta.unidadReferencia, placa: alta.placa, tipo: alta.tipo, descripcion: alta.descripcion }), "demo")).status).toBe(201);
+    expect((await tercerosHttp(request("POST", { recurso: "ASOCIACION", pilotoId: 11, unidadId: 21, relacion: alta.relacion, evidencia: alta.evidencia }), "demo")).status).toBe(201);
+    const op = { id: 31, revision: 0, estado: "VERIFICADA" };
     m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { id: 9, username: "sesion-renovada", rol: "Admin" } });
     expect((await tercerosHttp(request("PATCH", op), "demo")).status).toBe(403);
     expect(m.execute).not.toHaveBeenCalled();

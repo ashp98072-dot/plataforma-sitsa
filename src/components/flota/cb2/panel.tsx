@@ -117,7 +117,7 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
  {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <><ImportarCB2 actualizarCatalogos={actualizarCatalogos} key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/></> : <p role="status">Carga los catálogos para importar.</p>}</div>}
  <div hidden={tab !== "facturas"}><FacturasCB2 key={`facturas:${refresh}`} api={api} cat={cat} refresh={refresh} activo={tab === "facturas"} canWrite={canWrite} locked={locked} elegir={(d, p) => { setDocumento(d); setTab("consumos"); setMessage(`Documento del proveedor #${p} seleccionado. Selecciona sus consumos y confirma la asociación.`); }}/></div>
  <div hidden={tab !== "documental"}><ConciliacionDocumentalCB2 api={api} cat={cat} activo={tab === "documental"} refresh={refresh}/></div>
- <div hidden={tab !== "terceros"}><TercerosCB2 actorId={actorId} api={api} cat={cat} admin={admin && canWrite} recargar={() => setRecargarCat(n => n + 1)}/></div>
+ <div hidden={tab !== "terceros"}><TercerosCB2 activo={tab === "terceros"} actorId={actorId} api={api} cat={cat} admin={admin && canWrite} recargar={() => setRecargarCat(n => n + 1)}/></div>
  {admin && <div hidden={tab !== "duplicados"}><DuplicadosVehiculos api={`/api/empresas/${encodeURIComponent(slug)}/flota/vehiculos/duplicados`} activo={tab === "duplicados"} recargar={() => setRecargarCat(n => n + 1)}/></div>}
  <div hidden={tab !== "historial"}><HistorialCB2 key={`historial:${refresh}`} api={api} cat={cat} run={run} locked={locked} admin={admin} canWrite={canWrite && catalogosListos} refresh={refresh} activo={tab === "historial"}/></div>
  </section>;
