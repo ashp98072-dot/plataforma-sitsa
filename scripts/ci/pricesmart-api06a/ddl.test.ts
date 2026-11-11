@@ -54,11 +54,15 @@ describe("lista cerrada de SQL administrativo", () => {
   });
   it("las cuentas y GRANT apuntan solo a la base del run y al host 127.0.0.1", () => {
     const grants = list.filter((s) => s.startsWith("GRANT "));
-    expect(grants).toHaveLength(6);
-    for (const g of grants) { expect(g).toContain(`\`${m.schema}\`.`); expect(g).toContain(`\`${m.user}\`@\`127.0.0.1\``); }
+    const worker = `\`${m.workerUser}\`@\`127.0.0.1\``;
+    const execGrants = grants.filter((g) => g.includes(`\`${m.user}\`@`)); const workerGrants = grants.filter((g) => g.includes(worker));
+    expect(execGrants).toHaveLength(6); expect(workerGrants).toHaveLength(4); expect(grants).toHaveLength(10);   // 6 de ejecución (API-06A) + 4 de worker (API-07)
+    for (const g of grants) expect(g).toContain(`\`${m.schema}\`.`);
+    for (const g of execGrants) expect(g).toContain(`\`${m.user}\`@\`127.0.0.1\``);
     const create = list.filter((s) => s.startsWith("CREATE USER "));
-    expect(create).toHaveLength(1); expect(create[0]).toContain(`\`${m.user}\`@\`127.0.0.1\``);
-    expect(list.filter((s) => s.includes(m.secrets.DB_PASSWORD))).toEqual(create);
+    expect(create).toHaveLength(2); expect(create[0]).toContain(`\`${m.user}\`@\`127.0.0.1\``); expect(create[1]).toContain(worker);
+    expect(list.filter((s) => s.includes(m.secrets.DB_PASSWORD))).toEqual([create[0]]);
+    expect(list.filter((s) => s.includes(m.secrets.WORKER_PASSWORD))).toEqual([create[1]]);
   });
   it("el usuario de ejecución NO tiene DELETE, DDL ni escritura sobre eventos/scopes", () => {
     const text = list.filter((s) => s.startsWith("GRANT ")).join("\n");

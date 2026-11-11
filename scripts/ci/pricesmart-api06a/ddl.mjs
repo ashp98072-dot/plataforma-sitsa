@@ -45,7 +45,8 @@ const quote = (name) => {
 /** Lista CERRADA de sentencias administrativas. Es el único SQL que `SqlGate` deja pasar (por igualdad exacta). */
 export function adminStatements(m, stagingText) {
   const schema = quote(m.schema); const account = `${quote(m.user)}@${quote(HOST)}`;
-  if (!/^sandbox:[a-z0-9-]+:[a-f0-9]{64}$/.test(m.secrets.DB_PASSWORD)) fail('Forma de contraseña inválida.');
+  for (const k of ['DB_PASSWORD', 'WORKER_PASSWORD']) if (!/^sandbox:[a-z0-9-]+:[a-f0-9]{64}$/.test(m.secrets[k])) fail('Forma de contraseña inválida.');
+  const worker = `${quote(m.workerUser)}@${quote(HOST)}`;
   const seeds = LAB_SCOPES.map((s) => {
     if (!/^[a-z0-9-]+$/.test(s.integrationId) || !Number.isSafeInteger(s.tenantId) || !Number.isSafeInteger(s.clientId)) fail('Alcance sintético inválido.');
     return `INSERT INTO ps_api01_scopes (environment, tenant_id, client_id, integration_id) VALUES (_binary'sandbox', ${s.tenantId}, ${s.clientId}, _binary'${s.integrationId}')`;
@@ -64,5 +65,12 @@ export function adminStatements(m, stagingText) {
     `GRANT SELECT, INSERT ON ${schema}.ps_api01_events TO ${account}`,
     `GRANT INSERT ON ${schema}.ps_api01_outbox TO ${account}`,
     `GRANT INSERT ON ${schema}.ps_api01_audit TO ${account}`,
+    // API-07: cuenta de WORKER de la outbox (separada de la de ejecución). Mínimo para el almacén: leer la cola, y actualizar SOLO las 4 columnas de lease/estado/intentos;
+    // leer SOLO las columnas de eventos/órdenes que necesita el JOIN (sin payload cifrado ni recibos). Sin INSERT/DELETE, sin DDL, sin GRANT OPTION.
+    `CREATE USER ${worker} IDENTIFIED BY '${m.secrets.WORKER_PASSWORD}'`,
+    `GRANT SELECT ON ${schema}.novalvion_environment TO ${worker}`,
+    `GRANT SELECT, UPDATE (status, attempts, next_attempt_at, lease_until) ON ${schema}.ps_api01_outbox TO ${worker}`,
+    `GRANT SELECT (environment, tenant_id, client_id, integration_id, order_id, order_version, event_type, reason, correlation_id) ON ${schema}.ps_api01_events TO ${worker}`,
+    `GRANT SELECT (environment, tenant_id, client_id, integration_id, id, origin_club_reference) ON ${schema}.ps_api01_orders TO ${worker}`,
   ];
 }

@@ -42,18 +42,18 @@ export function createManifest({ randomBytes, tempRoot }) {
   const sandboxId = `api06a-${short}`;
   const secret = () => `sandbox:${sandboxId}:${randomBytes(32).toString('hex')}`;
   return {
-    id, sandboxId, schema: `sandbox_api02_${short}`, user: `sandbox_api02_${short}`, pipe: `ps06a-${id}`, port: 0, pid: 0,
+    id, sandboxId, schema: `sandbox_api02_${short}`, user: `sandbox_api02_${short}`, workerUser: `sandbox_api02_w${short}`, pipe: `ps06a-${id}`, port: 0, pid: 0,
     runDir, datadir: path.join(runDir, 'data'), pidFile: path.join(runDir, 'server.pid'), tmpDir: path.join(runDir, 'tmp'),
     filesDir: path.join(runDir, 'files'), sandboxRoot: path.join(runDir, 'sandbox'), uploadsDir: path.join(runDir, 'sandbox', 'uploads'),
     evidenceDir: path.join(runDir, 'evidence'), initIni: path.join(runDir, 'init-template.ini'), serverLog: path.join(runDir, 'server.log'),
-    secrets: { DB_PASSWORD: secret(), AUTH_SECRET: secret(), PORTAL_CREDENTIALS_KEY: secret() },
+    secrets: { DB_PASSWORD: secret(), AUTH_SECRET: secret(), PORTAL_CREDENTIALS_KEY: secret(), WORKER_PASSWORD: secret() },
   };
 }
 export function publicManifest(m) { const copy = { ...m }; delete copy.secrets; return copy; }
 
 export function validateManifest(m, tempRoot, { requirePort = false } = {}) {
   const ok = m && /^[a-f0-9]{32}$/.test(m.id) && m.sandboxId === `api06a-${m.id.slice(0, 20)}` &&
-    m.schema === `sandbox_api02_${m.id.slice(0, 20)}` && m.user === m.schema && m.pipe === `ps06a-${m.id}`;
+    m.schema === `sandbox_api02_${m.id.slice(0, 20)}` && m.user === m.schema && m.workerUser === `sandbox_api02_w${m.id.slice(0, 20)}` && m.pipe === `ps06a-${m.id}`;
   if (!ok) fail('Manifiesto inválido.');
   const expected = path.resolve(tempRoot, `${RUN_PREFIX}${m.id}`);
   const under = (p, ...parts) => path.resolve(p) === path.join(expected, ...parts);
@@ -99,15 +99,16 @@ export function buildChildEnv(m, base, extra = {}) {
     NOVALVION_ENV: 'sandbox', SANDBOX_ID: m.sandboxId, SANDBOX_ROOT: m.sandboxRoot, NEXT_TELEMETRY_DISABLED: '1',
     DB_HOST: HOST, DB_PORT: String(m.port), DB_NAME: m.schema, DB_USER: m.user, DB_PASSWORD: m.secrets.DB_PASSWORD,
     AUTH_SECRET: m.secrets.AUTH_SECRET, PORTAL_CREDENTIALS_KEY: m.secrets.PORTAL_CREDENTIALS_KEY,
+    PS06A_WORKER_PASSWORD: m.secrets.WORKER_PASSWORD,   // API-07: contraseña de la cuenta de worker (outbox); solo para el proceso de pruebas
     CB2_PUBLIC_ORIGIN: 'https://localhost', EMPRESA_DOMINIOS: '{"localhost":"kt-monaco"}', UPLOAD_DIR: m.uploadsDir,
     ...extra,
   };
   const allowed = new Set(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'PATH', 'NODE_ENV', 'NOVALVION_ENV', 'SANDBOX_ID', 'SANDBOX_ROOT', 'NEXT_TELEMETRY_DISABLED',
     'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'AUTH_SECRET', 'PORTAL_CREDENTIALS_KEY', 'CB2_PUBLIC_ORIGIN', 'EMPRESA_DOMINIOS', 'UPLOAD_DIR',
-    'PS06A_MANIFEST', 'PS06A_PHASE', 'PS06A_CRASH_READY']);
+    'PS06A_MANIFEST', 'PS06A_PHASE', 'PS06A_CRASH_READY', 'PS06A_WORKER_PASSWORD']);
   const unknown = Object.keys(env).filter((k) => !allowed.has(k));
   if (unknown.length) fail(`Variable no permitida en el entorno de pruebas: ${unknown.join(', ')}`);
-  if (new Set([env.AUTH_SECRET, env.DB_PASSWORD, env.PORTAL_CREDENTIALS_KEY]).size !== 3) fail('Los tres secretos deben ser distintos.');
+  if (new Set([env.AUTH_SECRET, env.DB_PASSWORD, env.PORTAL_CREDENTIALS_KEY, env.PS06A_WORKER_PASSWORD]).size !== 4) fail('Los cuatro secretos deben ser distintos.');
   return env;
 }
 export function isolationJson(m) {
