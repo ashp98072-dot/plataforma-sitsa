@@ -27,6 +27,7 @@ function fixture(over: { parada?: Fila | null; piloto?: boolean; viaje?: boolean
     rollback: vi.fn(async () => { calls.push({ sql: "ROLLBACK" }); }), release: vi.fn(),
     query: vi.fn(async (sql: string, params?: unknown[]) => {
       calls.push({ sql, params }); if (state.failQuery) throw state.failQuery;
+      if (sql.startsWith("SET TRANSACTION")) return [[]];
       if (sql.includes("FROM tms_plan_paradas pp")) return [state.parada ? [state.parada] : []];
       if (sql.includes("FROM tms_personal per")) return [state.piloto ? [{ id: 5 }] : []];
       if (sql.includes("FROM flota_viajes")) return [state.viaje ? [{ id: 900 }] : []];
@@ -60,7 +61,7 @@ describe("confirmarParadaPorPiloto: camino válido", () => {
     expect(p.slice(0, 18)).toEqual([7, 55, 900, 10, "Entrega", 2, "Club Zona 10", "ENTREGADA_POR_PILOTO", "NO_REQUERIDA", 1, 31, 5, "portal:P01", 77, "u/1/flota/foto.jpg", "2026-11-11 10:00:00", "portal:P01", null]);
     expect(typeof p[18]).toBe("string");
     expect(registrarAuditoriaTx).toHaveBeenCalledWith(f.conn, expect.objectContaining({ empresaId: 7, usuario: "portal:P01", accion: "confirmar_entrega_parada_piloto", modulo: "tms" }));
-    const orden = sqlOf(f); expect(orden[0]).toBe("BEGIN"); expect(orden.at(-1)).toBe("COMMIT"); expect(orden.filter((s) => s === "COMMIT")).toHaveLength(1); expect(f.conn.release).toHaveBeenCalled();
+    const orden = sqlOf(f); expect(orden.slice(0, 2)).toEqual(["SET TRANSACTION ISOLATION LEVEL READ COMMITTED", "BEGIN"]); expect(orden.at(-1)).toBe("COMMIT"); expect(orden.filter((s) => s === "COMMIT")).toHaveLength(1); expect(f.conn.release).toHaveBeenCalled();
   });
   it("cada consulta lleva el alcance completo: empresa, plan, parada, viaje e identidad del colaborador salen de la sesión", async () => {
     const f = fixture(); await confirmarParadaPorPiloto({ ...base, body: entregada });
@@ -69,7 +70,7 @@ describe("confirmarParadaPorPiloto: camino válido", () => {
     expect(q("FROM tms_personal per").params).toEqual([7, 31, 5, 55]);
     expect(q("FROM flota_viajes").params).toEqual([900, 7, 55]);
     const ev = q("FROM flota_viaje_evidencias"); expect(ev.params).toEqual([7, 900, 10]); expect(ev.sql).toMatch(/parada_id = \?/); expect(ev.sql).toContain("tipo = 'producto'");
-    expect(q("FROM tms_parada_confirmaciones").params).toEqual([7, 10]); expect(q("FROM tms_parada_confirmaciones").sql).toContain("LOCK IN SHARE MODE");   // lectura vigente, no la instantánea anterior a la espera del bloqueo
+    expect(q("FROM tms_parada_confirmaciones").params).toEqual([7, 10]); expect(sqlOf(f).slice(0, 2)).toEqual(["SET TRANSACTION ISOLATION LEVEL READ COMMITTED", "BEGIN"]);   // lecturas vigentes, no una instantánea anterior a la espera del bloqueo
   });
   it("un evidenciaId explícito se valida contra empresa, viaje y parada", async () => {
     const f = fixture(); await confirmarParadaPorPiloto({ ...base, body: { ...entregada, evidenciaId: 77 } });
@@ -141,6 +142,11 @@ describe("idempotencia, concurrencia y fallos", () => {
     const f = fixture(); vi.mocked(registrarAuditoriaTx).mockRejectedValueOnce(new Error("auditoria caída"));
     await expect(confirmarParadaPorPiloto({ ...base, body: entregada })).rejects.toThrow("auditoria caída");
     expect(sqlOf(f)).toContain("ROLLBACK"); expect(sqlOf(f)).not.toContain("COMMIT"); expect(f.conn.release).toHaveBeenCalled();
+  });
+  it.each([[1213, "ER_LOCK_DEADLOCK"], [1205, "ER_LOCK_WAIT_TIMEOUT"], [1020, "ER_CHECKREAD"]])("el error reintentable %i (%s) responde REINTENTAR 503 con rollback, sin dejar nada", async (errno, code) => {
+    const f = fixture(); f.state.failQuery = Object.assign(new Error("SQL secreto"), { errno, code });
+    const r = await confirmarParadaPorPiloto({ ...base, body: entregada }); expect(r).toMatchObject({ ok: false, codigo: "REINTENTAR", status: 503 }); expect(sqlOf(f)).toContain("ROLLBACK"); expect(f.state.inserts).toHaveLength(0);
+    const g = fixture(); g.state.failInsert = Object.assign(new Error("x"), { errno, code }); expect(await confirmarParadaPorPiloto({ ...base, body: entregada })).toMatchObject({ ok: false, codigo: "REINTENTAR" });
   });
   it("rechaza cuerpos con campos extra (empresa, piloto, hora, estado externo)", async () => {
     fixture(); for (const extra of [{ empresaId: 9 }, { pilotoId: 1 }, { confirmadoEn: "2020-01-01" }, { estadoExterno: "DELIVERED" }]) await expect(confirmarParadaPorPiloto({ ...base, body: { ...entregada, ...extra } as ConfirmarParadaBody })).rejects.toThrow();

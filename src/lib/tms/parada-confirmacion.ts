@@ -50,10 +50,10 @@ export type ConfirmacionParada = {
 
 export type CodigoErrorConfirmacion =
   | "NO_ASIGNADO" | "PARADA_INVALIDA" | "TIPO_NO_CONFIRMABLE" | "VIAJE_NO_EN_CURSO" | "SIN_EVIDENCIA" | "EVIDENCIA_INVALIDA"
-  | "NOTA_REQUERIDA" | "YA_CONFIRMADA" | "REVISION_PENDIENTE" | "NO_DISPONIBLE";
+  | "NOTA_REQUERIDA" | "YA_CONFIRMADA" | "REVISION_PENDIENTE" | "NO_DISPONIBLE" | "REINTENTAR";
 const STATUS: Record<CodigoErrorConfirmacion, number> = {
   NO_ASIGNADO: 403, PARADA_INVALIDA: 404, TIPO_NO_CONFIRMABLE: 409, VIAJE_NO_EN_CURSO: 409, SIN_EVIDENCIA: 409, EVIDENCIA_INVALIDA: 400,
-  NOTA_REQUERIDA: 400, YA_CONFIRMADA: 409, REVISION_PENDIENTE: 409, NO_DISPONIBLE: 503,
+  NOTA_REQUERIDA: 400, YA_CONFIRMADA: 409, REVISION_PENDIENTE: 409, NO_DISPONIBLE: 503, REINTENTAR: 503,
 };
 const MENSAJE: Record<CodigoErrorConfirmacion, string> = {
   NO_ASIGNADO: "Solo el piloto asignado al viaje puede confirmar entregas.",
@@ -66,6 +66,7 @@ const MENSAJE: Record<CodigoErrorConfirmacion, string> = {
   YA_CONFIRMADA: "Esta parada ya fue confirmada como entregada.",
   REVISION_PENDIENTE: "Esta parada tiene una incidencia pendiente de revisión.",
   NO_DISPONIBLE: "La confirmación de entregas aún no está habilitada.",
+  REINTENTAR: "Otra operación está en curso sobre esta parada. Intenta de nuevo.",
 };
 export type ResultadoConfirmar =
   | { ok: true; confirmacion: ConfirmacionParada; replayed: boolean }
@@ -76,6 +77,8 @@ const falla = (codigo: CodigoErrorConfirmacion): ResultadoConfirmar => ({ ok: fa
 export function revisionDe(resultado: ResultadoConfirmacion): "NO_REQUERIDA" | "PENDIENTE" {
   return resultado === "ENTREGADA_POR_PILOTO" ? "NO_REQUERIDA" : "PENDIENTE";
 }
+/** Interbloqueo (1213), espera de bloqueo vencida (1205) o «registro cambiado desde la lectura» (1020, aislamiento por instantánea de MariaDB): se puede reintentar sin riesgo (la operación es idempotente). */
+const reintentable = (e: unknown) => [1020, 1205, 1213].includes((e as { errno?: number })?.errno ?? 0) || ["ER_CHECKREAD", "ER_LOCK_WAIT_TIMEOUT", "ER_LOCK_DEADLOCK"].includes((e as { code?: string })?.code ?? "");
 const tablaFaltante = (e: unknown) => (e as { errno?: number; code?: string })?.errno === 1146 || (e as { code?: string })?.code === "ER_NO_SUCH_TABLE";
 
 function mapFila(r: RowDataPacket): ConfirmacionParada {
@@ -99,6 +102,9 @@ export async function confirmarParadaPorPiloto(input: {
   if (body.resultado !== "ENTREGADA_POR_PILOTO" && (nota === null || nota.length < NOTA_MIN)) return falla("NOTA_REQUERIDA");
   const conn: PoolConnection = await getPool().getConnection();
   try {
+    // READ COMMITTED: cada lectura ve lo último confirmado. Bajo REPEATABLE READ (y más con el aislamiento por instantánea de MariaDB 11) la instantánea podía fijarse ANTES de esperar el bloqueo de la
+    // parada y no ver la confirmación recién hecha por otro (hallazgos de B12.5). La fila de la parada (FOR UPDATE) ya serializa esta sección.
+    await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await conn.beginTransaction();
     const [paradas] = await conn.query<RowDataPacket[]>(
       `SELECT pp.id, pp.orden, pp.lugar_nombre, pp.tipo, p.estado AS plan_estado, p.piloto_id
@@ -131,9 +137,7 @@ export async function confirmarParadaPorPiloto(input: {
     if (!evidencia) { await conn.rollback(); return falla(body.evidenciaId ? "EVIDENCIA_INVALIDA" : "SIN_EVIDENCIA"); }
 
     const [previas] = await conn.query<RowDataPacket[]>(
-      // LECTURA VIGENTE (LOCK IN SHARE MODE, solo exige SELECT): bajo REPEATABLE READ un SELECT normal puede usar una instantánea anterior a la espera del bloqueo de la parada
-      // y NO ver la confirmación que otro acaba de confirmar (hallazgo del laboratorio B12.5). La fila de la parada ya serializa esta sección.
-      `SELECT * FROM tms_parada_confirmaciones WHERE empresa_id = ? AND parada_id = ? ORDER BY id DESC LIMIT 1 LOCK IN SHARE MODE`, [empresaId, paradaId]);
+      `SELECT * FROM tms_parada_confirmaciones WHERE empresa_id = ? AND parada_id = ? ORDER BY id DESC LIMIT 1`, [empresaId, paradaId]);
     const previa = previas[0];
     if (previa) {
       const mismoPiloto = Number(previa.piloto_empleado_id) === empleadoId;
@@ -159,6 +163,7 @@ export async function confirmarParadaPorPiloto(input: {
       await conn.rollback();
       if ((e as { code?: string })?.code === "ER_DUP_ENTRY") return falla("YA_CONFIRMADA");   // carrera residual: el UNIQUE de la base lo impide
       if (tablaFaltante(e)) return falla("NO_DISPONIBLE");
+      if (reintentable(e)) return falla("REINTENTAR");
       throw e;
     }
     await registrarAuditoriaTx(conn, {
@@ -171,6 +176,7 @@ export async function confirmarParadaPorPiloto(input: {
   } catch (error) {
     try { await conn.rollback(); } catch { /* conexión ya cerrada */ }
     if (tablaFaltante(error)) return falla("NO_DISPONIBLE");
+    if (reintentable(error)) return falla("REINTENTAR");
     throw error;
   } finally {
     conn.release();
