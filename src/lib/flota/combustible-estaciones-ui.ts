@@ -3,7 +3,7 @@ import { opcionesConHistorico } from "@/components/tms/catalogo-search-select";
 import { diagnosticarVehiculos } from "./vehiculos-catalogo";
 
 export type EstacionOpcion = { id: number; proveedorId: number; nombre: string; proveedorNombre?: string | null; direccion?: string | null };
-export type VehiculoOpcion = { id: number; placa: string; descripcion?: string | null };
+export type VehiculoOpcion = { id: number; placa: string; descripcion?: string | null; tipo_unidad?: string | null };
 export const estacionesDelProveedor = (estaciones: EstacionOpcion[], proveedorId: string) => estaciones.filter(e => e.proveedorId === Number(proveedorId));
 export const estacionAlCambiarProveedor = (estaciones: EstacionOpcion[], proveedorId: string, estacionId: string) => estacionesDelProveedor(estaciones, proveedorId).some(e => String(e.id) === estacionId) ? estacionId : "";
 
@@ -28,12 +28,12 @@ export function opcionesVehiculo(vehiculos: VehiculoOpcion[], historico?: { id: 
   const historicoAusente = historico?.id && !vehiculos.some(v => Number(v.id) === Number(historico.id));
   const filas = historicoAusente
     ? [{ id: Number(historico.id), placa: historico.placa?.trim() || "Unidad anterior" }, ...vehiculos] : vehiculos;
-  const diagnostico = diagnosticarVehiculos(filas);
+  const diagnostico = diagnosticarVehiculos(filas, { incluirExternos: true });
   const ambiguos = new Set(diagnostico.posiblesDuplicados.flatMap(g => g.ids));
   return diagnostico.vehiculos.map(v => historicoAusente && v.id === Number(historico.id) && !ambiguos.has(v.id)
     ? { value: String(v.id), label: `${v.placa} (histórico)` } : ({ value: String(v.id), label: `${v.placa}${historicoAusente && v.id === Number(historico.id) ? " (histórico)" : ""}`,
-    detail: [v.descripcion?.trim(), ambiguos.has(v.id) ? `Registro #${v.id} · placa repetida, verificar unidad` : ""].filter(Boolean).join(" · ") || undefined,
-    searchText: v.descripcion?.trim() || undefined }));
+    detail: [v.tipo_unidad?.trim(), v.descripcion?.trim(), v.id < 0 ? `Unidad externa #${-v.id}` : ambiguos.has(v.id) ? `Registro #${v.id} · placa repetida, verificar unidad` : ""].filter(Boolean).join(" · ") || undefined,
+    searchText: [v.descripcion, v.tipo_unidad, `#${v.id}`].filter(Boolean).join(" ") }));
 }
 
 export const MENSAJE_SIN_ESTACIONES = "Debes registrar primero la estación de combustible.";

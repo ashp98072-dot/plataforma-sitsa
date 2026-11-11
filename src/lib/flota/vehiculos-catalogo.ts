@@ -1,12 +1,12 @@
 import { placaComparable } from "./combustible-coincidencias";
 
 /** No deduplicar por placa: dos IDs representan registros independientes hasta revisión humana. */
-export function diagnosticarVehiculos<T extends { id: number; placa: string }>(filas: T[]) {
+export function diagnosticarVehiculos<T extends { id: number; placa: string }>(filas: T[], { incluirExternos = false } = {}) {
   const porId = new Map<number, T>();
   const repetidos = new Set<number>();
   for (const fila of filas) {
     const id = Number(fila.id);
-    if (!Number.isSafeInteger(id) || id <= 0) continue;
+    if (!Number.isSafeInteger(id) || id === 0 || (id < 0 && !incluirExternos)) continue;
     if (porId.has(id)) repetidos.add(id);
     else porId.set(id, { ...fila, id });
   }

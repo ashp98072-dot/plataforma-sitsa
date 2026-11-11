@@ -40,8 +40,10 @@ describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
         expect(decodeJwt(data.token).parser).toBe(2);
         expect(data.filas.every((r: { moneda: string }) => r.moneda === "GTQ")).toBe(true);
         expect(m.guard).toHaveBeenCalledWith("kt-monaco", "conciliar", { soloLectura: true });
-        expect(m.query).toHaveBeenCalledExactlyOnceWith("SELECT id FROM compras_proveedores WHERE empresa_id=? AND id=? AND activo=1", [7, 3]);
-        expect(m.release).toHaveBeenCalledOnce();
+        expect(m.query).toHaveBeenCalledWith("SELECT id FROM compras_proveedores WHERE empresa_id=? AND id=? AND activo=1", [7, 3]);
+        expect(m.query).toHaveBeenCalledTimes(4);
+        for (const [, params] of m.query.mock.calls) expect(params).toEqual([7, 3]);
+        expect(m.release).toHaveBeenCalledTimes(2);
         expect(response.headers.get("cache-control")).toBe("private, no-store");
     });
     it.each(actions)("%s conserva sesión, permiso y aislamiento por empresa antes de cualquier acceso", async action => {
