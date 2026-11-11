@@ -15,7 +15,7 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
   if (Number(g.vehiculoId) < 0) {
     const id = d.asociacionExternaId ?? g.fila.asociacionExterna?.id;
     const a = cat.terceros?.find(a => a.id === id && -a.unidad_id === Number(g.vehiculoId));
-    if (!cat.tercerosHabilitados) causas.push("Tercerizados deshabilitados: D2 pendiente de autorización del propietario.");
+    if (!cat.tercerosHabilitados) causas.push("Política D2 aprobada; tercerizados deshabilitados por configuración. La activación corresponde al propietario.");
     if (!a || a.estado !== "VERIFICADA") causas.push("La asociación externa no está disponible o verificada; puede haber sido revocada.");
     else if (g.activas.some(f => nombreComparable(a.nombre) !== nombreComparable(f.origen?.piloto ?? "") || placaComparable(a.placa) !== placaComparable(f.placaNormalizada || f.placa))) causas.push("El piloto o la placa originales no corresponden a la asociación externa elegida.");
   } else if (g.vehiculoId) {

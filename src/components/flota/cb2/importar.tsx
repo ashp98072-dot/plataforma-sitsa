@@ -13,11 +13,12 @@ export { CandidatosCB2 } from "./preview-vista";
 import { useRevisionCB2 } from "./use-revision";
 const sinFilas: PreviewCB2["filas"] = [];
 export type EjecutarCB2 = (accion: string, identidad: unknown, fn: (key: string) => Promise<unknown>) => Promise<unknown>;
-export function ImportarCB2({ api, cat, run, locked }: {
+export function ImportarCB2({ api, cat, run, locked, actualizarCatalogos }: {
     api: string;
     cat: CatalogosCB2;
     run: EjecutarCB2;
     locked: boolean;
+    actualizarCatalogos?: () => Promise<CatalogosCB2>;
 }) {
     const [proveedor, setProveedor] = useState(""), [moneda, setMoneda] = useState("GTQ"), [file, setFile] = useState<File | null>(null), [preview, setPreview] = useState<PreviewCB2 | null>(null), [error, setError] = useState(""), [loading, setLoading] = useState(false), [aceptacion, setAceptacion] = useState<string | null>(null);
     const [decisiones, setDecisiones] = useState<Record<string, DecisionAsignacion>>({});
@@ -35,6 +36,7 @@ export function ImportarCB2({ api, cat, run, locked }: {
         setError("");
         setPreview(null); setAceptacion(null);
         try {
+            await actualizarCatalogos?.();
             const resultado = await jsonCB2<PreviewCB2>(`${api}/preview`, { method: "POST", body: formCB2(file, undefined, proveedor, moneda, []) });
             if (resultado.perfilDetectado !== "HALEL" && resultado.perfilDetectado !== "SHELL") throw new Error("El servidor no informó un formato reconocido. Vuelve a analizar el archivo con la versión actual de la aplicación.");
             setPreview(resultado);

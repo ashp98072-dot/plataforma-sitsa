@@ -12,6 +12,7 @@ export type AsociacionExterna = {
   id: number; piloto_id: number; unidad_id: number; nombre: string; placa: string;
   tipo: string; descripcion: string; relacion: string; estado: string; revision: number;
   piloto_referencia: string; unidad_referencia: string;
+  creado_por?: number; verificado_por?: number | null;
 };
 /** Nombre solo no identifica una persona: exige asociación verificada nombre+unidad, sin homónimos. */
 export function reconocerTercero(nombre: string, placa: string, catalogo: AsociacionExterna[]) {

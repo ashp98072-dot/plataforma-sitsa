@@ -48,6 +48,21 @@ async function verificar(suffix: string, nombre?: string, placa?: string) {
   await revisarTerceros(revisor, a.id, 0, "VERIFICADA");
   return (await listarTerceros(1)).find(x => x.id === a.id)!;
 }
+async function esperarEmpresa(n: number) {
+  for (let i = 0; i < 100; i++) {
+    const actuales = await q("SELECT ID FROM information_schema.PROCESSLIST WHERE DB=DATABASE() AND INFO LIKE 'SELECT id FROM empresas%FOR UPDATE'");
+    if (new Set(actuales.map(r => r.ID)).size >= n) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw Error("No se observaron las conexiones concurrentes esperando empresa");
+}
+async function carreraEmpresa(tasks: (() => Promise<unknown>)[]) {
+  const gate = await state.pool!.getConnection(); await gate.beginTransaction();
+  await gate.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE");
+  const settled = Promise.allSettled(tasks.map(task => task()));
+  try { await esperarEmpresa(tasks.length); } finally { await gate.commit(); gate.release(); }
+  return settled;
+}
 async function historial() {
   return Promise.all([
     q("SELECT * FROM flota_combustible_cargas WHERE numero_vale='HIST-STAFF'"),
@@ -69,6 +84,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     await admin.query(`CREATE DATABASE \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin; USE \`${db}\``);
     await admin.query(readFileSync("scripts/ci/combustibles-pr2-lab/base.sql", "utf8"));
     await admin.query("ALTER TABLE flota_vehiculos ADD placa VARCHAR(40) NOT NULL DEFAULT 'C-001ABC', ADD estado VARCHAR(40) NOT NULL DEFAULT 'Activo', ADD activo TINYINT NOT NULL DEFAULT 1; INSERT INTO usuarios VALUES(2,1); CREATE TABLE empleados(id INT PRIMARY KEY,empresa_id INT NOT NULL,nombre VARCHAR(160),estado VARCHAR(20)) ENGINE=InnoDB");
+    await admin.query("ALTER TABLE usuarios ADD rol_global VARCHAR(40) NOT NULL DEFAULT 'Admin'; INSERT INTO usuarios VALUES(3,1,'Admin')");
     // Esquema staff compatible, sin ejecutar los migradores de otros modulos.
     const carga = readFileSync("src/lib/flota/schema.ts", "utf8").match(/CREATE TABLE IF NOT EXISTS flota_combustible_cargas \([\s\S]*?ENGINE=InnoDB DEFAULT CHARSET=utf8mb4/)![0];
     // La tabla base del fixture esta vacia: se completa en lugar de reemplazarla.
@@ -207,6 +223,56 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     const own = await registrarTerceros(otra, { ...alta("tenant", a.nombre, a.placa), proveedorId: 3 });
     expect(own.id).not.toBe(a.id); expect(await listarTerceros(2)).toHaveLength(1);
     await expect(revisarTerceros(otra, a.id, 1, "REVOCADA")).rejects.toMatchObject({ status: 404 });
+  });
+  it("D2: altas simultaneas desde dos proveedores reutilizan una identidad y asociacion", async () => {
+    vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "1");
+    const datos = alta("race-alta", "Piloto Ficticio Concurrente", "080 KHK");
+    const resultados = await carreraEmpresa([
+      () => registrarTerceros(ctx, datos),
+      () => registrarTerceros({ ...ctx, proveedorId: 2 }, { ...datos, proveedorId: 2 }),
+    ]);
+    expect(resultados.every(r => r.status === "fulfilled")).toBe(true);
+    const values = resultados.map(r => (r as PromiseFulfilledResult<{ id: number }>).value.id);
+    expect(new Set(values).size).toBe(1);
+    expect(await q("SELECT id FROM flota_cb2_externos_pilotos WHERE referencia=?", [datos.pilotoReferencia])).toHaveLength(1);
+    expect(await q("SELECT id FROM flota_cb2_externos_asociaciones WHERE id=?", [values[0]])).toHaveLength(1);
+  });
+  it("D2: dos revisores concurrentes de la misma revision no confirman estados contradictorios", async () => {
+    const a = await registrarTerceros(ctx, alta("race-revision", "Piloto Ficticio Revision", "081 KHK"));
+    const resultados = await carreraEmpresa([
+      () => revisarTerceros(revisor, a.id, 0, "VERIFICADA"),
+      () => revisarTerceros({ ...ctx, proveedorId: 2, actor: { id: 3, username: "OTRO_ADMIN_FICTICIO" } }, a.id, 0, "REVOCADA"),
+    ]);
+    expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(resultados.filter(r => r.status === "rejected")).toHaveLength(1);
+    expect((await q("SELECT revision FROM flota_cb2_externos_asociaciones WHERE id=?", [a.id]))[0].revision).toBe(1);
+  });
+  it("D2: revocacion concurrente con confirmar conserva un resultado serializable y bloquea el reconocimiento posterior", async () => {
+    const a = await verificar("race-consumo", "Piloto Ficticio Consumo", "082 KHK"), p = await preparar("RACE-EXTERNO", a.nombre, a.placa);
+    p.entrada.seleccion = [{ candidato: p.entrada.seleccion[0].candidato, vehiculoId: -a.unidad_id, asociacionExternaId: a.id }];
+    const recibo = await preview(ctx, p.buffer, p.entrada);
+    const resultados = await carreraEmpresa([
+      () => revisarTerceros({ ...revisor, proveedorId: 2 }, a.id, 1, "REVOCADA"),
+      () => confirmarArchivo(ctx, p.buffer, "ficticio.xlsx", p.entrada, key(), recibo.token),
+    ]);
+    expect(resultados[0].status).toBe("fulfilled");
+    expect(await total("RACE-EXTERNO")).toBe(resultados[1].status === "fulfilled" ? 1 : 0);
+    if (resultados[1].status === "rejected") expect(resultados[1].reason).toMatchObject({ status: 409 });
+    const [actual] = await q("SELECT estado,verificado_por FROM flota_cb2_externos_asociaciones WHERE id=?", [a.id]);
+    expect(actual).toMatchObject({ estado: "REVOCADA", verificado_por: 2 });
+    expect((await preview(ctx, p.buffer, p.entrada)).filas.find(f => f.candidato)?.asociacionExterna).toBeNull();
+  });
+  it("D2: rol revocado mientras espera empresa cancela aunque el contexto se capturo como administrador", async () => {
+    const gate = await state.pool!.getConnection(); await gate.beginTransaction(); await gate.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE");
+    const trabajo = registrarTerceros({ ...ctx, actor: { id: 3, username: "ADMIN_FICTICIO" } }, alta("rol-revocado", "Piloto Ficticio Rol", "083 KHK"));
+    const resultado = Promise.allSettled([trabajo]);
+    try { await esperarEmpresa(1); await q("UPDATE usuarios SET rol_global='Operaciones' WHERE id=3"); }
+    finally { await gate.commit(); gate.release(); }
+    try {
+      const [r] = await resultado; expect(r.status).toBe("rejected");
+      if (r.status === "rejected") expect(r.reason).toMatchObject({ status: 403 });
+      expect(await q("SELECT id FROM flota_cb2_externos_pilotos WHERE referencia='ficticio-p-rol-revocado'")).toHaveLength(0);
+    } finally { await q("UPDATE usuarios SET rol_global='Admin' WHERE id=3"); }
   });
   it("postcheck: historicos intactos y D2 vuelve a su valor predeterminado", async () => {
     expect(await historial()).toEqual(historico);
