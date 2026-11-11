@@ -317,7 +317,7 @@ export async function DELETE(req: Request, ctx: Ctx) {
     adjuntoId,
   );
   if (!result.ok) {
-    return NextResponse.json({ error: result.mensaje }, { status: 404 });
+    return NextResponse.json({ error: result.mensaje }, { status: result.status ?? 404 });
   }
   await registrarAuditoria({
     empresaId: guard.empresa.id,

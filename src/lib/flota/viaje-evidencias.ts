@@ -2,6 +2,7 @@ import type { PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/prom
 import { execute, query, type SqlParams } from "@/lib/db";
 import { ahoraLocal, fmtTs } from "@/lib/rrhh/dates";
 import { borrarUpload, contentTypeFor, guardarUpload } from "@/lib/uploads";
+import { evidenciaConfirmada, MSG_EVIDENCIA_CONFIRMADA } from "@/lib/tms/parada-confirmacion";
 
 export type TipoEvidenciaViaje =
   | "tablero_salida"
@@ -169,7 +170,7 @@ export async function eliminarEvidenciaViaje(
   empresaId: number,
   viajeId: number,
   evidenciaId: number,
-): Promise<{ ok: boolean; mensaje: string }> {
+): Promise<{ ok: boolean; mensaje: string; status?: number }> {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, ruta_relativa FROM flota_viaje_evidencias
      WHERE id = ? AND viaje_id = ? AND empresa_id = ? LIMIT 1`,
@@ -179,6 +180,8 @@ export async function eliminarEvidenciaViaje(
     return { ok: false, mensaje: "Evidencia no encontrada." };
   }
   const ruta = String(rows[0].ruta_relativa ?? "");
+  // TMS-ENTREGA-PILOTO-1: una evidencia que respalda la confirmación de una entrega es parte del historial y no se elimina.
+  if (await evidenciaConfirmada(empresaId, ruta)) return { ok: false, mensaje: MSG_EVIDENCIA_CONFIRMADA, status: 409 };
   await execute(
     `DELETE FROM flota_viaje_evidencias
      WHERE id = ? AND viaje_id = ? AND empresa_id = ?`,
@@ -197,7 +200,7 @@ export async function eliminarEvidenciaViaje(
 export async function eliminarEvidenciaTms(
   empresaId: number,
   evidenciaId: number,
-): Promise<{ ok: boolean; mensaje: string }> {
+): Promise<{ ok: boolean; mensaje: string; status?: number }> {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, ruta_archivo FROM tms_evidencias
      WHERE id = ? AND empresa_id = ? LIMIT 1`,
@@ -207,6 +210,7 @@ export async function eliminarEvidenciaTms(
     return { ok: false, mensaje: "Evidencia no encontrada." };
   }
   const ruta = String(rows[0].ruta_archivo ?? "");
+  if (await evidenciaConfirmada(empresaId, ruta)) return { ok: false, mensaje: MSG_EVIDENCIA_CONFIRMADA, status: 409 };   // TMS-ENTREGA-PILOTO-1
   await execute(
     `DELETE FROM tms_evidencias WHERE id = ? AND empresa_id = ?`,
     [evidenciaId, empresaId],
