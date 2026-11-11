@@ -3,7 +3,7 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
-  REQUIRED_BRANCH, LAB_ACK_ENV, LAB_ACK_PHRASE, RUN_PREFIX, HOST, PORT_MIN, PORT_MAX, FORBIDDEN_PORTS,
+  ALLOWED_BRANCHES, LAB_ACK_ENV, LAB_ACK_PHRASE, RUN_PREFIX, HOST, PORT_MIN, PORT_MAX, FORBIDDEN_PORTS,
   FORBIDDEN_PARENT_ENV, LOCK_WAIT_SECONDS, ENGINE,
 } from './constants.mjs';
 
@@ -16,7 +16,7 @@ export function assertLabGate({ argv, env, platform, branch, envFilesInCwd }) {
   const mode = argv.length === 1 ? argv[0] : '';
   if (!['--run-isolated', '--preflight-only'].includes(mode)) fail('Se requiere exactamente un argumento: --run-isolated o --preflight-only.');
   if (platform !== 'win32') fail('Solo Windows.');
-  if (branch !== REQUIRED_BRANCH) fail(`Rama inesperada (${branch}); se exige ${REQUIRED_BRANCH}.`);
+  if (!ALLOWED_BRANCHES.includes(branch)) fail(`Rama inesperada (${branch}); se exige una de: ${ALLOWED_BRANCHES.join(', ')}.`);
   if (envFilesInCwd.length) fail('Hay archivos .env* en el directorio de trabajo; validateSandboxConfig los rechaza.');
   const bad = Object.keys(env).filter((k) => FORBIDDEN_PARENT_ENV.test(k));
   if (bad.length) fail(`El entorno del proceso padre define variables de bases/entornos reales (${bad.join(', ')}). Ejecute desde una consola limpia.`);
