@@ -30,12 +30,13 @@ export function mariaDbOutboxStore(pool: Pool, config: { schema: string; workerU
   const keyOf = (e: { scope: { environment: string; tenantId: number; clientId: number; integrationId: string }; orderId: string; version: number }): Key =>
     [Buffer.from(e.scope.environment), e.scope.tenantId, e.scope.clientId, Buffer.from(e.scope.integrationId), uuid(e.orderId), e.version];
 
-  async function inTransaction<T>(action: (conn: PoolConnection) => Promise<T>): Promise<T> {
+  async function inTransaction<T>(action: (conn: PoolConnection) => Promise<T>, readCommitted = false): Promise<T> {
     let conn: PoolConnection | undefined; let active = false; let broken = false;
     try {
       conn = await pool.getConnection();
       const [identity] = await conn.execute<RowDataPacket[]>('SELECT DATABASE() AS db, CURRENT_USER() AS account');
       if (identity.length !== 1 || identity[0].db !== schema || identity[0].account !== `${workerUser}@127.0.0.1`) { broken = true; throw new OutboxStoreError('UNAVAILABLE'); }
+      if (readCommitted) await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');   // solo el reclamo: no retiene bloqueos de huecos ni de filas descartadas
       await conn.beginTransaction(); active = true;
       const value = await action(conn);
       await conn.commit(); active = false;
@@ -61,10 +62,17 @@ export function mariaDbOutboxStore(pool: Pool, config: { schema: string; workerU
     async claim(limit, leaseMs) {
       const n = int(limit, 1, 100); const lease = int(leaseMs, 1_000, 3_600_000);   // validados y en línea: LIMIT/INTERVAL con marcadores en sentencias preparadas no es portable
       return inTransaction(async conn => {
-        const [due] = await conn.execute<RowDataPacket[]>(
-          `SELECT environment,tenant_id,client_id,integration_id,order_id,order_version,attempts FROM ${table('outbox')} ` +
-          `WHERE (status='PENDING' AND next_attempt_at <= UTC_TIMESTAMP(6)) OR (status='LEASED' AND lease_until <= UTC_TIMESTAMP(6)) ` +
-          `ORDER BY next_attempt_at, order_version LIMIT ${n} FOR UPDATE SKIP LOCKED`, []);
+        // Dos consultas por rango de índice (status, next_attempt_at, ...) en vez de un OR + ORDER BY: con el OR el motor no puede recorrer el índice en orden,
+        // escanea y BLOQUEA casi toda la tabla, y un segundo despachador concurrente no reclama nada (hallazgo de B10.2 en la ejecución 5).
+        const cols = 'environment,tenant_id,client_id,integration_id,order_id,order_version,attempts';
+        const [pending] = await conn.execute<RowDataPacket[]>(
+          `SELECT ${cols} FROM ${table('outbox')} WHERE status='PENDING' AND next_attempt_at <= UTC_TIMESTAMP(6) ORDER BY next_attempt_at LIMIT ${n} FOR UPDATE SKIP LOCKED`, []);
+        const due = [...pending];
+        if (due.length < n) {
+          const [expired] = await conn.execute<RowDataPacket[]>(
+            `SELECT ${cols} FROM ${table('outbox')} WHERE status='LEASED' AND lease_until <= UTC_TIMESTAMP(6) ORDER BY lease_until LIMIT ${n - due.length} FOR UPDATE SKIP LOCKED`, []);
+          due.push(...expired);
+        }
         const claims: OutboxClaim[] = [];
         for (const row of due) {
           const key: Key = [row.environment, row.tenant_id, row.client_id, row.integration_id, row.order_id, row.order_version];
@@ -89,7 +97,7 @@ export function mariaDbOutboxStore(pool: Pool, config: { schema: string; workerU
           claims.push({ event: event.data, attempt: attempts + 1 });
         }
         return claims;
-      });
+      }, true);
     },
     complete: claim => close(`UPDATE ${table('outbox')} SET status='DONE', lease_until=NULL WHERE ${where} AND status='LEASED' AND attempts=?`, claim),
     retry: async (claim, delayMs) => {

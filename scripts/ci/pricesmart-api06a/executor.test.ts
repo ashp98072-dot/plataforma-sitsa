@@ -178,9 +178,9 @@ describe("AUD-02/AUD-04 evaluación estricta de cada ejecución de Vitest", () =
   });
   it("el listado de casos obligatorios coincide EXACTAMENTE con los títulos de mariadb-real.lab.ts (sin casos nuevos ni perdidos)", () => {
     const lab = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "mariadb-real.lab.ts"), "utf8");
-    const declared = [...lab.matchAll(/\bit(?:\.skip)?\(\s*"(B[0-9]\.[0-9a-z]+)\b/g)].map((m) => m[1]).sort();
+    const declared = [...lab.matchAll(/\bit(?:\.skip)?\(\s*"(B[0-9]{1,2}\.[0-9a-z]+)\b/g)].map((m) => m[1]).sort();
     expect(declared).toEqual([...ALL_IDS].sort());
-    const skipped = [...lab.matchAll(/\bit\.skip\(\s*"(B[0-9]\.[0-9a-z]+)\b/g)].map((m) => m[1]);
+    const skipped = [...lab.matchAll(/\bit\.skip\(\s*"(B[0-9]{1,2}\.[0-9a-z]+)\b/g)].map((m) => m[1]);
     expect(skipped).toEqual(["B7.5"]);   // la única omisión permanente del archivo es la declarada
   });
   it.each([
