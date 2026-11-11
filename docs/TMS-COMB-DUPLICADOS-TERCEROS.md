@@ -2,7 +2,7 @@
 
 Base: main tras #583 (`ffaed384236a8a062436721fc26a16f62b115f90`). No incorpora #582.
 
-- D2 sigue pendiente: terceros deshabilitados por defecto. `CB2_TERCEROS_D2_APROBADA=1` es una compuerta de preparación, **no debe activarse antes de aprobación de D2 y revisión de capacidades**. Gestión restringida a Admin con permiso de conciliación; verificar requiere otro responsable. No se crean empleados ni vehículos propios.
+- Política D2 aprobada por el propietario: terceros siguen deshabilitados por defecto hasta la activación operativa explícita. Gestión restringida a Admin autorizado; verificar exige otro ID de administrador distinto del creador. Configuración y pasos manuales: [activación D2](TMS-COMB-D2-ACTIVACION.md). No se crean empleados ni vehículos propios.
 - SQL requerido antes de habilitar terceros: `sql/migrate-2026-11-cb2-terceros.sql`. Validado únicamente en MariaDB 11.8.9 local desechable con registros sintéticos previos; no ejecutado en producción. Añade pilotos/unidades/asociaciones por empresa y snapshot/identidad alternativa en consumo; no cambia IDs ni rellena históricos. Requiere CB2 y asignaciones ya instalados.
 - Referencias estables separadas de nombre/placa; reintento de alta no duplica identidades. Coincidencia automática solo para asociación verificada, nombre normalizado + placa, sin homónimos ni unidades duplicadas. Un cambio no verificado o revocado queda pendiente; la elección manual de IDs no evita la revalidación transaccional.
 - D3 conserva barrera empresa/proveedor/vale: conflictos con C2B, cargas internas u otro payload no crean consumo; no se inventa serie/período para autorizar operaciones distintas. D1, D4 y D5 no se activan. Placas repetidas conservan IDs e históricos; no hay alias, fusión ni borrado.

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const m = vi.hoisted(() => ({ query: vi.fn(), execute: vi.fn(), insert: vi.fn(), diario: vi.fn(), guardar: vi.fn(), release: vi.fn(), auditar: vi.fn(), autorizar: vi.fn() }));
+const m = vi.hoisted(() => ({ query: vi.fn(), execute: vi.fn(), insert: vi.fn(), diario: vi.fn(), guardar: vi.fn(), release: vi.fn(), auditar: vi.fn(), autorizar: vi.fn(), guard: vi.fn() }));
+vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: m.guard }));
 vi.mock("@/lib/db", () => ({ getPool: () => ({ getConnection: async () => m }) }));
 vi.mock("@/lib/load-env", () => ({ loadRuntimeEnv: () => { throw Error("ENV_PROHIBIDO"); } }));
 vi.mock("@/lib/auth-secret", () => ({ getAuthSecretBytes: () => new TextEncoder().encode("synthetic-only-cb2-terceros-tests-no-production") }));
@@ -10,6 +11,7 @@ vi.mock("./repository", async original => ({ ...await original<typeof import("./
   anterior: async () => null, insert: m.insert, diario: m.diario,
 }));
 import { registrarTerceros, revisarTerceros, reconocerTercero, validarTercero, listarTerceros } from "./terceros";
+import { tercerosHttp } from "./terceros-http";
 import { seleccion } from "./model";
 import { preview, confirmarArchivo } from "./service";
 import { libro, row } from "./fixture";
@@ -26,6 +28,7 @@ let registro: Record<string, unknown> | undefined;
 let piloto: Record<string, unknown> | undefined, unidad: Record<string, unknown> | undefined;
 beforeEach(() => {
   vi.resetAllMocks(); vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "1"); catalogo = []; registro = piloto = unidad = undefined;
+  m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { id: 9, username: "capturista-demo", rol: "Admin" } });
   m.guardar.mockResolvedValue("solo-memoria");
   m.diario.mockImplementation(async (_c, _ctx, _tipo, _clave, _digest, eventos) => eventos);
   m.insert.mockImplementation(async (_c, table: string, values: Record<string, unknown>) => {
@@ -36,7 +39,8 @@ beforeEach(() => {
   });
   m.query.mockImplementation(async (sql: string, p: unknown[]) => {
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3 }]];
-    if (sql.includes("FROM empresas")) return [[{ id: 1 }]];
+    if (sql.includes("FROM empresas")) return [[{ id: 1, activa: 1 }]];
+    if (sql.includes("FROM usuarios")) return [[{ id: p[0], activo: 1, rol_global: "Admin" }]];
     if (sql.includes("FROM flota_cb2_externos_asociaciones a JOIN")) return [p[0] === 1 ? catalogo : []];
     if (sql.includes("FROM flota_cb2_externos_pilotos")) return [piloto ? [piloto] : []];
     if (sql.includes("FROM flota_cb2_externos_unidades")) return [unidad ? [unidad] : []];
@@ -139,5 +143,42 @@ describe("persistencia y confirmación: servicios reales con adaptadores mock; n
     expect(seleccion.safeParse([{ candidato, vehiculoId: -21 }]).success).toBe(false);
     expect(seleccion.safeParse([{ candidato, vehiculoId: 21, asociacionExternaId: 31 }]).success).toBe(false);
     expect(seleccion.safeParse([{ candidato, vehiculoId: -21, asociacionExternaId: 31, empleadoId: 7 }]).success).toBe(false);
+  });
+  it("mismo ID con otra sesion o username no puede autoverificar; auditoria conserva identidades", async () => {
+    await registrarTerceros(ctx, alta);
+    await expect(revisarTerceros({ ...ctx, actor: { id: ctx.actor.id, username: "sesion-nueva" } }, 31, 0, "VERIFICADA")).rejects.toMatchObject({ status: 403 });
+    expect(m.execute).not.toHaveBeenCalled();
+    await revisarTerceros({ ...ctx, actor: { id: 10, username: "otro-admin" } }, 31, 0, "VERIFICADA");
+    const evento = JSON.parse(m.auditar.mock.calls.at(-1)![1].detalle);
+    expect(evento).toMatchObject({ creadoPor: 9, actorId: 10, verificadoPor: 10, estadoAnterior: "PENDIENTE", estado: "VERIFICADA", revisionAnterior: 0, revision: 1 });
+    await revisarTerceros(ctx, 31, 1, "REVOCADA");
+    expect(JSON.parse(m.auditar.mock.calls.at(-1)![1].detalle)).toMatchObject({ creadoPor: 9, actorId: 9, verificadoPor: 10, estadoAnterior: "VERIFICADA", estado: "REVOCADA" });
+  });
+  it.each([{ activo: 0, rol_global: "Admin" }, { activo: 1, rol_global: "Operaciones" }])("rol/estado vigente %j impide llamadas directas aunque la sesion fuera Admin", async actual => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, args) => sql.includes("FROM usuarios") ? Promise.resolve([[{ id: ctx.actor.id, ...actual }]]) : original(sql, args));
+    await expect(registrarTerceros(ctx, alta)).rejects.toMatchObject({ status: 403 });
+    expect(m.insert).not.toHaveBeenCalled(); expect(m.execute).not.toHaveBeenCalled();
+  });
+  it("revocar configuracion o permiso mientras espera empresa bloquea la gestion", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql, args) => {
+      const r = await original(sql, args);
+      if (sql === "SELECT id FROM empresas WHERE id=? FOR UPDATE") vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "");
+      return r;
+    });
+    await expect(registrarTerceros(ctx, alta)).rejects.toMatchObject({ status: 403 }); expect(m.insert).not.toHaveBeenCalled();
+  });
+  it("API real con SQL mock: cuenta creadora no verifica tras cambiar sesion; otro Admin verifica", async () => {
+    const request = (method: string, body: object) => new Request("http://localhost/api/terceros", { method, headers: { origin: "http://localhost", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    expect((await tercerosHttp(request("POST", alta), "demo")).status).toBe(201);
+    const op = { proveedorId: 3, id: 31, revision: 0, estado: "VERIFICADA" };
+    m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { id: 9, username: "sesion-renovada", rol: "Admin" } });
+    expect((await tercerosHttp(request("PATCH", op), "demo")).status).toBe(403);
+    expect(m.execute).not.toHaveBeenCalled();
+    expect((await tercerosHttp(request("PATCH", { ...op, creado_por: 10 }), "demo")).status).toBe(400);
+    m.guard.mockResolvedValue({ empresa: { id: 1 }, session: { id: 10, username: "otro-admin", rol: "Admin" } });
+    expect((await tercerosHttp(request("PATCH", op), "demo")).status).toBe(200);
+    expect(registro).toMatchObject({ creado_por: 9, verificado_por: 10, estado: "VERIFICADA" });
   });
 });

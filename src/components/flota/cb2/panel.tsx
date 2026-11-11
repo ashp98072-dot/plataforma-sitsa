@@ -42,6 +42,12 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
     }, [scope, api]);
     const [busy, setBusy] = useState(false), [refresh, setRefresh] = useState(0), [error, setError] = useState(""), [message, setMessage] = useState("");
     const locked = !restaurado || busy || !!op.pending?.ejecutar;
+    async function actualizarCatalogos() {
+        const datos = await jsonCB2<CatalogosCB2>(`/api/empresas/${encodeURIComponent(slug)}/flota/combustible/catalogos`);
+        if (!Array.isArray(datos.vehiculos) || !Array.isArray(datos.proveedores)) throw new Error("Catálogos incompletos; vuelve a intentar.");
+        setCat(datos); setCatalogosListos(true); setCatalogosError("");
+        return datos;
+    }
     useEffect(() => {
         const ac = new AbortController();
         jsonCB2<CatalogosCB2>(`/api/empresas/${encodeURIComponent(slug)}/flota/combustible/catalogos`, { signal: ac.signal }).then(d => {
@@ -108,10 +114,10 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
  {op.pending && <aside className="space-y-2 rounded border border-amber-600 p-3"><p>Hay una solicitud pendiente ({op.pending.action}). Conservamos su clave de reintento. No cambies archivo, selección ni revisiones para recuperar un resultado incierto.</p>{op.pending.ejecutar ? <button className={button} disabled={busy} onClick={() => void retry()}>Reintentar exactamente la solicitud</button> : <p>Tras recargar, reproduce el mismo archivo y decisiones. No se guardan archivos ni recibos en el navegador.</p>}<details><summary>Decisiones del intento pendiente</summary><pre className="max-w-xl whitespace-pre-wrap break-all text-xs">{JSON.stringify(op.pending.identidad, null, 2)}</pre></details>{op.pending.definitivo && <button className={button} disabled={busy} onClick={() => { op.editar(); setError(""); setMessage("Solicitud rechazada sin aplicar. Puedes corregirla o actualizar los datos."); }}>Corregir solicitud rechazada</button>}</aside>}
  {catalogosError && <p role="alert">{catalogosError} <button className={button} onClick={() => setRecargarCat(n => n + 1)}>Reintentar catálogos</button></p>}
  <div hidden={tab !== "consumos"}><ConsumosCB2 admin={admin} key={`consumos:${refresh}`} api={api} cat={cat} run={run} canWrite={canWrite && catalogosListos} locked={locked} refresh={refresh} activo={tab === "consumos"} documento={documento} setDocumento={setDocumento}/></div>
- {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <><ImportarCB2 key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/></> : <p role="status">Carga los catálogos para importar.</p>}</div>}
+ {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <><ImportarCB2 actualizarCatalogos={actualizarCatalogos} key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/></> : <p role="status">Carga los catálogos para importar.</p>}</div>}
  <div hidden={tab !== "facturas"}><FacturasCB2 key={`facturas:${refresh}`} api={api} cat={cat} refresh={refresh} activo={tab === "facturas"} canWrite={canWrite} locked={locked} elegir={(d, p) => { setDocumento(d); setTab("consumos"); setMessage(`Documento del proveedor #${p} seleccionado. Selecciona sus consumos y confirma la asociación.`); }}/></div>
  <div hidden={tab !== "documental"}><ConciliacionDocumentalCB2 api={api} cat={cat} activo={tab === "documental"} refresh={refresh}/></div>
- <div hidden={tab !== "terceros"}><TercerosCB2 api={api} cat={cat} admin={admin && canWrite} recargar={() => setRecargarCat(n => n + 1)}/></div>
+ <div hidden={tab !== "terceros"}><TercerosCB2 actorId={actorId} api={api} cat={cat} admin={admin && canWrite} recargar={() => setRecargarCat(n => n + 1)}/></div>
  {admin && <div hidden={tab !== "duplicados"}><DuplicadosVehiculos api={`/api/empresas/${encodeURIComponent(slug)}/flota/vehiculos/duplicados`} activo={tab === "duplicados"} recargar={() => setRecargarCat(n => n + 1)}/></div>}
  <div hidden={tab !== "historial"}><HistorialCB2 key={`historial:${refresh}`} api={api} cat={cat} run={run} locked={locked} admin={admin} canWrite={canWrite && catalogosListos} refresh={refresh} activo={tab === "historial"}/></div>
  </section>;

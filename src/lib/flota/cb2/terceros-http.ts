@@ -13,8 +13,8 @@ export async function tercerosHttp(req: Request, slug: string) {
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura });
     if (g.error) return g.error;
     if (lectura) return NextResponse.json(await listarTerceros(g.empresa.id), { headers: { "Cache-Control": "private, no-store" } });
-    // Guard restrictivo de preparación. La activación y capacidades definitivas requieren D2 aprobada.
-    if (g.session.rol !== "Admin") throw new ErrorCB2("Gestionar terceros requiere Admin y D2 aprobada.", 403);
+    // D2: gestión solo para Admin autorizado; el creador nunca se toma del request.
+    if (g.session.rol !== "Admin") throw new ErrorCB2("Gestionar terceros requiere administrador autorizado.", 403);
     validarOrigenCB2(req);
     const op = z.object({ proveedorId: z.number().int().positive() }).passthrough().parse(JSON.parse((await bodyAcotado(req, 16 * 1024)).toString("utf8")));
     const proveedorId = op.proveedorId;
