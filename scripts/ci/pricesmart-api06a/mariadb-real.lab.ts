@@ -4,7 +4,9 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import mysql from "mysql2/promise";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { confirmarParadaPorPiloto, evidenciaConfirmada, listarConfirmacionesPlan, type ConfirmarParadaBody } from "../../../src/lib/tms/parada-confirmacion";
+import { eliminarEvidenciaViaje } from "../../../src/lib/flota/viaje-evidencias";
 import { sandboxPool } from "../../../src/lib/sandbox-db";
 import { mariaDbOrderRepository, PersistenceError } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
 import { OrderApplication } from "../../../src/lib/integrations/pricesmart/service";
@@ -22,7 +24,14 @@ import { makeLabCipher } from "./lab-cipher";
 
 const manifestPath = process.env.PS06A_MANIFEST;
 if (!manifestPath || process.env.NOVALVION_ENV !== "sandbox") throw new Error("API-06A: esta suite solo se ejecuta desde el ejecutor del laboratorio.");
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { schema: string; user: string; workerUser: string; port: number; pipe: string; datadir: string };
+// B12: el código real de TMS usa getPool()/query()/execute() de @/lib/db; en el laboratorio se le entrega SOLO la cuenta de aplicación del lab (privilegios acotados), nunca otra conexión.
+const appHoist = vi.hoisted(() => ({ pool: null as null | { getConnection(): Promise<unknown> }, raw: null as null | { query(sql: string, p?: unknown[]): Promise<unknown[]>; execute(sql: string, p?: unknown[]): Promise<unknown[]> } }));
+vi.mock("@/lib/db", () => ({
+  getPool: () => { if (!appHoist.pool) throw new Error("B12: pool de aplicación no inicializado"); return appHoist.pool; },
+  query: async (sql: string, params?: unknown[]) => (await appHoist.raw!.query(sql, params))[0],
+  execute: async (sql: string, params?: unknown[]) => (await appHoist.raw!.execute(sql, params))[0],
+}));
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { schema: string; user: string; workerUser: string; appUser: string; port: number; pipe: string; datadir: string };
 const phase = process.env.PS06A_PHASE ?? "";
 const MAIN = phase === "main";
 const T = `\`${manifest.schema}\``;
@@ -84,9 +93,9 @@ describe.skipIf(!MAIN)("B0 aislamiento observado desde el proceso de pruebas", (
 });
 
 describe.skipIf(!MAIN)("B1 DDL efectivo (information_schema)", () => {
-  it("B1.1 las 9 tablas son InnoDB", async () => {
+  it("B1.1 las 17 tablas son InnoDB", async () => {
     const rows = await admin("SELECT TABLE_NAME AS t, ENGINE AS e FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME", [manifest.schema]);
-    expect(rows.map((r) => r.t)).toEqual(["novalvion_environment", "ps_api01_audit", "ps_api01_events", "ps_api01_orders", "ps_api01_outbox", "ps_api01_scopes", "ps_api09_adapt_jobs", "ps_api09_adapt_links", "ps_api09_adapt_traces"]);
+    expect(rows.map((r) => String(r.t)).sort()).toEqual(["auditoria", "flota_viaje_evidencias", "flota_viajes", "novalvion_environment", "ps_api01_audit", "ps_api01_events", "ps_api01_orders", "ps_api01_outbox", "ps_api01_scopes", "ps_api09_adapt_jobs", "ps_api09_adapt_links", "ps_api09_adapt_traces", "tms_parada_confirmaciones", "tms_personal", "tms_plan_paradas", "tms_plan_pilotos_adicionales", "tms_planes_viaje"]);   // orden ASCII, independiente de la colación
     expect(rows.every((r) => r.e === "InnoDB")).toBe(true);
   });
   it("B1.2 CHECK de orders presentes (≥ 11) y UNIQUE de identidad con el orden de columnas del contrato", async () => {
@@ -95,9 +104,9 @@ describe.skipIf(!MAIN)("B1 DDL efectivo (information_schema)", () => {
     const cols = await admin("SELECT COLUMN_NAME AS c FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ps_api01_orders' AND INDEX_NAME = 'uq_ps_api01_identity' ORDER BY SEQ_IN_INDEX", [manifest.schema]);
     expect(cols.map((r) => r.c)).toEqual(["environment", "tenant_id", "client_id", "integration_id", "external_order_id"]);
   });
-  it("B1.3 10 claves foráneas efectivas (4 de API-01 + 6 de API-09); identificadores externos son binarios", async () => {
+  it("B1.3 12 claves foráneas efectivas (4 de API-01 + 6 de API-09 + 2 de B12); identificadores externos son binarios", async () => {
     const fks = await admin("SELECT COUNT(*) AS n FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ?", [manifest.schema]);
-    expect(Number(fks[0].n)).toBe(10);
+    expect(Number(fks[0].n)).toBe(12);
     const t = await admin("SELECT DATA_TYPE AS d FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'ps_api01_orders' AND COLUMN_NAME = 'external_order_id'", [manifest.schema]);
     expect(t[0].d).toBe("varbinary");
   });
@@ -527,6 +536,131 @@ describe.skipIf(!MAIN)("B11 adaptación durable contra el motor real (API-09)", 
     const foreignJob = { key: `lab-${uid()}`, orderId: b, inputHash: "b".repeat(64), version: 1, attempt: 1, status: "PROCESSING" as const, leaseUntilMs: Date.now() + 1000, result: null };
     await expect(repo.runAtomic(aScope(1), (tx) => tx.saveJob(foreignJob, null))).rejects.toMatchObject({ code: "UNAVAILABLE" });   // la clave foránea compuesta impide colgar un trabajo del alcance 1 a la orden del 2
     expect(await count("ps_api09_adapt_jobs", "order_id = UNHEX(?)", [uuidHex(b)])).toBe(1);
+  });
+});
+
+// ---- B12 confirmación de entrega por parada hecha por el piloto (TMS-ENTREGA-PILOTO-1): el código REAL de src/lib/tms/parada-confirmacion.ts contra el motor REAL.
+// Tablas del TMS = versión mínima de apoyo (tms-fixture.sql, solo laboratorio); la tabla nueva sale de sql/migrate-2026-11-tms-parada-confirmaciones.sql SIN modificar.
+// La cuenta de aplicación del laboratorio tiene SOLO SELECT/INSERT sobre las confirmaciones: si el código necesitara UPDATE/DELETE, estas pruebas fallarían.
+const tmsPool = () => { if (!appPool) { appRaw = mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: manifest.appUser, password: process.env.PS06A_APP_PASSWORD, database: manifest.schema, connectionLimit: 8 }); appPool = sandboxPool(appRaw); appHoist.pool = appPool; appHoist.raw = appRaw as never; } return appRaw!; };
+let appRaw: ReturnType<typeof mysql.createPool> | null = null; let appPool: ReturnType<typeof sandboxPool> | null = null;
+afterAll(async () => { if (appPool) await appPool.end(); });
+const ins = async (sql: string, params: unknown[]) => Number(((await tmsPool().execute(sql, params as never))[0] as { insertId: number }).insertId);
+const rid = () => 100_000 + Math.floor(Math.random() * 800_000);
+type Trip = { empresa: number; planId: number; viajeId: number; paradas: number[]; principal: { empleado: number; codigo: string }; extra: { empleado: number; codigo: string }; auxiliar: number; intruso: number };
+async function seedTrip(over: { empresa?: number; planEstado?: string; viajeEstado?: string } = {}): Promise<Trip> {
+  tmsPool(); const empresa = over.empresa ?? 7_000_000 + rid(); const principal = { empleado: rid(), codigo: `P${uid()}` }; const extra = { empleado: rid() + 1_000_000, codigo: `X${uid()}` }; const auxiliar = rid() + 2_000_000; const intruso = rid() + 3_000_000;
+  const pId = await ins("INSERT INTO tms_personal (empresa_id, codigo, nombre, id_empleado) VALUES (?, ?, 'Piloto', ?)", [empresa, principal.codigo, principal.empleado]);
+  const xId = await ins("INSERT INTO tms_personal (empresa_id, codigo, nombre, id_empleado) VALUES (?, ?, 'Piloto extra', ?)", [empresa, extra.codigo, extra.empleado]);
+  await ins("INSERT INTO tms_personal (empresa_id, codigo, nombre, tipo, id_empleado) VALUES (?, ?, 'Auxiliar', 'Auxiliar', ?)", [empresa, `A${uid()}`, auxiliar]);
+  const planId = await ins("INSERT INTO tms_planes_viaje (empresa_id, codigo, estado, piloto_id) VALUES (?, ?, ?, ?)", [empresa, `PL${uid()}`, over.planEstado ?? "En ruta", pId]);
+  await ins("INSERT INTO tms_plan_pilotos_adicionales (empresa_id, plan_id, personal_id) VALUES (?, ?, ?)", [empresa, planId, xId]);
+  const viajeId = await ins("INSERT INTO flota_viajes (empresa_id, plan_id, estado) VALUES (?, ?, ?)", [empresa, planId, over.viajeEstado ?? "abierto"]);
+  const paradas: number[] = [];
+  for (const [i, tipo] of ["Carga", "Entrega", "Entrega", "Descarga"].entries()) paradas.push(await ins("INSERT INTO tms_plan_paradas (plan_id, orden, lugar_nombre, tipo) VALUES (?, ?, ?, ?)", [planId, i + 1, `${tipo} ${i + 1}`, tipo]));
+  return { empresa, planId, viajeId, paradas, principal, extra, auxiliar, intruso };
+}
+const addEvidencia = (t: Trip, paradaId: number | null, tipo = "producto", over: { empresa?: number; viaje?: number } = {}) =>
+  ins("INSERT INTO flota_viaje_evidencias (empresa_id, viaje_id, tipo, ruta_relativa, nombre_original, capturado_en, subido_por, creado_at, parada_id) VALUES (?, ?, ?, ?, 'foto.jpg', '2026-11-11 10:00:00', ?, NOW(), ?)",
+    [over.empresa ?? t.empresa, over.viaje ?? t.viajeId, tipo, `lab/${uid()}.jpg`, `portal:${t.principal.codigo}`, paradaId]);
+const confirmar = (t: Trip, paradaId: number, body: ConfirmarParadaBody, who: { empleado: number; codigo: string } = t.principal, over: { empresa?: number; plan?: number } = {}) =>
+  confirmarParadaPorPiloto({ empresaId: over.empresa ?? t.empresa, empleadoId: who.empleado, usuario: `portal:${who.codigo}`, viajeId: t.viajeId, planId: over.plan ?? t.planId, paradaId, body });
+const confs = (t: Trip) => admin(`SELECT * FROM ${T}.tms_parada_confirmaciones WHERE plan_id = ? ORDER BY id`, [t.planId]);
+const audits = (t: Trip) => count("auditoria", "empresa_id = ? AND accion = 'confirmar_entrega_parada_piloto'", [t.empresa]);
+
+describe.skipIf(!MAIN)("B12 confirmación de entrega por parada contra el motor real (TMS-ENTREGA-PILOTO-1)", () => {
+  it("B12.1 la migración propuesta crea la tabla InnoDB con UNIQUE de entrega, dos FK RESTRICT y las cuatro restricciones CHECK", async () => {
+    const t = await admin("SELECT ENGINE AS e FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'tms_parada_confirmaciones'", [manifest.schema]); expect(t[0].e).toBe("InnoDB");
+    const fks = await admin("SELECT CONSTRAINT_NAME AS n, DELETE_RULE AS d, REFERENCED_TABLE_NAME AS r FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = 'tms_parada_confirmaciones' ORDER BY CONSTRAINT_NAME", [manifest.schema]);
+    expect(fks.map((f) => `${f.n}:${f.d}:${f.r}`)).toEqual(["fk_tmspc_parada:RESTRICT:tms_plan_paradas", "fk_tmspc_plan:RESTRICT:tms_planes_viaje"]);
+    const checks = await admin("SELECT CONSTRAINT_NAME AS n FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND TABLE_NAME = 'tms_parada_confirmaciones' ORDER BY CONSTRAINT_NAME", [manifest.schema]);
+    expect(checks.map((c) => c.n)).toEqual(["ck_tmspc_nota", "ck_tmspc_resultado", "ck_tmspc_revision", "ck_tmspc_vigente"]);
+    const uq = await admin("SELECT COLUMN_NAME AS c, NON_UNIQUE AS u FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'tms_parada_confirmaciones' AND INDEX_NAME = 'uq_tmspc_entrega' ORDER BY SEQ_IN_INDEX", [manifest.schema]);
+    expect(uq.map((r) => `${r.c}:${r.u}`)).toEqual(["parada_id:0", "entrega_vigente:0"]);
+  });
+  it("B12.2 el piloto confirma una parada con evidencia: fila con identidad, hora, evidencia y fotografía de la parada, más su auditoría; otra parada es independiente", async () => {
+    const t = await seedTrip(); const ev1 = await addEvidencia(t, t.paradas[1]); await addEvidencia(t, t.paradas[2]);
+    const r = await confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" });
+    expect(r).toMatchObject({ ok: true, replayed: false, confirmacion: { resultado: "ENTREGADA_POR_PILOTO", revision: "NO_REQUERIDA", evidenciaId: ev1, recepcionOficial: "NO_ACEPTADA_POR_PRICESMART", estadoExternoPublicado: false } });
+    const [row] = await confs(t);
+    expect(row).toMatchObject({ empresa_id: t.empresa, plan_id: t.planId, viaje_id: t.viajeId, parada_id: t.paradas[1], parada_tipo: "Entrega", parada_orden: 2, parada_lugar_nombre: "Entrega 2", resultado: "ENTREGADA_POR_PILOTO",
+      revision: "NO_REQUERIDA", entrega_vigente: 1, piloto_empleado_id: t.principal.empleado, piloto_usuario: `portal:${t.principal.codigo}`, evidencia_id: ev1, nota: null });
+    expect(String(row.evidencia_ruta)).toMatch(/^lab\//); expect(row.confirmado_en).toBeTruthy(); expect(await audits(t)).toBe(1);
+    expect(await confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO" }, t.extra)).toMatchObject({ ok: true });   // el piloto extra también puede, en OTRA parada
+    expect((await confs(t)).map((c) => Number(c.parada_id))).toEqual([t.paradas[1], t.paradas[2]]); expect(await audits(t)).toBe(2);
+    await addEvidencia(t, t.paradas[3]); expect(await confirmar(t, t.paradas[3], { resultado: "ENTREGADA_POR_PILOTO" })).toMatchObject({ ok: true });   // la Descarga final también se confirma
+  });
+  it("B12.3 el motor rechaza datos incoherentes aunque el código fallara: CHECK, UNIQUE de entrega y claves foráneas compuestas", async () => {
+    const t = await seedTrip(); const ev = await addEvidencia(t, t.paradas[1]); tmsPool();
+    const base = { empresa_id: t.empresa, plan_id: t.planId, viaje_id: t.viajeId, parada_id: t.paradas[1], parada_tipo: "Entrega", parada_orden: 2, parada_lugar_nombre: "x", resultado: "ENTREGADA_POR_PILOTO", revision: "NO_REQUERIDA", entrega_vigente: 1 as number | null,
+      piloto_empleado_id: 1, piloto_personal_id: 1, piloto_usuario: "portal:X", evidencia_id: ev, evidencia_ruta: "lab/x.jpg", evidencia_capturada_en: null, evidencia_subido_por: null, nota: null as string | null, confirmado_en: "2026-11-11 10:00:00" };
+    const insertRaw = (over: Partial<typeof base>) => { const v = { ...base, ...over }; return appRaw!.execute(`INSERT INTO ${T}.tms_parada_confirmaciones (${Object.keys(v).join(",")}) VALUES (${Object.keys(v).map(() => "?").join(",")})`, Object.values(v) as never); };
+    const rechaza = async (over: Partial<typeof base>, errno: number) => { await expect(insertRaw(over)).rejects.toSatisfy((e: { errno?: number }) => e.errno === errno); };
+    await rechaza({ resultado: "OTRO" }, 4025); await rechaza({ revision: "HECHA" }, 4025); await rechaza({ entrega_vigente: null }, 4025);
+    await rechaza({ resultado: "PARCIAL", revision: "PENDIENTE", entrega_vigente: 1, nota: "faltó producto" }, 4025); await rechaza({ resultado: "PARCIAL", revision: "NO_REQUERIDA", entrega_vigente: null, nota: "faltó producto" }, 4025);
+    await rechaza({ resultado: "PARCIAL", revision: "PENDIENTE", entrega_vigente: null, nota: null }, 4025); await rechaza({ resultado: "PARCIAL", revision: "PENDIENTE", entrega_vigente: null, nota: "abc" }, 4025);
+    await rechaza({ parada_id: 999_999_999 }, 1452); await rechaza({ empresa_id: t.empresa + 1 }, 1452);   // parada inexistente; empresa ≠ la del plan (FK compuesta)
+    await insertRaw({});   // la entrega válida entra…
+    await rechaza({}, 1062);   // …y una segunda entrega de la MISMA parada la impide el UNIQUE
+    await insertRaw({ resultado: "PARCIAL", revision: "PENDIENTE", entrega_vigente: null, nota: "faltó producto" }); await insertRaw({ resultado: "INCIDENCIA", revision: "PENDIENTE", entrega_vigente: null, nota: "cliente cerrado" });   // las incidencias sí se acumulan
+    expect(await count("tms_parada_confirmaciones", "plan_id = ?", [t.planId])).toBe(3);
+  });
+  it("B12.4 historial inmutable por privilegio y por clave foránea: la cuenta de aplicación no puede actualizar, borrar ni truncar, y plan/parada con confirmaciones no se pueden borrar", async () => {
+    const t = await seedTrip(); await addEvidencia(t, t.paradas[1]); await addEvidencia(t, t.paradas[2]); await confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }); tmsPool();
+    const denied = async (sql: string, errnos: number[], params: unknown[] = []) => { await expect(appRaw!.execute(sql, params as never)).rejects.toSatisfy((e: { errno?: number }) => errnos.includes(e.errno ?? 0)); };
+    await denied(`UPDATE ${T}.tms_parada_confirmaciones SET nota = 'x' WHERE plan_id = ?`, [1142, 1143], [t.planId]); await denied(`DELETE FROM ${T}.tms_parada_confirmaciones WHERE plan_id = ?`, [1142], [t.planId]);
+    await expect(appRaw!.query(`TRUNCATE TABLE ${T}.tms_parada_confirmaciones`)).rejects.toSatisfy((e: { errno?: number }) => e.errno === 1142); await expect(appRaw!.query(`ALTER TABLE ${T}.tms_parada_confirmaciones ADD COLUMN x INT`)).rejects.toSatisfy((e: { errno?: number }) => e.errno === 1142);
+    await denied(`DELETE FROM ${T}.tms_plan_paradas WHERE id = ?`, [1451], [t.paradas[1]]); await denied(`DELETE FROM ${T}.tms_planes_viaje WHERE id = ?`, [1451], [t.planId]);
+    expect((await appRaw!.execute(`DELETE FROM ${T}.tms_plan_paradas WHERE id = ?`, [t.paradas[2]] as never))[0]).toMatchObject({ affectedRows: 1 });   // control: una parada SIN confirmaciones sí se borra (lo que frena es la clave foránea)
+    expect(await count("tms_parada_confirmaciones", "plan_id = ?", [t.planId])).toBe(1);
+  });
+  it("B12.5 concurrencia real: dos confirmaciones simultáneas de la misma parada dejan UNA sola fila (replay del mismo piloto; el otro recibe YA_CONFIRMADA o REVISION_PENDIENTE)", async () => {
+    const a = await seedTrip(); await addEvidencia(a, a.paradas[1]);
+    const mismo = await Promise.all([confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" })]);
+    expect(mismo.map((r) => (r.ok ? (r.replayed ? "replay" : "nuevo") : r.codigo)).sort()).toEqual(["nuevo", "replay", "replay"]);   // diagnóstico: si falla, muestra el código de cada intento expect(await confs(a)).toHaveLength(1); expect(await audits(a)).toBe(1);
+    const b = await seedTrip(); await addEvidencia(b, b.paradas[1]);
+    const dos = await Promise.all([confirmar(b, b.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, b.principal), confirmar(b, b.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, b.extra)]);
+    expect(dos.filter((r) => r.ok)).toHaveLength(1); expect(dos.filter((r) => !r.ok).map((r) => (r as { codigo: string }).codigo)).toEqual(["YA_CONFIRMADA"]); expect(await confs(b)).toHaveLength(1);
+    const c = await seedTrip(); await addEvidencia(c, c.paradas[1]);
+    const mix = await Promise.all([confirmar(c, c.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, c.principal), confirmar(c, c.paradas[1], { resultado: "PARCIAL", nota: "faltaron 3 cajas" }, c.extra)]);
+    expect(mix.filter((r) => r.ok)).toHaveLength(1); expect(["YA_CONFIRMADA", "REVISION_PENDIENTE"]).toContain((mix.find((r) => !r.ok) as { codigo: string }).codigo); expect(await confs(c)).toHaveLength(1);
+  });
+  it("B12.6 reglas con datos reales: otra empresa, parada ajena, quien no es piloto, sin evidencia de ESA parada, evidencia ajena, viaje/plan fuera de curso y parada de Carga se rechazan sin escribir nada", async () => {
+    const t = await seedTrip(); const otro = await seedTrip(); const ev1 = await addEvidencia(t, t.paradas[1]);
+    const rechaza = async (p: Promise<Awaited<ReturnType<typeof confirmar>>>, codigo: string) => { expect(await p).toMatchObject({ ok: false, codigo }); };
+    await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, t.principal, { empresa: t.empresa + 1 }), "PARADA_INVALIDA");   // otra empresa
+    await rechaza(confirmar(t, otro.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), "PARADA_INVALIDA");   // parada de otro plan
+    await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, { empleado: t.auxiliar, codigo: "AUX" }), "NO_ASIGNADO"); await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, { empleado: t.intruso, codigo: "XXX" }), "NO_ASIGNADO");
+    await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, otro.principal), "NO_ASIGNADO");   // piloto de OTRO plan/empresa
+    await rechaza(confirmar(t, t.paradas[0], { resultado: "ENTREGADA_POR_PILOTO" }), "TIPO_NO_CONFIRMABLE");
+    await rechaza(confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO" }), "SIN_EVIDENCIA");   // la parada 3 no tiene evidencia (la de la parada 2 no cuenta)
+    await addEvidencia(t, t.paradas[2], "tablero_salida"); await rechaza(confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO" }), "SIN_EVIDENCIA");   // evidencia de otro tipo tampoco
+    await rechaza(confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO", evidenciaId: ev1 }), "EVIDENCIA_INVALIDA");   // evidencia de otra parada
+    const ajena = await addEvidencia(otro, otro.paradas[1]); await rechaza(confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO", evidenciaId: ajena }), "EVIDENCIA_INVALIDA");   // evidencia de otro viaje/empresa
+    const enOtroViaje = await addEvidencia(t, t.paradas[2], "producto", { viaje: otro.viajeId }); await rechaza(confirmar(t, t.paradas[2], { resultado: "ENTREGADA_POR_PILOTO", evidenciaId: enOtroViaje }), "EVIDENCIA_INVALIDA");
+    for (const estado of ["Programado", "Cargado", "Descargado", "Cerrado", "Cancelado"]) { await tmsPool().execute("UPDATE tms_planes_viaje SET estado = ? WHERE id = ?", [estado, t.planId]); await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), "VIAJE_NO_EN_CURSO"); }
+    await tmsPool().execute("UPDATE tms_planes_viaje SET estado = 'En ruta' WHERE id = ?", [t.planId]); await tmsPool().execute("UPDATE flota_viajes SET estado = 'cerrado' WHERE id = ?", [t.viajeId]); await rechaza(confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), "VIAJE_NO_EN_CURSO");
+    expect(await confs(t)).toHaveLength(0); expect(await audits(t)).toBe(0);
+  });
+  it("B12.7 parcial/rechazada/incidencia: exigen nota, quedan PENDIENTES de revisión humana, bloquean la entrega de esa parada y su historial se conserva", async () => {
+    const t = await seedTrip(); await addEvidencia(t, t.paradas[1]);
+    expect(await confirmar(t, t.paradas[1], { resultado: "PARCIAL" })).toMatchObject({ ok: false, codigo: "NOTA_REQUERIDA" }); expect(await confs(t)).toHaveLength(0);
+    const p = await confirmar(t, t.paradas[1], { resultado: "PARCIAL", nota: "Entregó 40 de 50 cajas" }); expect(p).toMatchObject({ ok: true, confirmacion: { revision: "PENDIENTE", resultado: "PARCIAL" } });
+    const [row] = await confs(t); expect(row).toMatchObject({ resultado: "PARCIAL", revision: "PENDIENTE", entrega_vigente: null, nota: "Entregó 40 de 50 cajas" });
+    expect(await confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" })).toMatchObject({ ok: false, codigo: "REVISION_PENDIENTE" });
+    expect(await confirmar(t, t.paradas[1], { resultado: "PARCIAL", nota: "Entregó 40 de 50 cajas" })).toMatchObject({ ok: true, replayed: true });   // reintento idéntico
+    expect(await confirmar(t, t.paradas[1], { resultado: "RECHAZADA", nota: "El cliente no recibió" }, t.extra)).toMatchObject({ ok: false, codigo: "REVISION_PENDIENTE" });
+    expect(await confs(t)).toHaveLength(1); expect(JSON.stringify(await admin(`SELECT detalle FROM ${T}.auditoria WHERE empresa_id = ?`, [t.empresa]))).not.toContain("40 de 50");   // la nota no va a la auditoría
+    const listado = await listarConfirmacionesPlan(t.empresa, t.planId); expect(listado).toHaveLength(1); expect(listado[0]).toMatchObject({ resultado: "PARCIAL", revision: "PENDIENTE" });
+    expect(await listarConfirmacionesPlan(t.empresa + 1, t.planId)).toHaveLength(0);   // otra empresa no ve el historial
+  });
+  it("B12.8 la evidencia que respalda una confirmación no se puede eliminar; una sin confirmación sí", async () => {
+    const t = await seedTrip(); const ev1 = await addEvidencia(t, t.paradas[1]); const ev2 = await addEvidencia(t, t.paradas[2]); await confirmar(t, t.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" });
+    const ruta1 = String((await admin(`SELECT ruta_relativa AS r FROM ${T}.flota_viaje_evidencias WHERE id = ?`, [ev1]))[0].r);
+    expect(await evidenciaConfirmada(t.empresa, ruta1)).toBe(true); expect(await evidenciaConfirmada(t.empresa + 1, ruta1)).toBe(false);
+    expect(await eliminarEvidenciaViaje(t.empresa, t.viajeId, ev1)).toMatchObject({ ok: false, status: 409 }); expect(await count("flota_viaje_evidencias", "id = ?", [ev1])).toBe(1);
+    expect(await eliminarEvidenciaViaje(t.empresa, t.viajeId, ev2)).toMatchObject({ ok: true }); expect(await count("flota_viaje_evidencias", "id = ?", [ev2])).toBe(0);
+    expect(await confs(t)).toHaveLength(1);
   });
 });
 

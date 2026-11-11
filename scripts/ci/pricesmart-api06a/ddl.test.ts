@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { adminStatements, adaptationDdlStatements, ADAPT_SIGNAL_LINE, ADAPT_TABLES, deriveLabDdl, labDdlStatements, LAB_NOTE, SIGNAL_LINE, splitStatements, TABLES } from "./ddl.mjs";
+import { adminStatements, adaptationDdlStatements, tmsFixtureStatements, tmsMigrationStatements, TMS_FIXTURE_TABLES, TMS_MIGRATION_TABLE, ADAPT_SIGNAL_LINE, ADAPT_TABLES, deriveLabDdl, labDdlStatements, LAB_NOTE, SIGNAL_LINE, splitStatements, TABLES } from "./ddl.mjs";
 import { createManifest, IDENTITY_QUERIES, SqlGate } from "./safety.mjs";
 import { LAB_SCOPES } from "./constants.mjs";
 
@@ -125,5 +125,52 @@ describe("DDL de adaptación (API-09) y permisos del worker", () => {
     const calls: string[] = []; const conn = { query: async (sql: string) => { calls.push(sql); return [[]]; } };
     for (const sql of list) await gate.run(conn as never, sql); expect(calls).toHaveLength(list.length);
     await expect(gate.run(conn as never, "DROP TABLE ps_api09_adapt_jobs")).rejects.toThrow();
+  });
+});
+
+// ---- TMS-ENTREGA-PILOTO-1 (B12): tablas de apoyo del TMS, migración real propuesta y cuenta de aplicación acotada
+const tmsFixtureText = fs.readFileSync(path.join(here, "tms-fixture.sql"), "utf8");
+const tmsMigrationText = fs.readFileSync(path.join(here, "../../../sql/migrate-2026-11-tms-parada-confirmaciones.sql"), "utf8");
+const tmsInput = { fixtureText: tmsFixtureText, migrationText: tmsMigrationText };
+describe("B12: DDL de apoyo del TMS, migración propuesta y cuenta de aplicación", () => {
+  it("las tablas de apoyo son exactamente las esperadas, sin claves foráneas ni sentencias destructivas", () => {
+    const st = tmsFixtureStatements(tmsFixtureText); expect(st).toHaveLength(TMS_FIXTURE_TABLES.length); st.forEach((s, i) => expect(s.startsWith(`CREATE TABLE ${TMS_FIXTURE_TABLES[i]} (`)).toBe(true));
+    expect(st.join("\n")).not.toMatch(/REFERENCES|\bDROP\b|\bALTER\b|\bDELETE\b|\bGRANT\b/i);
+    expect(() => tmsFixtureStatements(`${tmsFixtureText}\nDROP TABLE auditoria;\n`)).toThrow(); expect(() => tmsFixtureStatements(tmsFixtureText.replace("CREATE TABLE tms_personal", "CREATE TABLE tms_personal_x"))).toThrow(/inesperado/);
+  });
+  it("las claves de apoyo que usa la migración son fieles: UNIQUE (empresa_id, id) del plan, PK id de la parada y las columnas que consulta el código real", () => {
+    expect(tmsFixtureText).toContain("UNIQUE KEY uq_tmsplanes_empresa_id (empresa_id, id)");
+    const code = fs.readFileSync(path.join(here, "../../../src/lib/tms/parada-confirmacion.ts"), "utf8");
+    for (const col of ["pp.id", "pp.orden", "pp.lugar_nombre", "pp.tipo", "p.estado", "p.piloto_id", "per.id_empleado", "x.personal_id", "ruta_relativa", "capturado_en", "subido_por", "parada_id", "viaje_id"]) expect(code).toContain(col);
+    for (const col of ["id_empleado", "personal_id", "plan_id", "piloto_id", "ruta_relativa", "capturado_en", "subido_por", "parada_id", "lugar_nombre", "requiere_evidencia"]) expect(tmsFixtureText).toContain(col);
+  });
+  it("la migración REAL propuesta es una única CREATE TABLE IF NOT EXISTS con dos FK RESTRICT; cualquier otra forma se rechaza", () => {
+    const st = tmsMigrationStatements(tmsMigrationText); expect(st).toHaveLength(1); expect(st[0].startsWith(`CREATE TABLE IF NOT EXISTS ${TMS_MIGRATION_TABLE} (`)).toBe(true);
+    expect(() => tmsMigrationStatements(`${tmsMigrationText}\nDROP TABLE x;\n`)).toThrow(); expect(() => tmsMigrationStatements(tmsMigrationText.replaceAll("ON DELETE RESTRICT", "ON DELETE CASCADE"))).toThrow();
+    expect(() => tmsMigrationStatements(tmsMigrationText.replace("CREATE TABLE IF NOT EXISTS tms_parada_confirmaciones", "CREATE TABLE tms_otra"))).toThrow();
+  });
+  it("sin el texto TMS la lista es idéntica a la anterior; con él solo se SUMAN 8 tablas y la cuenta de aplicación, sin nada destructivo", () => {
+    const m = mk(); const base = adminStatements(m, staging, adaptText); const ext = adminStatements(m, staging, adaptText, tmsInput);
+    expect(base.every((s) => ext.includes(s))).toBe(true); const added = ext.filter((s) => !base.includes(s));
+    expect(added.filter((s) => s.startsWith("CREATE TABLE "))).toHaveLength(TMS_FIXTURE_TABLES.length + 1); expect(added.filter((s) => s.startsWith("CREATE USER "))).toHaveLength(1);
+    expect(added.join("\n")).not.toMatch(/\b(DROP|TRUNCATE|ALTER|GRANT OPTION|ALL PRIVILEGES)\b/); expect(added.join("\n").replaceAll("ON DELETE RESTRICT", "")).not.toMatch(/\bDELETE\b(?! ON)/);
+  });
+  it("la cuenta de aplicación tiene SOLO SELECT e INSERT sobre las confirmaciones y la auditoría (nunca UPDATE/DELETE), con contraseña propia y solo en 127.0.0.1", () => {
+    const m = mk(); const list = adminStatements(m, staging, adaptText, tmsInput); const app = `\`${m.appUser}\`@\`127.0.0.1\``;
+    const grants = list.filter((g) => g.startsWith("GRANT ") && g.endsWith(`TO ${app}`));
+    const on = (table: string) => grants.find((g) => g.includes(`.${table} TO`))!;
+    expect(on("tms_parada_confirmaciones")).toMatch(/^GRANT SELECT, INSERT ON .*tms_parada_confirmaciones TO /);
+    expect(on("auditoria")).toMatch(/^GRANT SELECT, INSERT ON /);
+    for (const g of grants) expect(g).not.toMatch(/GRANT OPTION|ALL PRIVILEGES|\bCREATE\b|\bDROP\b|\bALTER\b/);
+    for (const g of grants.filter((x) => /tms_parada_confirmaciones|auditoria/.test(x))) expect(g).not.toMatch(/UPDATE|DELETE/);
+    const create = list.filter((s) => s.startsWith("CREATE USER ") && s.includes(app)); expect(create).toHaveLength(1);
+    expect(list.filter((s) => s.includes(m.secrets.APP_PASSWORD))).toEqual(create); expect(new Set([m.user, m.workerUser, m.appUser]).size).toBe(3);
+    expect(adminStatements(m, staging, adaptText).some((s) => s.includes(m.appUser))).toBe(false);   // sin B12 no existe la cuenta
+  });
+  it("todas las sentencias B12 están en la lista cerrada del ejecutor y nada fuera de ella pasa", async () => {
+    const m = mk(); const list = adminStatements(m, staging, adaptText, tmsInput); const gate = new SqlGate(IDENTITY_QUERIES, [...list, "SHUTDOWN"]); gate.confirm();
+    const calls: string[] = []; const conn = { query: async (sql: string) => { calls.push(sql); return [[]]; } };
+    for (const sql of list) await gate.run(conn as never, sql); expect(calls).toHaveLength(list.length);
+    await expect(gate.run(conn as never, "DROP TABLE tms_parada_confirmaciones")).rejects.toThrow();
   });
 });

@@ -58,11 +58,33 @@ const quote = (name) => {
 };
 
 /** Lista CERRADA de sentencias administrativas. Es el único SQL que `SqlGate` deja pasar (por igualdad exacta). */
-/** @param {any} m @param {string} stagingText @param {string | null} [adaptationText] */
-export function adminStatements(m, stagingText, adaptationText = null) {
+// ---- TMS-ENTREGA-PILOTO-1 (B12): tablas mínimas del TMS (SOLO laboratorio; claves fieles a las reales) y la migración REAL propuesta, sin modificar.
+export const TMS_FIXTURE_TABLES = Object.freeze(['tms_planes_viaje', 'tms_plan_paradas', 'tms_personal', 'tms_plan_pilotos_adicionales', 'flota_viajes', 'flota_viaje_evidencias', 'auditoria']);
+export const TMS_MIGRATION_TABLE = 'tms_parada_confirmaciones';
+const TMS_FORBIDDEN = /\b(DROP|TRUNCATE|ALTER|DELETE|GRANT|USE|SIGNAL|UPDATE|INSERT|CREATE (DATABASE|USER))\b/i;
+export function tmsFixtureStatements(fixtureText) {
+  const statements = splitStatements(fixtureText);
+  if (statements.length !== TMS_FIXTURE_TABLES.length || statements.some((s) => !/^CREATE TABLE /i.test(s))) fail('Se esperaban exactamente las tablas de apoyo del TMS.');
+  TMS_FIXTURE_TABLES.forEach((table, i) => { if (!statements[i].startsWith(`CREATE TABLE ${table} (`)) fail(`Orden/nombre de tabla de apoyo inesperado: ${table}`); });
+  if (statements.some((s) => TMS_FORBIDDEN.test(s) || /REFERENCES/i.test(s))) fail('El DDL de apoyo del TMS contiene sentencias no permitidas.');
+  return statements;
+}
+/** La migración propuesta debe ser UNA sola sentencia CREATE TABLE IF NOT EXISTS (las comillas «ON DELETE RESTRICT» de sus claves foráneas son legítimas). */
+export function tmsMigrationStatements(migrationText) {
+  const statements = splitStatements(migrationText);
+  if (statements.length !== 1 || !statements[0].startsWith(`CREATE TABLE IF NOT EXISTS ${TMS_MIGRATION_TABLE} (`)) fail('La migración de confirmaciones debe ser una única sentencia CREATE TABLE.');
+  if (TMS_FORBIDDEN.test(statements[0].replaceAll('ON DELETE RESTRICT', ''))) fail('La migración de confirmaciones contiene sentencias no permitidas.');
+  if ((statements[0].match(/ON DELETE RESTRICT/g) ?? []).length !== 2) fail('La migración debe tener exactamente dos claves foráneas RESTRICT.');
+  return statements;
+}
+
+/** @param {any} m @param {string} stagingText @param {string | null} [adaptationText] @param {{ fixtureText: string, migrationText: string } | null} [tms] */
+export function adminStatements(m, stagingText, adaptationText = null, tms = null) {
   const schema = quote(m.schema); const account = `${quote(m.user)}@${quote(HOST)}`;
   for (const k of ['DB_PASSWORD', 'WORKER_PASSWORD']) if (!/^sandbox:[a-z0-9-]+:[a-f0-9]{64}$/.test(m.secrets[k])) fail('Forma de contraseña inválida.');
   const worker = `${quote(m.workerUser)}@${quote(HOST)}`;
+  const app = tms === null ? null : `${quote(m.appUser)}@${quote(HOST)}`;
+  if (tms !== null && !/^sandbox:[a-z0-9-]+:[a-f0-9]{64}$/.test(m.secrets.APP_PASSWORD)) fail('Forma de contraseña inválida.');
   const seeds = LAB_SCOPES.map((s) => {
     if (!/^[a-z0-9-]+$/.test(s.integrationId) || !Number.isSafeInteger(s.tenantId) || !Number.isSafeInteger(s.clientId)) fail('Alcance sintético inválido.');
     return `INSERT INTO ps_api01_scopes (environment, tenant_id, client_id, integration_id) VALUES (_binary'sandbox', ${s.tenantId}, ${s.clientId}, _binary'${s.integrationId}')`;
@@ -74,6 +96,7 @@ export function adminStatements(m, stagingText, adaptationText = null) {
     `INSERT INTO novalvion_environment (id, environment, sandbox_id) VALUES (1, 'sandbox', '${m.sandboxId}')`,
     ...labDdlStatements(stagingText),
     ...(adaptationText === null ? [] : adaptationDdlStatements(adaptationText)),
+    ...(tms === null ? [] : [...tmsFixtureStatements(tms.fixtureText), ...tmsMigrationStatements(tms.migrationText)]),
     ...seeds,
     `CREATE USER ${account} IDENTIFIED BY '${m.secrets.DB_PASSWORD}'`,
     `GRANT SELECT ON ${schema}.novalvion_environment TO ${account}`,
@@ -96,6 +119,15 @@ export function adminStatements(m, stagingText, adaptationText = null) {
       `GRANT SELECT, INSERT, UPDATE (version, attempt, status, lease_until_ms, result_json) ON ${schema}.ps_api09_adapt_jobs TO ${worker}`,
       `GRANT SELECT, INSERT, UPDATE (external_order_id, origin_club_reference, request_reference, version, source_version, source_state, local_delivery_state, cancellation_requested, correlation_id, link_json) ON ${schema}.ps_api09_adapt_links TO ${worker}`,
       `GRANT INSERT ON ${schema}.ps_api09_adapt_traces TO ${worker}`,
+    ]),
+    ...(tms === null ? [] : [
+      // TMS-ENTREGA-PILOTO-1 (B12): cuenta de APLICACIÓN del laboratorio, deliberadamente MÁS ESTRICTA que la real sobre la tabla nueva: solo SELECT e INSERT.
+      // Si el código necesitara UPDATE o DELETE sobre las confirmaciones, el laboratorio fallaría. Sobre las tablas de apoyo del TMS tiene lectura/escritura (las usa la aplicación real).
+      `CREATE USER ${app} IDENTIFIED BY '${m.secrets.APP_PASSWORD}'`,
+      `GRANT SELECT ON ${schema}.novalvion_environment TO ${app}`,
+      ...['tms_planes_viaje', 'tms_plan_paradas', 'tms_personal', 'tms_plan_pilotos_adicionales', 'flota_viajes', 'flota_viaje_evidencias'].map((t) => `GRANT SELECT, INSERT, UPDATE, DELETE ON ${schema}.${t} TO ${app}`),
+      `GRANT SELECT, INSERT ON ${schema}.auditoria TO ${app}`,
+      `GRANT SELECT, INSERT ON ${schema}.${TMS_MIGRATION_TABLE} TO ${app}`,
     ]),
   ];
 }

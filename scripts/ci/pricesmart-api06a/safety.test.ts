@@ -60,7 +60,7 @@ describe("puerto, manifiesto y rutas", () => {
     expect(m.schema).toMatch(/^sandbox_api02_[a-z0-9_]+$/); expect(m.user).toBe(m.schema); expect(m.sandboxId).toMatch(/^[a-z0-9][a-z0-9-]{2,47}$/);
     expect(m.schema.length).toBeLessThanOrEqual(64); expect(m.runDir).toBe(path.join(tempRoot, `novalvion-ps-api06a-${m.id}`));
     for (const s of Object.values(m.secrets) as string[]) expect(s).toMatch(new RegExp(`^sandbox:${m.sandboxId}:[a-f0-9]{64}$`));
-    expect(new Set(Object.values(m.secrets)).size).toBe(4);
+    expect(new Set(Object.values(m.secrets)).size).toBe(5);
     expect(validateManifest(m, tempRoot, { requirePort: true })).toBe(m);
   });
   it("publicManifest no contiene secretos", () => {
@@ -107,7 +107,7 @@ describe("argumentos del servidor y entorno del proceso de pruebas", () => {
   it("el entorno hijo se construye desde cero: no hereda variables de la consola", () => {
     const m = mk(); const env = buildChildEnv(m, { ...baseEnv, DB_HOST: "prod.example", DB_PASSWORD: "real", HTTPS_PROXY: "http://p", AUTH_SECRET: "real", HOSTINGER_TOKEN: "t", MYSQL_PWD: "x" });
     expect(Object.keys(env).sort()).toEqual(["AUTH_SECRET", "CB2_PUBLIC_ORIGIN", "DB_HOST", "DB_NAME", "DB_PASSWORD", "DB_PORT", "DB_USER", "EMPRESA_DOMINIOS", "NEXT_TELEMETRY_DISABLED", "NODE_ENV",
-      "NOVALVION_ENV", "PATH", "PORTAL_CREDENTIALS_KEY", "PS06A_WORKER_PASSWORD", "SANDBOX_ID", "SANDBOX_ROOT", "SystemRoot", "TEMP", "TMP", "UPLOAD_DIR", "WINDIR"].sort());
+      "NOVALVION_ENV", "PATH", "PORTAL_CREDENTIALS_KEY", "PS06A_APP_PASSWORD", "PS06A_WORKER_PASSWORD", "SANDBOX_ID", "SANDBOX_ROOT", "SystemRoot", "TEMP", "TMP", "UPLOAD_DIR", "WINDIR"].sort());
     expect(env.DB_HOST).toBe("127.0.0.1"); expect(env.DB_PORT).toBe(String(m.port)); expect(env.DB_PASSWORD).toBe(m.secrets.DB_PASSWORD); expect(env.DB_PASSWORD).not.toBe("real");
     expect(Object.values(env).join("|")).not.toMatch(/prod\.example|hostinger|HTTPS_PROXY|http:\/\/p/i);
     expect(() => buildChildEnv(m, baseEnv, { MYSQL_PWD: "x" })).toThrow(/no permitida/);
