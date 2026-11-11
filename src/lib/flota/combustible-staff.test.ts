@@ -99,10 +99,10 @@ describe("captura staff C-1", () => {
     await expect(guardarCombustibleStaff(1, actor, input, file)).rejects.toMatchObject({ status: 409 });
     expect(m.subir).not.toHaveBeenCalled(); expect(m.query).toHaveBeenCalledWith(expect.stringContaining("UPPER(TRIM"), [1, 3, "A-1", 0]);
   });
-  it("compensa el archivo si falla BD", async () => {
+  it("conserva el archivo si falla BD: no se demuestra propiedad exclusiva del upload", async () => {
     m.execute.mockRejectedValue(new Error("fallo"));
     await expect(guardarCombustibleStaff(1, actor, input, file)).rejects.toThrow("fallo");
-    expect(m.rollback).toHaveBeenCalledOnce(); expect(m.borrar).toHaveBeenCalledWith("empresas/1/flota/nuevo.pdf");
+    expect(m.rollback).toHaveBeenCalledOnce(); expect(m.borrar).not.toHaveBeenCalled();
   });
   it("si falla upload no escribe ni borra evidencia anterior", async () => {
     m.subir.mockRejectedValue(new Error("upload"));
