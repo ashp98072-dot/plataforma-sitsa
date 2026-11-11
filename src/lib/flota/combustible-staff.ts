@@ -3,7 +3,7 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { obtenerVehiculoAccesibleTx, predicadoVehiculoAccesible } from "./acceso";
 import { ahoraLocal } from "@/lib/rrhh/dates";
-import { borrarUpload, contentTypeFor, guardarUpload, validarRutaArchivoEmpresa } from "@/lib/uploads";
+import { contentTypeFor, guardarUpload } from "@/lib/uploads";
 import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 import { combustibleStaffSchema, precioCalculado, type CombustibleStaffInput } from "./combustible-staff-schema";
 import { validarLineaFondoCombustibleTx } from "./combustible-fondos";
@@ -32,9 +32,16 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
   const conn = await getPool().getConnection();
   let subida: Awaited<ReturnType<typeof guardarUpload>> | null = null;
   let anterior: string | null = null;
-  let committed = false;
+  let transaccion: "INICIO_EN_CURSO" | "ABIERTA" | "COMMIT_INTENTADO" | "COMMIT_CONFIRMADO" = "INICIO_EN_CURSO";
+  let rollback: "NO_INTENTADO" | "INTENTADO" | "CONFIRMADO" | "FALLIDO" = "NO_INTENTADO";
+  const conexionLimpia = () => transaccion === "COMMIT_CONFIRMADO" || (transaccion === "ABIERTA" && rollback === "CONFIRMADO");
+  const informar = (etapa: string) => {
+    // Diagnóstico sin payload, rutas ni errores secundarios que puedan contener datos sensibles.
+    try { console.warn("[combustible-staff] estado transaccional", { etapa, transaccion, rollback }); } catch { /* no sustituir el resultado principal */ }
+  };
   try {
     await conn.beginTransaction();
+    transaccion = "ABIERTA";
     // PROVEEDOR DERIVADO DE LA ESTACIÓN. El formulario ya no captura proveedor: la estación (catálogo del servidor) es la fuente
     // autoritativa. Orden de bloqueos conservado (proveedor → vale → estación): primero lecturas SIN bloqueo para saber qué proveedor
     // bloquear y, ya bajo bloqueo, se revalida que nada cambió.
@@ -123,15 +130,30 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
     // Misma transacción que captura y auditoría; NULL explícito quita el vínculo, omitir lo conserva.
     await conn.execute("UPDATE flota_combustible_cargas SET solicitud_fondo_linea_id=? WHERE empresa_id=? AND id=? AND estado='PENDIENTE'", [lineaFondoId, empresaId, cargaId!]);
     await registrarAuditoriaTx(conn, { empresaId, usuario: actor.username, accion: id == null ? "registrar_combustible" : "editar_combustible", modulo: "flota_combustible", detalle: `Vale #${cargaId} · proveedor #${proveedorId ?? "sin proveedor"} · estación #${estacionId ?? "sin estación"} · ${datos.numeroVale} · usuario #${actor.usuarioId} · línea fondo ${actual?.solicitud_fondo_linea_id ?? "sin vínculo"} -> ${lineaFondoId ?? "sin vínculo"}` });
+    transaccion = "COMMIT_INTENTADO";
     await conn.commit();
-    committed = true;
+    transaccion = "COMMIT_CONFIRMADO";
     // El archivo histórico se conserva: puede estar referenciado por snapshots/consultas anteriores.
     return cargaId!;
   } catch (error) {
-    await conn.rollback();
+    if (transaccion === "ABIERTA" || transaccion === "COMMIT_INTENTADO") {
+      rollback = "INTENTADO";
+      try { await conn.rollback(); rollback = "CONFIRMADO"; }
+      catch { rollback = "FALLIDO"; }
+    }
+    if (transaccion !== "ABIERTA" || rollback !== "CONFIRMADO") informar("resultado_incierto");
     throw error;
   } finally {
-    conn.release();
-    if (!committed && subida && validarRutaArchivoEmpresa(empresaId, subida.relative)) borrarUpload(subida.relative);
+    if (conexionLimpia()) {
+      try { conn.release(); }
+      catch {
+        informar("release_fallido");
+        try { conn.destroy(); } catch { informar("destroy_fallido"); }
+      }
+    } else {
+      try { conn.destroy(); } catch { informar("destroy_fallido"); }
+    }
+    // guardarUpload no garantiza creación exclusiva. Ni siquiera un rollback confirmado
+    // demuestra propiedad del archivo: conservar SIEMPRE; una futura recuperación es separada.
   }
 }
