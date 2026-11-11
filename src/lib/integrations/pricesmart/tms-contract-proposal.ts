@@ -3,6 +3,8 @@
 // Cada valor cita su fuente en el TMS; tms-contract-proposal.test.ts compara estas constantes con el código y el DDL reales para detectar deriva (si el TMS cambia, la prueba falla).
 
 export const CONTRACT_STATUS = 'PROPOSED' as const;
+/** Estado por decisión. D05 (modelo 1 pedido = 1 solicitud = 1 plan; parciales/reintentos/viaje compartido a revisión) fue APROBADO por el propietario; el resto sigue como propuesta. */
+export const DECISION_STATUS = Object.freeze({ D05: 'APPROVED', D06: 'PROPOSED', D08: 'PROPOSED', D09: 'PROPOSED' } as const);
 
 /** Estados reales de tms_solicitudes_cliente (src/lib/tms/solicitudes-cliente.ts → ESTADOS_SOLICITUD_CLIENTE). */
 export const SOLICITUD_STATES = ['SOLICITADA', 'EN_REVISION', 'PROGRAMADA', 'RECHAZADA', 'CANCELADA'] as const;

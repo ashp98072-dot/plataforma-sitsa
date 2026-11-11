@@ -9,7 +9,7 @@ import { ESTADOS_SOLICITUD_CLIENTE, TIPOS_SOLICITUD_PARADA } from '@/lib/tms/sol
 import { ESTADOS_CIERRE_MANUAL } from '@/lib/tms/cierre-viaje-shared';
 import { ESTADOS_BLOQUEADOS, ESTADOS_SOLO_NOTAS } from '@/lib/tms/programacion-validacion-recursos';
 import {
-  assessCancellation, CONTRACT_STATUS, EXTERNAL_STATUSES, FULFILLMENT_MODEL, PLAN_STATES, projectExternalStatus, SOLICITUD_STATES, TMS_LIMITS,
+  assessCancellation, CONTRACT_STATUS, DECISION_STATUS, EXTERNAL_STATUSES, FULFILLMENT_MODEL, PLAN_STATES, projectExternalStatus, SOLICITUD_STATES, TMS_LIMITS,
 } from './tms-contract-proposal';
 
 // Guardas de DERIVA: la propuesta D05/D06/D08/D09 se apoya en reglas reales del TMS. Si el TMS cambia (estados, límites, DDL, rutas), estas pruebas fallan y obligan a revisar la propuesta.
@@ -21,6 +21,7 @@ const varchar = (body: string, column: string) => Number(new RegExp(`\\b${column
 
 describe('propuesta D05/D06/D08/D09: sin deriva respecto al TMS real', () => {
   it('es una PROPUESTA (no ratificada)', () => { expect(CONTRACT_STATUS).toBe('PROPOSED'); });
+  it('solo D05 está aprobado; D06, D08 y D09 siguen como propuesta', () => { expect(DECISION_STATUS).toEqual({ D05: 'APPROVED', D06: 'PROPOSED', D08: 'PROPOSED', D09: 'PROPOSED' }); });
   it('los estados de solicitud coinciden con los reales y los tipos de parada son los reales', () => {
     expect([...SOLICITUD_STATES]).toEqual([...ESTADOS_SOLICITUD_CLIENTE]); expect([...TIPOS_SOLICITUD_PARADA]).toEqual(['Carga', 'Entrega', 'Descarga']);
   });
