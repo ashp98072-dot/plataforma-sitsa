@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ahoraLocal, fmtTs } from "@/lib/rrhh/dates";
+import type { EntregaVista } from "./parada-confirmacion-ui";
 
 /**
  * TMS-ENTREGA-PILOTO-1 — confirmación de entrega POR PARADA hecha por el piloto (decisión D08 aprobada por el propietario).
@@ -199,6 +200,23 @@ export async function listarConfirmacionesPlan(empresaId: number, planId: number
     if (tablaFaltante(e)) return [];
     throw e;
   }
+}
+
+/**
+ * Vista para la pantalla del Portal: las paradas Entrega/Descarga del plan (de ESTA empresa), cuántas evidencias aceptaría el servidor para confirmar cada una
+ * (flota_viaje_evidencias, tipo 'producto', este viaje) y su última confirmación. Solo lectura; la tabla de confirmaciones ausente ⇒ sin confirmaciones.
+ */
+export async function listarEntregasDelViaje(empresaId: number, planId: number, viajeId: number): Promise<EntregaVista[]> {
+  const paradas = await query<RowDataPacket[]>(
+    `SELECT pp.id, pp.orden, pp.lugar_nombre, pp.tipo FROM tms_plan_paradas pp INNER JOIN tms_planes_viaje p ON p.id = pp.plan_id
+     WHERE pp.plan_id = ? AND p.empresa_id = ? AND pp.tipo IN ('Entrega', 'Descarga') ORDER BY pp.orden, pp.id`, [planId, empresaId]);
+  if (!paradas.length) return [];
+  const evidencias = await query<RowDataPacket[]>(
+    `SELECT parada_id, COUNT(*) AS n FROM flota_viaje_evidencias WHERE empresa_id = ? AND viaje_id = ? AND tipo = 'producto' AND parada_id IS NOT NULL GROUP BY parada_id`, [empresaId, viajeId]);
+  const porParada = new Map(evidencias.map((r) => [Number(r.parada_id), Number(r.n)]));
+  const ultimas = new Map<number, ConfirmacionParada>();
+  for (const c of await listarConfirmacionesPlan(empresaId, planId)) if (!ultimas.has(c.paradaId)) ultimas.set(c.paradaId, c);   // la lista viene de la más reciente a la más antigua
+  return paradas.map((r) => ({ paradaId: Number(r.id), orden: Number(r.orden), lugarNombre: String(r.lugar_nombre), tipo: String(r.tipo), evidencias: porParada.get(Number(r.id)) ?? 0, confirmacion: ultimas.get(Number(r.id)) ?? null }));
 }
 
 /** ¿Alguna confirmación referencia esta evidencia (por id de flota o por ruta de archivo, que comparten flota_viaje_evidencias y tms_evidencias)? Impide eliminarla. Tabla ausente ⇒ false. */
