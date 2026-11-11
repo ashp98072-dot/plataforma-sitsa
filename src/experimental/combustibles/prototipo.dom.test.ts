@@ -12,6 +12,34 @@ async function elegir(label: string, value: string) {
   const control = [...host.querySelectorAll("label")].find(e => e.firstChild?.textContent === label)?.querySelector("select") as HTMLSelectElement;
   expect(control).toBeTruthy(); await act(async () => { control.value = value; control.dispatchEvent(new Event("change", { bubbles: true })); });
 }
+async function buscar(label: string, value: string) {
+  const control = [...host.querySelectorAll("label")].find(e => e.firstChild?.textContent === label)?.querySelector("input") as HTMLInputElement;
+  expect(control).toBeTruthy();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(control, value);
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+it("separa avisos de búsqueda de bloqueos sin invalidar una selección válida", async () => {
+  await act(async () => root.render(createElement(PrototipoExternos)));
+  await elegir("Identidad conductor", "11"); await elegir("Identidad vehículo", "101");
+  await buscar("Buscar empleado", "Homónimo"); await buscar("Buscar placa", "ausente");
+  const informacion = host.querySelector('[aria-label="Información de búsqueda"]')!;
+  const bloqueos = host.querySelector('[aria-label="Bloqueos de la selección actual"]')!;
+  expect(informacion.querySelector('[data-codigo="CONDUCTOR_AMBIGUO"]')?.textContent).toContain("Información:");
+  expect(informacion.querySelector('[data-codigo="VEHICULO_NO_DISPONIBLE"]')).not.toBeNull();
+  expect(bloqueos.querySelector("li")).toBeNull();
+  expect(bloqueos.textContent).toContain("no constituye autorización real");
+  expect(host.querySelector("output")?.textContent).toBe("SIMULACION_VALIDA");
+  expect(host.querySelector("button")?.disabled).toBe(true);
+  await elegir("Identidad conductor", "14");
+  expect(bloqueos.querySelector('[data-codigo="EMPLEADO_NO_DISPONIBLE"]')?.textContent).toContain("Bloqueo:");
+  expect(host.querySelector("output")?.textContent).toBe("BLOQUEADO");
+  await buscar("Buscar empleado", "Persona A"); await buscar("Buscar placa", "DEMO-001");
+  expect(informacion.querySelector("li")).toBeNull();
+  expect(bloqueos.querySelector('[data-codigo="EMPLEADO_NO_DISPONIBLE"]')).not.toBeNull();
+  expect(host.querySelector("button")?.disabled).toBe(true);
+});
 it.each([["EMPLEADO", "CATALOGO"], ["EMPLEADO", "EXTERNO"], ["EXTERNO", "CATALOGO"], ["EXTERNO", "EXTERNO"]])("visualiza %s/%s con cero red/escrituras", async (conductor, vehiculo) => {
   const fetch = vi.fn(() => { throw new Error("Red prohibida"); }), xhr = vi.fn(() => { throw new Error("XHR prohibido"); });
   vi.stubGlobal("fetch", fetch); vi.stubGlobal("XMLHttpRequest", xhr);

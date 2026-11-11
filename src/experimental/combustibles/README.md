@@ -10,7 +10,7 @@ No es una ruta Next ni se incorpora al menú o al flujo de importación. `Protot
 - `fixtures.ts`: empresas A/B, homónimos, inactivos/pendientes, externo verificado y unidad compartida explícita; todos sintéticos.
 - `prototipo.tsx`: selección de identidades, consulta de candidatos y resultado simulado; botón de confirmación deshabilitado sin handler. No crea tokens ni registra consumos.
 - `contratos.test.ts`: 32 casos unitarios, variantes/campos, revisiones, aislamiento y ausencia de mutaciones.
-- `prototipo.dom.test.ts`: 10 casos DOM, cuatro combinaciones, estados, compartidos, cambio A/B/A, éxito/error tardíos y trampas de efectos.
+- `prototipo.dom.test.ts`: 11 casos DOM, cuatro combinaciones, estados, compartidos, cambio A/B/A, éxito/error tardíos, trampas de efectos y separación de avisos de búsqueda frente a bloqueos de selección.
 - `aislamiento.test.ts`: 2 controles de frontera de imports y ausencia de incorporación desde módulos operativos.
 - Este README: ejecución, evidencia y límites.
 
@@ -39,4 +39,14 @@ Cambiar empresa desmonta la instancia y descarta selección, resultado y búsque
 
 Los validadores operan sobre catálogos tipados sintéticos. No aceptan catálogos de una red real ni sustituyen validación/locks de servidor. La evidencia y los revisores son demostrativos; no se implementan catálogo externo persistente, comprobación documental real, entidad, numeración, reserva de idempotencia ni alias. La jurisdicción/tenedor y revisión independiente representan propuestas del contrato, no reglas activadas en operaciones. NO_IDENTIFICADO bloqueado solo en simulación; SIN_ASIGNACION permanece intacto.
 
-No hay commit ni push de este incremento. Auditoría independiente requerida antes de publicación o ampliación de alcance.
+## Publicación y cierre de auditoría
+
+El prototipo fue publicado en GitHub en la rama `feature/tms-comb03a-externos-prototipo`, commit auditado [`9a6d03b7d3f603b0909bb94e30dc03272947ecb9`](https://github.com/ashp98072-dot/plataforma-sitsa/commit/9a6d03b7d3f603b0909bb94e30dc03272947ecb9).
+
+Dictamen ChatGPT: **APTO COMO PROTOTIPO EXPERIMENTAL. No autorizado para integración funcional ni despliegue.** D1–D5 siguen **NO APROBADAS**.
+
+AUD-03A-01 separa visualmente los bloqueos de la selección actual y la información de búsqueda mediante títulos, etiquetas y bordes distintos. Los avisos de consulta no cambian el resultado de validación de la selección actual. Una simulación válida no constituye autorización real; el botón de confirmación permanece deshabilitado y sin handler. No se modifican contratos ni reglas de servidor.
+
+AUD-03A-02 sustituye la nota anterior de ausencia de publicación por este estado publicado. La tabla de evidencia anterior corresponde al incremento original de 44 pruebas. El cierre añade una prueba DOM de presentación: **45 PASS (32 unitarias, 11 DOM y 2 de aislamiento)**. TypeScript completo, ESLint focal con cero advertencias y `git diff --check` pasan nuevamente. El build original se conserva como evidencia histórica.
+
+El PR Draft hacia `main` se prepara exclusivamente para revisión del código experimental y no operativo. No autoriza integración funcional, activación de externos, persistencia, migraciones, merge ni despliegue. Se requiere revisión final antes de ampliar el alcance.
