@@ -77,6 +77,10 @@ export async function main(argv, env = process.env) {
   }
   const stagingText = fs.readFileSync(path.join(loc.repo, 'docs/integraciones/pricesmart/api01/staging.sql.in'), 'utf8');
   const adaptationText = fs.readFileSync(path.join(loc.repo, 'docs/integraciones/pricesmart/api09/staging.sql.in'), 'utf8');   // API-09
+  const tms = {   // TMS-ENTREGA-PILOTO-1 (B12): tablas mínimas del TMS (solo laboratorio) + la migración REAL propuesta
+    fixtureText: fs.readFileSync(path.join(loc.repo, 'scripts/ci/pricesmart-api06a/tms-fixture.sql'), 'utf8'),
+    migrationText: fs.readFileSync(path.join(loc.repo, 'sql/migrate-2026-11-tms-parada-confirmaciones.sql'), 'utf8'),
+  };
   const mysql = (await import('mysql2/promise')).default;
   const m = createManifest({ randomBytes: crypto.randomBytes, tempRoot });
   validateManifest(m, tempRoot);
@@ -157,7 +161,7 @@ export async function main(argv, env = process.env) {
     // 3) Arranque y comprobación de identidad ANTES de cualquier SQL administrativo
     await startServer();
     admin = await connectAdmin();
-    gate = new SqlGate(IDENTITY_QUERIES, [...adminStatements(m, stagingText, adaptationText), 'SHUTDOWN']);
+    gate = new SqlGate(IDENTITY_QUERIES, [...adminStatements(m, stagingText, adaptationText, tms), 'SHUTDOWN']);
     const [[ident]] = await gate.run(admin, IDENTITY_QUERY);
     validateServerIdentity(ident, m, loc.home);
     if (fs.existsSync(m.pidFile) && parsePidFile(fs.readFileSync(m.pidFile, 'utf8')) !== m.pid) fail('El PID del archivo no coincide con el proceso lanzado.');
@@ -165,13 +169,14 @@ export async function main(argv, env = process.env) {
     const [[{ n: nSchema }]] = await gate.run(admin, SCHEMA_ABSENT_QUERY, [m.schema]);
     const [[{ n: nUser }]] = await gate.run(admin, USER_ABSENT_QUERY, [m.user]);
     const [[{ n: nWorker }]] = await gate.run(admin, USER_ABSENT_QUERY, [m.workerUser]);
-    if (Number(nSchema) !== 0 || Number(nUser) !== 0 || Number(nWorker) !== 0) fail('Base o usuario (ejecución o worker) preexistente; no se reutiliza.');
+    const [[{ n: nApp }]] = await gate.run(admin, USER_ABSENT_QUERY, [m.appUser]);
+    if (Number(nSchema) !== 0 || Number(nUser) !== 0 || Number(nWorker) !== 0 || Number(nApp) !== 0) fail('Base o usuario (ejecución, worker o aplicación) preexistente; no se reutiliza.');
     gate.confirm();
     note('B0.2', 'Identidad: datadir/pid/puerto/bind 127.0.0.1/versión/pipe/basedir/skip_name_resolve/local_infile=0', 'PASS');
     note('B0.3', 'Único socket en escucha del PID: 127.0.0.1:<puerto del run>', 'PASS', `puerto ${m.port}`);
     note('B0.4', 'Base y usuario del laboratorio inexistentes antes de crear (no se reutiliza nada)', 'PASS');
     // 4) DDL de laboratorio y cuenta mínima, SOLO sentencias exactas aprobadas
-    for (const sql of adminStatements(m, stagingText, adaptationText)) await gate.run(admin, sql);
+    for (const sql of adminStatements(m, stagingText, adaptationText, tms)) await gate.run(admin, sql);
     note('B0.5', 'SQL administrativo = lista cerrada aprobada (DDL derivado + cuenta mínima); nada fuera de ella', 'PASS', `${gate.executed.length} sentencias`);
     fs.writeFileSync(path.join(m.evidenceDir, 'sql-ejecutado.json'), JSON.stringify(gate.executed, null, 2), { flag: 'wx' });
     // 5) Manifiestos para el proceso de pruebas
