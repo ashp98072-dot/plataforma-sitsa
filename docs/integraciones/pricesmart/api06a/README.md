@@ -14,7 +14,8 @@ Alcance: solo archivos NUEVOS. No se modificó el adaptador, contratos, OpenAPI,
 | `.../report.mjs` | Resumen PASS/FAIL/SKIP por bloque B0–B9; sin resultados ⇒ «NO EJECUTADA», nunca PASS |
 | `.../mariadb-real.lab.ts` | Pruebas B0–B8 contra el motor real (solo cargables desde el ejecutor; no coinciden con `npm test`) |
 | `.../lab-setup.ts`, `vitest.lab.config.mts` | Guardia de red del laboratorio: solo pipe del run y `127.0.0.1:<puerto del run>` |
-| `.../safety.test.ts`, `ddl.test.ts`, `vitest.static.config.mts` | 103 pruebas ESTÁTICAS (sin base de datos) |
+| `.../procinfo.mjs` | Consultas de proceso/puerto/sockets/descendientes con estado explícito (`absent`/`present`/`unknown`) y terminación verificada |
+| `.../safety.test.ts`, `ddl.test.ts`, `executor.test.ts`, `vitest.static.config.mts` | 169 pruebas ESTÁTICAS (sin base de datos) |
 | `.../engine-manifest.json` | SHA-256 de los 624 archivos del motor (derivado del ZIP oficial verificado) |
 | `docs/.../staging-lab.sql`, `staging-DIFF.txt` | DDL de laboratorio y diff exacto contra `staging.sql.in` |
 | `docs/.../MATRIZ-B0-B9.md`, `RIESGOS-Y-DECISIONES.md` | Matriz de pruebas con estado real; riesgos residuales y relación con D01–D16 |
@@ -32,7 +33,9 @@ Además, el ejecutor crea en la base del run: `novalvion_environment` (tabla que
 6. **Identidad antes de actuar**: `datadir`, `pid_file`, `port`, `bind_address`, `version` 11.8.9-MariaDB, `socket`, `basedir`, `skip_name_resolve`, `local_infile`, FK/CHECK, `secure_file_priv`, `innodb_lock_wait_timeout`, `read_only`, `log_bin`; PID/ejecutable/línea de comandos coinciden con el manifiesto; base y usuario del run no existen.
 7. **`SqlGate`**: antes de confirmar la identidad solo pasan las consultas de identidad; después, solo sentencias **idénticas** a la lista cerrada de `adminStatements` (+`SHUTDOWN`). No existe ruta para SQL libre. Sin `DROP`/`TRUNCATE`/`DELETE`/`ALTER` en la lista.
 8. **Proceso de pruebas**: entorno construido desde cero (lista blanca); producido y validado contra el `validateSandboxConfig` REAL (la prueba lo ejecuta); guardia de red que solo admite el pipe y `127.0.0.1:<puerto>` y lanza ANTES de abrir cualquier socket (incluye una prueba que intenta 3306, 5432, hosts externos y `fetch`).
-9. **Limpieza**: `SHUTDOWN` por pipe; si no cierra, `kill()` del proceso hijo propio; borrado únicamente con `safeRemoveRunDir` (hijo directo de la raíz temporal, ruta real idéntica, recorrido sin enlaces/uniones, manifiesto válido) y solo si el PID ya no existe; la evidencia se copia antes a `.lab-runtime/ps-api06a-evidence-<id>` (ignorada por git). El ejecutor no contiene ninguna otra llamada de borrado (se prueba).
+9. **Limpieza fail-closed (AUD-01)**: `SHUTDOWN` por pipe; un proceso solo se termina tras verificar su identidad y su pertenencia al laboratorio (`terminateVerified`/`terminateStray`; nunca por nombre). El directorio se borra únicamente si `cleanupDecision` demuestra TODO: servidor terminado, proceso `absent`, puerto `free`, sin descendientes y evidencia copiada; cualquier consulta fallida/incompleta (`unknown`), proceso presente o puerto ocupado lo CONSERVA y lo informa. El borrado va por `safeRemoveRunDir` (hijo directo de la raíz temporal, ruta real idéntica, sin enlaces/uniones). La evidencia se copia antes a `.lab-runtime/ps-api06a-evidence-<id>` (ignorada por git).
+10. **Control de errores (AUD-02)**: cada ejecución de Vitest se evalúa con `evaluateVitestRun` (código, señal, error, JSON, bloques requeridos); B7 solo comienza si la fase principal es PASS completa; la preparación B7 se vigila (salida a archivo, timeout, señal); tras cada fase se buscan procesos huérfanos; ante cualquier fallo se detienen las fases siguientes, se conserva la evidencia y se informa FAIL/INCOMPLETO.
+11. **Resumen (AUD-03)**: PASS / PASS CON LIMITACIONES / FAIL / INCOMPLETO; B7.5 siempre visible como SKIP declarado.
 
 ## Cómo se ejecutaría (NO ejecutado; requiere autorización)
 ```

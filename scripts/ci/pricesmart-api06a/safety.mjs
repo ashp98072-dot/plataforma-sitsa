@@ -204,3 +204,24 @@ export function safeRemoveRunDir(m, tempRoot, fsApi) {
   walkAssertNoLinks(m.runDir, fsApi);
   fsApi.rmSync(m.runDir, { recursive: true, force: false, maxRetries: 3 });
 }
+
+// ---- AUD-01 / AUD-02 (correcciones de auditoría) ----
+
+/** Decisión de limpieza FAIL-CLOSED: solo se borra el directorio si TODO está demostrado. Cualquier estado 'unknown', 'present', 'busy' o ausente de consulta lo impide. */
+export function cleanupDecision({ exited, proc, port, strays, evidence }) {
+  const reasons = [];
+  if (evidence !== true) reasons.push('la evidencia no se copió fuera del directorio efímero');
+  if (exited !== true) reasons.push('el servidor no consta como terminado');
+  if (!proc || proc.state !== 'absent') reasons.push(`proceso del servidor: ${proc?.state ?? 'sin consulta'} (se exige absent)`);
+  if (!port || port.state !== 'free') reasons.push(`puerto del run: ${port?.state ?? 'sin consulta'} (se exige free)`);
+  if (!strays || strays.state !== 'none') reasons.push(`procesos descendientes del ejecutor: ${strays?.state ?? 'sin consulta'} (se exige none)`);
+  return { remove: reasons.length === 0, reasons };
+}
+/** Pertenencia de un proceso hijo (node/vitest) al laboratorio: ejecutable = node actual y línea de comandos dentro de vitest o del directorio del run. */
+export function labChildBelongs(info, { nodeExe, vitestRoot, runDir }) {
+  if (!info || !info.exe || !info.cmd) return false;
+  const cmd = String(info.cmd).toLowerCase();
+  return norm(info.exe) === norm(nodeExe) && (cmd.includes(norm(vitestRoot)) || cmd.includes(norm(runDir)));
+}
+/** Solo se continúa a la fase siguiente si TODAS las anteriores dieron PASS (un FAIL o INCOMPLETO detiene). */
+export function canProceed(evaluations) { return evaluations.length > 0 && evaluations.every((e) => e.state === 'PASS'); }

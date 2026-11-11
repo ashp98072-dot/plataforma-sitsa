@@ -8,7 +8,9 @@
 5. **Dependencias.** Las pruebas reales usan `node_modules` del checkout principal (el worktree no tiene propias). No se cambió `package.json` ni el lockfile.
 6. **El motor no aísla inquilinos.** El aislamiento multiempresa es del adaptador (cláusula `WHERE` con alcance completo); la cuenta de BD es única. B5 verifica el adaptador, no un control del motor.
 7. **Grants del laboratorio ≠ grants de producción.** La cuenta de laboratorio no tiene `SELECT` en `ps_api01_scopes` (el adaptador no lo usa), a diferencia de la propuesta de `PERSISTENCIA.md`.
-8. **Fragilidad de plataforma.** El ejecutor es solo Windows (PowerShell para PID/puertos).
+8. **Fragilidad de plataforma.** El ejecutor es solo Windows (PowerShell para PID/puertos). Las consultas CIM/NetTCP se prueban de forma real solo contra el propio proceso de prueba y con fallos inyectados; su comportamiento ante un servidor MariaDB real no se ha observado.
+9. **Posible falso positivo de seguridad.** El cierre es deliberadamente conservador: un estado incierto del PID, del puerto o de los descendientes (p. ej. proceso de otro usuario o consulta CIM lenta) conserva el directorio y devuelve INCOMPLETO/FAIL aunque el servidor ya hubiera terminado; en ese caso la limpieza es manual y se informa la ruta.
+10. **PASS pleno inalcanzable.** Con `B7.5` como SKIP permanente, el mejor resultado de la suite es `PASS CON LIMITACIONES`.
 
 ## Relación B0–B9 ↔ D01–D16 (NO se declaran resueltas)
 | Decisión pendiente | Bloques afectados | Tratamiento en API-06A |

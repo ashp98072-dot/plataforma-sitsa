@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest";
 import { adminStatements, deriveLabDdl, labDdlStatements, LAB_NOTE, SIGNAL_LINE, splitStatements, TABLES } from "./ddl.mjs";
 import { createManifest, IDENTITY_QUERIES, SqlGate } from "./safety.mjs";
 import { LAB_SCOPES } from "./constants.mjs";
-import { BLOCKS, renderMarkdown, summarize } from "./report.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const stagingPath = path.join(here, "../../../docs/integraciones/pricesmart/api01/staging.sql.in");
@@ -77,30 +76,5 @@ describe("lista cerrada de SQL administrativo", () => {
   it("la forma de la contraseña es obligatoria (no se acepta un valor libre)", () => {
     const x = mk(); x.secrets.DB_PASSWORD = "contraseña-libre";
     expect(() => adminStatements(x, staging)).toThrow(/contraseña/);
-  });
-});
-
-describe("informe PASS/FAIL/SKIP", () => {
-  const passed = (title: string, status = "passed") => ({ title, ancestorTitles: [], status, failureMessages: [] as string[] });
-  it("sin resultados no se declara PASS: todos los bloques quedan NO EJECUTADA", () => {
-    const s = summarize([], []);
-    expect(BLOCKS.every((b) => s.blocks[b].status === "NO EJECUTADA")).toBe(true); expect(s.overall).toBe("INCOMPLETO");
-  });
-  it("conserva FAIL y SKIP reales y marca los bloques", () => {
-    const rep = { testResults: [{ assertionResults: [passed("B1.1 a"), passed("B1.2 b", "failed"), passed("B2.1 c", "skipped"), passed("B3.1 d")] }] };
-    const s = summarize([rep], [{ id: "B0.1", name: "motor", status: "PASS" }]);
-    expect(s.counts).toEqual({ PASS: 3, FAIL: 1, SKIP: 1 });   // incluye B0.1 del ejecutor
-    expect(s.blocks.B1.status).toBe("FAIL"); expect(s.blocks.B2.status).toBe("SKIP"); expect(s.blocks.B3.status).toBe("PASS"); expect(s.blocks.B4.status).toBe("NO EJECUTADA");
-    expect(s.overall).toBe("FAIL");
-    expect(renderMarkdown(s)).toContain("| B1 | FAIL | 1 | 1 | 0 |");
-  });
-  it("un caso sin bloque se señala y el global no es PASS", () => {
-    const rep = { testResults: [{ assertionResults: [passed("sin bloque")] }] };
-    const s = summarize([rep], []); expect(s.unassigned).toBe(1); expect(s.overall).toBe("FAIL");
-  });
-  it("PASS global solo si B0–B9 tienen resultados y ninguno falla", () => {
-    const all = BLOCKS.map((b) => passed(`${b}.1 x`));
-    const s = summarize([{ testResults: [{ assertionResults: all }] }], []);
-    expect(s.overall).toBe("PASS");
   });
 });
