@@ -111,7 +111,8 @@ describe.skipIf(!MAIN)("B1 DDL efectivo (information_schema)", () => {
       const insert = (state: string) => c.query(
         `INSERT INTO ${T}.ps_api01_orders (id,environment,tenant_id,client_id,integration_id,external_order_id,origin_club_reference,payload_version,payload_ciphertext,payload_key_reference,input_hash,state,version,correlation_id,received_at,receipt_json,tms_linked) VALUES (UNHEX(?),'sandbox',1,1,'qa-integration',?,'QA-CLUB','api01-draft-1',?, 'k', UNHEX(?), ?, 1, UNHEX(?), UTC_TIMESTAMP(6), '{}', 0)`,
         [id, Buffer.from(uid()), Buffer.from("x"), "a".repeat(64), state, id]);
-      await expect(insert("BOGUS")).rejects.toMatchObject({ code: "ER_CONSTRAINT_FAILED" });
+      // MariaDB 4025 = ER_CONSTRAINT_FAILED, pero mysql2 traduce el errno 4025 con el nombre de MySQL (ER_INNODB_AUTOEXTEND_SIZE_OUT_OF_RANGE): se comprueba el errno y el mensaje, no el nombre.
+      await expect(insert("BOGUS")).rejects.toSatisfy((e: { errno?: number; sqlMessage?: string }) => e.errno === 4025 && /CONSTRAINT .* failed/.test(e.sqlMessage ?? ""));
     } finally { await c.end(); }
   });
 });

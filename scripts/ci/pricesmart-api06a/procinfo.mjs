@@ -57,15 +57,22 @@ export function classifyCount(r) {
   if (!v || v.ok !== true || !Number.isInteger(v.total) || v.total <= 0 || !Number.isInteger(v.count) || v.count < 0) return { state: 'unknown', reason: 'consulta incompleta' };
   return { state: 'known', count: v.count };
 }
-/** Puerto: free / busy / unknown. */
-export function classifyPort(r) {
-  const c = classifyCount(r);
-  return c.state === 'known' ? { state: c.count === 0 ? 'free' : 'busy' } : c;
+/**
+ * Puerto: free / busy / unknown. `count` = conexiones del puerto que NO están en TimeWait; `timeWait` = las que sí (sin propietario: restos de conexiones ya cerradas).
+ * Modo estricto (por defecto, selección de puerto): cualquier socket lo ocupa. Con `ignoreTimeWait` (prueba de cierre): los TimeWait no cuentan,
+ * porque tras un apagado correcto quedan sockets TimeWait sin proceso y sin escucha (ejecución 2). Una consulta incompleta (sin `timeWait` entero) es 'unknown'.
+ */
+export function classifyPort(r, opts = {}) {
+  const p = parseRun(r); if (!p.ok) return { state: 'unknown', reason: p.reason };
+  const v = p.value;
+  if (!v || v.ok !== true || !Number.isInteger(v.total) || v.total <= 0 || !Number.isInteger(v.count) || v.count < 0 || !Number.isInteger(v.timeWait) || v.timeWait < 0) return { state: 'unknown', reason: 'consulta de puerto incompleta' };
+  const busy = v.count > 0 || (opts.ignoreTimeWait !== true && v.timeWait > 0);
+  return { state: busy ? 'busy' : 'free', count: v.count, timeWait: v.timeWait };
 }
-export function inspectPort(port, runPs = defaultRunPs) {
+export function inspectPort(port, runPs = defaultRunPs, opts = {}) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return { state: 'unknown', reason: 'puerto inválido' };
-  const body = `$all = @(Get-NetTCPConnection); [pscustomobject]@{ok=$true;total=$all.Count;count=@($all | Where-Object { $_.LocalPort -eq ${port} }).Count} | ConvertTo-Json -Compress`;
-  return classifyPort(runPs(wrap(body)));
+  const body = `$all = @(Get-NetTCPConnection); $mine = @($all | Where-Object { $_.LocalPort -eq ${port} }); [pscustomobject]@{ok=$true;total=$all.Count;count=@($mine | Where-Object { $_.State -ne 'TimeWait' }).Count;timeWait=@($mine | Where-Object { $_.State -eq 'TimeWait' }).Count} | ConvertTo-Json -Compress`;
+  return classifyPort(runPs(wrap(body)), opts);
 }
 
 /** Descendientes (vivos) de un PID raíz. none / present / unknown. */

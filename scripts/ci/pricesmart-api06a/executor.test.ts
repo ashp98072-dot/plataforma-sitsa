@@ -52,12 +52,27 @@ describe("AUD-01 estado explícito de procesos: ausente / presente / desconocido
     expect(listenersOfPid(7, () => ok({ ok: true, total: 9, listeners: [{ address: "127.0.0.1", port: 50000 }] }) as never)).toEqual({ state: "known", listeners: [{ pid: 7, address: "127.0.0.1", port: 50000 }] });
   });
   it("puerto: free / busy / unknown; una consulta rota nunca es 'free'", () => {
-    expect(classifyPort(ok({ ok: true, total: 30, count: 0 }))).toEqual({ state: "free" });
-    expect(classifyPort(ok({ ok: true, total: 30, count: 2 }))).toEqual({ state: "busy" });
-    for (const r of [rawRun({ status: 3 }), rawRun({ stdout: "" }), ok({ ok: true, total: 0, count: 0 }), ok({ ok: true, total: 5 }), ok({ ok: true, total: 5, count: -1 })]) expect(classifyPort(r as never).state).toBe("unknown");
+    expect(classifyPort(ok({ ok: true, total: 30, count: 0, timeWait: 0 }))).toMatchObject({ state: "free" });
+    expect(classifyPort(ok({ ok: true, total: 30, count: 2, timeWait: 0 }))).toMatchObject({ state: "busy" });
+    for (const r of [rawRun({ status: 3 }), rawRun({ stdout: "" }), ok({ ok: true, total: 0, count: 0, timeWait: 0 }), ok({ ok: true, total: 5 }), ok({ ok: true, total: 5, count: -1, timeWait: 0 }),
+      ok({ ok: true, total: 5, count: 0 }), ok({ ok: true, total: 5, count: 0, timeWait: -1 }), ok({ ok: true, total: 5, count: 0, timeWait: "3" })]) {
+      expect(classifyPort(r as never).state).toBe("unknown"); expect(classifyPort(r as never, { ignoreTimeWait: true }).state).toBe("unknown");   // incompleta/ilegible = desconocido en AMBOS modos
+    }
     expect(inspectPort(0).state).toBe("unknown"); expect(inspectPort(70000).state).toBe("unknown"); expect(inspectPort(5000, () => rawRun({ status: 3 }) as never).state).toBe("unknown");
     expect(classifyCount(ok({ ok: true, total: 3, count: 1 }))).toEqual({ state: "known", count: 1 });
     expect(countProcessesNamed("x'; calc", () => ok({}) as never).state).toBe("unknown");
+  });
+  it("puerto y TimeWait (ejecución 2): sockets TimeWait sin propietario no cuentan en la prueba de cierre, pero sí en la selección estricta", () => {
+    const onlyTimeWait = ok({ ok: true, total: 40, count: 0, timeWait: 12 });
+    expect(classifyPort(onlyTimeWait)).toMatchObject({ state: "busy", count: 0, timeWait: 12 });                         // estricto (selección de puerto)
+    expect(classifyPort(onlyTimeWait, { ignoreTimeWait: true })).toMatchObject({ state: "free", count: 0, timeWait: 12 }); // cierre
+    for (const live of [ok({ ok: true, total: 40, count: 1, timeWait: 0 }), ok({ ok: true, total: 40, count: 1, timeWait: 12 })]) {
+      expect(classifyPort(live).state).toBe("busy"); expect(classifyPort(live, { ignoreTimeWait: true }).state).toBe("busy");   // escucha o conexión viva: ocupado siempre
+    }
+    expect(classifyPort(onlyTimeWait, { ignoreTimeWait: "yes" as never }).state).toBe("busy");   // solo el booleano true relaja la regla
+    expect(inspectPort(5000, () => ok({ ok: true, total: 40, count: 0, timeWait: 3 }) as never, { ignoreTimeWait: true }).state).toBe("free");
+    expect(inspectPort(5000, () => ok({ ok: true, total: 40, count: 0, timeWait: 3 }) as never).state).toBe("busy");
+    expect(inspectPort(5000, () => rawRun({ status: 3 }) as never, { ignoreTimeWait: true }).state).toBe("unknown");
   });
   it("descendientes: none / present / unknown", () => {
     expect(classifyDescendants(ok({ ok: true, total: 80, procs: [] }))).toEqual({ state: "none" });
@@ -369,9 +384,28 @@ describe.skipIf(process.platform !== "win32")("tubería real de consulta (solo l
   }, 60000);
   it("puertos, sockets, descendientes y recuentos devuelven estados conocidos (no 'unknown')", () => {
     expect(["free", "busy"]).toContain(inspectPort(1).state);
+    expect(inspectPort(1, undefined, { ignoreTimeWait: true }).state).not.toBe("unknown");
     expect(listenersOfPid(process.pid).state).toBe("known");
     expect(["none", "present"]).toContain(descendantsOf(process.pid).state);
     expect(countProcessesNamed("mariadbd").state).toBe("known");
+  }, 60000);
+});
+
+describe.skipIf(process.platform !== "win32")("puerto: reproducción REAL del TimeWait de la ejecución 2 (servidor local propio, sin MariaDB)", () => {
+  it("un puerto con servidor vivo está ocupado; tras cerrarlo (con TimeWait sin propietario) la prueba de cierre lo da por libre", async () => {
+    const net = await import("node:net");
+    const srv = net.createServer((sock) => { sock.destroy(); });   // el servidor cierra primero → TimeWait en su puerto, como mariadbd
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as import("node:net").AddressInfo).port;
+    for (let i = 0; i < 3; i++) await new Promise<void>((r) => { const c = net.connect({ port, host: "127.0.0.1" }); c.on("close", () => r()); c.on("error", () => r()); });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(inspectPort(port).state).toBe("busy");
+    expect(inspectPort(port, undefined, { ignoreTimeWait: true }).state).toBe("busy");   // escucha viva
+    await new Promise<void>((r) => srv.close(() => r()));
+    await new Promise((r) => setTimeout(r, 300));
+    const lenient = inspectPort(port, undefined, { ignoreTimeWait: true }); const strict = inspectPort(port);
+    expect(lenient.state).toBe("free");
+    expect(["free", "busy"]).toContain(strict.state);   // estricto: 'busy' si aún quedan TimeWait (el escenario real)
   }, 60000);
 });
 
@@ -390,6 +424,16 @@ describe("auditoría estática del ejecutor tras las correcciones", () => {
     expect(iCan).toBeGreaterThan(0); expect(iPrep).toBeGreaterThan(iCan);
     expect(source).toMatch(/if \(!halted\) \{\s*const ready/);
     for (const needle of ["timeout esperando la señal", "terminó antes de dar la señal", "prepExited()", "terminateVerified(prep", "reapStrays('crash-verify')", "evaluateVitestRun", "canProceed(phases)"]) expect(source).toContain(needle);
+  });
+  it("selección de puerto ESTRICTA y prueba de cierre que ignora solo TimeWait", () => {
+    expect(source).toContain("(p) => inspectPort(p).state !== 'free'");
+    expect(source).toContain("inspectPort(m.port, undefined, { ignoreTimeWait: true })");
+    expect(source.match(/ignoreTimeWait/g)?.length).toBe(1);
+  });
+  it("B1.4 comprueba el errno 4025 y el mensaje del motor (mysql2 traduce 4025 con un nombre de MySQL, no de MariaDB), conservando que el estado inválido debe ser rechazado", () => {
+    const lab = fs.readFileSync(path.join(dir, "mariadb-real.lab.ts"), "utf8");
+    expect(lab).toContain("e.errno === 4025"); expect(lab).toContain("/CONSTRAINT .* failed/"); expect(lab).not.toContain('code: "ER_CONSTRAINT_FAILED"');
+    expect(lab).toContain('insert("BOGUS")');   // sigue insertando un estado inválido y exigiendo el rechazo
   });
   it("la limpieza depende de cleanupDecision y exige evidencia copiada", () => {
     expect(source.match(/cleanupDecision\(/g)?.length).toBe(2); expect(source).toContain("evidence: evidenceKept"); expect(source).toMatch(/if \(decision\.remove\) \{ try \{ safeRemoveRunDir/);

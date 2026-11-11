@@ -258,7 +258,8 @@ export async function main(argv, env = process.env) {
     for (const c of children) closing.push(await terminateVerified(c, belongsVitest, 'proceso hijo de pruebas'));
     try { if (admin) await admin.end(); } catch { /* ignorar */ }
     const procState = m.pid ? inspectProcess(m.pid) : { state: 'absent' };
-    const portState = m.port ? inspectPort(m.port) : { state: 'free' };
+    // Prueba de cierre: sin escucha ni conexiones vivas; los TimeWait sin propietario (restos de conexiones cerradas) no cuentan. La SELECCIÓN de puerto sigue siendo estricta.
+    const portState = m.port ? inspectPort(m.port, undefined, { ignoreTimeWait: true }) : { state: 'free' };
     const strays = descendantsOf(process.pid);
     // Evidencia: se copia SIEMPRE antes de decidir el borrado; si no se puede copiar, el directorio se conserva.
     const keep = path.join(loc.main, '.lab-runtime', `ps-api06a-evidence-${m.id}`);
