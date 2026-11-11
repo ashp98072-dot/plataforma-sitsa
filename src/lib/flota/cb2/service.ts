@@ -1,6 +1,6 @@
 import { validarEmpleadosImportacion } from "./empleados-validacion";
 import { consultarConsumos } from "./consumos-lectura";
-import { tercerosHabilitados, catalogoTerceros, reconocerTercero, validarTercero } from "./terceros";
+import { tercerosHabilitados, catalogosTercerosTx, reconocerTercero, validarTercero } from "./terceros";
 import { clavesInternas, valesInternos } from "./duplicados";
 import { clasificarProducto } from "./clasificacion";
 import { SignJWT, jwtVerify } from "jose";
@@ -39,13 +39,13 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
         const internos = clavesInternas(await valesInternos(c, ctx, false));
         const anteriores = await rows(c, "SELECT clave_candidata,payload_operacion FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? ORDER BY id", [ctx.empresaId, ctx.proveedorId]);
         const c2b = await rows(c, "SELECT f.clave_operacion FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id WHERE h.empresa_id=? AND h.proveedor_id=? AND h.perfil_parser='HALEL'", [ctx.empresaId, ctx.proveedorId]);
-        const catalogo = tercerosHabilitados() ? await catalogoTerceros(c, ctx.empresaId) : [];
+        const catalogo = tercerosHabilitados() ? await catalogosTercerosTx(c, ctx.empresaId) : { pilotos: [], unidades: [], asociaciones: [] };
         for (const l of lineas) if (l.clave) {
             const previos = anteriores.filter(a => a.clave_candidata === l.clave);
             const conflicto = internos.has(l.fila.vale) || c2b.some(a => a.clave_operacion === l.clave) || previos.some(a => a.payload_operacion !== l.payload);
             if (conflicto) { l.bloqueada = true; avisos.set(l.clave, ["CONFLICTO_HISTORICO: vale registrado en otro flujo o con datos distintos. D3 pendiente; revisar sin crear otro consumo."]); }
             else if (previos.length) avisos.set(l.clave, ["CONSUMO_PREVIO: se revalidará su reutilización, sin crear otro consumo."]);
-            externas.set(l.clave, reconocerTercero(l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, catalogo).asociacion);
+            externas.set(l.clave, reconocerTercero(l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, catalogo.asociaciones, catalogo).asociacion);
         }
     } finally { c.release(); }
     const token = await new SignJWT({ parser: 2, solicitud: digest(ctx, "CONFIRMAR", [sha, entrada]), archivo: sha }).setProtectedHeader({ alg: "HS256" }).setAudience(audience).setIssuedAt().setExpirationTime("15m").sign(getAuthSecretBytes());

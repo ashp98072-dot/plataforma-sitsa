@@ -1,3 +1,4 @@
+import { registrarTerceros } from "./terceros-fixture";
 /** MariaDB real solo en instancia PIPE creada por run-windows.mjs; adaptadores de archivos sintéticos. */
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -13,7 +14,7 @@ vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: `synth
 import { preview, confirmarArchivo, type Entrada } from "./service";
 import { analizar } from "./model";
 import { libro, row } from "./fixture";
-import { registrarTerceros, revisarTerceros, listarTerceros, tercerosHabilitados } from "./terceros";
+import { revisarTerceros, listarTerceros, tercerosHabilitados, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros, reconocerTercero } from "./terceros";
 import { guardarCombustibleStaff } from "../combustible-staff";
 import { asignacionesExactas } from "@/components/flota/cb2/preview-model";
 import type { CatalogosCB2 } from "@/components/flota/cb2/client";
@@ -50,7 +51,7 @@ async function verificar(suffix: string, nombre?: string, placa?: string) {
 }
 async function esperarEmpresa(n: number) {
   for (let i = 0; i < 100; i++) {
-    const actuales = await q("SELECT ID FROM information_schema.PROCESSLIST WHERE DB=DATABASE() AND INFO LIKE 'SELECT id FROM empresas%FOR UPDATE'");
+    const actuales = await q("SELECT ID FROM information_schema.PROCESSLIST WHERE DB=DATABASE() AND INFO LIKE 'SELECT id%FROM empresas%FOR UPDATE'");
     if (new Set(actuales.map(r => r.ID)).size >= n) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
@@ -85,6 +86,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     await admin.query(readFileSync("scripts/ci/combustibles-pr2-lab/base.sql", "utf8"));
     await admin.query("ALTER TABLE flota_vehiculos ADD placa VARCHAR(40) NOT NULL DEFAULT 'C-001ABC', ADD estado VARCHAR(40) NOT NULL DEFAULT 'Activo', ADD activo TINYINT NOT NULL DEFAULT 1; INSERT INTO usuarios VALUES(2,1); CREATE TABLE empleados(id INT PRIMARY KEY,empresa_id INT NOT NULL,nombre VARCHAR(160),estado VARCHAR(20)) ENGINE=InnoDB");
     await admin.query("ALTER TABLE usuarios ADD rol_global VARCHAR(40) NOT NULL DEFAULT 'Admin'; INSERT INTO usuarios VALUES(3,1,'Admin')");
+    await admin.query("INSERT INTO empresas VALUES(3,1)");
     // Esquema staff compatible, sin ejecutar los migradores de otros modulos.
     const carga = readFileSync("src/lib/flota/schema.ts", "utf8").match(/CREATE TABLE IF NOT EXISTS flota_combustible_cargas \([\s\S]*?ENGINE=InnoDB DEFAULT CHARSET=utf8mb4/)![0];
     // La tabla base del fixture esta vacia: se completa en lugar de reemplazarla.
@@ -224,12 +226,12 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     expect(own.id).not.toBe(a.id); expect(await listarTerceros(2)).toHaveLength(1);
     await expect(revisarTerceros(otra, a.id, 1, "REVOCADA")).rejects.toMatchObject({ status: 404 });
   });
-  it("D2: altas simultaneas desde dos proveedores reutilizan una identidad y asociacion", async () => {
+  it("D2: altas simultaneas empresariales reutilizan una identidad y asociacion", async () => {
     vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "1");
     const datos = alta("race-alta", "Piloto Ficticio Concurrente", "080 KHK");
     const resultados = await carreraEmpresa([
       () => registrarTerceros(ctx, datos),
-      () => registrarTerceros({ ...ctx, proveedorId: 2 }, { ...datos, proveedorId: 2 }),
+      () => registrarTerceros(ctx, datos),
     ]);
     expect(resultados.every(r => r.status === "fulfilled")).toBe(true);
     const values = resultados.map(r => (r as PromiseFulfilledResult<{ id: number }>).value.id);
@@ -241,7 +243,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     const a = await registrarTerceros(ctx, alta("race-revision", "Piloto Ficticio Revision", "081 KHK"));
     const resultados = await carreraEmpresa([
       () => revisarTerceros(revisor, a.id, 0, "VERIFICADA"),
-      () => revisarTerceros({ ...ctx, proveedorId: 2, actor: { id: 3, username: "OTRO_ADMIN_FICTICIO" } }, a.id, 0, "REVOCADA"),
+      () => revisarTerceros({ ...ctx, actor: { id: 3, username: "OTRO_ADMIN_FICTICIO" } }, a.id, 0, "REVOCADA"),
     ]);
     expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
     expect(resultados.filter(r => r.status === "rejected")).toHaveLength(1);
@@ -252,7 +254,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     p.entrada.seleccion = [{ candidato: p.entrada.seleccion[0].candidato, vehiculoId: -a.unidad_id, asociacionExternaId: a.id }];
     const recibo = await preview(ctx, p.buffer, p.entrada);
     const resultados = await carreraEmpresa([
-      () => revisarTerceros({ ...revisor, proveedorId: 2 }, a.id, 1, "REVOCADA"),
+      () => revisarTerceros(revisor, a.id, 1, "REVOCADA"),
       () => confirmarArchivo(ctx, p.buffer, "ficticio.xlsx", p.entrada, key(), recibo.token),
     ]);
     expect(resultados[0].status).toBe("fulfilled");
@@ -273,6 +275,52 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
       if (r.status === "rejected") expect(r.reason).toMatchObject({ status: 403 });
       expect(await q("SELECT id FROM flota_cb2_externos_pilotos WHERE referencia='ficticio-p-rol-revocado'")).toHaveLength(0);
     } finally { await q("UPDATE usuarios SET rol_global='Admin' WHERE id=3"); }
+  });
+  it("catálogos independientes funcionan en empresa sin proveedores y no crean relaciones implícitas", async () => {
+    const empresa = { empresaId: 3, actor: ctx.actor, autorizar: ctx.autorizar };
+    const p = await registrarPiloto(empresa, { referencia: "solo-piloto", nombre: "Piloto Ficticio Independiente" });
+    const u = await registrarUnidad(empresa, { referencia: "solo-unidad", placa: "090 KHK", tipo: "MOTOCICLETA", descripcion: "Moto ficticia independiente" });
+    const cat = await listarCatalogosTerceros(3);
+    expect(cat.pilotos.map(x => x.id)).toEqual([p.id]); expect(cat.unidades.map(x => x.id)).toEqual([u.id]); expect(cat.asociaciones).toEqual([]);
+    expect(await q("SELECT id FROM compras_proveedores WHERE empresa_id=3")).toHaveLength(0);
+    expect(await registrarPiloto(empresa, { referencia: " SOLO-PILOTO ", nombre: "PILOTO FICTICIO INDEPENDIENTE" })).toMatchObject({ id: p.id, existente: true });
+    await expect(crearAsociacion({ ...empresa, empresaId: 2 }, { pilotoId: p.id, unidadId: u.id, relacion: "CONTRATISTA", evidencia: "respaldo ficticio" })).rejects.toMatchObject({ status: 404 });
+  });
+  it("relaciones muchos a muchos conservan identidades y reconocimiento único por nombre + placa", async () => {
+    const empresa = { empresaId: 1, actor: ctx.actor, autorizar: ctx.autorizar };
+    const previos = await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+    const p1 = await registrarPiloto(empresa, { referencia: "multi-p1", nombre: "Piloto Ficticio Multiples" });
+    const p2 = await registrarPiloto(empresa, { referencia: "multi-p2", nombre: "Piloto Ficticio Alterno" });
+    const u1 = await registrarUnidad(empresa, { referencia: "multi-u1", placa: "091 KHK", tipo: "MOTOCICLETA", descripcion: "Moto ficticia" });
+    const u2 = await registrarUnidad(empresa, { referencia: "multi-u2", placa: "092 KHK", tipo: "VEHICULO", descripcion: "Vehiculo ficticio" });
+    const asociadas: number[] = [];
+    for (const [pilotoId, unidadId] of [[p1.id, u1.id], [p1.id, u2.id], [p2.id, u1.id]]) {
+      const a = await crearAsociacion(empresa, { pilotoId, unidadId, relacion: "CONTRATISTA", evidencia: "respaldo ficticio" }); asociadas.push(a.id);
+      await revisarTerceros(revisor, a.id, 0, "VERIFICADA");
+    }
+    const cat = await listarCatalogosTerceros(1);
+    expect(new Set(asociadas).size).toBe(3);
+    expect(reconocerTercero("Piloto Ficticio Multiples", "091 KHK", cat.asociaciones, cat).asociacion?.id).toBe(asociadas[0]);
+    expect(reconocerTercero("Piloto Ficticio Multiples", "092 KHK", cat.asociaciones, cat).asociacion?.id).toBe(asociadas[1]);
+    expect(reconocerTercero("Piloto Ficticio Alterno", "091 KHK", cat.asociaciones, cat).asociacion?.id).toBe(asociadas[2]);
+    const op = { pilotoId: p1.id, unidadId: u1.id, relacion: "CONTRATISTA", evidencia: "respaldo ficticio" };
+    const carreras = await carreraEmpresa([() => crearAsociacion(empresa, op), () => crearAsociacion(empresa, op)]);
+    expect(carreras.every(x => x.status === "fulfilled" && (x.value as { id: number }).id === asociadas[0])).toBe(true);
+    const entrada = await preparar("MULTI-FICTICIO", "Piloto Ficticio Multiples", "091 KHK");
+    expect((await preview(ctx, entrada.buffer, entrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna?.id).toBe(asociadas[0]);
+    await registrarPiloto(empresa, { referencia: "multi-homonimo", nombre: "Piloto Ficticio Multiples" });
+    expect((await preview(ctx, entrada.buffer, entrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna).toBeNull();
+    await registrarUnidad(empresa, { referencia: "multi-placa-ambigua", placa: "091 KHK", tipo: "VEHICULO", descripcion: "Otra unidad ficticia" });
+    const otraEntrada = await preparar("MULTI-AMBIGUO", "Piloto Ficticio Alterno", "091 KHK");
+    expect((await preview(ctx, otraEntrada.buffer, otraEntrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna).toBeNull();
+    expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(previos);
+  });
+  it("fallo de auditoría revierte el alta independiente completa", async () => {
+    await q("CREATE TRIGGER cb2_catalogo_audit_fail BEFORE INSERT ON auditoria FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fallo sintetico auditoria'");
+    try {
+      await expect(registrarPiloto({ empresaId: 1, actor: ctx.actor, autorizar: ctx.autorizar }, { referencia: "auditoria-fallida", nombre: "Piloto Ficticio Rollback" })).rejects.toThrow("fallo sintetico");
+      expect(await q("SELECT id FROM flota_cb2_externos_pilotos WHERE referencia='auditoria-fallida'")).toHaveLength(0);
+    } finally { await q("DROP TRIGGER cb2_catalogo_audit_fail"); }
   });
   it("postcheck: historicos intactos y D2 vuelve a su valor predeterminado", async () => {
     expect(await historial()).toEqual(historico);
