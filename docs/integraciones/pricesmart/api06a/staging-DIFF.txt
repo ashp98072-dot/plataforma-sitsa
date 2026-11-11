@@ -1,0 +1,10 @@
+--- a/docs/integraciones/pricesmart/api01/staging.sql.in
++++ b/docs/integraciones/pricesmart/api06a/staging-lab.sql
+@@ -1,6 +1,6 @@
+ -- DESIGN ONLY. Separate future staging, NOT S04 or a production migration.
+ -- No installer, connection, USE, credentials or GRANT is provided.
+-SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API01_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
++-- [LAB API-06A] SIGNAL de bloqueo retirada SOLO en esta copia de laboratorio; staging.sql.in no se modifica.
+ 
+ -- Trusted namespace registration is administrative, never selected by request body.
+ CREATE TABLE ps_api01_scopes (
