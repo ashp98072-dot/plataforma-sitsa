@@ -293,9 +293,9 @@ async function outboxRow(orderId: string, version = 1) {
   return rows[0] as { status: string; attempts: number; leased: number; due: number };
 }
 /** Reclama hasta encontrar los eventos propios (clave orderId:version); lo ajeno se devuelve inmediatamente a PENDING. */
-async function claimMine(store: OutboxStore, mine: Set<string>, leaseMs = 30_000): Promise<OutboxClaim[]> {
+async function claimMine(store: OutboxStore, mine: Set<string>, leaseMs = 30_000, maxRounds = 6): Promise<OutboxClaim[]> {
   const found: OutboxClaim[] = [];
-  for (let round = 0; round < 6 && found.length < mine.size; round++) {
+  for (let round = 0; round < maxRounds && found.length < mine.size; round++) {
     const batch = await store.claim(100, leaseMs);
     for (const c of batch) { if (mine.has(`${c.event.orderId}:${c.event.version}`)) found.push(c); else await store.retry(c, 0); }
     if (batch.length === 0) break;
@@ -342,7 +342,7 @@ describe.skipIf(!MAIN)("B10 outbox contra el motor real (API-07)", () => {
     const [orderId] = await seedOrders("O4", 1); const mine = new Set([`${orderId}:1`]); const W = workerStore();
     const [c1] = await claimMine(W, mine); expect(await W.retry(c1, 1_500)).toBe(true);
     expect(await outboxRow(orderId)).toMatchObject({ status: "PENDING", attempts: 1, leased: 0, due: 0 });
-    expect((await claimMine(W, mine)).length).toBe(0);
+    expect((await claimMine(W, mine, 30_000, 1)).length).toBe(0);   // UNA sola ronda: varias rondas con filas ajenas tardan más que la espera y el evento vencería durante la comprobación
     await sleep(1_900); const [c2] = await claimMine(W, mine); expect(c2.attempt).toBe(2); expect(await W.complete(c2)).toBe(true);
   });
   it("B10.5 review: pasa a REVIEW durable y NUNCA se vuelve a reclamar, ni al vencer el tiempo", async () => {
