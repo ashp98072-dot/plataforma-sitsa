@@ -101,10 +101,13 @@ export async function confirmarParadaPorPiloto(input: {
   const nota = body.nota && body.nota.length ? body.nota : null;
   if (body.resultado !== "ENTREGADA_POR_PILOTO" && (nota === null || nota.length < NOTA_MIN)) return falla("NOTA_REQUERIDA");
   const conn: PoolConnection = await getPool().getConnection();
+  let aislamientoCambiado = false;
   try {
-    // READ COMMITTED: cada lectura ve lo último confirmado. Bajo REPEATABLE READ (y más con el aislamiento por instantánea de MariaDB 11) la instantánea podía fijarse ANTES de esperar el bloqueo de la
-    // parada y no ver la confirmación recién hecha por otro (hallazgos de B12.5). La fila de la parada (FOR UPDATE) ya serializa esta sección.
-    await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+    // READ COMMITTED a nivel de SESIÓN (restaurado al terminar): cada lectura ve lo último confirmado. Bajo REPEATABLE READ (y más con el aislamiento por instantánea de MariaDB 11) la instantánea
+    // podía fijarse ANTES de esperar el bloqueo de la parada y no ver la confirmación recién hecha por otro (hallazgos de B12.5). La fila de la parada (FOR UPDATE) ya serializa esta sección.
+    // No se usa «SET TRANSACTION» de una sola vez: cualquier lectura intermedia en autocommit (p. ej. la verificación de identidad del entorno sandbox) consume ese ajuste antes del BEGIN.
+    await conn.query("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED");
+    aislamientoCambiado = true;
     await conn.beginTransaction();
     const [paradas] = await conn.query<RowDataPacket[]>(
       `SELECT pp.id, pp.orden, pp.lugar_nombre, pp.tipo, p.estado AS plan_estado, p.piloto_id
@@ -179,7 +182,10 @@ export async function confirmarParadaPorPiloto(input: {
     if (reintentable(error)) return falla("REINTENTAR");
     throw error;
   } finally {
-    conn.release();
+    // La conexión vuelve al pool con el nivel que el resto de la aplicación espera (REPEATABLE READ, el de este pool). Si no se puede restaurar, se DESTRUYE en vez de devolverla alterada.
+    let restaurada = !aislamientoCambiado;
+    if (aislamientoCambiado) { try { await conn.query("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"); restaurada = true; } catch { restaurada = false; } }
+    if (restaurada) conn.release(); else conn.destroy();
   }
 }
 

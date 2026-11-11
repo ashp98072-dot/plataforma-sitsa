@@ -617,7 +617,7 @@ describe.skipIf(!MAIN)("B12 confirmación de entrega por parada contra el motor 
   it("B12.5 concurrencia real: dos confirmaciones simultáneas de la misma parada dejan UNA sola fila (replay del mismo piloto; el otro recibe YA_CONFIRMADA o REVISION_PENDIENTE)", async () => {
     const a = await seedTrip(); await addEvidencia(a, a.paradas[1]);
     const mismo = await Promise.all([confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }), confirmar(a, a.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" })]);
-    expect(mismo.every((r) => r.ok)).toBe(true); expect(mismo.filter((r) => r.ok && !r.replayed)).toHaveLength(1); expect(await confs(a)).toHaveLength(1); expect(await audits(a)).toBe(1);
+    expect(mismo.map((r) => (r.ok ? (r.replayed ? "replay" : "nuevo") : r.codigo)).sort()).toEqual(["nuevo", "replay", "replay"]);   // diagnóstico: si falla, muestra el código de cada intento expect(await confs(a)).toHaveLength(1); expect(await audits(a)).toBe(1);
     const b = await seedTrip(); await addEvidencia(b, b.paradas[1]);
     const dos = await Promise.all([confirmar(b, b.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, b.principal), confirmar(b, b.paradas[1], { resultado: "ENTREGADA_POR_PILOTO" }, b.extra)]);
     expect(dos.filter((r) => r.ok)).toHaveLength(1); expect(dos.filter((r) => !r.ok).map((r) => (r as { codigo: string }).codigo)).toEqual(["YA_CONFIRMADA"]); expect(await confs(b)).toHaveLength(1);
