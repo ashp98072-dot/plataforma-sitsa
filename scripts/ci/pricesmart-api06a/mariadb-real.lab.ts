@@ -452,7 +452,11 @@ describe.skipIf(!MAIN)("B11 adaptación durable contra el motor real (API-09)", 
     const slow: CandidateResolutionPort = { resolve: async (c: LogisticsCandidate) => { await sleep(400); return createSyntheticCandidateResolver().resolve(c); } };
     const results = await Promise.allSettled([adaptationFor(Date.now, slow).process(aScope(), command), adaptationFor(Date.now, slow).process(aScope(), command)]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((r) => r.status === "rejected").map((r) => (r as PromiseRejectedResult).reason.code)).toEqual(["CONFLICT"]);
+    // El perdedor NO ejecuta nada: CONFLICT (vio el trabajo ya reclamado) o UNAVAILABLE (víctima de interbloqueo al crear el MISMO trabajo a la vez; reintentable por diseño).
+    // La ejecución 7 observó UNAVAILABLE: es el camino previsto (el despachador lo reintenta); se comprueba que el reintento converge sin duplicar nada.
+    const losers = results.filter((r) => r.status === "rejected").map((r) => (r as PromiseRejectedResult).reason.code);
+    expect(losers).toHaveLength(1); expect(["CONFLICT", "UNAVAILABLE"]).toContain(losers[0]);
+    expect((await adaptationFor(Date.now).process(aScope(), command)).replayed).toBe(true);   // el reintento recupera el resultado ya guardado
     expect(await jobsOf(id)).toHaveLength(1); expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE" });
     expect(await count("ps_api09_adapt_links", "order_id = UNHEX(?)", [uuidHex(id)])).toBe(1);
   });
