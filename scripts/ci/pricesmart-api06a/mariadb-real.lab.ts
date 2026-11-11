@@ -1,16 +1,17 @@
 // PRICESMART-API-06A — pruebas CONTRA MariaDB real efímera. SOLO se cargan desde el ejecutor (vitest.lab.config.mts); no coinciden con el patrón de `npm test`.
 // Datos exclusivamente sintéticos. Cada título empieza por su bloque (B0…B8) para el resumen PASS/FAIL/SKIP. D01–D16 siguen PENDIENTES: lo que dependa de ellas se anota en el título.
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import mysql from "mysql2/promise";
 import { afterAll, describe, expect, it } from "vitest";
 import { sandboxPool } from "../../../src/lib/sandbox-db";
-import { mariaDbOrderRepository, PersistenceError, type PayloadCipher } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
+import { mariaDbOrderRepository, PersistenceError } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
 import { OrderApplication } from "../../../src/lib/integrations/pricesmart/service";
 import { OrderError, type Principal, type Scope } from "../../../src/lib/integrations/pricesmart/contracts";
 import type { StoredOrder } from "../../../src/lib/integrations/pricesmart/ports";
 import { adminOptions, assertAdminOptions } from "./safety.mjs";
+import { makeLabCipher } from "./lab-cipher";
 
 const manifestPath = process.env.PS06A_MANIFEST;
 if (!manifestPath || process.env.NOVALVION_ENV !== "sandbox") throw new Error("API-06A: esta suite solo se ejecuta desde el ejecutor del laboratorio.");
@@ -20,19 +21,8 @@ const MAIN = phase === "main";
 const T = `\`${manifest.schema}\``;
 
 // ---- infraestructura de prueba
-const KEY = randomBytes(32);
-const cipher: PayloadCipher = {
-  async seal(input, context) {
-    const iv = randomBytes(12); const c = createCipheriv("aes-256-gcm", KEY, iv); c.setAAD(Buffer.from(context));
-    const body = Buffer.concat([c.update(JSON.stringify(input), "utf8"), c.final()]);
-    return { ciphertext: Buffer.concat([iv, c.getAuthTag(), body]), keyReference: "lab-key-1" };
-  },
-  async open(buf, keyReference, context) {
-    if (keyReference !== "lab-key-1") throw new Error("clave desconocida");
-    const d = createDecipheriv("aes-256-gcm", KEY, buf.subarray(0, 12)); d.setAAD(Buffer.from(context)); d.setAuthTag(buf.subarray(12, 28));
-    return JSON.parse(Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8"));
-  },
-};
+// Cifrador de laboratorio con clave derivada de AUTH_SECRET del run: estable entre las fases (procesos) de B7. Ver lab-cipher.ts.
+const cipher = makeLabCipher(process.env.AUTH_SECRET);
 const raw = mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, connectionLimit: 8, multipleStatements: false });
 const pool = sandboxPool(raw);
 const repo = mariaDbOrderRepository(pool, { schema: manifest.schema, runtimeUser: manifest.user, cipher });

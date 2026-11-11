@@ -6,7 +6,7 @@ export default defineConfig({
   resolve: { tsconfigPaths: true },
   test: {
     environment: "node",
-    include: ["scripts/ci/pricesmart-api06a/safety.test.ts", "scripts/ci/pricesmart-api06a/ddl.test.ts", "scripts/ci/pricesmart-api06a/executor.test.ts", "scripts/ci/pricesmart-api06a/netguard.test.ts"],
+    include: ["scripts/ci/pricesmart-api06a/safety.test.ts", "scripts/ci/pricesmart-api06a/ddl.test.ts", "scripts/ci/pricesmart-api06a/executor.test.ts", "scripts/ci/pricesmart-api06a/netguard.test.ts", "scripts/ci/pricesmart-api06a/lab-cipher.test.ts"],
     clearMocks: true,
   },
 });
