@@ -15,7 +15,8 @@ Alcance: solo archivos NUEVOS. No se modificó el adaptador, contratos, OpenAPI,
 | `.../mariadb-real.lab.ts` | Pruebas B0–B8 contra el motor real (solo cargables desde el ejecutor; no coinciden con `npm test`) |
 | `.../lab-setup.ts`, `vitest.lab.config.mts` | Guardia de red del laboratorio: solo pipe del run y `127.0.0.1:<puerto del run>` |
 | `.../procinfo.mjs` | Consultas de proceso/puerto/sockets/descendientes con estado explícito (`absent`/`present`/`unknown`) y terminación verificada |
-| `.../safety.test.ts`, `ddl.test.ts`, `executor.test.ts`, `vitest.static.config.mts` | 169 pruebas ESTÁTICAS (sin base de datos) |
+| `.../netguard.mjs`, `netguard.test.ts` | Lógica pura de la guardia de red (desempaqueta el arreglo normalizado de Node) y pruebas con sockets reales de `net` |
+| `.../safety.test.ts`, `ddl.test.ts`, `executor.test.ts`, `netguard.test.ts`, `vitest.static.config.mts` | 207 pruebas ESTÁTICAS (sin base de datos) |
 | `.../engine-manifest.json` | SHA-256 de los 624 archivos del motor (derivado del ZIP oficial verificado) |
 | `docs/.../staging-lab.sql`, `staging-DIFF.txt` | DDL de laboratorio y diff exacto contra `staging.sql.in` |
 | `docs/.../MATRIZ-B0-B9.md`, `RIESGOS-Y-DECISIONES.md` | Matriz de pruebas con estado real; riesgos residuales y relación con D01–D16 |

@@ -1,4 +1,13 @@
-# Matriz B0–B9 — estado REAL (no se ejecutó el laboratorio)
+# Matriz B0–B9 — estado REAL
+
+## Historial de ejecuciones del laboratorio
+
+| # | Fecha (UTC) | SHA | Resultado | Resumen |
+|---|---|---|---|---|
+| 1 | 2026-11-11 13:35:54–13:36:11 | `aa9c5e48` | **FAIL** (8 PASS / 22 FAIL / 0 SKIP; B7 NO EJECUTADA) | Fallo del propio arnés: la guardia de red de pruebas (`lab-setup.ts`) rechazó TODA conexión, también la legítima al laboratorio, porque Node llama a `Socket.prototype.connect` con un único arreglo normalizado `[opciones, cb]` que `target()` trataba como ruta de pipe. **B1–B8 son INCONCLUSOS sobre el adaptador** (no hubo consultas). Sí quedó demostrado con el motor real: identidad y aislamiento (B0.2–B0.5), DDL de laboratorio y cuenta mínima aplicados sin error (23 sentencias aprobadas), apagado ordenado, limpieza y fail-closed del ejecutor (se detuvo antes de B7). |
+| 2 | — | — | **NO EJECUTADA** | Pendiente de autorización expresa tras la corrección de la guardia (`netguard.mjs` + `netguard.test.ts`, con sockets reales). |
+
+La tabla de abajo describe el estado esperado/medido por bloque; mientras no exista una ejecución 2 sin el defecto, B1–B8 permanecen «NO EJECUTADA» respecto del adaptador.
 
 Leyenda: **NO EJECUTADA** = escrita pero sin ejecutar (requiere el motor real). **PASS (estático)** = comprobado sin base de datos. Ningún B1–B8 está en PASS; no se infiere nada de las pruebas estáticas.
 
@@ -20,6 +29,6 @@ AUD-04: cada fase de Vitest exige sus casos obligatorios por id exacto (`REQUIRE
 El resumen (`report.mjs`) distingue **PASS**, **PASS CON LIMITACIONES**, **FAIL** e **INCOMPLETO**: un bloque sin resultados es «NO EJECUTADA» (global `INCOMPLETO`); cualquier SKIP impide el PASS pleno (`PASS CON LIMITACIONES`); `B7.5` aparece SIEMPRE como limitación declarada (SKIP) y, si alguien la activa, el global es FAIL hasta nueva revisión; una fase de Vitest incompleta, una ejecución detenida o un apagado no demostrado dan `INCOMPLETO`. Dado que `B7.5` es un SKIP permanente, el mejor resultado posible de esta entrega es `PASS CON LIMITACIONES`.
 
 ## Qué ya se verificó (sin iniciar MariaDB)
-- 198 pruebas estáticas PASS (guardas, DDL, estados de proceso, limpieza, evaluación de Vitest con casos obligatorios, resumen, caída forzada con mocks y con procesos reales inofensivos). `tsc --noEmit`: 0 errores en los archivos de API-06A (quedan 15 errores preexistentes ajenos, por el módulo `fake-indexeddb` ausente en el checkout principal). ESLint de la carpeta: 0 errores, 0 advertencias.
+- 207 pruebas estáticas PASS (guardas, DDL, estados de proceso, limpieza, evaluación de Vitest con casos obligatorios, resumen, caída forzada con mocks y con procesos reales inofensivos). `tsc --noEmit`: 0 errores en los archivos de API-06A (quedan 15 errores preexistentes ajenos, por el módulo `fake-indexeddb` ausente en el checkout principal). ESLint de la carpeta: 0 errores, 0 advertencias.
 - `--preflight-only`: gate OK, 624 archivos del motor verificados, ningún proceso `mariadbd`, ningún archivo/proceso creado.
 - `--run-isolated` sin la confirmación: rechazado.
