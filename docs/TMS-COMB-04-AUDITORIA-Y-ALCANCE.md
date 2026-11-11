@@ -1,19 +1,19 @@
 # TMS-COMB-04 — Auditoría técnica y alcance propuesto
 
-Fecha: 2026-11-11. Estado: análisis local terminado; pendiente de auditoría de ChatGPT. No habilita implementación funcional.
+Fecha: 2026-11-11. Informe inicial publicado en `dd97ee2f29ea5d453ee54b448357de0e618e6654` y auditado por ChatGPT. Estado actual: 04A exclusivamente como pruebas/documentación, con publicación controlada autorizada para auditoría independiente. No habilita implementación funcional ni TMS-COMB-04B.
 
 ## Base y aislamiento
 
 - Main obtenido de origin mediante fetch: `373bb48704f14904326037573081280ab2222fcd`.
 - Rama nueva: `feature/tms-comb04-idempotencia-vales`.
 - Worktree: `.worktrees/tms-comb04`.
-- HEAD coincide con main verificado; el SHA aprobado de 03A no es ancestro de este HEAD. No se incorporaron archivos de PR #582.
+- Al preparar el informe inicial, HEAD coincidía con main verificado; el SHA aprobado de 03A no era ancestro de ese HEAD. No se incorporaron archivos de PR #582. El trabajo local 04A parte del commit documental `dd97ee2f29ea5d453ee54b448357de0e618e6654`.
 - TMS-COMB-03A terminado exclusivamente a nivel experimental, SHA aprobado `c61f2582b87ac74ee919e42ed2976c9aa843e462`. PR #582 comprobado abierto, Draft y no fusionado; su rama queda sin cambios.
 - D1–D5 siguen **NO APROBADAS**. Sin confirmaciones externas, catálogos persistentes, migraciones ni cambios históricos.
 
 ## Método y límites
 
-Revisión estática de servicios, adaptadores HTTP, parsers, pruebas y DDL versionado en este main. Se leyeron archivos SQL como texto: **no se ejecutó SQL ni se abrió conexión a BD**. No se iniciaron servidores, build ni suites DB. No se modificó código, dependencias, main o PR #581. Este documento es el único archivo nuevo.
+La auditoría inicial fue una revisión estática de servicios, adaptadores HTTP, parsers, pruebas y DDL versionado en este main. Se leyeron archivos SQL como texto: **no se ejecutó SQL ni se abrió conexión a BD**. No se iniciaron servidores, build ni suites DB. No se modificó código, dependencias, main o PR #581. En esa fase, este documento fue el único archivo nuevo. Los resultados de las nuevas pruebas locales 04A se detallan al final.
 
 Los índices descritos son los declarados en el repositorio: no certifican que producción tenga ese esquema. No se infieren datos reales, duplicados existentes, flags activos ni garantías de concurrencia medidas. Las pruebas citadas se inspeccionaron; no se vuelven a declarar PASS en esta fase.
 
@@ -67,7 +67,7 @@ DDL relevante: `sql/migrate-2026-10-combustibles-pr2-consumos-facturas.sql:479` 
 
 Orden observado de bloqueos: CB2 proveedor primero, luego cabeceras/documentos/vehículos/consumos según operación; staff proveedor → vale → fondo/estación/vehículo según entrada; C2C proveedor → fila → vale para acción manual. El orden no es idéntico entre todos los recursos. El proveedor común serializa mismo tenant/proveedor, pero vehículos compartidos y otros proveedores pueden introducir ciclos; el semáforo CB2 (4 activas, cola 32) es local al proceso, no cerrojo distribuido. No se demostró un deadlock real durante esta revisión.
 
-## Primer incremento propuesto: TMS-COMB-04A (pendiente de aprobación)
+## Primer incremento propuesto: TMS-COMB-04A (autorizado solo como pruebas/documentación)
 
 **Objetivo:** fijar contratos observables de idempotencia y compatibilidad mediante pruebas de caracterización, antes de decidir cambios en escritores.
 
@@ -105,4 +105,52 @@ Pruebas existentes a reutilizar como referencia: `cb2/service.db.test.ts` (concu
 - Separar una futura corrección de conservación de evidencia staff de cualquier integración CB2/C2B.
 - Definir reglas de repetición de vale por proveedor/periodo y contrato de normalización/versionado antes de proponer reserva o índice nuevo.
 
-Se detiene el trabajo al terminar este documento. Sin implementación funcional, SQL, commit, push, nuevo PR, merge, despliegue, rebase, squash ni force push.
+El análisis inicial se detuvo sin implementación funcional. Posteriormente se autorizó y publicó exclusivamente este informe en `dd97ee2f29ea5d453ee54b448357de0e618e6654`, sin PR. La autorización posterior 04A permite preparar pruebas/documentación localmente, sin commit ni push.
+
+## 04A — Resultados locales de caracterización
+
+Base de trabajo: `dd97ee2f29ea5d453ee54b448357de0e618e6654`. La entrega local inicial no creó commit ni push; la autorización posterior permite un único commit incremental y push normal de los tres archivos nuevos de pruebas y este informe. D1–D5 permanecen **NO APROBADAS**. El diff no contiene cambios de implementaciones.
+
+### Cobertura exacta de los casos nuevos
+
+| Archivo bajo `src/lib/flota/` | PASS | Casos ejecutados |
+|---|---:|---|
+| `combustible-04a-evidencia.test.ts` | 12 | Staff: COMMIT confirmado (1); fallos previos en INSERT/auditoría (2); respuesta COMMIT perdida con escenario aplicado/no aplicado (2); rollback fallido (1); upload fallido (1); edición con referencia anterior y COMMIT incierto (1); estación inactiva/proveedor cambiado/acceso de vehículo revocado (3); conservación de espacios internos y argumentos de deduplicación SQL (1). |
+| `combustible-04a-identidades.test.ts` | 29 | Normalización comparada staff/C2B/C2C/CB2 con 7 literales; límites 40/41/128/129 (4); vacío (1); identificador numérico Excel inseguro en CB2 (1); vector SHA/payload/candidato/fingerprint conocidos (1); archivo/hoja/documento (1); sensibilidad a monto/fecha/placa/piloto/producto/km (6); moneda y equivalencia decimal (1); C2C exacta con 5 datos faltantes (1); recuperación válida/vacía (1); digest/actor/diario incompleto/orden/total incompatibles (5). |
+| `combustible-04a-secuencias.test.ts` | 25 | CB2→C2B y C2B→CB2 (2); reutilización y conflicto de payload (2); recuperación con token vencido y rechazo sin operación previa (2); clave con actor/contenido distinto (2); mismo archivo/clave nueva (1); diario incompleto (1); ausencia del callback CB2 en servicio C2B (1); C2B repetido/reclasificación/token vencido (3); rollback CB2 fallido (1); orden lock→revalidación y revocación (1); vehículo/empleado/proveedor revocados (3); conservación comparada CB2/C2B con COMMIT confirmado, rollback previo y COMMIT incierto (6). |
+| **Total** | **66** | **3 archivos; 0 FAIL; 0 SKIP.** |
+
+“Cobertura” aquí significa el inventario de escenarios anterior, no un porcentaje de líneas/ramas ni certificación de toda la aplicación. No se instrumentó cobertura porcentual.
+
+### Ejecución y aislamiento
+
+- Vitest focal: `npx.cmd vitest run src/lib/flota/combustible-04a-evidencia.test.ts src/lib/flota/combustible-04a-identidades.test.ts src/lib/flota/combustible-04a-secuencias.test.ts` → **66 PASS**.
+- TypeScript completo: `npx.cmd tsc --noEmit` → exit 0.
+- ESLint sobre los tres archivos nuevos con `--max-warnings 0` → exit 0.
+- `git diff --check` y comprobación equivalente de cada archivo nuevo no rastreado → sin errores de whitespace.
+- Se reutilizó la instalación local existente mediante junction `node_modules` ignorada por Git; no se instaló ni cambió ninguna dependencia o lockfile. No se hizo build ni se iniciaron servidores.
+- Los tres archivos sustituyen `@/lib/db` antes de importar servicios. La carga de entorno real está bloqueada. Uploads, compensación/borrado, auditoría y autorización se simulan cuando corresponden. Los Excel sintéticos se generan con ExcelJS únicamente en buffers; no se leen archivos históricos ni se escribe evidencia en disco.
+- En secuencias se ejecutan las implementaciones vigentes de CB2, C2B y del repositorio/transacción CB2. El adaptador SQL propio acepta solo las formas de consulta previstas y falla ante otras; sus INSERT solo alimentan colecciones en memoria. Prohíbe insertar cargas internas. No es un motor SQL, no aplica restricciones físicas, colaciones, locks ni concurrencia de MariaDB.
+- Staff y secuencias verifican llamadas a persistencia/compensación simuladas. Los “COMMIT aplicado/no aplicado” son escenarios definidos por el doble; no se deduce el estado durable de una base real.
+
+### Comportamientos problemáticos observados y divergencias
+
+**R3 y el rollback fallido de staff son defectos actuales caracterizados, no comportamientos aceptados.** Que estas pruebas pasen significa que reproducen el defecto vigente; no aprueba la pérdida potencial de evidencia, el enmascaramiento del error original ni su conservación como política. Su corrección requiere autorización posterior y no forma parte de esta publicación.
+
+1. **R3 reproducido:** staff llama a `borrarUpload` para la evidencia NUEVA si COMMIT arroja error, tanto cuando el mock representa COMMIT aplicado como no aplicado. El caso de edición conserva la referencia anterior, pero pide eliminar la nueva. Es una solicitud de borrado observada, no un borrado físico realizado. No se corrigió la implementación.
+2. **Deuda adicional de rollback staff:** si el rollback arroja error después de un fallo de INSERT, ese error sustituye al original; finally sigue solicitando compensación y libera la conexión. CB2, en contraste, devuelve `incierto=true`, destruye la conexión simulada y conserva evidencia cuando falla rollback. El caso de COMMIT incierto también conserva evidencia en CB2 y C2B.
+3. **Asimetría R1 caracterizada:** con el mismo archivo/vale, CB2→C2B crea un consumo CB2 y un reporte C2B; C2B no consulta CB2. C2B→CB2 conserva la cabecera y el diario original CB2 con resultado BLOQUEADA y no crea consumo. El bloqueo se observa en los servicios reales sobre estado simulado; no constituye una nueva política aprobada.
+4. **Coexistencia R2:** un vale interno sintético ya existente permanece idéntico al importar consumo/reporte; se verifican colecciones separadas, no un total sumado ni fusión de entidades. No se comprueba una estrategia global de deduplicación entre tablas.
+5. **Normalización R4:** staff conserva `A  001` tras trim y lo envía a `UPPER(TRIM(...))`; C2B/C2C/CB2 normalizan a `A 001`. NFC/NFD y NBSP convergen en funciones JS, ceros/prefijos/guiones del vale se conservan. Staff rechaza longitud >40; CB2 bloquea >128. No se emula la semántica de comparación SQL ni se certifican colaciones Unicode.
+6. **Identidades distintas:** añadir serie/factura y renombrar hoja cambia hash de archivo y huella parser v2, pero no payload operativo CB2. Monto/fecha/placa/piloto/producto/km/moneda cambian el payload; representaciones decimales equivalentes no lo cambian. Los hashes operativos no se sustituyeron ni recalcularon en históricos. Los vectores constantes de SHA-256 se fijaron sobre JSON conocido y se calcularon con `node:crypto` independientemente de las funciones bajo prueba.
+7. **Recuperación:** CB2 recupera una solicitud previa incluso con recibo vencido, pero rechaza actor/digest/diario incompatible; un archivo existente con clave nueva requiere reanudar. C2B rechaza repetición y valida expiración antes de cualquier recuperación. C2C puede devolver COINCIDENCIA_EXACTA aun con campos faltantes, que siguen como diferencias FALTANTE; no implica evidencia completa.
+8. **Revocaciones:** se observa revalidación CB2 después del bloqueo simulado del proveedor y rechazo ante catálogos revocados. Staff rechaza estación inactiva/proveedor cambiado/vehículo sin acceso antes de subir. La prueba de C2B invoca directamente su servicio y confirma que no llama al callback de autorización CB2: **no prueba una vulnerabilidad del endpoint ni evita su guard HTTP**.
+9. **Ajuste de expectativa del harness:** CB2 hace una transacción inicial de recuperación sin escrituras antes de preparar evidencia. Por eso un fallo posterior de auditoría puede tener un COMMIT anterior de solo consulta; la prueba exige rollback de la transacción de escritura, no ausencia absoluta de cualquier COMMIT. No se modificó código para satisfacer esa expectativa.
+
+### Límites y deuda pendiente
+
+Las 66 pruebas no demuestran unicidad física, exclusión mutua, atomicidad del motor ni comportamiento multiproceso. No se ejecutaron suites DB, migraciones, consultas reales, pruebas HTTP/DOM ni procesos productivos. El adaptador no comprueba DDL aplicado, FKs, CHECK, escala, normalización SQL ni snapshots de aislamiento. No se ejercitó reanudación completa con lectura privada ni su control de revisión obsoleta en esta nueva suite; las pruebas existentes citadas siguen siendo referencias, sin ejecución nueva.
+
+R1–R7 siguen como riesgos que requieren decisiones o pruebas adicionales. Este incremento caracteriza algunos caminos, no cierra la política de coexistencia ni el defecto R3. No implementa reserva común, índices, nuevos recibos, cambios de validación o confirmaciones externas. Las futuras pruebas de dos conexiones en BD desechable requieren autorización SQL específica.
+
+**Publicación controlada para auditoría:** exclusivamente un commit incremental y push normal de las pruebas nuevas y este informe. Sin PR nuevo, merge, rebase, squash, force push o despliegue. Main, PR #581 y PR #582 no se modifican. Se detiene el trabajo después del push para auditoría independiente; no se inicia TMS-COMB-04B.
