@@ -1,6 +1,7 @@
 "use client";
 import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
-import { Fragment, type ReactNode, useId, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { causasAsignacion } from "./problemas-asignacion";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 import { avisosDetallados, estadosPreview, resumirRevision, sugerenciaVehiculo, sugerenciaPiloto, type CandidatoRevision } from "./preview-model";
@@ -20,11 +21,12 @@ const importes = (totales: Mapa) => Object.entries(totales).map(([moneda, n]) =>
 function Paginas({ pagina, total, cambiar, anterior, siguiente }: { pagina: number; total: number; cambiar: (p: number) => void; anterior: string; siguiente: string }) {
     return <div className="flex flex-wrap items-center gap-3"><button type="button" className={button} disabled={!pagina} onClick={() => cambiar(pagina - 1)}>{anterior}</button><span>Página {pagina + 1} de {Math.max(1, Math.ceil(total / 25))}</span><button type="button" className={button} disabled={(pagina + 1) * 25 >= total} onClick={() => cambiar(pagina + 1)}>{siguiente}</button></div>;
 }
-export function ResumenSeleccionCB2({ filas, cat, seleccion, omitidos = vacio, revisados = vacio, decisiones = {} }: Props) {
+export function ResumenSeleccionCB2({ filas, cat, seleccion, omitidos = vacio, revisados = vacio, decisiones = {}, onCorregir }: Props & { onCorregir?: (clave: string) => void }) {
     const [pagina, setPagina] = useState(0);
     const r = resumirRevision(filas, cat, seleccion, omitidos, revisados, decisiones), grupos = r.revision.filter(g => g.seleccionado);
     function productoResumen(g: CandidatoRevision) { const p = decisiones[g.clave]?.productoClasificado ?? clasificarProducto(g.fila.origen?.producto); return p ? etiquetasProducto[p] : "CLASIFICACION PENDIENTE"; }
     const invalidas = Object.entries(seleccion).filter(([k, v]) => v && !omitidos[k] && !r.segura[k]).length;
+    const problemas = r.revision.filter(g => g.estado !== "RESUELTO" && !omitidos[g.clave] && !g.unidadValida);
     const page = Math.min(pagina, Math.max(0, Math.ceil(grupos.length / 25) - 1));
     return <aside className="space-y-2" aria-label="Resumen antes de confirmar">
         <p><strong>{r.seleccionados} consumos seleccionados para confirmar</strong> · {grupos.filter(g => g.conAdvertencias).length} con advertencias · {grupos.filter(g => g.advertenciasPendientes).length} pendientes de revisión.</p>
@@ -32,6 +34,7 @@ export function ResumenSeleccionCB2({ filas, cat, seleccion, omitidos = vacio, r
         {r.pendientes > 0 && <p role="status">{r.pendientes} candidatos con asignacion o clasificacion pendiente. Quedan pendientes y no se procesan.</p>}
         {r.bloqueados > 0 && <p>{r.bloqueados} candidatos bloqueados quedan excluidos de la confirmación.</p>}
         {invalidas > 0 && <p role="alert">{invalidas} asignaciones incompatibles o bloqueadas. Corrígelas o exclúyelas antes de confirmar.</p>}
+        {!!problemas.length && <section aria-label="Asignaciones que requieren corrección"><h4>Vales con problemas ({problemas.length})</h4><ul className="space-y-2">{problemas.map(g => <li key={g.clave} className="rounded border border-amber-600 p-3"><strong>Vale {g.fila.vale || "No informado"} · Placa {g.fila.placa || "No informada"}</strong><p>{g.fila.hoja}:{g.fila.fila} · Unidad elegida: {g.vehiculoId || "Ninguna"}</p><ul>{causasAsignacion(g, cat, decisiones[g.clave]).map(c => <li key={c}>{c}</li>)}</ul>{onCorregir && <button type="button" className={button} onClick={() => onCorregir(g.clave)}>Ir a corregir vale {g.fila.vale || `${g.fila.hoja}:${g.fila.fila}`}</button>}</li>)}</ul></section>}
         <details><summary>Revisar unidades y advertencias de la selección ({grupos.length})</summary>
             <ul className="space-y-2">{grupos.slice(page * 25, page * 25 + 25).map(g => <li key={g.clave} className="rounded-lg border border-[var(--border)] p-3">Vale {g.fila.vale} → <strong>{cat.vehiculos.find(v => String(v.id) === g.vehiculoId)?.placa}</strong> · {g.apariciones.length} apariciones
                 <p>Empleado: {cat.empleados?.find(e => e.id === (decisiones[g.clave]?.empleadoId === undefined ? identificarEmpleado(g.fila.origen?.piloto ?? "", cat.empleados ?? []).propuesta?.id : decisiones[g.clave]?.empleadoId))?.nombre ?? "Sin vinculo"} / Combustible: {productoResumen(g)}</p>{decisiones[g.clave]?.motivoUnidad && <p>Justificacion de unidad: {decisiones[g.clave].motivoUnidad}</p>}<ul>{[...new Set(g.activas.flatMap(f => avisosDetallados(f).map(a => `${a.nivel}: ${a.mensaje}`)))].map(a => <li key={a}>{a}</li>)}</ul>
@@ -47,7 +50,8 @@ function identificacion(g: CandidatoRevision, cat: CatalogosCB2, manuales: Mapa)
     const match = sugerenciaVehiculo(g.fila, cat);
     return match.estado === "AMBIGUA" ? "AMBIGUA" : match.estado === "INEXISTENTE" ? "INEXISTENTE" : "PENDIENTE";
 }
-export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisados, manuales = seleccion, onChange, onAsignar, onSeleccionar, onRevisar, revisionExtra, decisiones = {}, disabled = false }: Props & {
+export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisados, manuales = seleccion, onChange, onAsignar, onSeleccionar, onRevisar, revisionExtra, decisiones = {}, disabled = false, corregir }: Props & {
+    corregir?: { clave: string; intento: number };
     revisionExtra?: (g: CandidatoRevision) => ReactNode; manuales?: Mapa; onChange?: (v: Mapa) => void; onAsignar?: (clave: string, unidad: string) => void; onSeleccionar?: (clave: string, valor: boolean) => void; onRevisar?: (clave: string, valor: boolean) => void; disabled?: boolean;
 }) {
     const panelId = useId();
@@ -59,10 +63,32 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
     const [revisadosLocales, setRevisadosLocales] = useState<Marcas>({}), [pilotosPendientes, setPilotosPendientes] = useState<Mapa>({}), [pilotosRevisados, setPilotosRevisados] = useState<Mapa>({});
     const marcas = revisados ?? revisadosLocales;
     const r = useMemo(() => resumirRevision(filas, cat, seleccion, omitidos, marcas, decisiones), [filas, cat, seleccion, omitidos, marcas, decisiones]);
+    const ultimaCorreccion = useRef<number | undefined>(undefined);
+    const enfocar = useRef<string | null>(null);
+    useEffect(() => {
+        if (!corregir || ultimaCorreccion.current === corregir.intento) return;
+        let activo = true;
+        const ordenadas = [...r.revision].sort((a, b) => a.fila.hoja.localeCompare(b.fila.hoja) || a.fila.fila - b.fila.fila);
+        const index = ordenadas.findIndex(g => g.clave === corregir.clave);
+        if (index < 0) return;
+        Promise.resolve().then(() => {
+            if (!activo) return;
+            ultimaCorreccion.current = corregir.intento;
+            setEstado(""); setAvisos(""); setSeleccionFiltro(""); setUnidadFiltro(""); setFiltro(""); setPlaca(""); setVale(""); setLote(""); setIntervencion(false); setVista("");
+            setPagina(Math.floor(index / 25)); setAbiertos(prev => ({ ...prev, [corregir.clave]: true }));
+            enfocar.current = corregir.clave;
+        });
+        return () => { activo = false; };
+    }, [corregir, r.revision, panelId]);
+    useEffect(() => {
+        if (!enfocar.current) return;
+        const target = document.getElementById(`${panelId}-${enfocar.current}-toggle`);
+        if (target) { target.focus(); target.scrollIntoView?.({ block: "center", behavior: "smooth" }); enfocar.current = null; }
+    }, [pagina, abiertos, panelId]);
     function texto(f: FilaCB2) {
         return f.placa.toLowerCase().includes(placa.toLowerCase()) && f.vale.toLowerCase().includes(vale.toLowerCase()) && (f.lote ?? "").toLowerCase().includes(lote.toLowerCase()) && `${f.vale} ${f.placa} ${f.hoja} ${f.lote ?? ""} ${f.origen?.piloto ?? ""}`.toLowerCase().includes(filtro.toLowerCase());
     }
-    const rows = r.revision.filter(g => (!vista || (vista === "EXCLUIDOS" ? !!omitidos[g.clave] : vista === "SELECCIONADOS" ? g.seleccionado : vista === "AVISOS" ? g.conAdvertencias : g.estado === vista)) && (!estado || g.estado === estado) && g.apariciones.some(texto)
+    const rows = r.revision.filter(g => (!vista || (vista === "PROBLEMAS" ? g.estado !== "RESUELTO" && !g.unidadValida && !omitidos[g.clave] : vista === "EXCLUIDOS" ? !!omitidos[g.clave] : vista === "SELECCIONADOS" ? g.seleccionado : vista === "AVISOS" ? g.conAdvertencias : g.estado === vista)) && (!estado || g.estado === estado) && g.apariciones.some(texto)
         && (!avisos || (avisos === "CON" ? g.conAdvertencias : avisos === "PENDIENTES" ? g.advertenciasPendientes : avisos === "REVISADAS" ? g.conAdvertencias && !g.advertenciasPendientes : !g.conAdvertencias))
         && (!seleccionFiltro || (seleccionFiltro === "SI" ? g.seleccionado : !g.seleccionado))
         && (!unidadFiltro || identificacion(g, cat, manuales) === unidadFiltro)
@@ -85,7 +111,7 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
         <p className="text-xs"><strong>LISTO</strong> = consumo no bloqueado con unidad compatible y clasificacion requerida completa; puede tener advertencias y estar desmarcado. Seleccionado = LISTO marcado para esta confirmación. {r.advertenciasPendientes} candidatos con advertencias pendientes de revisión; {r.resueltos} ya resueltos. Los indicadores pueden solaparse.</p>
         <details><summary>Cómo se conserva la evidencia y se revisan pilotos</summary><p className="text-xs">{filas.length} apariciones. Los contadores, filtros y selección cuentan cada candidato una vez. Buscar por hoja o lote localiza un candidato por cualquiera de sus apariciones; la confirmación conserva todas.</p><p role="note" className="text-xs">{cat.limitacionPilotos || (revisionExtra ? "El nombre original se conserva y el vinculo usa empleados activos de esta empresa. La autopropuesta requiere dos tokens completos y un empleado activo único; la ambigüedad exige elección manual." : "CB2 conserva el piloto leído del Excel sin vínculo al catálogo de pilotos. Las sugerencias son informativas y no se persisten. Una aproximada o ambigua requiere confirmación explícita de su revisión; no identifica ni asocia al piloto.")}</p></details>
         <div className="flex flex-wrap gap-2"><button type="button" className={button} aria-pressed={intervencion} onClick={() => filtrar(() => setIntervencion(v => !v))}>Requieren intervención</button><button type="button" className={button} onClick={() => filtrar(() => { setEstado(""); setAvisos(""); setSeleccionFiltro(""); setUnidadFiltro(""); setFiltro(""); setPlaca(""); setVale(""); setLote(""); setIntervencion(false); setVista(""); })}>Limpiar filtros</button></div>
-        <div className={styles.quickFilters} role="group" aria-label="Vistas de revisión">{[["", "Todos"], ["LISTO", "Listos"], ["PENDIENTE", "Pendientes"], ["AVISOS", "Con advertencias"], ["SELECCIONADOS", "Seleccionados"], ["EXCLUIDOS", "Excluidos"]].map(([value, label]) => <button key={value} type="button" className={button} aria-pressed={vista === value} onClick={() => filtrar(() => setVista(value))}>{label}</button>)}</div>
+        <div className={styles.quickFilters} role="group" aria-label="Vistas de revisión">{[["", "Todos"], ["PROBLEMAS", "Solo problemas"], ["LISTO", "Listos"], ["PENDIENTE", "Pendientes"], ["AVISOS", "Con advertencias"], ["SELECCIONADOS", "Seleccionados"], ["EXCLUIDOS", "Excluidos"]].map(([value, label]) => <button key={value} type="button" className={button} aria-pressed={vista === value} onClick={() => filtrar(() => setVista(value))}>{label}</button>)}</div>
             <label>Buscar en la vista previa<input className={input} value={filtro} onChange={e => filtrar(() => setFiltro(e.target.value))}/></label>
         <details><summary className="cursor-pointer py-2 text-sm font-medium">Filtros avanzados</summary><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <label>Estado de vista previa<select className={input} value={estado} onChange={e => filtrar(() => setEstado(e.target.value))}><option value="">Todos</option>{estadosPreview.map(s => <option key={s}>{s}</option>)}</select></label>
