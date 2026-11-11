@@ -1,16 +1,17 @@
 // PRICESMART-API-06A — evaluación de ejecuciones de Vitest y resumen B0–B9. PURO. Nunca convierte "no ejecutada", "incompleta" o "con SKIP" en PASS.
-export const BLOCKS = Object.freeze(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9']);
+export const BLOCKS = Object.freeze(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9', 'B10']);
 // AUD-04: casos OBLIGATORIOS por fase (ids exactos de mariadb-real.lab.ts; una prueba estática verifica que coinciden con el archivo). Un caso obligatorio debe estar presente
 // y en PASS: ausente, duplicado u OMITIDO (skip) hace la fase INCOMPLETA. Los casos de OTRA fase aparecen como omitidos en esta y no cuentan.
 export const REQUIRED_CASES = Object.freeze({
-  main: Object.freeze(['B0.t1', 'B0.t2', 'B0.t3', 'B1.1', 'B1.2', 'B1.3', 'B1.4', 'B2.1', 'B2.2', 'B3.1', 'B3.2', 'B3.3', 'B4.1', 'B4.2', 'B4.3', 'B4.4', 'B5.1', 'B5.2', 'B5.3', 'B6.1', 'B6.2', 'B6.3', 'B8.1', 'B8.2']),
+  main: Object.freeze(['B0.t1', 'B0.t2', 'B0.t3', 'B1.1', 'B1.2', 'B1.3', 'B1.4', 'B2.1', 'B2.2', 'B3.1', 'B3.2', 'B3.3', 'B4.1', 'B4.2', 'B4.3', 'B4.4', 'B5.1', 'B5.2', 'B5.3', 'B6.1', 'B6.2', 'B6.3', 'B8.1', 'B8.2',
+    'B10.1', 'B10.2', 'B10.3', 'B10.4', 'B10.5', 'B10.6', 'B10.7', 'B10.8']),
   'crash-prepare': Object.freeze(['B7.1']),
   'crash-verify': Object.freeze(['B7.2', 'B7.3', 'B7.4']),
 });
 // Omisiones DECLARADAS (permitidas) por fase.
 export const DECLARED_SKIPS = Object.freeze({ main: Object.freeze([]), 'crash-prepare': Object.freeze([]), 'crash-verify': Object.freeze(['B7.5']) });
 const KNOWN_IDS = new Set([...Object.values(REQUIRED_CASES).flat(), ...Object.values(DECLARED_SKIPS).flat()]);
-const idOf = (title) => /(?<![A-Za-z0-9])(B[0-9]\.[0-9a-z]+)(?![0-9a-z])/.exec(title)?.[1];
+const idOf = (title) => /(?<![A-Za-z0-9])(B[0-9]{1,2}\.[0-9a-z]+)(?![0-9a-z])/.exec(title)?.[1];
 // Limitaciones declaradas: deben permanecer SKIP y aparecer SIEMPRE en el informe.
 export const DECLARED_LIMITATIONS = Object.freeze([
   Object.freeze({ id: 'B7.5', block: 'B7', name: 'Caída DURANTE el COMMIT (COMMIT_UNKNOWN real)', reason: 'no determinista con este arnés; solo cubierta con doble en API-02' }),
@@ -19,7 +20,7 @@ export const OVERALL = Object.freeze(['PASS', 'PASS CON LIMITACIONES', 'FAIL', '
 
 const MAP = { passed: 'PASS', failed: 'FAIL', skipped: 'SKIP', pending: 'SKIP', todo: 'SKIP', disabled: 'SKIP' };
 const titleOf = (t) => [...(t.ancestorTitles ?? []), t.title].join(' > ');
-const blockOf = (title) => /\b(B[0-9])\b/.exec(title)?.[1];
+const blockOf = (title) => /\b(B[0-9]{1,2})\b/.exec(title)?.[1];
 
 /**
  * AUD-02: evalúa UNA ejecución de Vitest. run = {status, signal, error} del proceso; report = JSON parseado o null.

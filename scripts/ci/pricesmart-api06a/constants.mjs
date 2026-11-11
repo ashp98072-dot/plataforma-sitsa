@@ -2,6 +2,8 @@
 // Cualquier cambio de estas constantes requiere nueva revisión independiente.
 
 export const REQUIRED_BRANCH = 'feature/pricesmart-api06a-mariadb-real';
+// API-07: la extensión B10 vive en su propia rama apilada; lista CERRADA de ramas exactas (nunca un patrón).
+export const ALLOWED_BRANCHES = Object.freeze([REQUIRED_BRANCH, 'feature/pricesmart-api07-lab-outbox']);
 export const LAB_ACK_ENV = 'PS_API06A_LAB_ACK';
 export const LAB_ACK_PHRASE = 'SINTETICO-LOCAL-SIN-PRODUCCION-NI-HOSTINGER';
 

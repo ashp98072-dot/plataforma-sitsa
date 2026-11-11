@@ -15,16 +15,17 @@ const failure = new Error('PASSWORD SECRET sql text');
 
 function fixture(verified = true) {
   const calls: { sql: string; params?: unknown[] }[] = [];
-  let due: unknown[] = []; let details: unknown[][] = []; let affected: number[] = []; let fail = ''; let err: unknown = failure; let identity = { db: 'sandbox_api02_test', account: 'sandbox_api02_worker@127.0.0.1' };
+  let due: unknown[] = []; let expired: unknown[] = []; let details: unknown[][] = []; let affected: number[] = []; let fail = ''; let err: unknown = failure; let identity = { db: 'sandbox_api02_test', account: 'sandbox_api02_worker@127.0.0.1' };
   const conn = {
     execute: vi.fn(async (sql: string, params?: unknown[]) => {
       expect((sql.match(/\?/g) ?? []).length).toBe(params?.length ?? 0);   // todo valor va parametrizado
       calls.push({ sql, params }); if (fail && sql.includes(fail)) throw err;
       if (sql.startsWith('SELECT DATABASE')) return [[identity]];
-      if (sql.startsWith('SELECT environment')) return [due];
+      if (sql.startsWith('SELECT environment')) return [sql.includes("status='PENDING'") ? due : expired];   // dos consultas: PENDING vencidos y LEASED vencidos
       if (sql.startsWith('SELECT e.event_type')) return [details.shift() ?? []];
       return [{ affectedRows: affected.length ? affected.shift() : 1 }];
     }),
+    query: vi.fn(async (sql: string) => { calls.push({ sql }); return [[]]; }),
     beginTransaction: vi.fn(async () => { calls.push({ sql: 'BEGIN' }); }),
     commit: vi.fn(async () => { calls.push({ sql: 'COMMIT' }); if (fail === 'COMMIT') throw err; }),
     rollback: vi.fn(async () => { calls.push({ sql: 'ROLLBACK' }); if (fail === 'ROLLBACK') throw err; }), release: vi.fn(), destroy: vi.fn(),
@@ -33,7 +34,7 @@ function fixture(verified = true) {
   if (verified) vi.spyOn(isolation, 'isSandboxVerifiedPool').mockImplementation(p => p === pool);
   const config = { schema: 'sandbox_api02_test', workerUser: 'sandbox_api02_worker' };
   return { conn, pool, calls, config, store: () => mariaDbOutboxStore(pool as unknown as Pool, config),
-    set: { due: (v: unknown[]) => { due = v; }, details: (v: unknown[][]) => { details = v; }, affected: (v: number[]) => { affected = v; }, fail: (at: string, e: unknown = failure) => { fail = at; err = e; }, identity: (v: typeof identity) => { identity = v; } } };
+    set: { due: (v: unknown[]) => { due = v; }, expired: (v: unknown[]) => { expired = v; }, details: (v: unknown[][]) => { details = v; }, affected: (v: number[]) => { affected = v; }, fail: (at: string, e: unknown = failure) => { fail = at; err = e; }, identity: (v: typeof identity) => { identity = v; } } };
 }
 const event = { scope: { environment: 'sandbox' as const, tenantId: 1, clientId: 2, integrationId: 'PriceSmart', originClubReference: 'Club-A' }, orderId: id(1), version: 1, type: 'RECEIVED' as const, reason: null, correlationId: cid(900) };
 const claim: OutboxClaim = { event, attempt: 3 };
@@ -61,14 +62,23 @@ describe('MariaDB outbox store: claim', () => {
     const f = fixture(); f.set.due([dueRow(1, 2)]); f.set.details([[detail]]);
     const claims = await f.store().claim(5, 10_000);
     expect(claims).toEqual([{ event: { scope: event.scope, orderId: id(1), version: 1, type: 'RECEIVED', reason: null, correlationId: id(900) }, attempt: 3 }]);
-    const [select, update, joined] = f.calls.filter(c => /^(SELECT environment|UPDATE|SELECT e\.)/.test(c.sql));
-    expect(select.sql).toContain('FOR UPDATE SKIP LOCKED'); expect(select.sql).toContain('UTC_TIMESTAMP(6)'); expect(select.sql).toContain('LIMIT 5'); expect(select.sql).toMatch(/status='PENDING' AND next_attempt_at <=/); expect(select.sql).toMatch(/status='LEASED' AND lease_until <=/);
+    const [select, leasedSelect, update, joined] = f.calls.filter(c => /^(SELECT environment|UPDATE|SELECT e\.)/.test(c.sql));
+    expect(select.sql).toContain('FOR UPDATE SKIP LOCKED'); expect(select.sql).toContain('UTC_TIMESTAMP(6)'); expect(select.sql).toContain('LIMIT 5'); expect(select.sql).toMatch(/status='PENDING' AND next_attempt_at <=/); expect(select.sql).not.toMatch(/OR/);
+    expect(leasedSelect.sql).toMatch(/status='LEASED' AND lease_until <=/); expect(leasedSelect.sql).toContain('LIMIT 4'); expect(leasedSelect.sql).toContain('FOR UPDATE SKIP LOCKED'); expect(leasedSelect.sql).not.toMatch(/OR/);   // lote restante = 5 - 1 PENDING
+    expect(sqlOf(f).slice(sqlOf(f).findIndex(x => x.startsWith('SELECT DATABASE'))).slice(0, 3)).toEqual([expect.stringMatching(/^SELECT DATABASE/), 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED', 'BEGIN']);
     expect(update.sql).toContain('attempts=attempts+1'); expect(update.sql).toContain('INTERVAL 10000000 MICROSECOND'); expect(update.sql).toContain('AND attempts=?');
     expect(update.params).toEqual([Buffer.from('sandbox'), 1, 2, Buffer.from('PriceSmart'), bin(1), 1, 2]);   // alcance completo + PK + CAS por attempts leído
     expect(joined.params!.slice(0, 4)).toEqual([Buffer.from('sandbox'), 1, 2, Buffer.from('PriceSmart')]);
     expect(sqlOf(f).slice(-1)).toEqual(['COMMIT']); expect(f.conn.release).toHaveBeenCalled();
     expect(sqlOf(f).indexOf('BEGIN')).toBeGreaterThan(sqlOf(f).findIndex(s => s.startsWith('SELECT DATABASE')));
   });
+  it('si el lote ya se llenó con PENDING no consulta los LEASED vencidos; si no, completa con ellos (lease vencida = worker caído)', async () => {
+    const f = fixture(); f.set.due([dueRow(1)]); f.set.details([[detail]]); await f.store().claim(1, 10_000);
+    expect(f.calls.filter(c => /^SELECT environment/.test(c.sql))).toHaveLength(1);
+    const g = fixture(); g.set.expired([dueRow(2, 4)]); g.set.details([[detail]]); const claims = await g.store().claim(3, 10_000);
+    expect(claims).toHaveLength(1); expect(claims[0].attempt).toBe(5); expect(g.calls.filter(c => /^SELECT environment/.test(c.sql))).toHaveLength(2);
+  });
+  it('solo el reclamo usa READ COMMITTED; los cierres no', async () => { const f = fixture(); await f.store().complete(claim); expect(sqlOf(f)).not.toContain('SET TRANSACTION ISOLATION LEVEL READ COMMITTED'); });
   it('sin eventos vencidos devuelve vacío y confirma', async () => { const f = fixture(); expect(await f.store().claim(5, 10_000)).toEqual([]); expect(f.conn.commit).toHaveBeenCalled(); });
   it.each([0, 101, 1.5, -1, Number.NaN, '5' as unknown as number, Number.POSITIVE_INFINITY])('valida el tamaño de lote %s antes de tocar la base', async limit => {
     const f = fixture(); await expect(f.store().claim(limit, 10_000)).rejects.toBeInstanceOf(OutboxStoreError); expect(f.pool.getConnection).not.toHaveBeenCalled();
@@ -123,7 +133,7 @@ describe('MariaDB outbox store: invariantes de seguridad del SQL', () => {
   it('ninguna operación emite DELETE, DROP, TRUNCATE, ALTER, INSERT ni DDL; solo SELECT/UPDATE parametrizados sobre las tablas de la outbox', async () => {
     const f = fixture(); f.set.due([dueRow(1)]); f.set.details([[detail]]); const s = f.store();
     await s.claim(5, 10_000); await s.complete(claim); await s.retry(claim, 1_000); await s.review(claim);
-    for (const c of f.calls) { expect(c.sql).not.toMatch(/\b(DELETE|DROP|TRUNCATE|ALTER|INSERT|CREATE|GRANT|REPLACE)\b/i); if (!/^(BEGIN|COMMIT|ROLLBACK|SELECT DATABASE)/.test(c.sql)) expect(c.sql).toMatch(/`sandbox_api02_test`\.`ps_api01_(outbox|events|orders)`/); }
+    for (const c of f.calls) { expect(c.sql).not.toMatch(/\b(DELETE|DROP|TRUNCATE|ALTER|INSERT|CREATE|GRANT|REPLACE)\b/i); if (!/^(BEGIN|COMMIT|ROLLBACK|SELECT DATABASE|SET TRANSACTION ISOLATION LEVEL READ COMMITTED$)/.test(c.sql)) expect(c.sql).toMatch(/`sandbox_api02_test`\.`ps_api01_(outbox|events|orders)`/); }
     expect(f.conn.execute).toHaveBeenCalled();   // solo sentencias preparadas
   });
   it('las columnas que escribe coinciden con el UPDATE de columnas concedido al worker (status, attempts, next_attempt_at, lease_until)', async () => {

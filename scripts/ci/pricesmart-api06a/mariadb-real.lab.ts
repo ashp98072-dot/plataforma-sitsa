@@ -8,6 +8,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sandboxPool } from "../../../src/lib/sandbox-db";
 import { mariaDbOrderRepository, PersistenceError } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
 import { OrderApplication } from "../../../src/lib/integrations/pricesmart/service";
+import { mariaDbOutboxStore } from "../../../src/lib/integrations/pricesmart/outbox-mariadb";
+import { DEFAULT_OUTBOX_POLICY, OutboxDispatcher, type OutboxClaim, type OutboxHandler, type OutboxStore } from "../../../src/lib/integrations/pricesmart/outbox";
 import { OrderError, type Principal, type Scope } from "../../../src/lib/integrations/pricesmart/contracts";
 import type { StoredOrder } from "../../../src/lib/integrations/pricesmart/ports";
 import { adminOptions, assertAdminOptions } from "./safety.mjs";
@@ -15,7 +17,7 @@ import { makeLabCipher } from "./lab-cipher";
 
 const manifestPath = process.env.PS06A_MANIFEST;
 if (!manifestPath || process.env.NOVALVION_ENV !== "sandbox") throw new Error("API-06A: esta suite solo se ejecuta desde el ejecutor del laboratorio.");
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { schema: string; user: string; port: number; pipe: string; datadir: string };
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { schema: string; user: string; workerUser: string; port: number; pipe: string; datadir: string };
 const phase = process.env.PS06A_PHASE ?? "";
 const MAIN = phase === "main";
 const T = `\`${manifest.schema}\``;
@@ -266,6 +268,138 @@ describe.skipIf(!MAIN)("B8 privilegios efectivos de la cuenta de ejecución", ()
       expect(text).not.toMatch(/ALL PRIVILEGES|GRANT OPTION|SUPER|FILE|PROCESS/);
       for (const line of text.split("\n")) if (!/^GRANT USAGE ON \*\.\*/.test(line)) expect(line).toContain(manifest.schema);
     } finally { await c.end(); }
+  });
+});
+
+// ---- B10 outbox (API-07): almacén MariaDB y despachador contra el motor REAL, con una cuenta de WORKER separada (privilegios mínimos).
+// Los eventos nacen del adaptador real (receive/cancel → ps_api01_outbox). La base es compartida con B1–B8, así que cada prueba trabaja SOLO con sus órdenes (claimMine) y devuelve lo ajeno
+// con retry(0) para no depender del orden de las pruebas. Las esperas de lease usan el reloj de la base (lease mínima 1 s).
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const workerPools: ReturnType<typeof sandboxPool>[] = [];
+afterAll(async () => { await Promise.all(workerPools.map((p) => p.end())); });
+function workerStore(): OutboxStore {
+  const raw = mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: manifest.workerUser, password: process.env.PS06A_WORKER_PASSWORD, database: manifest.schema, connectionLimit: 4 });
+  const facade = sandboxPool(raw); workerPools.push(facade);
+  return mariaDbOutboxStore(facade, { schema: manifest.schema, workerUser: manifest.workerUser });
+}
+const hexToUuid = (h: string) => `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`.toLowerCase();
+const uuidHex = (u: string) => u.replaceAll("-", "");
+async function orderIdOf(externalId: string, tenant = 1, client = 1) {
+  const rows = await admin(`SELECT HEX(id) AS id FROM ${T}.ps_api01_orders WHERE external_order_id = ? AND tenant_id = ? AND client_id = ?`, [Buffer.from(externalId), tenant, client]);
+  return hexToUuid(String(rows[0].id));
+}
+async function outboxRow(orderId: string, version = 1) {
+  const rows = await admin(`SELECT status, attempts, (lease_until IS NOT NULL AND lease_until > UTC_TIMESTAMP(6)) AS leased, (next_attempt_at <= UTC_TIMESTAMP(6)) AS due FROM ${T}.ps_api01_outbox WHERE order_id = UNHEX(?) AND order_version = ?`, [uuidHex(orderId), version]);
+  return rows[0] as { status: string; attempts: number; leased: number; due: number };
+}
+/** Reclama hasta encontrar los eventos propios (clave orderId:version); lo ajeno se devuelve inmediatamente a PENDING. */
+async function claimMine(store: OutboxStore, mine: Set<string>, leaseMs = 30_000, maxRounds = 6): Promise<OutboxClaim[]> {
+  const found: OutboxClaim[] = [];
+  for (let round = 0; round < maxRounds && found.length < mine.size; round++) {
+    const batch = await store.claim(100, leaseMs);
+    for (const c of batch) { if (mine.has(`${c.event.orderId}:${c.event.version}`)) found.push(c); else await store.retry(c, 0); }
+    if (batch.length === 0) break;
+  }
+  return found;
+}
+async function seedOrders(prefix: string, n: number, p: Principal = principal()) {
+  const ids: string[] = []; const app = appFor(p);
+  for (let i = 0; i < n; i++) { const ext = `${prefix}${i}${uid()}`; await app.receive(bytes(body(ext, p.originClubReference))); ids.push(await orderIdOf(ext, p.tenantId, p.clientId)); }
+  return ids;
+}
+
+describe.skipIf(!MAIN)("B10 outbox contra el motor real (API-07)", () => {
+  it("B10.1 claim: reclama los eventos propios con lease (LEASED, attempts=1, vencimiento futuro) y los reconstruye con alcance, club y tipo correctos", async () => {
+    const ids = await seedOrders("O1", 3); const mine = new Set(ids.map((i) => `${i}:1`)); const claims = await claimMine(workerStore(), mine);
+    expect(claims).toHaveLength(3);
+    for (const c of claims) {
+      expect(c.attempt).toBe(1);
+      expect(c.event).toMatchObject({ type: "RECEIVED", reason: null, version: 1, scope: { environment: "sandbox", tenantId: 1, clientId: 1, integrationId: "qa-integration", originClubReference: "QA-CLUB" } });
+      expect(await outboxRow(c.event.orderId)).toMatchObject({ status: "LEASED", attempts: 1, leased: 1 });
+    }
+    expect(new Set(claims.map((c) => c.event.orderId))).toEqual(new Set(ids));
+  });
+  it("B10.2 exclusividad real: dos despachadores concurrentes reclaman lotes DISJUNTOS y ninguno espera al otro (SKIP LOCKED)", async () => {
+    await seedOrders("O2", 12); const a = workerStore(); const b = workerStore();
+    const started = Date.now(); const [x, y] = await Promise.all([a.claim(5, 30_000), b.claim(5, 30_000)]);
+    expect(Date.now() - started).toBeLessThan(2_500);   // el lock wait de la base es de 3 s: si uno esperara al otro lo superaría
+    expect(x).toHaveLength(5); expect(y).toHaveLength(5);
+    const keys = [...x, ...y].map((c) => `${c.event.orderId}:${c.event.version}`); expect(new Set(keys).size).toBe(10);
+    for (const c of [...x, ...y]) expect(await a.retry(c, 0) || await b.retry(c, 0)).toBe(true);   // se devuelven
+  });
+  it("B10.3 fencing real: tras vencer la lease otro worker reclama (attempt 2); el worker rezagado NO puede cerrar ni reabrir el evento", async () => {
+    const [orderId] = await seedOrders("O3", 1); const mine = new Set([`${orderId}:1`]); const A = workerStore(); const B = workerStore();
+    const [c1] = await claimMine(A, mine, 1_000); expect(c1.attempt).toBe(1);
+    await sleep(1_600);
+    const [c2] = await claimMine(B, mine, 30_000); expect(c2.attempt).toBe(2);
+    expect(await A.complete(c1)).toBe(false); expect(await A.retry(c1, 0)).toBe(false); expect(await A.review(c1)).toBe(false);
+    expect(await outboxRow(orderId)).toMatchObject({ status: "LEASED", attempts: 2 });
+    expect(await B.complete(c2)).toBe(true); expect(await outboxRow(orderId)).toMatchObject({ status: "DONE", attempts: 2, leased: 0 });
+    expect(await B.complete(c2)).toBe(false);   // ya no está LEASED
+    expect((await claimMine(B, mine, 1_000)).length).toBe(0);   // lo cerrado no se reclama
+  });
+  it("B10.4 retry: vuelve a PENDING con espera (no se reclama antes de tiempo) y se reclama después con attempts=2", async () => {
+    const [orderId] = await seedOrders("O4", 1); const mine = new Set([`${orderId}:1`]); const W = workerStore();
+    const [c1] = await claimMine(W, mine); expect(await W.retry(c1, 1_500)).toBe(true);
+    expect(await outboxRow(orderId)).toMatchObject({ status: "PENDING", attempts: 1, leased: 0, due: 0 });
+    expect((await claimMine(W, mine, 30_000, 1)).length).toBe(0);   // UNA sola ronda: varias rondas con filas ajenas tardan más que la espera y el evento vencería durante la comprobación
+    await sleep(1_900); const [c2] = await claimMine(W, mine); expect(c2.attempt).toBe(2); expect(await W.complete(c2)).toBe(true);
+  });
+  it("B10.5 review: pasa a REVIEW durable y NUNCA se vuelve a reclamar, ni al vencer el tiempo", async () => {
+    const [orderId] = await seedOrders("O5", 1); const mine = new Set([`${orderId}:1`]); const W = workerStore();
+    const [c1] = await claimMine(W, mine, 1_000); expect(await W.review(c1)).toBe(true);
+    await sleep(1_300); expect((await claimMine(W, mine)).length).toBe(0); expect(await outboxRow(orderId)).toMatchObject({ status: "REVIEW", attempts: 1, leased: 0 });
+  });
+  it("B10.6 despachador de punta a punta: DONE de recepción y cancelación (2 eventos) y REVIEW durable al agotar los intentos", async () => {
+    const [orderId] = await seedOrders("O6", 1); const ext = (await admin(`SELECT external_order_id AS e FROM ${T}.ps_api01_orders WHERE id = UNHEX(?)`, [uuidHex(orderId)]))[0].e;
+    await appFor(principal()).requestCancellation(Buffer.from(ext as Buffer).toString("utf8"), bytes({ reason: "ORIGIN_REQUEST" }));
+    const seen: string[] = []; const handler: OutboxHandler = { handle: async (e) => { if (e.orderId === orderId) seen.push(`${e.type}:${e.version}:${e.reason}`); return { kind: "DONE" }; } };
+    const policy = { ...DEFAULT_OUTBOX_POLICY, batchSize: 100, maxAttempts: 2, backoffBaseMs: 1, backoffMaxMs: 1 };
+    const summary = await new OutboxDispatcher(workerStore(), handler, policy).runOnce();
+    expect(summary.done).toBeGreaterThanOrEqual(2); expect(summary.unrecorded).toBe(0); expect(summary.lostLease).toBe(0);
+    expect(seen.sort()).toEqual(["CANCELLATION_REQUESTED:2:ORIGIN_REQUEST", "RECEIVED:1:null"]);
+    expect(await outboxRow(orderId, 1)).toMatchObject({ status: "DONE", attempts: 1 }); expect(await outboxRow(orderId, 2)).toMatchObject({ status: "DONE", attempts: 1 });
+    // agotar intentos: el handler siempre pide reintento para una orden concreta
+    const [other] = await seedOrders("O6b", 1); const logs: string[] = [];
+    const always: OutboxHandler = { handle: async (e) => (e.orderId === other ? { kind: "RETRY", reason: "DEPENDENCY_DOWN" } : { kind: "DONE" }) };
+    const d = new OutboxDispatcher(workerStore(), always, policy, (l) => { if (l.orderId === other) logs.push(`${l.outcome}:${l.code}`); });
+    await d.runOnce(); await sleep(250); await d.runOnce();
+    expect(logs).toEqual(["RETRY:DEPENDENCY_DOWN", "REVIEW:MAX_ATTEMPTS"]); expect(await outboxRow(other)).toMatchObject({ status: "REVIEW", attempts: 2 });
+    expect(await count("ps_api01_orders", "id = UNHEX(?)", [uuidHex(other)])).toBe(1);   // la orden aceptada sigue intacta
+  });
+  it("B10.7 privilegios efectivos de la cuenta de WORKER: solo lee la cola y escribe 4 columnas; sin payload, sin INSERT/DELETE, sin DDL", async () => {
+    const c = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: manifest.workerUser, password: process.env.PS06A_WORKER_PASSWORD, database: manifest.schema });
+    try {
+      const denied = async (sql: string, errno: number[]) => { await expect(c.query(sql)).rejects.toSatisfy((e: { errno?: number }) => errno.includes(e.errno ?? 0)); };
+      await c.query(`SELECT status, attempts FROM ${T}.ps_api01_outbox LIMIT 1`);   // permitido
+      await c.query(`UPDATE ${T}.ps_api01_outbox SET status = status WHERE 1=0`);    // permitido (columna concedida)
+      await denied(`UPDATE ${T}.ps_api01_outbox SET order_id = order_id WHERE 1=0`, [1143, 1142]);
+      await denied(`DELETE FROM ${T}.ps_api01_outbox WHERE 1=0`, [1142]);
+      await denied(`INSERT INTO ${T}.ps_api01_outbox (status) VALUES ('PENDING')`, [1142, 1143]);
+      await denied(`UPDATE ${T}.ps_api01_events SET reason = reason WHERE 1=0`, [1142, 1143]);
+      await denied(`SELECT payload_ciphertext FROM ${T}.ps_api01_orders LIMIT 1`, [1143, 1142]);
+      await denied(`SELECT receipt_json FROM ${T}.ps_api01_orders LIMIT 1`, [1143, 1142]);
+      await denied(`SELECT * FROM ${T}.ps_api01_audit`, [1142]);
+      await denied(`SELECT * FROM ${T}.ps_api01_scopes`, [1142]);
+      await denied(`DROP TABLE ${T}.ps_api01_outbox`, [1142]);
+      await denied(`CREATE TABLE ${T}.intruso (id INT)`, [1142]);
+      await denied("SELECT * FROM mysql.user", [1142, 1044]);
+      await denied("USE mysql", [1044]);
+      const [rows] = await c.query("SHOW GRANTS FOR CURRENT_USER()");
+      const text = (rows as Record<string, string>[]).map((r) => Object.values(r)[0]).join("\n");
+      expect(text).not.toMatch(/ALL PRIVILEGES|GRANT OPTION|DELETE|INSERT|DROP|CREATE|ALTER|SUPER|FILE|PROCESS/);
+      for (const line of text.split("\n")) if (!/^GRANT USAGE ON \*\.\*/.test(line)) expect(line).toContain(manifest.schema);
+    } finally { await c.end(); }
+  });
+  it("B10.8 multiempresa: cada evento reclamado conserva su propio alcance y club, también con el mismo identificador externo", async () => {
+    const ext = `O8${uid()}`; const pa = principal(1, 1, "qa-integration", "QA-CLUB"); const pb = principal(2, 1, "qa-integration", "QA-CLUB"); const pc = principal(1, 1, "qa-integration", "QA-CLUB-2");
+    await appFor(pa).receive(bytes(body(ext))); await appFor(pb).receive(bytes(body(ext))); await appFor(pc).receive(bytes(body(`${ext}c`, "QA-CLUB-2")));
+    const a = await orderIdOf(ext, 1, 1); const b = await orderIdOf(ext, 2, 1); const c = await orderIdOf(`${ext}c`, 1, 1);
+    const claims = await claimMine(workerStore(), new Set([`${a}:1`, `${b}:1`, `${c}:1`])); const byOrder = new Map(claims.map((x) => [x.event.orderId, x.event.scope]));
+    expect(byOrder.size).toBe(3); expect(a).not.toBe(b);
+    expect(byOrder.get(a)).toMatchObject({ tenantId: 1, clientId: 1, originClubReference: "QA-CLUB" });
+    expect(byOrder.get(b)).toMatchObject({ tenantId: 2, clientId: 1, originClubReference: "QA-CLUB" });
+    expect(byOrder.get(c)).toMatchObject({ tenantId: 1, clientId: 1, originClubReference: "QA-CLUB-2" });
   });
 });
 

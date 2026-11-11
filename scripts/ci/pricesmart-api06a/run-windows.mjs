@@ -163,7 +163,8 @@ export async function main(argv, env = process.env) {
     assertOnlyLoopback();
     const [[{ n: nSchema }]] = await gate.run(admin, SCHEMA_ABSENT_QUERY, [m.schema]);
     const [[{ n: nUser }]] = await gate.run(admin, USER_ABSENT_QUERY, [m.user]);
-    if (Number(nSchema) !== 0 || Number(nUser) !== 0) fail('Base o usuario preexistente; no se reutiliza.');
+    const [[{ n: nWorker }]] = await gate.run(admin, USER_ABSENT_QUERY, [m.workerUser]);
+    if (Number(nSchema) !== 0 || Number(nUser) !== 0 || Number(nWorker) !== 0) fail('Base o usuario (ejecución o worker) preexistente; no se reutiliza.');
     gate.confirm();
     note('B0.2', 'Identidad: datadir/pid/puerto/bind 127.0.0.1/versión/pipe/basedir/skip_name_resolve/local_infile=0', 'PASS');
     note('B0.3', 'Único socket en escucha del PID: 127.0.0.1:<puerto del run>', 'PASS', `puerto ${m.port}`);
