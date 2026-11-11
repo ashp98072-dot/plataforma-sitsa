@@ -23,6 +23,7 @@ beforeEach(() => {
   vale = { id: 11, vehiculo_id: 7, proveedor_id: 3, estacion_id: 55, gasolinera: "Shell Roosevelt", ruta_relativa: "empresas/1/flota/viejo.pdf" };
   estacion = { id: 55, proveedor_id: 3, nombre: "Shell Roosevelt", activo: 1 };
   m.query.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes("FROM flota_cb2_consumos")) return [[]];
     if (sql.includes("FROM compras_proveedores")) return [[{ id: params[1], activo: proveedorActivo }]];
     if (sql.includes("SELECT proveedor_id, estacion_id FROM flota_combustible_cargas")) return [[{ proveedor_id: vale.proveedor_id, estacion_id: vale.estacion_id }]];
     if (sql.includes("SELECT proveedor_id FROM flota_combustible_estaciones")) return [estacion ? [{ proveedor_id: estacion.proveedor_id }] : []];
@@ -37,6 +38,14 @@ beforeEach(() => {
   m.subir.mockResolvedValue({ relative: "empresas/1/flota/nuevo.pdf", original: "vale.pdf", size: 10 });
 });
 describe("captura staff C-1", () => {
+  it("un vale CB2 del proveedor bloquea la captura interna bajo el mismo cerrojo, antes del upload", async () => {
+    const original = m.query.getMockImplementation()!;
+    m.query.mockImplementation((sql, params) => sql.includes("FROM flota_cb2_consumos") ? Promise.resolve([[{ vale_norm: " a-1 " }]]) : original(sql, params));
+    await expect(guardarCombustibleStaff(1, actor, input, file)).rejects.toMatchObject({ status: 409 });
+    expect(m.subir).not.toHaveBeenCalled(); expect(m.execute).not.toHaveBeenCalled();
+    const sql = m.query.mock.calls.map(([s]) => s);
+    expect(sql.findIndex(s => s.includes("FROM compras_proveedores") && s.includes("FOR UPDATE"))).toBeLessThan(sql.findIndex(s => s.includes("FROM flota_cb2_consumos")));
+  });
   it("alta sin captura de viaje resuelve NULL, nunca undefined/0", async () => {
     expect(combustibleStaffSchema.parse({ ...input, viajeId: undefined }).viajeId).toBeUndefined();
     await guardarCombustibleStaff(1, actor, { ...input, viajeId: undefined }, file);

@@ -23,6 +23,7 @@ beforeEach(() => {
   m.get.mockResolvedValue(m);
   m.validarRuta.mockReturnValue(true);
   m.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("FROM flota_cb2_consumos")) return [[]];
     if (sql.includes("SELECT proveedor_id FROM flota_combustible_estaciones")) return [[{ proveedor_id: 3 }]];
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3, activo: 1 }]];
     if (sql.includes("LOCK IN SHARE MODE")) return [proveedor === 3 ? [{ id: 55, nombre: "Estación sintética", activo: Number(activa) }] : []];
@@ -113,7 +114,7 @@ describe("04B: regresión segura de evidencia staff, con transacción y almacena
     await guardarCombustibleStaff(1, actor, input, file);
     expect(m.query).toHaveBeenCalledWith(expect.stringContaining("UPPER(TRIM(numero_vale)) = UPPER(TRIM(?))"), [1, 3, "A  001", 0]);
     expect(m.execute.mock.calls[0][1][3]).toBe("A  001");
-    expect(m.query.mock.calls.some(([sql]) => /flota_cb2_/.test(sql))).toBe(false);
+    expect(m.query).toHaveBeenCalledWith(expect.stringContaining("FROM flota_cb2_consumos"), [1, 3]);
   });
   it("beginTransaction fallido es incierto: destroy sin consultas, upload ni rollback supuesto", async () => {
     const original = Error("inicio sin respuesta"); m.beginTransaction.mockRejectedValueOnce(original);

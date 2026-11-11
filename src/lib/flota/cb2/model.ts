@@ -13,13 +13,17 @@ export const hash = (s: string | Buffer) => createHash("sha256").update(s).diges
 export const id = z.number().int().positive().max(2147483647);
 export const clave = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const moneda = z.enum(["GTQ", "USD"]);
-const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: id, empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
+// IDs negativos existen solo en el selector/solicitud: representan unidades externas, nunca FKs propias.
+const unidadSeleccion = z.number().int().min(-2147483647).max(2147483647).refine(n => n !== 0);
+const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: unidadSeleccion, asociacionExternaId: id.optional(), empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
+    if ((s.vehiculoId < 0) !== (s.asociacionExternaId !== undefined) || (s.vehiculoId < 0 && (s.empleadoId != null || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION")))) ctx.addIssue({ code: "custom", message: "Identidad externa incompatible con vehículo propio o empleado" });
     if ((s.metodoEmpleado === "SIN_ASIGNACION" && s.empleadoId != null) || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION" && s.empleadoId == null)) ctx.addIssue({ code: "custom", message: "Metodo de empleado incompatible con su asignacion" });
 });
 const decisionOriginal = z.object({
     version: z.literal(1), moneda,
     candidato: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
-    vehiculoId: id.nullable(), errores: z.array(z.string()), asignacion: eleccion.nullable().optional(), metodoEmpleadoValidado: z.enum([...metodosEmpleado, "NO_DECLARADO"]).optional(),
+    vehiculoId: unidadSeleccion.nullable(), errores: z.array(z.string()), asignacion: eleccion.nullable().optional(), metodoEmpleadoValidado: z.enum([...metodosEmpleado, "NO_DECLARADO"]).optional(),
+    identidadExterna: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 /** Validar TODOS los originales; el resultado no depende de cual sea primero. */
 export function monedaOriginal(originales: Record<string, unknown>[], empresa: number, proveedor: number, importacion: number): "GTQ" | "USD" {

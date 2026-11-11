@@ -1,5 +1,6 @@
 import { productos } from "@/lib/flota/cb2/clasificacion";
 export type FilaCB2 = {
+    asociacionExterna?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna | null;
     lote?: string | null;
     kilometraje?: string | null;
     origen?: { producto: string; km: string; galones: string; precio: string; monto: string; fecha?: string; vale?: string; placa?: string; serie?: string; factura?: string; piloto?: string; lote?: string; auxiliar?: string };
@@ -37,6 +38,8 @@ export type Registro = {
     [key: string]: unknown;
 };
 export type CatalogosCB2 = {
+    tercerosHabilitados?: boolean;
+    terceros?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna[];
     empleados?: { id: number; nombre: string }[];
     pilotos?: { id: number; nombre: string }[];
     limitacionPilotos?: string;
@@ -48,11 +51,13 @@ export type CatalogosCB2 = {
         id: number;
         placa: string;
         descripcion?: string;
+        tipo_unidad?: string;
     }[];
 };
 export type SeleccionCB2 = {
     candidato: string;
     vehiculoId: number;
+    asociacionExternaId?: number;
     empleadoId?: number | null;
     metodoEmpleado?: import("@/lib/flota/cb2/empleados-coincidencias").MetodoEmpleado;
     productoClasificado?: import("@/lib/flota/cb2/clasificacion").Producto;

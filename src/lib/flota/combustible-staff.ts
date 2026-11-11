@@ -8,6 +8,7 @@ import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 import { combustibleStaffSchema, precioCalculado, type CombustibleStaffInput } from "./combustible-staff-schema";
 import { validarLineaFondoCombustibleTx } from "./combustible-fondos";
 import { diagnosticarVehiculos } from "./vehiculos-catalogo";
+import { normalizarIdentificador } from "./combustible-identificadores";
 
 type Archivo = { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> };
 
@@ -15,7 +16,7 @@ type Archivo = { name: string; size: number; arrayBuffer: () => Promise<ArrayBuf
 export async function catalogosCombustible(empresaId: number) {
   const [proveedores, vehiculos, estaciones] = await Promise.all([
     query<RowDataPacket[]>("SELECT id, nombre_comercial AS nombre FROM compras_proveedores WHERE empresa_id = ? AND activo = 1 ORDER BY nombre_comercial", [empresaId]),
-    query<RowDataPacket[]>(`SELECT v.id, v.placa, v.descripcion FROM flota_vehiculos v WHERE v.activo = 1 AND ${predicadoVehiculoAccesible("v", "?")} ORDER BY v.placa`, [empresaId, empresaId]),
+    query<RowDataPacket[]>(`SELECT v.id, v.placa, v.descripcion, v.tipo_unidad FROM flota_vehiculos v WHERE v.activo = 1 AND ${predicadoVehiculoAccesible("v", "?")} ORDER BY v.placa, v.id`, [empresaId, empresaId]),
     query<RowDataPacket[]>(`SELECT e.id, e.proveedor_id AS proveedorId, e.nombre, p.nombre_comercial AS proveedorNombre, e.direccion FROM flota_combustible_estaciones e JOIN compras_proveedores p ON p.id=e.proveedor_id AND p.empresa_id=e.empresa_id WHERE e.empresa_id=? AND e.activo=1 AND p.activo=1 ORDER BY e.nombre, e.id`, [empresaId]),
   ]);
   const diagnostico = diagnosticarVehiculos(vehiculos.map(v => ({ ...v, id: Number(v.id), placa: String(v.placa), descripcion: v.descripcion as string | undefined })));
@@ -112,6 +113,12 @@ export async function guardarCombustibleStaff(empresaId: number, actor: { usuari
     // Sin proveedor (solo históricos del portal sin estación) no hay contra qué comparar el número de vale.
     const [duplicados] = proveedorId == null ? [[]] : await conn.query<RowDataPacket[]>(`SELECT id FROM flota_combustible_cargas WHERE empresa_id = ? AND proveedor_id = ? AND UPPER(TRIM(numero_vale)) = UPPER(TRIM(?)) AND id <> ? LIMIT 1`, [empresaId, proveedorId, datos.numeroVale, id ?? 0]);
     if (duplicados.length) throw new ErrorDominioFormulario("Ya existe un vale con ese proveedor y número en esta empresa.", 409);
+    if (proveedorId != null) {
+      // Lectura actual, no snapshot previo a esperar el proveedor. CB2 toma el mismo cerrojo.
+      const [cb2] = await conn.query<RowDataPacket[]>("SELECT vale_norm FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? ORDER BY id FOR UPDATE", [empresaId, proveedorId]);
+      if (cb2.some(r => normalizarIdentificador(String(r.vale_norm)) === normalizarIdentificador(datos.numeroVale)))
+        throw new ErrorDominioFormulario("Vale registrado en CB2. Revisa el consumo existente; no se crea otra carga.", 409);
+    }
     if (!file && !anterior) throw new ErrorDominioFormulario("Adjunta la evidencia del vale.");
     if (file) subida = await guardarUpload(empresaId, "flota", "combustible", file);
     const valores = [datos.vehiculoId, viajeId, proveedorId, datos.numeroVale, datos.fechaConsumo, datos.tipoCombustible, datos.galones, datos.monto, precioCalculado(datos.monto, datos.galones), datos.km, gasolinera, datos.observaciones || null, estacionId];

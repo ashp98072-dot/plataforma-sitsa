@@ -31,7 +31,7 @@ beforeEach(() => {
   vi.resetAllMocks(); nextId = 100; vehiculoActivo = empleadoActivo = proveedorActivo = true;
   tablas = Object.fromEntries(["flota_cb2_importaciones", "flota_cb2_consumos", "flota_cb2_filas", "flota_cb2_facturas", "flota_combustible_conciliaciones", "flota_combustible_conciliacion_filas", "flota_combustible_cargas"].map(t => [t, []]));
   // Vale interno ya existente: solo fixture en memoria, nunca se inserta por los servicios bajo prueba.
-  internos().push({ id: 7, empresa_id: 1, proveedor_id: 3, numero_vale: "0001", vehiculo_id: 1, monto: "200", galones: "10", estado: "PENDIENTE" });
+  internos().push({ id: 7, empresa_id: 1, proveedor_id: 3, numero_vale: "OTRO-INTERNO", vehiculo_id: 1, monto: "200", galones: "10", estado: "PENDIENTE" });
   m.get.mockResolvedValue(m);
   m.beginTransaction.mockImplementation(async () => { snapshot = structuredClone(tablas); });
   m.rollback.mockImplementation(async () => { if (snapshot) tablas = structuredClone(snapshot); });
@@ -47,10 +47,11 @@ beforeEach(() => {
     else if (sql.includes("FROM empleados")) rows = empleadoActivo ? [{ id: 77 }] : [];
     else if (sql.includes("FROM flota_cb2_importaciones")) rows = tablas.flota_cb2_importaciones.filter(r => ambito(r, p) && r.archivo_sha256 === p[2]);
     else if (sql.includes("FROM flota_cb2_filas")) rows = originales().filter(r => ambito(r, p) && (sql.includes("operacion_clave=?") ? r.operacion_tipo === p[2] && r.operacion_clave === p[3] : r.importacion_id === p[2]));
-    else if (sql.includes("FROM flota_cb2_consumos")) rows = consumos().filter(r => ambito(r, p) && (sql.includes("clave_candidata IN") ? p.slice(2).includes(r.clave_candidata) || p.slice(2).includes(r.vale_norm) : r.id === p[2]));
+    else if (sql.includes("FROM flota_combustible_cargas")) rows = internos().filter(r => ambito(r, p));
+    else if (sql.includes("FROM flota_cb2_consumos")) rows = consumos().filter(r => ambito(r, p) && (p.length === 2 || (sql.includes("clave_candidata IN") ? p.slice(2).includes(r.clave_candidata) || p.slice(2).includes(r.vale_norm) : r.id === p[2])));
     else if (sql.includes("FROM flota_combustible_conciliaciones WHERE")) rows = tablas.flota_combustible_conciliaciones.filter(r => ambito(r, p) && r.archivo_sha256 === p[2]);
     else if (sql.includes("FROM flota_combustible_conciliacion_filas")) {
-      rows = tablas.flota_combustible_conciliacion_filas.filter(r => tablas.flota_combustible_conciliaciones.some(h => h.id === r.conciliacion_id && ambito(h, p) && h.perfil_parser === "HALEL") && p.slice(2).includes(r.clave_operacion));
+      rows = tablas.flota_combustible_conciliacion_filas.filter(r => tablas.flota_combustible_conciliaciones.some(h => h.id === r.conciliacion_id && ambito(h, p) && h.perfil_parser === "HALEL") && (p.length === 2 || p.slice(2).includes(r.clave_operacion)));
     } else throw Error(`SQL mock no previsto: ${sql}`);
     return [rows];
   });
@@ -88,6 +89,15 @@ async function importarC2B(b: Buffer) {
 }
 
 describe("04A secuencias reales sobre adaptador SQL en memoria, no garantía DB", () => {
+  it("carga interna del mismo vale bloquea preview y confirmación CB2, conservando evidencia sin contabilizar dos veces", async () => {
+    internos()[0].numero_vale = "0001";
+    const p = await preparar();
+    expect(p.recibo.filas.find(f => f.candidato)?.bloqueada).toBe(true);
+    await confirmarCB2(p);
+    expect(consumos()).toHaveLength(0); expect(internos()).toHaveLength(1);
+    expect(originales().some(r => r.resultado === "BLOQUEADA")).toBe(true);
+    expect(m.query).toHaveBeenCalledWith(expect.stringContaining("FROM flota_combustible_cargas WHERE empresa_id=? AND proveedor_id=? ORDER BY id FOR UPDATE"), [1, 3]);
+  });
   it("CB2 → C2B guarda consumo y reporte coexistentes sin consultar CB2 desde C2B ni alterar vale interno", async () => {
     const antes = structuredClone(internos()), p = await preparar();
     await confirmarCB2(p); expect(consumos()).toHaveLength(1);

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
 import { catalogosCombustible } from "@/lib/flota/combustible-staff";
 import { query } from "@/lib/db";
+import { listarTerceros, tercerosHabilitados } from "@/lib/flota/cb2/terceros";
 import type { RowDataPacket } from "mysql2";
 export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
@@ -10,6 +11,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
   if (guard.error) return guard.error;
   try {
     const catalogos = await catalogosCombustible(guard.empresa.id);
+    const terceros = await listarTerceros(guard.empresa.id);
+    const unidadesExternas = [...new Map(terceros.filter(a => a.estado === "VERIFICADA").map(a => [a.unidad_id, { id: -a.unidad_id, placa: a.placa, descripcion: `Tercerizado · ${a.descripcion}`, tipo_unidad: a.tipo }])).values()];
     // RRHH activo de la empresa; lectura sin reparar ni crear relaciones TMS.
     let personal: RowDataPacket[] = [], empleadosDisponibles = true;
     try { personal = await query<RowDataPacket[]>("SELECT id, nombre FROM empleados WHERE empresa_id = ? AND estado = 'Activo' ORDER BY nombre, id", [guard.empresa.id]); }
@@ -17,7 +20,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
     const empleados = personal.map(p => ({ id: Number(p.id), nombre: String(p.nombre) }));
     const pilotos = empleados;
     const limitacionPilotos = (empleadosDisponibles ? "" : "Catálogo de empleados no disponible: no se proponen vínculos. ") + "El vínculo usa empleados activos de la empresa y conserva el nombre original. Dos o más tokens completos permiten autopropuesta solo con un empleado coincidente; ante ambigüedad se exige elección manual.";
-    return NextResponse.json({ ...catalogos, empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ ...catalogos, vehiculos: [...catalogos.vehiculos, ...unidadesExternas], terceros, tercerosHabilitados: tercerosHabilitados(), empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) {
     // Siempre JSON con mensaje (antes un fallo de cualquiera de las 3 consultas daba un 500 vacío y selectores en blanco sin explicación).
     const referencia = randomUUID().slice(0, 8);
