@@ -69,7 +69,7 @@ describe("confirmarParadaPorPiloto: camino válido", () => {
     expect(q("FROM tms_personal per").params).toEqual([7, 31, 5, 55]);
     expect(q("FROM flota_viajes").params).toEqual([900, 7, 55]);
     const ev = q("FROM flota_viaje_evidencias"); expect(ev.params).toEqual([7, 900, 10]); expect(ev.sql).toMatch(/parada_id = \?/); expect(ev.sql).toContain("tipo = 'producto'");
-    expect(q("FROM tms_parada_confirmaciones").params).toEqual([7, 10]);
+    expect(q("FROM tms_parada_confirmaciones").params).toEqual([7, 10]); expect(q("FROM tms_parada_confirmaciones").sql).toContain("LOCK IN SHARE MODE");   // lectura vigente, no la instantánea anterior a la espera del bloqueo
   });
   it("un evidenciaId explícito se valida contra empresa, viaje y parada", async () => {
     const f = fixture(); await confirmarParadaPorPiloto({ ...base, body: { ...entregada, evidenciaId: 77 } });
@@ -159,6 +159,7 @@ describe("historial inmutable", () => {
     expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS tms_parada_confirmaciones/); expect(sql.replaceAll("ON DELETE RESTRICT", "")).not.toMatch(/\b(DROP|ALTER|DELETE|TRUNCATE|UPDATE|GRANT)\b/i);
     for (const c of ["uq_tmspc_entrega", "fk_tmspc_plan", "fk_tmspc_parada", "ck_tmspc_resultado", "ck_tmspc_vigente", "ck_tmspc_nota"]) expect(sql).toContain(c);
     expect(sql.match(/ON DELETE RESTRICT/g)).toHaveLength(2);
+    expect(sql).toContain("entrega_vigente <=> 1");   // el CHECK debe tolerar NULL: con «= 1» una entrega con entrega_vigente NULL pasaría (UNKNOWN) y esquivaría el UNIQUE
   });
   it("listarConfirmacionesPlan filtra por empresa+plan y trata la tabla ausente como vacía", async () => {
     vi.mocked(query).mockResolvedValueOnce([{ id: 1, plan_id: 55, parada_id: 10, resultado: "ENTREGADA_POR_PILOTO", revision: "NO_REQUERIDA", piloto_usuario: "portal:P01", confirmado_en: "2026-11-11 10:05:00", evidencia_id: 77, nota: null }] as never);

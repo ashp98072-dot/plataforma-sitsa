@@ -131,7 +131,9 @@ export async function confirmarParadaPorPiloto(input: {
     if (!evidencia) { await conn.rollback(); return falla(body.evidenciaId ? "EVIDENCIA_INVALIDA" : "SIN_EVIDENCIA"); }
 
     const [previas] = await conn.query<RowDataPacket[]>(
-      `SELECT * FROM tms_parada_confirmaciones WHERE empresa_id = ? AND parada_id = ? ORDER BY id DESC LIMIT 1`, [empresaId, paradaId]);
+      // LECTURA VIGENTE (LOCK IN SHARE MODE, solo exige SELECT): bajo REPEATABLE READ un SELECT normal puede usar una instantánea anterior a la espera del bloqueo de la parada
+      // y NO ver la confirmación que otro acaba de confirmar (hallazgo del laboratorio B12.5). La fila de la parada ya serializa esta sección.
+      `SELECT * FROM tms_parada_confirmaciones WHERE empresa_id = ? AND parada_id = ? ORDER BY id DESC LIMIT 1 LOCK IN SHARE MODE`, [empresaId, paradaId]);
     const previa = previas[0];
     if (previa) {
       const mismoPiloto = Number(previa.piloto_empleado_id) === empleadoId;

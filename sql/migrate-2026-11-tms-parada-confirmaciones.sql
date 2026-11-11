@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS tms_parada_confirmaciones (
   CONSTRAINT ck_tmspc_resultado CHECK (resultado IN ('ENTREGADA_POR_PILOTO','PARCIAL','RECHAZADA','INCIDENCIA')),
   CONSTRAINT ck_tmspc_revision CHECK (revision IN ('NO_REQUERIDA','PENDIENTE')),
   CONSTRAINT ck_tmspc_vigente CHECK (
-    (resultado = 'ENTREGADA_POR_PILOTO' AND entrega_vigente = 1 AND revision = 'NO_REQUERIDA')
+    -- «<=>» (igualdad que tolera NULL): con «=», entrega_vigente NULL daría UNKNOWN y el CHECK lo ACEPTARÍA (hallazgo del laboratorio B12.3).
+    (resultado = 'ENTREGADA_POR_PILOTO' AND entrega_vigente <=> 1 AND revision = 'NO_REQUERIDA')
     OR (resultado <> 'ENTREGADA_POR_PILOTO' AND entrega_vigente IS NULL AND revision = 'PENDIENTE')),
   CONSTRAINT ck_tmspc_nota CHECK (resultado = 'ENTREGADA_POR_PILOTO' OR (nota IS NOT NULL AND CHAR_LENGTH(nota) >= 5))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
