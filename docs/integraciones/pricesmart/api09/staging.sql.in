@@ -1,0 +1,90 @@
+-- DESIGN ONLY (PRICESMART API-09). Separate future staging, NOT a production migration. Requires ps_api01_* (api01/staging.sql.in) to exist first.
+-- Persistencia durable de la ADAPTACIÓN TMS sintética (trabajos idempotentes, vínculos orden→logística y bitácora). No crea solicitudes TMS: el vínculo nunca guarda un id del TMS.
+-- No installer, connection, USE, credentials or GRANT is provided. Not ratified: do not execute outside a disposable sandbox.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API09_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+-- Trabajo idempotente de adaptación (una fila por comando): lease, CAS por versión y resultado.
+CREATE TABLE ps_api09_adapt_jobs (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  job_key_hash BINARY(32) NOT NULL,
+  job_key VARBINARY(2048) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  input_hash BINARY(32) NOT NULL,
+  version INT UNSIGNED NOT NULL,
+  attempt INT UNSIGNED NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  lease_until_ms BIGINT UNSIGNED NOT NULL,
+  result_json LONGTEXT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, job_key_hash),
+  INDEX ix_ps_api09_jobs_order (environment, tenant_id, client_id, integration_id, order_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id),
+  CHECK (job_key_hash = UNHEX(SHA2(job_key, 256))),
+  CHECK (status IN ('PROCESSING','RETRYABLE','REVIEW_REQUIRED','DONE')),
+  CHECK ((status = 'DONE') = (result_json IS NOT NULL)),
+  CHECK (result_json IS NULL OR JSON_VALID(result_json)),
+  CHECK (version >= 1 AND attempt >= 1)
+) ENGINE=InnoDB;
+
+-- Vínculo orden → proyección logística local (UNO por orden). No hay columna de id del TMS: la creación de solicitudes sigue deshabilitada.
+CREATE TABLE ps_api09_adapt_links (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  external_order_id VARBINARY(120) NOT NULL,
+  origin_club_reference VARBINARY(64) NOT NULL,
+  request_reference VARBINARY(120) NULL,
+  version INT UNSIGNED NOT NULL,
+  source_version INT UNSIGNED NOT NULL,
+  source_state VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  local_delivery_state VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  cancellation_requested TINYINT(1) NOT NULL,
+  correlation_id BINARY(16) NOT NULL,
+  link_json LONGTEXT NOT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id),
+  UNIQUE KEY uq_ps_api09_link_request (environment, tenant_id, client_id, integration_id, request_reference),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id),
+  CHECK (JSON_VALID(link_json)),
+  CHECK (source_state IN ('RECEIVED','REVIEW_REQUIRED','CANCELLATION_REQUESTED','CANCELLED')),
+  CHECK (local_delivery_state IN ('AWAITING_MAPPING','LOGISTICS_REVIEW','SCHEDULED_UNCONFIRMED','IN_PROGRESS_UNCONFIRMED','DELIVERY_UNCONFIRMED','REVIEW_REQUIRED','CANCELLATION_REVIEW')),
+  CHECK (cancellation_requested IN (0, 1)),
+  CHECK ((cancellation_requested = 1) = (local_delivery_state = 'CANCELLATION_REVIEW')),
+  CHECK (version >= 1 AND source_version >= 1)
+) ENGINE=InnoDB;
+
+-- Bitácora de intentos (solo se agrega; sin UPDATE ni DELETE para ningún rol de aplicación).
+CREATE TABLE ps_api09_adapt_traces (
+  seq BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  job_key_hash BINARY(32) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  attempt INT UNSIGNED NOT NULL,
+  phase VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  correlation_id BINARY(16) NOT NULL,
+  recorded_at DATETIME(6) NOT NULL,
+  failure VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  observation_json LONGTEXT NULL,
+  PRIMARY KEY (seq),
+  INDEX ix_ps_api09_traces_order (environment, tenant_id, client_id, integration_id, order_id, seq),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id),
+  CHECK (phase IN ('STARTED','LEASE_RECLAIMED','SUCCEEDED','FAILED','REPLAY')),
+  CHECK (failure IS NULL OR failure IN ('DEPENDENCY_FAILURE','CONFLICT','NOT_FOUND')),
+  CHECK (observation_json IS NULL OR JSON_VALID(observation_json)),
+  CHECK (attempt >= 1)
+) ENGINE=InnoDB;

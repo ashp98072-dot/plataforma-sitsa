@@ -31,6 +31,7 @@ describe("compuerta contra ejecución accidental", () => {
     expect(() => assertLabGate({ ...gateArgs, platform: "linux" })).toThrow(/Windows/);
     expect(() => assertLabGate({ ...gateArgs, branch: "main" })).toThrow(/Rama/);
     expect(() => assertLabGate({ ...gateArgs, branch: "feature/pricesmart-api07-lab-outbox" })).not.toThrow();   // rama apilada B10 (lista cerrada)
+    expect(() => assertLabGate({ ...gateArgs, branch: "feature/pricesmart-api09-adaptacion-durable" })).not.toThrow();   // rama de API-09 (B11)
     expect(() => assertLabGate({ ...gateArgs, branch: "feature/pricesmart-api07-lab-outbox-x" })).toThrow(/Rama/);   // sin patrones
     expect(() => assertLabGate({ ...gateArgs, envFilesInCwd: [".env.local"] })).toThrow(/\.env/);
     expect(() => assertLabGate({ ...gateArgs, env: {} })).toThrow(/confirmación/);

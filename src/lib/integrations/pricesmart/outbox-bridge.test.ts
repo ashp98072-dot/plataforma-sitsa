@@ -3,7 +3,7 @@ import { OrderApplication } from './service';
 import { ModelRepository } from './__tests__/model-repository';
 import { AdaptationModel } from './__tests__/tms-adaptation-model';
 import { OutboxModelStore } from './__tests__/outbox-model';
-import { BRIDGE_MODE, createSimulatedOrderBridge } from './outbox-bridge';
+import { BRIDGE_MODE, createMariaDbSimulatedBridge, createSimulatedOrderBridge, createSyntheticCandidateResolver } from './outbox-bridge';
 import { DEFAULT_OUTBOX_POLICY } from './outbox';
 import { AdaptationError, type AdaptationScope, type LogisticsCandidate } from './tms-adaptation-contracts';
 
@@ -88,5 +88,17 @@ describe('puente orden → outbox → TMS (SIMULATED)', () => {
     expect(() => fixture({ policy: { batchSize: 0 } })).toThrow(AdaptationError);
     const f = fixture(); await f.app.receive(bytes(body('Order-A'))); f.sync();
     const first = f.bridge.runOnce(); await expect(f.bridge.runOnce()).rejects.toMatchObject({ code: 'CONFLICT' }); await first; await expect(f.bridge.runOnce()).resolves.toMatchObject({ claimed: 0 });
+  });
+});
+
+describe('puente durable (composición MariaDB) y resolutor sintético', () => {
+  it('el resolutor sintético deriva una referencia local determinista y nunca toca el TMS', async () => {
+    const f = fixture(); await f.app.receive(bytes(body('Order-A'))); f.sync();
+    const candidate = (await (async () => { const o = [...f.orders.orders.values()][0]; const { candidateFromSnapshot } = await import('./tms-adaptation'); return candidateFromSnapshot({ scope, orderId: o.id, input: o.input, state: o.state, version: o.version, correlationId: o.correlationId, receivedAt: o.receivedAt, cancellationReason: null, assurance: 'SIMULATED' }); })());
+    const resolver = createSyntheticCandidateResolver(); const a = await resolver.resolve(candidate); const b = await resolver.resolve(candidate);
+    expect(a).toEqual(b); expect(a).toMatchObject({ requestReference: `synthetic:${candidate.orderId}`, assurance: 'SIMULATED', candidateId: candidate.candidateId, orderId: candidate.orderId });
+  });
+  it('rechaza un pool que no es de sandbox verificado antes de componer nada (también sin resolutor propio)', () => {
+    expect(() => createMariaDbSimulatedBridge({ pool: {} as never, schema: 'sandbox_api02_test', workerUser: 'sandbox_api02_worker', nowMs: () => 1 })).toThrow();
   });
 });
