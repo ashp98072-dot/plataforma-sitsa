@@ -17,7 +17,7 @@ import {
 } from './safety.mjs';
 import { adminStatements } from './ddl.mjs';
 import { summarize, renderMarkdown, evaluateVitestRun } from './report.mjs';
-import { inspectProcess, listenersOfPid, inspectPort, descendantsOf, countProcessesNamed, terminateVerified, terminateStray } from './procinfo.mjs';
+import { inspectProcess, listenersOfPid, inspectPort, descendantsOf, countProcessesNamed, terminateVerified, terminateStray, forceCrashVerified } from './procinfo.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sha256File = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -208,8 +208,23 @@ export async function main(argv, env = process.env) {
           await terminateVerified(prep, belongsVitest, 'preparación B7');
           phases.push({ name: 'crash-prepare', state: 'INCOMPLETO', reasons: [why] }); halt('crash-prepare', why);
         } else {
-          const killed = await terminateVerified(server, belongsServer, 'servidor (caída B7)');
-          if (!killed.done) { phases.push({ name: 'crash-prepare', state: 'INCOMPLETO', reasons: [killed.reason] }); halt('crash-prepare', killed.reason); await terminateVerified(prep, belongsVitest, 'preparación B7'); }
+          // AUD-05: la caída es una interrupción FORZADA distinta del apagado normal y de la terminación de limpieza; revalida identidad, ejecutable, datadir, puerto, pipe y sockets justo antes.
+          const revalidate = async () => {
+            const reasons = [];
+            const s2 = inspectProcess(m.pid);
+            if (s2.state !== 'present' || !belongsServer(s2.info)) reasons.push(`proceso/ejecutable/datadir/puerto/pipe (${s2.state})`);
+            try { const [[id2]] = await gate.run(admin, IDENTITY_QUERY); validateServerIdentity(id2, m, loc.home); } catch (e) { reasons.push(`identidad SQL: ${e.message}`); }
+            const L = listenersOfPid(m.pid);
+            if (L.state !== 'known' || !onlyLoopbackListeners(L.listeners, m.pid, m.port)) reasons.push(`sockets (${L.state})`);
+            if (!fs.existsSync(m.pidFile) || parsePidFile(fs.readFileSync(m.pidFile, 'utf8')) !== m.pid) reasons.push('archivo PID');
+            return { ok: reasons.length === 0, reasons };
+          };
+          const killed = await forceCrashVerified(server, { revalidate, belongs: belongsServer, label: 'servidor (caída B7)', preconditions: { phase: 'crash-prepare', ready: fs.existsSync(ready), gateConfirmed: gate.state === 'LAB' } });
+          const pidFileRemained = fs.existsSync(m.pidFile);
+          fs.writeFileSync(path.join(m.evidenceDir, 'crash-evidence.json'), JSON.stringify({ ...killed, pidFileRemained, at: new Date().toISOString() }, null, 2));
+          const abrupt = killed.done === true && killed.signal === 'SIGKILL' && pidFileRemained;
+          note('B7.6', 'Caída forzada verificada: SIGKILL, proceso ausente y archivo PID sin retirar (no fue un cierre ordenado)', abrupt ? 'PASS' : 'FAIL', killed.reason ?? `señal ${killed.signal}; PID file ${pidFileRemained ? 'permaneció' : 'retirado'}`);
+          if (!abrupt) { const why = killed.reason ?? 'la caída no consta como forzada/abrupta'; phases.push({ name: 'crash-prepare', state: 'INCOMPLETO', reasons: [why] }); halt('crash-prepare', why); await terminateVerified(prep, belongsVitest, 'preparación B7'); }
           else {
             for (let i = 0; i < 360 && !prepExited(); i++) await sleep(250);
             if (!prepExited()) { await terminateVerified(prep, belongsVitest, 'preparación B7'); phases.push({ name: 'crash-prepare', state: 'INCOMPLETO', reasons: ['la preparación no terminó tras la caída (timeout)'] }); halt('crash-prepare', 'timeout tras la caída'); }
@@ -222,6 +237,7 @@ export async function main(argv, env = process.env) {
                 assertOnlyLoopback();
                 note('B0.6', 'Tras caída dura y reinicio: misma identidad y solo loopback', 'PASS');
                 writeManifest(manifestFile);
+                try { const log = fs.readFileSync(m.serverLog, 'utf8'); fs.writeFileSync(path.join(m.evidenceDir, 'crash-recovery.json'), JSON.stringify({ recoveryMessageInServerLog: /crash recovery|not shut down|Starting crash recovery/i.test(log), note: 'informativo: el texto exacto del registro no está garantizado' }, null, 2)); } catch { /* informativo */ }
                 const ver = runVitest('crash-verify'); record('crash-verify', ver.run, ver.out);
                 await reapStrays('crash-verify');
                 if (!halted && !canProceed(phases)) halt('crash-verify', `${phases.at(-1).state}: ${phases.at(-1).reasons.join('; ')}`);
@@ -251,7 +267,7 @@ export async function main(argv, env = process.env) {
     shutdown = { proven: decisionPre.remove, reasons: [...decisionPre.reasons, ...closing.filter((c) => !c.done).map((c) => c.reason)] };
     if (shutdown.reasons.length) shutdown.proven = false;
     note('B9.1', 'Apagado demostrado: proceso ausente, puerto libre, sin descendientes', shutdown.proven ? 'PASS' : 'FAIL', shutdown.reasons.join('; '));
-    const reports = ['main', 'crash-prepare', 'crash-verify'].map((p) => readJson(path.join(m.evidenceDir, `vitest-${p}.json`))).filter(Boolean);
+    const reports = ['main', 'crash-prepare', 'crash-verify'].map((p) => ({ phase: p, report: readJson(path.join(m.evidenceDir, `vitest-${p}.json`)) })).filter((x) => x.report);
     const summary = summarize(reports, checks, { phases, halted, shutdown, error: runError });
     try {
       fs.writeFileSync(path.join(m.evidenceDir, 'resultados.json'), JSON.stringify(summary, null, 2));

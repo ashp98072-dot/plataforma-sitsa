@@ -10,6 +10,7 @@
 7. **Grants del laboratorio ≠ grants de producción.** La cuenta de laboratorio no tiene `SELECT` en `ps_api01_scopes` (el adaptador no lo usa), a diferencia de la propuesta de `PERSISTENCIA.md`.
 8. **Fragilidad de plataforma.** El ejecutor es solo Windows (PowerShell para PID/puertos). Las consultas CIM/NetTCP se prueban de forma real solo contra el propio proceso de prueba y con fallos inyectados; su comportamiento ante un servidor MariaDB real no se ha observado.
 9. **Posible falso positivo de seguridad.** El cierre es deliberadamente conservador: un estado incierto del PID, del puerto o de los descendientes (p. ej. proceso de otro usuario o consulta CIM lenta) conserva el directorio y devuelve INCOMPLETO/FAIL aunque el servidor ya hubiera terminado; en ese caso la limpieza es manual y se informa la ruta.
+11. **Naturaleza de la caída.** `B7.6` exige `signalCode = SIGKILL` y que el archivo PID NO se retire (un cierre ordenado lo elimina). Es una inferencia razonable no observada aún con MariaDB real: si el motor o el sistema se comportaran distinto, B7.6 daría FAIL/INCOMPLETO y se informaría tal cual. El mensaje de recuperación del registro del servidor se guarda solo como evidencia informativa.
 10. **PASS pleno inalcanzable.** Con `B7.5` como SKIP permanente, el mejor resultado de la suite es `PASS CON LIMITACIONES`.
 
 ## Relación B0–B9 ↔ D01–D16 (NO se declaran resueltas)

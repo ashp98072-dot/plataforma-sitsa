@@ -120,3 +120,33 @@ export async function terminateStray(proc, belongs, deps = {}) {
   }
   return { done: false, reason: `proceso ${proc.pid}: no terminó` };
 }
+
+/**
+ * AUD-05 — INTERRUPCIÓN FORZADA para simular la caída de B7. NO es el apagado normal ni la terminación de limpieza (`terminateVerified`).
+ * En Windows `child.kill()` NUNCA es un cierre ordenado: Node invoca TerminateProcess para SIGTERM/SIGKILL/SIGINT (el proceso no puede interceptarlo; se midió
+ * signalCode = la señal pedida, exitCode = null). El único cierre ordenado es el SQL `SHUTDOWN`. Aquí se usa 'SIGKILL' de forma explícita y se registra la naturaleza de la caída.
+ * Se rechaza si falta alguna precondición, si el proceso ya terminó, o si no se REVALIDA (identidad, ejecutable, datadir, puerto, pipe, sockets) justo antes. Solo actúa sobre el hijo propio.
+ */
+export async function forceCrashVerified(child, ctx, deps = {}) {
+  const inspect = deps.inspect ?? inspectProcess; const wait = deps.wait ?? ((ms) => new Promise((r) => setTimeout(r, ms))); const now = deps.now ?? Date.now;
+  const exited = () => (child.exitCode !== null && child.exitCode !== undefined) || Boolean(child.signalCode);
+  const reject = (reason) => ({ done: false, forced: false, method: null, reason });
+  const pre = ctx.preconditions ?? {};
+  if (pre.phase !== 'crash-prepare') return reject('fase incorrecta: la caída forzada solo se permite en crash-prepare');
+  if (pre.ready !== true) return reject('falta la señal de la preparación (crash-ready); no se simula la caída');
+  if (pre.gateConfirmed !== true) return reject('la identidad del laboratorio no está confirmada');
+  if (exited()) return reject('el proceso ya había terminado; no hay caída que simular');
+  const before = inspect(child.pid);
+  if (before.state !== 'present') return reject(`estado previo del proceso no verificable (${before.reason ?? before.state})`);
+  if (!ctx.belongs(before.info)) return reject(`${ctx.label}: el proceso ${child.pid} no pertenece al laboratorio`);
+  let rev; try { rev = await ctx.revalidate(); } catch (e) { rev = { ok: false, reasons: [e.message] }; }
+  if (!rev || rev.ok !== true) return reject(`revalidación previa fallida: ${(rev?.reasons ?? ['sin resultado']).join('; ')}`);
+  const started = now();
+  const sent = child.kill('SIGKILL');
+  if (sent !== true) return { done: false, forced: false, method: 'child.kill(SIGKILL)', reason: 'kill() no pudo enviar la interrupción', pre: before.info };
+  for (let i = 0; i < 80 && !exited(); i++) await wait(250);
+  const after = exited() ? inspect(child.pid) : { state: 'present' };
+  const evidence = { method: 'child.kill(SIGKILL) → TerminateProcess en Windows (sin cierre ordenado)', pre: before.info, signal: child.signalCode ?? null, exitCode: child.exitCode ?? null, postState: after.state, elapsedMs: now() - started };
+  if (!exited() || after.state !== 'absent') return { done: false, forced: true, ...evidence, reason: after.state === 'unknown' ? 'terminación no verificable (estado desconocido)' : 'el proceso no terminó tras la interrupción forzada' };
+  return { done: true, forced: true, ...evidence };
+}

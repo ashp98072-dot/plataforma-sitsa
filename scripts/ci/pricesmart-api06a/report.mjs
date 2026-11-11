@@ -1,7 +1,16 @@
 // PRICESMART-API-06A — evaluación de ejecuciones de Vitest y resumen B0–B9. PURO. Nunca convierte "no ejecutada", "incompleta" o "con SKIP" en PASS.
 export const BLOCKS = Object.freeze(['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B9']);
-// Bloques que cada ejecución de Vitest DEBE reportar para considerarse completa.
-export const REQUIRED_BLOCKS = Object.freeze({ main: ['B0', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B8'], 'crash-prepare': ['B7'], 'crash-verify': ['B7'] });
+// AUD-04: casos OBLIGATORIOS por fase (ids exactos de mariadb-real.lab.ts; una prueba estática verifica que coinciden con el archivo). Un caso obligatorio debe estar presente
+// y en PASS: ausente, duplicado u OMITIDO (skip) hace la fase INCOMPLETA. Los casos de OTRA fase aparecen como omitidos en esta y no cuentan.
+export const REQUIRED_CASES = Object.freeze({
+  main: Object.freeze(['B0.t1', 'B0.t2', 'B0.t3', 'B1.1', 'B1.2', 'B1.3', 'B1.4', 'B2.1', 'B2.2', 'B3.1', 'B3.2', 'B3.3', 'B4.1', 'B4.2', 'B4.3', 'B4.4', 'B5.1', 'B5.2', 'B5.3', 'B6.1', 'B6.2', 'B6.3', 'B8.1', 'B8.2']),
+  'crash-prepare': Object.freeze(['B7.1']),
+  'crash-verify': Object.freeze(['B7.2', 'B7.3', 'B7.4']),
+});
+// Omisiones DECLARADAS (permitidas) por fase.
+export const DECLARED_SKIPS = Object.freeze({ main: Object.freeze([]), 'crash-prepare': Object.freeze([]), 'crash-verify': Object.freeze(['B7.5']) });
+const KNOWN_IDS = new Set([...Object.values(REQUIRED_CASES).flat(), ...Object.values(DECLARED_SKIPS).flat()]);
+const idOf = (title) => /(?<![A-Za-z0-9])(B[0-9]\.[0-9a-z]+)(?![0-9a-z])/.exec(title)?.[1];
 // Limitaciones declaradas: deben permanecer SKIP y aparecer SIEMPRE en el informe.
 export const DECLARED_LIMITATIONS = Object.freeze([
   Object.freeze({ id: 'B7.5', block: 'B7', name: 'Caída DURANTE el COMMIT (COMMIT_UNKNOWN real)', reason: 'no determinista con este arnés; solo cubierta con doble en API-02' }),
@@ -19,7 +28,7 @@ const blockOf = (title) => /\b(B[0-9])\b/.exec(title)?.[1];
  */
 export function evaluateVitestRun(phase, run, report) {
   const reasons = [];
-  if (!REQUIRED_BLOCKS[phase]) return { state: 'INCOMPLETO', reasons: [`fase desconocida: ${phase}`] };
+  if (!REQUIRED_CASES[phase]) return { state: 'INCOMPLETO', reasons: [`fase desconocida: ${phase}`] };
   if (!run) return { state: 'INCOMPLETO', reasons: ['sin resultado de la ejecución'] };
   if (run.error) reasons.push(`error de proceso: ${run.error.code ?? run.error.message}`);
   if (run.signal) reasons.push(`terminado por señal ${run.signal}`);
@@ -31,8 +40,21 @@ export function evaluateVitestRun(phase, run, report) {
     tests = files.flatMap((f) => (Array.isArray(f.assertionResults) ? f.assertionResults : []));
     if (tests.length === 0) reasons.push('Vitest no reportó ningún caso');
     if (Number.isFinite(Number(report.numTotalTests)) && Number(report.numTotalTests) !== tests.length) reasons.push(`recuento inconsistente (${report.numTotalTests} vs ${tests.length})`);
-    const present = new Set(tests.map((t) => blockOf(titleOf(t))).filter(Boolean));
-    for (const b of REQUIRED_BLOCKS[phase]) if (!present.has(b)) reasons.push(`bloque ${b} sin resultados`);
+    const byId = new Map();
+    for (const t of tests) { const id = idOf(titleOf(t)); if (id) byId.set(id, [...(byId.get(id) ?? []), t]); }
+    // AUD-04: cada caso obligatorio de ESTA fase debe existir, ser único y NO estar omitido.
+    for (const id of REQUIRED_CASES[phase]) {
+      const items = byId.get(id) ?? [];
+      if (items.length === 0) reasons.push(`caso obligatorio ausente: ${id}`);
+      else if (items.length > 1) reasons.push(`caso obligatorio duplicado: ${id}`);
+      else if (MAP[items[0].status] === 'SKIP') reasons.push(`caso obligatorio OMITIDO (skip): ${id}`);
+    }
+    // Una omisión es aceptable solo si pertenece a OTRA fase conocida o está declarada para esta; cualquier otra es inesperada.
+    for (const t of tests) {
+      if (MAP[t.status] !== 'SKIP') continue;
+      const id = idOf(titleOf(t));
+      if (!id || !KNOWN_IDS.has(id)) reasons.push(`caso omitido no clasificado: ${titleOf(t)}`);
+    }
   }
   if (reasons.length) return { state: 'INCOMPLETO', reasons };
   const failures = [];
@@ -46,18 +68,22 @@ export function evaluateVitestRun(phase, run, report) {
 }
 
 /**
- * reports: JSON de Vitest. executorChecks: [{id,name,status,detail}] medidos por el ejecutor.
+ * phaseReports: [{phase, report}] con el JSON de Vitest de cada fase (las omisiones que pertenecen a OTRA fase no se cuentan). executorChecks: [{id,name,status,detail}] medidos por el ejecutor.
  * ctx: { phases:[{name,state,reasons}], halted:{phase,reason}|null, shutdown:{proven,reasons}|null, error:string|null }.
  */
-export function summarize(reports, executorChecks = [], ctx0 = {}) {
+export function summarize(phaseReports, executorChecks = [], ctx0 = {}) {
   const ctx = ctx0 ?? {};
-  const rows = [];
-  for (const report of reports) {
+  const rows = []; let otherPhaseOmitted = 0;
+  for (const entry of phaseReports) {
+    const phase = entry?.phase; const report = entry?.report;
     for (const file of report?.testResults ?? []) {
       for (const t of file.assertionResults ?? []) {
         const title = titleOf(t);
         const status = MAP[t.status] ?? 'FAIL';
-        rows.push({ id: /\b(B[0-9]\.[0-9a-z]+)\b/.exec(title)?.[1] ?? '', block: blockOf(title) ?? 'SIN-BLOQUE', name: title, status, detail: status === 'FAIL' ? String((t.failureMessages ?? [])[0] ?? '').split('\n')[0].slice(0, 300) : '' });
+        const id = idOf(title);
+        // AUD-04: una omisión de un caso que pertenece a OTRA fase es esperada y no se cuenta como SKIP; las demás se conservan.
+        if (status === 'SKIP' && phase && id && !(REQUIRED_CASES[phase] ?? []).includes(id) && !(DECLARED_SKIPS[phase] ?? []).includes(id) && KNOWN_IDS.has(id)) { otherPhaseOmitted++; continue; }
+        rows.push({ id: id ?? '', block: blockOf(title) ?? 'SIN-BLOQUE', name: title, status, detail: status === 'FAIL' ? String((t.failureMessages ?? [])[0] ?? '').split('\n')[0].slice(0, 300) : '' });
       }
     }
   }
@@ -91,7 +117,7 @@ export function summarize(reports, executorChecks = [], ctx0 = {}) {
   if (limitations.some((l) => l.observed === 'NO OBSERVADA')) gaps.push('limitación declarada no observada');
   const limited = counts.SKIP > 0 || BLOCKS.some((b) => ['SKIP', 'PASS CON LIMITACIONES'].includes(blocks[b].status));
   const overall = problems.length ? 'FAIL' : gaps.length ? 'INCOMPLETO' : limited ? 'PASS CON LIMITACIONES' : 'PASS';
-  return { rows, counts, blocks, unassigned, phases, halted, shutdown, error, limitations, problems, gaps, overall };
+  return { rows, counts, blocks, unassigned, otherPhaseOmitted, phases, halted, shutdown, error, limitations, problems, gaps, overall };
 }
 
 export function renderMarkdown(summary, header = '') {
