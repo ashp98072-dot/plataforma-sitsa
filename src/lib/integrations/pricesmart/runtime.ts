@@ -14,6 +14,8 @@ export function installPriceSmartHandler(handler: PriceSmartHandler | null): voi
   if (handler !== null && typeof handler !== 'function') throw new TypeError('handler inválido');
   state.handler = handler;
 }
+/** Solo lectura: ¿hay un handler instalado? (lo usa el diagnóstico administrativo; no instala ni retira nada). */
+export function isPriceSmartHandlerInstalled(): boolean { return state.handler !== null; }
 function disabled(): Response {
   const correlationId = crypto.randomUUID();
   return new Response(JSON.stringify({ code: 'DISABLED', correlationId }), { status: 503, headers: {

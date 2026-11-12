@@ -1,6 +1,7 @@
 import { createIsolatedHttpTransport, type HttpEvidencePort, type HttpTransportExtensions } from './http-transport';
 import { installPriceSmartHandler, type PriceSmartHandler } from './runtime';
-import { parseRuntimeConfig, type RuntimeConfig, type RuntimeMode } from './runtime-config';
+import { REQUIRED_DECISIONS, parseRuntimeConfig, type RuntimeConfig, type RuntimeMode } from './runtime-config';
+export { REQUIRED_DECISIONS };
 import type { OrderRepository } from './ports';
 import type { createM2MSecurity } from './m2m-security';
 
@@ -8,11 +9,6 @@ import type { createM2MSecurity } from './m2m-security';
 // Una composición administrativa futura aportará los puertos reales (verificador D02, contrato D06, cifrado, repositorio) y llamará a `installControlledRuntime`; este módulo
 // solo garantiza que el handler se instale únicamente si TODO está validado, y que quede detrás de un modo (DISABLED / READ_ONLY / ENABLED) y un interruptor de emergencia.
 
-/** Decisiones de PriceSmart que deben estar ratificadas (declaradas por el operador) para cada modo. Supuesto conservador de este PR; ajustable cuando PriceSmart las confirme. */
-export const REQUIRED_DECISIONS: Readonly<Record<Exclude<RuntimeMode, 'DISABLED'>, readonly string[]>> = {
-  READ_ONLY: ['D02', 'D06'],
-  ENABLED: ['D02', 'D06', 'D08', 'D09', 'D12'],
-};
 export type Blocker = { code: string; detail: string };
 export type Readiness = { ready: boolean; mode: RuntimeMode; blockers: Blocker[] };
 
