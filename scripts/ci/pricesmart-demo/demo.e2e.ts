@@ -187,30 +187,34 @@ describe("API-12 circuito completo", () => {
     expect((await rows("SELECT observaciones FROM tms_solicitudes_cliente WHERE empresa_id = ? AND id = ?", [A.empresaId, preId]))[0].observaciones).toBe("solicitud preexistente ajena a PriceSmart");   // la ajena quedó intacta
   });
 
-  it("DEMO.13 recuperación tras una caída entre crear la solicitud e insertar el vínculo: el reintento completa el MISMO vínculo por token, sin duplicar", async () => {
-    const z = uid(); const A = empresas.a.empresaId;
-    // 1) La orden se recibe sin mapeo (no hay vinculación): queda RECEIVED. Se restaura el mapeo después.
-    const [map] = await rows("SELECT * FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
-    await db.query("DELETE FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
-    try { expect((await post("d", z)).status).toBe(202); } finally {
-      await db.query("INSERT INTO ps_api12_tms_mapping (environment, tenant_id, client_id, integration_id, empresa_id, tms_cliente_id, tms_usuario_cliente_id, pickup_place, dropoff_place) VALUES (?,?,?,?,?,?,?,?,?)",
-        [map.environment, map.tenant_id, map.client_id, map.integration_id, map.empresa_id, map.tms_cliente_id, map.tms_usuario_cliente_id, map.pickup_place, map.dropoff_place]);
-    }
-    expect(await solicitudOf(z)).toHaveLength(0); expect((await get("d", z)).json.tms.linked).toBe(false);
-    // 2) Primer intento: la solicitud SE CREA y el proceso «cae» antes de completar el vínculo.
-    const schema = String(process.env.DB_NAME); const pool = getPool();
+  it("DEMO.13 caídas entre operaciones (API-13): antes de crear no queda nada; después de crear el vínculo ya es atómico; los reclamos pendientes de API-12 se recuperan por token", async () => {
+    const A = empresas.a.empresaId; const schema = String(process.env.DB_NAME); const pool = getPool();
     const repository = mariaDbOrderRepository(pool, { schema, runtimeUser: String(process.env.DB_USER), cipher: labCipher(labKey), contract: labContract });
     const scope = { environment: "sandbox" as const, tenantId: A, clientId: 3, integrationId: INTEGRATION };
-    const crash = (async (s: Parameters<typeof crearSolicitudCliente>[0], i: Parameters<typeof crearSolicitudCliente>[1]) => { await crearSolicitudCliente(s, i); throw new Error("caída simulada"); }) as typeof crearSolicitudCliente;
-    await expect(createTmsLinker({ pool, schema, repository, createRequest: crash }).link(scope, z)).rejects.toThrow("caída simulada");
-    const created = await solicitudOf(z); expect(created).toHaveLength(1);
-    const pending = await markerOf(z, 3); expect(pending?.solicitudId).toBeNull(); expect(String(created[0].observaciones).startsWith(pending!.marker)).toBe(true);
-    expect((await get("d", z)).json.tms.linked).toBe(false);   // el reclamo pendiente no se presenta como vínculo
-    // 3) Reintento normal: encuentra la solicitud POR TOKEN y completa el vínculo; no crea otra.
+    const received = async (id: string) => {   // la orden se recibe sin mapeo (sin vinculación); el mapeo se restaura enseguida
+      const [map] = await rows("SELECT * FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
+      await db.query("DELETE FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
+      try { expect((await post("d", id)).status).toBe(202); } finally {
+        await db.query("INSERT INTO ps_api12_tms_mapping (environment, tenant_id, client_id, integration_id, empresa_id, tms_cliente_id, tms_usuario_cliente_id, pickup_place, dropoff_place) VALUES (?,?,?,?,?,?,?,?,?)",
+          [map.environment, map.tenant_id, map.client_id, map.integration_id, map.empresa_id, map.tms_cliente_id, map.tms_usuario_cliente_id, map.pickup_place, map.dropoff_place]);
+      }
+    };
+    // a) Caída ANTES de crear la solicitud: no hay solicitud; queda un reclamo pendiente que no se presenta como vínculo.
+    const z = uid(); await received(z);
+    const antes = (async () => { throw new Error("caída simulada antes de crear"); }) as unknown as typeof crearSolicitudCliente;
+    await expect(createTmsLinker({ pool, schema, repository, createRequest: antes }).link(scope, z)).rejects.toThrow("caída simulada");
+    expect(await solicitudOf(z)).toHaveLength(0); expect((await markerOf(z, 3))?.solicitudId).toBeNull(); expect((await get("d", z)).json.tms.linked).toBe(false);
+    // b) Caída DESPUÉS de crear: el vínculo se escribió en la MISMA transacción que la solicitud, así que ya está completo; el reintento no crea otra.
+    const crashAfter = (async (sc: Parameters<typeof crearSolicitudCliente>[0], inp: Parameters<typeof crearSolicitudCliente>[1], g: Parameters<typeof crearSolicitudCliente>[2]) => { await crearSolicitudCliente(sc, inp, g); throw new Error("caída simulada después de crear"); }) as typeof crearSolicitudCliente;
+    await expect(createTmsLinker({ pool, schema, repository, createRequest: crashAfter }).link(scope, z)).rejects.toThrow("caída simulada");
+    const created = await solicitudOf(z); expect(created).toHaveLength(1); expect((await markerOf(z, 3))?.solicitudId).toBe(Number(created[0].id)); expect((await get("d", z)).json.tms.linked).toBe(true);
     const linker = createTmsLinker({ pool, schema, repository });
-    const done = await linker.link(scope, z); expect(done).toMatchObject({ state: "LINKED", solicitudId: Number(created[0].id) });
-    expect(await solicitudOf(z)).toHaveLength(1); expect((await markerOf(z, 3))?.solicitudId).toBe(Number(created[0].id));
-    expect(await linker.link(scope, z)).toMatchObject({ state: "ALREADY_LINKED", solicitudId: Number(created[0].id) });
-    expect((await get("d", z)).json).toMatchObject({ tms: { linked: true, requestState: "SOLICITADA" }, confirmsDelivery: false });
+    expect(await linker.link(scope, z)).toMatchObject({ state: "ALREADY_LINKED", solicitudId: Number(created[0].id) }); expect(await solicitudOf(z)).toHaveLength(1);
+    // c) Compatibilidad: un reclamo pendiente del formato API-12 (solicitud creada SIN gancho, con el token en observaciones) se completa por token, sin duplicar.
+    const w = uid(); await received(w);
+    const legacy = (async (sc: Parameters<typeof crearSolicitudCliente>[0], inp: Parameters<typeof crearSolicitudCliente>[1]) => { await crearSolicitudCliente(sc, inp); throw new Error("caída simulada (formato API-12)"); }) as typeof crearSolicitudCliente;
+    await expect(createTmsLinker({ pool, schema, repository, createRequest: legacy }).link(scope, w)).rejects.toThrow("caída simulada");
+    const old = await solicitudOf(w); const pending = await markerOf(w, 3); expect(old).toHaveLength(1); expect(pending?.solicitudId).toBeNull(); expect(String(old[0].observaciones).startsWith(pending!.marker)).toBe(true);
+    expect(await linker.link(scope, w)).toMatchObject({ state: "LINKED", solicitudId: Number(old[0].id) }); expect(await solicitudOf(w)).toHaveLength(1);
   });
 });

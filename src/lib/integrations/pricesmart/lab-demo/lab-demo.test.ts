@@ -6,6 +6,7 @@ import { createLabDemoHandler, labDemoGate, LAB_DEMO_FLAG } from './composition'
 import { autoInstallLabDemo } from './autoinstall';
 import { labCipher, labVerifier } from './lab-crypto';
 import { createTmsLinker } from './tms-link';
+import { backoffMs, classify, DEFAULT_RETRY_POLICY } from './link-retry';
 import { handlePriceSmart, installPriceSmartHandler } from '../runtime';
 
 const goodEnv = { NODE_ENV: 'development', NOVALVION_ENV: 'sandbox', PRICESMART_LAB_DEMO: LAB_DEMO_FLAG, DB_HOST: '127.0.0.1', DB_NAME: 'sandbox_api02_abc', DB_USER: 'sandbox_api02_abc', PRICESMART_LAB_KEY: 'k'.repeat(40) };
@@ -91,5 +92,54 @@ describe('API-12 liberación del bloqueo de vinculación', () => {
       const h = harness({ release, work: 'throws' });
       await expect(h.linker.link(scope, 'A1')).rejects.toThrow('fallo del trabajo'); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
     }
+  });
+});
+
+// ---- API-13: política de reintentos (pura)
+describe('API-13 clasificación y retroceso de reintentos', () => {
+  const p = { ...DEFAULT_RETRY_POLICY, maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 5000 };
+  it('retroceso exponencial acotado', () => { expect([1, 2, 3, 4, 5].map((n) => backoffMs(p, n))).toEqual([1000, 2000, 4000, 5000, 5000]); });
+  it('éxito → DONE; rechazo del TMS y ambigüedad → BLOQUEADA sin reintento; transitorios → PENDIENTE y AGOTADA al llegar al máximo', () => {
+    expect(classify({ state: 'LINKED', solicitudId: 1 }, 1, p).status).toBe('DONE'); expect(classify({ state: 'ALREADY_LINKED', solicitudId: 1 }, 2, p).status).toBe('DONE');
+    expect(classify({ state: 'REJECTED_BY_TMS', detail: 'x'.repeat(500) }, 1, p)).toMatchObject({ status: 'BLOCKED', delayMs: 0 }); expect(classify({ state: 'REJECTED_BY_TMS', detail: 'x'.repeat(500) }, 1, p).detail).toHaveLength(200);
+    expect(classify({ state: 'RECOVERY_AMBIGUOUS' }, 1, p).status).toBe('BLOCKED');
+    for (const state of ['UNMAPPED', 'LOCK_TIMEOUT', 'ORDER_NOT_FOUND'] as const) {
+      expect(classify({ state }, 1, p)).toMatchObject({ status: 'PENDING', delayMs: 1000 }); expect(classify({ state }, 2, p)).toMatchObject({ status: 'PENDING', delayMs: 2000 }); expect(classify({ state }, 3, p)).toMatchObject({ status: 'EXHAUSTED', delayMs: 0 });
+    }
+  });
+  it('una excepción nunca guarda su mensaje: solo un código corto', () => {
+    const c = classify({ thrown: Object.assign(new Error('contiene datos sensibles del cliente'), { code: 'ER_LOCK_DEADLOCK' }) }, 1, p);
+    expect(c).toMatchObject({ status: 'PENDING', outcome: 'ERROR', detail: 'ER_LOCK_DEADLOCK' }); expect(JSON.stringify(c)).not.toContain('sensibles');
+    expect(classify({ thrown: 'texto' }, 3, p).status).toBe('EXHAUSTED');
+  });
+});
+
+// ---- API-13 (auditoría de #604): un fallo al restaurar el nivel de aislamiento no oculta el error original ni cambia el resultado
+import { createLinkRetry } from './link-retry';
+describe('API-13 restauración del aislamiento en el trabajador de reintentos', () => {
+  function pool(o: { restoreFails: boolean; executeThrows?: Error }) {
+    const calls = { destroyed: 0, released: 0 };
+    const conn = {
+      async query(sql: string) { if (/REPEATABLE READ/.test(sql) && o.restoreFails) throw new Error('fallo al restaurar el aislamiento'); return [[]]; },
+      async execute() { if (o.executeThrows) throw o.executeThrows; return [[]]; },
+      destroy() { calls.destroyed++; }, release() { calls.released++; },
+    };
+    return { calls, retry: createLinkRetry({ pool: { getConnection: async () => conn } as never, schema: 'sandbox_api02_x', linker: { link: async () => ({ state: 'UNMAPPED' }) } }) };
+  }
+  it('restauración correcta: la conexión vuelve al pool', async () => {
+    const h = pool({ restoreFails: false }); expect(await h.retry.claim(1)).toEqual([]); expect(h.calls).toEqual({ destroyed: 0, released: 1 });
+  });
+  it('fallo al restaurar con trabajo correcto: el resultado se conserva y la conexión se destruye (no vuelve al pool con el nivel alterado)', async () => {
+    const h = pool({ restoreFails: true }); expect(await h.retry.claim(1)).toEqual([]); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
+  });
+  it('fallo al restaurar con trabajo fallido: se propaga el error ORIGINAL, no el de la restauración', async () => {
+    const h = pool({ restoreFails: true, executeThrows: new Error('error original del trabajo') });
+    await expect(h.retry.claim(1)).rejects.toThrow('error original del trabajo'); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
+  });
+  it('el código del registro de intentos solo inserta: no actualiza ni borra el historial', () => {
+    const src = readFileSync('src/lib/integrations/pricesmart/lab-demo/link-retry.ts', 'utf8');
+    expect(src).not.toMatch(/UPDATE\s+\$\{A\}|DELETE\s+FROM\s+\$\{A\}|UPDATE\s+[`'"]?\S*ps_api13_link_attempts|DELETE\s+FROM\s+\S*ps_api13_link_attempts/);
+    expect(src).toMatch(/INSERT INTO \$\{A\}/);
+    const ddl = readFileSync('docs/integraciones/pricesmart/api13/staging-link-retry.sql.in', 'utf8'); expect(ddl).toContain("CHECK (event IN ('STARTED','FINISHED'))"); expect(ddl).not.toMatch(/finished_at/);
   });
 });

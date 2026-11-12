@@ -1,0 +1,58 @@
+-- DESIGN ONLY (PRICESMART API-13). Separate future staging, NOT a production migration. Requires ps_api01_* (api01) y ps_api12_* (api12/staging-tms-link.sql.in).
+-- Cola de reintentos de vinculación TMS (una fila por orden) y registro append-only de cada intento. Sin datos sensibles: solo códigos de resultado y textos de validación cortos.
+-- Privilegios mínimos sugeridos para la cuenta del trabajador: jobs = SELECT, INSERT, UPDATE; attempts = SELECT, INSERT (nunca UPDATE/DELETE: es un registro de eventos inmutables).
+-- No installer, connection, USE, credentials or GRANT is provided. Not ratified: do not execute outside a disposable sandbox.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API13_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+CREATE TABLE ps_api13_link_jobs (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  external_order_id VARBINARY(120) NOT NULL,
+  empresa_id INT NULL,
+  status VARCHAR(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING',
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  next_attempt_at DATETIME(6) NOT NULL,
+  lease_owner BINARY(16) NULL,
+  lease_until DATETIME(6) NULL,
+  last_outcome VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  last_detail VARCHAR(200) NULL,
+  ack_by VARCHAR(100) NULL,
+  ack_at DATETIME(6) NULL,
+  created_at DATETIME(6) NOT NULL,
+  updated_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id),
+  INDEX ix_ps_api13_due (status, next_attempt_at, lease_until),
+  INDEX ix_ps_api13_empresa (empresa_id, status),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id) ON DELETE RESTRICT,
+  CHECK (status IN ('PENDING','DONE','BLOCKED','EXHAUSTED')),
+  CHECK ((lease_owner IS NULL) = (lease_until IS NULL)),
+  CHECK ((ack_by IS NULL) = (ack_at IS NULL))
+) ENGINE=InnoDB;
+
+-- Registro de intentos: SOLO eventos inmutables (INSERT, nunca UPDATE/DELETE). Cada intento escribe un evento STARTED al comenzar y un evento FINISHED al terminar, cada uno con su
+-- hora. Un intento interrumpido (caída, lease vencido sin cierre) queda con STARTED y SIN FINISHED: no se inventa ningún resultado. Si un trabajador cuyo lease venció termina tarde, su
+-- FINISHED lleva outcome LEASE_LOST (resultado descartado para el trabajo; el estado del TMS lo reconcilia el siguiente intento, que es idempotente).
+CREATE TABLE ps_api13_link_attempts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  attempt_no INT UNSIGNED NOT NULL,
+  event VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  worker_id VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  outcome VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  detail VARCHAR(200) NULL,
+  recorded_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ps_api13_attempt_event (environment, tenant_id, client_id, integration_id, order_id, attempt_no, event),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api13_link_jobs(environment, tenant_id, client_id, integration_id, order_id) ON DELETE RESTRICT,
+  CHECK (event IN ('STARTED','FINISHED')),
+  CHECK ((event = 'STARTED') = (outcome IS NULL))
+) ENGINE=InnoDB;

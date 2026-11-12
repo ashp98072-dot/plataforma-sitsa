@@ -34,6 +34,11 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
           if (path.replaceAll('\\','/').startsWith('src/app/api/integrations/pricesmart/v1/orders')) {
             expect(text).toMatch(/^import \{ handlePriceSmart \} from "@\/lib\/integrations\/pricesmart\/runtime";/);
             expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql/);
+          } else if (/^src\/app\/api\/empresas\/\[slug\]\/tms\/solicitudes-clientes\/pricesmart\//.test(path.replaceAll('\\','/'))) {
+            // API-13: las dos rutas de Operaciones (lectura y «reconocer») solo importan la vista de laboratorio, que se niega a operar fuera del laboratorio ({enabled:false}).
+            const imports = text.match(/from "[^"]*pricesmart[^"]*"/g) ?? [];
+            expect(imports).toEqual(['from "@/lib/integrations/pricesmart/lab-demo/ops-view"']);
+            expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql/);
           } else expect(text).not.toMatch(/integrations\/pricesmart|PRICESMART_ENABLED|OrderApplication/);
         }
       }

@@ -42,6 +42,17 @@ async function adminConn(m) {
 
 /** DDL de laboratorio de API-12 (derivado del .in: solo se retira el SIGNAL de bloqueo). */
 export const API12_SIGNAL = "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API12_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';";
+/** DDL de laboratorio de API-13 (cola de reintentos y registro de intentos), derivado del .in. */
+export const API13_SIGNAL = "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API13_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';";
+export function api13DdlStatements(text) {
+  const t = lf(text);
+  const first = t.split(String.fromCharCode(10)).filter((l) => l.trim() && !l.trim().startsWith('--'))[0];
+  if (first !== API13_SIGNAL || t.split(API13_SIGNAL).length !== 2) fail('La primera sentencia de api13/staging-link-retry.sql.in no es el SIGNAL de bloqueo esperado.');
+  const st = splitStatements(t.replace(API13_SIGNAL, '-- [LAB API-13] SIGNAL de bloqueo retirada SOLO en la copia de laboratorio.'));
+  if (st.length !== 2 || !st[0].startsWith('CREATE TABLE ps_api13_link_jobs (') || !st[1].startsWith('CREATE TABLE ps_api13_link_attempts (')) fail('Se esperaban exactamente 2 CREATE TABLE de API-13.');
+  if (st.some((s) => new RegExp('\\b(DROP|TRUNCATE|ALTER|DELETE|GRANT|USE|SIGNAL|CREATE (DATABASE|USER))\\b', 'i').test(s.replaceAll('ON DELETE RESTRICT', '')))) fail('El DDL de API-13 contiene sentencias no permitidas.');
+  return st;
+}
 export function api12DdlStatements(text) {
   const t = lf(text);
   const first = t.split('\n').filter((l) => l.trim() && !l.trim().startsWith('--'))[0];
@@ -65,7 +76,7 @@ async function prepare() {
   const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
   const c = await adminConn(m); await c.query(`USE \`${m.schema}\``);
   for (const sql of [...labDdlStatements(read('docs/integraciones/pricesmart/api01/staging.sql.in')), ...securityDdlStatements(read('docs/integraciones/pricesmart/api11/staging-security.sql.in')),
-    ...api12DdlStatements(read('docs/integraciones/pricesmart/api12/staging-tms-link.sql.in'))]) await c.query(sql);
+    ...api12DdlStatements(read('docs/integraciones/pricesmart/api12/staging-tms-link.sql.in')), ...api13DdlStatements(read('docs/integraciones/pricesmart/api13/staging-link-retry.sql.in'))]) await c.query(sql);
   // ---- datos FICTICIOS: 2 empresas, 1 cliente de servicio por empresa (usuario inactivo para el portal), alcances, catálogo M2M y mapeo.
   const id = async (sql, params) => Number((await c.query(sql, params))[0].insertId);
   const empresa1 = state.seed.empresa;
@@ -125,12 +136,37 @@ async function prepare() {
   console.log(JSON.stringify({ baseUrl, appPid: next.pid, postmanEnvironment: postmanEnv, log: logFile }));
 }
 
+/** Reinicia SOLO la app (la base sigue igual): simula un reinicio del proceso. `--worker-ms=N` activa el trabajador de reintentos dentro de la app (N ≥ 1000). */
+async function restartApp() {
+  const state = readState(); const { m } = state;
+  const workerMs = Number(process.argv.find((a) => a.startsWith('--worker-ms='))?.split('=')[1] ?? 0);
+  if (state.app?.pid) cp.spawnSync('taskkill', ['/PID', String(state.app.pid), '/T', '/F'], { windowsHide: true });
+  const port = pickPort(() => crypto.randomInt(0, 2 ** 31 - 1), (p) => inspectPort(p).state !== 'free');
+  const env = buildChildEnv(m, process.env, { NODE_ENV: 'development' });
+  delete env.PS06A_APP_PASSWORD; delete env.PS06A_WORKER_PASSWORD;
+  env.PATH = `${path.dirname(process.execPath)};${env.PATH}`;
+  env.PRICESMART_LAB_DEMO = 'SINTETICO-LOCAL-SIN-PRODUCCION'; env.PRICESMART_LAB_KEY = state.demo.labKey;
+  if (workerMs) env.PRICESMART_LAB_WORKER_MS = String(workerMs);
+  const log = fs.openSync(path.join(m.runDir, 'next.log'), 'a');
+  const next = cp.spawn(process.execPath, [path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', String(port)], {
+    cwd: repoRoot, env, windowsHide: true, detached: true, stdio: ['ignore', log, log] });
+  fs.closeSync(log); next.unref();
+  state.app = { pid: next.pid, port }; writeState(state);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 240; i++) { try { const r = await fetch(`${baseUrl}/portal/login`, { redirect: 'manual' }); if (r.status < 500) break; } catch { /* aún no */ } await new Promise((r) => setTimeout(r, 1000)); }
+  // El primer acceso a la ruta instala la composición (y arranca el trabajador): se dispara una solicitud sin credenciales.
+  await fetch(`${baseUrl}/api/integrations/pricesmart/v1/orders/WARMUP`).catch(() => undefined);
+  const postmanEnv = path.join(m.runDir, 'postman-environment.json');
+  try { const e = JSON.parse(fs.readFileSync(postmanEnv, 'utf8')); e.values = e.values.map((v) => (v.key === 'baseUrl' ? { ...v, value: baseUrl } : v)); fs.writeFileSync(postmanEnv, JSON.stringify(e)); } catch { /* opcional */ }
+  console.log(JSON.stringify({ baseUrl, appPid: next.pid, workerMs }));
+}
+
 function e2e() {
   const state = readState(); const { m } = state;
   const env = buildChildEnv(m, process.env, { NODE_ENV: 'test' }); delete env.PS06A_APP_PASSWORD; delete env.PS06A_WORKER_PASSWORD;
   env.PS_DEMO_RUNDIR = m.runDir;   // el e2e lee state.json de aquí (TEMP del proceso hijo apunta al directorio del run)
   env.PATH = `${path.dirname(process.execPath)};${env.PATH}`;
-  const r = cp.spawnSync(process.execPath, [path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(here, 'vitest.demo.config.mts'), '--reporter=verbose'], { cwd: repoRoot, env, windowsHide: true, encoding: 'utf8', timeout: 420000 });
+  const r = cp.spawnSync(process.execPath, [path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(here, 'vitest.demo.config.mts'), '--reporter=verbose', ...process.argv.slice(3).filter((a) => a.endsWith('.e2e.ts') && !a.includes('..'))], { cwd: repoRoot, env, windowsHide: true, encoding: 'utf8', timeout: 420000 });
   console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-45).join('\n')); if (r.status !== 0) process.exitCode = 1;
 }
 
@@ -147,7 +183,7 @@ function down() {
 
 const [cmd] = process.argv.slice(2);
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  const run = { up, prepare, e2e: async () => e2e(), postman: async () => postman(), down: async () => down() }[cmd];
-  if (!run) { console.error('Uso: up | e2e | postman | down [--keep-evidence=<dir>]'); process.exitCode = 2; }
+  const run = { up, prepare, 'restart-app': restartApp, e2e: async () => e2e(), postman: async () => postman(), down: async () => down() }[cmd];
+  if (!run) { console.error('Uso: up | prepare | restart-app [--worker-ms=N] | e2e | postman | down [--keep-evidence=<dir>]'); process.exitCode = 2; }
   else run().catch((e) => { console.error(e.message); process.exitCode = 1; });
 }
