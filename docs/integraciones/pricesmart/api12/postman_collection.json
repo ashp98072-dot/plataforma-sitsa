@@ -1,0 +1,495 @@
+{
+  "info": {
+    "name": "PriceSmart <-> Novalvion - API-12 demostracion en laboratorio local",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "EJECUTABLE solo contra el laboratorio local (demo.mjs up genera el entorno con baseUrl y la clave del run, fuera del repositorio). Contrato de prueba lab-demo-1; autenticacion de PRUEBA (HMAC). D02/D06/D08/D09/D12 siguen pendientes de PriceSmart."
+  },
+  "variable": [
+    {
+      "key": "externalOrderId",
+      "value": ""
+    },
+    {
+      "key": "deliveryDate",
+      "value": ""
+    },
+    {
+      "key": "firstCorrelationId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1 - Enviar orden sintetica (POST) -> 202 respaldado por persistencia",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'a'); pm.variables.set('op', 'orders:create');",
+              "pm.collectionVariables.set('externalOrderId', 'PM' + Math.random().toString(36).slice(2, 10));",
+              "const d = new Date(); d.setDate(d.getDate() + 3); pm.collectionVariables.set('deliveryDate', d.toISOString().slice(0, 10));",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202 Accepted', function () { pm.response.to.have.status(202); });",
+              "const j = pm.response.json();",
+              "pm.test('recibo RECEIVED/PENDING v1 de la orden enviada', function () { pm.expect(j.externalOrderId).to.eql(pm.variables.get('externalOrderId')); pm.expect(j.provisionalStatus).to.eql('RECEIVED'); pm.expect(j.processingStatus).to.eql('PENDING'); pm.expect(j.version).to.eql(1); });",
+              "pm.collectionVariables.set('firstCorrelationId', j.correlationId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{club}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "2 - Consultar estado (GET): vinculada a la bandeja del TMS, nunca entregada",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'a'); pm.variables.set('op', 'orders:read');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', function () { pm.response.to.have.status(200); });",
+              "const j = pm.response.json();",
+              "pm.test('estado propuesto RECEIVED y vinculada a una solicitud TMS', function () { pm.expect(j.proposedStatus).to.eql('RECEIVED'); pm.expect(j.tms.linked).to.eql(true); pm.expect(j.tms.requestState).to.eql('SOLICITADA'); pm.expect(j.tms.scheduled).to.eql(false); });",
+              "pm.test('nunca informa entrega', function () { pm.expect(j.confirmsDelivery).to.eql(false); pm.expect(JSON.stringify(j)).to.not.match(/DELIVERED|ENTREGAD/i); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "3 - Reenviar la misma orden (idempotente, sin duplicar)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'a'); pm.variables.set('op', 'orders:create');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202 con el mismo recibo', function () { pm.response.to.have.status(202); const j = pm.response.json(); pm.expect(j.externalOrderId).to.eql(pm.variables.get('externalOrderId')); pm.expect(j.version).to.eql(1); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{club}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "4 - Otra empresa intenta leer la orden ajena (aislamiento) -> 404",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'b'); pm.variables.set('op', 'orders:read');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('404 NOT_FOUND', function () { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql('NOT_FOUND'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "5 - Solicitar cancelacion (trazable, sin cancelar viajes) -> 202",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'a'); pm.variables.set('op', 'orders:cancel');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('202 CANCELLATION_REQUESTED', function () { pm.response.to.have.status(202); const j = pm.response.json(); pm.expect(j.provisionalStatus).to.eql('CANCELLATION_REQUESTED'); pm.expect(j.version).to.eql(2); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}/cancellation-requests",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}",
+            "cancellation-requests"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"reason\": \"ORIGIN_REQUEST\"\n}"
+        }
+      }
+    },
+    {
+      "name": "6 - GET tras la cancelacion: solicitada, nunca automatica",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', 'a'); pm.variables.set('op', 'orders:read');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('cancelacion pedida y NO automatica', function () { const j = pm.response.json(); pm.expect(j.provisionalStatus).to.eql('CANCELLATION_REQUESTED'); pm.expect(j.cancellation.requested).to.eql(true); pm.expect(j.cancellation.automatic).to.eql(false); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "7 - Sin evidencia de autenticacion -> 401",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('keyId', null); pm.variables.set('op', 'orders:read');",
+              "pm.variables.set('externalOrderId', pm.collectionVariables.get('externalOrderId')); pm.variables.set('deliveryDate', pm.collectionVariables.get('deliveryDate'));",
+              "// --- firma de laboratorio (se ejecuta DESPUÉS de fijar variables de este request) ---",
+              "// LABORATORIO: firma de prueba (HMAC con la clave del run). NO es el mecanismo M2M definitivo (D02 pendiente).",
+              "const keyId = pm.variables.get('keyId');",
+              "if (!keyId) { return; }",
+              "const op = pm.variables.get('op');",
+              "const extId = pm.variables.get('externalOrderId');",
+              "const tenants = { a: pm.environment.get('tenantA'), b: pm.environment.get('tenantB'), ghost: pm.environment.get('tenantA') };",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';",
+              "if (pm.request.body && pm.request.body.raw) { pm.request.body.raw = raw; }",
+              "const ns = JSON.stringify(['api03', 'sandbox', Number(tenants[keyId]), 1, pm.environment.get('integrationId')]);",
+              "const digest = CryptoJS.SHA256(JSON.stringify(['api03-request-v1', op, ns, pm.environment.get('club'), extId, CryptoJS.SHA256(raw).toString()])).toString();",
+              "const now = Date.now();",
+              "const proof = { id: 'pm' + Math.random().toString(36).slice(2) + now, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: digest };",
+              "const b64 = CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(JSON.stringify({ k: keyId, proof: proof }))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');",
+              "const sig = CryptoJS.HmacSHA256('api12-lab:' + b64, pm.environment.get('labKey')).toString();",
+              "pm.request.headers.upsert({ key: 'x-lab-evidence', value: b64 + '.' + sig });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('401 UNAUTHENTICATED', function () { pm.response.to.have.status(401); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -9,6 +9,12 @@ export const orderSchema = z.object({
 }).strict();
 export const cancellationSchema = z.object({ reason: z.enum(['ORIGIN_REQUEST', 'DUPLICATE']) }).strict();
 export type OrderInput = z.infer<typeof orderSchema>;
+/** API-12: extensión OPCIONAL (solo composiciones de laboratorio) para aceptar un contrato de orden distinto del borrador API-01. El valor por defecto no cambia nada. */
+export type OrderContractOptions = {
+  orderSchema: z.ZodType<{ schemaVersion: string; externalOrderId: string; originClubReference: string }>;
+  /** Datos que definen la identidad de contenido de la orden (idempotencia): dos órdenes con el mismo id pero contenido distinto deben dar CONFLICT. */
+  canonicalInput: (input: { schemaVersion: string; externalOrderId: string; originClubReference: string }) => unknown;
+};
 export type CancellationInput = z.infer<typeof cancellationSchema>;
 export type ErrorCode = 'DISABLED' | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'TOO_LARGE' | 'NOT_FOUND' | 'CONFLICT' | 'UNAVAILABLE';
 export class OrderError extends Error {

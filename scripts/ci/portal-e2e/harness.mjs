@@ -120,7 +120,7 @@ async function bootstrap() {
   await schema(migrations, true); const second = await schema(migrations, true);
   await schema(['sql/migrate-2026-11-tms-parada-confirmaciones.sql'], true);
   console.log(JSON.stringify({ migracionesPendientesTrasLaSegundaRonda: second.filter((r) => r.pendingAtEnd > 0).length }));
-  await seed(); await app();
+  await seed(); if (!process.argv.includes('--no-app')) await app();
 }
 
 async function app() {

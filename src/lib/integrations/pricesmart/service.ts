@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { cancellationSchema, canTransition, OrderError, orderSchema, parseBody, principalSchema, reference, scopeOf, type OrderView, type Principal } from './contracts';
+import { cancellationSchema, canTransition, OrderError, orderSchema, parseBody, principalSchema, reference, scopeOf, type OrderContractOptions, type OrderInput, type OrderView, type Principal } from './contracts';
 import { UniqueOrderCollision, type Committed, type IdentityPort, type OrderRepository, type StoredOrder, type Transaction } from './ports';
 
 function hash(value: unknown): string { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
@@ -9,7 +9,7 @@ function view(order: StoredOrder): OrderView {
     version: order.version, correlationId: order.correlationId };
 }
 export class OrderApplication {
-  constructor(private readonly identity: IdentityPort, private readonly repository: OrderRepository) {}
+  constructor(private readonly identity: IdentityPort, private readonly repository: OrderRepository, private readonly contract?: OrderContractOptions) {}
   private async principal(scope: Principal['scopes'][number]): Promise<Principal> {
     try {
       const input = await this.identity.resolve();
@@ -36,10 +36,10 @@ export class OrderApplication {
   }
   async receive(body: Uint8Array): Promise<Committed<OrderView>> {
     const p = await this.principal('orders:create');
-    const input = parseBody(body, orderSchema);
+    const input = (this.contract ? parseBody(body, this.contract.orderSchema) : parseBody(body, orderSchema)) as OrderInput;
     if (input.originClubReference !== p.originClubReference) throw new OrderError('FORBIDDEN');
     // Explicit field order: stable under JSON property reordering, no ID normalization.
-    const inputHash = hash([input.schemaVersion, input.externalOrderId, input.originClubReference]);
+    const inputHash = hash(this.contract ? this.contract.canonicalInput(input) : [input.schemaVersion, input.externalOrderId, input.originClubReference]);
     const correlationId = randomUUID();
     return this.safe(async () => {
       try {
