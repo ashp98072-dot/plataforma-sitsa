@@ -28,7 +28,14 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
     function inspect(dir: string) {
       for (const item of readdirSync(dir, { withFileTypes:true })) {
         const path=join(dir,item.name); if(item.isDirectory()) { if(path.replaceAll('\\','/').endsWith('/lib/integrations/pricesmart')) continue; inspect(path); }
-        else if(/\.[cm]?[jt]sx?$/.test(item.name)) expect(readFileSync(path,'utf8')).not.toMatch(/integrations\/pricesmart|PRICESMART_ENABLED|OrderApplication/);
+        else if(/\.[cm]?[jt]sx?$/.test(item.name)) {
+          const text = readFileSync(path,'utf8');
+          // API-11: las únicas rutas permitidas fuera del módulo son las tres rutas candidatas, que SOLO delegan en runtime.ts (cerrado por defecto: 503 DISABLED).
+          if (path.replaceAll('\\','/').startsWith('src/app/api/integrations/pricesmart/v1/orders')) {
+            expect(text).toMatch(/^import \{ handlePriceSmart \} from "@\/lib\/integrations\/pricesmart\/runtime";/);
+            expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql/);
+          } else expect(text).not.toMatch(/integrations\/pricesmart|PRICESMART_ENABLED|OrderApplication/);
+        }
       }
     }
     inspect('src');

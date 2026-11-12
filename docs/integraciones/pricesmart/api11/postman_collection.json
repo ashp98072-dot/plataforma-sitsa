@@ -1,0 +1,139 @@
+{
+  "info": {
+    "name": "PriceSmart ↔ Novalvion — API-11 (candidato, sandbox)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Contrato PROVISIONAL (D01–D16 pendientes). Solo sandbox; datos sintéticos. La evidencia de autenticación es un placeholder hasta ratificar D02."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://SANDBOX-PENDIENTE"
+    },
+    {
+      "key": "evidenceHeaderName",
+      "value": "PENDIENTE-D02"
+    },
+    {
+      "key": "evidence",
+      "value": ""
+    },
+    {
+      "key": "externalOrderId",
+      "value": "ORD-SINTETICO-0001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Recibir orden (POST)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "{{evidenceHeaderName}}",
+            "value": "{{evidence}}",
+            "description": "PENDIENTE D02: nombre y formato de la evidencia M2M no están ratificados. Placeholder; no incluir secretos reales en el repositorio."
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders"
+          ]
+        },
+        "description": "202 RECEIVED/PENDING. Reenviar la misma orden devuelve el mismo recibo.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"schemaVersion\": \"api01-draft-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"<club-aprobado>\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Consultar estado (GET)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "{{evidenceHeaderName}}",
+            "value": "{{evidence}}",
+            "description": "PENDIENTE D02: nombre y formato de la evidencia M2M no están ratificados. Placeholder; no incluir secretos reales en el repositorio."
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}"
+          ]
+        },
+        "description": "200 con provisionalStatus/processingStatus/version. Los códigos definitivos de estado (D08) están pendientes."
+      }
+    },
+    {
+      "name": "Solicitar cancelación (POST, método PENDIENTE D09)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "{{evidenceHeaderName}}",
+            "value": "{{evidence}}",
+            "description": "PENDIENTE D02: nombre y formato de la evidencia M2M no están ratificados. Placeholder; no incluir secretos reales en el repositorio."
+          },
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}/cancellation-requests",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "integrations",
+            "pricesmart",
+            "v1",
+            "orders",
+            "{{externalOrderId}}",
+            "cancellation-requests"
+          ]
+        },
+        "description": "202 CANCELLATION_REQUESTED. Método y ruta definitivos no confirmados por PriceSmart.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"reason\": \"ORIGIN_REQUEST\"\n}"
+        }
+      }
+    }
+  ]
+}
