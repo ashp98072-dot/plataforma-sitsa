@@ -15,8 +15,8 @@ export const clave = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const moneda = z.enum(["GTQ", "USD"]);
 // IDs negativos existen solo en el selector/solicitud: representan unidades externas, nunca FKs propias.
 const unidadSeleccion = z.number().int().min(-2147483647).max(2147483647).refine(n => n !== 0);
-const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: unidadSeleccion, asociacionExternaId: id.optional(), empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
-    if ((s.vehiculoId < 0) !== (s.asociacionExternaId !== undefined) || (s.vehiculoId < 0 && (s.empleadoId != null || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION")))) ctx.addIssue({ code: "custom", message: "Identidad externa incompatible con vehículo propio o empleado" });
+const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: unidadSeleccion, pilotoExternoId: id.optional(), asociacionExternaId: id.optional(), empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
+    if ((s.vehiculoId < 0) !== (s.asociacionExternaId !== undefined || s.pilotoExternoId !== undefined) || (s.asociacionExternaId !== undefined && s.pilotoExternoId !== undefined) || (s.vehiculoId < 0 && (s.empleadoId != null || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION")))) ctx.addIssue({ code: "custom", message: "Identidad externa incompatible con vehículo propio o empleado" });
     if ((s.metodoEmpleado === "SIN_ASIGNACION" && s.empleadoId != null) || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION" && s.empleadoId == null)) ctx.addIssue({ code: "custom", message: "Metodo de empleado incompatible con su asignacion" });
 });
 const decisionOriginal = z.object({

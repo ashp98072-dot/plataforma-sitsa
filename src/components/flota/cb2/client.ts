@@ -40,6 +40,7 @@ export type Registro = {
 export type CatalogosCB2 = {
     pilotosExternos?: import("@/lib/flota/cb2/terceros-model").PilotoTercero[];
     unidadesExternas?: import("@/lib/flota/cb2/terceros-model").UnidadTercera[];
+    tercerosDirectos?: boolean;
     tercerosHabilitados?: boolean;
     terceros?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna[];
     empleados?: { id: number; nombre: string }[];
@@ -59,6 +60,7 @@ export type CatalogosCB2 = {
 export type SeleccionCB2 = {
     candidato: string;
     vehiculoId: number;
+    pilotoExternoId?: number;
     asociacionExternaId?: number;
     empleadoId?: number | null;
     metodoEmpleado?: import("@/lib/flota/cb2/empleados-coincidencias").MetodoEmpleado;

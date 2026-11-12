@@ -17,7 +17,7 @@ import { listarEmpresasActivas } from "@/lib/empresas";
  * actual; si luego se retira el acceso, el histórico no debe quedar con la placa vacía.
  */
 export function predicadoVehiculoAccesible(alias: string, empresaExpr: string): string {
-  return `(${alias}.empresa_id = ${empresaExpr} OR EXISTS (SELECT 1 FROM flota_vehiculo_acceso fva WHERE fva.vehiculo_id = ${alias}.id AND fva.empresa_id = ${empresaExpr}))`;
+  return `(${alias}.empresa_id = ${empresaExpr} OR EXISTS (SELECT 1 FROM flota_vehiculo_acceso fva WHERE fva.vehiculo_id = ${alias}.id AND fva.empresa_id = ${empresaExpr}))${process.env.FLOTA_FUSIONES_APROBADAS === "1" ? ` AND NOT EXISTS (SELECT 1 FROM flota_vehiculos_fusiones ff WHERE ff.origen_id=${alias}.id)` : ""}`;
 }
 
 /**

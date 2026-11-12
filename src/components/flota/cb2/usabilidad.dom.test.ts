@@ -40,3 +40,17 @@ it("herramienta muestra IDs y referencias; no ofrece desactivar un registro vinc
   expect([...host.querySelectorAll("button")].some(b => b.textContent?.startsWith("Desactivar únicamente"))).toBe(false);
   expect(fetch.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
 });
+it("fusión habilitada: compara IDs y envía las dos revisiones sin reasignar históricos", async () => {
+  const v = { id: 10, empresaId: 1, placa: "C-558BSJ", tipo: "VEHICULO", descripcion: "Laboratorio", marca: "Lab", modelo: "2026", chasis: "LABSERIAL000000001", sucursal: "Lab", estado: "Activo", activo: true, propio: true, revision: "a".repeat(64) };
+  const destino = { ...v, id: 20, revision: "b".repeat(64) };
+  const fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => new Response(JSON.stringify(init?.method ? { origen: 10, destino: 20 } : url.includes("?id=") ? { vehiculo: v, referencias: [], puedeDesactivar: false, puedeFusionar: true, motivos: [] } : [{ placa: "C558BSJ", vehiculos: [v, destino] }]), { headers: { "Content-Type": "application/json" } })); vi.stubGlobal("fetch", fetch);
+  await act(async () => root.render(createElement(DuplicadosVehiculos, { api: "/lab", activo: true, recargar: vi.fn() })));
+  await click("Revisar referencias del ID #10");
+  const select = host.querySelector<HTMLSelectElement>("select")!;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, "20"); select.dispatchEvent(new Event("change", { bubbles: true })); });
+  const motivo = host.querySelector("textarea")!;
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(motivo, "Misma identidad real y chasis revisados"); motivo.dispatchEvent(new Event("input", { bubbles: true })); });
+  await act(async () => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await click("Fusionar por alias preservando históricos");
+  expect(JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === "POST")![1].body))).toMatchObject({ id: 10, conservarId: 20, revision: v.revision, destinoRevision: destino.revision, fusionar: true, confirmado: true });
+});

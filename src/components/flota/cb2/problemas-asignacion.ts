@@ -1,3 +1,4 @@
+import { pilotoDirecto } from "./identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
 import { nombreComparable, placaCompatible } from "@/lib/flota/combustible-coincidencias";
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
@@ -13,7 +14,10 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
   if (!g.vehiculoId) {
     causas.push("Falta seleccionar una unidad válida. Las coincidencias ambiguas no se asignan automáticamente.");
   } else if (!cat.vehiculos.some(v => String(v.id) === g.vehiculoId)) causas.push(`Unidad #${g.vehiculoId} ausente del catálogo disponible de esta empresa.`);
-  if (Number(g.vehiculoId) < 0) {
+  if (Number(g.vehiculoId) < 0 && cat.tercerosDirectos) {
+    const p = pilotoDirecto(g.fila, cat, d);
+    if (!p || !cat.tercerosHabilitados || g.activas.some(f => nombreComparable(p.nombre) !== nombreComparable(f.origen?.piloto ?? "") || !unidadTerceraCompatible(f.placaNormalizada || f.placa, -Number(g.vehiculoId), cat.unidadesExternas ?? [], d.motivoUnidad))) causas.push("Piloto o unidad externos pendientes o incompatibles con el Excel.");
+  } else if (Number(g.vehiculoId) < 0) {
     const id = d.asociacionExternaId === undefined ? g.fila.asociacionExterna?.id : d.asociacionExternaId;
     const a = cat.terceros?.find(a => a.id === id && -a.unidad_id === Number(g.vehiculoId));
     if (!cat.tercerosHabilitados) causas.push("Política D2 aprobada; tercerizados deshabilitados por configuración. La activación corresponde al propietario.");

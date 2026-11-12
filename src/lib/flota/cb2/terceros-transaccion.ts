@@ -3,8 +3,8 @@ import { getPool } from "@/lib/db";
 import { ErrorCB2 } from "./model";
 import { rows, type Actor } from "./repository";
 
-export type ContextoTerceros = { empresaId: number; actor: Actor; autorizar: () => Promise<void> };
-export const tercerosHabilitados = () => process.env.CB2_TERCEROS_D2_APROBADA === "1";
+export type ContextoTerceros = { empresaId: number; actor: Actor; autorizar: () => Promise<void>; escrituraDirecta?: boolean };
+export const tercerosHabilitados = () => process.env.CB2_TERCEROS_D2_APROBADA === "1" || process.env.CB2_TERCEROS_DIRECTOS_APROBADA === "1";
 export function exigirTerceros() { if (!tercerosHabilitados()) throw new ErrorCB2("Tercerizados deshabilitados por configuración. La activación corresponde al propietario.", 403); }
 let activas = 0;
 const esperando: (() => void)[] = [];
@@ -29,7 +29,7 @@ async function ejecutar<T>(ctx: ContextoTerceros, fn: (c: PoolConnection) => Pro
       const [empresa] = await rows(c, "SELECT id,activa FROM empresas WHERE id=? FOR UPDATE", [ctx.empresaId]);
       exigirTerceros(); await ctx.autorizar();
       const [actor] = await rows(c, "SELECT id,activo,rol_global FROM usuarios WHERE id=? LOCK IN SHARE MODE", [ctx.actor.id]);
-      if (!empresa || Number(empresa.activa) !== 1 || !actor || Number(actor.activo) !== 1 || actor.rol_global !== "Admin") throw new ErrorCB2("La gestión requiere administrador activo y empresa vigente.", 403);
+      if (!empresa || Number(empresa.activa) !== 1 || !actor || Number(actor.activo) !== 1 || (!(ctx.escrituraDirecta && process.env.CB2_TERCEROS_DIRECTOS_APROBADA === "1") && actor.rol_global !== "Admin")) throw new ErrorCB2("La gestión requiere administrador activo y empresa vigente.", 403);
       const result = await fn(c); commit = true; await c.commit(); return result;
     } catch (e) {
       try { await c.rollback(); } catch { limpia = false; }

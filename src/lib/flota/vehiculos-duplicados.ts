@@ -10,7 +10,7 @@ const rows = async (c: PoolConnection, sql: string, args: (string | number)[] = 
 const firma = (v: RowDataPacket) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 export type VehiculoRevision = { id: number; empresaId: number; placa: string; tipo: string; descripcion: string; marca: string; modelo: string; chasis: string; sucursal: string; estado: string; activo: boolean; propio: boolean; revision: string };
 export type ReferenciaVehiculo = { tabla: string; campo: string; cantidad: number | null; ids: number[] };
-export type RevisionDuplicado = { vehiculo: VehiculoRevision; referencias: ReferenciaVehiculo[]; puedeDesactivar: boolean; motivos: string[] };
+export type RevisionDuplicado = { vehiculo: VehiculoRevision; referencias: ReferenciaVehiculo[]; puedeFusionar?: boolean; puedeDesactivar: boolean; motivos: string[] };
 function presentar(v: RowDataPacket, empresa: number): VehiculoRevision {
   return { id: Number(v.id), empresaId: Number(v.empresa_id), placa: String(v.placa), tipo: String(v.tipo_unidad ?? "No registrado"), descripcion: String(v.descripcion ?? ""), marca: String(v.marca ?? ""), modelo: String(v.modelo ?? ""), chasis: String(v.chasis ?? ""),
     sucursal: String(v.sucursal_nombre ?? v.sucursal ?? "No registrada"), estado: String(v.estado), activo: Number(v.activo) === 1, propio: Number(v.empresa_id) === empresa, revision: firma(v) };
@@ -27,7 +27,7 @@ export async function listarPlacasDuplicadas(empresa: number) {
 const quoted = (s: string) => { if (!/^[A-Za-z0-9_]+$/.test(s)) throw new ErrorCB2("Esquema no verificable; desactivación bloqueada."); return `\`${s}\``; };
 /** Incluye referencias sin FK, comparticiones y snapshots CB2; ninguna lectura cambia vínculos.
  * Los conteos/IDs ajenos no se revelan: solo se informa que existe una referencia bloqueante. */
-async function referencias(c: PoolConnection, empresa: number, id: number, lock: boolean): Promise<ReferenciaVehiculo[]> {
+export async function referencias(c: PoolConnection, empresa: number, id: number, lock: boolean): Promise<ReferenciaVehiculo[]> {
   const columnas = await rows(c, "SELECT c.TABLE_NAME,c.COLUMN_NAME,t.ENGINE,t.TABLE_TYPE FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME WHERE c.TABLE_SCHEMA=DATABASE() ORDER BY c.TABLE_NAME,c.ORDINAL_POSITION");
   const fks = await rows(c, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME='flota_vehiculos' AND REFERENCED_COLUMN_NAME='id'");
   if (!columnas.some(r => r.TABLE_NAME === "flota_vehiculos" && r.COLUMN_NAME === "id")) throw new ErrorCB2("Inventario de referencias incompleto.", 503);
@@ -66,7 +66,7 @@ async function revision(c: PoolConnection, empresa: number, id: number, lock = f
   if (Number(v.empresa_id) !== empresa) motivos.push("Solo la empresa propietaria puede desactivar este registro.");
   if (Number(v.activo) !== 1 || v.estado !== "Activo" || Number(v.en_taller ?? 0) !== 0) motivos.push("El registro debe estar activo y fuera de taller.");
   if (refs.length) motivos.push("Existen referencias históricas u operativas. Se conservan y requieren revisión fuera de esta herramienta.");
-  return { vehiculo: presentar(v, empresa), referencias: refs, puedeDesactivar: !motivos.length, motivos };
+  return { vehiculo: presentar(v, empresa), referencias: refs, puedeFusionar: process.env.FLOTA_FUSIONES_APROBADAS === "1" && Number(v.empresa_id) === empresa && Number(v.activo) === 1, puedeDesactivar: !motivos.length, motivos };
 }
 export async function revisarPlacaDuplicada(empresa: number, id: number) {
   const c = await getPool().getConnection(); try { return await revision(c, empresa, id); } finally { c.release(); }

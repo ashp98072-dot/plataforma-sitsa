@@ -1,3 +1,4 @@
+import { validarTerceroDirecto } from "./terceros-directos";
 import { validarEmpleadosImportacion } from "./empleados-validacion";
 import { consultarConsumos } from "./consumos-lectura";
 import { tercerosHabilitados, catalogosTercerosTx, reconocerTercero, validarTercero } from "./terceros";
@@ -190,7 +191,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     for (const l of lineas)
         if (l.clave && seleccion.has(l.clave)) {
             const prev = previos.get(l.clave) ?? [];
-            if (prev.length > 1 || prev.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.asociacion_externa_id ?? null) !== (decisiones.get(l.clave!)?.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== seleccion.get(l.clave!)))
+            if (prev.length > 1 || prev.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || ((p.asociacion_externa_id ?? null) !== (decisiones.get(l.clave!)?.asociacionExternaId ?? null) || (p.piloto_externo_id ?? null) !== (decisiones.get(l.clave!)?.pilotoExternoId ?? null)) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== seleccion.get(l.clave!)))
                 l.bloqueada = true;
         }
     const existentes = new Map<number, RowDataPacket>();
@@ -221,10 +222,10 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     }
     const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && seleccion.get(l.clave)! > 0 && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId).filter(id => id > 0));
-    const identidadesExternas = new Map<string, Awaited<ReturnType<typeof validarTercero>>>();
+    const identidadesExternas = new Map<string, Awaited<ReturnType<typeof validarTercero>> | Awaited<ReturnType<typeof validarTerceroDirecto>>>();
     for (const s of selection) if (s.vehiculoId < 0) {
         const l = lineas.find(l => l.clave === s.candidato)!;
-        const a = await validarTercero(c, ctx, s.asociacionExternaId!, -s.vehiculoId, l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, s.motivoUnidad);
+        const a = s.pilotoExternoId !== undefined ? await validarTerceroDirecto(c, ctx, s.pilotoExternoId, -s.vehiculoId, l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, s.motivoUnidad) : await validarTercero(c, ctx, s.asociacionExternaId!, -s.vehiculoId, l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, s.motivoUnidad);
         unidades.set(s.vehiculoId, a.placa); identidadesExternas.set(s.candidato, a);
     }
     const ids = [...new Set([...previos.values()].flat().map(r => Number(r.id)))].sort((a, b) => a - b);
@@ -256,7 +257,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             if (!resolved) {
                 const previous = previos.get(l.clave) ?? [];
                 const fid = l.documento ? docs.get(JSON.stringify(l.documento))! : null;
-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
                     resultado = "BLOQUEADA";
                 }
                 else if (previous.length) {
@@ -265,7 +266,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 else {
                     const productoClasificado = choice.productoClasificado ?? clasificarProducto(f.producto);
                     if (!productoClasificado) throw new ErrorCB2("Clasifica el combustible o confirma NO DETERMINADO antes de importar.", 400);
-                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(vehicle < 0 ? { asociacion_externa_id: choice.asociacionExternaId!, identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
+                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(vehicle < 0 ? { asociacion_externa_id: choice.asociacionExternaId ?? null, ...(choice.pilotoExternoId !== undefined ? { piloto_externo_id: choice.pilotoExternoId, unidad_externa_id: -vehicle } : {}), identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
                     resolved = { id, resultado: "CREADA", factura: fid };
                 }
                 if (resolved)
@@ -342,7 +343,7 @@ export async function asociarFactura(ctx: Contexto, op: {
         return { eventos: await diario(c, ctx, "ASOCIAR_FACTURA", op.clave, request, eventos), repetida: false };
     });
 }
-export type FiltrosCB2 = { vehiculoId?: number; empleadoId?: number; importacionId?: number; producto?: string; proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
+export type FiltrosCB2 = { pilotoExternoId?: number; unidadExternaId?: number; vehiculoId?: number; empleadoId?: number; importacionId?: number; producto?: string; proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
 export async function consultar(empresa: number, tipo: "importaciones" | "consumos" | "facturas" | "filas", importacion?: number, limite = 100, despues = 0, filtros: FiltrosCB2 = {}) {
     const c = await getPool().getConnection();
     try {
