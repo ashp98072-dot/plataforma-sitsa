@@ -1,0 +1,64 @@
+-- DESIGN ONLY (PRICESMART API-11). Separate future staging, NOT a production migration. Requires ps_api01_* (api01/staging.sql.in) to exist first.
+-- Estado administrativo y atómico de la seguridad M2M: catálogo de integraciones, revocaciones, contador de cuota y reclamo anti-repetición.
+-- Independiente del mecanismo criptográfico (D02, PENDIENTE): aquí NO se guardan secretos, claves ni tokens; solo referencias opacas (issuer/subject/credential_reference).
+-- No installer, connection, USE, credentials or GRANT is provided. Not ratified: do not execute outside a disposable sandbox.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API11_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+-- Catálogo administrativo: una fila por credencial. El runtime SOLO lee; el alta/rotación es administrativa y nunca la decide el cliente.
+CREATE TABLE ps_api11_integrations (
+  issuer VARBINARY(256) NOT NULL,
+  subject VARBINARY(256) NOT NULL,
+  credential_reference VARBINARY(256) NOT NULL,
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  revision INT UNSIGNED NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  valid_from_ms BIGINT UNSIGNED NOT NULL,
+  valid_until_ms BIGINT UNSIGNED NOT NULL,
+  credential_valid_from_ms BIGINT UNSIGNED NOT NULL,
+  credential_valid_until_ms BIGINT UNSIGNED NOT NULL,
+  rotated_at_ms BIGINT UNSIGNED NOT NULL,
+  allowed_clubs_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  scopes_json LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  PRIMARY KEY (issuer, subject, credential_reference),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  CHECK (environment = _binary'sandbox'),
+  CHECK (status IN ('ACTIVE','REVOKED')),
+  CHECK (revision >= 1),
+  CHECK (valid_until_ms > valid_from_ms AND credential_valid_until_ms > credential_valid_from_ms),
+  CHECK (JSON_VALID(allowed_clubs_json) AND JSON_VALID(scopes_json))
+) ENGINE=InnoDB;
+
+-- Revocaciones: solo se añaden. revision = 0 revoca la credencial completa; revision N revoca esa revisión y las anteriores.
+CREATE TABLE ps_api11_revocations (
+  issuer VARBINARY(256) NOT NULL,
+  subject VARBINARY(256) NOT NULL,
+  credential_reference VARBINARY(256) NOT NULL,
+  revision INT UNSIGNED NOT NULL,
+  revoked_at_ms BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (issuer, subject, credential_reference, revision)
+) ENGINE=InnoDB;
+
+-- Cuota por ventana fija. El runtime solo incrementa con UPDATE condicionado (used < límite).
+CREATE TABLE ps_api11_rate_counters (
+  identity_key VARBINARY(512) NOT NULL,
+  window_start_ms BIGINT UNSIGNED NOT NULL,
+  used INT UNSIGNED NOT NULL,
+  PRIMARY KEY (identity_key, window_start_ms),
+  CHECK (used >= 0)
+) ENGINE=InnoDB;
+
+-- Reclamo atómico de la prueba de solicitud (nonce): la misma prueba con el mismo digest es REUSED; con otro digest, COLLISION.
+CREATE TABLE ps_api11_proof_claims (
+  identity_hash BINARY(32) NOT NULL,
+  proof_id VARBINARY(120) NOT NULL,
+  binding_digest BINARY(32) NOT NULL,
+  claimed_at_ms BIGINT UNSIGNED NOT NULL,
+  retain_until_ms BIGINT UNSIGNED NOT NULL,
+  PRIMARY KEY (identity_hash, proof_id),
+  INDEX ix_ps_api11_claims_retain (retain_until_ms),
+  CHECK (retain_until_ms > claimed_at_ms)
+) ENGINE=InnoDB;
