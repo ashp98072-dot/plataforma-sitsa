@@ -1,10 +1,11 @@
+import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import type { DecisionAsignacion } from "./asignacion";
 import DecimalJS from "decimal.js";
 const Decimal = DecimalJS.clone({ precision: 48, rounding: DecimalJS.ROUND_HALF_UP });
 import { buscarCoincidencias, identificarPlaca, placaCompatible } from "@/lib/flota/combustible-coincidencias";
 import type { CatalogosCB2, FilaCB2 } from "./client";
-import { nombreComparable, placaComparable } from "@/lib/flota/combustible-coincidencias";
+import { nombreComparable } from "@/lib/flota/combustible-coincidencias";
 export const estadosPreview = ["LISTO", "PENDIENTE", "BLOQUEADO", "RESUELTO", "IGNORADO"] as const;
 export function coincidencias(f: FilaCB2, cat: CatalogosCB2) {
     return identificarPlaca(f.placaNormalizada || f.placa, cat.vehiculos, v => v.placa).candidatos;
@@ -40,7 +41,7 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
         if (Number(value) < 0) {
             const id = decisiones[key]?.asociacionExternaId === undefined ? originales[0]?.asociacionExterna?.id : decisiones[key]?.asociacionExternaId;
             const a = cat.terceros?.find(a => a.id === id && a.estado === "VERIFICADA" && -a.unidad_id === Number(value));
-            if (!omitidos[key] && cat.tercerosHabilitados && a && originales.length && originales.every(f => elegible(f) && nombreComparable(a.nombre) === nombreComparable(f.origen?.piloto ?? "") && placaComparable(a.placa) === placaComparable(f.placaNormalizada || f.placa) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;
+            if (!omitidos[key] && cat.tercerosHabilitados && a && originales.length && originales.every(f => elegible(f) && nombreComparable(a.nombre) === nombreComparable(f.origen?.piloto ?? "") && unidadTerceraCompatible(f.placaNormalizada || f.placa, a.unidad_id, cat.unidadesExternas ?? (cat.terceros ?? []).filter((v,i,all) => all.findIndex(x => x.unidad_id === v.unidad_id) === i).map(v => ({ id: v.unidad_id, placa: v.placa })), motivo) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;
             continue;
         }
         if (!omitidos[key] && value && (!motivo || motivo.length >= 10) && originales.length && originales.every(f => elegible(f) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))) && (!decisiones[key]?.empleadoId || !!cat.empleados?.some(e => e.id === decisiones[key].empleadoId)) && (placaCompatible(f.placaNormalizada || f.placa, Number(value), cat.vehiculos) || motivo.length >= 10)) && unidades.has(value)) result[key] = value;

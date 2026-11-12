@@ -1,3 +1,4 @@
+import { unidadTerceraCompatible } from "./terceros-busqueda";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ErrorCB2, hash } from "./model";
@@ -6,7 +7,7 @@ import { altaPiloto, altaUnidad, altaAsociacion, reconocerTercero, type Asociaci
 import { exigirTerceros, txTerceros, type ContextoTerceros } from "./terceros-transaccion";
 export { exigirTerceros, tercerosHabilitados } from "./terceros-transaccion";
 import { tercerosHabilitados } from "./terceros-transaccion";
-import { nombreComparable, placaComparable } from "../combustible-coincidencias";
+import { identificarPlaca, nombreComparable, placaComparable } from "../combustible-coincidencias";
 import type { PoolConnection } from "mysql2/promise";
 
 export async function catalogoTerceros(c: PoolConnection, empresa: number, lock = false): Promise<AsociacionExterna[]> {
@@ -35,8 +36,11 @@ export async function registrarPiloto(ctx: ContextoTerceros, entrada: unknown) {
     const [p] = await rows(c, "SELECT * FROM flota_cb2_externos_pilotos WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (p && nombreComparable(String(p.nombre)) !== nombreComparable(op.nombre)) throw new ErrorCB2("Referencia de piloto con datos contradictorios; requiere revisión.");
     if (p) return { id: Number(p.id), existente: true };
+    const candidatos = await rows(c, "SELECT id,nombre,referencia FROM flota_cb2_externos_pilotos WHERE empresa_id=? ORDER BY id FOR UPDATE", [ctx.empresaId]);
+    const coincidencias = candidatos.filter(p => nombreComparable(String(p.nombre)) === nombreComparable(op.nombre)).map(p => Number(p.id));
+    if (coincidencias.length && !op.confirmarCoincidencias) throw new ErrorCB2(`Nombre coincidente con pilotos #${coincidencias.join(", #")}. Reutiliza su referencia o confirma que es otra persona con referencia real distinta.`);
     const id = await insert(c, "flota_cb2_externos_pilotos", { empresa_id: ctx.empresaId, referencia: op.referencia, referencia_hash: hash(nombreComparable(op.referencia)), nombre: op.nombre });
-    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_piloto_tercero_creado", detalle: JSON.stringify({ id, actorId: ctx.actor.id }) });
+    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_piloto_tercero_creado", detalle: JSON.stringify({ id, actorId: ctx.actor.id, coincidenciasRevisadas: coincidencias }) });
     return { id, existente: false };
   });
 }
@@ -46,8 +50,11 @@ export async function registrarUnidad(ctx: ContextoTerceros, entrada: unknown) {
     const [u] = await rows(c, "SELECT * FROM flota_cb2_externos_unidades WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (u && (placaComparable(String(u.placa)) !== placaComparable(op.placa) || u.tipo !== op.tipo)) throw new ErrorCB2("Referencia de unidad con datos contradictorios; requiere revisión.");
     if (u) return { id: Number(u.id), existente: true };
+    const candidatos = await rows(c, "SELECT id,placa,referencia FROM flota_cb2_externos_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE", [ctx.empresaId]) as unknown as UnidadTercera[];
+    const coincidencias = candidatos.filter(u => identificarPlaca(op.placa, [u], u => u.placa).candidatos.length || identificarPlaca(u.placa, [{ placa: op.placa }], u => u.placa).candidatos.length).map(u => u.id);
+    if (coincidencias.length && !op.confirmarCoincidencias) throw new ErrorCB2(`Placa coincidente con unidades #${coincidencias.join(", #")}. Reutiliza su referencia o confirma una unidad distinta con referencia real.`);
     const id = await insert(c, "flota_cb2_externos_unidades", { empresa_id: ctx.empresaId, referencia: op.referencia, referencia_hash: hash(nombreComparable(op.referencia)), placa: op.placa, tipo: op.tipo, descripcion: op.descripcion });
-    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_unidad_tercera_creada", detalle: JSON.stringify({ id, actorId: ctx.actor.id }) });
+    await registrarAuditoriaTx(c, { empresaId: ctx.empresaId, usuario: ctx.actor.username, modulo: "flota_combustible", accion: "cb2_unidad_tercera_creada", detalle: JSON.stringify({ id, actorId: ctx.actor.id, coincidenciasRevisadas: coincidencias }) });
     return { id, existente: false };
   });
 }
@@ -81,12 +88,13 @@ export async function revisarTerceros(ctx: ContextoTerceros, id: number, revisio
     return { id, revision: revision + 1, estado };
   });
 }
-export async function validarTercero(c: PoolConnection, ctx: Contexto, asociacionId: number, unidad: number, nombre: string, placa: string) {
+export async function validarTercero(c: PoolConnection, ctx: Contexto, asociacionId: number, unidad: number, nombre: string, placa: string, motivo = "") {
   exigirTerceros(); await rows(c, "SELECT id FROM empresas WHERE id=? FOR UPDATE", [ctx.empresaId]);
   exigirTerceros(); // La configuración pudo cambiar mientras esperaba el cerrojo empresarial.
   const catalogo = await catalogoTerceros(c, ctx.empresaId, true), a = catalogo.find(a => a.id === asociacionId);
+  const unidades = await rows(c, "SELECT id,placa FROM flota_cb2_externos_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE", [ctx.empresaId]) as unknown as { id: number; placa: string }[];
   // La elección manual de un ID estable puede resolver homónimos; nunca sustituye verificación ni compatibilidad.
-  if (!a || a.estado !== "VERIFICADA" || a.unidad_id !== unidad || nombreComparable(a.nombre) !== nombreComparable(nombre) || placaComparable(a.placa) !== placaComparable(placa))
+  if (!a || a.estado !== "VERIFICADA" || a.unidad_id !== unidad || nombreComparable(a.nombre) !== nombreComparable(nombre) || !unidadTerceraCompatible(placa, unidad, unidades, motivo))
     throw new ErrorCB2("Tercero pendiente, revocado o incompatible con los datos originales.");
   return a;
 }

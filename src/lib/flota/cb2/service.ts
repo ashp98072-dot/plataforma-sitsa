@@ -224,7 +224,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     const identidadesExternas = new Map<string, Awaited<ReturnType<typeof validarTercero>>>();
     for (const s of selection) if (s.vehiculoId < 0) {
         const l = lineas.find(l => l.clave === s.candidato)!;
-        const a = await validarTercero(c, ctx, s.asociacionExternaId!, -s.vehiculoId, l.fila.pilotoInformado ?? "", l.fila.placaNormalizada);
+        const a = await validarTercero(c, ctx, s.asociacionExternaId!, -s.vehiculoId, l.fila.pilotoInformado ?? "", l.fila.placaNormalizada, s.motivoUnidad);
         unidades.set(s.vehiculoId, a.placa); identidadesExternas.set(s.candidato, a);
     }
     const ids = [...new Set([...previos.values()].flat().map(r => Number(r.id)))].sort((a, b) => a - b);

@@ -35,6 +35,7 @@ export function debeMostrarNombreManual(value: string, modoManual: boolean, manu
 const VALOR_NOMBRE_MANUAL = "__nombre_manual__";
 
 type Props = {
+  normalizarBusqueda?: (texto: string) => string;
   label: string;
   placeholder: string;
   value: string;
@@ -63,11 +64,11 @@ type Props = {
 };
 
 /** Buscador auxiliar + select nativo visible. El input solo filtra; la selección siempre ocurre en el desplegable. */
-export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados, onSearchChange, searchResetKey }: Props) {
+export function CatalogoSearchSelect({ label, placeholder, value, options, inputClassName, onChange, manualText, onTextChange, onOptionSelected, emptyLabel, selectDataCampo, sinResultados, onSearchChange, searchResetKey, normalizarBusqueda }: Props) {
   const id = useId();
   const [busqueda, setBusqueda] = useState("");
   const [modoManual, setModoManual] = useState(false);
-  const filtradas = filtrarOpcionesBusqueda(options, busqueda);
+  const filtradas = normalizarBusqueda && busqueda.trim() ? options.filter(o => normalizarBusqueda(`${o.label} ${o.searchText ?? o.detail ?? ""}`).includes(normalizarBusqueda(busqueda))) : filtrarOpcionesBusqueda(options, busqueda);
   const seleccion = options.find((o) => o.value === value);
   const opcionesVisibles = seleccion && !filtradas.some((o) => o.value === seleccion.value)
     ? [seleccion, ...filtradas]

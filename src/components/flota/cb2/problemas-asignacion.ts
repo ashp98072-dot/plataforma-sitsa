@@ -1,4 +1,5 @@
-import { nombreComparable, placaComparable, placaCompatible } from "@/lib/flota/combustible-coincidencias";
+import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
+import { nombreComparable, placaCompatible } from "@/lib/flota/combustible-coincidencias";
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import type { CatalogosCB2 } from "./client";
 import type { DecisionAsignacion } from "./asignacion";
@@ -13,11 +14,11 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
     causas.push("Falta seleccionar una unidad válida. Las coincidencias ambiguas no se asignan automáticamente.");
   } else if (!cat.vehiculos.some(v => String(v.id) === g.vehiculoId)) causas.push(`Unidad #${g.vehiculoId} ausente del catálogo disponible de esta empresa.`);
   if (Number(g.vehiculoId) < 0) {
-    const id = d.asociacionExternaId ?? g.fila.asociacionExterna?.id;
+    const id = d.asociacionExternaId === undefined ? g.fila.asociacionExterna?.id : d.asociacionExternaId;
     const a = cat.terceros?.find(a => a.id === id && -a.unidad_id === Number(g.vehiculoId));
     if (!cat.tercerosHabilitados) causas.push("Política D2 aprobada; tercerizados deshabilitados por configuración. La activación corresponde al propietario.");
     if (!a || a.estado !== "VERIFICADA") causas.push("La asociación externa no está disponible o verificada; puede haber sido revocada.");
-    else if (g.activas.some(f => nombreComparable(a.nombre) !== nombreComparable(f.origen?.piloto ?? "") || placaComparable(a.placa) !== placaComparable(f.placaNormalizada || f.placa))) causas.push("El piloto o la placa originales no corresponden a la asociación externa elegida.");
+    else if (g.activas.some(f => nombreComparable(a.nombre) !== nombreComparable(f.origen?.piloto ?? "") || !unidadTerceraCompatible(f.placaNormalizada || f.placa, a.unidad_id, cat.unidadesExternas ?? (cat.terceros ?? []).filter((v,i,all) => all.findIndex(x => x.unidad_id === v.unidad_id) === i).map(v => ({ id: v.unidad_id, placa: v.placa })), d.motivoUnidad))) causas.push("El piloto o la placa originales no corresponden a la asociación externa elegida.");
   } else if (g.vehiculoId) {
     const motivo = d.motivoUnidad?.trim() ?? "";
     if (g.activas.some(f => !placaCompatible(f.placaNormalizada || f.placa, Number(g.vehiculoId), cat.vehiculos)) && motivo.length < 10) causas.push("La unidad no coincide inequívocamente con la placa del Excel; revisa el ID o justifica la excepción con al menos 10 caracteres.");

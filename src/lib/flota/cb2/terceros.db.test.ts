@@ -14,7 +14,7 @@ vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: `synth
 import { preview, confirmarArchivo, type Entrada } from "./service";
 import { analizar } from "./model";
 import { libro, row } from "./fixture";
-import { revisarTerceros, listarTerceros, tercerosHabilitados, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros, reconocerTercero } from "./terceros";
+import { validarTercero, revisarTerceros, listarTerceros, tercerosHabilitados, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros, reconocerTercero } from "./terceros";
 import { guardarCombustibleStaff } from "../combustible-staff";
 import { asignacionesExactas } from "@/components/flota/cb2/preview-model";
 import type { CatalogosCB2 } from "@/components/flota/cb2/client";
@@ -86,7 +86,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     await admin.query(readFileSync("scripts/ci/combustibles-pr2-lab/base.sql", "utf8"));
     await admin.query("ALTER TABLE flota_vehiculos ADD placa VARCHAR(40) NOT NULL DEFAULT 'C-001ABC', ADD estado VARCHAR(40) NOT NULL DEFAULT 'Activo', ADD activo TINYINT NOT NULL DEFAULT 1; INSERT INTO usuarios VALUES(2,1); CREATE TABLE empleados(id INT PRIMARY KEY,empresa_id INT NOT NULL,nombre VARCHAR(160),estado VARCHAR(20)) ENGINE=InnoDB");
     await admin.query("ALTER TABLE usuarios ADD rol_global VARCHAR(40) NOT NULL DEFAULT 'Admin'; INSERT INTO usuarios VALUES(3,1,'Admin')");
-    await admin.query("INSERT INTO empresas VALUES(3,1)");
+    await admin.query("INSERT INTO empresas VALUES(3,1),(4,1)");
     // Esquema staff compatible, sin ejecutar los migradores de otros modulos.
     const carga = readFileSync("src/lib/flota/schema.ts", "utf8").match(/CREATE TABLE IF NOT EXISTS flota_combustible_cargas \([\s\S]*?ENGINE=InnoDB DEFAULT CHARSET=utf8mb4/)![0];
     // La tabla base del fixture esta vacia: se completa en lugar de reemplazarla.
@@ -110,6 +110,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     historico = await historial();
   }, 60000);
   afterAll(async () => { vi.unstubAllEnvs(); await state.pool?.end(); await admin?.end(); });
+
 
   it("migracion crea tres tablas InnoDB y FK/CHECK activos; conserva historicos", async () => {
     const tables = await q("SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE 'flota_cb2_externos_%'");
@@ -308,9 +309,9 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     expect(carreras.every(x => x.status === "fulfilled" && (x.value as { id: number }).id === asociadas[0])).toBe(true);
     const entrada = await preparar("MULTI-FICTICIO", "Piloto Ficticio Multiples", "091 KHK");
     expect((await preview(ctx, entrada.buffer, entrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna?.id).toBe(asociadas[0]);
-    await registrarPiloto(empresa, { referencia: "multi-homonimo", nombre: "Piloto Ficticio Multiples" });
+    await registrarPiloto(empresa, { confirmarCoincidencias: true, referencia: "multi-homonimo", nombre: "Piloto Ficticio Multiples" });
     expect((await preview(ctx, entrada.buffer, entrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna).toBeNull();
-    await registrarUnidad(empresa, { referencia: "multi-placa-ambigua", placa: "091 KHK", tipo: "VEHICULO", descripcion: "Otra unidad ficticia" });
+    await registrarUnidad(empresa, { confirmarCoincidencias: true, referencia: "multi-placa-ambigua", placa: "091 KHK", tipo: "VEHICULO", descripcion: "Otra unidad ficticia" });
     const otraEntrada = await preparar("MULTI-AMBIGUO", "Piloto Ficticio Alterno", "091 KHK");
     expect((await preview(ctx, otraEntrada.buffer, otraEntrada.entrada)).filas.find(f => f.candidato)?.asociacionExterna).toBeNull();
     expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(previos);
@@ -321,6 +322,29 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
       await expect(registrarPiloto({ empresaId: 1, actor: ctx.actor, autorizar: ctx.autorizar }, { referencia: "auditoria-fallida", nombre: "Piloto Ficticio Rollback" })).rejects.toThrow("fallo sintetico");
       expect(await q("SELECT id FROM flota_cb2_externos_pilotos WHERE referencia='auditoria-fallida'")).toHaveLength(0);
     } finally { await q("DROP TRIGGER cb2_catalogo_audit_fail"); }
+  });
+  it("vale 19955: identidades persistentes independientes, prefijo, D2 y revocacion", async () => {
+    vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "1");
+    const empresa = { empresaId: 4, actor: ctx.actor, autorizar: ctx.autorizar };
+    const p = await registrarPiloto(empresa, { referencia: "lab-19955-p", nombre: "Luis Escobar" });
+    const u = await registrarUnidad(empresa, { referencia: "lab-19955-u", placa: "M-060KHK", tipo: "MOTOCICLETA", descripcion: "Sintetica laboratorio" });
+    let cat = await listarCatalogosTerceros(4);
+    expect(cat.asociaciones).toEqual([]); expect(cat.pilotos.some(x => x.id === p.id)).toBe(true); expect(cat.unidades.some(x => x.id === u.id)).toBe(true);
+    await expect(registrarPiloto(empresa, { referencia: "lab-19955-duplicado", nombre: " LUIS  ESCOBAR " })).rejects.toThrow("Nombre coincidente");
+    await expect(registrarUnidad(empresa, { referencia: "lab-19955-duplicada", placa: "060 KHK", tipo: "MOTOCICLETA", descripcion: "Sintetica" })).rejects.toThrow("Placa coincidente");
+    const a = await crearAsociacion(empresa, { pilotoId: p.id, unidadId: u.id, relacion: "CONTRATISTA", evidencia: "vale 19955 ficticio" });
+    await expect(revisarTerceros(empresa, a.id, 0, "VERIFICADA")).rejects.toMatchObject({ status: 403 });
+    await revisarTerceros({ ...empresa, actor: revisor.actor }, a.id, 0, "VERIFICADA");
+    cat = await listarCatalogosTerceros(4);
+    expect(reconocerTercero(" luis  escobar ", "060 KHK", cat.asociaciones, cat).asociacion?.id).toBe(a.id);
+    const c = await state.pool!.getConnection();
+    try { expect((await validarTercero(c, { ...empresa, proveedorId: 1 }, a.id, u.id, "LUIS  ESCOBAR", "060-KHK")).id).toBe(a.id); } finally { c.release(); }
+    expect((await listarCatalogosTerceros(2)).pilotos.some(x => x.id === p.id)).toBe(false);
+    await revisarTerceros(empresa, a.id, 1, "REVOCADA"); cat = await listarCatalogosTerceros(4);
+    expect(reconocerTercero("Luis Escobar", "060-KHK", cat.asociaciones, cat).asociacion).toBeNull();
+    await revisarTerceros({ ...empresa, actor: revisor.actor }, a.id, 2, "VERIFICADA");
+    expect((await listarCatalogosTerceros(4)).unidades.find(x => x.id === u.id)?.placa).toBe("M-060KHK");
+    vi.stubEnv("CB2_TERCEROS_D2_APROBADA", "");
   });
   it("postcheck: historicos intactos y D2 vuelve a su valor predeterminado", async () => {
     expect(await historial()).toEqual(historico);
