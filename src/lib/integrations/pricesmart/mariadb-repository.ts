@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { isSandboxVerifiedPool } from '../../sandbox-db';
-import { OrderError, orderSchema, reference, type Scope, type OrderInput } from './contracts';
+import { OrderError, orderSchema, reference, type OrderContractOptions, type Scope, type OrderInput } from './contracts';
 import { UniqueOrderCollision, type OrderRepository, type Transaction, type StoredOrder, type Committed } from './ports';
 
 // No default codec: plaintext persistence is deliberately unavailable.
@@ -29,13 +29,14 @@ const fields = 'environment,tenant_id,client_id,integration_id';
 
 /** Offline composition only. Never creates a pool or executes DDL. */
 export function mariaDbOrderRepository(pool: Pool, config: {
-  schema: string; runtimeUser: string; cipher: PayloadCipher;
+  schema: string; runtimeUser: string; cipher: PayloadCipher; contract?: Pick<OrderContractOptions, 'orderSchema'>;
 }): OrderRepository {
   if (!isSandboxVerifiedPool(pool) || !/^sandbox_api02_[a-z0-9_]+$/.test(config.schema) ||
       !/^sandbox_api02_[a-z0-9_]+$/.test(config.runtimeUser) || !config.cipher?.seal || !config.cipher?.open) {
     throw new PersistenceError('UNAVAILABLE');
   }
   const { schema, runtimeUser, cipher } = config;
+  const storedSchema = (config.contract?.orderSchema ?? orderSchema) as typeof orderSchema;   // API-12: por defecto, el borrador API-01 sin cambios
   const table = (name: string) => `\`${schema}\`.\`ps_api01_${name}\``;
   return {
     async runAtomic<T>(inputScope: Scope, action: (tx: Transaction) => Promise<T>): Promise<Committed<T>> {
@@ -78,7 +79,7 @@ export function mariaDbOrderRepository(pool: Pool, config: {
             if (!reference.safeParse(id).success) throw new OrderError('INVALID_INPUT');
             const [rows] = await sql(`SELECT *,DATE_FORMAT(received_at,'%Y-%m-%dT%H:%i:%s.%fZ') AS received_at_iso FROM ${table('orders')} WHERE ${where} AND external_order_id=? FOR UPDATE`, [...ns, Buffer.from(id)]);
             const row = (rows as RowDataPacket[])[0]; if (!row) return null;
-            const input = orderSchema.parse(await cipher.open(row.payload_ciphertext, text(row.payload_key_reference), context(id)));
+            const input = storedSchema.parse(await cipher.open(row.payload_ciphertext, text(row.payload_key_reference), context(id)));
             if (input.externalOrderId !== id || input.originClubReference !== text(row.origin_club_reference) || input.schemaVersion !== text(row.payload_version)) throw new PersistenceError('UNAVAILABLE');
             return { id: uuidText(row.id), input, inputHash: row.input_hash.toString('hex'), state: row.state, version: row.version,
               correlationId: uuidText(row.correlation_id), receivedAt: new Date(row.received_at_iso ?? row.received_at).toISOString(), receipt: JSON.parse(text(row.receipt_json)),

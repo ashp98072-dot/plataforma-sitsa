@@ -26,7 +26,7 @@ describe("API-11 runtime y rutas", () => {
       expect(text).toMatch(/^import \{ handlePriceSmart \} from "@\/lib\/integrations\/pricesmart\/runtime";/);
       expect(text).not.toMatch(/process\.env|mysql|getPool|OrderApplication|createIsolated|PRICESMART_ENABLED/);
     }
-    expect(read("src/lib/integrations/pricesmart/runtime.ts")).not.toMatch(/process\.env|mysql|import .* from/);
+    const runtime = read("src/lib/integrations/pricesmart/runtime.ts"); expect(runtime).not.toMatch(/process\.env|mysql/); expect(runtime.match(/^import .* from '.*';/gm)).toEqual(["import { autoInstallLabDemo } from './lab-demo/autoinstall';"]);
   });
 });
 

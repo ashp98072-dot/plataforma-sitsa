@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { MAX_BODY_BYTES, OrderError, orderSchema, cancellationSchema, parseBody, reference, states } from './contracts';
+import { MAX_BODY_BYTES, OrderError, orderSchema, cancellationSchema, parseBody, reference, scopeOf, states, type OrderContractOptions, type OrderView, type Scope } from './contracts';
 import { createM2MSecurity } from './m2m-security';
 import { SecurityFailure, policySchema, type AbusePolicy, type Operation } from './security-contracts';
 import type { OrderRepository, Transaction } from './ports';
@@ -22,6 +22,15 @@ const viewSchema = z.object({
   version: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), correlationId: z.uuid(),
 }).strict().refine(v => v.processingStatus === (v.provisionalStatus === 'RECEIVED' ? 'PENDING' : v.provisionalStatus === 'CANCELLED' ? 'CANCELLED' : 'PAUSED'));
 const committedSchema = z.object({ value: viewSchema, durability: z.literal('DURABLE') }).strict();
+/** API-12: puntos de extensión OPCIONALES (solo composiciones de laboratorio). Sin ellos el comportamiento es exactamente el de API-04/API-11.
+ *  - order: contrato de orden alternativo (esquema + identidad de contenido para la idempotencia).
+ *  - readExtra: campos ADICIONALES de solo lectura para GET (no pueden pisar los del recibo).
+ *  - afterCommit: acción posterior a un commit durable (p. ej. vincular con el TMS); un fallo NUNCA cambia la respuesta ya comprometida. */
+export type HttpTransportExtensions = {
+  order?: OrderContractOptions;
+  readExtra?: (context: { scope: Scope; externalOrderId: string; view: OrderView }) => Promise<Record<string, unknown>>;
+  afterCommit?: (context: { operation: Operation; scope: Scope; externalOrderId: string; view: OrderView }) => Promise<void>;
+};
 class HttpFailure extends Error {
   constructor(readonly status: number, readonly code: string, readonly allow?: string) { super(code); }
 }
@@ -52,7 +61,7 @@ function respond(status: number, value: unknown, correlationId: string, allow?: 
 /** Callable Request/Response adapter only: no route registration, server or default dependencies. */
 export function createIsolatedHttpTransport(dependencies: {
   evidence: HttpEvidencePort; security: Parameters<typeof createM2MSecurity>[0]; repository: OrderRepository;
-}, proposedPolicy: AbusePolicy, proposedLimits: HttpTransportLimits): (request: Request) => Promise<Response> {
+}, proposedPolicy: AbusePolicy, proposedLimits: HttpTransportLimits, extensions: HttpTransportExtensions = {}): (request: Request) => Promise<Response> {
   const parsedLimits = limitsSchema.safeParse(proposedLimits), parsedPolicy = policySchema.safeParse(proposedPolicy);
   if (!parsedLimits.success || !parsedPolicy.success || typeof dependencies.evidence?.extract !== 'function' ||
       typeof dependencies.repository?.runAtomic !== 'function') throw new SecurityFailure('UNAVAILABLE');
@@ -136,7 +145,7 @@ export function createIsolatedHttpTransport(dependencies: {
       phase.value = 'AUTHORIZATION';
       let externalId = selected.externalId;
       if (selected.operation === 'orders:create') {
-        const input = parseBody(body,orderSchema); externalId = input.externalOrderId;
+        const input = parseBody(body,extensions.order?.orderSchema ?? orderSchema); externalId = input.externalOrderId;
         if (input.originClubReference !== limits.originClubReference) throw new HttpFailure(403,'FORBIDDEN');
       } else if (selected.operation === 'orders:cancel') parseBody(body,cancellationSchema);
       const target = await security.resourceTarget(identity,limits.originClubReference,externalId!); checkpoint();
@@ -157,7 +166,7 @@ export function createIsolatedHttpTransport(dependencies: {
           guarded(async () => Reflect.apply(tx[key],tx,args))])) as unknown as Transaction;
         return guarded(() => action(wrapped));
       })) };
-      const application = new OrderApplication(identityPort,repository);
+      const application = new OrderApplication(identityPort,repository,extensions.order);
       const result = selected.operation === 'orders:create' ? await application.receive(body)
         : selected.operation === 'orders:read' ? await application.get(externalId) : await application.requestCancellation(externalId,body);
       checkpoint();
@@ -165,7 +174,16 @@ export function createIsolatedHttpTransport(dependencies: {
       if (!committed.success || committed.data.value.externalOrderId !== externalId ||
           (selected.operation === 'orders:create' && (committed.data.value.provisionalStatus !== 'RECEIVED' || committed.data.value.version !== 1)) ||
           (selected.operation === 'orders:cancel' && (committed.data.value.provisionalStatus !== 'CANCELLATION_REQUESTED' || committed.data.value.version < 2))) throw new HttpFailure(503,'UNAVAILABLE');
-      return respond(selected.operation === 'orders:read' ? 200 : 202,committed.data.value,correlationId);
+      let extra: Record<string, unknown> = {};
+      if (selected.operation === 'orders:read' && extensions.readExtra) {
+        extra = await guarded(() => extensions.readExtra!({ scope: scopeOf(admission.principal), externalOrderId: externalId!, view: committed.data.value }));
+        if (extra === null || typeof extra !== 'object' || Object.keys(extra).some(key => key in committed.data.value)) throw new HttpFailure(503,'UNAVAILABLE');
+      }
+      if (selected.operation !== 'orders:read' && extensions.afterCommit) {
+        // El commit durable ya ocurrió: un fallo posterior no puede convertir la respuesta en error ni provocar un reintento duplicado.
+        try { await extensions.afterCommit({ operation: selected.operation, scope: scopeOf(admission.principal), externalOrderId: externalId!, view: committed.data.value }); } catch { /* recuperable: la vinculación es idempotente */ }
+      }
+      return respond(selected.operation === 'orders:read' ? 200 : 202,{ ...committed.data.value, ...extra },correlationId);
     }
     try { return await Promise.race([process(),deadline]); }
     catch (error) {

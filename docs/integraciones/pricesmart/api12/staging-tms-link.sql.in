@@ -1,0 +1,41 @@
+-- DESIGN ONLY (PRICESMART API-12). Separate future staging, NOT a production migration. Requires ps_api01_* (api01), y las tablas tms_clientes / tms_cliente_usuarios / tms_solicitudes_cliente del TMS.
+-- Vinculación orden PriceSmart ↔ solicitud TMS. El destino (empresa, cliente y usuario de la solicitud) lo fija ESTE mapeo administrativo, nunca el cuerpo de la solicitud HTTP.
+-- No installer, connection, USE, credentials or GRANT is provided. Not ratified: do not execute outside a disposable sandbox.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API12_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+-- Mapeo administrativo: alcance de la integración (tenant/cliente/integración del catálogo M2M) → empresa y cliente del TMS + usuario «de servicio» (inactivo para el portal) + lugares fijos de carga y descarga.
+CREATE TABLE ps_api12_tms_mapping (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  empresa_id INT NOT NULL,
+  tms_cliente_id INT NOT NULL,
+  tms_usuario_cliente_id INT NOT NULL,
+  pickup_place VARCHAR(200) NOT NULL,
+  dropoff_place VARCHAR(200) NOT NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id)
+    REFERENCES ps_api01_scopes(environment, tenant_id, client_id, integration_id),
+  FOREIGN KEY (empresa_id, tms_cliente_id, tms_usuario_cliente_id)
+    REFERENCES tms_cliente_usuarios(empresa_id, cliente_id, id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
+
+-- Vínculo: una orden ↔ una solicitud (una sola vez). cancellation_requested_at solo deja constancia; no cancela nada.
+CREATE TABLE ps_api12_tms_links (
+  environment VARBINARY(16) NOT NULL,
+  tenant_id BIGINT UNSIGNED NOT NULL,
+  client_id BIGINT UNSIGNED NOT NULL,
+  integration_id VARBINARY(120) NOT NULL,
+  order_id BINARY(16) NOT NULL,
+  empresa_id INT NOT NULL,
+  solicitud_id INT NOT NULL,
+  linked_at DATETIME(6) NOT NULL,
+  cancellation_requested_at DATETIME(6) NULL,
+  PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id),
+  UNIQUE KEY uq_ps_api12_solicitud (empresa_id, solicitud_id),
+  FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
+    REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id) ON DELETE RESTRICT,
+  FOREIGN KEY (empresa_id, solicitud_id)
+    REFERENCES tms_solicitudes_cliente(empresa_id, id) ON DELETE RESTRICT
+) ENGINE=InnoDB;
