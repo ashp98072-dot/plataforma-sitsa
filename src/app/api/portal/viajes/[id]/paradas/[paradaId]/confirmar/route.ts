@@ -5,6 +5,7 @@ import { colaboradorParticipaEnViaje } from "@/lib/flota/viajes-piloto";
 import { confirmarParadaPorPiloto, confirmarParadaSchema, listarConfirmacionesPlan } from "@/lib/tms/parada-confirmacion";
 
 type Ctx = { params: Promise<{ id: string; paradaId: string }> };
+const NO_DISPONIBLE = () => NextResponse.json({ error: "El servicio no está disponible en este momento. Intenta de nuevo.", codigo: "REINTENTAR" }, { status: 503 });
 
 /**
  * TMS-ENTREGA-PILOTO-1 — confirmación de entrega por parada, hecha por el piloto desde el Portal. La empresa y la identidad salen de la sesión del colaborador
@@ -17,7 +18,10 @@ async function contexto(ctx: Ctx) {
   const viajeId = Number(id); const parada = Number(paradaId);
   if (!session) return { ok: false, error: NextResponse.json({ error: "No autenticado." }, { status: 401 }) } as const;
   if (!Number.isSafeInteger(viajeId) || viajeId <= 0 || !Number.isSafeInteger(parada) || parada <= 0) return { ok: false, error: NextResponse.json({ error: "Parada no encontrada." }, { status: 404 }) } as const;
-  const participacion = await colaboradorParticipaEnViaje(session.empresaId, session.empleadoId, viajeId);
+  // Hallazgo del E2E: con la base saturada, la consulta de participación tragaba el error y devolvía «no estás asignado» (403) a un piloto legítimo. Aquí el error se PROPAGA y se responde 503 (reintentable).
+  let participacion: Awaited<ReturnType<typeof colaboradorParticipaEnViaje>>;
+  try { participacion = await colaboradorParticipaEnViaje(session.empresaId, session.empleadoId, viajeId, { propagarErrores: true }); }
+  catch (error) { console.error("confirmar parada: participación", error instanceof Error ? error.message : error); return { ok: false, error: NO_DISPONIBLE() } as const; }
   if (!participacion) return { ok: false, error: NextResponse.json({ error: "No estás asignado a este viaje." }, { status: 403 }) } as const;
   if (!participacion.planId) return { ok: false, error: NextResponse.json({ error: "El viaje aún no está vinculado a su programación." }, { status: 409 }) } as const;
   return { ok: true, session, viajeId, parada, planId: participacion.planId } as const;
@@ -39,10 +43,15 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
   if (!parsed.success) return NextResponse.json({ error: "Datos inválidos." }, { status: 400 });
   const empleado = await obtenerEmpleado(c.session.empresaId, c.session.empleadoId);
   if (!empleado) return NextResponse.json({ error: "Colaborador no encontrado." }, { status: 404 });
-  const r = await confirmarParadaPorPiloto({
-    empresaId: c.session.empresaId, empleadoId: c.session.empleadoId, usuario: `portal:${empleado.codigo}`,
-    viajeId: c.viajeId, planId: c.planId, paradaId: c.parada, body: parsed.data,
-  });
+  let r: Awaited<ReturnType<typeof confirmarParadaPorPiloto>>;
+  try {
+    r = await confirmarParadaPorPiloto({
+      empresaId: c.session.empresaId, empleadoId: c.session.empleadoId, usuario: `portal:${empleado.codigo}`,
+      viajeId: c.viajeId, planId: c.planId, paradaId: c.parada, body: parsed.data,
+    });
+  } catch (error) {   // la transacción ya se revirtió y la operación es idempotente: se puede reintentar sin riesgo
+    console.error("confirmar parada", error instanceof Error ? error.message : error); return NO_DISPONIBLE();
+  }
   if (!r.ok) return NextResponse.json({ error: r.mensaje, codigo: r.codigo }, { status: r.status });
   return NextResponse.json({ confirmacion: r.confirmacion, replayed: r.replayed }, { status: r.replayed ? 200 : 201 });
 }

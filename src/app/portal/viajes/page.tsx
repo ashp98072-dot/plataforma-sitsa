@@ -8,6 +8,7 @@ import {
   obtenerViajeAbiertoDeEmpleado,
 } from "@/lib/flota/viajes-piloto";
 import { listarParadasDelPlan } from "@/lib/tms/paradas";
+import { listarEntregasDelViaje } from "@/lib/tms/parada-confirmacion";
 import { listarViaticosPropiosPorPlanes } from "@/lib/tms/viaticos";
 import ViajeForm from "./viaje-form";
 
@@ -58,6 +59,11 @@ export default async function ViajesPage({
     ? await listarParadasDelPlan(asignacionEnCurso.planId)
     : [];
 
+  // TMS-ENTREGA-PILOTO-2: paradas de entrega del viaje en curso, con su evidencia aceptable y su última confirmación (solo lectura; el servidor revalida al confirmar).
+  const entregas = asignacionEnCurso?.viajeId
+    ? await listarEntregasDelViaje(session!.empresaId, asignacionEnCurso.planId, asignacionEnCurso.viajeId)
+    : [];
+
   // VIAT-1 — enriquecer con el viático propio de cada viaje (monto + estado,
   // sin datos administrativos). Consulta independiente del JOIN de arriba,
   // ver comentario en listarViaticosPropiosPorPlanes (src/lib/tms/viaticos.ts).
@@ -101,6 +107,7 @@ export default async function ViajesPage({
           viajeEnCursoId={asignacionEnCurso?.viajeId ?? viajeAbiertoPiloto?.id ?? null}
           paradas={paradas}
           viajeDestacadoId={viajeDestacadoId}
+          entregas={entregas}
         />
       </div>
     </main>

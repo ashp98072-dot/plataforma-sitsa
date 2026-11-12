@@ -6,6 +6,8 @@ import Image from "next/image";
 import type { AsignacionOperativaPortal, ViajeAbiertoPiloto } from "@/lib/flota/viajes-piloto";
 import type { PlanParada } from "@/lib/tms/paradas";
 import { paginarViajesPortal, separarViajesPortal } from "@/lib/flota/viajes-portal-ui";
+import type { EntregaVista } from "@/lib/tms/parada-confirmacion-ui";
+import ConfirmacionEntregas from "./confirmacion-entregas";
 
 
 function fechaEnEspanol(fecha: string) {
@@ -40,7 +42,7 @@ const TIPOS_EVIDENCIA: { value: "tablero_salida" | "producto" | "tablero_llegada
 
 type GpsCoords = { latitud: number; longitud: number };
 
-export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas, viajeDestacadoId }: {
+export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacionEnCurso, viajeEnCursoId, paradas, viajeDestacadoId, entregas = [] }: {
   tipo: "Piloto" | "Auxiliar";
   viajeAbierto: ViajeAbiertoPiloto | null;
   asignaciones: AsignacionOperativaPortal[];
@@ -48,6 +50,8 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
   viajeEnCursoId: number | null;
   paradas: PlanParada[];
   viajeDestacadoId: number | null;
+  /** TMS-ENTREGA-PILOTO-2: paradas de entrega con su evidencia aceptable y su última confirmación (solo viaje en curso). */
+  entregas?: EntregaVista[];
 }) {
   const router = useRouter();
   const [error, setError] = useState("");
@@ -242,6 +246,12 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
     detenerCamara();
   }
 
+  // TMS-ENTREGA-PILOTO-2: «Subir evidencia» de la confirmación NO abre otra cámara: preselecciona la parada en ESTE formulario y lo muestra.
+  function prepararEvidenciaDeParada(paradaId: number) {
+    setTipoEvidencia("producto"); setParadaSeleccionada(paradaId); setFoto(null); setError(""); setMensaje("");
+    document.getElementById("adjuntar-evidencia")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   function elegirPlan(id: number) {
     setPlanId(id);
     const plan = programados.find((a) => a.planId === id);
@@ -379,7 +389,10 @@ export default function ViajeForm({ tipo, viajeAbierto, asignaciones, asignacion
       {paradasSinEvidencia.length ? <p className="mt-3 rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-sm text-amber-200">Hay {paradasSinEvidencia.length} parada(s) sin evidencia. Puedes registrar la llegada de todos modos.</p> : null}
     </section> : null}
 
-    {viajeEnCursoId ? <form onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+    {viajeEnCursoId && entregas.length ? <ConfirmacionEntregas viajeId={viajeEnCursoId} entregas={entregas}
+      puedeConfirmar={tipo === "Piloto" && asignacionEnCurso?.estado === "En ruta"} onSubirEvidencia={prepararEvidenciaDeParada} onConfirmada={() => router.refresh()} /> : null}
+
+    {viajeEnCursoId ? <form id="adjuntar-evidencia" onSubmit={subirEvidencias} className="rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
       <h2 className="font-semibold">Adjuntar evidencia</h2>
       <p className="mt-1 text-xs text-[var(--muted)]">La evidencia debe tomarse ahora, con fecha, hora y GPS impresos en la foto. No se permite seleccionar archivos de la galería. Es un respaldo — no bloquea salida, llegada ni cierre.</p>
 
