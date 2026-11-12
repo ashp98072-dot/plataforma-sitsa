@@ -68,11 +68,19 @@ export function withRuntimeControls(inner: PriceSmartHandler, mode: RuntimeMode,
   };
 }
 
-/** Único camino hacia producción: valida, comprueba salud y SOLO entonces instala. Devuelve el informe; si no está listo, no instala nada. */
+/** Único camino hacia producción: valida, comprueba salud y SOLO entonces instala. Devuelve el informe; si no está listo, no instala nada.
+ *  Falla cerrado: el handler anterior se retira ANTES de evaluar nada (una reinstalación nunca deja activa la composición previa, ni siquiera durante las sondas), y cualquier excepción
+ *  —configuración, readiness o construcción del transporte— deja el handler desinstalado y produce un informe genérico sin mensajes ni valores. */
 export async function installControlledRuntime(env: Record<string, string | undefined>, ports: RuntimePorts, options: { probeTimeoutMs?: number } = {}): Promise<Readiness> {
-  const { config, ...report } = await evaluateReadiness(env, ports, options);
-  if (!report.ready || !config) { installPriceSmartHandler(null); return report; }
-  const transport = createIsolatedHttpTransport({ evidence: ports.evidence, security: ports.security, repository: ports.repository }, config.policy, config.limits, ports.extensions ?? {});
-  installPriceSmartHandler(withRuntimeControls(transport, config.mode, ports.killSwitch as () => boolean | Promise<boolean>));
-  return report;
+  installPriceSmartHandler(null);
+  try {
+    const { config, ...report } = await evaluateReadiness(env, ports, options);
+    if (!report.ready || !config) return report;
+    const transport = createIsolatedHttpTransport({ evidence: ports.evidence, security: ports.security, repository: ports.repository }, config.policy, config.limits, ports.extensions ?? {});
+    installPriceSmartHandler(withRuntimeControls(transport, config.mode, ports.killSwitch as () => boolean | Promise<boolean>));
+    return report;
+  } catch {
+    installPriceSmartHandler(null);
+    return { ready: false, mode: 'DISABLED', blockers: [{ code: 'INSTALL_FAILED', detail: 'la construcción del runtime falló; se mantiene cerrado' }] };
+  }
 }

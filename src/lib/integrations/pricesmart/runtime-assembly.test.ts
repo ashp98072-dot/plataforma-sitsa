@@ -90,6 +90,42 @@ describe('installControlledRuntime y controles', () => {
   });
 });
 
+describe('reinstalación fallida (fallo cerrado)', () => {
+  const previous = async () => new Response('{"anterior":true}', { status: 200 });
+  const get = () => handlePriceSmart(new Request('https://x.test/api/integrations/pricesmart/v1/orders/A1'));
+  const expectClosed = async () => { const r = await get(); expect(r.status).toBe(503); expect((await r.json()).code).toBe('DISABLED'); };
+  it('antes de la falla el handler previo responde; tras una construcción fallida queda 503 DISABLED y sin secretos', async () => {
+    installPriceSmartHandler(previous); expect((await get()).status).toBe(200);
+    // Provoca la excepción en createIsolatedHttpTransport: el puerto de evidencia pasa el control de readiness pero su `extract` es un getter que lanza la 2.ª vez.
+    let reads = 0;
+    const evidence = { get extract() { if (++reads > 1) throw new Error('secreto-token-ABC123'); return async () => null; } } as unknown as RuntimePorts['evidence'];
+    const report = await installControlledRuntime(baseEnv(), ports({ evidence }));
+    expect(report.ready).toBe(false); expect(report.blockers).toEqual([{ code: 'INSTALL_FAILED', detail: expect.any(String) }]);
+    expect(JSON.stringify(report)).not.toMatch(/secreto|ABC123/); await expectClosed();
+  });
+  it('un fallo de readiness (sonda que lanza o configuración incompleta) también retira el handler previo', async () => {
+    installPriceSmartHandler(previous);
+    const r = await installControlledRuntime(baseEnv({ PRICESMART_RATIFIED_DECISIONS: 'D02' }), ports()); expect(r.ready).toBe(false); await expectClosed();
+    installPriceSmartHandler(previous);
+    await installControlledRuntime(baseEnv(), ports({ probes: { db: async () => { throw new Error('secreto-db'); } } })); await expectClosed();
+  });
+  it('un entorno que lanza al leerse retira el handler y no filtra el mensaje', async () => {
+    installPriceSmartHandler(previous);
+    const env = new Proxy({}, { get() { throw new Error('secreto-env-XYZ'); } }) as Record<string, string | undefined>;
+    const r = await installControlledRuntime(env, ports()); expect(JSON.stringify(r)).not.toMatch(/secreto|XYZ/); await expectClosed();
+  });
+  it('el handler previo ya no está activo mientras corren las sondas de la reinstalación', async () => {
+    installPriceSmartHandler(previous); let during = 0;
+    await installControlledRuntime(baseEnv(), ports({ probes: { db: async () => { during = (await get()).status; return true; } } }));
+    expect(during).toBe(503);
+  });
+  it('una reinstalación correcta sustituye al previo y deja de usarlo', async () => {
+    installPriceSmartHandler(previous);
+    expect((await installControlledRuntime(baseEnv(), ports())).ready).toBe(true);
+    const res = await get(); expect(await res.text()).not.toContain('anterior');
+  });
+});
+
 describe('aislamiento del cableado', () => {
   it('ninguna ruta ni módulo de la aplicación invoca el ensamblaje (producción sigue cerrada)', () => {
     const root = path.resolve(__dirname, '../../..');   // src/
