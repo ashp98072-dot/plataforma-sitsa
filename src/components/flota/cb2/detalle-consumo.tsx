@@ -9,7 +9,7 @@ export function DetalleConsumoCB2({ r }: { r: Registro }) {
     const producto = combustibleConsumo(r.producto_clasificado);
     return <details><summary>Empleado, combustible y trazabilidad</summary>
         <p className="whitespace-pre-wrap">Piloto original: {String(origen?.piloto ?? r.piloto_informado ?? "No informado")} · Empleado vinculado: {String(r.empleado_nombre ?? "Sin vínculo")}</p>
-        {r.identidad_externa != null && <p>Tercerizado: {String(externa.nombre)} · piloto #{String(externa.piloto_id)} · {String(externa.placa)} · {String(externa.tipo)} · unidad #{String(externa.unidad_id)} · relación {String(externa.relacion)}. Identidad conservada al confirmar.</p>}
+        {r.identidad_externa != null && <p>Tercerizado: {String(externa.nombre)} · piloto #{String(externa.piloto_id)} · {String(externa.placa)} · {String(externa.tipo)} · unidad #{String(externa.unidad_id)} · relación {String(externa.relacion ?? "Registro directo")}. Identidad conservada al confirmar.</p>}
         <p className="whitespace-pre-wrap">Producto original: {String(origen?.producto ?? r.producto ?? "No informado")} · Clasificado: {producto}{r.producto_clasificado == null && " (clasificación histórica pendiente)"}</p>
         <p>Perfil {String(r.perfil ?? "No informado")} · Archivo {String(r.archivo_nombre ?? "No informado")} · Importado {String(r.importado_en ?? "No informado")} · Responsable {String(r.importado_usuario ?? r.importado_por ?? "No informado")}</p>
         <p>Factura {String(r.factura_serie ?? "Sin serie")} / {String(r.factura_numero ?? "Sin número")}</p>

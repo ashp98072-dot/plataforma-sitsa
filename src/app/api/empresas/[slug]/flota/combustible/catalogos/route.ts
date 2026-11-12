@@ -1,3 +1,4 @@
+import { tercerosDirectosHabilitados } from "@/lib/flota/cb2/terceros-directos";
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
@@ -21,7 +22,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
     const empleados = personal.map(p => ({ id: Number(p.id), nombre: String(p.nombre) }));
     const pilotos = empleados;
     const limitacionPilotos = (empleadosDisponibles ? "" : "Catálogo de empleados no disponible: no se proponen vínculos. ") + "El vínculo usa empleados activos de la empresa y conserva el nombre original. Dos o más tokens completos permiten autopropuesta solo con un empleado coincidente; ante ambigüedad se exige elección manual.";
-    return NextResponse.json({ ...catalogos, vehiculos: [...catalogos.vehiculos, ...unidadesExternas], terceros, pilotosExternos: externos.pilotos, unidadesExternas: externos.unidades, tercerosHabilitados: tercerosHabilitados(), empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ ...catalogos, vehiculos: [...catalogos.vehiculos, ...unidadesExternas], tercerosDirectos: tercerosDirectosHabilitados(), terceros, pilotosExternos: externos.pilotos, unidadesExternas: externos.unidades, tercerosHabilitados: tercerosHabilitados(), empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) {
     // Siempre JSON con mensaje (antes un fallo de cualquiera de las 3 consultas daba un 500 vacío y selectores en blanco sin explicación).
     const referencia = randomUUID().slice(0, 8);

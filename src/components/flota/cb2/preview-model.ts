@@ -1,3 +1,4 @@
+import { pilotoDirecto } from "./identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import type { DecisionAsignacion } from "./asignacion";
@@ -39,6 +40,11 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
         const originales = grupos.get(key) ?? [];
         const motivo = decisiones[key]?.motivoUnidad?.trim() ?? "";
         if (Number(value) < 0) {
+            if (cat.tercerosDirectos) {
+                const piloto = originales[0] && pilotoDirecto(originales[0], cat, decisiones[key]);
+                if (!omitidos[key] && cat.tercerosHabilitados && piloto && unidades.has(value) && originales.length && originales.every(f => elegible(f) && nombreComparable(piloto.nombre) === nombreComparable(f.origen?.piloto ?? "") && unidadTerceraCompatible(f.placaNormalizada || f.placa, -Number(value), cat.unidadesExternas ?? [], motivo) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;
+                continue;
+            }
             const id = decisiones[key]?.asociacionExternaId === undefined ? originales[0]?.asociacionExterna?.id : decisiones[key]?.asociacionExternaId;
             const a = cat.terceros?.find(a => a.id === id && a.estado === "VERIFICADA" && -a.unidad_id === Number(value));
             if (!omitidos[key] && cat.tercerosHabilitados && a && originales.length && originales.every(f => elegible(f) && nombreComparable(a.nombre) === nombreComparable(f.origen?.piloto ?? "") && unidadTerceraCompatible(f.placaNormalizada || f.placa, a.unidad_id, cat.unidadesExternas ?? (cat.terceros ?? []).filter((v,i,all) => all.findIndex(x => x.unidad_id === v.unidad_id) === i).map(v => ({ id: v.unidad_id, placa: v.placa })), motivo) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;

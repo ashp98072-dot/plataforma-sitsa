@@ -4,6 +4,9 @@ import type { FiltrosCB2 } from "./service";
 export async function consultarConsumos(c: PoolConnection, empresa: number, limite: number, despues: number, filtros: FiltrosCB2) {
     const where = ["c.empresa_id=?", "c.id>?"], args: (string | number)[] = [empresa, despues];
     for (const [campo, valor] of [["proveedor_id", filtros.proveedorId], ["vehiculo_id", filtros.vehiculoId], ["empleado_id", filtros.empleadoId], ["importacion_origen_id", filtros.importacionId], ["producto_clasificado", filtros.producto], ["estado_factura", filtros.estado]] as const) if (valor !== undefined) { where.push(campo === "producto_clasificado" ? "COALESCE(c.producto_clasificado,'NO_DETERMINADO')=?" : `c.${campo}=?`); args.push(valor); }
+    for (const [campo, json, valor] of [["piloto_externo_id","piloto_id",filtros.pilotoExternoId],["unidad_externa_id","unidad_id",filtros.unidadExternaId]] as const) if (valor !== undefined) {
+        where.push(`(c.${campo}=? OR (c.${campo} IS NULL AND c.asociacion_externa_id IS NOT NULL AND JSON_VALUE(c.identidad_externa,'$.${json}')=?))`); args.push(valor, valor);
+    }
     if (filtros.desde) { where.push("c.fecha_consumo>=?"); args.push(filtros.desde); }
     if (filtros.hasta) { where.push("c.fecha_consumo<=?"); args.push(filtros.hasta); }
     if (filtros.buscar) { where.push("(LOCATE(UPPER(?),UPPER(c.vale_norm))>0 OR LOCATE(UPPER(?),UPPER(c.placa_normalizada))>0 OR LOCATE(UPPER(?),UPPER(i.archivo_nombre))>0)"); args.push(filtros.buscar, filtros.buscar, filtros.buscar); }

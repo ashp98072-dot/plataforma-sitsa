@@ -32,3 +32,13 @@ it("origen ajeno y JSON no objeto son rechazados", async () => {
   expect((await tercerosHttp(req({}, "https://external.invalid"), "demo")).status).toBe(403);
   expect((await tercerosHttp(req(null), "demo")).status).toBe(400); expect(m.registrar).not.toHaveBeenCalled();
 });
+it("política directa: escritura autorizada sin Admin ni asociación; revalida empresa y permiso", async () => {
+  vi.stubEnv("CB2_TERCEROS_D2_APROBADA", ""); vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA", "1");
+  m.guard.mockResolvedValue({ session: { id: 9, username: "operador-lab", rol: "Operaciones" }, empresa: { id: 1 } });
+  m.registrar.mockImplementationOnce(async ctx => { expect(ctx.escrituraDirecta).toBe(true); await ctx.autorizar(); return { id: 44 }; });
+  expect((await tercerosHttp(req(), "demo")).status).toBe(201);
+  expect(m.guard).toHaveBeenCalledWith("demo", "conciliar");
+  expect((await tercerosHttp(req({ recurso: "ASOCIACION", pilotoId: 1, unidadId: 2, relacion: "CONTRATISTA", evidencia: "lab" }), "demo")).status).toBe(403);
+  m.registrar.mockImplementationOnce(async ctx => { m.guard.mockResolvedValueOnce({ error: new Response(null, { status: 403 }) }); await ctx.autorizar(); });
+  expect((await tercerosHttp(req(), "demo")).status).toBe(403);
+});

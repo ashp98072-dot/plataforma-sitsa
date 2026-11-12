@@ -75,7 +75,9 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                 const f = await service.archivo(ctx.empresaId, iid!);
                 return new Response(new Uint8Array(f.buffer), { headers: { ...headers, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="cb2-${iid}.xlsx"` } });
             }
-            const filtros = z.object({vehiculoId:id.optional(),empleadoId:id.optional(),importacionId:id.optional(),producto:z.enum(productos).optional(),proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+            const filtros = z.object({pilotoExternoId:id.optional(),unidadExternaId:id.optional(),vehiculoId:id.optional(),empleadoId:id.optional(),importacionId:id.optional(),producto:z.enum(productos).optional(),proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+                pilotoExternoId:url.searchParams.has("pilotoExternoId")?Number(url.searchParams.get("pilotoExternoId")):undefined,
+                unidadExternaId:url.searchParams.has("unidadExternaId")?Number(url.searchParams.get("unidadExternaId")):undefined,
                 vehiculoId:url.searchParams.has("vehiculoId")?Number(url.searchParams.get("vehiculoId")):undefined,
                 empleadoId:url.searchParams.has("empleadoId")?Number(url.searchParams.get("empleadoId")):undefined,
                 importacionId:url.searchParams.has("importacionId")?Number(url.searchParams.get("importacionId")):undefined,
