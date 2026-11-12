@@ -5,6 +5,7 @@ import { mariaDbSecurityPorts } from '../security-mariadb';
 import type { PriceSmartHandler } from '../runtime';
 import { labContract } from './contract';
 import { labCipher, labEvidencePort, labVerifier } from './lab-crypto';
+import { createLinkRetry, startLinkWorker } from './link-retry';
 import { createTmsLinker } from './tms-link';
 
 // PRICESMART API-12 — composición EJECUTABLE solo para un laboratorio local aislado. Autenticación de PRUEBA (HMAC con una clave por ejecución), contrato de prueba `lab-demo-1`.
@@ -29,6 +30,10 @@ export async function createLabDemoHandler(env: Record<string, string | undefine
   const repository = mariaDbOrderRepository(pool, { schema, runtimeUser, cipher: labCipher(labKey), contract: labContract });
   const security = mariaDbSecurityPorts(pool, { schema, runtimeUser });
   const linker = createTmsLinker({ pool, schema, repository });
+  const retry = createLinkRetry({ pool, schema, linker });
+  // Trabajador de reintentos en el proceso: SOLO si el entorno del laboratorio lo pide (PRICESMART_LAB_WORKER_MS ≥ 1000). Sin él, los reintentos los ejecuta quien invoque `runOnce`.
+  const everyMs = Number(env.PRICESMART_LAB_WORKER_MS ?? 0);
+  if (everyMs) startLinkWorker(retry, everyMs);
   const policy = { maxEvidenceBytes: 4096, maxBodyBytes: 8192, requestsPerWindow: 600, windowMs: 60000, maxProofAgeMs: 300000, futureSkewMs: 5000, replayRetentionMs: 400000 };
   const limits = { originClubReference: LAB_CLUB, timeoutMs: 20000, maxHeaderBytes: 8192, maxHeaderCount: 48, maxUrlBytes: 2048, maxBodyChunks: 64 };
   return createIsolatedHttpTransport(
@@ -38,7 +43,8 @@ export async function createLabDemoHandler(env: Record<string, string | undefine
       order: labContract,
       readExtra: ({ scope, externalOrderId, view }) => linker.status(scope, externalOrderId, view),
       afterCommit: async ({ operation, scope, externalOrderId }) => {
-        if (operation === 'orders:create') await linker.link(scope, externalOrderId);
+        // Vía rápida: encola la orden y la vincula de inmediato; si falla, el trabajo queda en cola para el trabajador (no hace falta que PriceSmart reenvíe).
+        if (operation === 'orders:create') await retry.attemptNow(scope, externalOrderId);
         else if (operation === 'orders:cancel') await linker.noteCancellation(scope, externalOrderId);
       },
     });

@@ -164,6 +164,15 @@ export type CrearSolicitudClienteInput = {
   destino: ParadaSolicitudEntrada;
 };
 
+/** Conexión transaccional que `crearSolicitudCliente` entrega al gancho opcional (mismo tipo que devuelve el pool de la aplicación). */
+export type ConexionTransaccional = Awaited<ReturnType<ReturnType<typeof getPool>["getConnection"]>>;
+/**
+ * Gancho OPCIONAL (API-13): se ejecuta DENTRO de la misma transacción, después de insertar la solicitud, sus paradas y la auditoría y ANTES del commit.
+ * Si lanza, se revierte todo (no queda solicitud). Lo usan integraciones para escribir su vínculo de forma atómica con la solicitud (sin ventana de caída entre ambas escrituras).
+ * Sin gancho, el comportamiento es idéntico al de siempre.
+ */
+export type CrearSolicitudGanchos = { dentroDeTransaccion?: (conn: ConexionTransaccional, solicitudId: number) => Promise<void> };
+
 export type ResultadoCrearSolicitud =
   | { ok: true; solicitud: SolicitudClienteDetalle }
   | { ok: false; mensaje: string };
@@ -199,6 +208,7 @@ function limpiarParada(p: ParadaSolicitudEntrada): { lugarNombre: string; client
 export async function crearSolicitudCliente(
   scope: { empresaId: number; clienteId: number; usuarioClienteId: number },
   input: CrearSolicitudClienteInput,
+  ganchos?: CrearSolicitudGanchos,
 ): Promise<ResultadoCrearSolicitud> {
   const fecha = input.fechaSolicitada?.trim() ?? "";
   if (!esFechaCalendarioValida(fecha)) {
@@ -329,6 +339,7 @@ export async function crearSolicitudCliente(
       modulo: "tms",
       detalle: `Solicitud #${solicitudId} creada por cliente #${scope.clienteId} · fecha solicitada ${fecha} · ${entregas.length} entrega(s).`,
     });
+    if (ganchos?.dentroDeTransaccion) await ganchos.dentroDeTransaccion(conn, solicitudId);
     await conn.commit();
   } catch (error) {
     // Todavía dentro de la fase transaccional: cualquier error de aquí

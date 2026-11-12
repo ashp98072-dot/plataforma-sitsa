@@ -14,11 +14,13 @@ import type { LabOrderInput } from './contract';
 // Modelo de seguridad: el destino (empresa, cliente y usuario de la solicitud) sale SOLO de la tabla administrativa ps_api12_tms_mapping, ligada al alcance autenticado
 // (tenant/cliente/integración del catálogo M2M); el cuerpo de la solicitud HTTP no puede elegirlo.
 //
-// IDENTIDAD DEL VÍNCULO (auditoría de #603): una solicitud solo se asocia a una orden si su pertenencia está DEMOSTRADA por un reclamo persistido, nunca por coincidir en referencia.
+// IDENTIDAD DEL VÍNCULO (API-12 auditoría + API-13): una solicitud solo se asocia a una orden si su pertenencia está DEMOSTRADA, nunca por coincidir en referencia.
 //   1) Antes de crear la solicitud se persiste, en el vínculo de la orden (clave: alcance + orden), un token aleatorio de 128 bits (`claim_token`, UNIQUE) con la solicitud aún en NULL.
-//   2) La solicitud se crea con ese token en el inicio de `observaciones` ([PS:<32 hex>]); el token solo existe en la fila del vínculo (no es adivinable ni lo conoce otro alcance).
-//   3) Se completa el vínculo (solicitud_id) con un UPDATE condicionado al token.
-//   Si el proceso cae entre 2 y 3, el reintento busca la solicitud POR TOKEN (y por empresa/cliente/usuario del mapeo) y completa el vínculo sin crear otra.
+//   2) La solicitud se crea con `crearSolicitudCliente` y su gancho `dentroDeTransaccion`: el UPDATE que escribe `solicitud_id` en el vínculo ocurre EN LA MISMA TRANSACCIÓN que el alta de la
+//      solicitud (ACID). No existe ventana de caída entre «crear la solicitud» y «anotar el vínculo»: o quedan ambas o ninguna. La pertenencia vive en una columna con FK y UNIQUE,
+//      no en texto editable.
+//   3) El token también se escribe al inicio de `observaciones` ([PS:<32 hex>]) SOLO como trazabilidad para personas y como compatibilidad con vínculos pendientes creados por API-12
+//      (esos se recuperan por token). Que un usuario edite ese texto ya no puede romper ni falsear la identidad de los vínculos nuevos.
 //   Una solicitud preexistente con la misma referencia, o creada por otra integración que comparta cliente y usuario de servicio, NO se reutiliza jamás.
 
 export type LinkResult =
@@ -27,7 +29,7 @@ export type LinkResult =
 
 export type TmsLinkerDeps = {
   pool: Pool; schema: string; repository: OrderRepository;
-  /** Solo pruebas: sustituye la creación de la solicitud (p. ej. para simular una caída justo después de crearla). Por defecto, la función real del TMS. */
+  /** Solo pruebas: sustituye la creación de la solicitud (p. ej. para simular una caída antes o después de crearla). Por defecto, la función real del TMS. */
   createRequest?: typeof crearSolicitudCliente;
 };
 
@@ -77,11 +79,19 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
           origen: { lugarNombre: String(map.pickup_place) },
           entregas: [{ lugarNombre: input.recipient.name, referencia: input.address }],
           destino: { lugarNombre: String(map.dropoff_place) },
+        },
+        {
+          // Misma transacción que el alta de la solicitud: si este UPDATE no afecta exactamente 1 fila, se revierte la solicitud completa.
+          dentroDeTransaccion: async (tx, id) => {
+            const [done] = await tx.execute<import('mysql2/promise').ResultSetHeader>(
+              `UPDATE ${t('tms_links')} SET solicitud_id=?, linked_at=UTC_TIMESTAMP(6) WHERE ${where} AND order_id=? AND claim_token=? AND solicitud_id IS NULL`, [id, ...orderKey, token]);
+            if (done.affectedRows !== 1) throw new Error('El vínculo no pudo completarse de forma atómica.');
+          },
         });
       if (!created.ok) return { state: 'REJECTED_BY_TMS', detail: created.mensaje };
-      solicitudId = created.solicitud.id;
+      return { state: 'LINKED', solicitudId: created.solicitud.id };
     }
-    // Paso 3: completar el vínculo, condicionado al token y a que siga pendiente.
+    // Compatibilidad: solicitud encontrada por token (vínculo pendiente de API-12). Se completa el vínculo, condicionado al token y a que siga pendiente.
     const [upd] = await conn.execute<import('mysql2/promise').ResultSetHeader>(
       `UPDATE ${t('tms_links')} SET solicitud_id=?, linked_at=UTC_TIMESTAMP(6) WHERE ${where} AND order_id=? AND claim_token=? AND solicitud_id IS NULL`, [solicitudId, ...orderKey, token]);
     if (upd.affectedRows !== 1) throw new Error('El vínculo no pudo completarse (estado inesperado).');

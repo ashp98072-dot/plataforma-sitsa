@@ -6,6 +6,7 @@ import { createLabDemoHandler, labDemoGate, LAB_DEMO_FLAG } from './composition'
 import { autoInstallLabDemo } from './autoinstall';
 import { labCipher, labVerifier } from './lab-crypto';
 import { createTmsLinker } from './tms-link';
+import { backoffMs, classify, DEFAULT_RETRY_POLICY } from './link-retry';
 import { handlePriceSmart, installPriceSmartHandler } from '../runtime';
 
 const goodEnv = { NODE_ENV: 'development', NOVALVION_ENV: 'sandbox', PRICESMART_LAB_DEMO: LAB_DEMO_FLAG, DB_HOST: '127.0.0.1', DB_NAME: 'sandbox_api02_abc', DB_USER: 'sandbox_api02_abc', PRICESMART_LAB_KEY: 'k'.repeat(40) };
@@ -91,5 +92,24 @@ describe('API-12 liberación del bloqueo de vinculación', () => {
       const h = harness({ release, work: 'throws' });
       await expect(h.linker.link(scope, 'A1')).rejects.toThrow('fallo del trabajo'); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
     }
+  });
+});
+
+// ---- API-13: política de reintentos (pura)
+describe('API-13 clasificación y retroceso de reintentos', () => {
+  const p = { ...DEFAULT_RETRY_POLICY, maxAttempts: 3, baseDelayMs: 1000, maxDelayMs: 5000 };
+  it('retroceso exponencial acotado', () => { expect([1, 2, 3, 4, 5].map((n) => backoffMs(p, n))).toEqual([1000, 2000, 4000, 5000, 5000]); });
+  it('éxito → DONE; rechazo del TMS y ambigüedad → BLOQUEADA sin reintento; transitorios → PENDIENTE y AGOTADA al llegar al máximo', () => {
+    expect(classify({ state: 'LINKED', solicitudId: 1 }, 1, p).status).toBe('DONE'); expect(classify({ state: 'ALREADY_LINKED', solicitudId: 1 }, 2, p).status).toBe('DONE');
+    expect(classify({ state: 'REJECTED_BY_TMS', detail: 'x'.repeat(500) }, 1, p)).toMatchObject({ status: 'BLOCKED', delayMs: 0 }); expect(classify({ state: 'REJECTED_BY_TMS', detail: 'x'.repeat(500) }, 1, p).detail).toHaveLength(200);
+    expect(classify({ state: 'RECOVERY_AMBIGUOUS' }, 1, p).status).toBe('BLOCKED');
+    for (const state of ['UNMAPPED', 'LOCK_TIMEOUT', 'ORDER_NOT_FOUND'] as const) {
+      expect(classify({ state }, 1, p)).toMatchObject({ status: 'PENDING', delayMs: 1000 }); expect(classify({ state }, 2, p)).toMatchObject({ status: 'PENDING', delayMs: 2000 }); expect(classify({ state }, 3, p)).toMatchObject({ status: 'EXHAUSTED', delayMs: 0 });
+    }
+  });
+  it('una excepción nunca guarda su mensaje: solo un código corto', () => {
+    const c = classify({ thrown: Object.assign(new Error('contiene datos sensibles del cliente'), { code: 'ER_LOCK_DEADLOCK' }) }, 1, p);
+    expect(c).toMatchObject({ status: 'PENDING', outcome: 'ERROR', detail: 'ER_LOCK_DEADLOCK' }); expect(JSON.stringify(c)).not.toContain('sensibles');
+    expect(classify({ thrown: 'texto' }, 3, p).status).toBe('EXHAUSTED');
   });
 });

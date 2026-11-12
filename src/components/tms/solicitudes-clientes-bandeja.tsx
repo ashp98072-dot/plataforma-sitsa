@@ -8,6 +8,13 @@ import {
   etiquetaEstadoSolicitud,
 } from "@/lib/tms/solicitudes-cliente-ui";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
+import {
+  ETIQUETA_VINCULACION,
+  claseVinculacion,
+  requiereAtencion,
+  textoResultadoVinculacion,
+  type PriceSmartBandejaUi,
+} from "@/lib/tms/pricesmart-bandeja-ui";
 
 type SolicitudFila = {
   id: number;
@@ -30,6 +37,29 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
   const [cliente, setCliente] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
+  // API-13 (laboratorio): anotaciones de PriceSmart. Fuera del laboratorio el servidor responde { enabled: false } y no se muestra nada.
+  const [ps, setPs] = useState<PriceSmartBandejaUi>({ enabled: false });
+
+  const cargarPriceSmart = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/empresas/${slug}/tms/solicitudes-clientes/pricesmart`);
+      if (res.ok) setPs((await res.json()) as PriceSmartBandejaUi);
+    } catch {
+      /* la bandeja funciona igual sin las anotaciones */
+    }
+  }, [slug]);
+
+  const reconocer = useCallback(
+    async (id: string) => {
+      const res = await fetch(`/api/empresas/${slug}/tms/solicitudes-clientes/pricesmart/reconocer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) await cargarPriceSmart();
+    },
+    [slug, cargarPriceSmart],
+  );
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -54,7 +84,13 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void cargar();
-  }, [cargar]);
+    void cargarPriceSmart();
+  }, [cargar, cargarPriceSmart]);
+
+  const origenPorId = useMemo(
+    () => new Map((ps.enabled ? ps.origen : []).map((o) => [o.solicitudId, o])),
+    [ps],
+  );
 
   const visibles = useMemo(() => {
     const filtro = cliente.trim().toLowerCase();
@@ -105,6 +141,30 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
 
       {error ? <p className="text-sm text-red-500">{error}</p> : null}
 
+      {ps.enabled && ps.pendientes.length ? (
+        <div className="space-y-2 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3" data-testid="pricesmart-pendientes">
+          <p className="text-sm font-medium">Vinculaciones PriceSmart pendientes o fallidas</p>
+          <ul className="space-y-1 text-xs">
+            {ps.pendientes.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center gap-2">
+                <span className="font-mono">{p.referencia}</span>
+                <span className={`rounded-full px-2 py-0.5 font-medium ${claseVinculacion(p.estado)}`}>{ETIQUETA_VINCULACION[p.estado]}</span>
+                <span className="text-[var(--muted)]">
+                  {p.intentos} intento(s) · {textoResultadoVinculacion(p)}
+                </span>
+                {requiereAtencion(p) ? (
+                  <button type="button" className="rounded border border-[var(--border)] px-2 py-0.5 underline" onClick={() => void reconocer(p.id)}>
+                    Reconocer
+                  </button>
+                ) : (
+                  <span className="text-[var(--muted)]">Reconocida por {p.reconocidoPor}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {loading ? (
         <p className="text-sm text-[var(--muted)]">Cargando…</p>
       ) : (
@@ -130,7 +190,15 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
                   <td className="px-3 py-2">{s.clienteNombre}</td>
                   <td className="px-3 py-2">{s.fechaSolicitada}</td>
                   <td className="px-3 py-2 text-xs">{formatearHora12(s.horaSolicitada)}</td>
-                  <td className="px-3 py-2 text-xs">{s.referenciaCliente || "—"}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {s.referenciaCliente || "—"}
+                    {origenPorId.has(s.id) ? (
+                      <span className="ml-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-500">PriceSmart</span>
+                    ) : null}
+                    {origenPorId.get(s.id)?.cancelacionPendiente ? (
+                      <span className="ml-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-500">Cancelación solicitada</span>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2 text-xs">{s.cantidadEntregas}</td>
                   <td className="px-3 py-2">
                     <span
