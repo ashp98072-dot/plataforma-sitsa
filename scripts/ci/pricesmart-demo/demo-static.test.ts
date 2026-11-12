@@ -19,7 +19,7 @@ describe("API-12 DDL y colección", () => {
   it("la colección Postman es ejecutable, firma con la clave del ENTORNO (no escrita en el repositorio) y cubre POST, GET, idempotencia, aislamiento, cancelación y 401", () => {
     const text = read("docs/integraciones/pricesmart/api12/postman_collection.json"); const col = JSON.parse(text);
     expect(col.item).toHaveLength(7); expect(text).toContain("pm.environment.get('labKey')"); expect(text).not.toMatch(/"labKey"\s*:\s*"[0-9a-f]{16,}/);
-    expect(col.item.map((i: { name: string }) => i.name).join("|")).toMatch(/POST[sS]*GET[sS]*idempotente[sS]*aislamiento[sS]*cancelacion[sS]*401/);
+    expect(col.item.map((i: { name: string }) => i.name).join("|")).toMatch(/POST[\s\S]*GET[\s\S]*idempotente[\s\S]*aislamiento[\s\S]*cancelacion[\s\S]*401/);
   });
   it("el arnés se niega a usarse fuera del sandbox: la app solo recibe la bandera de laboratorio desde demo.mjs", () => {
     const demo = read("scripts/ci/pricesmart-demo/demo.mjs");
