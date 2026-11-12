@@ -101,7 +101,8 @@ export default function ConfirmacionEntregas({ viajeId, entregas, puedeConfirmar
               <button className="rounded-lg bg-amber-700 px-4 py-2.5 font-medium text-white disabled:opacity-50" disabled={!notaValida(nota) || enviando !== null}>{ocupada ? "Enviando…" : "Enviar incidencia"}</button>
             </form> : null}
           </div> : null}
-          {error ? <p className="mt-2 text-sm text-red-300" role="alert">{error}</p> : null}
+          {/* Hallazgo del E2E: tras una respuesta perdida el servidor ya tenía la confirmación y la pantalla la mostraba JUNTO al aviso de «Sin conexión». Con confirmación no hay nada que reintentar. */}
+          {error && !c ? <p className="mt-2 text-sm text-red-300" role="alert">{error}</p> : null}
         </li>;
       })}
     </ul>

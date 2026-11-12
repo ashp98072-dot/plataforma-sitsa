@@ -95,6 +95,12 @@ describe("reintentos de red", () => {
     expect(llamadas).toHaveLength(2); expect(llamadas[1].url).toBe(llamadas[0].url); expect(cuerpoDe(1)).toEqual(cuerpoDe(0));
     expect(host.querySelectorAll("[data-confirmacion]")).toHaveLength(1); expect(host.querySelector("[role=alert]")).toBeNull(); expect(texto()).toContain("ENTREGADA POR PILOTO");
   });
+  it("si la respuesta se pierde pero el servidor SÍ guardó (la pantalla lo recibe después), el aviso de error desaparece: nunca se muestran confirmada y «sin conexión» a la vez", async () => {
+    fetchMock.mockImplementationOnce(async (url: string, init?: RequestInit) => { llamadas.push({ url, init }); throw new TypeError("Failed to fetch"); });
+    await montar(); await clic(boton(/Confirmar entrega/)); expect(host.querySelector("[role=alert]")).not.toBeNull();
+    await montar({ entregas: [parada(11, { evidencias: 1, confirmacion: conf() })] });   // el refresco periódico trae la confirmación que el servidor ya guardó
+    expect(host.querySelector("[data-confirmacion]")).not.toBeNull(); expect(host.querySelector("[role=alert]")).toBeNull(); expect(botones(/Confirmar entrega|Reintentar/)).toHaveLength(0);
+  });
   it("una respuesta sin JSON o con error del servidor muestra un mensaje y deja reintentar", async () => {
     fetchMock.mockImplementationOnce(async () => ({ ok: false, status: 502, json: async () => { throw new Error("html"); } }));
     await montar(); await clic(boton(/Confirmar entrega/)); expect(host.querySelector("[role=alert]")?.textContent).toContain("No se pudo registrar la confirmación"); expect(boton(/Confirmar entrega/).disabled).toBe(false);
