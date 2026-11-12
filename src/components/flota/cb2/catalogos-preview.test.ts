@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const m = vi.hoisted(() => ({ guard: vi.fn(), query: vi.fn() }));
+const m = vi.hoisted(() => ({ guard: vi.fn(), query: vi.fn(), externos: vi.fn(), habilitados: vi.fn() }));
 vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: m.guard }));
 vi.mock("@/lib/db", () => ({ query: m.query, getPool: () => { throw new Error("Catálogo no abre transacciones"); } }));
+vi.mock("@/lib/flota/cb2/terceros", () => ({ listarCatalogosTerceros: m.externos, tercerosHabilitados: m.habilitados }));
 import { GET } from "@/app/api/empresas/[slug]/flota/combustible/catalogos/route";
-beforeEach(() => { m.guard.mockResolvedValue({ empresa: { id: 7 } }); m.query.mockResolvedValue([]); });
+beforeEach(() => { m.guard.mockResolvedValue({ empresa: { id: 7 } }); m.query.mockResolvedValue([]); m.externos.mockResolvedValue({ pilotos: [], unidades: [], asociaciones: [] }); m.habilitados.mockReturnValue(false); });
 describe("catálogo usado para sugerir vehículos en preview", () => {
     it("solo lista pilotos activos de la empresa autenticada y declara la limitación de CB2", async () => {
         m.query.mockImplementation(async (sql: string) => sql.includes("FROM empleados") ? [{ id: 1, nombre: "José Chay" }] : []);
@@ -35,4 +36,17 @@ describe("catálogo usado para sugerir vehículos en preview", () => {
         expect((await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "otra" }) })).status).toBe(status);
         expect(m.query).not.toHaveBeenCalled();
     });
+});
+
+it("catálogo CB2 incluye identidades independientes sin aprobar consumos ni mezclar empleados", async () => {
+  m.habilitados.mockReturnValue(true);
+  const pilotos = [{ id: 11, nombre: "Luis Escobar", referencia: "lab-19955-p" }];
+  const unidades = [{ id: 21, placa: "M-060KHK", tipo: "MOTOCICLETA", descripcion: "Ficticia", referencia: "lab-19955-u" }];
+  m.externos.mockResolvedValue({ pilotos, unidades, asociaciones: [] });
+  const r = await GET(new Request("https://example.test/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });
+  const data = await r.json();
+  expect(m.externos).toHaveBeenCalledWith(7);
+  expect(data.pilotosExternos).toEqual(pilotos); expect(data.unidadesExternas).toEqual(unidades);
+  expect(data.vehiculos).toEqual([{ id: -21, placa: "M-060KHK", descripcion: "Tercerizado #21 · Ficticia", tipo_unidad: "MOTOCICLETA" }]);
+  expect(data.empleados).toEqual([]); expect(data.terceros).toEqual([]);
 });

@@ -38,6 +38,8 @@ export type Registro = {
     [key: string]: unknown;
 };
 export type CatalogosCB2 = {
+    pilotosExternos?: import("@/lib/flota/cb2/terceros-model").PilotoTercero[];
+    unidadesExternas?: import("@/lib/flota/cb2/terceros-model").UnidadTercera[];
     tercerosHabilitados?: boolean;
     terceros?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna[];
     empleados?: { id: number; nombre: string }[];

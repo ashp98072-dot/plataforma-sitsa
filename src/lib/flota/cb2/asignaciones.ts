@@ -17,7 +17,7 @@ export async function corregirAsignacion(ctx: Contexto, op: z.infer<typeof corre
         const [consumo] = await rows(c, "SELECT * FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? AND id=? FOR UPDATE", [ctx.empresaId, ctx.proveedorId, op.consumoId]);
         if (!consumo) throw new ErrorCB2("Consumo no encontrado.", 404);
         if (Number(consumo.revision_asignacion) !== op.revision) throw new ErrorCB2("La asignación cambió; actualiza antes de corregir.");
-        const externa = op.vehiculoId < 0 ? await validarTercero(c, ctx, op.asociacionExternaId!, -op.vehiculoId, String(consumo.piloto_informado ?? ""), String(consumo.placa_normalizada)) : null;
+        const externa = op.vehiculoId < 0 ? await validarTercero(c, ctx, op.asociacionExternaId!, -op.vehiculoId, String(consumo.piloto_informado ?? ""), String(consumo.placa_normalizada), op.motivo) : null;
         if (!externa) await vehiculos(c, ctx, [op.vehiculoId]);
         if (consumo.vehiculo_id == null && !tercerosHabilitados()) throw new ErrorCB2("Edición externa deshabilitada hasta aprobar D2.", 403);
         if (op.empleadoId !== null) {
