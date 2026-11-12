@@ -137,6 +137,8 @@ export async function colaboradorParticipaEnViaje(
   empresaId: number,
   empleadoId: number,
   viajeId: number,
+  /** TMS-ENTREGA-PILOTO-2: por defecto (callers existentes) un error de base de datos se traga y equivale a «no participa». Con `propagarErrores` se relanza, para que quien lo pide distinga «no participa» (403) de «servicio no disponible» (503). */
+  opciones: { propagarErrores?: boolean } = {},
 ): Promise<{ viajeId: number; planId: number | null; estado: string } | null> {
   const rows = await query<RowDataPacket[]>(
     `SELECT DISTINCT fv.id, fv.plan_id, fv.estado
@@ -153,7 +155,7 @@ export async function colaboradorParticipaEnViaje(
             OR aux.id_empleado = ? OR aux_legacy.id_empleado = ?)
      LIMIT 1`,
     [viajeId, empresaId, empleadoId, empleadoId, empleadoId, empleadoId, empleadoId],
-  ).catch(() => [] as RowDataPacket[]);
+  ).catch((error) => { if (opciones.propagarErrores) throw error; return [] as RowDataPacket[]; });
   return rows[0]
     ? {
         viajeId: Number(rows[0].id),

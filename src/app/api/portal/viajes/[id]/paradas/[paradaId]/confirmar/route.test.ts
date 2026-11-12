@@ -59,6 +59,19 @@ describe("POST /api/portal/viajes/[id]/paradas/[paradaId]/confirmar", () => {
   });
 });
 
+describe("fallos de infraestructura (503 reintentable, nunca un 403 engañoso)", () => {
+  it("si la consulta de participación falla, se PROPAGA el error y responde 503 REINTENTAR (no «no estás asignado»)", async () => {
+    vi.mocked(colaboradorParticipaEnViaje).mockRejectedValue(new Error("No se pudo conectar a la base sandbox."));
+    const res = await POST(post({ resultado: "ENTREGADA_POR_PILOTO" }), ctx()); expect(res.status).toBe(503); expect((await res.json()).codigo).toBe("REINTENTAR");
+    expect(colaboradorParticipaEnViaje).toHaveBeenCalledWith(7, 31, 900, { propagarErrores: true }); expect(confirmarParadaPorPiloto).not.toHaveBeenCalled();
+    const g = await GET(new Request("https://x.invalid/api"), ctx()); expect(g.status).toBe(503);
+  });
+  it("si el dominio lanza un error inesperado responde 503 REINTENTAR sin filtrar el mensaje", async () => {
+    vi.mocked(confirmarParadaPorPiloto).mockRejectedValue(new Error("SQL secreto: password=x"));
+    const res = await POST(post({ resultado: "ENTREGADA_POR_PILOTO" }), ctx()); expect(res.status).toBe(503); expect(JSON.stringify(await res.json())).not.toMatch(/secreto|password/);
+  });
+});
+
 describe("GET: historial de la parada", () => {
   it("devuelve solo las confirmaciones de ESA parada del plan del viaje del colaborador", async () => {
     vi.mocked(listarConfirmacionesPlan).mockResolvedValue([okConf, { ...okConf, id: 6, paradaId: 11 }] as never);
