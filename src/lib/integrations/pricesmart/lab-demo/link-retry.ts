@@ -10,7 +10,8 @@ import type { LinkResult } from './tms-link';
 //  · Concurrencia: cada trabajo se reclama con un lease (UPDATE condicionado, hora de la base de datos) y se cierra con fencing (lease_owner + attempts). Dos trabajadores no procesan lo mismo.
 //  · Recuperación tras reinicio: el estado vive en MariaDB; un lease vencido de un trabajador caído vuelve a ser elegible.
 //  · Límites: máximo de intentos con retroceso exponencial; los fallos que requieren una persona (rechazo del TMS, ambigüedad, orden cancelada) pasan a BLOCKED sin reintentar.
-//  · Registro: cada intento queda en ps_api13_link_attempts (append-only) con su resultado; sin tokens, firmas ni cuerpos de solicitud.
+//  · Registro: cada intento escribe DOS eventos inmutables en ps_api13_link_attempts (STARTED y FINISHED; solo INSERT, nunca UPDATE). Un intento interrumpido queda con STARTED sin FINISHED
+//    (no se inventa un resultado). Sin tokens, firmas ni cuerpos de solicitud.
 //  · Aislamiento multiempresa: cada trabajo conserva su alcance completo; el destino lo decide el mapeo administrativo de ese alcance (el trabajador no recibe empresa del exterior).
 
 export type RetryPolicy = { maxAttempts: number; baseDelayMs: number; maxDelayMs: number; leaseMs: number; batch: number };
@@ -102,7 +103,10 @@ export function createLinkRetry(deps: { pool: Pool; schema: string; linker: { li
 
   async function process(job: Claimed, workerId: string): Promise<AttemptSummary> {
     const k = [...keyOf(job.scope), job.orderId];
-    const [ins] = await pool.execute<ResultSetHeader>(`INSERT INTO ${A} (environment, tenant_id, client_id, integration_id, order_id, attempt_no, worker_id, started_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(6))`, [...k, job.attemptNo, workerId.slice(0, 40)]);
+    const event = (name: 'STARTED' | 'FINISHED', outcome: string | null, detail: string | null) => pool.execute(
+      `INSERT INTO ${A} (environment, tenant_id, client_id, integration_id, order_id, attempt_no, event, worker_id, outcome, detail, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(6))`,
+      [...k, job.attemptNo, name, workerId.slice(0, 40), outcome, detail]);
+    await event('STARTED', null, null);
     let verdict: Classified;
     try {
       const [st] = await pool.execute<RowDataPacket[]>(`SELECT o.state, (SELECT COUNT(*) FROM ${L} l WHERE l.environment=o.environment AND l.tenant_id=o.tenant_id AND l.client_id=o.client_id AND l.integration_id=o.integration_id AND l.order_id=o.id AND l.solicitud_id IS NOT NULL) AS linked
@@ -117,7 +121,7 @@ export function createLinkRetry(deps: { pool: Pool; schema: string; linker: { li
         WHERE environment=? AND tenant_id=? AND client_id=? AND integration_id=? AND order_id=? AND lease_owner=? AND attempts=?`,
       [verdict.status, verdict.delayMs * 1000, verdict.outcome, verdict.detail, ...k, job.lease, job.attemptNo]);
     const lost = fin.affectedRows !== 1;
-    await pool.execute(`UPDATE ${A} SET outcome=?, detail=?, finished_at=UTC_TIMESTAMP(6) WHERE id=?`, [lost ? 'LEASE_LOST' : verdict.outcome, lost ? 'otro trabajador asumió la orden' : verdict.detail, ins.insertId]);
+    await event('FINISHED', lost ? 'LEASE_LOST' : verdict.outcome, lost ? 'otro trabajador asumió la orden' : verdict.detail);   // evento nuevo e inmutable; nunca se actualiza el de inicio
     return { externalOrderId: job.externalOrderId, attemptNo: job.attemptNo, outcome: lost ? 'LEASE_LOST' : verdict.outcome, status: lost ? 'LEASE_LOST' : verdict.status };
   }
 

@@ -113,3 +113,33 @@ describe('API-13 clasificación y retroceso de reintentos', () => {
     expect(classify({ thrown: 'texto' }, 3, p).status).toBe('EXHAUSTED');
   });
 });
+
+// ---- API-13 (auditoría de #604): un fallo al restaurar el nivel de aislamiento no oculta el error original ni cambia el resultado
+import { createLinkRetry } from './link-retry';
+describe('API-13 restauración del aislamiento en el trabajador de reintentos', () => {
+  function pool(o: { restoreFails: boolean; executeThrows?: Error }) {
+    const calls = { destroyed: 0, released: 0 };
+    const conn = {
+      async query(sql: string) { if (/REPEATABLE READ/.test(sql) && o.restoreFails) throw new Error('fallo al restaurar el aislamiento'); return [[]]; },
+      async execute() { if (o.executeThrows) throw o.executeThrows; return [[]]; },
+      destroy() { calls.destroyed++; }, release() { calls.released++; },
+    };
+    return { calls, retry: createLinkRetry({ pool: { getConnection: async () => conn } as never, schema: 'sandbox_api02_x', linker: { link: async () => ({ state: 'UNMAPPED' }) } }) };
+  }
+  it('restauración correcta: la conexión vuelve al pool', async () => {
+    const h = pool({ restoreFails: false }); expect(await h.retry.claim(1)).toEqual([]); expect(h.calls).toEqual({ destroyed: 0, released: 1 });
+  });
+  it('fallo al restaurar con trabajo correcto: el resultado se conserva y la conexión se destruye (no vuelve al pool con el nivel alterado)', async () => {
+    const h = pool({ restoreFails: true }); expect(await h.retry.claim(1)).toEqual([]); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
+  });
+  it('fallo al restaurar con trabajo fallido: se propaga el error ORIGINAL, no el de la restauración', async () => {
+    const h = pool({ restoreFails: true, executeThrows: new Error('error original del trabajo') });
+    await expect(h.retry.claim(1)).rejects.toThrow('error original del trabajo'); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
+  });
+  it('el código del registro de intentos solo inserta: no actualiza ni borra el historial', () => {
+    const src = readFileSync('src/lib/integrations/pricesmart/lab-demo/link-retry.ts', 'utf8');
+    expect(src).not.toMatch(/UPDATE\s+\$\{A\}|DELETE\s+FROM\s+\$\{A\}|UPDATE\s+[`'"]?\S*ps_api13_link_attempts|DELETE\s+FROM\s+\S*ps_api13_link_attempts/);
+    expect(src).toMatch(/INSERT INTO \$\{A\}/);
+    const ddl = readFileSync('docs/integraciones/pricesmart/api13/staging-link-retry.sql.in', 'utf8'); expect(ddl).toContain("CHECK (event IN ('STARTED','FINISHED'))"); expect(ddl).not.toMatch(/finished_at/);
+  });
+});

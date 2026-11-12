@@ -5,7 +5,7 @@
 ## Qué cambia
 | Pieza | Dónde |
 |---|---|
-| Reintentos: cola `ps_api13_link_jobs` + registro append-only `ps_api13_link_attempts`; descubrimiento por barrido (no depende de que PriceSmart reenvíe); lease y fencing con la hora de la BD; retroceso exponencial y máximo de intentos | `lab-demo/link-retry.ts`, `api13/staging-link-retry.sql.in` |
+| Reintentos: cola `ps_api13_link_jobs` + registro de eventos inmutables `ps_api13_link_attempts` (cada intento = un evento `STARTED` y un evento `FINISHED`, solo INSERT; un intento interrumpido queda con `STARTED` sin `FINISHED`, sin inventar resultado; un trabajador con lease vencido que termina tarde registra `FINISHED` con `LEASE_LOST`); descubrimiento por barrido (no depende de que PriceSmart reenvíe); lease y fencing con la hora de la BD; retroceso exponencial y máximo de intentos | `lab-demo/link-retry.ts`, `api13/staging-link-retry.sql.in` |
 | Identidad del vínculo: `solicitud_id` se escribe **en la misma transacción** que la solicitud (gancho opcional `dentroDeTransaccion` de `crearSolicitudCliente`, cambio retrocompatible y justificado: elimina la ventana de caída entre ambas escrituras). El token en `observaciones` queda solo como trazabilidad/compatibilidad con reclamos pendientes de API-12 | `lab-demo/tms-link.ts`, `src/lib/tms/solicitudes-cliente.ts` |
 | Operaciones: en la bandeja existente, insignia **PriceSmart**, insignia **Cancelación solicitada** (mientras la solicitud siga abierta) y panel de vinculaciones pendientes/fallidas con **Reconocer** (solo constancia + auditoría) | `solicitudes-clientes-bandeja.tsx`, rutas `.../solicitudes-clientes/pricesmart[/reconocer]`, `lab-demo/ops-view.ts` |
 

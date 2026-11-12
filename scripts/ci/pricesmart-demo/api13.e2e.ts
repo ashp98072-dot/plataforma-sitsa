@@ -29,7 +29,11 @@ const worker = (createRequest?: typeof crearSolicitudCliente, policy: Partial<Re
 const dueAll = () => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING' AND lease_until IS NULL AND external_order_id LIKE 'PS%'");
 const due = (id: string) => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE external_order_id = ? AND status = 'PENDING'", [Buffer.from(id)]);
 const jobsOf = (id: string) => rows("SELECT tenant_id, client_id, status, attempts, last_outcome, last_detail, empresa_id, ack_by, HEX(order_id) AS oid FROM ps_api13_link_jobs WHERE external_order_id = ? ORDER BY tenant_id, client_id", [Buffer.from(id)]);
-const attemptsOf = (id: string, tenant = empresas.a.empresaId, client = 1) => rows("SELECT attempt_no, worker_id, outcome, detail, finished_at FROM ps_api13_link_attempts WHERE tenant_id = ? AND client_id = ? AND order_id = (SELECT order_id FROM ps_api13_link_jobs WHERE tenant_id = ? AND client_id = ? AND external_order_id = ?) ORDER BY attempt_no", [tenant, client, tenant, client, Buffer.from(id)]);
+const ORDER_OF = "(SELECT order_id FROM ps_api13_link_jobs WHERE tenant_id = ? AND client_id = ? AND external_order_id = ?)";
+/** Todos los eventos inmutables del registro de intentos (STARTED/FINISHED), en orden. */
+const eventsOf = (id: string, tenant = empresas.a.empresaId, client = 1) => rows(`SELECT id, attempt_no, event, worker_id, outcome, detail, recorded_at FROM ps_api13_link_attempts WHERE tenant_id = ? AND client_id = ? AND order_id = ${ORDER_OF} ORDER BY attempt_no, event DESC`, [tenant, client, tenant, client, Buffer.from(id)]);
+/** Solo los eventos FINISHED (un resultado por intento terminado). */
+const attemptsOf = async (id: string, tenant = empresas.a.empresaId, client = 1) => (await eventsOf(id, tenant, client)).filter((e) => e.event === "FINISHED");
 const solicitudes = (id: string, empresaId = empresas.a.empresaId) => rows("SELECT id, estado, plan_id, observaciones FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ? ORDER BY id", [empresaId, id]);
 const linkOf = (id: string, key: Key) => rows("SELECT claim_token, solicitud_id, empresa_id FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.environment = l.environment AND o.tenant_id = l.tenant_id AND o.client_id = l.client_id AND o.integration_id = l.integration_id AND o.id = l.order_id WHERE l.tenant_id = ? AND l.client_id = ? AND o.external_order_id = ?", [scopeFull(key).tenantId, scopeFull(key).clientId, Buffer.from(id)]);
 
@@ -54,6 +58,7 @@ describe("API-13 reintentos de vinculación y trazabilidad", () => {
     expect(await solicitudes(id)).toHaveLength(1); expect((await get("a", id)).json.tms).toMatchObject({ linked: true, requestState: "SOLICITADA" });
     expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE", attempts: 1, last_outcome: "LINKED" });
     expect(await attemptsOf(id)).toMatchObject([{ attempt_no: 1, worker_id: "inline", outcome: "LINKED" }]);
+    expect((await eventsOf(id)).map((e) => `${e.attempt_no}:${e.event}`)).toEqual(["1:STARTED", "1:FINISHED"]);   // dos eventos inmutables por intento
   });
 
   it("API13.2 caída ANTES de crear la solicitud: queda registrado, no hay solicitud y el siguiente ciclo la vincula SIN reenvío", async () => {
@@ -184,5 +189,76 @@ describe("API-13 reintentos de vinculación y trazabilidad", () => {
     const id = uid(); expect((await post("a", id)).status).toBe(202);
     expect((await fetch(`${API}/${id}`)).status).toBe(401); const g = await get("a", id); expect(g.json.confirmsDelivery).toBe(false); expect(JSON.stringify(g.json)).not.toMatch(/DELIVERED|ENTREGAD/i);
     expect(INTEGRATION).toBe("pricesmart-lab");
+  });
+
+  // ---- Leases vencidos con un trabajador que SIGUE ejecutándose (auditoría de #604)
+  const deferred = () => { let resolve!: () => void; const promise = new Promise<void>((r) => { resolve = r; }); return { promise, resolve }; };
+  /** Mismo contenido de una fila del registro de eventos, para demostrar que no se modifica nunca. */
+  const snapshot = (r: Row) => JSON.stringify([r.id, r.attempt_no, r.event, r.worker_id, r.outcome, r.detail, String(r.recorded_at)]);
+
+  it("API13.14 lease vencido con el primer trabajador aún ejecutándose DENTRO de la creación: el segundo reclama, espera el bloqueo, y al terminar el primero queda UNA solicitud, UN vínculo, fencing correcto y registro consistente; sin fuga entre empresas", async () => {
+    const idA = uid(); const idB = uid();
+    await unlinked("d", idA); await unlinked("b", idB);   // dos empresas distintas, ambas guardadas y sin vincular
+    const entered = deferred(); const gate = deferred();
+    const slow = (async (sc: Parameters<typeof crearSolicitudCliente>[0], inp: Parameters<typeof crearSolicitudCliente>[1], g: Parameters<typeof crearSolicitudCliente>[2]) => { entered.resolve(); await gate.promise; return crearSolicitudCliente(sc, inp, g); }) as typeof crearSolicitudCliente;
+    await ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 SECOND) WHERE external_order_id = ?", [Buffer.from(idA)]);
+    await ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 5 SECOND) WHERE external_order_id = ?", [Buffer.from(idB)]);
+    // Trabajador 1: reclama SOLO la orden A (la más antigua) y se queda dentro de la creación, sosteniendo el bloqueo de la orden.
+    const w1 = worker(slow, { maxAttempts: 6 }).runOnce("w1-lento", 1);
+    await entered.promise;
+    const enVuelo = await eventsOf(idA, empresas.a.empresaId, 3); expect(enVuelo.map((e) => `${e.attempt_no}:${e.event}`)).toEqual(["1:STARTED", "1:FINISHED", "2:STARTED"]);   // el intento 2 empezó y aún no termina
+    const inicio2 = snapshot(enVuelo.find((e) => e.attempt_no === 2 && e.event === "STARTED")!);
+    await ctx.db.query("UPDATE ps_api13_link_jobs SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE external_order_id = ?", [Buffer.from(idA)]);   // el lease del primero vence (sigue vivo)
+    // Trabajador 2: reclama A (lease vencido) y B; A espera el bloqueo que sostiene el primero; se libera al primero mientras el segundo espera.
+    const w2 = worker(undefined, { maxAttempts: 6 }).runOnce("w2-rapido", 5);
+    await new Promise((r) => setTimeout(r, 1500)); expect((await jobsOf(idA))[0]).toMatchObject({ status: "PENDING", attempts: 3 });   // intento 3 en curso, esperando el bloqueo
+    gate.resolve();
+    const [r1, r2] = await Promise.all([w1, w2]);
+    // Fencing: el primero perdió el lease; su resultado se descarta para el TRABAJO (aunque su alta en el TMS fue válida y atómica).
+    expect(mine(r1, idA)).toMatchObject([{ attemptNo: 2, outcome: "LEASE_LOST", status: "LEASE_LOST" }]);
+    expect(mine(r2, idA)).toMatchObject([{ attemptNo: 3, outcome: "ALREADY_LINKED", status: "DONE" }]); expect(mine(r2, idB)).toMatchObject([{ outcome: "LINKED", status: "DONE" }]);
+    // UNA sola solicitud y UN solo vínculo definitivo por orden.
+    expect(await solicitudes(idA)).toHaveLength(1); const linksA = await linkOf(idA, "d"); expect(linksA).toHaveLength(1); expect(linksA[0].solicitud_id).toBe((await solicitudes(idA))[0].id);
+    expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.solicitud_id IS NOT NULL", [Buffer.from(idA)])).toBe(1);
+    expect((await jobsOf(idA))[0]).toMatchObject({ status: "DONE", attempts: 3, last_outcome: "ALREADY_LINKED" });
+    // Registro consistente: ambos intentos, con sus eventos; el de inicio del intento 2 NO se modificó.
+    const ev = await eventsOf(idA, empresas.a.empresaId, 3);
+    expect(ev.map((e) => `${e.attempt_no}:${e.event}:${e.outcome ?? "-"}:${e.worker_id}`)).toEqual(["1:STARTED:-:inline", "1:FINISHED:UNMAPPED:inline", "2:STARTED:-:w1-lento", "2:FINISHED:LEASE_LOST:w1-lento", "3:STARTED:-:w2-rapido", "3:FINISHED:ALREADY_LINKED:w2-rapido"]);
+    expect(snapshot(ev.find((e) => e.attempt_no === 2 && e.event === "STARTED")!)).toBe(inicio2);
+    // Sin fuga entre empresas: B se vinculó a SU empresa y A a la suya; ninguna solicitud cruzó.
+    expect(await solicitudes(idB, empresas.b.empresaId)).toHaveLength(1); expect(await solicitudes(idB, empresas.a.empresaId)).toHaveLength(0); expect(await solicitudes(idA, empresas.b.empresaId)).toHaveLength(0);
+    const [lb] = await linkOf(idB, "b"); expect(lb.empresa_id).toBe(empresas.b.empresaId); expect((await jobsOf(idB))[0]).toMatchObject({ empresa_id: empresas.b.empresaId, status: "DONE" });
+    // Recuperación tras reinicio: procesos nuevos (instancias nuevas) no encuentran nada que hacer ni duplican.
+    expect(mine(await worker().runOnce("w3-reinicio"), idA)).toEqual([]); expect(mine(await worker().runOnce("w3-reinicio"), idB)).toEqual([]);
+    expect(await solicitudes(idA)).toHaveLength(1); expect(await solicitudes(idB, empresas.b.empresaId)).toHaveLength(1);
+  });
+
+  it("API13.15 un trabajador que se cuelga ANTES de terminar deja un intento INTERRUMPIDO (STARTED sin FINISHED, sin resultado inventado); otro lo recupera tras vencer el lease y el rezagado, si despierta, queda como LEASE_LOST sin tocar el historial", async () => {
+    const id = uid(); await unlinked("d", id); await ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 SECOND) WHERE external_order_id = ?", [Buffer.from(id)]);
+    const entered = deferred(); const gate = deferred();
+    const hung = { link: async (sc: Parameters<ReturnType<typeof createTmsLinker>["link"]>[0], ext: string) => { entered.resolve(); await gate.promise; return createTmsLinker({ pool, schema, repository }).link(sc, ext); } };
+    const w1 = createLinkRetry({ pool, schema, linker: hung, policy: { baseDelayMs: 0, maxAttempts: 6, leaseMs: 60000 } }).runOnce("w1-colgado", 1);
+    await entered.promise;
+    const interrumpido = await eventsOf(id, empresas.a.empresaId, 3);
+    expect(interrumpido.map((e) => `${e.attempt_no}:${e.event}`)).toEqual(["1:STARTED", "1:FINISHED", "2:STARTED"]);   // intento 2: iniciado, sin cierre ni resultado
+    const inicio = snapshot(interrumpido.find((e) => e.attempt_no === 2)!);
+    expect(await worker().claim(1, { scope: scopeFull("d"), externalOrderId: id })).toHaveLength(0);   // lease vigente: nadie lo toma
+    await ctx.db.query("UPDATE ps_api13_link_jobs SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE external_order_id = ?", [Buffer.from(id)]);
+    expect(mine(await worker(undefined, { maxAttempts: 6 }).runOnce("w2-recupera"), id)).toMatchObject([{ attemptNo: 3, outcome: "LINKED", status: "DONE" }]);
+    expect(await solicitudes(id)).toHaveLength(1);
+    const antesDeDespertar = (await eventsOf(id, empresas.a.empresaId, 3)).map((e) => `${e.attempt_no}:${e.event}:${e.outcome ?? "-"}`);
+    expect(antesDeDespertar).toEqual(["1:STARTED:-", "1:FINISHED:UNMAPPED", "2:STARTED:-", "3:STARTED:-", "3:FINISHED:LINKED"]);   // el intento 2 sigue SIN resultado: no se inventó nada
+    gate.resolve(); expect(mine(await w1, id)).toMatchObject([{ attemptNo: 2, outcome: "LEASE_LOST" }]);   // el rezagado despierta: su resultado se descarta (ya está ALREADY_LINKED, pero el trabajo es de otro)
+    const ev = await eventsOf(id, empresas.a.empresaId, 3); expect(ev.map((e) => `${e.attempt_no}:${e.event}:${e.outcome ?? "-"}`)).toEqual(["1:STARTED:-", "1:FINISHED:UNMAPPED", "2:STARTED:-", "2:FINISHED:LEASE_LOST", "3:STARTED:-", "3:FINISHED:LINKED"]);
+    expect(snapshot(ev.find((e) => e.attempt_no === 2 && e.event === "STARTED")!)).toBe(inicio);   // el evento de inicio jamás se modificó
+    expect((await jobsOf(id))[0]).toMatchObject({ status: "DONE", attempts: 3, last_outcome: "LINKED" }); expect(await solicitudes(id)).toHaveLength(1);
+  });
+
+  it("API13.16 el registro de intentos es de solo inserción: no admite eventos duplicados ni resultados en un STARTED, y el código no actualiza ni borra el historial", async () => {
+    const id = uid(); expect((await post("a", id)).status).toBe(202);
+    const dup = ctx.db.query("INSERT INTO ps_api13_link_attempts (environment, tenant_id, client_id, integration_id, order_id, attempt_no, event, worker_id, outcome, recorded_at) SELECT environment, tenant_id, client_id, integration_id, order_id, 1, 'FINISHED', 'x', 'LINKED', UTC_TIMESTAMP(6) FROM ps_api13_link_jobs WHERE external_order_id = ? AND tenant_id = ?", [Buffer.from(id), empresas.a.empresaId]);
+    await expect(dup).rejects.toMatchObject({ errno: 1062 });   // ya existe el FINISHED del intento 1
+    const badStart = ctx.db.query("INSERT INTO ps_api13_link_attempts (environment, tenant_id, client_id, integration_id, order_id, attempt_no, event, worker_id, outcome, recorded_at) SELECT environment, tenant_id, client_id, integration_id, order_id, 9, 'STARTED', 'x', 'LINKED', UTC_TIMESTAMP(6) FROM ps_api13_link_jobs WHERE external_order_id = ? AND tenant_id = ?", [Buffer.from(id), empresas.a.empresaId]);
+    await expect(badStart).rejects.toMatchObject({ errno: 4025 });   // CHECK: un STARTED no puede traer resultado
   });
 });
