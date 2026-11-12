@@ -1,6 +1,6 @@
 # TMS — Gestión administrativa de incidencias de entrega: auditoría y política de resolución
 
-**Estado: PROPUESTA para aprobación. No hay código de aplicación, no se ejecutó SQL (ni en una base desechable) y no se modificó ningún dato.**
+**Estado: POLÍTICA APROBADA por el propietario (D-1 a D-6, con las recomendaciones indicadas en §2). El SQL sigue SIN ejecutarse en ningún entorno: aplicarlo en Hostinger requiere una autorización expresa aparte. No hay código de aplicación y no se modificó ningún dato.**
 Entregables de este PR: este documento y `sql/migrate-2026-11-tms-incidencias-resoluciones.sql` (para revisión independiente). El módulo se implementa en PRs separados **después** de aprobar la política (§9).
 
 Vocabulario: **incidencia** = una confirmación del piloto con resultado `PARCIAL`, `RECHAZADA` o `INCIDENCIA` (`tms_parada_confirmaciones`, `revision='PENDIENTE'`). **Resolver una incidencia NO equivale a una entrega aceptada por el cliente ni por PriceSmart**; ninguna decisión de este diseño produce «entregada» ni «recepción oficial».
@@ -26,14 +26,14 @@ Vocabulario: **incidencia** = una confirmación del piloto con resultado `PARCIA
 
 ## 2. Decisiones que requieren al propietario (antes de implementar)
 
-| ID | Decisión | Recomendación |
+| ID | Decisión | Resolución del propietario |
 |---|---|---|
-| **D-1** | ¿Se acepta una **tercera decisión** `CERRAR_SIN_ENTREGA` (cierra la incidencia sin reintento y sin entrega)? Sin ella, una `RECHAZADA` legítima (el cliente no recibió) **queda pendiente para siempre**. | **Sí.** Está incluida en el SQL propuesto; si se rechaza, se elimina de `ck_tmspr_*`. |
-| **D-2** | ¿Se puede autorizar un nuevo intento cuando el viaje ya no está «En ruta»? Hoy el piloto solo confirma con viaje abierto y plan «En ruta». | **No**: `AUTORIZAR_NUEVO_INTENTO` solo si el viaje sigue abierto y en ruta; si no, usar `MANTENER_PENDIENTE` o `CERRAR_SIN_ENTREGA`. (Permitir reintentos con el viaje cerrado exigiría confirmaciones «por Operaciones», fuera de alcance.) |
-| **D-3** | Permiso nuevo: `programacion` → acción `viajes_resolver_incidencias` («Resolver incidencias de entrega», nivel `editar`), sin rol por defecto (`Admin` pasa, como en las demás). La **lectura** de la bandeja con `programacion:ver`/TMS. | Aprobar nombre y quién lo recibe. |
-| **D-4** | ¿Una incidencia **pendiente** debe impedir cerrar/liquidar el viaje? | **Solo advertencia** (mismo patrón `ADVERTENCIAS` de «reporte recibido»), no bloqueo; hoy los cierres no la conocen. |
-| **D-5** | Corrección de una entrega confirmada por error (`ENTREGADA_POR_PILOTO`): **fuera de alcance**; ninguna decisión la revierte. | Mantener fuera; decidir aparte si se necesita. |
-| **D-6** | La **justificación** se guarda completa en la tabla de resoluciones (visible a Operaciones); la auditoría general solo lleva ids y decisión (como las notas del piloto). | Aprobar. |
+| **D-1** | ¿Se acepta una **tercera decisión** `CERRAR_SIN_ENTREGA` (cierra la incidencia sin reintento y sin entrega)? Sin ella, una `RECHAZADA` legítima (el cliente no recibió) **queda pendiente para siempre**. | **Sí.** Está incluida en el SQL propuesto; si se rechaza, se elimina de `ck_tmspr_*`. **APROBADO.** |
+| **D-2** | ¿Se puede autorizar un nuevo intento cuando el viaje ya no está «En ruta»? Hoy el piloto solo confirma con viaje abierto y plan «En ruta». | **No**: `AUTORIZAR_NUEVO_INTENTO` solo si el viaje sigue abierto y en ruta; si no, usar `MANTENER_PENDIENTE` o `CERRAR_SIN_ENTREGA`. (Permitir reintentos con el viaje cerrado exigiría confirmaciones «por Operaciones», fuera de alcance.) **APROBADO.** |
+| **D-3** | Permiso nuevo: `programacion` → acción `viajes_resolver_incidencias` («Resolver incidencias de entrega», nivel `editar`), sin rol por defecto (`Admin` pasa, como en las demás). La **lectura** de la bandeja con `programacion:ver`/TMS. | Aprobar nombre y quién lo recibe. **APROBADO.** |
+| **D-4** | ¿Una incidencia **pendiente** debe impedir cerrar/liquidar el viaje? | **Solo advertencia** (mismo patrón `ADVERTENCIAS` de «reporte recibido»), no bloqueo; hoy los cierres no la conocen. **APROBADO.** |
+| **D-5** | Corrección de una entrega confirmada por error (`ENTREGADA_POR_PILOTO`): **fuera de alcance**; ninguna decisión la revierte. | Mantener fuera; decidir aparte si se necesita. **APROBADO.** |
+| **D-6** | La **justificación** se guarda completa en la tabla de resoluciones (visible a Operaciones); la auditoría general solo lleva ids y decisión (como las notas del piloto). | Aprobar. **APROBADO.** |
 
 ## 3. Máquina de estados (derivada, no almacenada)
 
