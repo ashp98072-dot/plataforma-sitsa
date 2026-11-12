@@ -21,7 +21,9 @@ CREATE TABLE ps_api12_tms_mapping (
     REFERENCES tms_cliente_usuarios(empresa_id, cliente_id, id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
--- Vínculo: una orden ↔ una solicitud (una sola vez). cancellation_requested_at solo deja constancia; no cancela nada.
+-- Vínculo: una orden ↔ una solicitud (una sola vez). Identidad PERSISTIDA y verificable: claim_token (128 bits, UNIQUE) se guarda ANTES de crear la solicitud y se escribe al inicio de
+-- sus observaciones ([PS:<hex>]); solicitud_id queda NULL hasta completar el vínculo. Una solicitud solo pertenece a la orden que demuestra su token (nunca por coincidir en referencia).
+-- cancellation_requested_at solo deja constancia; no cancela nada.
 CREATE TABLE ps_api12_tms_links (
   environment VARBINARY(16) NOT NULL,
   tenant_id BIGINT UNSIGNED NOT NULL,
@@ -29,11 +31,15 @@ CREATE TABLE ps_api12_tms_links (
   integration_id VARBINARY(120) NOT NULL,
   order_id BINARY(16) NOT NULL,
   empresa_id INT NOT NULL,
-  solicitud_id INT NOT NULL,
-  linked_at DATETIME(6) NOT NULL,
+  claim_token BINARY(16) NOT NULL,
+  solicitud_id INT NULL,
+  created_at DATETIME(6) NOT NULL,
+  linked_at DATETIME(6) NULL,
   cancellation_requested_at DATETIME(6) NULL,
   PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id),
+  UNIQUE KEY uq_ps_api12_claim (claim_token),
   UNIQUE KEY uq_ps_api12_solicitud (empresa_id, solicitud_id),
+  CHECK ((solicitud_id IS NULL) = (linked_at IS NULL)),
   FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
     REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (empresa_id, solicitud_id)

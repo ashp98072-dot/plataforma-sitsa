@@ -84,6 +84,15 @@ async function prepare() {
       [empresa, Buffer.from(LAB_INTEGRATION), empresa, cliente, usuario]);
     demo.empresas[key] = { empresaId: empresa, clienteId: cliente, usuarioClienteId: usuario, slug: key === 'a' ? 'kt-monaco' : 'otra-empresa' };
   }
+  // Alcances adicionales de la empresa A que COMPARTEN cliente y usuario de servicio con el alcance `a` (pruebas de colisión entre integraciones): c = client_id 2, d = client_id 3.
+  for (const [key, clientId] of [['c', 2], ['d', 3]]) {
+    const A = demo.empresas.a; const FROM = 1700000000000; const FAR = 4102444800000;
+    await c.query("INSERT INTO ps_api01_scopes (environment, tenant_id, client_id, integration_id) VALUES (_binary'sandbox', ?, ?, ?)", [A.empresaId, clientId, Buffer.from(LAB_INTEGRATION)]);
+    await c.query("INSERT INTO ps_api11_integrations (issuer, subject, credential_reference, environment, tenant_id, client_id, integration_id, revision, status, valid_from_ms, valid_until_ms, credential_valid_from_ms, credential_valid_until_ms, rotated_at_ms, allowed_clubs_json, scopes_json) VALUES (?, ?, ?, _binary'sandbox', ?, ?, ?, 1, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)",
+      [Buffer.from('lab-issuer'), Buffer.from(`lab-subject-${key}`), Buffer.from(`lab-cred-${key}-1`), A.empresaId, clientId, Buffer.from(LAB_INTEGRATION), FROM, FAR, FROM, FAR, FROM, JSON.stringify([LAB_CLUB]), JSON.stringify(['orders:create', 'orders:read', 'orders:cancel'])]);
+    await c.query("INSERT INTO ps_api12_tms_mapping (environment, tenant_id, client_id, integration_id, empresa_id, tms_cliente_id, tms_usuario_cliente_id, pickup_place, dropoff_place) VALUES (_binary'sandbox', ?, ?, ?, ?, ?, ?, 'Centro de distribución ficticio (carga)', 'Punto final ficticio (descarga)')",
+      [A.empresaId, clientId, Buffer.from(LAB_INTEGRATION), A.empresaId, A.clienteId, A.usuarioClienteId]);
+  }
   // Credencial REVOCADA (misma integración de la empresa A) para la prueba de autenticación.
   await c.query("INSERT INTO ps_api11_integrations (issuer, subject, credential_reference, environment, tenant_id, client_id, integration_id, revision, status, valid_from_ms, valid_until_ms, credential_valid_from_ms, credential_valid_until_ms, rotated_at_ms, allowed_clubs_json, scopes_json) VALUES (?, ?, ?, _binary'sandbox', ?, 1, ?, 1, 'ACTIVE', 1700000000000, 4102444800000, 1700000000000, 4102444800000, 1700000000000, ?, ?)",
     [Buffer.from('lab-issuer'), Buffer.from('lab-subject-rev'), Buffer.from('lab-cred-rev-1'), empresa1, Buffer.from(LAB_INTEGRATION), JSON.stringify([LAB_CLUB]), JSON.stringify(['orders:create', 'orders:read', 'orders:cancel'])]);

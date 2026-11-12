@@ -7,7 +7,13 @@ import path from "node:path";
 import mysql from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSessionToken, SESSION_COOKIE } from "@/lib/session";
+import { getPool } from "@/lib/db";
+import { crearSolicitudCliente } from "@/lib/tms/solicitudes-cliente";
 import { programarSolicitud, tomarEnRevisionSolicitud } from "@/lib/tms/solicitudes-cliente-operaciones";
+import { mariaDbOrderRepository } from "../../../src/lib/integrations/pricesmart/mariadb-repository";
+import { labContract } from "../../../src/lib/integrations/pricesmart/lab-demo/contract";
+import { labCipher } from "../../../src/lib/integrations/pricesmart/lab-demo/lab-crypto";
+import { claimMarker, createTmsLinker } from "../../../src/lib/integrations/pricesmart/lab-demo/tms-link";
 import { requestBindingDigest } from "../../../src/lib/integrations/pricesmart/m2m-security";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 
@@ -18,8 +24,9 @@ const BASE = `http://127.0.0.1:${state.app.port}`;
 const API = `${BASE}/api/integrations/pricesmart/v1/orders`;
 const { labKey, empresas, staff } = state.demo;
 const INTEGRATION = "pricesmart-lab"; const CLUB = "QA-CLUB";
-type Key = "a" | "b" | "rev" | "ghost";
-const tenantOf = (k: Key) => (k === "b" ? empresas.b.empresaId : empresas.a.empresaId);
+type Key = "a" | "b" | "c" | "d" | "rev" | "ghost";
+/** Alcance (tenant, cliente) de cada credencial de laboratorio. c y d están en la empresa A y COMPARTEN cliente y usuario de servicio TMS con a. */
+const scopeOf = (k: Key) => ({ tenantId: k === "b" ? empresas.b.empresaId : empresas.a.empresaId, clientId: k === "c" ? 2 : k === "d" ? 3 : 1 });
 type Row = Record<string, any>;   // eslint-disable-line @typescript-eslint/no-explicit-any
 
 let db: mysql.Connection; let cookie = "";
@@ -36,7 +43,7 @@ const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
 type Over = { proofId?: string; tamper?: boolean };
 function evidence(key: Key, op: Operation, externalId: string, body: Uint8Array, over: Over = {}) {
   const now = Date.now();
-  const target = { environment: "sandbox" as const, tenantId: tenantOf(key), clientId: 1, integrationId: INTEGRATION, originClubReference: CLUB, externalOrderId: externalId };
+  const target = { environment: "sandbox" as const, ...scopeOf(key), integrationId: INTEGRATION, originClubReference: CLUB, externalOrderId: externalId };
   const proof = { id: over.proofId ?? `p${randomBytes(8).toString("hex")}`, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: requestBindingDigest(op, target, body) };
   const payload = Buffer.from(JSON.stringify({ k: key, proof })).toString("base64url");
   const sig = over.tamper ? "00".repeat(32) : createHmac("sha256", labKey).update(`api12-lab:${payload}`).digest("hex");
@@ -147,6 +154,63 @@ describe("API-12 circuito completo", () => {
     const old = uid(); const r = await post("a", old, labOrder(old, { deliveryDate: "2020-01-01" })); expect(r.status).toBe(202);
     expect(await solicitudOf(old)).toHaveLength(0);
     const g = await get("a", old); expect(g.json).toMatchObject({ provisionalStatus: "RECEIVED", proposedStatus: "RECEIVED", tms: { linked: false }, confirmsDelivery: false });
-    expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ?", [Buffer.from(old)])).toBe(0);
+    expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.solicitud_id IS NOT NULL", [Buffer.from(old)])).toBe(0);
+    expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.solicitud_id IS NULL AND l.linked_at IS NULL", [Buffer.from(old)])).toBe(1);   // reclamo pendiente, sin solicitud
+  });
+
+  const markerOf = async (orderExternal: string, clientId: number) => {
+    const [l] = await rows("SELECT claim_token, solicitud_id FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.environment = l.environment AND o.tenant_id = l.tenant_id AND o.client_id = l.client_id AND o.integration_id = l.integration_id AND o.id = l.order_id WHERE l.tenant_id = ? AND l.client_id = ? AND o.external_order_id = ?", [empresas.a.empresaId, clientId, Buffer.from(orderExternal)]);
+    return l ? { marker: claimMarker(l.claim_token as Buffer), solicitudId: l.solicitud_id == null ? null : Number(l.solicitud_id) } : null;
+  };
+
+  it("DEMO.11 colisión entre integraciones/alcances que comparten cliente y usuario de servicio: cada orden se vincula a SU solicitud, nunca a la del otro por tener la misma referencia", async () => {
+    const x = uid();
+    expect((await post("a", x)).status).toBe(202); expect((await post("c", x)).status).toBe(202);
+    const sols = await solicitudOf(x); expect(sols).toHaveLength(2);   // misma empresa, mismo cliente, mismo usuario y MISMA referencia: dos solicitudes distintas
+    const la = await markerOf(x, 1); const lc = await markerOf(x, 2);
+    expect(la?.solicitudId).not.toBeNull(); expect(lc?.solicitudId).not.toBeNull(); expect(la?.solicitudId).not.toBe(lc?.solicitudId); expect(la?.marker).not.toBe(lc?.marker);
+    for (const l of [la!, lc!]) expect(String((await rows("SELECT observaciones FROM tms_solicitudes_cliente WHERE empresa_id = ? AND id = ?", [empresas.a.empresaId, l.solicitudId]))[0].observaciones).startsWith(l.marker)).toBe(true);
+    const sa = sols.find((r) => Number(r.id) === la!.solicitudId)!; expect((await tomarEnRevisionSolicitud(empresas.a.empresaId, Number(sa.id), Number(sa.version), "ops.lab")).ok).toBe(true);
+    expect((await get("a", x)).json.tms.requestState).toBe("EN_REVISION"); expect((await get("c", x)).json.tms.requestState).toBe("SOLICITADA");   // el estado de una no se filtra a la otra
+    expect((await post("c", x)).status).toBe(202); expect(await solicitudOf(x)).toHaveLength(2);   // reenvío idempotente: no crea una tercera
+  });
+
+  it("DEMO.12 una solicitud preexistente con la misma referencia (y mismo cliente/usuario) NO se reutiliza: la orden crea y vincula la suya", async () => {
+    const y = uid(); const A = empresas.a;
+    const [usr] = await rows("SELECT id FROM tms_cliente_usuarios WHERE empresa_id = ? AND cliente_id = ? ORDER BY id LIMIT 1", [A.empresaId, A.clienteId]);
+    const pre = await crearSolicitudCliente({ empresaId: A.empresaId, clienteId: A.clienteId, usuarioClienteId: Number(usr.id) },
+      { fechaSolicitada: day(5), referenciaCliente: y, observaciones: "solicitud preexistente ajena a PriceSmart", origen: { lugarNombre: "Origen X" }, entregas: [{ lugarNombre: "Entrega X" }], destino: { lugarNombre: "Destino X" } });
+    expect(pre.ok).toBe(true); const preId = pre.ok ? pre.solicitud.id : 0;
+    expect((await post("a", y)).status).toBe(202);
+    expect(await solicitudOf(y)).toHaveLength(2);
+    const l = await markerOf(y, 1); expect(l?.solicitudId).not.toBe(preId); expect(l?.solicitudId).not.toBeNull();
+    expect((await rows("SELECT observaciones FROM tms_solicitudes_cliente WHERE empresa_id = ? AND id = ?", [A.empresaId, preId]))[0].observaciones).toBe("solicitud preexistente ajena a PriceSmart");   // la ajena quedó intacta
+  });
+
+  it("DEMO.13 recuperación tras una caída entre crear la solicitud e insertar el vínculo: el reintento completa el MISMO vínculo por token, sin duplicar", async () => {
+    const z = uid(); const A = empresas.a.empresaId;
+    // 1) La orden se recibe sin mapeo (no hay vinculación): queda RECEIVED. Se restaura el mapeo después.
+    const [map] = await rows("SELECT * FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
+    await db.query("DELETE FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = 3", [A]);
+    try { expect((await post("d", z)).status).toBe(202); } finally {
+      await db.query("INSERT INTO ps_api12_tms_mapping (environment, tenant_id, client_id, integration_id, empresa_id, tms_cliente_id, tms_usuario_cliente_id, pickup_place, dropoff_place) VALUES (?,?,?,?,?,?,?,?,?)",
+        [map.environment, map.tenant_id, map.client_id, map.integration_id, map.empresa_id, map.tms_cliente_id, map.tms_usuario_cliente_id, map.pickup_place, map.dropoff_place]);
+    }
+    expect(await solicitudOf(z)).toHaveLength(0); expect((await get("d", z)).json.tms.linked).toBe(false);
+    // 2) Primer intento: la solicitud SE CREA y el proceso «cae» antes de completar el vínculo.
+    const schema = String(process.env.DB_NAME); const pool = getPool();
+    const repository = mariaDbOrderRepository(pool, { schema, runtimeUser: String(process.env.DB_USER), cipher: labCipher(labKey), contract: labContract });
+    const scope = { environment: "sandbox" as const, tenantId: A, clientId: 3, integrationId: INTEGRATION };
+    const crash = (async (s: Parameters<typeof crearSolicitudCliente>[0], i: Parameters<typeof crearSolicitudCliente>[1]) => { await crearSolicitudCliente(s, i); throw new Error("caída simulada"); }) as typeof crearSolicitudCliente;
+    await expect(createTmsLinker({ pool, schema, repository, createRequest: crash }).link(scope, z)).rejects.toThrow("caída simulada");
+    const created = await solicitudOf(z); expect(created).toHaveLength(1);
+    const pending = await markerOf(z, 3); expect(pending?.solicitudId).toBeNull(); expect(String(created[0].observaciones).startsWith(pending!.marker)).toBe(true);
+    expect((await get("d", z)).json.tms.linked).toBe(false);   // el reclamo pendiente no se presenta como vínculo
+    // 3) Reintento normal: encuentra la solicitud POR TOKEN y completa el vínculo; no crea otra.
+    const linker = createTmsLinker({ pool, schema, repository });
+    const done = await linker.link(scope, z); expect(done).toMatchObject({ state: "LINKED", solicitudId: Number(created[0].id) });
+    expect(await solicitudOf(z)).toHaveLength(1); expect((await markerOf(z, 3))?.solicitudId).toBe(Number(created[0].id));
+    expect(await linker.link(scope, z)).toMatchObject({ state: "ALREADY_LINKED", solicitudId: Number(created[0].id) });
+    expect((await get("d", z)).json).toMatchObject({ tms: { linked: true, requestState: "SOLICITADA" }, confirmsDelivery: false });
   });
 });

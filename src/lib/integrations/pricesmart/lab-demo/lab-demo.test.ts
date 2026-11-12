@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseBody } from '../contracts';
 import { labContract, labOrderSchema } from './contract';
 import { createLabDemoHandler, labDemoGate, LAB_DEMO_FLAG } from './composition';
 import { autoInstallLabDemo } from './autoinstall';
 import { labCipher, labVerifier } from './lab-crypto';
+import { createTmsLinker } from './tms-link';
 import { handlePriceSmart, installPriceSmartHandler } from '../runtime';
 
 const goodEnv = { NODE_ENV: 'development', NOVALVION_ENV: 'sandbox', PRICESMART_LAB_DEMO: LAB_DEMO_FLAG, DB_HOST: '127.0.0.1', DB_NAME: 'sandbox_api02_abc', DB_USER: 'sandbox_api02_abc', PRICESMART_LAB_KEY: 'k'.repeat(40) };
@@ -52,6 +53,43 @@ describe('API-12 la composición de laboratorio no puede activarse fuera de un l
     for (const f of ['composition.ts', 'autoinstall.ts', 'lab-crypto.ts', 'tms-link.ts']) {
       const text = readFileSync(`src/lib/integrations/pricesmart/lab-demo/${f}`, 'utf8');
       expect(text).not.toMatch(/PRICESMART_LAB_KEY\s*=\s*['"`][^'"`]{8,}/);
+    }
+  });
+});
+
+// ---- RELEASE_LOCK: un fallo al liberar el bloqueo no oculta errores ni sustituye el resultado
+vi.mock('@/lib/tms/solicitudes-cliente', () => ({ crearSolicitudCliente: vi.fn() }));
+vi.mock('@/lib/auditoria', () => ({ registrarAuditoria: vi.fn() }));
+describe('API-12 liberación del bloqueo de vinculación', () => {
+  const scope = { environment: 'sandbox' as const, tenantId: 1, clientId: 1, integrationId: 'pricesmart-lab' };
+  function harness(opts: { release: 'ok' | 'zero' | 'throws'; work: 'unmapped' | 'throws' }) {
+    const calls = { destroyed: 0, released: 0 };
+    const conn = {
+      async query(sql: string) {
+        if (sql.includes('GET_LOCK')) return [[{ ok: 1 }]];
+        if (sql.includes('RELEASE_LOCK')) { if (opts.release === 'throws') throw new Error('fallo al liberar'); return [[{ ok: opts.release === 'ok' ? 1 : 0 }]]; }
+        throw new Error('consulta inesperada');
+      },
+      async execute() { if (opts.work === 'throws') throw new Error('fallo del trabajo'); return [[]]; },
+      destroy() { calls.destroyed++; }, release() { calls.released++; },
+    };
+    const pool = { getConnection: async () => conn } as never;
+    return { calls, linker: createTmsLinker({ pool, schema: 'sandbox_api02_x', repository: { runAtomic: async () => { throw new Error('no se usa'); } } as never }) };
+  }
+  it('liberación correcta: sin advertencia y la conexión vuelve al pool', async () => {
+    const h = harness({ release: 'ok', work: 'unmapped' });
+    expect(await h.linker.link(scope, 'A1')).toEqual({ state: 'UNMAPPED' }); expect(h.calls).toEqual({ destroyed: 0, released: 1 });
+  });
+  it('fallo (excepción o 0) al liberar con trabajo correcto: el resultado se conserva, se informa la advertencia y se destruye la conexión', async () => {
+    for (const release of ['throws', 'zero'] as const) {
+      const h = harness({ release, work: 'unmapped' });
+      expect(await h.linker.link(scope, 'A1')).toEqual({ state: 'UNMAPPED', warning: 'LOCK_RELEASE_FAILED' }); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
+    }
+  });
+  it('fallo al liberar con el trabajo fallido: se propaga el error ORIGINAL del trabajo (no el de liberación)', async () => {
+    for (const release of ['throws', 'zero'] as const) {
+      const h = harness({ release, work: 'throws' });
+      await expect(h.linker.link(scope, 'A1')).rejects.toThrow('fallo del trabajo'); expect(h.calls).toEqual({ destroyed: 1, released: 0 });
     }
   });
 });
