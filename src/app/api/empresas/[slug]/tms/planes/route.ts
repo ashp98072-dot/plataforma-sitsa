@@ -14,6 +14,7 @@ import {
   asegurarCodigoPlanUnico,
   generarCodigoPlan,
 } from "@/lib/tms/codigo-plan";
+import { CodigoPlanAgotadoError, insertarPlanConCodigoUnico } from "@/lib/tms/codigo-plan-colision";
 import {
   guardarParadasPlan,
   listarParadasDePlanes,
@@ -1148,64 +1149,67 @@ export async function POST(req: Request, ctx: Ctx) {
         ventanaProgramacionSegura({ fechaPlan: d.fechaPlan, horaCarga: d.horaCarga ?? null, regresoEstimado: d.regresoEstimado ?? null }), [], conn);
       if (conflicto) throw new CuadrillaError(mensajeConflictoProgramacionIntervalo(conflicto), 409);
     }
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        const [result] = await conn.execute<ResultSetHeader>(
-          `INSERT INTO tms_planes_viaje
-            (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa${vehiculoSolicitado ? ", vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre" : ""})
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${vehiculoSolicitado ? ", ?, ?" : ""})`,
-          [
-            empresaId,
-            codigoFinal,
-            clienteId,
-            lugarCargaId,
-            lugarDescargaId,
-            unidadId,
-            pilotoId,
-            auxiliarId,
-            d.fechaPlan,
-            d.horaCarga ?? null,
-            d.tipoTraslado ?? null,
-            d.regresoEstimado?.replace("T", " ") ?? null,
-            tarifaComercialFinal,
-            snapshotTarifa?.id ?? null,
-            snapshotTarifa?.nombre ?? null,
-            snapshotTarifa?.monto ?? null,
-            snapshotTarifa?.moneda ?? null,
-            d.costoOperativoReferencia ?? null,
-            d.referenciaCliente?.trim() || null,
-            d.rutaId ?? null,
-            d.rutaCodigo?.trim() || null,
-            descargaReporte.valor,
-            d.contactoNombreHistorico?.trim() || null,
-            d.contactoCargoHistorico?.trim() || null,
-            d.contactoTelefonoHistorico?.trim() || null,
-            d.notas ?? null,
-            tipoViaje,
-            snapshotTercerizado.pilotoExternoNombre,
-            snapshotTercerizado.auxiliaresExternos,
-            snapshotTercerizado.unidadExternaPlaca,
-            snapshotTercerizado.unidadExternaDescripcion,
-            snapshotTercerizado.transportistaExterno,
-            snapshotTercerizado.costoTercerizado,
-            tcVehiculoId,
-            tcPlacaHistorica,
-            snapshotTercerizado.tcExternoPlaca,
-            // Solo si se eligió: sin dato no se nombran las columnas (compatibilidad antes de la migración).
-            ...(vehiculoSolicitado ? [vehiculoSolicitado.id, vehiculoSolicitado.nombre] : []),
-          ],
-        );
-        planId = Number(result.insertId);
-        break;
-      } catch {
-        codigoFinal = await asegurarCodigoPlanUnico(
-          empresaId,
-          d.fechaPlan,
-          null,
-        );
-      }
-    }
-    if (!planId) {
+    // URGENTE: SOLO una colisión real del UNIQUE (empresa_id, codigo) reintenta con otro código. Cualquier otro error del
+    // INSERT (columna inexistente, FK, trigger, timeout…) se relanza tal cual y sube al catch transaccional de abajo:
+    // rollback total y error verdadero, en vez de un falso "no se pudo generar un código de plan único".
+    try {
+      const alta = await insertarPlanConCodigoUnico({
+        empresaId,
+        codigoInicial: codigoFinal,
+        siguienteCodigo: () => asegurarCodigoPlanUnico(empresaId, d.fechaPlan, null),
+        intentarInsertar: async (codigoIntento) => {
+          const [result] = await conn.execute<ResultSetHeader>(
+            `INSERT INTO tms_planes_viaje
+              (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa${vehiculoSolicitado ? ", vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre" : ""})
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${vehiculoSolicitado ? ", ?, ?" : ""})`,
+            [
+              empresaId,
+              codigoIntento,
+              clienteId,
+              lugarCargaId,
+              lugarDescargaId,
+              unidadId,
+              pilotoId,
+              auxiliarId,
+              d.fechaPlan,
+              d.horaCarga ?? null,
+              d.tipoTraslado ?? null,
+              d.regresoEstimado?.replace("T", " ") ?? null,
+              tarifaComercialFinal,
+              snapshotTarifa?.id ?? null,
+              snapshotTarifa?.nombre ?? null,
+              snapshotTarifa?.monto ?? null,
+              snapshotTarifa?.moneda ?? null,
+              d.costoOperativoReferencia ?? null,
+              d.referenciaCliente?.trim() || null,
+              d.rutaId ?? null,
+              d.rutaCodigo?.trim() || null,
+              descargaReporte.valor,
+              d.contactoNombreHistorico?.trim() || null,
+              d.contactoCargoHistorico?.trim() || null,
+              d.contactoTelefonoHistorico?.trim() || null,
+              d.notas ?? null,
+              tipoViaje,
+              snapshotTercerizado.pilotoExternoNombre,
+              snapshotTercerizado.auxiliaresExternos,
+              snapshotTercerizado.unidadExternaPlaca,
+              snapshotTercerizado.unidadExternaDescripcion,
+              snapshotTercerizado.transportistaExterno,
+              snapshotTercerizado.costoTercerizado,
+              tcVehiculoId,
+              tcPlacaHistorica,
+              snapshotTercerizado.tcExternoPlaca,
+              // Solo si se eligió: sin dato no se nombran las columnas (compatibilidad antes de la migración).
+              ...(vehiculoSolicitado ? [vehiculoSolicitado.id, vehiculoSolicitado.nombre] : []),
+            ],
+          );
+          return Number(result.insertId);
+        },
+      });
+      planId = alta.planId;
+      codigoFinal = alta.codigo;
+    } catch (e) {
+      if (!(e instanceof CodigoPlanAgotadoError)) throw e;
       await conn.rollback();
       return NextResponse.json(
         { error: "No se pudo generar un código de plan único. Intenta de nuevo." },

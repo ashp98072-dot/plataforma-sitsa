@@ -62,7 +62,7 @@ let sinTablaOrigen = false;
 // PROGRAMACION-COPIA-LOTE-TX-1 — cola de fallos SIMULADOS del INSERT de tms_planes_viaje, consumidos en orden (uno
 // por intento de INSERT): permite reproducir, dentro de la MISMA transacción del lote, una colisión real de
 // código (ER_DUP_ENTRY) que debe reintentar, o cualquier otro error de INSERT que debe propagarse tal cual.
-let insertPlanFallos: ("dup" | "otro")[] = [];
+let insertPlanFallos: ("ok" | "dup" | "otro" | "guarda")[] = [];
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
 
 const flota: Record<number, { id: number; placa: string; activo: number; en_taller: number; tipo_unidad: string; empresa_id: number }> = {
@@ -199,8 +199,13 @@ beforeEach(() => {
     }
     if (s.includes("INSERT INTO tms_planes_viaje")) {
       const tipoFallo = insertPlanFallos.shift();
-      if (tipoFallo === "dup") throw Object.assign(new Error("Duplicate entry for key 'uq_plan'"), { code: "ER_DUP_ENTRY", errno: 1062 });
+      if (tipoFallo === "dup") throw Object.assign(new Error("Duplicate entry '7-PLAN-NUEVO-001' for key 'uq_plan'"), { code: "ER_DUP_ENTRY", errno: 1062 });
       if (tipoFallo === "otro") throw Object.assign(new Error("ER_NO_REFERENCED_ROW: cliente_id no existe"), { code: "ER_NO_REFERENCED_ROW_2", errno: 1452 });
+      // URGENTE — la guarda BEFORE INSERT de fusiones de flota (SQLSTATE 45000) reproducida contra MariaDB (planes-codigo-unico.db.test.ts).
+      if (tipoFallo === "guarda") {
+        const sqlMessage = "Seleccione la unidad principal: ID fusionado";
+        throw Object.assign(new Error(sqlMessage), { code: "ER_SIGNAL_EXCEPTION", errno: 1644, sqlState: "45000", sqlMessage });
+      }
       const id = e.sigPlan++;
       e.planes.push(plan({ id, codigo: p[1] as string, cliente_id: p[2] as number | null, unidad_id: p[5] as number | null, piloto_id: p[6] as number | null, auxiliar_id: p[7] as number | null,
         fecha: p[8] as string, hora: p[9] as string | null, regreso: p[11] as string | null, tarifa_comercial: p[12] as number | null, tarifa_id: p[13] as number | null, tarifa_nombre: p[14] as string | null, ruta_id: p[17] as number | null,
@@ -489,6 +494,45 @@ describe("PROGRAMACION-COPIA-LOTE-TX-1 — bugfix: copia masiva (regresión 'uno
     expect(conn.rollback).toHaveBeenCalledTimes(1);
     // solo 1 intento de código para la fila que falló: el error NO-duplicado no dispara un segundo intento de generación.
     expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(1);
+  });
+  // URGENTE — "tampoco funciona la copia masiva": el error SQL real quedaba oculto tras un mensaje genérico.
+  it("URGENTE-A) guarda/trigger (SQLSTATE 45000) en la fila 2: rollback TOTAL y el error indica la FILA y el CÓDIGO SQL (nunca 'código de plan único')", async () => {
+    insertPlanFallos = ["ok", "guarda"]; // la fila 1 se inserta; el INSERT de la fila 2 lo rechaza el trigger
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await confirmar([borrador(), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    if (!r.ok) {
+      expect(r.error).toContain("Fila 2");
+      expect(r.error).toContain("ER_SIGNAL_EXCEPTION");
+      expect(r.error).not.toContain("código de plan único");
+      expect(r.error).not.toContain("fusionado"); // el texto SQL no se devuelve al cliente
+      expect(r.error).toContain("No se creó ningún viaje.");
+    }
+    expect(creadosDestino()).toHaveLength(0); // la fila 1 ya insertada se revierte
+    expect(e.origen).toEqual([]);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(2); // 1 por fila: el error de la fila 2 NO regenera código
+    // el detalle SQL completo queda en la bitácora del servidor, con la fila
+    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("fila 2"), expect.objectContaining({ code: "ER_SIGNAL_EXCEPTION", errno: 1644, sqlState: "45000", sqlMessage: "Seleccione la unidad principal: ID fusionado" }));
+  });
+  it("URGENTE-B) 5 colisiones REALES consecutivas del código -> agota con el mensaje de código (el único caso legítimo) y rollback total", async () => {
+    insertPlanFallos = ["dup", "dup", "dup", "dup", "dup"];
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    if (!r.ok) expect(r.error).toContain("código de plan único");
+    expect(conn.execute.mock.calls.filter(([s]) => String(s).includes("INSERT INTO tms_planes_viaje"))).toHaveLength(5);
+    expect(creadosDestino()).toHaveLength(0);
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+  });
+  it("URGENTE-C) si el generador (snapshot REPEATABLE READ) devuelve el MISMO código tras la colisión, igual avanza al siguiente número", async () => {
+    vi.mocked(asegurarCodigoPlanUnicoTx).mockImplementation((async () => "PLAN-NUEVO-001") as never); // ciego a la fila ajena confirmada
+    insertPlanFallos = ["dup"];
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: true, codigos: ["PLAN-NUEVO-002"] });
+    expect(creadosDestino()).toHaveLength(1);
   });
   it("11) tms_plan_origen se crea para TODAS las filas del lote", async () => {
     const lote = [borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })];

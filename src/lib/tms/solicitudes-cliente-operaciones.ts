@@ -436,7 +436,7 @@ export async function programarSolicitud(
         // esquema…) se propaga tal cual — el catch exterior de la
         // función hace el rollback real y devuelve el error verdadero,
         // en vez de esconderlo detrás de un falso "código duplicado".
-        if (!esDuplicadoCodigoPlan(err)) throw err;
+        if (!esDuplicadoCodigoPlan(err, { empresaId, codigo: codigoFinal })) throw err;
         codigoFinal = await asegurarCodigoPlanUnico(empresaId, fechaPlan, null);
       }
     }
