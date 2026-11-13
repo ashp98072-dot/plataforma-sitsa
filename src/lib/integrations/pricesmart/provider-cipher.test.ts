@@ -288,3 +288,52 @@ describe('entradas no serializables y excepciones nativas', () => {
     expect(await code(cipher.open(old.ciphertext, 'prod.k1', 'ctx'))).toBe('INTEGRITY:INTEGRITY');
   });
 });
+
+// ---- API-19 (auditoría de #612, SHA 130b3a3b): arreglos con propiedades adicionales, toJSON, símbolos u ocultas
+describe('isPlainJson: arreglos y toJSON', () => {
+  const withProp = (extra: (a: unknown[]) => void) => { const a: unknown[] = [1, 2]; extra(a); return a; };
+  const hostile: [string, unknown][] = [
+    ['arreglo con toJSON propio (el caso de la auditoría)', withProp(a => { (a as unknown as { toJSON: () => unknown[] }).toJSON = () => ['contenido diferente']; })],
+    ['arreglo con toJSON no enumerable', withProp(a => { Object.defineProperty(a, 'toJSON', { value: () => ['x'], enumerable: false }); })],
+    ['arreglo con propiedad adicional enumerable', withProp(a => { (a as unknown as Record<string, unknown>).extra = 1; })],
+    ['arreglo con propiedad adicional no enumerable', withProp(a => { Object.defineProperty(a, 'oculta', { value: 1, enumerable: false }); })],
+    ['arreglo con clave símbolo', withProp(a => { (a as unknown as Record<symbol, unknown>)[Symbol('s')] = 1; })],
+    ['arreglo con símbolo no enumerable', withProp(a => { Object.defineProperty(a, Symbol('s'), { value: 1, enumerable: false }); })],
+    ['arreglo con getter en un índice', (() => { const a: unknown[] = [1]; Object.defineProperty(a, '1', { get: () => 2, enumerable: true }); return a; })()],
+    ['arreglo con setter en un índice', (() => { const a: unknown[] = [1]; Object.defineProperty(a, '1', { set: () => undefined, enumerable: true }); return a; })()],
+    ['arreglo con índice no enumerable', (() => { const a: unknown[] = [1]; Object.defineProperty(a, '1', { value: 2, enumerable: false, writable: true, configurable: true }); return a; })()],
+    ['arreglo disperso (hueco)', [1, , 3]],
+    ['arreglo con length ampliado (huecos finales)', (() => { const a: unknown[] = [1]; a.length = 3; return a; })()],
+    ['arreglo con prototipo alterado', (() => { const a: unknown[] = [1, 2]; Object.setPrototypeOf(a, { toJSON: () => ['x'] }); return a; })()],
+    ['subclase de Array', (() => { class A extends Array<number> {} return A.from([1, 2]); })()],
+    ['arreglo anidado con toJSON', { lista: withProp(a => { (a as unknown as { toJSON: () => unknown[] }).toJSON = () => []; }) }],
+    ['arreglo tipado', new Uint8Array([1, 2])],
+    ['objeto con toJSON propio', { a: 1, toJSON: () => ({ b: 2 }) }],
+    ['objeto con toJSON no enumerable', Object.defineProperty({ a: 1 }, 'toJSON', { value: () => ({ b: 2 }), enumerable: false })],
+    ['objeto con toJSON heredado', Object.assign(Object.create({ toJSON: () => ({ b: 2 }) }), { a: 1 })],
+    ['objeto con propiedad símbolo no enumerable', Object.defineProperty({ a: 1 }, Symbol('s'), { value: 1, enumerable: false })],
+  ];
+  it('cada arreglo/objeto hostil se rechaza', () => { for (const [name, v] of hostile) expect(isPlainJson(v), name).toBe(false); });
+  it('el ejemplo exacto del hallazgo: el arreglo con toJSON ya no pasa y JSON.stringify daría OTRO contenido', () => {
+    const datos: number[] = [1, 2]; (datos as unknown as { toJSON: () => string[] }).toJSON = () => ['contenido diferente'];
+    expect(JSON.stringify(datos)).toBe('["contenido diferente"]'); expect(isPlainJson(datos)).toBe(false);
+  });
+  it('seal rechaza esos arreglos con INVALID, sin llamar al proveedor ni lanzar excepciones nativas', async () => {
+    let calls = 0; const base = customProvider('LAB'); const p = customProvider('LAB', { wrapKey: async (i) => { calls++; return base.wrapKey(i); }, currentKeyReference: async () => { calls++; return 'lab.k1'; } }, base.keys);
+    const cipher = createProviderCipher({ provider: p, target: 'LAB' });
+    for (const [name, v] of hostile) { const r = await code(cipher.seal(v as never, 'ctx')); expect(r, name).toBe('INVALID:INVALID'); }
+    expect(calls).toBe(0);
+  });
+  it('los arreglos JSON ordinarios (vacíos, anidados, con objetos, null, cadenas y números) siguen aceptándose y se recuperan idénticos', async () => {
+    const ok: unknown[] = [[], [1, 2, 3], ['a', null, true, 1.5, -0.5], [[1, [2, [3]]]], [{ a: [1, { b: [] }] }, 'x'], { lista: [1, 2], vacia: [] }, Array.from({ length: 1000 }, (_, i) => i), [[], [[]]]];
+    for (const v of ok) expect(isPlainJson(v), JSON.stringify(v).slice(0, 30)).toBe(true);
+    const { cipher } = lab(); for (const v of ok) { const s = await cipher.seal(v as never, 'ctx'); expect(await cipher.open(s.ciphertext, s.keyReference, 'ctx')).toEqual(v); }
+  });
+  it('se conservan la detección de ciclos, la profundidad y el tamaño máximo para arreglos', () => {
+    const cyc: unknown[] = [1]; cyc.push(cyc); expect(isPlainJson(cyc)).toBe(false);
+    let deep: unknown = 1; for (let i = 0; i < 40; i++) deep = [deep]; expect(isPlainJson(deep)).toBe(false);
+    let ok: unknown = 1; for (let i = 0; i < 30; i++) ok = [ok]; expect(isPlainJson(ok)).toBe(true);
+    expect(isPlainJson(Array.from({ length: 200_000 }, (_, i) => i))).toBe(false);
+    const shared = [1]; expect(isPlainJson([shared, shared])).toBe(true);   // compartir no es ciclo
+  });
+});

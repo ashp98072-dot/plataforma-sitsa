@@ -55,10 +55,23 @@ export function isPlainJson(value: unknown): boolean {
     if (path.has(v)) return false;   // ciclo
     const proto = Object.getPrototypeOf(v);
     const isArray = Array.isArray(v);
-    if (!isArray && proto !== Object.prototype && proto !== null) return false;   // Map, Set, Date, instancias de clases, etc.
+    if (isArray ? proto !== Array.prototype : (proto !== Object.prototype && proto !== null)) return false;   // subclases de Array, Map, Set, Date, instancias de clases, etc.
+    if ('toJSON' in v) return false;   // ni propio ni heredado: un toJSON cambiaría lo que se serializa
     path.add(v);
     try {
-      if (isArray) { for (let i = 0; i < (v as unknown[]).length; i++) { if (!Object.prototype.hasOwnProperty.call(v, i) || !walk((v as unknown[])[i], depth + 1)) return false; } return true; }
+      if (isArray) {
+        const arr = v as unknown[]; const n = arr.length;
+        // Propiedades propias EXACTAMENTE: los índices 0..n-1 y `length`; nada más (ni extras, ni ocultas, ni símbolos).
+        const names = Object.getOwnPropertyNames(arr);
+        if (names.length !== n + 1 || Object.getOwnPropertySymbols(arr).length !== 0) return false;
+        const expected = new Set<string>(['length']); for (let i = 0; i < n; i++) expected.add(String(i));
+        if (!names.every(k => expected.has(k))) return false;
+        for (let i = 0; i < n; i++) {
+          const d = Object.getOwnPropertyDescriptor(arr, String(i));
+          if (!d || !('value' in d) || !d.enumerable || !walk(d.value, depth + 1)) return false;   // dispersos, getters/setters y no enumerables no
+        }
+        return true;
+      }
       for (const k of Object.getOwnPropertyNames(v)) {
         const d = Object.getOwnPropertyDescriptor(v, k);
         if (!d || !('value' in d) || !d.enumerable || !walk(d.value, depth + 1)) return false;   // getters/setters y propiedades ocultas no
