@@ -1,0 +1,24 @@
+# PriceSmart API-21 — hacia una composición productiva: lo que se puede cerrar sin decisiones pendientes
+
+**Estado: IMPLEMENTADO, VERIFICADO TÉCNICAMENTE y PROBADO contra MariaDB 11.8.9 real desechable (laboratorio API-11: PASS 21 / FAIL 0 / SKIP 0), con `npm ci` + `npm run build` correctos.** NO aprobado para producción. Runtime `503 DISABLED`, `ready=false`; ningún handler, endpoint ni flag cambia; nada en la aplicación importa estos módulos (solo el diagnóstico de readiness usa los módulos puros). No se ejecutó SQL productivo ni se tocó Hostinger.
+
+## Decisión pendiente: selección del proveedor KMS/HSM
+**No se ha seleccionado ningún proveedor**, por lo que NO se incluye un adaptador concreto (sería asumir un proveedor y su modelo de identidad). En su lugar se implementó el mecanismo por el que, una vez elegido y revisado, un proveedor se incorpora **sin tocar el resto**: `kms-provider-selection.ts` — registro cerrado `REVIEWED_KMS_ADAPTERS` (**hoy vacío**, congelado) donde cada adaptador declara los destinos para los que está aprobado (uno de laboratorio nunca sirve para PRODUCTION). Mientras esté vacío, toda composición falla cerrada con `KMS_PROVIDER_NOT_SELECTED` (también en el diagnóstico de readiness). La identidad de servicio llega como **referencia no secreta** (`PRICESMART_KMS_SERVICE_IDENTITY`); la autenticación real es del adaptador. Para cerrar la decisión se necesita: proveedor, modelo de identidad de servicio (p. ej. identidad de carga de trabajo), política de rotación/retiro de alias y revisión de seguridad del adaptador.
+
+## Qué se añadió
+| Módulo | Aporta |
+|---|---|
+| `kms-config.ts` | Contrato `KmsClient` y `parseKmsConfig` extraídos a un módulo puro (re-exportados desde `kms-adapter`); añade `providerId` y `serviceIdentityRef` (referencias, nunca credenciales). |
+| `kms-provider-selection.ts` | Registro de adaptadores revisados y selección con fallo cerrado (`NOT_SELECTED` / `UNKNOWN` / `NOT_APPROVED_FOR_TARGET` / `SERVICE_IDENTITY_MISSING` / `ADAPTER_FAILED`). |
+| `composition-config.ts` | Configuración de composición **por destino**: identidad de BD (host, puerto, esquema y 3 cuentas `usuario@host`) + KMS; rechaza credenciales, variables desconocidas y restos del otro destino (variables `PRICESMART_LAB_*`, `NOVALVION_ENV=sandbox` en PRODUCCIÓN; `NODE_ENV=production` en LAB; alias/cuentas/hosts de otro destino). |
+| `grants-audit.ts` (+ roles) | Además de la política de ejecución (API-20, límite obligatorio): `REGISTRY_WRITER_POLICY` (solo el registro: `SELECT`, `INSERT`, `UPDATE(status)`) y `MIGRATION_SCHEMA_PRIVILEGES` (solo DDL aditivo a nivel de esquema: `CREATE, ALTER, INDEX, REFERENCES`; **ningún** privilegio de datos, sin `DROP`/`TRUNCATE`); `auditRoleGrants(rol, …)`. |
+| `account-plans.ts` | `buildAccountGrantPlan(rol, …)`: sentencias `GRANT` **solo como texto para revisión** (no se ejecutan, sin contraseñas, sin `IDENTIFIED BY`, sin `WITH GRANT OPTION`, sin `*.*`, sin hosts comodín). Lo que se concede es exactamente lo que se audita. |
+| `database-identity.ts` | `validateLabIdentity` / `validateProductionIdentity` independientes (producción no necesita descriptor de laboratorio); `validateDatabaseSeparation` los reutiliza. |
+| `composition-preflight.ts` | `runCompositionPreflight`: configuración, proveedor KMS seleccionado, preflight de API-20 (KMS, separación, sesión y privilegios de ejecución, confianza, atestación) y sesiones/privilegios de las **otras dos cuentas**, que además deben ser cuentas efectivas **distintas**. Sin valores en el informe; `passed` no autoriza nada. |
+| `readiness-diagnostic.ts` | Nuevos bloqueos que fallan cerrados: `KMS_PROVIDER_NOT_SELECTED` y `COMPOSITION_CONFIG_INVALID`; una configuración válida solo es `INFO`, nunca `OK`. |
+
+## Pruebas
+Unitarias adversariales (configuración mezclada/contaminada, credenciales, adaptador de laboratorio en PRODUCCIÓN, cuentas intercambiadas entre roles, privilegios cruzados, hosts comodín, sesiones repetidas) y **laboratorio real**: `API11.20` crea tres cuentas reales con el plan y comprueba cada rol y los errores reales del motor al cruzar privilegios (1142/1143); `API11.21` ejecuta el preflight de composición con tres sesiones reales (pasa en LAB, falla sin proveedor revisado, con un `DELETE` real en exceso concedido y revocado, con sesión repetida y para PRODUCCIÓN contra recursos de laboratorio).
+
+## Bloqueantes restantes (no inventados)
+Selección del proveedor KMS/HSM (decisión pendiente, ver arriba) y su adaptador revisado · D02 (evidencia), D06 (contrato de orden), D08, D09, D12 · proveedor de la clave de firma de la autoridad · creación real de las cuentas y del esquema de producción por infraestructura (con el plan revisado) · relajar los guardas `sandbox_api02_*` de los puertos de API-11 (decisión explícita) · el entorno `production` no está modelado en el contrato de seguridad.

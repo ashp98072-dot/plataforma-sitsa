@@ -44,8 +44,8 @@ const specOf = (spec: string): Parsed | null => { const m = SPEC_RE.exec(spec); 
 const policyEntry = (spec: string): Parsed => specOf(spec) as Parsed;   // solo se usa con especificaciones ya validadas (base o política propia verificada)
 
 /** Valida una política propia y la devuelve como copia congelada. Falla si no es una restricción estricta de la base. */
-function resolvePolicy(custom: unknown): { ok: true; policy: PrivilegePolicy } | { ok: false; code: 'POLICY_INVALID' | 'POLICY_EXCEEDS_BASE' } {
-  if (custom === undefined) return { ok: true, policy: RUNTIME_PRIVILEGE_POLICY };
+function resolvePolicy(custom: unknown, base: PrivilegePolicy): { ok: true; policy: PrivilegePolicy } | { ok: false; code: 'POLICY_INVALID' | 'POLICY_EXCEEDS_BASE' } {
+  if (custom === undefined) return { ok: true, policy: base };
   try {
     if (typeof custom !== 'object' || custom === null || Array.isArray(custom)) return { ok: false, code: 'POLICY_INVALID' };
     const tables = Object.keys(custom); if (tables.length === 0 || tables.length > 64) return { ok: false, code: 'POLICY_INVALID' };
@@ -53,11 +53,11 @@ function resolvePolicy(custom: unknown): { ok: true; policy: PrivilegePolicy } |
     for (const table of tables) {
       const raw = (custom as Record<string, unknown>)[table];
       if (!Array.isArray(raw) || raw.length === 0 || raw.length > 16 || raw.some(s => typeof s !== 'string' || specOf(s) === null)) return { ok: false, code: 'POLICY_INVALID' };
-      if (!Object.prototype.hasOwnProperty.call(RUNTIME_PRIVILEGE_POLICY, table)) return { ok: false, code: 'POLICY_EXCEEDS_BASE' };   // tabla fuera de la base
-      const base = RUNTIME_PRIVILEGE_POLICY[table].map(policyEntry);
+      if (!Object.prototype.hasOwnProperty.call(base, table)) return { ok: false, code: 'POLICY_EXCEEDS_BASE' };   // tabla fuera de la base
+      const baseSpecs = base[table].map(policyEntry);
       for (const s of raw as string[]) {
         const e = policyEntry(s);
-        const within = base.some(b => b.priv === e.priv && (b.columns === undefined || (e.columns !== undefined && e.columns.every(c => b.columns?.includes(c)))));
+        const within = baseSpecs.some(b => b.priv === e.priv && (b.columns === undefined || (e.columns !== undefined && e.columns.every(c => b.columns?.includes(c)))));
         if (!within) return { ok: false, code: 'POLICY_EXCEEDS_BASE' };   // privilegio, tabla completa o columnas por encima del techo
       }
       copy[table] = [...(raw as string[])];
@@ -66,11 +66,30 @@ function resolvePolicy(custom: unknown): { ok: true; policy: PrivilegePolicy } |
   } catch { return { ok: false, code: 'POLICY_INVALID' }; }   // getters hostiles, proxies, etc.
 }
 
+export type AccountRole = 'runtime' | 'registryWriter' | 'migration';
+/** Cuenta de ESCRITURA DEL REGISTRO administrativo: solo el registro de identidad de recursos (alta y retiro), nada más. */
+export const REGISTRY_WRITER_POLICY: PrivilegePolicy = deepFreeze({ ps_api18_resource_registry: ['SELECT', 'INSERT', 'UPDATE(status)'] });
+/** Cuenta de MIGRACIÓN: solo DDL aditivo a nivel de esquema; NINGÚN privilegio de datos (SELECT/INSERT/UPDATE/DELETE), y sin DROP/TRUNCATE (operaciones destructivas requieren autorización explícita aparte). */
+export const MIGRATION_SCHEMA_PRIVILEGES: readonly string[] = Object.freeze(['CREATE', 'ALTER', 'INDEX', 'REFERENCES']);
+
+/** Auditoría de la cuenta de EJECUCIÓN (techo y requerido: `RUNTIME_PRIVILEGE_POLICY`; una política propia solo puede restringir). */
 export function auditGrants(lines: readonly string[], options: { schema: string; policy?: PrivilegePolicy }): GrantsAudit {
-  const resolved = resolvePolicy(options?.policy);
+  return auditCore(lines, { schema: options?.schema, base: RUNTIME_PRIVILEGE_POLICY, schemaWide: [], custom: options?.policy });
+}
+/** Auditoría de una cuenta por ROL, cada uno con su propio techo/requerido; sin políticas personalizables. */
+export function auditRoleGrants(role: AccountRole, lines: readonly string[], options: { schema: string }): GrantsAudit {
+  if (role === 'runtime') return auditGrants(lines, options);
+  if (role === 'registryWriter') return auditCore(lines, { schema: options?.schema, base: REGISTRY_WRITER_POLICY, schemaWide: [] });
+  if (role === 'migration') return auditCore(lines, { schema: options?.schema, base: deepFreeze({}), schemaWide: MIGRATION_SCHEMA_PRIVILEGES });
+  return { ok: false, complete: false, findings: [{ code: 'POLICY_INVALID' }], missing: [] };
+}
+
+function auditCore(lines: readonly string[], options: { schema: string; base: PrivilegePolicy; schemaWide: readonly string[]; custom?: unknown }): GrantsAudit {
+  const resolved = resolvePolicy(options.custom, options.base);
   if (!resolved.ok) return { ok: false, complete: false, findings: [{ code: resolved.code }], missing: [] };   // una política inadmisible nunca da un resultado favorable
   const allowedPolicy = resolved.policy; const findings: GrantsFinding[] = [];
   const granted = new Map<string, Parsed[]>();   // tabla → privilegios concedidos (acumulados de todas las líneas)
+  const schemaWideGranted = new Set<string>();
   if (!Array.isArray(lines) || lines.length === 0) return { ok: false, complete: false, findings: [{ code: 'NO_GRANTS' }], missing: [] };
   for (const raw of lines) {
     const line = typeof raw === 'string' ? raw.trim() : '';
@@ -87,7 +106,10 @@ export function auditGrants(lines: readonly string[], options: { schema: string;
     }
     const schema = (obj[2] ?? obj[3]).replace(/``/g, '`');
     if (schema !== options.schema) { findings.push({ code: 'WRONG_SCHEMA' }); continue; }
-    if (obj[2] !== undefined) { for (const p of privs) if (p.priv !== 'USAGE') findings.push({ code: 'SCHEMA_WIDE', privilege: p.priv }); continue; }
+    if (obj[2] !== undefined) {
+      for (const p of privs) { if (p.priv === 'USAGE') continue; if (options.schemaWide.includes(p.priv) && p.columns === undefined) schemaWideGranted.add(p.priv); else findings.push({ code: 'SCHEMA_WIDE', privilege: p.priv }); }
+      continue;
+    }
     const table = obj[4].replace(/``/g, '`');
     if (!Object.prototype.hasOwnProperty.call(allowedPolicy, table)) { findings.push({ code: 'UNKNOWN_TABLE', table }); continue; }
     granted.set(table, [...(granted.get(table) ?? []), ...privs.filter(p => p.priv !== 'USAGE')]);
@@ -103,10 +125,11 @@ export function auditGrants(lines: readonly string[], options: { schema: string;
   }
   // Completitud: SIEMPRE contra la base obligatoria (una política propia no puede reducir lo requerido).
   const missing: { table: string; privilege: string }[] = [];
-  for (const table of Object.keys(RUNTIME_PRIVILEGE_POLICY)) for (const spec of RUNTIME_PRIVILEGE_POLICY[table]) {
+  for (const table of Object.keys(options.base)) for (const spec of options.base[table]) {
     const a = policyEntry(spec); const have = granted.get(table) ?? [];
     const covered = a.columns === undefined ? have.some(p => p.priv === a.priv && p.columns === undefined) : have.some(p => p.priv === a.priv && (p.columns === undefined || a.columns?.every(c => p.columns?.includes(c))));
     if (!covered) missing.push({ table, privilege: spec });
   }
+  for (const priv of options.schemaWide) if (!schemaWideGranted.has(priv)) missing.push({ table: '*', privilege: priv });
   return { ok: findings.length === 0, complete: missing.length === 0, findings, missing };
 }

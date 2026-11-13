@@ -125,7 +125,7 @@ describe('aislamiento transitivo del diagnóstico', () => {
   it('el diagnóstico no alcanza, ni siquiera transitivamente, la composición del laboratorio, la base de datos, el TMS ni mysql2', () => {
     const { files, external } = closure(path.join(__dirname, 'readiness-diagnostic.ts'));
     expect(files).toContain('lib/integrations/pricesmart/lab-demo/gate.ts');
-    for (const forbidden of ['composition', 'autoinstall', 'link-retry', 'tms-link', 'lab-crypto', 'ops-view', 'mariadb-repository', 'security-mariadb', 'http-transport', 'runtime.ts', ['runtime', 'assembly'].join('-'), 'lib/db', 'lib/tms/', 'sandbox-db'])
+    for (const forbidden of ['lab-demo/composition', 'mariadb-composition', 'autoinstall', 'link-retry', 'tms-link', 'lab-crypto', 'ops-view', 'mariadb-repository', 'security-mariadb', 'http-transport', 'runtime.ts', ['runtime', 'assembly'].join('-'), 'lib/db', 'lib/tms/', 'sandbox-db'])
       expect(files.filter(f => f.includes(forbidden)), forbidden).toEqual([]);
     expect(external.filter(e => /^(mysql2|next|node:)/.test(e) || e.startsWith('node:'))).toEqual([]);
   });
