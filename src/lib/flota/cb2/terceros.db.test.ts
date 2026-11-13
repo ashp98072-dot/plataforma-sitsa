@@ -19,8 +19,10 @@ vi.mock("./storage", () => ({ guardar: async () => `synthetic/${randomUUID()}.xl
 vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: `synthetic/${randomUUID()}.pdf`, original: "sintetico.pdf", size: 10 }), contentTypeFor: () => "application/pdf" }));
 import { preview, confirmarArchivo, type Entrada } from "./service";
 import { cb2Http } from "./http";
+import { consultarFondoCB2,vincularFondoCB2 } from "./fondos";
+import { ErrorCB2 } from "./model";
 import { analizar } from "./model";
-import { libro, row } from "./fixture";
+import { libro, row,libroShell,filaShell } from "./fixture";
 import { validarTercero, revisarTerceros, listarTerceros, tercerosHabilitados, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros, reconocerTercero } from "./terceros";
 import { guardarCombustibleStaff } from "../combustible-staff";
 import { asignacionesExactas } from "@/components/flota/cb2/preview-model";
@@ -504,4 +506,74 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
  });
 
+ it("Shell HTTP sin empleado ni fondos, repetidos legitimos, reimportacion y errores",async()=>{
+  const employees=await q("SELECT * FROM empleados ORDER BY id"),history=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
+  const propia=String((await q("SELECT placa FROM flota_vehiculos WHERE id=1"))[0].placa);
+  const buffer=await libroShell([filaShell("SHELL-OPC-001","Mensajero sin catalogo",propia),filaShell("SHELL-OPC-002","Mensajero sin catalogo",propia),filaShell("SHELL-SIN-NOMBRE","",propia,"Regular")]);
+  const lineas=(await analizar(buffer,"SHELL","GTQ")).filter(l=>l.clave);
+  const entrada:Entrada={perfil:"SHELL",moneda:"GTQ",seleccion:lineas.map(l=>({candidato:l.clave!,vehiculoId:1,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"}))};
+  async function http(action:"preview"|"confirmar",token?:string,slug="e1",archivo=buffer,selection=entrada.seleccion){
+   const form=new FormData();form.append("file",new File([new Uint8Array(archivo)],"Shell.xlsx",{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));form.append("seleccion",JSON.stringify(selection));form.append("proveedorId","1");form.append("moneda","GTQ");if(token){form.append("token",token);form.append("clave",key());}
+   return cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:form}),slug,action);
+  }
+  try{
+   const p=await http("preview");expect(p.status,await p.clone().text()).toBe(200);const receipt=await p.json();
+   const result=await http("confirmar",receipt.token);expect(result.status,await result.clone().text()).toBe(200);
+   const saved=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm LIKE 'SHELL-%' ORDER BY id");expect(saved).toHaveLength(3);
+   expect(saved[0]).toMatchObject({empleado_id:null,piloto_externo_id:null,piloto_informado:"Mensajero sin catalogo",producto:"vPower",producto_clasificado:"VPOWER_NO_DETERMINADO",factura_id:null,galones:"10.000000",monto:"200.000000",precio:"20.000000"});
+   const p2=await http("preview");const second=await http("confirmar",(await p2.json()).token);expect(second.status,await second.clone().text()).toBe(200);
+   expect(await q("SELECT id FROM flota_cb2_consumos WHERE vale_norm LIKE 'SHELL-%'")).toHaveLength(3);
+   const evidence=await q("SELECT datos_origen FROM flota_cb2_filas WHERE consumo_id=? AND tipo='ORIGEN'",[saved[0].id]);
+   expect(JSON.parse(String(evidence[0].datos_origen)).textos).toMatchObject({piloto:"Mensajero sin catalogo",producto:"vPower",auxiliar:"Sucursal sintetica / observacion"});
+   const sinPermiso=await http("confirmar",receipt.token,"denied");expect(sinPermiso.status).toBe(403);
+   const badBuffer=await libroShell([filaShell("SHELL-AJENO","Mensajero",propia)]);const badLinea=(await analizar(badBuffer,"SHELL","GTQ")).find(l=>l.clave)!;const badSel=[{candidato:badLinea.clave!,vehiculoId:1,empleadoId:702,metodoEmpleado:"MANUAL" as const}];const badP=await http("preview",undefined,"e1",badBuffer,badSel);expect(badP.status).toBe(200);const ajeno=await http("confirmar",(await badP.json()).token,"e1",badBuffer,badSel);expect(ajeno.status).toBe(403);
+   const ambiguo=await libroShell([filaShell("SHELL-CONFLICTO","Mensajero",propia),[...filaShell("SHELL-CONFLICTO","Mensajero",propia)].map((v,i)=>i===4?201:v)]);
+   expect((await analizar(ambiguo,"SHELL","GTQ")).filter(l=>l.clave).every(l=>l.bloqueada)).toBe(true);
+   const oil=await libroShell([filaShell("SHELL-ACEITE","Mensajero",propia,"20W50")]);const oilLines=(await analizar(oil,"SHELL","GTQ")).filter(l=>l.clave);const oilEntry:Entrada={perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:oilLines[0].clave!,vehiculoId:1,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"}]};
+   await expect(cb2({buffer:oil,entrada:oilEntry})).rejects.toMatchObject({status:400});expect(await total("SHELL-ACEITE")).toBe(0);
+   expect(await q("SELECT * FROM empleados ORDER BY id")).toEqual(employees);
+   expect(await q(`SELECT * FROM flota_cb2_consumos WHERE id IN (${history.map(()=>"?").join(",")}) ORDER BY id`,history.map(r=>r.id))).toEqual(history);
+  }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ });
+ it("piloto reportado en unidad externa: migracion aditiva, tenant, guardas y concurrencia",async()=>{
+  vi.stubEnv("CB2_TERCEROS_D2_APROBADA","1");vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
+  try{
+   const u=await registrarUnidad(ctx,{referencia:"shell-reportada",placa:"M777LAB",tipo:"MOTOCICLETA",descripcion:"Sintetica"});
+   const buffer=await libroShell([filaShell("SHELL-EXTERNA","Persona sin relacion laboral","M777LAB","Diesel")]);const l=(await analizar(buffer,"SHELL","GTQ")).find(l=>l.clave)!;
+   const file={buffer,entrada:{perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:l.clave!,vehiculoId:-u.id,pilotoTipo:"REPORTADO",empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"}]} as Entrada};
+   await expect(cb2(file)).rejects.toMatchObject({status:503});
+  await admin.query(`CREATE TABLE tms_solicitudes_fondo(id INT PRIMARY KEY,empresa_id INT NOT NULL,codigo VARCHAR(40),estado VARCHAR(30),fecha_requerimiento DATE,UNIQUE(empresa_id,id)) ENGINE=InnoDB;
+   CREATE TABLE tms_solicitud_fondo_lineas(id INT PRIMARY KEY,empresa_id INT NOT NULL,solicitud_id INT NOT NULL,categoria VARCHAR(40),vehiculo_id INT NULL,cantidad DECIMAL(10,2),monto DECIMAL(12,2),empleado_nombre VARCHAR(200),placa VARCHAR(40)) ENGINE=InnoDB;
+   INSERT INTO tms_solicitudes_fondo VALUES(901,1,'LAB-901','Autorizada','2026-09-30'),(902,2,'LAB-902','Autorizada','2026-09-30'),(903,1,'LAB-903','Pendiente','2026-09-30');
+   INSERT INTO tms_solicitud_fondo_lineas VALUES(901,1,901,'Combustible',1,1,250,'Otra persona','C-001ABC'),(902,2,902,'Combustible',NULL,1,250,'Otro tenant','C-001ABC'),(903,1,903,'Combustible',1,1,250,'Otra persona','C-001ABC');`);
+
+   const [preflight]=await admin.query(readFileSync("sql/preflight-2026-11-cb2-shell-opcional.sql","utf8"));for(const n of [0,1,2,4,5])expect((preflight as unknown as unknown[][])[n]).toEqual([]);
+   const triggersAntes=await q("SELECT TRIGGER_NAME,ACTION_ORDER,ACTION_STATEMENT,DEFINER,SQL_MODE,CHARACTER_SET_CLIENT,COLLATION_CONNECTION,DATABASE_COLLATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME");
+   const history=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");await admin.query(readFileSync("sql/migrate-2026-11-cb2-piloto-reportado.sql","utf8"));expect(await q("SELECT TRIGGER_NAME,ACTION_ORDER,ACTION_STATEMENT,DEFINER,SQL_MODE,CHARACTER_SET_CLIENT,COLLATION_CONNECTION,DATABASE_COLLATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME")).toEqual(triggersAntes);expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(history);
+   const results=await Promise.allSettled([cb2(file),cb2(file)]);expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(2);expect(await total("SHELL-EXTERNA")).toBe(1);
+   const [r]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='SHELL-EXTERNA'");expect(r).toMatchObject({vehiculo_id:null,unidad_externa_id:u.id,empleado_id:null,piloto_externo_id:null,asociacion_externa_id:null,piloto_informado:"Persona sin relacion laboral"});expect(JSON.parse(String(r.identidad_externa))).toMatchObject({politica:"REPORTADO_V1",piloto:{tipo:"REPORTADO",id:null}});
+   await expect(q("UPDATE flota_cb2_consumos SET empleado_id=701 WHERE id=?",[r.id])).rejects.toThrow();
+   await expect(q("UPDATE flota_cb2_consumos SET identidad_externa=JSON_SET(identidad_externa,'$.unidad.id',999999) WHERE id=?",[r.id])).rejects.toThrow();
+   const otroBuffer=await libroShell([filaShell("SHELL-EXTERNA-AJENA","Persona sin relacion laboral","M777LAB","Diesel")]);const otraLinea=(await analizar(otroBuffer,"SHELL","GTQ")).find(l=>l.clave)!;
+   const ajeno={buffer:otroBuffer,entrada:{...file.entrada,seleccion:[{...file.entrada.seleccion[0],candidato:otraLinea.clave!,vehiculoId:-999999}]}};await expect(cb2(ajeno)).rejects.toThrow();
+   vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");await expect(cb2({...ajeno,entrada:{...ajeno.entrada,seleccion:[{...ajeno.entrada.seleccion[0],vehiculoId:-u.id}]}})).rejects.toMatchObject({status:403});
+  }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ });
+ it("fondos posteriores: sin efecto en consumos, diferencias manuales, permisos e idempotencia",async()=>{
+  const [r]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='SHELL-OPC-001'");
+  await expect(consultarFondoCB2(1,1,r.id,"")).rejects.toMatchObject({status:503});
+  await admin.query(readFileSync("sql/migrate-2026-11-cb2-fondos-vinculos.sql","utf8"));
+  const [postcheck]=await admin.query(readFileSync("sql/postcheck-2026-11-cb2-shell-opcional.sql","utf8"));expect((postcheck as unknown as Record<string,unknown>[][])[3][0].vinculos_manuales).toBe(0);expect((postcheck as unknown as unknown[][])[4]).toEqual([]);
+  expect((await consultarFondoCB2(1,1,r.id,"")).estado).toBe("SIN_CONCILIAR");
+  const op={proveedorId:1,consumoId:Number(r.id),lineaId:901,revision:Number(r.revision_asignacion),motivo:"Revisados los comprobantes y las diferencias",confirmado:true as const};
+  await expect(vincularFondoCB2(ctx,{...op,lineaId:902})).rejects.toThrow();await expect(vincularFondoCB2(ctx,{...op,lineaId:903})).rejects.toThrow();
+  await expect(vincularFondoCB2({...ctx,autorizar:async()=>{throw new ErrorCB2("Sin permiso",403);}},op)).rejects.toMatchObject({status:403});
+  const all=await Promise.all([vincularFondoCB2(ctx,op),vincularFondoCB2(ctx,op)]);expect(all.filter(v=>!v.repetida)).toHaveLength(1);expect(all[0].snapshot.contraste).toEqual({diferencias:["MONTO","FECHA","PERSONA"],diferenciaMonto:"-50"});
+  expect(await q("SELECT consumo_id FROM flota_cb2_fondos_vinculos")).toHaveLength(1);expect((await q("SELECT * FROM flota_cb2_consumos WHERE id=?",[r.id]))[0]).toEqual(r);
+  await expect(vincularFondoCB2(ctx,{...op,motivo:"Intento de sobrescribir otra revision"})).rejects.toThrow("sobrescribe");
+  expect((await consultarFondoCB2(1,1,r.id,"")).estado).toBe("VINCULADO_MANUAL");await expect(consultarFondoCB2(2,1,r.id,"")).rejects.toMatchObject({status:404});
+  const post=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify(op)}),"e1","vincular-fondo");expect(post.status,await post.clone().text()).toBe(200);
+  const noConfirmado=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify({...op,confirmado:false})}),"e1","vincular-fondo");expect(noConfirmado.status).toBe(400);
+ });
 });

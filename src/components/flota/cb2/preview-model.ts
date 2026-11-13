@@ -1,4 +1,4 @@
-import { politicaIndependiente, pilotoIndependiente, unidadIndependiente } from "./piloto-independiente";
+import { politicaIndependiente, pilotoIndependiente, unidadIndependiente, pilotoReportadoPermitido } from "./piloto-independiente";
 import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
 import { tipoTerceroCompatible } from "@/lib/flota/cb2/identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
@@ -55,12 +55,12 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
             const p = originales[0] && pilotoIndependiente(originales[0],cat,decisiones[key]);
             const valida = originales.length && originales.every(f=> {
                 const piloto = pilotoIndependiente(f,cat,decisiones[key]);
-                if (!piloto || piloto.id!==p?.id || piloto.tipo!==p.tipo || !elegible(f) || !(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))) return false;
+                if ((piloto ? piloto.id!==p?.id || piloto.tipo!==p?.tipo : !pilotoReportadoPermitido(decisiones[key]??{},Number(value),cat)) || !elegible(f) || !(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))) return false;
                 if (Number(value)>0) return placaCompatible(f.placaNormalizada||f.placa,Number(value),cat.vehiculos) || motivo.length>=10;
                 const unidad=cat.unidadesExternas?.find(u=>u.id===-Number(value));
-                return !!unidad && tipoTerceroCompatible(f.placaNormalizada||f.placa,unidad) && unidadTerceraCompatible(f.placaNormalizada||f.placa,unidad.id,cat.unidadesExternas??[],motivo);
+                return !!cat.tercerosHabilitados && !!unidad && tipoTerceroCompatible(f.placaNormalizada||f.placa,unidad) && unidadTerceraCompatible(f.placaNormalizada||f.placa,unidad.id,cat.unidadesExternas??[],motivo);
             });
-            if (!omitidos[key] && p && unidades.has(value) && valida) result[key]=value;
+            if (!omitidos[key] && unidades.has(value) && valida) result[key]=value;
             continue;
         }
         if (Number(value) < 0) {

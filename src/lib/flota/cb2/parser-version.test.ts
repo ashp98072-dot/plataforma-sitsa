@@ -15,7 +15,7 @@ beforeEach(() => {
     m.tx.mockImplementationOnce(async (_ctx, fn) => fn({})).mockRejectedValueOnce(new Error("fin de verificación de versión"));
 });
 describe("reanudación despacha la versión persistida del parser", () => {
-    it.each([1, 2])("evidencia parser %s se reanaliza con esa misma versión", async version => {
+    it.each([1, 2, 3])("evidencia parser %s se reanaliza con esa misma versión", async version => {
         m.version = version;
         await expect(reanudarArchivo(ctx, { importacionId: 5, revision: 1, seleccion: [], clave: "clave-sintetica-001", motivo: "Prueba" })).rejects.toThrow("fin de verificación");
         expect(m.analizar).toHaveBeenCalledExactlyOnceWith(Buffer.from("archivo privado sintético"), "HALEL", "GTQ", version);

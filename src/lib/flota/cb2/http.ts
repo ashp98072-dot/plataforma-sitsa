@@ -1,3 +1,4 @@
+import { consultarFondoCB2, vincularFondoCB2, vincularFondoSchema } from "./fondos";
 import { consultarDocumental, consumosDocumentales } from "./conciliacion-documental";
 import { estadosDocumentales } from "./conciliacion-documental-model";
 import { productos } from "./clasificacion";
@@ -35,9 +36,9 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
-    const lectura = ["conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
+    const lectura = ["fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
@@ -55,6 +56,12 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
         if (lectura) {
             const url = new URL(req.url), after = z.coerce.number().int().min(0).max(2147483647).parse(url.searchParams.get("despues") ?? 0), limit = z.coerce.number().int().min(1).max(500).parse(url.searchParams.get("limite") ?? 100);
             const iid = rawId === undefined ? undefined : id.parse(Number(rawId));
+            if (accion === "fondos") {
+                const proveedor = id.parse(Number(url.searchParams.get("proveedorId")));
+                const consumo = id.parse(Number(url.searchParams.get("consumoId")));
+                const buscar = z.string().trim().max(100).parse(url.searchParams.get("buscar")??"");
+                return NextResponse.json(await consultarFondoCB2(ctx.empresaId,proveedor,consumo,buscar),{headers});
+            }
             if (accion === "conciliacion-documental" || accion === "consumos-documentales") {
                 const proveedorId = url.searchParams.has("proveedorId") ? id.parse(Number(url.searchParams.get("proveedorId"))) : undefined;
                 const maximo = Math.min(limit, 100);
@@ -136,7 +143,9 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                     throw e;
                 throw new ErrorCB2("JSON invalido.", 400);
             }
-            if (accion === "corregir") {
+            if (accion === "vincular-fondo") {
+                const op=vincularFondoSchema.parse(json); ctx.proveedorId=op.proveedorId; resultado=await vincularFondoCB2(ctx,op);
+            } else if (accion === "corregir") {
                 const op = corregirSchema.parse(json); ctx.proveedorId = op.proveedorId; resultado = await corregirAsignacion(ctx, op);
             }
             else if (accion === "reanudar") {

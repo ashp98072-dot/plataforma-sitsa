@@ -4,6 +4,7 @@ import type { CatalogosCB2, FilaCB2 } from "./client";
 import type { DecisionAsignacion } from "./asignacion";
 export const politicaIndependiente = (cat: CatalogosCB2) => !!cat.tercerosDirectos && !!cat.identidadesIndependientes;
 export function pilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: DecisionAsignacion = {}) {
+  if (d.pilotoTipo === "REPORTADO") return null;
   const nombre = f.origen?.piloto ?? "";
   if (d.pilotoTipo === "INTERNO" || (!d.pilotoTipo && d.empleadoId != null)) {
     const p = cat.empleados?.find(p=>p.id===d.empleadoId);
@@ -24,8 +25,13 @@ export function unidadIndependiente(f: FilaCB2, cat: CatalogosCB2) {
   const m = identificarPlaca(f.placaNormalizada||f.placa,cat.vehiculos,v=>v.placa).candidatos;
   return m.length===1 ? m[0] : null;
 }
-export function seleccionPilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: DecisionAsignacion) {
+/** El nombre del proveedor no implica una relacion laboral. Una eleccion de catalogo invalida si bloquea. */
+export function pilotoReportadoPermitido(d: DecisionAsignacion, vehiculoId: number, cat?: CatalogosCB2) {
+  return (vehiculoId > 0 || (vehiculoId < 0 && !!cat?.pilotoReportadoExterno)) && (!d.pilotoTipo || d.pilotoTipo === "REPORTADO") && d.empleadoId == null && d.pilotoExternoId == null;
+}
+export function seleccionPilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: DecisionAsignacion, vehiculoId = 0) {
   const p = pilotoIndependiente(f,cat,d);
+  if (!p && pilotoReportadoPermitido(d,vehiculoId,cat)) return {empleadoId:null,metodoEmpleado:"SIN_ASIGNACION" as const, ...(vehiculoId<0?{pilotoTipo:"REPORTADO" as const}: {})};
   if (!p) throw Error("Selecciona un piloto válido de la empresa o tercerizado.");
   return {pilotoTipo:p.tipo,metodoPiloto:p.manual ? "MANUAL" as const : "AUTOMATICA" as const,
     empleadoId:p.tipo==="INTERNO"?p.id:null, ...(p.tipo==="EXTERNO"?{pilotoExternoId:p.id}:{}),
