@@ -25,6 +25,10 @@ import { PREFLIGHT_STATEMENTS, mariaDbPreflightDatabase } from "../../../src/lib
 import { runProductionPreflight } from "../../../src/lib/integrations/pricesmart/production-preflight";
 import { createKmsKeyProvider, parseKmsConfig } from "../../../src/lib/integrations/pricesmart/kms-adapter";
 import { createLabKmsClient } from "../../../src/lib/integrations/pricesmart/lab-demo/lab-kms-client";
+import { auditRoleGrants, type AccountRole } from "../../../src/lib/integrations/pricesmart/grants-audit";
+import { buildAccountGrantPlan } from "../../../src/lib/integrations/pricesmart/account-plans";
+import { runCompositionPreflight } from "../../../src/lib/integrations/pricesmart/composition-preflight";
+import { type KmsAdapterRegistry } from "../../../src/lib/integrations/pricesmart/kms-provider-selection";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -100,6 +104,28 @@ const orderRows = (id: string, tenant?: number) => n("ps_api01_orders", `externa
 const errno = async (p: Promise<unknown>) => { try { await p; return 0; } catch (e) { return (e as { errno?: number }).errno ?? -1; } };
 /** Evita que la ventana fija de la cuota cambie a mitad de una prueba. */
 async function windowSafe(windowMs: number, marginMs = 20000) { const left = windowMs - (Date.now() % windowMs); if (left < marginMs) await new Promise((r) => setTimeout(r, left + 200)); }
+
+// ---- API-21: tres cuentas REALES de laboratorio (ejecución adicional, escritura del registro y migración) creadas con el plan de privilegios en la MariaDB desechable.
+// Las contraseñas se generan al azar en memoria, nunca se imprimen ni se guardan; el plan que se ejecuta es el mismo texto que se entregaría a revisión (solo GRANT).
+type LabAccount = { role: AccountRole; user: string; password: string };
+let labAccounts: Promise<Record<AccountRole, LabAccount>> | null = null;
+function ensureLabAccounts() {
+  labAccounts ??= (async () => {
+    const tag = randomBytes(3).toString("hex"); const out = {} as Record<AccountRole, LabAccount>;
+    const admin = await mysql.createConnection(adminOptions(manifest));
+    try {
+      for (const [role, suffix] of [["runtime", "run"], ["registryWriter", "reg"], ["migration", "mig"]] as [AccountRole, string][]) {
+        const user = `sandbox_api02_p21${suffix}${tag}`; const password = randomBytes(18).toString("base64url");
+        await admin.query("CREATE USER ?@'127.0.0.1' IDENTIFIED BY ?", [user, password]);
+        for (const grant of buildAccountGrantPlan(role, { schema: manifest.schema, user, host: "127.0.0.1" })) await admin.query(grant);
+        out[role] = { role, user, password };
+      }
+    } finally { await admin.end(); }
+    return out;
+  })();
+  return labAccounts;
+}
+const accountPool = (a: LabAccount) => mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: a.user, password: a.password, database: manifest.schema, connectionLimit: 2 });
 
 describe("API-11 endpoints y seguridad M2M", () => {
   it("API11.1 cerrado por defecto: sin composición instalada, las tres rutas responden 503 DISABLED sin consultar nada", async () => {
@@ -377,5 +403,76 @@ describe("API-11 endpoints y seguridad M2M", () => {
     expect(prodReport.passed).toBe(false); expect(prodReport.checks.find((c) => c.id === "DB_SESSION_IDENTITY")).toMatchObject({ status: "FAIL", code: "SESSION_IDENTITY_MISMATCH" });
     expect(prodReport.checks.find((c) => c.id === "KMS_TARGET")).toMatchObject({ status: "FAIL" }); expect(prodReport.checks.find((c) => c.id === "ATTESTATION")?.status).toBe("FAIL");
     const text = JSON.stringify([labReport, prodReport]); for (const v of [KEY.toString("hex"), AUTH_KEY.toString("hex"), manifest.user, manifest.schema, "lab.k1"]) expect(text).not.toContain(v);
+  });
+
+  it("API11.20 cuentas por rol (API-21): el plan de privilegios se ejecuta sobre cuentas REALES y cada rol cumple SU política y no la de los otros; los privilegios cruzados fallan con errores reales del motor", async () => {
+    const acc = await ensureLabAccounts(); const pools = { runtime: accountPool(acc.runtime), registryWriter: accountPool(acc.registryWriter), migration: accountPool(acc.migration) };
+    try {
+      for (const role of ["runtime", "registryWriter", "migration"] as AccountRole[]) {
+        const db = mariaDbPreflightDatabase(pools[role] as never); const who = await db.identity();
+        expect(who).toEqual({ db: manifest.schema, account: `${acc[role].user}@127.0.0.1` });
+        const lines = await db.grants(); expect(auditRoleGrants(role, lines, { schema: manifest.schema })).toEqual({ ok: true, complete: true, findings: [], missing: [] });
+        for (const other of ["runtime", "registryWriter", "migration"] as AccountRole[]) if (other !== role) { const a = auditRoleGrants(other, lines, { schema: manifest.schema }); expect(a.ok && a.complete, `${role} como ${other}`).toBe(false); }
+      }
+      const q = (role: AccountRole, sql: string) => errno(pools[role].query(sql));
+      const reg = `${T}.ps_api18_resource_registry`; const nonces = `${T}.ps_api18_attestation_nonces`;
+      // ejecución: no escribe el registro, no hace DDL, no borra
+      expect(await q("runtime", `INSERT INTO ${reg} (target, port, resource_id, subject, status) VALUES ('LAB', 'clock', _binary'p21-x', 'LIVE', 'ACTIVE')`)).toBe(1142);
+      expect(await q("runtime", `DELETE FROM ${T}.ps_api11_proof_claims WHERE 1 = 0`)).toBe(1142); expect(await q("runtime", `CREATE TABLE ${T}.p21_runtime_no (id INT)`)).toBe(1142);
+      // registro: alta y retiro (solo la columna status), nada más
+      expect(await q("registryWriter", `INSERT INTO ${reg} (target, port, resource_id, subject, status) VALUES ('LAB', 'clock', _binary'p21-${randomBytes(3).toString("hex")}', 'LIVE', 'ACTIVE')`)).toBe(0);
+      expect(await q("registryWriter", `UPDATE ${reg} SET status = 'RETIRED' WHERE resource_id = _binary'p21-none'`)).toBe(0);
+      expect(await q("registryWriter", `UPDATE ${reg} SET subject = 'LIVE' WHERE 1 = 0`)).toBe(1143); expect(await q("registryWriter", `DELETE FROM ${reg} WHERE 1 = 0`)).toBe(1142);
+      expect(await q("registryWriter", `SELECT 1 FROM ${nonces} LIMIT 1`)).toBe(1142); expect(await q("registryWriter", `INSERT INTO ${nonces} (target, nonce_hash, expires_at_ms) VALUES ('LAB', _binary'0123456789abcdef0123456789abcdef', 1)`)).toBe(1142);
+      // migración: DDL aditivo sí; datos, DROP y TRUNCATE no
+      const tmp = `${T}.p21_tmp_${randomBytes(3).toString("hex")}`;
+      expect(await q("migration", `CREATE TABLE ${tmp} (id INT PRIMARY KEY)`)).toBe(0); expect(await q("migration", `ALTER TABLE ${tmp} ADD COLUMN c INT NULL`)).toBe(0);
+      expect(await q("migration", `INSERT INTO ${tmp} (id) VALUES (1)`)).toBe(1142); expect(await q("migration", `SELECT * FROM ${tmp}`)).toBe(1142); expect(await q("migration", `DROP TABLE ${tmp}`)).toBe(1142); expect(await q("migration", `SELECT 1 FROM ${reg} LIMIT 1`)).toBe(1142);
+    } finally { await Promise.all(Object.values(pools).map((p) => p.end())); }
+  });
+
+  it("API11.21 preflight de composición (API-21) contra MariaDB real con TRES sesiones: pasa en LAB con un adaptador KMS aprobado; falla cerrado sin proveedor revisado, con privilegios en exceso, con cuentas repetidas y para PRODUCCIÓN contra recursos de laboratorio", async () => {
+    const acc = await ensureLabAccounts(); const regPool = accountPool(acc.registryWriter); const migPool = accountPool(acc.migration);
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    const KEY = randomBytes(32); const AUTH_KEY = randomBytes(32);
+    const kmsClient = createLabKmsClient(["lab.k1"]); const adapters: KmsAdapterRegistry = { "lab-memoria": { targets: ["LAB"], create: () => kmsClient } };
+    const env = {
+      PRICESMART_COMPOSITION_TARGET: "LAB", PRICESMART_KMS_TARGET: "LAB", PRICESMART_KMS_CURRENT_ALIAS: "lab.k1", PRICESMART_KMS_ALLOWED_ALIASES: "lab.k1", PRICESMART_KMS_PROVIDER: "lab-memoria", PRICESMART_KMS_SERVICE_IDENTITY: "identidad-lab",
+      PRICESMART_DB_HOST: "127.0.0.1", PRICESMART_DB_PORT: String(process.env.DB_PORT), PRICESMART_DB_SCHEMA: manifest.schema, PRICESMART_DB_RUNTIME_USER: manifest.user, PRICESMART_DB_RUNTIME_HOST: "127.0.0.1",
+      PRICESMART_DB_REGISTRY_WRITER_USER: acc.registryWriter.user, PRICESMART_DB_REGISTRY_WRITER_HOST: "127.0.0.1", PRICESMART_DB_MIGRATION_USER: acc.migration.user, PRICESMART_DB_MIGRATION_HOST: "127.0.0.1",
+    };
+    try {
+      const kmsCfg = parseKmsConfig(env); if (!kmsCfg.ok) throw new Error("config KMS");
+      const kmsCipher = createProviderCipher({ provider: createKmsKeyProvider({ client: kmsClient, config: kmsCfg.config }), target: "LAB" });
+      const built = describeMariaDbComposition(ports, { cipher: { instance: kmsCipher, implementationId: "kms-provider-cipher", version: "api21-1" }, verifier: { instance: guardEvidenceVerifier(verifier), implementationId: "guarded-verifier", version: "api19-1" } });
+      expect(built.missing).toEqual([]);
+      const authority = createRegistryIdentityAuthority({ authorityId: "auth-lab-registry", target: "LAB", registry: att.registry, keys: { getKey: async () => AUTH_KEY } });
+      const ids: Record<string, string> = { counter: "lab-counter-iso", replay: "lab-replay-iso", catalog: "lab-catalog", clock: "lab-clock", cipher: "lab-cipher", verifier: "lab-verifier" };
+      for (const [port, d] of Object.entries(built.composition) as [string, { instance: object }][]) authority.enroll(d.instance, port as never, ids[port]);
+      const trust = { lab: { "auth-lab-registry": AUTH_KEY }, production: { "auth-prod-registry": randomBytes(32) } };
+      const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 300000, identity: { authority, trusted: trust.lab } });
+      const dbs = () => ({ runtime: mariaDbPreflightDatabase(pool), registryWriter: mariaDbPreflightDatabase(regPool as never), migration: mariaDbPreflightDatabase(migPool as never) });
+      const common = { env, labAdapters: adapters, trust, attestation: { composition: built.composition, attestation: issued.attestation, key: KEY, authority, clock: ports.clock } };
+      const nonceRows = await n("ps_api18_attestation_nonces", "1 = 1");
+      const good = await runCompositionPreflight({ ...common, databases: dbs() });
+      expect(good.checks.filter((c) => c.status !== "PASS")).toEqual([]); expect(good).toMatchObject({ passed: true, target: "LAB", ready: false, authorizesInstallation: false });
+      expect((await runCompositionPreflight({ ...common, databases: dbs() })).digest).toBe(good.digest); expect(await n("ps_api18_attestation_nonces", "1 = 1")).toBe(nonceRows);
+      // sin adaptador sintético de laboratorio, solo existe el registro REVISADO oficial (vacío): falla cerrado
+      const closed = await runCompositionPreflight({ ...common, labAdapters: undefined, databases: dbs() }); expect(closed.passed).toBe(false); expect(closed.checks.find((c) => c.id === "KMS_PROVIDER")).toMatchObject({ status: "FAIL", code: "KMS_PROVIDER_NOT_SELECTED" });
+      // privilegio en exceso REAL en la cuenta del registro → falla; al revocarlo vuelve a pasar
+      const adminConn = await mysql.createConnection(adminOptions(manifest));
+      try {
+        await adminConn.query(`GRANT DELETE ON ${T}.ps_api18_resource_registry TO ?@'127.0.0.1'`, [acc.registryWriter.user]);
+        const over = await runCompositionPreflight({ ...common, databases: dbs() }); expect(over.passed).toBe(false); expect(over.checks.find((c) => c.id === "ACCOUNT_REGISTRY_WRITER_GRANTS")).toMatchObject({ status: "FAIL", code: "EXCESS_PRIVILEGE" });
+        await adminConn.query(`REVOKE DELETE ON ${T}.ps_api18_resource_registry FROM ?@'127.0.0.1'`, [acc.registryWriter.user]);
+      } finally { await adminConn.end(); }
+      expect((await runCompositionPreflight({ ...common, databases: dbs() })).passed).toBe(true);
+      // la misma sesión de ejecución usada como cuenta del registro: identidad y separación fallan
+      const dup = await runCompositionPreflight({ ...common, databases: { ...dbs(), registryWriter: mariaDbPreflightDatabase(pool) } });
+      expect(dup.passed).toBe(false); expect(dup.checks.find((c) => c.id === "ACCOUNT_REGISTRY_WRITER_SESSION")?.status).toBe("FAIL"); expect(dup.checks.find((c) => c.id === "ACCOUNTS_DISTINCT")?.status).toBe("FAIL");
+      // PRODUCCIÓN contra recursos de laboratorio: la configuración es inválida (nombres, hosts y alias de laboratorio) y nada pasa
+      const prod = await runCompositionPreflight({ ...common, env: { ...env, PRICESMART_COMPOSITION_TARGET: "PRODUCTION" }, databases: dbs() }); expect(prod.passed).toBe(false); expect(prod.checks.find((c) => c.id === "COMPOSITION_CONFIG")).toMatchObject({ status: "FAIL", code: "COMPOSITION_CONFIG_INVALID" });
+      const text = JSON.stringify([good, closed, dup, prod]); for (const v of [KEY.toString("hex"), AUTH_KEY.toString("hex"), acc.registryWriter.password, acc.migration.password, acc.registryWriter.user, acc.migration.user, manifest.user, manifest.schema]) expect(text).not.toContain(v);
+    } finally { await Promise.all([regPool.end(), migPool.end()]); }
   });
 });

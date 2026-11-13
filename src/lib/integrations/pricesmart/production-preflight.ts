@@ -3,6 +3,7 @@ import { checkInstallationEligibility, type InstallationInput, type Installation
 import type { AttestationTarget, CompositionDescriptor, Attestation, ResourceIdentityAuthority } from './conformance-attestation';
 import { assertDisjointTrust } from './registry-identity-authority';
 import { createKmsKeyProvider, parseKmsConfig, type KmsClient } from './kms-adapter';
+import { REVIEWED_KMS_ADAPTERS, selectKmsClient } from './kms-provider-selection';
 import { accountMatches, parseAccount, validateDatabaseSeparation, type DbIdentity } from './database-identity';
 import { auditGrants, type PrivilegePolicy } from './grants-audit';
 import type { TrustedClock } from './security-contracts';
@@ -21,7 +22,8 @@ export interface PreflightDatabase { identity(): Promise<{ db: string; account: 
 export type PreflightInput = {
   target: AttestationTarget;
   env: Record<string, string | undefined>;
-  kmsClient: KmsClient;
+  /** SOLO laboratorio (cliente sintético). En PRODUCCIÓN se IGNORA por completo: el cliente verificado procede exclusivamente de la selección oficial del registro revisado. */
+  kmsClient?: KmsClient;
   database: { lab: DbIdentity; production: DbIdentity };
   db: PreflightDatabase;
   trust: InstallationTrust;
@@ -35,15 +37,29 @@ async function step(id: string, fn: () => Promise<{ pass: boolean; code?: string
   catch { return { id, status: 'FAIL', code: 'UNAVAILABLE' }; }   // cualquier excepción = fallo cerrado, sin detalles
 }
 
+/** Preflight de una composición productiva. La fuente de confianza de los proveedores KMS es SIEMPRE el registro oficial `REVIEWED_KMS_ADAPTERS`: esta función no tiene ningún parámetro ni exportación hermana que permita sustituirlo (API-21, auditoría de #615).
+ *  Las pruebas simulan un futuro registro oficial no vacío sustituyendo el MÓDULO `kms-provider-selection` en el ejecutor de pruebas (`vi.mock`), no mediante código de producción. */
 export async function runProductionPreflight(input: PreflightInput): Promise<PreflightReport> {
   const checks: PreflightCheck[] = [];
   const target = input?.target === 'LAB' || input?.target === 'PRODUCTION' ? input.target : 'PRODUCTION';
   const kms = parseKmsConfig(input?.env ?? {});
   checks.push(await step('KMS_CONFIG', async () => (kms.ok ? { pass: true } : { pass: false, code: 'KMS_CONFIG_INVALID' })));
   checks.push(await step('KMS_TARGET', async () => (kms.ok && kms.config.target === target ? { pass: true } : { pass: false, code: kms.ok ? 'KMS_TARGET_MISMATCH' : 'KMS_CONFIG_INVALID' })));
+  // API-21 (auditoría de #615): el cliente KMS que se verifica en PRODUCCIÓN se obtiene EXCLUSIVAMENTE de la selección oficial (registro revisado ligado a este ejecutor); `input.kmsClient` se ignora. Hoy el registro oficial está vacío ⇒ falla.
+  // En LAB se usa el cliente sintético inyectado (nunca puede ratificar PRODUCCIÓN).
+  let client: KmsClient | null = null;
+  checks.push(await step('KMS_PROVIDER_REVIEWED', async () => {
+    if (target === 'LAB') { client = input.kmsClient ?? null; return client ? { pass: true } : { pass: false, code: 'KMS_CLIENT_MISSING' }; }
+    if (!kms.ok) return { pass: false, code: 'KMS_CONFIG_INVALID' };
+    if (kms.config.target !== 'PRODUCTION') return { pass: false, code: 'KMS_TARGET_MISMATCH' };   // un proveedor aprobado para otro destino no se selecciona
+    const selection = selectKmsClient(kms.config, REVIEWED_KMS_ADAPTERS);
+    if (!selection.ok) return { pass: false, code: selection.reason };
+    client = selection.client; return { pass: true };
+  }));
   checks.push(await step('KMS_HEALTH', async () => {
     if (!kms.ok) return { pass: false, code: 'KMS_CONFIG_INVALID' };
-    return (await createKmsKeyProvider({ client: input.kmsClient, config: kms.config }).health()) ? { pass: true } : { pass: false, code: 'KMS_UNHEALTHY' };
+    if (!client) return { pass: false, code: 'BLOCKED_BY_PREVIOUS' };
+    return (await createKmsKeyProvider({ client, config: kms.config }).health()) ? { pass: true } : { pass: false, code: 'KMS_UNHEALTHY' };
   }));
   const separation = validateDatabaseSeparation(input?.database ?? {});
   checks.push(await step('DB_SEPARATION', async () => (separation.ok ? { pass: true } : { pass: false, code: separation.issues[0]?.code ?? 'SEPARATION_INVALID' })));

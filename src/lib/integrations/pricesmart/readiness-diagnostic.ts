@@ -2,6 +2,9 @@ import { targetSchema } from './security-contracts';
 import { isPriceSmartHandlerInstalled } from './runtime-state';
 import { labDemoGate } from './lab-demo/gate';
 import { REQUIRED_DECISIONS, parseRuntimeConfig } from './runtime-config';
+import { COMPOSITION_ENV_VARIABLES, parseCompositionConfig } from './composition-config';
+import { KMS_ENV_VARIABLES } from './kms-config';
+import { hasReviewedKmsAdapter } from './kms-provider-selection';
 
 // PRICESMART API-15 — diagnóstico administrativo de readiness. SOLO LECTURA y PURO respecto del sistema: no abre conexiones, no consulta ni escribe datos del TMS ni de ninguna empresa,
 // no instala ni retira handlers, no habilita endpoints y no cambia ninguna bandera. Informa únicamente PRESENCIA (booleanos) y estados; nunca valores de variables, claves, tokens ni
@@ -26,6 +29,7 @@ const VARIABLES = [
   'PRICESMART_RUNTIME_MODE', 'PRICESMART_RUNTIME_ACK', 'PRICESMART_RUNTIME_ENVIRONMENT', 'PRICESMART_ORIGIN_CLUB', 'PRICESMART_DB_SCHEMA', 'PRICESMART_DB_RUNTIME_USER',
   'PRICESMART_RATIFIED_DECISIONS', 'PRICESMART_TIMEOUT_MS', 'PRICESMART_MAX_BODY_BYTES', 'PRICESMART_MAX_EVIDENCE_BYTES', 'PRICESMART_RATE_PER_WINDOW', 'PRICESMART_RATE_WINDOW_MS',
   'PRICESMART_MAX_PROOF_AGE_MS', 'PRICESMART_FUTURE_SKEW_MS', 'PRICESMART_REPLAY_RETENTION_MS',
+  ...COMPOSITION_ENV_VARIABLES, ...KMS_ENV_VARIABLES,
 ] as const;
 const PORTS = ['verifier de evidencia (D02)', 'puerto de evidencia HTTP', 'cifrado de cargas con gestión de claves', 'contrato de orden (D06)', 'repositorio de producción', 'interruptor de emergencia', 'sondas de salud'] as const;
 
@@ -56,6 +60,11 @@ export function buildReadinessDiagnostic(env: Record<string, string | undefined>
     requiredFor: (Object.entries(REQUIRED_DECISIONS) as [string, readonly string[]][]).filter(([, ids]) => ids.includes(id)).map(([m]) => m) }));
   if (parsed.ok) for (const d of REQUIRED_DECISIONS[parsed.config.mode as 'READ_ONLY' | 'ENABLED']) if (!declared.includes(d)) block('DECISION_PENDING', `${d} no está declarada como ratificada por PriceSmart`);
 
+  // API-21 — configuración de composición por destino y selección del proveedor KMS: ambas fallan cerradas y NUNCA se consideran «OK» por sí solas.
+  const compositionDeclared = [...COMPOSITION_ENV_VARIABLES, ...KMS_ENV_VARIABLES].some(v => env[v] !== undefined && env[v] !== '');
+  if (!compositionDeclared) checks.push({ id: 'COMPOSITION_CONFIG', status: 'MISSING', detail: 'sin configuración de composición (destino, base de datos y KMS)' });
+  else { const c = parseCompositionConfig(env); if (!c.ok) block('COMPOSITION_CONFIG_INVALID', 'la configuración de composición es inválida, está incompleta o mezcla destinos'); else checks.push({ id: 'COMPOSITION_CONFIG', status: 'INFO', detail: `configuración de composición válida para el destino ${c.config.target} (no implica readiness)` }); }
+  if (!hasReviewedKmsAdapter()) block('KMS_PROVIDER_NOT_SELECTED', 'no hay ningún adaptador de proveedor KMS/HSM revisado: la selección del proveedor es una decisión pendiente');
   // Los puertos NUNCA se marcan OK por la mera existencia de un handler: un handler (incluido el de laboratorio) no demuestra que sus puertos sean productivos. Hoy no existe ningún
   // mecanismo que aporte evidencia verificable de una composición productiva, así que, con o sin handler, ningún puerto puede declararse OK.
   for (const p of PORTS) checks.push(state.handlerInstalled

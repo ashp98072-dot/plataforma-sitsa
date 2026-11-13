@@ -45,29 +45,39 @@ function basic(id: DbIdentity | undefined, side: 'lab' | 'production', issues: S
   return ok;
 }
 
+/** Reglas propias del LABORATORIO (loopback, nombres sandbox_api02_*, cuentas @127.0.0.1). */
+export function validateLabIdentity(lab: DbIdentity | undefined): SeparationIssue[] {
+  const issues: SeparationIssue[] = [];
+  if (!basic(lab, 'lab', issues)) return issues;
+  if (lab.host !== '127.0.0.1') issues.push({ code: 'LAB_NOT_LOOPBACK', field: 'lab.host' });
+  for (const f of ['schema', ...USER_FIELDS] as const) if (!LAB_NAME.test(lab[f])) issues.push({ code: 'LAB_NAME_PATTERN', field: `lab.${f}` });
+  for (const f of HOST_FIELDS) if (lab[f] !== '127.0.0.1') issues.push({ code: 'LAB_ACCOUNT_HOST', field: `lab.${f}` });   // las cuentas del laboratorio se crean @127.0.0.1
+  return issues;
+}
+/** Reglas propias de PRODUCCIÓN, sin necesitar ningún descriptor de laboratorio: sin nombres de laboratorio, cuentas no privilegiadas, hosts de cuenta exactos y tres cuentas distintas. */
+export function validateProductionIdentity(production: DbIdentity | undefined): SeparationIssue[] {
+  const issues: SeparationIssue[] = [];
+  if (!basic(production, 'production', issues)) return issues;
+  for (const f of ['schema', ...USER_FIELDS] as const) if (LAB_NAME.test(production[f]) || /sandbox/i.test(production[f])) issues.push({ code: 'PRODUCTION_USES_LAB_NAME', field: `production.${f}` });
+  for (const f of USER_FIELDS) if (FORBIDDEN_USERS.has(production[f].toLowerCase())) issues.push({ code: 'PRIVILEGED_ACCOUNT_NAME', field: `production.${f}` });
+  for (const f of HOST_FIELDS) if (hasWildcard(production[f])) issues.push({ code: 'WILDCARD_ACCOUNT_HOST', field: `production.${f}` });   // una cuenta con host comodín puede coincidir con orígenes inesperados
+  const users = USER_FIELDS.map(f => production[f].toLowerCase());
+  if (new Set(users).size !== users.length) issues.push({ code: 'ACCOUNTS_NOT_DISTINCT', field: 'production' });   // ejecución ≠ escritura del registro ≠ migración, aunque difieran solo en el host
+  const full = USER_FIELDS.map((u, i) => `${production[u].toLowerCase()}@${production[HOST_FIELDS[i]].toLowerCase()}`);
+  if (new Set(full).size !== full.length) issues.push({ code: 'ACCOUNTS_NOT_DISTINCT', field: 'production' });
+  return issues;
+}
+
 /** Valida ambos descriptores y su separación. `ok` solo si no hay ningún hallazgo. */
 export function validateDatabaseSeparation(input: { lab?: DbIdentity; production?: DbIdentity }): { ok: boolean; issues: SeparationIssue[] } {
-  const issues: SeparationIssue[] = []; const { lab, production } = input ?? {};
-  const labOk = basic(lab, 'lab', issues); const prodOk = basic(production, 'production', issues);
-  if (labOk) {
-    if (lab.host !== '127.0.0.1') issues.push({ code: 'LAB_NOT_LOOPBACK', field: 'lab.host' });
-    for (const f of ['schema', ...USER_FIELDS] as const) if (!LAB_NAME.test(lab[f])) issues.push({ code: 'LAB_NAME_PATTERN', field: `lab.${f}` });
-    for (const f of HOST_FIELDS) if (lab[f] !== '127.0.0.1') issues.push({ code: 'LAB_ACCOUNT_HOST', field: `lab.${f}` });   // las cuentas del laboratorio se crean @127.0.0.1
-  }
-  if (prodOk) {
-    for (const f of ['schema', ...USER_FIELDS] as const) if (LAB_NAME.test(production[f]) || /sandbox/i.test(production[f])) issues.push({ code: 'PRODUCTION_USES_LAB_NAME', field: `production.${f}` });
-    for (const f of USER_FIELDS) if (FORBIDDEN_USERS.has(production[f].toLowerCase())) issues.push({ code: 'PRIVILEGED_ACCOUNT_NAME', field: `production.${f}` });
-    for (const f of HOST_FIELDS) if (hasWildcard(production[f])) issues.push({ code: 'WILDCARD_ACCOUNT_HOST', field: `production.${f}` });   // una cuenta con host comodín puede coincidir con orígenes inesperados
-    const users = USER_FIELDS.map(f => production[f].toLowerCase());
-    if (new Set(users).size !== users.length) issues.push({ code: 'ACCOUNTS_NOT_DISTINCT', field: 'production' });   // ejecución ≠ escritura del registro ≠ migración, aunque difieran solo en el host
-    const full = USER_FIELDS.map((u, i) => `${production[u].toLowerCase()}@${production[HOST_FIELDS[i]].toLowerCase()}`);
-    if (new Set(full).size !== full.length) issues.push({ code: 'ACCOUNTS_NOT_DISTINCT', field: 'production' });
-  }
+  const { lab, production } = input ?? {};
+  const issues: SeparationIssue[] = [...validateLabIdentity(lab), ...validateProductionIdentity(production)];
+  const labOk = basic(lab, 'lab', []); const prodOk = basic(production, 'production', []);   // los descriptores tienen la forma válida (los hallazgos de forma ya están en `issues`)
   if (labOk && prodOk) {
-    const labUsers = new Set(USER_FIELDS.map(f => lab[f].toLowerCase()));
-    if (USER_FIELDS.some(f => labUsers.has(production[f].toLowerCase()))) issues.push({ code: 'ACCOUNT_SHARED_WITH_LAB', field: 'production' });   // mismo usuario aunque cambie el host: ambiguo, se rechaza
-    if (production.schema.toLowerCase() === lab.schema.toLowerCase()) issues.push({ code: 'SCHEMA_SHARED_WITH_LAB', field: 'production.schema' });
-    if (production.host.toLowerCase() === lab.host.toLowerCase() && production.port === lab.port) issues.push({ code: 'ENDPOINT_SHARED_WITH_LAB', field: 'production' });
+    const l = lab as DbIdentity; const p = production as DbIdentity; const labUsers = new Set(USER_FIELDS.map(f => l[f].toLowerCase()));
+    if (USER_FIELDS.some(f => labUsers.has(p[f].toLowerCase()))) issues.push({ code: 'ACCOUNT_SHARED_WITH_LAB', field: 'production' });   // mismo usuario aunque cambie el host: ambiguo, se rechaza
+    if (p.schema.toLowerCase() === l.schema.toLowerCase()) issues.push({ code: 'SCHEMA_SHARED_WITH_LAB', field: 'production.schema' });
+    if (p.host.toLowerCase() === l.host.toLowerCase() && p.port === l.port) issues.push({ code: 'ENDPOINT_SHARED_WITH_LAB', field: 'production' });
   }
   return { ok: issues.length === 0, issues };
 }

@@ -59,7 +59,7 @@ const reason = (v: { ok: boolean; reason?: string }) => (v.ok ? 'OK' : v.reason)
 const resign = (payload: string, target: 'LAB' | 'PRODUCTION', key: Uint8Array = KEY) => createHmac('sha256', createHmac('sha256', key).update(`pricesmart-api17-attestation-v1:${target}`).digest()).update(payload).digest('hex');
 const sourcePath = (f: string) => path.join(__dirname, f);
 /** Familia API-18 (composición administrativa): único código que puede importar la atestación; tampoco lo invoca la aplicación (lo vigila installation-gate.test.ts). */
-const API18_FAMILY = ['attestation-mariadb', 'installation-gate', 'mariadb-composition', 'registry-identity-authority', 'production-preflight'];
+const API18_FAMILY = ['attestation-mariadb', 'installation-gate', 'mariadb-composition', 'registry-identity-authority', 'production-preflight', 'composition-preflight'];
 
 describe('emisión y verificación', () => {
   it('una composición conforme, completa e identificada produce una atestación válida ligada a código, versión e identidad de recurso', async () => {
