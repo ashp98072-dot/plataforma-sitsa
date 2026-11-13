@@ -17,11 +17,11 @@ type Archivo = { name: string; size: number; arrayBuffer: () => Promise<ArrayBuf
 export async function catalogosCombustible(empresaId: number) {
   const [proveedores, vehiculos, estaciones] = await Promise.all([
     query<RowDataPacket[]>("SELECT id, nombre_comercial AS nombre FROM compras_proveedores WHERE empresa_id = ? AND activo = 1 ORDER BY nombre_comercial", [empresaId]),
-    query<RowDataPacket[]>(`SELECT v.id, v.placa, v.descripcion, v.tipo_unidad FROM flota_vehiculos v WHERE v.activo = 1 AND ${predicadoVehiculoAccesible("v", "?")} ORDER BY v.placa, v.id`, [empresaId, empresaId]),
+    query<RowDataPacket[]>(`SELECT v.id, v.empresa_id, v.placa, v.descripcion, v.tipo_unidad FROM flota_vehiculos v WHERE v.activo = 1 AND ${predicadoVehiculoAccesible("v", "?")} ORDER BY v.placa, v.id`, [empresaId, empresaId]),
     query<RowDataPacket[]>(`SELECT e.id, e.proveedor_id AS proveedorId, e.nombre, p.nombre_comercial AS proveedorNombre, e.direccion FROM flota_combustible_estaciones e JOIN compras_proveedores p ON p.id=e.proveedor_id AND p.empresa_id=e.empresa_id WHERE e.empresa_id=? AND e.activo=1 AND p.activo=1 ORDER BY e.nombre, e.id`, [empresaId]),
   ]);
   const diagnostico = diagnosticarVehiculos(vehiculos.map(v => ({ ...v, id: Number(v.id), placa: String(v.placa), descripcion: v.descripcion as string | undefined })));
-  return { proveedores, vehiculos: await catalogoSinAlias(diagnostico.vehiculos), estaciones,
+  return { proveedores, vehiculos: await catalogoSinAlias(diagnostico.vehiculos, empresaId), estaciones,
     diagnosticoVehiculos: { idsRepetidos: diagnostico.idsRepetidos, posiblesDuplicados: diagnostico.posiblesDuplicados } };
 }
 

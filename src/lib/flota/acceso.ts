@@ -142,7 +142,7 @@ export async function listarVehiculosAccesibles(
  */
 export async function listarVehiculosActivosAccesibles(empresaId: number, limite = 1000): Promise<RowDataPacket[]> {
   const vistos = new Set<number>();
-  return (await catalogoSinAlias<RowDataPacket & { id: number }>((await listarVehiculosAccesibles(empresaId)).map(v => ({ ...v, id: Number(v.id) }))))
+  return (await catalogoSinAlias<RowDataPacket & { id: number }>((await listarVehiculosAccesibles(empresaId)).filter(v => Number(v.activo ?? 1) === 1).map(v => ({ ...v, id: Number(v.id) })), empresaId))
     .filter((r) => Number(r.activo ?? 1) === 1 && !vistos.has(Number(r.id)) && vistos.add(Number(r.id)))
     .slice(0, limite);
 }

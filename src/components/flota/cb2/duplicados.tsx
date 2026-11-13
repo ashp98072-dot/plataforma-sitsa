@@ -1,4 +1,5 @@
 "use client";
+import { IdentidadesFisicas } from "./identidades-fisicas";
 import { useEffect, useState } from "react";
 import type { RevisionDuplicado, VehiculoRevision } from "@/lib/flota/vehiculos-duplicados";
 import { jsonCB2 } from "./client";
@@ -41,5 +42,6 @@ export function DuplicadosVehiculos({ api, activo, recargar }: { api: string; ac
       {!revision.referencias.length && <p>No se detectaron referencias en las columnas de vehículo, FK y snapshots CB2 examinados. Se comprobarán nuevamente bajo bloqueo al guardar.</p>}
       {(revision.puedeDesactivar || revision.puedeFusionar) && <fieldset disabled={busy} className="space-y-3"><label>ID propio activo que se conserva<select className={input} value={conservar} onChange={e => { setConservar(e.target.value); setConfirmado(false); }}><option value="">Selecciona tras revisar ambos registros</option>{grupo?.vehiculos.filter(v => v.id !== revision.vehiculo.id && v.propio && v.activo && v.estado === "Activo").map(v => <option key={v.id} value={v.id}>#{v.id} · {v.placa} · {v.tipo} · {v.descripcion}</option>)}</select></label><label>Motivo de la revisión<textarea className={input} minLength={10} maxLength={1000} value={motivo} onChange={e => { setMotivo(e.target.value); setConfirmado(false); }}/></label><label><input type="checkbox" checked={confirmado} onChange={e => setConfirmado(e.target.checked)}/>Verifiqué que el ID #{revision.vehiculo.id} es redundante. Desactivar no fusiona IDs ni transfiere históricos.</label>{revision.puedeFusionar && <button type="button" className={button} disabled={!conservar || motivo.trim().length < 10 || !confirmado} onClick={() => void desactivar(true)}>Fusionar por alias preservando históricos</button>}<button type="button" className={button} disabled={!revision.puedeDesactivar || !conservar || motivo.trim().length < 10 || !confirmado} onClick={() => void desactivar()}>Desactivar únicamente ID #{revision.vehiculo.id}</button></fieldset>}
     </section>}
+    <IdentidadesFisicas api={api.replace(/\/vehiculos\/duplicados$/, "/identidades-fisicas")} activo={activo} recargar={recargar}/>
   </section>;
 }

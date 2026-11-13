@@ -1,4 +1,5 @@
 "use client";
+import { politicaIndependiente, seleccionPilotoIndependiente } from "./piloto-independiente";
 import { pilotoDirecto } from "./identidad-directa";
 
 import { useRevisionCB2 } from "./use-revision";
@@ -29,7 +30,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
     const sel = asignacion.asignaciones;
     const pendientes = new Set(filas.filter(f => f.estadoCandidato === "PENDIENTE" && f.candidato).map(f => f.candidato)).size;
     const porClave = new Map(asignacion.resumen.revision.map(g => [g.clave,g.fila]));
-    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; return { ...s, ...(s.vehiculoId < 0 ? { empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" as const, ...(cat.tercerosDirectos ? { pilotoExternoId: pilotoDirecto(f, cat, d)?.id } : { asociacionExternaId: d.asociacionExternaId ?? f.asociacionExterna?.id }) } : seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId)), productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
+    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; return { ...s, ...(politicaIndependiente(cat) ? seleccionPilotoIndependiente(f,cat,d) : s.vehiculoId < 0 ? { empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" as const, ...(cat.tercerosDirectos ? { pilotoExternoId: pilotoDirecto(f, cat, d)?.id } : { asociacionExternaId: d.asociacionExternaId ?? f.asociacionExterna?.id }) } : seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId)), productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
     const revision = useRef(0);
     const [descargando, setDescargando] = useState(false);
     useEffect(() => () => { revision.current++; }, []);

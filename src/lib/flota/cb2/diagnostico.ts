@@ -13,7 +13,7 @@ export function diagnosticoCB2() {
   } catch { /* Development or unavailable build: explicitly unknown. */ }
   const sha = process.env.NOVALVION_DEPLOY_SHA ?? "";
   return {
-    revisionFuncional: "cb2-identidades-seguras-v1",
+    revisionFuncional: "cb2-identidades-independientes-v2",
     buildId,
     shaDeclarado: /^[0-9a-f]{40}$/i.test(sha) ? sha : null,
     tercerosDirectos: tercerosDirectosHabilitados(),
