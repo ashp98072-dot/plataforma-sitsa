@@ -20,6 +20,11 @@ import { createProviderCipher } from "../../../src/lib/integrations/pricesmart/p
 import { createLabKeyProvider } from "../../../src/lib/integrations/pricesmart/lab-demo/lab-key-provider";
 import { guardEvidenceVerifier } from "../../../src/lib/integrations/pricesmart/guarded-evidence-verifier";
 import { reference } from "../../../src/lib/integrations/pricesmart/contracts";
+import { auditGrants } from "../../../src/lib/integrations/pricesmart/grants-audit";
+import { PREFLIGHT_STATEMENTS, mariaDbPreflightDatabase } from "../../../src/lib/integrations/pricesmart/preflight-mariadb";
+import { runProductionPreflight } from "../../../src/lib/integrations/pricesmart/production-preflight";
+import { createKmsKeyProvider, parseKmsConfig } from "../../../src/lib/integrations/pricesmart/kms-adapter";
+import { createLabKmsClient } from "../../../src/lib/integrations/pricesmart/lab-demo/lab-kms-client";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -326,5 +331,51 @@ describe("API-11 endpoints y seguridad M2M", () => {
     // nada de claves ni de la atestación se persistió fuera de los hashes de nonce
     const stored = JSON.stringify(await admin(`SELECT HEX(nonce_hash) AS h FROM ${T}.ps_api18_attestation_nonces`));
     expect(stored).not.toContain(KEY.toString("hex")); expect(stored).not.toContain(AUTH_KEY.toString("hex")); expect(JSON.stringify(issued)).not.toContain(AUTH_KEY.toString("hex"));
+  });
+
+  it("API11.18 auditoría de privilegios (API-20): la cuenta de ejecución REAL cumple la política mínima (solo lecturas fijas, sin hallazgos); una cuenta con privilegios globales (la administrativa del arnés) se rechaza; los hallazgos no incluyen texto de las líneas", async () => {
+    const db = mariaDbPreflightDatabase(pool);
+    const identity = await db.identity(); expect(identity.db).toBe(manifest.schema); expect(identity.account.startsWith(`${manifest.user}@`)).toBe(true);
+    const audit = auditGrants(await db.grants(), { schema: manifest.schema });
+    expect(audit.findings).toEqual([]); expect(audit).toMatchObject({ ok: true, complete: true, missing: [] });
+    const adminConn = await mysql.createConnection(adminOptions(manifest)); let adminLines: string[] = [];
+    try { const [rows] = await adminConn.query("SHOW GRANTS FOR CURRENT_USER()"); adminLines = (rows as Record<string, unknown>[]).map((r) => String(Object.values(r)[0])); } finally { await adminConn.end(); }
+    const bad = auditGrants(adminLines, { schema: manifest.schema });
+    expect(bad.ok).toBe(false); expect(bad.findings.map((f) => f.code)).toEqual(expect.arrayContaining(["GLOBAL_PRIVILEGE"]));
+    expect(JSON.stringify(bad)).not.toMatch(/IDENTIFIED|PASSWORD|127\.0\.0\.1|GRANT /);
+    // sentencias del lector de preflight: exactamente dos lecturas fijas
+    expect(PREFLIGHT_STATEMENTS).toEqual(["SELECT DATABASE() AS db, CURRENT_USER() AS account", "SHOW GRANTS FOR CURRENT_USER()"]);
+  });
+
+  it("API11.19 preflight de composición (API-20) contra MariaDB real: puertos reales + cifrado con adaptador KMS (cliente de laboratorio) + autoridad por registro + sesión y privilegios reales → PASS en LAB; el mismo preflight como PRODUCTION contra recursos de laboratorio NO pasa; no consume nonces ni cambia nada", async () => {
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    const KEY = randomBytes(32); const AUTH_KEY = randomBytes(32);
+    const kmsEnv = { PRICESMART_KMS_TARGET: "LAB", PRICESMART_KMS_CURRENT_ALIAS: "lab.k1", PRICESMART_KMS_ALLOWED_ALIASES: "lab.k1" };
+    const kmsClient = createLabKmsClient(["lab.k1"]); const kmsCfg = parseKmsConfig(kmsEnv); if (!kmsCfg.ok) throw new Error("config KMS");
+    const kmsCipher = createProviderCipher({ provider: createKmsKeyProvider({ client: kmsClient, config: kmsCfg.config }), target: "LAB" });
+    expect(await kmsCipher.open((await kmsCipher.seal({ externalOrderId: "API20" } as never, "ctx")).ciphertext, "lab.k1", "ctx")).toEqual({ externalOrderId: "API20" });
+    const built = describeMariaDbComposition(ports, { cipher: { instance: kmsCipher, implementationId: "kms-provider-cipher", version: "api20-1" }, verifier: { instance: guardEvidenceVerifier(verifier), implementationId: "guarded-verifier", version: "api19-1" } });
+    expect(built.missing).toEqual([]);
+    const authority = createRegistryIdentityAuthority({ authorityId: "auth-lab-registry", target: "LAB", registry: att.registry, keys: { getKey: async () => AUTH_KEY } });
+    const ids: Record<string, string> = { counter: "lab-counter-iso", replay: "lab-replay-iso", catalog: "lab-catalog", clock: "lab-clock", cipher: "lab-cipher", verifier: "lab-verifier" };
+    for (const [port, d] of Object.entries(built.composition) as [string, { instance: object }][]) authority.enroll(d.instance, port as never, ids[port]);
+    const trust = { lab: { "auth-lab-registry": AUTH_KEY }, production: { "auth-prod-registry": randomBytes(32) } };
+    const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 300000, identity: { authority, trusted: trust.lab } });
+    expect(issued.claims.conformant && issued.claims.complete).toBe(true);
+    const database = {
+      lab: { host: "127.0.0.1", port: Number(process.env.DB_PORT), schema: manifest.schema, runtimeUser: manifest.user, registryWriterUser: "sandbox_api02_registry_writer", migrationUser: "sandbox_api02_migrator" },
+      production: { host: "prod.interno.example", port: 3306, schema: "prod_pricesmart", runtimeUser: "ps_runtime", registryWriterUser: "ps_registry", migrationUser: "ps_migrator" },
+    };
+    const nonceRowsBefore = await n("ps_api18_attestation_nonces", "1 = 1");
+    const common = { env: kmsEnv, kmsClient, database, db: mariaDbPreflightDatabase(pool), trust, attestation: { composition: built.composition, attestation: issued.attestation, key: KEY, authority, clock: ports.clock } };
+    const labReport = await runProductionPreflight({ ...common, target: "LAB" });
+    expect(labReport.checks.filter((c) => c.status !== "PASS")).toEqual([]); expect(labReport).toMatchObject({ passed: true, ready: false, authorizesInstallation: false });
+    const again = await runProductionPreflight({ ...common, target: "LAB" }); expect(again.digest).toBe(labReport.digest);   // repetible: no consume nada
+    expect(await n("ps_api18_attestation_nonces", "1 = 1")).toBe(nonceRowsBefore);
+    // como PRODUCTION contra recursos de laboratorio: no pasa (sesión, KMS y atestación son de otro destino)
+    const prodReport = await runProductionPreflight({ ...common, target: "PRODUCTION" });
+    expect(prodReport.passed).toBe(false); expect(prodReport.checks.find((c) => c.id === "DB_SESSION_IDENTITY")).toMatchObject({ status: "FAIL", code: "SESSION_IDENTITY_MISMATCH" });
+    expect(prodReport.checks.find((c) => c.id === "KMS_TARGET")).toMatchObject({ status: "FAIL" }); expect(prodReport.checks.find((c) => c.id === "ATTESTATION")?.status).toBe("FAIL");
+    const text = JSON.stringify([labReport, prodReport]); for (const v of [KEY.toString("hex"), AUTH_KEY.toString("hex"), manifest.user, manifest.schema, "lab.k1"]) expect(text).not.toContain(v);
   });
 });

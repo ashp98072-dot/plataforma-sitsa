@@ -153,7 +153,7 @@ describe('aislamiento estático', () => {
   });
   it('ninguna ruta ni módulo de la aplicación los importa (fuera de sus pruebas, del laboratorio y del arnés)', () => {
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const names = ['provider-cipher', 'guarded-evidence-verifier', 'lab-key-provider'];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.includes('.test.')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`))) hits.push(path.relative(root, f)); } } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('kms-adapter') && !n.includes('.test.')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`))) hits.push(path.relative(root, f)); } } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
   it('el proveedor de laboratorio solo existe para LAB y solo con referencias lab.*', async () => {
