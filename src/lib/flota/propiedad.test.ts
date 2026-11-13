@@ -9,6 +9,7 @@ const external = { tipoPropiedad: "EXTERNO", empresaPropietariaId: null, propiet
 const row = { id: 5, empresa_id: 1, placa: "C-558BSJ", tipo_propiedad: "EMPRESA", empresa_propietaria_id: null, revision_propiedad: 0, km_actual: 12345, activo: 1, estado: "Activo" };
 function connection() {
   return { beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
+    query: vi.fn(async (sql: string, params: unknown[]) => sql.includes("FROM empresas") ? [[{ id: params[0] }]] : [[]]),
     execute: vi.fn(async (sql: string, params: unknown[]) => {
       if (sql.includes("SELECT *")) return [params[1] === 1 ? [{ ...row }] : []];
       if (sql.includes("FROM empresas")) return [[{ id: 2 }]];

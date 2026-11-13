@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { AsignacionCB2, type DecisionAsignacion } from "./asignacion";
 import { useRevisionCB2 } from "./use-revision";
-import { seleccionSegura } from "./preview-model";
+import { seleccionSegura, asignacionesExactas } from "./preview-model";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 const fila: FilaCB2 = { hoja: "OCTUBRE", fila: 9, candidato: "a".repeat(64), bloqueada: false, documento: null, errores: [], estado: "ADVERTENCIA", motivos: [], vale: "121646", placa: "060 KHK", placaNormalizada: "060KHK", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ", origen: { piloto: "Luis Escobar", producto: "DIESEL", km: "", galones: "10", precio: "20", monto: "200" } };
 const cat: CatalogosCB2 = { tercerosDirectos: true, tercerosHabilitados: true, proveedores: [], vehiculos: [{ id: -21, placa: "M060KHK" }, { id: 1, placa: "M060KHK" }], pilotosExternos: [{ id: 11, nombre: "Luis Escobar", referencia: "lab-p" }], unidadesExternas: [{ id: 21, placa: "M060KHK", referencia: "lab-u", tipo: "MOTOCICLETA", descripcion: "Sintética" }], terceros: [] };
@@ -42,4 +42,29 @@ it("DOM directo: alta independiente desde importación, sin asociación, y B no 
     await act(async () => f.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(JSON.parse(String(fetch.mock.calls[0][1]!.body))).toEqual({ recurso: "PILOTO", referencia: "referencia-real-lab", nombre: "Otro Piloto Sintético" }); expect(recargar).toHaveBeenCalledTimes(1);
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
+});
+
+it("autopropuesta unica del vale 121646 aparece LISTO al actualizar catalogos sin recargar", async () => {
+ (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+ const automatico = { ...cat, vehiculos: cat.vehiculos.filter(v => v.id < 0) };
+ const host=document.createElement("div");document.body.append(host);const root=createRoot(host);
+ function Pantalla(){
+  const [catalogo,setCatalogo]=useState<CatalogosCB2>({...automatico,vehiculos:[],pilotosExternos:[],unidadesExternas:[]});
+  const [ds,setDs]=useState<Record<string,DecisionAsignacion>>({});const r=useRevisionCB2([fila],catalogo,ds,setDs);
+  return createElement("div",null,createElement("button",{onClick:()=>setCatalogo(automatico)},"Catalogos guardados"),createElement("output",null,r.resumen.revision[0].estado),createElement(AsignacionCB2,{fila,cat:catalogo,value:ds[fila.candidato!]??{},onChange:v=>r.cambiarDecision(fila.candidato!,v),disabled:false}));
+ }
+ try{
+  await act(async()=>root.render(createElement(Pantalla)));expect(host.querySelector("output")!.textContent).toBe("PENDIENTE");
+  await act(async()=>host.querySelector("button")!.click());expect(host.querySelector("output")!.textContent).toBe("LISTO");
+  const values=[...host.querySelectorAll("select")].map(s=>s.value);expect(values).toContain("11");expect(values).toContain("21");expect(host.textContent).not.toContain("VERIFICADA por otro administrador");
+ }finally{await act(async()=>root.unmount());host.remove();}
+});
+it("no autopropone homonimos, placas ambiguas, tipo discrepante, flag apagado ni unidad propia concurrente",()=>{
+ const automatico={...cat,vehiculos:cat.vehiculos.filter(v=>v.id<0)};
+ expect(asignacionesExactas([fila],automatico)).toEqual({[fila.candidato!]:"-21"});
+ expect(asignacionesExactas([fila],{...automatico,tercerosDirectos:false})).toEqual({});
+ expect(asignacionesExactas([fila],cat)).toEqual({});
+ expect(asignacionesExactas([fila],{...automatico,pilotosExternos:[...cat.pilotosExternos!,{...cat.pilotosExternos![0],id:12}]})).toEqual({});
+ expect(asignacionesExactas([fila],{...automatico,unidadesExternas:[{...cat.unidadesExternas![0],tipo:"VEHICULO"}]})).toEqual({});
+ expect(asignacionesExactas([fila],{...automatico,vehiculos:[...automatico.vehiculos,{id:-22,placa:"C060KHK"}],unidadesExternas:[...cat.unidadesExternas!,{...cat.unidadesExternas![0],id:22,placa:"C060KHK",tipo:"VEHICULO"}]})).toEqual({});
 });

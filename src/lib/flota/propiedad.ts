@@ -3,6 +3,7 @@ import type { RowDataPacket, ResultSetHeader } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarFiltrosVehiculo } from "./filtros";
+import { exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "./vehiculos-escritura";
 
 export const propiedadHabilitada = () => process.env.FLOTA_PROPIEDAD_EXTERNA === "1";
 export class ErrorPropiedad extends Error {
@@ -55,6 +56,8 @@ export async function guardarPropiedad(empresaId: number, usuario: string, raw: 
   const conn = await getPool().getConnection();
   try {
     await conn.beginTransaction();
+    const [administradora] = await conn.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE", [empresaId]);
+    if (!administradora.length) throw new ErrorPropiedad("Empresa no disponible.", 403);
     let antes: RowDataPacket | null = null;
     if ("id" in d) {
       const [rows] = await conn.execute<RowDataPacket[]>("SELECT * FROM flota_vehiculos WHERE id = ? AND empresa_id = ? FOR UPDATE", [d.id, empresaId]);
@@ -69,6 +72,7 @@ export async function guardarPropiedad(empresaId: number, usuario: string, raw: 
     }
     let id: number;
     if ("placa" in d) {
+      await exigirPlacaLibreTx(conn, empresaId, d.placa);
       const [result] = await conn.execute<ResultSetHeader>(`INSERT INTO flota_vehiculos
         (empresa_id, placa, marca, modelo, descripcion, color, tipo_unidad, km_actual,
          km_intervalo_servicio, km_ultimo_servicio, odometro_funcional, mantenimiento_intervalo_meses,
@@ -103,6 +107,7 @@ export async function guardarPropiedad(empresaId: number, usuario: string, raw: 
       mensaje: crear ? "Vehículo registrado." : "Propietario actualizado. El historial se conserva." };
   } catch (e) {
     await conn.rollback();
+    if (e instanceof ErrorIdentidadVehiculo) throw new ErrorPropiedad(e.message, e.status);
     if ((e as { code?: string }).code === "ER_DUP_ENTRY") throw new ErrorPropiedad("La placa ya está registrada en esta empresa.", 409);
     throw e;
   } finally { conn.release(); }

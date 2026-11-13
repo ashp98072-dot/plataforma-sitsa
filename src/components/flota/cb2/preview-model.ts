@@ -1,4 +1,5 @@
-import { pilotoDirecto } from "./identidad-directa";
+import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
+import { tipoTerceroCompatible } from "@/lib/flota/cb2/identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import type { DecisionAsignacion } from "./asignacion";
@@ -16,6 +17,11 @@ export function sugerenciaPiloto(f: FilaCB2, cat: CatalogosCB2) { return buscarC
 export function asignacionesExactas(filas: FilaCB2[], cat: CatalogosCB2) {
     const seleccion: Record<string, string> = {};
     for (const grupo of agruparCandidatos(filas).values()) {
+        const activasDirectas = grupo.filter(f => f.estado !== "RESUELTA");
+        const directa = activasDirectas[0] && propuestaDirecta(activasDirectas[0], cat);
+        if (directa && activasDirectas.every(f => elegible(f) && propuestaDirecta(f, cat)?.piloto.id === directa.piloto.id && propuestaDirecta(f, cat)?.unidad.id === directa.unidad.id && coincidencias(f, cat).length === 1)) {
+            seleccion[activasDirectas[0].candidato!] = String(-directa.unidad.id); continue;
+        }
         const externo = grupo[0].asociacionExterna;
         if (cat.tercerosHabilitados && externo && grupo.every(f => elegible(f) && f.asociacionExterna?.id === externo.id && coincidencias(f, cat).length === 1 && coincidencias(f, cat)[0].id === -externo.unidad_id)) { seleccion[grupo[0].candidato!] = String(-externo.unidad_id); continue; }
         const activas = grupo.filter(f => f.estado !== "RESUELTA"), ids = activas.map(f => { const m = coincidencias(f, cat); return elegible(f) && m.length === 1 ? String(m[0].id) : ""; });
@@ -42,7 +48,8 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
         if (Number(value) < 0) {
             if (cat.tercerosDirectos) {
                 const piloto = originales[0] && pilotoDirecto(originales[0], cat, decisiones[key]);
-                if (!omitidos[key] && cat.tercerosHabilitados && piloto && unidades.has(value) && originales.length && originales.every(f => elegible(f) && nombreComparable(piloto.nombre) === nombreComparable(f.origen?.piloto ?? "") && unidadTerceraCompatible(f.placaNormalizada || f.placa, -Number(value), cat.unidadesExternas ?? [], motivo) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;
+                const unidad = cat.unidadesExternas?.find(u => u.id === -Number(value));
+                if (!omitidos[key] && cat.tercerosHabilitados && piloto && unidad && unidades.has(value) && originales.length && originales.every(f => elegible(f) && tipoTerceroCompatible(f.placaNormalizada || f.placa, unidad) && nombreComparable(piloto.nombre) === nombreComparable(f.origen?.piloto ?? "") && unidadTerceraCompatible(f.placaNormalizada || f.placa, -Number(value), cat.unidadesExternas ?? [], motivo) && (!decisiones[key]?.exigirProducto || !!(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))))) result[key] = value;
                 continue;
             }
             const id = decisiones[key]?.asociacionExternaId === undefined ? originales[0]?.asociacionExterna?.id : decisiones[key]?.asociacionExternaId;

@@ -4,6 +4,7 @@ import { rows, type Contexto } from "./repository";
 import { catalogosTercerosTx } from "./terceros";
 import { nombreComparable } from "../combustible-coincidencias";
 import { unidadTerceraCompatible } from "./terceros-busqueda";
+import { tipoTerceroCompatible } from "./identidad-directa";
 
 /** Política nueva, activación posterior a migración auditada; no deriva de D2 antigua. */
 export const tercerosDirectosHabilitados = () => process.env.CB2_TERCEROS_DIRECTOS_APROBADA === "1";
@@ -16,6 +17,6 @@ export async function validarTerceroDirecto(c: PoolConnection, ctx: Contexto, pi
   if (!empresa || Number(empresa.activa) !== 1 || !actor || Number(actor.activo) !== 1) throw new ErrorCB2("Usuario o empresa no vigentes.", 403);
   const cat = await catalogosTercerosTx(c, ctx.empresaId);
   const piloto = cat.pilotos.find(p => p.id === pilotoId), unidad = cat.unidades.find(u => u.id === unidadId);
-  if (!piloto || !unidad || nombreComparable(piloto.nombre) !== nombreComparable(nombre) || !unidadTerceraCompatible(placa, unidadId, cat.unidades, motivo)) throw new ErrorCB2("Piloto o unidad externos incompatibles o ajenos a la empresa.");
+  if (!piloto || !unidad || !tipoTerceroCompatible(placa, unidad) || nombreComparable(piloto.nombre) !== nombreComparable(nombre) || !unidadTerceraCompatible(placa, unidadId, cat.unidades, motivo)) throw new ErrorCB2("Piloto o unidad externos incompatibles o ajenos a la empresa.");
   return { piloto_id: piloto.id, unidad_id: unidad.id, nombre: piloto.nombre, placa: unidad.placa, tipo: unidad.tipo, descripcion: unidad.descripcion, piloto_referencia: piloto.referencia, unidad_referencia: unidad.referencia, politica: "DIRECTA_V1" };
 }

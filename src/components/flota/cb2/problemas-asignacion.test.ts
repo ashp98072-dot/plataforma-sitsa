@@ -15,3 +15,8 @@ it("asignacion compatible y candidato resuelto no reciben causas ficticias", () 
   expect(causasAsignacion(revisionCandidatos([f], cat, { a: "1" })[0], cat)).toEqual([]);
   expect(causasAsignacion(revisionCandidatos([{ ...f, estado: "RESUELTA", bloqueada: true }], cat, { a: "99" })[0], cat)).toEqual([]);
 });
+it("tipo externo contradictorio conserva PENDIENTE y explica el bloqueo", () => {
+ const externo: CatalogosCB2 = { ...cat, tercerosDirectos:true, tercerosHabilitados:true, vehiculos:[{id:-2,placa:"M060KHK"}], pilotosExternos:[{id:11,nombre:f.origen!.piloto!,referencia:"lab-p"}], unidadesExternas:[{id:2,placa:"M060KHK",tipo:"VEHICULO",descripcion:"LAB",referencia:"lab-u"}] };
+ const d={pilotoExternoId:11}, g=revisionCandidatos([f],externo,{a:"-2"},{},{},{a:d})[0];
+ expect(g.estado).toBe("PENDIENTE");expect(causasAsignacion(g,externo,d).join(" ")).toContain("tipo");
+});

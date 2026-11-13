@@ -385,6 +385,11 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
       expect((await consultarConsumos(c, 1, 100, 0, { pilotoExternoId: identidad.piloto_id, unidadExternaId: identidad.unidad_id })).some(r => r.id === legacy.id)).toBe(true);
       await expect(validarTerceroDirecto(c, { ...otra, autorizar: async () => {} }, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toThrow("incompatibles");
       await expect(validarTerceroDirecto(c, { ...operador, autorizar: async () => { throw Error("REVOCADO_LAB"); } }, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toThrow("REVOCADO_LAB");
+      await expect(validarTerceroDirecto(c, operador, p.id, u.id, "Luis Escobar", "M-060KHK", "Referencia real revisada en laboratorio")).resolves.toMatchObject({ unidad_id: u.id });
+      await q("UPDATE flota_cb2_externos_unidades SET tipo='VEHICULO' WHERE empresa_id=1 AND id=?", [u.id]);
+      try {
+        await expect(validarTerceroDirecto(c, operador, p.id, u.id, "Luis Escobar", "M-060KHK", "Referencia real revisada en laboratorio")).rejects.toThrow("incompatibles");
+      } finally { await q("UPDATE flota_cb2_externos_unidades SET tipo='MOTOCICLETA' WHERE empresa_id=1 AND id=?", [u.id]); }
       vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA", "");
       await expect(validarTerceroDirecto(c, operador, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toMatchObject({ status: 403 });
     } finally { c.release(); }

@@ -9,6 +9,7 @@ import { combustibleStaffSchema, precioCalculado, type CombustibleStaffInput } f
 import { validarLineaFondoCombustibleTx } from "./combustible-fondos";
 import { diagnosticarVehiculos } from "./vehiculos-catalogo";
 import { normalizarIdentificador } from "./combustible-identificadores";
+import { catalogoSinAlias } from "./vehiculos-alias";
 
 type Archivo = { name: string; size: number; arrayBuffer: () => Promise<ArrayBuffer> };
 
@@ -20,7 +21,7 @@ export async function catalogosCombustible(empresaId: number) {
     query<RowDataPacket[]>(`SELECT e.id, e.proveedor_id AS proveedorId, e.nombre, p.nombre_comercial AS proveedorNombre, e.direccion FROM flota_combustible_estaciones e JOIN compras_proveedores p ON p.id=e.proveedor_id AND p.empresa_id=e.empresa_id WHERE e.empresa_id=? AND e.activo=1 AND p.activo=1 ORDER BY e.nombre, e.id`, [empresaId]),
   ]);
   const diagnostico = diagnosticarVehiculos(vehiculos.map(v => ({ ...v, id: Number(v.id), placa: String(v.placa), descripcion: v.descripcion as string | undefined })));
-  return { proveedores, vehiculos: diagnostico.vehiculos, estaciones,
+  return { proveedores, vehiculos: await catalogoSinAlias(diagnostico.vehiculos), estaciones,
     diagnosticoVehiculos: { idsRepetidos: diagnostico.idsRepetidos, posiblesDuplicados: diagnostico.posiblesDuplicados } };
 }
 

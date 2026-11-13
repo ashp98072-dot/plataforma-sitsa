@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
-import { execute, query } from "@/lib/db";
+import type { SqlParams } from "@/lib/db";
+import type { ResultSetHeader } from "mysql2";
+import { escribirVehiculos, coincidenciasPlacaTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
   parsearExcelFlota,
@@ -114,21 +116,19 @@ export async function POST(req: Request, ctx: Ctx) {
         if (kt) duenoId = kt.id;
       }
 
-      // Buscar por placa en dueño o en el tenant actual (evita duplicar unidad física)
-      let existente = await query<RowDataPacket[]>(
-        `SELECT id, empresa_id FROM flota_vehiculos
-         WHERE placa = ? AND empresa_id IN (?, ?)
-         ORDER BY CASE WHEN empresa_id = ? THEN 0 ELSE 1 END
-         LIMIT 1`,
-        [f.placa, duenoId, guard.empresa.id, duenoId],
-      );
-      if (!existente[0]) {
-        existente = await query<RowDataPacket[]>(
-          "SELECT id, empresa_id FROM flota_vehiculos WHERE placa = ? LIMIT 1",
-          [f.placa],
-        );
+      if (duenoId !== guard.empresa.id) throw new ErrorIdentidadVehiculo("Importa desde la empresa propietaria; no se modifican unidades de otra empresa.", 403);
+      const creado = await escribirVehiculos(duenoId, async conn => {
+      const execute = async (sql: string, params: SqlParams = []) => (await conn.execute<ResultSetHeader>(sql, params))[0];
+      let existente = await coincidenciasPlacaTx(conn, duenoId, f.placa);
+      const [tablaAlias] = await conn.query<RowDataPacket[]>("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_vehiculos_fusiones'");
+      if (tablaAlias.length) {
+        const [aliases] = await conn.query<RowDataPacket[]>("SELECT origen_id FROM flota_vehiculos_fusiones WHERE empresa_id=?", [duenoId]);
+        const origenes = new Set(aliases.map(a => Number(a.origen_id)));
+        existente = existente.filter(v => !origenes.has(Number(v.id)));
       }
-
+      if (existente.length > 1) throw new ErrorIdentidadVehiculo("Varias unidades con placa comparable. Revisa los IDs antes de importar.");
+      const serial = (v: unknown) => String(v ?? "").trim().toUpperCase().replace(/\s/g, "");
+      if (existente[0]?.chasis && f.chasis && serial(existente[0].chasis) !== serial(f.chasis)) throw new ErrorIdentidadVehiculo("Chasis incompatible con el registro existente.");
       const kmActual = f.kmActual ?? 0;
       const kmIntervalo =
         f.kmIntervalo && f.kmIntervalo > 0
@@ -202,13 +202,13 @@ export async function POST(req: Request, ctx: Ctx) {
           ],
         );
         if (filtros.length) {
-          await guardarFiltrosVehiculo(empId, vid, filtros);
+          await guardarFiltrosVehiculo(empId, vid, filtros, conn);
         }
         const acc = accesosPara(empId);
         if (acc.length) {
-          await guardarAccesoVehiculo(vid, acc, empId);
+          await guardarAccesoVehiculo(vid, acc, empId, conn);
         }
-        actualizados += 1;
+        return false;
       } else {
         const ins = await execute(
           `INSERT INTO flota_vehiculos
@@ -246,16 +246,18 @@ export async function POST(req: Request, ctx: Ctx) {
         );
         const nuevoId = Number(ins.insertId);
         if (filtros.length && nuevoId) {
-          await guardarFiltrosVehiculo(duenoId, nuevoId, filtros);
+          await guardarFiltrosVehiculo(duenoId, nuevoId, filtros, conn);
         }
         if (nuevoId) {
           const acc = accesosPara(duenoId);
           if (acc.length) {
-            await guardarAccesoVehiculo(nuevoId, acc, duenoId);
+            await guardarAccesoVehiculo(nuevoId, acc, duenoId, conn);
           }
         }
-        creados += 1;
+        return true;
       }
+      });
+      if (creado) creados++; else actualizados++;
     } catch (err) {
       errores.push(
         formatoErrorImport({

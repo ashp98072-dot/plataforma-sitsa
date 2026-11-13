@@ -1,3 +1,6 @@
+import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { placaComparable } from "@/lib/flota/combustible-coincidencias";
+import type { SqlParams } from "@/lib/db";
 import { propiedadesVehiculos, propiedadHabilitada } from "@/lib/flota/propiedad";
 import { diagnosticarVehiculos } from "@/lib/flota/vehiculos-catalogo";
 import { NextResponse } from "next/server";
@@ -5,7 +8,7 @@ import { z } from "zod";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { execute, getPool, query } from "@/lib/db";
 import { requireTenantFlota, requireTenantFlotaAny, sesionPuedeEditarVehiculosOtrasEmpresas } from "@/lib/tenant";
-import { registrarAuditoria } from "@/lib/auditoria";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { obtenerEmpresaPorId } from "@/lib/empresas";
 import {
   decidirEdicionVehiculo,
@@ -177,18 +180,10 @@ export async function POST(req: Request, ctx: Ctx) {
   const d = parsed.data;
   const placa = d.placa.trim().toUpperCase();
 
-  const dup = await query<RowDataPacket[]>(
-    "SELECT id FROM flota_vehiculos WHERE empresa_id = ? AND placa = ? LIMIT 1",
-    [guard.empresa.id, placa],
-  );
-  if (dup[0]) {
-    return NextResponse.json(
-      { error: `Ya existe la placa ${placa}.` },
-      { status: 409 },
-    );
-  }
-
   try {
+    return await escribirVehiculos(guard.empresa.id, async conn => {
+    const execute = async (sql: string, params: SqlParams = []) => (await conn.execute<ResultSetHeader>(sql, params))[0];
+    await exigirPlacaLibreTx(conn, guard.empresa.id, placa);
     const result = await execute(
       `INSERT INTO flota_vehiculos
         (empresa_id, placa, marca, modelo, descripcion, color, tipo_combustible,
@@ -250,12 +245,13 @@ export async function POST(req: Request, ctx: Ctx) {
       await guardarFiltrosVehiculo(
         guard.empresa.id,
         nuevoId,
-        d.filtros as FiltroVehiculo[],
+        d.filtros as FiltroVehiculo[], conn,
       );
     }
     return NextResponse.json({
       id: nuevoId,
       mensaje: "Vehículo registrado.",
+    });
     });
   } catch (err) {
     return NextResponse.json(
@@ -265,7 +261,7 @@ export async function POST(req: Request, ctx: Ctx) {
             ? `No se pudo registrar: ${err.message}`
             : "No se pudo registrar.",
       },
-      { status: 500 },
+      { status: err instanceof ErrorIdentidadVehiculo ? err.status : 500 },
     );
   }
 }
@@ -399,6 +395,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
   }
 
+  try {
+    return await escribirVehiculos(empresaDuenaId, async conn => {
+    const execute = async (sql: string, params: SqlParams = []) => (await conn.execute<ResultSetHeader>(sql, params))[0];
+    const [fresh] = await conn.query<RowDataPacket[]>("SELECT * FROM flota_vehiculos WHERE id=? AND empresa_id=? FOR UPDATE", [d.id, empresaDuenaId]);
+    if (!fresh[0]) throw new ErrorIdentidadVehiculo("Vehiculo no disponible.", 404);
+    cur[0] = fresh[0];
+    if (d.placa !== undefined && !placaComparable(d.placa)) throw new ErrorIdentidadVehiculo("Placa inválida.", 400);
+    if (d.placa !== undefined && placaComparable(d.placa) !== placaComparable(String(cur[0].placa))) await exigirPlacaLibreTx(conn, empresaDuenaId, d.placa, d.id);
   // PROGRAMACION-TC-CAJA-REMOLQUE-1: el tipo de unidad es atributo de la
   // empresa dueña (igual que los accesos compartidos). Se guarda aparte del
   // UPDATE principal para que un fallo (columna aún sin migrar) nunca quede
@@ -438,7 +442,6 @@ export async function PATCH(req: Request, ctx: Ctx) {
         ? d.motivoTaller.trim()
         : (cur[0].motivo_taller as string | null);
 
-  try {
     await execute(
       `UPDATE flota_vehiculos SET
         placa = ?,
@@ -512,21 +515,21 @@ export async function PATCH(req: Request, ctx: Ctx) {
       await guardarFiltrosVehiculo(
         empresaDuenaId,
         d.id,
-        d.filtros as FiltroVehiculo[],
+        d.filtros as FiltroVehiculo[], conn,
       );
     }
     if (d.accesoEmpresaIds && esDueno) {
       await guardarAccesoVehiculo(
         d.id,
         d.accesoEmpresaIds,
-        Number(cur[0].empresa_id),
+        Number(cur[0].empresa_id), conn,
       );
     }
     // Auditoría SOLO de la edición transversal (la de la propia empresa y la operación de taller no cambian): vehículo, empresa propietaria,
     // empresa activa y usuario; la fecha/hora la registra la tabla de auditoría.
     if (decision.porPermisoTransversal && !soloTaller) {
       const duena = await obtenerEmpresaPorId(empresaDuenaId).catch(() => null);
-      await registrarAuditoria({
+      await registrarAuditoriaTx(conn, {
         empresaId: guard.empresa.id,
         usuario: guard.session.username,
         accion: "editar_vehiculo_otra_empresa",
@@ -554,44 +557,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
                 ? "Vehículo marcado como activo."
                 : "Vehículo actualizado.",
     });
+    });
   } catch (err) {
-    // Fallback mínimo si faltan columnas nuevas
-    try {
-      await execute(
-        `UPDATE flota_vehiculos SET
-          en_taller = ?,
-          fecha_entrada_taller = ?,
-          estado = ?
-         WHERE id = ? AND empresa_id = ?`,
-        [
-          enTaller,
-          fechaTaller,
-          enTaller ? "En taller" : "Activo",
-          d.id,
-          empresaDuenaId,
-        ],
-      );
-      return NextResponse.json({
-        mensaje:
-          d.enTaller != null
-            ? enTaller
-              ? "Enviado a taller (campos básicos)."
-              : "Salió de taller."
-            : "Actualizado (campos básicos).",
-      });
-    } catch (err2) {
-      return NextResponse.json(
-        {
-          error:
-            err2 instanceof Error
-              ? err2.message
-              : err instanceof Error
-                ? err.message
-                : "No se pudo actualizar.",
-        },
-        { status: 500 },
-      );
-    }
+    return NextResponse.json({ error: err instanceof Error ? err.message : "No se pudo actualizar." }, { status: err instanceof ErrorIdentidadVehiculo ? err.status : 500 });
   }
 }
 
