@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseCompositionConfig } from './composition-config';
-import { selectKmsClient, type KmsAdapterRegistry } from './kms-provider-selection';
+import { REVIEWED_KMS_ADAPTERS, sanitizeLabAdapters, selectKmsClient, type KmsAdapterRegistry } from './kms-provider-selection';
 import { accountMatches, type DbIdentity } from './database-identity';
 import { auditRoleGrants, type AccountRole } from './grants-audit';
 import { runProductionPreflight, type PreflightCheck, type PreflightDatabase, type PreflightInput } from './production-preflight';
@@ -13,8 +13,8 @@ import type { AttestationTarget } from './conformance-attestation';
 // NO cambia el readiness y NO activa nada (`ready=false`, `authorizesInstallation=false` fijos). El informe contiene ids, estados y códigos —nunca valores— y un resumen SHA-256.
 export type CompositionPreflightInput = {
   env: Record<string, string | undefined>;
-  /** Registro de adaptadores KMS aprobados. En una composición real es `REVIEWED_KMS_ADAPTERS` (hoy vacío). */
-  adapters: KmsAdapterRegistry;
+  /** SOLO laboratorio y pruebas: adaptadores sintéticos. Se ignoran por completo para PRODUCCIÓN (que usa siempre el registro oficial `REVIEWED_KMS_ADAPTERS`) y, aun en LAB, cada entrada se fuerza a `['LAB']`. */
+  labAdapters?: KmsAdapterRegistry;
   databases: { runtime: PreflightDatabase; registryWriter: PreflightDatabase; migration: PreflightDatabase };
   trust: PreflightInput['trust'];
   attestation?: PreflightInput['attestation'];
@@ -39,7 +39,9 @@ export async function runCompositionPreflight(input: CompositionPreflightInput):
   let client: ReturnType<typeof selectKmsClient> | null = null;
   checks.push(await step('KMS_PROVIDER', async () => {
     if (!parsed.ok) return { pass: false, code: 'BLOCKED_BY_PREVIOUS' };
-    client = selectKmsClient(parsed.config.kms, input.adapters);
+    // FUENTE DE CONFIANZA OBLIGATORIA: PRODUCCIÓN solo usa el registro revisado oficial; el llamador no puede sustituirlo. Los adaptadores sintéticos solo existen para LAB y no pueden aprobar PRODUCCIÓN.
+    const registry = parsed.config.target === 'LAB' && input.labAdapters !== undefined ? sanitizeLabAdapters(input.labAdapters) : REVIEWED_KMS_ADAPTERS;
+    client = selectKmsClient(parsed.config.kms, registry);
     return client.ok ? { pass: true } : { pass: false, code: client.reason };
   }));
   const kms = client as ReturnType<typeof selectKmsClient> | null;

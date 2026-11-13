@@ -3,6 +3,7 @@ import { checkInstallationEligibility, type InstallationInput, type Installation
 import type { AttestationTarget, CompositionDescriptor, Attestation, ResourceIdentityAuthority } from './conformance-attestation';
 import { assertDisjointTrust } from './registry-identity-authority';
 import { createKmsKeyProvider, parseKmsConfig, type KmsClient } from './kms-adapter';
+import { isReviewedForTarget } from './kms-provider-selection';
 import { accountMatches, parseAccount, validateDatabaseSeparation, type DbIdentity } from './database-identity';
 import { auditGrants, type PrivilegePolicy } from './grants-audit';
 import type { TrustedClock } from './security-contracts';
@@ -41,6 +42,8 @@ export async function runProductionPreflight(input: PreflightInput): Promise<Pre
   const kms = parseKmsConfig(input?.env ?? {});
   checks.push(await step('KMS_CONFIG', async () => (kms.ok ? { pass: true } : { pass: false, code: 'KMS_CONFIG_INVALID' })));
   checks.push(await step('KMS_TARGET', async () => (kms.ok && kms.config.target === target ? { pass: true } : { pass: false, code: kms.ok ? 'KMS_TARGET_MISMATCH' : 'KMS_CONFIG_INVALID' })));
+  // API-21 (auditoría de #615): un preflight de PRODUCCIÓN solo puede pasar con un proveedor del registro REVISADO oficial (hoy vacío ⇒ siempre falla). El cliente inyectado no sustituye esa fuente de confianza.
+  checks.push(await step('KMS_PROVIDER_REVIEWED', async () => (target === 'LAB' ? { pass: true } : kms.ok && isReviewedForTarget(kms.config, 'PRODUCTION') ? { pass: true } : { pass: false, code: 'KMS_PROVIDER_NOT_SELECTED' })));
   checks.push(await step('KMS_HEALTH', async () => {
     if (!kms.ok) return { pass: false, code: 'KMS_CONFIG_INVALID' };
     return (await createKmsKeyProvider({ client: input.kmsClient, config: kms.config }).health()) ? { pass: true } : { pass: false, code: 'KMS_UNHEALTHY' };

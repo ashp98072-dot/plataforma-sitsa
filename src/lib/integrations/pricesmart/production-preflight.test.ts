@@ -54,9 +54,9 @@ async function input(over: Partial<PreflightInput> = {}, withAttestation = true)
 const status = (r: Awaited<ReturnType<typeof runProductionPreflight>>) => Object.fromEntries(r.checks.map(c => [c.id, c.status + (c.code ? `:${c.code}` : '')]));
 
 describe('preflight de la composición productiva', () => {
-  it('con todo en orden pasa, pero NO autoriza nada ni cambia el readiness (ready=false)', async () => {
-    const r = await runProductionPreflight(await input()); expect(status(r)).toEqual({ KMS_CONFIG: 'PASS', KMS_TARGET: 'PASS', KMS_HEALTH: 'PASS', DB_SEPARATION: 'PASS', DB_SESSION_IDENTITY: 'PASS', DB_GRANTS: 'PASS', TRUST_SEPARATION: 'PASS', ATTESTATION: 'PASS' });
-    expect(r.passed).toBe(true); expect(r.ready).toBe(false); expect(r.authorizesInstallation).toBe(false); expect(r.digest).toMatch(/^[a-f0-9]{64}$/);
+  it('con todo lo demás en orden, un preflight de PRODUCCIÓN NO puede pasar mientras el registro oficial de proveedores revisados esté vacío (API-21); no autoriza nada ni cambia el readiness', async () => {
+    const r = await runProductionPreflight(await input()); expect(status(r)).toEqual({ KMS_CONFIG: 'PASS', KMS_TARGET: 'PASS', KMS_PROVIDER_REVIEWED: 'FAIL:KMS_PROVIDER_NOT_SELECTED', KMS_HEALTH: 'PASS', DB_SEPARATION: 'PASS', DB_SESSION_IDENTITY: 'PASS', DB_GRANTS: 'PASS', TRUST_SEPARATION: 'PASS', ATTESTATION: 'PASS' });
+    expect(r.passed).toBe(false); expect(r.ready).toBe(false); expect(r.authorizesInstallation).toBe(false); expect(r.digest).toMatch(/^[a-f0-9]{64}$/);
   });
   it('sin atestación el preflight no pasa (ATTESTATION omitida)', async () => {
     const r = await runProductionPreflight(await input({}, false)); expect(status(r).ATTESTATION).toBe('SKIPPED:NOT_PROVIDED'); expect(r.passed).toBe(false);
@@ -121,7 +121,7 @@ describe('preflight de la composición productiva', () => {
     expect(a.digest).toBe(b.digest); expect((await runProductionPreflight({ ...i, db: fakeDb({ grants: async () => [] }) })).digest).not.toBe(a.digest);
   });
   it('no consume nonces: puede repetirse (la verificación de la atestación es de solo lectura)', async () => {
-    const i = await input(); for (let n = 0; n < 3; n++) expect((await runProductionPreflight(i)).passed).toBe(true);
+    const i = await input(); for (let n = 0; n < 3; n++) { const r = await runProductionPreflight(i); expect(status(r).ATTESTATION).toBe('PASS'); expect(r.checks.filter(c => c.status === 'FAIL').map(c => c.id)).toEqual(['KMS_PROVIDER_REVIEWED']); }   // la atestación se verifica sin consumirse; lo único que falla es la selección oficial de proveedor
   });
   it('no cambia el readiness ni instala nada: el diagnóstico sigue ready=false y sin handler', async () => {
     await runProductionPreflight(await input()); expect(isPriceSmartHandlerInstalled()).toBe(false);

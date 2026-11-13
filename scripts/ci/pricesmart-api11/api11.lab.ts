@@ -28,7 +28,7 @@ import { createLabKmsClient } from "../../../src/lib/integrations/pricesmart/lab
 import { auditRoleGrants, type AccountRole } from "../../../src/lib/integrations/pricesmart/grants-audit";
 import { buildAccountGrantPlan } from "../../../src/lib/integrations/pricesmart/account-plans";
 import { runCompositionPreflight } from "../../../src/lib/integrations/pricesmart/composition-preflight";
-import { REVIEWED_KMS_ADAPTERS, type KmsAdapterRegistry } from "../../../src/lib/integrations/pricesmart/kms-provider-selection";
+import { type KmsAdapterRegistry } from "../../../src/lib/integrations/pricesmart/kms-provider-selection";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -452,13 +452,13 @@ describe("API-11 endpoints y seguridad M2M", () => {
       const trust = { lab: { "auth-lab-registry": AUTH_KEY }, production: { "auth-prod-registry": randomBytes(32) } };
       const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 300000, identity: { authority, trusted: trust.lab } });
       const dbs = () => ({ runtime: mariaDbPreflightDatabase(pool), registryWriter: mariaDbPreflightDatabase(regPool as never), migration: mariaDbPreflightDatabase(migPool as never) });
-      const common = { env, adapters, trust, attestation: { composition: built.composition, attestation: issued.attestation, key: KEY, authority, clock: ports.clock } };
+      const common = { env, labAdapters: adapters, trust, attestation: { composition: built.composition, attestation: issued.attestation, key: KEY, authority, clock: ports.clock } };
       const nonceRows = await n("ps_api18_attestation_nonces", "1 = 1");
       const good = await runCompositionPreflight({ ...common, databases: dbs() });
       expect(good.checks.filter((c) => c.status !== "PASS")).toEqual([]); expect(good).toMatchObject({ passed: true, target: "LAB", ready: false, authorizesInstallation: false });
       expect((await runCompositionPreflight({ ...common, databases: dbs() })).digest).toBe(good.digest); expect(await n("ps_api18_attestation_nonces", "1 = 1")).toBe(nonceRows);
-      // sin proveedor KMS revisado (el registro del repositorio está vacío): falla cerrado
-      const closed = await runCompositionPreflight({ ...common, adapters: REVIEWED_KMS_ADAPTERS, databases: dbs() }); expect(closed.passed).toBe(false); expect(closed.checks.find((c) => c.id === "KMS_PROVIDER")).toMatchObject({ status: "FAIL", code: "KMS_PROVIDER_NOT_SELECTED" });
+      // sin adaptador sintético de laboratorio, solo existe el registro REVISADO oficial (vacío): falla cerrado
+      const closed = await runCompositionPreflight({ ...common, labAdapters: undefined, databases: dbs() }); expect(closed.passed).toBe(false); expect(closed.checks.find((c) => c.id === "KMS_PROVIDER")).toMatchObject({ status: "FAIL", code: "KMS_PROVIDER_NOT_SELECTED" });
       // privilegio en exceso REAL en la cuenta del registro → falla; al revocarlo vuelve a pasar
       const adminConn = await mysql.createConnection(adminOptions(manifest));
       try {
