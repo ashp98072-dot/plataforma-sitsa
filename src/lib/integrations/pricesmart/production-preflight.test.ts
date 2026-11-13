@@ -8,7 +8,8 @@ import { createInProcessIdentityAuthority, issueAttestation, type CompositionDes
 import type { KmsClient } from './kms-adapter';
 import type { DbIdentity } from './database-identity';
 import { PREFLIGHT_STATEMENTS, mariaDbPreflightDatabase } from './preflight-mariadb';
-import { runProductionPreflight, type PreflightDatabase, type PreflightInput } from './production-preflight';
+import { createProductionPreflightRunnerForTests, runProductionPreflight as officialRunner, type PreflightDatabase, type PreflightInput } from './production-preflight';
+import type { KmsAdapterRegistry } from './kms-provider-selection';
 import { RUNTIME_PRIVILEGE_POLICY } from './grants-audit';
 import { buildReadinessDiagnostic } from './readiness-diagnostic';
 import { isPriceSmartHandlerInstalled } from './runtime-state';
@@ -25,7 +26,7 @@ const grantLines = (): string[] => [
 const database = (): { lab: DbIdentity; production: DbIdentity } => ({
   lab: { host: '127.0.0.1', port: 3307, schema: 'sandbox_api02_x', runtimeUser: 'sandbox_api02_run', registryWriterUser: 'sandbox_api02_reg', migrationUser: 'sandbox_api02_mig', runtimeHost: '127.0.0.1', registryWriterHost: '127.0.0.1', migrationHost: '127.0.0.1' },
   production: { host: 'db.interno.example', port: 3306, schema: S, runtimeUser: 'ps_runtime', registryWriterUser: 'ps_registry', migrationUser: 'ps_migrator', runtimeHost: 'localhost', registryWriterHost: 'localhost', migrationHost: 'localhost' } });
-const kmsEnv = (over: Record<string, string | undefined> = {}) => ({ PRICESMART_KMS_TARGET: 'PRODUCTION', PRICESMART_KMS_CURRENT_ALIAS: 'prod.k1', PRICESMART_KMS_ALLOWED_ALIASES: 'prod.k1', ...over });
+const kmsEnv = (over: Record<string, string | undefined> = {}) => ({ PRICESMART_KMS_TARGET: 'PRODUCTION', PRICESMART_KMS_CURRENT_ALIAS: 'prod.k1', PRICESMART_KMS_ALLOWED_ALIASES: 'prod.k1', PRICESMART_KMS_PROVIDER: 'proveedor-aprobado', PRICESMART_KMS_SERVICE_IDENTITY: 'identidad-ps', ...over });
 const goodKms = (): KmsClient => ({ encrypt: async () => new Uint8Array(1), decrypt: async () => new Uint8Array(32), health: async () => true });
 const fakeDb = (over: Partial<PreflightDatabase> = {}): PreflightDatabase => ({ identity: async () => ({ db: S, account: 'ps_runtime@localhost' }), grants: async () => grantLines(), ...over });
 
@@ -51,12 +52,18 @@ async function input(over: Partial<PreflightInput> = {}, withAttestation = true)
   return { target: 'PRODUCTION', env: kmsEnv(), kmsClient: goodKms(), database: database(), db: fakeDb(), trust: a.trust,
     ...(withAttestation ? { attestation: { composition: a.composition, attestation: a.attestation, key: KEY, authority: a.authority, clock: { nowMs: () => Date.now() } } } : {}), ...over };
 }
-const status = (r: Awaited<ReturnType<typeof runProductionPreflight>>) => Object.fromEntries(r.checks.map(c => [c.id, c.status + (c.code ? `:${c.code}` : '')]));
+/** Registro oficial SIMULADO y aislado (no es `REVIEWED_KMS_ADAPTERS`): su adaptador entrega `client`. Permite probar el resto del preflight de PRODUCCIÓN sin que el llamador inyecte nada. */
+const simulatedOfficial = (client: KmsClient, targets: ('LAB' | 'PRODUCTION')[] = ['PRODUCTION']): KmsAdapterRegistry => ({ 'proveedor-aprobado': { targets, create: () => client } });
+/** Atajo de las pruebas heredadas: el `kmsClient` de la entrada (si lo hay) pasa a ser el cliente que entrega el adaptador oficial simulado; la entrada que recibe el ejecutor NO lleva `kmsClient`. */
+const runProductionPreflight = (i: PreflightInput) => { const { kmsClient, ...rest } = i ?? ({} as PreflightInput); return createProductionPreflightRunnerForTests(simulatedOfficial(kmsClient ?? goodKms()))(i ? (rest as PreflightInput) : (i as never)); };
+const status = (r: Awaited<ReturnType<typeof officialRunner>>) => Object.fromEntries(r.checks.map(c => [c.id, c.status + (c.code ? `:${c.code}` : '')]));
 
 describe('preflight de la composición productiva', () => {
-  it('con todo lo demás en orden, un preflight de PRODUCCIÓN NO puede pasar mientras el registro oficial de proveedores revisados esté vacío (API-21); no autoriza nada ni cambia el readiness', async () => {
-    const r = await runProductionPreflight(await input()); expect(status(r)).toEqual({ KMS_CONFIG: 'PASS', KMS_TARGET: 'PASS', KMS_PROVIDER_REVIEWED: 'FAIL:KMS_PROVIDER_NOT_SELECTED', KMS_HEALTH: 'PASS', DB_SEPARATION: 'PASS', DB_SESSION_IDENTITY: 'PASS', DB_GRANTS: 'PASS', TRUST_SEPARATION: 'PASS', ATTESTATION: 'PASS' });
-    expect(r.passed).toBe(false); expect(r.ready).toBe(false); expect(r.authorizesInstallation).toBe(false); expect(r.digest).toMatch(/^[a-f0-9]{64}$/);
+  it('con un registro oficial SIMULADO y aislado, todo en orden pasa; con el registro oficial REAL (vacío) un preflight de PRODUCCIÓN NO puede pasar; ninguno autoriza nada ni cambia el readiness', async () => {
+    const simulated = await runProductionPreflight(await input()); expect(status(simulated)).toEqual({ KMS_CONFIG: 'PASS', KMS_TARGET: 'PASS', KMS_PROVIDER_REVIEWED: 'PASS', KMS_HEALTH: 'PASS', DB_SEPARATION: 'PASS', DB_SESSION_IDENTITY: 'PASS', DB_GRANTS: 'PASS', TRUST_SEPARATION: 'PASS', ATTESTATION: 'PASS' });
+    expect(simulated.passed).toBe(true); expect(simulated.ready).toBe(false); expect(simulated.authorizesInstallation).toBe(false);
+    const real = await officialRunner(await input()); expect(status(real)).toEqual({ KMS_CONFIG: 'PASS', KMS_TARGET: 'PASS', KMS_PROVIDER_REVIEWED: 'FAIL:KMS_PROVIDER_NOT_SELECTED', KMS_HEALTH: 'FAIL:BLOCKED_BY_PREVIOUS', DB_SEPARATION: 'PASS', DB_SESSION_IDENTITY: 'PASS', DB_GRANTS: 'PASS', TRUST_SEPARATION: 'PASS', ATTESTATION: 'PASS' });
+    expect(real.passed).toBe(false); expect(real.ready).toBe(false); expect(real.authorizesInstallation).toBe(false); expect(real.digest).toMatch(/^[a-f0-9]{64}$/);
   });
   it('sin atestación el preflight no pasa (ATTESTATION omitida)', async () => {
     const r = await runProductionPreflight(await input({}, false)); expect(status(r).ATTESTATION).toBe('SKIPPED:NOT_PROVIDED'); expect(r.passed).toBe(false);
@@ -121,7 +128,7 @@ describe('preflight de la composición productiva', () => {
     expect(a.digest).toBe(b.digest); expect((await runProductionPreflight({ ...i, db: fakeDb({ grants: async () => [] }) })).digest).not.toBe(a.digest);
   });
   it('no consume nonces: puede repetirse (la verificación de la atestación es de solo lectura)', async () => {
-    const i = await input(); for (let n = 0; n < 3; n++) { const r = await runProductionPreflight(i); expect(status(r).ATTESTATION).toBe('PASS'); expect(r.checks.filter(c => c.status === 'FAIL').map(c => c.id)).toEqual(['KMS_PROVIDER_REVIEWED']); }   // la atestación se verifica sin consumirse; lo único que falla es la selección oficial de proveedor
+    const i = await input(); for (let n = 0; n < 3; n++) { const r = await runProductionPreflight(i); expect(status(r).ATTESTATION).toBe('PASS'); expect(r.passed).toBe(true); }   // la atestación se verifica sin consumirse; lo único que falla es la selección oficial de proveedor
   });
   it('no cambia el readiness ni instala nada: el diagnóstico sigue ready=false y sin handler', async () => {
     await runProductionPreflight(await input()); expect(isPriceSmartHandlerInstalled()).toBe(false);
@@ -151,6 +158,57 @@ describe('lector de preflight sobre MariaDB: solo dos lecturas fijas', () => {
     for (const f of ['preflight-mariadb.ts', 'production-preflight.ts', 'grants-audit.ts', 'database-identity.ts']) { const t = strip(f); if (['preflight-mariadb.ts', 'production-preflight.ts'].includes(f)) expect(t, f).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\s+(INTO|TABLE|FROM|DATABASE|USER)?/); /* los módulos que tocan la base solo leen */ expect(t, f).not.toMatch(/process\.env|\bfetch\s*\(/); expect(t, f).not.toContain(['install', 'PriceSmartHandler'].join('')); expect(t, f).not.toMatch(/from '\.\/runtime/); }
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const names = ['preflight-mariadb', 'production-preflight', 'grants-audit', 'database-identity'];
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('attestation-mariadb') && !n.startsWith('composition-') && !n.startsWith('account-plans') && !n.includes('.test.')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`))) hits.push(path.relative(root, f)); } } };
+    walk(root); expect(hits).toEqual([]);
+  }, 30000);
+});
+
+// ---- API-21 (auditoría de #615, SHA 1d5e5f16): el cliente KMS de PRODUCCIÓN procede EXCLUSIVAMENTE de la selección oficial
+describe('el cliente KMS verificado en PRODUCCIÓN procede solo del registro oficial; un cliente inyectado no lo sustituye', () => {
+  const counting = (healthy: boolean) => { const c = { calls: 0, health: 0, client: undefined as unknown as KmsClient }; c.client = { encrypt: async () => { c.calls++; return new Uint8Array(1); }, decrypt: async () => { c.calls++; return new Uint8Array(32); }, health: async () => { c.health++; return healthy; } }; return c; };
+  const run = async (registry: KmsAdapterRegistry, over: Partial<PreflightInput> = {}) => createProductionPreflightRunnerForTests(registry)(await input(over));
+  it('con un registro oficial simulado NO VACÍO, la salud se mide sobre el cliente del adaptador oficial: el inyectado no se usa ni una vez', async () => {
+    const official = counting(true); const injected = counting(false);
+    const r = await run(simulatedOfficial(official.client), { kmsClient: injected.client }); expect(status(r).KMS_HEALTH).toBe('PASS'); expect(r.passed).toBe(true);
+    expect(official.health).toBe(1); expect(injected.health).toBe(0); expect(injected.calls).toBe(0);
+  });
+  it('cliente sustituido: un cliente inyectado sano NO compensa un cliente oficial enfermo; uno inyectado enfermo no daña a un oficial sano', async () => {
+    const sickOfficial = counting(false); const healthyInjected = counting(true);
+    const r = await run(simulatedOfficial(sickOfficial.client), { kmsClient: healthyInjected.client }); expect(status(r).KMS_HEALTH).toBe('FAIL:KMS_UNHEALTHY'); expect(r.passed).toBe(false); expect(healthyInjected.health).toBe(0);
+    const healthyOfficial = counting(true); const sickInjected = counting(false); const ok = await run(simulatedOfficial(healthyOfficial.client), { kmsClient: sickInjected.client }); expect(status(ok).KMS_HEALTH).toBe('PASS'); expect(sickInjected.health).toBe(0);
+  });
+  it('sin adaptador oficial para el proveedor configurado, un cliente inyectado sano no aprueba nada y ni siquiera se consulta', async () => {
+    const injected = counting(true);
+    for (const registry of [{} as KmsAdapterRegistry, { 'otro-proveedor': { targets: ['PRODUCTION'], create: () => counting(true).client } } as KmsAdapterRegistry]) {
+      const r = await run(registry, { kmsClient: injected.client }); expect(status(r).KMS_PROVIDER_REVIEWED).toMatch(/^FAIL:KMS_PROVIDER_(NOT_SELECTED|UNKNOWN)$/); expect(status(r).KMS_HEALTH).toBe('FAIL:BLOCKED_BY_PREVIOUS'); expect(r.passed).toBe(false);
+    }
+    expect(injected.health).toBe(0); expect(injected.calls).toBe(0);
+  });
+  it('un adaptador oficial aprobado solo para LAB, sin identidad de servicio, con configuración de otro destino o que falla: PRODUCCIÓN no pasa y el cliente inyectado no interviene', async () => {
+    const injected = counting(true);
+    expect(status(await run(simulatedOfficial(counting(true).client, ['LAB']), { kmsClient: injected.client })).KMS_PROVIDER_REVIEWED).toBe('FAIL:KMS_PROVIDER_NOT_APPROVED_FOR_TARGET');
+    expect(status(await run(simulatedOfficial(counting(true).client), { env: kmsEnv({ PRICESMART_KMS_SERVICE_IDENTITY: undefined }), kmsClient: injected.client })).KMS_PROVIDER_REVIEWED).toBe('FAIL:SERVICE_IDENTITY_MISSING');
+    expect(status(await run(simulatedOfficial(counting(true).client, ['LAB', 'PRODUCTION']), { env: { PRICESMART_KMS_TARGET: 'LAB', PRICESMART_KMS_CURRENT_ALIAS: 'lab.k1', PRICESMART_KMS_ALLOWED_ALIASES: 'lab.k1', PRICESMART_KMS_PROVIDER: 'proveedor-aprobado', PRICESMART_KMS_SERVICE_IDENTITY: 'identidad-ps' }, kmsClient: injected.client })).KMS_PROVIDER_REVIEWED).toBe('FAIL:KMS_TARGET_MISMATCH');
+    const boom = await run({ 'proveedor-aprobado': { targets: ['PRODUCTION'], create: () => { throw new Error('secreto-adaptador'); } } }, { kmsClient: injected.client }); expect(status(boom).KMS_PROVIDER_REVIEWED).toBe('FAIL:ADAPTER_FAILED'); expect(JSON.stringify(boom)).not.toContain('secreto');
+    expect(injected.health).toBe(0);
+  });
+  it('el adaptador oficial solo recibe la configuración y una referencia de identidad; el cliente que devuelva debe ser un KmsClient', async () => {
+    let seen: unknown; const r = await run({ 'proveedor-aprobado': { targets: ['PRODUCTION'], create: (i) => { seen = i; return counting(true).client; } } }); expect(r.passed).toBe(true);
+    expect(Object.keys(seen as object).sort()).toEqual(['config', 'serviceIdentityRef']);
+    for (const bad of [null, {}, 'x']) expect(status(await run({ 'proveedor-aprobado': { targets: ['PRODUCTION'], create: () => bad as never } })).KMS_PROVIDER_REVIEWED).toBe('FAIL:ADAPTER_FAILED');
+  });
+  it('el ejecutor público está ligado al registro OFICIAL (vacío): con cualquier cliente inyectado, sano o no, PRODUCCIÓN no pasa y el cliente no se consulta', async () => {
+    const injected = counting(true); const r = await officialRunner(await input({ kmsClient: injected.client }));
+    expect(status(r).KMS_PROVIDER_REVIEWED).toBe('FAIL:KMS_PROVIDER_NOT_SELECTED'); expect(status(r).KMS_HEALTH).toBe('FAIL:BLOCKED_BY_PREVIOUS'); expect(r.passed).toBe(false); expect(injected.health).toBe(0); expect(injected.calls).toBe(0);
+  });
+  it('en LAB sí se usa el cliente sintético inyectado (nunca ratifica PRODUCCIÓN); sin cliente falla', async () => {
+    const injected = counting(true); const labEnv = { PRICESMART_KMS_TARGET: 'LAB', PRICESMART_KMS_CURRENT_ALIAS: 'lab.k1', PRICESMART_KMS_ALLOWED_ALIASES: 'lab.k1' };
+    const lab = await officialRunner({ ...(await input()), target: 'LAB', env: labEnv, kmsClient: injected.client }); expect(status(lab).KMS_PROVIDER_REVIEWED).toBe('PASS'); expect(status(lab).KMS_HEALTH).toBe('PASS'); expect(injected.health).toBe(1);
+    const none = await officialRunner({ ...(await input()), target: 'LAB', env: labEnv, kmsClient: undefined }); expect(status(none).KMS_PROVIDER_REVIEWED).toBe('FAIL:KMS_CLIENT_MISSING');
+  });
+  it('REVIEWED_KMS_ADAPTERS sigue vacío y las fábricas de ejecutores de prueba solo se usan en pruebas', async () => {
+    const { REVIEWED_KMS_ADAPTERS } = await import('./kms-provider-selection'); expect(Object.keys(REVIEWED_KMS_ADAPTERS)).toEqual([]);
+    const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = ['createProductionPreflight', 'RunnerForTests'].join('');
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && n !== 'production-preflight.ts' && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
 });
