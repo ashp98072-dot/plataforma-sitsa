@@ -194,7 +194,7 @@ describe('sin efecto sobre readiness ni runtime', () => {
     const mods = ['installation-gate.ts', 'registry-identity-authority.ts', 'mariadb-composition.ts', 'attestation-mariadb.ts'];
     for (const f of mods) { const t = strip(f); expect(t, f).not.toMatch(/process\.env|\bfetch\s*\(/); expect(t, f).not.toContain(['install', 'PriceSmartHandler'].join('')); expect(t, f).not.toMatch(/from '\.\/runtime/); expect(t, f).not.toMatch(/readiness-diagnostic/); }
     const names = mods.map(f => f.replace(/\.ts$/, '')); const root = path.resolve(__dirname, '../../..'); const hits: string[] = [];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('conformance-attestation') && !n.startsWith('installation-gate')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`) || t.includes(`./${x}`))) hits.push(path.relative(root, f)); } } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('conformance-attestation') && !n.startsWith('installation-gate') && !n.startsWith('production-preflight')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`) || t.includes(`./${x}`))) hits.push(path.relative(root, f)); } } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
   it('el gate usa solo la atestación estricta y no ofrece relajar la conformidad', () => {

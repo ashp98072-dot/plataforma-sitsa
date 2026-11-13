@@ -7,14 +7,14 @@ vi.mock('../../sandbox-db', () => ({ isSandboxVerifiedPool: () => state.verified
 import { mariaDbAttestationPorts } from './attestation-mariadb';
 
 const LAB = { schema: 'sandbox_api02_x', runtimeUser: 'sandbox_api02_x', target: 'LAB' as const };
-const PROD = { schema: 'novalvion_prod_att', runtimeUser: 'att_runtime', target: 'PRODUCTION' as const };
+const PROD = { schema: 'novalvion_prod_att', runtimeUser: 'att_runtime', target: 'PRODUCTION' as const, runtimeHost: 'localhost' };
 type Calls = { sql: string[]; destroyed: number; released: number };
-function fakePool(o: { db?: string; account?: string; insertErrno?: number; rows?: unknown[]; insertMessage?: string } = {}, cfg: { schema: string; runtimeUser: string } = LAB) {
+function fakePool(o: { db?: string; account?: string; insertErrno?: number; rows?: unknown[]; insertMessage?: string } = {}, cfg: { schema: string; runtimeUser: string; runtimeHost?: string } = LAB) {
   const calls: Calls = { sql: [], destroyed: 0, released: 0 };
   const conn = {
     async execute(sql: string) {
       calls.sql.push(sql);
-      if (sql.includes('DATABASE()')) return [[{ db: o.db ?? cfg.schema, account: o.account ?? `${cfg.runtimeUser}@127.0.0.1` }]];
+      if (sql.includes('DATABASE()')) return [[{ db: o.db ?? cfg.schema, account: o.account ?? `${cfg.runtimeUser}@${cfg.runtimeHost ?? '127.0.0.1'}` }]];
       if (/^INSERT/i.test(sql)) { if (o.insertErrno) throw Object.assign(new Error(o.insertMessage ?? 'motor: detalle interno secreto-db-77'), { errno: o.insertErrno }); return [{ affectedRows: 1 }]; }
       return [o.rows ?? []];
     },
@@ -62,7 +62,7 @@ describe('almacén de nonces', () => {
   });
   it('si la sesión no es la esperada (esquema o cuenta distintos) cierra y destruye la conexión', async () => {
     state.verified = true;
-    for (const o of [{ db: 'otra_db' }, { account: 'otro@127.0.0.1' }]) {
+    for (const o of [{ db: 'otra_db' }, { account: 'otro@127.0.0.1' }, { account: 'sandbox_api02_x@%' }, { account: 'sandbox_api02_x@10.0.0.5' }, { account: 'sandbox_api02_x' }, { account: 'a@b@sandbox_api02_x@127.0.0.1' }]) {
       const { pool, calls } = fakePool(o); await expect(mariaDbAttestationPorts(pool, LAB).nonces.consume(nonce, 5000)).rejects.toThrow('UNAVAILABLE');
       expect(calls.destroyed).toBe(1); expect(calls.sql.some(s => /^INSERT/i.test(s))).toBe(false);
     }
@@ -88,5 +88,22 @@ describe('aislamiento estático del módulo', () => {
   const src = readFileSync(path.join(__dirname, 'attestation-mariadb.ts'), 'utf8').replace(/\/\/.*$/gm, '');
   it('solo inserta y lee: nunca UPDATE, DELETE, TRUNCATE ni DDL; no lee el entorno; no instala handlers', () => {
     expect(src).not.toMatch(/\b(UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\b\s/); expect(src).not.toMatch(/process\.env/); expect(src).not.toContain(['install', 'PriceSmartHandler'].join('')); expect(src).not.toMatch(/from '\.\/runtime/);
+  });
+});
+
+describe('cuenta efectiva completa (usuario@host) en el almacén de nonces', () => {
+  it('PRODUCTION exige un host de cuenta exacto y sin comodines; LAB solo admite 127.0.0.1', () => {
+    state.verified = false;
+    expect(() => mariaDbAttestationPorts(fakePool({}, { ...PROD }).pool, { ...PROD })).not.toThrow();
+    const { runtimeHost: _omit, ...noHost } = PROD; void _omit; expect(() => mariaDbAttestationPorts(fakePool({}, PROD).pool, noHost as never)).toThrow();
+    for (const runtimeHost of ['%', '10.0.%', 'db_1', 5 as never, undefined as never]) expect(() => mariaDbAttestationPorts(fakePool({}, PROD).pool, { ...PROD, runtimeHost })).toThrow();
+    state.verified = true; expect(() => mariaDbAttestationPorts(fakePool().pool, { ...LAB, runtimeHost: '10.0.0.5' })).toThrow(); expect(() => mariaDbAttestationPorts(fakePool().pool, { ...LAB, runtimeHost: '127.0.0.1' })).not.toThrow();
+  });
+  it('una sesión con el mismo usuario pero otro host (o comodín) en PRODUCCIÓN se rechaza antes de escribir', async () => {
+    state.verified = false;
+    for (const account of ['att_runtime@10.0.0.5', 'att_runtime@%', 'att_runtime@LOCAL%', 'otro@localhost']) {
+      const { pool, calls } = fakePool({ account }, PROD); await expect(mariaDbAttestationPorts(pool, PROD).nonces.consume(nonce, 5000), account).rejects.toThrow('UNAVAILABLE'); expect(calls.destroyed).toBe(1); expect(calls.sql.some(s => /^INSERT/i.test(s))).toBe(false);
+    }
+    const ok = fakePool({ account: 'att_runtime@LOCALHOST' }, PROD); expect(await mariaDbAttestationPorts(ok.pool, PROD).nonces.consume(nonce, 5000)).toBe('FRESH'); state.verified = true;
   });
 });
