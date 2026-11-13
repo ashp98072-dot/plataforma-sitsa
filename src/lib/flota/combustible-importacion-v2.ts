@@ -25,9 +25,9 @@ function texto(c: ExcelJS.Cell): string {
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? "Fecha inválida" : v.toISOString();
   return c.text;
 }
-function encabezado(r: ExcelJS.Row): Columnas | null {
+function encabezado(r: ExcelJS.Row, auxiliaresShell = false): Columnas | null {
   const m: Columnas = {}; let ambiguo = false;
-  r.eachCell((c, n) => { for (const k of campos) if (alias[k].includes(norm(texto(c)))) { if (m[k]) ambiguo = true; m[k] = n; } });
+  r.eachCell((c, n) => { for (const k of campos) if (alias[k].includes(norm(texto(c))) || (auxiliaresShell && k === "auxiliar" && ["SUCURSAL","OBSERVACIONES"].includes(norm(texto(c))))) { if (m[k]) ambiguo = true; m[k] = n; } });
   if (ambiguo && m.vale && m.placa) throw new ErrorArchivoProveedor("Encabezados ambiguos: hay columnas repetidas.");
   return !ambiguo && m.vale && m.placa && m.fecha && m.monto && m.galones && m.precio ? m : null;
 }
@@ -107,7 +107,7 @@ export function resumirProveedorV2(p: PreviewProveedorV2): void {
   };
 }
 
-export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor, diagnostico?: (fila: FilaProveedorV2, campo: string) => void, versionParser: 1 | 2 = 2): Promise<PreviewProveedorV2> {
+export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedor, diagnostico?: (fila: FilaProveedorV2, campo: string) => void, versionParser: 1 | 2 | 3 = 2): Promise<PreviewProveedorV2> {
   validarArchivoImportacion({ name: "reporte.xlsx", size: buffer.length }); validarContenedorXlsx(buffer);
   const originales = leerOoxmlProveedor(buffer);
   const wb = new ExcelJS.Workbook();
@@ -121,15 +121,15 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
     if (versionParser === 1) for (let n = 1; n <= Math.min(25, ws.rowCount); n++) { const m = encabezado(ws.getRow(n)); if (m) { cols = m; inicio = n; reconocidas++; break; } }
     for (let n = 1; n <= ws.rowCount; n++) {
       const row = ws.getRow(n);
-      const nuevoEncabezado = versionParser === 1 && (!cols || n <= inicio) ? null : encabezado(row);
-      if (nuevoEncabezado && versionParser === 2) { cols = nuevoEncabezado; reconocidas++; }
+      const nuevoEncabezado = versionParser === 1 && (!cols || n <= inicio) ? null : encabezado(row, versionParser === 3);
+      if (nuevoEncabezado && versionParser >= 2) { cols = nuevoEncabezado; reconocidas++; }
       // Un título de lote ocupa una sola celda, nunca se deduce de una nota o consumo.
       const ocupadas: ExcelJS.Cell[] = [];
       // Excel suele combinar el título: conservar solo la celda maestra.
       row.eachCell(c => { if (c.master.address === c.address && texto(c).trim()) ocupadas.push(c); });
       const titulo = ocupadas.length === 1 && ocupadas[0].type !== ExcelJS.ValueType.Formula
         ? texto(ocupadas[0]).trim().match(/^LOTE\s*(?:NO\.?\s*|N[°º]\s*|[:#-]\s*)?([A-Z0-9][A-Z0-9_-]*)$/i) : null;
-      if (titulo && versionParser === 2) lote = titulo[1];
+      if (titulo && versionParser >= 2) lote = titulo[1];
       const identificadores = new Map<string, { literal: string; texto: string; seguro: boolean }>();
       for (const k of ["vale", "serie", "factura"] as const) {
         if (!cols?.[k]) continue;
@@ -165,7 +165,7 @@ export async function analizarProveedorV2(buffer: Buffer, perfil: PerfilProveedo
       // Una nota con un nombre en PILOTO no es una operación. Un vale o placa aislados requieren además contexto operativo.
       const contexto = !!(textos.monto.trim() || textos.galones.trim() || (tieneVale && textos.fecha.trim()));
       const primera = ocupadas[0] ? texto(ocupadas[0]).trim() : "";
-      if (!cols || n <= inicio || nuevoEncabezado || (versionParser === 2 && (titulo || /^(?:TOTAL|SUB\s*TOTAL)(?:\s|:|$)/i.test(primera))) || (!tieneVale && !tienePlaca) || !contexto || /^(TOTAL|SUBTOTAL)\b/i.test(`${textos.vale.trim()} ${textos.placa.trim()}`)) {
+      if (!cols || n <= inicio || nuevoEncabezado || (versionParser >= 2 && (titulo || /^(?:TOTAL|SUB\s*TOTAL)(?:\s|:|$)/i.test(primera))) || (!tieneVale && !tienePlaca) || !contexto || /^(TOTAL|SUBTOTAL)\b/i.test(`${textos.vale.trim()} ${textos.placa.trim()}`)) {
         f.estado = "IGNORADA"; f.motivos.push("Cabecera, subtotal, nota o fila sin operación"); continue;
       }
       if (f.vale) f.identidadCandidata = hashImportacion(JSON.stringify([f.vale])); // namespace empresa/proveedor lo aplica el servidor

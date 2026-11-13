@@ -91,7 +91,7 @@ export async function confirmarArchivo(ctx: Contexto, buffer: Buffer, nombre: st
             const [existente] = await rows(c, "SELECT id FROM flota_cb2_importaciones WHERE empresa_id=? AND proveedor_id=? AND archivo_sha256=? FOR UPDATE", [ctx.empresaId, ctx.proveedorId, sha]);
             if (existente)
                 return { importacionId: Number(existente.id), existente: true, requiereReanudacion: true };
-            const iid = await insert(c, "flota_cb2_importaciones", { empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, proveedor_nombre: String(p.nombre_comercial), perfil: entrada.perfil, version_contrato: 2, version_parser: 2, archivo_nombre: nombre, archivo_ruta: ruta, archivo_mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", archivo_tamano: buffer.length, archivo_sha256: sha, estado: "SOLO_EVIDENCIA", revision: 1, resumen_actual: "{}", creado_por: ctx.actor.id, creado_en: ahoraLocal(), actualizado_por: ctx.actor.id, actualizado_en: ahoraLocal() });
+            const iid = await insert(c, "flota_cb2_importaciones", { empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, proveedor_nombre: String(p.nombre_comercial), perfil: entrada.perfil, version_contrato: 2, version_parser: 3, archivo_nombre: nombre, archivo_ruta: ruta, archivo_mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", archivo_tamano: buffer.length, archivo_sha256: sha, estado: "SOLO_EVIDENCIA", revision: 1, resumen_actual: "{}", creado_por: ctx.actor.id, creado_en: ahoraLocal(), actualizado_por: ctx.actor.id, actualizado_en: ahoraLocal() });
             nueva = true;
             const eventos = await resolver(c, ctx, lineas, entrada.seleccion, iid, 1, entrada.moneda);
             await proyectar(c, ctx, iid, 1, eventos);
@@ -142,10 +142,10 @@ export async function reanudarArchivo(ctx: Contexto, op: {
     finally {
         c.release();
     }
-    if (Number(h.version_contrato) !== 2 || ![1, 2].includes(Number(h.version_parser)))
+    if (Number(h.version_contrato) !== 2 || ![1, 2, 3].includes(Number(h.version_parser)))
         throw new ErrorCB2("Version de evidencia no soportada.");
     const buffer = await storage.leer(ctx.empresaId, String(h.archivo_ruta), String(h.archivo_sha256));
-    const lineas = await analizar(buffer, h.perfil, currency, Number(h.version_parser) as 1 | 2);
+    const lineas = await analizar(buffer, h.perfil, currency, Number(h.version_parser) as 1 | 2 | 3);
     return tx(ctx, async (c) => {
         const retry = await anterior(c, ctx, "REANUDAR", op.clave, request);
         if (retry)

@@ -99,8 +99,8 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
         expect(creados[0][2]).toMatchObject({empleado_id:77,piloto_informado:"DEMO",producto:null,producto_clasificado:"NO_DETERMINADO"});
         const eventos=m.diario.mock.calls[0][5];expect(JSON.stringify(eventos)).toContain("empleadoId");
     });
-    it("producto ausente y V-Power sin variante exigen clasificación explícita", async () => {
-        for(const producto of ["","V-POWER"]){const {file,entrada,recibo}=await preparar("C-001ABC",false,{},producto);await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"producto-pendiente-514",recibo.token)).rejects.toThrow("Clasifica el combustible");}
+    it("producto ausente y producto ajeno al combustible exigen clasificación explícita", async () => {
+        for(const producto of ["","20W50"]){const {file,entrada,recibo}=await preparar("C-001ABC",false,{},producto);await expect(confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"producto-pendiente-514",recibo.token)).rejects.toThrow("Clasifica el combustible");}
         expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);
     });
     it("corrección manual justificada acepta otra unidad autorizada conservando la placa original", async () => {
@@ -131,7 +131,7 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
         await confirmarArchivo(ctx, file, "sintetico.xlsx", entrada, "clave-sintetica-511", recibo.token);
         const consumos = m.insert.mock.calls.filter(([, table]) => table === "flota_cb2_consumos");
         expect(consumos).toHaveLength(1); expect(consumos[0][2]).toMatchObject({ empresa_id: 7, proveedor_id: 3, placa_original: "C 001 ABC", placa_normalizada: "C 001 ABC", vehiculo_id: 1 });
-        expect(m.insert.mock.calls.find(([, table]) => table === "flota_cb2_importaciones")![2].version_parser).toBe(2);
+        expect(m.insert.mock.calls.find(([, table]) => table === "flota_cb2_importaciones")![2].version_parser).toBe(3);
     });
     it.each(["P-001ABC", "C-001AB7"])("selección manual no permite placa diferente: %s", async placa => {
         const { file, entrada, recibo } = await preparar(placa);

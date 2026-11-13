@@ -1,4 +1,5 @@
 "use client";
+import { FondosConsumoCB2 } from "./fondos-consumo";
 import { Fragment, useId, useState } from "react";
 import type { CatalogosCB2, Registro } from "./client";
 import type { EjecutarCB2 } from "./importar";
@@ -44,6 +45,7 @@ export function TablaConsumosCB2({ rows, seleccion, onSeleccionar, canWrite, adm
                     <tr id={id} className={styles.detailRow} hidden={!abierto} onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); setAbiertos(prev => ({ ...prev, [r.id]: false })); document.getElementById(`${id}-boton`)?.focus(); } }}><td colSpan={12}><div className={styles.editGrid}>
                         <section aria-label={`Procedencia del consumo ${r.id}`}><h3>Importación y trazabilidad</h3><p>Importacion #{String(r.importacion_origen_id)} / Consumo #{r.id}</p><p>Documento: {r.factura_id == null ? "Sin documento" : `#${r.factura_id}`}</p><DetalleConsumoCB2 r={r}/></section>
                         <section aria-label={`Valores originales del consumo ${r.id}`}><h3>Valores originales registrados</h3><p>Galones: {String(r.galones ?? "No informado")} · Precio: {String(r.precio ?? "No informado")} · Monto: {String(r.monto ?? "No informado")} · Moneda: {String(r.moneda ?? "No informada")}</p><p>La tabla redondea solo para mostrar. Los datos y las operaciones conservan su precisión original.</p><details><summary>Evidencia recibida completa de este consumo</summary><pre className="max-w-full whitespace-pre-wrap break-all text-xs">{JSON.stringify(r, null, 2)}</pre></details></section>
+                        {abierto && <section aria-label={`Fondos del consumo ${r.id}`}><h3>Conciliaci?n posterior con fondos</h3><FondosConsumoCB2 api={api} r={r} canWrite={canWrite} locked={locked}/></section>}
                         {canWrite && admin && <section aria-label={`Corrección del consumo ${r.id}`}><h3>Corrección de asignación registrada</h3><CorregirCB2 key={`${claveBorrador}:${r.revision_asignacion ?? 0}`} r={r} cat={cat} api={api} run={run} locked={locked} borrador={borradores[claveBorrador]} onBorradorChange={v => setBorradores(prev => { const next = { ...prev }; if (v) next[claveBorrador] = v; else delete next[claveBorrador]; return next; })}/></section>}
                     </div></td></tr>
                 </Fragment>;

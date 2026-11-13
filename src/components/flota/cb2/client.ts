@@ -39,6 +39,7 @@ export type Registro = {
 };
 export type CatalogosCB2 = {
     identidadesIndependientes?: boolean;
+    pilotoReportadoExterno?: boolean;
     pilotosExternos?: import("@/lib/flota/cb2/terceros-model").PilotoTercero[];
     unidadesExternas?: import("@/lib/flota/cb2/terceros-model").UnidadTercera[];
     tercerosDirectos?: boolean;
