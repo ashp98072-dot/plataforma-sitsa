@@ -1,4 +1,5 @@
 import { estadoEsquemaFisico, consultaFisicaTx } from "./identidad-fisica-schema";
+import { sinOperacionesAbiertas } from "./identidad-fisica-operaciones";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
@@ -29,10 +30,6 @@ function verificarIdentidad(vs:RowDataPacket[]) {
   const primero=vs[0], placa=primero&&placaComparable(String(primero.placa)),chasis=primero&&serial(primero.chasis);
   if(vs.length<2||!placa||!chasis||!/^[A-Z0-9]{6,32}$/.test(chasis)||/^(.)\1+$/.test(chasis)||["DESCONOCIDO","PENDIENTE","SINDATO","NOAPLICA"].includes(chasis)||vs.some(v=>placaComparable(String(v.placa))!==placa||serial(v.chasis)!==chasis||v.tipo_unidad!==primero.tipo_unidad||Number(v.activo)!==1||v.estado!=="Activo"||Number(v.en_taller??0)!==0))throw new ErrorCB2("No acredita la misma unidad física activa: placa, tipo, serie real y situación operativa deben coincidir.");
   return {placa,chasis,tipo:String(primero.tipo_unidad)};
-}
-async function sinOperacionesAbiertas(c:PoolConnection,ids:number[]) {
-  const tablas=await rows(c,"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('flota_viajes','tms_planes_viaje')");
-  for(const t of tablas){const marks=ids.map(()=>"?").join(",");const sql=t.TABLE_NAME==='flota_viajes'?`SELECT id FROM flota_viajes WHERE vehiculo_id IN (${marks}) AND (estado<>'cerrado' OR hora_llegada IS NULL) FOR UPDATE`:`SELECT id FROM tms_planes_viaje WHERE tc_vehiculo_id IN (${marks}) AND (estado NOT IN ('Cerrado','Cancelado') OR fecha_plan>=CURRENT_DATE) FOR UPDATE`;if((await rows(c,sql,ids)).length)throw new ErrorCB2("Hay viajes, reservas o diferencias operativas pendientes; resolver antes de consolidar.");}
 }
 export async function inspeccionarIdentidadFisica(ctx:ContextoFisico,ids:number[]) {
   const c=await getPool().getConnection();

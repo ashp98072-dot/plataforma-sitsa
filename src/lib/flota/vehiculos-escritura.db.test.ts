@@ -19,6 +19,7 @@ import { catalogoSinAlias } from "./vehiculos-alias";
 import { escribirVehiculos, exigirPlacaLibreTx } from "./vehiculos-escritura";
 import { inspeccionarIdentidadFisica, proponerIdentidadFisica, consultarIdentidadFisica, aprobarIdentidadFisica } from "./identidad-fisica";
 import { identidadFisicaHttp } from "./identidad-fisica-http";
+import { sinOperacionesAbiertas } from "./identidad-fisica-operaciones";
 const pipe=process.env.CB2_587_PIPE??"";
 const q=async(s:string,p:unknown[]=[]) => (await state.pool!.query<RowDataPacket[]>(s,p))[0];
 const ctx=(slug="e1")=>({params:Promise.resolve({slug})});
@@ -102,6 +103,21 @@ describe.skipIf(!pipe)("escritores HTTP reales / MariaDB aislada",()=>{
   }
   await q("CREATE TABLE flota_viajes(id INT PRIMARY KEY,empresa_id INT,vehiculo_id INT,estado VARCHAR(30),hora_llegada DATETIME,FOREIGN KEY(vehiculo_id) REFERENCES flota_vehiculos(id))");
   await q("INSERT INTO flota_viajes VALUES(1,1,651,'cerrado',NOW()),(2,2,1300,'cerrado',NOW())");
+  await q("CREATE TABLE tms_unidades(id INT PRIMARY KEY,empresa_id INT,flota_vehiculo_id INT,FOREIGN KEY(flota_vehiculo_id) REFERENCES flota_vehiculos(id))");
+  await q("CREATE TABLE tms_planes_viaje(id INT PRIMARY KEY,empresa_id INT,tc_vehiculo_id INT,unidad_id INT,estado VARCHAR(40),fecha_plan DATE,FOREIGN KEY(tc_vehiculo_id) REFERENCES flota_vehiculos(id),FOREIGN KEY(unidad_id) REFERENCES tms_unidades(id))");
+  await q("INSERT INTO tms_unidades VALUES(9001,2,1300)");
+  await q("INSERT INTO tms_planes_viaje VALUES(1,1,651,NULL,'Cerrado',CURRENT_DATE),(2,2,NULL,9001,'Cancelado','2099-01-01')");
+  const operaciones=await state.pool!.getConnection();
+  try{
+   await expect(sinOperacionesAbiertas(operaciones,[651,1300])).resolves.toBeUndefined();
+   await q("UPDATE flota_viajes SET estado='abierto',hora_llegada=NULL WHERE id=1");await expect(sinOperacionesAbiertas(operaciones,[651,1300])).rejects.toThrow('pendientes');
+   await q("UPDATE flota_viajes SET estado='cerrado' WHERE id=1");await expect(sinOperacionesAbiertas(operaciones,[651,1300])).rejects.toThrow('pendientes');
+   await q("UPDATE flota_viajes SET hora_llegada=NOW() WHERE id=1");
+   for(const estado of ['Programado','En ruta','Cargado','Descargado','DESCONOCIDO']){await q("UPDATE tms_planes_viaje SET estado=? WHERE id=1",[estado]);await expect(sinOperacionesAbiertas(operaciones,[651,1300])).rejects.toThrow('pendientes');}
+   await q("UPDATE tms_planes_viaje SET estado='Cerrado' WHERE id=1");await q("UPDATE tms_planes_viaje SET estado='Programado' WHERE id=2");await expect(sinOperacionesAbiertas(operaciones,[651,1300])).rejects.toThrow('pendientes');
+   await q("UPDATE tms_planes_viaje SET estado='Cancelado' WHERE id=2");await expect(sinOperacionesAbiertas(operaciones,[651,1300])).resolves.toBeUndefined();
+   await q("ALTER TABLE tms_planes_viaje CHANGE unidad_id unidad_legacy_id INT");await expect(sinOperacionesAbiertas(operaciones,[651,1300])).rejects.toMatchObject({status:503,message:expect.stringContaining('tms_planes_viaje.unidad_id')});await q("ALTER TABLE tms_planes_viaje CHANGE unidad_legacy_id unidad_id INT");
+  }finally{operaciones.release();}
   const originales=await q("SELECT * FROM flota_vehiculos WHERE id IN (651,1300) ORDER BY id"),accesos=await q("SELECT * FROM flota_vehiculo_acceso ORDER BY vehiculo_id,empresa_id");
   const c1={empresaId:1,usuarioId:1,usuario:'LAB1',autorizar:async()=>{}},c2={empresaId:2,usuarioId:2,usuario:'LAB2',autorizar:async()=>{}};
   const inspect=await inspeccionarIdentidadFisica(c1,[651,1300]);expect(inspect.compatible).toBe(true);
