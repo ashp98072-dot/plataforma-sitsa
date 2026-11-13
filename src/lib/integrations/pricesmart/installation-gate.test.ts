@@ -63,14 +63,16 @@ function setup(target: 'LAB' | 'PRODUCTION' = 'LAB', over: { subject?: ResourceS
     composition[port] = { instance, implementationId: `${port}-ref`, version: '1.0.0' }; authority.enroll(instance, port, `${port}-res`);
   }
   const identity = { authority, trusted: { [authorityId]: AUTH_KEY } };
-  return { composition, authority, identity, registry, instances, authorityId };
+  const other = { [target === 'LAB' ? 'auth-prod-x' : 'auth-lab-x']: randomBytes(32) };
+  const trust = target === 'LAB' ? { lab: { [authorityId]: AUTH_KEY }, production: other } : { lab: other, production: { [authorityId]: AUTH_KEY } };
+  return { composition, authority, identity, registry, instances, authorityId, trust };
 }
 const clockAt = (t: number | (() => number)): TrustedClock => ({ nowMs: typeof t === 'function' ? t : () => t });
 async function attested(s: ReturnType<typeof setup>, target: 'LAB' | 'PRODUCTION', ttlMs = 60_000, at = NOW) {
   return (await issueAttestation({ composition: s.composition, target, key: KEY, nowMs: at, ttlMs, identity: s.identity })).attestation;
 }
 const input = (s: ReturnType<typeof setup>, attestation: Awaited<ReturnType<typeof attested>>, target: 'LAB' | 'PRODUCTION', over: Partial<InstallationInput> = {}): InstallationInput => ({
-  composition: s.composition, attestation, target, key: KEY, identity: s.identity, clock: clockAt(NOW + 1000), labAuthorityIds: ['auth-lab'], ...over });
+  composition: s.composition, attestation, target, key: KEY, authority: s.authority, trust: s.trust, clock: clockAt(NOW + 1000), ...over });
 
 describe('autoridad respaldada por registro (no es la de laboratorio)', () => {
   it('el sujeto y la existencia salen del registro: la composición no puede elegirlos; un recurso no registrado o retirado no se atesta', async () => {
@@ -142,15 +144,16 @@ describe('compuerta de instalación: rechazos', () => {
     const badCatalog = setup('LAB'); const bad = { findByCredential: async () => [{}] } as IntegrationCatalog; badCatalog.composition.catalog = { instance: bad, implementationId: 'cat-bad', version: '1' }; badCatalog.authority.enroll(bad, 'catalog', 'catalog-res');
     expect(await checkInstallationEligibility(input(badCatalog, await attested(badCatalog, 'LAB'), 'LAB'))).toEqual({ eligible: false, reason: 'NOT_CONFORMANT' });
   });
-  it('en PRODUCTION, una autoridad de laboratorio como confiable se rechaza aunque la atestación sea auténtica', async () => {
-    const s = setup('PRODUCTION', { authorityId: 'auth-lab' }); const att = await attested(s, 'PRODUCTION');
-    expect(await checkInstallationEligibility(input(s, att, 'PRODUCTION'))).toEqual({ eligible: false, reason: 'AUTHORITY_NOT_SEPARATED' });
-    const ok = setup('PRODUCTION'); expect((await checkInstallationEligibility(input(ok, await attested(ok, 'PRODUCTION'), 'PRODUCTION'))).eligible).toBe(true);
+  it('en PRODUCTION, una autoridad que solo es confiable para LAB no se acepta aunque la atestación sea auténtica', async () => {
+    const s = setup('PRODUCTION'); const att = await attested(s, 'PRODUCTION');
+    const onlyLab = { lab: { ...s.trust.lab, [s.authorityId]: AUTH_KEY }, production: { 'auth-otra': randomBytes(32) } };   // la autoridad figura como confiable solo de laboratorio
+    expect(await checkInstallationEligibility(input(s, att, 'PRODUCTION', { trust: onlyLab }))).toEqual({ eligible: false, reason: 'IDENTITY_MISMATCH' });
+    expect((await checkInstallationEligibility(input(s, att, 'PRODUCTION'))).eligible).toBe(true);
   });
   it('atestación incompleta (recursos vivos) o entradas inválidas: nunca elegible', async () => {
     const live = setup('PRODUCTION', { subject: 'LIVE' }); const att = await attested(live, 'PRODUCTION');
     expect(await checkInstallationEligibility(input(live, att, 'PRODUCTION'))).toEqual({ eligible: false, reason: 'NOT_CONFORMANT' });
-    for (const bad of [{ target: 'X' as never }, { clock: undefined as never }, { labAuthorityIds: undefined as never }]) expect(await checkInstallationEligibility({ ...input(live, att, 'PRODUCTION'), ...bad })).toEqual({ eligible: false, reason: 'INVALID_INPUT' });
+    for (const bad of [{ target: 'X' as never }, { clock: undefined as never }, { authority: undefined as never }]) expect(await checkInstallationEligibility({ ...input(live, att, 'PRODUCTION'), ...bad })).toEqual({ eligible: false, reason: 'INVALID_INPUT' });
     expect(await checkInstallationEligibility(null as never)).toEqual({ eligible: false, reason: 'INVALID_INPUT' });
   });
 });
@@ -193,12 +196,72 @@ describe('sin efecto sobre readiness ni runtime', () => {
     const names = mods.map(f => f.replace(/\.ts$/, '')); const root = path.resolve(__dirname, '../../..'); const hits: string[] = [];
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('conformance-attestation') && !n.startsWith('installation-gate')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`) || t.includes(`./${x}`))) hits.push(path.relative(root, f)); } } };
     walk(root); expect(hits).toEqual([]);
-  });
+  }, 30000);
   it('el gate usa solo la atestación estricta y no ofrece relajar la conformidad', () => {
     const t = strip('installation-gate.ts'); expect(t).toContain('requireConformant: true'); expect(t).not.toMatch(/requireConformant:\s*false/);
   });
   it('autoridades distintas: la de registro no reutiliza la de laboratorio', () => {
     const lab = createInProcessIdentityAuthority({ authorityId: 'auth-lab', key: AUTH_KEY }); const reg = createRegistryIdentityAuthority({ authorityId: 'auth-prod', target: 'PRODUCTION', registry: registryFor({}), keys: { getKey: async () => AUTH_KEY } });
     expect(Object.keys(reg).sort()).toEqual(['enroll', 'identify']); expect(reg.enroll.toString()).not.toBe(lab.enroll.toString());
+  });
+});
+
+describe('separación real de confianza LAB / PRODUCTION (corrección bloqueante)', () => {
+  const K = () => randomBytes(32); const strip = (f: string) => readFileSync(path.join(__dirname, f), 'utf8').replace(/\/\/.*$/gm, '');
+  const valid = () => ({ lab: { 'auth-lab': AUTH_KEY, 'auth-lab-2': K() }, production: { 'auth-prod': K() } });
+  const decide = async (target: 'LAB' | 'PRODUCTION', trust: unknown, over: Partial<InstallationInput> = {}) => {
+    const s = setup(target); const att = await attested(s, target, 60_000, Date.now());
+    const base = input(s, att, target, { clock: clockAt(Date.now() + 1000), trust: trust as never, ...over });
+    return { check: await checkInstallationEligibility(base), redeem: await redeemInstallationEligibility({ ...base, nonces: createMemoryNonceStore() }) };
+  };
+  it('control: con confianza completa y separada la composición es elegible en ambos destinos', async () => {
+    for (const target of ['LAB', 'PRODUCTION'] as const) { const s = setup(target); expect((await checkInstallationEligibility(input(s, await attested(s, target, 60_000, Date.now()), target, { clock: clockAt(Date.now() + 1000) }))).eligible).toBe(true); }
+  });
+  it('omitir la confianza (undefined, null, objeto vacío, tipos erróneos) nunca produce una decisión favorable', async () => {
+    for (const target of ['LAB', 'PRODUCTION'] as const) for (const trust of [undefined, null, {}, [], 'x', 5, { lab: {} }, { production: {} }]) {
+      const r = await decide(target, trust); for (const d of [r.check, r.redeem]) expect(d, `${target} ${JSON.stringify(trust)}`).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+    }
+  });
+  it('listas vacías o sin la parte de LAB o la de PRODUCTION se rechazan en cualquier destino', async () => {
+    const v = valid();
+    for (const target of ['LAB', 'PRODUCTION'] as const) for (const trust of [{ lab: {}, production: v.production }, { lab: v.lab, production: {} }, { lab: {}, production: {} }, { lab: v.lab }, { production: v.production }, { lab: null, production: v.production }, { lab: v.lab, production: [] }])
+      expect((await decide(target, trust)).check, `${target}`).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+  });
+  it('identificadores repetidos entre LAB y PRODUCTION se rechazan', async () => {
+    const k1 = K(); const k2 = K();
+    for (const target of ['LAB', 'PRODUCTION'] as const) expect((await decide(target, { lab: { 'auth-x': k1 }, production: { 'auth-x': k2 } })).check).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+  });
+  it('claves idénticas aunque los identificadores sean distintos se rechazan (entre destinos y dentro de un mismo destino)', async () => {
+    const k = K();
+    for (const target of ['LAB', 'PRODUCTION'] as const) {
+      expect((await decide(target, { lab: { 'auth-a': k }, production: { 'auth-b': Uint8Array.from(k) } })).check).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+      expect((await decide(target, { lab: { 'auth-a': k, 'auth-c': Uint8Array.from(k) }, production: { 'auth-b': K() } })).check).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+    }
+  });
+  it('material inválido (clave corta, no bytes, identificador inválido o peligroso) se rechaza', async () => {
+    const v = valid();
+    for (const bad of [{ lab: { 'auth-lab': randomBytes(8) }, production: v.production }, { lab: { 'auth-lab': 'texto' }, production: v.production }, { lab: { 'con espacios': K() }, production: v.production }, { lab: v.lab, production: { '': K() } }, { lab: { '__proto__': K() }, production: v.production }])
+      expect((await decide('PRODUCTION', bad)).check, JSON.stringify(Object.keys(bad.lab))).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' });
+  });
+  it('la validación ocurre antes que cualquier otra y el rechazo no consume el nonce', async () => {
+    const s = setup('PRODUCTION'); const att = await attested(s, 'PRODUCTION', 60_000, Date.now()); let consumed = 0; const spy: NonceStore = { consume: async () => { consumed++; return 'FRESH'; } };
+    const incompleteAndBadTrust = { ...input(s, att, 'PRODUCTION', { clock: clockAt(Date.now() + 1000), trust: { lab: {}, production: {} } as never }), composition: {} };
+    expect(await redeemInstallationEligibility({ ...incompleteAndBadTrust, nonces: spy })).toEqual({ eligible: false, reason: 'TRUST_CONFIG_INVALID' }); expect(consumed).toBe(0);
+  });
+  it('una confianza que cambia entre lecturas no engaña a la compuerta (se copia una sola vez)', async () => {
+    const s = setup('PRODUCTION'); const att = await attested(s, 'PRODUCTION', 60_000, Date.now()); let reads = 0;
+    const flaky = { get lab() { reads++; return reads === 1 ? { 'auth-lab-x': K() } : { [s.authorityId]: AUTH_KEY }; }, get production() { return { [s.authorityId]: AUTH_KEY }; } };
+    const d = await checkInstallationEligibility(input(s, att, 'PRODUCTION', { clock: clockAt(Date.now() + 1000), trust: flaky as never }));
+    expect(reads).toBe(1);   // una sola lectura de cada parte
+    expect(d.eligible).toBe(true);   // la copia validada es la que se usa
+  });
+  it('el parámetro retirado (labAuthorityIds) ya no existe: el código no depende de listas de ids aportadas por el llamador', () => {
+    expect(strip('installation-gate.ts')).not.toContain('labAuthorityIds'); expect(strip('installation-gate.ts')).toContain('assertDisjointTrust(');
+  });
+  it('assertDisjointTrust rechaza directamente cada intento de omisión o solapamiento', () => {
+    const [a, b] = [K(), K()];
+    expect(() => assertDisjointTrust({ lab: { l: a }, production: { p: b } })).not.toThrow();
+    for (const bad of [null, undefined, {}, { lab: { l: a } }, { production: { p: b } }, { lab: {}, production: { p: b } }, { lab: { l: a }, production: {} }, { lab: { x: a }, production: { x: b } }, { lab: { l: a }, production: { p: a } }, { lab: { l: a, m: a }, production: { p: b } }, { lab: { l: new Uint8Array(4) }, production: { p: b } }, { lab: { 'a b': a }, production: { p: b } }])
+      expect(() => assertDisjointTrust(bad as never), JSON.stringify(bad && Object.keys(bad))).toThrow();
   });
 });

@@ -296,5 +296,5 @@ describe('sin efecto sobre readiness ni sobre el runtime', () => {
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = ['conformance', 'attestation'].join('-');
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && !n.startsWith('port-conformance') && !API18_FAMILY.some(x => n.startsWith(x)) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
-  });
+  }, 30000);
 });

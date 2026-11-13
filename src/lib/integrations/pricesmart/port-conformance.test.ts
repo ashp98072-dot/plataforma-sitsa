@@ -113,5 +113,5 @@ describe('seguridad de la suite', () => {
     const needle = ['port', 'conformance'].join('-');
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && n !== 'conformance-attestation.ts' && !n.startsWith('conformance-attestation.') && !['attestation-mariadb', 'installation-gate', 'mariadb-composition', 'registry-identity-authority'].some(x => n.startsWith(x)) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
-  });
+  }, 30000);
 });

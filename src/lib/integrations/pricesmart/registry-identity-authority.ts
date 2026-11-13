@@ -35,9 +35,23 @@ export function createRegistryIdentityAuthority(config: { authorityId: string; t
   };
 }
 
-/** Las autoridades de laboratorio y de producción no pueden compartir identificador ni material de verificación. Lanza si hay solapamiento. */
+/** Las autoridades de laboratorio y de producción no pueden compartir identificador ni material de verificación. Lanza si falta una parte, está vacía, hay identificadores inválidos o repetidos
+ *  entre destinos, material de verificación inválido (no bytes o menor de 32), o claves idénticas (entre destinos o dentro de un mismo destino) aunque tengan identificadores distintos. */
 export function assertDisjointTrust(trust: { lab: Readonly<Record<string, Uint8Array>>; production: Readonly<Record<string, Uint8Array>> }): void {
-  const lab = Object.keys(trust.lab); const prod = Object.keys(trust.production);
-  if (lab.length === 0 || prod.length === 0 || lab.some(id => prod.includes(id))) throw new Error('UNAVAILABLE');
-  for (const l of lab) for (const p of prod) if (Buffer.from(trust.lab[l]).equals(Buffer.from(trust.production[p]))) throw new Error('UNAVAILABLE');   // ni la misma clave
+  const fail = () => { throw new Error('UNAVAILABLE'); };
+  if (typeof trust !== 'object' || trust === null) return fail();
+  const sides = [trust.lab, trust.production];
+  for (const side of sides) if (typeof side !== 'object' || side === null || Array.isArray(side) || Object.keys(side).length === 0) return fail();
+  const seen = new Map<string, number>();   // clave (hex) → lado
+  const ids = [new Set<string>(), new Set<string>()];
+  sides.forEach((side, i) => {
+    for (const id of Object.keys(side)) {
+      const key = side[id];
+      if (!ID.test(id) || !(key instanceof Uint8Array) || key.length < 32) return fail();
+      const hex = Buffer.from(key).toString('hex');
+      if (seen.has(hex)) return fail();   // la misma clave en dos autoridades (de cualquier destino) no es separación
+      seen.set(hex, i); ids[i].add(id);
+    }
+  });
+  for (const id of ids[0]) if (ids[1].has(id)) return fail();   // mismo identificador en ambos destinos
 }

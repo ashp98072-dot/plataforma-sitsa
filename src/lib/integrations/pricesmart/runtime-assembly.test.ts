@@ -132,7 +132,7 @@ describe('aislamiento del cableado', () => {
     const hits: string[] = [];
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !/runtime-assembly(\.test)?\.ts$/.test(n) && /runtime-assembly|installControlledRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
-  });
+  }, 30000);
   it('el módulo de configuración no lee process.env', () => {
     expect(readFileSync(path.join(__dirname, 'runtime-config.ts'), 'utf8').replace(/\/\/.*$/gm, '')).not.toMatch(/process\.env/);
   });

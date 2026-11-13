@@ -271,7 +271,8 @@ describe("API-11 endpoints y seguridad M2M", () => {
     const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity });
     expect(issued.claims.conformant && issued.claims.complete).toBe(true);
     expect(issued.claims.ports.find((p) => p.port === "counter")).toMatchObject({ resourceId: "lab-counter-iso", subject: "ISOLATED_COPY", authorityId: "auth-lab-registry" });
-    const base = { composition: built.composition, attestation: issued.attestation, target: "LAB" as const, key: KEY, identity, clock: ports.clock, labAuthorityIds: ["auth-lab-registry"] };
+    const trust = { lab: { "auth-lab-registry": AUTH_KEY }, production: { "auth-prod-registry": randomBytes(32) } };   // confianza explícita y separada de ambos destinos
+    const base = { composition: built.composition, attestation: issued.attestation, target: "LAB" as const, key: KEY, authority, trust, clock: ports.clock };
     expect(await checkInstallationEligibility(base)).toEqual({ eligible: true, target: "LAB", consumedNonce: false });
     expect(await redeemInstallationEligibility({ ...base, nonces: att.nonces })).toEqual({ eligible: true, target: "LAB", consumedNonce: true });
     const other = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
@@ -286,6 +287,9 @@ describe("API-11 endpoints y seguridad M2M", () => {
     // la autoridad de laboratorio no habla por producción y la atestación de laboratorio no sirve como de producción
     await expect(issueAttestation({ composition: built.composition, target: "PRODUCTION", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity })).rejects.toThrow();
     expect(await checkInstallationEligibility({ ...base, target: "PRODUCTION" })).toMatchObject({ eligible: false });
+    // omitir o solapar la confianza nunca da una decisión favorable
+    for (const bad of [undefined, {}, { lab: trust.lab }, { lab: {}, production: trust.production }, { lab: trust.lab, production: { "auth-lab-registry": randomBytes(32) } }, { lab: trust.lab, production: { "auth-prod-registry": AUTH_KEY } }])
+      expect(await checkInstallationEligibility({ ...base, trust: bad as never })).toEqual({ eligible: false, reason: "TRUST_CONFIG_INVALID" });
     // los recursos de producción no se tocaron
     expect(await n("ps_api18_attestation_nonces", "target = 'PRODUCTION'")).toBe(0);
     expect(JSON.stringify(issued)).not.toContain(KEY.toString("hex")); expect(JSON.stringify(issued)).not.toContain(AUTH_KEY.toString("hex"));
