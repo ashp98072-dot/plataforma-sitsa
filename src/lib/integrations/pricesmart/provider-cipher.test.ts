@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CipherError, createProviderCipher, type ExternalKeyProvider, type KeyTarget } from './provider-cipher';
+import { CipherError, createProviderCipher, isPlainJson, type ExternalKeyProvider, type KeyTarget } from './provider-cipher';
 import { createLabKeyProvider } from './lab-demo/lab-key-provider';
 import { runPortConformance } from './port-conformance';
 import { createInProcessIdentityAuthority, issueAttestation, verifyAttestation } from './conformance-attestation';
@@ -159,5 +159,132 @@ describe('aislamiento estático', () => {
   it('el proveedor de laboratorio solo existe para LAB y solo con referencias lab.*', async () => {
     const p = createLabKeyProvider(); expect(p.target).toBe('LAB'); expect(p.references().every(r => r.startsWith('lab.'))).toBe(true); expect(p.rotate()).toMatch(/^lab\./);
     expect(() => createLabKeyProvider({ prefix: 'prod' + ' x' })).toThrow();
+  });
+});
+
+// ---- API-19 (auditoría de #612): ciclo de vida del material de clave, tiempo límite y entradas no serializables
+const allZero = (b: Uint8Array | undefined) => !!b && b.length > 0 && [...b].every(x => x === 0);
+const anyNonZero = (b: Uint8Array | undefined) => !!b && [...b].some(x => x !== 0);
+const wait = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+function deferred<T>() { let resolve!: (v: T) => void; let reject!: (e: unknown) => void; const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; }
+/** Proveedor que registra TODAS las copias recibidas (con una instantánea del contenido en el momento de la llamada) para comprobar su borrado posterior. */
+function spyProvider(over: Partial<ExternalKeyProvider> = {}, shared?: Map<string, Buffer>) {
+  const log = { wrapDek: [] as Uint8Array[], wrapDekAtCall: [] as Buffer[], wrapAad: [] as Uint8Array[], unwrapWrapped: [] as Uint8Array[], unwrapWrappedAtCall: [] as Buffer[], unwrapAad: [] as Uint8Array[], returned: [] as Uint8Array[], signals: [] as (AbortSignal | undefined)[] };
+  const base = customProvider('LAB', {}, shared);
+  const p = customProvider('LAB', {
+    async wrapKey(i) { log.wrapDek.push(i.dataKey); log.wrapDekAtCall.push(Buffer.from(i.dataKey)); log.wrapAad.push(i.aad); log.signals.push(i.signal); return base.wrapKey(i); },
+    async unwrapKey(i) { log.unwrapWrapped.push(i.wrappedKey); log.unwrapWrappedAtCall.push(Buffer.from(i.wrappedKey)); log.unwrapAad.push(i.aad); log.signals.push(i.signal); const dek = await base.unwrapKey(i); log.returned.push(dek); return dek; },
+    ...over,
+  }, base.keys);
+  return { provider: p, log, keys: base.keys };
+}
+
+describe('ciclo de vida de la DEK y de las copias entregadas al proveedor', () => {
+  it('éxito: las copias que recibió el proveedor (dataKey, aad, wrappedKey) se borran; la DEK desenvuelta que devolvió se borra; antes de la llamada contenían material real', async () => {
+    const { provider, log } = spyProvider(); const cipher = createProviderCipher({ provider, target: 'LAB' });
+    const sealed = await cipher.seal(order(), 'ctx');
+    expect(anyNonZero(log.wrapDekAtCall[0])).toBe(true); expect(allZero(log.wrapDek[0])).toBe(true); expect(allZero(log.wrapAad[0])).toBe(true);
+    await cipher.open(sealed.ciphertext, sealed.keyReference, 'ctx');
+    expect(anyNonZero(log.unwrapWrappedAtCall[0])).toBe(true); expect(allZero(log.unwrapWrapped[0])).toBe(true); expect(allZero(log.unwrapAad[0])).toBe(true); expect(allZero(log.returned[0])).toBe(true);
+    const re = await cipher.rewrap(sealed.ciphertext, sealed.keyReference, 'ctx'); expect(re.keyReference).toBe(sealed.keyReference);
+    expect(log.wrapDek.every(allZero)).toBe(true); expect(log.unwrapWrapped.every(allZero)).toBe(true); expect(log.returned.every(allZero)).toBe(true);
+  });
+  it('excepción del proveedor: las copias entregadas también se borran (seal, open y rewrap)', async () => {
+    const boom = async () => { throw new Error('secreto-prov-1'); };
+    const s1 = spyProvider({ wrapKey: async (i) => { s1.log.wrapDek.push(i.dataKey); s1.log.wrapDekAtCall.push(Buffer.from(i.dataKey)); throw new Error('secreto-prov-1'); } });
+    expect(await code(createProviderCipher({ provider: s1.provider, target: 'LAB' }).seal(order(), 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE');
+    expect(anyNonZero(s1.log.wrapDekAtCall[0])).toBe(true); expect(allZero(s1.log.wrapDek[0])).toBe(true);
+    const ok = spyProvider(); const sealed = await createProviderCipher({ provider: ok.provider, target: 'LAB' }).seal(order(), 'ctx');
+    const s2 = spyProvider({ unwrapKey: async (i) => { s2.log.unwrapWrapped.push(i.wrappedKey); s2.log.unwrapAad.push(i.aad); return boom() as never; } }, ok.keys);
+    const c2 = createProviderCipher({ provider: s2.provider, target: 'LAB' });
+    expect(await code(c2.open(sealed.ciphertext, sealed.keyReference, 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); expect(await code(c2.rewrap(sealed.ciphertext, sealed.keyReference, 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE');
+    expect(s2.log.unwrapWrapped.length).toBe(2); expect(s2.log.unwrapWrapped.every(allZero)).toBe(true); expect(s2.log.unwrapAad.every(allZero)).toBe(true);
+  });
+  it('respuesta inválida del proveedor (DEK de longitud errónea): el arreglo recibido se borra', async () => {
+    const ok = spyProvider(); const sealed = await createProviderCipher({ provider: ok.provider, target: 'LAB' }).seal(order(), 'ctx'); const short = new Uint8Array(16).fill(9);
+    const c = createProviderCipher({ provider: customProvider('LAB', { unwrapKey: async () => short }, ok.keys), target: 'LAB' });
+    expect(await code(c.open(sealed.ciphertext, sealed.keyReference, 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); expect(allZero(short)).toBe(true);
+  });
+  it('se entrega un AbortSignal de mejor esfuerzo y NO se activa en una operación que termina bien', async () => {
+    const { provider, log } = spyProvider(); const cipher = createProviderCipher({ provider, target: 'LAB' }); await cipher.seal(order(), 'ctx');
+    expect(log.signals[0]).toBeInstanceOf(AbortSignal); expect(log.signals[0]?.aborted).toBe(false);
+  });
+});
+
+describe('tiempo límite: sin afirmar cancelación y sin aceptar respuestas tardías', () => {
+  it('seal: al vencer, rechaza con PROVIDER_UNAVAILABLE, borra las copias que controla AUNQUE el proveedor siga pendiente, activa el signal y descarta la respuesta tardía', async () => {
+    const gate = deferred<Uint8Array>(); const seen: { dek?: Uint8Array; signal?: AbortSignal } = {};
+    const { provider } = spyProvider({ wrapKey: async (i) => { seen.dek = i.dataKey; seen.signal = i.signal; return gate.promise; } });
+    const cipher = createProviderCipher({ provider, target: 'LAB', timeoutMs: 100 });
+    expect(await code(cipher.seal(order(), 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE');
+    expect(allZero(seen.dek)).toBe(true);   // la copia de la DEK ya se borró, con el proveedor todavía «trabajando»
+    expect(seen.signal?.aborted).toBe(true);   // se avisó (de mejor esfuerzo); NO se afirma que el proveedor cancelara
+    gate.resolve(new Uint8Array(60).fill(5)); await wait(30);   // respuesta tardía: no produce efecto alguno ni rechazos sin manejar
+    // el adaptador no guarda estado entre llamadas: una llamada NUEVA es independiente de la tardía (aquí el proveedor ya responde de inmediato porque su promesa está resuelta)
+    expect(await code(cipher.seal(order(), 'ctx'))).toBe('OK');
+  });
+  it('open: una DEK que llega tarde jamás se usa y se borra; el open ya había fallado', async () => {
+    const ok = spyProvider(); const sealed = await createProviderCipher({ provider: ok.provider, target: 'LAB' }).seal(order(), 'ctx');
+    const gate = deferred<Uint8Array>(); let wrappedCopy: Uint8Array | undefined;
+    const slow = customProvider('LAB', { unwrapKey: async (i) => { wrappedCopy = i.wrappedKey; return gate.promise; } }, ok.keys);
+    const cipher = createProviderCipher({ provider: slow, target: 'LAB', timeoutMs: 100 });
+    expect(await code(cipher.open(sealed.ciphertext, sealed.keyReference, 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); expect(allZero(wrappedCopy)).toBe(true);
+    const lateDek = new Uint8Array(32).fill(0xaa); gate.resolve(lateDek); await wait(30);
+    expect(allZero(lateDek)).toBe(true);   // el material tardío que no se aceptó se borra
+  });
+  it('currentKeyReference tardía: no se acepta (no hay referencia efectiva) y no deja rechazos sin manejar', async () => {
+    const gate = deferred<string>(); const cipher = createProviderCipher({ provider: customProvider('LAB', { currentKeyReference: () => gate.promise }), target: 'LAB', timeoutMs: 100 });
+    expect(await code(cipher.seal(order(), 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); gate.resolve('lab.k1'); await wait(30);
+    const gate2 = deferred<string>(); const c2 = createProviderCipher({ provider: customProvider('LAB', { currentKeyReference: () => gate2.promise }), target: 'LAB', timeoutMs: 100 });
+    expect(await code(c2.seal(order(), 'ctx'))).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); gate2.reject(new Error('secreto-tardio')); await wait(30);   // rechazo tardío: sin «unhandled rejection»
+  });
+  it('un rechazo tardío del proveedor tras el tiempo límite no filtra detalles ni genera efectos', async () => {
+    const gate = deferred<Uint8Array>(); const cipher = createProviderCipher({ provider: customProvider('LAB', { wrapKey: () => gate.promise }), target: 'LAB', timeoutMs: 100 });
+    const r = await code(cipher.seal(order(), 'ctx')); expect(r).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); gate.reject(new Error('secreto-late-1')); await wait(30); expect(r).not.toContain('secreto');
+  });
+  it('una excepción SÍNCRONA del proveedor (antes de devolver una promesa) también se cierra con PROVIDER_UNAVAILABLE', async () => {
+    const cipher = createProviderCipher({ provider: customProvider('LAB', { currentKeyReference: (() => { throw new Error('secreto-sync'); }) as never }), target: 'LAB' });
+    const r = await code(cipher.seal(order(), 'ctx')); expect(r).toBe('PROVIDER_UNAVAILABLE:PROVIDER_UNAVAILABLE'); expect(r).not.toContain('secreto');
+  });
+});
+
+describe('entradas no serializables y excepciones nativas', () => {
+  const calls = () => { let n = 0; const base = customProvider('LAB'); const p = customProvider('LAB', { wrapKey: async (i) => { n++; return base.wrapKey(i); }, currentKeyReference: async () => { n++; return 'lab.k1'; } }, base.keys); return { p, count: () => n }; };
+  const cyc = (() => { const a: Record<string, unknown> = {}; a.self = a; return a; })();
+  const deep = (() => { let o: unknown = 'x'; for (let i = 0; i < 40; i++) o = { o }; return o; })();
+  const getter = { get x() { throw new Error('secreto-getter'); } };
+  const toJsonThrows = { toJSON() { throw new Error('secreto-tojson'); } };
+  class Foo { a = 1; }
+  const symbolKey = { [Symbol('s')]: 1, a: 1 };
+  const hidden = Object.defineProperty({ a: 1 }, 'h', { value: 2, enumerable: false });
+  const sparse = [1, , 3];
+  const invalids: [string, unknown][] = [['undefined', undefined], ['función', () => 1], ['símbolo', Symbol('x')], ['bigint', BigInt(10)], ['NaN', Number.NaN], ['Infinity', Infinity], ['Map', new Map([[1, 2]])], ['Set', new Set([1])], ['Date', new Date()], ['clase', new Foo()], ['ciclo', cyc], ['profundidad', deep], ['getter que lanza', getter], ['toJSON que lanza', toJsonThrows], ['clave símbolo', symbolKey], ['propiedad oculta', hidden], ['arreglo disperso', sparse], ['Buffer', Buffer.from('x')], ['objeto anidado con undefined', { a: { b: undefined } }], ['objeto anidado con función', { f: () => 1 }]];
+  it('cada entrada no serializable o no fiel produce INVALID (error cerrado) SIN llamar al proveedor ni lanzar excepciones nativas', async () => {
+    for (const [name, value] of invalids) {
+      const { p, count } = calls(); const cipher = createProviderCipher({ provider: p, target: 'LAB' });
+      const r = await code(cipher.seal(value as never, 'ctx')); expect(r, name).toBe('INVALID:INVALID'); expect(count(), name).toBe(0); expect(r, name).not.toContain('secreto');
+    }
+  });
+  it('las entradas JSON simples y fieles se aceptan y se recuperan idénticas', async () => {
+    const { p } = calls(); const cipher = createProviderCipher({ provider: p, target: 'LAB' });
+    for (const v of [{ a: 1, b: ['x', null, true, { c: 2.5 }], d: '' }, [], {}, 'texto', 42, null, Object.create(null)]) { const s = await cipher.seal(v as never, 'ctx'); expect(await cipher.open(s.ciphertext, s.keyReference, 'ctx')).toEqual(v); }
+  });
+  it('isPlainJson: definiciones directas y límites', () => {
+    for (const [, v] of invalids) expect(isPlainJson(v)).toBe(false);
+    expect(isPlainJson({ a: [1, 2, { b: null }] })).toBe(true); expect(isPlainJson('x'.repeat(10))).toBe(true);
+    expect(isPlainJson(Array.from({ length: 200_000 }, (_, i) => i))).toBe(false);   // desmesurado
+    const shared = { z: 1 }; expect(isPlainJson({ a: shared, b: shared })).toBe(true);   // referencias compartidas (no cíclicas) son válidas
+  });
+  it('excepciones nativas inesperadas en la ruta de apertura (respuestas que lanzan al leerse) se convierten en errores cerrados', async () => {
+    const ok = spyProvider(); const sealed = await createProviderCipher({ provider: ok.provider, target: 'LAB' }).seal(order(), 'ctx');
+    const trap = new Proxy(new Uint8Array(32), { get() { throw new TypeError('secreto-proxy'); } });
+    const c = createProviderCipher({ provider: customProvider('LAB', { unwrapKey: async () => trap }, ok.keys), target: 'LAB' });
+    for (const op of [c.open(sealed.ciphertext, sealed.keyReference, 'ctx'), c.rewrap(sealed.ciphertext, sealed.keyReference, 'ctx')]) { const r = await code(op); expect(r).toMatch(/^(INTEGRITY|PROVIDER_UNAVAILABLE|INVALID):/); expect(r).not.toContain('RAW'); expect(r).not.toContain('secreto'); }
+  });
+  it('rotación, separación de destinos y denegación por defecto siguen intactas tras el cambio (regresión)', async () => {
+    const { cipher, provider } = lab(); const o = order(); const old = await cipher.seal(o, 'ctx'); provider.rotate(); const re = await cipher.rewrap(old.ciphertext, old.keyReference, 'ctx');
+    expect(re.keyReference).not.toBe(old.keyReference); expect(await cipher.open(re.ciphertext, re.keyReference, 'ctx')).toEqual(o);
+    expect(() => createProviderCipher({ provider: customProvider('PRODUCTION'), target: 'LAB' })).toThrow();
+    expect(await code(cipher.open(old.ciphertext, 'prod.k1', 'ctx'))).toBe('INTEGRITY:INTEGRITY');
   });
 });
