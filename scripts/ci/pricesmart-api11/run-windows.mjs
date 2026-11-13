@@ -26,14 +26,14 @@ const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8
 export const API11_BRANCH = 'feature/pricesmart-api11-endpoints';
 export const ACK_ENV = 'PS_API11_LAB_ACK';
 export const ACK_PHRASE = 'SINTETICO-LOCAL-SIN-PRODUCCION-NI-HOSTINGER';
-export const REQUIRED_CASES = Object.freeze(Array.from({ length: 16 }, (_, i) => `API11.${i + 1}`));
+export const REQUIRED_CASES = Object.freeze(Array.from({ length: 17 }, (_, i) => `API11.${i + 1}`));
 
 /** Compuerta de ejecución accidental (se evalúa ANTES de crear cualquier archivo o proceso). */
 export function assertGate({ argv, env, platform, branch, envFilesInCwd }) {
   const mode = argv.length === 1 ? argv[0] : '';
   if (!['--run-isolated', '--preflight-only'].includes(mode)) fail('Se requiere exactamente un argumento: --run-isolated o --preflight-only.');
   if (platform !== 'win32') fail('Solo Windows.');
-  if (![API11_BRANCH, 'feature/pricesmart-api12-demo', 'feature/pricesmart-api13-resiliencia', 'feature/pricesmart-api16-conformidad-puertos', 'feature/pricesmart-api18-composicion-administrativa'].includes(branch)) fail(`Rama inesperada (${branch}); se exige ${API11_BRANCH} (o la rama de API-12 o API-13, que reejecutan este laboratorio como regresión).`);
+  if (![API11_BRANCH, 'feature/pricesmart-api12-demo', 'feature/pricesmart-api13-resiliencia', 'feature/pricesmart-api16-conformidad-puertos', 'feature/pricesmart-api18-composicion-administrativa', 'feature/pricesmart-api19-cifrado-proveedor'].includes(branch)) fail(`Rama inesperada (${branch}); se exige ${API11_BRANCH} (o la rama de API-12 o API-13, que reejecutan este laboratorio como regresión).`);
   if (envFilesInCwd.length) fail('Hay archivos .env* en el directorio de trabajo.');
   const bad = Object.keys(env).filter((k) => FORBIDDEN_PARENT_ENV.test(k));
   if (bad.length) fail(`El entorno del proceso padre define variables de bases/entornos reales (${bad.join(', ')}). Ejecute desde una consola limpia.`);

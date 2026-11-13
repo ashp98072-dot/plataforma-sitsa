@@ -16,6 +16,10 @@ import { createRegistryIdentityAuthority } from "../../../src/lib/integrations/p
 import { issueAttestation } from "../../../src/lib/integrations/pricesmart/conformance-attestation";
 import { checkInstallationEligibility, redeemInstallationEligibility } from "../../../src/lib/integrations/pricesmart/installation-gate";
 import { describeMariaDbComposition } from "../../../src/lib/integrations/pricesmart/mariadb-composition";
+import { createProviderCipher } from "../../../src/lib/integrations/pricesmart/provider-cipher";
+import { createLabKeyProvider } from "../../../src/lib/integrations/pricesmart/lab-demo/lab-key-provider";
+import { guardEvidenceVerifier } from "../../../src/lib/integrations/pricesmart/guarded-evidence-verifier";
+import { reference } from "../../../src/lib/integrations/pricesmart/contracts";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -293,5 +297,34 @@ describe("API-11 endpoints y seguridad M2M", () => {
     // los recursos de producción no se tocaron
     expect(await n("ps_api18_attestation_nonces", "target = 'PRODUCTION'")).toBe(0);
     expect(JSON.stringify(issued)).not.toContain(KEY.toString("hex")); expect(JSON.stringify(issued)).not.toContain(AUTH_KEY.toString("hex"));
+  });
+
+  it("API11.17 cifrado con proveedor externo y verificador protegido (API-19): el adaptador de cifrado y el verificador de laboratorio envuelto, junto con los puertos MariaDB reales, superan la conformidad, se atestan con la autoridad por registro y pasan la compuerta; las claves nunca se persisten", async () => {
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    const KEY = randomBytes(32); const AUTH_KEY = randomBytes(32);
+    const provider = createLabKeyProvider(); const providerCipher = createProviderCipher({ provider, target: "LAB" });
+    const guarded = guardEvidenceVerifier(verifier);
+    // el verificador de laboratorio sigue autenticando a través de la envoltura (aserciones válidas) y la envoltura deniega basura
+    expect(await guarded.verify(randomBytes(64), { environment: "sandbox" })).toBeNull();
+    const sealed = await providerCipher.seal({ externalOrderId: "API19-X", note: "valor" } as never, "api19-ctx");
+    expect(reference.safeParse(sealed.keyReference).success).toBe(true);   // la referencia de clave cumple el esquema que usa el repositorio
+    expect(await providerCipher.open(sealed.ciphertext, sealed.keyReference, "api19-ctx")).toEqual({ externalOrderId: "API19-X", note: "valor" });
+    const built = describeMariaDbComposition(ports, { cipher: { instance: providerCipher, implementationId: "provider-cipher", version: "api19-1" }, verifier: { instance: guarded, implementationId: "guarded-verifier", version: "api19-1" } });
+    expect(built.missing).toEqual([]);
+    const authority = createRegistryIdentityAuthority({ authorityId: "auth-lab-registry", target: "LAB", registry: att.registry, keys: { getKey: async () => AUTH_KEY } });
+    const ids: Record<string, string> = { counter: "lab-counter-iso", replay: "lab-replay-iso", catalog: "lab-catalog", clock: "lab-clock", cipher: "lab-cipher", verifier: "lab-verifier" };
+    for (const [port, d] of Object.entries(built.composition) as [string, { instance: object }][]) authority.enroll(d.instance, port as never, ids[port]);
+    const identity = { authority, trusted: { "auth-lab-registry": AUTH_KEY } };
+    const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity });
+    expect(issued.claims.results.filter((r) => !r.pass)).toEqual([]); expect(issued.claims.conformant && issued.claims.complete).toBe(true);
+    const trust = { lab: { "auth-lab-registry": AUTH_KEY }, production: { "auth-prod-registry": randomBytes(32) } };
+    const base = { composition: built.composition, attestation: issued.attestation, target: "LAB" as const, key: KEY, authority, trust, clock: ports.clock };
+    expect(await redeemInstallationEligibility({ ...base, nonces: att.nonces })).toEqual({ eligible: true, target: "LAB", consumedNonce: true });
+    // sustituir el proveedor de claves (otras claves, mismo código) invalida la atestación aunque el código del adaptador no cambie
+    const otherCipher = createProviderCipher({ provider: createLabKeyProvider(), target: "LAB" });   // mismo código, otro proveedor/claves, NO inscrito en la autoridad
+    expect(await checkInstallationEligibility({ ...base, composition: { ...built.composition, cipher: { instance: otherCipher, implementationId: "provider-cipher", version: "api19-1" } } })).toEqual({ eligible: false, reason: "IDENTITY_MISMATCH" });
+    // nada de claves ni de la atestación se persistió fuera de los hashes de nonce
+    const stored = JSON.stringify(await admin(`SELECT HEX(nonce_hash) AS h FROM ${T}.ps_api18_attestation_nonces`));
+    expect(stored).not.toContain(KEY.toString("hex")); expect(stored).not.toContain(AUTH_KEY.toString("hex")); expect(JSON.stringify(issued)).not.toContain(AUTH_KEY.toString("hex"));
   });
 });
