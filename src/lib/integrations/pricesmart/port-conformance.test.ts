@@ -108,10 +108,10 @@ describe('seguridad de la suite', () => {
     expect(src).not.toMatch(/process\.env|\bfetch\s*\(|from\s+['"](?:mysql2|@\/lib\/(?:db|tms)|node:(?:net|tls|http|https|fs|child_process))|sandbox-db/);
     expect(src).not.toMatch(/runtime|installPriceSmartHandler/);
   });
-  it('ningún código de la aplicación (fuera de este módulo y sus pruebas) lo invoca: producción sigue cerrada', () => {
+  it('ningún código de la aplicación (fuera de este módulo, de su única consumidora —la atestación de API-17, que tampoco se invoca— y sus pruebas) lo invoca: producción sigue cerrada', () => {
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = [];
     const needle = ['port', 'conformance'].join('-');
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && n !== 'conformance-attestation.ts' && !n.startsWith('conformance-attestation.') && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   });
 });
