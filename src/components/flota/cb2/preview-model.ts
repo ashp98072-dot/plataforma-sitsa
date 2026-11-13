@@ -1,3 +1,4 @@
+import { politicaIndependiente, pilotoIndependiente, unidadIndependiente } from "./piloto-independiente";
 import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
 import { tipoTerceroCompatible } from "@/lib/flota/cb2/identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
@@ -15,8 +16,13 @@ export function coincidencias(f: FilaCB2, cat: CatalogosCB2) {
 export function sugerenciaVehiculo(f: FilaCB2, cat: CatalogosCB2) { return buscarCoincidencias(f.placaNormalizada || f.placa, cat.vehiculos, v => v.placa, "placa"); }
 export function sugerenciaPiloto(f: FilaCB2, cat: CatalogosCB2) { return buscarCoincidencias(f.origen?.piloto ?? "", cat.pilotos ?? [], v => v.nombre, "piloto"); }
 export function asignacionesExactas(filas: FilaCB2[], cat: CatalogosCB2) {
-    const seleccion: Record<string, string> = {};
+    const seleccion: Record<string, string> = {}, independientes: Record<string,string> = {};
     for (const grupo of agruparCandidatos(filas).values()) {
+        if (politicaIndependiente(cat)) {
+            const activas = grupo.filter(f=>f.estado!=="RESUELTA"), u = activas[0] && unidadIndependiente(activas[0],cat);
+            if (u && activas.every(f=>elegible(f) && unidadIndependiente(f,cat)?.id===u.id)) independientes[activas[0].candidato!] = String(u.id);
+            continue;
+        }
         const activasDirectas = grupo.filter(f => f.estado !== "RESUELTA");
         const directa = activasDirectas[0] && propuestaDirecta(activasDirectas[0], cat);
         if (directa && activasDirectas.every(f => elegible(f) && propuestaDirecta(f, cat)?.piloto.id === directa.piloto.id && propuestaDirecta(f, cat)?.unidad.id === directa.unidad.id && coincidencias(f, cat).length === 1)) {
@@ -27,7 +33,7 @@ export function asignacionesExactas(filas: FilaCB2[], cat: CatalogosCB2) {
         const activas = grupo.filter(f => f.estado !== "RESUELTA"), ids = activas.map(f => { const m = coincidencias(f, cat); return elegible(f) && m.length === 1 ? String(m[0].id) : ""; });
         if (ids.length && ids.every(id => id && id === ids[0])) seleccion[activas[0].candidato!] = ids[0];
     }
-    return seleccionSegura(filas, cat, seleccion);
+    return {...seleccionSegura(filas, cat, seleccion),...independientes};
 }
 export function agruparCandidatos(filas: FilaCB2[]) {
     const grupos = new Map<string, FilaCB2[]>();
@@ -45,6 +51,18 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     for (const [key, value] of Object.entries(seleccion)) {
         const originales = grupos.get(key) ?? [];
         const motivo = decisiones[key]?.motivoUnidad?.trim() ?? "";
+        if (politicaIndependiente(cat)) {
+            const p = originales[0] && pilotoIndependiente(originales[0],cat,decisiones[key]);
+            const valida = originales.length && originales.every(f=> {
+                const piloto = pilotoIndependiente(f,cat,decisiones[key]);
+                if (!piloto || piloto.id!==p?.id || piloto.tipo!==p.tipo || !elegible(f) || !(decisiones[key]?.productoClasificado ?? clasificarProducto(f.origen?.producto))) return false;
+                if (Number(value)>0) return placaCompatible(f.placaNormalizada||f.placa,Number(value),cat.vehiculos) || motivo.length>=10;
+                const unidad=cat.unidadesExternas?.find(u=>u.id===-Number(value));
+                return !!unidad && tipoTerceroCompatible(f.placaNormalizada||f.placa,unidad) && unidadTerceraCompatible(f.placaNormalizada||f.placa,unidad.id,cat.unidadesExternas??[],motivo);
+            });
+            if (!omitidos[key] && p && unidades.has(value) && valida) result[key]=value;
+            continue;
+        }
         if (Number(value) < 0) {
             if (cat.tercerosDirectos) {
                 const piloto = originales[0] && pilotoDirecto(originales[0], cat, decisiones[key]);

@@ -1,3 +1,4 @@
+import { catalogoSinAlias } from "../vehiculos-alias";
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import Decimal from "decimal.js";
 import { getPool, type SqlValue } from "@/lib/db";
@@ -141,11 +142,11 @@ export async function vehiculos(c: PoolConnection, ctx: Contexto, ids: number[])
  * Bloquea todos los candidatos del sufijo, no solo el ID enviado por el cliente. */
 export async function catalogoAbreviadas(c: PoolConnection, ctx: Contexto, placas: string[]) {
     const sufijos = [...new Set(placas.filter(esPlacaAbreviada).map(placaComparable))].sort();
-    const catalogo: { id: number; placa: string }[] = [];
+    const catalogo: { id: number; empresa_id: number; placa: string }[] = [];
     for (let i = 0; i < sufijos.length; i += 200) {
         const parte = sufijos.slice(i, i + 200);
-        const found = await rows(c, `SELECT v.id,v.placa FROM flota_vehiculos v WHERE v.activo=1 AND v.estado='Activo' AND ${predicadoVehiculoAccesible("v", "?")} AND RIGHT(REGEXP_REPLACE(UPPER(v.placa),'[[:space:]‐‑–—-]',''),6) IN (${parte.map(() => "?").join(",")}) ORDER BY v.id FOR UPDATE`, [ctx.empresaId, ctx.empresaId, ...parte]);
-        catalogo.push(...found.map(v => ({ id: Number(v.id), placa: String(v.placa) })));
+        const found = await rows(c, `SELECT v.id,v.empresa_id,v.placa FROM flota_vehiculos v WHERE v.activo=1 AND v.estado='Activo' AND ${predicadoVehiculoAccesible("v", "?")} AND RIGHT(REGEXP_REPLACE(UPPER(v.placa),'[[:space:]‐‑–—-]',''),6) IN (${parte.map(() => "?").join(",")}) ORDER BY v.id FOR UPDATE`, [ctx.empresaId, ctx.empresaId, ...parte]);
+        catalogo.push(...found.map(v => ({ id: Number(v.id), empresa_id:Number(v.empresa_id), placa: String(v.placa) })));
     }
-    return catalogo;
+    return catalogoSinAlias(catalogo,ctx.empresaId,(sql,args=[])=>rows(c,sql,args));
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import type { SqlParams } from "@/lib/db";
 import type { ResultSetHeader } from "mysql2";
-import { escribirVehiculos, coincidenciasPlacaTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, coincidenciasPlacaTx, exigirSinDuplicadoCompartidoTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
   parsearExcelFlota,
@@ -127,6 +127,7 @@ export async function POST(req: Request, ctx: Ctx) {
         existente = existente.filter(v => !origenes.has(Number(v.id)));
       }
       if (existente.length > 1) throw new ErrorIdentidadVehiculo("Varias unidades con placa comparable. Revisa los IDs antes de importar.");
+      if (!existente.length) await exigirSinDuplicadoCompartidoTx(conn,duenoId,f.placa);
       const serial = (v: unknown) => String(v ?? "").trim().toUpperCase().replace(/\s/g, "");
       if (existente[0]?.chasis && f.chasis && serial(existente[0].chasis) !== serial(f.chasis)) throw new ErrorIdentidadVehiculo("Chasis incompatible con el registro existente.");
       const kmActual = f.kmActual ?? 0;

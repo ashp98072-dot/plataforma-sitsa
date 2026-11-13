@@ -1,3 +1,4 @@
+import { corregirAsignacion } from "./asignaciones";
 import { fusionarVehiculos } from "../vehiculos-fusion";
 import { revisarPlacaDuplicada } from "../vehiculos-duplicados";
 import { consultarConsumos } from "./consumos-lectura";
@@ -13,9 +14,11 @@ const state = vi.hoisted(() => ({ pool: null as Pool | null }));
 vi.mock("@/lib/db", () => ({ getPool: () => state.pool, query: async (s: string, p: unknown[]) => (await state.pool!.query(s, p))[0] }));
 vi.mock("@/lib/load-env", () => ({ loadRuntimeEnv: () => { throw Error("ENV_PROHIBIDO_EN_LAB"); } }));
 vi.mock("@/lib/auth-secret", () => ({ getAuthSecretBytes: () => new TextEncoder().encode("synthetic-only-pr587-disposable-integration-lab") }));
+vi.mock("@/lib/tenant",()=>({requireTenantFlotaCombustible:async(slug:string)=>slug==='denied'?{error:new Response(null,{status:403})}:{empresa:{id:1},session:{id:1,username:'SINTETICO_CAPTURA',rol:'Admin'}}}));
 vi.mock("./storage", () => ({ guardar: async () => `synthetic/${randomUUID()}.xlsx`, compensar: async () => {} }));
 vi.mock("@/lib/uploads", () => ({ guardarUpload: async () => ({ relative: `synthetic/${randomUUID()}.pdf`, original: "sintetico.pdf", size: 10 }), contentTypeFor: () => "application/pdf" }));
 import { preview, confirmarArchivo, type Entrada } from "./service";
+import { cb2Http } from "./http";
 import { analizar } from "./model";
 import { libro, row } from "./fixture";
 import { validarTercero, revisarTerceros, listarTerceros, tercerosHabilitados, registrarPiloto, registrarUnidad, crearAsociacion, listarCatalogosTerceros, reconocerTercero } from "./terceros";
@@ -33,7 +36,7 @@ const q = async (sql: string, args: unknown[] = []) => (await state.pool!.query<
 const key = () => randomUUID().replaceAll("-", "");
 async function preparar(vale: string, nombre?: string, placa?: string) {
   const r = row(vale); if (nombre) r[8] = nombre; if (placa) r[2] = placa;
-  const buffer = await libro([r]);
+  const buffer = await libro([r],w=>{w.worksheets[0].getCell('F1').value='COSTO TOTAL';});
   const candidato = (await analizar(buffer, "HALEL", "GTQ")).find(l => l.clave)!.clave!;
   return { buffer, entrada: { perfil: "HALEL", moneda: "GTQ", seleccion: [{ candidato, vehiculoId: 1 }] } as Entrada };
 }
@@ -463,5 +466,42 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     vi.stubEnv("FLOTA_FUSIONES_APROBADAS", "");
     await expect(fusionarVehiculos(empresa,op)).rejects.toMatchObject({ status: 403 });
   });
+
+ it("piloto y unidad independientes: cuatro combinaciones, regresiones, persistencia y concurrencia",async()=>{
+  const antes=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  await admin.query(readFileSync("sql/migrate-2026-11-cb2-identidades-independientes.sql","utf8"));
+  expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antes);
+  vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
+  try{
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(701,1,'Interno Independiente','Activo'),(702,2,'Otro Tenant','Activo')");
+   const p=await registrarPiloto(ctx,{referencia:"independiente-p",nombre:"Externo Independiente"});
+   const u=await registrarUnidad(ctx,{referencia:"independiente-u",placa:"M889LAB",tipo:"MOTOCICLETA",descripcion:"LAB independiente"});
+   const propia=(await q("SELECT placa FROM flota_vehiculos WHERE id=1"))[0].placa;
+   const casos=[{vale:"121641",externo:false,externa:false},{vale:"121552",externo:true,externa:false},{vale:"121646-INT",externo:false,externa:true},{vale:"121646-EXT",externo:true,externa:true}];
+   for(const caso of casos){
+    const file=await preparar(caso.vale,"Nombre original conservado",caso.externa?"M889LAB":propia);
+    file.entrada.seleccion[0]={candidato:file.entrada.seleccion[0].candidato,vehiculoId:caso.externa?-u.id:1,pilotoTipo:caso.externo?"EXTERNO":"INTERNO",metodoPiloto:"MANUAL",empleadoId:caso.externo?null:701,metodoEmpleado:caso.externo?"SIN_ASIGNACION":"MANUAL",...(caso.externo?{pilotoExternoId:p.id}:{})};
+    const http=async(action:'preview'|'confirmar',token?:string)=>{const form=new FormData();form.append('file',new File([new Uint8Array(file.buffer)],'lab.xlsx',{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));form.append('seleccion',JSON.stringify(file.entrada.seleccion));form.append('proveedorId','1');form.append('moneda','GTQ');if(token){form.append('token',token);form.append('clave',key());}return cb2Http(new Request('http://localhost/lab',{method:'POST',headers:{Origin:'http://localhost'},body:form}),'e1',action);};
+    const pvw=await http('preview');expect(pvw.status,await pvw.clone().text()).toBe(200);const data=await pvw.json();const confirmed=await http('confirmar',data.token);expect(confirmed.status,await confirmed.clone().text()).toBe(200);await cb2(file);
+    const [saved]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm=?",[caso.vale]);
+    expect(await total(caso.vale)).toBe(1);expect(saved).toMatchObject({empleado_id:caso.externo?null:701,piloto_externo_id:caso.externo?p.id:null,vehiculo_id:caso.externa?null:1,unidad_externa_id:caso.externa?u.id:null,asociacion_externa_id:null,piloto_informado:"Nombre original conservado"});
+    expect(JSON.parse(saved.identidad_externa)).toMatchObject({politica:"INDEPENDIENTE_V1",piloto:{tipo:caso.externo?"EXTERNO":"INTERNO"},unidad:{tipo:caso.externa?"EXTERNA":"FLOTA"}});
+   }
+   const [original]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='121646'");
+   await corregirAsignacion(ctx,{proveedorId:1,consumoId:original.id,revision:Number(original.revision_asignacion),vehiculoId:1,pilotoTipo:"EXTERNO",metodoPiloto:"MANUAL",pilotoExternoId:p.id,empleadoId:null,productoClasificado:"DIESEL",motivo:"Correccion independiente revisada en laboratorio",clave:key()});
+   expect((await q("SELECT id,vehiculo_id,piloto_externo_id,unidad_externa_id FROM flota_cb2_consumos WHERE id=?",[original.id]))[0]).toMatchObject({id:original.id,vehiculo_id:1,piloto_externo_id:p.id,unidad_externa_id:null});
+   const file=await preparar("INDEPENDIENTE-CONCURRENTE","Externo Independiente",propia);file.entrada.seleccion[0]={...file.entrada.seleccion[0],pilotoTipo:"EXTERNO",metodoPiloto:"MANUAL",pilotoExternoId:p.id,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"};
+   const results=await Promise.allSettled([cb2(file),cb2(file)]);expect(results.some(r=>r.status==="fulfilled")).toBe(true);expect(await total("INDEPENDIENTE-CONCURRENTE")).toBe(1);
+   const ajeno=await preparar("INDEPENDIENTE-AJENO","Otro Tenant",propia);ajeno.entrada.seleccion[0]={...ajeno.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:702,metodoEmpleado:"MANUAL"};
+   await expect(cb2(ajeno)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-AJENO")).toBe(0);
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(703,1,'Externo Independiente','Activo')");
+   const ambiguo=await preparar("INDEPENDIENTE-AMBIGUO","Externo Independiente",propia);ambiguo.entrada.seleccion[0]={...ambiguo.entrada.seleccion[0],pilotoTipo:'EXTERNO',metodoPiloto:'AUTOMATICA',pilotoExternoId:p.id,empleadoId:null,metodoEmpleado:'SIN_ASIGNACION'};
+   await expect(cb2(ambiguo)).rejects.toThrow('ambigua');expect(await total('INDEPENDIENTE-AMBIGUO')).toBe(0);
+   ambiguo.entrada.seleccion[0].metodoPiloto='MANUAL';await cb2(ambiguo);expect(await total('INDEPENDIENTE-AMBIGUO')).toBe(1);
+   await expect(q("UPDATE flota_cb2_consumos SET empleado_id=701 WHERE vale_norm='121646-EXT'")).rejects.toThrow();
+   const apagado=await preparar("INDEPENDIENTE-APAGADO","Externo Independiente",propia);apagado.entrada.seleccion[0]={...apagado.entrada.seleccion[0],pilotoTipo:"EXTERNO",metodoPiloto:"MANUAL",pilotoExternoId:p.id,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"};
+   vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");await expect(cb2(apagado)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-APAGADO")).toBe(0);
+  }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ });
 
 });

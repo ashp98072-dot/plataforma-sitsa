@@ -1,4 +1,5 @@
 import { pilotoDirecto } from "./identidad-directa";
+import { pilotoIndependiente, politicaIndependiente } from "./piloto-independiente";
 import { tipoTerceroCompatible } from "@/lib/flota/cb2/identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
 import { nombreComparable, placaCompatible } from "@/lib/flota/combustible-coincidencias";
@@ -15,7 +16,14 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
   if (!g.vehiculoId) {
     causas.push("Falta seleccionar una unidad válida. Las coincidencias ambiguas no se asignan automáticamente.");
   } else if (!cat.vehiculos.some(v => String(v.id) === g.vehiculoId)) causas.push(`Unidad #${g.vehiculoId} ausente del catálogo disponible de esta empresa.`);
-  if (Number(g.vehiculoId) < 0 && cat.tercerosDirectos) {
+  if (politicaIndependiente(cat)) {
+    const p = pilotoIndependiente(g.fila, cat, d);
+    if (!p) causas.push("Falta un piloto interno o tercerizado inequívoco; selecciona una sola identidad.");
+    if (Number(g.vehiculoId) < 0) {
+      const unidad = cat.unidadesExternas?.find(u => u.id === -Number(g.vehiculoId));
+      if (!cat.tercerosHabilitados || !unidad || g.activas.some(f => !tipoTerceroCompatible(f.placaNormalizada || f.placa, unidad) || !unidadTerceraCompatible(f.placaNormalizada || f.placa, unidad.id, cat.unidadesExternas ?? [], d.motivoUnidad))) causas.push("Unidad externa pendiente o incompatible con la placa o el tipo.");
+    } else if (g.vehiculoId && g.activas.some(f => !placaCompatible(f.placaNormalizada || f.placa, Number(g.vehiculoId), cat.vehiculos)) && (d.motivoUnidad?.trim().length ?? 0) < 10) causas.push("La unidad necesita revisión y una justificación de al menos 10 caracteres.");
+  } else if (Number(g.vehiculoId) < 0 && cat.tercerosDirectos) {
     const p = pilotoDirecto(g.fila, cat, d);
     const unidad = cat.unidadesExternas?.find(u => u.id === -Number(g.vehiculoId));
     if (!p || !unidad || !cat.tercerosHabilitados || g.activas.some(f => !tipoTerceroCompatible(f.placaNormalizada || f.placa, unidad) || nombreComparable(p.nombre) !== nombreComparable(f.origen?.piloto ?? "") || !unidadTerceraCompatible(f.placaNormalizada || f.placa, -Number(g.vehiculoId), cat.unidadesExternas ?? [], d.motivoUnidad))) causas.push("Piloto, unidad o tipo externos pendientes o incompatibles con el Excel.");

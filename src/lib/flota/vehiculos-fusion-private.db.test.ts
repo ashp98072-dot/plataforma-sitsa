@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import mysql, { type Pool, type RowDataPacket, type ResultSetHeader } from "mysql2/promise";
 import { afterAll, beforeAll, expect, it, vi, describe } from "vitest";
@@ -9,6 +9,7 @@ import { fusionarVehiculos } from "./vehiculos-fusion";
 import { predicadoVehiculoAccesible } from "./acceso";
 import { referencias } from "./vehiculos-duplicados";
 import { placaComparable } from "./combustible-coincidencias";
+import { sinOperacionesAbiertas } from "./identidad-fisica-operaciones";
 const pipe = process.env.CB2_PRIVATE_PIPE ?? "";
 const q = async (s: string, a: unknown[] = []) => (await state.pool!.query<RowDataPacket[]>(s,a))[0];
 describe.skipIf(!pipe)("respaldo privado pre-CB2 restaurado: fusión real", () => {
@@ -19,6 +20,26 @@ describe.skipIf(!pipe)("respaldo privado pre-CB2 restaurado: fusión real", () =
   expect(s.version).toMatch(/^11\.8\.9-MariaDB/); expect(Number(s.net)).toBe(1); expect(s.pipe).toBe(pipe);
  });
  afterAll(async () => { vi.unstubAllEnvs(); await state.pool?.end(); });
+ it("consultas de operaciones compilan contra tablas reales restauradas sin modificar registros reales",async()=>{
+  const c=await state.pool!.getConnection();try{
+   expect(await q("SELECT id FROM flota_vehiculos WHERE id=2147483000")).toEqual([]);
+   await expect(sinOperacionesAbiertas(c,[2147483000])).resolves.toBeUndefined();
+  }finally{c.release();}
+  const lectura=await mysql.createConnection({socketPath:'\\\\.\\pipe\\'+pipe,user:'root',database:'u611730801_Plataforma',multipleStatements:true});
+  try{await expect(lectura.query(readFileSync('sql/preflight-2026-11-identidad-fisica.sql','utf8'))).resolves.toBeDefined();}finally{await lectura.end();}
+ });
+ it("migraciones propuestas compatibles con esquema restaurado, sin reescribir consumos",async()=>{
+  const before=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  const c=await state.pool!.getConnection();
+  try{
+   await c.query(readFileSync("sql/migrate-2026-11-cb2-identidades-independientes.sql","utf8"));
+   const sql=readFileSync("sql/migrate-2026-11-flota-identidad-fisica.sql","utf8");
+   for(const part of sql.split(/DELIMITER\s+\/\//i)[0].split(';'))if(part.trim())await c.query(part);
+   for(const part of sql.split(/DELIMITER\s+\/\//i)[1].split(/DELIMITER\s+;/i)[0].split('//'))if(part.trim())await c.query(part);
+   expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(before);
+   expect(await q("SELECT * FROM flota_identidades_fisicas")).toEqual([]);
+  }finally{c.release();}
+ });
  it("audita pares reportados solo en la copia privada, sin declararlos fusionables por placa", async () => {
   const c = await state.pool!.getConnection();
   try {
