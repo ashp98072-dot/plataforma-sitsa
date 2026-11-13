@@ -1,6 +1,6 @@
 "use client";
 import { AltaDirectaCB2 } from "./alta-directa";
-import { pilotoDirecto } from "./identidad-directa";
+import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
 import { normalizarBusquedaUnidad } from "@/lib/flota/cb2/terceros-busqueda";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { clasificarProducto, identificarEmpleado, productos, etiquetasProducto, type Producto } from "@/lib/flota/cb2/clasificacion";
@@ -15,7 +15,7 @@ export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actua
     const pilotos = cat.pilotosExternos ?? [...new Map((cat.terceros ?? []).map(a => [a.piloto_id, { id: a.piloto_id, nombre: a.nombre, referencia: a.piloto_referencia }])).values()];
     const unidades = cat.unidadesExternas ?? [...new Map((cat.terceros ?? []).map(a => [a.unidad_id, { id: a.unidad_id, placa: a.placa, referencia: a.unidad_referencia, tipo: a.tipo, descripcion: a.descripcion }])).values()];
     const pilotoId = value.pilotoExternoId === undefined ? (cat.tercerosDirectos ? pilotoDirecto(fila, cat)?.id : externa?.piloto_id) : value.pilotoExternoId;
-    const unidadId = value.unidadExternaId === undefined ? externa?.unidad_id : value.unidadExternaId;
+    const unidadId = value.unidadExternaId === undefined ? (cat.tercerosDirectos ? propuestaDirecta(fila, cat)?.unidad.id : externa?.unidad_id) : value.unidadExternaId;
     function elegir(p: number | null | undefined, u: number | null | undefined) {
         const asociaciones = (cat.terceros ?? []).filter(a => a.piloto_id === p && a.unidad_id === u && a.estado === "VERIFICADA");
         onChange({ ...value, empleadoId: null, pilotoExternoId: p ?? null, unidadExternaId: u ?? null, asociacionExternaId: !cat.tercerosDirectos && asociaciones.length === 1 ? asociaciones[0].id : null });

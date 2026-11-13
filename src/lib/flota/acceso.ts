@@ -3,6 +3,7 @@ import type { PoolConnection } from "mysql2/promise";
 import { execute, query } from "@/lib/db";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarEmpresasActivas } from "@/lib/empresas";
+import { catalogoSinAlias } from "./vehiculos-alias";
 
 /**
  * REGLA ÚNICA de «vehículo accesible desde una empresa»: es propio de la empresa o está explícitamente compartido con ella
@@ -141,7 +142,7 @@ export async function listarVehiculosAccesibles(
  */
 export async function listarVehiculosActivosAccesibles(empresaId: number, limite = 1000): Promise<RowDataPacket[]> {
   const vistos = new Set<number>();
-  return (await listarVehiculosAccesibles(empresaId))
+  return (await catalogoSinAlias<RowDataPacket & { id: number }>((await listarVehiculosAccesibles(empresaId)).map(v => ({ ...v, id: Number(v.id) }))))
     .filter((r) => Number(r.activo ?? 1) === 1 && !vistos.has(Number(r.id)) && vistos.add(Number(r.id)))
     .slice(0, limite);
 }
@@ -215,16 +216,18 @@ export async function guardarAccesoVehiculo(
   vehiculoId: number,
   empresaIds: number[],
   empresaDuenia: number,
+  conn?: PoolConnection,
 ): Promise<void> {
-  await asegurarSchemaFlota().catch(() => undefined);
-  await execute("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [
+  if (!conn) await asegurarSchemaFlota().catch(() => undefined);
+  const escribir = conn ? async (sql: string, params: (string | number)[]) => conn.execute(sql, params) : execute;
+  await escribir("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [
     vehiculoId,
   ]);
   const unicos = [...new Set(empresaIds.map(Number))].filter(
     (id) => id > 0 && id !== empresaDuenia,
   );
   for (const eid of unicos) {
-    await execute(
+    await escribir(
       "INSERT IGNORE INTO flota_vehiculo_acceso (vehiculo_id, empresa_id) VALUES (?, ?)",
       [vehiculoId, eid],
     );
