@@ -3,19 +3,10 @@
 // verificado + EvidencePort/EvidenceVerifier ratificados + puertos de seguridad) la instala con `installPriceSmartHandler`. Solo en un laboratorio local aislado, la bandera
 // explícita PRICESMART_LAB_DEMO activa `lab-demo/autoinstall.ts` (ver ahí las condiciones).
 import { autoInstallLabDemo } from './lab-demo/autoinstall';
+import { installPriceSmartHandler, isPriceSmartHandlerInstalled, state, type PriceSmartHandler } from './runtime-state';
+export { installPriceSmartHandler, isPriceSmartHandlerInstalled };
+export type { PriceSmartHandler };
 
-export type PriceSmartHandler = (request: Request) => Promise<Response>;
-// Singleton en globalThis: los paquetes de Next (rutas, instrumentación, recarga en caliente) pueden evaluar este módulo más de una vez.
-const KEY = Symbol.for('novalvion.pricesmart.handler');
-const store = globalThis as unknown as Record<symbol, { handler: PriceSmartHandler | null; lab: Promise<boolean> | null } | undefined>;
-const state = (store[KEY] ??= { handler: null, lab: null });
-
-export function installPriceSmartHandler(handler: PriceSmartHandler | null): void {
-  if (handler !== null && typeof handler !== 'function') throw new TypeError('handler inválido');
-  state.handler = handler;
-}
-/** Solo lectura: ¿hay un handler instalado? (lo usa el diagnóstico administrativo; no instala ni retira nada). */
-export function isPriceSmartHandlerInstalled(): boolean { return state.handler !== null; }
 function disabled(): Response {
   const correlationId = crypto.randomUUID();
   return new Response(JSON.stringify({ code: 'DISABLED', correlationId }), { status: 503, headers: {

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { installPriceSmartHandler, isPriceSmartHandlerInstalled, handlePriceSmart } from './runtime';
+import { handlePriceSmart } from './runtime';
+import { installPriceSmartHandler, isPriceSmartHandlerInstalled } from './runtime-state';
 import { ENABLE_ACK } from './runtime-config';
 import { SANDBOX_DB_USER_PATTERN, buildReadinessDiagnostic, readinessDiagnostic } from './readiness-diagnostic';
 
@@ -17,7 +18,7 @@ describe('buildReadinessDiagnostic', () => {
     const r = buildReadinessDiagnostic({}, idle);
     expect(r.mode).toBe('DISABLED'); expect(r.ready).toBe(false);
     expect(r.blockers).toEqual(expect.arrayContaining(['MODE_DISABLED', 'PRODUCTION_ENVIRONMENT_NOT_MODELED', 'PORTS_NOT_WIRED']));
-    expect(r.checks.filter(c => c.status === 'NOT_WIRED')).toHaveLength(7);
+    expect(r.checks.filter(c => c.status === 'NOT_WIRED')).toHaveLength(7); expect(r.blockers).toContain('PRODUCTION_COMPOSITION_NOT_IMPLEMENTED');
     expect(r.decisions.every(d => !d.declaredRatified)).toBe(true);
   });
   it('nunca ratifica por su cuenta: D02/D06/D08/D09/D12 solo aparecen si el operador las declara', () => {
@@ -46,9 +47,23 @@ describe('buildReadinessDiagnostic', () => {
     expect(r.presentVariables.PRICESMART_ORIGIN_CLUB).toBe(true); expect(r.presentVariables.PRICESMART_TIMEOUT_MS).toBe(false);
     expect(Object.keys(r.presentVariables).every(k => /^PRICESMART_/.test(k)) && !('PRICESMART_API_KEY' in r.presentVariables)).toBe(true);
   });
-  it('con un handler instalado se informa, pero el diagnóstico no cambia el estado', () => {
-    const r = buildReadinessDiagnostic(full(), { handlerInstalled: true, labActive: true });
-    expect(r.blockers).not.toContain('PORTS_NOT_WIRED'); expect(r.checks.some(c => c.id === 'LAB_COMPOSITION')).toBe(true);
+  it('handler instalado + configuración aparentemente completa + laboratorio activo: sigue ready=false y ningún puerto es OK', () => {
+    for (const labActive of [false, true]) {
+      const r = buildReadinessDiagnostic(full({ PRICESMART_DB_RUNTIME_USER: 'sandbox_api02_x' }), { handlerInstalled: true, labActive });
+      expect(r.ready).toBe(false); expect(r.handlerInstalled).toBe(true);
+      expect(r.blockers).toEqual(expect.arrayContaining(['PORTS_UNVERIFIED', 'PRODUCTION_COMPOSITION_NOT_IMPLEMENTED']));
+      expect(r.blockers).not.toContain('PORTS_NOT_WIRED');
+      const ports = r.checks.filter(c => c.id.startsWith('PORT:')); expect(ports).toHaveLength(7);
+      expect(ports.every(c => c.status === 'UNVERIFIED')).toBe(true); expect(r.checks.some(c => c.status === 'OK' && c.id.startsWith('PORT:'))).toBe(false);
+      expect(r.blockers.includes('LAB_HANDLER_NOT_PRODUCTION_EVIDENCE')).toBe(labActive); expect(r.checks.some(c => c.id === 'LAB_COMPOSITION')).toBe(labActive);
+    }
+  });
+  it('ready es false en toda combinación de modo, decisiones, handler y entorno', () => {
+    for (const mode of ['DISABLED', 'READ_ONLY', 'ENABLED']) for (const handlerInstalled of [false, true]) for (const decisions of ['', 'D02,D06', 'D02,D06,D08,D09,D12'])
+      expect(buildReadinessDiagnostic(full({ PRICESMART_RUNTIME_MODE: mode, PRICESMART_RATIFIED_DECISIONS: decisions, PRICESMART_DB_RUNTIME_USER: 'sandbox_api02_x' }), { handlerInstalled, labActive: handlerInstalled }).ready).toBe(false);
+  });
+  it('las decisiones no se ratifican artificialmente por tener un handler', () => {
+    expect(buildReadinessDiagnostic({}, { handlerInstalled: true, labActive: true }).decisions.every(d => !d.declaredRatified)).toBe(true);
   });
 });
 
@@ -83,5 +98,40 @@ describe('aislamiento', () => {
   });
   it('el patrón sandbox del diagnóstico coincide con el del repositorio', () => {
     expect(readFileSync(path.join(__dirname, 'mariadb-repository.ts'), 'utf8')).toContain(SANDBOX_DB_USER_PATTERN.source);
+  });
+});
+
+describe('aislamiento transitivo del diagnóstico', () => {
+  const srcRoot = path.resolve(__dirname, '../../..');
+  const resolveSpec = (from: string, spec: string): string | null => {
+    const base = spec.startsWith('@/') ? path.join(srcRoot, spec.slice(2)) : spec.startsWith('.') ? path.resolve(path.dirname(from), spec) : null;
+    if (!base) return null;
+    for (const c of [`${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts')]) { try { readFileSync(c); return c; } catch { /* siguiente */ } }
+    return null;
+  };
+  /** Cierre de importaciones (estáticas y dinámicas) a partir de un módulo, más los paquetes externos alcanzados. */
+  const closure = (entry: string) => {
+    const files = new Set<string>(); const external = new Set<string>(); const queue = [entry];
+    while (queue.length) {
+      const f = queue.pop() as string; if (files.has(f)) continue; files.add(f);
+      const text = readFileSync(f, 'utf8').replace(/\/\/.*$/gm, '');
+      for (const m of text.matchAll(/(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/g)) {
+        const spec = m[1]; const resolved = resolveSpec(f, spec);
+        if (resolved) queue.push(resolved); else if (!spec.startsWith('.') && !spec.startsWith('@/')) external.add(spec); else throw new Error(`no resuelto: ${spec} en ${f}`);
+      }
+    }
+    return { files: [...files].map(f => path.relative(srcRoot, f).replaceAll('\\', '/')), external: [...external] };
+  };
+  it('el diagnóstico no alcanza, ni siquiera transitivamente, la composición del laboratorio, la base de datos, el TMS ni mysql2', () => {
+    const { files, external } = closure(path.join(__dirname, 'readiness-diagnostic.ts'));
+    expect(files).toContain('lib/integrations/pricesmart/lab-demo/gate.ts');
+    for (const forbidden of ['composition', 'autoinstall', 'link-retry', 'tms-link', 'lab-crypto', 'ops-view', 'mariadb-repository', 'security-mariadb', 'http-transport', 'runtime.ts', ['runtime', 'assembly'].join('-'), 'lib/db', 'lib/tms/', 'sandbox-db'])
+      expect(files.filter(f => f.includes(forbidden)), forbidden).toEqual([]);
+    expect(external.filter(e => /^(mysql2|next|node:)/.test(e) || e.startsWith('node:'))).toEqual([]);
+  });
+  it('las condiciones del laboratorio tienen una única implementación (composition reutiliza gate)', () => {
+    const composition = readFileSync(path.join(__dirname, 'lab-demo/composition.ts'), 'utf8');
+    expect(composition).not.toMatch(/function labDemoGate/); expect(composition).toMatch(/from '\.\/gate'/);
+    expect(readFileSync(path.join(__dirname, 'lab-demo/gate.ts'), 'utf8').match(/function labDemoGate/g)).toHaveLength(1);
   });
 });

@@ -1,17 +1,18 @@
 import { targetSchema } from './security-contracts';
-import { isPriceSmartHandlerInstalled } from './runtime';
+import { isPriceSmartHandlerInstalled } from './runtime-state';
+import { labDemoGate } from './lab-demo/gate';
 import { REQUIRED_DECISIONS, parseRuntimeConfig } from './runtime-config';
 
 // PRICESMART API-15 — diagnóstico administrativo de readiness. SOLO LECTURA y PURO respecto del sistema: no abre conexiones, no consulta ni escribe datos del TMS ni de ninguna empresa,
 // no instala ni retira handlers, no habilita endpoints y no cambia ninguna bandera. Informa únicamente PRESENCIA (booleanos) y estados; nunca valores de variables, claves, tokens ni
 // mensajes de error de terceros. Las decisiones D02/D06/D08/D09/D12 se muestran como «declaradas por el operador»: este módulo no las ratifica ni las verifica.
-export type CheckStatus = 'OK' | 'MISSING' | 'BLOCKED' | 'NOT_WIRED' | 'INFO';
+export type CheckStatus = 'OK' | 'MISSING' | 'BLOCKED' | 'NOT_WIRED' | 'UNVERIFIED' | 'INFO';
 export type Check = { id: string; status: CheckStatus; detail: string };
 export type ReadinessDiagnostic = {
   generatedAt: string;
   handlerInstalled: boolean;
   mode: 'DISABLED' | 'READ_ONLY' | 'ENABLED';
-  ready: boolean;
+  ready: false;   // constante mientras no exista una composición productiva verificable
   blockers: string[];
   checks: Check[];
   decisions: { id: string; declaredRatified: boolean; requiredFor: string[] }[];
@@ -55,18 +56,23 @@ export function buildReadinessDiagnostic(env: Record<string, string | undefined>
     requiredFor: (Object.entries(REQUIRED_DECISIONS) as [string, readonly string[]][]).filter(([, ids]) => ids.includes(id)).map(([m]) => m) }));
   if (parsed.ok) for (const d of REQUIRED_DECISIONS[parsed.config.mode as 'READ_ONLY' | 'ENABLED']) if (!declared.includes(d)) block('DECISION_PENDING', `${d} no está declarada como ratificada por PriceSmart`);
 
-  // Sin una composición instalada no hay puertos reales: se informa NOT_WIRED en lugar de suponerlos.
-  for (const p of PORTS) checks.push({ id: `PORT:${p}`, status: state.handlerInstalled ? 'OK' : 'NOT_WIRED', detail: state.handlerInstalled ? 'validado al instalar' : 'sin composición administrativa que lo aporte' });
-  if (!state.handlerInstalled) blockers.push('PORTS_NOT_WIRED');
-  if (state.labActive) checks.push({ id: 'LAB_COMPOSITION', status: 'INFO', detail: 'las condiciones del laboratorio local se cumplen (no es el runtime productivo)' });
+  // Los puertos NUNCA se marcan OK por la mera existencia de un handler: un handler (incluido el de laboratorio) no demuestra que sus puertos sean productivos. Hoy no existe ningún
+  // mecanismo que aporte evidencia verificable de una composición productiva, así que, con o sin handler, ningún puerto puede declararse OK.
+  for (const p of PORTS) checks.push(state.handlerInstalled
+    ? { id: `PORT:${p}`, status: 'UNVERIFIED', detail: 'hay un handler instalado, pero no existe evidencia verificable de que este puerto sea productivo' }
+    : { id: `PORT:${p}`, status: 'NOT_WIRED', detail: 'sin composición administrativa que lo aporte' });
+  blockers.push(state.handlerInstalled ? 'PORTS_UNVERIFIED' : 'PORTS_NOT_WIRED');
+  if (state.handlerInstalled && state.labActive) blockers.push('LAB_HANDLER_NOT_PRODUCTION_EVIDENCE');
+  // Mientras la composición productiva no esté implementada, el diagnóstico no puede dar ready=true bajo ninguna combinación de entorno y handlers.
+  block('PRODUCTION_COMPOSITION_NOT_IMPLEMENTED', 'no existe una composición productiva verificable; ninguna configuración ni handler instalado basta para declarar la integración lista');
+  if (state.labActive) checks.push({ id: 'LAB_COMPOSITION', status: 'INFO', detail: 'las condiciones del laboratorio local se cumplen (no es el runtime productivo ni evidencia de readiness)' });
 
-  return { generatedAt: now.toISOString(), handlerInstalled: state.handlerInstalled, mode, ready: blockers.length === 0, blockers: [...new Set(blockers)], checks, decisions, presentVariables };
+  return { generatedAt: now.toISOString(), handlerInstalled: state.handlerInstalled, mode, ready: false, blockers: [...new Set(blockers)], checks, decisions, presentVariables };
 }
 
 /** Punto de entrada para la ruta: lee el entorno del proceso y el estado de instalación, sin efectos. Cualquier excepción interna produce un informe cerrado genérico. */
 export async function readinessDiagnostic(): Promise<ReadinessDiagnostic> {
   try {
-    const { labDemoGate } = await import('./lab-demo/composition');
     return buildReadinessDiagnostic(process.env, { handlerInstalled: isPriceSmartHandlerInstalled(), labActive: labDemoGate(process.env).ok });
   } catch {
     return { generatedAt: new Date().toISOString(), handlerInstalled: false, mode: 'DISABLED', ready: false, blockers: ['DIAGNOSTIC_FAILED'],
