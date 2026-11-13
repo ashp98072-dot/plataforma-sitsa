@@ -29,13 +29,6 @@ export function selectKmsClient(config: KmsConfig, registry: KmsAdapterRegistry)
     return { ok: true, client };
   } catch { return { ok: false, reason: 'ADAPTER_FAILED' }; }   // el fallo de un adaptador nunca se propaga con detalles
 }
-/** ¿Existe en el registro REVISADO un adaptador aprobado para este destino con el proveedor configurado? (por omisión, SIEMPRE el registro oficial del repositorio). */
-export function isReviewedForTarget(config: KmsConfig, target: KmsTarget, registry: KmsAdapterRegistry = REVIEWED_KMS_ADAPTERS): boolean {
-  try {
-    if (!config || config.providerId === null || typeof registry !== 'object' || registry === null || !Object.prototype.hasOwnProperty.call(registry, config.providerId)) return false;
-    const entry = registry[config.providerId]; return !!entry && Array.isArray(entry.targets) && entry.targets.includes(target);
-  } catch { return false; }
-}
 /** Registro SOLO para laboratorio y pruebas: cada entrada se fuerza a `['LAB']` aunque declare otra cosa, de modo que jamás pueda aprobar PRODUCCIÓN. No es una fuente de confianza de producción. */
 export function sanitizeLabAdapters(registry: unknown): KmsAdapterRegistry {
   const out: Record<string, KmsAdapterRegistration> = {};

@@ -3,7 +3,7 @@ import { checkInstallationEligibility, type InstallationInput, type Installation
 import type { AttestationTarget, CompositionDescriptor, Attestation, ResourceIdentityAuthority } from './conformance-attestation';
 import { assertDisjointTrust } from './registry-identity-authority';
 import { createKmsKeyProvider, parseKmsConfig, type KmsClient } from './kms-adapter';
-import { REVIEWED_KMS_ADAPTERS, selectKmsClient, type KmsAdapterRegistry } from './kms-provider-selection';
+import { REVIEWED_KMS_ADAPTERS, selectKmsClient } from './kms-provider-selection';
 import { accountMatches, parseAccount, validateDatabaseSeparation, type DbIdentity } from './database-identity';
 import { auditGrants, type PrivilegePolicy } from './grants-audit';
 import type { TrustedClock } from './security-contracts';
@@ -37,12 +37,9 @@ async function step(id: string, fn: () => Promise<{ pass: boolean; code?: string
   catch { return { id, status: 'FAIL', code: 'UNAVAILABLE' }; }   // cualquier excepción = fallo cerrado, sin detalles
 }
 
-/** Ejecutor del preflight ligado a UN registro de proveedores revisados. El ejecutor público (`runProductionPreflight`) está ligado al registro OFICIAL; solo las pruebas construyen otro para simular, de forma aislada,
- *  un futuro registro oficial no vacío. El llamador del preflight NUNCA elige el registro ni, en PRODUCCIÓN, el cliente. */
-export function createProductionPreflightRunnerForTests(reviewed: KmsAdapterRegistry) { return (input: PreflightInput) => runWith(reviewed, input); }
-export const runProductionPreflight = (input: PreflightInput): Promise<PreflightReport> => runWith(REVIEWED_KMS_ADAPTERS, input);
-
-async function runWith(reviewed: KmsAdapterRegistry, input: PreflightInput): Promise<PreflightReport> {
+/** Preflight de una composición productiva. La fuente de confianza de los proveedores KMS es SIEMPRE el registro oficial `REVIEWED_KMS_ADAPTERS`: esta función no tiene ningún parámetro ni exportación hermana que permita sustituirlo (API-21, auditoría de #615).
+ *  Las pruebas simulan un futuro registro oficial no vacío sustituyendo el MÓDULO `kms-provider-selection` en el ejecutor de pruebas (`vi.mock`), no mediante código de producción. */
+export async function runProductionPreflight(input: PreflightInput): Promise<PreflightReport> {
   const checks: PreflightCheck[] = [];
   const target = input?.target === 'LAB' || input?.target === 'PRODUCTION' ? input.target : 'PRODUCTION';
   const kms = parseKmsConfig(input?.env ?? {});
@@ -55,7 +52,7 @@ async function runWith(reviewed: KmsAdapterRegistry, input: PreflightInput): Pro
     if (target === 'LAB') { client = input.kmsClient ?? null; return client ? { pass: true } : { pass: false, code: 'KMS_CLIENT_MISSING' }; }
     if (!kms.ok) return { pass: false, code: 'KMS_CONFIG_INVALID' };
     if (kms.config.target !== 'PRODUCTION') return { pass: false, code: 'KMS_TARGET_MISMATCH' };   // un proveedor aprobado para otro destino no se selecciona
-    const selection = selectKmsClient(kms.config, reviewed);
+    const selection = selectKmsClient(kms.config, REVIEWED_KMS_ADAPTERS);
     if (!selection.ok) return { pass: false, code: selection.reason };
     client = selection.client; return { pass: true };
   }));

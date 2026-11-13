@@ -1,20 +1,32 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { PayloadCipher } from './mariadb-repository';
 import type { AtomicCounterPort, AtomicReplayPort, EvidenceVerifier, IntegrationCatalog, TrustedClock } from './security-contracts';
 import { createInProcessIdentityAuthority, issueAttestation, type CompositionDescriptor } from './conformance-attestation';
 import type { KmsClient } from './kms-adapter';
 import type { DbIdentity } from './database-identity';
 import { PREFLIGHT_STATEMENTS, mariaDbPreflightDatabase } from './preflight-mariadb';
-import { createProductionPreflightRunnerForTests, runProductionPreflight as officialRunner, type PreflightDatabase, type PreflightInput } from './production-preflight';
+import { runProductionPreflight as realRun, type PreflightDatabase, type PreflightInput } from './production-preflight';
 import type { KmsAdapterRegistry } from './kms-provider-selection';
 import { RUNTIME_PRIVILEGE_POLICY } from './grants-audit';
 import { buildReadinessDiagnostic } from './readiness-diagnostic';
 import { isPriceSmartHandlerInstalled } from './runtime-state';
 import type { PortName } from './port-conformance';
 
+
+// ---- Separación REAL entre código productivo y de pruebas (auditoría de #615): `production-preflight.ts` solo exporta `runProductionPreflight`, ligado al registro oficial. Para simular un futuro registro oficial NO vacío,
+// el ejecutor de pruebas sustituye el MÓDULO `kms-provider-selection` (la constante `REVIEWED_KMS_ADAPTERS`) por un proxy que lee de `reviewed.registry`. Nada de esto existe fuera de las pruebas.
+const reviewed = vi.hoisted(() => ({ registry: {} as Record<string, unknown> }));
+vi.mock('./kms-provider-selection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./kms-provider-selection')>();
+  const proxy = new Proxy({}, {
+    get: (_t, k) => (reviewed.registry as Record<PropertyKey, unknown>)[k], has: (_t, k) => k in reviewed.registry, ownKeys: () => Reflect.ownKeys(reviewed.registry),
+    getOwnPropertyDescriptor: (_t, k) => { const desc = Object.getOwnPropertyDescriptor(reviewed.registry, k); return desc ? { ...desc, configurable: true } : undefined; },
+  });
+  return { ...actual, REVIEWED_KMS_ADAPTERS: proxy };
+});
 const KEY = randomBytes(32); const AUTH = randomBytes(32); const LAB_AUTH = randomBytes(32);
 const S = 'prod_pricesmart'; const U = '`ps_runtime`@`localhost`';
 const grantLines = (): string[] => [
@@ -54,9 +66,12 @@ async function input(over: Partial<PreflightInput> = {}, withAttestation = true)
 }
 /** Registro oficial SIMULADO y aislado (no es `REVIEWED_KMS_ADAPTERS`): su adaptador entrega `client`. Permite probar el resto del preflight de PRODUCCIÓN sin que el llamador inyecte nada. */
 const simulatedOfficial = (client: KmsClient, targets: ('LAB' | 'PRODUCTION')[] = ['PRODUCTION']): KmsAdapterRegistry => ({ 'proveedor-aprobado': { targets, create: () => client } });
+/** Ejecuta el preflight REAL con el registro oficial simulado indicado (vacío = el estado real de hoy). */
+const withOfficial = (registry: KmsAdapterRegistry, i: PreflightInput) => { reviewed.registry = registry as Record<string, unknown>; return realRun(i); };
+const officialRunner = (i: PreflightInput) => withOfficial({}, i);   // registro oficial VACÍO (como hoy)
 /** Atajo de las pruebas heredadas: el `kmsClient` de la entrada (si lo hay) pasa a ser el cliente que entrega el adaptador oficial simulado; la entrada que recibe el ejecutor NO lleva `kmsClient`. */
-const runProductionPreflight = (i: PreflightInput) => { const { kmsClient, ...rest } = i ?? ({} as PreflightInput); return createProductionPreflightRunnerForTests(simulatedOfficial(kmsClient ?? goodKms()))(i ? (rest as PreflightInput) : (i as never)); };
-const status = (r: Awaited<ReturnType<typeof officialRunner>>) => Object.fromEntries(r.checks.map(c => [c.id, c.status + (c.code ? `:${c.code}` : '')]));
+const runProductionPreflight = (i: PreflightInput) => { const { kmsClient, ...rest } = i ?? ({} as PreflightInput); return withOfficial(simulatedOfficial(kmsClient ?? goodKms()), i ? (rest as PreflightInput) : (i as never)); };
+const status = (r: Awaited<ReturnType<typeof realRun>>) => Object.fromEntries(r.checks.map(c => [c.id, c.status + (c.code ? `:${c.code}` : '')]));
 
 describe('preflight de la composición productiva', () => {
   it('con un registro oficial SIMULADO y aislado, todo en orden pasa; con el registro oficial REAL (vacío) un preflight de PRODUCCIÓN NO puede pasar; ninguno autoriza nada ni cambia el readiness', async () => {
@@ -165,7 +180,7 @@ describe('lector de preflight sobre MariaDB: solo dos lecturas fijas', () => {
 // ---- API-21 (auditoría de #615, SHA 1d5e5f16): el cliente KMS de PRODUCCIÓN procede EXCLUSIVAMENTE de la selección oficial
 describe('el cliente KMS verificado en PRODUCCIÓN procede solo del registro oficial; un cliente inyectado no lo sustituye', () => {
   const counting = (healthy: boolean) => { const c = { calls: 0, health: 0, client: undefined as unknown as KmsClient }; c.client = { encrypt: async () => { c.calls++; return new Uint8Array(1); }, decrypt: async () => { c.calls++; return new Uint8Array(32); }, health: async () => { c.health++; return healthy; } }; return c; };
-  const run = async (registry: KmsAdapterRegistry, over: Partial<PreflightInput> = {}) => createProductionPreflightRunnerForTests(registry)(await input(over));
+  const run = async (registry: KmsAdapterRegistry, over: Partial<PreflightInput> = {}) => withOfficial(registry, await input(over));
   it('con un registro oficial simulado NO VACÍO, la salud se mide sobre el cliente del adaptador oficial: el inyectado no se usa ni una vez', async () => {
     const official = counting(true); const injected = counting(false);
     const r = await run(simulatedOfficial(official.client), { kmsClient: injected.client }); expect(status(r).KMS_HEALTH).toBe('PASS'); expect(r.passed).toBe(true);
@@ -205,10 +220,16 @@ describe('el cliente KMS verificado en PRODUCCIÓN procede solo del registro ofi
     const lab = await officialRunner({ ...(await input()), target: 'LAB', env: labEnv, kmsClient: injected.client }); expect(status(lab).KMS_PROVIDER_REVIEWED).toBe('PASS'); expect(status(lab).KMS_HEALTH).toBe('PASS'); expect(injected.health).toBe(1);
     const none = await officialRunner({ ...(await input()), target: 'LAB', env: labEnv, kmsClient: undefined }); expect(status(none).KMS_PROVIDER_REVIEWED).toBe('FAIL:KMS_CLIENT_MISSING');
   });
-  it('REVIEWED_KMS_ADAPTERS sigue vacío y las fábricas de ejecutores de prueba solo se usan en pruebas', async () => {
-    const { REVIEWED_KMS_ADAPTERS } = await import('./kms-provider-selection'); expect(Object.keys(REVIEWED_KMS_ADAPTERS)).toEqual([]);
-    const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = ['createProductionPreflight', 'RunnerForTests'].join('');
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && n !== 'production-preflight.ts' && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
+  it('REVIEWED_KMS_ADAPTERS REAL sigue vacío (sin el proxy de pruebas) y el ejecutor público lo usa como única fuente', async () => {
+    const actual = await vi.importActual<typeof import('./kms-provider-selection')>('./kms-provider-selection'); expect(Object.keys(actual.REVIEWED_KMS_ADAPTERS)).toEqual([]); expect(Object.isFrozen(actual.REVIEWED_KMS_ADAPTERS)).toBe(true);
+    const src = readFileSync(path.join(__dirname, 'production-preflight.ts'), 'utf8').replace(/\/\/.*$/gm, ''); expect(src).toContain('selectKmsClient(kms.config, REVIEWED_KMS_ADAPTERS)');
+  });
+  it('SEPARACIÓN REAL: ningún módulo de producción exporta una fábrica o un parámetro capaz de sustituir el registro de proveedores; las exportaciones de valor de los preflight son exactamente las esperadas', () => {
+    const valueExports = (f: string) => [...readFileSync(path.join(__dirname, f), 'utf8').replace(/\/\/.*$/gm, '').matchAll(/^export\s+(?:async\s+)?(?:const|function|class|let|var)\s+([A-Za-z0-9_]+)/gm)].map(m => m[1]).sort();
+    expect(valueExports('production-preflight.ts')).toEqual(['runProductionPreflight']); expect(valueExports('composition-preflight.ts')).toEqual(['runCompositionPreflight']);
+    expect(valueExports('kms-provider-selection.ts')).toEqual(['REVIEWED_KMS_ADAPTERS', 'hasReviewedKmsAdapter', 'sanitizeLabAdapters', 'selectKmsClient', 'selectReviewedKmsClient']);
+    const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = /ForTests|RunnerFor|createProductionPreflight/;
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && needle.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
 });

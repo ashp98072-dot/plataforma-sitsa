@@ -6,7 +6,7 @@ import type { PayloadCipher } from './mariadb-repository';
 import type { AtomicCounterPort, AtomicReplayPort, EvidenceVerifier, IntegrationCatalog, TrustedClock } from './security-contracts';
 import { createInProcessIdentityAuthority, issueAttestation, type AttestationTarget, type CompositionDescriptor } from './conformance-attestation';
 import { runCompositionPreflight, type CompositionPreflightInput, type CompositionPreflightReport } from './composition-preflight';
-import { REVIEWED_KMS_ADAPTERS, isReviewedForTarget, sanitizeLabAdapters, type KmsAdapterRegistry } from './kms-provider-selection';
+import { REVIEWED_KMS_ADAPTERS, sanitizeLabAdapters, selectKmsClient, type KmsAdapterRegistry } from './kms-provider-selection';
 import { parseKmsConfig, type KmsClient } from './kms-config';
 import { runProductionPreflight, type PreflightDatabase } from './production-preflight';
 import { buildAccountGrantPlan } from './account-plans';
@@ -131,15 +131,11 @@ describe('PRODUCCIÓN: ningún registro inyectado por el llamador puede aprobarl
     const onlyLab = registry(PROD, ['LAB']); expectClosed(await runCompositionPreflight({ ...(await input(PROD)), labAdapters: onlyLab }));
     const labSide = await runCompositionPreflight({ ...(await input(LAB)), labAdapters: registry(LAB, ['LAB']) }); expect(labSide.passed).toBe(true);
     // un registro de laboratorio que se declara aprobado para PRODUCCIÓN: en LAB sus entradas se fuerzan a ['LAB'] y nunca ratifican PRODUCCIÓN
-    const sane = sanitizeLabAdapters(claimsProd(LAB)); expect(sane[LAB.provider].targets).toEqual(['LAB']); expect(isReviewedForTarget(parseCfg(PROD), 'PRODUCTION', sane)).toBe(false);
+    const sane = sanitizeLabAdapters(claimsProd(LAB)); expect(sane[LAB.provider].targets).toEqual(['LAB']); expect(selectKmsClient(parseCfg(PROD), sanitizeLabAdapters(claimsProd(PROD)))).toEqual({ ok: false, reason: 'KMS_PROVIDER_NOT_APPROVED_FOR_TARGET' });
   });
   it('sanitizeLabAdapters descarta entradas sin fábrica y registros hostiles; el resultado está congelado', () => {
     expect(sanitizeLabAdapters(null)).toEqual({}); expect(sanitizeLabAdapters(5)).toEqual({}); expect(sanitizeLabAdapters({ a: { targets: ['PRODUCTION'] }, b: null, c: { create: 'x' } })).toEqual({});
     expect(sanitizeLabAdapters(new Proxy({}, { ownKeys() { throw new Error('secreto'); } }))).toEqual({}); const ok = sanitizeLabAdapters({ x: { targets: ['PRODUCTION'], create: () => goodKms() } }); expect(Object.isFrozen(ok)).toBe(true); expect(ok.x.targets).toEqual(['LAB']);
-  });
-  it('isReviewedForTarget solo reconoce el registro que se le pasa EXPLÍCITAMENTE; por omisión usa el oficial (vacío)', () => {
-    const cfg = parseCfg(PROD); expect(isReviewedForTarget(cfg, 'PRODUCTION')).toBe(false); expect(isReviewedForTarget(cfg, 'LAB')).toBe(false);
-    expect(isReviewedForTarget(cfg, 'PRODUCTION', registry(PROD, ['PRODUCTION']))).toBe(true); expect(isReviewedForTarget(cfg, 'PRODUCTION', registry(PROD, ['LAB']))).toBe(false); expect(isReviewedForTarget(cfg, 'PRODUCTION', Object.create({ [PROD.provider]: { targets: ['PRODUCTION'] } }))).toBe(false);
   });
   it('el preflight de API-20 con un cliente KMS inyectado tampoco puede pasar PRODUCCIÓN: exige un proveedor del registro oficial', async () => {
     const a = await attestation(PROD); const r = await runProductionPreflight({ target: 'PRODUCTION', env: env(PROD), kmsClient: goodKms(), database: { lab: { host: '127.0.0.1', port: 3307, schema: LAB.schema, runtimeUser: LAB.run, registryWriterUser: LAB.reg, migrationUser: LAB.mig, runtimeHost: '127.0.0.1', registryWriterHost: '127.0.0.1', migrationHost: '127.0.0.1' }, production: { host: 'db.interno.example', port: 3306, schema: PROD.schema, runtimeUser: PROD.run, registryWriterUser: PROD.reg, migrationUser: PROD.mig, runtimeHost: PROD.host, registryWriterHost: PROD.host, migrationHost: PROD.host } }, db: session(PROD, PROD.run, 'runtime'), trust: a.trust, attestation: a.attestation });
