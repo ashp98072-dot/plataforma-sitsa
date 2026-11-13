@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import cp from 'node:child_process';
+import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
 const root=path.resolve('../..'), home=path.join(root,'.lab-runtime/mariadb-11.8.9-winx64');
 const manifest=JSON.parse(fs.readFileSync('scripts/ci/pricesmart-api06a/engine-manifest.json','utf8'));
@@ -13,7 +14,7 @@ const exec=(n,args,input='')=>cp.spawnSync(bin(n),args,{input,encoding:'utf8',wi
 const init=exec('mariadb-install-db',[`--datadir=${data}`,`--socket=${pipe}`,'--skip-networking']);if(init.status!==0)throw Error(init.stderr+init.stdout);
 const fd=fs.openSync(path.join(run,'server.log'),'w');const server=cp.spawn(bin('mariadbd'),['--no-defaults',`--basedir=${home}`,`--datadir=${data}`,'--skip-networking','--enable-named-pipe',`--socket=${pipe}`,'--innodb-buffer-pool-size=64M','--console'],{windowsHide:true,stdio:['ignore',fd,fd]});fs.closeSync(fd);
 const sql=s=>exec('mariadb',['--no-defaults','--protocol=PIPE','--host=.',`--socket=${pipe}`,'-uroot','--batch','--raw','--skip-column-names'],s);
-const check=(name,s)=>{const r=sql(s);fs.writeFileSync(path.join(run,name+'.json'),JSON.stringify(r));console.log(name,r.status,r.stderr.slice(0,1800));return r;};
+const check=(name,s)=>{const r=sql(s);fs.writeFileSync(path.join(run,name+'.json'),JSON.stringify(r));console.log(name,r.status,r.stderr.slice(0,1800));assert.equal(r.status,0,`${name}: SQL failed`);return r;};
 try{
 for(let i=0;i<60;i++){if(sql('SELECT 1').status===0)break;await new Promise(r=>setTimeout(r,500));}
 const identity=sql('SELECT VERSION(),@@skip_networking,@@socket;');if(!identity.stdout.startsWith('11.8.9-MariaDB')||!identity.stdout.includes(pipe))throw Error('Isolation failed');
@@ -22,7 +23,8 @@ const backup=fs.readFileSync(process.argv[2] ?? (()=>{throw Error('Provide priva
 if(check('restore',backup).status!==0)throw Error('Restore failed');
 const use='USE u611730801_Plataforma;\n';
 if(check('cb2',use+fs.readFileSync('sql/migrate-2026-11-cb2-terceros-directos.sql','utf8')).status!==0)throw Error('CB2 failed');
-check('fusion-original',use+fs.readFileSync('sql/migrate-2026-11-flota-fusiones.sql','utf8'));
+const fusion=check('fusion-original',use+fs.readFileSync('sql/migrate-2026-11-flota-fusiones.sql','utf8'));
+assert.equal(fusion.status,0,'Fusion migration failed');
 const test=cp.spawnSync(process.execPath,['node_modules/vitest/vitest.mjs','run','src/lib/flota/vehiculos-fusion-private.db.test.ts','--maxWorkers=1'],{env:{...process.env,CB2_PRIVATE_PIPE:pipe},encoding:'utf8',windowsHide:true,timeout:120000}); console.log(test.stdout,test.stderr); if(test.status!==0)throw Error('Private integration failed');
 const post=check('postcheck',use+fs.readFileSync('sql/postcheck-2026-11-flota-fusiones.sql','utf8'));if(post.status!==0||post.stdout.trim()!=='4\n0')throw Error('Postcheck mismatch');
 // A second private schema demonstrates non-transactional DDL failure with restricted grants.
