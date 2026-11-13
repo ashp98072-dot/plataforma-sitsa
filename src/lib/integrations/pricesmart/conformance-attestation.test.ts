@@ -58,6 +58,8 @@ const verify = (a: Attestation, fx: Fx, over: Record<string, unknown> = {}) => v
 const reason = (v: { ok: boolean; reason?: string }) => (v.ok ? 'OK' : v.reason);
 const resign = (payload: string, target: 'LAB' | 'PRODUCTION', key: Uint8Array = KEY) => createHmac('sha256', createHmac('sha256', key).update(`pricesmart-api17-attestation-v1:${target}`).digest()).update(payload).digest('hex');
 const sourcePath = (f: string) => path.join(__dirname, f);
+/** Familia API-18 (composición administrativa): único código que puede importar la atestación; tampoco lo invoca la aplicación (lo vigila installation-gate.test.ts). */
+const API18_FAMILY = ['attestation-mariadb', 'installation-gate', 'mariadb-composition', 'registry-identity-authority'];
 
 describe('emisión y verificación', () => {
   it('una composición conforme, completa e identificada produce una atestación válida ligada a código, versión e identidad de recurso', async () => {
@@ -292,7 +294,7 @@ describe('sin efecto sobre readiness ni sobre el runtime', () => {
   it('ni el diagnóstico ni el runtime importan la atestación, y ningún código de la app (fuera del módulo y sus pruebas) la usa', () => {
     for (const f of ['readiness-diagnostic.ts', 'runtime.ts', 'runtime-state.ts', ['runtime', 'assembly.ts'].join('-'), 'runtime-config.ts']) expect(here(f)).not.toContain('conformance-attestation');
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = ['conformance', 'attestation'].join('-');
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && !n.startsWith('port-conformance') && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && !n.startsWith('port-conformance') && !API18_FAMILY.some(x => n.startsWith(x)) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   });
 });

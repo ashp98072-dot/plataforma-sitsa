@@ -74,15 +74,16 @@ export function portFingerprint(instance: object, implementationId: string, vers
   return sha(JSON.stringify([implementationId, version, [...seen.entries()].sort(([a], [b]) => (a < b ? -1 : 1))]));
 }
 
-type ProofFields = { authorityId: string; port: PortName; target: AttestationTarget; resourceId: string; subject: ResourceSubject; challenge: string; codeFingerprint: string };
-const proofOf = (key: Uint8Array, f: ProofFields) =>
+/** Campos que una autoridad de identidad firma por objeto y desafío. */
+export type ProofFields = { authorityId: string; port: PortName; target: AttestationTarget; resourceId: string; subject: ResourceSubject; challenge: string; codeFingerprint: string };
+export const signIdentityProof = (key: Uint8Array, f: ProofFields) =>
   createHmac('sha256', key).update(JSON.stringify(['pricesmart-api17-resource-v1', f.authorityId, f.port, f.target, f.resourceId, f.subject, f.challenge, f.codeFingerprint])).digest('hex');
 /** Comprueba la afirmación de la autoridad con SU material de verificación (nunca con lo que traiga la composición). */
 function checkStatement(st: IdentityStatement | null, f: { port: PortName; target: AttestationTarget; challenge: string; codeFingerprint: string }, trusted: TrustedAuthorities): st is IdentityStatement {
   if (!st || !idText.safeParse(st.authorityId).success || !idText.safeParse(st.resourceId).success || (st.subject !== 'LIVE' && st.subject !== 'ISOLATED_COPY') || !/^[a-f0-9]{64}$/.test(st.proof ?? '')) return false;
   const key = Object.prototype.hasOwnProperty.call(trusted, st.authorityId) ? trusted[st.authorityId] : undefined;
   if (!(key instanceof Uint8Array) || key.length < 32) return false;
-  const expected = Buffer.from(proofOf(key, { ...f, authorityId: st.authorityId, resourceId: st.resourceId, subject: st.subject }), 'hex'); const got = Buffer.from(st.proof, 'hex');
+  const expected = Buffer.from(signIdentityProof(key, { ...f, authorityId: st.authorityId, resourceId: st.resourceId, subject: st.subject }), 'hex'); const got = Buffer.from(st.proof, 'hex');
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
 async function describe(composition: CompositionDescriptor, target: AttestationTarget, identity: IdentityTrust) {
@@ -182,7 +183,7 @@ export function createInProcessIdentityAuthority(config: { authorityId: string; 
     },
     async identify({ port, instance, target, challenge, codeFingerprint }) {
       const e = enrolled.get(instance)?.get(port); if (!e) return null;   // objeto desconocido para la autoridad (aunque tenga el mismo código)
-      return { authorityId: config.authorityId, resourceId: e.resourceId, subject: e.subject, proof: proofOf(key, { authorityId: config.authorityId, port, target, resourceId: e.resourceId, subject: e.subject, challenge, codeFingerprint }) };
+      return { authorityId: config.authorityId, resourceId: e.resourceId, subject: e.subject, proof: signIdentityProof(key, { authorityId: config.authorityId, port, target, resourceId: e.resourceId, subject: e.subject, challenge, codeFingerprint }) };
     },
   };
 }

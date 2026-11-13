@@ -20,6 +20,27 @@ export function securityDdlStatements(text) {
   return st;
 }
 
+// API-18 — almacén de nonces de atestación y registro de identidad de recursos. Estructura separada de API-11; el laboratorio solo siembra filas con destino LAB.
+export const ATT_SIGNAL = "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API18_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';";
+export const ATT_TABLES = Object.freeze(['ps_api18_attestation_nonces', 'ps_api18_resource_registry']);
+export function attestationDdlStatements(text) {
+  const t = lf(text);
+  const first = t.split('\n').filter((l) => l.trim() && !l.trim().startsWith('--'))[0];
+  if (first !== ATT_SIGNAL || t.split(ATT_SIGNAL).length !== 2) fail('La primera sentencia de api18/staging-attestation.sql.in no es el SIGNAL de bloqueo esperado.');
+  const st = splitStatements(t.replace(`${ATT_SIGNAL}\n`, '-- [LAB API-18] SIGNAL de bloqueo retirada SOLO en la copia de laboratorio.\n'));
+  if (st.length !== 2 || st.some((x) => !/^CREATE TABLE /i.test(x))) fail('Se esperaban exactamente 2 CREATE TABLE de atestación.');
+  ATT_TABLES.forEach((tb, i) => { if (!st[i].startsWith(`CREATE TABLE ${tb} (`)) fail(`Orden/nombre inesperado: ${tb}`); });
+  if (st.some((x) => /\b(DROP|TRUNCATE|ALTER|DELETE|GRANT|USE|SIGNAL|CREATE (DATABASE|USER))\b/i.test(x))) fail('El DDL de atestación contiene sentencias no permitidas.');
+  return st;
+}
+/** Registro de laboratorio: SOLO destino LAB. Lo escribe la cuenta administrativa del arnés; el runtime no tiene INSERT sobre esta tabla. */
+export const LAB_REGISTRY = Object.freeze([
+  ['counter', 'lab-counter-iso', 'ISOLATED_COPY'], ['replay', 'lab-replay-iso', 'ISOLATED_COPY'], ['counter', 'lab-counter-live', 'LIVE'], ['clock', 'lab-clock', 'LIVE'], ['catalog', 'lab-catalog', 'LIVE'], ['cipher', 'lab-cipher', 'LIVE'], ['verifier', 'lab-verifier', 'LIVE'],
+]);
+export function attestationSeedStatements() {
+  return LAB_REGISTRY.map(([port, id, subject]) => { if (!/^[a-z0-9-]+$/.test(id)) fail('Identificador de registro inválido.'); return `INSERT INTO ps_api18_resource_registry (target, port, resource_id, subject, status) VALUES ('LAB', '${port}', _binary'${id}', '${subject}', 'ACTIVE')`; });
+}
+
 const FROM = 1700000000000; const FAR = 4102444800000;   // 2023-11-14 → 2100-01-01 (ms)
 /** Integraciones de laboratorio (referencias opacas ficticias). */
 export const LAB_INTEGRATIONS = Object.freeze([
@@ -41,19 +62,25 @@ export function securitySeedStatements() {
 }
 
 /** @returns {{setup: string[], after: string[]}} setup = API-01/API-09 + seguridad + semillas + cuentas; after = privilegios sobre las tablas de seguridad. */
-export function adminStatementsApi11(m, { stagingText, adaptationText, securityText }) {
+export function adminStatementsApi11(m, { stagingText, adaptationText, securityText, attestationText }) {
   const base = adminStatements(m, stagingText, adaptationText, null);
   const sec = securityDdlStatements(securityText);
   const user = `\`${m.user}\`@\`127.0.0.1\``; const schema = `\`${m.schema}\``;
   // Se insertan las tablas de seguridad y semillas antes de CREATE USER (la tabla ps_api01_scopes ya existe y está sembrada en `base`).
   const idx = base.findIndex((s) => s.startsWith('CREATE USER'));
-  const setup = [...base.slice(0, idx), ...sec, ...securitySeedStatements(), ...base.slice(idx)];
+  const att = attestationText ? attestationDdlStatements(attestationText) : [];
+  const setup = [...base.slice(0, idx), ...sec, ...securitySeedStatements(), ...att, ...(att.length ? attestationSeedStatements() : []), ...base.slice(idx)];
   const after = [
     // Mínimo para los puertos: el runtime SOLO lee catálogo y revocaciones; cuota: leer/insertar/incrementar `used`; reclamos: leer/insertar. Sin DELETE, sin DDL.
     `GRANT SELECT ON ${schema}.ps_api11_integrations TO ${user}`,
     `GRANT SELECT ON ${schema}.ps_api11_revocations TO ${user}`,
     `GRANT SELECT, INSERT, UPDATE (used) ON ${schema}.ps_api11_rate_counters TO ${user}`,
     `GRANT SELECT, INSERT ON ${schema}.ps_api11_proof_claims TO ${user}`,
+    ...(attestationText ? [
+      // API-18: nonces de un solo uso → SELECT+INSERT (sin UPDATE/DELETE); registro de identidad → SOLO lectura (lo escribe la cuenta administrativa).
+      `GRANT SELECT, INSERT ON ${schema}.ps_api18_attestation_nonces TO ${user}`,
+      `GRANT SELECT ON ${schema}.ps_api18_resource_registry TO ${user}`,
+    ] : []),
   ];
   return { setup, after };
 }

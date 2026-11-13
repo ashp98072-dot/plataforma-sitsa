@@ -56,8 +56,8 @@ describe("API-11 ejecutor", () => {
     expect(() => assertGate({ ...ok, argv: [] })).toThrow(); expect(() => assertGate({ ...ok, platform: "linux" })).toThrow(); expect(() => assertGate({ ...ok, branch: "main" })).toThrow();
     expect(() => assertGate({ ...ok, env: {} })).toThrow(); expect(() => assertGate({ ...ok, envFilesInCwd: [".env"] })).toThrow();
   });
-  it("evaluateRun solo da PASS con los 13 casos pasados y sin omitidos", () => {
-    const mk = (skip?: string) => ({ testResults: [{ assertionResults: REQUIRED_CASES.map((c) => ({ title: `${c} x`, status: c === skip ? "skipped" : "passed" })) }], numTotalTests: 13 });
+  it("evaluateRun solo da PASS con los 16 casos pasados y sin omitidos", () => {
+    const mk = (skip?: string) => ({ testResults: [{ assertionResults: REQUIRED_CASES.map((c) => ({ title: `${c} x`, status: c === skip ? "skipped" : "passed" })) }], numTotalTests: 16 });
     expect(evaluateRun({ status: 0 }, mk()).state).toBe("PASS"); expect(evaluateRun({ status: 0 }, mk("API11.3")).state).not.toBe("PASS"); expect(evaluateRun(null, null).state).toBe("INCOMPLETO");
   });
 });

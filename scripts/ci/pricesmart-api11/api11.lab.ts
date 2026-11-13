@@ -11,6 +11,11 @@ import { createIsolatedHttpTransport } from "../../../src/lib/integrations/price
 import { requestBindingDigest } from "../../../src/lib/integrations/pricesmart/m2m-security";
 import { mariaDbSecurityPorts } from "../../../src/lib/integrations/pricesmart/security-mariadb";
 import { runPortConformance } from "../../../src/lib/integrations/pricesmart/port-conformance";
+import { mariaDbAttestationPorts } from "../../../src/lib/integrations/pricesmart/attestation-mariadb";
+import { createRegistryIdentityAuthority } from "../../../src/lib/integrations/pricesmart/registry-identity-authority";
+import { issueAttestation } from "../../../src/lib/integrations/pricesmart/conformance-attestation";
+import { checkInstallationEligibility, redeemInstallationEligibility } from "../../../src/lib/integrations/pricesmart/installation-gate";
+import { describeMariaDbComposition } from "../../../src/lib/integrations/pricesmart/mariadb-composition";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -219,5 +224,70 @@ describe("API-11 endpoints y seguridad M2M", () => {
     expect(report.results.filter((r) => !r.pass)).toEqual([]);
     expect(report.conformant).toBe(true);
     expect(JSON.stringify(report)).not.toMatch(/secret|AUTH_SECRET|sandbox_api02/i);
+  });
+
+  it("API11.14 nonces de atestación durables y atómicos (API-18): 20 canjes simultáneos del mismo nonce → exactamente 1 FRESH; otro almacén (otra instancia) lo ve USED; se guarda solo el hash", async () => {
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    const nonce = randomBytes(16).toString("hex"); const expires = Date.now() + 600000;
+    const results = await Promise.all(Array.from({ length: 20 }, () => att.nonces.consume(nonce, expires)));
+    expect(results.filter((r) => r === "FRESH")).toHaveLength(1); expect(results.filter((r) => r === "USED")).toHaveLength(19);
+    const second = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    expect(await second.nonces.consume(nonce, expires)).toBe("USED");   // compartido y durable entre instancias
+    expect(await second.nonces.consume(randomBytes(16).toString("hex"), expires)).toBe("FRESH");
+    const hash = createHash("sha256").update(`pricesmart-api18-nonce-v1:${nonce}`).digest();
+    expect(await n("ps_api18_attestation_nonces", "target = 'LAB' AND nonce_hash = ?", [hash])).toBe(1);
+    expect(await n("ps_api18_attestation_nonces", "target = 'PRODUCTION'")).toBe(0);
+    const stored = await admin(`SELECT HEX(nonce_hash) AS h FROM ${T}.ps_api18_attestation_nonces WHERE target = 'LAB'`);
+    expect(JSON.stringify(stored)).not.toContain(nonce);   // el nonce en claro nunca se persiste
+  });
+
+  it("API11.15 privilegios y separación (API-18): el runtime solo inserta/lee nonces y solo LEE el registro; el registro del laboratorio contiene únicamente destino LAB; el destino PRODUCTION no se consulta ni se construye con este pool", async () => {
+    const run = (sql: string, p: unknown[] = []) => errno(pool.execute(sql, p as never));
+    expect(await run(`UPDATE ${T}.ps_api18_attestation_nonces SET expires_at_ms = 1 WHERE 1 = 0`)).toBe(1142);
+    expect(await run(`DELETE FROM ${T}.ps_api18_attestation_nonces WHERE 1 = 0`)).toBe(1142);
+    expect(await run(`INSERT INTO ${T}.ps_api18_resource_registry (target, port, resource_id, subject, status) VALUES ('LAB', 'clock', _binary'intruso', 'LIVE', 'ACTIVE')`)).toBe(1142);
+    expect(await run(`UPDATE ${T}.ps_api18_resource_registry SET subject = 'LIVE' WHERE 1 = 0`)).toBe(1142);
+    expect(await run(`DELETE FROM ${T}.ps_api18_resource_registry WHERE 1 = 0`)).toBe(1142);
+    expect(await errno(pool.query(`TRUNCATE TABLE ${T}.ps_api18_attestation_nonces`))).toBe(1142);
+    expect(await n("ps_api18_resource_registry", "target <> 'LAB'")).toBe(0);
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    expect(await att.registry.lookup({ target: "LAB", port: "counter", resourceId: "lab-counter-iso" })).toEqual({ subject: "ISOLATED_COPY", status: "ACTIVE" });
+    expect(await att.registry.lookup({ target: "LAB", port: "counter", resourceId: "lab-counter-live" })).toEqual({ subject: "LIVE", status: "ACTIVE" });
+    expect(await att.registry.lookup({ target: "LAB", port: "counter", resourceId: "no-registrado" })).toBeNull();
+    expect(await att.registry.lookup({ target: "PRODUCTION", port: "counter", resourceId: "lab-counter-iso" })).toBeNull();
+    expect(() => mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "PRODUCTION" })).toThrow();
+  });
+
+  it("API11.16 composición administrativa de laboratorio de extremo a extremo (API-18): puertos MariaDB reales + autoridad respaldada por el registro + nonces durables → atestación → elegibilidad; incompleta, no registrada, de otro destino o repetida se rechazan", async () => {
+    const att = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    const KEY = randomBytes(32); const AUTH_KEY = randomBytes(32); const keys = { getKey: async () => AUTH_KEY };
+    const cipherInstance = makeLabCipher(process.env.AUTH_SECRET);
+    const built = describeMariaDbComposition(ports, { cipher: { instance: cipherInstance, implementationId: "lab-cipher", version: "api12-1" }, verifier: { instance: verifier, implementationId: "lab-verifier", version: "api11-1" } });
+    expect(built.missing).toEqual([]);
+    const authority = createRegistryIdentityAuthority({ authorityId: "auth-lab-registry", target: "LAB", registry: att.registry, keys });
+    const ids: Record<string, string> = { counter: "lab-counter-iso", replay: "lab-replay-iso", catalog: "lab-catalog", clock: "lab-clock", cipher: "lab-cipher", verifier: "lab-verifier" };
+    for (const [port, d] of Object.entries(built.composition) as [string, { instance: object }][]) authority.enroll(d.instance, port as never, ids[port]);
+    const identity = { authority, trusted: { "auth-lab-registry": AUTH_KEY } };
+    const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity });
+    expect(issued.claims.conformant && issued.claims.complete).toBe(true);
+    expect(issued.claims.ports.find((p) => p.port === "counter")).toMatchObject({ resourceId: "lab-counter-iso", subject: "ISOLATED_COPY", authorityId: "auth-lab-registry" });
+    const base = { composition: built.composition, attestation: issued.attestation, target: "LAB" as const, key: KEY, identity, clock: ports.clock, labAuthorityIds: ["auth-lab-registry"] };
+    expect(await checkInstallationEligibility(base)).toEqual({ eligible: true, target: "LAB", consumedNonce: false });
+    expect(await redeemInstallationEligibility({ ...base, nonces: att.nonces })).toEqual({ eligible: true, target: "LAB", consumedNonce: true });
+    const other = mariaDbAttestationPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, target: "LAB" });
+    expect(await redeemInstallationEligibility({ ...base, nonces: other.nonces })).toEqual({ eligible: false, reason: "REPLAYED" });   // el canje sobrevive a otra instancia del almacén
+    // composición incompleta (sin cifrado ni verificador, como hoy en producción)
+    const partial = describeMariaDbComposition(ports); expect(partial.missing).toEqual(["cipher", "verifier"]);
+    expect(await checkInstallationEligibility({ ...base, composition: partial.composition })).toMatchObject({ eligible: false, reason: "INCOMPLETE_COMPOSITION" });
+    // recurso no registrado: no se atesta
+    const rogue = createRegistryIdentityAuthority({ authorityId: "auth-lab-registry", target: "LAB", registry: att.registry, keys });
+    for (const [port, d] of Object.entries(built.composition) as [string, { instance: object }][]) rogue.enroll(d.instance, port as never, port === "catalog" ? "no-registrado" : ids[port]);
+    await expect(issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity: { authority: rogue, trusted: identity.trusted } })).rejects.toThrow();
+    // la autoridad de laboratorio no habla por producción y la atestación de laboratorio no sirve como de producción
+    await expect(issueAttestation({ composition: built.composition, target: "PRODUCTION", key: KEY, nowMs: Date.now(), ttlMs: 120000, identity })).rejects.toThrow();
+    expect(await checkInstallationEligibility({ ...base, target: "PRODUCTION" })).toMatchObject({ eligible: false });
+    // los recursos de producción no se tocaron
+    expect(await n("ps_api18_attestation_nonces", "target = 'PRODUCTION'")).toBe(0);
+    expect(JSON.stringify(issued)).not.toContain(KEY.toString("hex")); expect(JSON.stringify(issued)).not.toContain(AUTH_KEY.toString("hex"));
   });
 });
