@@ -23,6 +23,8 @@ BEGIN
 END//
 CREATE TRIGGER flota_fusion_inmutable BEFORE UPDATE ON flota_vehiculos_fusiones FOR EACH ROW
 BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='La fusion auditada es inmutable'; END//
+CREATE TRIGGER flota_fusion_no_borrar BEFORE DELETE ON flota_vehiculos_fusiones FOR EACH ROW
+BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='La fusion auditada no puede eliminarse'; END//
 CREATE TRIGGER flota_fusion_no_reactivar BEFORE UPDATE ON flota_vehiculos FOR EACH ROW
 BEGIN
  IF (NOT(NEW.empresa_id <=> OLD.empresa_id) OR NOT(NEW.chasis <=> OLD.chasis) OR NOT(NEW.tipo_unidad <=> OLD.tipo_unidad) OR NOT(NEW.placa <=> OLD.placa)) AND EXISTS(SELECT 1 FROM flota_vehiculos_fusiones WHERE origen_id=OLD.id OR destino_id=OLD.id) THEN

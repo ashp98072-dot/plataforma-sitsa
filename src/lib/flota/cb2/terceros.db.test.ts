@@ -363,10 +363,10 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     await q("INSERT INTO usuarios VALUES(4,1,'Operador')");
     await q("ALTER TABLE usuarios ADD username VARCHAR(80) NOT NULL DEFAULT 'LAB_SINTETICO'");
     const operador = { ...ctx, actor: { id: 4, username: "LAB_OPERADOR" }, escrituraDirecta: true };
-    const p = await registrarPiloto(operador, { referencia: "directo-lab-p", nombre: "Piloto Directo Sintetico" });
-    const u = await registrarUnidad(operador, { referencia: "directo-lab-u", placa: "M-777LAB", tipo: "MOTOCICLETA", descripcion: "Laboratorio" });
-    const file = await preparar("DIRECTO-LAB-1", "Piloto Directo Sintetico", "777 LAB");
-    file.entrada.seleccion[0] = { ...file.entrada.seleccion[0], vehiculoId: -u.id, pilotoExternoId: p.id };
+    const p = await registrarPiloto(operador, { referencia: "directo-lab-p", nombre: "Luis Escobar" });
+    const u = await registrarUnidad(operador, { referencia: "directo-lab-u", placa: "M-060KHK", tipo: "MOTOCICLETA", descripcion: "Laboratorio", confirmarCoincidencias: true });
+    const file = await preparar("121646", "Luis Escobar", "M-060KHK");
+    file.entrada.seleccion[0] = { ...file.entrada.seleccion[0], vehiculoId: -u.id, pilotoExternoId: p.id, motivoUnidad: "Referencia real revisada en laboratorio" };
     const gate = await state.pool!.getConnection(); await gate.beginTransaction();
     await gate.query("SELECT id FROM compras_proveedores WHERE empresa_id=1 AND id=1 FOR UPDATE");
     const pending = Promise.allSettled([cb2(file, operador), cb2(file, operador)]);
@@ -374,19 +374,19 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     try { for (let i=0; i<100; i++) { const procesos = await q("SELECT ID FROM information_schema.PROCESSLIST WHERE DB=DATABASE() AND INFO LIKE 'SELECT id,nombre_comercial,activo FROM compras_proveedores%'"); if (procesos.length >= 2) { esperando = true; break; } await new Promise(r => setTimeout(r, 20)); } }
     finally { await gate.commit(); gate.release(); }
     const results = await pending; expect(esperando).toBe(true);
-    expect(results.some(r => r.status === "fulfilled")).toBe(true); expect(await total("DIRECTO-LAB-1")).toBe(1);
-    const [consumo] = await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='DIRECTO-LAB-1'");
-    expect(consumo).toMatchObject({ piloto_externo_id: p.id, unidad_externa_id: u.id, asociacion_externa_id: null, vehiculo_id: null, empleado_id: null, piloto_informado: "Piloto Directo Sintetico" });
+    expect(results.some(r => r.status === "fulfilled"), results.map(r => r.status === "rejected" ? r.reason?.message : "OK").join("; ")).toBe(true); expect(await total("121646")).toBe(1);
+    const [consumo] = await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='121646'");
+    expect(consumo).toMatchObject({ piloto_externo_id: p.id, unidad_externa_id: u.id, asociacion_externa_id: null, vehiculo_id: null, empleado_id: null, piloto_informado: "Luis Escobar" });
     const c = await state.pool!.getConnection();
     try {
       expect(await consultarConsumos(c, 1, 100, 0, { pilotoExternoId: p.id, unidadExternaId: u.id })).toHaveLength(1);
       const [legacy] = await q("SELECT id,identidad_externa FROM flota_cb2_consumos WHERE empresa_id=1 AND asociacion_externa_id IS NOT NULL ORDER BY id LIMIT 1");
       const identidad = JSON.parse(String(legacy.identidad_externa));
       expect((await consultarConsumos(c, 1, 100, 0, { pilotoExternoId: identidad.piloto_id, unidadExternaId: identidad.unidad_id })).some(r => r.id === legacy.id)).toBe(true);
-      await expect(validarTerceroDirecto(c, { ...otra, autorizar: async () => {} }, p.id, u.id, "Piloto Directo Sintetico", "777 LAB")).rejects.toThrow("incompatibles");
-      await expect(validarTerceroDirecto(c, { ...operador, autorizar: async () => { throw Error("REVOCADO_LAB"); } }, p.id, u.id, "Piloto Directo Sintetico", "777 LAB")).rejects.toThrow("REVOCADO_LAB");
+      await expect(validarTerceroDirecto(c, { ...otra, autorizar: async () => {} }, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toThrow("incompatibles");
+      await expect(validarTerceroDirecto(c, { ...operador, autorizar: async () => { throw Error("REVOCADO_LAB"); } }, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toThrow("REVOCADO_LAB");
       vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA", "");
-      await expect(validarTerceroDirecto(c, operador, p.id, u.id, "Piloto Directo Sintetico", "777 LAB")).rejects.toMatchObject({ status: 403 });
+      await expect(validarTerceroDirecto(c, operador, p.id, u.id, "Luis Escobar", "M-060KHK")).rejects.toMatchObject({ status: 403 });
     } finally { c.release(); }
   });
   it("fusión: alias preserva referencias y guardas reales impiden nuevas asignaciones al duplicado", async () => {
@@ -416,6 +416,9 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     expect((await q("SELECT vehiculo_id FROM flota_combustible_cargas WHERE numero_vale='FUSION-HIST-LAB'"))[0].vehiculo_id).toBe(684);
     expect((await q("SELECT * FROM flota_vehiculos_fusiones WHERE origen_id=684"))[0]).toMatchObject({ destino_id: 1301, administrador_id: 1 });
     expect(await q("SELECT * FROM flota_viajes WHERE id=1")).toEqual(viajeHistorico);
+    await expect(q("DELETE FROM flota_vehiculos_fusiones WHERE origen_id=684")).rejects.toThrow("eliminarse");
+    await expect(q("INSERT INTO flota_vehiculos_fusiones SELECT destino_id,1,empresa_id,administrador_id,motivo,creado_en,origen_snapshot,destino_snapshot FROM flota_vehiculos_fusiones WHERE origen_id=684")).rejects.toThrow("cadena");
+    await expect(fusionarVehiculos(empresa, op)).rejects.toThrow();
     vi.stubEnv("FLOTA_FUSIONES_APROBADAS", "");
   });
 
