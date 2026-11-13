@@ -10,6 +10,7 @@ import { mariaDbOrderRepository } from "../../../src/lib/integrations/pricesmart
 import { createIsolatedHttpTransport } from "../../../src/lib/integrations/pricesmart/http-transport";
 import { requestBindingDigest } from "../../../src/lib/integrations/pricesmart/m2m-security";
 import { mariaDbSecurityPorts } from "../../../src/lib/integrations/pricesmart/security-mariadb";
+import { runPortConformance } from "../../../src/lib/integrations/pricesmart/port-conformance";
 import { handlePriceSmart, installPriceSmartHandler } from "../../../src/lib/integrations/pricesmart/runtime";
 import type { Operation } from "../../../src/lib/integrations/pricesmart/security-contracts";
 import * as ordersRoute from "../../../src/app/api/integrations/pricesmart/v1/orders/route";
@@ -211,5 +212,12 @@ describe("API-11 endpoints y seguridad M2M", () => {
     const bad = await send(handlePriceSmart, "POST", BASE, "orders:create", "a", "x", { schemaVersion: "api01-draft-1", externalOrderId: "x", originClubReference: "QA-CLUB", extra: "SELECT 1" });
     expect(bad.status).toBe(400); expect(Object.keys(bad.json).sort()).toEqual(["code", "correlationId"]);
     expect(JSON.stringify(bad.json)).not.toMatch(/SELECT|sandbox_api02|stack/i);
+  });
+
+  it("API11.13 conformidad de puertos (API-16): los puertos MariaDB reales de contador, replay, catálogo y reloj, el cifrado de laboratorio y el verificador de laboratorio superan la suite de conformidad; el informe no contiene valores", async () => {
+    const report = await runPortConformance({ counter: ports.counter, replay: ports.replay, catalog: ports.catalog, clock: ports.clock, cipher: makeLabCipher(process.env.AUTH_SECRET), verifier });
+    expect(report.results.filter((r) => !r.pass)).toEqual([]);
+    expect(report.conformant).toBe(true);
+    expect(JSON.stringify(report)).not.toMatch(/secret|AUTH_SECRET|sandbox_api02/i);
   });
 });
