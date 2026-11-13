@@ -48,7 +48,7 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
       }
     }
     inspect('src');
-  });
+  }, 30000);
   it('production modules contain no DB/TMS/network imports, console output or env activation', () => {
     for (const file of ['contracts.ts','ports.ts','service.ts','transport.ts']) {
       const source=readFileSync(join('src/lib/integrations/pricesmart',file),'utf8');

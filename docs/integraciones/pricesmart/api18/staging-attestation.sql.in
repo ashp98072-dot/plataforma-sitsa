@@ -1,0 +1,31 @@
+-- DESIGN ONLY (PRICESMART API-18). Separate future staging, NOT a production migration. Independent of ps_api01_* / ps_api11_* (no foreign keys).
+-- Estado durable de la atestación de conformidad: almacén de nonces de un solo uso y registro administrativo de identidad de recursos.
+-- Sin secretos: ni claves, ni contraseñas, ni cadenas de conexión; solo referencias opacas. El registro lo escribe SOLO una cuenta administrativa distinta del runtime.
+-- Privilegios sugeridos al runtime (no se otorgan aquí): ps_api18_attestation_nonces → SELECT, INSERT; ps_api18_resource_registry → SELECT. Nunca UPDATE/DELETE/DDL.
+-- La purga de nonces vencidos (expires_at_ms) es una tarea administrativa aparte. LAB y PRODUCTION comparten el diseño pero NO deben compartir esquema ni cuenta.
+SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'API18_UNRATIFIED_DESIGN_DO_NOT_EXECUTE';
+
+CREATE TABLE ps_api18_attestation_nonces (
+  target VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  nonce_hash BINARY(32) NOT NULL,
+  expires_at_ms BIGINT UNSIGNED NOT NULL,
+  consumed_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (target, nonce_hash),
+  KEY ix_ps_api18_nonce_expiry (expires_at_ms),
+  CHECK (target IN ('LAB','PRODUCTION')),
+  CHECK (expires_at_ms > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE ps_api18_resource_registry (
+  target VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  port VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  resource_id VARBINARY(128) NOT NULL,
+  subject VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  registered_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (target, port, resource_id),
+  CHECK (target IN ('LAB','PRODUCTION')),
+  CHECK (port IN ('cipher','clock','counter','replay','catalog','verifier')),
+  CHECK (subject IN ('LIVE','ISOLATED_COPY')),
+  CHECK (status IN ('ACTIVE','RETIRED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
