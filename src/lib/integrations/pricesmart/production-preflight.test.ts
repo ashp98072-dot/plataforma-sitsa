@@ -9,6 +9,7 @@ import type { KmsClient } from './kms-adapter';
 import type { DbIdentity } from './database-identity';
 import { PREFLIGHT_STATEMENTS, mariaDbPreflightDatabase } from './preflight-mariadb';
 import { runProductionPreflight, type PreflightDatabase, type PreflightInput } from './production-preflight';
+import { RUNTIME_PRIVILEGE_POLICY } from './grants-audit';
 import { buildReadinessDiagnostic } from './readiness-diagnostic';
 import { isPriceSmartHandlerInstalled } from './runtime-state';
 import type { PortName } from './port-conformance';
@@ -22,8 +23,8 @@ const grantLines = (): string[] => [
     .map(([t, p]) => `GRANT ${p} ON \`${S}\`.\`${t}\` TO ${U}`),
 ];
 const database = (): { lab: DbIdentity; production: DbIdentity } => ({
-  lab: { host: '127.0.0.1', port: 3307, schema: 'sandbox_api02_x', runtimeUser: 'sandbox_api02_run', registryWriterUser: 'sandbox_api02_reg', migrationUser: 'sandbox_api02_mig' },
-  production: { host: 'db.interno.example', port: 3306, schema: S, runtimeUser: 'ps_runtime', registryWriterUser: 'ps_registry', migrationUser: 'ps_migrator' } });
+  lab: { host: '127.0.0.1', port: 3307, schema: 'sandbox_api02_x', runtimeUser: 'sandbox_api02_run', registryWriterUser: 'sandbox_api02_reg', migrationUser: 'sandbox_api02_mig', runtimeHost: '127.0.0.1', registryWriterHost: '127.0.0.1', migrationHost: '127.0.0.1' },
+  production: { host: 'db.interno.example', port: 3306, schema: S, runtimeUser: 'ps_runtime', registryWriterUser: 'ps_registry', migrationUser: 'ps_migrator', runtimeHost: 'localhost', registryWriterHost: 'localhost', migrationHost: 'localhost' } });
 const kmsEnv = (over: Record<string, string | undefined> = {}) => ({ PRICESMART_KMS_TARGET: 'PRODUCTION', PRICESMART_KMS_CURRENT_ALIAS: 'prod.k1', PRICESMART_KMS_ALLOWED_ALIASES: 'prod.k1', ...over });
 const goodKms = (): KmsClient => ({ encrypt: async () => new Uint8Array(1), decrypt: async () => new Uint8Array(32), health: async () => true });
 const fakeDb = (over: Partial<PreflightDatabase> = {}): PreflightDatabase => ({ identity: async () => ({ db: S, account: 'ps_runtime@localhost' }), grants: async () => grantLines(), ...over });
@@ -87,6 +88,27 @@ describe('preflight de la composición productiva', () => {
     const lab = await input({ db: fakeDb({ identity: async () => ({ db: 'sandbox_api02_x', account: 'sandbox_api02_run@127.0.0.1' }), grants: async () => grantLines().map(l => l.replace(S, 'sandbox_api02_x')) }) });
     const r = await runProductionPreflight(lab); expect(r.passed).toBe(false); expect(status(r).DB_SESSION_IDENTITY).toBe('FAIL:SESSION_IDENTITY_MISMATCH'); expect(status(r).DB_GRANTS).toMatch(/^FAIL:/);
   });
+  it('identidad EFECTIVA completa usuario@host: otro host, comodín, mismo usuario con otro host y formatos inválidos NO pasan; solo la cuenta exacta', async () => {
+    const run = async (account: string, db = S) => status(await runProductionPreflight(await input({ db: fakeDb({ identity: async () => ({ db, account }) }) }))).DB_SESSION_IDENTITY;
+    expect(await run('ps_runtime@localhost')).toBe('PASS'); expect(await run('ps_runtime@LOCALHOST')).toBe('PASS');
+    for (const bad of ['ps_runtime@%', 'ps_runtime@10.0.0.5', 'ps_runtime@127.0.0.1', 'ps_runtime@local%', 'ps_runtime@localhost.evil', 'PS_RUNTIME@localhost', 'otro@localhost', 'ps_registry@localhost']) expect(await run(bad), bad).toBe('FAIL:SESSION_IDENTITY_MISMATCH');
+    for (const bad of ['ps_runtime', '', '@localhost', 'ps_runtime@', 'a@b@c', 'ps_runtime@ localhost', "ps_runtime@'localhost'"]) expect(await run(bad), bad).toBe('FAIL:SESSION_IDENTITY_MALFORMED');
+    expect(await run('ps_runtime@localhost', 'otra_db')).toBe('FAIL:SESSION_IDENTITY_MISMATCH');
+  });
+  it('producción con cuentas de host comodín en el descriptor, o con el mismo usuario en otro host, falla en DB_SEPARATION', async () => {
+    const wild = await input({ database: { ...database(), production: { ...database().production, runtimeHost: '%' } } }); expect(status(await runProductionPreflight(wild)).DB_SEPARATION).toBe('FAIL:WILDCARD_ACCOUNT_HOST');
+    const same = await input({ database: { ...database(), production: { ...database().production, registryWriterUser: 'ps_runtime', registryWriterHost: '10.0.0.9' } } }); expect(status(await runProductionPreflight(same)).DB_SEPARATION).toBe('FAIL:ACCOUNTS_NOT_DISTINCT');
+  });
+  it('una política propia que amplía la base nunca da PASS en DB_GRANTS (aunque los grants coincidan con ella), y una vacía tampoco', async () => {
+    const lax = { ...Object.fromEntries(Object.entries(RUNTIME_PRIVILEGE_POLICY).map(([t, p]) => [t, [...p]])), ps_api11_proof_claims: ['SELECT', 'INSERT', 'DELETE'] };
+    const r = await runProductionPreflight(await input({ policy: lax, db: fakeDb({ grants: async () => [...grantLines(), `GRANT DELETE ON \`${S}\`.\`ps_api11_proof_claims\` TO ${U}`] }) })); expect(status(r).DB_GRANTS).toBe('FAIL:POLICY_EXCEEDS_BASE'); expect(r.passed).toBe(false);
+    expect(status(await runProductionPreflight(await input({ policy: {} as never }))).DB_GRANTS).toBe('FAIL:POLICY_INVALID');
+    expect(status(await runProductionPreflight(await input({ policy: { novalvion_environment: ['SELECT'] } }))).DB_GRANTS).toMatch(/^FAIL:/);   // restricción válida, pero ya no cubre lo requerido
+  });
+  it('el informe público no contiene identificadores de cuenta ni hosts (ni «@»)', async () => {
+    const r = await runProductionPreflight(await input({ db: fakeDb({ identity: async () => ({ db: S, account: 'intruso@10.9.8.7' }) }) })); const text = JSON.stringify(r);
+    for (const v of ['intruso', '10.9.8.7', 'ps_runtime', 'localhost', '@']) expect(text).not.toContain(v);
+  });
   it('cualquier excepción de las dependencias es un fallo cerrado sin detalles', async () => {
     const boom = async () => { throw new Error('secreto-db-777'); };
     const r = await runProductionPreflight(await input({ db: fakeDb({ identity: boom, grants: boom }), kmsClient: { ...goodKms(), health: boom } }));
@@ -128,7 +150,7 @@ describe('lector de preflight sobre MariaDB: solo dos lecturas fijas', () => {
     const strip = (f: string) => readFileSync(path.join(__dirname, f), 'utf8').replace(/\/\/.*$/gm, '');
     for (const f of ['preflight-mariadb.ts', 'production-preflight.ts', 'grants-audit.ts', 'database-identity.ts']) { const t = strip(f); expect(t, f).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER|CREATE)\s+(INTO|TABLE|FROM|DATABASE|USER)?/); expect(t, f).not.toMatch(/process\.env|\bfetch\s*\(/); expect(t, f).not.toContain(['install', 'PriceSmartHandler'].join('')); expect(t, f).not.toMatch(/from '\.\/runtime/); }
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const names = ['preflight-mariadb', 'production-preflight', 'grants-audit', 'database-identity'];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.includes('.test.')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`))) hits.push(path.relative(root, f)); } } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !names.some(x => n.startsWith(x)) && !n.startsWith('attestation-mariadb') && !n.includes('.test.')) { const t = readFileSync(f, 'utf8'); if (names.some(x => t.includes(`/${x}'`) || t.includes(`/${x}"`))) hits.push(path.relative(root, f)); } } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
 });

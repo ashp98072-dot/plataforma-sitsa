@@ -3,7 +3,7 @@ import { checkInstallationEligibility, type InstallationInput, type Installation
 import type { AttestationTarget, CompositionDescriptor, Attestation, ResourceIdentityAuthority } from './conformance-attestation';
 import { assertDisjointTrust } from './registry-identity-authority';
 import { createKmsKeyProvider, parseKmsConfig, type KmsClient } from './kms-adapter';
-import { validateDatabaseSeparation, type DbIdentity } from './database-identity';
+import { accountMatches, parseAccount, validateDatabaseSeparation, type DbIdentity } from './database-identity';
 import { auditGrants, type PrivilegePolicy } from './grants-audit';
 import type { TrustedClock } from './security-contracts';
 
@@ -50,8 +50,11 @@ export async function runProductionPreflight(input: PreflightInput): Promise<Pre
   const expected = input?.database?.[target === 'LAB' ? 'lab' : 'production'];
   checks.push(await step('DB_SESSION_IDENTITY', async () => {
     if (!expected) return { pass: false, code: 'MISSING_IDENTITY' };
-    const id = await input.db.identity(); const account = String(id?.account ?? '');
-    return id?.db === expected.schema && account.slice(0, account.lastIndexOf('@')) === expected.runtimeUser ? { pass: true } : { pass: false, code: 'SESSION_IDENTITY_MISMATCH' };
+    const id = await input.db.identity();
+    if (id?.db !== expected.schema) return { pass: false, code: 'SESSION_IDENTITY_MISMATCH' };
+    if (parseAccount(id?.account) === null) return { pass: false, code: 'SESSION_IDENTITY_MALFORMED' };   // sin '@', varios '@', vacío, caracteres inválidos
+    // CUENTA EFECTIVA COMPLETA: usuario Y host exactos (otro host, comodín o mismo usuario con otro host = otra identidad)
+    return accountMatches(id.account, { user: expected.runtimeUser, host: expected.runtimeHost }) ? { pass: true } : { pass: false, code: 'SESSION_IDENTITY_MISMATCH' };
   }));
   checks.push(await step('DB_GRANTS', async () => {
     if (!expected) return { pass: false, code: 'MISSING_IDENTITY' };

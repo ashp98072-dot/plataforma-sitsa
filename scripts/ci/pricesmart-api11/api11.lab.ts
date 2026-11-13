@@ -363,8 +363,8 @@ describe("API-11 endpoints y seguridad M2M", () => {
     const issued = await issueAttestation({ composition: built.composition, target: "LAB", key: KEY, nowMs: Date.now(), ttlMs: 300000, identity: { authority, trusted: trust.lab } });
     expect(issued.claims.conformant && issued.claims.complete).toBe(true);
     const database = {
-      lab: { host: "127.0.0.1", port: Number(process.env.DB_PORT), schema: manifest.schema, runtimeUser: manifest.user, registryWriterUser: "sandbox_api02_registry_writer", migrationUser: "sandbox_api02_migrator" },
-      production: { host: "prod.interno.example", port: 3306, schema: "prod_pricesmart", runtimeUser: "ps_runtime", registryWriterUser: "ps_registry", migrationUser: "ps_migrator" },
+      lab: { host: "127.0.0.1", port: Number(process.env.DB_PORT), schema: manifest.schema, runtimeUser: manifest.user, registryWriterUser: "sandbox_api02_registry_writer", migrationUser: "sandbox_api02_migrator", runtimeHost: "127.0.0.1", registryWriterHost: "127.0.0.1", migrationHost: "127.0.0.1" },
+      production: { host: "prod.interno.example", port: 3306, schema: "prod_pricesmart", runtimeUser: "ps_runtime", registryWriterUser: "ps_registry", migrationUser: "ps_migrator", runtimeHost: "localhost", registryWriterHost: "localhost", migrationHost: "localhost" },
     };
     const nonceRowsBefore = await n("ps_api18_attestation_nonces", "1 = 1");
     const common = { env: kmsEnv, kmsClient, database, db: mariaDbPreflightDatabase(pool), trust, attestation: { composition: built.composition, attestation: issued.attestation, key: KEY, authority, clock: ports.clock } };

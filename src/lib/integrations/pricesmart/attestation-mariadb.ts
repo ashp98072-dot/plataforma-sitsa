@@ -4,6 +4,7 @@ import { isSandboxVerifiedPool } from '../../sandbox-db';
 import type { AttestationTarget, NonceStore } from './conformance-attestation';
 import type { PortName } from './port-conformance';
 import type { ResourceRegistry } from './registry-identity-authority';
+import { accountMatches } from './database-identity';
 
 // PRICESMART API-18 — almacén DURABLE y compartido de nonces de atestación (un solo uso, atómico) y lector del registro administrativo de identidad de recursos, respaldados por MariaDB.
 // Atomicidad: la clave primaria (target, hash del nonce) hace que de N canjes concurrentes del mismo nonce exactamente UNO inserte; el resto recibe «ya usado» (errno 1062). Sin lecturas previas ni locks.
@@ -15,9 +16,12 @@ const PROD_NAME = /^[A-Za-z0-9_]{1,64}$/;
 const PORTS: readonly PortName[] = ['cipher', 'clock', 'counter', 'replay', 'catalog', 'verifier'];
 const unavailable = () => new Error('UNAVAILABLE');
 
-export function mariaDbAttestationPorts(pool: Pool, config: { schema: string; runtimeUser: string; target: AttestationTarget }): { nonces: NonceStore; registry: ResourceRegistry } {
+export function mariaDbAttestationPorts(pool: Pool, config: { schema: string; runtimeUser: string; target: AttestationTarget; /** Host de la cuenta de ejecución (obligatorio y exacto en PRODUCTION; en LAB es siempre 127.0.0.1). */ runtimeHost?: string }): { nonces: NonceStore; registry: ResourceRegistry } {
   const { schema, runtimeUser, target } = config;
   const lab = target === 'LAB';
+  const hostRaw = lab ? '127.0.0.1' : config.runtimeHost;
+  if (typeof hostRaw !== 'string' || (lab ? config.runtimeHost !== undefined && config.runtimeHost !== '127.0.0.1' : /[%_]/.test(hostRaw))) throw unavailable();   // cuenta de producción: host exacto, sin comodines
+  const runtimeHost: string = hostRaw;
   const verified = (() => { try { return isSandboxVerifiedPool(pool); } catch { return false; } })();
   if (target !== 'LAB' && target !== 'PRODUCTION') throw unavailable();
   if (lab ? !(verified && LAB_NAME.test(schema) && LAB_NAME.test(runtimeUser)) : !(!verified && PROD_NAME.test(schema) && PROD_NAME.test(runtimeUser) && !LAB_NAME.test(schema) && !LAB_NAME.test(runtimeUser))) throw unavailable();
@@ -28,8 +32,7 @@ export function mariaDbAttestationPorts(pool: Pool, config: { schema: string; ru
     try {
       conn = await pool.getConnection();
       const [identity] = await conn.execute<RowDataPacket[]>('SELECT DATABASE() AS db, CURRENT_USER() AS account');
-      const account = String(identity[0]?.account ?? '');
-      if (identity.length !== 1 || identity[0].db !== schema || account.slice(0, account.lastIndexOf('@')) !== runtimeUser) { broken = true; throw unavailable(); }   // la sesión no es la esperada
+      if (identity.length !== 1 || identity[0].db !== schema || !accountMatches(identity[0].account, { user: runtimeUser, host: runtimeHost })) { broken = true; throw unavailable(); }   // la sesión no es la cuenta efectiva esperada (usuario Y host)
       return await action(conn);
     } catch {
       throw unavailable();   // nunca se propaga el detalle del motor
@@ -44,8 +47,7 @@ export function mariaDbAttestationPorts(pool: Pool, config: { schema: string; ru
       try {
         conn = await pool.getConnection();
         const [identity] = await conn.execute<RowDataPacket[]>('SELECT DATABASE() AS db, CURRENT_USER() AS account');
-        const account = String(identity[0]?.account ?? '');
-        if (identity.length !== 1 || identity[0].db !== schema || account.slice(0, account.lastIndexOf('@')) !== runtimeUser) { broken = true; throw unavailable(); }
+        if (identity.length !== 1 || identity[0].db !== schema || !accountMatches(identity[0].account, { user: runtimeUser, host: runtimeHost })) { broken = true; throw unavailable(); }
         try { await conn.execute(`INSERT INTO ${table('attestation_nonces')} (target, nonce_hash, expires_at_ms) VALUES (?, ?, ?)`, [target, hash, expiresAtMs]); return 'FRESH'; }
         catch (error) { if ((error as { errno?: number })?.errno === 1062) return 'USED'; throw error; }
       } catch (error) {
