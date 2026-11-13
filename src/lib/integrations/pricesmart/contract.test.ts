@@ -39,6 +39,10 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
             const imports = text.match(/from "[^"]*pricesmart[^"]*"/g) ?? [];
             expect(imports).toEqual(['from "@/lib/integrations/pricesmart/lab-demo/ops-view"']);
             expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql/);
+          } else if (path.replaceAll('\\','/') === 'src/app/api/admin/pricesmart/readiness/route.ts') {
+            // API-15: diagnóstico administrativo de solo lectura; importa únicamente el módulo de diagnóstico (que no instala handlers ni toca datos).
+            expect(text.match(/from "[^"]*pricesmart[^"]*"/g) ?? []).toEqual(['from "@/lib/integrations/pricesmart/readiness-diagnostic"']);
+            expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql|export async function (POST|PUT|PATCH|DELETE)/);
           } else expect(text).not.toMatch(/integrations\/pricesmart|PRICESMART_ENABLED|OrderApplication/);
         }
       }

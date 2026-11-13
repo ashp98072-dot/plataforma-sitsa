@@ -10,6 +10,11 @@ export type RuntimeMode = (typeof RUNTIME_MODES)[number];
 /** Frase de confirmación explícita para ENABLED: evita activar el runtime por una variable mal copiada. */
 export const ENABLE_ACK = 'CONFIRMO-ACTIVAR-PRICESMART-SANDBOX';
 
+/** Decisiones de PriceSmart que deben estar ratificadas (declaradas por el operador) para cada modo. Supuesto conservador de este PR; ajustable cuando PriceSmart las confirme. */
+export const REQUIRED_DECISIONS: Readonly<Record<Exclude<RuntimeMode, 'DISABLED'>, readonly string[]>> = {
+  READ_ONLY: ['D02', 'D06'],
+  ENABLED: ['D02', 'D06', 'D08', 'D09', 'D12'],
+};
 const num = (min: number, max: number) => z.coerce.number().int().min(min).max(max);
 const envSchema = z.object({
   PRICESMART_RUNTIME_MODE: z.enum(RUNTIME_MODES),

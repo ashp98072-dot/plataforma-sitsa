@@ -3,6 +3,7 @@ import { createIsolatedHttpTransport } from '../http-transport';
 import { mariaDbOrderRepository } from '../mariadb-repository';
 import { mariaDbSecurityPorts } from '../security-mariadb';
 import type { PriceSmartHandler } from '../runtime';
+import { LAB_DEMO_FLAG, labDemoGate } from './gate';
 import { labContract } from './contract';
 import { labCipher, labEvidencePort, labVerifier } from './lab-crypto';
 import { createLinkRetry, startLinkWorker } from './link-retry';
@@ -10,18 +11,8 @@ import { createTmsLinker } from './tms-link';
 
 // PRICESMART API-12 — composición EJECUTABLE solo para un laboratorio local aislado. Autenticación de PRUEBA (HMAC con una clave por ejecución), contrato de prueba `lab-demo-1`.
 // No es el runtime productivo: se niega a construirse salvo que TODAS las condiciones se cumplan (ver labDemoGate). Sin las condiciones, devuelve null y las rutas siguen en 503 DISABLED.
-export const LAB_DEMO_FLAG = 'SINTETICO-LOCAL-SIN-PRODUCCION';
 export const LAB_CLUB = 'QA-CLUB';
-
-export function labDemoGate(env: Record<string, string | undefined>): { ok: true } | { ok: false; reason: string } {
-  if (env.NODE_ENV === 'production') return { ok: false, reason: 'NODE_ENV=production' };
-  if (env.NOVALVION_ENV !== 'sandbox') return { ok: false, reason: 'no es sandbox' };
-  if (env.PRICESMART_LAB_DEMO !== LAB_DEMO_FLAG) return { ok: false, reason: 'bandera de laboratorio ausente' };
-  if (env.DB_HOST !== '127.0.0.1') return { ok: false, reason: 'la base no es loopback' };
-  if (!/^sandbox_api02_[a-z0-9_]+$/.test(env.DB_NAME ?? '') || !/^sandbox_api02_[a-z0-9_]+$/.test(env.DB_USER ?? '')) return { ok: false, reason: 'base/cuenta sin el patrón del laboratorio' };
-  if ((env.PRICESMART_LAB_KEY ?? '').length < 32) return { ok: false, reason: 'clave de laboratorio ausente o corta' };
-  return { ok: true };
-}
+export { LAB_DEMO_FLAG, labDemoGate };
 
 export async function createLabDemoHandler(env: Record<string, string | undefined> = process.env): Promise<PriceSmartHandler | null> {
   if (!labDemoGate(env).ok) return null;
