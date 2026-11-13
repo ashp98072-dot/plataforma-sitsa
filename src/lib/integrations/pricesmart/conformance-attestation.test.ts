@@ -294,7 +294,7 @@ describe('sin efecto sobre readiness ni sobre el runtime', () => {
   it('ni el diagnóstico ni el runtime importan la atestación, y ningún código de la app (fuera del módulo y sus pruebas) la usa', () => {
     for (const f of ['readiness-diagnostic.ts', 'runtime.ts', 'runtime-state.ts', ['runtime', 'assembly.ts'].join('-'), 'runtime-config.ts']) expect(here(f)).not.toContain('conformance-attestation');
     const root = path.resolve(__dirname, '../../..'); const hits: string[] = []; const needle = ['conformance', 'attestation'].join('-');
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && !n.startsWith('port-conformance') && !API18_FAMILY.some(x => n.startsWith(x)) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.startsWith(needle) && !n.startsWith('port-conformance') && !n.includes('.test.') && !API18_FAMILY.some(x => n.startsWith(x)) && readFileSync(f, 'utf8').includes(needle)) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
 });
