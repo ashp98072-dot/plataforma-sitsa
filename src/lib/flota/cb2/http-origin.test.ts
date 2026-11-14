@@ -15,7 +15,7 @@ beforeEach(() => {
     vi.stubEnv("AUTH_SECRET", "synthetic-test-secret-not-used-in-production-510");
     m.guard.mockResolvedValue({ empresa: { id: 7 }, session: { id: 9, username: "demo", rol: "Admin" } });
     m.connection.mockResolvedValue({ query: m.query, release: m.release });
-    m.query.mockResolvedValue([[{ id: 3 }], []]);
+    m.query.mockImplementation(async(sql:string)=>[sql.includes("information_schema")||sql.includes("FROM empleados")?[]:[{id:3}],[]]);
 });
 afterEach(() => vi.unstubAllEnvs());
 describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
@@ -41,8 +41,8 @@ describe("HTTP CB2: origen y guard de los nueve endpoints", () => {
         expect(data.filas.every((r: { moneda: string }) => r.moneda === "GTQ")).toBe(true);
         expect(m.guard).toHaveBeenCalledWith("kt-monaco", "conciliar", { soloLectura: true });
         expect(m.query).toHaveBeenCalledWith("SELECT id FROM compras_proveedores WHERE empresa_id=? AND id=? AND activo=1", [7, 3]);
-        expect(m.query).toHaveBeenCalledTimes(4);
-        for (const [, params] of m.query.mock.calls) expect(params).toEqual([7, 3]);
+        expect(m.query).toHaveBeenCalledTimes(perfil==="SHELL"?6:4);
+        for (const [sql, params] of m.query.mock.calls) expect(params??[]).toEqual(String(sql).includes("information_schema")?[]:String(sql).includes("FROM empleados")?[7]:[7,3]);
         expect(m.release).toHaveBeenCalledTimes(2);
         expect(response.headers.get("cache-control")).toBe("private, no-store");
     });

@@ -4,7 +4,7 @@ import type { CatalogosCB2, FilaCB2 } from "./client";
 import type { DecisionAsignacion } from "./asignacion";
 export const politicaIndependiente = (cat: CatalogosCB2) => !!cat.tercerosDirectos && !!cat.identidadesIndependientes;
 export function pilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: DecisionAsignacion = {}) {
-  if (d.pilotoTipo === "REPORTADO") return null;
+  if (d.pilotoTipo === "REPORTADO" || (f.perfil==="SHELL" && !d.pilotoTipo && d.empleadoId==null && d.pilotoExternoId==null)) return null;
   const nombre = f.origen?.piloto ?? "";
   if (d.pilotoTipo === "INTERNO" || (!d.pilotoTipo && d.empleadoId != null)) {
     const p = cat.empleados?.find(p=>p.id===d.empleadoId);

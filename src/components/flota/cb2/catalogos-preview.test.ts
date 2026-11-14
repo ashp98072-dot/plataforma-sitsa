@@ -19,12 +19,12 @@ describe("catálogo usado para sugerir vehículos en preview", () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); const data = await r.json();
         expect(data.empleados).toEqual([]); expect(data.empleadosDisponibles).toBe(false); expect(data.limitacionPilotos).toContain("no disponible");
-        expect(m.query).toHaveBeenCalledTimes(4);
+        expect(m.query).toHaveBeenCalledTimes(5);
     });
     it("deriva empresa del guard, no de parámetros controlados por el navegador", async () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); expect(m.guard).toHaveBeenCalledWith("demo", "ver");
-        expect(m.query).toHaveBeenCalledTimes(4);
+        expect(m.query).toHaveBeenCalledTimes(5);
         const vehiculos = m.query.mock.calls.find(([sql]) => sql.includes("FROM flota_vehiculos"))!;
         expect(vehiculos[1]).toEqual([7, 7]);
         expect(vehiculos[0]).toContain("empresa_id");
