@@ -16,6 +16,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { asegurarCodigoPlanUnico, asegurarCodigoPlanUnicoTx } from "./codigo-plan";
+import { idUnidadTrasUpsert } from "./unidad-upsert";
 import { CodigoPlanAgotadoError, esColisionIndiceCodigoPlan, insertarPlanConCodigoUnico } from "./codigo-plan-colision";
 
 /**
@@ -402,6 +403,44 @@ describe.skipIf(!port)("Alta de viajes / MariaDB DESECHABLE SOLO LOCAL — error
       } finally {
         a.release();
       }
+    });
+  });
+
+  describe("CAUSA RAÍZ — upsert de tms_unidades con las guardas de fusión: insertId = 0 -> fk_tmsplan_uni", () => {
+    const UPSERT = `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id) VALUES (?, ?, 'Camion', ?)
+                    ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`;
+    const buscar = (placa: string) => async () => {
+      const f = await sql("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [EMP, placa]);
+      return f[0] ? Number(f[0].id) : null;
+    };
+    const INSERT_CON_UNIDAD = "INSERT INTO tms_planes_viaje (empresa_id, codigo, fecha_plan, unidad_id) VALUES (?, ?, ?, ?)";
+
+    it("las guardas de fusión están instaladas en tms_unidades (BEFORE INSERT y BEFORE UPDATE)", async () => {
+      const t = await sql("SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() AND EVENT_OBJECT_TABLE = 'tms_unidades'");
+      expect(t.map((x) => String(x.TRIGGER_NAME).slice(0, 4)).sort()).toEqual(["ffi_", "ffu_"]);
+    });
+
+    it("REPRODUCCIÓN: unidad ya existente sin cambios -> insertId 0; con ese 0 el viaje falla con ER_NO_REFERENCED_ROW_2 sobre fk_tmsplan_uni", async () => {
+      await holder.pool!.execute(UPSERT, [EMP, "C-111AAA", 4]);
+      const repetido = (await holder.pool!.execute<ResultSetHeader>(UPSERT, [EMP, "C-111AAA", 4]))[0];
+      expect(Number(repetido.insertId)).toBe(0); // el valor que el código anterior usaba como unidad_id
+      const err = await capturar(holder.pool!.execute(INSERT_CON_UNIDAD, [EMP, "PLAN-20261113-001", FECHA, Number(repetido.insertId)]));
+      expect(err).toMatchObject({ code: "ER_NO_REFERENCED_ROW_2", errno: 1452 });
+      expect(String((err as { sqlMessage: string }).sqlMessage)).toContain("`fk_tmsplan_uni`");
+    });
+
+    it.each([
+      ["inserción nueva", async () => undefined, "C-300CCC"],
+      ["unidad existente sin cambios (insertId 0)", async () => { await holder.pool!.execute(UPSERT, [EMP, "C-301CCC", 4]); }, "C-301CCC"],
+      ["unidad existente sin vínculo que se completa", async () => { await holder.pool!.execute("INSERT INTO tms_unidades (empresa_id, placa, tipo) VALUES (?, ?, 'Camion')", [EMP, "C-302CCC"]); }, "C-302CCC"],
+    ])("CORRECCIÓN idUnidadTrasUpsert — %s: el id resuelto existe y el viaje se crea", async (_n, preparar, placa) => {
+      await preparar();
+      const r = (await holder.pool!.execute<ResultSetHeader>(UPSERT, [EMP, placa, 4]))[0];
+      const unidadId = await idUnidadTrasUpsert(r.insertId, buscar(placa));
+      const real = await sql("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ?", [EMP, placa]);
+      expect(unidadId).toBe(Number(real[0].id));
+      const ok = await holder.pool!.execute<ResultSetHeader>(INSERT_CON_UNIDAD, [EMP, `PLAN-${placa}`, FECHA, unidadId]);
+      expect(Number(ok[0].insertId)).toBeGreaterThan(0);
     });
   });
 
