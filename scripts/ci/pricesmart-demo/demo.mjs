@@ -108,6 +108,13 @@ async function prepare() {
   await c.query("INSERT INTO ps_api11_integrations (issuer, subject, credential_reference, environment, tenant_id, client_id, integration_id, revision, status, valid_from_ms, valid_until_ms, credential_valid_from_ms, credential_valid_until_ms, rotated_at_ms, allowed_clubs_json, scopes_json) VALUES (?, ?, ?, _binary'sandbox', ?, 1, ?, 1, 'ACTIVE', 1700000000000, 4102444800000, 1700000000000, 4102444800000, 1700000000000, ?, ?)",
     [Buffer.from('lab-issuer'), Buffer.from('lab-subject-rev'), Buffer.from('lab-cred-rev-1'), empresa1, Buffer.from(LAB_INTEGRATION), JSON.stringify([LAB_CLUB]), JSON.stringify(['orders:create', 'orders:read', 'orders:cancel'])]);
   await c.query("INSERT INTO ps_api11_revocations (issuer, subject, credential_reference, revision, revoked_at_ms) VALUES (?, ?, ?, 0, 1700000000005)", [Buffer.from('lab-issuer'), Buffer.from('lab-subject-rev'), Buffer.from('lab-cred-rev-1')]);
+  // API-23: cuenta de WORKER de la outbox (misma política mínima que API-07 en el laboratorio de API-06A: leer la cola y actualizar SOLO las 4 columnas de lease/estado/intentos; leer solo las columnas de eventos/órdenes del JOIN).
+  const sq = (n) => `\`${n}\``; const w = `'${m.workerUser}'@'127.0.0.1'`; const sch = sq(m.schema);
+  if (!/^sandbox_api02_w[a-z0-9]+$/.test(m.workerUser) || !/^sandbox:[a-z0-9-]+:[a-f0-9]{64}$/.test(m.secrets.WORKER_PASSWORD)) fail('Cuenta o contraseña de worker inválidas.');
+  for (const sql of [`CREATE USER ${w} IDENTIFIED BY '${m.secrets.WORKER_PASSWORD}'`, `GRANT SELECT ON ${sch}.novalvion_environment TO ${w}`,
+    `GRANT SELECT, UPDATE (status, attempts, next_attempt_at, lease_until) ON ${sch}.ps_api01_outbox TO ${w}`,
+    `GRANT SELECT (environment, tenant_id, client_id, integration_id, order_id, order_version, event_type, reason, correlation_id) ON ${sch}.ps_api01_events TO ${w}`,
+    `GRANT SELECT (environment, tenant_id, client_id, integration_id, id, origin_club_reference) ON ${sch}.ps_api01_orders TO ${w}`]) await c.query(sql);
   // Usuario interno ficticio (Admin) para la bandeja de Operaciones. Sin contraseña conocida: la sesión del e2e se firma con la clave del run.
   const h = inactiveHash();
   demo.staff = { id: await id("INSERT INTO usuarios (username, password_hash, salt, nombre, rol_global) VALUES ('ops.lab', ?, ?, 'Operaciones Ficticio', 'Admin')", [h.hash, h.salt]), username: 'ops.lab' };
@@ -163,11 +170,12 @@ async function restartApp() {
 
 function e2e() {
   const state = readState(); const { m } = state;
-  const env = buildChildEnv(m, process.env, { NODE_ENV: 'test' }); delete env.PS06A_APP_PASSWORD; delete env.PS06A_WORKER_PASSWORD;
+  const env = buildChildEnv(m, process.env, { NODE_ENV: 'test' }); delete env.PS06A_APP_PASSWORD;   // API-23: el e2e conserva la contraseña del worker de la outbox (solo laboratorio)
+  env.PS_DEMO_WORKER_USER = m.workerUser;
   env.PS_DEMO_RUNDIR = m.runDir;   // el e2e lee state.json de aquí (TEMP del proceso hijo apunta al directorio del run)
   env.PATH = `${path.dirname(process.execPath)};${env.PATH}`;
   const r = cp.spawnSync(process.execPath, [path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(here, 'vitest.demo.config.mts'), '--reporter=verbose', ...process.argv.slice(3).filter((a) => a.endsWith('.e2e.ts') && !a.includes('..'))], { cwd: repoRoot, env, windowsHide: true, encoding: 'utf8', timeout: 420000 });
-  console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-45).join('\n')); if (r.status !== 0) process.exitCode = 1;
+  console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-Number(process.env.PS_DEMO_TAIL ?? 45)).join('\n')); if (r.status !== 0) process.exitCode = 1;
 }
 
 function postman() {

@@ -28,11 +28,11 @@ export async function connect() {
 }
 
 const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
-export type Over = { proofId?: string; tamper?: boolean };
+export type Over = { proofId?: string; tamper?: boolean; issuedAtMs?: number; expiresAtMs?: number; environment?: string };
 function evidence(key: Key, op: Operation, externalId: string, body: Uint8Array, over: Over = {}) {
   const now = Date.now();
-  const target = { environment: "sandbox" as const, ...scopeOfKey(key), integrationId: INTEGRATION, originClubReference: CLUB, externalOrderId: externalId };
-  const proof = { id: over.proofId ?? `p${randomBytes(8).toString("hex")}`, issuedAtMs: now, expiresAtMs: now + 60000, bindingDigest: requestBindingDigest(op, target, body) };
+  const target = { environment: (over.environment ?? "sandbox") as "sandbox", ...scopeOfKey(key), integrationId: INTEGRATION, originClubReference: CLUB, externalOrderId: externalId };
+  const proof = { id: over.proofId ?? `p${randomBytes(8).toString("hex")}`, issuedAtMs: over.issuedAtMs ?? now, expiresAtMs: over.expiresAtMs ?? now + 60000, bindingDigest: requestBindingDigest(op, target, body) };
   const payload = Buffer.from(JSON.stringify({ k: key, proof })).toString("base64url");
   const sig = over.tamper ? "00".repeat(32) : createHmac("sha256", labKey).update(`api12-lab:${payload}`).digest("hex");
   return `${payload}.${sig}`;

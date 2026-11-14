@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { crearSolicitudCliente } from '@/lib/tms/solicitudes-cliente';
-import { registrarAuditoria } from '@/lib/auditoria';
+import { registrarAuditoriaTx } from '@/lib/auditoria';
 import type { OrderView, Scope } from '../contracts';
 import type { OrderRepository } from '../ports';
 import { assessCancellation, projectExternalStatus } from '../tms-contract-proposal';
@@ -31,6 +31,8 @@ export type TmsLinkerDeps = {
   pool: Pool; schema: string; repository: OrderRepository;
   /** Solo pruebas: sustituye la creación de la solicitud (p. ej. para simular una caída antes o después de crearla). Por defecto, la función real del TMS. */
   createRequest?: typeof crearSolicitudCliente;
+  /** Solo pruebas: sustituye la escritura de la auditoría de cancelación (p. ej. para simular su fallo). Por defecto, `registrarAuditoriaTx` (que, a diferencia de `registrarAuditoria`, NO oculta los errores). */
+  auditTx?: typeof registrarAuditoriaTx;
 };
 
 const hex = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -40,6 +42,7 @@ export const claimMarker = (token: Buffer) => `[PS:${token.toString('hex')}]`;
 export function createTmsLinker(deps: TmsLinkerDeps) {
   const { pool, schema, repository } = deps;
   const createRequest = deps.createRequest ?? crearSolicitudCliente;
+  const auditTx = deps.auditTx ?? registrarAuditoriaTx;
   if (!/^sandbox_api02_[a-z0-9_]+$/.test(schema)) throw new Error('esquema inválido');
   const t = (name: string) => `\`${schema}\`.\`ps_api12_${name}\``;
   const ns = (s: Scope): [Buffer, number, number, Buffer] => [Buffer.from(s.environment), s.tenantId, s.clientId, Buffer.from(s.integrationId)];
@@ -145,11 +148,36 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
   /** Solicitud de cancelación: SOLO deja constancia (vínculo + auditoría). No cancela solicitudes, planes ni viajes: lo decide Operaciones. */
   async function noteCancellation(scope: Scope, externalOrderId: string): Promise<void> {
     const join = `${t('tms_links')} l JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id`;
-    const [rows] = await pool.execute<RowDataPacket[]>(`SELECT l.empresa_id, l.solicitud_id FROM ${join} WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.solicitud_id IS NOT NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
+    const [rows] = await pool.execute<RowDataPacket[]>(`SELECT l.empresa_id, l.solicitud_id, l.order_id FROM ${join} WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.solicitud_id IS NOT NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
     if (!rows.length) return;
-    await pool.execute(`UPDATE ${join} SET l.cancellation_requested_at = COALESCE(l.cancellation_requested_at, UTC_TIMESTAMP(6)) WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
-    await registrarAuditoria({ empresaId: Number(rows[0].empresa_id), usuario: 'integracion:pricesmart-laboratorio', accion: 'pricesmart_cancelacion_solicitada', modulo: 'tms',
-      detalle: `PriceSmart solicitó cancelar el pedido ${externalOrderId} (solicitud TMS #${rows[0].solicitud_id}). Sin acción automática: requiere decisión de Operaciones.` });
+    // API-23 (corrección tras auditoría): la constancia en el vínculo y su auditoría se confirman en UNA MISMA transacción.
+    //  · Si la auditoría falla, TODO se revierte (el vínculo vuelve a «sin constancia») y la excepción llega al consumidor, que reintenta: nunca queda una constancia sin auditoría ni se marca DONE.
+    //  · Idempotente y seguro con consumidores concurrentes: la lectura con bloqueo (FOR UPDATE) serializa la fila del vínculo; solo quien la encuentra sin constancia la fija y audita; los demás esperan a que confirme y no hacen nada.
+    //  · Se usa `registrarAuditoriaTx` (propaga el error); `registrarAuditoria` lo ocultaría. Aislamiento: la lectura y el UPDATE siguen acotados por entorno, empresa, cliente e integración.
+    // Contención entre consumidores: InnoDB puede abortar al perdedor con ER_CHECKREAD (instantánea de aislamiento de MariaDB 11.8) o con un deadlock; ninguno ha escrito nada (se revierte). Se reintenta en una transacción NUEVA,
+    // que ya ve la constancia confirmada y no hace nada. Cualquier otro error (p. ej. la auditoría) se propaga al consumidor sin reintento local.
+    for (let attempt = 1; ; attempt++) {
+      const conn = await pool.getConnection(); let active = false; let broken = false;
+      try {
+        await conn.beginTransaction(); active = true;
+        // Lectura con bloqueo de la fila del vínculo y UPDATE por clave (sin JOIN: el UPDATE con JOIN fallaba con ER_CHECKREAD bajo concurrencia). El reintento de abajo cubre la contención restante.
+        const key = [...ns(scope), rows[0].order_id];
+        const [locked] = await conn.execute<RowDataPacket[]>(`SELECT cancellation_requested_at FROM ${t('tms_links')} WHERE ${where} AND order_id=? FOR UPDATE`, key);
+        const first = locked.length === 1 && locked[0].cancellation_requested_at == null;
+        if (first) await conn.execute(`UPDATE ${t('tms_links')} SET cancellation_requested_at = UTC_TIMESTAMP(6) WHERE ${where} AND order_id=?`, key);
+        if (first) {
+          await auditTx(conn, { empresaId: Number(rows[0].empresa_id), usuario: 'integracion:pricesmart-laboratorio', accion: 'pricesmart_cancelacion_solicitada', modulo: 'tms',
+            detalle: `PriceSmart solicitó cancelar el pedido ${externalOrderId} (solicitud TMS #${rows[0].solicitud_id}). Sin acción automática: requiere decisión de Operaciones.` });
+        }
+        await conn.commit(); active = false;
+        return;
+      } catch (error) {
+        if (active) { try { await conn.rollback(); } catch { broken = true; } }
+        const code = (error as { code?: string })?.code;
+        if (attempt < 5 && (code === 'ER_CHECKREAD' || code === 'ER_LOCK_DEADLOCK' || code === 'ER_LOCK_WAIT_TIMEOUT')) continue;
+        throw error;
+      } finally { if (broken) conn.destroy(); else conn.release(); }
+    }
   }
   return { link, status, noteCancellation };
 }
