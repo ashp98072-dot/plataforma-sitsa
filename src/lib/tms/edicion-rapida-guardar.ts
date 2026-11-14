@@ -1,3 +1,4 @@
+import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
 import type { RowDataPacket } from "mysql2";
 import type { ResultSetHeader } from "mysql2/promise";
 import { getPool } from "@/lib/db";
@@ -105,7 +106,10 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
            flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
         [empresaId, placa, fid],
       );
-      unidadTmsPorFlota.set(fid, Number(r.insertId));
+      unidadTmsPorFlota.set(fid, await idUnidadTrasUpsert(r.insertId, async () => {
+        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placa]);
+        return u[0] ? Number(u[0].id) : null;
+      }));
     }
 
     // 5) UPDATE de TODOS los planes (estado final ya validado; el estado se re-exige en el WHERE)

@@ -1,3 +1,4 @@
+import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
 import { NextResponse } from "next/server";
 import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
 import { z } from "zod";
@@ -884,7 +885,10 @@ export async function POST(req: Request, ctx: Ctx) {
            flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
         [empresaId, placaNorm, flotaVehiculoId],
       );
-      unidadId = Number(r.insertId);
+      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
+        const u = await query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placaNorm]);
+        return u[0] ? Number(u[0].id) : null;
+      });
     }
 
     pilotoId = await personalDesdeEmpleado(
@@ -2084,7 +2088,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
          ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
         [empresaId, placaNorm],
       );
-      unidadId = Number(r.insertId);
+      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
+        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placaNorm]);
+        return u[0] ? Number(u[0].id) : null;
+      });
     }
 
     if (d.flotaVehiculoId != null && vehiculoAccesible) {
@@ -2096,7 +2103,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
            flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
         [empresaId, String(vehiculoAccesible.placa).toUpperCase(), d.flotaVehiculoId],
       );
-      unidadId = Number(r.insertId);
+      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
+        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, String(vehiculoAccesible.placa).toUpperCase()]);
+        return u[0] ? Number(u[0].id) : null;
+      });
     }
 
     // VIAT-2: valida traslapes con el recurso EFECTIVO resultante (lo nuevo

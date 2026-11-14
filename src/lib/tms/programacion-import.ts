@@ -1,3 +1,4 @@
+import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
@@ -896,7 +897,10 @@ export async function confirmarImportacionProgramacion(
              flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
           [empresaId, datos.unidadPlaca, flotaVehiculoId],
         );
-        const unidadId = Number(rUnidad.insertId);
+        const unidadId = await idUnidadTrasUpsert(rUnidad.insertId, async () => {
+          const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, datos.unidadPlaca]);
+          return u[0] ? Number(u[0].id) : null;
+        });
 
         const lugarCargaId = await upsertLugar(empresaId, datos.lugarCargaTexto ?? undefined, "Carga", conn);
         const lugarDescargaId = await upsertLugar(empresaId, datos.destinoDescripcion ?? undefined, "Descarga", conn);
