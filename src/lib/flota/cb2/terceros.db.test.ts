@@ -544,11 +544,12 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
    const file={buffer,entrada:{perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:l.clave!,vehiculoId:-u.id,pilotoTipo:"REPORTADO",empleadoId:null,metodoEmpleado:"SIN_ASIGNACION"}]} as Entrada};
    await expect(cb2(file)).rejects.toMatchObject({status:503});
   await admin.query(`CREATE TABLE tms_solicitudes_fondo(id INT PRIMARY KEY,empresa_id INT NOT NULL,codigo VARCHAR(40),estado VARCHAR(30),fecha_requerimiento DATE,UNIQUE(empresa_id,id)) ENGINE=InnoDB;
-   CREATE TABLE tms_solicitud_fondo_lineas(id INT PRIMARY KEY,empresa_id INT NOT NULL,solicitud_id INT NOT NULL,categoria VARCHAR(40),vehiculo_id INT NULL,cantidad DECIMAL(10,2),monto DECIMAL(12,2),empleado_nombre VARCHAR(200),placa VARCHAR(40)) ENGINE=InnoDB;
+   CREATE TABLE tms_solicitud_fondo_lineas(id INT PRIMARY KEY,empresa_id INT NOT NULL,solicitud_id INT NOT NULL,categoria VARCHAR(40),vehiculo_id INT NULL,cantidad DECIMAL(10,2),monto DECIMAL(12,2),empleado_nombre VARCHAR(200),placa VARCHAR(40),UNIQUE KEY uq_fondolin_c2a_empresa_id(empresa_id,id),KEY idx_fondolin_solicitud(empresa_id,solicitud_id)) ENGINE=InnoDB;
+   ALTER TABLE flota_combustible_cargas ADD KEY idx_fcc_fondo_linea(empresa_id,solicitud_fondo_linea_id), ADD CONSTRAINT fk_fcc_fondo_linea FOREIGN KEY(empresa_id,solicitud_fondo_linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT;
    INSERT INTO tms_solicitudes_fondo VALUES(901,1,'LAB-901','Autorizada','2026-09-30'),(902,2,'LAB-902','Autorizada','2026-09-30'),(903,1,'LAB-903','Pendiente','2026-09-30');
    INSERT INTO tms_solicitud_fondo_lineas VALUES(901,1,901,'Combustible',1,1,250,'Otra persona','C-001ABC'),(902,2,902,'Combustible',NULL,1,250,'Otro tenant','C-001ABC'),(903,1,903,'Combustible',1,1,250,'Otra persona','C-001ABC');`);
 
-   const [preflight]=await admin.query(readFileSync("sql/preflight-2026-11-cb2-shell-opcional.sql","utf8"));for(const n of [0,1,2,4,5])expect((preflight as unknown as unknown[][])[n]).toEqual([]);
+   const [preflight]=await admin.query(readFileSync("sql/preflight-2026-11-cb2-shell-opcional.sql","utf8"));for(const n of [0,1,2,4,5,7,8])expect((preflight as unknown as unknown[][])[n]).toEqual([]);
    const triggersAntes=await q("SELECT TRIGGER_NAME,ACTION_ORDER,ACTION_STATEMENT,DEFINER,SQL_MODE,CHARACTER_SET_CLIENT,COLLATION_CONNECTION,DATABASE_COLLATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME");
    const history=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");await admin.query(readFileSync("sql/migrate-2026-11-cb2-piloto-reportado.sql","utf8"));expect(await q("SELECT TRIGGER_NAME,ACTION_ORDER,ACTION_STATEMENT,DEFINER,SQL_MODE,CHARACTER_SET_CLIENT,COLLATION_CONNECTION,DATABASE_COLLATION FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY TRIGGER_NAME")).toEqual(triggersAntes);expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(history);
    const results=await Promise.allSettled([cb2(file),cb2(file)]);expect(results.filter(r=>r.status==="fulfilled")).toHaveLength(2);expect(await total("SHELL-EXTERNA")).toBe(1);
@@ -563,7 +564,33 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
  it("fondos posteriores: sin efecto en consumos, diferencias manuales, permisos e idempotencia",async()=>{
   const [r]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='SHELL-OPC-001'");
   await expect(consultarFondoCB2(1,1,r.id,"")).rejects.toMatchObject({status:503});
-  await admin.query(readFileSync("sql/migrate-2026-11-cb2-fondos-vinculos.sql","utf8"));
+  const tablasHistoricas=["flota_cb2_consumos","flota_combustible_cargas","tms_solicitudes_fondo","tms_solicitud_fondo_lineas"];
+  const historicos=await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)));
+  const indicesAntes=await q("SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tms_solicitud_fondo_lineas' ORDER BY INDEX_NAME,SEQ_IN_INDEX");
+  const tablaAntes=await q("SHOW CREATE TABLE tms_solicitud_fondo_lineas");
+  const ddl=readFileSync("sql/migrate-2026-11-cb2-fondos-vinculos.sql","utf8");
+  // Una única DDL CREATE TABLE; nunca añadir índices sobre tablas históricas.
+  expect(ddl.replace(/^--.*$/gm,"").match(/\bCREATE TABLE\b/g)).toHaveLength(1);
+  expect(ddl.replace(/^--.*$/gm,"")).not.toMatch(/\bALTER\s+TABLE\b/i);
+  await admin.query(ddl);
+  expect(await q("SHOW CREATE TABLE tms_solicitud_fondo_lineas")).toEqual(tablaAntes);
+  expect(await q("SELECT INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tms_solicitud_fondo_lineas' ORDER BY INDEX_NAME,SEQ_IN_INDEX")).toEqual(indicesAntes);
+  const fks=await q("SELECT CONSTRAINT_NAME,UNIQUE_CONSTRAINT_NAME,REFERENCED_TABLE_NAME,UPDATE_RULE,DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_fondos_vinculos' ORDER BY CONSTRAINT_NAME");
+  expect(fks).toEqual([
+   {CONSTRAINT_NAME:"fk_cb2fv_actor",UNIQUE_CONSTRAINT_NAME:"PRIMARY",REFERENCED_TABLE_NAME:"usuarios",UPDATE_RULE:"RESTRICT",DELETE_RULE:"RESTRICT"},
+   {CONSTRAINT_NAME:"fk_cb2fv_consumo",UNIQUE_CONSTRAINT_NAME:"uq_cb2c_ambito",REFERENCED_TABLE_NAME:"flota_cb2_consumos",UPDATE_RULE:"RESTRICT",DELETE_RULE:"RESTRICT"},
+   {CONSTRAINT_NAME:"fk_cb2fv_linea",UNIQUE_CONSTRAINT_NAME:"uq_fondolin_c2a_empresa_id",REFERENCED_TABLE_NAME:"tms_solicitud_fondo_lineas",UPDATE_RULE:"RESTRICT",DELETE_RULE:"RESTRICT"}
+  ]);
+  expect((await q("SELECT UNIQUE_CONSTRAINT_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_combustible_cargas' AND CONSTRAINT_NAME='fk_fcc_fondo_linea'"))[0].UNIQUE_CONSTRAINT_NAME).toBe("uq_fondolin_c2a_empresa_id");
+  expect((await q("SELECT CONSTRAINT_NAME FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_fondos_vinculos' ORDER BY CONSTRAINT_NAME")).map(r=>r.CONSTRAINT_NAME)).toEqual(["ck_cb2fv_revision","ck_cb2fv_snapshot"]);
+  const insertar=(consumo:number,linea:number,actor:number,snapshot:string,revision:number)=>q("INSERT INTO flota_cb2_fondos_vinculos(empresa_id,proveedor_id,consumo_id,linea_id,revision_asignacion,snapshot,motivo,creado_por,creado_en) VALUES(1,1,?,?,?,?, 'Prueba sintetica de guardas',?,NOW(6))",[consumo,linea,revision,snapshot,actor]);
+  await expect(insertar(999999,901,1,"{}",0)).rejects.toMatchObject({errno:1452});
+  await expect(insertar(r.id,902,1,"{}",0)).rejects.toMatchObject({errno:1452});
+  await expect(insertar(r.id,901,999999,"{}",0)).rejects.toMatchObject({errno:1452});
+  await expect(insertar(r.id,901,1,"{",0)).rejects.toMatchObject({errno:4025});
+  await expect(insertar(r.id,901,1,"{}",-1)).rejects.toMatchObject({errno:4025});
+  expect(await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
+
   const [postcheck]=await admin.query(readFileSync("sql/postcheck-2026-11-cb2-shell-opcional.sql","utf8"));expect((postcheck as unknown as Record<string,unknown>[][])[3][0].vinculos_manuales).toBe(0);expect((postcheck as unknown as unknown[][])[4]).toEqual([]);
   expect((await consultarFondoCB2(1,1,r.id,"")).estado).toBe("SIN_CONCILIAR");
   const op={proveedorId:1,consumoId:Number(r.id),lineaId:901,revision:Number(r.revision_asignacion),motivo:"Revisados los comprobantes y las diferencias",confirmado:true as const};
@@ -574,6 +601,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await expect(vincularFondoCB2(ctx,{...op,motivo:"Intento de sobrescribir otra revision"})).rejects.toThrow("sobrescribe");
   expect((await consultarFondoCB2(1,1,r.id,"")).estado).toBe("VINCULADO_MANUAL");await expect(consultarFondoCB2(2,1,r.id,"")).rejects.toMatchObject({status:404});
   const post=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify(op)}),"e1","vincular-fondo");expect(post.status,await post.clone().text()).toBe(200);
+  expect(await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
   const noConfirmado=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify({...op,confirmado:false})}),"e1","vincular-fondo");expect(noConfirmado.status).toBe(400);
  });
 });

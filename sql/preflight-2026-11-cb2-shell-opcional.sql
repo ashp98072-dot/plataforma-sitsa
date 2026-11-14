@@ -31,4 +31,25 @@ SELECT TABLE_NAME,CONSTRAINT_NAME,CHECK_CLAUSE FROM information_schema.CHECK_CON
 SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_fondos_vinculos';
 SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND CONSTRAINT_NAME='ck_cb2_piloto_reportado';
 SELECT INDEX_NAME,COLUMN_NAME,SEQ_IN_INDEX,NON_UNIQUE FROM information_schema.STATISTICS
- WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN('flota_cb2_consumos','tms_solicitud_fondo_lineas') AND INDEX_NAME IN('uq_cb2c_ambito','uq_cb2_fondolin_ambito') ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX;
+ WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN('flota_cb2_consumos','tms_solicitud_fondo_lineas') AND INDEX_NAME IN('uq_cb2c_ambito','uq_fondolin_c2a_empresa_id') ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX;
+
+-- Cero filas: validar columnas, orden, unicidad e índices completos, no solo nombres.
+SELECT requerido.*,'INDICE_PADRE_INCOMPATIBLE_O_FALTANTE' problema FROM (
+ SELECT 'flota_cb2_consumos' tabla,'uq_cb2c_ambito' indice,'empresa_id,proveedor_id,id' columnas
+ UNION ALL SELECT 'tms_solicitud_fondo_lineas','uq_fondolin_c2a_empresa_id','empresa_id,id'
+ UNION ALL SELECT 'usuarios','PRIMARY','id'
+) requerido WHERE NOT EXISTS (
+ SELECT 1 FROM information_schema.STATISTICS s WHERE s.TABLE_SCHEMA=DATABASE()
+ AND s.TABLE_NAME=requerido.tabla AND s.INDEX_NAME=requerido.indice
+ GROUP BY s.INDEX_NAME HAVING MAX(s.NON_UNIQUE)=0
+ AND GROUP_CONCAT(s.COLUMN_NAME ORDER BY s.SEQ_IN_INDEX)=requerido.columnas
+ AND SUM(s.SUB_PART IS NOT NULL)=0 AND MIN(s.INDEX_TYPE)='BTREE'
+);
+
+-- Cero filas: las seis columnas referenciadas por las nuevas FK deben ser INT signed NOT NULL.
+SELECT c.TABLE_NAME,c.COLUMN_NAME,c.COLUMN_TYPE,c.IS_NULLABLE,'TIPO_FK_INCOMPATIBLE' problema
+ FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA=DATABASE()
+ AND ((c.TABLE_NAME='flota_cb2_consumos' AND c.COLUMN_NAME IN('empresa_id','proveedor_id','id'))
+ OR (c.TABLE_NAME='tms_solicitud_fondo_lineas' AND c.COLUMN_NAME IN('empresa_id','id'))
+ OR (c.TABLE_NAME='usuarios' AND c.COLUMN_NAME='id'))
+ AND (c.DATA_TYPE<>'int' OR c.COLUMN_TYPE LIKE '%unsigned%' OR c.IS_NULLABLE<>'NO');
