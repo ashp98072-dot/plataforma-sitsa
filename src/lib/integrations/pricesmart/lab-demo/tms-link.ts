@@ -147,7 +147,9 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     const join = `${t('tms_links')} l JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id`;
     const [rows] = await pool.execute<RowDataPacket[]>(`SELECT l.empresa_id, l.solicitud_id FROM ${join} WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.solicitud_id IS NOT NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
     if (!rows.length) return;
-    await pool.execute(`UPDATE ${join} SET l.cancellation_requested_at = COALESCE(l.cancellation_requested_at, UTC_TIMESTAMP(6)) WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
+    // Idempotente (API-23): solo la PRIMERA constancia actualiza el vínculo y escribe la auditoría; una entrega repetida (la outbox es al-menos-una-vez, y además existe la vía rápida) no duplica nada.
+    const [updated] = await pool.execute<import('mysql2/promise').ResultSetHeader>(`UPDATE ${join} SET l.cancellation_requested_at = UTC_TIMESTAMP(6) WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.cancellation_requested_at IS NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
+    if (updated.affectedRows === 0) return;
     await registrarAuditoria({ empresaId: Number(rows[0].empresa_id), usuario: 'integracion:pricesmart-laboratorio', accion: 'pricesmart_cancelacion_solicitada', modulo: 'tms',
       detalle: `PriceSmart solicitó cancelar el pedido ${externalOrderId} (solicitud TMS #${rows[0].solicitud_id}). Sin acción automática: requiere decisión de Operaciones.` });
   }
