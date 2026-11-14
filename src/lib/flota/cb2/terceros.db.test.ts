@@ -1,3 +1,4 @@
+import { reportePilotos } from "./pilotos-reporte";
 import { corregirAsignacion } from "./asignaciones";
 import { fusionarVehiculos } from "../vehiculos-fusion";
 import { revisarPlacaDuplicada } from "../vehiculos-duplicados";
@@ -190,7 +191,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     }
     const consumos = await q("SELECT * FROM flota_cb2_consumos WHERE asociacion_externa_id=?", [a.id]);
     expect(consumos).toHaveLength(2);
-    expect(consumos[0]).toMatchObject({ vehiculo_id: null, empleado_id: null, piloto_informado: "PILOTO FICTICIO ALFA", placa_original: "060-KHK" });
+    expect(consumos[0]).toMatchObject({ vehiculo_id: null, empleado_id: null, piloto_informado: " PILOTO FICTICIO ALFA ", placa_original: "060-KHK" });
     expect(JSON.parse(consumos[0].identidad_externa)).toMatchObject({ tipo: "MOTOCICLETA", relacion: "CONTRATISTA" });
     expect(await q("SELECT id FROM flota_cb2_externos_pilotos")).toHaveLength(1);
     expect(await q("SELECT id FROM empleados")).toHaveLength(0);
@@ -603,5 +604,52 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   const post=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify(op)}),"e1","vincular-fondo");expect(post.status,await post.clone().text()).toBe(200);
   expect(await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
   const noConfirmado=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify({...op,confirmado:false})}),"e1","vincular-fondo");expect(noConfirmado.status).toBe(400);
+ });
+ it("pilotos reportados: confirmación explícita, equivalencias empresariales y concurrencia, concurrencia e historial",async()=>{
+  expect((await reportePilotos(1,{})).instalado).toBe(false);
+  const antiguos=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  const [pre]=await admin.query(readFileSync("sql/preflight-2026-11-cb2-pilotos-reportados.sql","utf8"));expect((pre as unknown as unknown[][])[2]).toEqual([]);expect((pre as unknown as unknown[][])[3]).toEqual([]);
+  await admin.query(readFileSync("sql/migrate-2026-11-cb2-pilotos-reportados.sql","utf8"));
+  const [post]=await admin.query(readFileSync("sql/postcheck-2026-11-cb2-pilotos-reportados.sql","utf8"));expect((post as unknown as unknown[][])[5]).toEqual([]);expect((post as unknown as unknown[][])[6]).toEqual([]);
+  expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antiguos);
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados")).toEqual([]);
+  await q("INSERT INTO flota_vehiculos(id,empresa_id,placa) VALUES(3330,1,'C333LAB'),(3331,2,'C334LAB')");
+  const propia=String((await q("SELECT placa FROM flota_vehiculos WHERE id=1"))[0].placa);
+  async function shell(vale:string,nombre:string,placa:string,vehiculo:number){const buffer=await libroShell([filaShell(vale,nombre,placa,"Diesel")]);const l=(await analizar(buffer,"SHELL","GTQ")).find(l=>l.clave)!;return {buffer,entrada:{perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:l.clave!,vehiculoId:vehiculo,empleadoId:null,metodoEmpleado:"SIN_ASIGNACION",...(nombre?{decisionNombre:{tipo:"REPORTADO",confirmado:true}}:{})}]} as Entrada};}
+  const a=await shell("NOMBRE-REPORTE-A","  Álvaro   Pérez ",propia,1),b=await shell("NOMBRE-REPORTE-B","ÁLVARO PÉREZ","C333LAB",3330);
+  const previa=await preview(ctx,a.buffer,a.entrada);expect(previa.nombres).toHaveLength(1);expect(previa.nombres[0].propuesta).toBeNull();expect(await q("SELECT * FROM flota_cb2_pilotos_reportados")).toEqual([]);expect(await q("SELECT * FROM flota_cb2_pilotos_equivalencias")).toEqual([]);
+  const sinDecision={...a,entrada:{...a.entrada,seleccion:a.entrada.seleccion.map(s=>{const copia={...s};delete copia.decisionNombre;return copia;})}};
+  await expect(cb2(sinDecision)).rejects.toThrow("nombres distintos");
+  const noConfirmado={...a,entrada:{...a.entrada,seleccion:a.entrada.seleccion.map(s=>({...s,decisionNombre:{tipo:"REPORTADO" as const,confirmado:false}}))}};
+  await expect(cb2(noConfirmado)).rejects.toThrow("requiere confirmación");
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados")).toEqual([]);
+  await Promise.all([cb2(a),cb2(b,{...ctx,proveedorId:2})]);
+  const nombres=await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1");expect(nombres).toHaveLength(1);expect(nombres[0]).toMatchObject({nombre_normalizado:"ÁLVARO PÉREZ",estado:"REPORTADO_CONFIRMADO"});
+  const enlaces=await q("SELECT * FROM flota_cb2_consumo_piloto_reportado WHERE empresa_id=1");expect(enlaces).toHaveLength(2);expect(new Set(enlaces.map(r=>r.piloto_reportado_id)).size).toBe(1);
+  const reconocido=await shell("NOMBRE-REPORTE-C","Álvaro Pérez",propia,1);const sugerencias=await preview(ctx,reconocido.buffer,reconocido.entrada);expect(sugerencias.nombres[0].propuesta).toMatchObject({tipo:"REPORTADO",reportadoId:nombres[0].id,confirmado:false});
+  await cb2(a);expect(await q("SELECT * FROM flota_cb2_consumo_piloto_reportado WHERE empresa_id=1")).toHaveLength(2);
+  const reporte=await reportePilotos(1,{pilotoReportadoId:Number(nombres[0].id)});expect(reporte.items).toHaveLength(2);expect(reporte.totales).toEqual([expect.objectContaining({consumos:2,galones:"20.000000",importe:"400.000000",moneda:"GTQ"})]);expect(new Set(reporte.items.map(r=>r.piloto_informado))).toEqual(new Set(["  Álvaro   Pérez ","ÁLVARO PÉREZ"]));
+  expect(reporte.items.every(r=>r.empleado_id===null&&r.piloto_externo_id===null)).toBe(true);
+  const pag=await reportePilotos(1,{pilotoReportadoId:Number(nombres[0].id)},0,1);expect(pag.items).toHaveLength(1);expect(pag.siguiente).not.toBeNull();expect((await reportePilotos(1,{pilotoReportadoId:Number(nombres[0].id)},pag.siguiente!,1)).items[0].id).not.toBe(pag.items[0].id);
+  expect((await reportePilotos(1,{nombre:"  Álvaro   Pérez "})).items).toHaveLength(1);
+  await cb2(await shell("NOMBRE-OTRA-EMPRESA","ÁLVARO PÉREZ","C334LAB",3331),otra);const [ajeno]=await q("SELECT id FROM flota_cb2_pilotos_reportados WHERE empresa_id=2");expect(ajeno.id).not.toBe(nombres[0].id);await expect(reportePilotos(1,{pilotoReportadoId:ajeno.id})).rejects.toMatchObject({status:404});
+  await cb2(await shell("NOMBRE-AUSENTE","",propia,1));expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  const historicos=await reportePilotos(1,{nombre:"DEMO"});expect(historicos.items.length).toBeGreaterThan(0);expect(historicos.items.every(r=>r.piloto_reportado_id===null)).toBe(true);
+  expect(await q(`SELECT * FROM flota_cb2_consumos WHERE id IN (${antiguos.map(()=>"?").join(",")}) ORDER BY id`,antiguos.map(r=>r.id))).toEqual(antiguos);
+  // Las variantes de empleado se confirman una vez y se reutilizan sin crear reportados.
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4441,1,'Luis Escobar Sintético','Activo'),(4442,2,'Luis Escobar Sintético','Activo')");
+  const variante=await shell("VARIANTE-EMPLEADO","Luis Escobr Sintético",propia,1);
+  const revisionNombre=(await preview(ctx,variante.buffer,variante.entrada)).nombres[0];expect(revisionNombre.propuesta).toBeNull();expect(revisionNombre.candidatos.some(p=>p.id===4441)).toBe(true);expect(revisionNombre.candidatos.some(p=>p.id===4442)).toBe(false);
+  const comoEmpleado=(id:number)=>({...variante,entrada:{...variante.entrada,seleccion:variante.entrada.seleccion.map(s=>({...s,empleadoId:id,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:id,confirmado:true}}))}});
+  await expect(cb2(comoEmpleado(4442))).rejects.toMatchObject({status:403});await cb2(comoEmpleado(4441));
+  expect((await q("SELECT empleado_id,piloto_informado FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0]).toMatchObject({empleado_id:4441,piloto_informado:"Luis Escobr Sintético"});
+  expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4443,1,'Luis Escobar Sintético','Activo')");
+  const homonimo=await shell("VARIANTE-HOMONIMO","Luis Escobr Sintético",propia,1);homonimo.entrada.seleccion[0]={...homonimo.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
+  await cb2(homonimo);expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0].empleado_id).toBe(4441);expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-HOMONIMO'"))[0].empleado_id).toBe(4443);
+  const http=await cb2Http(new Request(`http://localhost/lab?pilotoReportadoId=${nombres[0].id}&exportar=csv`),"e1","pilotos-reporte");expect(http.status,await http.clone().text()).toBe(200);expect(await http.text()).toContain('Álvaro');
+  expect((await cb2Http(new Request("http://localhost/lab"),"denied","pilotos-reporte")).status).toBe(403);
+  await expect(q("UPDATE flota_cb2_pilotos_reportados SET estado='PERSONA_CONFIRMADA' WHERE id=?",[nombres[0].id])).rejects.toMatchObject({errno:4025});
  });
 });

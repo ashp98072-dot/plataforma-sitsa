@@ -1,3 +1,5 @@
+import { normalizarNombreReportado,type RevisionNombre } from "./pilotos-nombres";
+import { esquemaPilotosReportados,registrarPilotoReportadoTx,revisarNombresTx } from "./pilotos-reportados";
 import { validarAsignacionIndependiente } from "./asignacion-independiente";
 import { validarTerceroDirecto } from "./terceros-directos";
 import { validarEmpleadosImportacion } from "./empleados-validacion";
@@ -36,8 +38,10 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
     await proveedor(ctx);
     const lineas = await analizar(buffer, entrada.perfil, entrada.moneda), sha = hash(buffer);
     const c = await getPool().getConnection();
+    let nombres:RevisionNombre[]=[];
     const avisos = new Map<string, string[]>(), externas = new Map<string, ReturnType<typeof reconocerTercero>["asociacion"]>();
     try {
+        if(entrada.perfil==="SHELL") nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),await esquemaPilotosReportados(c));
         const internos = clavesInternas(await valesInternos(c, ctx, false));
         const anteriores = await rows(c, "SELECT clave_candidata,payload_operacion FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? ORDER BY id", [ctx.empresaId, ctx.proveedorId]);
         const c2b = await rows(c, "SELECT f.clave_operacion FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id WHERE h.empresa_id=? AND h.proveedor_id=? AND h.perfil_parser='HALEL'", [ctx.empresaId, ctx.proveedorId]);
@@ -51,7 +55,7 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
         }
     } finally { c.release(); }
     const token = await new SignJWT({ parser: 2, solicitud: digest(ctx, "CONFIRMAR", [sha, entrada]), archivo: sha }).setProtectedHeader({ alg: "HS256" }).setAudience(audience).setIssuedAt().setExpirationTime("15m").sign(getAuthSecretBytes());
-    return { sha256: sha, token, filas: lineas.map(l => ({ asociacionExterna: externas.get(l.clave ?? "") ?? null, hoja: l.fila.hoja, fila: l.fila.fila, lote: l.fila.lote, kilometraje: l.fila.kilometraje, origen: { ...l.fila.textos }, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: [...l.fila.motivos, ...(avisos.get(l.clave ?? "") ?? [])], vale: l.fila.vale, placa: l.fila.placaOriginal, placaNormalizada: l.fila.placaNormalizada, fecha: l.fila.fechaConsumo, galones: l.fila.galones, precio: l.fila.precio, monto: l.fila.monto, moneda: entrada.moneda })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
+    return { sha256: sha, token, nombres, filas: lineas.map(l => ({ perfil:entrada.perfil, asociacionExterna: externas.get(l.clave ?? "") ?? null, hoja: l.fila.hoja, fila: l.fila.fila, lote: l.fila.lote, kilometraje: l.fila.kilometraje, origen: { ...l.fila.textos }, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: [...l.fila.motivos, ...(avisos.get(l.clave ?? "") ?? [])], vale: l.fila.vale, placa: l.fila.placaOriginal, placaNormalizada: l.fila.placaNormalizada, fecha: l.fila.fechaConsumo, galones: l.fila.galones, precio: l.fila.precio, monto: l.fila.monto, moneda: entrada.moneda })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
 }
 export async function confirmarArchivo(ctx: Contexto, buffer: Buffer, nombre: string, entrada: Entrada, clave: string, token: string) {
     const sha = hash(buffer), request = digest(ctx, "CONFIRMAR", [sha, entrada]);
@@ -93,7 +97,7 @@ export async function confirmarArchivo(ctx: Contexto, buffer: Buffer, nombre: st
                 return { importacionId: Number(existente.id), existente: true, requiereReanudacion: true };
             const iid = await insert(c, "flota_cb2_importaciones", { empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, proveedor_nombre: String(p.nombre_comercial), perfil: entrada.perfil, version_contrato: 2, version_parser: 3, archivo_nombre: nombre, archivo_ruta: ruta, archivo_mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", archivo_tamano: buffer.length, archivo_sha256: sha, estado: "SOLO_EVIDENCIA", revision: 1, resumen_actual: "{}", creado_por: ctx.actor.id, creado_en: ahoraLocal(), actualizado_por: ctx.actor.id, actualizado_en: ahoraLocal() });
             nueva = true;
-            const eventos = await resolver(c, ctx, lineas, entrada.seleccion, iid, 1, entrada.moneda);
+            const eventos = await resolver(c, ctx, lineas, entrada.seleccion, iid, 1, entrada.moneda, undefined, undefined, entrada.perfil);
             await proyectar(c, ctx, iid, 1, eventos);
             return { eventos: await diario(c, ctx, "CONFIRMAR", clave, request, eventos), repetida: false };
         });
@@ -161,12 +165,12 @@ export async function reanudarArchivo(ctx: Contexto, op: {
         const elegidas = new Set(op.seleccion.map(s => s.candidato));
         if (!elegidas.size)
             throw new ErrorCB2("Selecciona candidatos para reanudar.", 400);
-        const eventos = await resolver(c, ctx, lineas, op.seleccion, op.importacionId, op.revision + 1, currency, origenes, op.motivo);
+        const eventos = await resolver(c, ctx, lineas, op.seleccion, op.importacionId, op.revision + 1, currency, origenes, op.motivo, h.perfil);
         await proyectar(c, ctx, op.importacionId, op.revision + 1, eventos);
         return { eventos: await diario(c, ctx, "REANUDAR", op.clave, request, eventos), repetida: false };
     });
 }
-async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita") {
+async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita", perfil:string="HALEL") {
     const decisiones = new Map(selection.map(s => [s.candidato,s]));
     const seleccion = new Map(selection.map(s => [s.candidato, s.vehiculoId]));
     const internos = clavesInternas(await valesInternos(c, ctx));
@@ -233,6 +237,22 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     for (const id of ids)
         await rows(c, "SELECT id FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? AND id=? FOR UPDATE", [ctx.empresaId, ctx.proveedorId, id]);
     const metodosEmpleados = await validarEmpleadosImportacion(c, ctx, selection, lineas);
+    const registroReportados = await esquemaPilotosReportados(c);
+    const nombresElegidos=new Map<string,string>(),nombresGuardados=new Map<string,number|null>();
+    for(const s of selection) {
+        const originales=lineas.filter(l=>l.clave===s.candidato && !l.bloqueada).map(l=>l.fila.textos.piloto);
+        for(const nombre of originales) {
+            const key=normalizarNombreReportado(nombre);if(!key)continue;
+            if(perfil==="SHELL" && registroReportados && !s.decisionNombre)throw new ErrorCB2("Revisa los nombres distintos antes de confirmar.",400);
+            if(!s.decisionNombre)continue;
+            if(!registroReportados)throw new ErrorCB2("Instala y valida el registro de equivalencias antes de guardar decisiones de nombres.",503);
+            const d=s.decisionNombre;
+            if((d.tipo==="EMPLEADO" ? s.empleadoId!==d.empleadoId : s.empleadoId!=null) || s.pilotoExternoId!=null || s.asociacionExternaId!=null)throw new ErrorCB2("La decisión de nombre no coincide con la identidad seleccionada.",400);
+            const valor=JSON.stringify(d),previo=nombresElegidos.get(key);
+            if(previo && previo!==valor)throw new ErrorCB2("Un nombre tiene decisiones contradictorias en el archivo.",400);
+            nombresElegidos.set(key,valor);
+        }
+    }
     const res = new Map<string, {
         id: number;
         resultado: string;
@@ -258,7 +278,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             if (!resolved) {
                 const previous = previos.get(l.clave) ?? [];
                 const fid = l.documento ? docs.get(JSON.stringify(l.documento))! : null;
-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || (choice.pilotoTipo && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || ((choice.pilotoTipo || choice.decisionNombre) && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
                     resultado = "BLOQUEADA";
                 }
                 else if (previous.length) {
@@ -267,7 +287,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 else {
                     const productoClasificado = choice.productoClasificado ?? clasificarProducto(f.producto);
                     if (!productoClasificado) throw new ErrorCB2("Clasifica el combustible o confirma NO DETERMINADO antes de importar.", 400);
-                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(vehicle < 0 || choice.pilotoTipo ? { asociacion_externa_id: choice.asociacionExternaId ?? null, ...((choice.pilotoExternoId !== undefined || choice.pilotoTipo) ? { piloto_externo_id: choice.pilotoExternoId ?? null, unidad_externa_id: vehicle < 0 ? -vehicle : null } : {}), identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.pilotoInformado, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
+                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(vehicle < 0 || choice.pilotoTipo ? { asociacion_externa_id: choice.asociacionExternaId ?? null, ...((choice.pilotoExternoId !== undefined || choice.pilotoTipo) ? { piloto_externo_id: choice.pilotoExternoId ?? null, unidad_externa_id: vehicle < 0 ? -vehicle : null } : {}), identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.textos.piloto || null, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
                     resolved = { id, resultado: "CREADA", factura: fid };
                 }
                 if (resolved)
@@ -276,6 +296,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             else
                 resolved = { ...resolved, resultado: "REUTILIZADA" };
             if (resolved) {
+                if(registroReportados && choice.decisionNombre) await registrarPilotoReportadoTx(c,ctx,resolved.id,f.textos.piloto || null,choice.decisionNombre,nombresGuardados);
                 cid = resolved.id;
                 resultado = resolved.resultado;
             }
@@ -377,4 +398,12 @@ export async function archivo(empresa: number, id: number) {
     finally {
         c.release();
     }
+}
+
+export async function nombresImportacion(empresa:number,importacion:number) {
+ const c=await getPool().getConnection();try {
+ const [h]=await rows(c,"SELECT id FROM flota_cb2_importaciones WHERE empresa_id=? AND id=?",[empresa,importacion]);if(!h)throw new ErrorCB2("Importación no disponible.",404);
+ const origenes=await rows(c,"SELECT datos_origen FROM flota_cb2_filas WHERE empresa_id=? AND importacion_id=? AND tipo='ORIGEN' ORDER BY id",[empresa,importacion]);
+ return revisarNombresTx(c,empresa,origenes.map(o=>{try{return String(JSON.parse(String(o.datos_origen)).textos?.piloto??"");}catch{throw new ErrorCB2("Evidencia original ilegible.");}}),await esquemaPilotosReportados(c));
+ }finally{c.release();}
 }

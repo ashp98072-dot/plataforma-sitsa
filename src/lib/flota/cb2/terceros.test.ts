@@ -39,6 +39,7 @@ beforeEach(() => {
     return 100;
   });
   m.query.mockImplementation(async (sql: string, p: unknown[] = []) => {
+    if (sql.includes("information_schema.TABLES") && sql.includes("flota_cb2_pilotos_reportados")) return [[]];
     if (sql.includes("@@SESSION.sql_mode")) return [[{ mode: "STRICT_ALL_TABLES", innodb: 1, fk: 1, ck: 1 }]];
     if (sql.startsWith("SET ")) return [[]];
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3 }]];
