@@ -41,9 +41,14 @@ export type Sent = { status: number; json: Row };
 export async function call(method: "GET" | "POST", url: string, op: Operation, key: Key | null, externalId: string, body?: unknown, over: Over = {}): Promise<Sent> {
   const bytes = body === undefined ? new Uint8Array(0) : enc(body);
   const headers: Record<string, string> = { accept: "application/json" }; if (method === "POST") headers["content-type"] = "application/json";
-  if (key) headers["x-lab-evidence"] = evidence(key, op, externalId, bytes, over);
-  const res = await fetch(url, { method, headers, body: method === "POST" ? Buffer.from(bytes) : undefined });
-  return { status: res.status, json: (await res.json()) as Row };
+  // `next dev` compila cada ruta en su primer uso y, bajo carga, puede devolver una página HTML de error en vez de JSON (no es una respuesta de la API). Solo en ese caso se reintenta UNA vez con evidencia nueva.
+  for (let attempt = 1; ; attempt++) {
+    if (key) headers["x-lab-evidence"] = evidence(key, op, externalId, bytes, attempt === 1 ? over : { ...over, proofId: undefined });
+    const res = await fetch(url, { method, headers, body: method === "POST" ? Buffer.from(bytes) : undefined });
+    const text = await res.text();
+    try { return { status: res.status, json: JSON.parse(text) as Row }; }
+    catch { if (attempt >= 2 || !text.trimStart().startsWith("<")) throw new Error(`Respuesta no JSON (${res.status})`); await new Promise((r) => setTimeout(r, 1500)); }
+  }
 }
 export const day = (offset: number) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toISOString().slice(0, 10); };
 export const uid = () => `PS${randomBytes(5).toString("hex")}`;

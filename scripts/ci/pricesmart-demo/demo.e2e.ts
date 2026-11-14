@@ -150,10 +150,10 @@ describe("API-12 circuito completo", () => {
     const extra = await post("a", y, { ...labOrder(y), campoNoDefinido: "x" }); expect(extra.status).toBe(400);
   });
 
-  it("DEMO.10 si el TMS rechaza la vinculación (fecha pasada) la orden queda RECIBIDA y sin vincular, sin simular una solicitud inexistente", async () => {
+  it("DEMO.10 si el TMS rechaza la vinculación (fecha pasada) la orden queda sin vincular y el GET pide REVISIÓN, sin simular una solicitud inexistente", async () => {
     const old = uid(); const r = await post("a", old, labOrder(old, { deliveryDate: "2020-01-01" })); expect(r.status).toBe(202);
     expect(await solicitudOf(old)).toHaveLength(0);
-    const g = await get("a", old); expect(g.json).toMatchObject({ provisionalStatus: "RECEIVED", proposedStatus: "RECEIVED", tms: { linked: false }, confirmsDelivery: false });
+    const g = await get("a", old); expect(g.json).toMatchObject({ provisionalStatus: "RECEIVED", proposedStatus: "REVIEW_REQUIRED", tms: { linked: false, linkIssue: { status: "BLOCKED", code: "REJECTED_BY_TMS" } }, confirmsDelivery: false });   // API-24: ya no aparenta «RECIBIDA» indefinidamente
     expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.solicitud_id IS NOT NULL", [Buffer.from(old)])).toBe(0);
     expect(await count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.solicitud_id IS NULL AND l.linked_at IS NULL", [Buffer.from(old)])).toBe(1);   // reclamo pendiente, sin solicitud
   });

@@ -5,7 +5,7 @@ import { registrarAuditoriaTx } from '@/lib/auditoria';
 import type { OrderView, Scope } from '../contracts';
 import type { OrderRepository } from '../ports';
 import { assessCancellation, projectExternalStatus } from '../tms-contract-proposal';
-import type { LabOrderInput } from './contract';
+import { labObservations, type LabOrderInput } from './contract';
 
 // PRICESMART API-12 — vinculación REAL (solo laboratorio) de una orden recibida con UNA solicitud del TMS en estado SOLICITADA.
 // Qué hace: crea la solicitud con crearSolicitudCliente (misma función y validaciones que el Portal del Cliente) para que Operaciones la vea en su bandeja
@@ -78,7 +78,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
         { empresaId: Number(map.empresa_id), clienteId: Number(map.tms_cliente_id), usuarioClienteId: Number(map.tms_usuario_cliente_id) },
         {
           fechaSolicitada: input.deliveryDate, referenciaCliente: input.externalOrderId,
-          observaciones: `${marker} PriceSmart (laboratorio) · club ${input.originClubReference} · destinatario ${input.recipient.name}${input.notes ? ` · ${input.notes}` : ''}`.slice(0, 500),
+          observaciones: labObservations(marker, input),   // la recepción ya garantiza que cabe (≤ 500): nunca se trunca
           origen: { lugarNombre: String(map.pickup_place) },
           entregas: [{ lugarNombre: input.recipient.name, referencia: input.address }],
           destino: { lugarNombre: String(map.dropoff_place) },
@@ -133,6 +133,14 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
         WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
     const cancellationAsked = view.provisionalStatus === 'CANCELLATION_REQUESTED' || view.provisionalStatus === 'CANCELLED';
     if (!rows.length || rows[0].solicitud_id == null) {   // sin vínculo, o reclamo pendiente que aún no se completó: NO se simula una solicitud
+      // API-24: una orden que el TMS RECHAZÓ (BLOQUEADA) o cuyos reintentos se AGOTARON necesita revisión humana: se informa REVIEW_REQUIRED con un código, en vez de aparentar «RECIBIDA» indefinidamente.
+      // Una cancelación pedida tiene prioridad (la orden ya no se vinculará). Solo se exponen códigos acotados, nunca el mensaje del TMS.
+      const [jobs] = await pool.execute<RowDataPacket[]>(`SELECT j.status, j.last_outcome FROM \`${schema}\`.ps_api13_link_jobs j JOIN \`${schema}\`.ps_api01_orders o ON o.environment=j.environment AND o.tenant_id=j.tenant_id AND o.client_id=j.client_id AND o.integration_id=j.integration_id AND o.id=j.order_id WHERE j.environment=? AND j.tenant_id=? AND j.client_id=? AND j.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
+      const jobStatus = jobs.length === 1 ? String(jobs[0].status) : null;
+      if (!cancellationAsked && (jobStatus === 'BLOCKED' || jobStatus === 'EXHAUSTED')) {
+        const outcome = typeof jobs[0].last_outcome === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(jobs[0].last_outcome) ? jobs[0].last_outcome : 'UNSPECIFIED';
+        return { labProposal: true, proposedStatus: 'REVIEW_REQUIRED', confirmsDelivery: false, tms: { linked: false, linkIssue: { status: jobStatus, code: outcome } } };
+      }
       return { labProposal: true, proposedStatus: 'RECEIVED', confirmsDelivery: false, tms: { linked: false },
         ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: 'REQUESTED_NOT_LINKED' } } : {}) };
     }
