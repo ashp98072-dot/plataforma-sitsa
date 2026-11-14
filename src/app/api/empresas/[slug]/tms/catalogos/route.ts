@@ -1,3 +1,6 @@
+import { ErrorCB2 } from "@/lib/flota/cb2/model";
+import { unidadesTmsVisibles } from "@/lib/tms/unidad-canonica-catalogo";
+import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { RowDataPacket } from "mysql2";
@@ -51,7 +54,7 @@ export async function GET(_req: Request, ctx: Ctx) {
       [eid],
     ),
     query<RowDataPacket[]>(
-      "SELECT id, placa, tipo, marca, modelo, estado FROM tms_unidades WHERE empresa_id = ? ORDER BY placa",
+      "SELECT id, placa, tipo, marca, modelo, estado, flota_vehiculo_id FROM tms_unidades WHERE empresa_id = ? ORDER BY placa",
       [eid],
     ),
     query<RowDataPacket[]>(
@@ -92,7 +95,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     {
       clientes,
       lugares,
-      unidades,
+      unidades: unidadesTmsVisibles(unidades as (RowDataPacket & {id:number})[],flotaVehiculos as (RowDataPacket & {id:number})[]),
       personal,
       vehiculosSolicitables,
       flotaVehiculos: flotaVehiculos.map((v) => ({
@@ -178,11 +181,7 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ id: r.insertId, mensaje: "Lugar creado." });
   }
   if (d.kind === "unidad") {
-    const r = await execute(
-      "INSERT INTO tms_unidades (empresa_id, placa, tipo, marca, modelo) VALUES (?, ?, ?, ?, ?)",
-      [eid, d.placa, d.tipo, d.marca ?? null, d.modelo ?? null],
-    );
-    return NextResponse.json({ id: r.insertId, mensaje: "Unidad creada." });
+    try{const id=await resolverUnidadTms(eid,d.placa,null,d.tipo);return NextResponse.json({id,mensaje:"Unidad resuelta sin duplicar ni reescribir históricos."});}catch(e){return NextResponse.json({error:e instanceof ErrorCB2?e.message:"No se pudo resolver la unidad."},{status:e instanceof ErrorCB2?e.status:503});}
   }
   let idEmpleadoValido: number | null = null;
   if (d.idEmpleado != null) {

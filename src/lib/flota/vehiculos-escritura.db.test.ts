@@ -1,3 +1,5 @@
+import { resolverUnidadCanonica,historialUnidadCanonica } from "./unidad-canonica";
+import { unidadCanonicaHttp } from "./unidad-canonica-http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -163,4 +165,32 @@ describe.skipIf(!pipe)("escritores HTTP reales / MariaDB aislada",()=>{
   const nueva=sql.split(/DELIMITER\s+\/\//i)[1].split('//')[0];await q(nueva);
   await q("UPDATE usuarios SET activo=0 WHERE id=2");await expect(consultarIdentidadFisica(c2,id)).rejects.toMatchObject({status:403});
  },60000);
+ it("históricos por identidad física: unión de IDs sin duplicar importes ni filtrar empresas ajenas",async()=>{
+  await q("CREATE TABLE flota_cb2_consumos(id INT PRIMARY KEY,empresa_id INT,vehiculo_id INT,numero_vale VARCHAR(40),galones DECIMAL(18,6),monto DECIMAL(18,6),moneda CHAR(3),producto VARCHAR(40),FOREIGN KEY(vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB");
+  await q("INSERT INTO flota_cb2_consumos VALUES(1,1,651,'VALE-A',10,100,'GTQ','Diesel'),(2,1,1300,'VALE-B',20,200,'GTQ','Diesel'),(3,2,1300,'AJENO',90,900,'GTQ','Diesel')");
+  await q("CREATE TABLE tms_solicitud_fondo_lineas(id INT PRIMARY KEY,empresa_id INT,vehiculo_id INT,monto DECIMAL(18,6),FOREIGN KEY(vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB");
+  await q("INSERT INTO tms_solicitud_fondo_lineas VALUES(1,1,651,80),(2,1,1300,150),(3,2,1300,1000)");
+  await q("INSERT INTO flota_viajes VALUES(3,1,1300,'cerrado',NOW())");
+  await q("CREATE TABLE flota_cb2_asignaciones(id INT PRIMARY KEY,empresa_id INT,anterior LONGTEXT,nuevo LONGTEXT) ENGINE=InnoDB");
+  await q("INSERT INTO flota_cb2_asignaciones VALUES(1,1,?,?),(2,2,?,?)",[JSON.stringify({vehiculoId:651}),JSON.stringify({vehiculoId:1300}),JSON.stringify({vehiculoId:651}),JSON.stringify({vehiculoId:1300})]);
+  const tablas=['flota_cb2_asignaciones','flota_cb2_consumos','tms_solicitud_fondo_lineas','flota_viajes','tms_planes_viaje','flota_mantenimientos_lab','flota_multas_lab','flota_documentos_lab'];
+  for(const sentencia of readFileSync("sql/preflight-2026-11-flota-unidad-canonica.sql","utf8").replace(/^--.*$/gm,"").split(';').filter(s=>s.trim()))await q(sentencia);
+  const antes=await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)));
+  const c=await state.pool!.getConnection();try {
+   const a=await resolverUnidadCanonica(c,1,651),b=await resolverUnidadCanonica(c,1,1300),otra=await resolverUnidadCanonica(c,2,651);
+   expect(a.identidadCanonica).toBe(b.identidadCanonica);expect(otra.identidadCanonica).toBe(a.identidadCanonica);expect(a.vehiculoCanonicoId).toBe(651);expect(b.vehiculoCanonicoId).toBe(651);expect(otra.vehiculoCanonicoId).toBe(1300);
+   const h=await historialUnidadCanonica(c,1,1300,'flota_cb2_consumos');expect(h.items.map(r=>r.id)).toEqual([1,2]);expect(h.historicosReasignados).toBe(0);
+   expect(h.fuentes.find(f=>f.tabla==='flota_cb2_consumos')).toMatchObject({cantidad:2,totales:[{galones:'30.000000',monto:'300.000000',moneda:'GTQ',producto:'Diesel'}]});
+   expect(h.fuentes.find(f=>f.tabla==='tms_solicitud_fondo_lineas')).toMatchObject({cantidad:2,totales:[{monto:'230.000000'}]});expect(h.fuentes.find(f=>f.tabla==='flota_viajes')).toMatchObject({cantidad:2});expect((await historialUnidadCanonica(c,1,651,'flota_cb2_asignaciones')).items.map(r=>r.id)).toEqual([1]);
+   await expect(historialUnidadCanonica(c,1,651,'usuarios; DROP TABLE empresas')).rejects.toMatchObject({status:400});await expect(resolverUnidadCanonica(c,999,651)).rejects.toMatchObject({status:404});
+   await q("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id=1300 AND empresa_id=1");
+   expect((await historialUnidadCanonica(c,1,1300,'flota_cb2_consumos')).items.map(r=>r.id)).toEqual([1,2]);await expect(resolverUnidadCanonica(c,1,1300,true)).rejects.toMatchObject({status:404});
+   await q("INSERT INTO flota_vehiculo_acceso VALUES(1300,1)");
+  }finally{c.release();}
+  expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(antes);
+  state.admin=false;expect((await unidadCanonicaHttp(new Request('http://localhost/lab?id=651&historial=1'),'e1')).status).toBe(403);state.admin=true;
+  const http=await unidadCanonicaHttp(new Request('http://localhost/lab?id=1300&historial=1&fuente=flota_cb2_consumos'),'e1');expect(http.status,await http.clone().text()).toBe(200);expect((await http.json()).items.map((r:{id:number})=>r.id)).toEqual([1,2]);
+  expect((await unidadCanonicaHttp(new Request('http://localhost/lab?id=651'),'denied')).status).toBe(403);
+ },60000);
+
 });

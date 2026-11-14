@@ -1,3 +1,4 @@
+vi.mock("@/lib/tms/unidad-canonica",async()=>({resolverUnidadTmsTx:(await import("./unidad-canonica.test-fixture")).unidadEnSimulador}));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**

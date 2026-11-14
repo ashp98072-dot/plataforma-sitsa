@@ -3,7 +3,7 @@ import { estadoEsquemaFisico } from "./identidad-fisica-schema";
 import { query, type SqlValue } from "@/lib/db";
 
 /** Read aliases independently of the flag that authorizes NEW merges. Historical IDs remain untouched. */
-export async function catalogoSinAlias<T extends { id: number; descripcion?: unknown; empresa_id?: unknown }>(vehiculos: T[], empresaId?: number, consultar: (sql:string,args?:SqlValue[])=>Promise<RowDataPacket[]> = (sql,args)=>query<RowDataPacket[]>(sql,args)) {
+export async function catalogoSinAlias<T extends { id: number; descripcion?: unknown; empresa_id?: unknown }>(vehiculos: T[], empresaId?: number, consultar: (sql:string,args?:SqlValue[])=>Promise<RowDataPacket[]> = (sql,args)=>query<RowDataPacket[]>(sql,args)):Promise<(T & {identidadFisicaId?:number;identidadCanonica?:string;vehiculoCanonicoId?:number;equivalenciasHistoricas?:number[]})[]> {
   if (!vehiculos.length) return vehiculos;
   const exists = await consultar("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_vehiculos_fusiones'");
 
@@ -16,8 +16,8 @@ export async function catalogoSinAlias<T extends { id: number; descripcion?: unk
   const estado=await estadoEsquemaFisico((sql,args)=>consultar(sql,args));
   if(estado==="AUSENTE")return disponibles;
   if(estado!=="COMPLETO")throw Error("Esquema de identidad fisica parcial; catalogo bloqueado.");
-  const miembros=await consultar(`SELECT m.vehiculo_id,m.identidad_id FROM flota_identidad_miembros m JOIN flota_identidades_fisicas f ON f.id=m.identidad_id AND f.estado='APROBADA' WHERE m.vehiculo_id IN (${marks})`,ids);
+  const miembros=await consultar(`SELECT m.vehiculo_id,m.identidad_id FROM flota_identidad_miembros m JOIN flota_identidades_fisicas f ON f.id=m.identidad_id AND f.estado='APROBADA' WHERE m.identidad_id IN (SELECT x.identidad_id FROM flota_identidad_miembros x WHERE x.vehiculo_id IN (${marks}))`,ids);
   const fisicas=new Map(miembros.map(m=>[Number(m.vehiculo_id),Number(m.identidad_id)])), elegidos=new Map<number,T>();
   for(const v of disponibles){const id=fisicas.get(v.id);if(!id)continue;const anterior=elegidos.get(id);if(!anterior||(Number(v.empresa_id)===empresaId&&Number(anterior.empresa_id)!==empresaId)||((Number(v.empresa_id)===empresaId)===(Number(anterior.empresa_id)===empresaId)&&v.id<anterior.id))elegidos.set(id,v);}
-  return disponibles.filter(v=>!fisicas.has(v.id)||elegidos.get(fisicas.get(v.id)!)?.id===v.id).map(v=>fisicas.has(v.id)?{...v,identidadFisicaId:fisicas.get(v.id),descripcion:`${v.descripcion??""} - Unidad fisica #${fisicas.get(v.id)} - registro #${v.id}`} : v);
+  return disponibles.filter(v=>!fisicas.has(v.id)||elegidos.get(fisicas.get(v.id)!)?.id===v.id).map(v=>fisicas.has(v.id)?{...v,identidadFisicaId:fisicas.get(v.id),identidadCanonica:`FISICA:${fisicas.get(v.id)}`,vehiculoCanonicoId:v.id,equivalenciasHistoricas:miembros.filter(m=>Number(m.identidad_id)===fisicas.get(v.id)).map(m=>Number(m.vehiculo_id)),descripcion:`${v.descripcion??""} - Unidad fisica #${fisicas.get(v.id)} - registro #${v.id}`} : v);
 }

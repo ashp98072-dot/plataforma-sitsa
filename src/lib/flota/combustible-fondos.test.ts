@@ -1,3 +1,5 @@
+vi.mock("./unidad-canonica",()=>({resolverUnidadCanonica:vi.fn()}));
+import { resolverUnidadCanonica } from "./unidad-canonica";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
@@ -90,4 +92,11 @@ describe("contrato SQL y UI (no ejecuta SQL)", () => {
     expect(selector).toContain('name="solicitudFondoLineaId"'); expect(selector).toContain('value="42" selected=""');
     expect(selector).toContain("Sin solicitud de fondo");
   });
+});
+
+it("fondos acepta equivalencia aprobada en memoria, conserva categoría/estado y nunca reescribe IDs",async()=>{
+ vi.mocked(resolverUnidadCanonica).mockResolvedValue({identidadCanonica:'FISICA:1'} as never);
+ m.query.mockResolvedValueOnce([[{solicitud_id:19}]]).mockResolvedValueOnce([[{estado:'Autorizada'}]]).mockResolvedValueOnce([[{categoria:'Combustible',vehiculo_id:651}]]);
+ await validarLineaFondoCombustibleTx(m as unknown as PoolConnection,1,42,1300);
+ expect(resolverUnidadCanonica).toHaveBeenCalledWith(m,1,651);expect(resolverUnidadCanonica).toHaveBeenCalledWith(m,1,1300);expect(m.query.mock.calls.every(([sql])=>String(sql).startsWith('SELECT'))).toBe(true);
 });

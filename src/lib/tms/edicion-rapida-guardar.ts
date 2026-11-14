@@ -1,4 +1,5 @@
-import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
+import { resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+
 import type { RowDataPacket } from "mysql2";
 import type { ResultSetHeader } from "mysql2/promise";
 import { getPool } from "@/lib/db";
@@ -98,18 +99,7 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
       if (unidadTmsPorFlota.has(fid)) continue;
       const placa = contexto.placaPorFlota.get(fid);
       if (!placa) throw new GuardadoAbortado("No se pudo resolver la unidad seleccionada.");
-      const [r] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-         VALUES (?, ?, 'Camion', ?)
-         ON DUPLICATE KEY UPDATE
-           id = LAST_INSERT_ID(id),
-           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-        [empresaId, placa, fid],
-      );
-      unidadTmsPorFlota.set(fid, await idUnidadTrasUpsert(r.insertId, async () => {
-        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placa]);
-        return u[0] ? Number(u[0].id) : null;
-      }));
+      unidadTmsPorFlota.set(fid,await resolverUnidadTmsTx(conn,empresaId,placa,fid));
     }
 
     // 5) UPDATE de TODOS los planes (estado final ya validado; el estado se re-exige en el WHERE)

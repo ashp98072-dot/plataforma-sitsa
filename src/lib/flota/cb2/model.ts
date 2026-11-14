@@ -23,6 +23,7 @@ const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehic
 });
 const decisionOriginal = z.object({
     version: z.literal(1), moneda,
+    vehiculoSolicitadoId: unidadSeleccion.optional(),
     candidato: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
     vehiculoId: unidadSeleccion.nullable(), errores: z.array(z.string()), asignacion: eleccion.nullable().optional(), metodoEmpleadoValidado: z.enum([...metodosEmpleado, "NO_DECLARADO"]).optional(),
     identidadExterna: z.record(z.string(), z.unknown()).optional(),

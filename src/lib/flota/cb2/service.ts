@@ -1,3 +1,4 @@
+import { resolverUnidadCanonica } from "../unidad-canonica";
 import { validarAsignacionIndependiente } from "./asignacion-independiente";
 import { validarTerceroDirecto } from "./terceros-directos";
 import { validarEmpleadosImportacion } from "./empleados-validacion";
@@ -167,6 +168,12 @@ export async function reanudarArchivo(ctx: Contexto, op: {
     });
 }
 async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita") {
+    const originalesSeleccion=new Map(selection.map(s=>[s.candidato,s.vehiculoId]));
+    const equivalencias=new Map<number,number[]>();
+    const normalizadas:Seleccion=[];
+    const resueltas=new Map<number,Awaited<ReturnType<typeof resolverUnidadCanonica>>>();
+    for(const s of selection){if(s.vehiculoId<0){normalizadas.push(s);continue;}const u=resueltas.get(s.vehiculoId)??await resolverUnidadCanonica(c,ctx.empresaId,s.vehiculoId,true);resueltas.set(s.vehiculoId,u);equivalencias.set(u.vehiculoCanonicoId!,u.idsHistoricos);normalizadas.push({...s,vehiculoId:u.vehiculoCanonicoId!});}
+    selection=normalizadas;
     const decisiones = new Map(selection.map(s => [s.candidato,s]));
     const seleccion = new Map(selection.map(s => [s.candidato, s.vehiculoId]));
     const internos = clavesInternas(await valesInternos(c, ctx));
@@ -258,7 +265,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             if (!resolved) {
                 const previous = previos.get(l.clave) ?? [];
                 const fid = l.documento ? docs.get(JSON.stringify(l.documento))! : null;
-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || (choice.pilotoTipo && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || (choice.pilotoTipo && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle && !(vehicle>0 && equivalencias.get(vehicle)?.includes(Number(p.vehiculo_id))) || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
                     resultado = "BLOQUEADA";
                 }
                 else if (previous.length) {
@@ -280,7 +287,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 resultado = resolved.resultado;
             }
         }
-        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ ...(l.clave && identidadesExternas.has(l.clave) ? { identidadExterna: identidadesExternas.get(l.clave) } : {}), version: 1, moneda: currency, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, metodoEmpleadoValidado: l.clave ? metodosEmpleados.get(l.clave) ?? "SIN_ASIGNACION" : "SIN_ASIGNACION", asignacion: l.clave ? decisiones.get(l.clave) ?? null : null }), motivo: l.errores.length ? `${motivo} - ${l.errores.join(", ")}` : motivo });
+        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ ...(l.clave && identidadesExternas.has(l.clave) ? { identidadExterna: identidadesExternas.get(l.clave) } : {}), version: 1, moneda: currency, vehiculoSolicitadoId:l.clave?originalesSeleccion.get(l.clave):undefined, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, metodoEmpleadoValidado: l.clave ? metodosEmpleados.get(l.clave) ?? "SIN_ASIGNACION" : "SIN_ASIGNACION", asignacion: l.clave ? decisiones.get(l.clave) ?? null : null }), motivo: l.errores.length ? `${motivo} - ${l.errores.join(", ")}` : motivo });
     }
     return eventos;
 }
