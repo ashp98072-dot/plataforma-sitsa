@@ -122,6 +122,8 @@ agregar("facturacion",
   accion("facturacion_anular_confirmacion","anular_confirmacion","Anular confirmación bancaria","puedeVer"));
 // Bitácora de facturas: acción propia (sin equivalencia por rol); ver facturas NO concede ver quién hizo qué.
 agregar("facturacion", accion("facturacion_ver_bitacora","ver_bitacora","Ver bitácora de movimientos de la factura","puedeVer"));
+// MIL-IMP-04A: capacidad explícita, sin equivalencia con crear/emitir/pagos ni concesiones por rol.
+agregar("facturacion", accion("facturacion_credito","administrar_credito","Administrar y aprobar plazo de crédito por cliente y libro","puedeVer"));
 // FACTURACION-PERMISOS-CONFIG-REQUISITOS: «Configuración empresa» y «Requisitos clientes» dejan de depender del ROL (alcanceFacturacion) y pasan a ser acciones
 // asignables, independientes de emitir/anular/pagar («Emitir factura» solo es borrador -> emitida; nunca edita NIT, razón social, FEL ni configuración).
 // Cada sección usa una fila propia (VARCHAR(40)) con dos flags: ver = puedeVer, editar = puedeEditar. Sin fila explícita NO hay acceso (a diferencia de `nueva`, no hay
