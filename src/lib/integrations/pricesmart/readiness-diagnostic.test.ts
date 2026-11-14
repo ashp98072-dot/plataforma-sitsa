@@ -17,7 +17,7 @@ describe('buildReadinessDiagnostic', () => {
   it('sin configuración: apagado, con bloqueos explícitos y sin puertos', () => {
     const r = buildReadinessDiagnostic({}, idle);
     expect(r.mode).toBe('DISABLED'); expect(r.ready).toBe(false);
-    expect(r.blockers).toEqual(expect.arrayContaining(['MODE_DISABLED', 'PRODUCTION_ENVIRONMENT_NOT_MODELED', 'PORTS_NOT_WIRED']));
+    expect(r.blockers).toEqual(expect.arrayContaining(['MODE_DISABLED', 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', 'PORTS_NOT_WIRED']));
     expect(r.checks.filter(c => c.status === 'NOT_WIRED')).toHaveLength(7); expect(r.blockers).toContain('PRODUCTION_COMPOSITION_NOT_IMPLEMENTED');
     expect(r.decisions.every(d => !d.declaredRatified)).toBe(true);
   });
@@ -32,8 +32,8 @@ describe('buildReadinessDiagnostic', () => {
     expect(buildReadinessDiagnostic(full({ PRICESMART_DB_RUNTIME_USER: 'sandbox_api02_x' }), idle).blockers).not.toContain('DB_USER_PATTERN_SANDBOX_ONLY');
     expect(buildReadinessDiagnostic({}, idle).checks.find(c => c.id === 'DB_RUNTIME_USER')?.status).toBe('MISSING');
   });
-  it('el contrato sandbox-only se calcula del esquema real y NODE_ENV/NOVALVION_ENV=production se reporta', () => {
-    expect(buildReadinessDiagnostic(full(), idle).blockers).toContain('PRODUCTION_ENVIRONMENT_NOT_MODELED');
+  it('el contrato modela production pero NINGÚN componente lo autoriza (siempre bloqueado) y NODE_ENV/NOVALVION_ENV=production se reporta', () => {
+    expect(buildReadinessDiagnostic(full(), idle).blockers).toContain('PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED');
     expect(buildReadinessDiagnostic({ ...full(), NODE_ENV: 'production' }, idle).blockers).toContain('RUNNING_IN_PRODUCTION_ENVIRONMENT');
   });
   it('configuración inválida: bloquea con nombres de variables, sin valores', () => {

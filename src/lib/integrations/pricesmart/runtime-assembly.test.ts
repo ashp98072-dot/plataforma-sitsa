@@ -24,7 +24,7 @@ describe('parseRuntimeConfig', () => {
     for (const env of [{}, { PRICESMART_RUNTIME_MODE: '' }, { PRICESMART_RUNTIME_MODE: 'DISABLED' }]) expect(parseRuntimeConfig(env)).toEqual({ ok: false, mode: 'DISABLED', issues: [] });
   });
   it('un modo desconocido o campos inválidos/ausentes cierran sin filtrar valores', () => {
-    for (const env of [baseEnv({ PRICESMART_RUNTIME_MODE: 'on' }), baseEnv({ PRICESMART_DB_SCHEMA: 'x; DROP' }), baseEnv({ PRICESMART_RUNTIME_ENVIRONMENT: 'production' }), baseEnv({ PRICESMART_RATE_PER_WINDOW: '0' }), baseEnv({ PRICESMART_UNKNOWN: '1' })]) {
+    for (const env of [baseEnv({ PRICESMART_RUNTIME_MODE: 'on' }), baseEnv({ PRICESMART_DB_SCHEMA: 'x; DROP' }), baseEnv({ PRICESMART_RUNTIME_ENVIRONMENT: 'staging' }), baseEnv({ PRICESMART_RUNTIME_ENVIRONMENT: 'Sandbox' }), baseEnv({ PRICESMART_RATE_PER_WINDOW: '0' }), baseEnv({ PRICESMART_UNKNOWN: '1' })]) {
       const r = parseRuntimeConfig(env); if (r.ok && !('PRICESMART_UNKNOWN' in env)) throw new Error('debía rechazar'); if (!r.ok) expect(JSON.stringify(r)).not.toMatch(/DROP|production|club-x/i);
     }
   });
@@ -48,8 +48,8 @@ describe('evaluateReadiness', () => {
     expect((await evaluateReadiness(none, ports())).blockers.filter(b => b.code === 'DECISION_PENDING')).toHaveLength(5);
     expect((await evaluateReadiness(baseEnv({ PRICESMART_RUNTIME_MODE: 'READ_ONLY', PRICESMART_RATIFIED_DECISIONS: 'D02,D06' }), ports())).ready).toBe(true);
   });
-  it('NODE_ENV/NOVALVION_ENV=production bloquea: producción no está modelada', async () => {
-    for (const e of [{ NODE_ENV: 'production' }, { NOVALVION_ENV: 'production' }]) expect((await evaluateReadiness({ ...baseEnv(), ...e }, ports())).blockers.map(b => b.code)).toContain('PRODUCTION_ENVIRONMENT_NOT_MODELED');
+  it('NODE_ENV/NOVALVION_ENV=production bloquea: producción no está autorizada (API-22)', async () => {
+    for (const e of [{ NODE_ENV: 'production' }, { NOVALVION_ENV: 'production' }]) expect((await evaluateReadiness({ ...baseEnv(), ...e }, ports())).blockers.map(b => b.code)).toContain('PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED');
   });
   it('puertos ausentes, sin interruptor o sin sondas bloquean', async () => {
     const r = await evaluateReadiness(baseEnv(), { probes: {} });
@@ -130,7 +130,7 @@ describe('aislamiento del cableado', () => {
   it('ninguna ruta ni módulo de la aplicación invoca el ensamblaje (producción sigue cerrada)', () => {
     const root = path.resolve(__dirname, '../../..');   // src/
     const hits: string[] = [];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !/runtime-assembly(\.test)?\.ts$/.test(n) && /runtime-assembly|installControlledRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && !/runtime-assembly\.ts$/.test(n) && /runtime-assembly|installControlledRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
   it('el módulo de configuración no lee process.env', () => {

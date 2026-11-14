@@ -1,4 +1,3 @@
-import { targetSchema } from './security-contracts';
 import { isPriceSmartHandlerInstalled } from './runtime-state';
 import { labDemoGate } from './lab-demo/gate';
 import { REQUIRED_DECISIONS, parseRuntimeConfig } from './runtime-config';
@@ -45,8 +44,8 @@ export function buildReadinessDiagnostic(env: Record<string, string | undefined>
   else if (!parsed.ok) for (const issue of parsed.issues) block('CONFIG_INVALID', issue);
   else checks.push({ id: 'CONFIG', status: 'OK', detail: `configuración válida, modo ${parsed.config.mode}` });
 
-  // Limitación del contrato: se calcula del esquema real, no se asume.
-  if (!targetSchema.shape.environment.safeParse('production').success) block('PRODUCTION_ENVIRONMENT_NOT_MODELED', 'el contrato de seguridad solo modela el entorno sandbox; producción requiere una decisión y un cambio de contrato');
+  // API-22: el contrato de seguridad ya modela `sandbox` y `production`, pero NINGÚN componente autoriza `production`: la persistencia (guardas `sandbox_api02_*`), el verificador criptográfico (D02) y el KMS siguen pendientes.
+  block('PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', 'el contrato modela production, pero no hay persistencia, verificador criptográfico ni KMS autorizados para ese entorno');
   if (env.NODE_ENV === 'production' || env.NOVALVION_ENV === 'production') block('RUNNING_IN_PRODUCTION_ENVIRONMENT', 'el proceso se declara de producción; el runtime no puede abrirse');
 
   const user = env.PRICESMART_DB_RUNTIME_USER;

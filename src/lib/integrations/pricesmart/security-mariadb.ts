@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { isSandboxVerifiedPool } from '../../sandbox-db';
+import type { Environment } from './environment';
 import { SecurityFailure, type AtomicCounterPort, type AtomicReplayPort, type CredentialBinding, type IntegrationCatalog, type RevocationPort, type TrustedClock } from './security-contracts';
 
 // PRICESMART API-11 — puertos de seguridad M2M respaldados por MariaDB (catálogo, revocación, contador y reclamo anti-repetición).
@@ -19,10 +20,10 @@ const bounded = (s: unknown, max: number) => {
   return Buffer.from(s);
 };
 
-export function mariaDbSecurityPorts(pool: Pool, config: { schema: string; runtimeUser: string }): {
+export function mariaDbSecurityPorts(pool: Pool, config: { schema: string; runtimeUser: string; /** API-22: explícito y SOLO `sandbox` (la persistencia de producción no está autorizada). */ environment?: Environment }): {
   catalog: IntegrationCatalog; revocation: RevocationPort; counter: AtomicCounterPort; replay: AtomicReplayPort; clock: TrustedClock;
 } {
-  if (!isSandboxVerifiedPool(pool) || !SCHEMA_RE.test(config.schema) || !SCHEMA_RE.test(config.runtimeUser)) throw new SecurityFailure('UNAVAILABLE');
+  if ((config.environment !== undefined && config.environment !== 'sandbox') || !isSandboxVerifiedPool(pool) || !SCHEMA_RE.test(config.schema) || !SCHEMA_RE.test(config.runtimeUser)) throw new SecurityFailure('UNAVAILABLE');
   const { schema, runtimeUser } = config;
   const table = (name: string) => `\`${schema}\`.\`ps_api11_${name}\``;
 

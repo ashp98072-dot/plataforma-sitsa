@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MAX_BODY_BYTES, reference } from './contracts';
+import { environmentSchema, type Environment } from './environment';
 
 export const operationSchema = z.enum(['orders:create', 'orders:read', 'orders:cancel']);
 export type Operation = z.infer<typeof operationSchema>;
@@ -9,14 +10,14 @@ const opaqueReference = z.string().min(1).max(256).regex(/^[\x21-\x7e]+$/);
 const uniqueScopes = z.array(operationSchema).min(1).max(3).refine(v => new Set(v).size === v.length);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 export const targetSchema = z.object({
-  environment: z.literal('sandbox'), tenantId: positive, clientId: positive, integrationId: reference,
+  environment: environmentSchema, tenantId: positive, clientId: positive, integrationId: reference,
   originClubReference: reference.max(64), externalOrderId: reference.optional(),
 }).strict();
 export type ResourceTarget = z.infer<typeof targetSchema>;
 
 // Schema validates data returned by a trusted cryptographic verifier, NEVER a token.
 export const assertionSchema = z.object({
-  environment: z.literal('sandbox'),
+  environment: environmentSchema,
   issuer: opaqueReference, subject: opaqueReference, credentialReference: opaqueReference,
   validFromMs: milliseconds, validUntilMs: milliseconds, scopes: uniqueScopes,
   requestProof: z.object({ id: reference, issuedAtMs: milliseconds, expiresAtMs: milliseconds, bindingDigest: digest }).strict().nullable(),
@@ -24,7 +25,7 @@ export const assertionSchema = z.object({
 export type VerifiedAssertion = z.infer<typeof assertionSchema>;
 export type CredentialBinding = Pick<VerifiedAssertion, 'issuer' | 'subject' | 'credentialReference'>;
 export const integrationSchema = z.object({
-  integrationId: reference, tenantId: positive, clientId: positive, environment: z.literal('sandbox'),
+  integrationId: reference, tenantId: positive, clientId: positive, environment: environmentSchema,
   issuer: opaqueReference, subject: opaqueReference, credentialReference: opaqueReference,
   revision: positive, status: z.enum(['ACTIVE', 'REVOKED']), validFromMs: milliseconds, validUntilMs: milliseconds,
   credentialValidFromMs: milliseconds, credentialValidUntilMs: milliseconds, rotatedAtMs: milliseconds,
@@ -35,7 +36,7 @@ export type IntegrationRecord = z.infer<typeof integrationSchema>;
 export interface EvidenceVerifier {
   // Must verify authentic cryptographic evidence, trust anchor, audience, mechanism,
   // validity and any request binding BEFORE returning. No implementation/default here.
-  verify(evidence: Uint8Array, context: { environment: 'sandbox' }): Promise<unknown | null>;
+  verify(evidence: Uint8Array, context: { environment: Environment }): Promise<unknown | null>;
 }
 export interface IntegrationCatalog {
   // Authoritative fresh lookup by ALL binding fields; 0 or >1 matches must be denied.

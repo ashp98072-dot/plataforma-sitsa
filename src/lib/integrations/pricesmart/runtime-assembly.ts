@@ -34,7 +34,9 @@ export async function evaluateReadiness(env: Record<string, string | undefined>,
     return { ready: false, mode: 'DISABLED', config: null, blockers: off ? [{ code: 'MODE_DISABLED', detail: 'PRICESMART_RUNTIME_MODE ausente o DISABLED (estado seguro por defecto)' }] : parsed.issues.map(detail => ({ code: 'CONFIG_INVALID', detail })) };
   }
   const { config } = parsed; const blockers: Blocker[] = [];
-  if (env.NODE_ENV === 'production' || env.NOVALVION_ENV === 'production') blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_MODELED', detail: 'el contrato de seguridad solo modela el entorno sandbox; producción requiere una decisión y un cambio de contrato aprobados' });
+  // API-22: aunque el contrato ya modela `production`, NINGÚN camino de ejecución lo autoriza (persistencia sandbox-only, sin verificador ni KMS aprobados): cualquier indicio de producción bloquea.
+  if (config.environment === 'production') blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', detail: 'el entorno production no está autorizado: persistencia, verificador criptográfico y KMS siguen pendientes' });
+  else if (env.NODE_ENV === 'production' || env.NOVALVION_ENV === 'production') blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', detail: 'el proceso se declara de producción: persistencia, verificador criptográfico y KMS siguen pendientes (ningún camino lo autoriza)' });
   for (const d of REQUIRED_DECISIONS[config.mode as 'READ_ONLY' | 'ENABLED']) if (!config.ratified.includes(d)) blockers.push({ code: 'DECISION_PENDING', detail: `${d} no está ratificada por PriceSmart` });
   const p = ports ?? {};
   if (!p.evidence || typeof p.evidence.extract !== 'function') blockers.push({ code: 'PORT_MISSING', detail: 'evidence' });
@@ -72,7 +74,7 @@ export async function installControlledRuntime(env: Record<string, string | unde
   try {
     const { config, ...report } = await evaluateReadiness(env, ports, options);
     if (!report.ready || !config) return report;
-    const transport = createIsolatedHttpTransport({ evidence: ports.evidence, security: ports.security, repository: ports.repository }, config.policy, config.limits, ports.extensions ?? {});
+    const transport = createIsolatedHttpTransport({ evidence: ports.evidence, security: ports.security, repository: ports.repository, environment: config.environment }, config.policy, config.limits, ports.extensions ?? {});
     installPriceSmartHandler(withRuntimeControls(transport, config.mode, ports.killSwitch as () => boolean | Promise<boolean>));
     return report;
   } catch {

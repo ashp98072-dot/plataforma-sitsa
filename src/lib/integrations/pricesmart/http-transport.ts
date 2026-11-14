@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { MAX_BODY_BYTES, OrderError, orderSchema, cancellationSchema, parseBody, reference, scopeOf, states, type OrderContractOptions, type OrderView, type Scope } from './contracts';
 import { createM2MSecurity } from './m2m-security';
+import { DEFAULT_ENVIRONMENT, environmentSchema, type Environment } from './environment';
 import { SecurityFailure, policySchema, type AbusePolicy, type Operation } from './security-contracts';
 import type { OrderRepository, Transaction } from './ports';
 import { OrderApplication } from './service';
@@ -61,11 +62,15 @@ function respond(status: number, value: unknown, correlationId: string, allow?: 
 /** Callable Request/Response adapter only: no route registration, server or default dependencies. */
 export function createIsolatedHttpTransport(dependencies: {
   evidence: HttpEvidencePort; security: Parameters<typeof createM2MSecurity>[0]; repository: OrderRepository;
+  /** API-22: entorno del despliegue (por omisión `sandbox`). Cualquier otro valor distinto de `sandbox`/`production` hace fallar la construcción. */
+  environment?: Environment;
 }, proposedPolicy: AbusePolicy, proposedLimits: HttpTransportLimits, extensions: HttpTransportExtensions = {}): (request: Request) => Promise<Response> {
   const parsedLimits = limitsSchema.safeParse(proposedLimits), parsedPolicy = policySchema.safeParse(proposedPolicy);
   if (!parsedLimits.success || !parsedPolicy.success || typeof dependencies.evidence?.extract !== 'function' ||
       typeof dependencies.repository?.runAtomic !== 'function') throw new SecurityFailure('UNAVAILABLE');
   const limits = Object.freeze(parsedLimits.data), policy = Object.freeze(parsedPolicy.data);
+  const parsedEnvironment = environmentSchema.safeParse(dependencies.environment === undefined ? DEFAULT_ENVIRONMENT : dependencies.environment); if (!parsedEnvironment.success) throw new SecurityFailure('UNAVAILABLE');
+  const deploymentEnvironment = parsedEnvironment.data;
   return async (request: Request): Promise<Response> => {
     const correlationId = randomUUID();
     if (!(request instanceof Request)) return respond(400,{ code:'INVALID_INPUT',correlationId },correlationId);
@@ -139,7 +144,7 @@ export function createIsolatedHttpTransport(dependencies: {
         counter:{ consume:input => guarded(() => dependencies.security.counter.consume(input)) },
         replay:{ claim:input => guarded(() => dependencies.security.replay.claim(input)) },
         clock:{ nowMs:() => { checkpoint(); return dependencies.security.clock.nowMs(); } },
-      },policy);
+      },policy,{ environment:deploymentEnvironment });
       const evidence = await guarded(() => dependencies.evidence.extract(metadata)); checkpoint();
       const identity = await security.authenticate(evidence); checkpoint();
       phase.value = 'AUTHORIZATION';

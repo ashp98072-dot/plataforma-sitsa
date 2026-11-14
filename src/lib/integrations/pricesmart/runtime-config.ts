@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { environmentSchema, type Environment } from './environment';
 import { reference } from './contracts';
 import { policySchema, type AbusePolicy } from './security-contracts';
 
@@ -19,7 +20,7 @@ const num = (min: number, max: number) => z.coerce.number().int().min(min).max(m
 const envSchema = z.object({
   PRICESMART_RUNTIME_MODE: z.enum(RUNTIME_MODES),
   PRICESMART_RUNTIME_ACK: z.string().optional(),
-  PRICESMART_RUNTIME_ENVIRONMENT: z.literal('sandbox'),   // el contrato de seguridad solo modela `sandbox`; `production` es una decisión pendiente (ver docs/api14)
+  PRICESMART_RUNTIME_ENVIRONMENT: environmentSchema,   // API-22: el contrato modela `sandbox` y `production`; `production` se parsea pero NO se autoriza (el ensamblaje del runtime lo bloquea con PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED)
   PRICESMART_RATIFIED_DECISIONS: z.string().regex(/^(D\d{2})(,D\d{2})*$/).optional(),   // lo declara el operador SOLO tras la confirmación escrita de PriceSmart
   PRICESMART_ORIGIN_CLUB: reference.max(64),
   PRICESMART_DB_SCHEMA: z.string().regex(/^[A-Za-z0-9_]{1,64}$/),
@@ -36,7 +37,7 @@ const envSchema = z.object({
 
 export type RuntimeConfig = Readonly<{
   ratified: readonly string[];
-  mode: RuntimeMode; environment: 'sandbox'; originClub: string; schema: string; runtimeUser: string;
+  mode: RuntimeMode; environment: Environment; originClub: string; schema: string; runtimeUser: string;
   policy: AbusePolicy;
   limits: { originClubReference: string; timeoutMs: number; maxHeaderBytes: number; maxHeaderCount: number; maxUrlBytes: number; maxBodyChunks: number };
 }>;

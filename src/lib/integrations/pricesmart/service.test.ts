@@ -69,7 +69,7 @@ describe('API-01 application with SIMULATED repository (not MariaDB acceptance)'
     const { app, repo } = setup(); await app.receive(bytes(input)); await app.receive(bytes({ ...input, externalOrderId: input.externalOrderId.toLowerCase() })); expect(repo.orders.size).toBe(2);
     expect((await setup(principal,repo).app.receive(bytes(input))).value).toEqual((await app.receive(bytes(input))).value);
   });
-  it.each([null, { ...principal, tenantId: -1 }, { ...principal, environment: 'production' }])('rejects absent/invalid authenticated identity %#', async p => {
+  it.each([null, { ...principal, tenantId: -1 }, { ...principal, environment: 'staging' }, { ...principal, environment: undefined }, { ...principal, environment: 'Sandbox' }, { ...principal, environment: '' }])('rejects absent/invalid authenticated identity %#', async p => {
     const { app, repo } = setup(p); await expect(app.receive(bytes(input))).rejects.toMatchObject({ code:'UNAUTHENTICATED' }); expect(repo.calls).toBe(0);
   });
   it('requires operation scope and trusted club before repository', async () => {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import { isSandboxVerifiedPool } from '../../sandbox-db';
+import type { Environment } from './environment';
 import { OrderError, orderSchema, reference, type OrderContractOptions, type Scope, type OrderInput } from './contracts';
 import { UniqueOrderCollision, type OrderRepository, type Transaction, type StoredOrder, type Committed } from './ports';
 
@@ -30,7 +31,10 @@ const fields = 'environment,tenant_id,client_id,integration_id';
 /** Offline composition only. Never creates a pool or executes DDL. */
 export function mariaDbOrderRepository(pool: Pool, config: {
   schema: string; runtimeUser: string; cipher: PayloadCipher; contract?: Pick<OrderContractOptions, 'orderSchema'>;
+  /** API-22: explícito y SOLO `sandbox`. La persistencia de producción no está autorizada (decisión pendiente): cualquier otro valor rechaza la construcción. */
+  environment?: Environment;
 }): OrderRepository {
+  if (config.environment !== undefined && config.environment !== 'sandbox') throw new PersistenceError('UNAVAILABLE');
   if (!isSandboxVerifiedPool(pool) || !/^sandbox_api02_[a-z0-9_]+$/.test(config.schema) ||
       !/^sandbox_api02_[a-z0-9_]+$/.test(config.runtimeUser) || !config.cipher?.seal || !config.cipher?.open) {
     throw new PersistenceError('UNAVAILABLE');
