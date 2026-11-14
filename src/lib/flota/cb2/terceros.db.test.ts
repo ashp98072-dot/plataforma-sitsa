@@ -1,3 +1,4 @@
+import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
 import { corregirAsignacion } from "./asignaciones";
 import { fusionarVehiculos } from "../vehiculos-fusion";
 import { revisarPlacaDuplicada } from "../vehiculos-duplicados";
@@ -407,6 +408,8 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
     await q("CREATE TABLE flota_viajes(id INT PRIMARY KEY,empresa_id INT,vehiculo_id INT,estado VARCHAR(20),hora_llegada DATETIME NULL, FOREIGN KEY(vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB");
     await q("INSERT INTO flota_viajes VALUES(1,1,684,'cerrado','2020-01-01 12:00:00')");
     const viajeHistorico = await q("SELECT * FROM flota_viajes WHERE id=1");
+    await q("CREATE TABLE tms_unidades(id INT AUTO_INCREMENT PRIMARY KEY,empresa_id INT NOT NULL,placa VARCHAR(40),tipo VARCHAR(40),flota_vehiculo_id INT NULL,UNIQUE(empresa_id,placa),FOREIGN KEY(flota_vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB");
+    await q("CREATE TABLE tms_planes_viaje(id INT AUTO_INCREMENT PRIMARY KEY,empresa_id INT NOT NULL,codigo VARCHAR(40),fecha_plan DATE,estado VARCHAR(30),unidad_id INT NULL,tc_vehiculo_id INT NULL,FOREIGN KEY(unidad_id) REFERENCES tms_unidades(id),FOREIGN KEY(tc_vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB");
     const sql = readFileSync("sql/migrate-2026-11-flota-fusiones.sql", "utf8"); const [head, tail] = sql.split("DELIMITER //");
     await admin.query(head); for (const statement of tail.replace("DELIMITER ;", "").split("//").map(s => s.trim()).filter(Boolean)) await admin.query(statement);
     vi.stubEnv("FLOTA_FUSIONES_APROBADAS", "1");
@@ -604,4 +607,21 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   expect(await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
   const noConfirmado=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify({...op,confirmado:false})}),"e1","vincular-fondo");expect(noConfirmado.status).toBe(400);
  });
+ it("unidad TMS canónica: guardas reales, insertId cero, alias, concurrencia y conservación de planes",async()=>{
+  const antes=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  const id=await resolverUnidadTms(1,"C-558BSJ",684);expect(id).toBeGreaterThan(0);
+  const [u]=await q("SELECT * FROM tms_unidades WHERE id=?",[id]);expect(u.flota_vehiculo_id).toBe(1301);
+  const [resultado]=await admin.execute("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,?,'Camion',1301) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[u.placa]);expect(Number((resultado as {insertId:number}).insertId)).toBe(0);
+  expect(await resolverUnidadTms(1,"C 558 BSJ",1301)).toBe(id);
+  await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-ORIGEN','2026-11-01','Cerrado',?)",[id]);
+  const original=await q("SELECT * FROM tms_planes_viaje ORDER BY id");
+  const copia=await resolverUnidadTms(1,"C558BSJ",684);await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-COPIA','2026-11-02','Cerrado',?)",[copia]);
+  expect((await q("SELECT * FROM tms_planes_viaje ORDER BY id"))[0]).toEqual(original[0]);expect(await q("SELECT id FROM tms_planes_viaje WHERE unidad_id<=0")).toEqual([]);
+  const unidades=await Promise.all([resolverUnidadTms(1,'C 991 LAB',null),resolverUnidadTms(1,'C-991LAB',null)]);expect(unidades[0]).toBe(unidades[1]);expect(await q("SELECT id FROM tms_unidades WHERE placa='C991LAB'")).toHaveLength(1);
+  await expect(resolverUnidadTms(2,'C558BSJ',684)).rejects.toMatchObject({status:404});
+  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo) VALUES(1,'C-998LAB','Camion')");await q("INSERT INTO flota_vehiculos(id,empresa_id,placa) VALUES(1998,1,'C998LAB')");
+  const conflicto=await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'");await expect(resolverUnidadTms(1,'C998LAB',1998)).rejects.toThrow('Conflicto');expect(await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'")).toEqual(conflicto);
+  expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antes);
+ });
+
 });

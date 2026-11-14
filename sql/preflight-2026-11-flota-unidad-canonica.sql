@@ -1,0 +1,10 @@
+-- SOLO LECTURA. No instala nada: reutiliza guardas y aprobaciones de #608/#613.
+SELECT VERSION(),@@foreign_key_checks,@@check_constraint_checks;
+-- Revisar con preflight/postcheck originales de identidad física y fusiones.
+SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('flota_vehiculos_fusiones','flota_identidades_fisicas','flota_identidad_miembros','flota_identidad_empresas','flota_identidad_aprobaciones','tms_unidades','tms_planes_viaje');
+SELECT EVENT_OBJECT_TABLE,TRIGGER_NAME,ACTION_TIMING,EVENT_MANIPULATION,ACTION_ORDER FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY EVENT_OBJECT_TABLE,ACTION_TIMING,EVENT_MANIPULATION,ACTION_ORDER;
+-- Inventario de referencias: comprobar índices y motor antes de consultar históricos por ID.
+SELECT k.TABLE_NAME,k.COLUMN_NAME,t.ENGINE FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=k.TABLE_SCHEMA AND t.TABLE_NAME=k.TABLE_NAME WHERE k.TABLE_SCHEMA=DATABASE() AND k.REFERENCED_TABLE_SCHEMA=DATABASE() AND k.REFERENCED_TABLE_NAME='flota_vehiculos' AND k.REFERENCED_COLUMN_NAME='id' ORDER BY k.TABLE_NAME,k.COLUMN_NAME;
+SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND ((TABLE_NAME='tms_unidades' AND COLUMN_NAME IN ('id','empresa_id','placa','tipo','flota_vehiculo_id')) OR (TABLE_NAME='flota_viajes' AND COLUMN_NAME IN ('vehiculo_id','estado','hora_llegada')) OR (TABLE_NAME='tms_planes_viaje' AND COLUMN_NAME IN ('empresa_id','unidad_id','tc_vehiculo_id','estado'))) ORDER BY TABLE_NAME,ORDINAL_POSITION;
+-- Debe ser cero. No propone ni aprueba identidades.
+SELECT COUNT(*) aprobadas_incompletas FROM flota_identidades_fisicas f WHERE f.estado='APROBADA' AND (EXISTS(SELECT 1 FROM flota_identidad_empresas e LEFT JOIN flota_identidad_aprobaciones a ON a.identidad_id=e.identidad_id AND a.empresa_id=e.empresa_id WHERE e.identidad_id=f.id AND a.identidad_id IS NULL) OR (SELECT COUNT(*) FROM flota_identidad_miembros m WHERE m.identidad_id=f.id)<2);

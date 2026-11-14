@@ -1,3 +1,4 @@
+import { resolverUnidadCanonica } from "./unidad-canonica";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { query } from "@/lib/db";
 import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
@@ -22,6 +23,10 @@ export async function validarLineaFondoCombustibleTx(conn: PoolConnection, empre
   if (!padres[0]) return validarLineaFondoCombustible(undefined, vehiculoId);
   const [solicitudes] = await conn.query<RowDataPacket[]>("SELECT estado FROM tms_solicitudes_fondo WHERE empresa_id=? AND id=? FOR UPDATE", [empresaId, padres[0].solicitud_id]);
   const [lineas] = await conn.query<RowDataPacket[]>("SELECT categoria, vehiculo_id FROM tms_solicitud_fondo_lineas WHERE empresa_id=? AND solicitud_id=? AND id=? FOR UPDATE", [empresaId, padres[0].solicitud_id, lineaId]);
+  if(lineas[0]?.vehiculo_id!=null && Number(lineas[0].vehiculo_id)!==vehiculoId && vehiculoId>0){
+    const a=await resolverUnidadCanonica(conn,empresaId,Number(lineas[0].vehiculo_id));const b=await resolverUnidadCanonica(conn,empresaId,vehiculoId);
+    if(a.identidadCanonica===b.identidadCanonica)lineas[0]={...lineas[0],vehiculo_id:vehiculoId} as RowDataPacket;
+  }
   validarLineaFondoCombustible(solicitudes[0] && lineas[0] ? { categoria: String(lineas[0].categoria), estado: String(solicitudes[0].estado), vehiculo_id: lineas[0].vehiculo_id } : undefined, vehiculoId);
 }
 
