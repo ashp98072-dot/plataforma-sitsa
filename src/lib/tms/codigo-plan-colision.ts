@@ -51,6 +51,18 @@ export function codigoErrorSql(e: unknown): string | null {
   return typeof code === "string" && /^ER_[A-Z0-9_]+$/.test(code) ? code : null;
 }
 
+/**
+ * Texto corto para el USUARIO: código `ER_*` y, en errores de llave foránea, el NOMBRE de la restricción (identificador de
+ * esquema, p. ej. fk_tmsplan_tc_vehiculo). Nunca el texto SQL, valores ni nombres de base de datos. Vacío si no hay código.
+ */
+export function detalleErrorSqlUsuario(e: unknown): string {
+  const code = codigoErrorSql(e);
+  if (!code) return "";
+  const msg = String((e as ErrorSqlLike).sqlMessage ?? "");
+  const fk = code.startsWith("ER_NO_REFERENCED_ROW") || code.startsWith("ER_ROW_IS_REFERENCED") ? msg.match(/CONSTRAINT `([A-Za-z0-9_]{1,64})`/)?.[1] : undefined;
+  return fk ? `${code}, restricción ${fk}` : code;
+}
+
 /** Resumen para la BITÁCORA DEL SERVIDOR (code/errno/sqlState/sqlMessage); no se devuelve al cliente. */
 export function resumenErrorSql(e: unknown): { code: unknown; errno: unknown; sqlState: unknown; sqlMessage: unknown } {
   const err = (e && typeof e === "object" ? e : {}) as ErrorSqlLike & { sqlState?: unknown };

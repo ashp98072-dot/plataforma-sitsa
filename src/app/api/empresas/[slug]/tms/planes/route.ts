@@ -14,7 +14,7 @@ import {
   asegurarCodigoPlanUnico,
   generarCodigoPlan,
 } from "@/lib/tms/codigo-plan";
-import { CodigoPlanAgotadoError, insertarPlanConCodigoUnico } from "@/lib/tms/codigo-plan-colision";
+import { CodigoPlanAgotadoError, detalleErrorSqlUsuario, insertarPlanConCodigoUnico } from "@/lib/tms/codigo-plan-colision";
 import {
   guardarParadasPlan,
   listarParadasDePlanes,
@@ -1253,8 +1253,9 @@ export async function POST(req: Request, ctx: Ctx) {
     await conn.rollback();
     if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     console.error("POST tms/planes (transacción de alta)", e);
+    const detalle = detalleErrorSqlUsuario(e);
     return NextResponse.json(
-      { error: "No se pudo crear el viaje. No se guardó ningún cambio." },
+      { error: `No se pudo crear el viaje${detalle ? ` (error de base de datos ${detalle})` : ""}. No se guardó ningún cambio.` },
       { status: 500 },
     );
   } finally {
