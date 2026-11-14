@@ -5,7 +5,7 @@ import { hoyLocal } from "@/lib/rrhh/dates";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { asegurarCodigoPlanUnicoTx } from "@/lib/tms/codigo-plan";
-import { CodigoPlanAgotadoError, codigoErrorSql, insertarPlanConCodigoUnico, resumenErrorSql } from "@/lib/tms/codigo-plan-colision";
+import { CodigoPlanAgotadoError, detalleErrorSqlUsuario, insertarPlanConCodigoUnico, resumenErrorSql } from "@/lib/tms/codigo-plan-colision";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { guardarAuxiliaresPlan, upsertLugar } from "@/lib/tms/plan-comunes";
 import { guardarPilotoExtraPlan } from "@/lib/tms/piloto-extra";
@@ -563,7 +563,7 @@ export async function confirmarLote(
         } catch (errInsert) {
           if (errInsert instanceof CodigoPlanAgotadoError) throw new Error(`Fila ${b.fila}: no se pudo generar un código de plan único.`);
           console.error(`confirmarLote: INSERT tms_planes_viaje falló en la fila ${b.fila}`, resumenErrorSql(errInsert));
-          throw new Error(`Fila ${b.fila}: no se pudo guardar el viaje (error de base de datos${codigoErrorSql(errInsert) ? ` ${codigoErrorSql(errInsert)}` : ""}).`, { cause: errInsert });
+          throw new Error(`Fila ${b.fila}: no se pudo guardar el viaje (error de base de datos${detalleErrorSqlUsuario(errInsert) ? ` ${detalleErrorSqlUsuario(errInsert)}` : ""}).`, { cause: errInsert });
         }
 
         await guardarAuxiliaresPlan(planId, auxIds, conn);

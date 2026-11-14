@@ -95,8 +95,9 @@ describe("POST /tms/planes — error del INSERT que NO es colisión de código: 
     const res = await post(PLAN);
     const cuerpo = await res.json();
     expect(res.status).toBe(500);
-    expect(cuerpo.error).toBe("No se pudo crear el viaje. No se guardó ningún cambio.");
+    expect(cuerpo.error).toMatch(/^No se pudo crear el viaje( \(error de base de datos ER_[A-Z0-9_]+(, restricción \w+)?\))?\. No se guardó ningún cambio\.$/);
     expect(cuerpo.error).not.toContain("código de plan único"); // nunca disfrazado de error de numeración
+    expect(cuerpo.error).not.toMatch(/Cannot add|Duplicate entry|Deadlock|Unknown column/); // sin texto SQL ni valores
     expect(inserts()).toHaveLength(1); // NO reintenta
     expect(asegurarCodigoPlanUnico).toHaveBeenCalledTimes(1); // solo el código inicial: no se regenera
     expect(conexion.rollback).toHaveBeenCalledTimes(1); // rollback transaccional conservado
@@ -105,6 +106,19 @@ describe("POST /tms/planes — error del INSERT que NO es colisión de código: 
     expect(vi.mocked(guardarAuxiliaresPlan)).not.toHaveBeenCalled(); // nada posterior al INSERT se ejecuta
     expect(sincronizarViaticosPlan).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith("POST tms/planes (transacción de alta)", err); // el error REAL queda en la bitácora
+  });
+});
+
+describe("POST /tms/planes — FK: el usuario ve el código y el NOMBRE de la restricción, sin texto SQL", () => {
+  it("ER_NO_REFERENCED_ROW_2 con CONSTRAINT `fk_tmsplan_tc_vehiculo`", async () => {
+    comportamientoInsert = () =>
+      sqlError("ER_NO_REFERENCED_ROW_2", 1452, "Cannot add or update a child row: a foreign key constraint fails (`secreta_db`.`tms_planes_viaje`, CONSTRAINT `fk_tmsplan_tc_vehiculo` FOREIGN KEY (`tc_vehiculo_id`) REFERENCES `flota_vehiculos` (`id`))");
+    const res = await post(PLAN);
+    const { error } = await res.json();
+    expect(res.status).toBe(500);
+    expect(error).toBe("No se pudo crear el viaje (error de base de datos ER_NO_REFERENCED_ROW_2, restricción fk_tmsplan_tc_vehiculo). No se guardó ningún cambio.");
+    expect(error).not.toContain("secreta_db");
+    expect(conexion.rollback).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -134,7 +148,7 @@ describe("POST /tms/planes — colisión REAL del UNIQUE (empresa_id, codigo)", 
     comportamientoInsert = (codigo, intento) => (intento === 1 ? dupUqPlan(codigo) : guardaFusion());
     const res = await post(PLAN);
     expect(res.status).toBe(500);
-    expect((await res.json()).error).toBe("No se pudo crear el viaje. No se guardó ningún cambio.");
+    expect((await res.json()).error).toBe("No se pudo crear el viaje (error de base de datos ER_SIGNAL_EXCEPTION). No se guardó ningún cambio.");
     expect(inserts()).toHaveLength(2);
     expect(conexion.rollback).toHaveBeenCalledTimes(1);
     expect(conexion.commit).not.toHaveBeenCalled();
