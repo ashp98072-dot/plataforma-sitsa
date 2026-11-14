@@ -22,7 +22,7 @@ El vínculo se guarda aparte, con empresa/proveedor, revisión de asignación y 
 
 1. `sql/preflight-2026-11-cb2-shell-opcional.sql`: revisar faltantes, motores, CHECK e instalación parcial. Además, contrastar tipos INT de las FK e índices con el esquema real antes de autorizar DDL.
 2. `sql/migrate-2026-11-cb2-piloto-reportado.sql`: amplía el CHECK en un ALTER, conserva sus ramas anteriores y las FK; añade una guarda para no vincular empleados/pilotos al modo REPORTADO.
-3. `sql/migrate-2026-11-cb2-fondos-vinculos.sql`: índice empresarial y tabla de vínculos. Dos DDL: pueden dejar índice creado si falla CREATE TABLE. No repetir a ciegas; inspeccionar y resolver la instalación parcial. No hay backfill.
+3. `sql/migrate-2026-11-cb2-fondos-vinculos.sql`: únicamente CREATE TABLE de vínculos. Reutiliza el UNIQUE `uq_fondolin_c2a_empresa_id (empresa_id,id)` instalado por C2A; no altera la tabla de líneas ni crea un índice redundante. Requiere preflight compatible; no hay backfill.
 4. `sql/postcheck-2026-11-cb2-shell-opcional.sql`: CHECK, InnoDB, tres FK, cero vínculos automáticos y comparación de triggers completos contra la captura previa.
 
 La importación de unidades propias funciona aunque no estén instaladas las dos propuestas. La conciliación opcional muestra su requisito de esquema sin impedir registrar consumos. No se certifica compatibilidad del DDL con producción por haber pasado un fixture local.
@@ -38,3 +38,13 @@ La importación de unidades propias funciona aunque no estén instaladas las dos
 Validacion final: 510 pruebas de modulo correctas; 34 pruebas MariaDB correctas (incluye pre/postchecks y conservacion de triggers); ESLint dirigido correcto; `npm ci` y `npm run build` completos correctos. Los warnings del build proceden de middleware, tracing del sandbox y la estrategia de workers existente.
 
 Rama independiente y PR Draft para auditoría antes de cualquier merge, SQL productivo o despliegue.
+
+## Corrección posterior a #616: índice de Fondos existente
+
+El hallazgo productivo confirma el contrato de C2A: `uq_fondolin_c2a_empresa_id (empresa_id,id)` ya existe. La migración corregida contiene únicamente CREATE TABLE; no añade, renombra ni elimina índices de tablas existentes. No requiere repetir ninguna migración anterior.
+
+Laboratorio MariaDB 11.8.9, sin TCP y con datos sintéticos: **34 pruebas correctas**, más **5 HTTP/DOM**. El fixture reproduce PRIMARY(id), el UNIQUE de C2A y el índice de solicitud; también conserva la FK Staff `fk_fcc_fondo_linea`. `REFERENTIAL_CONSTRAINTS.UNIQUE_CONSTRAINT_NAME` acredita que tanto Staff como `fk_cb2fv_linea` usan `uq_fondolin_c2a_empresa_id`. SHOW CREATE TABLE e inventario de índices de líneas son idénticos antes/después de crear la tabla de vínculos.
+
+Se verificaron las tres FK con RESTRICT y se rechazaron consumo inexistente, línea de otra empresa y actor inexistente (1452). Los dos CHECK rechazaron JSON inválido y revisión negativa (4025). Consumos CB2, cargas Staff, cabeceras y líneas de fondos permanecen idénticos tras la creación y la conciliación. Dos conciliaciones simultáneas producen un vínculo y un reintento idempotente; no se sobrescribe una solicitud diferente. Preflight y postcheck corregidos ejecutados solo en laboratorio.
+
+Dictamen local: **COMPATIBLE con el contrato de índices confirmado**. La compatibilidad productiva completa sigue condicionada al preflight de columnas, tipos INT signed, motores y claves: no se realizó conexión ni ejecución en Hostinger. Si el contrato difiere, detener; no crear otro UNIQUE para compensarlo.

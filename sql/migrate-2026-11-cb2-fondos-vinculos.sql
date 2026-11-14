@@ -1,6 +1,7 @@
 -- PROPUESTA MANUAL. No se ejecuta desde la aplicación. Sin backfill ni cambios en consumos.
 -- Requiere CB2 y Fondos instalados; una repetición debe fallar, no ocultar instalación parcial.
-ALTER TABLE tms_solicitud_fondo_lineas ADD UNIQUE KEY uq_cb2_fondolin_ambito (empresa_id,id);
+-- Reutiliza uq_fondolin_c2a_empresa_id (empresa_id,id), instalado por C2A.
+-- Ejecutar solo si el preflight acredita ese índice y la compatibilidad de las FK.
 CREATE TABLE flota_cb2_fondos_vinculos (
  empresa_id INT NOT NULL,
  proveedor_id INT NOT NULL,
