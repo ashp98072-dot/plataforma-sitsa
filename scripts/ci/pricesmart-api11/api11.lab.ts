@@ -475,4 +475,31 @@ describe("API-11 endpoints y seguridad M2M", () => {
       const text = JSON.stringify([good, closed, dup, prod]); for (const v of [KEY.toString("hex"), AUTH_KEY.toString("hex"), acc.registryWriter.password, acc.migration.password, acc.registryWriter.user, acc.migration.user, manifest.user, manifest.schema]) expect(text).not.toContain(v);
     } finally { await Promise.all([regPool.end(), migPool.end()]); }
   });
+
+  it("API11.22 entorno production en los contratos (API-22) contra MariaDB real: la persistencia sigue siendo SOLO sandbox, ninguna credencial/aserción/recurso cruza de entorno y nada se escribe; el flujo sandbox existente no cambia", async () => {
+    // (a) compatibilidad: el flujo sandbox completo sigue funcionando
+    const okId = uid(); const okRes = await create(transport(), "a", okId); expect(okRes.status).toBe(202); expect(await orderRows(okId)).toBe(1);
+    // (b) guardas de persistencia explícitas: la configuración `production` rechaza la construcción de los puertos reales
+    expect(() => mariaDbSecurityPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, environment: "production" as never })).toThrow();
+    expect(() => mariaDbOrderRepository(pool, { schema: manifest.schema, runtimeUser: manifest.user, cipher: makeLabCipher(process.env.AUTH_SECRET), environment: "production" as never })).toThrow();
+    expect(() => mariaDbSecurityPorts(pool, { schema: manifest.schema, runtimeUser: manifest.user, environment: "sandbox" })).not.toThrow();
+    // (c) el repositorio real rechaza un ámbito `production` (FORBIDDEN) antes de tocar la base: no se escribe nada
+    const ordersBefore = await n("ps_api01_orders", "1 = 1"); const eventsBefore = await n("ps_api01_events", "1 = 1");
+    for (const environment of ["production", "staging", undefined]) await expect(repository.runAtomic({ environment, tenantId: 1, clientId: 1, integrationId: "qa-integration" } as never, async () => 1)).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await n("ps_api01_orders", "1 = 1")).toBe(ordersBefore); expect(await n("ps_api01_events", "1 = 1")).toBe(eventsBefore);
+    // (d) transporte configurado como `production` con los puertos REALES de sandbox: la aserción de laboratorio (sandbox) se rechaza…
+    const asProduction = (v: { verify: (e: Uint8Array, c: { environment: "sandbox" | "production" }) => Promise<unknown> }) => createIsolatedHttpTransport({ evidence: evidencePort, security: { verifier: v, catalog: ports.catalog, revocation: ports.revocation, clock: ports.clock, counter: ports.counter, replay: ports.replay }, repository, environment: "production" }, policy(), limits);
+    const sandboxAssertion = await send(asProduction(verifier as never), "POST", BASE, "orders:create", "a", "p22-a", order("p22-a")); expect([401, 403]).toContain(sandboxAssertion.status);
+    // …y una aserción que DECLARA production sobre un registro REAL de sandbox también (el catálogo es de otro entorno)
+    const claimsProduction = { verify: async (e: Uint8Array, c: { environment: "sandbox" | "production" }) => { const a = (await verifier.verify(e)) as Record<string, unknown> | null; return a ? { ...a, environment: c.environment } : null; } };
+    const crossed = await send(asProduction(claimsProduction as never), "POST", BASE, "orders:create", "a", "p22-b", order("p22-b")); expect([401, 403]).toContain(crossed.status);
+    expect(await orderRows("p22-a")).toBe(0); expect(await orderRows("p22-b")).toBe(0); expect(await n("ps_api01_orders", "1 = 1")).toBe(ordersBefore);
+    // (e) el motor M2M de sandbox con un verificador que devuelve production sobre credenciales reales: rechazo
+    const sandboxEngine = createIsolatedHttpTransport({ evidence: evidencePort, security: { verifier: claimsProductionAsSandbox(), catalog: ports.catalog, revocation: ports.revocation, clock: ports.clock, counter: ports.counter, replay: ports.replay }, repository }, policy(), limits);
+    const wrongWay = await send(sandboxEngine, "POST", BASE, "orders:create", "a", "p22-c", order("p22-c")); expect([401, 403]).toContain(wrongWay.status); expect(await orderRows("p22-c")).toBe(0);
+    function claimsProductionAsSandbox() { return { verify: async (e: Uint8Array) => { const a = (await verifier.verify(e)) as Record<string, unknown> | null; return a ? { ...a, environment: "production" } : null; } }; }
+    // (f) las rutas siguen cerradas por omisión (503 DISABLED) aunque haya banderas de producción en el entorno del proceso
+    installPriceSmartHandler(null);
+    const closed = await send(handlePriceSmart, "GET", `${BASE}/p22-closed`, "orders:read", "a", "p22-closed"); expect(closed.status).toBe(503); expect(closed.json.code).toBe("DISABLED");
+  });
 });

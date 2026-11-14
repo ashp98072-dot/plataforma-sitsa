@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { MAX_BODY_BYTES, reference, principalSchema, type Principal } from './contracts';
+import { DEFAULT_ENVIRONMENT, environmentSchema, sameEnvironment, type Environment } from './environment';
 import {
   assertionSchema, integrationSchema, targetSchema, operationSchema, policySchema,
   counterResultSchema, replayResultSchema, SecurityFailure,
@@ -32,7 +33,12 @@ export function sanitizedSecurityRejection(error: unknown): { code: string; corr
 export function createM2MSecurity(ports: {
   verifier: EvidenceVerifier; catalog: IntegrationCatalog; revocation: RevocationPort;
   clock: TrustedClock; counter: AtomicCounterPort; replay: AtomicReplayPort;
-}, proposedPolicy: AbusePolicy) {
+}, proposedPolicy: AbusePolicy, options: { environment?: Environment } = {}) {
+  // API-22: ENTORNO DEL DESPLIEGUE (sandbox por omisión, por compatibilidad con los contratos de laboratorio). Un valor ausente-no-por-omisión o inválido rechaza la construcción; el entorno forma parte de la identidad,
+  // de la autorización y de la confianza: la aserción verificada, el registro administrativo y el recurso pedido deben coincidir EXACTAMENTE con él.
+  const parsedEnvironment = environmentSchema.safeParse(options?.environment === undefined ? DEFAULT_ENVIRONMENT : options.environment)   // solo `undefined` toma el valor por omisión; null o cualquier otro valor inválido rechaza;
+  if (!parsedEnvironment.success) throw new SecurityFailure('UNAVAILABLE');
+  const deploymentEnvironment = parsedEnvironment.data;
   // No quota defaults: this is a proposed test/composition policy, not D10-D12 approval.
   const parsedPolicy = policySchema.safeParse(proposedPolicy);
   if (!parsedPolicy.success) throw new SecurityFailure('UNAVAILABLE');
@@ -62,6 +68,8 @@ export function createM2MSecurity(ports: {
     const parsed = integrationSchema.safeParse(matches[0]);
     if (!parsed.success) throw new SecurityFailure('DENIED');
     const record = parsed.data;
+    // API-22: el registro (catálogo) debe ser del MISMO entorno que la aserción y que el despliegue; una credencial de otro entorno jamás autoriza aquí.
+    if (!sameEnvironment(record.environment, assertion.environment, deploymentEnvironment)) throw new SecurityFailure('DENIED');
     if (record.issuer !== binding.issuer || record.subject !== binding.subject || record.credentialReference !== binding.credentialReference) throw new SecurityFailure('DENIED');
     validAt(assertion, record, now());
     const revoked = await ports.revocation.isRevoked({ ...binding, environment: record.environment,
@@ -79,7 +87,7 @@ export function createM2MSecurity(ports: {
     return safe(async () => {
       const stored = owned(identity);
       const op = operationSchema.safeParse(operation), target = targetSchema.safeParse(resource);
-      if (!op.success || !target.success) throw new SecurityFailure('DENIED');
+      if (!op.success || !target.success || !sameEnvironment(target.data.environment, deploymentEnvironment, stored.assertion.environment)) throw new SecurityFailure('DENIED');   // API-22: el recurso pedido debe ser del entorno del despliegue
       const record = await current(stored.assertion);
       if (namespace(record) !== stored.namespace || namespace(record) !== namespace(target.data) ||
           !record.allowedClubs.includes(target.data.originClubReference) || !record.scopes.includes(op.data) ||
@@ -95,9 +103,9 @@ export function createM2MSecurity(ports: {
       return safe(async () => {
         if (!(evidence instanceof Uint8Array) || evidence.byteLength === 0) throw new SecurityFailure('DENIED');
         if (evidence.byteLength > policy.maxEvidenceBytes) throw new SecurityFailure('TOO_LARGE');
-        const result = await ports.verifier.verify(new Uint8Array(evidence), { environment: 'sandbox' });
+        const result = await ports.verifier.verify(new Uint8Array(evidence), { environment: deploymentEnvironment });
         const assertion = assertionSchema.safeParse(result);
-        if (!assertion.success) throw new SecurityFailure('DENIED');
+        if (!assertion.success || assertion.data.environment !== deploymentEnvironment) throw new SecurityFailure('DENIED');   // aserción de otro entorno (o sin entorno): rechazo
         const record = await current(assertion.data);
         const handle = Object.freeze(Object.create(null)) as VerifiedIdentity;
         identities.set(handle, { assertion: assertion.data, namespace: namespace(record) });

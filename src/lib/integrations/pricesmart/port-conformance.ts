@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { PayloadCipher } from './mariadb-repository';
+import { DEFAULT_ENVIRONMENT, isEnvironment, type Environment } from './environment';
 import type { AtomicCounterPort, AtomicReplayPort, EvidenceVerifier, IntegrationCatalog, TrustedClock } from './security-contracts';
 
 // PRICESMART API-16 — suite de CONFORMIDAD de puertos. Verifica COMPORTAMIENTO observable de las implementaciones que una composición productiva deberá aportar, sin definir ni suponer ninguna
@@ -65,8 +66,8 @@ function replayChecks(r: AtomicReplayPort): Check[] {
 function catalogChecks(c: IntegrationCatalog): Check[] {
   return [['unknown-credential-empty', async () => { const found = await c.findByCredential({ issuer: `conf-${rid()}`, subject: `conf-${rid()}`, credentialReference: `conf-${rid()}` }); return Array.isArray(found) && found.length === 0; }]];
 }
-function verifierChecks(v: EvidenceVerifier): Check[] {
-  const denies = async (bytes: Uint8Array) => { try { return (await v.verify(bytes, { environment: 'sandbox' })) == null; } catch { return true; } };   // rechazar (null o excepción) es denegar
+function verifierChecks(v: EvidenceVerifier, environment: Environment): Check[] {
+  const denies = async (bytes: Uint8Array) => { try { return (await v.verify(bytes, { environment })) == null; } catch { return true; } };   // rechazar (null o excepción) es denegar
   return [
     ['empty-denied', () => denies(new Uint8Array(0))],
     ['random-denied', () => denies(randomBytes(64))],
@@ -75,14 +76,16 @@ function verifierChecks(v: EvidenceVerifier): Check[] {
 }
 
 /** Ejecuta las comprobaciones de los puertos entregados. Un puerto ausente figura en `missing` y hace no conforme al conjunto cuando se lo pide en `required`. */
-export async function runPortConformance(ports: ConformancePorts, options: { required?: readonly PortName[] } = {}): Promise<ConformanceReport> {
+export async function runPortConformance(ports: ConformancePorts, options: { required?: readonly PortName[]; /** API-22: entorno con el que se prueba el verificador (por omisión `sandbox`). */ environment?: Environment } = {}): Promise<ConformanceReport> {
+  const environment = options.environment === undefined ? DEFAULT_ENVIRONMENT : options.environment;
+  if (!isEnvironment(environment)) throw new Error('UNAVAILABLE');
   const plan: [PortName, Check[]][] = [];
   if (ports.cipher) plan.push(['cipher', cipherChecks(ports.cipher)]);
   if (ports.clock) plan.push(['clock', clockChecks(ports.clock)]);
   if (ports.counter) plan.push(['counter', counterChecks(ports.counter)]);
   if (ports.replay) plan.push(['replay', replayChecks(ports.replay)]);
   if (ports.catalog) plan.push(['catalog', catalogChecks(ports.catalog)]);
-  if (ports.verifier) plan.push(['verifier', verifierChecks(ports.verifier)]);
+  if (ports.verifier) plan.push(['verifier', verifierChecks(ports.verifier, environment)]);
   const results: ConformanceResult[] = [];
   for (const [port, checks] of plan) for (const [id, run] of checks) {
     let pass = false;

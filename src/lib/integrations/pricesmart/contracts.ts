@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { environmentSchema } from './environment';
 
 export const MAX_BODY_BYTES = 65536;
 export const reference = z.string().min(1).max(120).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -39,7 +40,7 @@ export function parseBody<T>(body: Uint8Array, schema: z.ZodType<T>): T {
 }
 export const principalSchema = z.object({
   integrationId: reference, tenantId: z.number().int().positive(), clientId: z.number().int().positive(),
-  environment: z.literal('sandbox'), originClubReference: reference.max(64),
+  environment: environmentSchema, originClubReference: reference.max(64),
   scopes: z.array(z.enum(['orders:create', 'orders:read', 'orders:cancel'])).max(3),
 }).strict();
 export type Principal = z.infer<typeof principalSchema>;
