@@ -70,11 +70,18 @@ describe("PROGRAMACION-COPIA-LOTE-TX-1 — generarCodigoPlanTx / asegurarCodigoP
   });
 });
 
-describe("7-8) esDuplicadoCodigoPlan — distingue ER_DUP_ENTRY de cualquier otro error", () => {
-  it("7) ER_DUP_ENTRY / errno 1062 -> true", () => {
-    expect(esDuplicadoCodigoPlan({ code: "ER_DUP_ENTRY" })).toBe(true);
-    expect(esDuplicadoCodigoPlan({ errno: 1062 })).toBe(true);
-    expect(esDuplicadoCodigoPlan(Object.assign(new Error("dup"), { code: "ER_DUP_ENTRY" }))).toBe(true);
+describe("7-8) esDuplicadoCodigoPlan — SOLO la colisión real del índice (empresa_id, codigo); la lógica completa se prueba en codigo-plan-colision.test.ts", () => {
+  const dup = (clave: string, entrada = "7-PLAN-20260928-001") =>
+    Object.assign(new Error(`Duplicate entry '${entrada}' for key '${clave}'`), { code: "ER_DUP_ENTRY", errno: 1062, sqlMessage: `Duplicate entry '${entrada}' for key '${clave}'` });
+  it("7) ER_DUP_ENTRY / errno 1062 sobre uq_plan -> true", () => {
+    expect(esDuplicadoCodigoPlan(dup("uq_plan"))).toBe(true);
+    expect(esDuplicadoCodigoPlan(dup("tms_planes_viaje.uq_plan"))).toBe(true); // MySQL 8
+    expect(esDuplicadoCodigoPlan({ errno: 1062, sqlMessage: "Duplicate entry '7-PLAN-1' for key 'uq_plan'" })).toBe(true);
+  });
+  it("un ER_DUP_ENTRY de OTRO índice o sin información del índice -> false (se propaga, no se reintenta)", () => {
+    expect(esDuplicadoCodigoPlan(dup("PRIMARY", "31"))).toBe(false);
+    expect(esDuplicadoCodigoPlan({ code: "ER_DUP_ENTRY" })).toBe(false);
+    expect(esDuplicadoCodigoPlan({ errno: 1062 })).toBe(false);
   });
   it("8) cualquier otro error (FK, timeout, esquema…) -> false, nunca se confunde con colisión de código", () => {
     expect(esDuplicadoCodigoPlan({ code: "ER_NO_REFERENCED_ROW_2" })).toBe(false);

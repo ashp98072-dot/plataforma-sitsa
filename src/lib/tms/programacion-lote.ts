@@ -4,7 +4,8 @@ import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
-import { asegurarCodigoPlanUnicoTx, esDuplicadoCodigoPlan } from "@/lib/tms/codigo-plan";
+import { asegurarCodigoPlanUnicoTx } from "@/lib/tms/codigo-plan";
+import { CodigoPlanAgotadoError, codigoErrorSql, insertarPlanConCodigoUnico, resumenErrorSql } from "@/lib/tms/codigo-plan-colision";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { guardarAuxiliaresPlan, upsertLugar } from "@/lib/tms/plan-comunes";
 import { guardarPilotoExtraPlan } from "@/lib/tms/piloto-extra";
@@ -520,42 +521,50 @@ export async function confirmarLote(
         // usaba la variante del pool (conexión distinta): dos filas del mismo lote podían proponerse el mismo
         // código porque ninguna veía el INSERT sin confirmar de la otra — "uno por uno" funcionaba porque cada
         // copia individual era su PROPIA transacción, sin nadie más compitiendo dentro de ella.
-        let codigo = await asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null);
+        const codigoInicial = await asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null);
+        // URGENTE — SOLO una colisión real del UNIQUE (empresa_id, codigo) reintenta con otro código (helper compartido
+        // con el alta individual). Cualquier otro error del INSERT (columna inexistente, FK, trigger, timeout…) se
+        // propaga: el catch exterior hace el rollback total real. Antes el usuario solo veía un mensaje genérico; ahora
+        // el error indica la fila y el código SQL, y el detalle completo queda en la bitácora del servidor.
         let planId = 0;
-        for (let intento = 0; intento < 5 && !planId; intento++) {
-          try {
-            const [ins] = await conn.execute<ResultSetHeader>(
-              `INSERT INTO tms_planes_viaje
-                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                empresaId, codigo, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
-                b.horaCarga, b.tipoTraslado, regresoPersistidoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
-                r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre ?? null, r.tarifa?.monto ?? null, r.tarifa?.moneda ?? null,
-                r.rutaId, r.rutaCodigo, r.destino, r.contacto.nombre, r.contacto.cargo, r.contacto.telefono,
-                b.tipoViaje,
-                esTerc ? x!.pilotoExternoNombre.trim() : null,
-                esTerc ? (x!.auxiliaresExternos.map((n) => n.trim()).filter(Boolean).slice(0, MAX_AUXILIARES).join("\n") || null) : null,
-                esTerc ? (norm(x!.unidadExternaPlaca) || null) : null,
-                esTerc ? (x!.unidadExternaDescripcion.trim() || null) : null,
-                esTerc ? (x!.transportistaExterno.trim() || null) : null,
-                esTerc ? x!.costoTercerizado : null,
-                r.tc?.vehiculoId ?? null, r.tc?.placa ?? null,
-                esTerc ? (norm(x!.tcExternoPlaca) || null) : null,
-                r.vehiculo!.id, r.vehiculo!.nombre, // obligatorio: validado arriba (resolverYValidar) bajo el mismo candado
-              ],
-            );
-            planId = Number(ins.insertId);
-          } catch (errInsert) {
-            // PROGRAMACION-COPIA-LOTE-TX-1 — SOLO una colisión real del UNIQUE KEY (empresa_id, codigo) reintenta
-            // con otro código. Cualquier otro error del INSERT (FK, dato inválido, timeout, esquema…) se propaga
-            // tal cual: el catch exterior hace el rollback total real y devuelve el error verdadero, en vez de
-            // esconderlo detrás de un falso "no se pudo generar un código de plan único".
-            if (!esDuplicadoCodigoPlan(errInsert)) throw errInsert;
-            codigo = await asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null);
-          }
+        let codigo = codigoInicial;
+        try {
+          const alta = await insertarPlanConCodigoUnico({
+            empresaId,
+            codigoInicial,
+            siguienteCodigo: () => asegurarCodigoPlanUnicoTx(conn, empresaId, fechaDestino, null),
+            intentarInsertar: async (codigoIntento) => {
+                const [ins] = await conn.execute<ResultSetHeader>(
+                  `INSERT INTO tms_planes_viaje
+                    (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    empresaId, codigoIntento, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
+                    b.horaCarga, b.tipoTraslado, regresoPersistidoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
+                    r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre ?? null, r.tarifa?.monto ?? null, r.tarifa?.moneda ?? null,
+                    r.rutaId, r.rutaCodigo, r.destino, r.contacto.nombre, r.contacto.cargo, r.contacto.telefono,
+                    b.tipoViaje,
+                    esTerc ? x!.pilotoExternoNombre.trim() : null,
+                    esTerc ? (x!.auxiliaresExternos.map((n) => n.trim()).filter(Boolean).slice(0, MAX_AUXILIARES).join("\n") || null) : null,
+                    esTerc ? (norm(x!.unidadExternaPlaca) || null) : null,
+                    esTerc ? (x!.unidadExternaDescripcion.trim() || null) : null,
+                    esTerc ? (x!.transportistaExterno.trim() || null) : null,
+                    esTerc ? x!.costoTercerizado : null,
+                    r.tc?.vehiculoId ?? null, r.tc?.placa ?? null,
+                    esTerc ? (norm(x!.tcExternoPlaca) || null) : null,
+                    r.vehiculo!.id, r.vehiculo!.nombre, // obligatorio: validado arriba (resolverYValidar) bajo el mismo candado
+                  ],
+                );
+              return Number(ins.insertId);
+            },
+          });
+          planId = alta.planId;
+          codigo = alta.codigo;
+        } catch (errInsert) {
+          if (errInsert instanceof CodigoPlanAgotadoError) throw new Error(`Fila ${b.fila}: no se pudo generar un código de plan único.`);
+          console.error(`confirmarLote: INSERT tms_planes_viaje falló en la fila ${b.fila}`, resumenErrorSql(errInsert));
+          throw new Error(`Fila ${b.fila}: no se pudo guardar el viaje (error de base de datos${codigoErrorSql(errInsert) ? ` ${codigoErrorSql(errInsert)}` : ""}).`, { cause: errInsert });
         }
-        if (!planId) throw new Error(`Fila ${b.fila}: no se pudo generar un código de plan único.`);
 
         await guardarAuxiliaresPlan(planId, auxIds, conn);
         // Piloto extra copiado (revalidado arriba con las mismas reglas de disponibilidad): misma transacción del lote.

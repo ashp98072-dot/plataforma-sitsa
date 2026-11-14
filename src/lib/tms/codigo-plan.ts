@@ -1,6 +1,7 @@
 import type { PoolConnection } from "mysql2/promise";
 import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
+import { esColisionIndiceCodigoPlan, type IntentoCodigoPlan } from "./codigo-plan-colision";
 
 /** Prefijo estable: PLAN-YYYYMMDD-### (único por empresa). */
 export function prefijoCodigoPlan(fechaPlan: string): string {
@@ -90,12 +91,13 @@ export async function asegurarCodigoPlanUnicoTx(
 }
 
 /**
- * AJUSTE PRE-MERGE PR #173 (punto 1, ya existente en solicitudes-cliente-operaciones.ts) — SOLO una violación real
- * del UNIQUE KEY (empresa_id, codigo) debe interpretarse como "código duplicado, reintentar con otro". Cualquier
- * otro error del INSERT (FK, dato inválido, timeout, esquema…) debe propagarse tal cual — nunca esconderse detrás de
- * un falso "no se pudo generar un código de plan único". Centralizado aquí para no duplicarlo en cada caller.
+ * SOLO una violación real del UNIQUE KEY (empresa_id, codigo) —`uq_plan`— debe interpretarse como "código duplicado,
+ * reintentar con otro". Cualquier otro error del INSERT (FK, dato inválido, trigger, timeout, esquema…, e incluso un
+ * ER_DUP_ENTRY de OTRO índice) debe propagarse tal cual — nunca esconderse detrás de un falso "no se pudo generar un
+ * código de plan único". La lógica vive en `codigo-plan-colision.ts` (módulo puro); aquí se conserva el nombre
+ * histórico para los llamadores existentes. Pasar `intento` permite reconocer la colisión aunque el índice se llame
+ * distinto en una instalación (el valor duplicado es `<empresa_id>-<codigo>`).
  */
-export function esDuplicadoCodigoPlan(e: unknown): boolean {
-  const err = e as { code?: string; errno?: number } | null;
-  return !!err && (err.code === "ER_DUP_ENTRY" || err.errno === 1062);
+export function esDuplicadoCodigoPlan(e: unknown, intento?: IntentoCodigoPlan): boolean {
+  return esColisionIndiceCodigoPlan(e, intento);
 }

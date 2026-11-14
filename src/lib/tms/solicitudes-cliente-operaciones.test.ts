@@ -366,7 +366,8 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
       if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
         intentos++;
         if (intentos < 3) {
-          const err = new Error("Duplicate entry") as Error & { code: string; errno: number };
+          // Error realista de MariaDB para el UNIQUE (empresa_id, codigo): el índice viaja en el mensaje.
+          const err = new Error("Duplicate entry '7-PLAN-20990115-001' for key 'uq_plan'") as Error & { code: string; errno: number };
           err.code = "ER_DUP_ENTRY";
           err.errno = 1062;
           throw err;
@@ -408,7 +409,7 @@ describe("programarSolicitud — conversión a plan (transaccional)", () => {
   it("CASO C — 5 colisiones ER_DUP_ENTRY consecutivas → rollback, respuesta funcional de conflicto", async () => {
     conn.execute.mockImplementation(async (sql: string) => {
       if (String(sql).includes("INSERT INTO tms_planes_viaje")) {
-        const err = new Error("Duplicate entry") as Error & { code: string };
+        const err = new Error("Duplicate entry '7-PLAN-20990115-001' for key 'uq_plan'") as Error & { code: string };
         err.code = "ER_DUP_ENTRY";
         throw err;
       }

@@ -3,6 +3,7 @@ import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
 import { asegurarCodigoPlanUnico } from "@/lib/tms/codigo-plan";
+import { CodigoPlanAgotadoError, insertarPlanConCodigoUnico } from "@/lib/tms/codigo-plan-colision";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
 import { upsertLugar, guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
@@ -923,54 +924,59 @@ export async function confirmarImportacionProgramacion(
         // absorbe una colisión real (incluso contra una fila anterior de
         // este mismo lote, todavía sin commit) reintentando con uno
         // nuevo ante el error de UNIQUE KEY del propio INSERT.
-        let codigoFinal = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
+        const codigoInicial = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
+        // URGENTE — SOLO una colisión real del UNIQUE (empresa_id, codigo) reintenta con otro código. Cualquier otro error
+        // del INSERT (columna inexistente, FK, trigger, timeout…) se propaga al catch transaccional con su error verdadero.
         let planId = 0;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          try {
-            const [result] = await conn.execute<ResultSetHeader>(
-              `INSERT INTO tms_planes_viaje
-                (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?)`,
-              [
-                empresaId,
-                codigoFinal,
-                datos.clienteId,
-                lugarCargaId,
-                lugarDescargaId,
-                unidadId,
-                pilotoPersonalId,
-                auxPersonalIds[0] ?? null,
-                filaOriginal.fechaSalidaExcel,
-                filaOriginal.horaSalidaExcel,
-                filaOriginal.tipoTrasladoExcel || null,
-                datos.regresoEstimado?.replace("T", " ") ?? null,
-                filaOriginal.tarifaExcel,
-                tarifaSnapshot.id,
-                tarifaSnapshot.nombre,
-                tarifaSnapshot.monto,
-                tarifaSnapshot.moneda,
-                null, // costo_operativo_referencia: campo muerto (TMS-SIN-COSTO-OPERATIVO-1), nunca se popula.
-                null, // referencia_cliente: no forma parte de la plantilla aprobada.
-                datos.rutaId,
-                datos.rutaCodigo,
-                datos.destinoDescripcion,
-                datos.contactoNombre,
-                datos.contactoCargo,
-                datos.contactoTelefono,
-                filaOriginal.observacionesExcel || null,
-                // Vehículo solicitado (obligatorio): perfil activo resuelto en la vista previa + fotografía del nombre, en el MISMO INSERT.
-                datos.vehiculoSolicitadoPerfilId,
-                datos.vehiculoSolicitadoNombre,
-              ],
-            );
-            planId = Number(result.insertId);
-            break;
-          } catch {
-            codigoFinal = await asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null);
-          }
-        }
-        if (!planId) {
-          throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo generar un código de plan único.`);
+        try {
+          const alta = await insertarPlanConCodigoUnico({
+            empresaId,
+            codigoInicial,
+            siguienteCodigo: () => asegurarCodigoPlanUnico(empresaId, filaOriginal.fechaSalidaExcel as string, null),
+            intentarInsertar: async (codigoIntento) => {
+                const [result] = await conn.execute<ResultSetHeader>(
+                  `INSERT INTO tms_planes_viaje
+                    (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Programado', ?, ?)`,
+                  [
+                    empresaId,
+                    codigoIntento,
+                    datos.clienteId,
+                    lugarCargaId,
+                    lugarDescargaId,
+                    unidadId,
+                    pilotoPersonalId,
+                    auxPersonalIds[0] ?? null,
+                    filaOriginal.fechaSalidaExcel,
+                    filaOriginal.horaSalidaExcel,
+                    filaOriginal.tipoTrasladoExcel || null,
+                    datos.regresoEstimado?.replace("T", " ") ?? null,
+                    filaOriginal.tarifaExcel,
+                    tarifaSnapshot.id,
+                    tarifaSnapshot.nombre,
+                    tarifaSnapshot.monto,
+                    tarifaSnapshot.moneda,
+                    null, // costo_operativo_referencia: campo muerto (TMS-SIN-COSTO-OPERATIVO-1), nunca se popula.
+                    null, // referencia_cliente: no forma parte de la plantilla aprobada.
+                    datos.rutaId,
+                    datos.rutaCodigo,
+                    datos.destinoDescripcion,
+                    datos.contactoNombre,
+                    datos.contactoCargo,
+                    datos.contactoTelefono,
+                    filaOriginal.observacionesExcel || null,
+                    // Vehículo solicitado (obligatorio): perfil activo resuelto en la vista previa + fotografía del nombre, en el MISMO INSERT.
+                    datos.vehiculoSolicitadoPerfilId,
+                    datos.vehiculoSolicitadoNombre,
+                  ],
+                );
+              return Number(result.insertId);
+            },
+          });
+          planId = alta.planId;
+        } catch (errInsert) {
+          if (errInsert instanceof CodigoPlanAgotadoError) throw new Error(`Fila ${filaPreview.filaExcel}: no se pudo generar un código de plan único.`);
+          throw errInsert;
         }
 
         // TMS-TC-PLANES-REPORTES-1 — TC INTERNO (viaje Propio): id + snapshot de la placa; externo = NULL.
