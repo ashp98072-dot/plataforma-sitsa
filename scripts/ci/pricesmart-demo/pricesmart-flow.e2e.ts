@@ -23,10 +23,10 @@ const workerStore = () => {
   const raw = mysql.createPool({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: workerUser, password: process.env.PS06A_WORKER_PASSWORD, database: schema, connectionLimit: 4 });
   workerRaws.push(raw); return mariaDbOutboxStore(sandboxPool(raw), { schema, workerUser });
 };
-const POLICY: OutboxPolicy = { batchSize: 100, leaseMs: 2000, maxAttempts: 3, backoffBaseMs: 1, backoffMaxMs: 1 };
+const POLICY: OutboxPolicy = { batchSize: 100, leaseMs: 2000, maxAttempts: 10, backoffBaseMs: 1, backoffMaxMs: 1 };
 const log: OutboxLogEntry[] = [];
 let handler: ReturnType<typeof createLinkOutboxHandler>; let linker: ReturnType<typeof createTmsLinker>; let retry: ReturnType<typeof createLinkRetry>;
-const dispatcher = (policy = POLICY, store = workerStore()) => new OutboxDispatcher(store, handler, policy, (e) => log.push(e));
+const dispatcher = (policy = POLICY, store = workerStore(), h: { handle: typeof handler.handle } = handler) => new OutboxDispatcher(store, h as never, policy, (e) => log.push(e));
 
 beforeAll(async () => {
   ctx = await connect();
@@ -41,10 +41,11 @@ const hex = async (id: string, key: Key = "a") => String((await ctx.rows("SELECT
 const outbox = async (id: string, key: Key = "a") => ctx.rows("SELECT order_version v, status, attempts FROM ps_api01_outbox WHERE order_id = UNHEX(?) ORDER BY order_version", [await hex(id, key)]);
 const solicitudes = async (id: string, empresaId = empresas.a.empresaId) => ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [empresaId, id]);
 const planes = () => ctx.count("SELECT COUNT(*) n FROM tms_planes_viaje");
+const retryDeadlock = async <T>(fn: () => Promise<T>): Promise<T> => { for (let i = 1; ; i++) { try { return await fn(); } catch (e) { if (i < 6 && (e as { code?: string }).code === "ER_LOCK_DEADLOCK") continue; throw e; } } };   // el UPDATE administrativo de la prueba puede cruzarse con el reclamo del despachador
 const dueNow = async (id: string, key: Key = "a") => {   // adelanta el vencimiento de reintentos (solo laboratorio)
   const h = await hex(id, key);
-  await ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND status = 'PENDING'", [h]);
-  await ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND status = 'PENDING' AND lease_until IS NULL", [h]);
+  await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND status = 'PENDING'", [h]));
+  await retryDeadlock(() => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND status = 'PENDING' AND lease_until IS NULL", [h]));
 };
 async function withoutMapping<T>(key: Key, fn: (restore: () => Promise<void>) => Promise<T>): Promise<T> {
   const s = scopeFull(key); const saved = await ctx.rows("SELECT * FROM ps_api12_tms_mapping WHERE tenant_id = ? AND client_id = ?", [s.tenantId, s.clientId]);
@@ -144,6 +145,47 @@ describe("API-23 flujo funcional PriceSmart → M2M → persistencia → outbox 
     const [despues] = await ctx.rows("SELECT estado FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [empresas.a.empresaId, id]);
     expect(despues.estado).toBe(antes.estado); expect(await planes()).toBe(planesAntes);   // Operaciones decide: nada se cancela solo
     const st = await get("a", id); expect(st.json).toMatchObject({ confirmsDelivery: false }); expect((await cancel("a", id, "DUPLICATE")).status).toBe(409);
+  });
+
+  /** Deja una orden VINCULADA y con su solicitud de cancelación recibida, pero SIN constancia (estado previo a procesar la cancelación): el evento v2 queda PENDING. Solo laboratorio desechable. */
+  async function linkedWithPendingCancellation() {
+    const id = uid(); expect((await post("a", id)).status).toBe(202); await drain([id]); expect(await solicitudes(id)).toBe(1);
+    expect((await cancel("a", id)).status).toBe(202);   // la vía rápida de la app ya pudo dejar constancia: se retira para reproducir el estado previo al procesamiento
+    const h = await hex(id);
+    await ctx.db.query("UPDATE ps_api12_tms_links SET cancellation_requested_at = NULL WHERE order_id = UNHEX(?)", [h]);
+    await ctx.db.query("DELETE FROM auditoria WHERE accion = 'pricesmart_cancelacion_solicitada' AND detalle LIKE ?", [`%${id}%`]);
+    await ctx.db.query("UPDATE ps_api01_outbox SET status='PENDING', attempts=0, next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND order_version = 2", [h]);
+    return { id, h };
+  }
+  const auditCount = (id: string) => ctx.count("SELECT COUNT(*) n FROM auditoria WHERE accion = 'pricesmart_cancelacion_solicitada' AND detalle LIKE ?", [`%${id}%`]);
+  const constancias = (h: string) => ctx.count("SELECT COUNT(*) n FROM ps_api12_tms_links WHERE order_id = UNHEX(?) AND cancellation_requested_at IS NOT NULL", [h]);
+
+  it("F7b la auditoría de la cancelación FALLA tras actualizar el vínculo → todo se revierte, la outbox NO marca DONE, reintenta, se recupera la constancia y la auditoría queda con EXACTAMENTE un registro", async () => {
+    const { id, h } = await linkedWithPendingCancellation();
+    const pool = getPool(); const repository = mariaDbOrderRepository(pool, { schema, runtimeUser: String(process.env.DB_USER), cipher: labCipher(labKey), contract: labContract });
+    let fails = 2;   // la auditoría falla en los dos primeros intentos (después de que el UPDATE del vínculo ya se ejecutó dentro de la transacción)
+    const failing = createTmsLinker({ pool, schema, repository, auditTx: async (conn, input) => { if (fails-- > 0) throw new Error("auditoría caída"); const { registrarAuditoriaTx } = await import("@/lib/auditoria"); await registrarAuditoriaTx(conn, input); } });
+    const flaky = createLinkOutboxHandler({ pool, schema, retry, linker: failing });
+    const d = dispatcher(POLICY, workerStore(), flaky);
+    for (let i = 0; i < 2; i++) {
+      await ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND order_version = 2", [h]);
+      const r = await d.runOnce(); expect(r.done).toBe(0); expect(r.retried).toBeGreaterThanOrEqual(1);
+      expect(await constancias(h)).toBe(0); expect(await auditCount(id)).toBe(0);   // revertido: ni constancia sin auditoría ni auditoría sin constancia
+      expect((await outbox(id)).find((o) => o.v === 2)!.status).toBe("PENDING");   // NO DONE mientras falte la constancia obligatoria
+    }
+    await ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND order_version = 2", [h]);
+    await d.runOnce();   // la auditoría ya funciona → recupera la constancia
+    expect((await outbox(id)).find((o) => o.v === 2)!.status).toBe("DONE"); expect(await constancias(h)).toBe(1); expect(await auditCount(id)).toBe(1);
+    for (let i = 0; i < 2; i++) { await ctx.db.query("UPDATE ps_api01_outbox SET status='PENDING', next_attempt_at = UTC_TIMESTAMP(6) WHERE order_id = UNHEX(?) AND order_version = 2", [h]); await d.runOnce(); }
+    expect(await auditCount(id)).toBe(1);   // reprocesar no duplica
+    const [sol] = await ctx.rows("SELECT estado, plan_id FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [empresas.a.empresaId, id]); expect(sol).toMatchObject({ estado: "SOLICITADA", plan_id: null });   // nada se cancela solo
+  });
+
+  it("F7c concurrencia: 4 llamadas simultáneas a noteCancellation + 2 despachadores sobre la misma cancelación → UNA constancia y UN registro de auditoría", async () => {
+    const { id, h } = await linkedWithPendingCancellation();
+    const res = await Promise.allSettled([...Array.from({ length: 4 }, () => linker.noteCancellation(scopeFull("a"), id)), drain([id], dispatcher()), drain([id], dispatcher())]);
+    expect(res.filter((r) => r.status === "rejected").map((r) => { const e = (r as PromiseRejectedResult).reason as { code?: string; sql?: string }; return `${e.code} ${String(e.sql).slice(0, 90)}`; })).toEqual([]);
+    expect(await constancias(h)).toBe(1); expect(await auditCount(id)).toBe(1); expect((await outbox(id)).every((o) => o.status === "DONE")).toBe(true);
   });
 
   it("F8 estado incompatible: cancelar ANTES de vincular → la orden jamás se vincula al TMS (ni por la outbox ni por el trabajador) y nada queda colgado", async () => {

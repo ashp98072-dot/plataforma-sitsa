@@ -175,7 +175,7 @@ function e2e() {
   env.PS_DEMO_RUNDIR = m.runDir;   // el e2e lee state.json de aquí (TEMP del proceso hijo apunta al directorio del run)
   env.PATH = `${path.dirname(process.execPath)};${env.PATH}`;
   const r = cp.spawnSync(process.execPath, [path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(here, 'vitest.demo.config.mts'), '--reporter=verbose', ...process.argv.slice(3).filter((a) => a.endsWith('.e2e.ts') && !a.includes('..'))], { cwd: repoRoot, env, windowsHide: true, encoding: 'utf8', timeout: 420000 });
-  console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-45).join('\n')); if (r.status !== 0) process.exitCode = 1;
+  console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-Number(process.env.PS_DEMO_TAIL ?? 45)).join('\n')); if (r.status !== 0) process.exitCode = 1;
 }
 
 function postman() {
