@@ -622,6 +622,15 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await q("INSERT INTO tms_unidades(empresa_id,placa,tipo) VALUES(1,'C-998LAB','Camion')");await q("INSERT INTO flota_vehiculos(id,empresa_id,placa) VALUES(1998,1,'C998LAB')");
   const conflicto=await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'");await expect(resolverUnidadTms(1,'C998LAB',1998)).rejects.toThrow('Conflicto');expect(await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'")).toEqual(conflicto);
   expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antes);
+  // Distintas placas pueden conservar varios IDs TMS de la misma identidad.
+  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,'OTRA-PLACA-LAB','Camion',1301)");
+  const tablas=['tms_unidades','tms_planes_viaje','flota_cb2_consumos'];
+  const historicos=await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)));
+  await expect(resolverUnidadTms(1,'C558BSJ',684)).rejects.toThrow('Identidad TMS ambigua');
+  await expect(resolverUnidadTms(1,'C558BSJ',null)).rejects.toThrow('Identidad TMS ambigua');
+  const concurrentes=await Promise.allSettled([resolverUnidadTms(1,'C558BSJ',1301),resolverUnidadTms(1,'C558BSJ',684)]);
+  expect(concurrentes.every(r=>r.status==='rejected')).toBe(true);
+  expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
  });
 
 });

@@ -1,5 +1,6 @@
 import { resolverUnidadCanonica,historialUnidadCanonica } from "./unidad-canonica";
 import { unidadCanonicaHttp } from "./unidad-canonica-http";
+import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -193,4 +194,17 @@ describe.skipIf(!pipe)("escritores HTTP reales / MariaDB aislada",()=>{
   expect((await unidadCanonicaHttp(new Request('http://localhost/lab?id=651'),'denied')).status).toBe(403);
  },60000);
 
+ it("TMS: miembros físicos distintos se cuentan juntos y los IDs de otra empresa no participan",async()=>{
+  await q("ALTER TABLE tms_unidades ADD placa VARCHAR(40), ADD tipo VARCHAR(40)");
+  await q("INSERT INTO tms_unidades(id,empresa_id,flota_vehiculo_id,placa,tipo) VALUES(9101,1,1300,'HISTORIA-COMPARTIDA','Camion')");
+  // Un único ID propio se reutiliza incluso si pertenece al otro miembro aprobado.
+  expect(await resolverUnidadTms(1,'C092BXF',651)).toBe(9101);
+  await q("INSERT INTO tms_unidades(id,empresa_id,flota_vehiculo_id,placa,tipo) VALUES(9102,1,651,'HISTORIA-LOCAL','Camion')");
+  const unidades=await q("SELECT * FROM tms_unidades ORDER BY id"),planes=await q("SELECT * FROM tms_planes_viaje ORDER BY id");
+  await expect(resolverUnidadTms(1,'C092BXF',651)).rejects.toThrow('Identidad TMS ambigua');
+  await expect(resolverUnidadTms(1,'C092BXF',1300)).rejects.toThrow('Identidad TMS ambigua');
+  expect(await resolverUnidadTms(2,'C092BXF',1300)).toBe(9001);
+  expect(await q("SELECT * FROM tms_unidades ORDER BY id")).toEqual(unidades);
+  expect(await q("SELECT * FROM tms_planes_viaje ORDER BY id")).toEqual(planes);
+ });
 });
