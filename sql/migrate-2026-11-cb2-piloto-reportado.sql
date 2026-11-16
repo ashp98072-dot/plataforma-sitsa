@@ -1,6 +1,11 @@
 -- PROPUESTA para auditor?a. No ejecutar autom?ticamente. Requiere #613 instalado.
 -- ALTER ?nico: las ramas anteriores y las FK permanecen; no se actualizan registros.
+-- GUARDA DE ORDEN: la primera cláusula reemplaza `ck_cb2_piloto_unico` por su misma definición. Si la migración identidades-independientes
+-- (nivel 3) NO está instalada, esa restricción no existe y TODO el ALTER falla sin cambiar nada. Sin esta guarda el ALTER se aplicaba sobre
+-- el nivel 2 y, al instalar después identidades-independientes, el CHECK volvía a la forma anterior perdiendo REPORTADO_V1.
 ALTER TABLE flota_cb2_consumos
+ DROP CONSTRAINT ck_cb2_piloto_unico,
+ ADD CONSTRAINT ck_cb2_piloto_unico CHECK (empleado_id IS NULL OR piloto_externo_id IS NULL),
  ADD CONSTRAINT ck_cb2_piloto_reportado CHECK (
    COALESCE(JSON_VALUE(identidad_externa,'$.politica'),'')<>'REPORTADO_V1'
    OR (empleado_id IS NULL AND piloto_externo_id IS NULL AND asociacion_externa_id IS NULL)
