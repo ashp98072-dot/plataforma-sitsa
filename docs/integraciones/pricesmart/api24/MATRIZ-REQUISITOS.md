@@ -16,7 +16,7 @@ Estados: **confirmado** (acordado por escrito con PriceSmart: ninguno hoy) · **
 ## B. Resto de decisiones
 | Req. | Estado | Evidencia | Implementación existente | Brecha | Responsable |
 |---|---|---|---|---|---|
-| D01 dirección de integración (push/polling) | pendiente | SEGURIDAD-Y-DECISIONES D01 | Solo recepción (POST) y consulta (GET); sin salientes | Quién consulta estados y secuencias de acuse | PriceSmart + Arquitectura |
+| D01 dirección de integración (push/polling) | **confirmado en dirección** (acta/transcripción de la reunión del 30/10/2026: PriceSmart envía cada orden por POST, consulta el estado por GET ~cada hora y notifica cancelaciones a un endpoint de Mónaco; Mónaco provee API, sandbox, credenciales, Postman y documentación). **Pendiente** el contrato técnico y las secuencias de acuse | SEGURIDAD-Y-DECISIONES D01 (aún «PENDIENTE» en el documento original: **contradictorio** hasta actualizarlo); reunión 30/10/2026 | Recepción (POST), consulta (GET) y cancelación (POST en laboratorio; DELETE solo mencionado como ejemplo), sin salientes | Secuencias de acuse; método exacto de cancelación (D09) | PriceSmart + Arquitectura |
 | D03 unicidad de `externalOrderId` | provisional | D03; `contracts.ts` (`reference`: ≤120, `^[A-Za-z0-9][A-Za-z0-9._:-]*$`) | Unicidad por (entorno, tenant, cliente, integración, `externalOrderId`) con replay/conflicto probados | Namespace real por cuenta/país/club, mayúsculas, reutilización tras cancelar | PriceSmart |
 | D04 catálogo de empresas/clubes | pendiente | D04 | `allowedClubs` por credencial; aislamiento por empresa probado (F9, DEMO.5/11) | Catálogo versionado real, dueño y bajas | Operaciones + PriceSmart |
 | D05 varias entregas / parciales | **contradictorio** (interno aprobado: 1 pedido = 1 solicitud = 1 plan; PriceSmart: pendiente) | `tms-contract-proposal.ts` `DECISION_STATUS.D05='APPROVED'` vs D05 PENDIENTE | `lab-demo-1`: una entrega; varias entregas, parciales, reintentos y viaje compartido se retienen para revisión | Aprobación de PriceSmart del modelo | Operaciones + PriceSmart |
@@ -27,6 +27,8 @@ Estados: **confirmado** (acordado por escrito con PriceSmart: ninguno hoy) · **
 | D14 PII/retención | pendiente | D14 | Payload cifrado en reposo, respuestas/registros sin PII (probado H6) | Política de retención/supresión/legal hold | Privacidad/Legal |
 | D15 entornos y aceptación | pendiente | D15; `api22/README.md` | Contrato sandbox/production separado y bloqueado; sin conexión real | Entornos, accesos privados, criterios de aceptación | Arquitectura + Seguridad + PriceSmart |
 | D16 KPI de puntualidad | pendiente (fuera de esta integración) | D16 | — | OTD no definido | PriceSmart + KPI |
+
+> **Actualización API-25:** D01 refleja el acuerdo de la reunión del 30/10/2026 (solo la *dirección*). Ver `../api25/` para la arquitectura del sandbox, la guía de homologación y la OpenAPI/Postman vigentes (`api25/openapi.homologation.json` sustituye a la de `api24`).
 
 ## C. Hallazgos de código corregidos en API-24 (independientes del contrato definitivo)
 1. **Truncado silencioso:** la solicitud TMS recibía `observaciones` con `.slice(0, 500)`; destinatario y notas podían perderse sin aviso. Ahora la recepción rechaza (400) lo que no cabe; nunca se trunca.
