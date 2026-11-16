@@ -1,0 +1,97 @@
+{
+  "date": "2026-11-16",
+  "main": "ccfed468794d154ae6efa250280b9a57e6a37d58",
+  "previousPrHead": "5d274fe10c708fcd7609ad2b20b31ee09607d5e9",
+  "normalMergeCommit": "427165b756dd6ce0bd4460d91de5264d3271aee1",
+  "mergeParents": [
+    "5d274fe10c708fcd7609ad2b20b31ee09607d5e9",
+    "ccfed468794d154ae6efa250280b9a57e6a37d58"
+  ],
+  "mergeTree": "00d4845a38f761e74b67bef74236ad0fabcadffd",
+  "testedCodeCommit": "f679ff71166f5d7a61bbd82d9a74d26c39a06ddb",
+  "fiveOriginalCases": {
+    "total": 5,
+    "passed": 5,
+    "sqlDoubleIncompatible": 5,
+    "obsoleteExpectations": 0,
+    "expectationsChanged": 0,
+    "realResolversUsed": true
+  },
+  "httpRegressions": [
+    {
+      "name": "POST — errores del resolvedor real de identidad TMS devuelve 403 sin crear unidad ni plan",
+      "before": "failed",
+      "beforeError": "Error: Empresa no vigente.",
+      "after": "passed"
+    },
+    {
+      "name": "POST — errores del resolvedor real de identidad TMS devuelve 409 sin crear unidad ni plan",
+      "before": "failed",
+      "beforeError": "Error: Identidad TMS ambigua: varias unidades asociadas; requiere revisión operativa.",
+      "after": "passed"
+    },
+    {
+      "name": "PATCH — disponibilidad de unidad conserva el error 403 del resolvedor real y revierte sin actualizar el plan",
+      "before": "failed",
+      "beforeError": "AssertionError: expected 500 to be 403 // Object.is equality",
+      "after": "passed"
+    },
+    {
+      "name": "PATCH — disponibilidad de unidad conserva el error 409 del resolvedor real y revierte sin actualizar el plan",
+      "before": "failed",
+      "beforeError": "AssertionError: expected 500 to be 409 // Object.is equality",
+      "after": "passed"
+    }
+  ],
+  "baselineMain": {
+    "passed": 139,
+    "failed": 15,
+    "skipped": 0,
+    "reportSha256": "5c510f187cb8fed88633889182a4a0e5ef862c6fc98baaebf694ae117cb6da5f"
+  },
+  "finalDirected": {
+    "passed": 1328,
+    "failed": 15,
+    "skipped": 50,
+    "reportSha256": "ed47cbc1bdef979b67fe6e0bcafb425f27aa132c3f9d52cbe78e65b13df1bcb9",
+    "historicalFailures": 15,
+    "newFailures": 0,
+    "exitCode": 1
+  },
+  "mariaDb": {
+    "passed": 38,
+    "failed": 0,
+    "skipped": 0,
+    "reportSha256": "0692b56cf874df7f2af1683eee6de2ed5884994ab746ad53c21c905e791c0d84",
+    "version": "11.8.9-MariaDB",
+    "skipNetworking": "1",
+    "shutdownExitCode": 0,
+    "exitCode": 0
+  },
+  "checks": {
+    "typescript": 0,
+    "eslint": 0,
+    "eslintFiles": 37,
+    "build": 0,
+    "npmCiOffline": 0,
+    "diffCheck": 0
+  },
+  "logs": {
+    "typescriptSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "eslintSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "buildSha256": "d458650b8a89368f9bb8f79a687e9ff27ba30f2bbf3b56b27efbcdd9cf912092",
+    "npmCiSha256": "2a0434a905d2bdda2e34205118e3ceea024a5d70196cb188c679706b20bca332"
+  },
+  "changedSinceReviewedMerge": [
+    "src/app/api/empresas/[slug]/tms/planes/programacion-tc.test.ts",
+    "src/app/api/empresas/[slug]/tms/planes/regreso-opcional.test.ts",
+    "src/app/api/empresas/[slug]/tms/planes/route-patch-equivalencia.test.ts",
+    "src/app/api/empresas/[slug]/tms/planes/route.ts",
+    "src/app/api/empresas/[slug]/tms/planes/vehiculo-solicitado.test.ts",
+    "src/lib/tms/unidad-canonica-sql.fixture.ts"
+  ],
+  "productionSql": false,
+  "flagsChanged": false,
+  "deploy": false,
+  "prMerged": false
+}

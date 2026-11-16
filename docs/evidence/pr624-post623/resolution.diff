@@ -1,0 +1,139 @@
+commit 427165b756dd6ce0bd4460d91de5264d3271aee1
+Merge: 5d274fe1 ccfed468
+Author:     ashp98072-dot <274577862+ashp98072-dot@users.noreply.github.com>
+AuthorDate: Mon Nov 16 08:50:08 2026 -0600
+Commit:     ashp98072-dot <274577862+ashp98072-dot@users.noreply.github.com>
+CommitDate: Mon Nov 16 08:50:08 2026 -0600
+
+    Merge main after PR #623 into PR #624 preserving reviewed resolution
+
+diff --git a/src/lib/flota/cb2/service.ts b/src/lib/flota/cb2/service.ts
+remerge CONFLICT (content): Merge conflict in src/lib/flota/cb2/service.ts
+index 386a6edd..b623fc92 100644
+--- a/src/lib/flota/cb2/service.ts
++++ b/src/lib/flota/cb2/service.ts
+@@ -1,9 +1,6 @@
+-<<<<<<< 5d274fe1 (docs(tms): registrar auditoria y resolucion reproducible 623-624)
+-import { resolverUnidadCanonica } from "../unidad-canonica";
+-=======
+ import { normalizarNombreReportado,type RevisionNombre } from "./pilotos-nombres";
+ import { esquemaPilotosReportados,registrarPilotoReportadoTx,revisarNombresTx } from "./pilotos-reportados";
+->>>>>>> ccfed468 (Merge pull request #623 from ashp98072-dot/feature/cb2-pilotos-reportados)
++import { resolverUnidadCanonica } from "../unidad-canonica";
+ import { validarAsignacionIndependiente } from "./asignacion-independiente";
+ import { validarTerceroDirecto } from "./terceros-directos";
+ import { validarEmpleadosImportacion } from "./empleados-validacion";
+@@ -174,17 +171,13 @@ export async function reanudarArchivo(ctx: Contexto, op: {
+         return { eventos: await diario(c, ctx, "REANUDAR", op.clave, request, eventos), repetida: false };
+     });
+ }
+-<<<<<<< 5d274fe1 (docs(tms): registrar auditoria y resolucion reproducible 623-624)
+-async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita") {
++async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita", perfil:string="HALEL") {
+     const originalesSeleccion=new Map(selection.map(s=>[s.candidato,s.vehiculoId]));
+     const equivalencias=new Map<number,number[]>();
+     const normalizadas:Seleccion=[];
+     const resueltas=new Map<number,Awaited<ReturnType<typeof resolverUnidadCanonica>>>();
+     for(const s of selection){if(s.vehiculoId<0){normalizadas.push(s);continue;}const u=resueltas.get(s.vehiculoId)??await resolverUnidadCanonica(c,ctx.empresaId,s.vehiculoId,true);resueltas.set(s.vehiculoId,u);equivalencias.set(u.vehiculoCanonicoId!,u.idsHistoricos);normalizadas.push({...s,vehiculoId:u.vehiculoCanonicoId!});}
+     selection=normalizadas;
+-=======
+-async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selection: Seleccion, iid: number, revision: number, currency: "GTQ" | "USD", origenes?: RowDataPacket[], motivo = "Confirmacion explicita", perfil:string="HALEL") {
+->>>>>>> ccfed468 (Merge pull request #623 from ashp98072-dot/feature/cb2-pilotos-reportados)
+     const decisiones = new Map(selection.map(s => [s.candidato,s]));
+     const seleccion = new Map(selection.map(s => [s.candidato, s.vehiculoId]));
+     const internos = clavesInternas(await valesInternos(c, ctx));
+@@ -292,11 +285,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
+             if (!resolved) {
+                 const previous = previos.get(l.clave) ?? [];
+                 const fid = l.documento ? docs.get(JSON.stringify(l.documento))! : null;
+-<<<<<<< 5d274fe1 (docs(tms): registrar auditoria y resolucion reproducible 623-624)
+-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || (choice.pilotoTipo && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle && !(vehicle>0 && equivalencias.get(vehicle)?.includes(Number(p.vehiculo_id))) || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+-=======
+-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || ((choice.pilotoTipo || choice.decisionNombre) && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+->>>>>>> ccfed468 (Merge pull request #623 from ashp98072-dot/feature/cb2-pilotos-reportados)
++                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || ((choice.pilotoTipo || choice.decisionNombre) && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle && !(vehicle>0 && equivalencias.get(vehicle)?.includes(Number(p.vehiculo_id))) || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+                     resultado = "BLOQUEADA";
+                 }
+                 else if (previous.length) {
+diff --git a/src/lib/flota/cb2/terceros.db.test.ts b/src/lib/flota/cb2/terceros.db.test.ts
+remerge CONFLICT (content): Merge conflict in src/lib/flota/cb2/terceros.db.test.ts
+index 17bd6c47..c1fe4927 100644
+--- a/src/lib/flota/cb2/terceros.db.test.ts
++++ b/src/lib/flota/cb2/terceros.db.test.ts
+@@ -1,8 +1,5 @@
+-<<<<<<< 5d274fe1 (docs(tms): registrar auditoria y resolucion reproducible 623-624)
+-import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
+-=======
+ import { reportePilotos } from "./pilotos-reporte";
+->>>>>>> ccfed468 (Merge pull request #623 from ashp98072-dot/feature/cb2-pilotos-reportados)
++import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
+ import { corregirAsignacion } from "./asignaciones";
+ import { fusionarVehiculos } from "../vehiculos-fusion";
+ import { revisarPlacaDuplicada } from "../vehiculos-duplicados";
+@@ -611,34 +608,6 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
+   expect(await Promise.all(tablasHistoricas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
+   const noConfirmado=await cb2Http(new Request("http://localhost/lab",{method:"POST",headers:{Origin:"http://localhost"},body:JSON.stringify({...op,confirmado:false})}),"e1","vincular-fondo");expect(noConfirmado.status).toBe(400);
+  });
+-<<<<<<< 5d274fe1 (docs(tms): registrar auditoria y resolucion reproducible 623-624)
+- it("unidad TMS canónica: guardas reales, insertId cero, alias, concurrencia y conservación de planes",async()=>{
+-  const antes=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+-  const id=await resolverUnidadTms(1,"C-558BSJ",684);expect(id).toBeGreaterThan(0);
+-  const [u]=await q("SELECT * FROM tms_unidades WHERE id=?",[id]);expect(u.flota_vehiculo_id).toBe(1301);
+-  const [resultado]=await admin.execute("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,?,'Camion',1301) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[u.placa]);expect(Number((resultado as {insertId:number}).insertId)).toBe(0);
+-  expect(await resolverUnidadTms(1,"C 558 BSJ",1301)).toBe(id);
+-  await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-ORIGEN','2026-11-01','Cerrado',?)",[id]);
+-  const original=await q("SELECT * FROM tms_planes_viaje ORDER BY id");
+-  const copia=await resolverUnidadTms(1,"C558BSJ",684);await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-COPIA','2026-11-02','Cerrado',?)",[copia]);
+-  expect((await q("SELECT * FROM tms_planes_viaje ORDER BY id"))[0]).toEqual(original[0]);expect(await q("SELECT id FROM tms_planes_viaje WHERE unidad_id<=0")).toEqual([]);
+-  const unidades=await Promise.all([resolverUnidadTms(1,'C 991 LAB',null),resolverUnidadTms(1,'C-991LAB',null)]);expect(unidades[0]).toBe(unidades[1]);expect(await q("SELECT id FROM tms_unidades WHERE placa='C991LAB'")).toHaveLength(1);
+-  await expect(resolverUnidadTms(2,'C558BSJ',684)).rejects.toMatchObject({status:404});
+-  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo) VALUES(1,'C-998LAB','Camion')");await q("INSERT INTO flota_vehiculos(id,empresa_id,placa) VALUES(1998,1,'C998LAB')");
+-  const conflicto=await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'");await expect(resolverUnidadTms(1,'C998LAB',1998)).rejects.toThrow('Conflicto');expect(await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'")).toEqual(conflicto);
+-  expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antes);
+-  // Distintas placas pueden conservar varios IDs TMS de la misma identidad.
+-  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,'OTRA-PLACA-LAB','Camion',1301)");
+-  const tablas=['tms_unidades','tms_planes_viaje','flota_cb2_consumos'];
+-  const historicos=await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)));
+-  await expect(resolverUnidadTms(1,'C558BSJ',684)).rejects.toThrow('Identidad TMS ambigua');
+-  await expect(resolverUnidadTms(1,'C558BSJ',null)).rejects.toThrow('Identidad TMS ambigua');
+-  const concurrentes=await Promise.allSettled([resolverUnidadTms(1,'C558BSJ',1301),resolverUnidadTms(1,'C558BSJ',684)]);
+-  expect(concurrentes.every(r=>r.status==='rejected')).toBe(true);
+-  expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
+- });
+-
+-=======
+  it("pilotos reportados: confirmación explícita, equivalencias empresariales y concurrencia, concurrencia e historial",async()=>{
+   expect((await reportePilotos(1,{})).instalado).toBe(false);
+   const antiguos=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+@@ -729,5 +698,30 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
+   expect((await cb2Http(new Request("http://localhost/lab"),"denied","pilotos-reporte")).status).toBe(403);
+   await expect(q("UPDATE flota_cb2_pilotos_reportados SET estado='PERSONA_CONFIRMADA' WHERE id=?",[nombres[0].id])).rejects.toMatchObject({errno:4025});
+  },60000);
+->>>>>>> ccfed468 (Merge pull request #623 from ashp98072-dot/feature/cb2-pilotos-reportados)
++ it("unidad TMS canónica: guardas reales, insertId cero, alias, concurrencia y conservación de planes",async()=>{
++  const antes=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
++  const id=await resolverUnidadTms(1,"C-558BSJ",684);expect(id).toBeGreaterThan(0);
++  const [u]=await q("SELECT * FROM tms_unidades WHERE id=?",[id]);expect(u.flota_vehiculo_id).toBe(1301);
++  const [resultado]=await admin.execute("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,?,'Camion',1301) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[u.placa]);expect(Number((resultado as {insertId:number}).insertId)).toBe(0);
++  expect(await resolverUnidadTms(1,"C 558 BSJ",1301)).toBe(id);
++  await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-ORIGEN','2026-11-01','Cerrado',?)",[id]);
++  const original=await q("SELECT * FROM tms_planes_viaje ORDER BY id");
++  const copia=await resolverUnidadTms(1,"C558BSJ",684);await q("INSERT INTO tms_planes_viaje(empresa_id,codigo,fecha_plan,estado,unidad_id) VALUES(1,'PLAN-CANON-COPIA','2026-11-02','Cerrado',?)",[copia]);
++  expect((await q("SELECT * FROM tms_planes_viaje ORDER BY id"))[0]).toEqual(original[0]);expect(await q("SELECT id FROM tms_planes_viaje WHERE unidad_id<=0")).toEqual([]);
++  const unidades=await Promise.all([resolverUnidadTms(1,'C 991 LAB',null),resolverUnidadTms(1,'C-991LAB',null)]);expect(unidades[0]).toBe(unidades[1]);expect(await q("SELECT id FROM tms_unidades WHERE placa='C991LAB'")).toHaveLength(1);
++  await expect(resolverUnidadTms(2,'C558BSJ',684)).rejects.toMatchObject({status:404});
++  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo) VALUES(1,'C-998LAB','Camion')");await q("INSERT INTO flota_vehiculos(id,empresa_id,placa) VALUES(1998,1,'C998LAB')");
++  const conflicto=await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'");await expect(resolverUnidadTms(1,'C998LAB',1998)).rejects.toThrow('Conflicto');expect(await q("SELECT * FROM tms_unidades WHERE placa='C-998LAB'")).toEqual(conflicto);
++  expect(await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).toEqual(antes);
++  // Distintas placas pueden conservar varios IDs TMS de la misma identidad.
++  await q("INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(1,'OTRA-PLACA-LAB','Camion',1301)");
++  const tablas=['tms_unidades','tms_planes_viaje','flota_cb2_consumos'];
++  const historicos=await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)));
++  await expect(resolverUnidadTms(1,'C558BSJ',684)).rejects.toThrow('Identidad TMS ambigua');
++  await expect(resolverUnidadTms(1,'C558BSJ',null)).rejects.toThrow('Identidad TMS ambigua');
++  const concurrentes=await Promise.allSettled([resolverUnidadTms(1,'C558BSJ',1301),resolverUnidadTms(1,'C558BSJ',684)]);
++  expect(concurrentes.every(r=>r.status==='rejected')).toBe(true);
++  expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
++ });
++
+ });
