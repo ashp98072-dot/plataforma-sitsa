@@ -1,4 +1,5 @@
 import { resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
@@ -416,7 +417,7 @@ export async function validarLote(empresaId: number, fechaDestino: string, borra
 
 export type ResultadoConfirmarLote =
   | { ok: true; planIds: number[]; codigos: string[] }
-  | { ok: false; status: 400 | 409 | 500; error: string; erroresPorFila?: { fila: number; errores: string[] }[] };
+  | { ok: false; status: 400 | 403 | 409 | 500 | 503; error: string; erroresPorFila?: { fila: number; errores: string[] }[] };
 
 export type OrigenLote = { tipo: "COPIA"; fechaOrigen: string };
 
@@ -473,10 +474,12 @@ export async function confirmarLote(
     const conn = await getPool().getConnection();
     const planIds: number[] = [];
     const codigos: string[] = [];
+    let filaActual: number | null = null;   // fila en proceso: permite decir QUÉ fila rechazó el resolvedor de identidad
     try {
       await conn.beginTransaction();
       for (const f of filas) {
         const b = f.borrador;
+        filaActual = b.fila;
         const r = f.resuelto as Resuelto;
         const esTerc = b.tipoViaje === "Tercerizado";
         const x = b.externo;
@@ -587,6 +590,9 @@ export async function confirmarLote(
     } catch (e) {
       await conn.rollback();
       console.error("confirmarLote (rollback total)", e);
+      // #624: el resolvedor de unidad TMS RECHAZA a propósito identidades en conflicto (p. ej. una unidad histórica sin vínculo a Flota con la misma placa) con un ErrorCB2 y su estado HTTP.
+      // Antes se perdía en el mensaje genérico («No se pudo crear el lote»). Se informa fila, motivo y estado reales; la transacción ya se revirtió y NO se relaja ninguna validación.
+      if (e instanceof ErrorCB2 && [400, 403, 409, 503].includes(e.status)) return { ok: false, status: e.status as 400 | 403 | 409 | 503, error: `${filaActual != null ? `Fila ${filaActual}: ` : ""}${e.message} No se creó ningún viaje.` };
       return { ok: false, status: 500, error: e instanceof Error && /^Fila \d+:/.test(e.message) ? `${e.message} No se creó ningún viaje.` : "No se pudo crear el lote. No se guardó ningún cambio." };
     } finally {
       conn.release();
