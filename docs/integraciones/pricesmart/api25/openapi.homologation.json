@@ -1,0 +1,1287 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PriceSmart ↔ Novalvion — HOMOLOGACIÓN (laboratorio) — PROVISIONAL / NO EJECUTABLE EN PRODUCCIÓN",
+    "version": "api25-homologation-1",
+    "description": "NADA de este documento es un acuerdo con PriceSmart: describe lo implementado en el laboratorio. Contrato REALMENTE implementado en el laboratorio sintético (API-12/13/23/24/25), con cada elemento etiquetado en `x-contract-status`: PROVISIONAL_LAB (implementado y probado en laboratorio, NO ratificado), PROPOSED_D08 / PROPOSED_D09 (propuesta derivada del TMS, sin aprobación de PriceSmart) o PENDING_PRICESMART (sin definir). DIRECCIÓN DE INTEGRACIÓN (D01) acordada en la reunión del 30/10/2026: PriceSmart envía cada orden por POST, consulta el estado por GET (~cada hora) y notifica cancelaciones a un endpoint de Mónaco. Ese acuerdo NO ratifica el contrato técnico (D02, D05–D13). DISPONIBILIDAD: este documento NO anuncia un servicio accesible; los endpoints responden 503 DISABLED y no existe un sandbox público. La ausencia de securitySchemes NO permite acceso anónimo (D02 pendiente)."
+  },
+  "servers": [],
+  "x-executable": false,
+  "x-default-enabled": false,
+  "x-next-routes-installed": false,
+  "x-m2m-required": true,
+  "x-m2m-profile": "UNRESOLVED_D02",
+  "x-decisions": "D01-D16_PENDING_RATIFICATION",
+  "x-proposed-cancellation": {
+    "ratifiedMethod": null,
+    "isolatedTestCandidate": "POST /api/integrations/pricesmart/v1/orders/{externalOrderId}/cancellation-requests",
+    "status": "UNRATIFIED_D09_D12"
+  },
+  "x-http-idempotency-key": "UNRATIFIED_D10_NOT_IMPLEMENTED",
+  "x-auth-evidence-extraction": "TRUSTED_PORT_UNIMPLEMENTED_NO_AUTHENTICATION_SCHEME_SELECTED",
+  "x-max-body-bytes": 65536,
+  "x-strict-format": "POST application/json optionally charset=utf-8 (unquoted); no Content-Encoding or Transfer-Encoding. No query/fragment or percent-encoded IDs. GET has no body. Bounded reader/deadline/headers/URL/chunks. Gateway normalization and raw duplicate headers untested.",
+  "paths": {
+    "/api/integrations/pricesmart/v1/orders": {
+      "post": {
+        "operationId": "receiveOrderIsolatedDraft",
+        "x-provisional-only": true,
+        "description": "In-process Request/Response test profile only. No Next route, server, TLS, M2M provider or infrastructure is installed.",
+        "responses": {
+          "202": {
+            "description": "PROVISIONAL: confirmed repository DURABLE result required; this document certifies no physical durability",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "Pragma": {
+                "$ref": "#/components/headers/Pragma"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/X-Content-Type-Options"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Receipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "406": {
+            "$ref": "#/components/responses/Error406"
+          },
+          "408": {
+            "$ref": "#/components/responses/Error408"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "414": {
+            "$ref": "#/components/responses/Error414"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "431": {
+            "$ref": "#/components/responses/Error431"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderInput"
+              }
+            }
+          }
+        },
+        "x-contract-status": "PROVISIONAL_LAB",
+        "x-pending": [
+          "D01",
+          "D02",
+          "D06",
+          "D10"
+        ],
+        "x-agreed-direction": true
+      }
+    },
+    "/api/integrations/pricesmart/v1/orders/{externalOrderId}": {
+      "get": {
+        "operationId": "getOrderIsolatedDraft",
+        "x-provisional-only": true,
+        "description": "In-process Request/Response test profile only. No Next route, server, TLS, M2M provider or infrastructure is installed.",
+        "responses": {
+          "200": {
+            "description": "PROVISIONAL: confirmed repository DURABLE result required; this document certifies no physical durability",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "Pragma": {
+                "$ref": "#/components/headers/Pragma"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/X-Content-Type-Options"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabOrderStatusView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "406": {
+            "$ref": "#/components/responses/Error406"
+          },
+          "408": {
+            "$ref": "#/components/responses/Error408"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "414": {
+            "$ref": "#/components/responses/Error414"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "431": {
+            "$ref": "#/components/responses/Error431"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "parameters": [
+          {
+            "name": "externalOrderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          }
+        ],
+        "x-contract-status": "PROVISIONAL_LAB",
+        "x-pending": [
+          "D01",
+          "D02",
+          "D08",
+          "D12"
+        ],
+        "x-agreed-direction": true
+      }
+    },
+    "/api/integrations/pricesmart/v1/orders/{externalOrderId}/cancellation-requests": {
+      "post": {
+        "operationId": "requestCancellationIsolatedDraft",
+        "x-provisional-only": true,
+        "description": "In-process Request/Response test profile only. No Next route, server, TLS, M2M provider or infrastructure is installed.",
+        "responses": {
+          "202": {
+            "description": "PROVISIONAL: confirmed repository DURABLE result required; this document certifies no physical durability",
+            "headers": {
+              "X-Correlation-Id": {
+                "$ref": "#/components/headers/X-Correlation-Id"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "Pragma": {
+                "$ref": "#/components/headers/Pragma"
+              },
+              "X-Content-Type-Options": {
+                "$ref": "#/components/headers/X-Content-Type-Options"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancellationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error400"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error401"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error403"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error404"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error405"
+          },
+          "406": {
+            "$ref": "#/components/responses/Error406"
+          },
+          "408": {
+            "$ref": "#/components/responses/Error408"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error409"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error413"
+          },
+          "414": {
+            "$ref": "#/components/responses/Error414"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error415"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error429"
+          },
+          "431": {
+            "$ref": "#/components/responses/Error431"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error503"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancellationInput"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "externalOrderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            }
+          }
+        ],
+        "x-contract-status": "PENDING_PRICESMART",
+        "x-pending": [
+          "D09",
+          "D12"
+        ],
+        "x-agreed-direction": true,
+        "x-method-pending": "POST (implementado en laboratorio) vs DELETE (mencionado como ejemplo en la reunión): PENDIENTE de confirmación formal (D09). La cancelación NUNCA elimina físicamente la orden ni cancela automáticamente viajes."
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrderInput": {
+        "x-contract-status": "PROVISIONAL_LAB",
+        "x-pending": [
+          "D05",
+          "D06",
+          "D07"
+        ],
+        "description": "Contrato de PRUEBA `lab-demo-1` (solo laboratorio). Una entrega por orden; los campos mínimos son los que el TMS necesita hoy. No se aceptan campos desconocidos. El conjunto de observaciones de la solicitud TMS (club + destinatario + notas, ≤ 500) debe caber: si no, 400 (no se trunca).",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "externalOrderId",
+          "originClubReference",
+          "recipient",
+          "address",
+          "deliveryDate"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "lab-demo-1"
+          },
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "originClubReference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "recipient": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "deliveryDate": {
+            "type": "string",
+            "format": "date",
+            "description": "Fecha calendario real AAAA-MM-DD. El TMS rechaza fechas anteriores a hoy (zona local del TMS); la orden se acepta y el GET indica REVIEW_REQUIRED/REJECTED_BY_TMS (D07 pendiente)."
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      },
+      "CancellationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ORIGIN_REQUEST",
+              "DUPLICATE"
+            ]
+          }
+        },
+        "x-contract-status": "PENDING_PRICESMART"
+      },
+      "Receipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "const": "RECEIVED"
+          },
+          "processingStatus": {
+            "type": "string",
+            "const": "PENDING"
+          },
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "x-contract-status": "PROVISIONAL_LAB"
+      },
+      "OrderView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "REVIEW_REQUIRED",
+              "CANCELLATION_REQUESTED",
+              "CANCELLED"
+            ]
+          },
+          "processingStatus": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "PAUSED",
+              "CANCELLED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "const": "RECEIVED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "PENDING"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "const": "CANCELLED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "CANCELLED"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "enum": [
+                    "REVIEW_REQUIRED",
+                    "CANCELLATION_REQUESTED"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "PAUSED"
+                }
+              }
+            }
+          }
+        ],
+        "x-contract-status": "PROVISIONAL_LAB"
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "correlationId"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_INPUT",
+              "TOO_LARGE",
+              "UNAUTHENTICATED",
+              "FORBIDDEN",
+              "NOT_FOUND",
+              "METHOD_NOT_ALLOWED",
+              "NOT_ACCEPTABLE",
+              "UNSUPPORTED_FORMAT",
+              "REQUEST_TIMEOUT",
+              "LIMITED",
+              "REPLAY_REJECTED",
+              "CONFLICT",
+              "UNAVAILABLE",
+              "DISABLED"
+            ]
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "x-contract-status": "PROVISIONAL_LAB"
+      },
+      "CancellationReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "const": "CANCELLATION_REQUESTED"
+          },
+          "processingStatus": {
+            "type": "string",
+            "const": "PAUSED"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 2,
+            "maximum": 9007199254740991
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "const": "RECEIVED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "PENDING"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "const": "CANCELLED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "CANCELLED"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "provisionalStatus": {
+                  "enum": [
+                    "REVIEW_REQUIRED",
+                    "CANCELLATION_REQUESTED"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "processingStatus": {
+                  "const": "PAUSED"
+                }
+              }
+            }
+          }
+        ],
+        "x-contract-status": "PENDING_PRICESMART"
+      },
+      "LabOrderStatusView": {
+        "x-contract-status": "PROPOSED_D08",
+        "description": "Vista del GET en el laboratorio: OrderView + proyección PROPUESTA del estado del TMS. `confirmsDelivery` es SIEMPRE false: ningún estado afirma entrega (Descargado/Cerrado no prueban entrega aceptada).",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "externalOrderId",
+          "provisionalStatus",
+          "processingStatus",
+          "version",
+          "correlationId",
+          "labProposal",
+          "proposedStatus",
+          "confirmsDelivery",
+          "tms"
+        ],
+        "properties": {
+          "externalOrderId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "provisionalStatus": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "REVIEW_REQUIRED",
+              "CANCELLATION_REQUESTED",
+              "CANCELLED"
+            ]
+          },
+          "processingStatus": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "PAUSED",
+              "CANCELLED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "correlationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "labProposal": {
+            "type": "boolean",
+            "const": true
+          },
+          "proposedStatus": {
+            "type": "string",
+            "enum": [
+              "RECEIVED",
+              "IN_REVIEW",
+              "REJECTED",
+              "CANCELLED",
+              "SCHEDULED",
+              "LOADED",
+              "IN_TRANSIT",
+              "UNLOADED_UNCONFIRMED",
+              "CLOSED_ADMINISTRATIVE",
+              "REVIEW_REQUIRED"
+            ]
+          },
+          "confirmsDelivery": {
+            "type": "boolean",
+            "const": false
+          },
+          "tms": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "linked"
+            ],
+            "properties": {
+              "linked": {
+                "type": "boolean"
+              },
+              "requestState": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "SOLICITADA",
+                  "EN_REVISION",
+                  "PROGRAMADA",
+                  "RECHAZADA",
+                  "CANCELADA",
+                  null
+                ]
+              },
+              "scheduled": {
+                "type": "boolean"
+              },
+              "linkIssue": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "code"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "BLOCKED",
+                      "EXHAUSTED"
+                    ]
+                  },
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[A-Z][A-Z0-9_]{0,31}$"
+                  }
+                }
+              },
+              "deliveryEvidence": {
+                "description": "Evidencia INTERNA de entrega (confirmaciones del piloto por parada). Informativa: NO confirma entrega ante PriceSmart (D13 pendiente). `UNAVAILABLE` = el TMS aún no tiene la tabla de confirmaciones en este entorno.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "level",
+                  "confirmsDelivery",
+                  "publishable",
+                  "blockedBy"
+                ],
+                "properties": {
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "NONE",
+                      "PARTIAL",
+                      "PILOT_CONFIRMED_ALL",
+                      "REVIEW_REQUIRED",
+                      "UNAVAILABLE"
+                    ]
+                  },
+                  "deliveryStops": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pilotConfirmed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pendingReview": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "officialAcceptance": {
+                    "type": "string",
+                    "const": "NOT_ACCEPTED_BY_PRICESMART"
+                  },
+                  "confirmsDelivery": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "publishable": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "blockedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "const": "D13_PENDING"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "cancellation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "requested",
+              "automatic",
+              "assessment"
+            ],
+            "properties": {
+              "requested": {
+                "type": "boolean",
+                "const": true
+              },
+              "automatic": {
+                "type": "boolean",
+                "const": false
+              },
+              "assessment": {
+                "type": "string",
+                "enum": [
+                  "REQUESTED_NOT_LINKED",
+                  "STAFF_REJECTION_BEFORE_SCHEDULING",
+                  "OPERATIONS_MAY_CANCEL_PLAN",
+                  "BLOCKED_IN_EXECUTION",
+                  "BLOCKED_COMPLETED",
+                  "ALREADY_CANCELLED",
+                  "ALREADY_TERMINAL",
+                  "REVIEW_REQUIRED"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "headers": {
+      "X-Correlation-Id": {
+        "description": "Generated server-side for each attempt; receipt correlation remains immutable. PROVISIONAL_D12",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "Cache-Control": {
+        "schema": {
+          "type": "string",
+          "const": "no-store, private"
+        }
+      },
+      "Pragma": {
+        "schema": {
+          "type": "string",
+          "const": "no-cache"
+        }
+      },
+      "X-Content-Type-Options": {
+        "schema": {
+          "type": "string",
+          "const": "nosniff"
+        }
+      }
+    },
+    "responses": {
+      "Error400": {
+        "description": "PROVISIONAL: Invalid DTO/JSON/UTF-8/BOM/duplicate keys/path/query/length",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error401": {
+        "description": "PROVISIONAL: Evidence absent, unknown, expired, revoked or invalid",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error403": {
+        "description": "PROVISIONAL: Verified identity lacks scope or club/authorization; invalid proof binding",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error404": {
+        "description": "PROVISIONAL: Unknown route or order; missing and foreign order indistinguishable",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error405": {
+        "description": "PROVISIONAL: Method not allowed; Allow contains only the provisional candidate",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          },
+          "Allow": {
+            "description": "Only the provisional GET or POST candidate for the requested path",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST"
+              ]
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error406": {
+        "description": "PROVISIONAL: Accept outside strict provisional application/json or */*",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error408": {
+        "description": "PROVISIONAL: Body deadline or abort before authentication",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error409": {
+        "description": "PROVISIONAL: Immutable conflict or authenticated request-proof reuse/collision",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error413": {
+        "description": "PROVISIONAL: Body/evidence/chunk count above provisional limits",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error414": {
+        "description": "PROVISIONAL: URL above provisional limit",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error415": {
+        "description": "PROVISIONAL: Unsupported Content-Type/encoding/framing",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error429": {
+        "description": "PROVISIONAL: Verified identity quota exceeded",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error431": {
+        "description": "PROVISIONAL: Headers above provisional count/byte limits",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error503": {
+        "description": "PROVISIONAL: Dependency error/timeout, uncertain COMMIT, simulated or malformed guarantees/results",
+        "headers": {
+          "X-Correlation-Id": {
+            "$ref": "#/components/headers/X-Correlation-Id"
+          },
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          },
+          "Pragma": {
+            "$ref": "#/components/headers/Pragma"
+          },
+          "X-Content-Type-Options": {
+            "$ref": "#/components/headers/X-Content-Type-Options"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-contract-status": "PROVISIONAL_LAB",
+  "x-pending-ratification": {
+    "D01": "dirección ACORDADA en la reunión del 30/10/2026 (POST/GET/cancelación); pendientes: secuencias de acuse y el contrato técnico de cada servicio",
+    "D02": "mecanismo y formato de autenticación M2M, emisor, audiencia, ancla de confianza",
+    "D03": "unicidad y formato de externalOrderId",
+    "D05": "una vs. varias entregas/parciales/reintentos/viaje compartido (modelo 1 pedido = 1 solicitud APROBADO internamente; el contrato de varias entregas NO)",
+    "D06": "diccionario definitivo de campos de la orden",
+    "D07": "zona horaria, ventanas, reprogramación y fechas pasadas",
+    "D08": "estados y transiciones oficiales",
+    "D09": "cancelación: método, path, quién, cuándo, compensaciones",
+    "D10": "Idempotency-Key HTTP, replay, reintentos",
+    "D11": "capacidad, SLA y cuotas",
+    "D12": "GET suficiente, callbacks, acuses y Retry-After"
+  },
+  "x-published": false,
+  "x-availability": "NOT_ACCESSIBLE: endpoints 503 DISABLED; sandbox de homologación NO desplegado",
+  "x-agreed-direction": {
+    "source": "Reunión 30/10/2026 (minuta y transcripción)",
+    "agreed": [
+      "PriceSmart envía cada orden individualmente mediante POST a una API de Mónaco",
+      "PriceSmart consulta mediante GET aproximadamente cada hora el estado de cada orden",
+      "PriceSmart notifica cancelaciones a un endpoint de Mónaco",
+      "Mónaco proporciona API, sandbox, credenciales, colección Postman y documentación"
+    ],
+    "tentativeSchedule": "pruebas conjuntas en diciembre de 2026; salida productiva tentativa en enero de 2027, sujeta a aprobación",
+    "notAgreed": [
+      "D02 autenticación",
+      "D05 varias entregas",
+      "D06 diccionario de la orden",
+      "D07 fechas",
+      "D08 estados oficiales",
+      "D09 método y reglas de cancelación",
+      "D10 idempotencia HTTP",
+      "D11 capacidad",
+      "D12 acuses/errores",
+      "D13 prueba de entrega"
+    ]
+  }
+}

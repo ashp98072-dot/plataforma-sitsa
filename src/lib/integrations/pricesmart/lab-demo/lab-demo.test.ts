@@ -60,7 +60,7 @@ describe('API-12 la composición de laboratorio no puede activarse fuera de un l
 
 // ---- RELEASE_LOCK: un fallo al liberar el bloqueo no oculta errores ni sustituye el resultado
 vi.mock('@/lib/tms/solicitudes-cliente', () => ({ crearSolicitudCliente: vi.fn() }));
-vi.mock('@/lib/auditoria', () => ({ registrarAuditoria: vi.fn() }));
+vi.mock('@/lib/auditoria', () => ({ registrarAuditoria: vi.fn(), registrarAuditoriaTx: vi.fn() }));
 describe('API-12 liberación del bloqueo de vinculación', () => {
   const scope = { environment: 'sandbox' as const, tenantId: 1, clientId: 1, integrationId: 'pricesmart-lab' };
   function harness(opts: { release: 'ok' | 'zero' | 'throws'; work: 'unmapped' | 'throws' }) {

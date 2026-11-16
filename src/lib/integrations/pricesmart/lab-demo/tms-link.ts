@@ -1,11 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { crearSolicitudCliente } from '@/lib/tms/solicitudes-cliente';
-import { registrarAuditoria } from '@/lib/auditoria';
+import { registrarAuditoriaTx } from '@/lib/auditoria';
 import type { OrderView, Scope } from '../contracts';
 import type { OrderRepository } from '../ports';
 import { assessCancellation, projectExternalStatus } from '../tms-contract-proposal';
-import type { LabOrderInput } from './contract';
+import { assessDeliveryEvidence, deliveryEvidenceUnavailable } from '../delivery-evidence';
+import { labObservations, type LabOrderInput } from './contract';
 
 // PRICESMART API-12 — vinculación REAL (solo laboratorio) de una orden recibida con UNA solicitud del TMS en estado SOLICITADA.
 // Qué hace: crea la solicitud con crearSolicitudCliente (misma función y validaciones que el Portal del Cliente) para que Operaciones la vea en su bandeja
@@ -31,6 +32,8 @@ export type TmsLinkerDeps = {
   pool: Pool; schema: string; repository: OrderRepository;
   /** Solo pruebas: sustituye la creación de la solicitud (p. ej. para simular una caída antes o después de crearla). Por defecto, la función real del TMS. */
   createRequest?: typeof crearSolicitudCliente;
+  /** Solo pruebas: sustituye la escritura de la auditoría de cancelación (p. ej. para simular su fallo). Por defecto, `registrarAuditoriaTx` (que, a diferencia de `registrarAuditoria`, NO oculta los errores). */
+  auditTx?: typeof registrarAuditoriaTx;
 };
 
 const hex = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -40,6 +43,7 @@ export const claimMarker = (token: Buffer) => `[PS:${token.toString('hex')}]`;
 export function createTmsLinker(deps: TmsLinkerDeps) {
   const { pool, schema, repository } = deps;
   const createRequest = deps.createRequest ?? crearSolicitudCliente;
+  const auditTx = deps.auditTx ?? registrarAuditoriaTx;
   if (!/^sandbox_api02_[a-z0-9_]+$/.test(schema)) throw new Error('esquema inválido');
   const t = (name: string) => `\`${schema}\`.\`ps_api12_${name}\``;
   const ns = (s: Scope): [Buffer, number, number, Buffer] => [Buffer.from(s.environment), s.tenantId, s.clientId, Buffer.from(s.integrationId)];
@@ -75,7 +79,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
         { empresaId: Number(map.empresa_id), clienteId: Number(map.tms_cliente_id), usuarioClienteId: Number(map.tms_usuario_cliente_id) },
         {
           fechaSolicitada: input.deliveryDate, referenciaCliente: input.externalOrderId,
-          observaciones: `${marker} PriceSmart (laboratorio) · club ${input.originClubReference} · destinatario ${input.recipient.name}${input.notes ? ` · ${input.notes}` : ''}`.slice(0, 500),
+          observaciones: labObservations(marker, input),   // la recepción ya garantiza que cabe (≤ 500): nunca se trunca
           origen: { lugarNombre: String(map.pickup_place) },
           entregas: [{ lugarNombre: input.recipient.name, referencia: input.address }],
           destino: { lugarNombre: String(map.dropoff_place) },
@@ -122,7 +126,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
   /** Estado real para el GET. Nunca afirma entrega: `confirmsDelivery` es siempre false (Cerrado/Descargado no prueban entrega aceptada). */
   async function status(scope: Scope, externalOrderId: string, view: OrderView): Promise<Record<string, unknown>> {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, s.estado AS sol_estado, p.estado AS plan_estado
+      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, s.estado AS sol_estado, s.plan_id AS plan_id, p.estado AS plan_estado
          FROM ${t('tms_links')} l
          JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id
          LEFT JOIN tms_solicitudes_cliente s ON s.empresa_id=l.empresa_id AND s.id=l.solicitud_id
@@ -130,14 +134,36 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
         WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
     const cancellationAsked = view.provisionalStatus === 'CANCELLATION_REQUESTED' || view.provisionalStatus === 'CANCELLED';
     if (!rows.length || rows[0].solicitud_id == null) {   // sin vínculo, o reclamo pendiente que aún no se completó: NO se simula una solicitud
+      // API-24: una orden que el TMS RECHAZÓ (BLOQUEADA) o cuyos reintentos se AGOTARON necesita revisión humana: se informa REVIEW_REQUIRED con un código, en vez de aparentar «RECIBIDA» indefinidamente.
+      // Una cancelación pedida tiene prioridad (la orden ya no se vinculará). Solo se exponen códigos acotados, nunca el mensaje del TMS.
+      const [jobs] = await pool.execute<RowDataPacket[]>(`SELECT j.status, j.last_outcome FROM \`${schema}\`.ps_api13_link_jobs j JOIN \`${schema}\`.ps_api01_orders o ON o.environment=j.environment AND o.tenant_id=j.tenant_id AND o.client_id=j.client_id AND o.integration_id=j.integration_id AND o.id=j.order_id WHERE j.environment=? AND j.tenant_id=? AND j.client_id=? AND j.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
+      const jobStatus = jobs.length === 1 ? String(jobs[0].status) : null;
+      if (!cancellationAsked && (jobStatus === 'BLOCKED' || jobStatus === 'EXHAUSTED')) {
+        const outcome = typeof jobs[0].last_outcome === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(jobs[0].last_outcome) ? jobs[0].last_outcome : 'UNSPECIFIED';
+        return { labProposal: true, proposedStatus: 'REVIEW_REQUIRED', confirmsDelivery: false, tms: { linked: false, linkIssue: { status: jobStatus, code: outcome } } };
+      }
       return { labProposal: true, proposedStatus: 'RECEIVED', confirmsDelivery: false, tms: { linked: false },
         ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: 'REQUESTED_NOT_LINKED' } } : {}) };
     }
     const r = rows[0];
     const projection = projectExternalStatus(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado));
+    // API-25: evidencia de entrega INTERNA (confirmaciones del piloto por parada). Solo informativa: `confirmsDelivery` sigue siendo false y nada se publica mientras D13 esté pendiente.
+    // Consultas acotadas por la empresa del vínculo y por el plan de ESA solicitud; si la tabla de confirmaciones aún no existe en este entorno, se informa «UNAVAILABLE» (nunca «sin entregas»).
+    let deliveryEvidence: Record<string, unknown> | undefined;
+    if (r.plan_estado != null && r.plan_id != null) {
+      try {
+        const [stops] = await pool.execute<RowDataPacket[]>('SELECT pp.id, pp.tipo FROM tms_plan_paradas pp JOIN tms_planes_viaje p ON p.id=pp.plan_id WHERE p.empresa_id=? AND p.id=?', [r.empresa_id, r.plan_id]);
+        const [confs] = await pool.execute<RowDataPacket[]>('SELECT parada_id, resultado, revision, evidencia_id FROM tms_parada_confirmaciones WHERE empresa_id=? AND plan_id=?', [r.empresa_id, r.plan_id]);
+        deliveryEvidence = { ...assessDeliveryEvidence(stops.map((x) => ({ id: Number(x.id), type: String(x.tipo) })),
+          confs.map((x) => ({ stopId: Number(x.parada_id), result: String(x.resultado), revision: String(x.revision), hasEvidence: Number(x.evidencia_id) > 0 }))) };
+      } catch (error) {
+        if ((error as { code?: string })?.code !== 'ER_NO_SUCH_TABLE') throw error;
+        deliveryEvidence = { ...deliveryEvidenceUnavailable() };
+      }
+    }
     return {
       labProposal: true, proposedStatus: projection.status, confirmsDelivery: false,
-      tms: { linked: true, requestState: r.sol_estado == null ? null : String(r.sol_estado), scheduled: r.plan_estado != null },
+      tms: { linked: true, requestState: r.sol_estado == null ? null : String(r.sol_estado), scheduled: r.plan_estado != null, ...(deliveryEvidence ? { deliveryEvidence } : {}) },
       ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: assessCancellation(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado)).verdict } } : {}),
     };
   }
@@ -145,11 +171,36 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
   /** Solicitud de cancelación: SOLO deja constancia (vínculo + auditoría). No cancela solicitudes, planes ni viajes: lo decide Operaciones. */
   async function noteCancellation(scope: Scope, externalOrderId: string): Promise<void> {
     const join = `${t('tms_links')} l JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id`;
-    const [rows] = await pool.execute<RowDataPacket[]>(`SELECT l.empresa_id, l.solicitud_id FROM ${join} WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.solicitud_id IS NOT NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
+    const [rows] = await pool.execute<RowDataPacket[]>(`SELECT l.empresa_id, l.solicitud_id, l.order_id FROM ${join} WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=? AND l.solicitud_id IS NOT NULL`, [...ns(scope), Buffer.from(externalOrderId)]);
     if (!rows.length) return;
-    await pool.execute(`UPDATE ${join} SET l.cancellation_requested_at = COALESCE(l.cancellation_requested_at, UTC_TIMESTAMP(6)) WHERE l.environment=? AND l.tenant_id=? AND l.client_id=? AND l.integration_id=? AND o.external_order_id=?`, [...ns(scope), Buffer.from(externalOrderId)]);
-    await registrarAuditoria({ empresaId: Number(rows[0].empresa_id), usuario: 'integracion:pricesmart-laboratorio', accion: 'pricesmart_cancelacion_solicitada', modulo: 'tms',
-      detalle: `PriceSmart solicitó cancelar el pedido ${externalOrderId} (solicitud TMS #${rows[0].solicitud_id}). Sin acción automática: requiere decisión de Operaciones.` });
+    // API-23 (corrección tras auditoría): la constancia en el vínculo y su auditoría se confirman en UNA MISMA transacción.
+    //  · Si la auditoría falla, TODO se revierte (el vínculo vuelve a «sin constancia») y la excepción llega al consumidor, que reintenta: nunca queda una constancia sin auditoría ni se marca DONE.
+    //  · Idempotente y seguro con consumidores concurrentes: la lectura con bloqueo (FOR UPDATE) serializa la fila del vínculo; solo quien la encuentra sin constancia la fija y audita; los demás esperan a que confirme y no hacen nada.
+    //  · Se usa `registrarAuditoriaTx` (propaga el error); `registrarAuditoria` lo ocultaría. Aislamiento: la lectura y el UPDATE siguen acotados por entorno, empresa, cliente e integración.
+    // Contención entre consumidores: InnoDB puede abortar al perdedor con ER_CHECKREAD (instantánea de aislamiento de MariaDB 11.8) o con un deadlock; ninguno ha escrito nada (se revierte). Se reintenta en una transacción NUEVA,
+    // que ya ve la constancia confirmada y no hace nada. Cualquier otro error (p. ej. la auditoría) se propaga al consumidor sin reintento local.
+    for (let attempt = 1; ; attempt++) {
+      const conn = await pool.getConnection(); let active = false; let broken = false;
+      try {
+        await conn.beginTransaction(); active = true;
+        // Lectura con bloqueo de la fila del vínculo y UPDATE por clave (sin JOIN: el UPDATE con JOIN fallaba con ER_CHECKREAD bajo concurrencia). El reintento de abajo cubre la contención restante.
+        const key = [...ns(scope), rows[0].order_id];
+        const [locked] = await conn.execute<RowDataPacket[]>(`SELECT cancellation_requested_at FROM ${t('tms_links')} WHERE ${where} AND order_id=? FOR UPDATE`, key);
+        const first = locked.length === 1 && locked[0].cancellation_requested_at == null;
+        if (first) await conn.execute(`UPDATE ${t('tms_links')} SET cancellation_requested_at = UTC_TIMESTAMP(6) WHERE ${where} AND order_id=?`, key);
+        if (first) {
+          await auditTx(conn, { empresaId: Number(rows[0].empresa_id), usuario: 'integracion:pricesmart-laboratorio', accion: 'pricesmart_cancelacion_solicitada', modulo: 'tms',
+            detalle: `PriceSmart solicitó cancelar el pedido ${externalOrderId} (solicitud TMS #${rows[0].solicitud_id}). Sin acción automática: requiere decisión de Operaciones.` });
+        }
+        await conn.commit(); active = false;
+        return;
+      } catch (error) {
+        if (active) { try { await conn.rollback(); } catch { broken = true; } }
+        const code = (error as { code?: string })?.code;
+        if (attempt < 5 && (code === 'ER_CHECKREAD' || code === 'ER_LOCK_DEADLOCK' || code === 'ER_LOCK_WAIT_TIMEOUT')) continue;
+        throw error;
+      } finally { if (broken) conn.destroy(); else conn.release(); }
+    }
   }
   return { link, status, noteCancellation };
 }
