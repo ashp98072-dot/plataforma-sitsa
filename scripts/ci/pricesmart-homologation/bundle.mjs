@@ -86,8 +86,10 @@ const createUser = (names, role, variable) => [
 const read = (repo, rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
 /** Marcador de ESTADO del aprovisionamiento (en la propia base del sandbox). Distingue «iniciado/fallido» de «completo»: nada se da por instalado sin la fila COMPLETE de cada paso. */
 export const PROVISION_TABLE = 'ps_homolog_provisioning';
+/** Propiedad de la base: se escribe en el COMENTARIO de la base en la MISMA sentencia que la crea (no hay ventana entre crear y marcar). `destroy` solo actúa sobre una base que lo lleve. */
+export const ownerComment = (names) => `novalvion-sandbox-owner:${names.sandboxId}`;
 export const PROVISION_STEPS = Object.freeze(['bootstrap', 'finalize']);
-export const PROVISION_DDL = `CREATE TABLE ${PROVISION_TABLE} (step VARCHAR(16) NOT NULL PRIMARY KEY, state VARCHAR(12) NOT NULL, detail VARCHAR(300) NULL, updated_at DATETIME(6) NOT NULL, CHECK (step IN ('bootstrap','finalize')), CHECK (state IN ('STARTED','COMPLETE','FAILED'))) ENGINE=InnoDB`;
+export const PROVISION_DDL = `CREATE TABLE ${PROVISION_TABLE} (step VARCHAR(16) NOT NULL PRIMARY KEY, state VARCHAR(12) NOT NULL, detail VARCHAR(300) NULL, updated_at DATETIME(6) NOT NULL, CHECK (step IN ('bootstrap','finalize','account:app','account:worker','account:monitor')), CHECK (state IN ('STARTED','COMPLETE','FAILED'))) ENGINE=InnoDB`;
 
 /** Error de aprovisionamiento con diagnóstico SEGURO: códigos y el comienzo de la sentencia del DISEÑO (sin contraseñas, sin mensajes del servidor, sin datos). */
 export class ProvisioningError extends Error {
@@ -136,7 +138,7 @@ export function buildBootstrap(n, repo) {
     ...api12DdlStatements(read(repo, 'docs/integraciones/pricesmart/api12/staging-tms-link.sql.in')), ...api13DdlStatements(read(repo, 'docs/integraciones/pricesmart/api13/staging-link-retry.sql.in')),
   ];
   const head = [
-    `CREATE DATABASE ${q(names.schema)} CHARACTER SET utf8mb4`, `USE ${q(names.schema)}`,
+    `CREATE DATABASE ${q(names.schema)} CHARACTER SET utf8mb4 COMMENT '${ownerComment(names)}'`, `USE ${q(names.schema)}`,
     "CREATE TABLE novalvion_environment (id TINYINT NOT NULL PRIMARY KEY CHECK (id = 1), environment VARCHAR(16) NOT NULL CHECK (environment = 'sandbox'), sandbox_id VARCHAR(48) NOT NULL) ENGINE=InnoDB",
     `INSERT INTO novalvion_environment (id, environment, sandbox_id) VALUES (1, 'sandbox', '${names.sandboxId}')`,
   ];
@@ -245,16 +247,24 @@ const stateRows = async (conn, schema) => { const [rows] = await conn.query(`SEL
  */
 export async function preflightProvision(conn, names) {
   const [[s]] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]);
-  if (Number(s.n) === 0) return { state: 'ABSENT', steps: {} };
+  if (Number(s.n) === 0) {
+    const orphans = []; for (const [role, user] of roleAccounts(names)) if (await accountExists(conn, user)) orphans.push(role);
+    return orphans.length ? { state: 'ORPHAN_ACCOUNTS', steps: {}, accounts: orphans } : { state: 'ABSENT', steps: {} };   // cuentas SIN base: no se pueden atribuir al sandbox → nunca se tocan ni se reutiliza el nombre
+  }
+  const [[c]] = await conn.query('SELECT SCHEMA_COMMENT AS c FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]);
+  const comment = String(c?.c ?? ''); if (comment !== ownerComment(names)) return { state: 'FOREIGN', steps: {}, reason: comment.startsWith('novalvion-sandbox-owner:') ? 'OTHER_SANDBOX_ID' : 'NO_OWNER_COMMENT' };
   const [[t]] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [names.schema, PROVISION_TABLE]);
-  if (Number(t.n) === 0) return { state: 'FOREIGN', steps: {}, reason: 'NO_MARKER' };
-  let env; try { [env] = await conn.query(`SELECT sandbox_id FROM ${q(names.schema)}.novalvion_environment WHERE id = 1`); } catch { return { state: 'FOREIGN', steps: {}, reason: 'NO_ENVIRONMENT_ROW' }; }
-  if (env.length !== 1 || String(env[0].sandbox_id) !== names.sandboxId) return { state: 'FOREIGN', steps: {}, reason: 'OTHER_SANDBOX_ID' };
+  let env = null; try { [env] = await conn.query(`SELECT sandbox_id FROM ${q(names.schema)}.novalvion_environment WHERE id = 1`); } catch { env = null; }
+  if (env && env.length && (env.length !== 1 || String(env[0].sandbox_id) !== names.sandboxId)) return { state: 'FOREIGN', steps: {}, reason: 'OTHER_SANDBOX_ID' };   // identidad distinta dentro de la base
+  if (Number(t.n) === 0) return { state: 'BOOTSTRAP_PARTIAL', steps: {}, reason: 'BEFORE_MARKERS' };   // la base es nuestra (comentario) pero el fallo ocurrió antes de crear los marcadores
+  if (!env || env.length !== 1) return { state: 'FOREIGN', steps: {}, reason: 'NO_ENVIRONMENT_ROW' };
   const steps = Object.fromEntries((await stateRows(conn, names.schema)).map((r) => [String(r.step), String(r.state)]));
   if (steps.bootstrap !== 'COMPLETE') return { state: 'BOOTSTRAP_PARTIAL', steps };
   if (steps.finalize === 'COMPLETE') return { state: 'COMPLETE', steps };
   return { state: steps.finalize === undefined ? 'APPLIED' : 'FINALIZE_FAILED', steps };
 }
+const roleAccounts = (names) => [['app', names.appUser], ['worker', names.workerUser], ['monitor', names.monitorUser]];
+const accountExists = async (conn, user) => { const [[r]] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE = ?', [`'${user}'@'${ACCOUNT_HOST}'`]); return Number(r.n) > 0; };
 const markStep = (conn, schema, step, state, detail = null) => conn.query(
   `INSERT INTO ${q(schema)}.${q(PROVISION_TABLE)} (step, state, detail, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE state = VALUES(state), detail = VALUES(detail), updated_at = VALUES(updated_at)`, [step, state, detail]);
 const failureDetail = (error) => String(error instanceof ProvisioningError ? error.code : (error?.code ?? error?.errno ?? 'ERROR')).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 120);
@@ -268,7 +278,7 @@ export async function executeBundle(conn, bundle, secrets, options = {}) {
   const pw = { '@ps_app_pw': secrets.app, '@ps_worker_pw': secrets.worker, '@ps_monitor_pw': secrets.monitor };
   assertApplyTarget({ host: '127.0.0.1', port: 3306, ack: HOMOLOG_ACK, secrets: { ...secrets } });   // misma validación de secretos (ack ya confirmado por quien llama)
   const before = await preflightProvision(conn, bundle.names);
-  if (before.state !== 'ABSENT') throw new ProvisioningError('STATE_NOT_ABSENT', { state: before.state, steps: before.steps, hint: before.state === 'FOREIGN' ? 'la base existe y no pertenece a este sandbox: NO se toca' : 'ejecutar destroy (con confirmación) y volver a aplicar' });
+  if (before.state !== 'ABSENT') throw new ProvisioningError('STATE_NOT_ABSENT', { state: before.state, steps: before.steps, hint: before.state === 'FOREIGN' ? 'la base existe y no pertenece a este sandbox: NO se toca' : before.state === 'ORPHAN_ACCOUNTS' ? 'existen cuentas con los nombres del sandbox sin su base: no se pueden atribuir; intervención humana' : 'ejecutar destroy (con comprobación de propiedad) y volver a aplicar' });
   for (const s of bundle.head) await conn.query(s);   // si la base ya existiera, CREATE DATABASE falla aquí: no se escribe nada
   for (const s of bundle.provisioning) await conn.query(s);
   const schema = bundle.names.schema; await markStep(conn, schema, 'bootstrap', 'STARTED');
@@ -278,9 +288,11 @@ export async function executeBundle(conn, bundle, secrets, options = {}) {
     if (options.tms) { tmsSchema = await applySchemaFiles(conn, options.tms.repo, options.tms.files); assertSchemaComplete(tmsSchema, 'base', { allowDeferred: true }); }   // en `apply` solo pueden quedar DIFERIDAS (dependen de fases posteriores) las sentencias con error de dependencia; `finalize` exige 0
     for (const s of bundle.ddl) await conn.query(s);
     for (const [variable, value] of Object.entries(pw)) await conn.query(`SET ${variable} = ?`, [value]);
+    for (const role of ['app', 'worker', 'monitor']) await markStep(conn, schema, `account:${role}`, 'STARTED');   // procedencia: se anota ANTES de crear cada cuenta (el preflight garantizó que no existían)
     for (const s of bundle.accounts) await conn.query(s);
     for (const variable of Object.keys(pw)) await conn.query(`SET ${variable} = NULL`);
     for (const role of ['app', 'worker', 'monitor']) for (const s of bundle.grants[role]) await conn.query(s);
+    for (const role of ['app', 'worker', 'monitor']) await markStep(conn, schema, `account:${role}`, 'COMPLETE');
     await markStep(conn, schema, 'bootstrap', 'COMPLETE');
   } catch (error) {
     try { for (const variable of Object.keys(pw)) await conn.query(`SET ${variable} = NULL`); await markStep(conn, schema, 'bootstrap', 'FAILED', failureDetail(error)); } catch { /* el diagnóstico no debe ocultar el error original */ }
@@ -345,10 +357,50 @@ export async function finalizeBundle(conn, bundle, o) {
   return report;
 }
 
-/** Baja de un sandbox: SOLO nombres `sandbox_api02_homolog_*` y sus tres cuentas. */
+/** SOLO para revisión (`plan` → destroy.sql): NO se ejecuta a mano. La baja real es `destroySandbox`, que comprueba la propiedad de la base y la procedencia de cada cuenta ANTES de cualquier DROP. */
 export function destroyStatements(n) {
   const names = homologNames(n);
   return [`DROP USER IF EXISTS ${q(names.appUser)}@${q(ACCOUNT_HOST)}`, `DROP USER IF EXISTS ${q(names.workerUser)}@${q(ACCOUNT_HOST)}`, `DROP USER IF EXISTS ${q(names.monitorUser)}@${q(ACCOUNT_HOST)}`, `DROP DATABASE IF EXISTS ${q(names.schema)}`];
+}
+
+/** ¿Todos los privilegios de la cuenta apuntan SOLO a la base del sandbox (y `USAGE` global)? Una cuenta con privilegios en otro sitio no se atribuye al sandbox. */
+const grantsConfined = async (conn, user, schema) => {
+  let rows; try { [rows] = await conn.query(`SHOW GRANTS FOR ${q(user)}@${q(ACCOUNT_HOST)}`); } catch { return false; }
+  return rows.length > 0 && rows.every((r) => {
+    const m = /^GRANT (.+?) ON (.+?) TO /s.exec(String(Object.values(r)[0])); if (!m) return false;
+    const [, privileges, object] = m; if (object === '*.*') return privileges.trim().toUpperCase() === 'USAGE';
+    return object.replaceAll('\\_', '_').startsWith(`${q(schema)}.`);
+  });
+};
+/** Preflight OBLIGATORIO de `destroy` (solo lectura). `refused` ≠ null → no se ejecuta NINGÚN DROP y se exige intervención humana. */
+export async function planDestroy(conn, names) {
+  const state = await preflightProvision(conn, names);
+  const plan = { state: state.state, reason: state.reason ?? null, accounts: [], refused: null };
+  if (state.state === 'FOREIGN') return { ...plan, refused: 'FOREIGN' };
+  if (state.state === 'ORPHAN_ACCOUNTS') return { ...plan, accounts: state.accounts.map((role) => ({ role, exists: true, owned: false })), refused: 'ORPHAN_ACCOUNTS' };
+  if (state.state === 'ABSENT') return plan;   // nada que destruir (ejecución repetida): idempotente
+  for (const [role, user] of roleAccounts(names)) {
+    if (!(await accountExists(conn, user))) { plan.accounts.push({ role, exists: false, owned: true }); continue; }   // ya eliminada (destrucción interrumpida)
+    let marked = false; if (state.reason !== 'BEFORE_MARKERS') { try { marked = (await stateRows(conn, names.schema)).some((r) => String(r.step) === `account:${role}`); } catch { marked = false; } }
+    const confined = marked && await grantsConfined(conn, user, names.schema);
+    plan.accounts.push({ role, exists: true, owned: marked && confined, why: marked ? (confined ? null : 'GRANTS_OUTSIDE_SANDBOX') : 'NO_PROVENANCE_MARKER' });
+  }
+  if (plan.accounts.some((a) => a.exists && !a.owned)) plan.refused = 'ACCOUNT_PROVENANCE';
+  return plan;
+}
+/**
+ * Baja de UN sandbox con barreras: (1) preflight de propiedad de la base (comentario de propiedad + identidad) y procedencia de cada cuenta (marcador + privilegios confinados); cualquier duda → `DESTROY_REFUSED` SIN ejecutar nada;
+ * (2) primero las cuentas demostradas (si la baja se interrumpe, la base —y su prueba de propiedad— sigue ahí), (3) re-comprobación y por último la base. Repetir la baja es seguro (ausente = no hace nada).
+ */
+export async function destroySandbox(conn, n) {
+  const names = homologNames(n); const plan = await planDestroy(conn, names);
+  if (plan.refused) throw new ProvisioningError('DESTROY_REFUSED', { refused: plan.refused, state: plan.state, reason: plan.reason, accounts: plan.accounts, hint: 'la propiedad no se puede demostrar: intervención humana; nunca se hace DROP por suposición' });
+  const dropped = { accounts: [], schema: false };
+  for (const a of plan.accounts.filter((x) => x.exists)) { const user = roleAccounts(names).find(([role]) => role === a.role)[1]; await conn.query(`DROP USER ${q(user)}@${q(ACCOUNT_HOST)}`); dropped.accounts.push(a.role); }
+  if (plan.state === 'ABSENT') return { ...dropped, state: 'ABSENT' };
+  const again = await preflightProvision(conn, names); if (['FOREIGN', 'ORPHAN_ACCOUNTS', 'ABSENT'].includes(again.state)) throw new ProvisioningError('DESTROY_REFUSED', { refused: again.state, state: again.state, hint: 'el estado cambió durante la baja: no se elimina la base' });
+  await conn.query(`DROP DATABASE ${q(names.schema)}`); dropped.schema = true;
+  return { ...dropped, state: 'ABSENT' };
 }
 
 // ---- Revocación y alta de credenciales de integración (las ejecuta la cuenta ADMINISTRATIVA: el runtime solo lee el catálogo).

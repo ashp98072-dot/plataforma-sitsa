@@ -25,7 +25,7 @@ export async function plan(args) {
   if (fs.existsSync(out) && fs.readdirSync(out).length) fail('El directorio de salida no está vacío.');
   const nginxOpts = { publicHostname: args.hostname, certPath: args.cert, keyPath: args.key, allowlist: String(args.allow ?? '').split(',').filter(Boolean), appPort: num(args['app-port'], 3100) };
   const files = {
-    'bootstrap.sql': B.renderBootstrapSql(B.buildBootstrap(n, repo)), 'destroy.sql': B.destroyStatements(n).map((s) => `${s};`).join('\n'),
+    'bootstrap.sql': B.renderBootstrapSql(B.buildBootstrap(n, repo)), 'destroy.sql': ['-- SOLO PARA REVISIÓN: NO ejecutar a mano. `provision.mjs destroy` comprueba la propiedad de la base y la procedencia de las cuentas antes de cualquier DROP.', ...B.destroyStatements(n).map((s) => `${s};`)].join('\n'),
     'nginx-pricesmart-sandbox.conf': B.renderNginx(nginxOpts), 'pricesmart-sandbox-proxy.conf': B.NGINX_PROXY_INCLUDE,
     'pricesmart-sandbox.service': B.renderSystemd({ appPort: nginxOpts.appPort }), 'runtime.env.template': B.renderEnvTemplate(names, { dbPort: num(args['db-port'], 3306) }),
     'monitoring.json': JSON.stringify({ queries: B.MONITORING_QUERIES, alerts: B.ALERT_RULES, account: names.monitorUser }, null, 2),
@@ -80,7 +80,7 @@ const HOMOLOG_STATUS_ACK_FREE = 'solo-lectura';
 
 export async function destroy(args) {
   const conn = await adminConnection(args, B.HOMOLOG_DESTROY_ACK);
-  try { for (const s of B.destroyStatements(args.n)) await conn.query(s); return { destroyed: B.homologNames(args.n).schema }; } finally { await conn.end(); }
+  try { return { schema: B.homologNames(args.n).schema, ...(await B.destroySandbox(conn, args.n)) }; } finally { await conn.end(); }   // preflight de propiedad/procedencia ANTES de cualquier DROP
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

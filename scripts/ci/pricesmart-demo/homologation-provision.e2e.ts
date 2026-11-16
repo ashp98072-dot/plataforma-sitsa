@@ -27,7 +27,7 @@ describe("API-26 ensayo del aprovisionamiento (MariaDB real)", () => {
     for (const f of [...report.migrations.base, ...report.migrations.migrations, ...report.migrations.confirmations]) expect(f.pendingAtEnd, f.file).toBe(0);
     expect(report.scope.excludedFiles.length).toBeGreaterThan(0); expect(report.scope.excludedFiles.every((x: { module: string }) => x.module)).toBe(true);   // el alcance (módulos NO instalados) queda declarado en el informe
     expect(report.migrations.migrations.some((f: { skippedUse: number }) => f.skippedUse > 0)).toBe(true);   // al menos un archivo del proyecto trae `USE <otra base>`: se omitió, no se ejecutó
-    expect(report.finalState).toMatchObject({ state: "COMPLETE", marker: [{ step: "bootstrap", state: "COMPLETE" }, { step: "finalize", state: "COMPLETE" }] });
+    expect(report.finalState).toMatchObject({ state: "COMPLETE", marker: expect.arrayContaining([{ step: "bootstrap", state: "COMPLETE" }, { step: "finalize", state: "COMPLETE" }, { step: "account:app", state: "COMPLETE" }, { step: "account:worker", state: "COMPLETE" }, { step: "account:monitor", state: "COMPLETE" }]) });
   });
   it("P3 cuentas REALES y distintas por rol; la de la aplicación pasa la auditoría de privilegios mínimos del runtime (API-20) sobre sus tablas de PriceSmart; ninguna tiene privilegios globales, DELETE, DDL ni GRANT OPTION", () => {
     for (const role of ["app", "worker", "monitor"]) {
@@ -72,6 +72,25 @@ describe("API-26 ensayo del aprovisionamiento (MariaDB real)", () => {
     expect(f.report).toMatchObject({ state: "APPLIED", complete: false }); expect(f.report.tmsSchema.find((x: { file: string }) => x.file === "sql/deferred.sql")).toMatchObject({ pendingAtEnd: 1, deferred: 1, blocking: 0 }); expect(f.afterApply.state).toBe("APPLIED");
     expect(f.finalize).toMatchObject({ threw: true, code: "TMS_SCHEMA_INCOMPLETE", diagnostic: { phase: "base", allowDeferred: false } }); expect(f.afterFinalize.state).toBe("FINALIZE_FAILED");
     expect(f.privilegesTmp).toBe(0);   // ningún privilegio a nivel de esquema (ni temporal ni final) sobrevive
+  });
+  it("P13 `destroy` exige PROPIEDAD y PROCEDENCIA (MariaDB real): propio → se destruye; base ajena con nombre coincidente (sin comentario, de otro sandbox o con identidad distinta) → DESTROY_REFUSED y nada cambia (ni la base, ni sus datos, ni las cuentas ajenas homónimas)", () => {
+    const o = report.ownership;
+    expect(o.own.before).toMatchObject({ state: "APPLIED", schema: 1, accounts: 3 }); expect(o.own.result.threw).toBe(false); expect(o.own.report).toMatchObject({ accounts: ["app", "worker", "monitor"], schema: true, state: "ABSENT" }); expect(o.own.after).toMatchObject({ state: "ABSENT", schema: 0, accounts: 0 });
+    for (const k of ["foreignNoMarker", "otherComment", "otherIdentity"]) { expect(o[k].result, k).toMatchObject({ threw: true, code: "DESTROY_REFUSED", diagnostic: { refused: "FOREIGN" } }); expect(o[k].after, k).toEqual(o[k].before); expect(o[k].before.state).toBe("FOREIGN"); }
+    expect(o.foreignNoMarker.before.accounts).toBe(2);   // las cuentas ajenas con los MISMOS nombres siguen ahí
+    expect(o.foreignNoMarker.apply).toMatchObject({ threw: true, code: "STATE_NOT_ABSENT", diagnostic: { state: "FOREIGN" } });   // y `apply` tampoco las pisa
+  });
+  it("P14 recuperación segura: fallo antes de los marcadores (solo comentario de propiedad) se recupera; con una cuenta SIN procedencia o con privilegios fuera del sandbox se DETIENE sin ningún DROP; cuentas huérfanas (sin base) se detienen; al corregir, procede", () => {
+    const o = report.ownership;
+    expect(o.beforeMarkers.state).toBe("BOOTSTRAP_PARTIAL"); expect(o.beforeMarkers.result.threw).toBe(false); expect(o.beforeMarkers.after).toMatchObject({ state: "ABSENT", schema: 0 });
+    expect(o.beforeMarkersForeignAccount.result).toMatchObject({ threw: true, code: "DESTROY_REFUSED", diagnostic: { refused: "ACCOUNT_PROVENANCE" } }); expect(o.beforeMarkersForeignAccount.after).toEqual(o.beforeMarkersForeignAccount.before); expect(o.beforeMarkersForeignAccount.after).toMatchObject({ schema: 1, accounts: 1 });
+    expect(o.grantsOutside.result).toMatchObject({ threw: true, code: "DESTROY_REFUSED", diagnostic: { refused: "ACCOUNT_PROVENANCE" } }); expect(o.grantsOutside.after).toEqual(o.grantsOutside.before); expect(o.grantsOutside.afterFix.threw).toBe(false); expect(o.grantsOutside.final).toMatchObject({ state: "ABSENT", schema: 0, accounts: 0 });
+    expect(o.orphans.result).toMatchObject({ threw: true, code: "DESTROY_REFUSED", diagnostic: { refused: "ORPHAN_ACCOUNTS" } }); expect(o.orphans.after).toEqual(o.orphans.before); expect(o.orphans.before).toMatchObject({ schema: 0, accounts: 3 }); expect(o.orphans.apply).toMatchObject({ threw: true, code: "STATE_NOT_ABSENT", diagnostic: { state: "ORPHAN_ACCOUNTS" } });
+  });
+  it("P15 destrucción INTERRUMPIDA y repetida: con cuentas ya eliminadas se reanuda y termina; repetir la baja sobre un sandbox ausente no hace nada; el señuelo y las cuentas del laboratorio no cambiaron", () => {
+    const o = report.ownership; expect(o.interrupted.before).toMatchObject({ state: "APPLIED", accounts: 1 }); expect(o.interrupted.result.threw).toBe(false); expect(o.interrupted.report).toMatchObject({ accounts: ["monitor"], schema: true }); expect(o.interrupted.after).toMatchObject({ state: "ABSENT", schema: 0, accounts: 0 });
+    expect(o.repeated.first.threw).toBe(false); expect(o.repeated.second.threw).toBe(false); expect(o.repeated.secondReport).toMatchObject({ state: "ABSENT", schema: false, accounts: [] });
+    expect(o.decoyIntact.checksum).toBe(true);
   });
   it("P11 FALLO REAL de DDL de PriceSmart a mitad del paquete: error del motor relanzado, instalación PARCIAL con tablas ya creadas, sin cuentas ni privilegios, marcador FAILED, reaplicar rechazado; destroy deja AUSENTE", () => {
     const f = report.failures.ddlFailure;

@@ -187,15 +187,18 @@ describe('API-26 aislamiento estático', () => {
 
 // ---- Conexión SIMULADA guionizada: responde al preflight y a los marcadores como lo haría la base, registra TODAS las sentencias y permite inyectar fallos de DDL por patrón.
 type Steps = Record<string, string | undefined>;
-function scripted(opts: { exists?: boolean; marker?: boolean; sandboxId?: string; steps?: Steps; failOn?: (sql: string) => { code: string; message?: string } | null } = {}) {
+function scripted(opts: { exists?: boolean; comment?: string; accounts?: string[]; grants?: Record<string, string[]>; unmarked?: string[]; marker?: boolean; sandboxId?: string; steps?: Steps; failOn?: (sql: string) => { code: string; message?: string } | null } = {}) {
   const exists = opts.exists ?? true; const marker = opts.marker ?? true; const steps: Steps = { ...(opts.steps ?? { bootstrap: 'COMPLETE' }) }; const sql: string[] = []; const marks: Array<[string, string, string | null]> = [];
   const conn = {
     sql, marks, steps,
     async query(statement: string, params: unknown[] = []) {
+      if (/SCHEMA_COMMENT/.test(statement)) return [[{ c: opts.comment ?? 'novalvion-sandbox-owner:homolog-sbx1' }]];
+      if (/FROM information_schema\.USER_PRIVILEGES/.test(statement)) return [[{ n: (opts.accounts ?? []).some((u) => `'${u}'@'127.0.0.1'` === (params as string[])[0]) ? 1 : 0 }]];
+      if (/^SHOW GRANTS FOR/.test(statement)) { const u = /FOR `([^`]+)`/.exec(statement)![1]; if (!(opts.accounts ?? []).includes(u)) throw Object.assign(new Error('no grants'), { code: 'ER_NONEXISTING_GRANT' }); return [(opts.grants?.[u] ?? [`GRANT USAGE ON *.* TO \`${u}\`@\`127.0.0.1\``, `GRANT SELECT ON \`sandbox_api02_homolog_sbx1\`.\`ps_api01_orders\` TO \`${u}\`@\`127.0.0.1\``]).map((g) => ({ g }))]; }
       if (/FROM information_schema\.SCHEMATA/.test(statement)) return [[{ n: exists ? 1 : 0 }]];
       if (/FROM information_schema\.TABLES/.test(statement)) return [[{ n: marker ? 1 : 0 }]];
       if (/FROM `[^`]+`\.novalvion_environment/.test(statement)) return [[{ sandbox_id: opts.sandboxId ?? 'homolog-sbx1' }]];
-      if (/SELECT step, state FROM/.test(statement)) return [Object.entries(steps).map(([step, state]) => ({ step, state }))];
+      if (/SELECT step, state FROM/.test(statement)) return [[...Object.entries(steps).map(([step, state]) => ({ step, state })), ...(opts.accounts ?? []).filter((u) => !(opts.unmarked ?? []).includes(u)).map((u) => ({ step: `account:${u.replace(/^sandbox_api02_homolog_(w|m)?sbx1$/, (_m, k) => (k === 'w' ? 'worker' : k === 'm' ? 'monitor' : 'app'))}`, state: 'COMPLETE' }))]];
       if (/INSERT INTO `[^`]+`\.`ps_homolog_provisioning`/.test(statement)) { const [step, state, detail] = params as [string, string, string | null]; steps[step] = state; marks.push([step, state, detail]); return [[]]; }
       sql.push(statement);
       const failure = opts.failOn?.(statement); if (failure) throw Object.assign(new Error(failure.message ?? 'fallo'), { code: failure.code });
@@ -251,7 +254,7 @@ describe('API-26 segunda parte del aprovisionamiento (esquema de ejecución): pr
   it('`finalize` solo sobre un sandbox con bootstrap COMPLETO (APPLIED o FINALIZE_FAILED): ausente, parcial, completo o ajeno → STATE_NOT_APPLIED sin ejecutar NINGUNA sentencia ni el paso hijo', async () => {
     spawn.mockReset();
     const cases: Array<[string, ReturnType<typeof scripted>]> = [['ABSENT', scripted({ exists: false })], ['BOOTSTRAP_PARTIAL', scripted({ steps: { bootstrap: 'FAILED' } })], ['BOOTSTRAP_PARTIAL', scripted({ steps: { bootstrap: 'STARTED' } })],
-      ['COMPLETE', scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } })], ['FOREIGN', scripted({ marker: false })], ['FOREIGN', scripted({ sandboxId: 'homolog-otro' })]];
+      ['COMPLETE', scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } })], ['FOREIGN', scripted({ comment: '' })], ['FOREIGN', scripted({ comment: 'novalvion-sandbox-owner:homolog-otro' })], ['FOREIGN', scripted({ sandboxId: 'homolog-otro' })]];
     for (const [state, c] of cases) { await expect(B.finalizeBundle(c, bundle, opts()), state).rejects.toMatchObject({ code: 'STATE_NOT_APPLIED', diagnostic: { state } }); expect(c.sql, state).toEqual([]); expect(c.marks, state).toEqual([]); }
     expect(spawn).not.toHaveBeenCalled();
     for (const steps of [{ bootstrap: 'COMPLETE' }, { bootstrap: 'COMPLETE', finalize: 'FAILED' }, { bootstrap: 'COMPLETE', finalize: 'STARTED' }]) { spawn.mockReturnValue({ status: 0, stdout: '', stderr: '' }); await expect(B.finalizeBundle(scripted({ steps }), bundle, opts())).resolves.toBeDefined(); }   // reintento permitido
@@ -304,19 +307,19 @@ describe('API-26 apply FALLA CERRADO ante un esquema parcial (instalación parci
     expect(c.marks.at(-1)).toEqual(['bootstrap', 'FAILED', 'ER_FK_CANNOT_OPEN_PARENT']); expect(c.marks.some((m) => m[1] === 'COMPLETE')).toBe(false);
   });
   it('éxito: solo tras esquema completo, DDL, cuentas y privilegios se marca COMPLETE el bootstrap; el estado informado es APPLIED (no «completo»: falta finalize)', async () => {
-    const c = scripted({ exists: false }); const r = await B.executeBundle(c, bundle, secrets); expect(r.state).toBe('APPLIED'); expect(c.marks.map((m) => m.slice(0, 2).join(':'))).toEqual(['bootstrap:STARTED', 'bootstrap:COMPLETE']);
+    const c = scripted({ exists: false }); const r = await B.executeBundle(c, bundle, secrets); expect(r.state).toBe('APPLIED'); expect(c.marks.map((m) => m.slice(0, 2).join(':'))).toEqual(['bootstrap:STARTED', 'account:app:STARTED', 'account:worker:STARTED', 'account:monitor:STARTED', 'account:app:COMPLETE', 'account:worker:COMPLETE', 'account:monitor:COMPLETE', 'bootstrap:COMPLETE']);
     expect(c.sql.findIndex((x) => /^CREATE USER|^PREPARE/.test(x))).toBeGreaterThan(c.sql.findIndex((x) => /^CREATE TABLE ps_api13_link_attempts/.test(x)));
   });
   it('`apply` solo sobre un sandbox AUSENTE: parcial, aplicado, completo o ajeno → STATE_NOT_ABSENT sin ejecutar nada (jamás se escribe en una base que no es de este sandbox)', async () => {
     const cases: Array<[string, ReturnType<typeof scripted>]> = [['BOOTSTRAP_PARTIAL', scripted({ steps: { bootstrap: 'FAILED' } })], ['APPLIED', scripted()], ['FINALIZE_FAILED', scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'FAILED' } })],
-      ['COMPLETE', scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } })], ['FOREIGN', scripted({ marker: false })], ['FOREIGN', scripted({ sandboxId: 'homolog-ajeno' })]];
+      ['COMPLETE', scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } })], ['FOREIGN', scripted({ comment: '' })], ['FOREIGN', scripted({ sandboxId: 'homolog-ajeno' })]];
     for (const [state, c] of cases) { await expect(B.executeBundle(c, bundle, secrets, { tms: { repo, files: B.tmsSchemaPhases(repo).base } }), state).rejects.toMatchObject({ code: 'STATE_NOT_ABSENT', diagnostic: { state } }); expect(c.sql, state).toEqual([]); expect(c.marks, state).toEqual([]); }
   });
   it('preflight: ABSENT / BOOTSTRAP_PARTIAL / APPLIED / FINALIZE_FAILED / COMPLETE / FOREIGN según los marcadores reales (lectura únicamente)', async () => {
     const names = bundle.names; const st = async (c: ReturnType<typeof scripted>) => (await B.preflightProvision(c, names)).state;
     expect(await st(scripted({ exists: false }))).toBe('ABSENT'); expect(await st(scripted({ steps: {} }))).toBe('BOOTSTRAP_PARTIAL'); expect(await st(scripted({ steps: { bootstrap: 'STARTED' } }))).toBe('BOOTSTRAP_PARTIAL');
     expect(await st(scripted({ steps: { bootstrap: 'COMPLETE' } }))).toBe('APPLIED'); expect(await st(scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'STARTED' } }))).toBe('FINALIZE_FAILED');
-    expect(await st(scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } }))).toBe('COMPLETE'); expect(await st(scripted({ marker: false }))).toBe('FOREIGN'); expect(await st(scripted({ sandboxId: 'homolog-otro' }))).toBe('FOREIGN');
+    expect(await st(scripted({ steps: { bootstrap: 'COMPLETE', finalize: 'COMPLETE' } }))).toBe('COMPLETE'); expect(await st(scripted({ comment: '' }))).toBe('FOREIGN'); expect(await st(scripted({ sandboxId: 'homolog-otro' }))).toBe('FOREIGN');
     const c = scripted(); await B.preflightProvision(c, names); expect(c.sql).toEqual([]); expect(c.marks).toEqual([]);   // no escribe nada
   });
   it('«ya aplicado» (objeto existente) cuenta como aplicado; cualquier otro error deja la sentencia PENDIENTE; el diagnóstico solo lleva comienzo de la sentencia del diseño y CÓDIGO (nunca el mensaje)', async () => {
@@ -343,5 +346,39 @@ describe('API-26 `USE` de los archivos del proyecto', () => {
     const r = mkdtempSync(path.join(os.tmpdir(), 'ps-use-')); mkdirSync(path.join(r, 'sql')); writeFileSync(path.join(r, 'sql', 'u.sql'), 'USE u611730801_Plataforma;\nCREATE TABLE t1 (id INT);\nuse otra_base;\nCREATE TABLE t2 (id INT);\n');
     const c = scripted(); const report = await B.applySchemaFiles(c, r, ['sql/u.sql']);
     expect(report[0]).toMatchObject({ applied: 2, skippedUse: 2, pendingAtEnd: 0 }); expect(c.sql).toEqual(['CREATE TABLE t1 (id INT)', 'CREATE TABLE t2 (id INT)']); expect(() => B.assertSchemaComplete(report, 'x')).not.toThrow();
+  });
+});
+
+describe('API-26 `destroy` exige propiedad y procedencia antes de cualquier DROP', () => {
+  const accounts = ['sandbox_api02_homolog_sbx1', 'sandbox_api02_homolog_wsbx1', 'sandbox_api02_homolog_msbx1'];
+  const drops = (c: { sql: string[] }) => c.sql.filter((x) => /^DROP\b/.test(x));
+  it('sandbox propio (comentario + identidad + marcadores + privilegios confinados): cuentas primero y la base AL FINAL', async () => {
+    const c = scripted({ accounts }); const r = await B.destroySandbox(c, 'sbx1');
+    expect(drops(c)).toEqual([...accounts.map((a) => `DROP USER \`${a}\`@\`127.0.0.1\``), 'DROP DATABASE `sandbox_api02_homolog_sbx1`']); expect(r).toMatchObject({ schema: true, state: 'ABSENT' });
+  });
+  it('FOREIGN (sin comentario de propiedad, comentario de otro sandbox o fila de entorno de otro): DESTROY_REFUSED y CERO sentencias DROP', async () => {
+    for (const c of [scripted({ accounts, comment: '' }), scripted({ accounts, comment: 'novalvion-sandbox-owner:homolog-otro' }), scripted({ accounts, sandboxId: 'homolog-otro' }), scripted({ accounts, marker: false, comment: '' })]) {
+      await expect(B.destroySandbox(c, 'sbx1')).rejects.toMatchObject({ code: 'DESTROY_REFUSED', diagnostic: { refused: 'FOREIGN' } }); expect(drops(c)).toEqual([]);
+    }
+  });
+  it('cuenta sin marcador de procedencia o con privilegios fuera del sandbox: se rechaza TODO (ni siquiera las demás cuentas ni la base se tocan)', async () => {
+    const noMarker = scripted({ accounts, unmarked: [accounts[1]] }); await expect(B.destroySandbox(noMarker, 'sbx1')).rejects.toMatchObject({ code: 'DESTROY_REFUSED', diagnostic: { refused: 'ACCOUNT_PROVENANCE' } }); expect(drops(noMarker)).toEqual([]);
+    const outside = scripted({ accounts, grants: { [accounts[2]]: ['GRANT USAGE ON *.* TO `m`@`127.0.0.1`', 'GRANT SELECT ON `otra_base`.`t` TO `m`@`127.0.0.1`'] } }); await expect(B.destroySandbox(outside, 'sbx1')).rejects.toMatchObject({ code: 'DESTROY_REFUSED', diagnostic: { refused: 'ACCOUNT_PROVENANCE' } }); expect(drops(outside)).toEqual([]);
+    const global = scripted({ accounts, grants: { [accounts[0]]: ['GRANT SELECT ON *.* TO `a`@`127.0.0.1`'] } }); await expect(B.destroySandbox(global, 'sbx1')).rejects.toMatchObject({ code: 'DESTROY_REFUSED' }); expect(drops(global)).toEqual([]);
+  });
+  it('fallo antes de los marcadores (solo comentario): sin cuentas se recupera; con una cuenta sin procedencia se detiene; base ausente + cuentas huérfanas se detiene; base ausente sin cuentas no hace nada', async () => {
+    const ok = scripted({ marker: false, steps: {} }); await B.destroySandbox(ok, 'sbx1'); expect(drops(ok)).toEqual(['DROP DATABASE `sandbox_api02_homolog_sbx1`']);
+    const acc = scripted({ marker: false, steps: {}, accounts: [accounts[0]] }); await expect(B.destroySandbox(acc, 'sbx1')).rejects.toMatchObject({ diagnostic: { refused: 'ACCOUNT_PROVENANCE' } }); expect(drops(acc)).toEqual([]);
+    const orphan = scripted({ exists: false, accounts }); await expect(B.destroySandbox(orphan, 'sbx1')).rejects.toMatchObject({ diagnostic: { refused: 'ORPHAN_ACCOUNTS' } }); expect(drops(orphan)).toEqual([]);
+    const none = scripted({ exists: false }); await expect(B.destroySandbox(none, 'sbx1')).resolves.toMatchObject({ state: 'ABSENT', schema: false }); expect(drops(none)).toEqual([]);
+  });
+  it('destrucción interrumpida: con una cuenta ya eliminada, se reanuda y solo elimina las que existen y la base; `apply` rechaza cuentas huérfanas (ORPHAN_ACCOUNTS)', async () => {
+    const part = scripted({ accounts: [accounts[2]] }); await B.destroySandbox(part, 'sbx1'); expect(drops(part)).toEqual([`DROP USER \`${accounts[2]}\`@\`127.0.0.1\``, 'DROP DATABASE `sandbox_api02_homolog_sbx1`']);
+    const orphan = scripted({ exists: false, accounts: [accounts[0]] }); await expect(B.executeBundle(orphan, B.buildBootstrap('sbx1', repo), secretsOf(B.homologNames('sbx1')))).rejects.toMatchObject({ code: 'STATE_NOT_ABSENT', diagnostic: { state: 'ORPHAN_ACCOUNTS' } }); expect(orphan.sql).toEqual([]);
+  });
+  it('el paquete escribe la propiedad en la MISMA sentencia que crea la base y anota la procedencia de cada cuenta antes de crearla', async () => {
+    const b = B.buildBootstrap('sbx1', repo); expect(b.head[0]).toBe("CREATE DATABASE `sandbox_api02_homolog_sbx1` CHARACTER SET utf8mb4 COMMENT 'novalvion-sandbox-owner:homolog-sbx1'");
+    const c = scripted({ exists: false }); await B.executeBundle(c, b, secretsOf(b.names)); const first = c.marks.findIndex((m) => m[0] === 'account:app' && m[1] === 'STARTED'); expect(first).toBeGreaterThanOrEqual(0);
+    expect(['account:app', 'account:worker', 'account:monitor'].every((k) => c.steps[k] === 'COMPLETE')).toBe(true);
   });
 });

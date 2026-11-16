@@ -204,14 +204,14 @@ async function rehearseHomologation() {
   const step = (x) => { if (process.env.PS_DEMO_DEBUG) console.error(`[rehearse] ${x}`); };
   const admin = await adminConn(m); const report = { names, errors: {} }; step('conectado');
   try {
-  for (const k of ['r1', 'r2', 'r3', 'r4']) for (const sql of B.destroyStatements(k)) await admin.query(sql);   // limpieza previa (solo nombres homolog_r1…r4)
+  for (const k of ['r1', 'r2', 'r3', 'r4', 'r5']) for (const sql of B.destroyStatements(k)) await admin.query(sql);   // limpieza previa (solo nombres homolog_r1…r4)
   step('limpieza previa hecha');
   // Aislamiento de `apply`/`finalize`/`destroy`: una base y una cuenta «señuelo» AJENAS al sandbox (y las cuentas/bases del laboratorio) deben quedar EXACTAMENTE igual tras todo el ciclo.
   const decoy = 'sandbox_api02_homolog_decoy'; const decoyPw = crypto.randomBytes(24).toString('hex');
   await admin.query(`DROP DATABASE IF EXISTS \`${decoy}\``); await admin.query(`DROP USER IF EXISTS \`${decoy}\`@\`127.0.0.1\``);
   await admin.query(`CREATE DATABASE \`${decoy}\``); await admin.query(`CREATE TABLE \`${decoy}\`.t (id INT PRIMARY KEY, v VARCHAR(20))`); await admin.query(`INSERT INTO \`${decoy}\`.t VALUES (1, 'intacto')`);
   await admin.query(`CREATE USER \`${decoy}\`@\`127.0.0.1\` IDENTIFIED BY '${decoyPw}'`); await admin.query(`GRANT SELECT ON \`${decoy}\`.t TO \`${decoy}\`@\`127.0.0.1\``);
-  const sandboxes = ['r1', 'r2', 'r3', 'r4'].map((k) => B.homologNames(k)); const ownNames = new Set(sandboxes.flatMap((x) => [x.appUser, x.workerUser, x.monitorUser])); const ownSchemas = new Set(sandboxes.map((x) => x.schema));
+  const sandboxes = ['r1', 'r2', 'r3', 'r4', 'r5'].map((k) => B.homologNames(k)); const ownNames = new Set(sandboxes.flatMap((x) => [x.appUser, x.workerUser, x.monitorUser])); const ownSchemas = new Set(sandboxes.map((x) => x.schema));
   const snap = async () => {
     const users = (await admin.query("SELECT DISTINCT User u FROM mysql.user WHERE User LIKE 'sandbox%' ORDER BY 1"))[0].map((r) => r.u).filter((u) => !ownNames.has(u)); const grants = {};
     for (const u of users) grants[u] = (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>')).sort();   // el ORDEN de SHOW GRANTS no está garantizado tras recargar privilegios
@@ -254,7 +254,7 @@ async function rehearseHomologation() {
   report.catalog = { integrations: (await admin.query('SELECT COUNT(*) n FROM ps_api11_integrations'))[0][0].n, revocations: (await admin.query('SELECT COUNT(*) n FROM ps_api11_revocations'))[0][0].n };
   report.tables = (await admin.query('SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY 1', [names.schema]))[0].map((r) => r.t);
   report.environmentRow = (await admin.query('SELECT environment, sandbox_id FROM novalvion_environment'))[0][0];
-  for (const sql of B.destroyStatements('r1')) await admin.query(sql);
+  await B.destroySandbox(admin, 'r1');
   // ---- Fallos REALES de DDL y recuperación (sobre sandboxes r2, r3, r4; todo con nombres homolog_*): ninguna instalación parcial se informa como éxito ni activa permisos finales.
   const sab = path.join(m.runDir, 'sabotaged'); fs.rmSync(sab, { recursive: true, force: true }); fs.mkdirSync(path.join(sab, 'sql'), { recursive: true });
   fs.writeFileSync(path.join(sab, 'sql', 'broken.sql'), 'CREATE TABLE ok_t (id INT);\nCREATE TABLE bad_t (a INT DEFAULT \'no-es-entero\');\n');
@@ -274,22 +274,22 @@ async function rehearseHomologation() {
   report.failures.tmsIncomplete = { result: await failureOf(() => B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: ['sql/broken.sql'] } })), after: await inspect(nmA) };
   report.failures.tmsIncomplete.reapply = await failureOf(() => B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: ['sql/broken.sql'] } }));
   report.failures.tmsIncomplete.finalize = await failureOf(() => B.finalizeBundle(admin, bA, { repo: repoRoot, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir, runtimeSchemaStep: async () => { throw new Error('NO DEBE EJECUTARSE'); } }));
-  for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  await B.destroySandbox(admin, 'r2');
   report.failures.tmsIncomplete.destroyed = await inspect(nmA);
   report.failures.tmsIncomplete.recovered = await failureOf(async () => { report.failures.tmsIncomplete.recoveredApplied = await B.executeBundle(admin, bA, secretsFor(), { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } }); });
-  report.failures.tmsIncomplete.recoveredState = await inspect(nmA); for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  report.failures.tmsIncomplete.recoveredState = await inspect(nmA); await B.destroySandbox(admin, 'r2');
   // A2) sentencia DIFERIDA (depende de una fase posterior): `apply` la informa y NO es «completo»; `finalize` NO la acepta, revoca lo temporal y no concede privilegios finales.
   report.failures.deferred = {}; report.failures.deferred.applied = await failureOf(async () => { report.failures.deferred.report = await B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: [...B.tmsSchemaPhases(sab).base, 'sql/deferred.sql'] } }); });
   report.failures.deferred.afterApply = await inspect(nmA);
   report.failures.deferred.finalize = await failureOf(() => B.finalizeBundle(admin, bA, { repo: sab, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir, runtimeSchemaStep: async () => ({ exit: 0, tail: '' }), phases: { base: [...B.tmsSchemaPhases(sab).base, 'sql/deferred.sql'], migrations: [], confirmations: [] } }));
   report.failures.deferred.afterFinalize = await inspect(nmA); report.failures.deferred.privilegesTmp = (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMA_PRIVILEGES WHERE GRANTEE LIKE ?', [`%${nmA.appUser}%`]))[0][0].n;
-  for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  await B.destroySandbox(admin, 'r2');
   // B) fallo REAL de DDL de PriceSmart a mitad del paquete: queda PARCIAL (sin reversión del DDL), sin cuentas ni privilegios.
   const nmB = B.homologNames('r3'); const bB0 = B.buildBootstrap('r3', repoRoot);
   const bB = { ...bB0, ddl: [...bB0.ddl.slice(0, 6), 'CREATE TABLE ps_api99_roto (a INT, FOREIGN KEY (a) REFERENCES no_existe_xyz(id))', ...bB0.ddl.slice(6)] };
   report.failures.ddlFailure = { result: await failureOf(() => B.executeBundle(admin, bB, secretsFor())), after: await inspect(nmB) };
   report.failures.ddlFailure.reapply = await failureOf(() => B.executeBundle(admin, bB0, secretsFor()));
-  for (const sql of B.destroyStatements('r3')) await admin.query(sql); report.failures.ddlFailure.destroyed = await inspect(nmB);
+  await B.destroySandbox(admin, 'r3'); report.failures.ddlFailure.destroyed = await inspect(nmB);
   // C) fallos en FINALIZE sobre un sandbox APLICADO: privilegios temporales revocados, sin privilegios finales, marcador FAILED; luego recuperación real.
   const nmC = B.homologNames('r4'); const bC = B.buildBootstrap('r4', repoRoot); const sandboxSecretsC = B.generateSandboxSecrets(nmC); const rootC = path.join(m.runDir, 'homolog-root-r4'); fs.rmSync(rootC, { recursive: true, force: true }); fs.mkdirSync(path.join(rootC, 'uploads'), { recursive: true });
   fs.writeFileSync(path.join(rootC, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(nmC, sandboxSecretsC, { dbPort: m.port })));
@@ -302,7 +302,44 @@ async function rehearseHomologation() {
   report.failures.finalize.migrationsIncomplete = { result: await failureOf(() => fin({ repo: sab, runtimeSchemaStep: async () => ({ exit: 0, tail: '' }), phases: { base: [], migrations: [], confirmations: ['sql/broken.sql'] } })), privileges: await privileges(), after: await inspect(nmC) };
   report.failures.finalize.recovered = { result: await failureOf(async () => { report.failures.finalize.recoveredReport = await fin({}); }), privileges: await privileges(), after: await inspect(nmC) };
   report.failures.finalize.reapplyAfterComplete = await failureOf(() => fin({ runtimeSchemaStep: async () => { throw new Error('NO DEBE EJECUTARSE'); } }));
-  for (const sql of B.destroyStatements('r4')) await admin.query(sql); report.failures.finalize.destroyed = await inspect(nmC);
+  await B.destroySandbox(admin, 'r4'); report.failures.finalize.destroyed = await inspect(nmC);
+  // E) PROPIEDAD en `destroy` (sobre el nombre r5; cada caso es MariaDB real). Ninguna baja se hace por coincidencia de nombre.
+  const nm5 = B.homologNames('r5'); const own = report.ownership = {};
+  const raw5 = async () => { for (const sql of B.destroyStatements('r5')) await admin.query(sql); };
+  const snap5 = async () => ({ state: (await B.preflightProvision(admin, nm5)).state, schema: Number((await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [nm5.schema]))[0][0].n),
+    accounts: Number((await admin.query("SELECT COUNT(DISTINCT GRANTEE) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?", [`%homolog_%r5%`]))[0][0].n) });
+  const apply5 = () => B.executeBundle(admin, B.buildBootstrap('r5', repoRoot), { app: B.generateSandboxSecrets(nm5).DB_PASSWORD, worker: crypto.randomBytes(24).toString('hex'), monitor: crypto.randomBytes(24).toString('hex') }, { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } });
+  await raw5();
+  // E1) sandbox propio completo → se destruye
+  await apply5(); own.own = { before: await snap5() }; own.own.result = await failureOf(async () => { own.own.report = await B.destroySandbox(admin, 'r5'); }); own.own.after = await snap5();
+  // E2) base AJENA con el mismo nombre (sin comentario ni marcador) + cuentas ajenas con los mismos nombres → rechazado; nada cambia
+  await raw5(); await admin.query(`CREATE DATABASE \`${nm5.schema}\``); await admin.query(`CREATE TABLE \`${nm5.schema}\`.datos (id INT PRIMARY KEY, v VARCHAR(20))`); await admin.query(`INSERT INTO \`${nm5.schema}\`.datos VALUES (1, 'ajeno')`);
+  for (const u of [nm5.appUser, nm5.workerUser]) { await admin.query(`CREATE USER \`${u}\`@\`127.0.0.1\` IDENTIFIED BY '${decoyPw}'`); await admin.query(`GRANT SELECT ON \`${nm5.schema}\`.datos TO \`${u}\`@\`127.0.0.1\``); }
+  const sum5 = async () => ({ checksum: (await admin.query(`CHECKSUM TABLE \`${nm5.schema}\`.datos`))[0][0].Checksum, ...(await snap5()) });
+  own.foreignNoMarker = { before: await sum5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await sum5() };
+  own.foreignNoMarker.apply = await failureOf(() => apply5());
+  // E3) identidad distinta: comentario de OTRO sandbox; y comentario propio pero fila de entorno de otro sandbox
+  await raw5(); await admin.query(`CREATE DATABASE \`${nm5.schema}\` COMMENT 'novalvion-sandbox-owner:homolog-otro'`); await admin.query(`CREATE TABLE \`${nm5.schema}\`.datos (id INT PRIMARY KEY, v VARCHAR(20))`); await admin.query(`INSERT INTO \`${nm5.schema}\`.datos VALUES (1, 'ajeno')`);
+  own.otherComment = { before: await sum5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await sum5() };
+  await raw5(); await admin.query(`CREATE DATABASE \`${nm5.schema}\` COMMENT '${B.ownerComment(nm5)}'`); await admin.query(`CREATE TABLE \`${nm5.schema}\`.novalvion_environment (id TINYINT NOT NULL PRIMARY KEY, environment VARCHAR(16) NOT NULL, sandbox_id VARCHAR(48) NOT NULL)`);
+  await admin.query(`INSERT INTO \`${nm5.schema}\`.novalvion_environment VALUES (1, 'sandbox', 'homolog-otro')`); await admin.query(`CREATE TABLE \`${nm5.schema}\`.datos (id INT PRIMARY KEY)`);
+  own.otherIdentity = { before: await snap5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await snap5() };
+  // E4) fallo ANTES de los marcadores (solo el comentario de propiedad): recuperable sin intervención; con una cuenta SIN procedencia → se detiene
+  await raw5(); await admin.query(`CREATE DATABASE \`${nm5.schema}\` COMMENT '${B.ownerComment(nm5)}'`);
+  own.beforeMarkers = { state: (await B.preflightProvision(admin, nm5)).state }; own.beforeMarkers.result = await failureOf(async () => { own.beforeMarkers.report = await B.destroySandbox(admin, 'r5'); }); own.beforeMarkers.after = await snap5();
+  await raw5(); await admin.query(`CREATE DATABASE \`${nm5.schema}\` COMMENT '${B.ownerComment(nm5)}'`); await admin.query(`CREATE USER \`${nm5.appUser}\`@\`127.0.0.1\` IDENTIFIED BY '${decoyPw}'`);
+  own.beforeMarkersForeignAccount = { before: await snap5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await snap5() };
+  // E5) base propia pero una cuenta con privilegios FUERA del sandbox → se detiene; al corregirlo (revocar) la baja procede
+  await raw5(); await apply5(); await admin.query(`GRANT SELECT ON \`${decoy}\`.t TO \`${nm5.workerUser}\`@\`127.0.0.1\``);
+  own.grantsOutside = { before: await snap5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await snap5() };
+  await admin.query(`REVOKE SELECT ON \`${decoy}\`.t FROM \`${nm5.workerUser}\`@\`127.0.0.1\``); own.grantsOutside.afterFix = await failureOf(async () => { own.grantsOutside.fixReport = await B.destroySandbox(admin, 'r5'); }); own.grantsOutside.final = await snap5();
+  // E6) destrucción INTERRUMPIDA (dos cuentas ya eliminadas): reanudable; y base desaparecida con cuentas huérfanas → se detiene
+  await apply5(); await admin.query(`DROP USER \`${nm5.appUser}\`@\`127.0.0.1\``); await admin.query(`DROP USER \`${nm5.workerUser}\`@\`127.0.0.1\``);
+  own.interrupted = { before: await snap5() }; own.interrupted.result = await failureOf(async () => { own.interrupted.report = await B.destroySandbox(admin, 'r5'); }); own.interrupted.after = await snap5();
+  await apply5(); await admin.query(`DROP DATABASE \`${nm5.schema}\``);
+  own.orphans = { before: await snap5(), result: await failureOf(() => B.destroySandbox(admin, 'r5')), after: await snap5(), apply: await failureOf(() => apply5()) };
+  await raw5(); own.repeated = {}; own.repeated.first = await failureOf(async () => { own.repeated.firstReport = await B.destroySandbox(admin, 'r5'); }); own.repeated.second = await failureOf(async () => { own.repeated.secondReport = await B.destroySandbox(admin, 'r5'); });
+  own.decoyIntact = { checksum: (await admin.query(`CHECKSUM TABLE \`${decoy}\`.t`))[0][0].Checksum === before.decoyChecksum, grants: (await admin.query(`SHOW GRANTS FOR \`${decoy}\`@\`127.0.0.1\``))[0].length };
   const after = await snap();
   const changed = Object.keys(before).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k])).map((k) => ({ key: k, before: JSON.stringify(before[k]).slice(0, 400), after: JSON.stringify(after[k]).slice(0, 400) }));
   report.isolation = { changed, unchanged: JSON.stringify(before) === JSON.stringify(after), usersChecked: before.users, schemasChecked: before.schemas, decoyIntact: (await admin.query(`SELECT v FROM \`${decoy}\`.t`))[0][0]?.v === 'intacto' };
