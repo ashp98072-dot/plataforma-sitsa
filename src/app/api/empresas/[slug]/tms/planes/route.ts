@@ -1,4 +1,5 @@
 import { resolverUnidadTms,resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import { NextResponse } from "next/server";
 import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
@@ -878,7 +879,12 @@ export async function POST(req: Request, ctx: Ctx) {
       } catch {
         /* si falla disponibilidad, no bloquear creación */
       }
-      unidadId = await resolverUnidadTms(empresaId, placaNorm, flotaVehiculoId);
+      try {
+        unidadId = await resolverUnidadTms(empresaId, placaNorm, flotaVehiculoId);
+      } catch (e) {
+        if (e instanceof ErrorCB2) return NextResponse.json({ error:e.message }, { status:e.status });
+        throw e;
+      }
     }
 
     pilotoId = await personalDesdeEmpleado(
@@ -2398,6 +2404,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch (e) {
     await conn.rollback();
     console.error("PATCH tms/planes transacción", e);
+    if (e instanceof ErrorCB2) return NextResponse.json({ error:e.message }, { status:e.status });
     if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json(
       { error: "No se pudo actualizar el plan. Intenta de nuevo." },

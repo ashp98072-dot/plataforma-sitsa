@@ -1,3 +1,4 @@
+import { modeloSqlUnidadTms } from "@/lib/tms/unidad-canonica-sql.fixture";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -65,10 +66,12 @@ function responderQuery(sql: string, params: unknown[]): unknown[] {
 }
 
 function crearConexion() {
+  const unidadSql=modeloSqlUnidadTms(7,[{id:77,empresa_id:7,placa:"C-500",activo:1,estado:"Activo"}]);
   return {
+    unidadSql,
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
-    query: vi.fn(async (sql: string) => (String(sql).includes("GET_LOCK") ? [[{ l: 1 }]] : [[]])),
-    execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async () => [{ insertId: 55, affectedRows: 1 }]),
+    query: vi.fn(async (sql: string, params:unknown[] = []) => {const unidad=unidadSql.consultar(sql,params);return unidad!==undefined?[unidad]:(String(sql).includes("GET_LOCK") ? [[{ l: 1 }]] : [[]]);}),
+    execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async (sql:string,params:unknown[]=[]) => {unidadSql.insertar(sql,params,55);return [{ insertId: 55, affectedRows: 1 }];}),
   };
 }
 let conexion: ReturnType<typeof crearConexion>;

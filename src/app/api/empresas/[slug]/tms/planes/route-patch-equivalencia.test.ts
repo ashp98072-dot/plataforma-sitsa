@@ -1,3 +1,4 @@
+import { modeloSqlUnidadTms } from "@/lib/tms/unidad-canonica-sql.fixture";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -69,17 +70,20 @@ const plan = (over: Record<string, unknown> = {}) => ({
 });
 
 function crearConexion() {
+  const unidadSql=modeloSqlUnidadTms(7,[{id:77,empresa_id:7,placa:"c-777",activo:1,estado:"Activo"}]);
   return {
+    unidadSql,
     beginTransaction: vi.fn(async () => { orden.push("begin"); }),
     commit: vi.fn(async () => { orden.push("commit"); }),
     rollback: vi.fn(async () => { orden.push("rollback"); }),
     release: vi.fn(),
-    query: vi.fn(async (sql: string) => {
+    query: vi.fn(async (sql: string, params:unknown[] = []) => {
+      const unidad=unidadSql.consultar(sql,params);if(unidad!==undefined)return [unidad];
       if (String(sql).includes("GET_LOCK")) { orden.push("lock"); return [[{ l: 1 }]]; }
       if (String(sql).includes("RELEASE_LOCK")) { orden.push("unlock"); return [[{ l: 1 }]]; }
       return [[]];
     }),
-    execute: vi.fn(async (sql: string) => { if (String(sql).includes("UPDATE tms_planes_viaje")) orden.push("update"); return [{ insertId: 91, affectedRows: 1 }]; }),
+    execute: vi.fn(async (sql: string, params:unknown[]=[]) => {unidadSql.insertar(sql,params,91); if (String(sql).includes("UPDATE tms_planes_viaje")) orden.push("update"); return [{ insertId: 91, affectedRows: 1 }]; }),
   };
 }
 
@@ -283,6 +287,20 @@ describe("PATCH — disponibilidad de personal", () => {
 describe("PATCH — disponibilidad de unidad", () => {
   beforeEach(() => vi.mocked(obtenerVehiculoAccesible).mockResolvedValue({ placa: "c-777" } as never));
   const cambiarUnidad = () => ({ id: 40, flotaVehiculoId: 77, motivoCambio: "Unidad no disponible" });
+
+  it.each([403,409] as const)("conserva el error %i del resolvedor real y revierte sin actualizar el plan",async status=>{
+    usarVehiculos(vehiculo());
+    if(status===403)conexion.unidadSql.modelo.empresaActiva=false;
+    else conexion.unidadSql.modelo.unidades.push(
+      {id:400,empresa_id:7,placa:"c-777",flota_vehiculo_id:77},
+      {id:401,empresa_id:7,placa:"OTRA-PLACA",flota_vehiculo_id:77},
+    );
+    const res=await patch(cambiarUnidad());
+    expect(res.status).toBe(status);
+    expect((await res.json()).error).toContain(status===403?"Empresa no vigente":"Identidad TMS ambigua");
+    expect(update()).toBeUndefined();
+    expect(conexion.rollback).toHaveBeenCalled();
+  });
 
   it("11) unidad inactiva -> 409", async () => {
     usarVehiculos(vehiculo({ estadoDisponibilidad: "inactivo" }));
