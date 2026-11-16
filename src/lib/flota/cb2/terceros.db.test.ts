@@ -675,7 +675,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await cb2(fallido);
   expect((await preview(ctx,fallido.buffer,fallido.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4443,confirmado:false});
   const reutilizado=await shell("CORRECCION-REUSO",nombreCorreccion,propia,1);
-  reutilizado.entrada.seleccion[0]={...reutilizado.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"EXACTA_NORMALIZADA",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:false}};
+  reutilizado.entrada.seleccion[0]={...reutilizado.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:false}};
   await cb2(reutilizado);
   expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-REUSO'"))[0].empleado_id).toBe(4443);
   // Dos proveedores confirman destinos distintos: el bloqueo empresarial conserva una cadena auditada.
