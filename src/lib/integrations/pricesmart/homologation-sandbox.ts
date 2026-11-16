@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { hasReviewedKmsAdapter } from './kms-provider-selection';
 
 // PRICESMART API-25 — requisitos EJECUTABLES para que Mónaco entregue un sandbox de homologación a PriceSmart. Función PURA: no lee el entorno, no abre conexiones, no instala nada y no autoriza nada.
 // Recibe un PERFIL DECLARATIVO del sandbox propuesto (solo booleanos y nombres: nunca secretos, claves ni URLs con credenciales) y devuelve los BLOQUEANTES que siguen vigentes.
-// Dos cosas NO se pueden declarar en el perfil porque dependen del estado real del código/acuerdos: el adaptador KMS revisado (`hasReviewedKmsAdapter()`, hoy falso) y la ratificación de D02 por PriceSmart.
+// El adaptador KMS revisado NO forma parte del perfil declarativo: lo aporta el LLAMADOR desde el registro oficial (`hasReviewedKmsAdapter()`, hoy falso) como segundo argumento OBLIGATORIO. Este módulo no importa módulos de
+// composición (lo impide un guardia estático) y no puede sustituir ese hecho por un valor por omisión.
 // Por eso `authorizesExternalExposure` es SIEMPRE false: este módulo lista lo que falta; la exposición externa solo podrá autorizarla una revisión humana cuando la lista esté vacía.
 // El laboratorio local (esquemas `sandbox_api02_*`, verificador HMAC sintético, `PRICESMART_LAB_*`) NO es un sandbox de homologación y se rechaza explícitamente.
 const bool = z.boolean();
@@ -27,7 +27,7 @@ export type SandboxExposureReport = { authorizesExternalExposure: false; exposab
  */
 export const HOMOLOGATION_SCHEMA_PREFIX = /^sandbox_api02_homolog_[a-z0-9_]{1,30}$/;
 
-export function evaluateSandboxExposure(input: unknown): SandboxExposureReport {
+export function evaluateSandboxExposure(input: unknown, facts: { kmsAdapterReviewed: boolean }): SandboxExposureReport {
   const report = (blockers: string[], satisfied: string[]): SandboxExposureReport => ({ authorizesExternalExposure: false, exposable: false, blockers: [...new Set(blockers)], satisfied });
   const parsed = sandboxProfileSchema.safeParse(input);
   if (!parsed.success) return report(['PROFILE_INVALID'], []);
@@ -51,8 +51,8 @@ export function evaluateSandboxExposure(input: unknown): SandboxExposureReport {
   if (p.verifier.kind === 'LAB_HMAC') blockers.push('LAB_VERIFIER_NOT_ALLOWED_EXTERNALLY');
   else if (p.verifier.kind === 'NONE') blockers.push('VERIFIER_NOT_PROVIDED');
   else need('D02_RATIFIED_BY_PRICESMART', p.verifier.d02RatifiedByPriceSmart);
-  // Estado REAL del código (no declarable): sin adaptador KMS revisado no hay forma de custodiar claves de un sandbox externo.
-  need('KMS_ADAPTER_REVIEWED', hasReviewedKmsAdapter());
+  // Hecho aportado por el llamador desde el registro oficial (no declarable en el perfil): sin adaptador KMS revisado no hay forma de custodiar claves de un sandbox externo.
+  need('KMS_ADAPTER_REVIEWED', facts?.kmsAdapterReviewed === true);   // cualquier otro valor (ausente, truthy no booleano) cuenta como NO revisado
   return report(blockers, satisfied);
 }
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CURRENT_LAB_PROFILE, evaluateSandboxExposure, sandboxProfileSchema, type SandboxProfile } from './homologation-sandbox';
 import { assessDeliveryEvidence, deliveryEvidenceUnavailable } from './delivery-evidence';
+import { hasReviewedKmsAdapter } from './kms-provider-selection';
+
+// El registro OFICIAL de adaptadores KMS (vacío hoy) es la fuente del hecho; los módulos de producción no lo importan (guardia estático de API-21).
+const official = { kmsAdapterReviewed: hasReviewedKmsAdapter() };
+const evaluate = (profile: unknown) => evaluateSandboxExposure(profile, official);
 
 // PRICESMART API-25 — pruebas de los requisitos del sandbox de homologación y de la evidencia de entrega (puras, sin base de datos).
 const ideal = (): SandboxProfile => ({
@@ -16,13 +21,13 @@ const ideal = (): SandboxProfile => ({
 
 describe('API-25 requisitos del sandbox de homologación', () => {
   it('NUNCA autoriza la exposición externa: ni con un perfil ideal (falta el adaptador KMS revisado, que no es declarable)', () => {
-    const r = evaluateSandboxExposure(ideal());
+    const r = evaluate(ideal());
     expect(r.authorizesExternalExposure).toBe(false); expect(r.exposable).toBe(false);
     expect(r.blockers).toEqual(['KMS_ADAPTER_REVIEWED']);   // lo único que falta con todo declarado: depende del estado real del código
     expect(r.satisfied).toEqual(expect.arrayContaining(['HTTPS_ONLY', 'DB_DEDICATED_SERVER', 'SECRETS_SEPARATED', 'D02_RATIFIED_BY_PRICESMART', 'LAB_COMPOSITION_ABSENT']));
   });
   it('el laboratorio local actual NO es un sandbox de homologación: lista exactamente por qué (HMAC sintético, esquema sandbox_api02_, sin HTTPS, flag de laboratorio presente…)', () => {
-    const r = evaluateSandboxExposure(CURRENT_LAB_PROFILE);
+    const r = evaluate(CURRENT_LAB_PROFILE);
     expect(r.blockers).toEqual(expect.arrayContaining(['HTTPS_ONLY', 'NETWORK_ALLOWLIST', 'DB_DEDICATED_SERVER', 'DB_SCHEMA_PREFIX_NOT_LAB', 'LAB_VERIFIER_NOT_ALLOWED_EXTERNALLY', 'LAB_COMPOSITION_ABSENT', 'KMS_ADAPTER_REVIEWED', 'SECRET_ROTATION_PROCEDURE', 'MONITORING']));
     expect(r.exposable).toBe(false);
   });
@@ -40,14 +45,21 @@ describe('API-25 requisitos del sandbox de homologación', () => {
       ['LAB_COMPOSITION_ABSENT', (p) => { p.process.labCompositionFlagPresent = true; }], ['D02_RATIFIED_BY_PRICESMART', (p) => { p.verifier.d02RatifiedByPriceSmart = false; }],
       ['LAB_VERIFIER_NOT_ALLOWED_EXTERNALLY', (p) => { p.verifier.kind = 'LAB_HMAC'; }], ['VERIFIER_NOT_PROVIDED', (p) => { p.verifier.kind = 'NONE'; }],
     ];
-    for (const [id, mutate] of cases) { const p = ideal(); mutate(p); expect(evaluateSandboxExposure(p).blockers, id).toContain(id); }
+    for (const [id, mutate] of cases) { const p = ideal(); mutate(p); expect(evaluate(p).blockers, id).toContain(id); }
+  });
+  it('el hecho del KMS lo aporta el llamador: solo `true` estricto cuenta como revisado, y con todo cumplido la lista de bloqueantes queda vacía pero la exposición NO se autoriza', () => {
+    for (const v of [undefined, null, 1, 'true', {}]) expect(evaluateSandboxExposure(ideal(), { kmsAdapterReviewed: v } as never).blockers, String(v)).toContain('KMS_ADAPTER_REVIEWED');
+    expect(evaluateSandboxExposure(ideal(), undefined as never).blockers).toContain('KMS_ADAPTER_REVIEWED');
+    const allClear = evaluateSandboxExposure(ideal(), { kmsAdapterReviewed: true });
+    expect(allClear.blockers).toEqual([]); expect(allClear.exposable).toBe(false); expect(allClear.authorizesExternalExposure).toBe(false);   // lista vacía ≠ autorización: la decide una revisión humana
+    expect(official.kmsAdapterReviewed).toBe(false);   // hoy el registro oficial está vacío
   });
   it('perfiles inválidos, con campos de más (secretos) o de otro tipo → PROFILE_INVALID, y el informe nunca contiene valores del perfil', () => {
     for (const bad of [null, undefined, 'x', {}, { ...ideal(), apiKey: 'secreto-1234' }, { ...ideal(), secrets: { ...ideal().secrets, value: 'secreto-1234' } }, { ...ideal(), transport: { httpsOnly: 'sí' } }]) {
-      const r = evaluateSandboxExposure(bad); expect(r.blockers).toEqual(['PROFILE_INVALID']); expect(r.exposable).toBe(false); expect(JSON.stringify(r)).not.toContain('secreto-1234');
+      const r = evaluate(bad); expect(r.blockers).toEqual(['PROFILE_INVALID']); expect(r.exposable).toBe(false); expect(JSON.stringify(r)).not.toContain('secreto-1234');
     }
     expect(sandboxProfileSchema.safeParse(ideal()).success).toBe(true);
-    const leaked = evaluateSandboxExposure({ ...ideal(), database: { ...ideal().database, schemaPrefix: 'sandbox_api02_homolog_main' } });
+    const leaked = evaluate({ ...ideal(), database: { ...ideal().database, schemaPrefix: 'sandbox_api02_homolog_main' } });
     expect(JSON.stringify(leaked)).not.toContain('sandbox_api02_homolog_main');
   });
 });

@@ -36,6 +36,9 @@ describe("API-25 consulta periódica (PriceSmart consulta cada orden ~cada hora)
     const sched = [await scheduled(), await scheduled()]; ids.push(...sched.map((s) => s.id));
     const snapshot = async () => [await ctx.count("SELECT COUNT(*) n FROM ps_api01_orders"), await ctx.count("SELECT COUNT(*) n FROM ps_api01_events"), await ctx.count("SELECT COUNT(*) n FROM ps_api01_outbox"),
       await ctx.count("SELECT COUNT(*) n FROM ps_api01_audit"), await ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente"), await ctx.count("SELECT COUNT(*) n FROM tms_planes_viaje"), await ctx.count("SELECT COUNT(*) n FROM auditoria")];
+    // Calentamiento: `next dev` compila la ruta en su primer uso y, con 14 solicitudes simultáneas contra el servidor en frío, alguna podía superar el límite de 20 s de la solicitud (503 UNAVAILABLE por latencia de compilación,
+    // no por los puertos de seguridad: se verificó sin errores de base de datos). Se consulta una orden ANTES de la ráfaga; la lectura de calentamiento también cuenta en la auditoría de acceso.
+    expect((await get("a", ids[0])).status).toBe(200);
     const antes = await snapshot();
     const rounds: Row[][] = [];
     for (let r = 0; r < 3; r++) rounds.push((await Promise.all(ids.map((id) => get("a", id)))).map((x) => { expect(x.status, JSON.stringify(x.json)).toBe(200); return x.json; }));
