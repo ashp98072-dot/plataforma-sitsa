@@ -24,7 +24,7 @@ const envSchema = z.object({
   PRICESMART_RATIFIED_DECISIONS: z.string().regex(/^(D\d{2})(,D\d{2})*$/).optional(),   // lo declara el operador SOLO tras la confirmación escrita de PriceSmart
   PRICESMART_ORIGIN_CLUB: reference.max(64),
   PRICESMART_DB_SCHEMA: z.string().regex(/^[A-Za-z0-9_]{1,64}$/),
-  PRICESMART_DB_RUNTIME_USER: z.string().regex(/^[A-Za-z0-9_]{1,32}$/),
+  PRICESMART_DB_RUNTIME_USER: z.string().regex(/^[A-Za-z0-9_]{1,64}$/),   // API-26: los nombres `sandbox_api02_homolog_<n>` y los de laboratorio superan 32 caracteres (MariaDB 11 admite 80); la validación estricta del patrón está en los puertos y en la compuerta
   PRICESMART_TIMEOUT_MS: num(1000, 60000).default(20000),
   PRICESMART_MAX_BODY_BYTES: num(1024, 1_048_576).default(8192),
   PRICESMART_MAX_EVIDENCE_BYTES: num(256, 65536).default(4096),

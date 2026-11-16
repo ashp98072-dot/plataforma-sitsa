@@ -20,7 +20,7 @@ export const scopeOfKey = (k: Key) => ({ tenantId: k === "b" ? empresas.b.empres
 export const scopeFull = (k: Key) => ({ environment: "sandbox" as const, ...scopeOfKey(k), integrationId: INTEGRATION });
 
 export async function connect() {
-  const db = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME });
+  const db = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: process.env.PS_DEMO_OWNER_USER ?? process.env.DB_USER, password: process.env.PS_DEMO_OWNER_PASSWORD ?? process.env.DB_PASSWORD, database: process.env.DB_NAME });
   const cookie = `${SESSION_COOKIE}=${await createSessionToken({ id: staff.id, username: staff.username, rol: "Admin", nombre: "Operaciones Ficticio", accesoTodas: true })}`;
   const rows = async (sql: string, p: unknown[] = []) => (await db.query(sql, p))[0] as Row[];
   const count = async (sql: string, p: unknown[] = []) => Number((await rows(sql, p))[0].n);
@@ -29,7 +29,7 @@ export async function connect() {
 
 const enc = (v: unknown) => new TextEncoder().encode(JSON.stringify(v));
 export type Over = { proofId?: string; tamper?: boolean; issuedAtMs?: number; expiresAtMs?: number; environment?: string };
-function evidence(key: Key, op: Operation, externalId: string, body: Uint8Array, over: Over = {}) {
+export function evidence(key: Key, op: Operation, externalId: string, body: Uint8Array, over: Over = {}) {
   const now = Date.now();
   const target = { environment: (over.environment ?? "sandbox") as "sandbox", ...scopeOfKey(key), integrationId: INTEGRATION, originClubReference: CLUB, externalOrderId: externalId };
   const proof = { id: over.proofId ?? `p${randomBytes(8).toString("hex")}`, issuedAtMs: over.issuedAtMs ?? now, expiresAtMs: over.expiresAtMs ?? now + 60000, bindingDigest: requestBindingDigest(op, target, body) };

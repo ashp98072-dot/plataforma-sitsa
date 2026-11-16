@@ -130,7 +130,9 @@ describe('aislamiento del cableado', () => {
   it('ninguna ruta ni módulo de la aplicación invoca el ensamblaje (producción sigue cerrada)', () => {
     const root = path.resolve(__dirname, '../../..');   // src/
     const hits: string[] = [];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && !/runtime-assembly\.ts$/.test(n) && /runtime-assembly|installControlledRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
+    // API-26: la ÚNICA composición administrativa prevista (homologation/runtime.ts) puede importarlos; ninguna ruta ni otro módulo. Nada la invoca hoy (lo verifica homologation/provisioning.test.ts).
+    const composition = (f: string) => path.relative(root, f).split(path.sep).join('/') === 'lib/integrations/pricesmart/homologation/runtime.ts';
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && !/runtime-assembly\.ts$/.test(n) && !composition(f) && /runtime-assembly|installControlledRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(root, f)); } };
     walk(root); expect(hits).toEqual([]);
   }, 30000);
   it('el módulo de configuración no lee process.env', () => {

@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { validateManifest, buildChildEnv, adminOptions, assertAdminOptions, pickPort, fail } from '../pricesmart-api06a/safety.mjs';
 import { inspectPort } from '../pricesmart-api06a/procinfo.mjs';
 import { labDdlStatements, splitStatements } from '../pricesmart-api06a/ddl.mjs';
-import { securityDdlStatements } from '../pricesmart-api11/ddl.mjs';
+import { securityDdlStatements, attestationDdlStatements } from '../pricesmart-api11/ddl.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '../../..');
@@ -168,11 +168,93 @@ async function restartApp() {
   console.log(JSON.stringify({ baseUrl, appPid: next.pid, workerMs }));
 }
 
+
+/** API-26 (solo laboratorio): crea, en el esquema del run, las TRES cuentas de homologación (aplicación, worker, monitor) con los privilegios EXACTOS del paquete de aprovisionamiento. Las contraseñas son del run (state.json). */
+async function prepareHomologation() {
+  const state = readState(); const { m } = state; const B = await import('../pricesmart-homologation/bundle.mjs');
+  const c = await adminConn(m); await c.query(`USE \`${m.schema}\``);
+  for (const sql of attestationDdlStatements(fs.readFileSync(path.join(repoRoot, 'docs/integraciones/pricesmart/api18/staging-attestation.sql.in'), 'utf8'))) { try { await c.query(sql); } catch (e) { if (e.code !== 'ER_TABLE_EXISTS_ERROR') throw e; } }
+  const names = { schema: m.schema, appUser: `${m.schema}_ha`, workerUser: `${m.schema}_hw`, monitorUser: `${m.schema}_hm` };
+  const homolog = { names };
+  for (const [role, key] of [['app', 'appUser'], ['worker', 'workerUser'], ['monitor', 'monitorUser']]) {
+    const password = role === 'app' ? `sandbox:${m.sandboxId}:${crypto.randomBytes(32).toString('hex')}` : crypto.randomBytes(24).toString('hex');   // la de la aplicación sigue el formato de secretos del sandbox
+    await c.query(`CREATE USER \`${names[key]}\`@\`127.0.0.1\` IDENTIFIED BY '${password}'`);
+    for (const sql of B.grantStatements(names, role)) await c.query(sql);
+    homolog[role] = { user: names[key], password };
+  }
+  await c.end();
+  // Raíz y manifiesto de aislamiento para ejecutar TODO el proceso de pruebas (incluido el pool general del TMS) COMO la cuenta de la aplicación: `e2e --as-homolog-app`.
+  const root = path.join(m.runDir, 'homolog-app-root'); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
+  const lab = JSON.parse(fs.readFileSync(path.join(m.sandboxRoot, 'isolation.json'), 'utf8'));
+  const secretOf = { DB_PASSWORD: homolog.app.password, AUTH_SECRET: m.secrets.AUTH_SECRET, PORTAL_CREDENTIALS_KEY: m.secrets.PORTAL_CREDENTIALS_KEY };
+  fs.writeFileSync(path.join(root, 'isolation.json'), JSON.stringify({ ...lab, database: { ...lab.database, DB_USER: names.appUser }, secretSha256: Object.fromEntries(Object.entries(secretOf).map(([k, v]) => [k, crypto.createHash('sha256').update(v).digest('hex')])) }));
+  homolog.root = root; state.demo.homolog = homolog; writeState(state);
+  console.log(JSON.stringify({ homologAccounts: [names.appUser, names.workerUser, names.monitorUser] }));
+}
+
+/** API-26 (solo laboratorio): EJECUTA el paquete de aprovisionamiento en un esquema aparte `sandbox_api02_homolog_r1` del servidor desechable, comprueba cuentas/privilegios con conexiones reales, verifica las barreras
+ *  (segunda aplicación falla, base destruible) y escribe el informe en <run>/homolog-rehearsal.json. Todo se destruye al final. */
+async function rehearseHomologation() {
+  const state = readState(); const { m } = state; const B = await import('../pricesmart-homologation/bundle.mjs'); const mysql = (await import('mysql2/promise')).default;
+  const bundle = B.buildBootstrap('r1', repoRoot); const names = bundle.names;
+  const sandboxSecrets = B.generateSandboxSecrets(names);   // formato exigido por validateSandboxConfig (internos del sandbox; no son credenciales de PriceSmart)
+  const secrets = { app: sandboxSecrets.DB_PASSWORD, worker: crypto.randomBytes(24).toString('hex'), monitor: crypto.randomBytes(24).toString('hex') };
+  const step = (x) => { if (process.env.PS_DEMO_DEBUG) console.error(`[rehearse] ${x}`); };
+  const admin = await adminConn(m); const report = { names, errors: {} }; step('conectado');
+  try {
+  await admin.query(B.destroyStatements('r1').join(';\n'));   // limpieza previa (solo nombres homolog_r1)
+  step('limpieza previa hecha'); report.applied = await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaFiles(repoRoot) } }); step('paquete aplicado');
+  // Paso «esquema de ejecución» (código REAL del proyecto) con el MISMO entorno que tendrá el sandbox: manifiesto de aislamiento validado por validateSandboxConfig y cuenta de la aplicación con privilegios TEMPORALES.
+  const root = path.join(m.runDir, 'homolog-root'); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(names, sandboxSecrets, { dbPort: m.port })));
+  const finalized = await B.finalizeBundle(admin, bundle, { repo: repoRoot, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir }); step('esquema de ejecución y privilegios finales aplicados');
+  report.runtimeSchemaStep = finalized.runtimeSchemaStep; report.ensuredGrants = finalized.ensuredGrants;
+  report.passwordVariablesCleared = (await admin.query('SELECT @ps_app_pw AS a, @ps_worker_pw AS w, @ps_monitor_pw AS m'))[0][0];
+  try { await B.executeBundle(admin, bundle, secrets); report.secondApply = 'NO_ERROR'; } catch (e) { report.secondApply = e.errno ?? String(e.code); }   // la base ya existe: la reaplicación FALLA
+  report.grants = {};
+  for (const [role, key] of [['app', 'appUser'], ['worker', 'workerUser'], ['monitor', 'monitorUser']]) report.grants[role] = (await admin.query(`SHOW GRANTS FOR \`${names[key]}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>'));
+  const connect = (user, password) => mysql.createConnection({ host: '127.0.0.1', port: m.port, user, password, database: names.schema });
+  const attempt = async (c, sql, params = []) => { try { await c.query(sql, params); return 'OK'; } catch (e) { return e.errno ?? String(e.code); } };
+  step('grants leídos'); const monitor = await connect(names.monitorUser, secrets.monitor); step('monitor conectado'); report.monitor = { queries: {}, forbidden: {} };
+  for (const [id, sql] of Object.entries(B.MONITORING_QUERIES)) report.monitor.queries[id] = await attempt(monitor, sql, sql.includes('?') ? [0] : []);
+  for (const [id, sql] of Object.entries({ insertOutbox: 'INSERT INTO ps_api01_outbox (environment) VALUES (1)', updateOutbox: "UPDATE ps_api01_outbox SET status = 'DONE'", selectOrders: 'SELECT * FROM ps_api01_orders', selectPayloadViaEvents: 'SELECT payload_ciphertext FROM ps_api01_orders', deleteCounters: 'DELETE FROM ps_api11_rate_counters', selectIntegrations: 'SELECT * FROM ps_api11_integrations' })) report.monitor.forbidden[id] = await attempt(monitor, sql);
+  await monitor.end();
+  const worker = await connect(names.workerUser, secrets.worker); report.worker = { forbidden: {} };
+  for (const [id, sql] of Object.entries({ readPayload: 'SELECT payload_ciphertext FROM ps_api01_orders', insertOutbox: 'INSERT INTO ps_api01_outbox (environment) VALUES (1)', deleteOutbox: 'DELETE FROM ps_api01_outbox', readIntegrations: 'SELECT * FROM ps_api11_integrations', writeLinks: "UPDATE ps_api12_tms_links SET claim_token = claim_token", dropTable: 'DROP TABLE ps_api01_outbox' })) report.worker.forbidden[id] = await attempt(worker, sql);
+  report.worker.allowed = { readOutbox: await attempt(worker, 'SELECT status, attempts FROM ps_api01_outbox'), updateOutboxColumns: await attempt(worker, "UPDATE ps_api01_outbox SET attempts = attempts WHERE 1 = 0") };
+  await worker.end();
+  const app = await connect(names.appUser, secrets.app); report.app = { forbidden: {}, allowed: {} };
+  for (const [id, sql] of Object.entries({ deleteOrders: 'DELETE FROM ps_api01_orders', updateOutbox: "UPDATE ps_api01_outbox SET status = 'DONE'", insertRevocation: "INSERT INTO ps_api11_revocations (issuer, subject, credential_reference, revision, revoked_at_ms) VALUES ('a','b','c',0,1)",
+    insertIntegration: 'INSERT INTO ps_api11_integrations (issuer) VALUES (1)', dropTable: 'DROP TABLE ps_api01_orders', createTable: 'CREATE TABLE x (a INT)', readUsers: 'SELECT * FROM mysql.user', updateAudit: 'UPDATE ps_api01_audit SET environment = environment', deleteAudit: 'DELETE FROM ps_api01_audit' })) report.app.forbidden[id] = await attempt(app, sql);
+  report.app.allowed = { readEnv: await attempt(app, 'SELECT environment FROM novalvion_environment'), readIntegrations: await attempt(app, 'SELECT COUNT(*) FROM ps_api11_integrations') };
+  await app.end();
+  // Alta y revocación de una credencial SINTÉTICA con las funciones del paquete (cuenta administrativa).
+  const FROM = Date.now() - 60000; await admin.query(`USE \`${names.schema}\``);
+  await admin.query("INSERT INTO ps_api01_scopes (environment, tenant_id, client_id, integration_id) VALUES (_binary'sandbox', 1, 1, ?)", [Buffer.from('ps-homolog')]);
+  const reg = B.registerIntegrationStatement({ issuer: 'iss-sintetico', subject: 'sub-sintetico', credentialReference: 'cred-sintetica-1', tenantId: 1, clientId: 1, integrationId: 'ps-homolog', allowedClubs: ['CLUB-SINTETICO'], scopes: ['orders:read'], validFromMs: FROM, validUntilMs: FROM + 86400000 });
+  await admin.query(reg.sql, reg.params);
+  const rev = B.revokeStatement({ issuer: 'iss-sintetico', subject: 'sub-sintetico', credentialReference: 'cred-sintetica-1' }); await admin.query(rev.sql, rev.params);
+  report.catalog = { integrations: (await admin.query('SELECT COUNT(*) n FROM ps_api11_integrations'))[0][0].n, revocations: (await admin.query('SELECT COUNT(*) n FROM ps_api11_revocations'))[0][0].n };
+  report.tables = (await admin.query('SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY 1', [names.schema]))[0].map((r) => r.t);
+  report.environmentRow = (await admin.query('SELECT environment, sandbox_id FROM novalvion_environment'))[0][0];
+  for (const sql of B.destroyStatements('r1')) await admin.query(sql);
+  report.destroyed = { schemas: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]))[0][0].n,
+    accounts: (await admin.query("SELECT COUNT(*) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?", [`%sandbox_api02_homolog_%r1%`]))[0][0].n, labSchemaIntact: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [m.schema]))[0][0].n };
+  fs.writeFileSync(path.join(m.runDir, 'homolog-rehearsal.json'), JSON.stringify(report));
+  } finally { await admin.end().catch(() => undefined); }
+  console.log(JSON.stringify({ rehearsal: 'ok', tables: report.tables.length, secondApply: report.secondApply, destroyed: report.destroyed }));
+}
+
 function e2e() {
   const state = readState(); const { m } = state;
   const env = buildChildEnv(m, process.env, { NODE_ENV: 'test' }); delete env.PS06A_APP_PASSWORD;   // API-23: el e2e conserva la contraseña del worker de la outbox (solo laboratorio)
   env.PS_DEMO_WORKER_USER = m.workerUser;
-  env.PS_DEMO_RUNDIR = m.runDir;   // el e2e lee state.json de aquí (TEMP del proceso hijo apunta al directorio del run)
+  env.PS_DEMO_RUNDIR = m.runDir;
+  if (process.argv.includes('--as-homolog-app')) {   // API-26: el proceso entero (incl. el pool general del TMS) opera con la cuenta MÍNIMA de la aplicación y el manifiesto de su propio sandbox
+    const h = state.demo.homolog; if (!h?.root) fail('Falta prepare-homologation.');
+    env.PS_DEMO_OWNER_USER = env.DB_USER; env.PS_DEMO_OWNER_PASSWORD = env.DB_PASSWORD;   // la prueba conserva una conexión de PROPIETARIO solo para sembrar/verificar
+    env.DB_USER = h.app.user; env.DB_PASSWORD = h.app.password; env.SANDBOX_ROOT = h.root; env.UPLOAD_DIR = path.join(h.root, 'uploads');
+  }   // el e2e lee state.json de aquí (TEMP del proceso hijo apunta al directorio del run)
   env.PATH = `${path.dirname(process.execPath)};${env.PATH}`;
   const r = cp.spawnSync(process.execPath, [path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(here, 'vitest.demo.config.mts'), '--reporter=verbose', ...process.argv.slice(3).filter((a) => a.endsWith('.e2e.ts') && !a.includes('..'))], { cwd: repoRoot, env, windowsHide: true, encoding: 'utf8', timeout: 420000 });
   console.log([r.stdout ?? '', r.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-Number(process.env.PS_DEMO_TAIL ?? 45)).join('\n')); if (r.status !== 0) process.exitCode = 1;
@@ -191,7 +273,7 @@ function down() {
 
 const [cmd] = process.argv.slice(2);
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
-  const run = { up, prepare, 'restart-app': restartApp, e2e: async () => e2e(), postman: async () => postman(), down: async () => down() }[cmd];
-  if (!run) { console.error('Uso: up | prepare | restart-app [--worker-ms=N] | e2e | postman | down [--keep-evidence=<dir>]'); process.exitCode = 2; }
+  const run = { up, prepare, 'prepare-homologation': prepareHomologation, 'rehearse-homologation': rehearseHomologation, 'restart-app': restartApp, e2e: async () => e2e(), postman: async () => postman(), down: async () => down() }[cmd];
+  if (!run) { console.error('Uso: up | prepare | prepare-homologation | rehearse-homologation | restart-app [--worker-ms=N] | e2e | postman | down [--keep-evidence=<dir>]'); process.exitCode = 2; }
   else run().catch((e) => { console.error(e.message); process.exitCode = 1; });
 }
