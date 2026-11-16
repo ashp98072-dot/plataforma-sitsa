@@ -1,0 +1,47 @@
+[
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/programacion-tc.test.ts",
+    "name": "POST — viaje PROPIO con TC interno una unidad normal (VEHICULO/CABEZAL) sigue funcionando como Unidad, con y sin TC",
+    "classification": "SQL double incompatible with new resolver queries",
+    "before": "Error: Empresa no vigente.",
+    "withRealResolverAndExtendedSqlModel": "passed",
+    "final": "passed",
+    "originalExpectationChanged": false
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/regreso-opcional.test.ts",
+    "name": "POST /tms/planes — regreso estimado opcional regresoEstimado vacío/ausente no produce el mensaje de obligatoriedad",
+    "classification": "SQL double incompatible with new resolver queries",
+    "before": "Error: Empresa no vigente.",
+    "withRealResolverAndExtendedSqlModel": "passed",
+    "final": "passed",
+    "originalExpectationChanged": false
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/route-patch-equivalencia.test.ts",
+    "name": "PATCH — disponibilidad de unidad 12) unidad en taller: hoy 409; otro día advertencia",
+    "classification": "SQL double incompatible with new resolver queries",
+    "before": "AssertionError: expected 500 to be 200 // Object.is equality",
+    "withRealResolverAndExtendedSqlModel": "passed",
+    "final": "passed",
+    "originalExpectationChanged": false
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/route-patch-equivalencia.test.ts",
+    "name": "PATCH — disponibilidad de unidad 13) unidad en ruta: hoy 409 (con el piloto del viaje abierto); otro día advertencia",
+    "classification": "SQL double incompatible with new resolver queries",
+    "before": "AssertionError: expected 500 to be 200 // Object.is equality",
+    "withRealResolverAndExtendedSqlModel": "passed",
+    "final": "passed",
+    "originalExpectationChanged": false
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/vehiculo-solicitado.test.ts",
+    "name": "PATCH — editar vehículo solicitado (independiente de unidad/tarifa) 6) cambiar la UNIDAD (5 t en lugar de la solicitada 2.5 t) NO cambia el vehículo solicitado ni la tarifa",
+    "classification": "SQL double incompatible with new resolver queries",
+    "before": "AssertionError: expected 500 to be 200 // Object.is equality",
+    "withRealResolverAndExtendedSqlModel": "passed",
+    "final": "passed",
+    "originalExpectationChanged": false
+  }
+]

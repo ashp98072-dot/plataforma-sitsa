@@ -1,0 +1,22 @@
+[
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/programacion-tc.test.ts",
+    "oldAssertionLines": 83,
+    "removedOrChangedAssertionLines": []
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/regreso-opcional.test.ts",
+    "oldAssertionLines": 65,
+    "removedOrChangedAssertionLines": []
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/route-patch-equivalencia.test.ts",
+    "oldAssertionLines": 114,
+    "removedOrChangedAssertionLines": []
+  },
+  {
+    "file": "src/app/api/empresas/[slug]/tms/planes/vehiculo-solicitado.test.ts",
+    "oldAssertionLines": 73,
+    "removedOrChangedAssertionLines": []
+  }
+]

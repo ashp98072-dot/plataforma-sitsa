@@ -1,3 +1,4 @@
+import { catalogoSinAlias } from "@/lib/flota/vehiculos-alias";
 import type { RowDataPacket } from "mysql2";
 import { query } from "@/lib/db";
 import { predicadoVehiculoAccesible } from "@/lib/flota/acceso";
@@ -172,7 +173,9 @@ export async function listarDisponibilidadVehiculos(
     }
   }
 
-  const vehiculos: VehiculoDisponibilidad[] = rows.map((r) => {
+  const canonicos=await catalogoSinAlias<RowDataPacket & {id:number}>(rows.map(r=>({...r,id:Number(r.id)})),empresaId);
+  for(const v of canonicos){const equivalencias=(v as typeof v & {equivalenciasHistoricas?:number[]}).equivalenciasHistoricas??[];const abierto=equivalencias.map(id=>viajesMap.get(id)).find(Boolean);if(abierto)viajesMap.set(v.id,{...abierto,pilotoNombre:"Operación de la unidad física"});}
+  const vehiculos: VehiculoDisponibilidad[] = canonicos.map((r) => {
     const activo = Number(r.activo ?? 1) !== 0;
     const enTaller =
       Number(r.en_taller ?? 0) === 1 ||

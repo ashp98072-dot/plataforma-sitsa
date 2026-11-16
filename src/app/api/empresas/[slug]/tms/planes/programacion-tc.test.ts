@@ -1,3 +1,4 @@
+import { modeloSqlUnidadTms } from "@/lib/tms/unidad-canonica-sql.fixture";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -65,9 +66,12 @@ function responderTc(sql: string, params: unknown[]) {
 }
 
 function crearConexion() {
+  const unidadSql=modeloSqlUnidadTms(7,[{id:10,empresa_id:7,placa:"C-123ABC",activo:1,estado:"Activo"}]);
   return {
+    unidadSql,
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      const unidad=unidadSql.consultar(sql,params);if(unidad!==undefined)return [unidad];
       if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
       consultas.push({ sql: String(sql), params });
       if (String(sql).includes("FROM flota_vehiculos v")) return [responderTc(String(sql), params)];
@@ -75,6 +79,7 @@ function crearConexion() {
     }),
     execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async (sql: string, params: unknown[] = []) => {
       consultas.push({ sql: String(sql), params });
+      unidadSql.insertar(sql,params,55);
       return [{ insertId: 55, affectedRows: 1 }];
     }),
   };
@@ -108,6 +113,23 @@ beforeEach(() => {
 });
 
 const BASE = { fechaPlan: "2026-09-23", horaCarga: "08:00" };
+
+describe("POST — errores del resolvedor real de identidad TMS", () => {
+  it.each([403,409] as const)("devuelve %i sin crear unidad ni plan",async status=>{
+    vi.mocked(listarDisponibilidadVehiculos).mockResolvedValue({vehiculos:[{id:10,placa:"C-123ABC",tipoUnidad:"CABEZAL",puedeEnviar:true,estadoDisponibilidad:"disponible"}],resumen:{}} as never);
+    if(status===403)conexion.unidadSql.modelo.empresaActiva=false;
+    else conexion.unidadSql.modelo.unidades.push(
+      {id:400,empresa_id:7,placa:"C-123ABC",flota_vehiculo_id:10},
+      {id:401,empresa_id:7,placa:"OTRA-PLACA",flota_vehiculo_id:10},
+    );
+    const res=await post({...BASE,placa:"C-123ABC",pilotoNombre:"Piloto Uno"});
+    expect(res.status).toBe(status);
+    expect((await res.json()).error).toContain(status===403?"Empresa no vigente":"Identidad TMS ambigua");
+    expect(insertPlan()).toBeUndefined();
+    expect(conexion.execute.mock.calls.some(c=>String(c[0]).includes("INSERT INTO tms_unidades"))).toBe(false);
+    expect(conexion.rollback).toHaveBeenCalled();
+  });
+});
 // Índices de las columnas nuevas en el INSERT (ver route.ts): 5 unidad_id, 33 tc_vehiculo_id, 34 tc_placa_historica, 35 tc_externo_placa.
 const IDX = { unidad: 5, tipo: 26, tcId: 33, tcHist: 34, tcExt: 35 };
 

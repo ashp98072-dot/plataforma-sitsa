@@ -1,4 +1,6 @@
-import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
+import { resolverUnidadTms,resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+import { ErrorCB2 } from "@/lib/flota/cb2/model";
+
 import { NextResponse } from "next/server";
 import { errorRangoProgramacion } from "@/lib/tms/programacion-rango";
 import { z } from "zod";
@@ -877,18 +879,12 @@ export async function POST(req: Request, ctx: Ctx) {
       } catch {
         /* si falla disponibilidad, no bloquear creación */
       }
-      const r = await execute(
-        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-         VALUES (?, ?, 'Camion', ?)
-         ON DUPLICATE KEY UPDATE
-           id = LAST_INSERT_ID(id),
-           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-        [empresaId, placaNorm, flotaVehiculoId],
-      );
-      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
-        const u = await query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placaNorm]);
-        return u[0] ? Number(u[0].id) : null;
-      });
+      try {
+        unidadId = await resolverUnidadTms(empresaId, placaNorm, flotaVehiculoId);
+      } catch (e) {
+        if (e instanceof ErrorCB2) return NextResponse.json({ error:e.message }, { status:e.status });
+        throw e;
+      }
     }
 
     pilotoId = await personalDesdeEmpleado(
@@ -2082,31 +2078,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
       [pilotoId ?? antes.pilotoId, pilotoExtraFinalPatch, ...(auxPersonalIdsNuevo ?? auxPersonalIdsLegado ?? antesAuxiliaresIds)].filter((id): id is number => id != null), conn);
 
     if (placaNorm) {
-      const [r] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO tms_unidades (empresa_id, placa, tipo)
-         VALUES (?, ?, 'Camion')
-         ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)`,
-        [empresaId, placaNorm],
-      );
-      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
-        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, placaNorm]);
-        return u[0] ? Number(u[0].id) : null;
-      });
+      unidadId=await resolverUnidadTmsTx(conn,empresaId,placaNorm,null);
     }
 
     if (d.flotaVehiculoId != null && vehiculoAccesible) {
-      const [r] = await conn.execute<ResultSetHeader>(
-        `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-         VALUES (?, ?, 'Camion', ?)
-         ON DUPLICATE KEY UPDATE
-           id = LAST_INSERT_ID(id),
-           flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-        [empresaId, String(vehiculoAccesible.placa).toUpperCase(), d.flotaVehiculoId],
-      );
-      unidadId = await idUnidadTrasUpsert(r.insertId, async () => {
-        const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, String(vehiculoAccesible.placa).toUpperCase()]);
-        return u[0] ? Number(u[0].id) : null;
-      });
+      unidadId=await resolverUnidadTmsTx(conn,empresaId,String(vehiculoAccesible.placa),d.flotaVehiculoId);
     }
 
     // VIAT-2: valida traslapes con el recurso EFECTIVO resultante (lo nuevo
@@ -2428,6 +2404,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   } catch (e) {
     await conn.rollback();
     console.error("PATCH tms/planes transacción", e);
+    if (e instanceof ErrorCB2) return NextResponse.json({ error:e.message }, { status:e.status });
     if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json(
       { error: "No se pudo actualizar el plan. Intenta de nuevo." },

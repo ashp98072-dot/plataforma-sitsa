@@ -1,4 +1,5 @@
-import { idUnidadTrasUpsert } from "@/lib/tms/unidad-upsert";
+import { resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
@@ -486,16 +487,7 @@ export async function confirmarLote(
         const auxIds: number[] = [];
         if (!esTerc) {
           if (r.unidad) {
-            const [ru] = await conn.execute<ResultSetHeader>(
-              `INSERT INTO tms_unidades (empresa_id, placa, tipo, flota_vehiculo_id)
-               VALUES (?, ?, 'Camion', ?)
-               ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), flota_vehiculo_id = COALESCE(flota_vehiculo_id, VALUES(flota_vehiculo_id))`,
-              [empresaId, r.unidad.placa, r.unidad.flotaVehiculoId],
-            );
-            unidadId = await idUnidadTrasUpsert(ru.insertId, async () => {
-              const [u] = await conn.query<RowDataPacket[]>("SELECT id FROM tms_unidades WHERE empresa_id = ? AND placa = ? LIMIT 1", [empresaId, r.unidad!.placa]);
-              return u[0] ? Number(u[0].id) : null;
-            });
+            unidadId = await resolverUnidadTmsTx(conn,empresaId,r.unidad.placa,r.unidad.flotaVehiculoId);
           }
           if (b.pilotoEmpleadoId != null) {
             pilotoId = await personalDesdeEmpleado(empresaId, b.pilotoEmpleadoId, "Piloto", conn);

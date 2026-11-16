@@ -1,3 +1,4 @@
+import { modeloSqlUnidadTms } from "@/lib/tms/unidad-canonica-sql.fixture";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -66,15 +67,18 @@ function candidatosIntervalo(sql: string, params: unknown[]) {
 }
 
 function crearConexion() {
+  const unidadSql=modeloSqlUnidadTms(7,[]);
   return {
+    unidadSql,
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     // El PATCH valida traslapes DENTRO de la transacción (misma conexión): también se registra aquí.
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
+      const unidad=unidadSql.consultar(sql,params);if(unidad!==undefined)return [unidad];
       if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
       sqlDeConsultas.push({ sql: String(sql), params });
       return [String(sql).includes("FROM tms_personal tp") ? candidatosIntervalo(String(sql), params) : []];
     }),
-    execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async () => [{ insertId: 55, affectedRows: 1 }]),
+    execute: vi.fn<(sql: string, params?: unknown[]) => Promise<unknown[]>>(async (sql:string,params:unknown[]=[]) => {unidadSql.insertar(sql,params,55);return [{ insertId: 55, affectedRows: 1 }];}),
   };
 }
 
