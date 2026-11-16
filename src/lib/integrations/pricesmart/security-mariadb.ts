@@ -87,7 +87,10 @@ export function mariaDbSecurityPorts(pool: Pool, config: { schema: string; runti
   };
 
   // Ventana fija atómica. Paso 1 (fuera de transacción, se confirma de inmediato): INSERT IGNORE crea la fila en 0; así no hay bloqueos compartidos retenidos.
-  // Paso 2 (transacción corta): UPDATE used = used + 1 toma el bloqueo exclusivo y SELECT lee el valor propio. Dos variantes anteriores se descartaron por el laboratorio:
+  // Paso 2 (UNA sola sentencia, autocommit): `UPDATE … SET used = LAST_INSERT_ID(used + 1)` incrementa de forma atómica y devuelve el valor propio en `insertId`, sin SELECT ni transacción explícita.
+  // API-25: antes eran UPDATE + SELECT + COMMIT dentro de una transacción (con SET de aislamiento y verificaciones de identidad entre sentencias), de modo que el bloqueo de la fila del contador de UNA credencial
+  // se retenía durante varias idas y vueltas y las consultas simultáneas de PriceSmart (consulta periódica de muchas órdenes) se serializaban; en el laboratorio, con 14 consultas simultáneas de la misma credencial
+  // las últimas vencían la espera de bloqueo (ER_LOCK_WAIT_TIMEOUT) y respondían 503. Ahora el bloqueo dura solo el UPDATE. Dos variantes anteriores se descartaron por el laboratorio:
   // "INSERT IGNORE + UPDATE" en la misma transacción y "INSERT … ON DUPLICATE KEY UPDATE" se interbloquean con conexiones simultáneas sobre la misma clave nueva.
   // Toda solicitud cuenta, también las rechazadas: permitida ⇔ used <= límite.
   const counter: AtomicCounterPort = {
@@ -97,13 +100,12 @@ export function mariaDbSecurityPorts(pool: Pool, config: { schema: string; runti
       const windowStart = Math.floor(nowMs / windowMs) * windowMs;
       await withConn(async (conn) => { await conn.execute(`INSERT IGNORE INTO ${table('rate_counters')} (identity_key, window_start_ms, used) VALUES (?, ?, 0)`, [key, windowStart]); }, false);
       return withConn(async (conn) => {
-        const [up] = await conn.execute<ResultSetHeader>(`UPDATE ${table('rate_counters')} SET used = used + 1 WHERE identity_key = ? AND window_start_ms = ?`, [key, windowStart]);
+        const [up] = await conn.execute<ResultSetHeader>(`UPDATE ${table('rate_counters')} SET used = LAST_INSERT_ID(used + 1) WHERE identity_key = ? AND window_start_ms = ?`, [key, windowStart]);
         if (up.affectedRows !== 1) throw new SecurityFailure('UNAVAILABLE');
-        const [rows] = await conn.execute<RowDataPacket[]>(`SELECT used FROM ${table('rate_counters')} WHERE identity_key = ? AND window_start_ms = ?`, [key, windowStart]);
-        if (rows.length !== 1) throw new SecurityFailure('UNAVAILABLE');
-        const used = Number(rows[0].used);
+        const used = Number(up.insertId);   // valor propio de ESTA sentencia (LAST_INSERT_ID(expr)), no el de otra conexión
+        if (!Number.isSafeInteger(used) || used < 1) throw new SecurityFailure('UNAVAILABLE');
         return { allowed: used <= limit, used, resetAtMs: windowStart + windowMs, assurance: 'DISTRIBUTED_ATOMIC' as const };
-      }, true);
+      }, false);
     },
   };
 

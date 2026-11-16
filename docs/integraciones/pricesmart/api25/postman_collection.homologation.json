@@ -1,0 +1,455 @@
+{
+  "info": {
+    "name": "PriceSmart ↔ Mónaco — HOMOLOGACIÓN (sandbox NO desplegado)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "COLECCIÓN PROVISIONAL, NO EJECUTABLE HOY. No existe un sandbox público: los endpoints responden 503 DISABLED y `baseUrl` es un marcador (`.invalid`). Autenticación (D02) PENDIENTE: no se incluye ningún mecanismo ni credencial. Dirección de integración acordada el 30/10/2026; el contrato técnico NO está ratificado. Cada petición indica su estado: [PROVISIONAL_LAB] implementado en laboratorio · [PENDING_PRICESMART] sin acuerdo. Los datos son sintéticos.",
+    "x-contract-status": "PROVISIONAL_LAB"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://SANDBOX-PENDIENTE.invalid",
+      "description": "Marcador: la URL real la entregará Mónaco cuando exista un sandbox aprobado."
+    },
+    {
+      "key": "authHeaderName",
+      "value": "PENDIENTE-D02"
+    },
+    {
+      "key": "authHeaderValue",
+      "value": ""
+    },
+    {
+      "key": "externalOrderId",
+      "value": "SANDBOX-ORDEN-0001"
+    },
+    {
+      "key": "originClub",
+      "value": "CLUB-SINTETICO"
+    },
+    {
+      "key": "deliveryDate",
+      "value": "2026-12-15"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 · Flujo básico [PROVISIONAL_LAB]",
+      "item": [
+        {
+          "name": "1.1 Enviar orden (POST) → 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Contrato de prueba `lab-demo-1` (una entrega por orden). Confirma recepción; el procesamiento hacia el TMS es asíncrono (outbox).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{originClub}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\",\n  \"notes\": \"Orden sintética de homologación\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202 recibida\", function () { pm.response.to.have.status(202); });",
+                  "pm.test(\"estado provisional\", function () { var j = pm.response.json(); pm.expect(j.provisionalStatus).to.eql(\"RECEIVED\"); pm.expect(j.externalOrderId).to.eql(pm.variables.get(\"externalOrderId\")); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Consultar estado (GET, ~cada hora) → 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{externalOrderId}}"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Estado real del procesamiento y proyección PROPUESTA del estado del TMS. `confirmsDelivery` es SIEMPRE false."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200\", function () { pm.response.to.have.status(200); });",
+                  "pm.test(\"nunca confirma entrega\", function () { pm.expect(pm.response.json().confirmsDelivery).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Reenviar la misma orden (idempotente) → 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Duplicado idéntico: mismo recibo, sin duplicar la orden ni la solicitud TMS.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{originClub}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\",\n  \"notes\": \"Orden sintética de homologación\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202\", function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 Mismo id con contenido distinto → 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Mismo `externalOrderId` con otro contenido: CONFLICT, sin sobrescribir.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{originClub}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Otra dirección ficticia 99\",\n  \"deliveryDate\": \"{{deliveryDate}}\",\n  \"notes\": \"Orden sintética de homologación\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"409\", function () { pm.response.to.have.status(409); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 · Cancelación [PENDING_PRICESMART — método y reglas D09]",
+      "item": [
+        {
+          "name": "2.1 Notificar cancelación (POST implementado; DELETE pendiente) → 202",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}/cancellation-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{externalOrderId}}",
+                "cancellation-requests"
+              ]
+            },
+            "description": "[PENDING_PRICESMART] El método (POST vs DELETE) NO está acordado. Deja constancia durable (idempotente); NO elimina la orden ni cancela viajes automáticamente: la decisión operacional es de Mónaco.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"ORIGIN_REQUEST\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202\", function () { pm.response.to.have.status(202); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Consultar tras la cancelación → 200",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{externalOrderId}}"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Muestra `cancellation.requested=true`, `automatic=false` y la evaluación según el estado del TMS."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"cancelación solicitada, nunca automática\", function () { var c = pm.response.json().cancellation; pm.expect(c.requested).to.eql(true); pm.expect(c.automatic).to.eql(false); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 · Errores esperados [PROVISIONAL_LAB]",
+      "item": [
+        {
+          "name": "3.1 Sin evidencia de autenticación → 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{externalOrderId}}"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Sin evidencia válida la respuesta es 401 con `{code, correlationId}`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401\", function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.2 Orden inválida → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Campo desconocido o dato inválido: 400 con `{code, correlationId}` (sin eco de lo enviado).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{originClub}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\",\n  \"notes\": \"Orden sintética de homologación\",\n  \"campoNoDefinido\": \"x\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "PriceSmart ↔ Novalvion — HOMOLOGACIÓN (laboratorio) — PROVISIONAL / NO EJECUTABLE EN PRODUCCIÓN",
-    "version": "api24-homologation-1",
-    "description": "Contrato REALMENTE implementado en el laboratorio sintético (API-12/13/23), con cada elemento etiquetado en `x-contract-status`: PROVISIONAL_LAB (implementado y probado en laboratorio, NO ratificado), PROPOSED_D08 / PROPOSED_D09 (propuesta derivada del TMS, sin aprobación de PriceSmart) o PENDING_PRICESMART (sin definir). NADA de este documento es un acuerdo con PriceSmart. Los endpoints siguen en 503 DISABLED en producción; la ausencia de securitySchemes NO permite acceso anónimo (D02 pendiente)."
+    "version": "api25-homologation-1",
+    "description": "NADA de este documento es un acuerdo con PriceSmart: describe lo implementado en el laboratorio. Contrato REALMENTE implementado en el laboratorio sintético (API-12/13/23/24/25), con cada elemento etiquetado en `x-contract-status`: PROVISIONAL_LAB (implementado y probado en laboratorio, NO ratificado), PROPOSED_D08 / PROPOSED_D09 (propuesta derivada del TMS, sin aprobación de PriceSmart) o PENDING_PRICESMART (sin definir). DIRECCIÓN DE INTEGRACIÓN (D01) acordada en la reunión del 30/10/2026: PriceSmart envía cada orden por POST, consulta el estado por GET (~cada hora) y notifica cancelaciones a un endpoint de Mónaco. Ese acuerdo NO ratifica el contrato técnico (D02, D05–D13). DISPONIBILIDAD: este documento NO anuncia un servicio accesible; los endpoints responden 503 DISABLED y no existe un sandbox público. La ausencia de securitySchemes NO permite acceso anónimo (D02 pendiente)."
   },
   "servers": [],
   "x-executable": false,
@@ -111,7 +111,8 @@
           "D02",
           "D06",
           "D10"
-        ]
+        ],
+        "x-agreed-direction": true
       }
     },
     "/api/integrations/pricesmart/v1/orders/{externalOrderId}": {
@@ -206,7 +207,8 @@
           "D02",
           "D08",
           "D12"
-        ]
+        ],
+        "x-agreed-direction": true
       }
     },
     "/api/integrations/pricesmart/v1/orders/{externalOrderId}/cancellation-requests": {
@@ -309,7 +311,9 @@
         "x-pending": [
           "D09",
           "D12"
-        ]
+        ],
+        "x-agreed-direction": true,
+        "x-method-pending": "POST (implementado en laboratorio) vs DELETE (mencionado como ejemplo en la reunión): PENDIENTE de confirmación formal (D09). La cancelación NUNCA elimina físicamente la orden ni cancela automáticamente viajes."
       }
     }
   },
@@ -774,6 +778,60 @@
                     "pattern": "^[A-Z][A-Z0-9_]{0,31}$"
                   }
                 }
+              },
+              "deliveryEvidence": {
+                "description": "Evidencia INTERNA de entrega (confirmaciones del piloto por parada). Informativa: NO confirma entrega ante PriceSmart (D13 pendiente). `UNAVAILABLE` = el TMS aún no tiene la tabla de confirmaciones en este entorno.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "level",
+                  "confirmsDelivery",
+                  "publishable",
+                  "blockedBy"
+                ],
+                "properties": {
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "NONE",
+                      "PARTIAL",
+                      "PILOT_CONFIRMED_ALL",
+                      "REVIEW_REQUIRED",
+                      "UNAVAILABLE"
+                    ]
+                  },
+                  "deliveryStops": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pilotConfirmed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "pendingReview": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "officialAcceptance": {
+                    "type": "string",
+                    "const": "NOT_ACCEPTED_BY_PRICESMART"
+                  },
+                  "confirmsDelivery": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "publishable": {
+                    "type": "boolean",
+                    "const": false
+                  },
+                  "blockedBy": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "const": "D13_PENDING"
+                    }
+                  }
+                }
               }
             }
           },
@@ -1190,7 +1248,7 @@
   },
   "x-contract-status": "PROVISIONAL_LAB",
   "x-pending-ratification": {
-    "D01": "dirección de integración (push/polling/quién consulta estados)",
+    "D01": "dirección ACORDADA en la reunión del 30/10/2026 (POST/GET/cancelación); pendientes: secuencias de acuse y el contrato técnico de cada servicio",
     "D02": "mecanismo y formato de autenticación M2M, emisor, audiencia, ancla de confianza",
     "D03": "unicidad y formato de externalOrderId",
     "D05": "una vs. varias entregas/parciales/reintentos/viaje compartido (modelo 1 pedido = 1 solicitud APROBADO internamente; el contrato de varias entregas NO)",
@@ -1201,5 +1259,29 @@
     "D10": "Idempotency-Key HTTP, replay, reintentos",
     "D11": "capacidad, SLA y cuotas",
     "D12": "GET suficiente, callbacks, acuses y Retry-After"
+  },
+  "x-published": false,
+  "x-availability": "NOT_ACCESSIBLE: endpoints 503 DISABLED; sandbox de homologación NO desplegado",
+  "x-agreed-direction": {
+    "source": "Reunión 30/10/2026 (minuta y transcripción)",
+    "agreed": [
+      "PriceSmart envía cada orden individualmente mediante POST a una API de Mónaco",
+      "PriceSmart consulta mediante GET aproximadamente cada hora el estado de cada orden",
+      "PriceSmart notifica cancelaciones a un endpoint de Mónaco",
+      "Mónaco proporciona API, sandbox, credenciales, colección Postman y documentación"
+    ],
+    "tentativeSchedule": "pruebas conjuntas en diciembre de 2026; salida productiva tentativa en enero de 2027, sujeta a aprobación",
+    "notAgreed": [
+      "D02 autenticación",
+      "D05 varias entregas",
+      "D06 diccionario de la orden",
+      "D07 fechas",
+      "D08 estados oficiales",
+      "D09 método y reglas de cancelación",
+      "D10 idempotencia HTTP",
+      "D11 capacidad",
+      "D12 acuses/errores",
+      "D13 prueba de entrega"
+    ]
   }
 }

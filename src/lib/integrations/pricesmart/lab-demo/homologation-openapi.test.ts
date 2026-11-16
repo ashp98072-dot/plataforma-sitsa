@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { labOrderSchema } from './contract';
 import { assessCancellation, EXTERNAL_STATUSES, PLAN_STATES, SOLICITUD_STATES } from '../tms-contract-proposal';
+import { DELIVERY_EVIDENCE_LEVELS } from '../delivery-evidence';
 
-// PRICESMART API-24 — la OpenAPI de HOMOLOGACIÓN debe describir lo REALMENTE implementado y etiquetar qué es provisional y qué está pendiente. Estas pruebas la atan al código: si el código cambia y el documento no, fallan.
-const spec = JSON.parse(readFileSync('docs/integraciones/pricesmart/api24/openapi.homologation.json', 'utf8'));
+// PRICESMART API-24/25 — la OpenAPI de HOMOLOGACIÓN debe describir lo REALMENTE implementado y etiquetar qué es provisional y qué está pendiente. Estas pruebas la atan al código: si el código cambia y el documento no, fallan.
+const spec = JSON.parse(readFileSync('docs/integraciones/pricesmart/api25/openapi.homologation.json', 'utf8'));
 const draft = JSON.parse(readFileSync('docs/integraciones/pricesmart/api04/openapi.draft.json', 'utf8'));
 const STATUSES = ['PROVISIONAL_LAB', 'PROPOSED_D08', 'PROPOSED_D09', 'PENDING_PRICESMART'];
 
@@ -40,5 +41,19 @@ describe('API-24 OpenAPI de homologación ↔ código', () => {
     expect(view.properties.confirmsDelivery.const).toBe(false); expect(view.properties.cancellation.properties.automatic.const).toBe(false);
     expect(JSON.stringify(spec.components.schemas)).not.toMatch(/DELIVERED|ENTREGAD/);
     expect(spec.paths['/api/integrations/pricesmart/v1/orders/{externalOrderId}'].get.responses['200'].content['application/json'].schema.$ref).toBe('#/components/schemas/LabOrderStatusView');
+  });
+  it('API-25: dirección D01 acordada en la reunión del 30/10/2026 SIN ratificar el contrato técnico; el documento NO anuncia un servicio accesible; el método de cancelación sigue pendiente', () => {
+    expect(spec['x-published']).toBe(false); expect(spec['x-availability']).toMatch(/NOT_ACCESSIBLE.*503 DISABLED/);
+    expect(spec.info.description).toMatch(/30\/10\/2026/); expect(spec.info.description).toMatch(/NO anuncia un servicio accesible/);
+    expect(spec['x-agreed-direction'].source).toMatch(/30\/10\/2026/); expect(spec['x-agreed-direction'].notAgreed).toEqual(expect.arrayContaining([expect.stringMatching(/^D02/), expect.stringMatching(/^D06/), expect.stringMatching(/^D09/), expect.stringMatching(/^D13/)]));
+    expect(spec['x-pending-ratification'].D01).toMatch(/ACORDADA/);
+    const cancel = spec.paths['/api/integrations/pricesmart/v1/orders/{externalOrderId}/cancellation-requests'].post;
+    expect(cancel['x-method-pending']).toMatch(/DELETE/); expect(cancel['x-method-pending']).toMatch(/NUNCA elimina físicamente/); expect(cancel['x-contract-status']).toBe('PENDING_PRICESMART');
+  });
+  it('API-25: la evidencia de entrega documentada coincide con el código y nunca confirma entrega', () => {
+    const ev = spec.components.schemas.LabOrderStatusView.properties.tms.properties.deliveryEvidence;
+    expect(ev.properties.level.enum).toEqual([...DELIVERY_EVIDENCE_LEVELS, 'UNAVAILABLE']);
+    expect(ev.properties.confirmsDelivery.const).toBe(false); expect(ev.properties.publishable.const).toBe(false); expect(ev.properties.officialAcceptance.const).toBe('NOT_ACCEPTED_BY_PRICESMART');
+    expect(ev.properties.blockedBy.items.const).toBe('D13_PENDING');
   });
 });

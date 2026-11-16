@@ -5,6 +5,7 @@ import { registrarAuditoriaTx } from '@/lib/auditoria';
 import type { OrderView, Scope } from '../contracts';
 import type { OrderRepository } from '../ports';
 import { assessCancellation, projectExternalStatus } from '../tms-contract-proposal';
+import { assessDeliveryEvidence, deliveryEvidenceUnavailable } from '../delivery-evidence';
 import { labObservations, type LabOrderInput } from './contract';
 
 // PRICESMART API-12 — vinculación REAL (solo laboratorio) de una orden recibida con UNA solicitud del TMS en estado SOLICITADA.
@@ -125,7 +126,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
   /** Estado real para el GET. Nunca afirma entrega: `confirmsDelivery` es siempre false (Cerrado/Descargado no prueban entrega aceptada). */
   async function status(scope: Scope, externalOrderId: string, view: OrderView): Promise<Record<string, unknown>> {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, s.estado AS sol_estado, p.estado AS plan_estado
+      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, s.estado AS sol_estado, s.plan_id AS plan_id, p.estado AS plan_estado
          FROM ${t('tms_links')} l
          JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id
          LEFT JOIN tms_solicitudes_cliente s ON s.empresa_id=l.empresa_id AND s.id=l.solicitud_id
@@ -146,9 +147,23 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     }
     const r = rows[0];
     const projection = projectExternalStatus(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado));
+    // API-25: evidencia de entrega INTERNA (confirmaciones del piloto por parada). Solo informativa: `confirmsDelivery` sigue siendo false y nada se publica mientras D13 esté pendiente.
+    // Consultas acotadas por la empresa del vínculo y por el plan de ESA solicitud; si la tabla de confirmaciones aún no existe en este entorno, se informa «UNAVAILABLE» (nunca «sin entregas»).
+    let deliveryEvidence: Record<string, unknown> | undefined;
+    if (r.plan_estado != null && r.plan_id != null) {
+      try {
+        const [stops] = await pool.execute<RowDataPacket[]>('SELECT pp.id, pp.tipo FROM tms_plan_paradas pp JOIN tms_planes_viaje p ON p.id=pp.plan_id WHERE p.empresa_id=? AND p.id=?', [r.empresa_id, r.plan_id]);
+        const [confs] = await pool.execute<RowDataPacket[]>('SELECT parada_id, resultado, revision, evidencia_id FROM tms_parada_confirmaciones WHERE empresa_id=? AND plan_id=?', [r.empresa_id, r.plan_id]);
+        deliveryEvidence = { ...assessDeliveryEvidence(stops.map((x) => ({ id: Number(x.id), type: String(x.tipo) })),
+          confs.map((x) => ({ stopId: Number(x.parada_id), result: String(x.resultado), revision: String(x.revision), hasEvidence: Number(x.evidencia_id) > 0 }))) };
+      } catch (error) {
+        if ((error as { code?: string })?.code !== 'ER_NO_SUCH_TABLE') throw error;
+        deliveryEvidence = { ...deliveryEvidenceUnavailable() };
+      }
+    }
     return {
       labProposal: true, proposedStatus: projection.status, confirmsDelivery: false,
-      tms: { linked: true, requestState: r.sol_estado == null ? null : String(r.sol_estado), scheduled: r.plan_estado != null },
+      tms: { linked: true, requestState: r.sol_estado == null ? null : String(r.sol_estado), scheduled: r.plan_estado != null, ...(deliveryEvidence ? { deliveryEvidence } : {}) },
       ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: assessCancellation(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado)).verdict } } : {}),
     };
   }
