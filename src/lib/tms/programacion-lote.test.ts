@@ -1283,7 +1283,7 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
     conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
     const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
     expect(r).toMatchObject({ ok: false, status: 409 }); if (r.ok) return;
-    expect(r.error).toMatch(/^Fila 2: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos\. No se creó ningún viaje\.$/);
+    expect(r.error).toMatch(/^Fila 2 \(unidad P-1\): Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos\. No se creó ningún viaje\.$/);
     expect(creadosDestino()).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);   // la fila 1 (válida) tampoco quedó
     expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).not.toHaveBeenCalled();
   });
