@@ -36,7 +36,9 @@ export async function evaluateReadiness(env: Record<string, string | undefined>,
   const { config } = parsed; const blockers: Blocker[] = [];
   // API-22: aunque el contrato ya modela `production`, NINGÚN camino de ejecución lo autoriza (persistencia sandbox-only, sin verificador ni KMS aprobados): cualquier indicio de producción bloquea.
   if (config.environment === 'production') blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', detail: 'el entorno production no está autorizado: persistencia, verificador criptográfico y KMS siguen pendientes' });
-  else if (env.NODE_ENV === 'production' || env.NOVALVION_ENV === 'production') blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', detail: 'el proceso se declara de producción: persistencia, verificador criptográfico y KMS siguen pendientes (ningún camino lo autoriza)' });
+  // API-26: `next start` fija NODE_ENV=production también en el sandbox de homologación (que declara NOVALVION_ENV=sandbox y pasa las guardas de `validateSandboxConfig`). NODE_ENV=production SOLO bloquea si el proceso
+  // NO se declara sandbox; NOVALVION_ENV=production bloquea siempre. Un proceso real de producción (sin NOVALVION_ENV) sigue bloqueado.
+  else if (env.NOVALVION_ENV === 'production' || (env.NODE_ENV === 'production' && env.NOVALVION_ENV !== 'sandbox')) blockers.push({ code: 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED', detail: 'el proceso se declara de producción: persistencia, verificador criptográfico y KMS siguen pendientes (ningún camino lo autoriza)' });
   for (const d of REQUIRED_DECISIONS[config.mode as 'READ_ONLY' | 'ENABLED']) if (!config.ratified.includes(d)) blockers.push({ code: 'DECISION_PENDING', detail: `${d} no está ratificada por PriceSmart` });
   const p = ports ?? {};
   if (!p.evidence || typeof p.evidence.extract !== 'function') blockers.push({ code: 'PORT_MISSING', detail: 'evidence' });

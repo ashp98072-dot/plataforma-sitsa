@@ -1,0 +1,35 @@
+# Runbook de aprovisionamiento del sandbox de homologación (PROCEDIMIENTO — NO se ejecuta en esta fase)
+
+**No ejecutar contra producción ni contra Hostinger.** El ejecutor rechaza cualquier host que no sea 127.0.0.1/::1, exige confirmación explícita y falla si hay indicios de producción o variables del laboratorio. Todo se ejecuta **en el host dedicado del sandbox**, por una persona autorizada, cuando existan los prerrequisitos.
+
+## Prerrequisitos (hoy NO se cumplen)
+Verificador acordado (D02) y adaptador KMS revisado · contrato de orden (D06) · host dedicado con MariaDB en 127.0.0.1, Node, proxy inverso y TLS · dominio y certificado · allowlist de IPs de PriceSmart · gestor de secretos · usuario del sistema sin privilegios.
+
+## Pasos
+1. **Plan (sin tocar nada):** `node scripts/ci/pricesmart-homologation/provision.mjs plan --n <nombre> --out <dir vacío> --hostname <dns> --cert <ruta> --key <ruta> --allow <cidr,cidr>` → genera `bootstrap.sql`, `destroy.sql`, `nginx-pricesmart-sandbox.conf`, `pricesmart-sandbox.service`, `runtime.env.template`, `monitoring.json`. **Revisar** el SQL y el perfil (`evaluateSandboxExposure`, sin bloqueantes).
+2. **Secretos internos:** `init-secrets --n <nombre> --root <dir> --out-env <archivo 0600 fuera del repo>` (genera DB_PASSWORD/AUTH_SECRET/PORTAL_CREDENTIALS_KEY y `isolation.json`; no imprime valores). Las contraseñas de worker y monitor las genera el operador.
+3. **Aplicar:** variables `PS_HOMOLOG_ADMIN_USER/PASSWORD`, `PS_HOMOLOG_APP_PASSWORD` (= DB_PASSWORD), `PS_HOMOLOG_WORKER_PASSWORD`, `PS_HOMOLOG_MONITOR_PASSWORD`, `PS_HOMOLOG_PROVISION_ACK=CONFIRMO-APROVISIONAR-SANDBOX-HOMOLOGACION-AISLADO`; `apply --n <nombre> --db-port <p>` (resumen) y luego `--execute`. Falla si la base ya existe.
+4. **Esquema de ejecución y privilegios finales:** `finalize --n <nombre> --root <dir> --secrets-env <archivo> --db-port <p>` (privilegios temporales siempre revocados).
+5. **Credenciales de PriceSmart:** emitidas por Mónaco según D02 y registradas con `registerIntegrationStatement` (vigencia acotada, alcances y clubes cerrados); se revocan con `revokeStatement` (efecto inmediato, sin reinicio). **No generar credenciales antes de D02.**
+6. **Servicios:** instalar la unidad systemd y el proxy (revisados), `PRICESMART_RUNTIME_MODE=DISABLED` hasta ratificar decisiones; encender solo con decisiones ratificadas, ACK y `killswitch` en `ON`.
+7. **Verificar:** `/api/admin/pricesmart/readiness`, consultas de `monitoring.json` con la cuenta `monitor`, suites de homologación contra el sandbox.
+8. **Apagar/destruir:** escribir `OFF` en el archivo `killswitch` (efecto inmediato); baja completa con `destroy` (ACK de destrucción), eliminar unidad, proxy, DNS y secretos, y comprobar que producción no cambió.
+
+## Revocación de emergencia
+1. `OFF` en el archivo del interruptor (todas las rutas → 503 DISABLED al instante). 2. Revocar la credencial (`revokeStatement`). 3. Revisar la auditoría de acceso (`ps_api01_audit`) y `monitoring.json`.
+
+## Estados del aprovisionamiento: PARCIAL ≠ COMPLETO (corrección tras auditoría de #627)
+`status --n <nombre>` es de **solo lectura** y devuelve uno de: `ABSENT` (no existe), `APPLIED` (bootstrap completo, **falta `finalize`**; `complete=false`), `FINALIZE_FAILED` (`finalize` iniciado o fallido; reintentable), `COMPLETE` (bootstrap **y** finalize completos), `BOOTSTRAP_PARTIAL` (la base existe pero `apply` no terminó) y `FOREIGN` (existe una base con ese nombre que no es de este sandbox: **nunca se toca**).
+- El runtime **no se activa** salvo en `COMPLETE` (sonda `provisioning`); `APPLIED` ≠ listo.
+- **No hay reversión del DDL de MariaDB** (cada `CREATE/ALTER` confirma solo). Un fallo deja lo ya creado; el marcador queda en `FAILED` y el diagnóstico guarda, **sin secretos ni mensajes del motor**, archivo, comienzo de la sentencia (80 caracteres) y código de error de cada sentencia pendiente.
+- `apply` solo deja **diferidas** las sentencias que fallan por dependencia de una fase posterior (`ER_NO_SUCH_TABLE`, `ER_CANT_CREATE_TABLE`, …); cualquier otro error (sintaxis, valor no válido, …) detiene `apply` **antes** de DDL de PriceSmart, cuentas y privilegios. `finalize` reaplica base y migraciones hasta converger y exige **0 pendientes**; con alguna pendiente **no** concede privilegios finales, **no** marca `COMPLETE` y revoca los temporales.
+- **Alcance:** los módulos que el sandbox no instala (contabilidad, combustibles CB2, y migraciones con nombres calificados con la base de producción) están **fuera de alcance** y **no se aplican** (`OUT_OF_SCOPE_FILES` en `bundle.mjs`; el informe de `finalize` los lista en `scope.excludedFiles`). Los `USE <base>` y las líneas `DELIMITER` de los archivos del proyecto **nunca** se envían al servidor. Un fragmento de prosa sin `--` de `sql/schema.sql` (defecto previo, también en `main`) se identifica por SHA-256 y se omite (`knownNonSql`).
+- **Recuperación segura:** (1) `status`; (2) si es `BOOTSTRAP_PARTIAL`/`APPLIED` no deseado: `destroy` (ACK de destrucción; solo `sandbox_api02_homolog_<n>` y sus tres cuentas) y `apply` limpio; (3) si es `FINALIZE_FAILED`: corregir la causa y repetir `finalize`; (4) `FOREIGN`: detenerse e investigar, nunca destruir. Ninguna recuperación toca otras bases ni cuentas (prueba P9 con base y cuenta señuelo).
+
+## `destroy`: propiedad y procedencia antes de cualquier DROP (corrección tras la auditoría de f2586e3c)
+`destroy` ya no ejecuta `destroy.sql` a ciegas (ese archivo es solo para revisión). Hace un **preflight obligatorio** (`planDestroy`) y, ante cualquier duda, falla con `DESTROY_REFUSED` **sin ejecutar ningún DROP**:
+- **Base:** la propiedad se escribe en el comentario de la base en la misma sentencia que la crea (`novalvion-sandbox-owner:homolog-<n>`) y, si existe, la fila `novalvion_environment` debe coincidir. Sin comentario, con comentario de otro sandbox o con identidad distinta → `FOREIGN` → se rechaza siempre.
+- **Cuentas:** una cuenta solo se elimina si el marcador `account:<rol>` de la base propia la declara (se anota **antes** de crearla; `apply` exige que no existieran) **y** todos sus privilegios apuntan solo a esa base (`USAGE` global permitido). Un nombre coincidente no basta.
+- **Fallo antes de crear los marcadores:** el comentario de propiedad ya existe → `BOOTSTRAP_PARTIAL` recuperable (solo se elimina la base). Si existe además una cuenta sin marcador → se detiene.
+- **Cuentas sin base** (`ORPHAN_ACCOUNTS`) o cualquier estado cuya propiedad no se pueda demostrar → se detiene: intervención humana. `apply` también lo rechaza (no reutiliza esos nombres).
+- **Orden y repetición:** primero las cuentas demostradas, después re-comprobación y por último la base (si se interrumpe, la prueba de propiedad sigue ahí y la baja se reanuda). Repetir sobre un sandbox ausente no hace nada.
