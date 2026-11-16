@@ -474,6 +474,7 @@ export async function confirmarLote(
     const conn = await getPool().getConnection();
     const planIds: number[] = [];
     const codigos: string[] = [];
+    let unidadActual: string | null = null;   // placa de la unidad que se estaba resolviendo
     let filaActual: number | null = null;   // fila en proceso: permite decir QUÉ fila rechazó el resolvedor de identidad
     try {
       await conn.beginTransaction();
@@ -490,6 +491,7 @@ export async function confirmarLote(
         const auxIds: number[] = [];
         if (!esTerc) {
           if (r.unidad) {
+            unidadActual = r.unidad.placa;
             unidadId = await resolverUnidadTmsTx(conn,empresaId,r.unidad.placa,r.unidad.flotaVehiculoId);
           }
           if (b.pilotoEmpleadoId != null) {
@@ -592,7 +594,7 @@ export async function confirmarLote(
       console.error("confirmarLote (rollback total)", e);
       // #624: el resolvedor de unidad TMS RECHAZA a propósito identidades en conflicto (p. ej. una unidad histórica sin vínculo a Flota con la misma placa) con un ErrorCB2 y su estado HTTP.
       // Antes se perdía en el mensaje genérico («No se pudo crear el lote»). Se informa fila, motivo y estado reales; la transacción ya se revirtió y NO se relaja ninguna validación.
-      if (e instanceof ErrorCB2 && [400, 403, 409, 503].includes(e.status)) return { ok: false, status: e.status as 400 | 403 | 409 | 503, error: `${filaActual != null ? `Fila ${filaActual}: ` : ""}${e.message} No se creó ningún viaje.` };
+      if (e instanceof ErrorCB2 && [400, 403, 409, 503].includes(e.status)) return { ok: false, status: e.status as 400 | 403 | 409 | 503, error: `${filaActual != null ? `Fila ${filaActual}${unidadActual ? ` (unidad ${unidadActual})` : ""}: ` : ""}${e.message} No se creó ningún viaje.` };
       return { ok: false, status: 500, error: e instanceof Error && /^Fila \d+:/.test(e.message) ? `${e.message} No se creó ningún viaje.` : "No se pudo crear el lote. No se guardó ningún cambio." };
     } finally {
       conn.release();
