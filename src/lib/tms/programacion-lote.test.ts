@@ -1,6 +1,13 @@
-vi.mock("@/lib/tms/unidad-canonica",async()=>({resolverUnidadTmsTx:(await import("./unidad-canonica.test-fixture")).unidadEnSimulador}));
+// Por omisión el motor usa el adaptador SIMULADO de la unidad (upsert permisivo). Las pruebas «identidad TMS REAL» activan `unidadReal.modelo` y ejecutan el resolvedor REAL de #624 sobre un modelo SQL sintético.
+const unidadReal = vi.hoisted(() => ({ modelo: null as null | { consultar(sql: string, a?: unknown[]): Record<string, unknown>[] | undefined; insertar(sql: string, a: unknown[], id: number): void; modelo: { unidades: { id: number; empresa_id: number; placa: string; flota_vehiculo_id: number | null }[] } } }));
+vi.mock("@/lib/tms/unidad-canonica", async () => {
+  const sim = (await import("./unidad-canonica.test-fixture")).unidadEnSimulador;
+  const real = await vi.importActual<typeof import("./unidad-canonica")>("./unidad-canonica");
+  return { resolverUnidadTmsTx: (...a: Parameters<typeof sim>) => (unidadReal.modelo ? real.resolverUnidadTmsTx(...a) : sim(...a)) };
+});
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { modeloSqlUnidadTms } from "./unidad-canonica-sql.fixture";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
@@ -189,9 +196,17 @@ beforeEach(() => {
   // ---- transacción con respaldo/restauración ----
   conn.beginTransaction.mockImplementation(async () => { respaldo = JSON.stringify(e); });
   conn.rollback.mockImplementation(async () => { e = JSON.parse(respaldo); });
-  conn.query.mockImplementation(async (sql: string) => (String(sql).includes("GET_LOCK") ? [[{ l: 1 }]] : [[]]));
+  unidadReal.modelo = null;
+  conn.query.mockImplementation(async (sql: string, args: unknown[] = []) => {
+    if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
+    const unidad = unidadReal.modelo?.consultar(String(sql), args); if (unidad !== undefined) return [unidad];
+    return [[]];
+  });
   conn.execute.mockImplementation(async (sql: string, p: unknown[]) => {
     const s = String(sql);
+    if (unidadReal.modelo && s === "INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(?,?,?,?)") {
+      unidadReal.modelo.insertar(s, p, 900 + unidadReal.modelo.modelo.unidades.length); return [{ insertId: 0 }];   // insertId 0 a propósito (causa raíz de #619): el resolvedor relee por SELECT
+    }
     if (s.includes("INSERT INTO tms_unidades")) {
       const placa = p[1] as string;
       let u = e.unidades.find((x) => x.placa === placa);
@@ -1256,5 +1271,35 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
     const src = readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8");
     expect(src).toContain("pilotoExtraEmpleadoId: idNullable.optional()");
     expect(src).toContain(".strict()");
+  });
+});
+
+describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes con referencias anteriores a la canonicalización)", () => {
+  const flotaP1 = { id: 1, empresa_id: EMP, placa: "P-1", activo: 1, estado: "Activo" };
+  const conModelo = (unidades: { id: number; placa: string; flota_vehiculo_id: number | null }[]) => {
+    const m = modeloSqlUnidadTms(EMP, [flotaP1, { ...flotaP1, id: 2, placa: "P-2" }]); for (const u of unidades) m.modelo.unidades.push({ ...u, empresa_id: EMP }); unidadReal.modelo = m as never; return m;
+  };
+  it("REGRESIÓN: placa con unidad TMS HISTÓRICA sin vínculo a Flota → el lote no crea nada y el error dice FILA, MOTIVO REAL y estado 409 (antes: 500 «No se pudo crear el lote» sin causa); se revierte todo", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
+    const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
+    expect(r).toMatchObject({ ok: false, status: 409 }); if (r.ok) return;
+    expect(r.error).toMatch(/^Fila 2: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos\. No se creó ningún viaje\.$/);
+    expect(creadosDestino()).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);   // la fila 1 (válida) tampoco quedó
+    expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("la validación NO se relaja: el mismo conflicto se rechaza (409), nunca se reescribe la unidad histórica ni se crea una duplicada", async () => {
+    const m = conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
+    const r = await confirmar([borrador({ unidadPlaca: "P-1" })]); expect(r.ok).toBe(false);
+    expect(m.modelo.unidades).toEqual([{ id: 601, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: null }]);
+  });
+  it("unidad TMS ya vinculada a la MISMA unidad de Flota → se reutiliza (mismo unidad_id) y la copia se crea; sin unidad TMS previa → se crea una nueva vinculada, aunque el INSERT devuelva insertId 0", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+    expect(await confirmar([borrador({ unidadPlaca: "P-1" })])).toMatchObject({ ok: true }); expect(creadosDestino()[0].unidad_id).toBe(601);
+    const sinUnidad = conModelo([]); expect(await confirmar([borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 902, rutaId: 11 })], "2026-09-26")).toMatchObject({ ok: true });
+    expect(sinUnidad.modelo.unidades).toEqual([{ id: 900, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: 1 }]);
+  });
+  it("ErrorCB2 con estado inesperado o errores genéricos siguen sin filtrarse: mensaje genérico 500 y rollback", async () => {
+    conModelo([]); conn.execute.mockImplementationOnce(async () => { throw new Error("detalle interno SQL secreto"); });
+    const r = await confirmar([borrador({ unidadPlaca: "P-1" })]); expect(r).toMatchObject({ ok: false, status: 500 }); if (!r.ok) expect(r.error).not.toContain("secreto");
   });
 });
