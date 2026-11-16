@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ImportarCB2 } from "./importar";
 import type { CatalogosCB2 } from "./client";
+vi.setConfig({ testTimeout: 30000 });   // DOM + user-event: en paralelo bajo carga supera los 5 s por omisión (aisladas tardan ~1 s); un timeout no es un fallo funcional
 it("clasifica HALEL desconocido y V-Power, vincula empleado explícito y conserva decisiones entre páginas",async()=>{
     (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
     const host=document.createElement("div");document.body.append(host);const root=createRoot(host);
