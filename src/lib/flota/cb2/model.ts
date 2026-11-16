@@ -15,7 +15,8 @@ export const clave = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const moneda = z.enum(["GTQ", "USD"]);
 // IDs negativos existen solo en el selector/solicitud: representan unidades externas, nunca FKs propias.
 const unidadSeleccion = z.number().int().min(-2147483647).max(2147483647).refine(n => n !== 0);
-const eleccion = z.object({ candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: unidadSeleccion, pilotoTipo: z.enum(["INTERNO", "EXTERNO", "REPORTADO"]).optional(), metodoPiloto: z.enum(["AUTOMATICA", "MANUAL"]).optional(), pilotoExternoId: id.optional(), asociacionExternaId: id.optional(), empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
+const decisionNombre = z.discriminatedUnion("tipo", [z.object({tipo:z.literal("EMPLEADO"),empleadoId:id,confirmado:z.boolean()}).strict(), z.object({tipo:z.literal("REPORTADO"),reportadoId:id.optional(),confirmado:z.boolean()}).strict()]);
+const eleccion = z.object({ decisionNombre:decisionNombre.optional(), candidato: z.string().regex(/^[0-9a-f]{64}$/), vehiculoId: unidadSeleccion, pilotoTipo: z.enum(["INTERNO", "EXTERNO", "REPORTADO"]).optional(), metodoPiloto: z.enum(["AUTOMATICA", "MANUAL"]).optional(), pilotoExternoId: id.optional(), asociacionExternaId: id.optional(), empleadoId: id.nullable().optional(), metodoEmpleado: z.enum(metodosEmpleado).optional(), productoClasificado: z.enum(productos).optional(), motivoUnidad: z.string().trim().min(10).max(1000).optional() }).strict().superRefine((s, ctx) => {
     if (s.pilotoTipo) {
         if (s.asociacionExternaId != null || (s.pilotoTipo === "REPORTADO" ? s.vehiculoId > 0 || s.empleadoId != null || s.pilotoExternoId != null : s.pilotoTipo === "INTERNO" ? s.empleadoId == null || s.pilotoExternoId != null : s.pilotoExternoId == null || s.empleadoId != null)) ctx.addIssue({code:"custom",message:"Una sola identidad de piloto es obligatoria"});
     } else if ((s.vehiculoId < 0) !== (s.asociacionExternaId !== undefined || s.pilotoExternoId !== undefined) || (s.asociacionExternaId !== undefined && s.pilotoExternoId !== undefined) || (s.vehiculoId < 0 && (s.empleadoId != null || (s.metodoEmpleado && s.metodoEmpleado !== "SIN_ASIGNACION")))) ctx.addIssue({ code: "custom", message: "Identidad externa incompatible con vehículo propio o empleado" });
@@ -85,7 +86,7 @@ export async function analizar(buffer: Buffer, perfil: PerfilProveedor, currency
         if (!hojas.has(f.hoja))
             hojas.set(f.hoja, hojas.size + 1);
         const issues = [...(errores.get(f) ?? [])];
-        if (f.estado !== "IGNORADA" && ([f.vale, f.placaOriginal, f.placaNormalizada, f.textos.km].some(s => s.length > 128) || (f.pilotoInformado?.length ?? 0) > 255 || (f.producto?.length ?? 0) > 100))
+        if (f.estado !== "IGNORADA" && ([f.vale, f.placaOriginal, f.placaNormalizada, f.textos.km].some(s => s.length > 128) || f.textos.piloto.length > 255 || (f.producto?.length ?? 0) > 100))
             issues.push("LONGITUD");
         if (f.serie.length > 128) issues.push("serie");
         if (f.factura.length > 128) issues.push("factura");

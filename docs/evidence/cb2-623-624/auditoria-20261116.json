@@ -1,0 +1,97 @@
+{
+  "date": "2026-11-16",
+  "main": "296f9bce71c3b3fe605b45e79ddd58696cd4e349",
+  "testedCode": {
+    "pr623": "67e6108fcec9dfa17b8747a8e6bb411cc9a9826c",
+    "pr624": "d32923945deb2570fd4cf65f19d3ca63a6e794bb"
+  },
+  "individualTrees": {
+    "pr623": "d4ec25eb91e747ea0ac8d2157fa2dfb4f21b74e3",
+    "pr624": "a683593094556b934456b1fa030533bef9aa1ff0"
+  },
+  "database": {
+    "mainAnd623": {
+      "passed": 35,
+      "failed": 0,
+      "skipped": 0,
+      "reportSha256": "7483a0e923dc87184d8981107664169448b330de3a044763b35a8096f6edf806",
+      "version": "11.8.9-MariaDB",
+      "skipNetworking": "1",
+      "shutdown": 0
+    },
+    "mainAnd624": {
+      "passed": 37,
+      "failed": 0,
+      "skipped": 0,
+      "reportSha256": "82d998d4a6302bc2d3f60ee56361ab0e2ec3e946aa5bbbce41b840d7b5f7c15e",
+      "version": "11.8.9-MariaDB",
+      "skipNetworking": "1",
+      "shutdown": 0
+    },
+    "mainAndBoth": {
+      "passed": 38,
+      "failed": 0,
+      "skipped": 0,
+      "reportSha256": "bb7c5d96f4d3d12c037fd46a273525d60a58ebbcf07d7339b138bc6870f918e3",
+      "version": "11.8.9-MariaDB",
+      "skipNetworking": "1",
+      "shutdown": 0
+    }
+  },
+  "unit": {
+    "passed": 504,
+    "failed": 0,
+    "skipped": 50,
+    "reportSha256": "f90701b9e586450def801d8462fc403040439e3b9c5937ca4196b53d3b9e0095"
+  },
+  "tms": {
+    "passed": 540,
+    "failed": 20,
+    "skipped": 0,
+    "reportSha256": "566c1a066590b79f415a57fe605e910de40349b1022fe08d4a47b6359e4c9d12"
+  },
+  "tmsBeforeCorrection": {
+    "baselineSource": "05876746",
+    "baselineFailed": 20,
+    "currentFailed": 20,
+    "sameFailures": true,
+    "failures": [
+      "PATCH /tms/planes — editar y dejar el regreso estimado en null al editar sin regreso estimado, se valida la fecha efectiva",
+      "PATCH /tms/planes — editar y dejar el regreso estimado en null editar y conflicto con un viaje abierto de OTRO plan del mismo piloto: 409",
+      "PATCH /tms/planes — editar y dejar el regreso estimado en null editar y dejar null conserva la validación por empresa y excluye al propio plan",
+      "PATCH /tms/planes — editar y dejar el regreso estimado en null regresoEstimado: null con piloto asignado no da 400 y guarda NULL (sin inventar una hora)",
+      "PATCH /tms/planes — editar y dejar el regreso estimado en null un plan que ya no tenía regreso estimado se puede seguir editando sin exigirlo",
+      "PATCH /tms/planes — patchTipoViaje: cambio de tipo aislado un PATCH sin tipoViaje sigue el flujo normal (no entra a patchTipoViaje, no dispara su SELECT dedicado)",
+      "PATCH — TC de un viaje TERCERIZADO y cambio de tipo edición conserva/actualiza el snapshot externo (tcExternoPlaca en mayúsculas) sin tocar el catálogo interno",
+      "PATCH — disponibilidad de unidad 12) unidad en taller: hoy 409; otro día advertencia",
+      "PATCH — disponibilidad de unidad 13) unidad en ruta: hoy 409 (con el piloto del viaje abierto); otro día advertencia",
+      "PATCH — editar el TC de un viaje PROPIO cambiar a un TC ya asignado ese día a OTRO plan -> 409 (backend, no solo UI)",
+      "PATCH — editar el TC de un viaje PROPIO cambiar de TC valida el nuevo (acceso + clasificación) y reescribe id + fotografía",
+      "PATCH — editar el TC de un viaje PROPIO cambiar la fecha del plan revalida el TC contra la NUEVA fecha",
+      "PATCH — editar el TC de un viaje PROPIO editar OTROS campos conserva el TC (no reescribe las columnas TC) y el propio plan se autoexcluye de la validación",
+      "PATCH — editar el TC de un viaje PROPIO el mismo TC enviado de nuevo no se re-valida (ni por taller) ni se reescribe",
+      "PATCH — editar el TC de un viaje PROPIO tcVehiculoId: null quita el TC",
+      "PATCH — editar vehículo solicitado (independiente de unidad/tarifa) 6) cambiar la UNIDAD (5 t en lugar de la solicitada 2.5 t) NO cambia el vehículo solicitado ni la tarifa",
+      "POST /tms/planes — regreso estimado opcional regresoEstimado vacío/ausente no produce el mensaje de obligatoriedad",
+      "POST — viaje PROPIO con TC interno una unidad normal (VEHICULO/CABEZAL) sigue funcionando como Unidad, con y sin TC",
+      "Planes — proyección equivalente al GET real de /tms/catalogos mide JSON y queries con 104 elementos sintéticos por catálogo",
+      "identidad de personal por empleado — POST y PATCH usan la misma regla PATCH: al mover el viaje, el piloto (personal 12, empleado 55) choca con un viaje donde el mismo empleado es Auxiliar (personal 10): 409"
+    ]
+  },
+  "build": {
+    "command": "npm.cmd run build",
+    "exitCode": 0,
+    "ownDependencies": true,
+    "logSha256": "fd9c786ab0a903352bf1ec8bb0f1a1a1f7b7d21a2ccef8c6b9dd9d81a75923a3"
+  },
+  "textualConflicts": [
+    "src/lib/flota/cb2/service.ts",
+    "src/lib/flota/cb2/terceros.db.test.ts"
+  ],
+  "resolution": "Five known overlapping hunks, resolved only in an isolated audit copy; no branch or PR merged",
+  "resolvedSources": {
+    "src/lib/flota/cb2/service.ts": "6c54a960d658f34ed5ad96d4a17c8c51fe8cbe13497d28b6bfa57c4a768333c5",
+    "src/lib/flota/cb2/terceros.db.test.ts": "938c23aac1bcf56c185e3ebdbb0dcd21d5af3213c628c6c819285cfc8bddf116"
+  },
+  "productionActions": false
+}
