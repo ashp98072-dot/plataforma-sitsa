@@ -21,20 +21,29 @@ export type ErrorCode = 'DISABLED' | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'INVALID_
 export class OrderError extends Error {
   constructor(public readonly code: ErrorCode) { super(code); }
 }
+/** Claves duplicadas dentro del MISMO objeto JSON (el texto ya es JSON válido). Compara las claves decodificadas, así `"a"` y `"a"` cuentan como la misma. */
+export function hasDuplicateKeys(text: string): boolean {
+  const stack: Array<Set<string> | null> = []; let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '{') { stack.push(new Set()); i++; } else if (c === '[') { stack.push(null); i++; } else if (c === '}' || c === ']') { stack.pop(); i++; }
+    else if (c === '"') {
+      let j = i + 1; while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      const token = text.slice(i, j + 1); i = j + 1; let k = i; while (k < text.length && /\s/.test(text[k])) k++;
+      const top = stack[stack.length - 1];
+      if (text[k] === ':' && top) { const key = JSON.parse(token) as string; if (top.has(key)) return true; top.add(key); }
+    } else i++;
+  }
+  return false;
+}
 export function parseBody<T>(body: Uint8Array, schema: z.ZodType<T>): T {
   if (body.byteLength > MAX_BODY_BYTES) throw new OrderError('TOO_LARGE');
   try {
     const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(body);
     const result = schema.parse(JSON.parse(text));
-    // These provisional DTOs are flat string objects. Reject duplicate wire keys,
-    // including escaped spellings, rather than accepting JSON.parse's last value.
-    const seen = new Set<string>();
-    for (const token of text.matchAll(/"(?:[^"\\]|\\.)*"/g)) {
-      if (!text.slice((token.index ?? 0) + token[0].length).trimStart().startsWith(':')) continue;
-      const key = JSON.parse(token[0]) as string;
-      if (seen.has(key)) throw new Error('duplicate');
-      seen.add(key);
-    }
+    // API-27: la detección de claves duplicadas es POR OBJETO (antes era global: un arreglo de objetos con los mismos nombres de campo se rechazaba como «duplicado»). Se siguen rechazando las claves repetidas
+    // dentro de un mismo objeto, incluidas las escritas con escapes (se comparan decodificadas) en cualquier nivel.
+    if (hasDuplicateKeys(text)) throw new Error('duplicate');
     return result;
   } catch { throw new OrderError('INVALID_INPUT'); }
 }
