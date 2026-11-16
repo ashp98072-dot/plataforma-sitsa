@@ -45,7 +45,7 @@ describe("API-26 ensayo del aprovisionamiento (MariaDB real)", () => {
   });
   it("P7 alta y revocación de una credencial con las funciones del paquete (cuenta administrativa), con datos sintéticos que aporta el operador", () => { expect(report.catalog).toEqual({ integrations: 1, revocations: 1 }); });
   it("P9 AISLAMIENTO: aplicar, finalizar y destruir el sandbox NO cambió nada ajeno: una base y una cuenta señuelo (y las del laboratorio) quedaron idénticas (privilegios, sumas de verificación, tablas)", () => {
-    expect(report.isolation).toMatchObject({ unchanged: true, decoyIntact: true });
+    expect(report.isolation.changed, JSON.stringify(report.isolation.changed)).toEqual([]); expect(report.isolation).toMatchObject({ unchanged: true, decoyIntact: true });
     expect(report.isolation.usersChecked).toEqual(expect.arrayContaining(["sandbox_api02_homolog_decoy"])); expect(report.isolation.usersChecked.length).toBeGreaterThanOrEqual(2);   // el señuelo y al menos una cuenta del laboratorio
     expect(report.isolation.schemasChecked).toEqual(expect.arrayContaining(["sandbox_api02_homolog_decoy"]));
   });

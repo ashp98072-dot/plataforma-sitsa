@@ -212,7 +212,7 @@ async function rehearseHomologation() {
   const ownNames = new Set([names.appUser, names.workerUser, names.monitorUser]);
   const snap = async () => {
     const users = (await admin.query("SELECT DISTINCT User u FROM mysql.user WHERE User LIKE 'sandbox%' ORDER BY 1"))[0].map((r) => r.u).filter((u) => !ownNames.has(u)); const grants = {};
-    for (const u of users) grants[u] = (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>'));
+    for (const u of users) grants[u] = (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>')).sort();   // el ORDEN de SHOW GRANTS no está garantizado tras recargar privilegios
     return { schemas: (await admin.query("SELECT SCHEMA_NAME s FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY 1"))[0].map((r) => r.s).filter((x) => x !== names.schema),
       decoyChecksum: (await admin.query(`CHECKSUM TABLE \`${decoy}\`.t`))[0][0].Checksum, labTables: (await admin.query('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [m.schema]))[0][0].n, users, grants };
   };
@@ -253,7 +253,8 @@ async function rehearseHomologation() {
   report.environmentRow = (await admin.query('SELECT environment, sandbox_id FROM novalvion_environment'))[0][0];
   for (const sql of B.destroyStatements('r1')) await admin.query(sql);
   const after = await snap();
-  report.isolation = { unchanged: JSON.stringify(before) === JSON.stringify(after), usersChecked: before.users, schemasChecked: before.schemas, decoyIntact: (await admin.query(`SELECT v FROM \`${decoy}\`.t`))[0][0]?.v === 'intacto' };
+  const changed = Object.keys(before).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k])).map((k) => ({ key: k, before: JSON.stringify(before[k]).slice(0, 400), after: JSON.stringify(after[k]).slice(0, 400) }));
+  report.isolation = { changed, unchanged: JSON.stringify(before) === JSON.stringify(after), usersChecked: before.users, schemasChecked: before.schemas, decoyIntact: (await admin.query(`SELECT v FROM \`${decoy}\`.t`))[0][0]?.v === 'intacto' };
   await admin.query(`DROP DATABASE IF EXISTS \`${decoy}\``); await admin.query(`DROP USER IF EXISTS \`${decoy}\`@\`127.0.0.1\``);
   report.destroyed = { schemas: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]))[0][0].n,
     accounts: (await admin.query("SELECT COUNT(*) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?", [`%sandbox_api02_homolog_%r1%`]))[0][0].n, labSchemaIntact: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [m.schema]))[0][0].n };

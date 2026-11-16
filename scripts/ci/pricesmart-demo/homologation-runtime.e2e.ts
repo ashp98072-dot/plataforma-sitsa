@@ -41,12 +41,14 @@ const post = (key: Key | string | null, id: string, body: unknown = labOrder(id)
 const get = (key: Key | string | null, id: string) => send("GET", `${API}/${id}`, "orders:read", key, id);
 const cancel = (key: Key | string | null, id: string, reason = "ORIGIN_REQUEST") => send("POST", `${API}/${id}/cancellation-requests`, "orders:cancel", key, id, { reason });
 const A = () => empresas.a.empresaId;
+/** Un ciclo del consumidor. Con consumidores y UPDATEs administrativos simultáneos el almacén puede responder RETRYABLE/UNAVAILABLE (bloqueo o interbloqueo): el temporizador de producción lo reintenta en el siguiente ciclo; aquí igual. */
+const cycle = async (c: { runOnce(): Promise<unknown> }) => { try { await c.runOnce(); } catch (e) { if (!["RETRYABLE", "UNAVAILABLE"].includes((e as { code?: string }).code ?? String((e as Error).message))) throw e; } };
 const outboxOf = async (id: string) => ctx.rows("SELECT order_version v, status, attempts FROM ps_api01_outbox WHERE order_id = (SELECT id FROM ps_api01_orders WHERE tenant_id = ? AND external_order_id = ?) ORDER BY order_version", [A(), Buffer.from(id)]);
 const solicitudes = (id: string) => ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [A(), id]);
 const retryDeadlock = async <T>(fn: () => Promise<T>): Promise<T> => { for (let i = 1; ; i++) { try { return await fn(); } catch (e) { if (i < 8 && (e as { code?: string }).code === "ER_LOCK_DEADLOCK") continue; throw e; } } };   // el UPDATE administrativo de la prueba puede cruzarse con el reclamo del consumidor
 async function drain(ids: string[], rounds = 40) {
   for (let i = 0; i < rounds; i++) {
-    await runtime.consumer.runOnce();
+    await cycle(runtime.consumer);
     let open = 0; for (const id of ids) open += (await outboxOf(id)).filter((o) => o.status === "PENDING" || o.status === "LEASED").length;
     if (!open) return;
     await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'")); await retryDeadlock(() => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING' AND lease_until IS NULL"));
@@ -161,7 +163,7 @@ describe("API-26 composición de homologación con cuentas de mínimo privilegio
     await withoutMapping(async (restore) => { for (const id of ids) expect((await post("a", id)).status).toBe(202); await restore(); });
     for (let i = 0; i < 12; i++) {
       await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'")); await retryDeadlock(() => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING' AND lease_until IS NULL"));
-      await Promise.all([runtime.consumer.runOnce(), second.consumer.runOnce()]);
+      await Promise.all([cycle(runtime.consumer), cycle(second.consumer)]);
       let open = 0; for (const id of ids) open += (await outboxOf(id)).filter((o) => o.status !== "DONE").length; if (!open) break;
     }
     for (const id of ids) {
@@ -174,14 +176,14 @@ describe("API-26 composición de homologación con cuentas de mínimo privilegio
   it("R11 CAÍDA del consumidor: eventos reclamados y abandonados (lease) NO se pierden ni se procesan dos veces; vencida la lease otro consumidor los recupera y quedan vinculados una sola vez", async () => {
     const store = mariaDbOutboxStore(rawPool(homolog.worker), { schema, workerUser: homolog.worker.user }); const ids = Array.from({ length: 6 }, () => uid()); let claimed: Awaited<ReturnType<typeof store.claim>> = [];
     await withoutMapping(async (restore) => {
-      for (const id of ids) expect((await post("a", id)).status).toBe(202); await new Promise((r) => setTimeout(r, 600)); await runtime.consumer.runOnce();   // se asienta el trabajo del kick (sin mapeo: reintento)
+      for (const id of ids) expect((await post("a", id)).status).toBe(202); await new Promise((r) => setTimeout(r, 600)); await cycle(runtime.consumer);   // se asienta el trabajo del kick (sin mapeo: reintento)
       await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'"));
       claimed = await store.claim(100, 1000);   // «proceso caído»: reclama y jamás cierra
       await restore();
     });
     expect(claimed.length).toBeGreaterThanOrEqual(ids.length);   // al menos nuestros eventos quedaron reclamados
     for (const id of ids) expect((await outboxOf(id)).some((o) => o.status === "LEASED")).toBe(true);   // retenidos por la lease
-    await runtime.consumer.runOnce(); for (const id of ids) expect(await solicitudes(id), `${id}: mientras dure la lease nadie los procesa`).toBe(0);
+    await cycle(runtime.consumer); for (const id of ids) expect(await solicitudes(id), `${id}: mientras dure la lease nadie los procesa`).toBe(0);
     await new Promise((r) => setTimeout(r, 1300));   // vence la lease (reloj de la base)
     await drain(ids); for (const id of ids) { expect(await solicitudes(id), id).toBe(1); const o = await outboxOf(id); expect(o.every((x) => x.status === "DONE"), id).toBe(true); expect(Number(o[0].attempts), id).toBeGreaterThanOrEqual(2); }
     for (const c of claimed) expect(await store.complete(c), "el proceso caído ya no puede cerrar su reclamo (fencing)").toBe(false);
@@ -189,19 +191,26 @@ describe("API-26 composición de homologación con cuentas de mínimo privilegio
 
   it("R12 reintentos agotados → REVIEW durable que NO se reprocesa solo aunque el TMS vuelva, y la cuenta de monitoreo lo ve (alerta)", async () => {
     const strict = createHomologationRuntime(mkDeps({ outbox: { policy: { batchSize: 10, leaseMs: 2000, maxAttempts: 2, backoffBaseMs: 1, backoffMaxMs: 1 } } })); extraConsumers.push(strict); const id = uid();
-    await withoutMapping(async () => { expect((await post("a", id)).status).toBe(202); for (let i = 0; i < 4; i++) { await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'")); await strict.consumer.runOnce(); } });
+    await withoutMapping(async () => {
+      expect((await post("a", id)).status).toBe(202);
+      for (let i = 0; i < 20 && (await outboxOf(id))[0].status !== "REVIEW"; i++) { await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'")); await cycle(strict.consumer); await new Promise((r) => setTimeout(r, 150)); }
+    });
     expect((await outboxOf(id))[0].status).toBe("REVIEW"); expect(await solicitudes(id)).toBe(0);
-    await strict.consumer.runOnce(); await runtime.consumer.runOnce(); await runtime.consumer.runOnce(); expect((await outboxOf(id))[0].status).toBe("REVIEW"); expect(await solicitudes(id)).toBe(0);   // el TMS ya volvió y sigue en revisión humana
+    await cycle(strict.consumer); await cycle(runtime.consumer); await cycle(runtime.consumer); expect((await outboxOf(id))[0].status).toBe("REVIEW"); expect(await solicitudes(id)).toBe(0);   // el TMS ya volvió y sigue en revisión humana
     const monitor = await mysql.createConnection({ host: process.env.DB_HOST, port: Number(process.env.DB_PORT), user: homolog.monitor.user, password: homolog.monitor.password, database: schema });
     try { const [[row]] = (await monitor.query(B.MONITORING_QUERIES.outbox_review)) as unknown as [Row[]]; expect(Number(row.n)).toBeGreaterThanOrEqual(1); const rule = (B.ALERT_RULES as unknown as { id: string; field: string; above: number }[]).find((r) => r.id === "outbox_review")!; expect(Number(row[rule.field])).toBeGreaterThan(rule.above); } finally { await monitor.end(); }
   }, 240000);
 
   it("R13 aislamiento empresarial EN EJECUCIÓN: el mismo identificador en dos empresas crea dos órdenes y dos solicitudes, cada una en SU empresa; consultar o cancelar con una credencial no toca la otra", async () => {
-    const id = uid(); expect((await post("a", id)).status).toBe(202); expect((await post("b", id)).status).toBe(202); await drain([id]);
+    const id = uid(); expect((await post("a", id)).status).toBe(202); expect((await post("b", id)).status).toBe(202);
     const B2 = () => empresas.b.empresaId;
+    const settle = async (cond: () => Promise<boolean>) => { for (let i = 0; i < 30 && !(await cond()); i++) { await retryDeadlock(() => ctx.db.query("UPDATE ps_api01_outbox SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING'")); await retryDeadlock(() => ctx.db.query("UPDATE ps_api13_link_jobs SET next_attempt_at = UTC_TIMESTAMP(6) WHERE status = 'PENDING' AND lease_until IS NULL")); await cycle(runtime.consumer); await new Promise((r) => setTimeout(r, 100)); } };
+    const linkedIn = (tenant: number) => async () => (await ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [tenant, id])) === 1;
+    await settle(async () => (await linkedIn(A())()) && (await linkedIn(B2())()));
     expect(await ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [A(), id])).toBe(1); expect(await ctx.count("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [B2(), id])).toBe(1);
     expect(await ctx.count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND l.empresa_id <> o.tenant_id", [Buffer.from(id)])).toBe(0);   // ningún vínculo cruza de empresa
-    expect((await cancel("b", id)).status).toBe(202); await drain([id]);
+    expect((await cancel("b", id)).status).toBe(202);
+    await settle(async () => (await ctx.count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND o.tenant_id = ? AND l.cancellation_requested_at IS NOT NULL", [Buffer.from(id), B2()])) === 1);
     expect(await ctx.count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND o.tenant_id = ? AND l.cancellation_requested_at IS NOT NULL", [Buffer.from(id), A()])).toBe(0);   // la empresa A no se enteró
     expect(await ctx.count("SELECT COUNT(*) n FROM ps_api12_tms_links l JOIN ps_api01_orders o ON o.id = l.order_id WHERE o.external_order_id = ? AND o.tenant_id = ? AND l.cancellation_requested_at IS NOT NULL", [Buffer.from(id), B2()])).toBe(1);
     expect((await get("a", id)).json).not.toHaveProperty("cancellation"); expect((await get("b", id)).json).toHaveProperty("cancellation");
