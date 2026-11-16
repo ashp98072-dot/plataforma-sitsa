@@ -1,4 +1,5 @@
 "use client";
+import { seleccionShell } from "./seleccion-shell";
 import { politicaIndependiente, seleccionPilotoIndependiente } from "./piloto-independiente";
 import { pilotoDirecto } from "./identidad-directa";
 
@@ -33,7 +34,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
     const sel = asignacion.asignaciones;
     const pendientes = new Set(filas.filter(f => f.estadoCandidato === "PENDIENTE" && f.candidato).map(f => f.candidato)).size;
     const porClave = new Map(asignacion.resumen.revision.map(g => [g.clave,g.fila]));
-    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; if(header?.perfil==="SHELL"){const n=d.decisionNombre;return {...s,empleadoId:n?.tipo==="EMPLEADO"?n.empleadoId:null,metodoEmpleado:n?.tipo==="EMPLEADO"?"MANUAL" as const:"SIN_ASIGNACION" as const,...(s.vehiculoId<0?n?.tipo==="EMPLEADO"?{pilotoTipo:"INTERNO" as const,metodoPiloto:"MANUAL" as const}:{pilotoTipo:"REPORTADO" as const}:{}),...(n?{decisionNombre:n}:{}),productoClasificado:d.productoClasificado??clasificarProducto(f.origen?.producto)??undefined,...(d.motivoUnidad?.trim()?{motivoUnidad:d.motivoUnidad.trim()}:{})};}return { ...s, ...(politicaIndependiente(cat) ? seleccionPilotoIndependiente(f,cat,d,s.vehiculoId) : s.vehiculoId < 0 ? { empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" as const, ...(cat.tercerosDirectos ? { pilotoExternoId: pilotoDirecto(f, cat, d)?.id } : { asociacionExternaId: d.asociacionExternaId ?? f.asociacionExterna?.id }) } : seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId)), productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
+    const seleccionValida = elecciones(asignacion.resumen.segura).map(s => { const f = porClave.get(s.candidato)!; const d = decisiones[s.candidato] ?? {}; if(header?.perfil==="SHELL"){return {...s,...seleccionShell(f,cat,d,s.vehiculoId),productoClasificado:d.productoClasificado??clasificarProducto(f.origen?.producto)??undefined,...(d.motivoUnidad?.trim()?{motivoUnidad:d.motivoUnidad.trim()}:{})};}return { ...s, ...(politicaIndependiente(cat) ? seleccionPilotoIndependiente(f,cat,d,s.vehiculoId) : s.vehiculoId < 0 ? { empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" as const, ...(cat.tercerosDirectos ? { pilotoExternoId: pilotoDirecto(f, cat, d)?.id } : { asociacionExternaId: d.asociacionExternaId ?? f.asociacionExterna?.id }) } : seleccionarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? [], d.empleadoId)), productoClasificado: d.productoClasificado ?? clasificarProducto(f.origen?.producto) ?? undefined, ...(d.motivoUnidad?.trim() ? { motivoUnidad: d.motivoUnidad.trim() } : {}) }; });
     const revision = useRef(0);
     const [descargando, setDescargando] = useState(false);
     useEffect(() => () => { revision.current++; }, []);
@@ -62,7 +63,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
         }
     }
     function elegirNombre(clave:string,d:DecisionNombre){setDecisiones(prev=>{const result={...prev};for(const f of filas)if(f.candidato && normalizarNombreReportado(f.origen?.piloto??"")===clave)result[f.candidato]={...prev[f.candidato],decisionNombre:d,pilotoTipo:d.tipo==="EMPLEADO"?"INTERNO":"REPORTADO",empleadoId:d.tipo==="EMPLEADO"?d.empleadoId:null,pilotoExternoId:null,asociacionExternaId:null};return result;});}
-    const faltaNombre=header?.perfil==="SHELL" && seleccionValida.some(s=>porClave.get(s.candidato)?.origen?.piloto?.trim() && !s.decisionNombre);
+    const faltaNombre=header?.perfil==="SHELL" && seleccionValida.some(s=>porClave.get(s.candidato)?.origen?.piloto?.trim() && s.pilotoTipo!=="EXTERNO" && !s.decisionNombre);
     async function reanudar() {
         if (faltaNombre || !header || !motivo.trim() || locked || loading || !pendientes || !seleccionValida.length || Object.keys(asignacion.solicitudes).length !== seleccionValida.length || seleccionValida.some(s => !s.productoClasificado))
             return;

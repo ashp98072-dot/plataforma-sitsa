@@ -1,3 +1,6 @@
+import { seleccionShell } from "@/components/flota/cb2/seleccion-shell";
+import { revisionCandidatos } from "@/components/flota/cb2/preview-model";
+import type { DecisionAsignacion } from "@/components/flota/cb2/asignacion";
 import { reportePilotos } from "./pilotos-reporte";
 import { resolverUnidadTms } from "@/lib/tms/unidad-canonica";
 import { corregirAsignacion } from "./asignaciones";
@@ -722,6 +725,67 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   const concurrentes=await Promise.allSettled([resolverUnidadTms(1,'C558BSJ',1301),resolverUnidadTms(1,'C558BSJ',684)]);
   expect(concurrentes.every(r=>r.status==='rejected')).toBe(true);
   expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
+ });
+
+ it("cierre integral Shell: alta directa, pendiente, listo, consumo, fondos, historial y solapamiento",async()=>{
+  vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
+  vi.stubEnv("CB2_TERCEROS_D2_APROBADA","");
+  try {
+   const actor={...ctx,escrituraDirecta:true};
+   const p=await registrarPiloto(actor,{referencia:"cierre-piloto",nombre:"Piloto Cierre Sintetico"});
+   const u=await registrarUnidad(actor,{referencia:"cierre-unidad",placa:"M884LAB",tipo:"MOTOCICLETA",descripcion:"Cierre sintetico"});
+   expect(await registrarPiloto(actor,{referencia:"cierre-piloto",nombre:"Piloto Cierre Sintetico"})).toMatchObject({id:p.id,existente:true});
+   expect(await q("SELECT id FROM flota_cb2_externos_asociaciones WHERE piloto_id=?",[p.id])).toEqual([]);
+   const original="Nombre original del proveedor";
+   const buffer=await libroShell([filaShell("CIERRE-INTEGRAL",original,"M884LAB","Diesel")]);
+   const previa=await preview(ctx,buffer,{perfil:"SHELL",moneda:"GTQ",seleccion:[]});
+   const fila=previa.filas.find(f=>f.candidato)!;
+   const cat:CatalogosCB2={tercerosDirectos:true,tercerosHabilitados:true,identidadesIndependientes:true,pilotosReportados:true,pilotoReportadoExterno:true,proveedores:[],empleados:[],vehiculos:[{id:-u.id,placa:"M884LAB"}],pilotosExternos:[{id:p.id,nombre:"Piloto Cierre Sintetico",referencia:"cierre-piloto"}],unidadesExternas:[{id:u.id,placa:"M884LAB",referencia:"cierre-unidad",tipo:"MOTOCICLETA",descripcion:"Cierre sintetico"}]};
+   expect(revisionCandidatos([fila],cat,{})[0].estado).toBe("PENDIENTE");
+   const decision:DecisionAsignacion={pilotoTipo:"EXTERNO",pilotoExternoId:p.id,empleadoId:null,productoClasificado:"DIESEL"};
+   const unidad={[fila.candidato!]:String(-u.id)};
+   expect(revisionCandidatos([fila],cat,unidad,{}, {},{[fila.candidato!]:decision})[0].estado).toBe("LISTO");
+   const entrada:Entrada={perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:fila.candidato!,vehiculoId:-u.id,...seleccionShell(fila,cat,decision,-u.id),productoClasificado:"DIESEL"}]};
+   const token=await preview(ctx,buffer,entrada);
+   await confirmarArchivo(ctx,buffer,"cierre.xlsx",entrada,key(),token.token);
+   const [consumo]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='CIERRE-INTEGRAL'");
+   expect(consumo).toMatchObject({piloto_informado:original,piloto_externo_id:p.id,unidad_externa_id:u.id,asociacion_externa_id:null});
+   // Otro archivo contiene el mismo vale y uno nuevo: reutilizar, no bloquear ni duplicar.
+   const solapado=await libroShell([filaShell("CIERRE-INTEGRAL",original,"M884LAB","Diesel"),filaShell("CIERRE-NUEVO",original,"M884LAB","Diesel")]);
+   const lineas=(await analizar(solapado,"SHELL","GTQ")).filter(l=>l.clave);
+   await cb2({buffer:solapado,entrada:{...entrada,seleccion:lineas.map(l=>({...entrada.seleccion[0],candidato:l.clave!}))}});
+   expect(await total("CIERRE-INTEGRAL")).toBe(1);
+   expect(await q("SELECT id FROM flota_cb2_filas WHERE consumo_id=? AND resultado='REUTILIZADA'",[consumo.id])).toHaveLength(1);
+   await q("INSERT INTO tms_solicitud_fondo_lineas VALUES(990,1,901,'Combustible',NULL,1,200,?,'M884LAB')",[original]);
+   const op={proveedorId:1,consumoId:consumo.id,lineaId:990,revision:Number(consumo.revision_asignacion),motivo:"Cierre sintetico con comprobantes revisados",confirmado:true as const};
+   await expect(vincularFondoCB2({...ctx,proveedorId:2},op)).rejects.toMatchObject({status:404});
+   const fondos=await Promise.all([vincularFondoCB2(ctx,op),vincularFondoCB2(ctx,op)]);
+   expect(fondos.filter(f=>!f.repetida)).toHaveLength(1);
+   expect((await consultarFondoCB2(1,1,consumo.id,"")).estado).toBe("VINCULADO_MANUAL");
+   const historial=await cb2Http(new Request("http://localhost/lab?pilotoExternoId="+p.id),"e1","consumos");
+   expect(historial.status,await historial.clone().text()).toBe(200);
+   expect(await historial.text()).toContain(original);
+   expect((await q("SELECT * FROM flota_cb2_consumos WHERE id=?",[consumo.id]))[0]).toEqual(consumo);
+   expect(await q("SELECT * FROM flota_cb2_consumo_piloto_reportado WHERE consumo_id=?",[consumo.id])).toEqual([]);
+   expect(await q("SELECT * FROM flota_cb2_fondos_vinculos WHERE consumo_id=?",[consumo.id])).toHaveLength(1);
+  } finally {vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ },60000);
+
+ it("captura CHECK solo lectura: recupera expresion, NULL permitido y rechazo real tras restaurar",async()=>{
+  await q("CREATE TABLE lab_check_capture(id INT PRIMARY KEY,valor INT NULL,CONSTRAINT lab_ck_capture CHECK(valor>=0)) ENGINE=InnoDB");
+  await q("INSERT INTO lab_check_capture VALUES(1,NULL),(2,10)");
+  const [resultados]=await admin.query(readFileSync("docs/operaciones/cb2-cierre-20261116/00-capturar-checks-solo-lectura.sql","utf8"));
+  const sets=resultados as unknown as Record<string,unknown>[][];
+  const registro=sets[1].find(r=>r.TABLE_NAME==="lab_check_capture")!;
+  const texto=sets[3].find(r=>r.TABLE_NAME==="lab_check_capture")!;
+  expect(Number(registro.bytes_clausula)).toBe(Buffer.byteLength(String(registro.CHECK_CLAUSE)));
+  expect(sets[1]).toHaveLength(Number(sets[2][0].checks_esperados));
+  await q("ALTER TABLE lab_check_capture DROP CONSTRAINT lab_ck_capture");
+  expect(Number((await q(String(texto.validar_datos)))[0].infracciones)).toBe(0);
+  await q(String(texto.restaurar_check));
+  expect((await q("SELECT CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='lab_check_capture'"))[0].CHECK_CLAUSE).toBe(registro.CHECK_CLAUSE);
+  await expect(q("UPDATE lab_check_capture SET valor=-1 WHERE id=2")).rejects.toMatchObject({errno:4025});
+  await q("DROP TABLE lab_check_capture");
  });
 
 });

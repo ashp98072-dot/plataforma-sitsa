@@ -250,7 +250,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         const originales=lineas.filter(l=>l.clave===s.candidato && !l.bloqueada).map(l=>l.fila.textos.piloto);
         for(const nombre of originales) {
             const key=normalizarNombreReportado(nombre);if(!key)continue;
-            if(perfil==="SHELL" && registroReportados && !s.decisionNombre)throw new ErrorCB2("Revisa los nombres distintos antes de confirmar.",400);
+            if(perfil==="SHELL" && registroReportados && s.pilotoTipo!=="EXTERNO" && !s.decisionNombre)throw new ErrorCB2("Revisa los nombres distintos antes de confirmar.",400);
             if(!s.decisionNombre)continue;
             if(!registroReportados)throw new ErrorCB2("Instala y valida el registro de equivalencias antes de guardar decisiones de nombres.",503);
             const d=s.decisionNombre;
