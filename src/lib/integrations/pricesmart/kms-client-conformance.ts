@@ -9,7 +9,15 @@ export type KmsConformanceCheckId =
   | 'ROUNDTRIP' | 'NO_PLAINTEXT_IN_CIPHERTEXT' | 'NON_DETERMINISTIC' | 'CONTEXT_BINDING' | 'ALIAS_BINDING' | 'TAMPER_DETECTED' | 'TRUNCATION_REJECTED' | 'UNKNOWN_ALIAS_REJECTED'
   | 'ERRORS_DO_NOT_LEAK' | 'INPUTS_NOT_MUTATED' | 'ABORT_SETTLES' | 'HEALTH_BOOLEAN';
 export const KMS_CONFORMANCE_CHECKS: readonly KmsConformanceCheckId[] = ['ROUNDTRIP', 'NO_PLAINTEXT_IN_CIPHERTEXT', 'NON_DETERMINISTIC', 'CONTEXT_BINDING', 'ALIAS_BINDING', 'TAMPER_DETECTED', 'TRUNCATION_REJECTED', 'UNKNOWN_ALIAS_REJECTED', 'ERRORS_DO_NOT_LEAK', 'INPUTS_NOT_MUTATED', 'ABORT_SETTLES', 'HEALTH_BOOLEAN'];
-export type KmsConformanceReport = { conformant: boolean; checks: Array<{ id: KmsConformanceCheckId; pass: boolean }> };
+/**
+ * Cancelación (señal YA abortada). Dos cosas distintas:
+ *  - `ABORT_SETTLES` (EXIGIDA): con una señal ya abortada la llamada debe TERMINAR (resolver o rechazar) en un tiempo acotado; un cliente que se cuelga no es conforme.
+ *  - `cancellation` (INFORMATIVA, no bloquea `conformant`): `HONORED` = el cliente RECHAZÓ la llamada con la señal abortada (respeta la cancelación); `IGNORED` = la completó como si nada (ignora la señal). `IGNORED`
+ *    NO valida la cancelación: significa que la señal no se respeta y que la protección depende del envoltorio `createKmsKeyProvider` (que no envía ni reintenta tras abortar) y de los tiempos límite. El kit solo ejercita
+ *    una señal abortada ANTES de la llamada; la cancelación a mitad de vuelo no se puede probar de forma genérica y debe revisarse en el adaptador concreto.
+ */
+export type KmsCancellation = 'HONORED' | 'IGNORED' | 'HUNG';
+export type KmsConformanceReport = { conformant: boolean; checks: Array<{ id: KmsConformanceCheckId; pass: boolean }>; cancellation: KmsCancellation };
 export type KmsConformanceOptions = { aliases: readonly [string, string]; unknownAlias?: string; abortTimeoutMs?: number };
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -21,7 +29,7 @@ const forms = (b: Uint8Array) => [Buffer.from(b).toString('hex'), Buffer.from(b)
 
 export async function runKmsClientConformance(client: KmsClient, options: KmsConformanceOptions): Promise<KmsConformanceReport> {
   const [alias, other] = options.aliases; const unknown = options.unknownAlias ?? 'lab.alias-inexistente-conformidad';
-  if (alias === other || typeof client?.encrypt !== 'function' || typeof client?.decrypt !== 'function') return { conformant: false, checks: KMS_CONFORMANCE_CHECKS.map((id) => ({ id, pass: false })) };
+  if (alias === other || typeof client?.encrypt !== 'function' || typeof client?.decrypt !== 'function') return { conformant: false, checks: KMS_CONFORMANCE_CHECKS.map((id) => ({ id, pass: false })), cancellation: 'HUNG' };
   const results = new Map<KmsConformanceCheckId, boolean>(); const record = (id: KmsConformanceCheckId, pass: boolean) => results.set(id, pass);
   const key = () => Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 13) & 0xff);   // clave de datos de PRUEBA (no secreta, determinista para detectar eco)
   const context = 'Y29udGV4dG8tZGUtcHJ1ZWJh';
@@ -50,12 +58,16 @@ export async function runKmsClientConformance(client: KmsClient, options: KmsCon
     return probes.every((p) => p.rejected && !needles.some((n) => observable(p.error).includes(n)));
   });
   await guard('INPUTS_NOT_MUTATED', async () => { const pt = key(); const c = await enc(alias, context, pt); const snapshot = Uint8Array.from(c); await dec(c); return valid && sameBytes(pt, key()) && sameBytes(c, snapshot); });
+  let cancellation: KmsCancellation = 'HUNG';
   await guard('ABORT_SETTLES', async () => {
     const controller = new AbortController(); controller.abort(); const limit = options.abortTimeoutMs ?? 2000; let timer: ReturnType<typeof setTimeout> | undefined;
-    try { const outcome = await Promise.race([rejects(() => enc(alias, context, key(), controller.signal)).then(() => 'settled'), new Promise<string>((resolve) => { timer = setTimeout(() => resolve('hung'), limit); })]); return outcome === 'settled'; } finally { if (timer) clearTimeout(timer); }
+    try {
+      const outcome = await Promise.race([rejects(() => enc(alias, context, key(), controller.signal)), new Promise<'hung'>((resolve) => { timer = setTimeout(() => resolve('hung'), limit); })]);
+      if (outcome === 'hung') return false; cancellation = outcome.rejected ? 'HONORED' : 'IGNORED'; return true;
+    } finally { if (timer) clearTimeout(timer); }
   });
   await guard('HEALTH_BOOLEAN', async () => typeof client.health === 'function' && typeof (await client.health()) === 'boolean');
 
   const checks = KMS_CONFORMANCE_CHECKS.map((id) => ({ id, pass: results.get(id) === true }));
-  return { conformant: checks.every((c) => c.pass), checks };
+  return { conformant: checks.every((c) => c.pass), checks, cancellation };
 }

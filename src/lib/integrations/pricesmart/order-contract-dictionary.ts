@@ -10,7 +10,7 @@ import { TMS_LIMITS } from './tms-contract-proposal';
 //
 // Reglas de seguridad fijas (no configurables): cada campo es obligatorio u opcional de forma EXPLÍCITA; objetos estrictos (campo desconocido ⇒ rechazo); cadenas normalizadas a NFC, recortadas si se pide, contadas en
 // puntos de código (como un VARCHAR de utf8mb4), sin caracteres de control, sin sustitutos sueltos y sin caracteres de dirección o ancho cero que permiten suplantar texto; fechas de calendario REALES;
-// profundidad ≤ 3, ≤ 40 campos, cadenas ≤ 2000, arreglos ≤ 50 elementos, patrones acotados y anclados.
+// profundidad ≤ 3, ≤ 40 campos, cadenas ≤ 2000, arreglos ≤ 50 elementos, patrones del lenguaje restringido de `analyzePattern` (sin grupos ni retroceso catastrófico).
 
 export type StringField = { type: 'string'; required: boolean; max: number; min?: number; trim?: boolean; pattern?: string };
 export type DateField = { type: 'date'; required: boolean };
@@ -24,7 +24,53 @@ export const DICTIONARY_LIMITS = Object.freeze({ maxDepth: 3, maxFields: 40, max
 export const RESERVED_FIELDS = Object.freeze(['schemaVersion', 'externalOrderId', 'originClubReference']);
 const FIELD_NAME = /^[a-z][A-Za-z0-9]{0,39}$/; const SCHEMA_VERSION = /^[a-z0-9][a-z0-9.-]{0,31}$/;
 const CONTROL = /\p{Cc}/u; const SPOOF = /[\u200B-‏‪-\u202E\u2066-\u2069\uFEFF\u00AD]/u;
-const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)[+*{]|\\[1-9]/;   // heurística contra patrones de retroceso catastrófico y referencias hacia atrás
+
+// ---- Lenguaje de patrones ADMITIDO (política estructural, no heurística). Un patrón es `^` + elementos + `$`, donde cada elemento es un ÁTOMO (carácter literal, `.`, `\d` `\w` `\s`, un escape de metacarácter o una
+// clase simple `[...]`) con un cuantificador opcional (`?` `*` `+` `{n}` `{n,}` `{n,m}`, m ≤ 255). NO hay grupos, alternancias, referencias hacia atrás, anticipaciones ni cuantificadores perezosos. Sin grupos no puede haber
+// cuantificadores anidados ni alternativas ambiguas, así que lo único que puede costar es el producto de las elecciones de repetición de los cuantificadores VARIABLES: un retroceso explora, como máximo, ese producto de
+// combinaciones (cada una cuesta a lo sumo la longitud de la cadena, que ya está acotada por `max` ANTES de aplicar el patrón). `patternCost` calcula esa cota y `MAX_PATTERN_COST` la limita; todo patrón que la supere
+// (p. ej. muchos opcionales seguidos o varios `*` en fila) se rechaza. Para alternativas fijas se usa `enum`.
+export const MAX_PATTERN_COST = 5000; const MAX_PATTERN_ITEMS = 60; const MAX_REPEAT = 255;
+const META = new Set(['\\', '^', '$', '.', '|', '?', '*', '+', '(', ')', '[', ']', '{', '}']);
+export type PatternAnalysis = { ok: true; cost: number; items: number } | { ok: false; reason: string };
+export function analyzePattern(pattern: string, maxLength: number): PatternAnalysis {
+  const bad = (reason: string): PatternAnalysis => ({ ok: false, reason });
+  if (typeof pattern !== 'string' || pattern.length > DICTIONARY_LIMITS.maxPattern) return bad('LONGITUD');
+  if (!pattern.startsWith('^') || !pattern.endsWith('$') || pattern.length < 2 || pattern.endsWith('\\$')) return bad('SIN_ANCLAS');
+  const body = [...pattern.slice(1, -1)]; let i = 0; let cost = 1; let items = 0;
+  const readEscape = (): boolean => { const c = body[i + 1]; if (c === undefined) return false; if (c === 'd' || c === 'w' || c === 's') { i += 2; return true; } if (META.has(c) || c === '-' || c === '/') { i += 2; return true; } return false; };   // nada de \1, \b, \k, \p, \u…
+  const readClass = (): boolean => {
+    i++; if (body[i] === '^') i++; let n = 0;
+    while (i < body.length && body[i] !== ']') {
+      const c = body[i]; if (c === '[') return false;   // dentro de una clase los demás metacaracteres son literales (no hay anidación ni POSIX)
+      if (c === '\\') { if (!readEscape()) return false; n++; continue; }
+      if (body[i + 1] === '-' && body[i + 2] !== undefined && body[i + 2] !== ']') { const hi = body[i + 2]; if (hi === '\\' || hi === '[' || (hi.codePointAt(0) as number) < (c.codePointAt(0) as number)) return false; i += 3; n++; continue; }
+      i++; n++; if (n > 30) return false;
+    }
+    if (body[i] !== ']' || n === 0 || n > 30) return false; i++; return true;
+  };
+  while (i < body.length) {
+    const c = body[i]; items++; if (items > MAX_PATTERN_ITEMS) return bad('DEMASIADOS_ELEMENTOS');
+    if (c === '\\') { if (!readEscape()) return bad('ESCAPE_NO_PERMITIDO'); }
+    else if (c === '[') { if (!readClass()) return bad('CLASE_NO_PERMITIDA'); }
+    else if (c === '(' || c === ')' || c === '|') return bad('GRUPOS_O_ALTERNANCIA');
+    else if (c === '?' || c === '*' || c === '+' || c === '{') return bad('CUANTIFICADOR_SIN_ATOMO');
+    else if (c === '^' || c === '$' || c === '}' || c === ']') return bad('METACARACTER_SUELTO');
+    else i++;   // literal o `.`
+    const q = body[i]; if (q === undefined) continue;
+    const choices = (lo: number, hi: number | null): number => (hi === null ? Math.max(1, maxLength - lo + 1) : Math.min(hi - lo + 1, maxLength + 1));
+    if (q === '?') { i++; cost *= 2; }
+    else if (q === '*') { i++; cost *= choices(0, null); } else if (q === '+') { i++; cost *= choices(1, null); }
+    else if (q === '{') {
+      const m = /^\{(\d{1,3})(?:(,)(\d{1,3})?)?\}/.exec(body.slice(i).join('')); if (!m) return bad('CUANTIFICADOR_INVALIDO');
+      const lo = Number(m[1]); const hi = m[2] ? (m[3] === undefined ? null : Number(m[3])) : lo; if (lo > MAX_REPEAT || (hi !== null && (hi > MAX_REPEAT || hi < lo))) return bad('CUANTIFICADOR_INVALIDO');
+      i += m[0].length; cost *= choices(lo, hi);
+    }
+    if (body[i] === '?' || body[i] === '+' || body[i] === '*' || body[i] === '{') return bad('CUANTIFICADOR_DOBLE_O_PEREZOSO');
+    if (!Number.isFinite(cost) || cost > MAX_PATTERN_COST) return bad('COSTO_EXCESIVO');
+  }
+  return { ok: true, cost, items };
+}
 
 export class DictionaryError extends Error { constructor(readonly code: 'INVALID_DICTIONARY' | 'D06_NOT_RATIFIED', readonly issues: readonly string[] = []) { super(code); this.name = 'DictionaryError'; } }
 
@@ -44,7 +90,8 @@ export function validateDictionary(dictionary: ContractDictionary): string[] {
           if (!Number.isInteger(def.max) || def.max < 1 || def.max > DICTIONARY_LIMITS.maxString) issues.push(`${at}: max fuera de 1..${DICTIONARY_LIMITS.maxString}`);
           if (def.min !== undefined && (!Number.isInteger(def.min) || def.min < 0 || def.min > def.max)) issues.push(`${at}: min inválido`);
           if (def.pattern !== undefined) {
-            if (def.pattern.length > DICTIONARY_LIMITS.maxPattern || !def.pattern.startsWith('^') || !def.pattern.endsWith('$') || NESTED_QUANTIFIER.test(def.pattern)) issues.push(`${at}: patrón no permitido (anclado ^…$, ≤ ${DICTIONARY_LIMITS.maxPattern}, sin cuantificadores anidados ni referencias)`);
+            const verdict = analyzePattern(def.pattern, def.max);
+            if (!verdict.ok) issues.push(`${at}: patrón no permitido (${verdict.reason}); lenguaje admitido: ^átomos con cuantificador$ sin grupos, alternancias ni referencias, costo ≤ ${MAX_PATTERN_COST}`);
             else try { new RegExp(def.pattern, 'u'); } catch { issues.push(`${at}: patrón no compila`); }
           }
           break;

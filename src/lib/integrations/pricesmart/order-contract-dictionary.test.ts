@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { compileContractDictionary, DICTIONARY_LIMITS, DictionaryError, dictionaryHash, LAB_DEMO_DICTIONARY, validateDictionary, type ContractDictionary, type FieldDef } from './order-contract-dictionary';
+import { Worker } from 'node:worker_threads';
+import { analyzePattern, compileContractDictionary, DICTIONARY_LIMITS, DictionaryError, dictionaryHash, LAB_DEMO_DICTIONARY, validateDictionary, type ContractDictionary, type FieldDef } from './order-contract-dictionary';
 import { hasDuplicateKeys, parseBody, OrderError } from './contracts';
 import { labObservations, labOrderSchema } from './lab-demo/contract';
 import { TMS_LIMITS } from './tms-contract-proposal';
@@ -84,4 +85,39 @@ describe('API-27 diccionario del contrato de la orden (D06): mecanismo, NO contr
     const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'order-contract-dictionary.ts'), 'utf8');
     expect(text).not.toMatch(/mysql|process\.env|from '\.\/(runtime|service|http-transport|mariadb)|homologation\/runtime|lab-demo\/(composition|gate)/);
   });
+});
+
+describe('API-27 lenguaje de patrones admitido (política estructural contra ReDoS)', () => {
+  const ok = (pattern: string, max = 120) => analyzePattern(pattern, max);
+  const strField = (pattern: string, max = 120): ContractDictionary => ({ schemaVersion: 'v-patron', status: 'PROPOSED', fields: { code: { type: 'string', required: true, max, pattern } } });
+  it('ACEPTA patrones útiles del lenguaje restringido (identificadores, códigos, teléfonos) y compila con ellos', () => {
+    const good: Array<[string, number]> = [['^[A-Za-z0-9][A-Za-z0-9._:-]*$', 120], ['^[A-Z]{3}-\\d{6}$', 30], ['^\\+?\\d{8,15}$', 20], ['^PS-\\d{1,10}$', 20], ['^[a-z]+\\.?[a-z]*$', 40], ['^.{1,50}$', 50], ['^\\w+@\\w+\\.com$', 60], ['^$', 5], ['^a*a*a*$', 10], ['^[^\\s]+$', 100]];
+    for (const [p, max] of good) { const verdict = ok(p, max); expect(verdict.ok, p).toBe(true); expect(() => compileContractDictionary(strField(p, max), { ratifiedDecisions: [] }), p).not.toThrow(); }
+    const c = compileContractDictionary(strField('^[A-Z]{3}-\\d{6}$', 30), { ratifiedDecisions: [] });
+    expect(accepts(c, { schemaVersion: 'v-patron', externalOrderId: 'O1', originClubReference: 'C1', code: 'ABC-123456' })).toBe(true); expect(accepts(c, { schemaVersion: 'v-patron', externalOrderId: 'O1', originClubReference: 'C1', code: 'AB-123456' })).toBe(false);
+  });
+  it('RECHAZA por estructura (sin ejecutarlos): cuantificadores anidados, alternativas ambiguas, referencias hacia atrás, anticipaciones, perezosos, dobles cuantificadores y escapes no admitidos', () => {
+    const bad: Array<[string, string]> = [
+      ['^(a+)+$', 'GRUPOS_O_ALTERNANCIA'], ['^(a|aa)+$', 'GRUPOS_O_ALTERNANCIA'], ['^(a|a)*$', 'GRUPOS_O_ALTERNANCIA'], ['^(a*)*$', 'GRUPOS_O_ALTERNANCIA'], ['^(.*a){5}$', 'GRUPOS_O_ALTERNANCIA'], ['^(?:a)$', 'GRUPOS_O_ALTERNANCIA'], ['^(?=a)a$', 'GRUPOS_O_ALTERNANCIA'],
+      ['^(a)\\1$', 'GRUPOS_O_ALTERNANCIA'], ['^a\\1$', 'ESCAPE_NO_PERMITIDO'], ['^\\b$', 'ESCAPE_NO_PERMITIDO'], ['^\\p{L}+$', 'ESCAPE_NO_PERMITIDO'], ['^\\u0041$', 'ESCAPE_NO_PERMITIDO'], ['^\\k<x>$', 'ESCAPE_NO_PERMITIDO'],
+      ['^a|b$', 'GRUPOS_O_ALTERNANCIA'], ['^a+?$', 'CUANTIFICADOR_DOBLE_O_PEREZOSO'], ['^a*+$', 'CUANTIFICADOR_DOBLE_O_PEREZOSO'], ['^a{2}{3}$', 'CUANTIFICADOR_DOBLE_O_PEREZOSO'], ['^a??$', 'CUANTIFICADOR_DOBLE_O_PEREZOSO'], ['^*a$', 'CUANTIFICADOR_SIN_ATOMO'],
+      ['^a{3,2}$', 'CUANTIFICADOR_INVALIDO'], ['^a{1,999}$', 'CUANTIFICADOR_INVALIDO'], ['^a{x}$', 'CUANTIFICADOR_INVALIDO'], ['^[a-z$', 'CLASE_NO_PERMITIDA'], ['^[[:alpha:]]$', 'CLASE_NO_PERMITIDA'], ['^[z-a]$', 'CLASE_NO_PERMITIDA'], ['^[]$', 'CLASE_NO_PERMITIDA'],
+      ['a$', 'SIN_ANCLAS'], ['^a', 'SIN_ANCLAS'], ['^a\\$', 'SIN_ANCLAS'], ['^a$b$', 'METACARACTER_SUELTO'],
+      [`^${'a?'.repeat(30)}${'a'.repeat(30)}$`, 'COSTO_EXCESIVO'], ['^a*a*a*$', 'COSTO_EXCESIVO'], ['^.*.*$', 'COSTO_EXCESIVO'], [`^${'a'.repeat(DICTIONARY_LIMITS.maxPattern + 1)}$`, 'LONGITUD'],
+    ];
+    for (const [p, reason] of bad) { const verdict = ok(p, p === '^a*a*a*$' ? 2000 : p === '^.*.*$' ? 200 : 120); expect(verdict.ok, p).toBe(false); expect((verdict as { reason: string }).reason, p).toBe(reason); }
+    expect(ok('^a*a*a*$', 10).ok).toBe(true);   // el costo depende de `max`: con 10 caracteres el producto de elecciones (11³) es pequeño
+  });
+  it('un diccionario con patrones peligrosos se rechaza al validarlo, SIN ejecutar la expresión, y el mensaje no cita el patrón', () => {
+    for (const p of ['^(a|aa)+$', '^(a+)+$', '^(a|a)*$', '^(a)\\1$']) { const issues = validateDictionary(strField(p)); expect(issues.length, p).toBe(1); expect(issues[0]).toContain('patrón no permitido'); expect(issues[0]).not.toContain(p); expect(() => compileContractDictionary(strField(p), { ratifiedDecisions: ['D06'] }), p).toThrow(DictionaryError); }
+  });
+  it('COTA COMPROBADA EXPERIMENTALMENTE: 400 patrones aleatorios del lenguaje; los admitidos se ejecutan contra cadenas adversarias en un hilo aparte con límite de tiempo (si la cota fallara, la prueba falla, no se cuelga)', async () => {
+    const atoms = ['a', 'b', '.', '\\d', '\\w', '[ab]', '[^a]', '[a-c]']; const quants = ['', '', '?', '*', '+', '{2}', '{1,3}', '{2,}', '{0,5}', '{1,20}']; let seed = 20260101; const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    const patterns: string[] = []; for (let k = 0; k < 400; k++) { let body = ''; const n = 1 + rnd(14); for (let j = 0; j < n; j++) body += atoms[rnd(atoms.length)] + quants[rnd(quants.length)]; patterns.push(`^${body}$`); }
+    const accepted = patterns.filter((p) => ok(p, 300).ok); const rejected = patterns.length - accepted.length; expect(accepted.length).toBeGreaterThan(40); expect(rejected).toBeGreaterThan(40);
+    const worker = new Worker(`const { workerData, parentPort } = require('node:worker_threads'); const inputs = ['a'.repeat(300), 'a'.repeat(299) + '!', 'ab'.repeat(150), '1'.repeat(299) + 'x', ' '.repeat(300)]; let worst = 0;
+      for (const p of workerData) { const r = new RegExp(p, 'u'); for (const s of inputs) { const t = process.hrtime.bigint(); r.test(s); const ms = Number(process.hrtime.bigint() - t) / 1e6; if (ms > worst) worst = ms; } } parentPort.postMessage(worst);`, { eval: true, workerData: accepted });
+    const worst = await new Promise<number>((resolve, reject) => { const timer = setTimeout(() => { void worker.terminate(); reject(new Error('TIMEOUT: un patrón admitido tardó demasiado')); }, 30000); worker.once('message', (m: number) => { clearTimeout(timer); resolve(m); }); worker.once('error', (e) => { clearTimeout(timer); reject(e); }); });
+    expect(worst, `peor caso medido: ${worst} ms`).toBeLessThan(250);
+  }, 40000);
 });
