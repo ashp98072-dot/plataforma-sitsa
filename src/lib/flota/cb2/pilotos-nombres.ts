@@ -22,7 +22,7 @@ export function candidatosNombre(nombre:string,empleados:Empleado[]) {
 export function proponerNombre(nombre:string,empleados:Empleado[],equivalencia?:DecisionNombre):RevisionNombre {
  const candidatos=candidatosNombre(nombre,empleados),key=nombreEmpleadoComparable(nombre);
  const exactas=empleados.filter(p=>nombreEmpleadoComparable(p.nombre)===key);
- const aliasValido=equivalencia && exactas.length<2 && (equivalencia.tipo==="EMPLEADO" ? empleados.some(p=>p.id===equivalencia.empleadoId) : exactas.length===0);
+ const aliasValido=equivalencia && candidatos.length<2 && exactas.length<2 && (equivalencia.tipo==="EMPLEADO" ? empleados.some(p=>p.id===equivalencia.empleadoId) : exactas.length===0);
  const propuesta=aliasValido ? {...equivalencia,confirmado:false} : candidatos.length===1 && exactas.length===1 ? {tipo:"EMPLEADO" as const,empleadoId:exactas[0].id,confirmado:false} : null;
  return {clave:normalizarNombreReportado(nombre),originales:[nombre],filas:1,candidatos,propuesta,...(equivalencia?{equivalencia}:{})};
 }

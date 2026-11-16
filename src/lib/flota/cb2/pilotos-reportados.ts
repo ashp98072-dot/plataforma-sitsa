@@ -1,4 +1,5 @@
-﻿import { query,type SqlValue } from "@/lib/db";
+import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { query,type SqlValue } from "@/lib/db";
 import type { RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { hash,ErrorCB2 } from "./model";
@@ -43,7 +44,6 @@ async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null
  // Un alta concurrente idéntica es un reintento compatible, sin confiar en insertId.
  const altaConcurrente=decision.tipo==="REPORTADO" && decision.reportadoId==null && decision.confirmado && revision.equivalencia?.tipo==="REPORTADO";
  if(!decision.confirmado && !mismoDestino(revision.propuesta,decision))throw new ErrorCB2("El nombre requiere confirmación; revisa las coincidencias actuales.");
- if(revision.equivalencia && !mismoDestino(revision.equivalencia,decision) && !altaConcurrente){if(!decision.confirmado)throw new ErrorCB2("Equivalencia ambigua: confirma la identidad para este archivo.");await c.execute("UPDATE flota_cb2_pilotos_equivalencias SET requiere_revision=1 WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[ctx.empresaId,digest]);}
  let reportado=decision.tipo==="REPORTADO"?decision.reportadoId??(altaConcurrente && revision.equivalencia?.tipo==="REPORTADO"?revision.equivalencia.reportadoId:null)??null:null;
  if(decision.tipo==="EMPLEADO") {
   const [e]=await rows(c,"SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' LOCK IN SHARE MODE",[ctx.empresaId,decision.empleadoId]);
@@ -60,7 +60,11 @@ async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null
  }
  // La propuesta automática exacta no se convierte en equivalencia confirmada.
  if(decision.confirmado) {
-  await c.execute("INSERT INTO flota_cb2_pilotos_equivalencias(empresa_id,nombre_hash,nombre_normalizado,empleado_id,piloto_reportado_id,confirmado_por,confirmado_en) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE nombre_hash=nombre_hash",[ctx.empresaId,digest,normalizado,decision.tipo==="EMPLEADO"?decision.empleadoId:null,reportado,ctx.actor.id,ahoraLocal()]);
+  const [anterior]=await rows(c,"SELECT * FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=? FOR UPDATE",[ctx.empresaId,digest]);
+  // La elección para un archivo no acredita un nombre ambiguo para futuros consumos.
+  const requiereRevision=Number(revision.candidatos.length>1 || Number(anterior?.requiere_revision)===1);
+  await c.execute("INSERT INTO flota_cb2_pilotos_equivalencias(empresa_id,nombre_hash,nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision,confirmado_por,confirmado_en) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE empleado_id=VALUES(empleado_id),piloto_reportado_id=VALUES(piloto_reportado_id),requiere_revision=VALUES(requiere_revision),confirmado_por=VALUES(confirmado_por),confirmado_en=VALUES(confirmado_en)",[ctx.empresaId,digest,normalizado,decision.tipo==="EMPLEADO"?decision.empleadoId:null,reportado,requiereRevision,ctx.actor.id,ahoraLocal()]);
+  await registrarAuditoriaTx(c,{empresaId:ctx.empresaId,usuario:ctx.actor.username,modulo:"flota_combustible",accion:"cb2_confirmar_equivalencia_piloto",detalle:JSON.stringify({proveedorId:ctx.proveedorId,nombreHash:digest,nombreNormalizado:normalizado,anterior:anterior??null,nuevo:{empleado_id:decision.tipo==="EMPLEADO"?decision.empleadoId:null,piloto_reportado_id:reportado,requiere_revision:requiereRevision,confirmado_por:ctx.actor.id}})});
  }
  return reportado;
 }

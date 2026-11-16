@@ -646,10 +646,53 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
   expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4443,1,'Luis Escobar Sintético','Activo')");
+  expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();
   const homonimo=await shell("VARIANTE-HOMONIMO","Luis Escobr Sintético",propia,1);homonimo.entrada.seleccion[0]={...homonimo.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
   await cb2(homonimo);expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0].empleado_id).toBe(4441);expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-HOMONIMO'"))[0].empleado_id).toBe(4443);
+  // Una corrección cambia la equivalencia vigente, nunca los consumos anteriores.
+  const nombreCorreccion="Correccion Sintetica Unica";
+  await cb2(await shell("CORRECCION-REPORTADO",nombreCorreccion,propia,1));
+  const antesCorreccion=await q("SELECT * FROM flota_cb2_consumos ORDER BY id");
+  const enlacesAntes=await q("SELECT * FROM flota_cb2_consumo_piloto_reportado ORDER BY consumo_id");
+  const corregido=await shell("CORRECCION-EMPLEADO",nombreCorreccion,propia,1);
+  corregido.entrada.seleccion[0]={...corregido.entrada.seleccion[0],empleadoId:4441,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4441,confirmado:true}};
+  await cb2(corregido);
+  expect((await preview(ctx,corregido.buffer,corregido.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
+  const [equivalenciaCorregida]=await q("SELECT * FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='CORRECCION SINTETICA UNICA'");
+  expect(equivalenciaCorregida).toMatchObject({empleado_id:4441,piloto_reportado_id:null,requiere_revision:0,confirmado_por:1});
+  const auditorias=await q("SELECT detalle FROM auditoria WHERE accion='cb2_confirmar_equivalencia_piloto' AND JSON_VALUE(detalle,'$.nombreNormalizado')='CORRECCION SINTETICA UNICA' ORDER BY id");
+  expect(auditorias).toHaveLength(2);
+  expect(JSON.parse(auditorias[1].detalle)).toMatchObject({anterior:{empleado_id:null,piloto_reportado_id:expect.any(Number)},nuevo:{empleado_id:4441,piloto_reportado_id:null}});
+  expect(await q(`SELECT * FROM flota_cb2_consumos WHERE id IN (${antesCorreccion.map(()=>"?").join(",")}) ORDER BY id`,antesCorreccion.map(r=>r.id))).toEqual(antesCorreccion);
+  expect(await q("SELECT * FROM flota_cb2_consumo_piloto_reportado ORDER BY consumo_id")).toEqual(enlacesAntes);
+  // Si falla auditoría, también se revierten la equivalencia y el nuevo consumo.
+  const fallido=await shell("CORRECCION-ROLLBACK",nombreCorreccion,propia,1);
+  fallido.entrada.seleccion[0]={...fallido.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
+  await q("CREATE TRIGGER lab_falla_equivalencia BEFORE INSERT ON auditoria FOR EACH ROW BEGIN IF NEW.accion='cb2_confirmar_equivalencia_piloto' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='AUDITORIA_EQ_FALLIDA'; END IF; END");
+  try{await expect(cb2(fallido)).rejects.toThrow('AUDITORIA_EQ_FALLIDA');}finally{await q("DROP TRIGGER lab_falla_equivalencia");}
+  expect((await q("SELECT * FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='CORRECCION SINTETICA UNICA'"))[0]).toEqual(equivalenciaCorregida);
+  expect(await q("SELECT id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-ROLLBACK'")).toEqual([]);
+  await cb2(fallido);
+  expect((await preview(ctx,fallido.buffer,fallido.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4443,confirmado:false});
+  const reutilizado=await shell("CORRECCION-REUSO",nombreCorreccion,propia,1);
+  reutilizado.entrada.seleccion[0]={...reutilizado.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"AUTOMATICA",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:false}};
+  await cb2(reutilizado);
+  expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-REUSO'"))[0].empleado_id).toBe(4443);
+  // Dos proveedores confirman destinos distintos: el bloqueo empresarial conserva una cadena auditada.
+  const carreraA=await shell("CORRECCION-CARRERA-A",nombreCorreccion,propia,1),carreraB=await shell("CORRECCION-CARRERA-B",nombreCorreccion,propia,1);
+  carreraA.entrada.seleccion[0]={...carreraA.entrada.seleccion[0],empleadoId:4441,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4441,confirmado:true}};
+  carreraB.entrada.seleccion[0]={...carreraB.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
+  await Promise.all([cb2(carreraA),cb2(carreraB,{...ctx,proveedorId:2})]);
+  const cadena=(await q("SELECT detalle FROM auditoria WHERE accion='cb2_confirmar_equivalencia_piloto' AND JSON_VALUE(detalle,'$.nombreNormalizado')='CORRECCION SINTETICA UNICA' ORDER BY id")).map(r=>JSON.parse(r.detalle));
+  for(let i=1;i<cadena.length;i++)expect(cadena[i].anterior.empleado_id).toBe(cadena[i-1].nuevo.empleado_id);
+  const [vigente]=await q("SELECT empleado_id FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='CORRECCION SINTETICA UNICA'");
+  expect(vigente.empleado_id).toBe(cadena.at(-1).nuevo.empleado_id);
+  expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-CARRERA-A'"))[0].empleado_id).toBe(4441);
+  expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-CARRERA-B'"))[0].empleado_id).toBe(4443);
+  // Los homónimos actualizan el destino confirmado pero siguen requiriendo decisión por archivo.
+  expect((await q("SELECT empleado_id,requiere_revision FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='LUIS ESCOBR SINTÉTICO'"))[0]).toMatchObject({empleado_id:4443,requiere_revision:1});
   const http=await cb2Http(new Request(`http://localhost/lab?pilotoReportadoId=${nombres[0].id}&exportar=csv`),"e1","pilotos-reporte");expect(http.status,await http.clone().text()).toBe(200);expect(await http.text()).toContain('Álvaro');
   expect((await cb2Http(new Request("http://localhost/lab"),"denied","pilotos-reporte")).status).toBe(403);
   await expect(q("UPDATE flota_cb2_pilotos_reportados SET estado='PERSONA_CONFIRMADA' WHERE id=?",[nombres[0].id])).rejects.toMatchObject({errno:4025});
- });
+ },60000);
 });
