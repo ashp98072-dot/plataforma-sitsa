@@ -103,7 +103,7 @@ export class ProvisioningError extends Error {
  */
 export const OUT_OF_SCOPE_FILES = Object.freeze({
   'cb2-documentos-fase2-paso1-revision': 'combustibles-cb2', 'cb2-documentos-fase2-paso2-operaciones': 'combustibles-cb2', 'combustibles-pr2-consumos-facturas': 'combustibles-cb2', 'combustibles-pr514-asignaciones': 'combustibles-cb2',
-  'cb2-fondos-vinculos': 'combustibles-cb2', 'cb2-identidades-independientes': 'combustibles-cb2', 'cb2-piloto-reportado': 'combustibles-cb2', 'cb2-terceros-directos': 'combustibles-cb2', 'cb2-terceros': 'combustibles-cb2',
+  'cb2-fondos-vinculos': 'combustibles-cb2', 'cb2-identidades-independientes': 'combustibles-cb2', 'cb2-piloto-reportado': 'combustibles-cb2', 'cb2-pilotos-reportados': 'combustibles-cb2', 'cb2-terceros-directos': 'combustibles-cb2', 'cb2-terceros': 'combustibles-cb2',
   'compras-idempotencia-requerimientos': 'compras (nombres calificados con la base de producción)', 'documento-entregas': 'documentos (nombres calificados con la base de producción)', 'operaciones-idempotencia-fondos-gastos': 'fondos (nombres calificados con la base de producción)',
   'contabilidad-calendario-c3c1': 'contabilidad', 'contabilidad-infraestructura-a': 'contabilidad', 'contabilidad-periodos-c3c2': 'contabilidad', 'expediente-evidencia-c3c12': 'contabilidad', 'origen-revisiones-c3c10': 'contabilidad',
   'politicas-autorizacion-c3c11': 'contabilidad', 'regularizacion-control-c3c9': 'contabilidad', 'validacion-precontable-c3c13': 'contabilidad',
