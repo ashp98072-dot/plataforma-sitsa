@@ -176,6 +176,8 @@ async function prepareHomologation() {
   for (const sql of attestationDdlStatements(fs.readFileSync(path.join(repoRoot, 'docs/integraciones/pricesmart/api18/staging-attestation.sql.in'), 'utf8'))) { try { await c.query(sql); } catch (e) { if (e.code !== 'ER_TABLE_EXISTS_ERROR') throw e; } }
   const names = { schema: m.schema, appUser: `${m.schema}_ha`, workerUser: `${m.schema}_hw`, monitorUser: `${m.schema}_hm` };
   const homolog = { names };
+  try { await c.query(B.PROVISION_DDL); } catch (e) { if (e.code !== 'ER_TABLE_EXISTS_ERROR') throw e; }   // el runtime exige el marcador de aprovisionamiento COMPLETO (sonda `provisioning`)
+  for (const step of B.PROVISION_STEPS) await c.query("INSERT INTO ps_homolog_provisioning (step, state, detail, updated_at) VALUES (?, 'COMPLETE', 'laboratorio', UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE state = 'COMPLETE'", [step]);
   for (const [role, key] of [['app', 'appUser'], ['worker', 'workerUser'], ['monitor', 'monitorUser']]) {
     const password = role === 'app' ? `sandbox:${m.sandboxId}:${crypto.randomBytes(32).toString('hex')}` : crypto.randomBytes(24).toString('hex');   // la de la aplicación sigue el formato de secretos del sandbox
     await c.query(`CREATE USER \`${names[key]}\`@\`127.0.0.1\` IDENTIFIED BY '${password}'`);
@@ -202,29 +204,30 @@ async function rehearseHomologation() {
   const step = (x) => { if (process.env.PS_DEMO_DEBUG) console.error(`[rehearse] ${x}`); };
   const admin = await adminConn(m); const report = { names, errors: {} }; step('conectado');
   try {
-  await admin.query(B.destroyStatements('r1').join(';\n'));   // limpieza previa (solo nombres homolog_r1)
+  for (const k of ['r1', 'r2', 'r3', 'r4']) for (const sql of B.destroyStatements(k)) await admin.query(sql);   // limpieza previa (solo nombres homolog_r1…r4)
   step('limpieza previa hecha');
   // Aislamiento de `apply`/`finalize`/`destroy`: una base y una cuenta «señuelo» AJENAS al sandbox (y las cuentas/bases del laboratorio) deben quedar EXACTAMENTE igual tras todo el ciclo.
   const decoy = 'sandbox_api02_homolog_decoy'; const decoyPw = crypto.randomBytes(24).toString('hex');
   await admin.query(`DROP DATABASE IF EXISTS \`${decoy}\``); await admin.query(`DROP USER IF EXISTS \`${decoy}\`@\`127.0.0.1\``);
   await admin.query(`CREATE DATABASE \`${decoy}\``); await admin.query(`CREATE TABLE \`${decoy}\`.t (id INT PRIMARY KEY, v VARCHAR(20))`); await admin.query(`INSERT INTO \`${decoy}\`.t VALUES (1, 'intacto')`);
   await admin.query(`CREATE USER \`${decoy}\`@\`127.0.0.1\` IDENTIFIED BY '${decoyPw}'`); await admin.query(`GRANT SELECT ON \`${decoy}\`.t TO \`${decoy}\`@\`127.0.0.1\``);
-  const ownNames = new Set([names.appUser, names.workerUser, names.monitorUser]);
+  const sandboxes = ['r1', 'r2', 'r3', 'r4'].map((k) => B.homologNames(k)); const ownNames = new Set(sandboxes.flatMap((x) => [x.appUser, x.workerUser, x.monitorUser])); const ownSchemas = new Set(sandboxes.map((x) => x.schema));
   const snap = async () => {
     const users = (await admin.query("SELECT DISTINCT User u FROM mysql.user WHERE User LIKE 'sandbox%' ORDER BY 1"))[0].map((r) => r.u).filter((u) => !ownNames.has(u)); const grants = {};
     for (const u of users) grants[u] = (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>')).sort();   // el ORDEN de SHOW GRANTS no está garantizado tras recargar privilegios
-    return { schemas: (await admin.query("SELECT SCHEMA_NAME s FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY 1"))[0].map((r) => r.s).filter((x) => x !== names.schema),
+    return { schemas: (await admin.query("SELECT SCHEMA_NAME s FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY 1"))[0].map((r) => r.s).filter((x) => !ownSchemas.has(x)),
       decoyChecksum: (await admin.query(`CHECKSUM TABLE \`${decoy}\`.t`))[0][0].Checksum, labTables: (await admin.query('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [m.schema]))[0][0].n, users, grants };
   };
   const before = await snap();
-  report.applied = await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaFiles(repoRoot) } }); step('paquete aplicado');
+  report.applied = await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } }); step('paquete aplicado');
   // Paso «esquema de ejecución» (código REAL del proyecto) con el MISMO entorno que tendrá el sandbox: manifiesto de aislamiento validado por validateSandboxConfig y cuenta de la aplicación con privilegios TEMPORALES.
   const root = path.join(m.runDir, 'homolog-root'); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
   fs.writeFileSync(path.join(root, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(names, sandboxSecrets, { dbPort: m.port })));
   const finalized = await B.finalizeBundle(admin, bundle, { repo: repoRoot, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir }); step('esquema de ejecución y privilegios finales aplicados');
-  report.runtimeSchemaStep = finalized.runtimeSchemaStep; report.ensuredGrants = finalized.ensuredGrants;
+  report.runtimeSchemaStep = finalized.runtimeSchemaStep; report.ensuredGrants = finalized.ensuredGrants; report.migrations = finalized.migrations; report.scope = finalized.scope;
+  report.finalState = { ...(await B.preflightProvision(admin, names)), marker: (await admin.query(`SELECT step, state FROM \`${names.schema}\`.ps_homolog_provisioning ORDER BY step`))[0] };
   report.passwordVariablesCleared = (await admin.query('SELECT @ps_app_pw AS a, @ps_worker_pw AS w, @ps_monitor_pw AS m'))[0][0];
-  try { await B.executeBundle(admin, bundle, secrets); report.secondApply = 'NO_ERROR'; } catch (e) { report.secondApply = e.errno ?? String(e.code); }   // la base ya existe: la reaplicación FALLA
+  try { await B.executeBundle(admin, bundle, secrets); report.secondApply = 'NO_ERROR'; } catch (e) { report.secondApply = e.code ?? e.errno ?? 'ERR'; }   // la base ya existe: la reaplicación FALLA
   report.grants = {};
   for (const [role, key] of [['app', 'appUser'], ['worker', 'workerUser'], ['monitor', 'monitorUser']]) report.grants[role] = (await admin.query(`SHOW GRANTS FOR \`${names[key]}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>'));
   const connect = (user, password) => mysql.createConnection({ host: '127.0.0.1', port: m.port, user, password, database: names.schema });
@@ -252,6 +255,54 @@ async function rehearseHomologation() {
   report.tables = (await admin.query('SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY 1', [names.schema]))[0].map((r) => r.t);
   report.environmentRow = (await admin.query('SELECT environment, sandbox_id FROM novalvion_environment'))[0][0];
   for (const sql of B.destroyStatements('r1')) await admin.query(sql);
+  // ---- Fallos REALES de DDL y recuperación (sobre sandboxes r2, r3, r4; todo con nombres homolog_*): ninguna instalación parcial se informa como éxito ni activa permisos finales.
+  const sab = path.join(m.runDir, 'sabotaged'); fs.rmSync(sab, { recursive: true, force: true }); fs.mkdirSync(path.join(sab, 'sql'), { recursive: true });
+  fs.writeFileSync(path.join(sab, 'sql', 'broken.sql'), 'CREATE TABLE ok_t (id INT);\nCREATE TABLE bad_t (a INT DEFAULT \'no-es-entero\');\n');
+  fs.writeFileSync(path.join(sab, 'sql', 'deferred.sql'), 'CREATE TABLE dep_t (a INT, FOREIGN KEY (a) REFERENCES no_existe_xyz(id));\n');   // falla por DEPENDENCIA (tabla padre ausente): diferible en apply, inaceptable en finalize
+  for (const f of B.tmsSchemaPhases(repoRoot).base) fs.copyFileSync(path.join(repoRoot, f), path.join(sab, f));   // el esquema BASE real + una sentencia diferida propia
+  const secretsFor = () => ({ app: B.generateSandboxSecrets(B.homologNames('r4')).DB_PASSWORD, worker: crypto.randomBytes(24).toString('hex'), monitor: crypto.randomBytes(24).toString('hex') });
+  const failureOf = async (fn) => { try { await fn(); return { threw: false }; } catch (e) { return { threw: true, name: e.name, code: e.code ?? e.errno ?? 'ERR', diagnostic: e.diagnostic ?? null }; } };
+  const inspect = async (nm) => {
+    const state = await B.preflightProvision(admin, nm); const marker = state.state === 'ABSENT' || state.state === 'FOREIGN' ? [] : (await admin.query(`SELECT step, state, detail FROM \`${nm.schema}\`.ps_homolog_provisioning`))[0];
+    const accounts = (await admin.query('SELECT COUNT(*) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?', [`%${nm.appUser}%`]))[0][0].n + (await admin.query('SELECT COUNT(*) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?', [`%${nm.workerUser}%`]))[0][0].n;
+    const tables = state.state === 'ABSENT' ? 0 : (await admin.query('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [nm.schema]))[0][0].n;
+    return { state: state.state, marker, accounts: Number(accounts), tables: Number(tables) };
+  };
+  report.failures = {};
+  // A) esquema del TMS PARCIAL (DDL real que falla): ni DDL de PriceSmart, ni cuentas, ni privilegios; marcador FAILED; reaplicar y finalizar se rechazan; recuperación = destroy + apply limpio.
+  const nmA = B.homologNames('r2'); const bA = B.buildBootstrap('r2', repoRoot);
+  report.failures.tmsIncomplete = { result: await failureOf(() => B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: ['sql/broken.sql'] } })), after: await inspect(nmA) };
+  report.failures.tmsIncomplete.reapply = await failureOf(() => B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: ['sql/broken.sql'] } }));
+  report.failures.tmsIncomplete.finalize = await failureOf(() => B.finalizeBundle(admin, bA, { repo: repoRoot, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir, runtimeSchemaStep: async () => { throw new Error('NO DEBE EJECUTARSE'); } }));
+  for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  report.failures.tmsIncomplete.destroyed = await inspect(nmA);
+  report.failures.tmsIncomplete.recovered = await failureOf(async () => { report.failures.tmsIncomplete.recoveredApplied = await B.executeBundle(admin, bA, secretsFor(), { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } }); });
+  report.failures.tmsIncomplete.recoveredState = await inspect(nmA); for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  // A2) sentencia DIFERIDA (depende de una fase posterior): `apply` la informa y NO es «completo»; `finalize` NO la acepta, revoca lo temporal y no concede privilegios finales.
+  report.failures.deferred = {}; report.failures.deferred.applied = await failureOf(async () => { report.failures.deferred.report = await B.executeBundle(admin, bA, secretsFor(), { tms: { repo: sab, files: [...B.tmsSchemaPhases(sab).base, 'sql/deferred.sql'] } }); });
+  report.failures.deferred.afterApply = await inspect(nmA);
+  report.failures.deferred.finalize = await failureOf(() => B.finalizeBundle(admin, bA, { repo: sab, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir, runtimeSchemaStep: async () => ({ exit: 0, tail: '' }), phases: { base: [...B.tmsSchemaPhases(sab).base, 'sql/deferred.sql'], migrations: [], confirmations: [] } }));
+  report.failures.deferred.afterFinalize = await inspect(nmA); report.failures.deferred.privilegesTmp = (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMA_PRIVILEGES WHERE GRANTEE LIKE ?', [`%${nmA.appUser}%`]))[0][0].n;
+  for (const sql of B.destroyStatements('r2')) await admin.query(sql);
+  // B) fallo REAL de DDL de PriceSmart a mitad del paquete: queda PARCIAL (sin reversión del DDL), sin cuentas ni privilegios.
+  const nmB = B.homologNames('r3'); const bB0 = B.buildBootstrap('r3', repoRoot);
+  const bB = { ...bB0, ddl: [...bB0.ddl.slice(0, 6), 'CREATE TABLE ps_api99_roto (a INT, FOREIGN KEY (a) REFERENCES no_existe_xyz(id))', ...bB0.ddl.slice(6)] };
+  report.failures.ddlFailure = { result: await failureOf(() => B.executeBundle(admin, bB, secretsFor())), after: await inspect(nmB) };
+  report.failures.ddlFailure.reapply = await failureOf(() => B.executeBundle(admin, bB0, secretsFor()));
+  for (const sql of B.destroyStatements('r3')) await admin.query(sql); report.failures.ddlFailure.destroyed = await inspect(nmB);
+  // C) fallos en FINALIZE sobre un sandbox APLICADO: privilegios temporales revocados, sin privilegios finales, marcador FAILED; luego recuperación real.
+  const nmC = B.homologNames('r4'); const bC = B.buildBootstrap('r4', repoRoot); const sandboxSecretsC = B.generateSandboxSecrets(nmC); const rootC = path.join(m.runDir, 'homolog-root-r4'); fs.rmSync(rootC, { recursive: true, force: true }); fs.mkdirSync(path.join(rootC, 'uploads'), { recursive: true });
+  fs.writeFileSync(path.join(rootC, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(nmC, sandboxSecretsC, { dbPort: m.port })));
+  await B.executeBundle(admin, bC, { app: sandboxSecretsC.DB_PASSWORD, worker: crypto.randomBytes(24).toString('hex'), monitor: crypto.randomBytes(24).toString('hex') }, { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } });
+  const grantsOf = async (u) => (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, '<oculto>'));
+  const privileges = async () => { const g = await grantsOf(nmC.appUser); return { schemaWide: g.some((l) => /ON `sandbox_api02_homolog_r4`\.\* /.test(l)), ensuredTable: g.some((l) => /`tms_plan_paradas`|`tms_parada_confirmaciones`/.test(l)) }; };
+  const fin = (extra) => B.finalizeBundle(admin, bC, { repo: repoRoot, sandboxRoot: rootC, sandboxSecrets: sandboxSecretsC, dbPort: m.port, tmpDir: m.tmpDir, ...extra });
+  report.failures.finalize = { stateBefore: (await inspect(nmC)).state };
+  report.failures.finalize.stepFails = { result: await failureOf(() => fin({ runtimeSchemaStep: async () => ({ exit: 1, tail: 'fallo simulado del paso' }) })), privileges: await privileges(), after: await inspect(nmC) };
+  report.failures.finalize.migrationsIncomplete = { result: await failureOf(() => fin({ repo: sab, runtimeSchemaStep: async () => ({ exit: 0, tail: '' }), phases: { base: [], migrations: [], confirmations: ['sql/broken.sql'] } })), privileges: await privileges(), after: await inspect(nmC) };
+  report.failures.finalize.recovered = { result: await failureOf(async () => { report.failures.finalize.recoveredReport = await fin({}); }), privileges: await privileges(), after: await inspect(nmC) };
+  report.failures.finalize.reapplyAfterComplete = await failureOf(() => fin({ runtimeSchemaStep: async () => { throw new Error('NO DEBE EJECUTARSE'); } }));
+  for (const sql of B.destroyStatements('r4')) await admin.query(sql); report.failures.finalize.destroyed = await inspect(nmC);
   const after = await snap();
   const changed = Object.keys(before).filter((k) => JSON.stringify(before[k]) !== JSON.stringify(after[k])).map((k) => ({ key: k, before: JSON.stringify(before[k]).slice(0, 400), after: JSON.stringify(after[k]).slice(0, 400) }));
   report.isolation = { changed, unchanged: JSON.stringify(before) === JSON.stringify(after), usersChecked: before.users, schemasChecked: before.schemas, decoyIntact: (await admin.query(`SELECT v FROM \`${decoy}\`.t`))[0][0]?.v === 'intacto' };
@@ -293,5 +344,5 @@ const [cmd] = process.argv.slice(2);
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   const run = { up, prepare, 'prepare-homologation': prepareHomologation, 'rehearse-homologation': rehearseHomologation, 'restart-app': restartApp, e2e: async () => e2e(), postman: async () => postman(), down: async () => down() }[cmd];
   if (!run) { console.error('Uso: up | prepare | prepare-homologation | rehearse-homologation | restart-app [--worker-ms=N] | e2e | postman | down [--keep-evidence=<dir>]'); process.exitCode = 2; }
-  else run().catch((e) => { console.error(e.message); process.exitCode = 1; });
+  else run().catch((e) => { console.error(e.message); if (e.diagnostic) console.error(JSON.stringify(e.diagnostic).slice(0, 4000)); process.exitCode = 1; });
 }

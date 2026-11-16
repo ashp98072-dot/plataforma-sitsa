@@ -40,6 +40,7 @@ export const ROLE_POLICY = Object.freeze({
     ps_api12_tms_links: ['SELECT', 'INSERT', 'UPDATE(solicitud_id,linked_at,cancellation_requested_at)'],
     ps_api13_link_jobs: ['SELECT', 'INSERT', 'UPDATE(empresa_id,status,attempts,next_attempt_at,lease_owner,lease_until,last_outcome,last_detail,ack_by,ack_at,updated_at)'],
     ps_api13_link_attempts: ['SELECT', 'INSERT'],
+    ps_homolog_provisioning: ['SELECT'],   // estado del aprovisionamiento: el runtime NO se activa si no está COMPLETO (sonda `provisioning`)
     // TMS: alta de la solicitud (crearSolicitudCliente) y lectura del estado (GET); la auditoría es solo INSERT.
     tms_solicitudes_cliente: ['SELECT', 'INSERT'], tms_solicitud_paradas: ['SELECT', 'INSERT'], tms_cliente_ubicaciones: ['SELECT'],
     tms_planes_viaje: ['SELECT'], tms_plan_paradas: ['SELECT'], tms_parada_confirmaciones: ['SELECT'], auditoria: ['INSERT'],
@@ -83,10 +84,47 @@ const createUser = (names, role, variable) => [
 ];
 
 const read = (repo, rel) => fs.readFileSync(path.join(repo, rel), 'utf8');
-/** Archivos SQL del TMS que arma el sandbox (mismo orden que el arnés `portal-e2e`). Se aplican sentencia por sentencia con reintentos; NO forman parte del texto del paquete. */
+/** Marcador de ESTADO del aprovisionamiento (en la propia base del sandbox). Distingue «iniciado/fallido» de «completo»: nada se da por instalado sin la fila COMPLETE de cada paso. */
+export const PROVISION_TABLE = 'ps_homolog_provisioning';
+export const PROVISION_STEPS = Object.freeze(['bootstrap', 'finalize']);
+export const PROVISION_DDL = `CREATE TABLE ${PROVISION_TABLE} (step VARCHAR(16) NOT NULL PRIMARY KEY, state VARCHAR(12) NOT NULL, detail VARCHAR(300) NULL, updated_at DATETIME(6) NOT NULL, CHECK (step IN ('bootstrap','finalize')), CHECK (state IN ('STARTED','COMPLETE','FAILED'))) ENGINE=InnoDB`;
+
+/** Error de aprovisionamiento con diagnóstico SEGURO: códigos y el comienzo de la sentencia del DISEÑO (sin contraseñas, sin mensajes del servidor, sin datos). */
+export class ProvisioningError extends Error {
+  constructor(code, diagnostic = null) { super(code); this.name = 'ProvisioningError'; this.code = code; this.diagnostic = diagnostic; }
+}
+
+/**
+ * ALCANCE de la homologación (revisado): el sandbox instala el esquema del TMS y de PriceSmart. Estos módulos del proyecto NO forman parte de él y NO se aplican (están FUERA DE ALCANCE, no «fallidos»):
+ * sus migraciones exigen precondiciones manuales con SIGNAL, marcadores `{{...}}` de esquema, nombres calificados con la base de PRODUCCIÓN o tablas de módulos que tampoco se instalan (contabilidad, combustibles CB2, compras).
+ * Ninguna de ellas crea objetos que usen PriceSmart ni el flujo de planes/paradas/confirmaciones. Ampliar o reducir la lista exige revisión; el informe de `finalize` la reproduce (`scope.excludedFiles`).
+ */
+export const OUT_OF_SCOPE_FILES = Object.freeze({
+  'cb2-documentos-fase2-paso1-revision': 'combustibles-cb2', 'cb2-documentos-fase2-paso2-operaciones': 'combustibles-cb2', 'combustibles-pr2-consumos-facturas': 'combustibles-cb2', 'combustibles-pr514-asignaciones': 'combustibles-cb2',
+  'cb2-fondos-vinculos': 'combustibles-cb2', 'cb2-identidades-independientes': 'combustibles-cb2', 'cb2-piloto-reportado': 'combustibles-cb2', 'cb2-terceros-directos': 'combustibles-cb2', 'cb2-terceros': 'combustibles-cb2',
+  'compras-idempotencia-requerimientos': 'compras (nombres calificados con la base de producción)', 'documento-entregas': 'documentos (nombres calificados con la base de producción)', 'operaciones-idempotencia-fondos-gastos': 'fondos (nombres calificados con la base de producción)',
+  'contabilidad-calendario-c3c1': 'contabilidad', 'contabilidad-infraestructura-a': 'contabilidad', 'contabilidad-periodos-c3c2': 'contabilidad', 'expediente-evidencia-c3c12': 'contabilidad', 'origen-revisiones-c3c10': 'contabilidad',
+  'politicas-autorizacion-c3c11': 'contabilidad', 'regularizacion-control-c3c9': 'contabilidad', 'validacion-precontable-c3c13': 'contabilidad',
+  'fondos-vehiculos-compartidos': 'fondos/flota (sintaxis no soportada por el motor del sandbox)', 'flota-identidad-fisica': 'flota (depende de columnas de un módulo no instalado)',
+});
+const outOfScopeFile = (f) => Object.keys(OUT_OF_SCOPE_FILES).some((k) => f === `sql/migrate-2026-${k.startsWith('cb2-fondos') ? k : k}.sql` || f.endsWith(`-${k}.sql`) && f.startsWith('sql/migrate-2026-'));
+/** Sentencias del esquema base que pertenecen al módulo de contabilidad (no instalado): se omiten y se cuentan (`outOfScope`). */
+export const OUT_OF_SCOPE_STATEMENT = /\bcont_(?:regularizacion|asientos_origen)[a-z_]*\b/i;
+export const tmsExcludedFiles = (repo) => fs.readdirSync(path.join(repo, 'sql')).filter((f) => /^migrate-2026-.*\.sql$/.test(f) && outOfScopeFile(`sql/${f}`)).sort().map((f) => `sql/${f}`);
+
+/** Archivos SQL del TMS que arma el sandbox (mismo orden que el arnés `portal-e2e`), SIN los módulos fuera de alcance. Se aplican sentencia por sentencia con reintentos; NO forman parte del texto del paquete. */
 export function tmsSchemaFiles(repo) {
-  const migrations = fs.readdirSync(path.join(repo, 'sql')).filter((f) => /^migrate-2026-.*\.sql$/.test(f) && !f.includes('tms-parada-confirmaciones')).sort().map((f) => `sql/${f}`);
+  const migrations = fs.readdirSync(path.join(repo, 'sql')).filter((f) => /^migrate-2026-.*\.sql$/.test(f) && !f.includes('tms-parada-confirmaciones') && !outOfScopeFile(`sql/${f}`)).sort().map((f) => `sql/${f}`);
   return ['sql/schema.sql', 'sql/migrate-2026-08-rrhh-colaborador-auth.sql', ...migrations.filter((f) => f !== 'sql/migrate-2026-08-rrhh-colaborador-auth.sql'), 'sql/migrate-2026-11-tms-parada-confirmaciones.sql'];
+}
+
+/**
+ * Fases del esquema del TMS (mismo orden que el arnés `portal-e2e`): `base` (antes de las tablas de PriceSmart, que las referencian), luego el «esquema de ejecución» del proyecto (lo crea el código con la cuenta de
+ * la aplicación, en `finalize`), `migrations` (dependen de las tablas de ejecución; dos rondas) y `confirmations`. CADA fase debe quedar COMPLETA: una sentencia pendiente es un fallo, no un aviso.
+ */
+export function tmsSchemaPhases(repo) {
+  const all = tmsSchemaFiles(repo); const base = ['sql/schema.sql', 'sql/migrate-2026-08-rrhh-colaborador-auth.sql']; const confirmations = ['sql/migrate-2026-11-tms-parada-confirmaciones.sql'];
+  return { base, migrations: all.filter((f) => !base.includes(f) && !confirmations.includes(f)), confirmations };
 }
 
 /** Paquete SQL completo (texto): base, entorno, DDL de PriceSmart, cuentas y privilegios. Falla si la base ya existe (CREATE DATABASE sin IF NOT EXISTS). */
@@ -105,12 +143,13 @@ export function buildBootstrap(n, repo) {
   const accounts = [...createUser(names, 'app', '@ps_app_pw'), ...createUser(names, 'worker', '@ps_worker_pw'), ...createUser(names, 'monitor', '@ps_monitor_pw')];
   const grants = { app: grantStatements(names, 'app', 'core'), worker: grantStatements(names, 'worker', 'core'), monitor: grantStatements(names, 'monitor', 'core') };
   const ensuredGrants = { app: grantStatements(names, 'app', 'ensured'), worker: grantStatements(names, 'worker', 'ensured'), monitor: grantStatements(names, 'monitor', 'ensured') };
-  return Object.freeze({ names, head, ddl, accounts, grants, ensuredGrants, passwordVariables: ['@ps_app_pw', '@ps_worker_pw', '@ps_monitor_pw'] });
+  const provisioning = [PROVISION_DDL];
+  return Object.freeze({ names, head, provisioning, ddl, accounts, grants, ensuredGrants, passwordVariables: ['@ps_app_pw', '@ps_worker_pw', '@ps_monitor_pw'] });
 }
 
 /** Texto único para revisión (sin contraseñas: solo las variables de sesión que las reemplazan). */
 export function renderBootstrapSql(bundle) {
-  const all = [...bundle.head, ...bundle.ddl, ...bundle.accounts, ...bundle.grants.app, ...bundle.grants.worker, ...bundle.grants.monitor, '-- Tras el esquema de ejecución del proyecto (tablas creadas en tiempo de ejecución):', ...bundle.ensuredGrants.app, ...bundle.ensuredGrants.worker, ...bundle.ensuredGrants.monitor];
+  const all = [...bundle.head, ...bundle.provisioning, ...bundle.ddl, ...bundle.accounts, ...bundle.grants.app, ...bundle.grants.worker, ...bundle.grants.monitor, '-- Tras el esquema de ejecución del proyecto (tablas creadas en tiempo de ejecución):', ...bundle.ensuredGrants.app, ...bundle.ensuredGrants.worker, ...bundle.ensuredGrants.monitor];
   return [`-- PRICESMART API-26 — aprovisionamiento del sandbox ${bundle.names.sandboxId}. PARA REVISIÓN. Las contraseñas llegan como variables de sesión (${bundle.passwordVariables.join(', ')}); no están en este texto.`,
     '-- Se ejecuta SOLO por una persona, en el host del sandbox, tras confirmar HOMOLOG_ACK. Falla si la base ya existe.', ...all.map((s) => `${s};`)].join('\n');
 }
@@ -130,37 +169,124 @@ export function assertApplyTarget({ host, port, env, secrets, ack, expectedAck =
   return true;
 }
 
-/** Divisor del esquema del TMS (mismo criterio que el arnés `portal-e2e`): quita comentarios de línea y separa en `;` + salto de línea. Los .sql del proyecto no usan DELIMITER ni rutinas. */
-const tmsStatements = (text) => text.split(/\r?\n/).filter((l) => !l.trim().startsWith('--')).join('\n').split(/;\s*(?:\r?\n|$)/).map((x) => x.trim()).filter(Boolean);
+/**
+ * Divisor del esquema del TMS (comportamiento del cliente `mysql`): quita comentarios (de línea `--` y de bloque), respeta `DELIMITER <x>` (los .sql del proyecto SÍ lo usan: triggers y bloques `BEGIN NOT ATOMIC`) y,
+ * con el delimitador por omisión, separa en `;` + fin de línea (el modismo de una línea `PREPARE ...; EXECUTE ...; DEALLOCATE ...` viaja como UNA sentencia múltiple). Las líneas `DELIMITER` NUNCA se envían al servidor.
+ */
+export function tmsStatements(text) {
+  const lines = text.replace(/\/\*(?!!)[\s\S]*?\*\//g, '').split(/\r?\n/); const out = []; let delim = ';'; let buf = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (buf.length === 0) { const m = /^DELIMITER\s+(\S+)\s*$/i.exec(t); if (m) { delim = m[1]; continue; } }
+    if (t === '' || t.startsWith('--')) { if (buf.length) buf.push(''); continue; }
+    buf.push(line);
+    if (t.endsWith(delim)) {
+      const stmt = buf.join('\n').trim().slice(0, -delim.length).trim(); buf = [];
+      out.push(stmt);
+    }
+  }
+  if (buf.join('').trim()) out.push(buf.join('\n').trim());
+  // `PREPARE x ...; EXECUTE x; DEALLOCATE PREPARE x` es UNA unidad (el manejador solo vive en la conexión y se libera al final): se agrupa en una sola sentencia múltiple para reintentarla completa.
+  const grouped = []; const items = out.map((x) => x.trim()).filter(Boolean);
+  for (let i = 0; i < items.length; i++) {
+    const m = /^PREPARE\s+(\w+)\s/i.exec(items[i]);
+    if (m && !/DEALLOCATE\s+PREPARE/i.test(items[i])) { const end = items.findIndex((x, j) => j > i && /^DEALLOCATE\s+PREPARE\s+(\w+)/i.exec(x)?.[1]?.toLowerCase() === m[1].toLowerCase()); if (end > i) { grouped.push(items.slice(i, end + 1).join(';\n')); i = end; continue; } }
+    grouped.push(items[i]);
+  }
+  return grouped;
+}
 
-/** Aplica un archivo .sql del TMS sentencia por sentencia con reintentos (dependencias no lineales). Devuelve lo que no se pudo crear. */
-export async function applySchemaFiles(conn, repo, files) {
+/** Errores que significan «el objeto ya existe / ya estaba aplicado» (migraciones idempotentes): cuentan como aplicados, no como pendientes. Todo lo demás pendiente es un FALLO. */
+const ALREADY_APPLIED = new Set(['ER_TABLE_EXISTS_ERROR', 'ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME', 'ER_FK_DUP_NAME', 'ER_DUP_ENTRY', 'ER_TRG_ALREADY_EXISTS', 'ER_SP_ALREADY_EXISTS']);
+const oneLine = (sql) => sql.replace(/\s+/g, ' ').trim();
+/** Errores que indican «depende de una tabla que otra fase del TMS todavía no creó» (el esquema del proyecto NO es un guion lineal: parte de él se crea en migraciones o en tiempo de ejecución). Solo estos pueden quedar DIFERIDOS en `apply`; en `finalize` NADA puede quedar. */
+export const DEPENDENCY_CODES = Object.freeze(['ER_NO_SUCH_TABLE', 'ER_CANT_CREATE_TABLE', 'ER_UNKNOWN_STMT_HANDLER', 'ER_FK_CANNOT_OPEN_PARENT', 'ER_FK_NO_INDEX_PARENT']);
+/** Fragmentos del PROYECTO que no son SQL (línea de prosa sin `--` en `sql/schema.sql`, defecto previo: también en `main`). Se identifican por SHA-256 del texto normalizado, se cuentan aparte (`knownNonSql`) y NO se envían al motor. Ampliar esta lista exige revisión. */
+export const KNOWN_NON_SQL = Object.freeze(new Set(['0480f82558402855b419bcf4d8ff7d80d9ca0579324c9bd3a1ad636d9cf016d7']));
+/** «Ya aplicado» que el motor informa con otro código: FK/clave duplicada (`ER_CANT_CREATE_TABLE` con errno 121) y borrado de algo que ya no está. Solo sirve para REAPLICAR migraciones; el diagnóstico nunca incluye el mensaje del motor. */
+const isAlreadyAppliedError = (e, code) => (code === 'ER_CANT_CREATE_TABLE' && /errno: ?121\b/.test(String(e.sqlMessage ?? e.message ?? ''))) || code === 'ER_CANT_DROP_FIELD_OR_KEY';
+const isKnownNonSql = (sql) => KNOWN_NON_SQL.has(createHash('sha256').update(oneLine(sql)).digest('hex'));
+/** Aplica archivos .sql del TMS sentencia por sentencia con reintentos (dependencias no lineales). NO lanza: DEVUELVE lo que no se pudo crear (`pendingAtEnd`, `failures`); quien lo usa debe llamar a `assertSchemaComplete`. */
+export async function applySchemaFiles(conn, repo, files, memo = new Map()) {   // `memo`: por archivo, sentencias YA aplicadas (no se reenvían: las migraciones no siempre son idempotentes)
   const report = [];
   for (const file of files) {
-    let pending = tmsStatements(read(repo, file)); let ok = 0; const last = new Map();
+    const doneSet = memo.get(file) ?? new Set(); memo.set(file, doneSet);
+    // Los archivos del proyecto pueden traer `USE <base>` (p. ej. el nombre de la base de PRODUCCIÓN): JAMÁS se envían por la conexión administrativa. La conexión ya está en la base del sandbox; el `USE` se OMITE y se cuenta aparte.
+    const all = tmsStatements(read(repo, file)); const skippedUse = all.filter((sql) => /^USE\s/i.test(sql)).length;
+    const candidates = all.filter((sql) => !/^USE\s/i.test(sql)); const knownNonSql = candidates.filter(isKnownNonSql).length; const outOfScope = candidates.filter((sql) => !isKnownNonSql(sql) && OUT_OF_SCOPE_STATEMENT.test(sql)).length;
+    let pending = candidates.filter((sql) => !isKnownNonSql(sql) && !OUT_OF_SCOPE_STATEMENT.test(sql) && !doneSet.has(sql)); let ok = 0; let already = 0; const last = new Map();
     for (let pass = 0; pass < 6 && pending.length; pass++) {
       const next = [];
-      for (const sql of pending) { try { await conn.query(sql); ok++; } catch (e) { next.push(sql); last.set(sql, String(e.code ?? e.message).slice(0, 60)); } }
+      for (const sql of pending) {
+        try { await conn.query(sql); ok++; doneSet.add(sql); }
+        catch (e) { const code = String(e.code ?? e.errno ?? 'ERR').slice(0, 40); if (ALREADY_APPLIED.has(code) || isAlreadyAppliedError(e, code)) { already++; doneSet.add(sql); } else { next.push(sql); last.set(sql, code); } }
+      }
       if (next.length === pending.length && pass > 0) { pending = next; break; } pending = next;
     }
-    report.push({ file, applied: ok, pendingAtEnd: pending.length, errors: pending.slice(0, 3).map((s) => `${s.slice(0, 50)} => ${last.get(s)}`) });
+    // Diagnóstico seguro: comienzo de la sentencia del DISEÑO y CÓDIGO de error (nunca el mensaje del servidor).
+    const deferred = pending.filter((sql) => DEPENDENCY_CODES.includes(last.get(sql))).length;
+    report.push({ file, applied: ok, alreadyApplied: already, skippedUse, knownNonSql, outOfScope, pendingAtEnd: pending.length, deferred, blocking: pending.length - deferred, failures: pending.slice(0, 10).map((sql) => ({ statement: oneLine(sql).slice(0, 80), code: last.get(sql) })) });
   }
   return report;
 }
+/** Una instalación del esquema del TMS con sentencias pendientes es PARCIAL: se rechaza (los pasos dependientes —DDL de PriceSmart, cuentas, privilegios— no deben ejecutarse). */
+export function assertSchemaComplete(report, phase, { allowDeferred = false } = {}) {
+  const incomplete = report.filter((r) => (allowDeferred ? r.blocking : r.pendingAtEnd) > 0);
+  if (incomplete.length) throw new ProvisioningError('TMS_SCHEMA_INCOMPLETE', { phase, allowDeferred, files: incomplete.map(({ file, applied, alreadyApplied, skippedUse, knownNonSql, pendingAtEnd, deferred, blocking, failures }) => ({ file, applied, alreadyApplied, skippedUse, knownNonSql, pendingAtEnd, deferred, blocking, failures })) });
+  return report;
+}
 
-/** Ejecuta el paquete con una conexión YA abierta (la abre quien llama: TCP a loopback o, en el laboratorio, el pipe administrativo). No imprime contraseñas. */
+// ---- Estado del aprovisionamiento: preflight, marcadores y recuperación.
+const stateRows = async (conn, schema) => { const [rows] = await conn.query(`SELECT step, state FROM ${q(schema)}.${q(PROVISION_TABLE)}`); return rows; };
+/**
+ * Preflight de SOLO LECTURA del estado de UN sandbox (por nombre). ABSENT = no existe; COMPLETE = ambos pasos completos; APPLIED = bootstrap completo y finalize sin iniciar; FINALIZE_FAILED = bootstrap completo y
+ * finalize iniciado/fallido (se puede reintentar `finalize`); BOOTSTRAP_PARTIAL = la base existe pero el bootstrap no terminó (instalación PARCIAL: no hay reversión automática del DDL: ver `destroy` + `apply`);
+ * FOREIGN = existe una base con ese nombre que NO es de este sandbox (sin marcador o con otro identificador): nunca se toca.
+ */
+export async function preflightProvision(conn, names) {
+  const [[s]] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]);
+  if (Number(s.n) === 0) return { state: 'ABSENT', steps: {} };
+  const [[t]] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?', [names.schema, PROVISION_TABLE]);
+  if (Number(t.n) === 0) return { state: 'FOREIGN', steps: {}, reason: 'NO_MARKER' };
+  let env; try { [env] = await conn.query(`SELECT sandbox_id FROM ${q(names.schema)}.novalvion_environment WHERE id = 1`); } catch { return { state: 'FOREIGN', steps: {}, reason: 'NO_ENVIRONMENT_ROW' }; }
+  if (env.length !== 1 || String(env[0].sandbox_id) !== names.sandboxId) return { state: 'FOREIGN', steps: {}, reason: 'OTHER_SANDBOX_ID' };
+  const steps = Object.fromEntries((await stateRows(conn, names.schema)).map((r) => [String(r.step), String(r.state)]));
+  if (steps.bootstrap !== 'COMPLETE') return { state: 'BOOTSTRAP_PARTIAL', steps };
+  if (steps.finalize === 'COMPLETE') return { state: 'COMPLETE', steps };
+  return { state: steps.finalize === undefined ? 'APPLIED' : 'FINALIZE_FAILED', steps };
+}
+const markStep = (conn, schema, step, state, detail = null) => conn.query(
+  `INSERT INTO ${q(schema)}.${q(PROVISION_TABLE)} (step, state, detail, updated_at) VALUES (?, ?, ?, UTC_TIMESTAMP(6)) ON DUPLICATE KEY UPDATE state = VALUES(state), detail = VALUES(detail), updated_at = VALUES(updated_at)`, [step, state, detail]);
+const failureDetail = (error) => String(error instanceof ProvisioningError ? error.code : (error?.code ?? error?.errno ?? 'ERROR')).replace(/[^A-Za-z0-9_ -]/g, '').slice(0, 120);
+
+/**
+ * Ejecuta el paquete con una conexión YA abierta (la abre quien llama: TCP a loopback o, en el laboratorio, el pipe administrativo). No imprime contraseñas.
+ * FALLA CERRADO: (1) solo si el sandbox está AUSENTE (preflight); (2) el esquema del TMS debe quedar COMPLETO antes de cualquier paso dependiente; (3) cualquier fallo deja el marcador en FAILED y relanza el error.
+ * Un fallo NO revierte el DDL ya ejecutado (MariaDB confirma implícitamente cada sentencia de DDL): la base queda PARCIAL y se recupera con `destroy` (autorizado) + `apply` limpio.
+ */
 export async function executeBundle(conn, bundle, secrets, options = {}) {
   const pw = { '@ps_app_pw': secrets.app, '@ps_worker_pw': secrets.worker, '@ps_monitor_pw': secrets.monitor };
   assertApplyTarget({ host: '127.0.0.1', port: 3306, ack: HOMOLOG_ACK, secrets: { ...secrets } });   // misma validación de secretos (ack ya confirmado por quien llama)
-  for (const s of bundle.head) await conn.query(s);
-  // El DDL de PriceSmart referencia tablas del TMS (FK): el esquema del TMS se aplica ANTES (mismos archivos y orden que el arnés). `options.tms = { repo, files }`.
-  const tmsSchema = options.tms ? await applySchemaFiles(conn, options.tms.repo, options.tms.files) : null;
-  for (const s of bundle.ddl) await conn.query(s);
-  for (const [variable, value] of Object.entries(pw)) await conn.query(`SET ${variable} = ?`, [value]);
-  for (const s of bundle.accounts) await conn.query(s);
-  for (const variable of Object.keys(pw)) await conn.query(`SET ${variable} = NULL`);
-  for (const role of ['app', 'worker', 'monitor']) for (const s of bundle.grants[role]) await conn.query(s);
-  return { schema: bundle.names.schema, accounts: [bundle.names.appUser, bundle.names.workerUser, bundle.names.monitorUser], tables: bundle.ddl.length, tmsSchema: tmsSchema?.map(({ file, applied, pendingAtEnd }) => ({ file, applied, pendingAtEnd })) ?? null };
+  const before = await preflightProvision(conn, bundle.names);
+  if (before.state !== 'ABSENT') throw new ProvisioningError('STATE_NOT_ABSENT', { state: before.state, steps: before.steps, hint: before.state === 'FOREIGN' ? 'la base existe y no pertenece a este sandbox: NO se toca' : 'ejecutar destroy (con confirmación) y volver a aplicar' });
+  for (const s of bundle.head) await conn.query(s);   // si la base ya existiera, CREATE DATABASE falla aquí: no se escribe nada
+  for (const s of bundle.provisioning) await conn.query(s);
+  const schema = bundle.names.schema; await markStep(conn, schema, 'bootstrap', 'STARTED');
+  let tmsSchema = null;
+  try {
+    // El DDL de PriceSmart referencia tablas del TMS (FK): el esquema BASE del TMS se aplica ANTES y debe quedar completo. `options.tms = { repo, files }`.
+    if (options.tms) { tmsSchema = await applySchemaFiles(conn, options.tms.repo, options.tms.files); assertSchemaComplete(tmsSchema, 'base', { allowDeferred: true }); }   // en `apply` solo pueden quedar DIFERIDAS (dependen de fases posteriores) las sentencias con error de dependencia; `finalize` exige 0
+    for (const s of bundle.ddl) await conn.query(s);
+    for (const [variable, value] of Object.entries(pw)) await conn.query(`SET ${variable} = ?`, [value]);
+    for (const s of bundle.accounts) await conn.query(s);
+    for (const variable of Object.keys(pw)) await conn.query(`SET ${variable} = NULL`);
+    for (const role of ['app', 'worker', 'monitor']) for (const s of bundle.grants[role]) await conn.query(s);
+    await markStep(conn, schema, 'bootstrap', 'COMPLETE');
+  } catch (error) {
+    try { for (const variable of Object.keys(pw)) await conn.query(`SET ${variable} = NULL`); await markStep(conn, schema, 'bootstrap', 'FAILED', failureDetail(error)); } catch { /* el diagnóstico no debe ocultar el error original */ }
+    throw error;
+  }
+  return { schema, accounts: [bundle.names.appUser, bundle.names.workerUser, bundle.names.monitorUser], tables: bundle.ddl.length, state: 'APPLIED', tmsSchema: tmsSchema?.map(({ file, applied, alreadyApplied, knownNonSql, pendingAtEnd, deferred, blocking }) => ({ file, applied, alreadyApplied, knownNonSql, pendingAtEnd, deferred, blocking })) ?? null, complete: false };   // «aplicado» NO es «completo»: falta `finalize`
 }
 
 /** Privilegios TEMPORALES del paso de «esquema de ejecución» (el código del proyecto crea tablas con la cuenta de la aplicación): se conceden, se ejecuta el paso y se REVOCAN; los privilegios por tabla/columna no se tocan. */
@@ -176,23 +302,46 @@ export async function applyEnsuredGrants(conn, bundle) {
 
 /**
  * Segunda parte del aprovisionamiento: «esquema de ejecución» del proyecto (tablas que el código crea en tiempo de ejecución) con EL MISMO entorno que tendrá el sandbox (validateSandboxConfig lo valida) y la cuenta de la
- * aplicación con privilegios TEMPORALES (siempre revocados, también si el paso falla); después la migración de confirmaciones y los privilegios restantes. `o`: { repo, sandboxRoot, sandboxSecrets, dbPort, extraEnv }.
+ * aplicación con privilegios TEMPORALES (siempre revocados, también si el paso falla); después las migraciones (dos rondas), la de confirmaciones y los privilegios restantes.
+ * FALLA CERRADO: solo corre sobre un sandbox con bootstrap COMPLETO (APPLIED o FINALIZE_FAILED); si CUALQUIER sentencia de las migraciones queda pendiente NO se conceden los privilegios finales ni se marca COMPLETE.
+ * `o`: { repo, sandboxRoot, sandboxSecrets, dbPort, tmpDir } y, solo para pruebas, `runtimeSchemaStep(env)` (sustituye el proceso hijo) y `phases` (sustituye las fases del TMS).
  */
 export async function finalizeBundle(conn, bundle, o) {
-  const { names } = bundle; const { repo, sandboxRoot, sandboxSecrets, dbPort } = o;
+  const { names } = bundle; const { repo, sandboxRoot, sandboxSecrets, dbPort } = o; const schema = names.schema;
   if (!fs.existsSync(path.join(sandboxRoot, 'isolation.json'))) fail('MANIFEST_MISSING');
+  const before = await preflightProvision(conn, names);
+  if (!['APPLIED', 'FINALIZE_FAILED'].includes(before.state)) throw new ProvisioningError('STATE_NOT_APPLIED', { state: before.state, steps: before.steps, hint: before.state === 'COMPLETE' ? 'ya está completo' : 'ejecutar apply sobre un sandbox AUSENTE (destroy + apply si quedó parcial)' });
+  const phases = o.phases ?? tmsSchemaPhases(repo);
   const sysRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT; const tmpDir = o.tmpDir ?? process.env.TEMP ?? '/tmp';
   const env = { ...(sysRoot ? { SystemRoot: sysRoot, WINDIR: sysRoot } : {}), TEMP: tmpDir, TMP: tmpDir, PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`, NODE_ENV: 'test', NOVALVION_ENV: 'sandbox', SANDBOX_ID: names.sandboxId, SANDBOX_ROOT: sandboxRoot,
     NEXT_TELEMETRY_DISABLED: '1', DB_HOST: '127.0.0.1', DB_PORT: String(dbPort), DB_NAME: names.schema, DB_USER: names.appUser, ...sandboxSecrets, CB2_PUBLIC_ORIGIN: 'https://localhost', EMPRESA_DOMINIOS: '{"localhost":"kt-monaco"}', UPLOAD_DIR: path.join(sandboxRoot, 'uploads') };
+  const spawnStep = (e) => { const run = cp.spawnSync(process.execPath, [path.join(repo, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(repo, 'scripts', 'ci', 'portal-e2e', 'vitest.e2e.config.mts'), 'scripts/ci/portal-e2e/ensure.e2e.ts'], { cwd: repo, env: e, windowsHide: true, encoding: 'utf8', timeout: 300000 });
+    return { exit: run.status, tail: [run.stdout ?? '', run.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-4).join(' | ').slice(0, 400) }; };
   const tmp = temporaryEnsureStatements(names); const report = {};
-  await conn.query(tmp.grant);
+  await markStep(conn, schema, 'finalize', 'STARTED');
   try {
-    const run = cp.spawnSync(process.execPath, [path.join(repo, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--config', path.join(repo, 'scripts', 'ci', 'portal-e2e', 'vitest.e2e.config.mts'), 'scripts/ci/portal-e2e/ensure.e2e.ts'], { cwd: repo, env, windowsHide: true, encoding: 'utf8', timeout: 300000 });
-    report.runtimeSchemaStep = { exit: run.status, tail: [run.stdout ?? '', run.stderr ?? ''].join('\n').split('\n').filter((l) => l.trim()).slice(-4).join(' | ').slice(0, 400) };
-  } finally { await conn.query(tmp.revoke); }   // los privilegios temporales NUNCA quedan, ni siquiera si el paso falla
-  if (report.runtimeSchemaStep.exit !== 0) fail(`RUNTIME_SCHEMA_STEP_FAILED: ${report.runtimeSchemaStep.tail}`);
-  await conn.query(`USE ${q(names.schema)}`); await applySchemaFiles(conn, repo, ['sql/migrate-2026-11-tms-parada-confirmaciones.sql']);
-  report.ensuredGrants = await applyEnsuredGrants(conn, bundle);
+    await conn.query(tmp.grant);
+    try { report.runtimeSchemaStep = await (o.runtimeSchemaStep ?? spawnStep)(env); } finally { await conn.query(tmp.revoke); }   // los privilegios temporales NUNCA quedan, ni siquiera si el paso falla
+    if (report.runtimeSchemaStep.exit !== 0) throw new ProvisioningError('RUNTIME_SCHEMA_STEP_FAILED', { exit: report.runtimeSchemaStep.exit, tail: report.runtimeSchemaStep.tail });
+    await conn.query(`USE ${q(schema)}`);
+    // Migraciones del proyecto: dos rondas (las sentencias dependientes de tablas de ejecución pueden necesitar la segunda). Después de la 2.ª NADA puede quedar pendiente.
+    // El esquema del proyecto NO es lineal (el base depende de migraciones y viceversa): se alterna base ↔ migraciones hasta CONVERGER (sin avance) y después NADA puede quedar pendiente.
+    const memo = new Map(); const pendingOf = (r) => r.reduce((n, f) => n + f.pendingAtEnd, 0); let baseAgain; let second; let last = Infinity;
+    for (let round = 0; round < 6; round++) {
+      baseAgain = await applySchemaFiles(conn, repo, phases.base, memo); second = await applySchemaFiles(conn, repo, phases.migrations, memo);
+      const now = pendingOf(baseAgain) + pendingOf(second); if (now === 0 || now >= last) break; last = now;
+    }
+    const summary = (r) => r.map(({ file, applied, alreadyApplied, skippedUse, knownNonSql, pendingAtEnd }) => ({ file, applied, alreadyApplied, skippedUse, knownNonSql, pendingAtEnd }));
+    assertSchemaComplete(baseAgain, 'base');
+    assertSchemaComplete(second, 'migrations'); const confirmations = await applySchemaFiles(conn, repo, phases.confirmations, memo); assertSchemaComplete(confirmations, 'confirmations');
+    report.scope = { excludedFiles: tmsExcludedFiles(repo).map((f) => ({ file: f, module: OUT_OF_SCOPE_FILES[Object.keys(OUT_OF_SCOPE_FILES).find((k) => f.endsWith(`-${k}.sql`))] })), outOfScopeStatements: baseAgain.reduce((n, f) => n + f.outOfScope, 0) };
+    report.migrations = { base: summary(baseAgain), migrations: summary(second), confirmations: summary(confirmations) };
+    report.ensuredGrants = await applyEnsuredGrants(conn, bundle);   // solo aquí, con el esquema COMPLETO
+    await markStep(conn, schema, 'finalize', 'COMPLETE');
+  } catch (error) {
+    try { await markStep(conn, schema, 'finalize', 'FAILED', failureDetail(error)); } catch { /* conservar el error original */ }
+    throw error;
+  }
   return report;
 }
 

@@ -1,6 +1,7 @@
 // PRICESMART API-26 — CLI de aprovisionamiento del sandbox de homologación (se ejecuta EN el host del sandbox; NADA se ejecuta desde CI ni contra producción).
 //   node provision.mjs plan --n sbx1 --out <dir> --hostname <dns> --cert <ruta> --key <ruta> --allow <cidr,cidr> [--app-port 3100] [--db-port 3306]   → genera archivos de REVISIÓN (sin secretos, sin tocar bases)
 //   node provision.mjs init-secrets --n sbx1 --root <dir> --out-env <archivo> [--db-port 3306]                                                       → secretos INTERNOS del sandbox + isolation.json (0600; no se imprimen)
+//   node provision.mjs status --n sbx1 [--db-port 3306]                  → SOLO LECTURA: estado del aprovisionamiento (preflight; un estado PARCIAL se recupera con destroy + apply)
 //   node provision.mjs finalize --n sbx1 --root <dir> --secrets-env <archivo> [--db-port 3306]   → esquema de ejecución del proyecto + privilegios finales (tras apply)
 //   node provision.mjs apply --n sbx1 --db-port 3306 [--execute]    → por omisión solo muestra el resumen; con --execute aplica (loopback, ACK, credenciales por variables de entorno)
 //   node provision.mjs register-integration|revoke|destroy ...      → mismas barreras (loopback + ACK)
@@ -28,7 +29,7 @@ export async function plan(args) {
     'nginx-pricesmart-sandbox.conf': B.renderNginx(nginxOpts), 'pricesmart-sandbox-proxy.conf': B.NGINX_PROXY_INCLUDE,
     'pricesmart-sandbox.service': B.renderSystemd({ appPort: nginxOpts.appPort }), 'runtime.env.template': B.renderEnvTemplate(names, { dbPort: num(args['db-port'], 3306) }),
     'monitoring.json': JSON.stringify({ queries: B.MONITORING_QUERIES, alerts: B.ALERT_RULES, account: names.monitorUser }, null, 2),
-    'tms-schema-files.txt': B.tmsSchemaFiles(repo).join('\n'),
+    'tms-schema-phases.json': JSON.stringify(B.tmsSchemaPhases(repo), null, 2),
   };
   fs.mkdirSync(out, { recursive: true }); for (const [f, text] of Object.entries(files)) fs.writeFileSync(path.join(out, f), `${text}\n`, { flag: 'wx' });
   return { out, files: Object.keys(files) };
@@ -56,7 +57,7 @@ export async function apply(args) {
   if (!args.execute) return { dryRun: true, schema: bundle.names.schema, accounts: [bundle.names.appUser, bundle.names.workerUser, bundle.names.monitorUser], statements: bundle.head.length + bundle.ddl.length + bundle.accounts.length + bundle.grants.app.length + bundle.grants.worker.length + bundle.grants.monitor.length, tmsFiles: B.tmsSchemaFiles(repo).length };
   B.assertApplyTarget({ host: '127.0.0.1', port: num(args['db-port'], 3306), env, ack: env.PS_HOMOLOG_PROVISION_ACK, secrets });
   const conn = await adminConnection(args, B.HOMOLOG_ACK);
-  try { return await B.executeBundle(conn, bundle, secrets, { tms: { repo, files: B.tmsSchemaFiles(repo) } }); } finally { await conn.end(); }
+  try { return await B.executeBundle(conn, bundle, secrets, { tms: { repo, files: B.tmsSchemaPhases(repo).base } }); } finally { await conn.end(); }
 }
 
 /** Segunda parte tras `apply`: esquema de ejecución del proyecto con el entorno del sandbox (secretos de `init-secrets`: --secrets-env <archivo>) y privilegios finales. */
@@ -68,6 +69,15 @@ export async function finalize(args) {
   try { return await B.finalizeBundle(conn, bundle, { repo, sandboxRoot, sandboxSecrets, dbPort: num(args['db-port'], 3306) }); } finally { await conn.end(); }
 }
 
+/** Solo lectura: estado del aprovisionamiento de UN sandbox (ABSENT / BOOTSTRAP_PARTIAL / APPLIED / FINALIZE_FAILED / COMPLETE / FOREIGN). Es el preflight de `apply` y `finalize`. */
+export async function status(args) {
+  const names = B.homologNames(args.n); const mysql = (await import('mysql2/promise')).default; const env = process.env; const port = num(args['db-port'], 3306);
+  B.assertApplyTarget({ host: '127.0.0.1', port, env, ack: HOMOLOG_STATUS_ACK_FREE, expectedAck: HOMOLOG_STATUS_ACK_FREE });
+  const conn = await mysql.createConnection({ host: '127.0.0.1', port, user: env.PS_HOMOLOG_ADMIN_USER, password: env.PS_HOMOLOG_ADMIN_PASSWORD });
+  try { return { schema: names.schema, ...(await B.preflightProvision(conn, names)) }; } finally { await conn.end(); }
+}
+const HOMOLOG_STATUS_ACK_FREE = 'solo-lectura';
+
 export async function destroy(args) {
   const conn = await adminConnection(args, B.HOMOLOG_DESTROY_ACK);
   try { for (const s of B.destroyStatements(args.n)) await conn.query(s); return { destroyed: B.homologNames(args.n).schema }; } finally { await conn.end(); }
@@ -75,7 +85,7 @@ export async function destroy(args) {
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   const [cmd, ...rest] = process.argv.slice(2); const args = parseArgs(rest);
-  const run = { plan, 'init-secrets': async (a) => initSecrets(a), apply, finalize, destroy }[cmd];
-  if (!run) { console.error('Uso: plan | init-secrets | apply [--execute] | finalize | destroy'); process.exitCode = 2; }
+  const run = { plan, 'init-secrets': async (a) => initSecrets(a), status, apply, finalize, destroy }[cmd];
+  if (!run) { console.error('Uso: plan | init-secrets | status | apply [--execute] | finalize | destroy'); process.exitCode = 2; }
   else run(args).then((r) => console.log(JSON.stringify(r, null, 2))).catch((e) => { console.error(String(e.message).slice(0, 200)); process.exitCode = 1; });
 }

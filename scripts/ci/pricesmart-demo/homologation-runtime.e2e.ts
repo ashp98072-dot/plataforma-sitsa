@@ -216,4 +216,16 @@ describe("API-26 composición de homologación con cuentas de mínimo privilegio
     expect((await get("a", id)).json).not.toHaveProperty("cancellation"); expect((await get("b", id)).json).toHaveProperty("cancellation");
     expect((await get("c", id)).status).toBe(404);   // otra integración (cliente 2) de la misma empresa tampoco ve la orden
   }, 240000);
+  it("R14 el runtime NO se activa con un aprovisionamiento incompleto (marcador FAILED/STARTED/ausente) aunque todo lo demás esté declarado; al completarlo vuelve a activarse", async () => {
+    const setFinalize = (state: string | null) => state === null ? ctx.db.query("DELETE FROM ps_homolog_provisioning WHERE step = 'finalize'") : ctx.db.query("UPDATE ps_homolog_provisioning SET state = ? WHERE step = 'finalize'", [state]);
+    try {
+      for (const state of ["FAILED", "STARTED", null]) {
+        await setFinalize(state); const r = await installControlledRuntime(baseEnv("ENABLED"), runtime.ports);
+        expect(r.ready, String(state)).toBe(false); expect(r.blockers.map((b) => `${b.code}:${b.detail}`), String(state)).toContain("PROBE_FAILED:provisioning"); expect(isPriceSmartHandlerInstalled(), String(state)).toBe(false);
+        expect((await post("a", uid())).status).toBe(503);
+        if (state === null) await ctx.db.query("INSERT INTO ps_homolog_provisioning (step, state, detail, updated_at) VALUES ('finalize', 'FAILED', NULL, UTC_TIMESTAMP(6))");
+      }
+    } finally { await setFinalize("COMPLETE"); }
+    const ok = await installControlledRuntime(baseEnv("ENABLED"), runtime.ports); expect(ok).toMatchObject({ ready: true }); expect((await post("a", uid())).status).toBe(202);
+  }, 120000);
 });

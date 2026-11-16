@@ -38,3 +38,6 @@ Aislamiento, concurrencia (30 POST y 40 GET simultáneos), idempotencia (8 POST 
 | Infraestructura | `nginx`/`systemd`/entorno generados como plantillas | Host dedicado, MariaDB local, dominio y certificado TLS, allowlist de IPs de PriceSmart, gestor de secretos, monitoreo/alertas operativos, usuario del sistema |
 | Autorización humana | `HOMOLOG_ACK`, `evaluateSandboxExposure` sin bloqueantes | Revisión del SQL, del perfil y despliegue expreso |
 Además: los diseños SQL (`*.sql.in`) siguen «no ratificados»; aplicarlos en el sandbox exige la confirmación explícita (ACK).
+
+## 7. Corrección tras la auditoría de #627 (instalación parcial ≠ completa)
+`applySchemaFiles()` devuelve `pendingAtEnd`/`deferred`/`blocking`; `executeBundle()` y `finalizeBundle()` llaman a `assertSchemaComplete()` y **fallan cerrado** (`TMS_SCHEMA_INCOMPLETE`) antes de DDL de PriceSmart, cuentas, privilegios finales o `COMPLETE`. `apply` informa `state: APPLIED, complete: false`. Divisor SQL compatible con `DELIMITER`, comentarios de bloque y `PREPARE…DEALLOCATE` como unidad; `USE`/nombres de producción nunca se envían. Ver el runbook («Estados del aprovisionamiento») para estados, alcance y recuperación. No se afirma reversión del DDL de MariaDB.
