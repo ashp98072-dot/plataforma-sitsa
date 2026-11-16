@@ -26,8 +26,8 @@ describe("API-26 revalidación acotada de la configuración sandbox", () => {
   });
   it("pasado el intervalo vuelve a validar (un manifiesto alterado se detecta): si la validación falla, la sentencia NO se ejecuta", async () => {
     const { pool, conn } = fake(); await pool.execute("UPDATE synthetic SET value = 1"); expect(validate).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1900); await pool.execute("UPDATE synthetic SET value = 1"); expect(validate).toHaveBeenCalledTimes(1);   // aún dentro del intervalo
-    vi.advanceTimersByTime(200); validate.mockImplementation(() => { throw new Error("Configuración sandbox inválida"); });
+    vi.advanceTimersByTime(200); await pool.execute("UPDATE synthetic SET value = 1"); expect(validate).toHaveBeenCalledTimes(1);   // aún dentro del intervalo
+    vi.advanceTimersByTime(100); validate.mockImplementation(() => { throw new Error("Configuración sandbox inválida"); });
     await expect(pool.execute("DELETE FROM synthetic")).rejects.toThrow(/inválida/); expect(validate).toHaveBeenCalledTimes(2);
     expect(conn.execute).toHaveBeenCalledTimes(2);   // la tercera nunca llegó a la base
   });

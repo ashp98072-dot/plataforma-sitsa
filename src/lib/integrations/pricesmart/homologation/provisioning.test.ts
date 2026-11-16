@@ -207,6 +207,24 @@ describe('API-26 segunda parte del aprovisionamiento (esquema de ejecución): pr
       expect(grantIdx(c.sql), mode).toBeGreaterThanOrEqual(0); expect(revokeIdx(c.sql), mode).toBeGreaterThan(grantIdx(c.sql)); expect(c.sql.some((x) => /tms_parada_confirmaciones`/.test(x) && x.startsWith('GRANT')), mode).toBe(false);
     }
   });
+  it('AISLAMIENTO de `finalize`: TODA sentencia que ejecuta nombra únicamente la base y la cuenta del sandbox (nada global, nada de otras bases o cuentas, nada destructivo) y el proceso hijo recibe un entorno mínimo sin credenciales ajenas', async () => {
+    spawn.mockReset(); spawn.mockReturnValue({ status: 0, stdout: '', stderr: '' }); const c = fakeConn();
+    const saved = { PS_HOMOLOG_ADMIN_USER: process.env.PS_HOMOLOG_ADMIN_USER, PS_HOMOLOG_ADMIN_PASSWORD: process.env.PS_HOMOLOG_ADMIN_PASSWORD, DB_PASSWORD: process.env.DB_PASSWORD, PRICESMART_LAB_KEY: process.env.PRICESMART_LAB_KEY };
+    process.env.PS_HOMOLOG_ADMIN_USER = 'root'; process.env.PS_HOMOLOG_ADMIN_PASSWORD = 'admin-secreto-xyz'; process.env.DB_PASSWORD = 'otra-base-secreta'; process.env.PRICESMART_LAB_KEY = 'k'.repeat(40);
+    try {
+      await B.finalizeBundle(c, bundle, opts());
+      const own = /`sandbox_api02_homolog_(?:w|m)?sbx1`/;
+      for (const sql of c.sql) {
+        expect(sql.replaceAll('ON DELETE RESTRICT', ''), sql).not.toMatch(/\*\.\*|\bmysql\b|information_schema|performance_schema|\bsys\b|\bDROP\b|\bTRUNCATE\b|\bDELETE\b|GRANT OPTION|CREATE USER|CREATE DATABASE|SET PASSWORD|FLUSH|SHUTDOWN|LOAD_FILE|INTO OUTFILE/i);
+        if (/^(GRANT|REVOKE|USE)\b/.test(sql)) expect(sql, sql).toMatch(/`sandbox_api02_homolog_sbx1`/);   // siempre la base del sandbox
+        if (/^(GRANT|REVOKE)\b/.test(sql)) expect(sql, sql).toMatch(own);   // siempre una cuenta del sandbox
+        for (const quoted of sql.match(/`[^`]+`/g) ?? []) expect(['`sandbox_api02_homolog_sbx1`', '`sandbox_api02_homolog_wsbx1`', '`sandbox_api02_homolog_msbx1`', '`127.0.0.1`'].includes(quoted) || /^`(?:tms_[a-z_]+|auditoria|ps_api\d+_[a-z_]+|novalvion_environment|[a-z_]+)`$/.test(quoted), `${sql} → ${quoted}`).toBe(true);
+      }
+      const spawned = spawn.mock.calls[0][2].env as Record<string, string>;
+      expect(Object.keys(spawned).sort()).toEqual(['DB_HOST', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT', 'DB_USER', 'AUTH_SECRET', 'CB2_PUBLIC_ORIGIN', 'EMPRESA_DOMINIOS', 'NEXT_TELEMETRY_DISABLED', 'NODE_ENV', 'NOVALVION_ENV', 'PATH', 'PORTAL_CREDENTIALS_KEY', 'SANDBOX_ID', 'SANDBOX_ROOT', 'TEMP', 'TMP', 'UPLOAD_DIR', ...(process.platform === 'win32' ? ['SystemRoot', 'WINDIR'] : [])].sort());
+      expect(spawned.DB_PASSWORD).toBe(secrets.DB_PASSWORD); expect(JSON.stringify(spawned)).not.toMatch(/admin-secreto-xyz|otra-base-secreta|PRICESMART_LAB/);   // ni la credencial administrativa ni la de otra base
+    } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  });
   it('sin manifiesto de aislamiento no se concede nada', async () => {
     const c = fakeConn(); await expect(B.finalizeBundle(c, bundle, { ...opts(), sandboxRoot: mkdtempSync(path.join(os.tmpdir(), 'ps-fin-')) })).rejects.toThrow('MANIFEST_MISSING'); expect(c.sql).toEqual([]);
   });

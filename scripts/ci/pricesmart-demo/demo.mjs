@@ -203,7 +203,21 @@ async function rehearseHomologation() {
   const admin = await adminConn(m); const report = { names, errors: {} }; step('conectado');
   try {
   await admin.query(B.destroyStatements('r1').join(';\n'));   // limpieza previa (solo nombres homolog_r1)
-  step('limpieza previa hecha'); report.applied = await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaFiles(repoRoot) } }); step('paquete aplicado');
+  step('limpieza previa hecha');
+  // Aislamiento de `apply`/`finalize`/`destroy`: una base y una cuenta «señuelo» AJENAS al sandbox (y las cuentas/bases del laboratorio) deben quedar EXACTAMENTE igual tras todo el ciclo.
+  const decoy = 'sandbox_api02_homolog_decoy'; const decoyPw = crypto.randomBytes(24).toString('hex');
+  await admin.query(`DROP DATABASE IF EXISTS \`${decoy}\``); await admin.query(`DROP USER IF EXISTS \`${decoy}\`@\`127.0.0.1\``);
+  await admin.query(`CREATE DATABASE \`${decoy}\``); await admin.query(`CREATE TABLE \`${decoy}\`.t (id INT PRIMARY KEY, v VARCHAR(20))`); await admin.query(`INSERT INTO \`${decoy}\`.t VALUES (1, 'intacto')`);
+  await admin.query(`CREATE USER \`${decoy}\`@\`127.0.0.1\` IDENTIFIED BY '${decoyPw}'`); await admin.query(`GRANT SELECT ON \`${decoy}\`.t TO \`${decoy}\`@\`127.0.0.1\``);
+  const ownNames = new Set([names.appUser, names.workerUser, names.monitorUser]);
+  const snap = async () => {
+    const users = (await admin.query("SELECT DISTINCT User u FROM mysql.user WHERE User LIKE 'sandbox%' ORDER BY 1"))[0].map((r) => r.u).filter((u) => !ownNames.has(u)); const grants = {};
+    for (const u of users) grants[u] = (await admin.query(`SHOW GRANTS FOR \`${u}\`@\`127.0.0.1\``))[0].map((r) => String(Object.values(r)[0]).replace(/IDENTIFIED BY PASSWORD '[^']*'/, 'IDENTIFIED BY PASSWORD <oculto>'));
+    return { schemas: (await admin.query("SELECT SCHEMA_NAME s FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN ('information_schema','mysql','performance_schema','sys') ORDER BY 1"))[0].map((r) => r.s).filter((x) => x !== names.schema),
+      decoyChecksum: (await admin.query(`CHECKSUM TABLE \`${decoy}\`.t`))[0][0].Checksum, labTables: (await admin.query('SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?', [m.schema]))[0][0].n, users, grants };
+  };
+  const before = await snap();
+  report.applied = await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaFiles(repoRoot) } }); step('paquete aplicado');
   // Paso «esquema de ejecución» (código REAL del proyecto) con el MISMO entorno que tendrá el sandbox: manifiesto de aislamiento validado por validateSandboxConfig y cuenta de la aplicación con privilegios TEMPORALES.
   const root = path.join(m.runDir, 'homolog-root'); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
   fs.writeFileSync(path.join(root, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(names, sandboxSecrets, { dbPort: m.port })));
@@ -238,6 +252,9 @@ async function rehearseHomologation() {
   report.tables = (await admin.query('SELECT TABLE_NAME t FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY 1', [names.schema]))[0].map((r) => r.t);
   report.environmentRow = (await admin.query('SELECT environment, sandbox_id FROM novalvion_environment'))[0][0];
   for (const sql of B.destroyStatements('r1')) await admin.query(sql);
+  const after = await snap();
+  report.isolation = { unchanged: JSON.stringify(before) === JSON.stringify(after), usersChecked: before.users, schemasChecked: before.schemas, decoyIntact: (await admin.query(`SELECT v FROM \`${decoy}\`.t`))[0][0]?.v === 'intacto' };
+  await admin.query(`DROP DATABASE IF EXISTS \`${decoy}\``); await admin.query(`DROP USER IF EXISTS \`${decoy}\`@\`127.0.0.1\``);
   report.destroyed = { schemas: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [names.schema]))[0][0].n,
     accounts: (await admin.query("SELECT COUNT(*) n FROM information_schema.USER_PRIVILEGES WHERE GRANTEE LIKE ?", [`%sandbox_api02_homolog_%r1%`]))[0][0].n, labSchemaIntact: (await admin.query('SELECT COUNT(*) n FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [m.schema]))[0][0].n };
   fs.writeFileSync(path.join(m.runDir, 'homolog-rehearsal.json'), JSON.stringify(report));
