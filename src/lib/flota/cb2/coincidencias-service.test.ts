@@ -63,8 +63,8 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
         const piloto="  Álvaro, Pinto. ",extra={empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS" as const};
         const {file,entrada,recibo}=await preparar("C-001ABC",true,extra,"DIESEL",piloto,perfil);
         await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-tokens-unicos",recibo.token);
-        const creados=m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos");expect(creados).toHaveLength(1);expect(creados[0][2]).toMatchObject({empleado_id:77,piloto_informado:piloto.trim()});
-        expect(m.query.mock.calls.filter(([sql])=>String(sql).includes("FROM empleados"))).toHaveLength(2);
+        const creados=m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos");expect(creados).toHaveLength(1);expect(creados[0][2]).toMatchObject({empleado_id:77,piloto_informado:piloto});
+        expect(m.query.mock.calls.filter(([sql])=>String(sql).includes("FROM empleados"))).toHaveLength(perfil==="SHELL"?3:2);
         expect(m.insert.mock.calls.find(([,table])=>table==="flota_cb2_importaciones")![2].archivo_nombre).toBe("sintetico.xlsx");
         const eventos=m.diario.mock.calls[0][5],evento=eventos.find((e:{resultado:string})=>e.resultado==="CREADA");expect(JSON.parse(evento.decision)).toMatchObject({metodoEmpleadoValidado:"TOKENS_COMPLETOS_UNICOS",asignacion:extra});expect(JSON.parse(evento.datos_origen).textos.piloto).toBe(piloto);
     });

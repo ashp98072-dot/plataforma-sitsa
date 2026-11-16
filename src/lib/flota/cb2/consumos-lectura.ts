@@ -1,9 +1,11 @@
+import { resolverUnidadCanonica } from "../unidad-canonica";
 import type { PoolConnection } from "mysql2/promise";
 import { rows } from "./repository";
 import type { FiltrosCB2 } from "./service";
 export async function consultarConsumos(c: PoolConnection, empresa: number, limite: number, despues: number, filtros: FiltrosCB2) {
     const where = ["c.empresa_id=?", "c.id>?"], args: (string | number)[] = [empresa, despues];
-    for (const [campo, valor] of [["proveedor_id", filtros.proveedorId], ["vehiculo_id", filtros.vehiculoId], ["empleado_id", filtros.empleadoId], ["importacion_origen_id", filtros.importacionId], ["producto_clasificado", filtros.producto], ["estado_factura", filtros.estado]] as const) if (valor !== undefined) { where.push(campo === "producto_clasificado" ? "COALESCE(c.producto_clasificado,'NO_DETERMINADO')=?" : `c.${campo}=?`); args.push(valor); }
+    for (const [campo, valor] of [["proveedor_id", filtros.proveedorId], ["empleado_id", filtros.empleadoId], ["importacion_origen_id", filtros.importacionId], ["producto_clasificado", filtros.producto], ["estado_factura", filtros.estado]] as const) if (valor !== undefined) { where.push(campo === "producto_clasificado" ? "COALESCE(c.producto_clasificado,'NO_DETERMINADO')=?" : `c.${campo}=?`); args.push(valor); }
+    if(filtros.vehiculoId!==undefined){const u=await resolverUnidadCanonica(c,empresa,filtros.vehiculoId);where.push(`c.vehiculo_id IN (${u.idsHistoricos.map(()=>'?').join(',')})`);args.push(...u.idsHistoricos);}
     for (const [campo, json, valor] of [["piloto_externo_id","piloto_id",filtros.pilotoExternoId],["unidad_externa_id","unidad_id",filtros.unidadExternaId]] as const) if (valor !== undefined) {
         where.push(`(c.${campo}=? OR (c.${campo} IS NULL AND c.asociacion_externa_id IS NOT NULL AND JSON_VALUE(c.identidad_externa,'$.${json}')=?))`); args.push(valor, valor);
     }

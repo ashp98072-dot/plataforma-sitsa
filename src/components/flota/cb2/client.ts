@@ -1,5 +1,6 @@
 import { productos } from "@/lib/flota/cb2/clasificacion";
 export type FilaCB2 = {
+    perfil?: "SHELL"|"HALEL";
     asociacionExterna?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna | null;
     lote?: string | null;
     kilometraje?: string | null;
@@ -26,6 +27,7 @@ export type FilaCB2 = {
     moneda: string;
 };
 export type PreviewCB2 = {
+    nombres?:import("@/lib/flota/cb2/pilotos-nombres").RevisionNombre[];
     perfilDetectado?: "HALEL" | "SHELL";
     sha256: string;
     token: string;
@@ -38,6 +40,7 @@ export type Registro = {
     [key: string]: unknown;
 };
 export type CatalogosCB2 = {
+    pilotosReportados?:boolean;
     identidadesIndependientes?: boolean;
     pilotoReportadoExterno?: boolean;
     pilotosExternos?: import("@/lib/flota/cb2/terceros-model").PilotoTercero[];
@@ -60,6 +63,7 @@ export type CatalogosCB2 = {
     }[];
 };
 export type SeleccionCB2 = {
+    decisionNombre?:import("@/lib/flota/cb2/pilotos-nombres").DecisionNombre;
     pilotoTipo?: "INTERNO" | "EXTERNO";
     metodoPiloto?: "AUTOMATICA" | "MANUAL";
     candidato: string;

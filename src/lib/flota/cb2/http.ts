@@ -1,3 +1,4 @@
+import { reportePilotos,filtrosPiloto,csvPilotos } from "./pilotos-reporte";
 import { consultarFondoCB2, vincularFondoCB2, vincularFondoSchema } from "./fondos";
 import { consultarDocumental, consumosDocumentales } from "./conciliacion-documental";
 import { estadosDocumentales } from "./conciliacion-documental-model";
@@ -36,9 +37,9 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "pilotos-nombres" | "pilotos-reporte" | "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
-    const lectura = ["fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
+    const lectura = ["pilotos-nombres","pilotos-reporte","fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
@@ -56,6 +57,14 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
         if (lectura) {
             const url = new URL(req.url), after = z.coerce.number().int().min(0).max(2147483647).parse(url.searchParams.get("despues") ?? 0), limit = z.coerce.number().int().min(1).max(500).parse(url.searchParams.get("limite") ?? 100);
             const iid = rawId === undefined ? undefined : id.parse(Number(rawId));
+            if(accion==="pilotos-nombres")return NextResponse.json(await service.nombresImportacion(ctx.empresaId,id.parse(iid)),{headers});
+            if (accion === "pilotos-reporte") {
+                const f=filtrosPiloto.parse(Object.fromEntries(["desde","hasta","nombre","producto","proveedorId","pilotoReportadoId","empleadoId","pilotoExternoId"].filter(k=>url.searchParams.has(k)).map(k=>[k,k.endsWith("Id")?Number(url.searchParams.get(k)):url.searchParams.get(k)])));
+                const exportar=url.searchParams.get("exportar")==="csv";
+                const reporte=await reportePilotos(ctx.empresaId,f,after,exportar?5000:limit);
+                if(exportar){if(reporte.siguiente!==null)throw new ErrorCB2("Exportación supera 5000 consumos; acota los filtros.",413);return new Response(csvPilotos(reporte.items),{headers:{...headers,"Content-Type":"text/csv; charset=utf-8","Content-Disposition":"attachment; filename=combustible-pilotos.csv"}});}
+                return NextResponse.json(reporte,{headers});
+            }
             if (accion === "fondos") {
                 const proveedor = id.parse(Number(url.searchParams.get("proveedorId")));
                 const consumo = id.parse(Number(url.searchParams.get("consumoId")));
