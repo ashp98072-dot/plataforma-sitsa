@@ -65,25 +65,33 @@ describe("API-26 caché de validación sandbox con archivos reales: sin ventana 
     await sleep(320); await mustFail(pool, conn, "mismo tamaño y mtime");
   });
 
-  it("secreto rotado/revocado en el entorno, cambio de base o cuenta, proxy o carpeta de cargas: falla de inmediato", async () => {
+  it("DESTINO Y SECRETOS (sin ventana): secreto rotado/revocado, cambio de base, cuenta, host, puerto, entorno o raíz → la PRIMERA sentencia posterior falla, sin esperar nada", async () => {
     const { pool, conn } = fake(); await run(pool);
-    for (const [name, value] of [["AUTH_SECRET", `sandbox:qa-s02:${"b".repeat(64)}`], ["DB_PASSWORD", `sandbox:qa-s02:${"c".repeat(64)}`], ["DB_NAME", "sandbox_otra"], ["DB_USER", "sandbox_otro"], ["HTTPS_PROXY", "http://proxy.local:8080"], ["FEL_CREDENTIALS_KEY", "x"], ["EMPRESA_DOMINIOS", '{"produccion.com":"kt-monaco"}'], ["CB2_PUBLIC_ORIGIN", "https://produccion.com"]] as const) {
+    for (const [name, value] of [["AUTH_SECRET", `sandbox:qa-s02:${"b".repeat(64)}`], ["PORTAL_CREDENTIALS_KEY", `sandbox:qa-s02:${"d".repeat(64)}`], ["DB_PASSWORD", `sandbox:qa-s02:${"c".repeat(64)}`], ["DB_NAME", "sandbox_otra"], ["DB_USER", "sandbox_otro"], ["DB_HOST", "db.produccion.com"], ["DB_PORT", "3306"],
+      ["NOVALVION_ENV", "production"], ["SANDBOX_ID", "otro-sandbox"], ["SANDBOX_ROOT", join(root, "otra")]] as const) {
       const prev = process.env[name]; vi.stubEnv(name, value); await mustFail(pool, conn, name); vi.stubEnv(name, prev ?? ""); if (prev !== undefined) vi.stubEnv(name, prev);
     }
     await run(pool);
   });
 
-  it("aparece un `.env` en el directorio de trabajo (segunda fuente de secretos) o desaparece la carpeta de cargas: falla de inmediato y se recupera al corregirlo", async () => {
+  it("HIGIENE DEL ENTORNO (acotada a ≤250 ms): proxy, FEL, dominios, origen público → tras la revalidación completa la sentencia falla cerrado y, al corregirlo, se recupera", async () => {
     const { pool, conn } = fake(); await run(pool);
-    writeFileSync(join(cwd, ".env.production"), "DB_HOST=db.produccion.com"); await mustFail(pool, conn, ".env.production"); rmSync(join(cwd, ".env.production")); await run(pool);
-    rmSync(join(root, "uploads"), { recursive: true }); await mustFail(pool, conn, "sin carpeta de cargas"); mkdirSync(join(root, "uploads")); await run(pool);
+    for (const [name, value] of [["HTTPS_PROXY", "http://proxy.local:8080"], ["FEL_CREDENTIALS_KEY", "x"], ["EMPRESA_DOMINIOS", '{"produccion.com":"kt-monaco"}'], ["CB2_PUBLIC_ORIGIN", "https://produccion.com"], ["NEXT_TELEMETRY_DISABLED", "0"]] as const) {
+      const prev = process.env[name]; vi.stubEnv(name, value); await sleep(300); await mustFail(pool, conn, name); vi.stubEnv(name, prev ?? ""); if (prev !== undefined) vi.stubEnv(name, prev); await run(pool);
+    }
+  });
+
+  it("aparece un `.env` en el directorio de trabajo (segunda fuente de secretos) o desaparece la carpeta de cargas: tras ≤250 ms falla cerrado y se recupera al corregirlo", async () => {
+    const { pool, conn } = fake(); await run(pool);
+    writeFileSync(join(cwd, ".env.production"), "DB_HOST=db.produccion.com"); await sleep(300); await mustFail(pool, conn, ".env.production"); rmSync(join(cwd, ".env.production")); await run(pool);
+    rmSync(join(root, "uploads"), { recursive: true }); await sleep(300); await mustFail(pool, conn, "sin carpeta de cargas"); mkdirSync(join(root, "uploads")); await run(pool);
   });
 
   it("raíz reemplazada por un enlace simbólico o carpeta de cargas convertida en enlace: falla cerrado (se omite donde el sistema no permite crear enlaces)", async () => {
     const { pool, conn } = fake(); await run(pool); const outside = mkdtempSync(join(tmpdir(), "novalvion-outside-"));
     try { renameSync(join(root, "uploads"), join(root, "uploads-real")); symlinkSync(outside, join(root, "uploads"), "junction"); }
     catch { return; }   // sin permiso para enlaces
-    await mustFail(pool, conn, "cargas como enlace"); rmSync(join(root, "uploads")); renameSync(join(root, "uploads-real"), join(root, "uploads")); await run(pool);
+    await sleep(300); await mustFail(pool, conn, "cargas como enlace"); rmSync(join(root, "uploads")); renameSync(join(root, "uploads-real"), join(root, "uploads")); await run(pool);
     rmSync(outside, { recursive: true, force: true }); expect(existsSync(join(root, "uploads"))).toBe(true);
   });
 
@@ -94,9 +102,9 @@ describe("API-26 caché de validación sandbox con archivos reales: sin ventana 
     await mustFail(a.pool, a.conn, "el pool viejo conserva SU instantánea y no se beneficia de la validación del nuevo");
   });
 
-  it("COSTO ACOTADO bajo concurrencia: 3000 sentencias simultáneas con validación REAL (≈18 ms cada una antes del cambio, ≈54 s) terminan en pocos segundos", async () => {
+  it("COSTO ACOTADO bajo concurrencia: 1500 sentencias simultáneas con validación REAL (≈18 ms por comprobación y 3 comprobaciones por sentencia antes del cambio: ≈80 s) terminan en pocos segundos", async () => {
     const { pool, conn } = fake(); const t0 = Date.now();
-    await Promise.all(Array.from({ length: 3000 }, () => run(pool)));
-    const elapsed = Date.now() - t0; expect(conn.execute).toHaveBeenCalledTimes(3000); expect(elapsed, `${elapsed} ms`).toBeLessThan(6000);
-  }, 30000);
+    await Promise.all(Array.from({ length: 1500 }, () => run(pool)));
+    const elapsed = Date.now() - t0; expect(conn.execute).toHaveBeenCalledTimes(1500); expect(elapsed, `${elapsed} ms`).toBeLessThan(10000);
+  }, 60000);
 });

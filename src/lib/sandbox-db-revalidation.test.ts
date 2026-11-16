@@ -33,8 +33,14 @@ describe("API-26 revalidación acotada de la configuración sandbox", () => {
   });
   it("cualquier cambio de las variables vigiladas obliga a validar DE INMEDIATO (sin esperar al intervalo)", async () => {
     const { pool } = fake(); await pool.execute("UPDATE synthetic SET value = 1"); expect(validate).toHaveBeenCalledTimes(1);
-    process.env.UPLOAD_DIR = "/otro"; validate.mockImplementation(() => { throw new Error("Configuración sandbox inválida"); });
-    await expect(pool.execute("UPDATE synthetic SET value = 1")).rejects.toThrow(/inválida/); expect(validate).toHaveBeenCalledTimes(2);
+    process.env.AUTH_SECRET = "sandbox:qa-s02:" + "9".repeat(64); validate.mockImplementation(() => { throw new Error("Configuración sandbox inválida"); });
+    await expect(pool.execute("UPDATE synthetic SET value = 1")).rejects.toThrow(/inválida/); expect(validate).toHaveBeenCalledTimes(2);   // destino/secretos: inmediato, sin esperar al intervalo
+  });
+  it("la higiene del entorno (proxy, dominios, cargas…) se revalida como máximo cada 250 ms: dentro del intervalo no se relee, pasado el intervalo se valida completa y, si falla, la sentencia no se ejecuta", async () => {
+    const { pool, conn } = fake(); await pool.execute("UPDATE synthetic SET value = 1");
+    process.env.HTTPS_PROXY = "http://proxy.local:8080"; validate.mockImplementation(() => { throw new Error("Configuración sandbox inválida"); });
+    vi.advanceTimersByTime(100); await pool.execute("UPDATE synthetic SET value = 1"); expect(validate).toHaveBeenCalledTimes(1);   // aún dentro del intervalo
+    vi.advanceTimersByTime(200); await expect(pool.execute("UPDATE synthetic SET value = 1")).rejects.toThrow(/inválida/); expect(validate).toHaveBeenCalledTimes(2); expect(conn.execute).toHaveBeenCalledTimes(2);
   });
   it("cambiar la base o la cuenta tras crear el pool se rechaza SIEMPRE (instantánea del pool), también dentro del intervalo y sin volver a leer archivos", async () => {
     const { pool, conn } = fake(); await pool.execute("UPDATE synthetic SET value = 1");
