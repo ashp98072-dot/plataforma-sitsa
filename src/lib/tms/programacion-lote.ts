@@ -370,6 +370,26 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos });
   }
 
+  // --- identidad de la unidad TMS (#624), SOLO LECTURA ---
+  // Antes el conflicto de identidad solo aparecía al CONFIRMAR (la vista previa decía «OK» y después fallaba el lote entero). Se ejecuta el MISMO resolvedor real, solo para unidades que YA tienen fila en
+  // tms_unidades (el resolvedor nunca llega a su INSERT), a través de un lector que RECHAZA cualquier sentencia que no sea SELECT (sin transacción, sin escrituras posibles, sin AUTO_INCREMENT consumido).
+  // Un rechazo (ErrorCB2) marca esa fila con error; cualquier otro fallo no bloquea la vista previa (la confirmación lo revalida). No se relaja nada: es el mismo resolvedor que crea los viajes.
+  const porIdentidad = internas.filter((f) => !f.errores.length && f.borrador.tipoViaje === "Propio" && f.resuelto?.unidad && unidadIdPorPlaca.has(norm(f.resuelto.unidad.placa)));
+  if (porIdentidad.length) {
+    try {
+      const pool = getPool() as unknown as { query: (sql: string, args?: unknown[]) => Promise<unknown>; execute: (sql: string, args?: unknown[]) => Promise<unknown> };
+      const soloSelect = (sql: string) => { if (!/^\s*SELECT\b/i.test(sql)) throw new Error("SOLO_LECTURA"); };
+      const lector = { query: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.query(sql, args); }, execute: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.execute(sql, args); } } as unknown as Parameters<typeof resolverUnidadTmsTx>[0];
+      const vistas = new Map<string, string | null>();   // placa+vehículo → motivo (una sola resolución por unidad)
+      for (const f of porIdentidad) {
+        const u = f.resuelto!.unidad!; const clave = `${norm(u.placa)}|${u.flotaVehiculoId ?? ""}`;
+        if (!vistas.has(clave)) { try { await resolverUnidadTmsTx(lector, empresaId, u.placa, u.flotaVehiculoId); vistas.set(clave, null); } catch (e) { vistas.set(clave, e instanceof ErrorCB2 ? e.message : null); } }
+        const motivo = vistas.get(clave);
+        if (motivo) { f.errores.push(`Unidad ${norm(u.placa)}: ${motivo}`); f.resuelto = null; }
+      }
+    } catch { /* sin pool o error técnico: no se bloquea la vista previa; la confirmación revalida */ }
+  }
+
   // --- colisiones DENTRO del lote (A2.2): la misma persona / unidad / TC en dos filas cuyas VENTANAS se solapan ---
   // Misma política que la comparación contra BD: [hora, regreso) semiabierto; sin hora o sin regreso = todo fecha_plan.
   // La persona se identifica por empleado (piloto vs auxiliar de la misma persona física = conflicto).

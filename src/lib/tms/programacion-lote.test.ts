@@ -1276,15 +1276,40 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
 
 describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes con referencias anteriores a la canonicalización)", () => {
   const flotaP1 = { id: 1, empresa_id: EMP, placa: "P-1", activo: 1, estado: "Activo" };
+  const sentenciasPool: string[] = [];
   const conModelo = (unidades: { id: number; placa: string; flota_vehiculo_id: number | null }[]) => {
-    const m = modeloSqlUnidadTms(EMP, [flotaP1, { ...flotaP1, id: 2, placa: "P-2" }]); for (const u of unidades) m.modelo.unidades.push({ ...u, empresa_id: EMP }); unidadReal.modelo = m as never; return m;
+    const m = modeloSqlUnidadTms(EMP, [flotaP1, { ...flotaP1, id: 2, placa: "P-2" }]); for (const u of unidades) m.modelo.unidades.push({ ...u, empresa_id: EMP }); unidadReal.modelo = m as never;
+    e.unidades = m.modelo.unidades.map((u) => ({ id: u.id, placa: u.placa }));   // el motor y el modelo SQL ven las MISMAS unidades TMS
+    sentenciasPool.length = 0;
+    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conn), query: async (sql: string, a: unknown[] = []) => { sentenciasPool.push(String(sql)); return [m.consultar(String(sql), a) ?? []]; }, execute: async (sql: string) => { sentenciasPool.push(String(sql)); throw new Error("el lector no debe ejecutar"); } } as never);
+    return m;
   };
-  it("REGRESIÓN: placa con unidad TMS HISTÓRICA sin vínculo a Flota → el lote no crea nada y el error dice FILA, MOTIVO REAL y estado 409 (antes: 500 «No se pudo crear el lote» sin causa); se revierte todo", async () => {
+  it("VISTA PREVIA: la unidad histórica sin vínculo a Flota se marca con error en SU fila (antes la preview decía «ok» y fallaba todo al confirmar); la otra fila queda ok; no se escribe nada y solo se ejecutan SELECT", async () => {
+    const m = conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
+    const r = await validarLote(EMP, DESTINO, [borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
+    expect(r.map((x) => x.estado)).toEqual(["ok", "error"]); expect(r[1].errores).toEqual(["Unidad P-1: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos."]);
+    expect(m.modelo.unidades).toEqual([{ id: 601, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: null }]); expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(sentenciasPool.length).toBeGreaterThan(0); expect(sentenciasPool.every((q) => /^\s*SELECT\b/i.test(q))).toBe(true);
+  });
+  it("VISTA PREVIA: sin unidad TMS previa (se crearía al confirmar) no se consulta nada ni se inserta; unidad ya vinculada a la misma de Flota → ok", async () => {
+    conModelo([]); const sinUnidad = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-9" })]); expect(sinUnidad[0].estado).toBe("error");   // P-9 no existe en Flota: la validación de siempre
+    sentenciasPool.length = 0; const nueva = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-2" })]); expect(nueva[0].estado).toBe("ok"); expect(sentenciasPool).toEqual([]);   // P-2 sin fila TMS: el resolvedor no se invoca
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]); expect((await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-1" })]))[0].estado).toBe("ok");
+  });
+  it("CONFIRMAR con la unidad histórica en conflicto: la revalidación bajo candado lo rechaza ANTES de abrir transacción (409, errores por fila), nada se crea", async () => {
     conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
     const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
     expect(r).toMatchObject({ ok: false, status: 409 }); if (r.ok) return;
+    expect(r.erroresPorFila).toEqual([{ fila: 2, errores: ["Unidad P-1: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos."] }]);
+    expect(creadosDestino()).toHaveLength(0); expect(conn.beginTransaction).not.toHaveBeenCalled(); expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("REGRESIÓN (defensa en profundidad): si el conflicto aparece DESPUÉS de la revalidación (otro usuario vinculó/creó la unidad entre medias), el lote no crea nada y el error dice FILA, PLACA y MOTIVO REAL con 409; se revierte todo", async () => {
+    const m = conModelo([]);
+    conn.beginTransaction.mockImplementation(async () => { respaldo = JSON.stringify(e); m.modelo.unidades.push({ id: 601, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: null }); });   // aparece al abrir la transacción del lote
+    const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
+    expect(r).toMatchObject({ ok: false, status: 409 }); if (r.ok) return;
     expect(r.error).toMatch(/^Fila 2 \(unidad P-1\): Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos\. No se creó ningún viaje\.$/);
-    expect(creadosDestino()).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);   // la fila 1 (válida) tampoco quedó
+    expect(creadosDestino()).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);
     expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).not.toHaveBeenCalled();
   });
   it("la validación NO se relaja: el mismo conflicto se rechaza (409), nunca se reescribe la unidad histórica ni se crea una duplicada", async () => {
