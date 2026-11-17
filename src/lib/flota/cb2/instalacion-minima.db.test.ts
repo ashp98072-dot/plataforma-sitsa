@@ -4,7 +4,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import mysql, { type RowDataPacket } from "mysql2/promise";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+vi.setConfig({ testTimeout: 120000 });   // consultas a information_schema + varias bases desechables por prueba: el límite por omisión (5 s) es insuficiente
 
 const pipe = process.env.CB2_587_PIPE ?? "";
 const sql = (f: string) => readFileSync(path.join("sql", f), "utf8").replace(/^﻿/, "");
@@ -13,6 +15,17 @@ const M = { terceros: "migrate-2026-11-cb2-terceros.sql", directos: "migrate-202
 let admin: mysql.Connection;
 const q = async (s: string, a: unknown[] = []) => (await admin.query<RowDataPacket[]>(s, a))[0];
 const DETECTOR = "preflight-2026-11-cb2-nivel-instalacion.sql";
+const VARIANTE = "preflight-2026-11-cb2-nivel-instalacion-esquema.sql";
+const BASE_LAB = "cb2_instalacion_minima";
+/** Ejecuta la variante con esquema explícito (`esquema` null = SET @esquema = NULL) y devuelve el resumen y los hechos. */
+const nivelVariante = async (esquema: string | null) => {
+  const texto = sql(VARIANTE).replace(/SET @esquema = '[^']*';/, esquema === null ? "SET @esquema = NULL;" : `SET @esquema = '${esquema}';`);
+  const r = (await admin.query<RowDataPacket[][]>(texto))[0] as unknown as RowDataPacket[][]; const principal = r.find((x) => Array.isArray(x) && x.some((f) => f.objeto === "nivel_detectado"))!;
+  const dato = (o: string) => String(principal.find((f) => String(f.objeto).startsWith(o))?.observada);
+  return { nivel: dato("nivel_detectado"), siguiente: dato("siguiente_paso"), secuencia: dato("secuencia_por_nivel"), version: dato("version_ck"), diagnostico: dato("diagnostico_esquema"), analizado: dato("esquema_analizado"), hechos: principal.filter((f) => f.tipo === "HECHO") };
+};
+/** Ejecuta `fn` con DATABASE() apuntando a otro esquema (como phpMyAdmin parado en information_schema) y vuelve a la base de laboratorio. */
+const conDatabase = async <T>(otro: string, fn: () => Promise<T>): Promise<T> => { await admin.query(`USE ${otro}`); try { return await fn(); } finally { await admin.query(`USE ${BASE_LAB}`); } };
 const detector = async () => (await admin.query<RowDataPacket[][]>(sql(DETECTOR)))[0] as unknown as RowDataPacket[][];
 const nivel = async () => {
   const [principal] = await detector(); const dato = (o: string) => String(principal.find((r) => String(r.objeto).startsWith(o))?.observada);
@@ -183,5 +196,31 @@ describe.skipIf(!pipe)("CB2 instalación mínima (MariaDB 11.8.9 real)", () => {
   it("DETECTOR robusto, nivel superior a medias (objeto de un nivel posterior presente sin el resto) → INCONSISTENTE; los niveles legítimos 0-4 siguen detectándose con su secuencia C/V exacta", async () => {
     await hasta(1); await admin.query("ALTER TABLE flota_cb2_consumos ADD COLUMN piloto_externo_id INT NULL"); const parcial = await exigirDetener("columna de nivel 2 suelta"); expect(parcial.secuencia).toBe("CPVV");
     for (const [n, seq] of [[0, "VVVV"], [1, "CVVV"], [2, "CCVV"], [3, "CCCV"], [4, "CCCC"]] as const) { await hasta(n); const d = await nivel(); expect([d.nivel, d.secuencia, d.version]).toEqual([String(n), seq, String(n)]); expect(d.hechos.every((h) => (n === 0 ? Number(h.presente) === 0 : true))).toBe(true); }
+  }, 120000);
+
+  // ---- Variante con ESQUEMA EXPLÍCITO (no depende de DATABASE()) ----
+  const resumen = (d: { nivel: string; secuencia: string; version: string; hechos: RowDataPacket[] }) => ({ nivel: d.nivel, secuencia: d.secuencia, version: d.version, hechos: d.hechos.map((h) => [h.nivel, h.objeto, h.presente, h.ok, h.observada, h.esperada]) });
+  it("VARIANTE esquema explícito: idéntica al detector original en los niveles 0-4 (mismo nivel, secuencia C/V/P, versión de CHECK y las MISMAS firmas observadas/esperadas por objeto)", async () => {
+    for (const n of [0, 1, 2, 3, 4]) { await hasta(n); const original = await nivel(); const variante = await nivelVariante(BASE_LAB); expect(variante.nivel).toBe(String(n)); expect(variante.diagnostico).toBe("OK"); expect(variante.analizado).toBe(BASE_LAB); expect(resumen(variante)).toEqual(resumen(original)); }
+  }, 120000);
+  it("VARIANTE con DATABASE() = information_schema (o mysql): el original da un FALSO nivel 0 sobre un esquema de nivel 3; la variante con `@esquema` fijado da el nivel 3 correcto", async () => {
+    await hasta(3);
+    const original = await conDatabase("information_schema", nivel); expect(original.nivel).toBe("0");   // el defecto operativo que se observó en phpMyAdmin: nivel 0 falso
+    for (const otro of ["information_schema", "mysql"]) { const v = await conDatabase(otro, () => nivelVariante(BASE_LAB)); expect([v.nivel, v.secuencia, v.version, v.diagnostico]).toEqual(["3", "CCCV", "3", "OK"]); expect(v.siguiente).toContain("OPCIONAL"); }
+    await hasta(4); expect((await conDatabase("information_schema", () => nivelVariante(BASE_LAB))).nivel).toBe("4");
+    await hasta(0); expect((await conDatabase("information_schema", () => nivelVariante(BASE_LAB))).nivel).toBe("0");   // un nivel 0 REAL también se reconoce (la base CB2 existe y no hay cadena)
+  }, 120000);
+  it("VARIANTE fail-closed: esquema no fijado, vacío, inexistente, de sistema o sin `flota_cb2_consumos` → INCONSISTENTE / DETENER Y AUDITAR con el motivo; nunca un nivel", async () => {
+    await hasta(3); await admin.query("DROP DATABASE IF EXISTS cb2_esquema_vacio; CREATE DATABASE cb2_esquema_vacio"); await admin.query(`USE ${BASE_LAB}`);
+    const casos: Array<[string | null, RegExp]> = [[null, /ESQUEMA_NO_FIJADO/], ["", /ESQUEMA_NO_FIJADO/], ["no_existe_ni_en_sueños", /ESQUEMA_NO_FIJADO/], ["information_schema", /ESQUEMA_NO_FIJADO/], ["mysql", /ESQUEMA_NO_FIJADO/], ["performance_schema", /ESQUEMA_NO_FIJADO/], ["cb2_esquema_vacio", /BASE_CB2_AUSENTE/]];
+    for (const [esq, motivo] of casos) { const v = await conDatabase("information_schema", () => nivelVariante(esq)); expect(v.nivel, String(esq)).toBe("INCONSISTENTE"); expect(v.siguiente, String(esq)).toBe("DETENER Y AUDITAR"); expect(v.diagnostico, String(esq)).toMatch(motivo); }
+    await admin.query("DROP DATABASE cb2_esquema_vacio");
+  }, 60000);
+  it("VARIANTE: las instalaciones parciales o alteradas siguen dando INCONSISTENTE aunque DATABASE() sea information_schema (CHECK eliminado, CHECK señuelo, FK distinta, columna faltante)", async () => {
+    const detenerVariante = async (motivo: string) => { const v = await conDatabase("information_schema", () => nivelVariante(BASE_LAB)); expect(v.nivel, `${motivo}: ${v.secuencia}/${v.version}`).toBe("INCONSISTENTE"); expect(v.siguiente, motivo).toBe("DETENER Y AUDITAR"); };
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo"); await detenerVariante("CHECK eliminado");
+    await hasta(3); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, ADD CONSTRAINT ck_cb2c_unidad_tipo CHECK (COALESCE(JSON_VALUE(identidad_externa,'$.politica'),'')='INDEPENDIENTE_V1' OR 1=1)"); await detenerVariante("CHECK señuelo");
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_piloto_directo"); await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT fk_cb2c_piloto_directo FOREIGN KEY(empresa_id,piloto_externo_id) REFERENCES flota_cb2_externos_pilotos(empresa_id,id) ON DELETE NO ACTION ON UPDATE NO ACTION"); await detenerVariante("FK con otra regla");
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, DROP FOREIGN KEY fk_cb2c_unidad_directa, DROP INDEX ix_cb2c_unidad_directa, DROP COLUMN unidad_externa_id"); await detenerVariante("columna faltante");
   }, 120000);
 });
