@@ -1,5 +1,6 @@
 # SHA-256 de cada archivo con saltos de línea normalizados a LF (formato: <sha256>  <ruta>); lo verifica src/lib/flota/cb2/instalacion-minima.test.ts
 9f0e7d1fc208dd62b1f50317c6a00c744897d7ef594e1196e342268f2bc76639  sql/preflight-2026-11-cb2-nivel-instalacion.sql
+35fb18d0d46979641f382c22f890d3b3a35a3f81dbbbf26da06f171781a82b7c  sql/preflight-2026-11-cb2-nivel-instalacion-esquema.sql
 07f9d39a3934841335038a3193dba785036477c7fc267705ec311bc2c53d0ac6  sql/postcheck-2026-11-cb2-nivel-instalacion.sql
 5abae1ef5dc99eeffc6071aed1677838832ffba4c73ffaab9f2fc742c06bf83d  sql/migrate-2026-11-cb2-terceros.sql
 fa0657b671b2ac8ae300463f44e2016846465bfc7d024b83fdd92b50c7a164a8  sql/migrate-2026-11-cb2-terceros-directos.sql

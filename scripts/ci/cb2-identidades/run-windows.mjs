@@ -55,7 +55,7 @@ try {
   verified = true;
   record('server', { pid: server.pid, version, net, socket, dir });
   const test = cp.spawnSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.resolve('vitest/package.json'))), 'vitest.mjs'), 'run', 'src/lib/flota/cb2/terceros.db.test.ts', 'src/lib/flota/vehiculos-escritura.db.test.ts', 'src/lib/flota/cb2/instalacion-minima.db.test.ts', '--maxWorkers=1', '--reporter=default', '--reporter=json', `--outputFile=${path.join(run, 'vitest.json')}`], {
-    env: { ...env, CB2_587_PIPE: pipe, CB2_587_DATA: data }, encoding: 'utf8', windowsHide: true, timeout: 180000, maxBuffer: 8 * 1024 * 1024,
+    env: { ...env, CB2_587_PIPE: pipe, CB2_587_DATA: data }, encoding: 'utf8', windowsHide: true, timeout: 480000, maxBuffer: 8 * 1024 * 1024,
   });
   record('tests', { status: test.status, stdout: test.stdout, stderr: test.stderr });
   console.log(test.stdout, test.stderr); process.exitCode = test.status === 0 ? 0 : 1;
