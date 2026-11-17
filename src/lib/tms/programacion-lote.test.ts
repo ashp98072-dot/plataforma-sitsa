@@ -8,6 +8,7 @@ vi.mock("@/lib/tms/unidad-canonica", async () => {
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { modeloSqlUnidadTms } from "./unidad-canonica-sql.fixture";
+import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn() }));
@@ -1311,6 +1312,18 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
     expect(r.error).toMatch(/^Fila 2 \(unidad P-1\): Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos\. No se creó ningún viaje\.$/);
     expect(creadosDestino()).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);
     expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("ATRIBUCIÓN: un ErrorCB2 de una fila SIN unidad (la 2.ª) no menciona la placa de la fila anterior (la 1.ª, con unidad); rollback total, 409 y nada creado", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+    const base = vi.mocked(personalDesdeEmpleado).getMockImplementation()!;
+    vi.mocked(personalDesdeEmpleado).mockImplementation((async (emp: number, empleadoId: number, ...resto: unknown[]) => {
+      if (empleadoId === 3) throw new ErrorCB2("Personal con identidad ambigua; requiere revisión.", 409);   // ErrorCB2 de la fila 2, que no tiene unidad
+      return (base as (...a: unknown[]) => unknown)(emp, empleadoId, ...resto);
+    }) as never);
+    const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 }), borrador({ fila: 2, unidadPlaca: null, origenPlanId: 901, pilotoEmpleadoId: 3 })]);
+    expect(r).toMatchObject({ ok: false, status: 409 }); if (r.ok) return;
+    expect(r.error).toBe("Fila 2: Personal con identidad ambigua; requiere revisión. No se creó ningún viaje."); expect(r.error).not.toContain("P-1"); expect(r.error).not.toContain("unidad");
+    expect(creadosDestino()).toHaveLength(0); expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).not.toHaveBeenCalled();
   });
   it("la validación NO se relaja: el mismo conflicto se rechaza (409), nunca se reescribe la unidad histórica ni se crea una duplicada", async () => {
     const m = conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);

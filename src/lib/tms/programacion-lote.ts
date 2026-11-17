@@ -429,7 +429,11 @@ const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
 });
 
-/** SOLO LECTURA: valida el lote para la fecha destino (preview / revalidación tras editar). */
+/**
+ * SOLO LECTURA: valida el lote para la fecha destino (preview / revalidación tras editar).
+ * La vista previa es ORIENTATIVA: describe el estado en el momento de consultar y puede quedar desactualizada si otro usuario cambia unidades, personal o viajes después (disponibilidad, identidad de la
+ * unidad TMS). La AUTORIDAD FINAL es `confirmarLote`: revalida todo bajo el candado por empresa y dentro de su transacción (todo o nada); si algo cambió, rechaza con la fila y el motivo reales.
+ */
 export async function validarLote(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<ResultadoFilaLote[]> {
   if (!FECHA_RE.test(fechaDestino)) throw new Error("Fecha destino inválida.");
   return (await resolverYValidar(empresaId, fechaDestino, borradores)).map(aResultado);
@@ -501,6 +505,7 @@ export async function confirmarLote(
       for (const f of filas) {
         const b = f.borrador;
         filaActual = b.fila;
+        unidadActual = null;   // cada fila empieza sin unidad: un ErrorCB2 posterior jamás hereda la placa de la fila anterior
         const r = f.resuelto as Resuelto;
         const esTerc = b.tipoViaje === "Tercerizado";
         const x = b.externo;
