@@ -370,6 +370,26 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos });
   }
 
+  // --- identidad de la unidad TMS (#624), SOLO LECTURA ---
+  // Antes el conflicto de identidad solo aparecía al CONFIRMAR (la vista previa decía «OK» y después fallaba el lote entero). Se ejecuta el MISMO resolvedor real, solo para unidades que YA tienen fila en
+  // tms_unidades (el resolvedor nunca llega a su INSERT), a través de un lector que RECHAZA cualquier sentencia que no sea SELECT (sin transacción, sin escrituras posibles, sin AUTO_INCREMENT consumido).
+  // Un rechazo (ErrorCB2) marca esa fila con error; cualquier otro fallo no bloquea la vista previa (la confirmación lo revalida). No se relaja nada: es el mismo resolvedor que crea los viajes.
+  const porIdentidad = internas.filter((f) => !f.errores.length && f.borrador.tipoViaje === "Propio" && f.resuelto?.unidad && unidadIdPorPlaca.has(norm(f.resuelto.unidad.placa)));
+  if (porIdentidad.length) {
+    try {
+      const pool = getPool() as unknown as { query: (sql: string, args?: unknown[]) => Promise<unknown>; execute: (sql: string, args?: unknown[]) => Promise<unknown> };
+      const soloSelect = (sql: string) => { if (!/^\s*SELECT\b/i.test(sql)) throw new Error("SOLO_LECTURA"); };
+      const lector = { query: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.query(sql, args); }, execute: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.execute(sql, args); } } as unknown as Parameters<typeof resolverUnidadTmsTx>[0];
+      const vistas = new Map<string, string | null>();   // placa+vehículo → motivo (una sola resolución por unidad)
+      for (const f of porIdentidad) {
+        const u = f.resuelto!.unidad!; const clave = `${norm(u.placa)}|${u.flotaVehiculoId ?? ""}`;
+        if (!vistas.has(clave)) { try { await resolverUnidadTmsTx(lector, empresaId, u.placa, u.flotaVehiculoId); vistas.set(clave, null); } catch (e) { vistas.set(clave, e instanceof ErrorCB2 ? e.message : null); } }
+        const motivo = vistas.get(clave);
+        if (motivo) { f.errores.push(`Unidad ${norm(u.placa)}: ${motivo}`); f.resuelto = null; }
+      }
+    } catch { /* sin pool o error técnico: no se bloquea la vista previa; la confirmación revalida */ }
+  }
+
   // --- colisiones DENTRO del lote (A2.2): la misma persona / unidad / TC en dos filas cuyas VENTANAS se solapan ---
   // Misma política que la comparación contra BD: [hora, regreso) semiabierto; sin hora o sin regreso = todo fecha_plan.
   // La persona se identifica por empleado (piloto vs auxiliar de la misma persona física = conflicto).
@@ -409,7 +429,11 @@ const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
 });
 
-/** SOLO LECTURA: valida el lote para la fecha destino (preview / revalidación tras editar). */
+/**
+ * SOLO LECTURA: valida el lote para la fecha destino (preview / revalidación tras editar).
+ * La vista previa es ORIENTATIVA: describe el estado en el momento de consultar y puede quedar desactualizada si otro usuario cambia unidades, personal o viajes después (disponibilidad, identidad de la
+ * unidad TMS). La AUTORIDAD FINAL es `confirmarLote`: revalida todo bajo el candado por empresa y dentro de su transacción (todo o nada); si algo cambió, rechaza con la fila y el motivo reales.
+ */
 export async function validarLote(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<ResultadoFilaLote[]> {
   if (!FECHA_RE.test(fechaDestino)) throw new Error("Fecha destino inválida.");
   return (await resolverYValidar(empresaId, fechaDestino, borradores)).map(aResultado);
@@ -474,12 +498,14 @@ export async function confirmarLote(
     const conn = await getPool().getConnection();
     const planIds: number[] = [];
     const codigos: string[] = [];
+    let unidadActual: string | null = null;   // placa de la unidad que se estaba resolviendo
     let filaActual: number | null = null;   // fila en proceso: permite decir QUÉ fila rechazó el resolvedor de identidad
     try {
       await conn.beginTransaction();
       for (const f of filas) {
         const b = f.borrador;
         filaActual = b.fila;
+        unidadActual = null;   // cada fila empieza sin unidad: un ErrorCB2 posterior jamás hereda la placa de la fila anterior
         const r = f.resuelto as Resuelto;
         const esTerc = b.tipoViaje === "Tercerizado";
         const x = b.externo;
@@ -490,6 +516,7 @@ export async function confirmarLote(
         const auxIds: number[] = [];
         if (!esTerc) {
           if (r.unidad) {
+            unidadActual = r.unidad.placa;
             unidadId = await resolverUnidadTmsTx(conn,empresaId,r.unidad.placa,r.unidad.flotaVehiculoId);
           }
           if (b.pilotoEmpleadoId != null) {
@@ -592,7 +619,7 @@ export async function confirmarLote(
       console.error("confirmarLote (rollback total)", e);
       // #624: el resolvedor de unidad TMS RECHAZA a propósito identidades en conflicto (p. ej. una unidad histórica sin vínculo a Flota con la misma placa) con un ErrorCB2 y su estado HTTP.
       // Antes se perdía en el mensaje genérico («No se pudo crear el lote»). Se informa fila, motivo y estado reales; la transacción ya se revirtió y NO se relaja ninguna validación.
-      if (e instanceof ErrorCB2 && [400, 403, 409, 503].includes(e.status)) return { ok: false, status: e.status as 400 | 403 | 409 | 503, error: `${filaActual != null ? `Fila ${filaActual}: ` : ""}${e.message} No se creó ningún viaje.` };
+      if (e instanceof ErrorCB2 && [400, 403, 409, 503].includes(e.status)) return { ok: false, status: e.status as 400 | 403 | 409 | 503, error: `${filaActual != null ? `Fila ${filaActual}${unidadActual ? ` (unidad ${unidadActual})` : ""}: ` : ""}${e.message} No se creó ningún viaje.` };
       return { ok: false, status: 500, error: e instanceof Error && /^Fila \d+:/.test(e.message) ? `${e.message} No se creó ningún viaje.` : "No se pudo crear el lote. No se guardó ningún cambio." };
     } finally {
       conn.release();
