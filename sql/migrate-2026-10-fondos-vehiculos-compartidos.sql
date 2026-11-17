@@ -15,7 +15,8 @@
 -- ninguna empresa.
 --
 -- ORDEN SEGURO (sin ventana sin FK): 1) indice, 2) FK nueva, 3) se elimina la FK compuesta vieja.
--- IDEMPOTENTE (MariaDB 11.8): se puede re-ejecutar. No toca datos ni columnas.
+-- IDEMPOTENTE (MariaDB 11.8.9): se puede re-ejecutar. No toca datos ni columnas. Sintaxis corregida: en MariaDB el `IF NOT EXISTS` de una FK va DESPUÉS de `FOREIGN KEY`
+-- (`ADD CONSTRAINT IF NOT EXISTS … FOREIGN KEY` es un error de sintaxis en 11.8.9; solo vale para CHECK). Verificado con MariaDB 11.8.9 real (instalacion-minima.db.test.ts).
 -- Se conservan idx_gastos_vehiculo / idx_fondolin_vehiculo (empresa_id, vehiculo_id): los usan las consultas por empresa.
 -- =====================================================================
 
@@ -24,8 +25,8 @@ ALTER TABLE IF EXISTS tms_solicitud_fondo_lineas
   ADD INDEX IF NOT EXISTS idx_fondolin_vehiculo_id (vehiculo_id);
 
 ALTER TABLE IF EXISTS tms_solicitud_fondo_lineas
-  ADD CONSTRAINT IF NOT EXISTS fk_fondolin_vehiculo
-  FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
+  ADD CONSTRAINT fk_fondolin_vehiculo
+  FOREIGN KEY IF NOT EXISTS (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
 
 ALTER TABLE IF EXISTS tms_solicitud_fondo_lineas
   DROP FOREIGN KEY IF EXISTS fk_fondolin_vehiculo_ambito;
@@ -35,8 +36,8 @@ ALTER TABLE IF EXISTS tms_gastos_operativos
   ADD INDEX IF NOT EXISTS idx_gastos_vehiculo_id (vehiculo_id);
 
 ALTER TABLE IF EXISTS tms_gastos_operativos
-  ADD CONSTRAINT IF NOT EXISTS fk_gasto_vehiculo
-  FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
+  ADD CONSTRAINT fk_gasto_vehiculo
+  FOREIGN KEY IF NOT EXISTS (vehiculo_id) REFERENCES flota_vehiculos (id) ON DELETE RESTRICT;
 
 ALTER TABLE IF EXISTS tms_gastos_operativos
   DROP FOREIGN KEY IF EXISTS fk_gasto_vehiculo_ambito;

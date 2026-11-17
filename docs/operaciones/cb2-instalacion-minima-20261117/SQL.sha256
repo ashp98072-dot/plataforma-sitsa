@@ -1,0 +1,10 @@
+# SHA-256 de cada archivo con saltos de línea normalizados a LF (formato: <sha256>  <ruta>); lo verifica src/lib/flota/cb2/instalacion-minima.test.ts
+9f0e7d1fc208dd62b1f50317c6a00c744897d7ef594e1196e342268f2bc76639  sql/preflight-2026-11-cb2-nivel-instalacion.sql
+07f9d39a3934841335038a3193dba785036477c7fc267705ec311bc2c53d0ac6  sql/postcheck-2026-11-cb2-nivel-instalacion.sql
+5abae1ef5dc99eeffc6071aed1677838832ffba4c73ffaab9f2fc742c06bf83d  sql/migrate-2026-11-cb2-terceros.sql
+fa0657b671b2ac8ae300463f44e2016846465bfc7d024b83fdd92b50c7a164a8  sql/migrate-2026-11-cb2-terceros-directos.sql
+b33f3017250a6b93d1d643453bd439ac81fab6cff45bf6122585a1aaad967e07  sql/migrate-2026-11-cb2-identidades-independientes.sql
+da533d4ca2812550edd3cae832d7983518ff868d00aecba16373e908daac72c5  sql/migrate-2026-11-cb2-piloto-reportado.sql
+4c4b3a018601b4c14b0114c45857bbe745203b6af63e1fb1f06b5777d1a1293c  sql/migrate-2026-11-cb2-pilotos-reportados.sql
+a4321499dbcf432d75261db6e727c051b42a87c121c3b82ad95f4947a87adc9f  sql/migrate-2026-11-cb2-fondos-vinculos.sql
+d68d0e8d01c0951de74ab0ce63e4de8d38cc8d91ed35a1434050fe6a33fc6afa  sql/migrate-2026-10-fondos-vehiculos-compartidos.sql
