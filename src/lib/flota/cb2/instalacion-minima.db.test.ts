@@ -1,7 +1,7 @@
 // CB2 — instalación mínima de la cadena de identidades externas, sobre MariaDB 11.8.9 REAL y desechable (pipe sin red; lo lanza `scripts/ci/cb2-identidades/run-windows.mjs`). Prueba, con las migraciones REALES del repositorio:
 // el detector de nivel (`sql/preflight-2026-11-cb2-nivel-instalacion.sql`), el ORDEN obligatorio, que ningún paso es idempotente (repetirlo falla sin cambiar nada), qué permite cada nivel, y la sintaxis de
 // `sql/migrate-2026-10-fondos-vehiculos-compartidos.sql`. Los stubs de tablas TMS solo reproducen las columnas/índices/FK que las migraciones tocan.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import mysql, { type RowDataPacket } from "mysql2/promise";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -12,9 +12,19 @@ const M = { terceros: "migrate-2026-11-cb2-terceros.sql", directos: "migrate-202
   shell: "migrate-2026-11-cb2-pilotos-reportados.sql", vinculos: "migrate-2026-11-cb2-fondos-vinculos.sql", compartidos: "migrate-2026-10-fondos-vehiculos-compartidos.sql" } as const;
 let admin: mysql.Connection;
 const q = async (s: string, a: unknown[] = []) => (await admin.query<RowDataPacket[]>(s, a))[0];
-const nivel = async () => { const [r] = (await admin.query<RowDataPacket[][]>(sql("preflight-2026-11-cb2-nivel-instalacion.sql")))[0] as unknown as RowDataPacket[][]; return { nivel: String(r[0].nivel_detectado), siguiente: String(r[0].siguiente_paso), hechos: r[0] }; };
+const DETECTOR = "preflight-2026-11-cb2-nivel-instalacion.sql";
+const detector = async () => (await admin.query<RowDataPacket[][]>(sql(DETECTOR)))[0] as unknown as RowDataPacket[][];
+const nivel = async () => {
+  const [principal] = await detector(); const dato = (o: string) => String(principal.find((r) => String(r.objeto).startsWith(o))?.observada);
+  return { nivel: dato("nivel_detectado"), siguiente: dato("siguiente_paso"), secuencia: dato("secuencia_por_nivel"), version: dato("version_ck"), hechos: principal.filter((r) => r.tipo === "HECHO") };
+};
+/** Firmas OBSERVADAS (solo la CTE `obs` del detector, entre sus marcadores BEGIN-CTE/END-CTE). */
+const observar = async () => {
+  const t = sql(DETECTOR); const cte = t.slice(t.indexOf("-- BEGIN-CTE") + "-- BEGIN-CTE".length, t.indexOf("-- END-CTE"));
+  return (await q(`${cte} SELECT nivel, objeto, presente, firma FROM obs ORDER BY nivel, objeto`)) as RowDataPacket[];
+};
 const intenta = async (f: string) => { try { await admin.query(sql(f)); return { ok: true as const }; } catch (e) { const x = e as { errno?: number; code?: string }; return { ok: false as const, errno: x.errno, code: x.code }; } };
-const postcheckVacio = async () => { const r = (await admin.query<RowDataPacket[][]>(sql("postcheck-2026-11-cb2-nivel-instalacion.sql")))[0] as unknown as RowDataPacket[][]; return { faltantes: r[0].length, motor: r[1].length, checks: r[2].length }; };
+const postcheckVacio = async (n: number) => { const r = (await admin.query<RowDataPacket[][]>(sql("postcheck-2026-11-cb2-nivel-instalacion.sql").replace(/SET @nivel_esperado = \d;/, `SET @nivel_esperado = ${n};`)))[0] as unknown as RowDataPacket[][]; return { faltantes: r[1].length, superior: r[2].length, motor: r[3].length }; };
 const checkClause = async (name: string) => String((await q("SELECT CHECK_CLAUSE c FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND CONSTRAINT_NAME=?", [name]))[0]?.c ?? "");
 const snapshotEsquema = async () => JSON.stringify([await q("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' ORDER BY ORDINAL_POSITION"),
   await q("SELECT CONSTRAINT_NAME,CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' ORDER BY CONSTRAINT_NAME"),
@@ -60,17 +70,17 @@ describe.skipIf(!pipe)("CB2 instalación mínima (MariaDB 11.8.9 real)", () => {
     expect(await snapshotEsquema()).toBe(antes); expect((await nivel()).nivel).toBe("0");
   });
   it("N1 terceros: nivel 1; repetirlo falla sin cambiar nada; directos requiere el nivel 1 y los demás siguen bloqueados", async () => {
-    expect(await intenta(M.terceros)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("1"); expect(await postcheckVacio()).toMatchObject({ faltantes: 0, motor: 0 }); expect(d.siguiente).toBe(M.directos);
+    expect(await intenta(M.terceros)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("1"); expect(await postcheckVacio(1)).toMatchObject({ faltantes: 0, superior: 0, motor: 0 }); expect(d.siguiente).toBe(M.directos);
     const antes = await snapshotEsquema(); const otra = await intenta(M.terceros); expect(otra.ok).toBe(false); expect(await snapshotEsquema()).toBe(antes);
     for (const f of [M.independientes, M.reportado]) expect((await intenta(f)).ok, f).toBe(false); expect(await snapshotEsquema()).toBe(antes);
   });
   it("N2 directos: nivel 2; repetirlo falla; con v2 todavía NO existe la política independiente", async () => {
-    expect(await intenta(M.directos)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("2"); expect(await postcheckVacio()).toMatchObject({ faltantes: 0, motor: 0 }); expect(d.siguiente).toBe(M.independientes);
+    expect(await intenta(M.directos)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("2"); expect(await postcheckVacio(2)).toMatchObject({ faltantes: 0, superior: 0, motor: 0 }); expect(d.siguiente).toBe(M.independientes);
     const antes = await snapshotEsquema(); expect((await intenta(M.directos)).ok).toBe(false); expect((await intenta(M.reportado)).ok).toBe(false); expect(await snapshotEsquema()).toBe(antes);   // la guarda de orden de `piloto-reportado` también rechaza el nivel 2
     expect(await checkClause("ck_cb2c_unidad_tipo")).not.toContain("INDEPENDIENTE_V1");
   });
   it("N3 independientes: nivel 3 (suficiente para registro directo, asignación independiente y consumo); un nombre REPORTADO sobre unidad externa AÚN se rechaza por CHECK; repetirlo falla", async () => {
-    expect(await intenta(M.independientes)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("3"); expect(await postcheckVacio()).toMatchObject({ faltantes: 0, motor: 0 }); expect(d.siguiente).toContain("OPCIONAL");
+    expect(await intenta(M.independientes)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("3"); expect(await postcheckVacio(3)).toMatchObject({ faltantes: 0, superior: 0, motor: 0 }); expect(d.siguiente).toContain("OPCIONAL");
     const antes = await snapshotEsquema(); expect((await intenta(M.independientes)).ok).toBe(false); expect(await snapshotEsquema()).toBe(antes);
     await admin.query("INSERT INTO flota_cb2_externos_pilotos(empresa_id,referencia,referencia_hash,nombre) VALUES(1,'p1',REPEAT('1',64),'Piloto Directo')");
     await admin.query("INSERT INTO flota_cb2_externos_unidades(empresa_id,referencia,referencia_hash,placa,tipo,descripcion) VALUES(1,'u1',REPEAT('2',64),'M884LAB','MOTOCICLETA','Unidad directa')");
@@ -80,7 +90,7 @@ describe.skipIf(!pipe)("CB2 instalación mínima (MariaDB 11.8.9 real)", () => {
   });
   it("N4 piloto-reportado (singular, opcional): nivel 4; permite REPORTADO_V1 sobre unidad externa y sigue prohibiendo mezclarlo con empleado/piloto; las filas previas se conservan; repetirlo falla", async () => {
     const filasAntes = (await q("SELECT COUNT(*) n FROM flota_cb2_consumos"))[0].n;
-    expect(await intenta(M.reportado)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("4"); expect(await postcheckVacio()).toMatchObject({ faltantes: 0, motor: 0 }); expect(d.siguiente).toContain("NINGUNO");
+    expect(await intenta(M.reportado)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("4"); expect(await postcheckVacio(4)).toMatchObject({ faltantes: 0, superior: 0, motor: 0 }); expect(d.siguiente).toContain("NINGUNO");
     expect((await q("SELECT COUNT(*) n FROM flota_cb2_consumos"))[0].n).toBe(filasAntes);
     const antes = await snapshotEsquema(); expect((await intenta(M.reportado)).ok).toBe(false); expect(await snapshotEsquema()).toBe(antes);
     const [{ u }] = await q("SELECT id u FROM flota_cb2_externos_unidades LIMIT 1");
@@ -88,7 +98,7 @@ describe.skipIf(!pipe)("CB2 instalación mínima (MariaDB 11.8.9 real)", () => {
     await expect(consumo("REP-CON-EMPLEADO", { vehiculo_id: null, unidad_externa_id: u, empleado_id: 1, identidad_externa: ident({ politica: "REPORTADO_V1", piloto: { tipo: "REPORTADO", id: null }, unidad: { tipo: "EXTERNA", id: u } }) })).rejects.toMatchObject({ errno: 4025 });
   });
   it("INCONSISTENTE: una instalación parcial o manual (p. ej. se quita ck_cb2_piloto_unico con el nivel 4) se detecta y manda DETENER Y AUDITAR", async () => {
-    await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2_piloto_unico"); const d = await nivel(); expect(d.nivel).toBe("INCONSISTENTE"); expect(d.siguiente).toBe("DETENER Y AUDITAR"); expect((await postcheckVacio()).faltantes).toBeGreaterThan(0);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2_piloto_unico"); const d = await nivel(); expect(d.nivel).toBe("INCONSISTENTE"); expect(d.siguiente).toBe("DETENER Y AUDITAR"); expect((await postcheckVacio(4)).faltantes).toBeGreaterThan(0);
     await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT ck_cb2_piloto_unico CHECK (empleado_id IS NULL OR piloto_externo_id IS NULL)"); expect((await nivel()).nivel).toBe("4");
   });
   it("Shell y vínculos con fondos exigen sus prerrequisitos: las tablas de nombres reportados se instalan sobre el nivel ≥1 de consumos; el vínculo con fondos EXIGE `uq_fondolin_c2a_empresa_id` en líneas de fondo", async () => {
@@ -118,4 +128,60 @@ describe.skipIf(!pipe)("CB2 instalación mínima (MariaDB 11.8.9 real)", () => {
     const antes = await snapshotEsquema(); const salto = await intenta(M.reportado); expect(salto.ok).toBe(false); expect(await snapshotEsquema()).toBe(antes); expect((await nivel()).nivel).toBe("2");
     expect(await intenta(M.independientes)).toEqual({ ok: true }); expect(await intenta(M.reportado)).toEqual({ ok: true }); const d = await nivel(); expect(d.nivel).toBe("4"); expect(await checkClause("ck_cb2c_unidad_tipo")).toContain("REPORTADO_V1");
   });
+
+  // ---- Detector robusto (firmas de estructura): instalaciones PARCIALES o ALTERADAS nunca dan un nivel válido ----
+  const cadena = [M.terceros, M.directos, M.independientes, M.reportado];
+  const hasta = async (n: number) => { await construirBase(); for (const f of cadena.slice(0, n)) expect(await intenta(f), f).toEqual({ ok: true }); };
+  const exigirDetener = async (motivo: string) => { const d = await nivel(); expect(d.nivel, `${motivo}: ${d.secuencia}/${d.version}`).toBe("INCONSISTENTE"); expect(d.siguiente, motivo).toBe("DETENER Y AUDITAR"); return d; };
+  const bloqueEsperado = () => { const t = sql(DETECTOR); const b = t.slice(t.indexOf("-- BEGIN-ESPERADO"), t.indexOf("-- END-ESPERADO")); return Object.fromEntries([...b.matchAll(/'([^']+)'\s*(?:objeto)?\s*,\s*'([0-9a-f]{64})'/g)].map((m) => [m[1], m[2]])); };
+  it("FIRMAS: el bloque ESPERADO del detector coincide EXACTAMENTE con lo que dejan las migraciones reales en cada nivel (si el SQL de una migración o la versión del motor cambia, esta prueba falla) y las firmas de un nivel no cambian en los siguientes", async () => {
+    await construirBase(); const generado: Record<string, string> = {}; const porNivel: Array<Map<string, string>> = [];
+    for (let k = 1; k <= 4; k++) {
+      expect(await intenta(cadena[k - 1])).toEqual({ ok: true }); const o = await observar(); porNivel[k] = new Map(o.map((r) => [String(r.objeto), String(r.firma)]));
+      for (const r of o) { if (Number(r.nivel) === k) generado[String(r.objeto)] = String(r.firma); if (Number(r.nivel) === 0) generado[`ck_cb2c_unidad_tipo v${k}`] = String(r.firma); }
+    }
+    for (const [objeto, firma] of Object.entries(generado)) if (!objeto.startsWith("ck_cb2c_unidad_tipo v")) expect(porNivel[4].get(objeto), `estabilidad de ${objeto}`).toBe(firma);
+    const lineas = Object.entries(generado).map(([o, f], i) => (i === 0 ? `  SELECT '${o}' objeto, '${f}' firma` : `  UNION ALL SELECT '${o}', '${f}'`)).join("\n");
+    if (existsSync(path.join(".lab-runtime", "REGENERAR_FIRMAS"))) writeFileSync(path.join(".lab-runtime", "esperado.sql"), lineas + "\n");   // solo para regenerar el bloque tras revisar un cambio de migración
+    expect(bloqueEsperado()).toEqual(generado); expect(Object.keys(generado)).toHaveLength(Object.keys(generado).length);
+  });
+  it("DETECTOR robusto, esquemas parciales/alterados: CHECK ELIMINADO (nivel 2 sin ck_cb2c_unidad_tipo; nivel 3 sin ck_cb2_piloto_unico) → INCONSISTENTE, no un nivel válido", async () => {
+    await hasta(2); expect((await nivel()).nivel).toBe("2"); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo"); await exigirDetener("nivel 2 sin ck_cb2c_unidad_tipo");
+    await hasta(1); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo"); await exigirDetener("nivel 1 sin ck_cb2c_unidad_tipo");
+    await hasta(3); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2_piloto_unico"); await exigirDetener("nivel 3 sin ck_cb2_piloto_unico");
+  }, 60000);
+  it("DETECTOR robusto, CHECK MODIFICADO: una expresión que CONTIENE el texto INDEPENDIENTE_V1/REPORTADO_V1 pero es trivial, otra versión, o con ck_cb2_piloto_unico alterado → INCONSISTENTE (no se acredita por subcadenas)", async () => {
+    await hasta(3);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, ADD CONSTRAINT ck_cb2c_unidad_tipo CHECK (COALESCE(JSON_VALUE(identidad_externa,'$.politica'),'')='INDEPENDIENTE_V1' OR 1=1)"); const señuelo = await exigirDetener("CHECK señuelo con INDEPENDIENTE_V1"); expect(señuelo.version).toBe("9");
+    await hasta(3); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2_piloto_unico, ADD CONSTRAINT ck_cb2_piloto_unico CHECK (1=1)"); await exigirDetener("ck_cb2_piloto_unico trivial");
+    await hasta(4); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2_piloto_reportado, ADD CONSTRAINT ck_cb2_piloto_reportado CHECK (COALESCE(JSON_VALUE(identidad_externa,'$.politica'),'')<>'REPORTADO_V1')"); await exigirDetener("ck_cb2_piloto_reportado alterado");
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, ADD CONSTRAINT ck_cb2c_unidad_tipo CHECK (vehiculo_id IS NOT NULL OR vehiculo_id IS NULL)"); await exigirDetener("CHECK de nivel 2 reemplazado por otro");
+    await hasta(4); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, ADD CONSTRAINT ck_cb2c_unidad_tipo CHECK (vehiculo_id IS NOT NULL AND asociacion_externa_id IS NULL AND identidad_externa IS NULL AND piloto_externo_id IS NULL AND unidad_externa_id IS NULL)"); await exigirDetener("CHECK v4 degradado a una sola rama");
+  }, 90000);
+  it("DETECTOR robusto, FK INCORRECTA: otra regla ON DELETE, otras columnas o otra tabla referenciada → INCONSISTENTE", async () => {
+    await hasta(2);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_piloto_directo"); await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT fk_cb2c_piloto_directo FOREIGN KEY(empresa_id,piloto_externo_id) REFERENCES flota_cb2_externos_pilotos(empresa_id,id) ON DELETE NO ACTION ON UPDATE NO ACTION"); await exigirDetener("FK con otra regla (NO ACTION en lugar de RESTRICT)");
+    await hasta(2);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_unidad_directa"); await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT fk_cb2c_unidad_directa FOREIGN KEY(empresa_id,unidad_externa_id) REFERENCES flota_cb2_externos_pilotos(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT"); await exigirDetener("FK de la unidad que apunta a la TABLA equivocada (pilotos)");
+    await hasta(1);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_externo"); await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT fk_cb2c_externo FOREIGN KEY(empresa_id,asociacion_externa_id) REFERENCES flota_cb2_externos_asociaciones(empresa_id,id) ON DELETE NO ACTION"); await exigirDetener("fk_cb2c_externo con otra regla");
+    await hasta(2);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_piloto_directo"); await exigirDetener("FK de nivel 2 ausente");
+    await hasta(2);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_piloto_directo"); await admin.query("ALTER TABLE flota_cb2_consumos ADD CONSTRAINT fk_cb2c_piloto_directo FOREIGN KEY(empresa_id,piloto_externo_id) REFERENCES flota_cb2_externos_pilotos(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT"); expect((await nivel()).nivel).toBe("2");   // control: la misma FK recreada con la definición correcta SÍ vuelve a nivel 2
+  }, 90000);
+  it("DETECTOR robusto, COLUMNA FALTANTE o con otro tipo: columna de nivel 2 eliminada, columna de nivel 1 con otro tipo, vehiculo_id vuelto NOT NULL, tabla externa con columna de más o índice de menos → INCONSISTENTE", async () => {
+    await hasta(2);
+    await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, DROP FOREIGN KEY fk_cb2c_unidad_directa, DROP INDEX ix_cb2c_unidad_directa, DROP COLUMN unidad_externa_id"); await exigirDetener("columna unidad_externa_id eliminada");
+    await hasta(1); await admin.query("ALTER TABLE flota_cb2_consumos MODIFY identidad_externa TEXT NULL"); await exigirDetener("identidad_externa con otro tipo");
+    await hasta(1); await admin.query("ALTER TABLE flota_cb2_consumos DROP CONSTRAINT ck_cb2c_unidad_tipo, MODIFY vehiculo_id INT NOT NULL"); await exigirDetener("vehiculo_id NOT NULL");
+    await hasta(1); await admin.query("ALTER TABLE flota_cb2_externos_pilotos ADD COLUMN extra INT NULL"); await exigirDetener("tabla externa con columna de más");
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_externos_unidades DROP INDEX uq_cb2eu_ref"); await exigirDetener("tabla externa sin índice único");
+    await hasta(2); await admin.query("ALTER TABLE flota_cb2_consumos DROP FOREIGN KEY fk_cb2c_piloto_directo, DROP INDEX ix_cb2c_piloto_directo"); await exigirDetener("índice y FK de nivel 2 ausentes");
+    await hasta(1); await admin.query("SET SESSION foreign_key_checks=0; DROP TABLE flota_cb2_externos_unidades; SET SESSION foreign_key_checks=1"); await exigirDetener("tabla externa ausente");
+  }, 120000);
+  it("DETECTOR robusto, nivel superior a medias (objeto de un nivel posterior presente sin el resto) → INCONSISTENTE; los niveles legítimos 0-4 siguen detectándose con su secuencia C/V exacta", async () => {
+    await hasta(1); await admin.query("ALTER TABLE flota_cb2_consumos ADD COLUMN piloto_externo_id INT NULL"); const parcial = await exigirDetener("columna de nivel 2 suelta"); expect(parcial.secuencia).toBe("CPVV");
+    for (const [n, seq] of [[0, "VVVV"], [1, "CVVV"], [2, "CCVV"], [3, "CCCV"], [4, "CCCC"]] as const) { await hasta(n); const d = await nivel(); expect([d.nivel, d.secuencia, d.version]).toEqual([String(n), seq, String(n)]); expect(d.hechos.every((h) => (n === 0 ? Number(h.presente) === 0 : true))).toBe(true); }
+  }, 120000);
 });
