@@ -2,14 +2,15 @@
 import { useState } from "react";
 import type { DecisionNombre,RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
 import { input } from "./controles";
+import { decisionesMasivas } from "./nombres-masivos";
 export function RevisionNombresCB2({nombres,decisiones,onChange,disabled,instalado,empleados=[]}:{empleados?:{id:number;nombre:string}[];nombres:RevisionNombre[];decisiones:Record<string,DecisionNombre|undefined>;onChange:(clave:string,d:DecisionNombre)=>void;disabled:boolean;instalado:boolean}) {
  const [elegidos,setElegidos]=useState<Record<string,string>>({});
  return <fieldset disabled={disabled} className="space-y-4 rounded-xl border p-4"><legend>Revisar pilotos por nombre distinto</legend><p>Una decisión se aplica a todas las filas de ese nombre. Las equivalencias se guardan únicamente al confirmar la importación.</p>
  {nombres.length>0 && <div role="group" aria-label="Acciones masivas de nombres" className="flex flex-wrap items-center gap-2">
-  {(()=>{const sinDecidir=nombres.filter(n=>!decisiones[n.clave]),sin=sinDecidir.filter(n=>n.candidatos.length===0 && !n.propuesta && !n.equivalencia),unico=sinDecidir.filter(n=>n.candidatos.length===1 && !n.equivalencia),otros=sinDecidir.length-sin.length-unico.length;
-  return <><button type="button" disabled={!instalado||sin.length===0} onClick={()=>sin.forEach(n=>onChange(n.clave,{tipo:"REPORTADO",confirmado:true}))}>Guardar como piloto reportado los {sin.length} nombres sin coincidencia</button>
-  <button type="button" disabled={!instalado||unico.length===0} onClick={()=>unico.forEach(n=>onChange(n.clave,{tipo:"EMPLEADO",empleadoId:n.candidatos[0].id,confirmado:true}))}>Usar el empleado sugerido en los {unico.length} nombres con un único candidato</button>
-  <span role="status">Pendientes de decidir: {sinDecidir.length}{otros>0?` (${otros} con varios candidatos o equivalencia previa: revísalos uno por uno)`:""}. Puedes cambiar cualquier decisión después.</span></>;})()}</div>}
+  {(()=>{const m=decisionesMasivas(nombres,decisiones);
+  return <><button type="button" disabled={!instalado||m.reportado.length===0} onClick={()=>m.reportado.forEach(n=>onChange(n.clave,{tipo:"REPORTADO",confirmado:true}))}>Guardar como piloto reportado los {m.reportado.length} nombres sin coincidencia</button>
+  <button type="button" disabled={!instalado||m.empleado.length===0} onClick={()=>m.empleado.forEach(n=>onChange(n.clave,{tipo:"EMPLEADO",empleadoId:n.candidatos[0].id,confirmado:true}))}>Usar el empleado cuando coinciden todas las palabras del nombre ({m.empleado.length})</button>
+  <span role="status">Pendientes de decidir: {m.sinDecidir}{m.manuales>0?` (${m.manuales} con coincidencia aproximada, varios candidatos o equivalencia previa: revísalos uno por uno para no asignar a la persona equivocada)`:""}. Puedes cambiar cualquier decisión después.</span></>;})()}</div>}
  {!instalado && <p role="alert">Registro de equivalencias no instalado. La persistencia de estas decisiones requiere la migración revisada.</p>}
  {nombres.map(n=>{const d=decisiones[n.clave],opciones=[...new Map([...n.candidatos,...empleados].map(p=>[p.id,p])).values()];return <section key={n.clave} className="rounded border p-3"><h3>{n.originales.join(" / ")} — {n.filas} filas</h3>
  <p role="status">{d ? d.tipo==="EMPLEADO"?`Empleado #${d.empleadoId}${d.confirmado?" confirmado":" reconocido"}`:d.reportadoId?`Piloto reportado #${d.reportadoId} reconocido`:"Guardar piloto reportado al importar" : "Requiere confirmación"}</p>
