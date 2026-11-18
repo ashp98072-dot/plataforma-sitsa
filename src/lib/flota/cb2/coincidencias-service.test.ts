@@ -43,7 +43,7 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
                 const sql=String(args[0]);
                 if(sql.startsWith("SELECT * FROM flota_cb2_importaciones"))return [[{id:10,revision:1,version_contrato:2,version_parser:2,perfil,archivo_ruta:"privado-original",archivo_sha256:"sha-original"}],[]];
                 if(sql.includes("FROM flota_cb2_filas"))return [origenes,[]];
-                if(sql.includes("FROM empleados"))return [[{id:77,nombre:"Alvaro Antonio León Pinto"}],[]];
+                if(sql.includes("FROM empleados"))return [[{id:77,nombre:"Alvaro Antonio León Pinto",estado:"Activo"}],[]];
                 return originalQuery(...args);
             });
             const antes=JSON.stringify(origenes);
@@ -59,7 +59,7 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
     });
     it.each(["HALEL","SHELL"] as const)("%s revalida tokens y registra método sin reemplazar el piloto original",async perfil=>{
         const original=m.query.getMockImplementation()!;
-        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto"}],[]]:original(...args));
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto",estado:"Activo"}],[]]:original(...args));
         const piloto="  Álvaro, Pinto. ",extra={empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS" as const};
         const {file,entrada,recibo}=await preparar("C-001ABC",true,extra,"DIESEL",piloto,perfil);
         await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-tokens-unicos",recibo.token);
@@ -79,7 +79,7 @@ describe("confirmación real del servicio con BD y almacenamiento simulados", ()
         const {file,entrada,recibo}=await preparar("C-001ABC",false,{empleadoId:77,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"},"DIESEL","Alvaro Pinto");
         const l=(await analizar(file,"HALEL","GTQ"))[1];
         const previo={id:45,empresa_id:7,proveedor_id:3,vehiculo_id:1,empleado_id:42,version_clave:1,version_huella:1,payload_operacion:l.payload,huella_operacion:l.huella,clave_candidata:l.clave,vale_norm:l.fila.vale,factura_id:null};
-        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto"}],[]]:String(args[0]).startsWith("SELECT * FROM flota_cb2_consumos")?[[previo],[]]:original(...args));
+        m.query.mockImplementation(async(...args)=>String(args[0]).includes("FROM empleados")?[[{id:77,nombre:"Alvaro Antonio León Pinto",estado:"Activo"}],[]]:String(args[0]).startsWith("SELECT * FROM flota_cb2_consumos")?[[previo],[]]:original(...args));
         await confirmarArchivo(ctx,file,"sintetico.xlsx",entrada,"piloto-previo-intacto",recibo.token);
         expect(m.insert.mock.calls.filter(([,table])=>table==="flota_cb2_consumos")).toHaveLength(0);expect(m.execute.mock.calls.some(([sql])=>String(sql).startsWith("UPDATE flota_cb2_consumos"))).toBe(false);expect(previo.empleado_id).toBe(42);
         expect(m.diario.mock.calls[0][5].some((e:{resultado:string;consumo_id:number})=>e.resultado==="REUTILIZADA"&&e.consumo_id===45)).toBe(true);

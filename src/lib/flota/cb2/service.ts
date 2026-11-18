@@ -42,7 +42,7 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
     let nombres:RevisionNombre[]=[];
     const avisos = new Map<string, string[]>(), externas = new Map<string, ReturnType<typeof reconocerTercero>["asociacion"]>();
     try {
-        if(entrada.perfil==="SHELL") nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),await esquemaPilotosReportados(c));
+        if(entrada.perfil==="SHELL") nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),await esquemaPilotosReportados(c),lineas.filter(l=>!l.bloqueada).map(l=>l.fila.fechaConsumo));
         const internos = clavesInternas(await valesInternos(c, ctx, false));
         const anteriores = await rows(c, "SELECT clave_candidata,payload_operacion FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? ORDER BY id", [ctx.empresaId, ctx.proveedorId]);
         const c2b = await rows(c, "SELECT f.clave_operacion FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id WHERE h.empresa_id=? AND h.proveedor_id=? AND h.perfil_parser='HALEL'", [ctx.empresaId, ctx.proveedorId]);
@@ -411,6 +411,7 @@ export async function nombresImportacion(empresa:number,importacion:number) {
  const c=await getPool().getConnection();try {
  const [h]=await rows(c,"SELECT id FROM flota_cb2_importaciones WHERE empresa_id=? AND id=?",[empresa,importacion]);if(!h)throw new ErrorCB2("Importación no disponible.",404);
  const origenes=await rows(c,"SELECT datos_origen FROM flota_cb2_filas WHERE empresa_id=? AND importacion_id=? AND tipo='ORIGEN' ORDER BY id",[empresa,importacion]);
- return revisarNombresTx(c,empresa,origenes.map(o=>{try{return String(JSON.parse(String(o.datos_origen)).textos?.piloto??"");}catch{throw new ErrorCB2("Evidencia original ilegible.");}}),await esquemaPilotosReportados(c));
+ const datos=origenes.map(o=>{try{return JSON.parse(String(o.datos_origen));}catch{throw new ErrorCB2("Evidencia original ilegible.");}});
+ return revisarNombresTx(c,empresa,datos.map(d=>String(d.textos?.piloto??"")),await esquemaPilotosReportados(c),datos.map(d=>typeof d.fechaConsumo==="string"?d.fechaConsumo:null));
  }finally{c.release();}
 }

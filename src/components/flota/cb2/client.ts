@@ -48,7 +48,7 @@ export type CatalogosCB2 = {
     tercerosDirectos?: boolean;
     tercerosHabilitados?: boolean;
     terceros?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna[];
-    empleados?: { id: number; nombre: string }[];
+    empleados?: { id: number; nombre: string; estado?: string; fechaBaja?: string | null; fechaAlta?: string | null }[];
     pilotos?: { id: number; nombre: string }[];
     limitacionPilotos?: string;
     proveedores: {

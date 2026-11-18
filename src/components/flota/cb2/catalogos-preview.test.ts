@@ -7,19 +7,19 @@ import { GET } from "@/app/api/empresas/[slug]/flota/combustible/catalogos/route
 beforeEach(() => { m.guard.mockResolvedValue({ empresa: { id: 7 } }); m.query.mockResolvedValue([]); m.externos.mockResolvedValue({ pilotos: [], unidades: [], asociaciones: [] }); m.habilitados.mockReturnValue(false); });
 describe("catálogo usado para sugerir vehículos en preview", () => {
     it("solo lista pilotos activos de la empresa autenticada y declara la limitación de CB2", async () => {
-        m.query.mockImplementation(async (sql: string) => sql.includes("FROM empleados") ? [{ id: 1, nombre: "José Chay" }] : []);
+        m.query.mockImplementation(async (sql: string) => sql.includes("FROM empleados") ? [{ id: 1, nombre: "José Chay", estado: "Activo", fecha_egreso: null, fecha_alta: null }, { id: 2, nombre: "Andrés Taracena", estado: "Baja", fecha_egreso: new Date("2026-06-30T00:00:00Z"), fecha_alta: "2024-01-10" }] : []);
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });
         const data = await r.json();
-        expect(data.pilotos).toEqual([{ id: 1, nombre: "José Chay" }]); expect(data.empleados).toEqual(data.pilotos); expect(data.limitacionPilotos).toContain("empleados activos");
+        expect(data.pilotos).toEqual([{ id: 1, nombre: "José Chay", estado: "Activo", fechaBaja: null, fechaAlta: null }, { id: 2, nombre: "Andrés Taracena", estado: "Baja", fechaBaja: "2026-06-30", fechaAlta: "2024-01-10" }]); expect(data.empleados).toEqual(data.pilotos); expect(data.limitacionPilotos).toContain("empleados activos y de baja");
         const [sql, args] = m.query.mock.calls.find(([sql]) => sql.includes("FROM empleados"))!;
-        expect(args).toEqual([7]); expect(sql).toContain("estado = 'Activo'");
+        expect(args).toEqual([7]); expect(sql).toContain("estado IN ('Activo','Baja')");
     });
     it("catálogo ausente declara indisponibilidad sin usar personal de otras empresas", async () => {
         m.query.mockImplementation(async (sql: string) => { if (sql.includes("FROM empleados")) throw new Error("Tabla no disponible"); return []; });
         const r = await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); const data = await r.json();
         expect(data.empleados).toEqual([]); expect(data.empleadosDisponibles).toBe(false); expect(data.limitacionPilotos).toContain("no disponible");
-        expect(m.query).toHaveBeenCalledTimes(5);
+        expect(m.query).toHaveBeenCalledTimes(5);   // un error que no es de columna inexistente NO se reintenta
     });
     it("deriva empresa del guard, no de parámetros controlados por el navegador", async () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });

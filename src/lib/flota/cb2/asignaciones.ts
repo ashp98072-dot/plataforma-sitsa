@@ -23,7 +23,7 @@ export async function corregirAsignacion(ctx: Contexto, op: z.infer<typeof corre
         if (!externa) await vehiculos(c, ctx, [op.vehiculoId]);
         if (consumo.vehiculo_id == null && !tercerosHabilitados()) throw new ErrorCB2("Edición externa deshabilitada hasta aprobar D2.", 403);
         if (op.empleadoId !== null) {
-            const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' FOR UPDATE", [ctx.empresaId, op.empleadoId]);
+            const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') FOR UPDATE", [ctx.empresaId, op.empleadoId]);
             if (!empleado) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
         }
         const nuevo = { vehiculoId: op.vehiculoId, empleadoId: op.empleadoId, productoClasificado: op.productoClasificado, revision: op.revision + 1, ...(externa ? { identidadExterna: externa } : {}) };
