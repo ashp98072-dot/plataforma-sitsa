@@ -215,6 +215,13 @@ export function AppShell({
   const groups = useMemo(() => {
     const g: NavGroup[] = [];
 
+    if (isAdmin || permisos.some(p => p.modulo === "canecas" && p.puedeVer)) {
+      g.push({ id: "canecas", label: "Gestión de Canecas", icon: <IconConta />, links: [
+        { href: `${base}/canecas`, label: "Panel general", key: "canecas-panel" },
+        ...[ ["productos", "Aceites"], ["ubicaciones", "Ubicaciones"], ["compras", "Compras"], ["recepciones", "Recepciones"], ["inventario", "Inventario"], ["movimientos", "Movimientos"] ].map(([path, label]) => ({ href: `${base}/canecas/${path}`, label, key: `canecas-${path}` })),
+      ] });
+    }
+
     const rrhhLinks: NavLink[] = [];
     if (rol === "RRHH" || isAdmin || modulos.includes("rrhh")) {
       if (isAdmin || tienePermisoBase(permisos, "rrhh")) {

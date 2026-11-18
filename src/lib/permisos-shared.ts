@@ -234,6 +234,11 @@ const LABEL_PERMISO_CXC: Record<PermisoCxc, string> = {
 };
 
 export const PLATAFORMA_PERMISIBLES = [
+  "canecas",
+  "canecas_catalogo",
+  "canecas_compras",
+  "canecas_recepciones",
+  "canecas_confirmar",
   "cotizaciones",
   "proveedor_portales",
   "compras_proveedores",
@@ -483,6 +488,7 @@ export function esPlataformaPermisible(m: string): m is PlataformaPermisible {
  * null (no aplica este filtro — se rigen por otro mecanismo).
  */
 export function moduloEmpresaDelPermiso(m: string): Modulo | null {
+  if (m === "canecas" || m.startsWith("canecas_")) return null;
   if (m === "cotizaciones" || m === "proveedor_portales" || m === "compras_proveedores" || m === "compras_requerimientos" || m === "compras_autorizar" || m === "cotizaciones_costeo" || m === "cotizaciones_ajustes") return "tms";
   // RRHH-REQUERIMIENTOS-PROVEEDORES-1: dependen de que la empresa tenga el módulo "rrhh" habilitado (no "tms").
   if (m === "rrhh_requerimientos" || m === "rrhh_requerimientos_autorizar" || m === "rrhh_proveedores") return "rrhh";
@@ -788,7 +794,7 @@ export function modulosOtrasAreasDelRol(rol: RolGlobal): string[] {
 /** Catálogo completo editable para un rol (propios + cruzados). */
 export function catalogoPermisosRol(rol: RolGlobal): string[] {
   // Asignable explícitamente, sin concederlo por rol ni por TMS.
-  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "rrhh", "flota", "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
+  return [...new Set([...modulosPropiosDelRol(rol), ...modulosOtrasAreasDelRol(rol), "rrhh", "flota", "canecas", "compras_proveedores", "compras_requerimientos", "compras_autorizar", "cotizaciones_costeo", "cotizaciones_ajustes"])];
 }
 
 export function permisosDefaultPorRol(rol: RolGlobal): PermisoModulo[] {
@@ -978,6 +984,11 @@ export function modulosPlataformaDesdePermisos(
     // sistema (catálogo, editor de permisos, tienePermiso()).
     if (
       esPlataformaPermisible(p.modulo) &&
+        p.modulo !== "canecas" &&
+        p.modulo !== "canecas_catalogo" &&
+        p.modulo !== "canecas_compras" &&
+        p.modulo !== "canecas_recepciones" &&
+        p.modulo !== "canecas_confirmar" &&
       p.modulo !== "compras_proveedores" &&
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&

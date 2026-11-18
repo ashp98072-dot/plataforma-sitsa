@@ -1,0 +1,48 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import mysql from "mysql2/promise";
+const pipe = process.env.CANECAS_TEST_PIPE;
+const pool = mysql.createPool({socketPath:`\\\\.\\pipe\\${pipe}`,user:"root",database:"canecas_api_test",multipleStatements:true,connectionLimit:8});
+vi.mock("@/lib/db", () => ({ getPool: () => pool, query: async (sql: string, params: unknown[]) => (await pool.query(sql,params))[0] }));
+vi.mock("@/lib/canecas/acceso", () => ({ accesoCanecas: async () => ({empresa:{id:1},session:{id:1,username:"tester"}}) }));
+import { GET, POST } from "@/app/api/empresas/[slug]/canecas/[recurso]/route";
+const ctx = (recurso: string) => ({params:Promise.resolve({slug:"demo",recurso})});
+const post = async (recurso: string, body: object) => POST(new Request("http://local",{method:"POST",body:JSON.stringify(body)}),ctx(recurso));
+describe.skipIf(!pipe)("flujo API contra MariaDB desechable", () => {
+  beforeAll(async () => {
+    await pool.query(`CREATE TABLE empresas (id INT PRIMARY KEY) ENGINE=InnoDB;
+      CREATE TABLE usuarios (id INT PRIMARY KEY,username VARCHAR(80)) ENGINE=InnoDB;
+      CREATE TABLE empleados (id INT PRIMARY KEY,empresa_id INT NOT NULL,nombre VARCHAR(200),estado VARCHAR(20),UNIQUE KEY (empresa_id,id)) ENGINE=InnoDB;
+      CREATE TABLE compras_proveedores (id INT AUTO_INCREMENT PRIMARY KEY,empresa_id INT NOT NULL,nombre_comercial VARCHAR(200),nombre_normalizado VARCHAR(200),razon_social VARCHAR(250),nit VARCHAR(30),nit_normalizado VARCHAR(30),direccion VARCHAR(500),telefono VARCHAR(50),correo VARCHAR(200),contacto_nombre VARCHAR(200),contacto_telefono VARCHAR(50),contacto_correo VARCHAR(200),metodo_pago_habitual VARCHAR(80),banco VARCHAR(150),numero_cuenta VARCHAR(100),tipo_cuenta VARCHAR(80),titular_cuenta VARCHAR(200),dias_credito INT,observaciones TEXT,activo TINYINT,creado_por INT,actualizado_por INT,UNIQUE KEY (empresa_id,id),UNIQUE KEY uq_cb_proveedor_nombre (empresa_id,nombre_normalizado),UNIQUE KEY uq_cb_proveedor_nit (empresa_id,nit_normalizado)) ENGINE=InnoDB;
+      CREATE TABLE auditoria (empresa_id INT,usuario VARCHAR(80),accion VARCHAR(100),modulo VARCHAR(100),detalle TEXT) ENGINE=InnoDB;
+      INSERT INTO empresas VALUES (1); INSERT INTO usuarios VALUES (1,'tester');
+      INSERT INTO empleados VALUES (1,1,'Ana','Activo');`);
+    await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql","utf8"));
+  });
+  afterAll(async () => { await pool.end(); });
+  it("registra compra sin saldo, recibe 20, reintenta y acumula otra recepción", async () => {
+    let res = await post("productos",{codigo:"A1",nombre:"Aceite",marca:"Marca",presentacion:"Caneca",capacidad:5,unidad_capacidad:"galones",unidad_inventario:"caneca"});
+    expect(res.status).toBe(201); const producto = (await res.json()).id;
+    res = await post("ubicaciones",{nombre:"Bodega"}); expect(res.status).toBe(201); const ubicacion = (await res.json()).id;
+    res = await post("proveedores",{nombre_comercial:"Proveedor"}); expect(res.status).toBe(201); const proveedor = (await res.json()).id;
+    const compra = {proveedor_id:proveedor,producto_id:producto,referencia:"FAC-1",cantidad:25,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf11"};
+    res = await post("compras",compra); expect(res.status).toBe(201); const compraId = (await res.json()).id;
+    let inventario = await (await GET(new Request("http://local"),ctx("inventario"))).json(); expect(inventario.datos).toHaveLength(0);
+    const recepcion = {compra_id:compraId,ubicacion_id:ubicacion,recibido_por_empleado_id:1,cantidad:20,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf12"};
+    const duplicadas = await Promise.all([post("recepciones",recepcion),post("recepciones",recepcion)]);
+    const ids = await Promise.all(duplicadas.map(async r => ({status:r.status,body:await r.json()})));
+    expect(ids.map(x => x.status).sort()).toEqual([200,201]); expect(ids[0].body.id).toBe(ids[1].body.id);
+    expect((await post("recepciones",{...recepcion,cantidad:19})).status).toBe(409);
+    const confirmaciones = await Promise.all([post("confirmar",{id:ids[0].body.id}),post("confirmar",{id:ids[0].body.id})]);
+    expect(confirmaciones.map(r => r.status)).toEqual([200,200]);
+    inventario = await (await GET(new Request("http://local"),ctx("inventario"))).json(); expect(inventario.datos[0].disponible).toBe(20);
+    res = await post("recepciones",{...recepcion,cantidad:5,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf13"});
+    expect(res.status).toBe(201); expect((await post("confirmar",{id:(await res.json()).id})).status).toBe(200);
+    inventario = await (await GET(new Request("http://local"),ctx("inventario"))).json(); expect(inventario.datos[0].disponible).toBe(25);
+    const movimientos = await (await GET(new Request("http://local"),ctx("movimientos"))).json();
+    expect(movimientos.datos[0]).toMatchObject({documento:"FAC-1",usuario:"tester",recibido_por:"Ana"});
+    expect(movimientos.datos[0].creado_en).toBeTruthy();
+    const [rows] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n,SUM(cantidad) AS total FROM canecas_movimientos");
+    expect(Number(rows[0].n)).toBe(2); expect(Number(rows[0].total)).toBe(25);
+  });
+});

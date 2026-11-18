@@ -77,7 +77,7 @@ async function permisosEfectivosUncached(
   const byMod = new Map(stored.map((p) => [p.modulo, p]));
   const tienePlataformaGuardada = stored.some(
     (p) =>
-      esPlataformaPermisible(p.modulo) ||
+      (p.modulo !== "canecas" && !p.modulo.startsWith("canecas_") && esPlataformaPermisible(p.modulo)) ||
       esFlotaSubmodulo(p.modulo) ||
       p.modulo === "flota",
   );
