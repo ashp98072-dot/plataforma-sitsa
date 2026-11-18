@@ -10,22 +10,29 @@ const choice={candidato:"a".repeat(64),vehiculoId:1,empleadoId:77,metodoEmpleado
 beforeEach(()=>{
     catalogo=[{id:77,nombre:"Alvaro Antonio León Pinto",empresa:7,estado:"Activo"},{id:88,nombre:"Alvaro Manuel Pinto",empresa:99,estado:"Activo"},{id:89,nombre:"Alvaro René Pinto",empresa:7,estado:"Inactivo"}];
     query.mockImplementation(async(sql:string,args:number[])=>{
-        expect(sql).toContain("WHERE empresa_id=? AND estado='Activo'");expect(sql).not.toContain("FOR UPDATE");
+        expect(sql).toContain("WHERE empresa_id=? AND estado IN ('Activo','Baja')");expect(sql).not.toContain("FOR UPDATE");
         if (sql.includes("LOCK IN SHARE MODE")) {
             expect(sql).toContain("FORCE INDEX (PRIMARY)"); expect(sql).toContain("AND id IN (");
         }
-        return [catalogo.filter(e=>e.empresa===args[0]&&e.estado==="Activo"&&(!sql.includes("LOCK IN SHARE MODE")||args.slice(1).includes(e.id))),[]];
+        return [catalogo.filter(e=>e.empresa===args[0]&&(e.estado==="Activo"||e.estado==="Baja")&&(!sql.includes("LOCK IN SHARE MODE")||args.slice(1).includes(e.id))),[]];
     });
 });
 describe("revalidación de empleados del Excel bajo transacción",()=>{
     it("solo el catálogo activo de la empresa del contexto determina unicidad",async()=>{
-        const r=await validarEmpleadosImportacion(c,ctx,[choice],[linea()]);expect(r.get(choice.candidato)).toBe("TOKENS_COMPLETOS_UNICOS");expect(query.mock.calls).toEqual([[expect.stringContaining("LOCK IN SHARE MODE"),[7,77]],[expect.stringContaining("SELECT id,nombre FROM empleados"),[7]]]);
+        const r=await validarEmpleadosImportacion(c,ctx,[choice],[linea()]);expect(r.get(choice.candidato)).toBe("TOKENS_COMPLETOS_UNICOS");expect(query.mock.calls).toEqual([[expect.stringContaining("LOCK IN SHARE MODE"),[7,77]],[expect.stringContaining("SELECT id,nombre,estado FROM empleados"),[7]]]);
         await expect(validarEmpleadosImportacion(c,ctx,[{...choice,empleadoId:88}],[linea()])).rejects.toMatchObject({status:403});await expect(validarEmpleadosImportacion(c,ctx,[{...choice,empleadoId:89}],[linea()])).rejects.toMatchObject({status:403});
     });
     it("homónimo nuevo, cambio de nombre o baja tras preview invalidan la propuesta automática",async()=>{
         catalogo.push({id:90,nombre:"Alvaro Pinto",empresa:7,estado:"Activo"});await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toThrow("ambigua");
         catalogo=catalogo.filter(p=>p.id!==90);catalogo[0].nombre="Alberto Pinto";await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toThrow("coincidencia automática");
         catalogo[0].estado="Inactivo";await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toMatchObject({status:403});
+    });
+    it("empleado de baja: se acepta solo por elección MANUAL de la empresa; nunca como coincidencia automática; otra empresa se rechaza",async()=>{
+        catalogo.push({id:91,nombre:"Andres Norberto Taracena Mayen",empresa:7,estado:"Baja"},{id:92,nombre:"Andres Norberto Taracena Mayen",empresa:99,estado:"Baja"});
+        const manual={candidato:"a".repeat(64),vehiculoId:1,empleadoId:91,metodoEmpleado:"MANUAL" as const};
+        expect((await validarEmpleadosImportacion(c,ctx,[manual],[linea("a".repeat(64),"Andres Taracena")])).get(manual.candidato)).toBe("MANUAL");
+        await expect(validarEmpleadosImportacion(c,ctx,[{...manual,empleadoId:92}],[linea("a".repeat(64),"Andres Taracena")])).rejects.toMatchObject({status:403});
+        await expect(validarEmpleadosImportacion(c,ctx,[{...manual,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"}],[linea("a".repeat(64),"Andres Taracena")])).rejects.toThrow("coincidencia automática");
     });
     it("no acepta método exacto falso ni usa nombres enviados por el cliente",async()=>{
         await expect(validarEmpleadosImportacion(c,ctx,[{...choice,metodoEmpleado:"EXACTA_NORMALIZADA"}],[linea()])).rejects.toThrow("coincidencia automática");

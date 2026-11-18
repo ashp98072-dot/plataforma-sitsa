@@ -5,6 +5,7 @@ import type { PoolConnection } from "mysql2/promise";
 import { hash,ErrorCB2 } from "./model";
 import { rows,type Contexto } from "./repository";
 import { ahoraLocal } from "@/lib/rrhh/dates";
+import { fechaIso } from "./empleados-baja";
 import { normalizarNombreReportado,proponerNombre,type DecisionNombre,type RevisionNombre } from "./pilotos-nombres";
 export { normalizarNombreReportado } from "./pilotos-nombres";
 export async function esquemaPilotosReportados(c?:PoolConnection) {
@@ -19,16 +20,23 @@ export async function esquemaPilotosReportados(c?:PoolConnection) {
  if(indices.length!==4 || indices.some(i=>Number(i.no_unico)!==0||Number(i.prefijos)!==0||i.columnas!==(i.TABLE_NAME==="flota_cb2_pilotos_equivalencias"?"empresa_id,normalizacion_version,nombre_hash":requeridos[String(i.INDEX_NAME)])))throw new ErrorCB2("Índices de nombres reportados incompatibles.",503);
  return true;
 }
-export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:string[],instalado:boolean):Promise<RevisionNombre[]> {
- const empleados=(await rows(c,"SELECT id,nombre FROM empleados WHERE empresa_id=? AND estado='Activo' ORDER BY id",[empresa])).map(p=>({id:Number(p.id),nombre:String(p.nombre)}));
+async function empleadosRevision(c:PoolConnection,empresa:number) {
+ const mapa=(p:RowDataPacket)=>({id:Number(p.id),nombre:String(p.nombre),estado:String(p.estado),fechaBaja:fechaIso(p.fecha_egreso),fechaAlta:fechaIso(p.fecha_alta)});
+ try{return (await rows(c,"SELECT id,nombre,estado,fecha_egreso,fecha_alta FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[empresa])).map(mapa);}
+ catch{return (await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[empresa])).map(mapa);}
+}
+/** `fechas[i]` es la fecha de consumo (ISO) de `nombres[i]`, cuando se conoce; permite comparar con la fecha de baja. */
+export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:string[],instalado:boolean,fechas:(string|null|undefined)[]=[]):Promise<RevisionNombre[]> {
+ const empleados=await empleadosRevision(c,empresa);
  const grupos=new Map<string,RevisionNombre>();
- for(const nombre of nombres) {
+ for(const [i,nombre] of nombres.entries()) {
   const clave=normalizarNombreReportado(nombre);if(!clave)continue;
-  const previo=grupos.get(clave);if(previo){previo.filas++;if(!previo.originales.includes(nombre))previo.originales.push(nombre);continue;}
+  const fecha=fechaIso(fechas[i]);
+  const previo=grupos.get(clave);if(previo){previo.filas++;if(fecha){const r=previo.rango??={min:null,max:null};if(!r.min||fecha<r.min)r.min=fecha;if(!r.max||fecha>r.max)r.max=fecha;}if(!previo.originales.includes(nombre))previo.originales.push(nombre);continue;}
   const [alias]=instalado?await rows(c,"SELECT nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[empresa,hash(clave)]):[];
   if(alias && alias.nombre_normalizado!==clave)throw new ErrorCB2("Colisión de nombre; requiere revisión.");
   const destino:DecisionNombre|undefined=alias?alias.empleado_id!=null?{tipo:"EMPLEADO",empleadoId:Number(alias.empleado_id),confirmado:false}:{tipo:"REPORTADO",reportadoId:Number(alias.piloto_reportado_id),confirmado:false}:undefined;
-  const revision=proponerNombre(nombre,empleados,destino);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
+  const revision=proponerNombre(nombre,empleados,destino,fecha?{min:fecha,max:fecha}:undefined);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
  }
  return [...grupos.values()];
 }
@@ -46,7 +54,7 @@ async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null
  if(!decision.confirmado && !mismoDestino(revision.propuesta,decision))throw new ErrorCB2("El nombre requiere confirmación; revisa las coincidencias actuales.");
  let reportado=decision.tipo==="REPORTADO"?decision.reportadoId??(altaConcurrente && revision.equivalencia?.tipo==="REPORTADO"?revision.equivalencia.reportadoId:null)??null:null;
  if(decision.tipo==="EMPLEADO") {
-  const [e]=await rows(c,"SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' LOCK IN SHARE MODE",[ctx.empresaId,decision.empleadoId]);
+  const [e]=await rows(c,"SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') LOCK IN SHARE MODE",[ctx.empresaId,decision.empleadoId]);
   if(!e)throw new ErrorCB2("Empleado no autorizado para esta empresa.",403);
  } else if(reportado!=null) {
   const [p]=await rows(c,"SELECT id FROM flota_cb2_pilotos_reportados WHERE empresa_id=? AND id=? AND estado='REPORTADO_CONFIRMADO' AND nombre_hash=? AND nombre_normalizado=? LOCK IN SHARE MODE",[ctx.empresaId,reportado,digest,normalizado]);

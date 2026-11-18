@@ -3,9 +3,9 @@ import { nombreComparable } from "../combustible-coincidencias";
 export const metodosEmpleado = ["EXACTA_NORMALIZADA", "TOKENS_COMPLETOS_UNICOS", "MANUAL", "SIN_ASIGNACION"] as const;
 export type MetodoEmpleado = typeof metodosEmpleado[number];
 type MetodoAutomatico = Extract<MetodoEmpleado, "EXACTA_NORMALIZADA" | "TOKENS_COMPLETOS_UNICOS">;
-type Empleado = { id: number; nombre: string; estado?: string };
+type Empleado = { id: number; nombre: string; estado?: string; fechaBaja?: string | null; fechaAlta?: string | null };
 export type CoincidenciaEmpleado<T> = {
-    estado: "EXACTA" | "PARCIAL_UNICA" | "AMBIGUA" | "INEXISTENTE";
+    estado: "EXACTA" | "PARCIAL_UNICA" | "AMBIGUA" | "INEXISTENTE" | "REQUIERE_CONFIRMACION_BAJA";
     candidatos: T[];
     propuesta: T | null;
     metodo: MetodoAutomatico | null;
@@ -19,7 +19,7 @@ const sinNombre = new Set(["NO TIENE NOMBRE", "SIN NOMBRE", "NO INFORMADO", "N A
 export function crearBuscadorEmpleados<T extends Empleado>(catalogo: readonly T[]) {
     const indice = new Map<string, Set<number>>(), nombres = new Map<number, string>(), cache = new Map<string, CoincidenciaEmpleado<T>>();
     catalogo.forEach((p, i) => {
-        if (p.estado !== undefined && p.estado !== "Activo") return;
+        if (p.estado !== undefined && p.estado !== "Activo" && p.estado !== "Baja") return;
         const nombre = nombreEmpleadoComparable(p.nombre);
         nombres.set(i, nombre);
         for (const token of new Set(nombre.split(" ").filter(Boolean))) {
@@ -35,14 +35,16 @@ export function crearBuscadorEmpleados<T extends Empleado>(catalogo: readonly T[
             const listas = tokens.map(t => indice.get(t) ?? new Set<number>()).sort((a,b) => a.size-b.size);
             indices = [...listas[0]].filter(i => listas.every(lista => lista.has(i))).sort((a,b) => a-b);
         }
-        const candidatos = indices.map(i => catalogo[i]), unica = candidatos.length === 1;
+        const candidatos = indices.map(i => catalogo[i]), coincide = candidatos.length === 1;
+        // Un empleado de baja se ofrece como candidato pero nunca se vincula solo: exige confirmación manual.
+        const baja = coincide && candidatos[0].estado === "Baja", unica = coincide && !baja;
         const exacta = unica && nombres.get(indices[0]) === key;
         // Una exacta no gana sobre otra persona cuyo nombre también contiene los tokens.
         const resultado: CoincidenciaEmpleado<T> = {
-            estado: unica ? exacta ? "EXACTA" : "PARCIAL_UNICA" : candidatos.length ? "AMBIGUA" : "INEXISTENTE",
+            estado: baja ? "REQUIERE_CONFIRMACION_BAJA" : unica ? exacta ? "EXACTA" : "PARCIAL_UNICA" : candidatos.length ? "AMBIGUA" : "INEXISTENTE",
             candidatos, propuesta: unica ? candidatos[0] : null,
             metodo: unica ? exacta ? "EXACTA_NORMALIZADA" : "TOKENS_COMPLETOS_UNICOS" : null,
-            motivo: unica ? exacta ? "Nombre normalizado completo y único en el catálogo activo" : "Dos o más tokens completos, sin exigir orden, identifican un único empleado activo" : candidatos.length ? "Varios empleados contienen todos los tokens; requiere elección manual" : "Sin coincidencia confiable de al menos dos tokens completos; piloto pendiente",
+            motivo: baja ? "Único empleado coincidente está de baja; requiere confirmación manual" : unica ? exacta ? "Nombre normalizado completo y único en el catálogo activo" : "Dos o más tokens completos, sin exigir orden, identifican un único empleado activo" : candidatos.length ? "Varios empleados contienen todos los tokens; requiere elección manual" : "Sin coincidencia confiable de al menos dos tokens completos; piloto pendiente",
         };
         if (key.length <= 255 && cache.size < 10000) cache.set(key, resultado);
         return resultado;

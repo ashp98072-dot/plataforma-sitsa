@@ -1,4 +1,5 @@
 "use client";
+import { etiquetaEmpleado } from "@/lib/flota/cb2/empleados-baja";
 import { AltaDirectaCB2 } from "./alta-directa";
 import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
 import { normalizarBusquedaUnidad } from "@/lib/flota/cb2/terceros-busqueda";
@@ -27,7 +28,7 @@ export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actua
     return <div className="space-y-4">{fila.perfil==="SHELL" && <p>Nombre original: {fila.origen?.piloto || "No informado"}. Revisa y confirma el nombre en el panel común; se aplica a todo el archivo.</p>}
         {independiente && <fieldset disabled={disabled}><legend>Piloto reportado y vinculacion opcional</legend>
           <label>Tipo de piloto<select className={input} value={value.pilotoTipo??piloto?.tipo??""} onChange={e=>onChange({...value,decisionNombre:undefined,pilotoTipo:e.target.value as "INTERNO"|"EXTERNO"|"REPORTADO",empleadoId:null,pilotoExternoId:null,asociacionExternaId:null})}><option value="">Vinculacion automatica opcional</option><option value="REPORTADO">Conservar solo el nombre reportado</option><option value="INTERNO">De la empresa</option><option value="EXTERNO">Tercerizado</option></select></label>
-          <CatalogoSearchSelect label={`Piloto de la empresa para vale ${fila.vale}`} placeholder="Buscar piloto interno" inputClassName={input} value={piloto?.tipo==="INTERNO"?String(piloto.id):""} options={(cat.empleados??[]).map(p=>({value:String(p.id),label:p.nombre}))} onChange={v=>onChange({...value,decisionNombre:fila.perfil==="SHELL" && v?{tipo:"EMPLEADO",empleadoId:Number(v),confirmado:true}:undefined,pilotoTipo:"INTERNO",empleadoId:v?Number(v):null,pilotoExternoId:null,asociacionExternaId:null})}/>
+          <CatalogoSearchSelect label={`Piloto de la empresa para vale ${fila.vale}`} placeholder="Buscar piloto interno" inputClassName={input} value={piloto?.tipo==="INTERNO"?String(piloto.id):""} options={(cat.empleados??[]).map(p=>({value:String(p.id),label:p.estado==="Baja"?etiquetaEmpleado(p):p.nombre}))} onChange={v=>onChange({...value,decisionNombre:fila.perfil==="SHELL" && v?{tipo:"EMPLEADO",empleadoId:Number(v),confirmado:true}:undefined,pilotoTipo:"INTERNO",empleadoId:v?Number(v):null,pilotoExternoId:null,asociacionExternaId:null})}/>
           <CatalogoSearchSelect label={`Piloto tercerizado para vale ${fila.vale}`} placeholder="Buscar piloto externo" inputClassName={input} value={piloto?.tipo==="EXTERNO"?String(piloto.id):""} options={pilotos.map(p=>({value:String(p.id),label:p.nombre,detail:p.referencia}))} onChange={v=>onChange({...value,decisionNombre:undefined,pilotoTipo:"EXTERNO",pilotoExternoId:v?Number(v):null,empleadoId:null,asociacionExternaId:null})}/>
         </fieldset>}
         {cat.tercerosDirectos && api && actualizarCatalogos && <AltaDirectaCB2 api={api} recargar={actualizarCatalogos} disabled={disabled}/>}

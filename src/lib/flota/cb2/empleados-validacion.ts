@@ -13,14 +13,14 @@ export async function validarEmpleadosImportacion(c: PoolConnection, ctx: Contex
     const ids = new Set<number>();
     for (let i = 0; i < elegidos.length; i += 200) {
         const lote = elegidos.slice(i, i + 200);
-        const activos = await rows(c, `SELECT id FROM empleados FORCE INDEX (PRIMARY) WHERE empresa_id=? AND estado='Activo' AND id IN (${lote.map(() => "?").join(",")}) ORDER BY id LOCK IN SHARE MODE`, [ctx.empresaId, ...lote]);
+        const activos = await rows(c, `SELECT id FROM empleados FORCE INDEX (PRIMARY) WHERE empresa_id=? AND estado IN ('Activo','Baja') AND id IN (${lote.map(() => "?").join(",")}) ORDER BY id LOCK IN SHARE MODE`, [ctx.empresaId, ...lote]);
         activos.forEach(p => ids.add(Number(p.id)));
     }
     if (elegidos.some(id => !ids.has(id))) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
     const automatica = seleccion.some(s => s.metodoEmpleado === "EXACTA_NORMALIZADA" || s.metodoEmpleado === "TOKENS_COMPLETOS_UNICOS");
     // Después de esperar los bloqueos: un cambio de RRHH ya confirmado es visible.
     // Las altas/renombres de OTROS empleados posteriores a esta lectura no se serializan.
-    const catalogo = automatica ? (await rows(c, "SELECT id,nombre FROM empleados WHERE empresa_id=? AND estado='Activo' ORDER BY id", [ctx.empresaId])).map(p => ({ id: Number(p.id), nombre: String(p.nombre ?? "") })) : [];
+    const catalogo = automatica ? (await rows(c, "SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id", [ctx.empresaId])).map(p => ({ id: Number(p.id), nombre: String(p.nombre ?? ""), estado: String(p.estado) })) : [];
     const buscar = crearBuscadorEmpleados(catalogo);
     const nombres = new Map<string, Set<string>>();
     for (const l of lineas) if (l.clave) { const grupo = nombres.get(l.clave) ?? new Set<string>(); grupo.add(l.fila.textos.piloto); nombres.set(l.clave, grupo); }
