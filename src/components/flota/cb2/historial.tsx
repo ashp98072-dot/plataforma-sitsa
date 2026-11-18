@@ -27,7 +27,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
 }) {
     const list = useListadoCB2(api, "importaciones", refresh, activo);
     const [header, setHeader] = useState<Registro | null>(null), [rows, setRows] = useState<Registro[]>([]), [motivo, setMotivo] = useState(""), [error, setError] = useState(""), [loading, setLoading] = useState(false), [page, setPage] = useState(0);
-    const [nombres,setNombres]=useState<RevisionNombre[]>([]);
+    const [nombres,setNombres]=useState<RevisionNombre[]>([]),[nombresError,setNombresError]=useState("");
     const [decisiones, setDecisiones] = useState<Record<string, DecisionAsignacion>>({});
     const filas = useMemo(() => gruposOrigen(rows).map(f=>({...f,perfil:header?.perfil as "SHELL"|"HALEL"|undefined})), [rows,header]);
     const asignacion = useRevisionCB2(filas, cat, decisiones, setDecisiones);
@@ -41,7 +41,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
     async function abrir(h: Registro) {
         const actual = ++revision.current;
         setHeader(h);
-        setRows([]);setNombres([]);
+        setRows([]);setNombres([]);setNombresError("");
         asignacion.reset(); setDecisiones({});
         setMotivo("");
         setLoading(true);
@@ -51,15 +51,8 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
             const r = await todasCB2(`${api}/importaciones/${h.id}/filas`);
             if (actual === revision.current) {
                 setRows(r);
-                const shell = h.perfil === "SHELL";
-                // Reanudación sin panel global: el servidor recalcula los nombres (misma política) y las propuestas únicas llegan preseleccionadas.
-                const lista = shell ? await jsonCB2<RevisionNombre[]>(`${api}/importaciones/${h.id}/pilotos-nombres`).catch(() => [] as RevisionNombre[]) : [], revisiones = Array.isArray(lista) ? lista : [];
-                if (actual !== revision.current) return;
-                setNombres(revisiones);
-                setDecisiones(Object.fromEntries(gruposOrigen(r).filter(f => f.candidato).map(f => {
-                    const d = shell ? revisiones.find(n => n.clave === claveNombreShell(f.origen?.piloto))?.propuesta : undefined;
-                    return [f.candidato!, { exigirProducto: true, ...(shell ? { exigirPiloto: true, pilotoTipo: d?.tipo === "EMPLEADO" ? "INTERNO" as const : "REPORTADO" as const, empleadoId: d?.tipo === "EMPLEADO" ? d.empleadoId : null, pilotoExternoId: null, ...(d ? { decisionNombre: d } : {}) } : {}) }];
-                })));
+                if (h.perfil === "SHELL") await cargarNombres(h, r, actual);
+                else setDecisiones(Object.fromEntries(gruposOrigen(r).filter(f => f.candidato).map(f => [f.candidato!, { exigirProducto: true }])));
             }
         }
         catch (e) {
@@ -71,10 +64,33 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
                 setLoading(false);
         }
     }
+    /** Consulta las propuestas de nombres del servidor. Una lista vacía legítima NO es un fallo; una petición fallida o una respuesta inválida sí:
+     * se informa y se bloquea la reanudación hasta reintentar. Al reintentar se conservan las decisiones ya tomadas. */
+    async function cargarNombres(h: Registro, origen: Registro[], actual: number) {
+        let revisiones: RevisionNombre[];
+        try {
+            const lista = await jsonCB2<unknown>(`${api}/importaciones/${h.id}/pilotos-nombres`);
+            if (!Array.isArray(lista)) throw new Error("respuesta inválida");
+            revisiones = lista as RevisionNombre[];
+        } catch (e) {
+            if (actual === revision.current) {
+                setNombresError(`No se pudo cargar la revisión de pilotos de esta importación (${e instanceof Error ? e.message : "error desconocido"}). No se puede reanudar con información incompleta: reintenta.`);
+                setDecisiones(prev => Object.fromEntries(gruposOrigen(origen).filter(f => f.candidato).map(f => [f.candidato!, { exigirProducto: true, exigirPiloto: true, ...prev[f.candidato!] }])));
+            }
+            return;
+        }
+        if (actual !== revision.current) return;
+        setNombres(revisiones); setNombresError("");
+        setDecisiones(prev => Object.fromEntries(gruposOrigen(origen).filter(f => f.candidato).map(f => {
+            const previa = prev[f.candidato!], d = revisiones.find(n => n.clave === claveNombreShell(f.origen?.piloto))?.propuesta;
+            // Conserva lo ya decidido por el usuario; solo completa las propuestas que faltan.
+            return [f.candidato!, previa?.decisionNombre ? { exigirProducto: true, exigirPiloto: true, ...previa } : { exigirProducto: true, exigirPiloto: true, ...previa, pilotoTipo: d?.tipo === "EMPLEADO" ? "INTERNO" as const : "REPORTADO" as const, empleadoId: d?.tipo === "EMPLEADO" ? d.empleadoId : null, pilotoExternoId: null, ...(d ? { decisionNombre: d } : {}) }];
+        })));
+    }
     function elegirNombre(clave:string,d:DecisionNombre){setDecisiones(prev=>{const result={...prev};for(const f of filas)if(f.candidato && normalizarNombreReportado(f.origen?.piloto??"")===clave)result[f.candidato]={...prev[f.candidato],decisionNombre:d,pilotoTipo:d.tipo==="EMPLEADO"?"INTERNO":"REPORTADO",empleadoId:d.tipo==="EMPLEADO"?d.empleadoId:null,pilotoExternoId:null,asociacionExternaId:null};return result;});}
     const faltaNombre=header?.perfil==="SHELL" && seleccionValida.some(s=>porClave.get(s.candidato)?.origen?.piloto?.trim() && s.pilotoTipo!=="EXTERNO" && !s.decisionNombre);
     async function reanudar() {
-        if (faltaNombre || !header || !motivo.trim() || locked || loading || !pendientes || !seleccionValida.length || Object.keys(asignacion.solicitudes).length !== seleccionValida.length || seleccionValida.some(s => !s.productoClasificado))
+        if (nombresError || faltaNombre || !header || !motivo.trim() || locked || loading || !pendientes || !seleccionValida.length || Object.keys(asignacion.solicitudes).length !== seleccionValida.length || seleccionValida.some(s => !s.productoClasificado))
             return;
         const data = { proveedorId: Number(header.proveedor_id), importacionId: header.id, revision: Number(header.revision), seleccion: seleccionValida, motivo: motivo.trim() };
         await run("reanudar", data, key => jsonCB2(`${api}/reanudar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...data, clave: key }) })).catch(() => { });
@@ -101,7 +117,7 @@ export function HistorialCB2({ api, cat, run, locked, admin, canWrite, refresh, 
                 }
             }}>Descargar Excel original privado</a><p>SHA-256: <span className="break-all">{String(header.archivo_sha256)}</span></p>{descargando && <p role="status">Descargando Excel privado…</p>}{loading && <p role="status">Leyendo todas las páginas del diario…</p>}{error && <p role="alert">{error}</p>}
  {!loading && !error && rows.length > 0 && <><details><summary>Diario completo ({rows.length} eventos)</summary><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr>{["Evento / revisión", "Origen", "Resultado / consumo", "Decisión y evidencia"].map(t => <th key={t}>{t}</th>)}</tr></thead><tbody>{rows.slice(page * 25, page * 25 + 25).map(r => <tr key={r.id} className="border-t"><td>{String(r.tipo)} · {String(r.revision)}</td><td>{String(r.hoja_nombre)}:{String(r.fila_excel)}</td><td>{String(r.resultado)} · {String(r.consumo_id ?? "Sin consumo")}</td><td><details><summary>Ver evidencia #{r.id}</summary><pre className="max-w-lg whitespace-pre-wrap break-all">{JSON.stringify({ original: leerObjeto(r.datos_origen), decision: leerObjeto(r.decision), motivo: r.motivo, operacion: r.operacion_clave }, null, 2)}</pre></details></td></tr>)}</tbody></table></div><button className={button} disabled={!page} onClick={() => setPage(page - 1)}>Eventos anteriores</button><button className={button} disabled={(page + 1) * 25 >= rows.length} onClick={() => setPage(page + 1)}>Eventos siguientes</button></details>
- {admin && canWrite ? <><h3 className="font-semibold">Reanudar candidatos pendientes</h3><p>{pendientes} candidatos pendientes de resolución.</p>{!pendientes && <p role="status">No quedan candidatos pendientes para reanudar. Los resueltos y bloqueados se conservan en la trazabilidad.</p>}<p>Solo Admin. Se usa el Excel privado original; no es posible forzar conflictos. El servidor revalida toda la identidad, historial y acceso actual.</p><CandidatosCB2 decisiones={decisiones} revisionExtra={g => g.estado !== "RESUELTO" && <fieldset disabled={locked || loading}><AsignacionCB2 api={api} actualizarCatalogos={actualizarCatalogos} fila={g.fila} cat={cat} value={decisiones[g.clave] ?? {}} disabled={locked || loading} nombre={nombres.find(n => n.clave === claveNombreShell(g.fila.origen?.piloto))} onNombre={d => elegirNombre(claveNombreShell(g.fila.origen?.piloto), d)} onChange={v => { asignacion.cambiarDecision(g.clave, v); }}/></fieldset>} key={header.id} filas={filas} cat={cat} seleccion={sel} manuales={asignacion.manuales} omitidos={asignacion.omitidos} revisados={asignacion.revisados} onAsignar={asignacion.asignar} onSeleccionar={asignacion.seleccionar} onRevisar={asignacion.revisar} disabled={locked}/><fieldset disabled={locked}><label>Motivo de reanudación<textarea className={input} required maxLength={1000} value={motivo} onChange={e => setMotivo(e.target.value)}/></label><button className={button} disabled={faltaNombre || !pendientes || !motivo.trim() || !seleccionValida.length || seleccionValida.some(s => !s.productoClasificado)} onClick={() => void reanudar()}>Reanudar selección</button></fieldset></> : <p>La reanudación requiere autorización Admin.</p>}</>}
+ {admin && canWrite ? <><h3 className="font-semibold">Reanudar candidatos pendientes</h3><p>{pendientes} candidatos pendientes de resolución.</p>{!pendientes && <p role="status">No quedan candidatos pendientes para reanudar. Los resueltos y bloqueados se conservan en la trazabilidad.</p>}<p>Solo Admin. Se usa el Excel privado original; no es posible forzar conflictos. El servidor revalida toda la identidad, historial y acceso actual.</p>{nombresError && <div role="alert" className="space-y-2"><p>{nombresError}</p><button type="button" className={button} disabled={loading} onClick={() => void cargarNombres(header, rows, revision.current)}>Reintentar carga de pilotos</button></div>}<CandidatosCB2 decisiones={decisiones} revisionExtra={g => g.estado !== "RESUELTO" && <fieldset disabled={locked || loading}><AsignacionCB2 api={api} actualizarCatalogos={actualizarCatalogos} fila={g.fila} cat={cat} value={decisiones[g.clave] ?? {}} disabled={locked || loading} nombre={nombres.find(n => n.clave === claveNombreShell(g.fila.origen?.piloto))} onNombre={d => elegirNombre(claveNombreShell(g.fila.origen?.piloto), d)} onChange={v => { asignacion.cambiarDecision(g.clave, v); }}/></fieldset>} key={header.id} filas={filas} cat={cat} seleccion={sel} manuales={asignacion.manuales} omitidos={asignacion.omitidos} revisados={asignacion.revisados} onAsignar={asignacion.asignar} onSeleccionar={asignacion.seleccionar} onRevisar={asignacion.revisar} disabled={locked}/><fieldset disabled={locked}><label>Motivo de reanudación<textarea className={input} required maxLength={1000} value={motivo} onChange={e => setMotivo(e.target.value)}/></label><button className={button} disabled={!!nombresError || faltaNombre || !pendientes || !motivo.trim() || !seleccionValida.length || seleccionValida.some(s => !s.productoClasificado)} onClick={() => void reanudar()}>Reanudar selección</button></fieldset></> : <p>La reanudación requiere autorización Admin.</p>}</>}
  </section>}
  </section>;
 }

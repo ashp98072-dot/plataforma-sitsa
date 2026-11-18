@@ -13,7 +13,7 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
   if (g.estado === "RESUELTO") return [];
   const causas: string[] = [];
   if (g.estado === "BLOQUEADO") causas.push(...g.activas.flatMap(f => [...f.errores, ...avisosDetallados(f).filter(a => a.nivel === "BLOQUEO").map(a => a.mensaje)]), "El servidor bloquea este candidato; corregir la asignación no elimina el conflicto histórico o del archivo.");
-  if (d.exigirPiloto && !pilotoShellResuelto(g.activas, d)) causas.push("Falta resolver el piloto: elige un empleado existente o confirma el nombre original como piloto reportado.");
+  if (d.exigirPiloto && !pilotoShellResuelto(g.activas, d, cat)) causas.push("Falta resolver el piloto: elige un empleado existente o confirma el nombre original como piloto reportado.");
   if (!g.vehiculoId) {
     causas.push("Falta seleccionar una unidad válida. Las coincidencias ambiguas no se asignan automáticamente.");
   } else if (!cat.vehiculos.some(v => String(v.id) === g.vehiculoId)) causas.push(`Unidad #${g.vehiculoId} ausente del catálogo disponible de esta empresa.`);

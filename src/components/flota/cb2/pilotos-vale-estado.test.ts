@@ -7,7 +7,7 @@ import type { CatalogosCB2, FilaCB2 } from "./client";
 import type { DecisionAsignacion } from "./asignacion";
 
 const base: FilaCB2 = { perfil: "SHELL", hoja: "Octubre", fila: 2, candidato: "k1", bloqueada: false, documento: null, errores: [], estado: "VALIDA", motivos: [], vale: "0001", placa: "C-570BZT", placaNormalizada: "C-570BZT", fecha: "2026-10-01", galones: "10", precio: "20", monto: "200", moneda: "GTQ", lote: "1", origen: { piloto: "  Andres Taracena ", producto: "Diesel" } } as unknown as FilaCB2;
-const cat: CatalogosCB2 = { proveedores: [], vehiculos: [{ id: 1, placa: "C-570BZT", estado: "Activo" }], empleados: [{ id: 110, nombre: "Andrés Norberto Taracena Mayén", estado: "Baja" }] } as unknown as CatalogosCB2;
+const cat: CatalogosCB2 = { proveedores: [], pilotosReportados: true, vehiculos: [{ id: 1, placa: "C-570BZT", estado: "Activo" }], empleados: [{ id: 110, nombre: "Andrés Norberto Taracena Mayén", estado: "Baja" }] } as unknown as CatalogosCB2;
 const dec = (extra: Partial<DecisionAsignacion> = {}): Record<string, DecisionAsignacion> => ({ k1: { exigirProducto: true, exigirPiloto: true, ...extra } });
 const estado = (filas: FilaCB2[], c: CatalogosCB2, d: Record<string, DecisionAsignacion>) => {
   const sel = asignacionesExactas(filas, c);   // selección automática de unidad (solo con placa inequívoca)
@@ -45,10 +45,49 @@ describe("estado LISTO/PENDIENTE de vales Shell", () => {
     expect(revisionCandidatos([f], dos, {}, {}, {}, d)[0].estado).toBe("PENDIENTE");
     expect(revisionCandidatos([f], dos, { k1: "1" }, {}, {}, { k1: { ...d.k1, motivoUnidad: "Se verificó la unidad correcta con el proveedor" } })[0].estado).toBe("LISTO");
   });
-  it("pilotoShellResuelto: HALEL no se ve afectado; Shell exige decisión o piloto externo explícito", () => {
-    expect(pilotoShellResuelto([{ ...base, perfil: "HALEL" } as FilaCB2], {})).toBe(true);
-    expect(pilotoShellResuelto([base], {})).toBe(false);
-    expect(pilotoShellResuelto([base], { pilotoTipo: "EXTERNO" })).toBe(true);
+  it("pilotoShellResuelto: HALEL no se ve afectado; Shell exige una decisión coherente", () => {
+    expect(pilotoShellResuelto([{ ...base, perfil: "HALEL" } as FilaCB2], {}, cat)).toBe(true);
+    expect(pilotoShellResuelto([base], {}, cat)).toBe(false);
+    expect(pilotoShellResuelto([base], undefined, cat)).toBe(false);
+  });
+  it("decisiones INCONSISTENTES no cuentan como piloto resuelto (tipo, ID, empleado, externo, registro no instalado)", () => {
+    const emp = { tipo: "EMPLEADO" as const, empleadoId: 110, confirmado: true }, rep = { tipo: "REPORTADO" as const, confirmado: true };
+    const ok = (d: DecisionAsignacion, c: CatalogosCB2 = cat) => pilotoShellResuelto([base], d, c);
+    expect(ok({ pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: emp })).toBe(true);
+    expect(ok({ pilotoTipo: "INTERNO", empleadoId: 999, decisionNombre: emp })).toBe(false);          // ID del vale distinto del de la decisión
+    expect(ok({ pilotoTipo: "REPORTADO", empleadoId: 110, decisionNombre: emp })).toBe(false);        // tipo ≠ decisión
+    expect(ok({ pilotoTipo: "INTERNO", empleadoId: null, decisionNombre: emp })).toBe(false);
+    expect(ok({ pilotoTipo: "INTERNO", empleadoId: 110, pilotoExternoId: 5, decisionNombre: emp })).toBe(false);   // mezcla empleado + externo
+    expect(ok({ pilotoTipo: "INTERNO", empleadoId: 777, decisionNombre: { ...emp, empleadoId: 777 } })).toBe(false); // empleado ajeno al catálogo de la empresa
+    expect(ok({ pilotoTipo: "REPORTADO", decisionNombre: rep })).toBe(true);
+    expect(ok({ pilotoTipo: "INTERNO", decisionNombre: rep })).toBe(false);
+    expect(ok({ pilotoTipo: "REPORTADO", empleadoId: 110, decisionNombre: rep })).toBe(false);
+    expect(ok({ pilotoTipo: "REPORTADO", decisionNombre: rep }, { ...cat, pilotosReportados: false } as CatalogosCB2)).toBe(false);   // registro no instalado: el servidor no podría guardarlo
+    expect(ok({ pilotoTipo: "REPORTADO", decisionNombre: { tipo: "REPORTADO", confirmado: false } })).toBe(false);   // sin confirmar y sin identidad previa
+  });
+  it("reconocimiento automático correcto vs propuesta que el motor no respalda", () => {
+    const auto = { tipo: "EMPLEADO" as const, empleadoId: 110, confirmado: false };
+    expect(pilotoShellResuelto([base], { pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: auto }, cat)).toBe(true);   // «Andres Taracena» → #110 (baja), único
+    const otro = { ...cat, empleados: [...(cat.empleados ?? []), { id: 111, nombre: "Andrés Taracena López", estado: "Activo" }] } as unknown as CatalogosCB2;
+    expect(pilotoShellResuelto([base], { pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: auto }, otro)).toBe(false);   // ahora es ambiguo: la propuesta sin confirmar ya no vale
+    expect(pilotoShellResuelto([base], { pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: { ...auto, confirmado: true } }, otro)).toBe(true);   // confirmada manualmente sí
+    const ajeno = { ...base, origen: { piloto: "Otra Persona", producto: "Diesel" } } as unknown as FilaCB2;
+    expect(pilotoShellResuelto([ajeno], { pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: auto }, cat)).toBe(false);   // el motor no reconoce a #110 para ese nombre
+  });
+  it("reportado previamente registrado (reportadoId) vale solo si hoy no hay empleado identificable", () => {
+    const previo = { tipo: "REPORTADO" as const, reportadoId: 9, confirmado: false };
+    const visitante = { ...base, origen: { piloto: "Visitante Nuevo", producto: "Diesel" } } as unknown as FilaCB2;
+    expect(pilotoShellResuelto([visitante], { pilotoTipo: "REPORTADO", decisionNombre: previo }, cat)).toBe(true);
+    expect(pilotoShellResuelto([base], { pilotoTipo: "REPORTADO", decisionNombre: previo }, cat)).toBe(false);   // «Andres Taracena» identifica a un empleado: hay que revisar
+  });
+  it("EXTERNO: exige identidad real del catálogo bajo identidades independientes; el tipo por sí solo no basta", () => {
+    const ind = { ...cat, tercerosDirectos: true, identidadesIndependientes: true, pilotosExternos: [{ id: 5, nombre: "Piloto Externo", referencia: "R" }] } as unknown as CatalogosCB2;
+    const f = { ...base, origen: { piloto: "Piloto Externo", producto: "Diesel" } } as unknown as FilaCB2;
+    expect(pilotoShellResuelto([f], { pilotoTipo: "EXTERNO" }, ind)).toBe(false);                                   // sin identidad
+    expect(pilotoShellResuelto([f], { pilotoTipo: "EXTERNO", pilotoExternoId: 99 }, ind)).toBe(false);              // ID inexistente en la empresa
+    expect(pilotoShellResuelto([f], { pilotoTipo: "EXTERNO", pilotoExternoId: 5 }, cat)).toBe(false);               // identidades independientes no activas
+    expect(pilotoShellResuelto([f], { pilotoTipo: "EXTERNO", pilotoExternoId: 5, empleadoId: 110 }, ind)).toBe(false);   // empleado y externo a la vez
+    expect(pilotoShellResuelto([f], { pilotoTipo: "EXTERNO", pilotoExternoId: 5 }, ind)).toBe(true);
   });
   it("coherencia con el resumen previo: las claves LISTAS son exactamente las de estado LISTO y el resumen cuadra", () => {
     const filas = [base, { ...base, candidato: "k2", vale: "0002", fila: 3, origen: { piloto: "Desconocido Visitante", producto: "Diesel" } } as FilaCB2];

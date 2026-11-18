@@ -15,7 +15,7 @@ const original = { id: 10, proveedor_id: 1, importacion_id: 2, revision: 1, tipo
 const header = { id: 2, proveedor_id: 1, proveedor_nombre: "PROVEEDOR DEMO", archivo_nombre: "demo.xlsx", archivo_sha256: preview.sha256, revision: 1, estado: "PARCIAL", resumen_actual: '{"pendientes":1}' };
 const consumo = { id: 3, proveedor_id: 1, importacion_origen_id: 2, moneda: "GTQ", numero_vale: "0001", placa_original: "C-001ABC", fecha_consumo: "2026-10-01", galones: "10", precio: "20", monto: "200", factura_id: null, estado_factura: "PENDIENTE_FACTURA" };
 let eventosHistorial: Record<string, unknown>[] = [];
-let perfilHeader = "HALEL", failConfirm = false, failAsociar = false, revisionHeader = 1, paginado = false, consumoProveedor = 1;
+let nombresFallan = 0, nombresVacios = false, perfilHeader = "HALEL", failConfirm = false, failAsociar = false, revisionHeader = 1, paginado = false, consumoProveedor = 1;
 const response = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 beforeEach(() => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,7 +26,7 @@ beforeEach(() => {
     root = createRoot(host);
     calls.length = 0;
     eventosHistorial = [];
-    perfilHeader = "HALEL";
+    perfilHeader = "HALEL"; nombresFallan = 0; nombresVacios = false;
     failConfirm = false;
     failAsociar = false;
     revisionHeader = 1;
@@ -58,6 +58,9 @@ beforeEach(() => {
         }
         if (url.endsWith("/asociar") || url.endsWith("/reanudar"))
             return response({ eventos: [{ id: 11, importacionId: 2, revision: 2, resultado: "REUTILIZADA", consumoId: 3 }] });
+        if (url.endsWith("/pilotos-nombres") && nombresFallan > 0) { nombresFallan--; return response({ error: "Servicio de nombres no disponible" }, 503); }
+        if (url.endsWith("/pilotos-nombres") && nombresVacios)
+            return response([]);
         if (url.endsWith("/pilotos-nombres"))
             return response([{ clave: "VISITANTE NUEVO", originales: ["Visitante Nuevo"], filas: 1, candidatos: [], elegibles: [], propuesta: null }]);
         if (url.includes("/filas?"))
@@ -206,5 +209,47 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await click("Reanudar selección");
         const sel = JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion;
         expect(sel).toHaveLength(1); expect(sel[0]).toMatchObject({ candidato, vehiculoId: 1, decisionNombre: { tipo: "REPORTADO", confirmado: true } });
+    });
+    async function abrirShell() {
+        perfilHeader = "SHELL"; revisionHeader = 1; eventosHistorial = [];
+        const origenShell = { ...original, datos_origen: JSON.stringify({ textos: { producto: "DIESEL", piloto: "Visitante Nuevo" }, vale: "0001", placaOriginal: "C-001ABC", fechaConsumo: "2026-10-01" }) };
+        const base = fetch as unknown as ReturnType<typeof vi.fn>, prev = base.getMockImplementation()! as (i: unknown, n?: unknown) => Promise<Response>;
+        base.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => String(input).includes("/filas?") ? response([origenShell]) : prev(input, init));
+        await mount(); await click("Historial"); await click("Ver trazabilidad #2");
+    }
+    it("reanudación Shell: si falla /pilotos-nombres se muestra el error, se bloquea la reanudación y al reintentar se conservan las decisiones", async () => {
+        nombresFallan = 1;
+        await abrirShell();
+        expect(host.textContent).toContain("No se pudo cargar la revisión de pilotos"); expect(host.textContent).toContain("Servicio de nombres no disponible");
+        await click("Editar");
+        await change("Unidad para vale", "1");
+        await change("Motivo de reanudación", "Completar el piloto pendiente");
+        await click("Guardar el nombre original como piloto reportado");   // decisión tomada mientras la carga falló
+        expect(btn("Reanudar selección").disabled).toBe(true);           // información incompleta: no se puede continuar
+        await click("Reanudar selección");
+        expect(calls.some(c => c.url.endsWith("/reanudar"))).toBe(false);
+        await click("Reintentar carga de pilotos");
+        expect(calls.filter(c => c.url.endsWith("/pilotos-nombres"))).toHaveLength(2);
+        expect(host.textContent).not.toContain("No se pudo cargar la revisión de pilotos");
+        expect(btn("Reanudar selección").disabled).toBe(false);          // la decisión previa se conservó
+        await click("Reanudar selección");
+        const sel = JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion;
+        expect(sel).toHaveLength(1); expect(sel[0]).toMatchObject({ decisionNombre: { tipo: "REPORTADO", confirmado: true } });
+    });
+    it("reanudación Shell: una lista de nombres legítimamente vacía NO es un error", async () => {
+        nombresVacios = true;
+        await abrirShell();
+        expect(host.textContent).not.toContain("No se pudo cargar la revisión de pilotos");
+        await click("Editar");
+        await change("Unidad para vale", "1");
+        await change("Motivo de reanudación", "Completar el piloto pendiente");
+        await click("Guardar el nombre original como piloto reportado");
+        expect(btn("Reanudar selección").disabled).toBe(false);
+    });
+    it("reanudación Shell: una respuesta inválida (no es una lista) también se trata como fallo", async () => {
+        const base = fetch as unknown as ReturnType<typeof vi.fn>, prev = base.getMockImplementation()! as (i: unknown, n?: unknown) => Promise<Response>;
+        base.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => String(input).endsWith("/pilotos-nombres") ? response({ nombres: [] }) : prev(input, init));
+        await abrirShell();
+        expect(host.textContent).toContain("No se pudo cargar la revisión de pilotos"); expect(host.textContent).toContain("respuesta inválida");
     });
 });

@@ -2,7 +2,7 @@ import { politicaIndependiente, pilotoIndependiente, unidadIndependiente, piloto
 import { pilotoDirecto, propuestaDirecta } from "./identidad-directa";
 import { tipoTerceroCompatible } from "@/lib/flota/cb2/identidad-directa";
 import { unidadTerceraCompatible } from "@/lib/flota/cb2/terceros-busqueda";
-import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
+import { clasificarProducto, identificarEmpleado } from "@/lib/flota/cb2/clasificacion";
 import type { DecisionAsignacion } from "./asignacion";
 import DecimalJS from "decimal.js";
 const Decimal = DecimalJS.clone({ precision: 48, rounding: DecimalJS.ROUND_HALF_UP });
@@ -53,7 +53,7 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
         const originales = grupos.get(key) ?? [];
         const motivo = decisiones[key]?.motivoUnidad?.trim() ?? "";
         // Shell: un vale solo está LISTO con el piloto resuelto (empleado o piloto reportado confirmado), igual que lo exige el servidor.
-        if (decisiones[key]?.exigirPiloto && !pilotoShellResuelto(originales, decisiones[key])) continue;
+        if (decisiones[key]?.exigirPiloto && !pilotoShellResuelto(originales, decisiones[key], cat)) continue;
         if (politicaIndependiente(cat)) {
             const p = originales[0] && pilotoIndependiente(originales[0],cat,decisiones[key]);
             const valida = originales.length && originales.every(f=> {
@@ -82,7 +82,31 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     }
     return result;
 }
-export const pilotoShellResuelto = (filas: FilaCB2[], d: DecisionAsignacion | undefined) => !filas.some(f => f.perfil === "SHELL") || d?.pilotoTipo === "EXTERNO" || !!d?.decisionNombre;
+/** Shell: ¿el piloto del vale está resuelto de forma COHERENTE? No basta con que exista una decisión: se comprueba tipo, ID y nombre original con los motores existentes
+ * (identificarEmpleado / pilotoIndependiente); el servidor sigue siendo la autoridad final. Los vales no Shell no se ven afectados. */
+export function pilotoShellResuelto(filas: FilaCB2[], d: DecisionAsignacion | undefined, cat?: CatalogosCB2) {
+    if (!filas.some(f => f.perfil === "SHELL")) return true;
+    if (!d) return false;
+    if (d.pilotoTipo === "EXTERNO") {
+        // Identidad externa real y vigente en el catálogo de la empresa, bajo la política de identidades independientes (la que el servidor exige).
+        if (!cat || !politicaIndependiente(cat) || d.pilotoExternoId == null || d.empleadoId != null || d.decisionNombre) return false;
+        return filas.every(f => { const p = pilotoIndependiente(f, cat, d); return p?.tipo === "EXTERNO" && p.id === d.pilotoExternoId; });
+    }
+    const n = d.decisionNombre;
+    if (!n || d.pilotoExternoId != null || d.asociacionExternaId != null) return false;
+    const nombres = filas.map(f => f.origen?.piloto ?? "");
+    if (n.tipo === "EMPLEADO") {
+        if (d.pilotoTipo !== "INTERNO" || d.empleadoId !== n.empleadoId) return false;
+        const e = cat?.empleados?.find(p => p.id === n.empleadoId);
+        if (cat && !e) return false;   // el empleado debe existir en el catálogo de la empresa
+        // Una propuesta sin confirmar solo vale si el motor actual reconoce exactamente a ese empleado para cada nombre original (o hay equivalencia confirmada).
+        return n.confirmado || !cat || nombres.every(o => identificarEmpleado(o, cat.empleados ?? []).propuesta?.id === n.empleadoId);
+    }
+    if (d.pilotoTipo !== "REPORTADO" || d.empleadoId != null) return false;
+    if (cat && !cat.pilotosReportados) return false;   // sin el registro instalado el servidor no puede guardar la identidad reportada
+    // Reportado: confirmado expresamente, o una identidad ya registrada (reportadoId) siempre que ningún empleado sea identificable hoy.
+    return n.confirmado || (n.reportadoId != null && (!cat || nombres.every(o => identificarEmpleado(o, cat.empleados ?? []).candidatos.length === 0)));
+}
 export function estadoVisual(f: FilaCB2, seleccion: Record<string, string>) {
     if (f.estado === "IGNORADA") return "IGNORADO";
     if (f.estado === "RESUELTA") return "RESUELTO";
