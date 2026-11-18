@@ -1,5 +1,6 @@
 c1c900eb444b409144c46e8bbec56f9a7049662440f3d13fd4cdc0d424479e68 *30-preflight-nivel4-esquema.sql
 77285dcfe9f7d3cbb6bcc20a11ba6af9be51572b438b6ed70ad1375cad298264 *30-preflight-nivel4.sql
+3d73e0e3af8e9cfc5f7066a17ae7a6003aed1dcff00d7214e9a1df2dd108bbc2 *35-ejecutar-nivel4-esquema.sql
 2c7bbe1c28b8172c72cca1d5b23843f754cd37f6f4ba82f61bbd5c417f964ccc *40-postcheck-nivel4-esquema.sql
 7f27ed7f442412cb1d7f506d2133b777c007eda2f061fd470a9204243c3a6b79 *40-postcheck-nivel4.sql
 6620795168362542f739c40fe449463d462039f3458328deeed85baeb53e9e12 *../../../sql/migrate-2026-11-cb2-piloto-reportado.sql

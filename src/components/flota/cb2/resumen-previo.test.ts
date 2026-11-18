@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { resumirRevision } from "./preview-model";
+import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import { clavesListas, resumenPrevio } from "./resumen-previo";
 import { motivoUnidadNoOperable, unidadOperable } from "./unidades-bloqueo";
 import type { CatalogosCB2, FilaCB2 } from "./client";
@@ -48,4 +49,19 @@ it("las filas con CONSUMO_PREVIO (ya registradas en una importación anterior) s
   const entrada = { filas, cat, segura, omitidos: {}, decisiones: { a: { exigirProducto: true }, b: { exigirProducto: true } } };
   expect([...clavesListas(entrada)]).toEqual(["b"]);
   expect(resumenPrevio(entrada)).toMatchObject({ total: 3, yaImportadas: 1, listas: 1, pendientes: 0, bloqueadas: 1, validas: 1, cuadra: true });   // un conflicto histórico NO es «ya importada»
+});
+
+it("«20W50» (aceite) NO se convierte en combustible: queda pendiente hasta que la persona clasifique, y solo entonces (p. ej. NO_DETERMINADO) pasa a lista", () => {
+  expect(clasificarProducto("20W50")).toBeNull(); expect(clasificarProducto("Aceite 20W50")).toBeNull(); expect(clasificarProducto("20W-50")).toBeNull();
+  const filas = [fila("a", "C-111AAA", { origen: { producto: "20W50", piloto: "" } })], d0 = { a: { exigirProducto: true } };
+  const seg = (d: Record<string, { exigirProducto: boolean; productoClasificado?: "NO_DETERMINADO" }>) => resumirRevision(filas, cat, { a: "1" }, {}, {}, d).segura;
+  const sin = { filas, cat, segura: seg(d0), omitidos: {}, decisiones: d0 };
+  expect(clavesListas(sin).size).toBe(0); expect(resumenPrevio(sin)).toMatchObject({ listas: 0, pendientes: 1, motivos: { combustible: 1 }, cuadra: true });
+  const d1 = { a: { exigirProducto: true, productoClasificado: "NO_DETERMINADO" as const } };
+  expect(clavesListas({ filas, cat, segura: seg(d1), omitidos: {}, decisiones: d1 }).size).toBe(1);
+});
+it("el módulo CB2 nunca escribe el estado de las unidades de Flota: una unidad «En taller» solo se reactiva desde Flota", async () => {
+  const { readdirSync, readFileSync, statSync } = await import("node:fs"), { join } = await import("node:path");
+  const recorrer = (d: string): string[] => readdirSync(d).flatMap((f) => { const p = join(d, f); return statSync(p).isDirectory() ? recorrer(p) : /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f) ? [p] : []; });
+  for (const archivo of [...recorrer("src/lib/flota/cb2"), ...recorrer("src/components/flota/cb2")]) expect(readFileSync(archivo, "utf8"), archivo).not.toMatch(/(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+`?flota_vehiculos`?\b/i);
 });
