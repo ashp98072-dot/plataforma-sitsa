@@ -40,15 +40,21 @@ describe("asignación independiente (HALEL/terceros directos) y empleados de baj
     const r = await validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 50, metodoPiloto: "MANUAL" }, "Andres Taracena", "C-001ABC");
     expect(r.piloto).toEqual({ tipo: "INTERNO", id: 50, nombre: "Andres Norberto Taracena Mayen", estadoEmpleado: "Baja" });
   });
-  it("baja con método automático (explícito o por omisión): rechazada", async () => {
-    await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 50, metodoPiloto: "AUTOMATICA" }, "Andres Norberto Taracena Mayen", "C-001ABC")).rejects.toThrow("manual");
-    await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 50 }, "Andres Norberto Taracena Mayen", "C-001ABC")).rejects.toThrow("manual");
+  it("baja con método automático: se reconoce igual que un activo cuando es único; el estado queda registrado", async () => {
+    for (const metodoPiloto of ["AUTOMATICA", undefined] as const) {
+      const r = await validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 50, ...(metodoPiloto ? { metodoPiloto } : {}) }, "Andres Taracena", "C-001ABC");
+      expect(r.piloto).toMatchObject({ tipo: "INTERNO", id: 50, estadoEmpleado: "Baja" });
+    }
+  });
+  it("automática hacia otro empleado distinto del único coincidente, o con nombre sin dos palabras: rechazada", async () => {
+    await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 33, metodoPiloto: "AUTOMATICA" }, "Andres Taracena", "C-001ABC")).rejects.toThrow("ambigua");
+    await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 50, metodoPiloto: "AUTOMATICA" }, "Andres", "C-001ABC")).rejects.toThrow("ambigua");
   });
   it("baja de otra empresa o estado distinto de Activo/Baja: 403, aunque sea MANUAL", async () => {
     for (const id of [51, 52, 999]) await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: id, metodoPiloto: "MANUAL" }, "x", "C-001ABC")).rejects.toMatchObject({ status: 403 });
     expect(m.consultas.filter(s => s.includes("FROM empleados")).every(s => s.includes("empresa_id=?"))).toBe(true);
   });
-  it("un homónimo de baja vuelve ambigua la propuesta automática de un empleado activo", async () => {
+  it("un homónimo (activo o de baja) vuelve ambigua la propuesta automática", async () => {
     m.empleados.push({ id: 60, empresa: 7, nombre: "Edgar Palala", estado: "Baja" });
     await expect(validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 33, metodoPiloto: "AUTOMATICA" }, "Edgar Palala", "C-001ABC")).rejects.toThrow("ambigua");
     expect((await validarAsignacionIndependiente(c, ctx, { ...base, empleadoId: 33, metodoPiloto: "MANUAL" }, "Edgar Palala", "C-001ABC")).piloto).toEqual({ tipo: "INTERNO", id: 33, nombre: "Edgar Palala" });
@@ -61,11 +67,11 @@ describe("asignación independiente (HALEL/terceros directos) y empleados de baj
 describe("asignación independiente — cliente", () => {
   const cat = { tercerosDirectos: true, identidadesIndependientes: true, empleados: [{ id: 33, nombre: "Edgar Palala", estado: "Activo" }, { id: 50, nombre: "Andres Norberto Taracena Mayen", estado: "Baja", fechaBaja: "2026-06-30" }], pilotosExternos: [], vehiculos: [] } as unknown as CatalogosCB2;
   const fila = (piloto: string) => ({ origen: { piloto }, perfil: "HALEL" }) as unknown as FilaCB2;
-  it("un empleado de baja nunca se propone solo; sí se puede elegir manualmente", () => {
-    expect(pilotoIndependiente(fila("Andres Taracena"), cat)).toBeNull();
-    expect(pilotoIndependiente(fila("Andres Norberto Taracena Mayen"), cat)).toBeNull();
+  it("un empleado de baja se propone solo si es único (≥2 palabras completas) y también se puede elegir manualmente", () => {
+    expect(pilotoIndependiente(fila("Andres Taracena"), cat)).toMatchObject({ tipo: "INTERNO", id: 50, manual: false });
+    expect(pilotoIndependiente(fila("Andres"), cat)).toBeNull();
     expect(pilotoIndependiente(fila("Edgar Palala"), cat)).toMatchObject({ tipo: "INTERNO", id: 33, manual: false });
-    expect(seleccionPilotoIndependiente(fila("Andres Taracena"), cat, { pilotoTipo: "INTERNO", empleadoId: 50 }, 1)).toMatchObject({ pilotoTipo: "INTERNO", empleadoId: 50, metodoPiloto: "MANUAL", metodoEmpleado: "MANUAL" });
-    expect(seleccionPilotoIndependiente(fila("Andres Taracena"), cat, {}, 1)).toMatchObject({ empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" });   // sin elección explícita nunca queda ligado a la baja
+    expect(seleccionPilotoIndependiente(fila("Andres Taracena"), cat, {}, 1)).toMatchObject({ pilotoTipo: "INTERNO", empleadoId: 50, metodoPiloto: "AUTOMATICA", metodoEmpleado: "TOKENS_COMPLETOS_UNICOS" });
+    expect(seleccionPilotoIndependiente(fila("Andres Taracena"), cat, { pilotoTipo: "INTERNO", empleadoId: 50 }, 1)).toMatchObject({ empleadoId: 50, metodoPiloto: "MANUAL", metodoEmpleado: "MANUAL" });
   });
 });

@@ -26,9 +26,9 @@ export function ventanaLaboral(e: EmpleadoCatalogo, rango: RangoFechas | undefin
 }
 export const textoVentana: Record<VentanaLaboral, string> = {
     ACTIVO: "", VALIDA: "Los consumos son anteriores o iguales a la fecha de baja.",
-    POSTERIOR_A_BAJA: "Hay consumos posteriores a la fecha de baja: revisa que sea la misma persona antes de confirmar.",
-    ANTERIOR_A_ALTA: "Hay consumos anteriores a la fecha de alta: revisa antes de confirmar.",
-    SIN_FECHA_BAJA: "RR. HH. no tiene fecha de baja confiable: confirma manualmente; no se asume que seguía activo.",
-    SIN_FECHA_CONSUMO: "El archivo no trae fechas suficientes para comparar con la baja: confirma manualmente.",
+    POSTERIOR_A_BAJA: "Aviso: hay consumos posteriores a la fecha de baja; verifica que sea la misma persona.",
+    ANTERIOR_A_ALTA: "Aviso: hay consumos anteriores a la fecha de alta.",
+    SIN_FECHA_BAJA: "Aviso: RR. HH. no tiene fecha de baja confiable; no se puede comparar con los consumos.",
+    SIN_FECHA_CONSUMO: "Aviso: el archivo no trae fechas suficientes para comparar con la baja.",
 };
 export const etiquetaEmpleado = (e: EmpleadoCatalogo) => `${e.nombre} · #${e.id}${e.estado && e.estado !== "Activo" ? ` · ${e.estado}${e.fechaBaja ? ` (${iso(e.fechaBaja)})` : ""}` : ""}`;

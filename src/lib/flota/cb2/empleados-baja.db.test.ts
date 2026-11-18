@@ -39,7 +39,7 @@ describe.skipIf(!pipe)("empleados de baja: consultas reales (MariaDB 11.8.9)", (
     const { revisarNombresTx } = await import("./pilotos-reportados");
     const [g] = await revisarNombresTx(conexion(admin), 7, [NOMBRE, NOMBRE, NOMBRE], false, ["2026-05-01", null, "2026-05-03"]);
     expect(g.candidatos).toHaveLength(1); expect(g.candidatos[0]).toMatchObject({ estado: "Baja", fechaBaja: "2026-06-30", fechaAlta: "2024-01-10" });
-    expect(g.rango).toMatchObject({ min: "2026-05-01", max: "2026-05-03", sinFecha: true }); expect(g.propuesta).toBeNull();
+    expect(g.rango).toMatchObject({ min: "2026-05-01", max: "2026-05-03", sinFecha: true }); expect(g.propuesta).toMatchObject({ tipo: "EMPLEADO", confirmado: false });   // la baja se reconoce sola
     const [e] = await revisarNombresTx(conexion(admin), 7, ["Edgar Palala"], false, ["2026-05-01"]);
     expect(e.propuesta).toMatchObject({ tipo: "EMPLEADO", confirmado: false });
   });
@@ -49,7 +49,7 @@ describe.skipIf(!pipe)("empleados de baja: consultas reales (MariaDB 11.8.9)", (
       const err = await admin.query("SELECT fecha_egreso FROM empleados").catch((e) => e); expect(err.errno).toBe(1054); expect(err.code).toBe("ER_BAD_FIELD_ERROR");
       const { revisarNombresTx } = await import("./pilotos-reportados");
       const [g] = await revisarNombresTx(conexion(admin), 7, [NOMBRE], false, ["2026-05-01"]);
-      expect(g.candidatos[0]).toMatchObject({ estado: "Baja", fechaBaja: null }); expect(g.propuesta).toBeNull();
+      expect(g.candidatos[0]).toMatchObject({ estado: "Baja", fechaBaja: null }); expect(g.propuesta).toMatchObject({ tipo: "EMPLEADO" });
     } finally { await admin.query("ALTER TABLE empleados ADD COLUMN fecha_egreso DATE NULL; UPDATE empleados SET fecha_egreso='2026-06-30' WHERE estado='Baja'"); }
   });
   it("sin privilegio sobre la columna: el error de permisos se propaga y NO se reintenta", async () => {
@@ -59,7 +59,7 @@ describe.skipIf(!pipe)("empleados de baja: consultas reales (MariaDB 11.8.9)", (
     const { revisarNombresTx } = await import("./pilotos-reportados");
     await expect(revisarNombresTx(conexion(limitado!), 7, [NOMBRE], false, ["2026-05-01"])).rejects.toMatchObject({ errno: err.errno });
   });
-  it("validación del servidor: baja aceptada solo por elección MANUAL de la misma empresa; otra empresa 403; automática rechazada", async () => {
+  it("validación del servidor: baja aceptada (automática única o manual) de la misma empresa; otra empresa 403; homónimo ambiguo", async () => {
     await admin.query(`USE ${DB}`);
     const [[b7]] = await admin.query<RowDataPacket[][]>("SELECT id FROM empleados WHERE empresa_id=7 AND estado='Baja'") as unknown as [RowDataPacket[]];
     const [[b99]] = await admin.query<RowDataPacket[][]>("SELECT id FROM empleados WHERE empresa_id=99") as unknown as [RowDataPacket[]];
@@ -71,7 +71,10 @@ describe.skipIf(!pipe)("empleados de baja: consultas reales (MariaDB 11.8.9)", (
     try {
       expect((await validarEmpleadosImportacion(conexion(admin), ctx, sel(Number(b7.id), "MANUAL"), [linea])).get("a".repeat(64))).toBe("MANUAL");
       await expect(validarEmpleadosImportacion(conexion(admin), ctx, sel(Number(b99.id), "MANUAL"), [linea])).rejects.toMatchObject({ status: 403 });
-      await expect(validarEmpleadosImportacion(conexion(admin), ctx, sel(Number(b7.id), "TOKENS_COMPLETOS_UNICOS"), [linea])).rejects.toThrow("coincidencia automática");
+        const auto = await validarEmpleadosImportacion(conexion(admin), ctx, sel(Number(b7.id), "TOKENS_COMPLETOS_UNICOS"), [linea]);   // «Andres Taracena»: dos palabras completas, único → automática válida
+      expect(auto.get("a".repeat(64))).toBe("TOKENS_COMPLETOS_UNICOS"); expect(auto.estados.get("a".repeat(64))).toBe("Baja");
+      await admin.query("INSERT INTO empleados(empresa_id,codigo,nombre,estado) VALUES (7,'H1','Andres Taracena Lopez','Activo')");   // homónimo parcial: ahora ambiguo
+      await expect(validarEmpleadosImportacion(conexion(admin), ctx, sel(Number(b7.id), "TOKENS_COMPLETOS_UNICOS"), [linea])).rejects.toThrow("ambigua");
       // Consulta de asignación posterior (asignaciones.ts): acotada por empresa e ID explícito.
       const sql = "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') FOR UPDATE";
       expect((await admin.query<RowDataPacket[]>(sql, [7, b7.id]))[0]).toHaveLength(1); expect((await admin.query<RowDataPacket[]>(sql, [7, b99.id]))[0]).toHaveLength(0);

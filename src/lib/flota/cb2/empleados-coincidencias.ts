@@ -5,7 +5,7 @@ export type MetodoEmpleado = typeof metodosEmpleado[number];
 type MetodoAutomatico = Extract<MetodoEmpleado, "EXACTA_NORMALIZADA" | "TOKENS_COMPLETOS_UNICOS">;
 type Empleado = { id: number; nombre: string; estado?: string; fechaBaja?: string | null; fechaAlta?: string | null };
 export type CoincidenciaEmpleado<T> = {
-    estado: "EXACTA" | "PARCIAL_UNICA" | "AMBIGUA" | "INEXISTENTE" | "REQUIERE_CONFIRMACION_BAJA";
+    estado: "EXACTA" | "PARCIAL_UNICA" | "AMBIGUA" | "INEXISTENTE";
     candidatos: T[];
     propuesta: T | null;
     metodo: MetodoAutomatico | null;
@@ -14,7 +14,16 @@ export type CoincidenciaEmpleado<T> = {
 export const nombreEmpleadoComparable = (s: string) => nombreComparable(s).replace(/\p{P}+/gu, " ").replace(/\s+/g, " ").trim();
 const sinNombre = new Set(["NO TIENE NOMBRE", "SIN NOMBRE", "NO INFORMADO", "N A", "PENDIENTE"]);
 
-/** El llamador aporta exclusivamente el catálogo autorizado de la empresa actual.
+/** Partículas que no cuentan como «palabra» de identidad (evitan que «de/la» + un apellido común identifiquen a otra persona).
+ * Una palabra cuenta si tiene al menos 2 letras y no es una partícula. */
+const particulas = new Set(["DE", "DEL", "LA", "LAS", "LOS", "Y", "E", "VON", "VAN", "DA", "DO", "DI"]);
+export const palabraSignificativa = (t: string) => t.length >= 2 && !particulas.has(t);
+export const MIN_PALABRAS_COINCIDENTES = 2;
+
+/** Política ÚNICA de reconocimiento (Shell, HALEL, terceros directos y validación del servidor).
+ * El llamador aporta exclusivamente el catálogo autorizado de la empresa actual (empleados Activo y Baja; el estado no cambia el reconocimiento).
+ * Un empleado es elegible si comparte al menos DOS palabras completas distintas con el nombre importado (sin importar posición, tildes ni mayúsculas).
+ * Exactamente un elegible → propuesta con su ID real; dos o más → ambiguo; ninguno → revisión manual.
  * Índice invertido y caché por nombre: no recorre todo el catálogo por consumo. */
 export function crearBuscadorEmpleados<T extends Empleado>(catalogo: readonly T[]) {
     const indice = new Map<string, Set<number>>(), nombres = new Map<number, string>(), cache = new Map<string, CoincidenciaEmpleado<T>>();
@@ -29,22 +38,22 @@ export function crearBuscadorEmpleados<T extends Empleado>(catalogo: readonly T[
     return (original: string): CoincidenciaEmpleado<T> => {
         const key = nombreEmpleadoComparable(original), previa = cache.get(key);
         if (previa) return previa;
-        const tokens = [...new Set(key.split(" ").filter(Boolean))];
+        const todos = [...new Set(key.split(" ").filter(Boolean))];
+        const tokens = todos.filter(palabraSignificativa);
         let indices: number[] = [];
-        if (tokens.length >= 2 && key.length <= 255 && !sinNombre.has(key) && tokens.every(t => /^\p{L}+$/u.test(t))) {
-            const listas = tokens.map(t => indice.get(t) ?? new Set<number>()).sort((a,b) => a.size-b.size);
-            indices = [...listas[0]].filter(i => listas.every(lista => lista.has(i))).sort((a,b) => a-b);
+        if (tokens.length >= MIN_PALABRAS_COINCIDENTES && key.length <= 255 && !sinNombre.has(key) && todos.every(t => /^\p{L}+$/u.test(t))) {
+            const cuenta = new Map<number, number>();
+            for (const t of tokens) for (const i of indice.get(t) ?? []) cuenta.set(i, (cuenta.get(i) ?? 0) + 1);
+            indices = [...cuenta].filter(([, n]) => n >= MIN_PALABRAS_COINCIDENTES).map(([i]) => i).sort((a, b) => a - b);
         }
-        const candidatos = indices.map(i => catalogo[i]), coincide = candidatos.length === 1;
-        // Un empleado de baja se ofrece como candidato pero nunca se vincula solo: exige confirmación manual.
-        const baja = coincide && candidatos[0].estado === "Baja", unica = coincide && !baja;
+        const candidatos = indices.map(i => catalogo[i]), unica = candidatos.length === 1;
+        // Sin excepciones: si dos o más empleados reúnen el mínimo de palabras completas, es ambiguo aunque el nombre importado sea idéntico al de uno de ellos.
         const exacta = unica && nombres.get(indices[0]) === key;
-        // Una exacta no gana sobre otra persona cuyo nombre también contiene los tokens.
         const resultado: CoincidenciaEmpleado<T> = {
-            estado: baja ? "REQUIERE_CONFIRMACION_BAJA" : unica ? exacta ? "EXACTA" : "PARCIAL_UNICA" : candidatos.length ? "AMBIGUA" : "INEXISTENTE",
+            estado: unica ? exacta ? "EXACTA" : "PARCIAL_UNICA" : candidatos.length ? "AMBIGUA" : "INEXISTENTE",
             candidatos, propuesta: unica ? candidatos[0] : null,
             metodo: unica ? exacta ? "EXACTA_NORMALIZADA" : "TOKENS_COMPLETOS_UNICOS" : null,
-            motivo: baja ? "Único empleado coincidente está de baja; requiere confirmación manual" : unica ? exacta ? "Nombre normalizado completo y único en el catálogo activo" : "Dos o más tokens completos, sin exigir orden, identifican un único empleado activo" : candidatos.length ? "Varios empleados contienen todos los tokens; requiere elección manual" : "Sin coincidencia confiable de al menos dos tokens completos; piloto pendiente",
+            motivo: unica ? exacta ? "Nombre normalizado completo y único en el catálogo de la empresa (activo o de baja)" : "Dos o más palabras completas coinciden con un único empleado de la empresa (activo o de baja)" : candidatos.length ? "Varios empleados comparten dos o más palabras completas; requiere elección manual" : "Sin empleado con al menos dos palabras completas coincidentes; revisión manual",
         };
         if (key.length <= 255 && cache.size < 10000) cache.set(key, resultado);
         return resultado;

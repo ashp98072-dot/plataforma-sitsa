@@ -6,6 +6,7 @@ import { tercerosDirectosHabilitados } from "./terceros-directos";
 import { tipoTerceroCompatible } from "./identidad-directa";
 import { unidadTerceraCompatible } from "./terceros-busqueda";
 import { nombreComparable } from "../combustible-coincidencias";
+import { crearBuscadorEmpleados } from "./empleados-coincidencias";
 
 export type IdentidadIndependiente = { pilotoTipo?: "INTERNO" | "EXTERNO" | "REPORTADO"; metodoPiloto?: "AUTOMATICA" | "MANUAL"; pilotoExternoId?: number; empleadoId?: number | null; vehiculoId: number; motivoUnidad?: string; asociacionExternaId?: number };
 export async function validarAsignacionIndependiente(c: PoolConnection, ctx: Contexto, s: IdentidadIndependiente, nombre: string, placa: string) {
@@ -21,12 +22,11 @@ export async function validarAsignacionIndependiente(c: PoolConnection, ctx: Con
   if (s.asociacionExternaId != null || !s.pilotoTipo || (reportado ? s.vehiculoId > 0 || s.empleadoId != null || s.pilotoExternoId != null : s.pilotoTipo === "INTERNO" ? !s.empleadoId || s.pilotoExternoId != null : !s.pilotoExternoId || s.empleadoId != null)) throw new ErrorCB2("Selecciona una sola identidad de piloto.",400);
   const cat = await catalogosTercerosTx(c,ctx.empresaId);
   if(!reportado && s.metodoPiloto!=="MANUAL"){
-    // Activos y de baja: un homónimo de baja también hace ambigua la propuesta automática, y un empleado de baja NUNCA se vincula solo.
-    const internos=await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[ctx.empresaId]);
-    const exactos=internos.filter(p=>nombreComparable(String(p.nombre))===nombreComparable(nombre));
-    if(s.pilotoTipo==='INTERNO' && exactos.some(p=>Number(p.id)===s.empleadoId && p.estado==='Baja'))throw new ErrorCB2("Un empleado de baja requiere selección manual explícita.");
+    // Misma política que Shell/HALEL: ≥2 palabras completas, empleado único de la empresa (Activo o Baja por igual) y sin ambigüedad.
+    const internos=(await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[ctx.empresaId])).map(p=>({id:Number(p.id),nombre:String(p.nombre ?? ""),estado:String(p.estado)}));
+    const interno=crearBuscadorEmpleados(internos)(nombre);
     const externos=cat.pilotos.filter(p=>nombreComparable(p.nombre)===nombreComparable(nombre));
-    if(s.pilotoTipo==='INTERNO' ? exactos.length!==1||Number(exactos[0]?.id)!==s.empleadoId||externos.length!==0 : externos.length!==1||externos[0]?.id!==s.pilotoExternoId||exactos.length!==0)throw new ErrorCB2("Propuesta automatica ambigua entre pilotos internos y externos. Selecciona manualmente.");
+    if(s.pilotoTipo==='INTERNO' ? interno.propuesta?.id!==s.empleadoId||externos.length!==0 : externos.length!==1||externos[0]?.id!==s.pilotoExternoId||interno.candidatos.length!==0)throw new ErrorCB2("Propuesta automatica ambigua entre pilotos internos y externos. Selecciona manualmente.");
   }
   let piloto: { tipo: string; id: number | null; nombre: string; estadoEmpleado?: string };
   if (reportado) {
@@ -34,8 +34,7 @@ export async function validarAsignacionIndependiente(c: PoolConnection, ctx: Con
   } else if (s.pilotoTipo === "INTERNO") {
     const [p] = await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') LOCK IN SHARE MODE",[ctx.empresaId,s.empleadoId!]);
     if (!p) throw new ErrorCB2("Piloto interno ajeno o inactivo.",403);
-    // Baja: solo por selección manual explícita; queda registrada en la identidad guardada para trazabilidad.
-    if (p.estado==="Baja" && s.metodoPiloto!=="MANUAL") throw new ErrorCB2("Un empleado de baja requiere selección manual explícita.");
+    // Baja: se admite igual que Activo (automática única o manual); el estado queda registrado en la identidad guardada para trazabilidad.
     piloto = {tipo:"INTERNO",id:Number(p.id),nombre:String(p.nombre),...(p.estado==="Baja"?{estadoEmpleado:"Baja"}:{})};
   } else {
     const p = cat.pilotos.find(p=>p.id===s.pilotoExternoId);

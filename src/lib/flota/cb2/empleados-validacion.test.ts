@@ -27,12 +27,14 @@ describe("revalidación de empleados del Excel bajo transacción",()=>{
         catalogo=catalogo.filter(p=>p.id!==90);catalogo[0].nombre="Alberto Pinto";await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toThrow("coincidencia automática");
         catalogo[0].estado="Inactivo";await expect(validarEmpleadosImportacion(c,ctx,[choice],[linea()])).rejects.toMatchObject({status:403});
     });
-    it("empleado de baja: se acepta solo por elección MANUAL de la empresa; nunca como coincidencia automática; otra empresa se rechaza",async()=>{
+    it("empleado de baja: se acepta por coincidencia automática única o por elección manual de la empresa; otra empresa 403; homónimo activo+baja ambiguo",async()=>{
         catalogo.push({id:91,nombre:"Andres Norberto Taracena Mayen",empresa:7,estado:"Baja"},{id:92,nombre:"Andres Norberto Taracena Mayen",empresa:99,estado:"Baja"});
-        const manual={candidato:"a".repeat(64),vehiculoId:1,empleadoId:91,metodoEmpleado:"MANUAL" as const};
-        expect((await validarEmpleadosImportacion(c,ctx,[manual],[linea("a".repeat(64),"Andres Taracena")])).get(manual.candidato)).toBe("MANUAL");
-        await expect(validarEmpleadosImportacion(c,ctx,[{...manual,empleadoId:92}],[linea("a".repeat(64),"Andres Taracena")])).rejects.toMatchObject({status:403});
-        await expect(validarEmpleadosImportacion(c,ctx,[{...manual,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"}],[linea("a".repeat(64),"Andres Taracena")])).rejects.toThrow("coincidencia automática");
+        const l=[linea("a".repeat(64),"Andres Taracena")],auto={candidato:"a".repeat(64),vehiculoId:1,empleadoId:91,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS" as const};
+        const r=await validarEmpleadosImportacion(c,ctx,[auto],l);expect(r.get(auto.candidato)).toBe("TOKENS_COMPLETOS_UNICOS");expect(r.estados.get(auto.candidato)).toBe("Baja");
+        expect((await validarEmpleadosImportacion(c,ctx,[{...auto,metodoEmpleado:"MANUAL"}],l)).get(auto.candidato)).toBe("MANUAL");
+        await expect(validarEmpleadosImportacion(c,ctx,[{...auto,empleadoId:92}],l)).rejects.toMatchObject({status:403});
+        catalogo.push({id:93,nombre:"Andres Taracena Lopez",empresa:7,estado:"Activo"});
+        await expect(validarEmpleadosImportacion(c,ctx,[auto],l)).rejects.toThrow("ambigua");
     });
     it("no acepta método exacto falso ni usa nombres enviados por el cliente",async()=>{
         await expect(validarEmpleadosImportacion(c,ctx,[{...choice,metodoEmpleado:"EXACTA_NORMALIZADA"}],[linea()])).rejects.toThrow("coincidencia automática");

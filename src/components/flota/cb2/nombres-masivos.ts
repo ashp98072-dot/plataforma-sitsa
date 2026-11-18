@@ -1,5 +1,4 @@
 import { nombreEmpleadoComparable } from "@/lib/flota/cb2/empleados-coincidencias";
-import { ventanaLaboral } from "@/lib/flota/cb2/empleados-baja";
 import type { DecisionNombre, RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
 
 /**
@@ -15,9 +14,7 @@ export function decisionesMasivas(nombres: RevisionNombre[], decisiones: Record<
   const empleado = sinDecidir.filter((n) => {
     if (n.candidatos.length !== 1 || n.equivalencia) return false;
     const palabras = nombreEmpleadoComparable(n.originales[0] ?? "").split(" ").filter(Boolean);
-    // Un empleado de baja solo entra a la acción masiva si TODOS los consumos caen dentro de su periodo laboral con fecha de baja confiable.
-    const v = ventanaLaboral(n.candidatos[0], n.rango);
-    if (v !== "ACTIVO" && v !== "VALIDA") return false;
+    // Activo o Baja se tratan igual; las fechas laborales solo generan advertencias informativas en la revisión.
     const del = nombreEmpleadoComparable(n.candidatos[0].nombre).split(" ");
     return palabras.length >= 2 && palabras.every((p) => del.includes(p));
   });

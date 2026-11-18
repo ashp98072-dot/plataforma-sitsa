@@ -1,8 +1,8 @@
 import { buscarCoincidencias } from "../combustible-coincidencias";
-import { nombreEmpleadoComparable } from "./empleados-coincidencias";
+import { crearBuscadorEmpleados, nombreEmpleadoComparable } from "./empleados-coincidencias";
 export const normalizarNombreReportado=(nombre:string)=>nombre.normalize("NFC").trim().replace(/\s+/gu," ").toLocaleUpperCase("es-GT");
 export type DecisionNombre = {tipo:"EMPLEADO";empleadoId:number;confirmado:boolean} | {tipo:"REPORTADO";reportadoId?:number;confirmado:boolean};
-export type RevisionNombre = {clave:string;originales:string[];filas:number;rango?:{min:string|null;max:string|null;sinFecha?:boolean};candidatos:{id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null}[];propuesta:DecisionNombre|null;equivalencia?:DecisionNombre};
+export type RevisionNombre = {clave:string;originales:string[];filas:number;rango?:{min:string|null;max:string|null;sinFecha?:boolean};candidatos:{id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null}[];/** IDs que cumplen la política de dos palabras completas (los demás candidatos son solo ayudas visuales aproximadas). */elegibles?:number[];/** La equivalencia histórica apunta a un empleado distinto del que identifica hoy el motor: exige revisión explícita. */conflictoEquivalencia?:{equivalenciaId:number;reconocidoId:number};propuesta:DecisionNombre|null;equivalencia?:DecisionNombre};
 type Empleado={id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null};
 function parecidos(a:string,b:string) {
  if(a===b)return true;
@@ -19,11 +19,18 @@ export function candidatosNombre(nombre:string,empleados:Empleado[]) {
  const parciales=empleados.filter(p=>{const otras=nombreEmpleadoComparable(p.nombre).split(" ");return tokens.every(t=>otras.some(o=>parecidos(t,o))) || otras.every(t=>tokens.some(o=>parecidos(t,o)));});
  return [...new Map([...parciales,...fuzzy].map(p=>[p.id,p])).values()].sort((a,b)=>a.id-b.id);
 }
-export function proponerNombre(nombre:string,empleados:Empleado[],equivalencia?:DecisionNombre,rango?:{min:string|null;max:string|null;sinFecha?:boolean}):RevisionNombre {
- const candidatos=candidatosNombre(nombre,empleados),key=nombreEmpleadoComparable(nombre);
- const exactas=empleados.filter(p=>nombreEmpleadoComparable(p.nombre)===key);
- const aliasValido=equivalencia && candidatos.length<2 && exactas.length<2 && (equivalencia.tipo==="EMPLEADO" ? empleados.some(p=>p.id===equivalencia.empleadoId && p.estado!=="Baja")   // una equivalencia hacia un empleado de baja jamás se propone sola: exige nueva confirmación manual
- : exactas.length===0);
- const propuesta=aliasValido ? {...equivalencia,confirmado:false} : candidatos.length===1 && exactas.length===1 && exactas[0].estado!=="Baja" ? {tipo:"EMPLEADO" as const,empleadoId:exactas[0].id,confirmado:false} : null;
- return {clave:normalizarNombreReportado(nombre),originales:[nombre],filas:1,...(rango?{rango}:{}),candidatos,propuesta,...(equivalencia?{equivalencia}:{})};
+export function proponerNombre(nombre:string,empleados:Empleado[],equivalencia?:DecisionNombre,rango?:{min:string|null;max:string|null;sinFecha?:boolean},buscar=crearBuscadorEmpleados(empleados)):RevisionNombre {
+ const coincidencia=buscar(nombre);   // misma política que HALEL: ≥2 palabras completas, único, sin ambigüedad; Activo y Baja por igual
+ // Los elegibles del motor SIEMPRE son candidatos; los aproximados (erratas, parecidos) se añaden solo como ayuda visual y jamás deciden una asignación.
+ const candidatos=[...new Map([...coincidencia.candidatos,...candidatosNombre(nombre,empleados)].map(p=>[p.id,p])).values()].sort((a,b)=>a.id-b.id);
+ const reconocido=coincidencia.propuesta?.id??null;
+ let propuesta:DecisionNombre|null=reconocido!=null?{tipo:"EMPLEADO",empleadoId:reconocido,confirmado:false}:null,conflicto:RevisionNombre["conflictoEquivalencia"];
+ if(equivalencia?.tipo==="EMPLEADO") {
+  // Una equivalencia histórica nunca sustituye a una coincidencia inequívoca hacia otro ID ni resuelve una ambigüedad: ante conflicto, revisión explícita.
+  if(reconocido!=null && reconocido!==equivalencia.empleadoId){propuesta=null;conflicto={equivalenciaId:equivalencia.empleadoId,reconocidoId:reconocido};}
+  // Sin reconocimiento del motor (o ambiguo), el alias queda solo como referencia (`equivalencia`): no se autopropone ni elude el mínimo de dos palabras.
+ }
+ // Un alias «reportado» no se propone si hoy existe un empleado identificable (se propone el empleado en su lugar).
+ else if(equivalencia?.tipo==="REPORTADO" && coincidencia.candidatos.length===0)propuesta={...equivalencia,confirmado:false};
+ return {clave:normalizarNombreReportado(nombre),originales:[nombre],filas:1,...(rango?{rango}:{}),candidatos,elegibles:coincidencia.candidatos.map(p=>p.id),...(conflicto?{conflictoEquivalencia:conflicto}:{}),propuesta,...(equivalencia?{equivalencia}:{})};
 }

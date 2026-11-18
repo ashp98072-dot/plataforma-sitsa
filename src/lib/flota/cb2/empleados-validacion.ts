@@ -7,14 +7,14 @@ import { crearBuscadorEmpleados, type MetodoEmpleado } from "./empleados-coincid
  * El catálogo de unicidad es una lectura READ COMMITTED sin bloquear RRHH.
  * No usa el catálogo ni el nombre completo enviados por el navegador. */
 export async function validarEmpleadosImportacion(c: PoolConnection, ctx: Contexto, seleccion: Seleccion, lineas: Linea[]) {
-    const metodos = new Map<string, MetodoEmpleado | "NO_DECLARADO">();
+    const metodos = new Map<string, MetodoEmpleado | "NO_DECLARADO">(), estados = new Map<string, string>();
     const elegidas = seleccion.filter(s => s.empleadoId != null);
     const elegidos = [...new Set(elegidas.map(s => s.empleadoId!))].sort((a, b) => a - b);
-    const ids = new Set<number>();
+    const ids = new Set<number>(), estadoPorId = new Map<number, string>();
     for (let i = 0; i < elegidos.length; i += 200) {
         const lote = elegidos.slice(i, i + 200);
-        const activos = await rows(c, `SELECT id FROM empleados FORCE INDEX (PRIMARY) WHERE empresa_id=? AND estado IN ('Activo','Baja') AND id IN (${lote.map(() => "?").join(",")}) ORDER BY id LOCK IN SHARE MODE`, [ctx.empresaId, ...lote]);
-        activos.forEach(p => ids.add(Number(p.id)));
+        const activos = await rows(c, `SELECT id,estado FROM empleados FORCE INDEX (PRIMARY) WHERE empresa_id=? AND estado IN ('Activo','Baja') AND id IN (${lote.map(() => "?").join(",")}) ORDER BY id LOCK IN SHARE MODE`, [ctx.empresaId, ...lote]);
+        activos.forEach(p => { ids.add(Number(p.id)); estadoPorId.set(Number(p.id), String(p.estado ?? "Activo")); });
     }
     if (elegidos.some(id => !ids.has(id))) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
     const automatica = seleccion.some(s => s.metodoEmpleado === "EXACTA_NORMALIZADA" || s.metodoEmpleado === "TOKENS_COMPLETOS_UNICOS");
@@ -33,6 +33,8 @@ export async function validarEmpleadosImportacion(c: PoolConnection, ctx: Contex
                 throw new ErrorCB2("La coincidencia automática del empleado cambió o es ambigua. Revisa el catálogo y vuelve a confirmar, o elige manualmente.");
         }
         metodos.set(s.candidato, metodo);
+        if (s.empleadoId != null) estados.set(s.candidato, estadoPorId.get(s.empleadoId) ?? "Activo");
     }
-    return metodos;
+    // Trazabilidad: estado laboral del empleado vinculado (Activo/Baja) por candidato; no altera RR. HH.
+    return Object.assign(metodos, { estados });
 }
