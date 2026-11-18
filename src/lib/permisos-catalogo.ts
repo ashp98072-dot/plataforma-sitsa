@@ -4,7 +4,7 @@ import { puedeEditarModulo, type Modulo, type RolGlobal } from "./roles";
 import { alcanceFacturacionPorRol } from "./facturacion/alcance-rol";
 
 export type FlagPermiso = keyof Omit<PermisoModulo, "modulo">;
-export type AreaPermiso = "rrhh" | "operaciones" | "flota" | "contabilidad" | "sitio" | "administracion";
+export type AreaPermiso = "rrhh" | "operaciones" | "flota" | "contabilidad" | "sitio" | "administracion" | "canecas";
 export type AccionCatalogo = {
   id: string; label: string; modulo: string; flag: FlagPermiso;
   /** Aclaración opcional que la matriz de Usuarios muestra bajo la etiqueta. */
@@ -18,6 +18,7 @@ export type AccionCatalogo = {
 };
 export type ModuloCatalogo = { id: string; label: string; area: AreaPermiso; acciones: AccionCatalogo[] };
 export const AREAS_PERMISOS = [
+  {id:"canecas",titulo:"Gestión de Canecas"},
   {id:"rrhh",titulo:"RRHH"},
   {id:"operaciones",titulo:"Operaciones"},
   {id:"flota",titulo:"Flota / Predios"},
@@ -38,6 +39,13 @@ function modulo(id: string, label: string, area: AreaPermiso, acciones: [FlagPer
 const C: FlagPermiso = "puedeCrear", E: FlagPermiso = "puedeEditar", D: FlagPermiso = "puedeEliminar";
 /** Solo operaciones presentes en las rutas/servicios del discovery. Los flags son un detalle de persistencia. */
 export const CATALOGO_PERMISOS: ModuloCatalogo[] = [
+  { id:"canecas", label:"Gestión de Canecas", area:"canecas", acciones:[
+    accion("canecas","ver","Ver","puedeVer"),
+    accion("canecas_catalogo","catalogo","Gestionar aceites, ubicaciones y proveedores","puedeVer"),
+    accion("canecas_compras","compras","Registrar compras","puedeVer"),
+    accion("canecas_recepciones","recepciones","Registrar recepciones","puedeVer"),
+    accion("canecas_confirmar","confirmar","Confirmar recepciones","puedeVer"),
+  ] },
   modulo("rrhh","Dashboard Talento Humano","rrhh",[]),
   modulo("empleados","Empleados","rrhh",[[C,"registrar","Registrar / importar empleados"],[E,"editar","Editar ficha y documentos"],[D,"desactivar","Desactivar / quitar documentos"]]),
   modulo("marcajes","Marcajes","rrhh",[[C,"registrar","Registrar marcaje"],[E,"corregir","Importar / corregir marcajes"]]),
