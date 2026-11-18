@@ -26,3 +26,13 @@ export function claseUnidadShell(f: FilaCB2, cat: CatalogosCB2, vehiculoId: stri
   }
   return { clase: "SIN_ELEGIR", mensaje: `Unidad sugerida (${m.estado.toLowerCase()}): ${m.candidatos.map(v => v.placa).join(" / ")}. Confírmala eligiéndola.`, candidatos: m.candidatos.map(v => String(v.id)), registrable: false };
 }
+
+/** Unidad elegida (ID del selector): interna si es > 0 (catálogo de Flota), externa si es < 0 (identidad externa registrada). Las dos validaciones son independientes:
+ * una identidad externa NUNCA se busca entre los vehículos internos ni se declara «ausente» por no estar allí. */
+export function unidadElegida(cat: CatalogosCB2, vehiculoId: string): { tipo: "INTERNA" | "EXTERNA"; id: number; placa: string } | null {
+  const n = Number(vehiculoId);
+  if (!vehiculoId || !Number.isInteger(n) || n === 0) return null;
+  if (n > 0) { const v = cat.vehiculos.find(v => v.id === n); return v ? { tipo: "INTERNA", id: n, placa: v.placa } : null; }
+  const u = cat.unidadesExternas?.find(u => u.id === -n) ?? cat.vehiculos.find(v => v.id === n);
+  return u ? { tipo: "EXTERNA", id: -n, placa: u.placa } : null;
+}

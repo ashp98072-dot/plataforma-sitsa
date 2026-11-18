@@ -14,6 +14,7 @@ const externa = { id: 7, placa: "C-999EXT", referencia: "shell:C999EXT", tipo: "
 const indep = { ...interna, tercerosDirectos: true, identidadesIndependientes: true, tercerosHabilitados: true, pilotoReportadoExterno: true, unidadesExternas: [externa], pilotosExternos: [{ id: 5, nombre: "Piloto Externo", referencia: "R5" }],
   vehiculos: [{ id: 1, placa: "C-570BZT", estado: "Activo" }, { id: -7, placa: "C-999EXT" }] } as unknown as CatalogosCB2;
 const reportado: DecisionAsignacion = { exigirProducto: true, exigirPiloto: true, pilotoTipo: "REPORTADO", decisionNombre: { tipo: "REPORTADO", confirmado: true } };
+const interna_ = interna;
 const estado = (f: FilaCB2, cat: CatalogosCB2, seleccion: Record<string, string>, d: DecisionAsignacion) => revisionCandidatos([f], cat, seleccion, {}, {}, { k1: d })[0];
 
 describe("clasificación de la unidad del vale Shell", () => {
@@ -81,4 +82,28 @@ describe("estado LISTO exige piloto + unidad (interna o externa confirmada) + co
     expect(estado(f, interna, { k1: "1" }, manual(110)).estado).toBe("LISTO");
     expect(estado(f, interna, { k1: "1" }, { ...manual(110), decisionNombre: { tipo: "EMPLEADO", empleadoId: 110, confirmado: false } }).estado).toBe("PENDIENTE");
   });
+  it("identidad externa VÁLIDA (ID negativo) con el vale PENDIENTE por combustible o piloto: el diagnóstico NO afirma que la unidad esté ausente ni inexistente", () => {
+    // El catálogo solo trae la identidad en unidadesExternas (no entre los vehículos internos): no debe confundirse con una unidad interna ausente.
+    const soloExterna = { ...indep, vehiculos: [{ id: 1, placa: "C-570BZT", estado: "Activo" }] } as unknown as CatalogosCB2;
+    const f = fila({}, "C-999EXT", "Andres Taracena", "20W50");   // combustible sin clasificar
+    const sinCombustible = estado(f, soloExterna, { k1: "-7" }, { ...reportado });
+    expect(sinCombustible.estado).toBe("PENDIENTE");
+    const texto1 = causasAsignacion(sinCombustible, soloExterna, reportado).join(" | ");
+    expect(texto1).toContain("combustible"); expect(texto1).not.toMatch(/ausente|no existe|no identificada|Falta seleccionar una unidad/i);
+    const sinPiloto = estado(fila({}, "C-999EXT"), soloExterna, { k1: "-7" }, { exigirProducto: true, exigirPiloto: true, pilotoTipo: "REPORTADO" });
+    expect(sinPiloto.estado).toBe("PENDIENTE");
+    const texto2 = causasAsignacion(sinPiloto, soloExterna, { exigirProducto: true, exigirPiloto: true, pilotoTipo: "REPORTADO" }).join(" | ");
+    expect(texto2).toContain("piloto"); expect(texto2).not.toMatch(/ausente|no existe|no identificada|Falta seleccionar una unidad/i);
+    expect(estado(fila({}, "C-999EXT"), soloExterna, { k1: "-7" }, reportado).estado).toBe("LISTO");   // y con todo resuelto queda LISTO
+  });
+  it("las identidades interna y externa se validan por separado: una externa inexistente y una interna ausente se explican con su propio mensaje, sin repetir instrucciones", () => {
+    const f = fila({}, "C-123XYZ");
+    const ext = causasAsignacion(estado(f, indep, { k1: "-99" }, reportado), indep, reportado);
+    expect(ext.filter(c => /unidad externa elegida|existe en esta empresa/i.test(c))).toHaveLength(1);
+    const interna = causasAsignacion(estado(f, interna_, { k1: "55" }, reportado), interna_, reportado);
+    expect(interna.filter(c => /ya no está en el catálogo interno/i.test(c))).toHaveLength(1);
+    const sinUnidad = causasAsignacion(estado(f, interna_, {}, reportado), interna_, reportado);
+    expect(sinUnidad.filter(c => /unidad/i.test(c))).toHaveLength(1);   // una sola instrucción de unidad, no dos contradictorias
+  });
 });
+

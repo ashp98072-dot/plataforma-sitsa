@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { jsonCB2 } from "./client";
 import { button, input } from "./controles";
-export function AltaDirectaCB2({ api, recargar, disabled }: { api: string; recargar: () => Promise<unknown>; disabled: boolean }) {
+export function AltaDirectaCB2({ api, recargar, disabled, soloPiloto = false }: { api: string; recargar: () => Promise<unknown>; disabled: boolean; /** Shell: la unidad se resuelve en «Unidad del vale»; aquí solo se registra un piloto externo. */ soloPiloto?: boolean }) {
   const [busy, setBusy] = useState(false), [mensaje, setMensaje] = useState("");
   async function enviar(form: HTMLFormElement, recurso: "PILOTO" | "UNIDAD") {
     if (busy || disabled) return;
@@ -16,7 +16,7 @@ export function AltaDirectaCB2({ api, recargar, disabled }: { api: string; recar
   }
   return <details><summary>Registrar piloto o unidad externa</summary><p>Consulta primero el catálogo. Usa una referencia real estable; el nombre o la placa no sustituyen la identidad.</p>
     <form aria-label="Alta directa de piloto" onSubmit={e => { e.preventDefault(); void enviar(e.currentTarget, "PILOTO"); }}><fieldset disabled={disabled || busy}><label>Referencia real del piloto<input className={input} name="referencia" required maxLength={160}/></label><label>Nombre externo<input className={input} name="nombre" required maxLength={160}/></label><button className={button}>Guardar piloto externo</button></fieldset></form>
-    <form aria-label="Alta directa de unidad" onSubmit={e => { e.preventDefault(); void enviar(e.currentTarget, "UNIDAD"); }}><fieldset disabled={disabled || busy}><label>Referencia real de unidad<input className={input} name="referencia" required maxLength={160}/></label><label>Placa externa<input className={input} name="placa" required maxLength={160}/></label><label>Tipo externo<select className={input} name="tipo"><option>VEHICULO</option><option>MOTOCICLETA</option></select></label><label>Descripción externa<input className={input} name="descripcion" required maxLength={160}/></label><button className={button}>Guardar unidad externa</button></fieldset></form>
+{!soloPiloto && <form aria-label="Alta directa de unidad" onSubmit={e => { e.preventDefault(); void enviar(e.currentTarget, "UNIDAD"); }}><fieldset disabled={disabled || busy}><label>Referencia real de unidad<input className={input} name="referencia" required maxLength={160}/></label><label>Placa externa<input className={input} name="placa" required maxLength={160}/></label><label>Tipo externo<select className={input} name="tipo"><option>VEHICULO</option><option>MOTOCICLETA</option></select></label><label>Descripción externa<input className={input} name="descripcion" required maxLength={160}/></label><button className={button}>Guardar unidad externa</button></fieldset></form>}
     {mensaje && <p role="status">{mensaje}</p>}
   </details>;
 }

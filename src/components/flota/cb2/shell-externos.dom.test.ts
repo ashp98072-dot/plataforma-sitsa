@@ -22,7 +22,10 @@ it("Shell ofrece alta y elección de piloto externo; cambiar tipo elimina la dec
     try {
         await act(async () => root.render(createElement(Pantalla)));
         expect(host.querySelector('form[aria-label="Alta directa de piloto"]')).not.toBeNull();
-        expect(host.querySelector('form[aria-label="Alta directa de unidad"]')).not.toBeNull();
+        // La unidad de Shell se resuelve SOLO en «Unidad del vale» (sin un segundo formulario/selector de unidad que contradiga al principal).
+        expect(host.querySelector('form[aria-label="Alta directa de unidad"]')).toBeNull();
+        expect([...host.querySelectorAll("label")].some(l => l.textContent?.startsWith("Unidad tercerizada"))).toBe(false);
+        expect(host.textContent).toContain("Unidad no identificada");
         expect(host.textContent).toContain("Piloto tercerizado para vale LAB");
         // Regla única: en Shell el tipo de piloto NO se elige con un select aparte (contradecía a «Piloto del Excel»); solo el piloto tercerizado reemplaza la decisión de nombre.
         expect([...host.querySelectorAll("label")].some(l => l.textContent?.startsWith("Tipo de piloto"))).toBe(false);

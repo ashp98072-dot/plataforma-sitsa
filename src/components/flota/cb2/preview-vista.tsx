@@ -4,7 +4,7 @@ import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motivoUnidadNoOperable, unidadOperable } from "./unidades-bloqueo";
 import { causasAsignacion } from "./problemas-asignacion";
-import { claseUnidadShell } from "./unidad-shell";
+import { claseUnidadShell, unidadElegida } from "./unidad-shell";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 import { avisosDetallados, estadosPreview, resumirRevision, sugerenciaVehiculo, sugerenciaPiloto, type CandidatoRevision } from "./preview-model";
@@ -125,7 +125,7 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
         </div></details>
         <p role="status">{rows.length} candidatos filtrados de {r.detectados} · {r.seleccionados} seleccionados en todo el archivo.</p>
         <div className={styles.reviewScroll} role="region" aria-label="Tabla de revisión de consumos" tabIndex={0}><table className={styles.consumptionTable}><caption className="sr-only">Candidatos únicos del Excel, identificación y revisión</caption><thead><tr>{["Selección", "Vale", "Fecha", "Placa / unidad", "Piloto original", "Empleado identificado", "Combustible", "Galones", "Monto", "Estado", "Acciones"].map(t => <th key={t} scope="col">{t}</th>)}</tr></thead><tbody>{rows.slice(page * 25, page * 25 + 25).map(g => {
-            const f = g.fila, unidad = sugerenciaVehiculo(f, cat), piloto = revisionExtra ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []) : sugerenciaPiloto(f, cat), vehiculo = cat.vehiculos.find(v => String(v.id) === g.vehiculoId);
+            const f = g.fila, unidad = sugerenciaVehiculo(f, cat), piloto = revisionExtra ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []) : sugerenciaPiloto(f, cat), vehiculo = unidadElegida(cat, g.vehiculoId);
             const fuente = identificacion(g, cat, manuales);
             const avisosGrupo = [...new Set(g.activas.flatMap(f => avisosDetallados(f).map(a => `${a.nivel}: ${a.mensaje}`)))];
             const pilotoRevisado = piloto.candidatos.find(p => String(p.id) === pilotosRevisados[g.clave]);
