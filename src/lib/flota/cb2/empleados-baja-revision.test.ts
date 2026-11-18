@@ -8,7 +8,6 @@ const { revisarNombresTx, registrarPilotoReportadoTx } = await import("./pilotos
 const { nombresImportacion } = await import("./service");
 const { proponerNombre } = await import("./pilotos-nombres");
 const { acumularFecha, esColumnaInexistente, ventanaLaboral } = await import("./empleados-baja");
-const { decisionesMasivas } = await import("@/components/flota/cb2/nombres-masivos");
 
 const andres = { id: 50, nombre: "Andres Norberto Taracena Mayen", estado: "Baja", fecha_egreso: "2026-06-30", fecha_alta: "2024-01-10" };
 const NOMBRE = "Andres Norberto Taracena Mayen";
@@ -47,7 +46,6 @@ describe("rango de fechas: una fila sin fecha invalida la acción masiva de baja
     const [g] = await revisarNombresTx(conn(), 7, ["Andres Taracena", "Andres Taracena"], true, ["2026-05-01", "2026-07-15"]);
     expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
     expect(ventanaLaboral({ id: 50, nombre: NOMBRE, estado: "Baja", fechaBaja: "2026-06-30" }, g.rango)).toBe("POSTERIOR_A_BAJA");
-    expect(decisionesMasivas([g], {}).reportado).toHaveLength(0);   // jamás termina como piloto reportado
   });
   it("REANUDACIÓN: nombresImportacion aplica la misma política (propuesta única) y conserva el rango con filas sin fecha", async () => {
     const t = (fechaConsumo?: unknown) => ({ textos: { piloto: "Andres Taracena" }, ...(fechaConsumo === undefined ? {} : { fechaConsumo }) });

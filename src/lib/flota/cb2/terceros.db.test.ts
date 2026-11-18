@@ -657,6 +657,17 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await cb2(await shell("NOMBRE-AUSENTE","",propia,1));expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
   const historicos=await reportePilotos(1,{nombre:"DEMO"});expect(historicos.items.length).toBeGreaterThan(0);expect(historicos.items.every(r=>r.piloto_reportado_id===null)).toBe(true);
   expect(await q(`SELECT * FROM flota_cb2_consumos WHERE id IN (${antiguos.map(()=>"?").join(",")}) ORDER BY id`,antiguos.map(r=>r.id))).toEqual(antiguos);
+  // Piloto desconocido registrado desde el vale: doble envío / reintentos concurrentes no duplican la identidad y se reconoce en una reimportación posterior.
+  const dc1=await shell("DOBLE-CLIC-A","Piloto Doble Clic",propia,1),dc2=await shell("DOBLE-CLIC-B","Piloto Doble Clic",propia,1);
+  await Promise.allSettled([cb2(dc1),cb2(dc2),cb2(dc1)]);
+  const dobles=await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1 AND nombre_normalizado='PILOTO DOBLE CLIC'");expect(dobles).toHaveLength(1);
+  expect(dobles[0]).toMatchObject({nombre_muestra:"Piloto Doble Clic",estado:"REPORTADO_CONFIRMADO"});expect(Number(dobles[0].creado_por)).toBeGreaterThan(0);   // nombre original, normalizado y quién lo confirmó
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=2 AND nombre_normalizado='PILOTO DOBLE CLIC'")).toHaveLength(0);   // ámbito por empresa
+  const dc3=await shell("DOBLE-CLIC-C","Piloto Doble Clic",propia,1);
+  expect((await preview(ctx,dc3.buffer,dc3.entrada)).nombres[0].propuesta).toMatchObject({tipo:"REPORTADO",reportadoId:dobles[0].id,confirmado:false});   // reconocido sin pedir confirmación
+  await cb2({...dc3,entrada:{...dc3.entrada,seleccion:dc3.entrada.seleccion.map(sel=>({...sel,decisionNombre:{tipo:"REPORTADO" as const,reportadoId:Number(dobles[0].id),confirmado:false}}))}});
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1 AND nombre_normalizado='PILOTO DOBLE CLIC'")).toHaveLength(1);
+  expect(await q("SELECT piloto_reportado_id FROM flota_cb2_consumo_piloto_reportado WHERE empresa_id=1 AND piloto_reportado_id=?",[dobles[0].id])).toHaveLength(3);
   // Las variantes de empleado se confirman una vez y se reutilizan sin crear reportados.
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4441,1,'Luis Escobar Sintético','Activo'),(4442,2,'Luis Escobar Sintético','Activo')");
   const variante=await shell("VARIANTE-EMPLEADO","Luis Escobr Sintético",propia,1);
@@ -665,7 +676,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await expect(cb2(comoEmpleado(4442))).rejects.toMatchObject({status:403});await cb2(comoEmpleado(4441));
   expect((await q("SELECT empleado_id,piloto_informado FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0]).toMatchObject({empleado_id:4441,piloto_informado:"Luis Escobr Sintético"});
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
-  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(2);   // «Álvaro Pérez» + «Piloto Doble Clic»: los empleados reconocidos no crean reportados
   // Empleado de BAJA reconocido automáticamente en Shell (sin selección manual, sin crear piloto reportado, RR. HH. intacto).
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4450,1,'Norberto Taracena Sintético Mayén','Baja'),(4451,2,'Norberto Taracena Sintético Mayén','Baja')");
   const baja=await shell("BAJA-SHELL-AUTO","Norberto Taracena",propia,1);
@@ -673,7 +684,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   const autoBaja={...baja,entrada:{...baja.entrada,seleccion:baja.entrada.seleccion.map(s=>({...s,empleadoId:4450,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:4450,confirmado:false}}))}};
   await cb2(autoBaja);
   expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='BAJA-SHELL-AUTO'"))[0].empleado_id).toBe(4450);
-  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(2);
   expect((await q("SELECT estado FROM empleados WHERE id=4450"))[0].estado).toBe("Baja");
   // Decisión no confirmada hacia otro empleado distinto de la propuesta (u otra empresa) se rechaza.
   const otraPersona=await shell("BAJA-SHELL-AJENA","Norberto Taracena",propia,1);

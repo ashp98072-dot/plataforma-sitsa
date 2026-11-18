@@ -1,23 +1,49 @@
 "use client";
-import { useState } from "react";
-import type { DecisionNombre,RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
+import type { DecisionNombre, RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
+import { normalizarNombreReportado } from "@/lib/flota/cb2/pilotos-nombres";
+import { etiquetaEmpleado, textoVentana, ventanaLaboral, type EmpleadoCatalogo } from "@/lib/flota/cb2/empleados-baja";
+import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { input } from "./controles";
-import { decisionesMasivas } from "./nombres-masivos";
-import { etiquetaEmpleado, textoVentana, ventanaLaboral } from "@/lib/flota/cb2/empleados-baja";
-export function RevisionNombresCB2({nombres,decisiones,onChange,disabled,instalado,empleados=[]}:{empleados?:{id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null}[];nombres:RevisionNombre[];decisiones:Record<string,DecisionNombre|undefined>;onChange:(clave:string,d:DecisionNombre)=>void;disabled:boolean;instalado:boolean}) {
- const [elegidos,setElegidos]=useState<Record<string,string>>({});
- return <fieldset disabled={disabled} className="space-y-4 rounded-xl border p-4"><legend>Revisar pilotos por nombre distinto</legend><p>Una decisión se aplica a todas las filas de ese nombre. Las equivalencias se guardan únicamente al confirmar la importación.</p>
- {nombres.length>0 && <div role="group" aria-label="Acciones masivas de nombres" className="flex flex-wrap items-center gap-2">
-  {(()=>{const m=decisionesMasivas(nombres,decisiones);
-  return <><button type="button" disabled={!instalado||m.reportado.length===0} onClick={()=>m.reportado.forEach(n=>onChange(n.clave,{tipo:"REPORTADO",confirmado:true}))}>Guardar como piloto reportado los {m.reportado.length} nombres sin coincidencia</button>
-  <button type="button" disabled={!instalado||m.empleado.length===0} onClick={()=>m.empleado.forEach(n=>onChange(n.clave,{tipo:"EMPLEADO",empleadoId:n.candidatos[0].id,confirmado:true}))}>Usar el empleado cuando coinciden todas las palabras del nombre ({m.empleado.length})</button>
-  <span role="status">Pendientes de decidir: {m.sinDecidir}{m.manuales>0?` (${m.manuales} con coincidencia aproximada, varios candidatos o equivalencia previa: revísalos uno por uno para no asignar a la persona equivocada)`:""}. Puedes cambiar cualquier decisión después.</span></>;})()}</div>}
- {!instalado && <p role="alert">Registro de equivalencias no instalado. La persistencia de estas decisiones requiere la migración revisada.</p>}
- {nombres.map(n=>{const d=decisiones[n.clave],opciones=[...new Map([...n.candidatos,...empleados].map(p=>[p.id,p])).values()],seleccionado=elegidos[n.clave]??(d?.tipo==="EMPLEADO"?String(d.empleadoId):""),emp=opciones.find(p=>String(p.id)===seleccionado),ventana=emp?ventanaLaboral(emp,n.rango):"ACTIVO";return <section key={n.clave} className="rounded border p-3"><h3>{n.originales.join(" / ")} — {n.filas} filas</h3>
- <p role="status">{d ? d.tipo==="EMPLEADO"?`${(()=>{const e=opciones.find(p=>p.id===d.empleadoId);return e?etiquetaEmpleado(e):`Empleado #${d.empleadoId}`;})()}${d.confirmado?" confirmado":" reconocido"}`:d.reportadoId?`Piloto reportado #${d.reportadoId} reconocido`:"Guardar piloto reportado al importar" : "Requiere confirmación"}</p>
- {n.conflictoEquivalencia && <p role="alert">Conflicto: una equivalencia guardada apunta al empleado #{n.conflictoEquivalencia.equivalenciaId}, pero hoy el nombre identifica al empleado #{n.conflictoEquivalencia.reconocidoId}. No se asigna ninguno automáticamente: elige y confirma explícitamente.</p>}
- {n.candidatos.length===0 && <p>Este piloto no está registrado como empleado. ¿Deseas guardarlo como piloto reportado?</p>}{opciones.length>0 ? <><label>Empleado existente (coincidencias primero)<select className={input} value={seleccionado} onChange={e=>setElegidos(prev=>({...prev,[n.clave]:e.target.value}))}><option value="">Seleccionar coincidencia</option>{opciones.map(p=><option key={p.id} value={p.id}>{etiquetaEmpleado(p)}</option>)}</select></label>{emp&&ventana!=="ACTIVO"&&<p role="alert">Empleado de baja{emp.fechaBaja?` desde ${emp.fechaBaja}`:""} (informativo, no bloquea). {textoVentana[ventana]}</p>}<button type="button" disabled={!seleccionado || !instalado} onClick={()=>onChange(n.clave,{tipo:"EMPLEADO",empleadoId:Number(seleccionado),confirmado:true})}>Confirmar empleado para todas estas filas</button><p>La similitud no vincula ni fusiona personas. Si ninguno corresponde, confirma expresamente una identidad reportada independiente.</p></> : null}
- {(!n.equivalencia || !n.propuesta) && <button type="button" disabled={!instalado} onClick={()=>onChange(n.clave,{tipo:"REPORTADO",confirmado:true})}>{n.candidatos.length?"Ninguno corresponde; guardar como piloto reportado":"Sí, guardar como piloto reportado"}</button>}
- {n.equivalencia && !n.propuesta && <button type="button" disabled={!instalado} onClick={()=>onChange(n.clave,{...n.equivalencia!,confirmado:true})}>Confirmar equivalencia anterior tras revisar homónimos</button>}
- </section>;})}</fieldset>;
+
+/** Clave de agrupación del nombre del Excel (la misma que usa el servidor para equivalencias). */
+export const claveNombreShell = (original: string | undefined | null) => normalizarNombreReportado(original ?? "");
+
+/** Estado legible de la decisión de piloto de un vale Shell. */
+export function textoDecisionPiloto(d: DecisionNombre | undefined, empleados: EmpleadoCatalogo[]) {
+  if (!d) return "Pendiente: elige un empleado o confirma el nombre original como piloto reportado.";
+  if (d.tipo === "EMPLEADO") {
+    const e = empleados.find(p => p.id === d.empleadoId);
+    return `Empleado ${e ? etiquetaEmpleado(e) : `#${d.empleadoId}`} ${d.confirmado ? "confirmado" : "reconocido automáticamente"}.`;
+  }
+  return d.reportadoId ? `Piloto reportado #${d.reportadoId} ya registrado (${d.confirmado ? "confirmado" : "reconocido"}).` : "Se guardará el nombre original como piloto reportado al importar.";
+}
+
+/**
+ * Resolución del piloto DESDE el vale (sin panel global). El nombre original se muestra y se conserva tal cual; la decisión se aplica a todas las
+ * filas que comparten ese nombre y solo se persiste al confirmar la importación. No crea ni modifica empleados.
+ */
+export function PilotoShellVale({ original, nombre, decision, empleados = [], instalado, disabled, onElegir }: {
+  original: string; nombre?: RevisionNombre; decision?: DecisionNombre; empleados?: EmpleadoCatalogo[]; instalado: boolean; disabled?: boolean; onElegir: (d: DecisionNombre) => void;
+}) {
+  const candidatos = nombre?.candidatos ?? [], elegibles = nombre?.elegibles ?? [];
+  const opciones = [...new Map([...candidatos, ...empleados].map(p => [p.id, p])).values()];
+  const seleccionado = decision?.tipo === "EMPLEADO" ? opciones.find(p => p.id === decision.empleadoId) : undefined;
+  const ventana = seleccionado ? ventanaLaboral(seleccionado, nombre?.rango) : "ACTIVO";
+  const ambiguo = elegibles.length > 1, conflicto = nombre?.conflictoEquivalencia;
+  const reportadoConfirmado = decision?.tipo === "REPORTADO";
+  return <fieldset disabled={disabled} className="space-y-2" aria-label={`Piloto del vale`}>
+    <legend className="text-sm font-semibold">Piloto del Excel</legend>
+    <p>Nombre original: <strong>{original || "No informado"}</strong>{nombre && nombre.filas > 1 ? ` · se aplica a las ${nombre.filas} filas con este nombre` : ""}.</p>
+    <p role="status">{textoDecisionPiloto(decision, opciones)}</p>
+    {conflicto && <p role="alert">Conflicto: una equivalencia guardada apunta al empleado #{conflicto.equivalenciaId}, pero hoy el nombre identifica al empleado #{conflicto.reconocidoId}. No se asigna ninguno automáticamente: elige y confirma.</p>}
+    {ambiguo && <p role="alert">Varios empleados coinciden con dos o más palabras ({elegibles.length}): elige manualmente a la persona correcta.</p>}
+    {candidatos.length === 0 && !decision && <p>Ningún empleado coincide. Si no está en RR. HH., confirma el nombre original como piloto reportado (no crea empleados).</p>}
+    {seleccionado && ventana !== "ACTIVO" && <p role="alert">Empleado de baja{seleccionado.fechaBaja ? ` desde ${seleccionado.fechaBaja}` : ""} (informativo, no bloquea). {textoVentana[ventana]}</p>}
+    <CatalogoSearchSelect label={`Empleado existente para ${original || "este vale"}`} placeholder="Buscar empleado activo o de baja" inputClassName={input}
+      value={seleccionado ? String(seleccionado.id) : ""} options={opciones.map(p => ({ value: String(p.id), label: etiquetaEmpleado(p) }))}
+      onChange={v => { if (v) onElegir({ tipo: "EMPLEADO", empleadoId: Number(v), confirmado: true }); }}/>
+    <button type="button" disabled={!instalado || (reportadoConfirmado && decision?.confirmado)} onClick={() => onElegir({ tipo: "REPORTADO", ...(decision?.tipo === "REPORTADO" && decision.reportadoId ? { reportadoId: decision.reportadoId } : {}), confirmado: true })}>
+      {candidatos.length ? "Ninguno corresponde; guardar el nombre original como piloto reportado" : "Guardar el nombre original como piloto reportado"}</button>
+    {!instalado && <p role="alert">Registro de pilotos reportados no instalado: solo se pueden vincular empleados existentes.</p>}
+  </fieldset>;
 }
