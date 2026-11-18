@@ -19,7 +19,7 @@ describe("catálogo usado para sugerir vehículos en preview", () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); const data = await r.json();
         expect(data.empleados).toEqual([]); expect(data.empleadosDisponibles).toBe(false); expect(data.limitacionPilotos).toContain("no disponible");
-        expect(m.query).toHaveBeenCalledTimes(6);   // la consulta de empleados se reintenta una vez sin la columna fecha_egreso
+        expect(m.query).toHaveBeenCalledTimes(5);   // un error que no es de columna inexistente NO se reintenta
     });
     it("deriva empresa del guard, no de parámetros controlados por el navegador", async () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });

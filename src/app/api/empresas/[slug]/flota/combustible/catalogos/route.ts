@@ -7,7 +7,7 @@ import { catalogosCombustible } from "@/lib/flota/combustible-staff";
 import { query } from "@/lib/db";
 import { listarCatalogosTerceros, tercerosHabilitados } from "@/lib/flota/cb2/terceros";
 import type { RowDataPacket } from "mysql2";
-import { fechaIso } from "@/lib/flota/cb2/empleados-baja";
+import { esColumnaInexistente, fechaIso } from "@/lib/flota/cb2/empleados-baja";
 export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }> }) {
   const { slug } = await ctx.params;
   const guard = await requireTenantFlotaCombustible(slug, "ver");
@@ -22,9 +22,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
     let personal: RowDataPacket[] = [], empleadosDisponibles = true;
     // Activos y de baja (solo lectura): los consumos históricos pueden pertenecer a personas que ya no están en planilla.
     try { personal = await query<RowDataPacket[]>("SELECT id, nombre, estado, fecha_egreso, fecha_alta FROM empleados WHERE empresa_id = ? AND estado IN ('Activo','Baja') ORDER BY nombre, id", [guard.empresa.id]); }
-    catch {
-        try { personal = await query<RowDataPacket[]>("SELECT id, nombre, estado, NULL AS fecha_egreso, NULL AS fecha_alta FROM empleados WHERE empresa_id = ? AND estado IN ('Activo','Baja') ORDER BY nombre, id", [guard.empresa.id]); }
-        catch { empleadosDisponibles = false; }
+    catch (e) {
+        // Solo una columna opcional inexistente (fecha_egreso/fecha_alta) permite reintentar sin ellas; conexión, permisos u otros errores no se enmascaran.
+        if (!esColumnaInexistente(e)) { console.error("[combustible-catalogos] empleados", e); empleadosDisponibles = false; }
+        else {
+            try { personal = await query<RowDataPacket[]>("SELECT id, nombre, estado, NULL AS fecha_egreso, NULL AS fecha_alta FROM empleados WHERE empresa_id = ? AND estado IN ('Activo','Baja') ORDER BY nombre, id", [guard.empresa.id]); }
+            catch (e2) { console.error("[combustible-catalogos] empleados", e2); empleadosDisponibles = false; }
+        }
     }
     const empleados = personal.map(p => ({ id: Number(p.id), nombre: String(p.nombre), estado: String(p.estado), fechaBaja: fechaIso(p.fecha_egreso), fechaAlta: fechaIso(p.fecha_alta) }));
     const pilotos = empleados;

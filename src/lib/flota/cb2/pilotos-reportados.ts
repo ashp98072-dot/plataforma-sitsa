@@ -5,7 +5,7 @@ import type { PoolConnection } from "mysql2/promise";
 import { hash,ErrorCB2 } from "./model";
 import { rows,type Contexto } from "./repository";
 import { ahoraLocal } from "@/lib/rrhh/dates";
-import { fechaIso } from "./empleados-baja";
+import { acumularFecha,esColumnaInexistente,fechaIso } from "./empleados-baja";
 import { normalizarNombreReportado,proponerNombre,type DecisionNombre,type RevisionNombre } from "./pilotos-nombres";
 export { normalizarNombreReportado } from "./pilotos-nombres";
 export async function esquemaPilotosReportados(c?:PoolConnection) {
@@ -23,7 +23,7 @@ export async function esquemaPilotosReportados(c?:PoolConnection) {
 async function empleadosRevision(c:PoolConnection,empresa:number) {
  const mapa=(p:RowDataPacket)=>({id:Number(p.id),nombre:String(p.nombre),estado:String(p.estado),fechaBaja:fechaIso(p.fecha_egreso),fechaAlta:fechaIso(p.fecha_alta)});
  try{return (await rows(c,"SELECT id,nombre,estado,fecha_egreso,fecha_alta FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[empresa])).map(mapa);}
- catch{return (await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[empresa])).map(mapa);}
+ catch(e){if(!esColumnaInexistente(e))throw e;return (await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[empresa])).map(mapa);}
 }
 /** `fechas[i]` es la fecha de consumo (ISO) de `nombres[i]`, cuando se conoce; permite comparar con la fecha de baja. */
 export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:string[],instalado:boolean,fechas:(string|null|undefined)[]=[]):Promise<RevisionNombre[]> {
@@ -31,12 +31,11 @@ export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:s
  const grupos=new Map<string,RevisionNombre>();
  for(const [i,nombre] of nombres.entries()) {
   const clave=normalizarNombreReportado(nombre);if(!clave)continue;
-  const fecha=fechaIso(fechas[i]);
-  const previo=grupos.get(clave);if(previo){previo.filas++;if(fecha){const r=previo.rango??={min:null,max:null};if(!r.min||fecha<r.min)r.min=fecha;if(!r.max||fecha>r.max)r.max=fecha;}if(!previo.originales.includes(nombre))previo.originales.push(nombre);continue;}
+  const previo=grupos.get(clave);if(previo){previo.filas++;previo.rango=acumularFecha(previo.rango,fechas[i]);if(!previo.originales.includes(nombre))previo.originales.push(nombre);continue;}
   const [alias]=instalado?await rows(c,"SELECT nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[empresa,hash(clave)]):[];
   if(alias && alias.nombre_normalizado!==clave)throw new ErrorCB2("Colisión de nombre; requiere revisión.");
   const destino:DecisionNombre|undefined=alias?alias.empleado_id!=null?{tipo:"EMPLEADO",empleadoId:Number(alias.empleado_id),confirmado:false}:{tipo:"REPORTADO",reportadoId:Number(alias.piloto_reportado_id),confirmado:false}:undefined;
-  const revision=proponerNombre(nombre,empleados,destino,fecha?{min:fecha,max:fecha}:undefined);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
+  const revision=proponerNombre(nombre,empleados,destino,acumularFecha(undefined,fechas[i]));if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
  }
  return [...grupos.values()];
 }

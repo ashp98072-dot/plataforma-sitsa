@@ -17,5 +17,12 @@ describe("corrección explícita sin duplicar consumo ni tocar evidencia",()=>{
     it("revision obsoleta, empleado ajeno, vehículo sin acceso o permiso revocado impiden escribir",async()=>{
         m.consumo.revision_asignacion=1;await expect(corregirAsignacion(ctx,op)).rejects.toThrow("asignación cambió");m.consumo.revision_asignacion=0;m.empleado=false;await expect(corregirAsignacion(ctx,op)).rejects.toThrow("Empleado no autorizado");m.empleado=true;m.vehiculos.mockRejectedValueOnce(new Error("Sin acceso"));await expect(corregirAsignacion(ctx,op)).rejects.toThrow("Sin acceso");m.autorizar.mockRejectedValueOnce(new Error("Revocado"));await expect(corregirAsignacion(ctx,op)).rejects.toThrow("Revocado");expect(m.execute).not.toHaveBeenCalled();expect(m.insert).not.toHaveBeenCalled();
     });
+    it("asignación posterior: acepta un empleado de baja solo por ID explícito y siempre acotado a la empresa del contexto",async()=>{
+        await corregirAsignacion(ctx,op);
+        const [, sql, args]=m.rows.mock.calls.find(([,s])=>String(s).includes("FROM empleados"))!;
+        expect(sql).toContain("empresa_id=? AND id=? AND estado IN ('Activo','Baja')");expect(args).toEqual([ctx.empresaId,77]);
+        m.empleado=false;await expect(corregirAsignacion(ctx,{...op,clave:"clave-otra-empresa-1"})).rejects.toMatchObject({status:403});   // ID de otra empresa o inexistente: sin fila
+        expect(corregirSchema.safeParse({...op,empleadoId:undefined}).success).toBe(false);   // el empleado nunca se infiere: debe venir explícito
+    });
     it("schema rechaza campos arbitrarios, IDs inválidos y motivos insuficientes",()=>{for(const cambio of [{empleadoId:0},{vehiculoId:0},{motivo:"ok"},{productoClasificado:"gasolina"},{empresaId:99}])expect(corregirSchema.safeParse({...op,...cambio}).success).toBe(false);});
 });
