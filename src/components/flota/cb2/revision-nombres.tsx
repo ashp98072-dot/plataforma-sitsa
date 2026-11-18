@@ -22,7 +22,8 @@ export function textoDecisionPiloto(d: DecisionNombre | undefined, empleados: Em
  * Resolución del piloto DESDE el vale (sin panel global). El nombre original se muestra y se conserva tal cual; la decisión se aplica a todas las
  * filas que comparten ese nombre y solo se persiste al confirmar la importación. No crea ni modifica empleados.
  */
-export function PilotoShellVale({ original, nombre, decision, empleados = [], instalado, disabled, onElegir }: {
+export function PilotoShellVale({ original, nombre, decision, empleados = [], instalado, disabled, onElegir, externo }: {
+  externo?: string;
   original: string; nombre?: RevisionNombre; decision?: DecisionNombre; empleados?: EmpleadoCatalogo[]; instalado: boolean; disabled?: boolean; onElegir: (d: DecisionNombre) => void;
 }) {
   const candidatos = nombre?.candidatos ?? [], elegibles = nombre?.elegibles ?? [];
@@ -34,7 +35,7 @@ export function PilotoShellVale({ original, nombre, decision, empleados = [], in
   return <fieldset disabled={disabled} className="space-y-2" aria-label={`Piloto del vale`}>
     <legend className="text-sm font-semibold">Piloto del Excel</legend>
     <p>Nombre original: <strong>{original || "No informado"}</strong>{nombre && nombre.filas > 1 ? ` · se aplica a las ${nombre.filas} filas con este nombre` : ""}.</p>
-    <p role="status">{textoDecisionPiloto(decision, opciones)}</p>
+    <p role="status">{externo ? `Piloto tercerizado elegido: ${externo}. Elige un empleado o confirma el nombre original para reemplazarlo.` : textoDecisionPiloto(decision, opciones)}</p>
     {conflicto && <p role="alert">Conflicto: una equivalencia guardada apunta al empleado #{conflicto.equivalenciaId}, pero hoy el nombre identifica al empleado #{conflicto.reconocidoId}. No se asigna ninguno automáticamente: elige y confirma.</p>}
     {ambiguo && <p role="alert">Varios empleados coinciden con dos o más palabras ({elegibles.length}): elige manualmente a la persona correcta.</p>}
     {candidatos.length === 0 && !decision && <p>Ningún empleado coincide. Si no está en RR. HH., confirma el nombre original como piloto reportado (no crea empleados).</p>}

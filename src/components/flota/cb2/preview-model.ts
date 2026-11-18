@@ -45,7 +45,7 @@ export function elegible(f: FilaCB2) { return !!f.candidato && !f.bloqueada && !
 type Decisiones = Record<string, DecisionAsignacion>;
 export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
     const result: Record<string, string> = {};
-    const grupos = new Map<string, FilaCB2[]>(), unidades = new Set(cat.vehiculos.filter(unidadOperable).map(v => String(v.id)));
+    const grupos = new Map<string, FilaCB2[]>(), unidades = new Set([...cat.vehiculos.filter(unidadOperable).map(v => String(v.id)), ...(cat.unidadesExternas ?? []).map(u => String(-u.id))]);
     for (const f of filas) if (f.candidato && !["RESUELTA", "IGNORADA"].includes(f.estado)) {
         const group = grupos.get(f.candidato) ?? []; group.push(f); grupos.set(f.candidato, group);
     }
