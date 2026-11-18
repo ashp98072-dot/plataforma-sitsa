@@ -7,9 +7,11 @@ import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { clasificarProducto, identificarEmpleado, productos, etiquetasProducto, type Producto } from "@/lib/flota/cb2/clasificacion";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 import { input } from "./controles";
+import { PilotoShellVale } from "./revision-nombres";
+import type { DecisionNombre, RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
 import { politicaIndependiente, pilotoIndependiente, unidadIndependiente } from "./piloto-independiente";
-export type DecisionAsignacion = { decisionNombre?:import("@/lib/flota/cb2/pilotos-nombres").DecisionNombre; pilotoTipo?: "INTERNO" | "EXTERNO" | "REPORTADO"; pilotoExternoId?: number | null; unidadExternaId?: number | null; exigirProducto?: boolean; empleadoId?: number | null; productoClasificado?: Producto; motivoUnidad?: string; asociacionExternaId?: number | null };
-export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actualizarCatalogos }: { fila: FilaCB2; cat: CatalogosCB2; value: DecisionAsignacion; onChange: (v: DecisionAsignacion) => void; disabled: boolean; api?: string; actualizarCatalogos?: () => Promise<unknown> }) {
+export type DecisionAsignacion = { decisionNombre?:import("@/lib/flota/cb2/pilotos-nombres").DecisionNombre; pilotoTipo?: "INTERNO" | "EXTERNO" | "REPORTADO"; pilotoExternoId?: number | null; unidadExternaId?: number | null; exigirProducto?: boolean; /** Shell: el vale no está LISTO hasta resolver el piloto (empleado o piloto reportado confirmado). */exigirPiloto?: boolean; empleadoId?: number | null; productoClasificado?: Producto; motivoUnidad?: string; asociacionExternaId?: number | null };
+export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actualizarCatalogos, nombre, onNombre }: { nombre?: RevisionNombre; onNombre?: (d: DecisionNombre) => void; fila: FilaCB2; cat: CatalogosCB2; value: DecisionAsignacion; onChange: (v: DecisionAsignacion) => void; disabled: boolean; api?: string; actualizarCatalogos?: () => Promise<unknown> }) {
     const match = identificarEmpleado(fila.origen?.piloto ?? "", cat.empleados ?? []);
     const empleado = value.empleadoId === undefined ? match.propuesta?.id : value.empleadoId;
     const producto = value.productoClasificado ?? clasificarProducto(fila.origen?.producto);
@@ -25,7 +27,7 @@ export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actua
         const asociaciones = (cat.terceros ?? []).filter(a => a.piloto_id === p && a.unidad_id === u && a.estado === "VERIFICADA");
         onChange({ ...value, empleadoId: null, pilotoExternoId: p ?? null, unidadExternaId: u ?? null, asociacionExternaId: !cat.tercerosDirectos && asociaciones.length === 1 ? asociaciones[0].id : null });
     }
-    return <div className="space-y-4">{fila.perfil==="SHELL" && <p>Nombre original: {fila.origen?.piloto || "No informado"}. Revisa y confirma el nombre en el panel común; se aplica a todo el archivo.</p>}
+    return <div className="space-y-4">{fila.perfil==="SHELL" && <PilotoShellVale original={fila.origen?.piloto ?? ""} nombre={nombre} decision={value.decisionNombre} empleados={cat.empleados} instalado={!!cat.pilotosReportados} disabled={disabled} onElegir={onNombre ?? (() => undefined)}/>}
         {independiente && <fieldset disabled={disabled}><legend>Piloto reportado y vinculacion opcional</legend>
           <label>Tipo de piloto<select className={input} value={value.pilotoTipo??piloto?.tipo??""} onChange={e=>onChange({...value,decisionNombre:undefined,pilotoTipo:e.target.value as "INTERNO"|"EXTERNO"|"REPORTADO",empleadoId:null,pilotoExternoId:null,asociacionExternaId:null})}><option value="">Vinculacion automatica opcional</option><option value="REPORTADO">Conservar solo el nombre reportado</option><option value="INTERNO">De la empresa</option><option value="EXTERNO">Tercerizado</option></select></label>
           <CatalogoSearchSelect label={`Piloto de la empresa para vale ${fila.vale}`} placeholder="Buscar piloto interno" inputClassName={input} value={piloto?.tipo==="INTERNO"?String(piloto.id):""} options={(cat.empleados??[]).map(p=>({value:String(p.id),label:p.estado==="Baja"?etiquetaEmpleado(p):p.nombre}))} onChange={v=>onChange({...value,decisionNombre:fila.perfil==="SHELL" && v?{tipo:"EMPLEADO",empleadoId:Number(v),confirmado:true}:undefined,pilotoTipo:"INTERNO",empleadoId:v?Number(v):null,pilotoExternoId:null,asociacionExternaId:null})}/>

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { identificarEmpleado, seleccionarEmpleado } from "./empleados-coincidencias";
 import { etiquetaEmpleado, ventanaLaboral } from "./empleados-baja";
 import { proponerNombre } from "./pilotos-nombres";
-import { decisionesMasivas } from "@/components/flota/cb2/nombres-masivos";
 
 const edgar = { id: 33, nombre: "Edgar Palala", estado: "Activo" };
 const andres: { id: number; nombre: string; estado: string; fechaBaja: string | null; fechaAlta: string | null } = { id: 50, nombre: "Andrés Norberto Taracena Mayén", estado: "Baja", fechaBaja: "2026-06-30", fechaAlta: "2024-01-10" };
@@ -36,12 +35,6 @@ describe("empleados activos y de baja en la revisión Shell", () => {
     expect(ventanaLaboral({ ...andres, fechaBaja: null }, { min: "2026-01-01", max: "2026-01-02" })).toBe("SIN_FECHA_BAJA");
     expect(ventanaLaboral(andres, { min: null, max: null })).toBe("SIN_FECHA_CONSUMO");
     expect(ventanaLaboral(edgar, undefined)).toBe("ACTIVO");
-  });
-  it("acción masiva: la baja y las fechas ya no la bloquean (solo advertencias); sin candidato sigue sin asignar empleado ni crear reportado", () => {
-    const mk = (rango: { min: string | null; max: string | null; sinFecha?: boolean } | undefined, c = andres) => ({ clave: "A", originales: ["Andres Norberto Taracena Mayen"], filas: 3, rango, candidatos: [c], propuesta: null });
-    for (const r of [{ min: "2026-01-01", max: "2026-06-30" }, { min: "2026-01-01", max: "2026-07-01" }, { min: "2026-01-01", max: "2026-02-01", sinFecha: true }, undefined])
-      expect(decisionesMasivas([mk(r)], {}).empleado).toHaveLength(1);
-    expect(decisionesMasivas([mk(undefined)], {}).reportado).toHaveLength(0);
   });
   it("etiqueta con estado y fecha de baja", () => {
     expect(etiquetaEmpleado(andres)).toBe("Andrés Norberto Taracena Mayén · #50 · Baja (2026-06-30)");

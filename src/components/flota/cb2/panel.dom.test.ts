@@ -15,7 +15,7 @@ const original = { id: 10, proveedor_id: 1, importacion_id: 2, revision: 1, tipo
 const header = { id: 2, proveedor_id: 1, proveedor_nombre: "PROVEEDOR DEMO", archivo_nombre: "demo.xlsx", archivo_sha256: preview.sha256, revision: 1, estado: "PARCIAL", resumen_actual: '{"pendientes":1}' };
 const consumo = { id: 3, proveedor_id: 1, importacion_origen_id: 2, moneda: "GTQ", numero_vale: "0001", placa_original: "C-001ABC", fecha_consumo: "2026-10-01", galones: "10", precio: "20", monto: "200", factura_id: null, estado_factura: "PENDIENTE_FACTURA" };
 let eventosHistorial: Record<string, unknown>[] = [];
-let failConfirm = false, failAsociar = false, revisionHeader = 1, paginado = false, consumoProveedor = 1;
+let perfilHeader = "HALEL", failConfirm = false, failAsociar = false, revisionHeader = 1, paginado = false, consumoProveedor = 1;
 const response = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { "Content-Type": "application/json" } });
 beforeEach(() => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -26,6 +26,7 @@ beforeEach(() => {
     root = createRoot(host);
     calls.length = 0;
     eventosHistorial = [];
+    perfilHeader = "HALEL";
     failConfirm = false;
     failAsociar = false;
     revisionHeader = 1;
@@ -35,7 +36,7 @@ beforeEach(() => {
         const url = String(input);
         calls.push({ url, init });
         if (url.endsWith("/catalogos"))
-            return response({ proveedores: [{ id: 1, nombre: "PROVEEDOR DEMO" }], vehiculos: [{ id: 1, placa: "C-001ABC" }] });
+            return response({ proveedores: [{ id: 1, nombre: "PROVEEDOR DEMO" }], vehiculos: [{ id: 1, placa: "C-001ABC" }], pilotosReportados: true, empleados: [{ id: 110, nombre: "Andrés Norberto Taracena Mayén", estado: "Baja" }] });
         if (url.endsWith("/preview"))
             return response(preview);
         if (url.endsWith("/corregir")) {
@@ -57,10 +58,12 @@ beforeEach(() => {
         }
         if (url.endsWith("/asociar") || url.endsWith("/reanudar"))
             return response({ eventos: [{ id: 11, importacionId: 2, revision: 2, resultado: "REUTILIZADA", consumoId: 3 }] });
+        if (url.endsWith("/pilotos-nombres"))
+            return response([{ clave: "VISITANTE NUEVO", originales: ["Visitante Nuevo"], filas: 1, candidatos: [], elegibles: [], propuesta: null }]);
         if (url.includes("/filas?"))
             return response([original, ...eventosHistorial]);
         if (url.includes("/importaciones?"))
-            return response([{ ...header, revision: revisionHeader }]);
+            return response([{ ...header, perfil: perfilHeader, revision: revisionHeader }]);
         if (url.includes("/consumos?"))
             return response(paginado ? (new URL(url, "http://localhost").searchParams.get("despues") === "0" ? Array.from({ length: 50 }, (_, i) => ({ ...consumo, id: i + 3 })) : [{ ...consumo, id: 53 }]) : [{ ...consumo, proveedor_id: consumoProveedor }]);
         if (url.includes("/facturas?"))
@@ -182,5 +185,26 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await change("Motivo de reanudación", "Completar apariciones pendientes");
         await click("Reanudar selección");
         expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion).toEqual([{ candidato, vehiculoId: 1, empleadoId: null, metodoEmpleado: "SIN_ASIGNACION", productoClasificado: "DIESEL" }]);
+    });
+    it("reanudación Shell SIN panel global: el piloto pendiente se resuelve desde el vale y viaja con el nombre original", async () => {
+        perfilHeader = "SHELL"; revisionHeader = 1;
+        eventosHistorial = [];
+        const origenShell = { ...original, datos_origen: JSON.stringify({ textos: { producto: "DIESEL", piloto: "Visitante Nuevo" }, vale: "0001", placaOriginal: "C-001ABC", fechaConsumo: "2026-10-01" }) };
+        const base = fetch as unknown as ReturnType<typeof vi.fn>, prev = base.getMockImplementation()! as (i: unknown, n?: unknown) => Promise<Response>;
+        base.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => String(input).includes("/filas?") ? response([origenShell]) : prev(input, init));
+        await mount();
+        await click("Historial");
+        await click("Ver trazabilidad #2");
+        expect(host.textContent).not.toContain("Revisar pilotos por nombre distinto");
+        expect(calls.some(c => c.url.endsWith("/importaciones/2/pilotos-nombres"))).toBe(true);
+        await click("Editar");
+        expect(host.textContent).toContain("Piloto del Excel"); expect(host.textContent).toContain("Visitante Nuevo");
+        await change("Unidad para vale", "1");
+        await change("Motivo de reanudación", "Completar el piloto pendiente");
+        expect(btn("Reanudar selección").disabled).toBe(true);   // PENDIENTE: falta el piloto
+        await click("Guardar el nombre original como piloto reportado");
+        await click("Reanudar selección");
+        const sel = JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion;
+        expect(sel).toHaveLength(1); expect(sel[0]).toMatchObject({ candidato, vehiculoId: 1, decisionNombre: { tipo: "REPORTADO", confirmado: true } });
     });
 });

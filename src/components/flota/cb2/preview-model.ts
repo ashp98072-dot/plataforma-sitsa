@@ -52,6 +52,8 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     for (const [key, value] of Object.entries(seleccion)) {
         const originales = grupos.get(key) ?? [];
         const motivo = decisiones[key]?.motivoUnidad?.trim() ?? "";
+        // Shell: un vale solo está LISTO con el piloto resuelto (empleado o piloto reportado confirmado), igual que lo exige el servidor.
+        if (decisiones[key]?.exigirPiloto && !pilotoShellResuelto(originales, decisiones[key])) continue;
         if (politicaIndependiente(cat)) {
             const p = originales[0] && pilotoIndependiente(originales[0],cat,decisiones[key]);
             const valida = originales.length && originales.every(f=> {
@@ -80,6 +82,7 @@ export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: 
     }
     return result;
 }
+export const pilotoShellResuelto = (filas: FilaCB2[], d: DecisionAsignacion | undefined) => !filas.some(f => f.perfil === "SHELL") || d?.pilotoTipo === "EXTERNO" || !!d?.decisionNombre;
 export function estadoVisual(f: FilaCB2, seleccion: Record<string, string>) {
     if (f.estado === "IGNORADA") return "IGNORADO";
     if (f.estado === "RESUELTA") return "RESUELTO";
