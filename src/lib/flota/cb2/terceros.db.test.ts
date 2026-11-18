@@ -503,6 +503,17 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
    const results=await Promise.allSettled([cb2(file),cb2(file)]);expect(results.some(r=>r.status==="fulfilled")).toBe(true);expect(await total("INDEPENDIENTE-CONCURRENTE")).toBe(1);
    const ajeno=await preparar("INDEPENDIENTE-AJENO","Otro Tenant",propia);ajeno.entrada.seleccion[0]={...ajeno.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:702,metodoEmpleado:"MANUAL"};
    await expect(cb2(ajeno)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-AJENO")).toBe(0);
+   // Empleados de baja (identidades independientes): solo selección MANUAL, de la misma empresa y con trazabilidad; nunca automática.
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(704,1,'Baja Independiente Uno','Baja'),(705,2,'Baja Otro Tenant','Baja')");
+   const bajaManual=await preparar("INDEPENDIENTE-BAJA-MANUAL","Baja Independiente Uno",propia);bajaManual.entrada.seleccion[0]={...bajaManual.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:704,metodoEmpleado:"MANUAL"};
+   await cb2(bajaManual);expect(await total("INDEPENDIENTE-BAJA-MANUAL")).toBe(1);
+   const [guardadaBaja]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='INDEPENDIENTE-BAJA-MANUAL'");
+   expect(guardadaBaja).toMatchObject({empleado_id:704});expect(JSON.parse(guardadaBaja.identidad_externa)).toMatchObject({politica:"INDEPENDIENTE_V1",piloto:{tipo:"INTERNO",id:704,estadoEmpleado:"Baja"}});
+   const bajaAuto=await preparar("INDEPENDIENTE-BAJA-AUTO","Baja Independiente Uno",propia);bajaAuto.entrada.seleccion[0]={...bajaAuto.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"AUTOMATICA",empleadoId:704,metodoEmpleado:"EXACTA_NORMALIZADA"};
+   await expect(cb2(bajaAuto)).rejects.toThrow();expect(await total("INDEPENDIENTE-BAJA-AUTO")).toBe(0);
+   const bajaAjena=await preparar("INDEPENDIENTE-BAJA-AJENA","Baja Otro Tenant",propia);bajaAjena.entrada.seleccion[0]={...bajaAjena.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:705,metodoEmpleado:"MANUAL"};
+   await expect(cb2(bajaAjena)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-BAJA-AJENA")).toBe(0);
+   expect((await q("SELECT estado FROM empleados WHERE id=704"))[0].estado).toBe("Baja");   // RR. HH. no se modifica
    await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(703,1,'Externo Independiente','Activo')");
    const ambiguo=await preparar("INDEPENDIENTE-AMBIGUO","Externo Independiente",propia);ambiguo.entrada.seleccion[0]={...ambiguo.entrada.seleccion[0],pilotoTipo:'EXTERNO',metodoPiloto:'AUTOMATICA',pilotoExternoId:p.id,empleadoId:null,metodoEmpleado:'SIN_ASIGNACION'};
    await expect(cb2(ambiguo)).rejects.toThrow('ambigua');expect(await total('INDEPENDIENTE-AMBIGUO')).toBe(0);
