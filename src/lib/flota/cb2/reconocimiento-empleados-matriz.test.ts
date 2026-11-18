@@ -2,7 +2,7 @@
 // Regla: empleados Activo y Baja de la empresa; ≥2 palabras completas coincidentes (sin importar posición, tildes ni mayúsculas); exactamente un empleado → propuesta;
 // dos o más → ambiguo; ninguno → revisión manual. Los nombres reales de la regresión son solo datos de prueba: la lógica no contiene nombres ni IDs fijos.
 import { describe, expect, it } from "vitest";
-import { crearBuscadorEmpleados, identificarEmpleado, seleccionarEmpleado } from "./empleados-coincidencias";
+import { crearBuscadorEmpleados, identificarEmpleado, nombreEmpleadoComparable, palabraSignificativa, seleccionarEmpleado } from "./empleados-coincidencias";
 import { proponerNombre } from "./pilotos-nombres";
 
 type E = { id: number; nombre: string; estado: string; empresa: number };
@@ -51,6 +51,7 @@ describe("matriz de reconocimiento automático de empleados (Activo y Baja por i
     ["Ana Lopez", [7, 8]],                       // homónimo baja + activo
     ["Juan Ramirez", [5, 6]],                    // varios candidatos con dos palabras
     ["Juan Carlos Ramirez", [5, 6]],             // Juan Carlos Ramírez Soto cumple 3, Juan Pablo Ramírez López cumple 2 → los dos cumplen el mínimo → ambiguo
+    ["Juan Carlos Ramirez Soto", [5, 6]],        // aunque sea el nombre completo exacto de #5, #6 también cumple el mínimo → ambiguo
   ])("«%s» → ambiguo, sin propuesta: candidatos %j", (nombre, ids) => {
     const m = identificarEmpleado(nombre, empresa1()); expect(m.estado).toBe("AMBIGUA"); expect(m.propuesta).toBeNull(); expect(m.candidatos.map(c => c.id)).toEqual(ids);
     expect(seleccionarEmpleado(nombre, empresa1(), undefined)).toEqual({ empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" });
@@ -71,9 +72,23 @@ describe("matriz de reconocimiento automático de empleados (Activo y Baja por i
       expect(shell?.tipo === "EMPLEADO" ? shell.empleadoId : null).toBe(hal);
     }
   });
-  it("cada empleado único del catálogo se reconoce a sí mismo (sin nombres fijos en la lógica); los homónimos quedan ambiguos", () => {
+  it("oráculo por fuerza bruta: cada nombre completo se reconoce a sí mismo SOLO si ningún otro empleado comparte dos palabras significativas; si no, es ambiguo (sin excepciones)", () => {
     const cat = empresa1(true), buscar = crearBuscadorEmpleados(cat);
-    for (const e of cat) { const m = buscar(e.nombre); if (cat.filter(o => o.nombre === e.nombre).length > 1) expect(m.estado).toBe("AMBIGUA"); else expect(m.propuesta?.id, e.nombre).toBe(e.id); }
+    const sig = (n: string) => new Set(nombreEmpleadoComparable(n).split(" ").filter(palabraSignificativa));
+    const compartidas = (a: string, b: string) => [...sig(a)].filter(t => sig(b).has(t)).length;
+    for (const e of cat) {
+      const rivales = cat.filter(o => o.id !== e.id && compartidas(e.nombre, o.nombre) >= 2);
+      const m = buscar(e.nombre);
+      if (rivales.length) { expect(m.estado, e.nombre).toBe("AMBIGUA"); expect(m.propuesta).toBeNull(); expect(m.candidatos.map(c => c.id).sort((a, b) => a - b)).toEqual([e.id, ...rivales.map(r => r.id)].sort((a, b) => a - b)); }
+      else expect(m.propuesta?.id, e.nombre).toBe(e.id);
+    }
+  });
+  it("nombres completos de 3 o más palabras con competidores parciales → ambiguo (sin excepción de nombre exacto)", () => {
+    const cat = [{ id: 1, nombre: "Juan Carlos Ramírez Soto", estado: "Activo" }, { id: 2, nombre: "Juan Pablo Ramírez López", estado: "Baja" }];
+    for (const nombre of ["Juan Carlos Ramírez Soto", "JUAN CARLOS RAMIREZ SOTO", "Soto Ramirez Carlos Juan"]) {
+      const m = identificarEmpleado(nombre, cat); expect(m.estado, nombre).toBe("AMBIGUA"); expect(m.propuesta).toBeNull(); expect(m.candidatos.map(c => c.id)).toEqual([1, 2]);
+    }
+    expect(identificarEmpleado("Carlos Soto", cat).propuesta?.id).toBe(1);   // sin competidor con dos palabras: único
   });
   it("un nombre de empleado ya registrado nunca queda como piloto reportado sin candidatos", () => {
     const r = proponerNombre("Andres Taracena", empresa1(true));

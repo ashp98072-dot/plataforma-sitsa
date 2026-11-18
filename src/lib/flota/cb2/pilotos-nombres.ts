@@ -2,7 +2,7 @@ import { buscarCoincidencias } from "../combustible-coincidencias";
 import { crearBuscadorEmpleados, nombreEmpleadoComparable } from "./empleados-coincidencias";
 export const normalizarNombreReportado=(nombre:string)=>nombre.normalize("NFC").trim().replace(/\s+/gu," ").toLocaleUpperCase("es-GT");
 export type DecisionNombre = {tipo:"EMPLEADO";empleadoId:number;confirmado:boolean} | {tipo:"REPORTADO";reportadoId?:number;confirmado:boolean};
-export type RevisionNombre = {clave:string;originales:string[];filas:number;rango?:{min:string|null;max:string|null;sinFecha?:boolean};candidatos:{id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null}[];propuesta:DecisionNombre|null;equivalencia?:DecisionNombre};
+export type RevisionNombre = {clave:string;originales:string[];filas:number;rango?:{min:string|null;max:string|null;sinFecha?:boolean};candidatos:{id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null}[];/** IDs que cumplen la política de dos palabras completas (los demás candidatos son solo ayudas visuales aproximadas). */elegibles?:number[];/** La equivalencia histórica apunta a un empleado distinto del que identifica hoy el motor: exige revisión explícita. */conflictoEquivalencia?:{equivalenciaId:number;reconocidoId:number};propuesta:DecisionNombre|null;equivalencia?:DecisionNombre};
 type Empleado={id:number;nombre:string;estado?:string;fechaBaja?:string|null;fechaAlta?:string|null};
 function parecidos(a:string,b:string) {
  if(a===b)return true;
@@ -20,10 +20,17 @@ export function candidatosNombre(nombre:string,empleados:Empleado[]) {
  return [...new Map([...parciales,...fuzzy].map(p=>[p.id,p])).values()].sort((a,b)=>a.id-b.id);
 }
 export function proponerNombre(nombre:string,empleados:Empleado[],equivalencia?:DecisionNombre,rango?:{min:string|null;max:string|null;sinFecha?:boolean},buscar=crearBuscadorEmpleados(empleados)):RevisionNombre {
- const candidatos=candidatosNombre(nombre,empleados),coincidencia=buscar(nombre);   // misma política que HALEL: ≥2 palabras completas, único, sin ambigüedad; Activo y Baja por igual
- // Una equivalencia previa no puede ocultar ni distorsionar el reconocimiento: un alias hacia un empleado solo vale si el nombre no es ambiguo,
- // y un alias «reportado» no se propone si hoy existe un empleado identificable (el empleado existente se propone en su lugar).
- const aliasValido=equivalencia && coincidencia.candidatos.length<2 && (equivalencia.tipo==="EMPLEADO" ? empleados.some(p=>p.id===equivalencia.empleadoId) : coincidencia.candidatos.length===0);
- const propuesta=aliasValido ? {...equivalencia,confirmado:false} : coincidencia.propuesta ? {tipo:"EMPLEADO" as const,empleadoId:coincidencia.propuesta.id,confirmado:false} : null;
- return {clave:normalizarNombreReportado(nombre),originales:[nombre],filas:1,...(rango?{rango}:{}),candidatos,propuesta,...(equivalencia?{equivalencia}:{})};
+ const coincidencia=buscar(nombre);   // misma política que HALEL: ≥2 palabras completas, único, sin ambigüedad; Activo y Baja por igual
+ // Los elegibles del motor SIEMPRE son candidatos; los aproximados (erratas, parecidos) se añaden solo como ayuda visual y jamás deciden una asignación.
+ const candidatos=[...new Map([...coincidencia.candidatos,...candidatosNombre(nombre,empleados)].map(p=>[p.id,p])).values()].sort((a,b)=>a.id-b.id);
+ const reconocido=coincidencia.propuesta?.id??null;
+ let propuesta:DecisionNombre|null=reconocido!=null?{tipo:"EMPLEADO",empleadoId:reconocido,confirmado:false}:null,conflicto:RevisionNombre["conflictoEquivalencia"];
+ if(equivalencia?.tipo==="EMPLEADO") {
+  // Una equivalencia histórica nunca sustituye a una coincidencia inequívoca hacia otro ID ni resuelve una ambigüedad: ante conflicto, revisión explícita.
+  if(reconocido!=null && reconocido!==equivalencia.empleadoId){propuesta=null;conflicto={equivalenciaId:equivalencia.empleadoId,reconocidoId:reconocido};}
+  else if(reconocido==null && coincidencia.candidatos.length===0 && empleados.some(p=>p.id===equivalencia.empleadoId))propuesta={...equivalencia,confirmado:false};
+ }
+ // Un alias «reportado» no se propone si hoy existe un empleado identificable (se propone el empleado en su lugar).
+ else if(equivalencia?.tipo==="REPORTADO" && coincidencia.candidatos.length===0)propuesta={...equivalencia,confirmado:false};
+ return {clave:normalizarNombreReportado(nombre),originales:[nombre],filas:1,...(rango?{rango}:{}),candidatos,elegibles:coincidencia.candidatos.map(p=>p.id),...(conflicto?{conflictoEquivalencia:conflicto}:{}),propuesta,...(equivalencia?{equivalencia}:{})};
 }

@@ -679,6 +679,20 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   const otraPersona=await shell("BAJA-SHELL-AJENA","Norberto Taracena",propia,1);
   await expect(cb2({...otraPersona,entrada:{...otraPersona.entrada,seleccion:otraPersona.entrada.seleccion.map(s=>({...s,empleadoId:4451,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:4451,confirmado:false}}))}})).rejects.toThrow();
   expect(await q("SELECT * FROM flota_cb2_consumos WHERE numero_vale='BAJA-SHELL-AJENA'")).toHaveLength(0);
+  // Equivalencia histórica en conflicto con el reconocimiento actual: nunca se aplica el ID antiguo sin revisión explícita.
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4460,1,'Otro Sintetico Alias','Activo')");
+  const base=await shell("ALIAS-BASE","Conflicto Alias",propia,1);
+  const aEmpleado=(f:typeof base,id:number,confirmado:boolean)=>({...f,entrada:{...f.entrada,seleccion:f.entrada.seleccion.map(sel=>({...sel,empleadoId:id,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:id,confirmado}}))}});
+  await cb2(aEmpleado(base,4460,true));   // equivalencia explícita «Conflicto Alias» → #4460
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4461,1,'Conflicto Alias Sintético','Baja')");   // hoy el motor identifica de forma única al #4461
+  const conflicto=await shell("ALIAS-CONFLICTO","Conflicto Alias",propia,1);
+  const revConflicto=(await preview(ctx,conflicto.buffer,conflicto.entrada)).nombres[0];
+  expect(revConflicto.propuesta).toBeNull();expect(revConflicto.conflictoEquivalencia).toEqual({equivalenciaId:4460,reconocidoId:4461});expect(revConflicto.elegibles).toEqual([4461]);
+  await expect(cb2(aEmpleado(conflicto,4460,false))).rejects.toThrow("requiere confirmación");   // el ID antiguo sin confirmar se rechaza
+  await expect(cb2(aEmpleado(conflicto,4461,false))).rejects.toThrow("requiere confirmación");   // tampoco el reconocido sin revisión explícita
+  expect(await q("SELECT * FROM flota_cb2_consumos WHERE numero_vale='ALIAS-CONFLICTO'")).toHaveLength(0);
+  await cb2(aEmpleado(conflicto,4461,true));   // confirmación explícita
+  expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='ALIAS-CONFLICTO'"))[0].empleado_id).toBe(4461);
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4443,1,'Luis Escobar Sintético','Activo')");
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();
   const homonimo=await shell("VARIANTE-HOMONIMO","Luis Escobr Sintético",propia,1);homonimo.entrada.seleccion[0]={...homonimo.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};

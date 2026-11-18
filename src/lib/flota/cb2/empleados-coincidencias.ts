@@ -46,15 +46,12 @@ export function crearBuscadorEmpleados<T extends Empleado>(catalogo: readonly T[
             for (const t of tokens) for (const i of indice.get(t) ?? []) cuenta.set(i, (cuenta.get(i) ?? 0) + 1);
             indices = [...cuenta].filter(([, n]) => n >= MIN_PALABRAS_COINCIDENTES).map(([i]) => i).sort((a, b) => a - b);
         }
-        const candidatos = indices.map(i => catalogo[i]);
-        // Un nombre COMPLETO (≥3 palabras significativas) idéntico al de un único empleado lo identifica aunque otro empleado comparta dos palabras;
-        // con nombres de dos palabras la ambigüedad siempre se conserva.
-        const identicos = tokens.length >= 3 ? indices.filter(i => nombres.get(i) === key) : [];
-        const elegido = identicos.length === 1 ? identicos[0] : candidatos.length === 1 ? indices[0] : -1;
-        const unica = elegido >= 0, exacta = unica && nombres.get(elegido) === key;
+        const candidatos = indices.map(i => catalogo[i]), unica = candidatos.length === 1;
+        // Sin excepciones: si dos o más empleados reúnen el mínimo de palabras completas, es ambiguo aunque el nombre importado sea idéntico al de uno de ellos.
+        const exacta = unica && nombres.get(indices[0]) === key;
         const resultado: CoincidenciaEmpleado<T> = {
             estado: unica ? exacta ? "EXACTA" : "PARCIAL_UNICA" : candidatos.length ? "AMBIGUA" : "INEXISTENTE",
-            candidatos, propuesta: unica ? catalogo[elegido] : null,
+            candidatos, propuesta: unica ? candidatos[0] : null,
             metodo: unica ? exacta ? "EXACTA_NORMALIZADA" : "TOKENS_COMPLETOS_UNICOS" : null,
             motivo: unica ? exacta ? "Nombre normalizado completo y único en el catálogo de la empresa (activo o de baja)" : "Dos o más palabras completas coinciden con un único empleado de la empresa (activo o de baja)" : candidatos.length ? "Varios empleados comparten dos o más palabras completas; requiere elección manual" : "Sin empleado con al menos dos palabras completas coincidentes; revisión manual",
         };
