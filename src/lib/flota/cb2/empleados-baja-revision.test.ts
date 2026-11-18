@@ -73,12 +73,12 @@ describe("equivalencias históricas hacia empleados de baja", () => {
     expect(g.equivalencia).toMatchObject({ tipo: "REPORTADO" }); expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
   });
   it("alias hacia #50 con un nombre de UNA palabra («Taracena»): sin autopropuesta (preview, reanudación) y el servidor rechaza la decisión sin confirmar; confirmada se acepta", async () => {
-    sqlMock({ alias });
+    sqlMock({ alias: { ...alias, nombre_normalizado: "TARACENA" } });
     const [g] = await revisarNombresTx(conn(), 7, ["Taracena"], true, ["2026-05-01"]);
     expect(g.propuesta).toBeNull(); expect(g.equivalencia).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
-    sqlMock({ alias, origen: [{ textos: { piloto: "Taracena" }, fechaConsumo: "2026-05-01" }] });
+    sqlMock({ alias: { ...alias, nombre_normalizado: "TARACENA" }, origen: [{ textos: { piloto: "Taracena" }, fechaConsumo: "2026-05-01" }] });
     expect((await nombresImportacion(7, 1))[0].propuesta).toBeNull();
-    sqlMock({ alias });
+    sqlMock({ alias: { ...alias, nombre_normalizado: "TARACENA" } });
     const ctx = { empresaId: 7, proveedorId: 3, actor: { id: 9, username: "demo" }, autorizar: async () => {} };
     const c = { query: q, execute: vi.fn() } as unknown as PoolConnection;
     await expect(registrarPilotoReportadoTx(c, ctx, 1, "Taracena", { tipo: "EMPLEADO", empleadoId: 50, confirmado: false })).rejects.toThrow("requiere confirmación");
