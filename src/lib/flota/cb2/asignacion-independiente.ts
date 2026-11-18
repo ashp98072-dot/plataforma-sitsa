@@ -21,18 +21,22 @@ export async function validarAsignacionIndependiente(c: PoolConnection, ctx: Con
   if (s.asociacionExternaId != null || !s.pilotoTipo || (reportado ? s.vehiculoId > 0 || s.empleadoId != null || s.pilotoExternoId != null : s.pilotoTipo === "INTERNO" ? !s.empleadoId || s.pilotoExternoId != null : !s.pilotoExternoId || s.empleadoId != null)) throw new ErrorCB2("Selecciona una sola identidad de piloto.",400);
   const cat = await catalogosTercerosTx(c,ctx.empresaId);
   if(!reportado && s.metodoPiloto!=="MANUAL"){
-    const internos=await rows(c,"SELECT id,nombre FROM empleados WHERE empresa_id=? AND estado='Activo' ORDER BY id",[ctx.empresaId]);
+    // Activos y de baja: un homónimo de baja también hace ambigua la propuesta automática, y un empleado de baja NUNCA se vincula solo.
+    const internos=await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND estado IN ('Activo','Baja') ORDER BY id",[ctx.empresaId]);
     const exactos=internos.filter(p=>nombreComparable(String(p.nombre))===nombreComparable(nombre));
+    if(s.pilotoTipo==='INTERNO' && exactos.some(p=>Number(p.id)===s.empleadoId && p.estado==='Baja'))throw new ErrorCB2("Un empleado de baja requiere selección manual explícita.");
     const externos=cat.pilotos.filter(p=>nombreComparable(p.nombre)===nombreComparable(nombre));
     if(s.pilotoTipo==='INTERNO' ? exactos.length!==1||Number(exactos[0]?.id)!==s.empleadoId||externos.length!==0 : externos.length!==1||externos[0]?.id!==s.pilotoExternoId||exactos.length!==0)throw new ErrorCB2("Propuesta automatica ambigua entre pilotos internos y externos. Selecciona manualmente.");
   }
-  let piloto: { tipo: string; id: number | null; nombre: string };
+  let piloto: { tipo: string; id: number | null; nombre: string; estadoEmpleado?: string };
   if (reportado) {
     piloto = {tipo:"REPORTADO",id:null,nombre};
   } else if (s.pilotoTipo === "INTERNO") {
-    const [p] = await rows(c,"SELECT id,nombre FROM empleados WHERE empresa_id=? AND id=? AND estado='Activo' LOCK IN SHARE MODE",[ctx.empresaId,s.empleadoId!]);
+    const [p] = await rows(c,"SELECT id,nombre,estado FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') LOCK IN SHARE MODE",[ctx.empresaId,s.empleadoId!]);
     if (!p) throw new ErrorCB2("Piloto interno ajeno o inactivo.",403);
-    piloto = {tipo:"INTERNO",id:Number(p.id),nombre:String(p.nombre)};
+    // Baja: solo por selección manual explícita; queda registrada en la identidad guardada para trazabilidad.
+    if (p.estado==="Baja" && s.metodoPiloto!=="MANUAL") throw new ErrorCB2("Un empleado de baja requiere selección manual explícita.");
+    piloto = {tipo:"INTERNO",id:Number(p.id),nombre:String(p.nombre),...(p.estado==="Baja"?{estadoEmpleado:"Baja"}:{})};
   } else {
     const p = cat.pilotos.find(p=>p.id===s.pilotoExternoId);
     if (!p) throw new ErrorCB2("Piloto tercerizado ajeno o no disponible.",403);
