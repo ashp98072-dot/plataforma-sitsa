@@ -72,6 +72,17 @@ describe("equivalencias históricas hacia empleados de baja", () => {
     const [g] = await revisarNombresTx(conn(), 7, ["Andres Taracena"], true, ["2026-05-01"]);
     expect(g.equivalencia).toMatchObject({ tipo: "REPORTADO" }); expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
   });
+  it("alias hacia #50 con un nombre de UNA palabra («Taracena»): sin autopropuesta (preview, reanudación) y el servidor rechaza la decisión sin confirmar; confirmada se acepta", async () => {
+    sqlMock({ alias });
+    const [g] = await revisarNombresTx(conn(), 7, ["Taracena"], true, ["2026-05-01"]);
+    expect(g.propuesta).toBeNull(); expect(g.equivalencia).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
+    sqlMock({ alias, origen: [{ textos: { piloto: "Taracena" }, fechaConsumo: "2026-05-01" }] });
+    expect((await nombresImportacion(7, 1))[0].propuesta).toBeNull();
+    sqlMock({ alias });
+    const ctx = { empresaId: 7, proveedorId: 3, actor: { id: 9, username: "demo" }, autorizar: async () => {} };
+    const c = { query: q, execute: vi.fn() } as unknown as PoolConnection;
+    await expect(registrarPilotoReportadoTx(c, ctx, 1, "Taracena", { tipo: "EMPLEADO", empleadoId: 50, confirmado: false })).rejects.toThrow("requiere confirmación");
+  });
   it("el alias hacia un empleado ACTIVO conserva su comportamiento (propuesta sin confirmar)", () => {
     const activo = { id: 33, nombre: "Edgar Palala", estado: "Activo" };
     expect(proponerNombre("Edgar Palala", [activo], { tipo: "EMPLEADO", empleadoId: 33, confirmado: false }).propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 33, confirmado: false });

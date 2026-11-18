@@ -17,7 +17,9 @@ it("no resuelve homónimos por exactitud, parecido ni equivalencias antiguas",()
 });
 it("reutiliza solo equivalencias confirmadas vigentes; no inventa reportados",()=>{
  const e=[{id:1,nombre:"José Luis Escobar"}];
- expect(proponerNombre("Escobr",e,{tipo:"EMPLEADO",empleadoId:1,confirmado:false}).propuesta?.tipo).toBe("EMPLEADO");
+ // el alias hacia un empleado NO elude el mínimo de dos palabras: queda como referencia y se confirma manualmente
+ const sinMotor=proponerNombre("Escobr",e,{tipo:"EMPLEADO",empleadoId:1,confirmado:false});expect(sinMotor.propuesta).toBeNull();expect(sinMotor.equivalencia).toEqual({tipo:"EMPLEADO",empleadoId:1,confirmado:false});
+ expect(proponerNombre("Jose Luis",e,{tipo:"EMPLEADO",empleadoId:1,confirmado:false}).propuesta?.tipo).toBe("EMPLEADO");   // el motor reconoce al mismo empleado
  expect(proponerNombre("Escobr",[],{tipo:"EMPLEADO",empleadoId:1,confirmado:false}).propuesta).toBeNull();
  expect(proponerNombre("Visitante",[],{tipo:"REPORTADO",reportadoId:3,confirmado:false}).propuesta).toEqual({tipo:"REPORTADO",reportadoId:3,confirmado:false});
  expect(proponerNombre("Visitante",[]).propuesta).toBeNull();
@@ -38,12 +40,16 @@ it("equivalencia histórica hacia #75 con coincidencia única #110 (Andrés Tara
  const r=proponerNombre("Andrés Taracena",empleados,{tipo:"EMPLEADO",empleadoId:75,confirmado:false});
  expect(r.propuesta).toBeNull();expect(r.conflictoEquivalencia).toEqual({equivalenciaId:75,reconocidoId:110});expect(r.equivalencia).toEqual({tipo:"EMPLEADO",empleadoId:75,confirmado:false});
  expect(r.elegibles).toEqual([110]);expect(r.candidatos.map(p=>p.id)).toContain(110);
- // sin conflicto (alias hacia el mismo ID) o sin reconocimiento del motor, el alias sigue proponiéndose
- expect(proponerNombre("Andrés Taracena",empleados,{tipo:"EMPLEADO",empleadoId:110,confirmado:false}).propuesta).toEqual({tipo:"EMPLEADO",empleadoId:110,confirmado:false});
- expect(proponerNombre("Taracena",empleados,{tipo:"EMPLEADO",empleadoId:110,confirmado:false}).propuesta).toEqual({tipo:"EMPLEADO",empleadoId:110,confirmado:false});
+ // alias hacia el MISMO empleado que reconoce el motor → autopropuesta; sin reconocimiento (una sola palabra) el alias NO propone
+ const alias110={tipo:"EMPLEADO" as const,empleadoId:110,confirmado:false};
+ expect(proponerNombre("Andrés Taracena",empleados,alias110).propuesta).toEqual(alias110);
+ const sola=proponerNombre("Taracena",empleados,alias110);expect(sola.propuesta).toBeNull();expect(sola.equivalencia).toEqual(alias110);expect(sola.elegibles).toEqual([]);expect(sola.conflictoEquivalencia).toBeUndefined();
  // un alias nunca resuelve una ambigüedad del motor
  const amb=[...empleados,{id:111,nombre:"Andrés Taracena López",estado:"Activo"}];
- expect(proponerNombre("Andrés Taracena",amb,{tipo:"EMPLEADO",empleadoId:110,confirmado:false}).propuesta).toBeNull();
+ const ambiguo=proponerNombre("Andrés Taracena",amb,alias110);expect(ambiguo.propuesta).toBeNull();expect(ambiguo.elegibles).toEqual([110,111]);
+ expect(proponerNombre("Andrés Taracena",amb,{tipo:"EMPLEADO",empleadoId:111,confirmado:false}).propuesta).toBeNull();
+ // alias «reportado» previamente confirmado: se conserva si no hay empleado identificable
+ expect(proponerNombre("Persona Desconocida Nueva",empleados,{tipo:"REPORTADO",reportadoId:9,confirmado:false}).propuesta).toEqual({tipo:"REPORTADO",reportadoId:9,confirmado:false});
 });
 it("todo elegible del motor aparece entre los candidatos; los aproximados no alteran la propuesta ni crean ambigüedad",()=>{
  const empleados=[{id:1,nombre:"Marta Luisa Pérez Gómez",estado:"Activo"},{id:2,nombre:"Martha Luisa Perez Gomes",estado:"Activo"},{id:3,nombre:"Pedro Xol",estado:"Baja"}];

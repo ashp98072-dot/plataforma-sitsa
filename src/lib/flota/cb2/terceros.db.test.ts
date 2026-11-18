@@ -660,7 +660,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   // Las variantes de empleado se confirman una vez y se reutilizan sin crear reportados.
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4441,1,'Luis Escobar Sintético','Activo'),(4442,2,'Luis Escobar Sintético','Activo')");
   const variante=await shell("VARIANTE-EMPLEADO","Luis Escobr Sintético",propia,1);
-  const revisionNombre=(await preview(ctx,variante.buffer,variante.entrada)).nombres[0];expect(revisionNombre.propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});   // «Luis» y «Sintético» son dos palabras completas coincidentesexpect(revisionNombre.candidatos.some(p=>p.id===4441)).toBe(true);expect(revisionNombre.candidatos.some(p=>p.id===4442)).toBe(false);
+  const revisionNombre=(await preview(ctx,variante.buffer,variante.entrada)).nombres[0];expect(revisionNombre.propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});   expect(revisionNombre.candidatos.some(p=>p.id===4441)).toBe(true);expect(revisionNombre.candidatos.some(p=>p.id===4442)).toBe(false);   // «Luis» y «Sintético» son dos palabras completas coincidentes
   const comoEmpleado=(id:number)=>({...variante,entrada:{...variante.entrada,seleccion:variante.entrada.seleccion.map(s=>({...s,empleadoId:id,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:id,confirmado:true}}))}});
   await expect(cb2(comoEmpleado(4442))).rejects.toMatchObject({status:403});await cb2(comoEmpleado(4441));
   expect((await q("SELECT empleado_id,piloto_informado FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0]).toMatchObject({empleado_id:4441,piloto_informado:"Luis Escobr Sintético"});
@@ -693,6 +693,14 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   expect(await q("SELECT * FROM flota_cb2_consumos WHERE numero_vale='ALIAS-CONFLICTO'")).toHaveLength(0);
   await cb2(aEmpleado(conflicto,4461,true));   // confirmación explícita
   expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='ALIAS-CONFLICTO'"))[0].empleado_id).toBe(4461);
+  // Alias hacia un empleado con un nombre de UNA palabra en común: nunca autopropuesta; el servidor exige confirmación explícita.
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4462,1,'Zeta Sintetico Persona','Baja')");
+  const aliasUno=await shell("ALIAS-UNA-BASE","Zeta Omega",propia,1);await cb2(aEmpleado(aliasUno,4462,true));   // equivalencia explícita «Zeta Omega» → #4462
+  const unaPalabra=await shell("ALIAS-UNA-PALABRA","Zeta Omega",propia,1);
+  const revUna=(await preview(ctx,unaPalabra.buffer,unaPalabra.entrada)).nombres[0];expect(revUna.propuesta).toBeNull();expect(revUna.equivalencia).toMatchObject({tipo:"EMPLEADO",empleadoId:4462});expect(revUna.elegibles).toEqual([]);
+  await expect(cb2(aEmpleado(unaPalabra,4462,false))).rejects.toThrow("requiere confirmación");
+  expect(await q("SELECT * FROM flota_cb2_consumos WHERE numero_vale='ALIAS-UNA-PALABRA'")).toHaveLength(0);
+  await cb2(aEmpleado(unaPalabra,4462,true));expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='ALIAS-UNA-PALABRA'"))[0].empleado_id).toBe(4462);
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4443,1,'Luis Escobar Sintético','Activo')");
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();
   const homonimo=await shell("VARIANTE-HOMONIMO","Luis Escobr Sintético",propia,1);homonimo.entrada.seleccion[0]={...homonimo.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
@@ -705,7 +713,7 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   const corregido=await shell("CORRECCION-EMPLEADO",nombreCorreccion,propia,1);
   corregido.entrada.seleccion[0]={...corregido.entrada.seleccion[0],empleadoId:4441,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4441,confirmado:true}};
   await cb2(corregido);
-  expect((await preview(ctx,corregido.buffer,corregido.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
+  {const r=(await preview(ctx,corregido.buffer,corregido.entrada)).nombres[0];expect(r.propuesta).toBeNull();expect(r.equivalencia).toMatchObject({tipo:"EMPLEADO",empleadoId:4441});expect(r.elegibles).toEqual([]);}   // el motor no reconoce a nadie (sin dos palabras): el alias es solo referencia y no autopropone
   const [equivalenciaCorregida]=await q("SELECT * FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='CORRECCION SINTETICA UNICA'");
   expect(equivalenciaCorregida).toMatchObject({empleado_id:4441,piloto_reportado_id:null,requiere_revision:0,confirmado_por:1});
   const auditorias=await q("SELECT detalle FROM auditoria WHERE accion='cb2_confirmar_equivalencia_piloto' AND JSON_VALUE(detalle,'$.nombreNormalizado')='CORRECCION SINTETICA UNICA' ORDER BY id");
@@ -721,9 +729,11 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   expect((await q("SELECT * FROM flota_cb2_pilotos_equivalencias WHERE nombre_normalizado='CORRECCION SINTETICA UNICA'"))[0]).toEqual(equivalenciaCorregida);
   expect(await q("SELECT id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-ROLLBACK'")).toEqual([]);
   await cb2(fallido);
-  expect((await preview(ctx,fallido.buffer,fallido.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4443,confirmado:false});
+  {const r=(await preview(ctx,fallido.buffer,fallido.entrada)).nombres[0];expect(r.propuesta).toBeNull();expect(r.equivalencia).toMatchObject({tipo:"EMPLEADO",empleadoId:4443});}
   const reutilizado=await shell("CORRECCION-REUSO",nombreCorreccion,propia,1);
   reutilizado.entrada.seleccion[0]={...reutilizado.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:false}};
+  await expect(cb2(reutilizado)).rejects.toThrow("requiere confirmación");   // un alias sin reconocimiento del motor no se acepta sin confirmar
+  reutilizado.entrada.seleccion[0]={...reutilizado.entrada.seleccion[0],decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};
   await cb2(reutilizado);
   expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='CORRECCION-REUSO'"))[0].empleado_id).toBe(4443);
   // Dos proveedores confirman destinos distintos: el bloqueo empresarial conserva una cadena auditada.

@@ -28,7 +28,7 @@ export function proponerNombre(nombre:string,empleados:Empleado[],equivalencia?:
  if(equivalencia?.tipo==="EMPLEADO") {
   // Una equivalencia histórica nunca sustituye a una coincidencia inequívoca hacia otro ID ni resuelve una ambigüedad: ante conflicto, revisión explícita.
   if(reconocido!=null && reconocido!==equivalencia.empleadoId){propuesta=null;conflicto={equivalenciaId:equivalencia.empleadoId,reconocidoId:reconocido};}
-  else if(reconocido==null && coincidencia.candidatos.length===0 && empleados.some(p=>p.id===equivalencia.empleadoId))propuesta={...equivalencia,confirmado:false};
+  // Sin reconocimiento del motor (o ambiguo), el alias queda solo como referencia (`equivalencia`): no se autopropone ni elude el mínimo de dos palabras.
  }
  // Un alias «reportado» no se propone si hoy existe un empleado identificable (se propone el empleado en su lugar).
  else if(equivalencia?.tipo==="REPORTADO" && coincidencia.candidatos.length===0)propuesta={...equivalencia,confirmado:false};
