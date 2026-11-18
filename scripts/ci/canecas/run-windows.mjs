@@ -39,9 +39,9 @@ try {
   const [version, net, socket, dir] = ready.stdout.trim().split("\t");
   if (!version.startsWith("11.8.9-MariaDB") || net !== "1" || socket !== pipe || path.resolve(dir).toLowerCase() !== data.toLowerCase()) throw Error("Identidad incorrecta");
   verified = true;
-  if (sql("CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test;").status !== 0) throw Error("No se creó base desechable");
+  if (sql("CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test; CREATE DATABASE canecas_schema_test;").status !== 0) throw Error("No se creó base desechable");
   const vitest = fileURLToPath(import.meta.resolve("vitest/package.json"));
-  const test = cp.spawnSync(process.execPath, [path.join(path.dirname(vitest), "vitest.mjs"), "run", "src/lib/canecas/confirmar.db.test.ts", "src/lib/canecas/flujo.db.test.ts", "--maxWorkers=1"], { env: { ...env, CANECAS_TEST_PIPE: pipe }, encoding: "utf8", windowsHide: true, timeout: 180000 });
+  const test = cp.spawnSync(process.execPath, [path.join(path.dirname(vitest), "vitest.mjs"), "run", "src/lib/canecas/confirmar.db.test.ts", "src/lib/canecas/flujo.db.test.ts", "src/lib/canecas/schema.db.test.ts", "--maxWorkers=1"], { env: { ...env, CANECAS_TEST_PIPE: pipe }, encoding: "utf8", windowsHide: true, timeout: 180000 });
   console.log(test.stdout, test.stderr);
   process.exitCode = test.status === 0 ? 0 : 1;
 } finally {

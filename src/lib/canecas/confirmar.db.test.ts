@@ -7,13 +7,19 @@ const pipe = process.env.CANECAS_TEST_PIPE;
 describe.skipIf(!pipe)("confirmación contra MariaDB aislada", () => {
   const pool = mysql.createPool({ socketPath: `\\\\.\\pipe\\${pipe}`, user: "root", database: "canecas_test", multipleStatements: true, connectionLimit: 8 });
   beforeAll(async () => {
-    await pool.query(`CREATE TABLE empresas (id INT PRIMARY KEY) ENGINE=InnoDB;
-      CREATE TABLE usuarios (id INT PRIMARY KEY) ENGINE=InnoDB;
-      CREATE TABLE empleados (id INT PRIMARY KEY, empresa_id INT NOT NULL, UNIQUE KEY (empresa_id,id)) ENGINE=InnoDB;
-      CREATE TABLE compras_proveedores (id INT PRIMARY KEY, empresa_id INT NOT NULL, UNIQUE KEY (empresa_id,id)) ENGINE=InnoDB;
-      INSERT INTO empresas VALUES (1),(2); INSERT INTO usuarios VALUES (1);
-      INSERT INTO empleados VALUES (1,1),(2,2); INSERT INTO compras_proveedores VALUES (1,1),(2,2);`);
-    await pool.query(readFileSync("sql/preflight-2026-11-canecas-fase1.sql", "utf8"));
+    const schema = readFileSync("sql/schema.sql", "utf8");
+    for (const tabla of ["empresas","usuarios","empleados","compras_proveedores","auditoria"]) {
+      const ddl = schema.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${tabla} \\([\\s\\S]*?\\) ENGINE=InnoDB[^;]*;`));
+      if (!ddl) throw new Error(`Falta definición ${tabla}`);
+      await pool.query(ddl[0]);
+    }
+    await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a'),(2,'B','B','b');
+      INSERT INTO usuarios (id,username,password_hash,salt) VALUES (1,'test','hash','salt');
+      INSERT INTO empleados (id,empresa_id,codigo,nombre) VALUES (1,1,'A','Ana'),(2,2,'B','Berta');
+      INSERT INTO compras_proveedores (id,empresa_id,nombre_comercial,nombre_normalizado) VALUES (1,1,'A','A'),(2,2,'B','B');`);
+    const [preflight] = await pool.query<mysql.RowDataPacket[][]>(readFileSync("sql/preflight-2026-11-canecas-fase1.sql", "utf8"));
+    expect(preflight[0][0].estado_motor).toBe("APTO");
+    expect(preflight[1].find(r => r.prueba === "RESULTADO")?.estado).toBe("APTO");
     await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql", "utf8"));
     await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql", "utf8"));
     await pool.query(`INSERT INTO canecas_productos (id,empresa_id,codigo,nombre,presentacion,capacidad,unidad_capacidad,unidad_inventario) VALUES
@@ -52,7 +58,21 @@ describe.skipIf(!pipe)("confirmación contra MariaDB aislada", () => {
     expect(rows[0].fisico).toBe(40);
     expect(Number(movs[0].total)).toBe(40);
     const [postcheck] = await pool.query<mysql.RowDataPacket[][]>(readFileSync("sql/postcheck-2026-11-canecas-fase1.sql", "utf8"));
-    expect(postcheck[0]).toHaveLength(6);
+    expect(postcheck[0].filter(r => r.estado !== "APTO")).toEqual([]);
+    expect(postcheck[0].find(r => r.prueba === "RESULTADO")?.estado).toBe("APTO");
     expect(postcheck.slice(1).every(rows => rows.length === 0)).toBe(true);
+  });
+  it("detecta movimientos cargados con referencias de otra empresa", async () => {
+    const conn = await pool.getConnection();
+    try {
+      await conn.query("SET SESSION foreign_key_checks=0");
+      await conn.query("INSERT INTO canecas_movimientos (empresa_id,producto_id,ubicacion_id,tipo,cantidad,documento,usuario_id) VALUES (1,2,1,'ENTRADA',1,'invalido',1)");
+      await conn.query("SET SESSION foreign_key_checks=1");
+      const [postcheck] = await conn.query<mysql.RowDataPacket[][]>(readFileSync("sql/postcheck-2026-11-canecas-fase1.sql", "utf8"));
+      expect(postcheck[4].some(r => r.movimiento === "movimiento")).toBe(true);
+    } finally {
+      await conn.query("SET SESSION foreign_key_checks=1");
+      conn.release();
+    }
   });
 });

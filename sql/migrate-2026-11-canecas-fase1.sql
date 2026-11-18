@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS canecas_compras (
   clave_operacion CHAR(36) NOT NULL,
   UNIQUE KEY uq_can_compra_empresa_id (empresa_id,id),
   UNIQUE KEY uq_can_compra_clave (empresa_id,clave_operacion),
-  UNIQUE KEY uq_can_compra_documento_producto (empresa_id,proveedor_id,referencia,producto_id),
   CONSTRAINT chk_can_compra_cantidad CHECK (cantidad > 0),
   CONSTRAINT fk_can_compra_proveedor FOREIGN KEY (empresa_id,proveedor_id) REFERENCES compras_proveedores(empresa_id,id) ON DELETE RESTRICT,
   CONSTRAINT fk_can_compra_producto FOREIGN KEY (empresa_id,producto_id) REFERENCES canecas_productos(empresa_id,id) ON DELETE RESTRICT,

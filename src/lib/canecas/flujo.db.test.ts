@@ -27,6 +27,10 @@ describe.skipIf(!pipe)("flujo API contra MariaDB desechable", () => {
     res = await post("proveedores",{nombre_comercial:"Proveedor"}); expect(res.status).toBe(201); const proveedor = (await res.json()).id;
     const compra = {proveedor_id:proveedor,producto_id:producto,referencia:"FAC-1",cantidad:25,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf11"};
     res = await post("compras",compra); expect(res.status).toBe(201); const compraId = (await res.json()).id;
+    const repeticion = await post("compras",compra); expect(repeticion.status).toBe(200); expect((await repeticion.json()).id).toBe(compraId);
+    expect((await post("compras",{...compra,cantidad:24})).status).toBe(409);
+    const segunda = await post("compras",{...compra,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf14"});
+    expect(segunda.status).toBe(201); expect((await segunda.json()).id).not.toBe(compraId);
     let inventario = await (await GET(new Request("http://local"),ctx("inventario"))).json(); expect(inventario.datos).toHaveLength(0);
     const recepcion = {compra_id:compraId,ubicacion_id:ubicacion,recibido_por_empleado_id:1,cantidad:20,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf12"};
     const duplicadas = await Promise.all([post("recepciones",recepcion),post("recepciones",recepcion)]);
