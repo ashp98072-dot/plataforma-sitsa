@@ -578,6 +578,18 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
    const [r]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='SHELL-EXTERNA'");expect(r).toMatchObject({vehiculo_id:null,unidad_externa_id:u.id,empleado_id:null,piloto_externo_id:null,asociacion_externa_id:null,piloto_informado:"Persona sin relacion laboral"});expect(JSON.parse(String(r.identidad_externa))).toMatchObject({politica:"REPORTADO_V1",piloto:{tipo:"REPORTADO",id:null}});
    await expect(q("UPDATE flota_cb2_consumos SET empleado_id=701 WHERE id=?",[r.id])).rejects.toThrow();
    await expect(q("UPDATE flota_cb2_consumos SET identidad_externa=JSON_SET(identidad_externa,'$.unidad.id',999999) WHERE id=?",[r.id])).rejects.toThrow();
+   // Unidad externa REUTILIZADA en otra importación Shell con un empleado de BAJA (INTERNO manual): misma identidad externa, sin crear vehículos de Flota ni modificar RR. HH.
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(7701,1,'Baja Externa Prueba','Baja'),(7702,2,'Baja Otro Tenant Ext','Baja')");
+   const vehiculosAntes=await q("SELECT COUNT(*) n FROM flota_vehiculos");
+   const bufferBaja=await libroShell([filaShell("SHELL-EXTERNA-BAJA","Baja Externa Prueba","M777LAB","Diesel")]);const lineaBaja=(await analizar(bufferBaja,"SHELL","GTQ")).find(l=>l.clave)!;
+   const archivoBaja={buffer:bufferBaja,entrada:{perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:lineaBaja.clave!,vehiculoId:-u.id,pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:7701,metodoEmpleado:"MANUAL"}]} as Entrada};
+   await cb2(archivoBaja);
+   const [rb]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='SHELL-EXTERNA-BAJA'");expect(rb).toMatchObject({vehiculo_id:null,unidad_externa_id:u.id,empleado_id:7701});expect(JSON.parse(String(rb.identidad_externa))).toMatchObject({piloto:{tipo:"INTERNO",id:7701,estadoEmpleado:"Baja"},unidad:{tipo:"EXTERNA",id:u.id}});
+   expect(await q("SELECT COUNT(*) n FROM flota_vehiculos")).toEqual(vehiculosAntes);expect((await q("SELECT estado FROM empleados WHERE id=7701"))[0].estado).toBe("Baja");
+   // otra empresa: ni su empleado ni una unidad ajena se aceptan aunque el ID exista
+   const bufferAjena=await libroShell([filaShell("SHELL-EXTERNA-BAJA-AJENA","Baja Otro Tenant Ext","M777LAB","Diesel")]);const lineaAjena=(await analizar(bufferAjena,"SHELL","GTQ")).find(l=>l.clave)!;
+   await expect(cb2({buffer:bufferAjena,entrada:{...archivoBaja.entrada,seleccion:[{...archivoBaja.entrada.seleccion[0],candidato:lineaAjena.clave!,empleadoId:7702}]}})).rejects.toMatchObject({status:403});
+   expect(await total("SHELL-EXTERNA-BAJA-AJENA")).toBe(0);
    const otroBuffer=await libroShell([filaShell("SHELL-EXTERNA-AJENA","Persona sin relacion laboral","M777LAB","Diesel")]);const otraLinea=(await analizar(otroBuffer,"SHELL","GTQ")).find(l=>l.clave)!;
    const ajeno={buffer:otroBuffer,entrada:{...file.entrada,seleccion:[{...file.entrada.seleccion[0],candidato:otraLinea.clave!,vehiculoId:-999999}]}};await expect(cb2(ajeno)).rejects.toThrow();
    vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");await expect(cb2({...ajeno,entrada:{...ajeno.entrada,seleccion:[{...ajeno.entrada.seleccion[0],vehiculoId:-u.id}]}})).rejects.toMatchObject({status:403});

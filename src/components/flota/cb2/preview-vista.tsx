@@ -4,6 +4,7 @@ import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motivoUnidadNoOperable, unidadOperable } from "./unidades-bloqueo";
 import { causasAsignacion } from "./problemas-asignacion";
+import { claseUnidadShell } from "./unidad-shell";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 import { avisosDetallados, estadosPreview, resumirRevision, sugerenciaVehiculo, sugerenciaPiloto, type CandidatoRevision } from "./preview-model";
@@ -133,7 +134,7 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
             const empleadoId = politicaIndependiente(cat) ? identidad?.tipo==="INTERNO" ? identidad.id : null : decision.empleadoId === undefined ? identificarEmpleado(f.origen?.piloto ?? "", cat.empleados ?? []).propuesta?.id : decision.empleadoId;
             const empleado = cat.empleados?.find(e => e.id === empleadoId);
             const producto = decision.productoClasificado ?? clasificarProducto(f.origen?.producto);
-            const pendiente = decision.exigirPiloto && !decision.decisionNombre && decision.pilotoTipo !== "EXTERNO" ? "Falta resolver el piloto: abre Editar y elige un empleado o confirma el nombre original como piloto reportado." : revisionExtra && !producto ? "Falta clasificar combustible." : !g.vehiculoId || !vehiculo ? "Selecciona una unidad válida." : decision.empleadoId != null && !empleado ? "El empleado elegido no está disponible; revisa el catálogo." : "Revisa la compatibilidad de la unidad y su justificación.";
+            const pendiente = decision.exigirPiloto && !decision.decisionNombre && decision.pilotoTipo !== "EXTERNO" ? "Falta resolver el piloto: abre Editar y elige un empleado o confirma el nombre original como piloto reportado." : revisionExtra && !producto ? "Falta clasificar combustible." : !g.vehiculoId || !vehiculo ? (f.perfil === "SHELL" ? claseUnidadShell(f, cat, g.vehiculoId).mensaje : "Selecciona una unidad válida.") : decision.empleadoId != null && !empleado ? "El empleado elegido no está disponible; revisa el catálogo." : "Revisa la compatibilidad de la unidad y su justificación.";
             const abierto = !!abiertos[g.clave], detalleId = `${panelId}-${g.clave}`;
             return <Fragment key={g.clave}><tr data-candidato={g.clave} data-excluded={!!omitidos[g.clave]} className={styles.consumptionRow}>
                 <td><input type="checkbox" aria-label={`Seleccionar consumo vale ${f.vale}`} checked={g.seleccionado} disabled={disabled || !g.unidadValida} onChange={e => elegir(g, e.target.checked)}/></td>

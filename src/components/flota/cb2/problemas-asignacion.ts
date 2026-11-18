@@ -6,6 +6,7 @@ import { nombreComparable, placaCompatible } from "@/lib/flota/combustible-coinc
 import { clasificarProducto } from "@/lib/flota/cb2/clasificacion";
 import type { CatalogosCB2 } from "./client";
 import type { DecisionAsignacion } from "./asignacion";
+import { claseUnidadShell } from "./unidad-shell";
 import { avisosDetallados, pilotoShellResuelto, type CandidatoRevision } from "./preview-model";
 
 /** Explica la selección actual; nunca convierte un diagnóstico en autorización. */
@@ -14,6 +15,12 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
   const causas: string[] = [];
   if (g.estado === "BLOQUEADO") causas.push(...g.activas.flatMap(f => [...f.errores, ...avisosDetallados(f).filter(a => a.nivel === "BLOQUEO").map(a => a.mensaje)]), "El servidor bloquea este candidato; corregir la asignación no elimina el conflicto histórico o del archivo.");
   if (d.exigirPiloto && !pilotoShellResuelto(g.activas, d, cat)) causas.push("Falta resolver el piloto: elige un empleado existente o confirma el nombre original como piloto reportado.");
+  if (g.fila.perfil === "SHELL") {
+    // Qué es la unidad (interna / externa / ambigua / no identificada) y qué falta; una unidad externa con piloto Shell exige la política de identidades independientes.
+    const u = claseUnidadShell(g.fila, cat, g.vehiculoId);
+    if (!g.vehiculoId || u.clase === "NO_IDENTIFICADA") causas.push(u.mensaje);
+    if (Number(g.vehiculoId) < 0 && !politicaIndependiente(cat)) causas.push("La unidad externa de un vale Shell requiere identidades independientes habilitadas por el propietario; hasta entonces elige una unidad de Flota.");
+  }
   if (!g.vehiculoId) {
     causas.push("Falta seleccionar una unidad válida. Las coincidencias ambiguas no se asignan automáticamente.");
   } else if (!cat.vehiculos.some(v => String(v.id) === g.vehiculoId)) causas.push(`Unidad #${g.vehiculoId} ausente del catálogo disponible de esta empresa.`);

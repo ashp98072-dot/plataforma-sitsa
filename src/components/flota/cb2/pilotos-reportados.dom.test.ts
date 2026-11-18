@@ -11,7 +11,7 @@ it("Shell permite vincular terceros opcionalmente sin convertir el nombre report
  const host=document.createElement("div"),root=createRoot(host);document.body.append(host);const cambiar=vi.fn();
  const fila={perfil:"SHELL",vale:"001",placa:"C001LAB",placaNormalizada:"C001LAB",origen:{piloto:"  Mensajero externo  ",producto:"Diesel"}} as FilaCB2;
  try{await act(async()=>root.render(createElement(AsignacionCB2,{fila,cat:{proveedores:[],vehiculos:[],tercerosDirectos:true,identidadesIndependientes:true},value:{pilotoTipo:"REPORTADO"},onChange:cambiar,disabled:false})));
- expect(host.textContent).toContain("  Mensajero externo  ");expect([...host.querySelectorAll('label')].find(l=>l.textContent?.startsWith("Tipo de piloto"))?.querySelector("select")?.value).toBe("REPORTADO");expect(host.textContent).not.toContain("Registrar piloto");
+ expect(host.textContent).toContain("  Mensajero externo  ");expect([...host.querySelectorAll('label')].some(l=>l.textContent?.startsWith("Tipo de piloto"))).toBe(false);expect(host.textContent).not.toContain("Registrar piloto");
  expect(host.textContent).toContain("Piloto del Excel");expect(cambiar).not.toHaveBeenCalled();
  }finally{await act(async()=>root.unmount());host.remove();}
 });
