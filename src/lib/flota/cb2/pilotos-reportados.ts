@@ -6,6 +6,7 @@ import { hash,ErrorCB2 } from "./model";
 import { rows,type Contexto } from "./repository";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { acumularFecha,esColumnaInexistente,fechaIso } from "./empleados-baja";
+import { crearBuscadorEmpleados } from "./empleados-coincidencias";
 import { normalizarNombreReportado,proponerNombre,type DecisionNombre,type RevisionNombre } from "./pilotos-nombres";
 export { normalizarNombreReportado } from "./pilotos-nombres";
 export async function esquemaPilotosReportados(c?:PoolConnection) {
@@ -27,7 +28,7 @@ async function empleadosRevision(c:PoolConnection,empresa:number) {
 }
 /** `fechas[i]` es la fecha de consumo (ISO) de `nombres[i]`, cuando se conoce; permite comparar con la fecha de baja. */
 export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:string[],instalado:boolean,fechas:(string|null|undefined)[]=[]):Promise<RevisionNombre[]> {
- const empleados=await empleadosRevision(c,empresa);
+ const empleados=await empleadosRevision(c,empresa),buscar=crearBuscadorEmpleados(empleados);
  const grupos=new Map<string,RevisionNombre>();
  for(const [i,nombre] of nombres.entries()) {
   const clave=normalizarNombreReportado(nombre);if(!clave)continue;
@@ -35,7 +36,7 @@ export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:s
   const [alias]=instalado?await rows(c,"SELECT nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[empresa,hash(clave)]):[];
   if(alias && alias.nombre_normalizado!==clave)throw new ErrorCB2("Colisión de nombre; requiere revisión.");
   const destino:DecisionNombre|undefined=alias?alias.empleado_id!=null?{tipo:"EMPLEADO",empleadoId:Number(alias.empleado_id),confirmado:false}:{tipo:"REPORTADO",reportadoId:Number(alias.piloto_reportado_id),confirmado:false}:undefined;
-  const revision=proponerNombre(nombre,empleados,destino,acumularFecha(undefined,fechas[i]));if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
+  const revision=proponerNombre(nombre,empleados,destino,acumularFecha(undefined,fechas[i]),buscar);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
  }
  return [...grupos.values()];
 }

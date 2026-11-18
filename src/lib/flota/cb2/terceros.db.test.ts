@@ -503,16 +503,20 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
    const results=await Promise.allSettled([cb2(file),cb2(file)]);expect(results.some(r=>r.status==="fulfilled")).toBe(true);expect(await total("INDEPENDIENTE-CONCURRENTE")).toBe(1);
    const ajeno=await preparar("INDEPENDIENTE-AJENO","Otro Tenant",propia);ajeno.entrada.seleccion[0]={...ajeno.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:702,metodoEmpleado:"MANUAL"};
    await expect(cb2(ajeno)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-AJENO")).toBe(0);
-   // Empleados de baja (identidades independientes): solo selección MANUAL, de la misma empresa y con trazabilidad; nunca automática.
+   // Empleados de baja (identidades independientes): mismo reconocimiento que los activos (≥2 palabras completas, único), de la misma empresa y con trazabilidad.
    await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(704,1,'Baja Independiente Uno','Baja'),(705,2,'Baja Otro Tenant','Baja')");
    const bajaManual=await preparar("INDEPENDIENTE-BAJA-MANUAL","Baja Independiente Uno",propia);bajaManual.entrada.seleccion[0]={...bajaManual.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:704,metodoEmpleado:"MANUAL"};
    await cb2(bajaManual);expect(await total("INDEPENDIENTE-BAJA-MANUAL")).toBe(1);
    const [guardadaBaja]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='INDEPENDIENTE-BAJA-MANUAL'");
    expect(guardadaBaja).toMatchObject({empleado_id:704});expect(JSON.parse(guardadaBaja.identidad_externa)).toMatchObject({politica:"INDEPENDIENTE_V1",piloto:{tipo:"INTERNO",id:704,estadoEmpleado:"Baja"}});
-   const bajaAuto=await preparar("INDEPENDIENTE-BAJA-AUTO","Baja Independiente Uno",propia);bajaAuto.entrada.seleccion[0]={...bajaAuto.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"AUTOMATICA",empleadoId:704,metodoEmpleado:"EXACTA_NORMALIZADA"};
-   await expect(cb2(bajaAuto)).rejects.toThrow();expect(await total("INDEPENDIENTE-BAJA-AUTO")).toBe(0);
-   const bajaAjena=await preparar("INDEPENDIENTE-BAJA-AJENA","Baja Otro Tenant",propia);bajaAjena.entrada.seleccion[0]={...bajaAjena.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"MANUAL",empleadoId:705,metodoEmpleado:"MANUAL"};
-   await expect(cb2(bajaAjena)).rejects.toMatchObject({status:403});expect(await total("INDEPENDIENTE-BAJA-AJENA")).toBe(0);
+   const bajaAuto=await preparar("INDEPENDIENTE-BAJA-AUTO","Baja Independiente",propia);bajaAuto.entrada.seleccion[0]={...bajaAuto.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"AUTOMATICA",empleadoId:704,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"};
+   await cb2(bajaAuto);expect(await total("INDEPENDIENTE-BAJA-AUTO")).toBe(1);   // dos palabras completas, único, estado Baja: reconocimiento automático
+   expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE vale_norm='INDEPENDIENTE-BAJA-AUTO'"))[0].empleado_id).toBe(704);
+   const bajaAjena=await preparar("INDEPENDIENTE-BAJA-AJENA","Baja Otro Tenant",propia);bajaAjena.entrada.seleccion[0]={...bajaAjena.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"AUTOMATICA",empleadoId:705,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"};
+   await expect(cb2(bajaAjena)).rejects.toThrow();expect(await total("INDEPENDIENTE-BAJA-AJENA")).toBe(0);   // otra empresa: no existe en el catálogo autorizado
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(706,1,'Baja Independiente Dos','Activo')");   // ahora «Baja Independiente» es ambiguo
+   const bajaAmbigua=await preparar("INDEPENDIENTE-BAJA-AMBIGUA","Baja Independiente",propia);bajaAmbigua.entrada.seleccion[0]={...bajaAmbigua.entrada.seleccion[0],pilotoTipo:"INTERNO",metodoPiloto:"AUTOMATICA",empleadoId:704,metodoEmpleado:"TOKENS_COMPLETOS_UNICOS"};
+   await expect(cb2(bajaAmbigua)).rejects.toThrow();expect(await total("INDEPENDIENTE-BAJA-AMBIGUA")).toBe(0);
    expect((await q("SELECT estado FROM empleados WHERE id=704"))[0].estado).toBe("Baja");   // RR. HH. no se modifica
    await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(703,1,'Externo Independiente','Activo')");
    const ambiguo=await preparar("INDEPENDIENTE-AMBIGUO","Externo Independiente",propia);ambiguo.entrada.seleccion[0]={...ambiguo.entrada.seleccion[0],pilotoTipo:'EXTERNO',metodoPiloto:'AUTOMATICA',pilotoExternoId:p.id,empleadoId:null,metodoEmpleado:'SIN_ASIGNACION'};
@@ -656,12 +660,25 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   // Las variantes de empleado se confirman una vez y se reutilizan sin crear reportados.
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4441,1,'Luis Escobar Sintético','Activo'),(4442,2,'Luis Escobar Sintético','Activo')");
   const variante=await shell("VARIANTE-EMPLEADO","Luis Escobr Sintético",propia,1);
-  const revisionNombre=(await preview(ctx,variante.buffer,variante.entrada)).nombres[0];expect(revisionNombre.propuesta).toBeNull();expect(revisionNombre.candidatos.some(p=>p.id===4441)).toBe(true);expect(revisionNombre.candidatos.some(p=>p.id===4442)).toBe(false);
+  const revisionNombre=(await preview(ctx,variante.buffer,variante.entrada)).nombres[0];expect(revisionNombre.propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});   // «Luis» y «Sintético» son dos palabras completas coincidentesexpect(revisionNombre.candidatos.some(p=>p.id===4441)).toBe(true);expect(revisionNombre.candidatos.some(p=>p.id===4442)).toBe(false);
   const comoEmpleado=(id:number)=>({...variante,entrada:{...variante.entrada,seleccion:variante.entrada.seleccion.map(s=>({...s,empleadoId:id,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:id,confirmado:true}}))}});
   await expect(cb2(comoEmpleado(4442))).rejects.toMatchObject({status:403});await cb2(comoEmpleado(4441));
   expect((await q("SELECT empleado_id,piloto_informado FROM flota_cb2_consumos WHERE numero_vale='VARIANTE-EMPLEADO'"))[0]).toMatchObject({empleado_id:4441,piloto_informado:"Luis Escobr Sintético"});
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4441,confirmado:false});
   expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  // Empleado de BAJA reconocido automáticamente en Shell (sin selección manual, sin crear piloto reportado, RR. HH. intacto).
+  await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4450,1,'Norberto Taracena Sintético Mayén','Baja'),(4451,2,'Norberto Taracena Sintético Mayén','Baja')");
+  const baja=await shell("BAJA-SHELL-AUTO","Norberto Taracena",propia,1);
+  const revBaja=(await preview(ctx,baja.buffer,baja.entrada)).nombres[0];expect(revBaja.propuesta).toEqual({tipo:"EMPLEADO",empleadoId:4450,confirmado:false});
+  const autoBaja={...baja,entrada:{...baja.entrada,seleccion:baja.entrada.seleccion.map(s=>({...s,empleadoId:4450,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:4450,confirmado:false}}))}};
+  await cb2(autoBaja);
+  expect((await q("SELECT empleado_id FROM flota_cb2_consumos WHERE numero_vale='BAJA-SHELL-AUTO'"))[0].empleado_id).toBe(4450);
+  expect(await q("SELECT * FROM flota_cb2_pilotos_reportados WHERE empresa_id=1")).toHaveLength(1);
+  expect((await q("SELECT estado FROM empleados WHERE id=4450"))[0].estado).toBe("Baja");
+  // Decisión no confirmada hacia otro empleado distinto de la propuesta (u otra empresa) se rechaza.
+  const otraPersona=await shell("BAJA-SHELL-AJENA","Norberto Taracena",propia,1);
+  await expect(cb2({...otraPersona,entrada:{...otraPersona.entrada,seleccion:otraPersona.entrada.seleccion.map(s=>({...s,empleadoId:4451,metodoEmpleado:"MANUAL" as const,decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:4451,confirmado:false}}))}})).rejects.toThrow();
+  expect(await q("SELECT * FROM flota_cb2_consumos WHERE numero_vale='BAJA-SHELL-AJENA'")).toHaveLength(0);
   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(4443,1,'Luis Escobar Sintético','Activo')");
   expect((await preview(ctx,variante.buffer,variante.entrada)).nombres[0].propuesta).toBeNull();
   const homonimo=await shell("VARIANTE-HOMONIMO","Luis Escobr Sintético",propia,1);homonimo.entrada.seleccion[0]={...homonimo.entrada.seleccion[0],empleadoId:4443,metodoEmpleado:"MANUAL",decisionNombre:{tipo:"EMPLEADO",empleadoId:4443,confirmado:true}};

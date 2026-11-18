@@ -5,7 +5,8 @@ import { proponerNombre } from "./pilotos-nombres";
 it("empleado exacto único normaliza tildes/espacios; parcial y erratas solo proponen",()=>{
  const empleados=[{id:1,nombre:"José Luis Escobar"}];
  expect(proponerNombre("  Jose  Luis Escobar ",empleados).propuesta).toEqual({tipo:"EMPLEADO",empleadoId:1,confirmado:false});
- for(const nombre of ["Luis Escobar","José","Jose Luis Escobr","Luis Escobr"]){const r=proponerNombre(nombre,empleados);expect(r.candidatos.map(p=>p.id)).toContain(1);expect(r.propuesta).toBeNull();}
+ for(const nombre of ["José","Luis Escobr"]){const r=proponerNombre(nombre,empleados);expect(r.candidatos.map(p=>p.id)).toContain(1);expect(r.propuesta).toBeNull();}
+ for(const nombre of ["Luis Escobar","Jose Luis Escobr"])expect(proponerNombre(nombre,empleados).propuesta).toEqual({tipo:"EMPLEADO",empleadoId:1,confirmado:false});   // dos palabras completas coincidentes
  expect(proponerNombre("Mensajero ajeno",empleados).candidatos).toEqual([]);
 });
 it("no resuelve homónimos por exactitud, parecido ni equivalencias antiguas",()=>{

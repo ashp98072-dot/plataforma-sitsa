@@ -37,52 +37,51 @@ describe("rango de fechas: una fila sin fecha invalida la acción masiva de baja
     }
     expect(acumularFecha(undefined, "fecha inválida").sinFecha).toBe(true);
   });
-  it("PREVIEW: revisarNombresTx marca sinFecha y la acción masiva NO incluye al empleado de baja", async () => {
+  it("PREVIEW: revisarNombresTx conserva sinFecha como ADVERTENCIA, pero reconoce y propone al empleado de baja", async () => {
     const [g] = await revisarNombresTx(conn(), 7, [NOMBRE, NOMBRE, NOMBRE], true, ["2026-05-01", null, "2026-05-03"]);
     expect(g.filas).toBe(3); expect(g.rango).toMatchObject({ min: "2026-05-01", max: "2026-05-03", sinFecha: true });
-    expect(decisionesMasivas([g], {}).empleado).toHaveLength(0);
+    expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
+    expect(ventanaLaboral({ id: 50, nombre: NOMBRE, estado: "Baja", fechaBaja: "2026-06-30" }, g.rango)).toBe("SIN_FECHA_CONSUMO");
   });
-  it("PREVIEW: la primera fila sin fecha tampoco se pierde", async () => {
-    const [g] = await revisarNombresTx(conn(), 7, [NOMBRE, NOMBRE, NOMBRE], true, [null, "2026-05-01", "2026-05-03"]);
-    expect(g.rango?.sinFecha).toBe(true); expect(decisionesMasivas([g], {}).empleado).toHaveLength(0);
+  it("PREVIEW: consumos posteriores a la baja → advertencia, no bloqueo", async () => {
+    const [g] = await revisarNombresTx(conn(), 7, ["Andres Taracena", "Andres Taracena"], true, ["2026-05-01", "2026-07-15"]);
+    expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
+    expect(ventanaLaboral({ id: 50, nombre: NOMBRE, estado: "Baja", fechaBaja: "2026-06-30" }, g.rango)).toBe("POSTERIOR_A_BAJA");
+    expect(decisionesMasivas([g], {}).reportado).toHaveLength(0);   // jamás termina como piloto reportado
   });
-  it("PREVIEW: con todas las fechas y todas ≤ baja sí entra; si no se informan fechas, no", async () => {
-    const [ok] = await revisarNombresTx(conn(), 7, [NOMBRE, NOMBRE, NOMBRE], true, ["2026-05-01", "2026-05-02", "2026-05-03"]);
-    expect(ok.rango?.sinFecha).toBe(false); expect(decisionesMasivas([ok], {}).empleado).toHaveLength(1);
-    const [sin] = await revisarNombresTx(conn(), 7, [NOMBRE, NOMBRE], true);
-    expect(decisionesMasivas([sin], {}).empleado).toHaveLength(0);
-  });
-  it("REANUDACIÓN: nombresImportacion lee la fecha de la evidencia original y respeta filas sin fecha", async () => {
-    const t = (fechaConsumo?: unknown) => ({ textos: { piloto: NOMBRE }, ...(fechaConsumo === undefined ? {} : { fechaConsumo }) });
-    sqlMock({ origen: [t("2026-05-01"), t(), t("2026-05-03")] });
+  it("REANUDACIÓN: nombresImportacion aplica la misma política (propuesta única) y conserva el rango con filas sin fecha", async () => {
+    const t = (fechaConsumo?: unknown) => ({ textos: { piloto: "Andres Taracena" }, ...(fechaConsumo === undefined ? {} : { fechaConsumo }) });
+    sqlMock({ origen: [t("2026-05-01"), t(), t("2026-07-03")] });
     const [g] = await nombresImportacion(7, 1);
-    expect(g.rango).toMatchObject({ min: "2026-05-01", max: "2026-05-03", sinFecha: true }); expect(decisionesMasivas([g], {}).empleado).toHaveLength(0);
-    sqlMock({ origen: [t("2026-05-01"), t(null), t("2026-05-03")] });
-    expect((await nombresImportacion(7, 1))[0].rango?.sinFecha).toBe(true);
-    sqlMock({ origen: [t("2026-05-01"), t("2026-05-02"), t("2026-05-03")] });
-    const [ok] = await nombresImportacion(7, 1); expect(ok.rango?.sinFecha).toBe(false); expect(decisionesMasivas([ok], {}).empleado).toHaveLength(1);
+    expect(g.rango).toMatchObject({ min: "2026-05-01", max: "2026-07-03", sinFecha: true });
+    expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
   });
 });
 
 describe("equivalencias históricas hacia empleados de baja", () => {
   const alias = { nombre_normalizado: NOMBRE.toUpperCase(), empleado_id: 50, piloto_reportado_id: null, requiere_revision: 0 };
-  it("el alias hacia un empleado de baja no genera propuesta: requiere una nueva confirmación manual (preview y reanudación)", async () => {
+  it("el alias hacia un empleado de baja se propone igual que hacia uno activo (preview y reanudación)", async () => {
     sqlMock({ alias });
     const [g] = await revisarNombresTx(conn(), 7, [NOMBRE], true, ["2026-05-01"]);
-    expect(g.equivalencia).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false }); expect(g.propuesta).toBeNull();
+    expect(g.equivalencia).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false }); expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
     sqlMock({ alias, origen: [{ textos: { piloto: NOMBRE }, fechaConsumo: "2026-05-01" }] });
-    expect((await nombresImportacion(7, 1))[0].propuesta).toBeNull();
-    expect(decisionesMasivas([g], {}).empleado).toHaveLength(0);
+    expect((await nombresImportacion(7, 1))[0].propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
+  });
+  it("un alias antiguo a «piloto reportado» no oculta a un empleado identificable: se propone el empleado", async () => {
+    sqlMock({ alias: { nombre_normalizado: "ANDRES TARACENA", empleado_id: null, piloto_reportado_id: 9, requiere_revision: 0 } });
+    const [g] = await revisarNombresTx(conn(), 7, ["Andres Taracena"], true, ["2026-05-01"]);
+    expect(g.equivalencia).toMatchObject({ tipo: "REPORTADO" }); expect(g.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false });
   });
   it("el alias hacia un empleado ACTIVO conserva su comportamiento (propuesta sin confirmar)", () => {
     const activo = { id: 33, nombre: "Edgar Palala", estado: "Activo" };
     expect(proponerNombre("Edgar Palala", [activo], { tipo: "EMPLEADO", empleadoId: 33, confirmado: false }).propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 33, confirmado: false });
   });
-  it("el servidor rechaza una decisión sin confirmar hacia un empleado de baja", async () => {
-    sqlMock({ alias });
+  it("el servidor acepta la decisión sin confirmar hacia el empleado de baja SOLO si coincide con la propuesta vigente; otra distinta se rechaza", async () => {
+    sqlMock({});
     const ctx = { empresaId: 7, proveedorId: 3, actor: { id: 9, username: "demo" }, autorizar: async () => {} };
     const c = { query: q, execute: vi.fn() } as unknown as PoolConnection;
-    await expect(registrarPilotoReportadoTx(c, ctx, 1, NOMBRE, { tipo: "EMPLEADO", empleadoId: 50, confirmado: false })).rejects.toThrow("requiere confirmación");
+    await expect(registrarPilotoReportadoTx(c, ctx, 1, "Andres Taracena", { tipo: "EMPLEADO", empleadoId: 50, confirmado: false })).resolves.toBeNull();
+    await expect(registrarPilotoReportadoTx(c, ctx, 1, "Andres Taracena", { tipo: "EMPLEADO", empleadoId: 51, confirmado: false })).rejects.toThrow("requiere confirmación");
   });
 });
 

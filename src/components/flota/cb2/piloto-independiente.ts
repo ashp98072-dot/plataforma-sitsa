@@ -18,7 +18,8 @@ export function pilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: DecisionAs
   const internos = identificarEmpleado(nombre,cat.empleados??[]);
   const externos = (cat.pilotosExternos??[]).filter(p=>nombreComparable(p.nombre)===nombreComparable(nombre));
   if (internos.candidatos.length===0 && externos.length===1) return {tipo:"EXTERNO" as const,...externos[0],manual:false};
-  if (internos.estado === "EXACTA" && internos.candidatos.length===1 && externos.length===0) return {tipo:"INTERNO" as const,...internos.candidatos[0],manual:false};
+  // Misma política que el servidor: ≥2 palabras completas, único (Activo o Baja por igual).
+  if (internos.propuesta && externos.length===0) return {tipo:"INTERNO" as const,...internos.propuesta,manual:false,metodo:internos.metodo};
   return null;
 }
 export function unidadIndependiente(f: FilaCB2, cat: CatalogosCB2) {
@@ -35,5 +36,5 @@ export function seleccionPilotoIndependiente(f: FilaCB2, cat: CatalogosCB2, d: D
   if (!p) throw Error("Selecciona un piloto válido de la empresa o tercerizado.");
   return {pilotoTipo:p.tipo,metodoPiloto:p.manual ? "MANUAL" as const : "AUTOMATICA" as const,
     empleadoId:p.tipo==="INTERNO"?p.id:null, ...(p.tipo==="EXTERNO"?{pilotoExternoId:p.id}:{}),
-    metodoEmpleado:p.tipo==="INTERNO" ? p.manual ? "MANUAL" as const : "EXACTA_NORMALIZADA" as const : "SIN_ASIGNACION" as const};
+    metodoEmpleado:p.tipo==="INTERNO" ? p.manual ? "MANUAL" as const : ("metodo" in p && p.metodo ? p.metodo : "EXACTA_NORMALIZADA" as const) : "SIN_ASIGNACION" as const};
 }
