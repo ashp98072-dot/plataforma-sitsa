@@ -41,3 +41,11 @@ it("las filas excluidas por el usuario siguen pendientes, no listas", () => {
   const segura = resumirRevision(filas, cat, { a: "1" }, {}, {}, decisiones).segura;
   expect(resumenPrevio({ filas, cat, segura, omitidos: { a: true }, decisiones })).toMatchObject({ listas: 0, pendientes: 1, cuadra: true });
 });
+it("las filas con CONSUMO_PREVIO (ya registradas en una importación anterior) se cuentan como ya importadas y no se vuelven a ofrecer; el total sigue cuadrando", () => {
+  const previa = { motivos: ["CONSUMO_PREVIO: se revalidará su reutilización, sin crear otro consumo."] };
+  const filas = [fila("a", "C-111AAA", previa), fila("b", "C-111AAA"), fila("c", "C-111AAA", { bloqueada: true, motivos: ["CONFLICTO_HISTORICO: vale registrado en otro flujo o con datos distintos."] })];
+  const segura = resumirRevision(filas, cat, { a: "1", b: "1" }, {}, {}, { a: { exigirProducto: true }, b: { exigirProducto: true } }).segura;
+  const entrada = { filas, cat, segura, omitidos: {}, decisiones: { a: { exigirProducto: true }, b: { exigirProducto: true } } };
+  expect([...clavesListas(entrada)]).toEqual(["b"]);
+  expect(resumenPrevio(entrada)).toMatchObject({ total: 3, yaImportadas: 1, listas: 1, pendientes: 0, bloqueadas: 1, validas: 1, cuadra: true });   // un conflicto histórico NO es «ya importada»
+});

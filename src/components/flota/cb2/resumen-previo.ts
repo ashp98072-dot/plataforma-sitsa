@@ -5,6 +5,8 @@ import type { DecisionAsignacion } from "./asignacion";
 import { motivoUnidadNoOperable } from "./unidades-bloqueo";
 
 type Entrada = { filas: FilaCB2[]; cat: CatalogosCB2; segura: Record<string, string>; omitidos: Record<string, boolean>; decisiones: Record<string, DecisionAsignacion> };
+/** El servidor marca con CONSUMO_PREVIO las filas cuyo consumo ya está registrado (mismo archivo o de otro archivo): no hay nada que importar. */
+export const yaRegistrada = (f: FilaCB2) => !f.bloqueada && (f.motivos ?? []).some(m => m.startsWith("CONSUMO_PREVIO"));
 const activa = (f: FilaCB2) => !!f.candidato && !f.bloqueada && !["IGNORADA", "RESUELTA"].includes(f.estado);
 const nombreResuelto = (f: FilaCB2, d: DecisionAsignacion | undefined) => f.perfil !== "SHELL" || d?.pilotoTipo === "EXTERNO" || !!d?.decisionNombre;
 const productoResuelto = (f: FilaCB2, d: DecisionAsignacion | undefined) => !!(d?.productoClasificado ?? clasificarProducto(f.origen?.producto));
@@ -15,7 +17,7 @@ export function clavesListas({ filas, segura, omitidos, decisiones }: Entrada): 
   const listas = new Set<string>();
   for (const f of filas) {
     const k = f.candidato;
-    if (!k || !segura[k] || omitidos[k] || !activa(f)) continue;
+    if (!k || !segura[k] || omitidos[k] || !activa(f) || yaRegistrada(f)) continue;
     const todas = filas.filter(x => x.candidato === k && x.estado !== "RESUELTA" && x.estado !== "IGNORADA");
     if (todas.every(x => activa(x) && nombreResuelto(x, decisiones[k]) && productoResuelto(x, decisiones[k]))) listas.add(k);
   }
@@ -32,7 +34,7 @@ export function resumenPrevio(e: Entrada) {
   const noOperables = new Set<string>();
   for (const f of filas) {
     if (f.estado === "IGNORADA") { r.ignoradas++; continue; }
-    if (f.estado === "RESUELTA") { r.yaImportadas++; continue; }
+    if (f.estado === "RESUELTA" || yaRegistrada(f)) { r.yaImportadas++; continue; }
     if (!f.candidato || f.bloqueada) { r.bloqueadas++; continue; }
     const k = f.candidato, d = decisiones[k];
     if (listas.has(k)) { r.listas++; continue; }
