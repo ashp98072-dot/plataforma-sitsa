@@ -60,6 +60,8 @@ export type CatalogosCB2 = {
         placa: string;
         descripcion?: string;
         tipo_unidad?: string;
+        /** Estado en Flota. Solo «Activo» puede recibir consumos; las demás unidades se muestran como bloqueadas con su motivo. */
+        estado?: string;
     }[];
 };
 export type SeleccionCB2 = {

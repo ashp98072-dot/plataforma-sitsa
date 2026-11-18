@@ -6,12 +6,13 @@ import { ImportarCB2 } from "./importar";
 let host: HTMLDivElement, root: Root;
 const requests: FormData[] = [];
 let formato: string | undefined = "SHELL", fallo = false;
+const FILA_LISTA = { candidato: "c1", perfil: "HALEL", estado: "LISTA", bloqueada: false, placa: "C-123ABC", placaNormalizada: "C123ABC", vale: "1", hoja: "H", fila: 2, motivos: [], errores: [], moneda: "GTQ", origen: { producto: "Diesel", piloto: "" } };
 beforeEach(() => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement("div"); document.body.append(host); root = createRoot(host); requests.length = 0; formato = "SHELL"; fallo = false;
     vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
         requests.push(init.body);
-        return new Response(JSON.stringify(fallo ? { error: "El Excel mezcla formatos HALEL y SHELL incompatibles" } : { perfilDetectado: formato, sha256: "a".repeat(64), token: "recibo", filas: [], nota: "fixture" }), { status: fallo ? 400 : 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify(fallo ? { error: "El Excel mezcla formatos HALEL y SHELL incompatibles" } : { perfilDetectado: formato, sha256: "a".repeat(64), token: "recibo", filas: formato === "HALEL" ? [FILA_LISTA] : [], nota: "fixture" }), { status: fallo ? 400 : 200, headers: { "Content-Type": "application/json" } });
     }));
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
@@ -26,7 +27,7 @@ async function archivo(nombre: string) {
     });
 }
 async function montar() {
-    await act(async () => root.render(createElement(ImportarCB2, { api: "/demo", cat: { proveedores: [{ id: 83, nombre: "Comercial independiente" }], vehiculos: [] }, run: async (_a, _d, f) => f("clave-sintetica-demo"), locked: false })));
+    await act(async () => root.render(createElement(ImportarCB2, { api: "/demo", cat: { proveedores: [{ id: 83, nombre: "Comercial independiente" }], vehiculos: [{ id: 1, placa: "C-123ABC" }] }, run: async (_a, _d, f) => f("clave-sintetica-demo"), locked: false })));
 }
 it("no tiene selector Perfil, exige proveedor y limpia la detección al cambiar el archivo", async () => {
     await montar(); await archivo("HALEL.xlsx");
@@ -47,10 +48,10 @@ it("un error de detección no ofrece continuar ni supone un formato", async () =
     expect(host.querySelector('[role="alert"]')!.textContent).toContain("El servidor no informó"); expect(host.textContent).not.toContain("Formato detectado:");
 });
 it("un cambio de formato entre preview y recibo impide enviar confirmar", async () => {
-    await montar(); await archivo("ejemplo.xlsx");
+    await montar(); await archivo("ejemplo.xlsx"); formato = "HALEL";
     await act(async () => { const el = control("Proveedor de la empresa"); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(el, "83"); el.dispatchEvent(new Event("change", { bubbles: true })); });
     await act(async () => boton("Analizar Excel").click());
     await act(async () => control("Confirmo el procesamiento parcial").click());
-    formato = "HALEL"; await act(async () => boton("Confirmar selección parcial").click());
+    formato = "SHELL"; await act(async () => boton("Confirmar selección parcial").click());
     expect(requests).toHaveLength(2); expect(requests.every(f => !f.has("clave"))).toBe(true);
 });

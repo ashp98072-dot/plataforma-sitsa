@@ -8,6 +8,7 @@ import DecimalJS from "decimal.js";
 const Decimal = DecimalJS.clone({ precision: 48, rounding: DecimalJS.ROUND_HALF_UP });
 import { buscarCoincidencias, identificarPlaca, placaCompatible } from "@/lib/flota/combustible-coincidencias";
 import type { CatalogosCB2, FilaCB2 } from "./client";
+import { unidadOperable } from "./unidades-bloqueo";
 import { nombreComparable } from "@/lib/flota/combustible-coincidencias";
 export const estadosPreview = ["LISTO", "PENDIENTE", "BLOQUEADO", "RESUELTO", "IGNORADO"] as const;
 export function coincidencias(f: FilaCB2, cat: CatalogosCB2) {
@@ -44,7 +45,7 @@ export function elegible(f: FilaCB2) { return !!f.candidato && !f.bloqueada && !
 type Decisiones = Record<string, DecisionAsignacion>;
 export function seleccionSegura(filas: FilaCB2[], cat: CatalogosCB2, seleccion: Record<string, string>, omitidos: Record<string, boolean> = {}, decisiones: Decisiones = {}) {
     const result: Record<string, string> = {};
-    const grupos = new Map<string, FilaCB2[]>(), unidades = new Set(cat.vehiculos.map(v => String(v.id)));
+    const grupos = new Map<string, FilaCB2[]>(), unidades = new Set(cat.vehiculos.filter(unidadOperable).map(v => String(v.id)));
     for (const f of filas) if (f.candidato && !["RESUELTA", "IGNORADA"].includes(f.estado)) {
         const group = grupos.get(f.candidato) ?? []; group.push(f); grupos.set(f.candidato, group);
     }
