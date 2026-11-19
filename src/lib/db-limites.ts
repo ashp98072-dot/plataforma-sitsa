@@ -21,16 +21,24 @@ export const esErrorSqlLimpio = (e: unknown) => {
   return !!err && err.fatal !== true && typeof err.errno === "number" && typeof err.code === "string" && /^ER_/.test(err.code);
 };
 
-/** Aplica los límites de sesión. Solo tolera «variable no soportada»; cualquier otro error se propaga (el llamador debe destruir la conexión). */
-export async function aplicarLimitesSesion(conn: Pick<PoolConnection, "query">, limiteSentenciaMs: number): Promise<string[]> {
+/**
+ * Aplica los límites de sesión. Solo tolera «variable no soportada»; cualquier otro error se propaga (el llamador debe destruir la conexión).
+ * Con `soloLectura` la sesión queda en `TRANSACTION READ ONLY`: el SERVIDOR rechaza toda escritura (ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION) aunque
+ * el código del cliente se equivocara. Ese modo NO se tolera si el servidor no lo admite (falla cerrado).
+ */
+export async function aplicarLimitesSesion(conn: Pick<PoolConnection, "query">, limiteSentenciaMs: number, opts: { soloLectura?: boolean } = {}): Promise<string[]> {
   const aplicadas: string[] = [];
   const segundos = Math.max(1, Math.ceil(limiteSentenciaMs / 1000));
   for (const [variable, valor] of [["max_statement_time", limiteSentenciaMs / 1000], ["max_execution_time", limiteSentenciaMs], ["lock_wait_timeout", segundos], ["innodb_lock_wait_timeout", segundos]] as const) {
     try { await conn.query(`SET SESSION ${variable} = ?`, [valor]); aplicadas.push(variable); }
     catch (e) { if (!esVariableNoSoportada(e)) throw e; }
   }
+  if (opts.soloLectura) { await conn.query("SET SESSION TRANSACTION READ ONLY"); aplicadas.push(MARCA_SOLO_LECTURA); }
   return aplicadas;
 }
+
+/** Marca interna (no es una variable) en la lista de límites aplicados cuando la sesión quedó en solo lectura. */
+export const MARCA_SOLO_LECTURA = "tx_read_only";
 
 /** Espera `p` como máximo `ms`; si vence, ejecuta `alVencer()` y rechaza con `crearError()`. El temporizador siempre se limpia y `p` nunca queda sin manejar. */
 export function conLimite<T>(p: Promise<T>, ms: number, alVencer: () => void, crearError: () => Error): Promise<T> {
@@ -42,29 +50,43 @@ export function conLimite<T>(p: Promise<T>, ms: number, alVencer: () => void, cr
   });
 }
 
-/** Restablece los límites de sesión. true = la conexión quedó limpia; false = hay que destruirla. */
+/**
+ * Restablece los límites de sesión con UNA sola sentencia (acotada) y, si hubo solo lectura, otra para volver a lectura/escritura.
+ * true = la conexión quedó limpia; false = hay que destruirla (nunca debe volver al pool con la sesión alterada).
+ */
 export async function restablecerLimitesSesion(conn: Pick<PoolConnection, "query">, aplicadas: readonly string[], ms = 2_000): Promise<boolean> {
-  for (const variable of aplicadas) {
-    try { await conLimite(Promise.resolve(conn.query(`SET SESSION ${variable} = DEFAULT`)), ms, () => undefined, () => new Error("restablecer: tiempo agotado")); }
-    catch { return false; }
-  }
-  return true;
+  const variables = aplicadas.filter((v) => v !== MARCA_SOLO_LECTURA);
+  const falla = () => new Error("restablecer: tiempo agotado");
+  try {
+    if (variables.length) await conLimite(Promise.resolve(conn.query(`SET SESSION ${variables.map((v) => `${v} = DEFAULT`).join(", ")}`)), ms, () => undefined, falla);
+    if (aplicadas.includes(MARCA_SOLO_LECTURA)) await conLimite(Promise.resolve(conn.query("SET SESSION TRANSACTION READ WRITE")), ms, () => undefined, falla);
+    return true;
+  } catch { return false; }
 }
 
 export type ConexionControl = { query: (sql: string) => Promise<unknown>; destroy: () => void };
 
 /**
  * Cancela la sentencia en curso de la conexión `threadId` con `KILL QUERY` desde una conexión de control APARTE (no del pool: el pool puede estar
- * saturado justamente por las sentencias colgadas). Best-effort: devuelve false si no se pudo (sin conexión de control, sin privilegios, tiempo agotado);
- * el llamador debe destruir igualmente la conexión afectada.
+ * saturado justamente por las sentencias colgadas). Best-effort: devuelve false si no se pudo; el llamador debe destruir igualmente la conexión.
+ *
+ * SOLO apunta a la conexión de la operación vencida: (1) `threadId` es el de la conexión que la operación obtuvo del pool y mantiene en exclusiva
+ * hasta destruirla; (2) ANTES de matar se verifica en `information_schema.PROCESSLIST` que ese hilo existe y que su sentencia actual EMPIEZA por el
+ * mismo texto que la operación envió (`prefijoSql`); si el hilo está ocioso o ejecuta otra cosa, NO se mata nada.
  */
-export async function cancelarConsulta(abrirControl: () => Promise<ConexionControl | null>, threadId: unknown, ms = 2_000): Promise<boolean> {
+export async function cancelarConsulta(abrirControl: () => Promise<ConexionControl | null>, threadId: unknown, prefijoSql: string, ms = 2_000): Promise<boolean> {
   const id = Number(threadId);
-  if (!Number.isInteger(id) || id <= 0) return false;
+  const prefijo = prefijoSql.replace(/\s+/g, " ").trim().slice(0, 60).toLowerCase();
+  if (!Number.isInteger(id) || id <= 0 || prefijo.length < 6) return false;
   let control: ConexionControl | null = null;
   try {
-    control = await conLimite(abrirControl(), ms, () => undefined, () => new Error("control: tiempo agotado"));
+    const pendiente = abrirControl();
+    control = await conLimite(pendiente, ms, () => { void pendiente.then((c) => { try { c?.destroy(); } catch { /* ya cerrada */ } }, () => undefined); }, () => new Error("control: tiempo agotado"));
     if (!control) return false;
+    const resultado = await conLimite(Promise.resolve(control.query(`SELECT INFO FROM information_schema.PROCESSLIST WHERE ID = ${id}`)), ms, () => undefined, () => new Error("control: tiempo agotado"));
+    const filas = (Array.isArray(resultado) ? resultado[0] : resultado) as { INFO?: unknown }[] | undefined;
+    const info = typeof filas?.[0]?.INFO === "string" ? filas[0].INFO.replace(/\s+/g, " ").trim().toLowerCase() : "";
+    if (!info.startsWith(prefijo)) return false;   // ocioso o ejecutando otra cosa: no se mata
     await conLimite(Promise.resolve(control.query(`KILL QUERY ${id}`)), ms, () => undefined, () => new Error("control: tiempo agotado"));
     return true;
   } catch {

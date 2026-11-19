@@ -42,24 +42,34 @@ export async function abrirConexionControl(): Promise<ConexionControl | null> {
   return { query: (sql) => c.query(sql), destroy: () => c.destroy() };
 }
 
+/** La operación declarada de solo lectura intentó una sentencia que no es de lectura (no se envía a la base). */
+export class ErrorOperacionSoloLectura extends Error {
+  constructor() { super("Operación de solo lectura: se rechazó una sentencia que no es de lectura."); this.name = "ErrorOperacionSoloLectura"; }
+}
+const SENTENCIA_DE_LECTURA = /^\s*(?:SELECT|SHOW|WITH)\b/i;
+
 export async function conPlazo<T>(
   pool: PoolConConexion,
-  opts: { presupuestoMs: number; limiteSentenciaMs?: number; abrirControl?: () => Promise<ConexionControl | null>; ahora?: () => number },
+  opts: { presupuestoMs: number; limiteSentenciaMs?: number; soloLectura?: boolean; abrirControl?: () => Promise<ConexionControl | null>; ahora?: () => number },
   fn: () => Promise<T>,
 ): Promise<T> {
   const ahora = opts.ahora ?? Date.now;
   const limite = ahora() + opts.presupuestoMs;
   const restante = () => limite - ahora();
   const crearError = () => new ErrorPlazoOperacion(MSG_TIEMPO);
+  const soloLectura = opts.soloLectura === true;
 
   // La conexión también cuenta contra el plazo: un pool agotado no puede dejar la operación esperando. Si llega tarde, se devuelve al pool sin usarla.
   const pendiente = pool.getConnection();
   const conn = await conLimite(pendiente, restante(), () => { void pendiente.then((c) => c.release(), () => undefined); }, crearError);
+  // Esta conexión es EXCLUSIVA de la operación hasta que se libere o destruya: nadie más la usa y su thread id identifica solo a esta operación.
 
+  // Preparar la sesión también está acotado por el plazo; si cuelga o falla, la conexión se destruye.
   let aplicadas: string[] = [];
-  try { aplicadas = await aplicarLimitesSesion(conn, opts.limiteSentenciaMs ?? 10_000); }
+  try { aplicadas = await conLimite(aplicarLimitesSesion(conn, opts.limiteSentenciaMs ?? 10_000, { soloLectura }), restante(), () => undefined, crearError); }
   catch (e) {
     try { conn.destroy(); } catch { /* ya cerrada */ }
+    if (e instanceof ErrorPlazoOperacion) throw e;
     const codigo = codigoErrorSql(e);
     throw new ErrorPlazoOperacion(`No se pudo preparar la conexión${codigo ? ` (error de base de datos ${codigo})` : ""}. Intenta de nuevo.`, codigo, { cause: e });
   }
@@ -67,14 +77,16 @@ export async function conPlazo<T>(
   let vencido = false;
   let finalizado = false;
   let incierta = false;
-  let enVuelo = 0;
   let cerrada = false;
+  const enVuelo: string[] = [];   // sentencias enviadas y sin respuesta, en orden: la primera es la que el servidor está ejecutando
   const abrirControl = opts.abrirControl ?? abrirConexionControl;
+  const threadId = () => (conn as PoolConnection & { threadId?: number }).threadId;
+  const cancelarEnCurso = async () => { if (enVuelo.length) await cancelarConsulta(abrirControl, threadId(), enVuelo[0]); };
 
   const cerrar = async (destruir: boolean) => {
     if (cerrada) return;   // idempotente
     cerrada = true;
-    let limpia = !destruir && !incierta;
+    let limpia = !destruir && !incierta && enVuelo.length === 0;   // con una sentencia sin terminar la conexión NO es reutilizable
     if (limpia) limpia = await restablecerLimitesSesion(conn, aplicadas);
     if (limpia) conn.release(); else { try { conn.destroy(); } catch { /* ya cerrada */ } }
   };
@@ -83,14 +95,15 @@ export async function conPlazo<T>(
     restanteMs: restante,
     async consultar(sql, params, modo) {
       if (finalizado || cerrada) throw new ErrorPlazoOperacion("La operación ya terminó.");
+      if (soloLectura && !SENTENCIA_DE_LECTURA.test(sql)) throw new ErrorOperacionSoloLectura();   // además, el servidor la rechazaría (TRANSACTION READ ONLY)
       if (vencido || restante() <= 0) { vencido = true; throw crearError(); }
-      enVuelo++;
+      enVuelo.push(sql);
       try {
         return await (modo === "query" ? conn.query(sql, params as never) : conn.execute(sql, params as never));
       } catch (e) {
         if (!(e instanceof ErrorPlazoOperacion) && !esErrorSqlLimpio(e)) incierta = true;   // error de socket/protocolo: conexión incierta
         throw e;
-      } finally { enVuelo--; }
+      } finally { const i = enVuelo.indexOf(sql); if (i >= 0) enVuelo.splice(i, 1); }
     },
   };
 
@@ -99,8 +112,8 @@ export async function conPlazo<T>(
     temporizador = setTimeout(() => {
       vencido = true;
       void (async () => {
-        // (2) cancelar la sentencia en curso (best-effort) y (3) destruir la conexión ANTES de responder.
-        if (enVuelo > 0) await cancelarConsulta(abrirControl, (conn as PoolConnection & { threadId?: number }).threadId);
+        // (2) cancelar la sentencia en curso (best-effort, verificada) y (3) destruir la conexión ANTES de responder.
+        await cancelarEnCurso();
         await cerrar(true);
         reject(crearError());
       })();
@@ -115,7 +128,8 @@ export async function conPlazo<T>(
   } finally {
     finalizado = true;
     if (temporizador) clearTimeout(temporizador);
-    await cerrar(false);
+    // Si la función terminó dejando sentencias sin respuesta (promesas no esperadas), la conexión no es reutilizable: se cancela y se destruye.
+    if (!cerrada) { if (enVuelo.length) { await cancelarEnCurso(); await cerrar(true); } else await cerrar(false); }   // si el plazo ya la cerró, no se repite nada
   }
 }
 

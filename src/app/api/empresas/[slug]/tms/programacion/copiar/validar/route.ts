@@ -19,7 +19,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." }, { status: 400 });
   const { fechaOrigen, fechaDestino, filas } = parsed.data;
   try {
-    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS }, async () => {
+    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true }, async () => {
       const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas);
       if (!b.ok) return NextResponse.json({ error: b.error }, { status: 400 });
       const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);

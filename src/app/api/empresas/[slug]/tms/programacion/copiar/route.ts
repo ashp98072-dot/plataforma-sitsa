@@ -28,7 +28,7 @@ export async function GET(req: Request, ctx: Ctx) {
   try {
     // TODA la operación (cargar + validar + catálogos) con plazo y cancelación real: una conexión dedicada, límites de sesión por sentencia y, al vencer,
     // KILL QUERY + destrucción de la conexión ANTES de responder (db-plazo.ts). Las validaciones de identidad y su lector no cambian.
-    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS }, async () => {
+    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true }, async () => {
       const filas = await cargarCopiaDeFecha(guard.empresa.id, origen.data);
       const validacion = filas.length ? await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)) : [];
       const rutaIds = [...new Set(filas.map((f) => f.borrador.rutaId).filter((n): n is number => n != null))];

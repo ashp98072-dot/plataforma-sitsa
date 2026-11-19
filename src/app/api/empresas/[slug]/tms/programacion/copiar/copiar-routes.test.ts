@@ -144,11 +144,11 @@ describe("vista previa: fallo técnico CONTROLADO (bloqueo / tiempo agotado), nu
 
 describe("plazo de TODA la operación (cargar + validar + catálogos) con cancelación real", () => {
   const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
-  it("GET cargar corre dentro de conPlazo con el plazo del servidor y el límite por sentencia", async () => {
+  it("GET cargar corre dentro de conPlazo de SOLO LECTURA con el plazo del servidor y el límite por sentencia", async () => {
     const res = await cargar(new Request(url), ctx);
     expect(res.status).toBe(200);
     expect(vi.mocked(conPlazo)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS });
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
     expect(cargarCopiaDeFecha).toHaveBeenCalled(); expect(validarLote).toHaveBeenCalled(); expect(catalogosParaCopia).toHaveBeenCalled();
   });
   it("plazo agotado (ErrorPlazoOperacion) → 503 con mensaje claro y sin cache; no responde 200 ni se queda esperando", async () => {
@@ -160,7 +160,7 @@ describe("plazo de TODA la operación (cargar + validar + catálogos) con cancel
   });
   it("POST validar también corre acotado (borradores + validación) y mapea el plazo agotado a 503", async () => {
     expect((await post(validar, cuerpo())).status).toBe(200);
-    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS });
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
     vi.mocked(conPlazo).mockRejectedValueOnce(new ErrorPlazoOperacion("tardó demasiado"));
     expect((await post(validar, cuerpo())).status).toBe(503);
   });

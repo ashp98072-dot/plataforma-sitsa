@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { abrirLectorVistaPrevia, ErrorVistaPrevia, errorVistaPrevia } from "./lector-vista-previa";
+import { conPlazo } from "@/lib/db-plazo";
 
 const sqlError = (code: string, errno: number, sqlMessage = "texto sql interno `tabla_secreta`") => Object.assign(new Error(sqlMessage), { code, errno, sqlMessage });
 function pool(handler: (sql: string, args?: unknown[]) => unknown = () => [[]]) {
@@ -80,7 +81,7 @@ describe("abrirLectorVistaPrevia — límite de tiempo de TODA la operación", (
     const sets = conn.query.mock.calls.map((c) => String(c[0])).filter((q) => /^SET SESSION/.test(q));
     expect(sets).toEqual(expect.arrayContaining(["SET SESSION max_statement_time = ?", "SET SESSION max_execution_time = ?", "SET SESSION lock_wait_timeout = ?", "SET SESSION innodb_lock_wait_timeout = ?"]));
     await lector.liberar();
-    expect(conn.query.mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining(["SET SESSION max_statement_time = DEFAULT", "SET SESSION innodb_lock_wait_timeout = DEFAULT"]));
+    expect(conn.query.mock.calls.map((c) => String(c[0]))).toContain("SET SESSION max_statement_time = DEFAULT, max_execution_time = DEFAULT, lock_wait_timeout = DEFAULT, innodb_lock_wait_timeout = DEFAULT");
     expect(conn.release).toHaveBeenCalledTimes(1);
     expect(conn.destroy).not.toHaveBeenCalled();
   });
@@ -250,5 +251,46 @@ describe("abrirLectorVistaPrevia — caché: ni se mezcla entre empresas ni se a
     const r8 = (await lector.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [8] as never)) as unknown as [{ placa: string }[]];
     expect([r7[0][0].placa, r8[0][0].placa]).toEqual(["P-7", "P-8"]);
     expect(datos(conn)).toHaveLength(2);
+  });
+});
+
+describe("abrirLectorVistaPrevia dentro de conPlazo — reutiliza la conexión de la operación (una conexión por vista previa)", () => {
+  it("no abre una segunda conexión: usa la de la operación, conserva SELECT puro y reutiliza sentencias; liberar() no libera la conexión de la operación", async () => {
+    const { conn, pool: p } = pool((sql) => (/^SELECT/.test(sql) ? [[{ id: 1 }]] : [[]]));
+    const getConnection = vi.fn(async () => { throw new Error("no debe abrir otra conexión"); });
+    const sinConexiones = { getConnection } as never;
+    await conPlazo(p, { presupuestoMs: 5_000, soloLectura: true }, async () => {
+      const lector = await abrirLectorVistaPrevia(sinConexiones, { empresaId: 7 });
+      await lector.query("SELECT id FROM tms_unidades WHERE empresa_id=?" as never, [7] as never);
+      await lector.query("SELECT id FROM tms_unidades WHERE empresa_id=?" as never, [7] as never);
+      await expect(lector.query("SELECT id FROM t FOR UPDATE" as never)).rejects.toBeInstanceOf(ErrorVistaPrevia);
+      await expect(lector.query("UPDATE t SET a=1" as never)).rejects.toBeInstanceOf(ErrorVistaPrevia);
+      expect(lector.sentencias()).toBe(1);
+      await lector.liberar();
+      await expect(lector.query("SELECT 1" as never)).rejects.toBeInstanceOf(ErrorVistaPrevia);
+    });
+    expect(getConnection).not.toHaveBeenCalled();
+    expect(datos(conn).filter((q) => /tms_unidades/.test(q))).toHaveLength(1);
+    expect(conn.release).toHaveBeenCalledTimes(1);   // la libera conPlazo, una sola vez
+  });
+  it("lo servido es una copia también en este modo", async () => {
+    const { pool: p } = pool((sql) => (/^SELECT/.test(sql) ? [[{ placa: "P-1" }]] : [[]]));
+    await conPlazo(p, { presupuestoMs: 5_000 }, async () => {
+      const lector = await abrirLectorVistaPrevia(p, { empresaId: 7 });
+      const a = (await lector.query("SELECT placa FROM tms_unidades" as never)) as unknown as [{ placa: string }[]];
+      a[0][0].placa = "MUTADA";
+      const b = (await lector.query("SELECT placa FROM tms_unidades" as never)) as unknown as [{ placa: string }[]];
+      expect(b[0][0].placa).toBe("P-1");
+    });
+  });
+});
+describe("cancelarConsulta no mata nada sin verificar", () => {
+  it("prefijo demasiado corto o hilo inválido → no abre conexión de control", async () => {
+    const { cancelarConsulta } = await import("@/lib/db-limites");
+    const abrir = vi.fn(async () => null);
+    expect(await cancelarConsulta(abrir, 0, "SELECT SLEEP(1)")).toBe(false);
+    expect(await cancelarConsulta(abrir, "abc", "SELECT SLEEP(1)")).toBe(false);
+    expect(await cancelarConsulta(abrir, 12, "S")).toBe(false);
+    expect(abrir).not.toHaveBeenCalled();
   });
 });

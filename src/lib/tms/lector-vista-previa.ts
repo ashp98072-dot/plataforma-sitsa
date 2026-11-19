@@ -1,7 +1,7 @@
 import type { Pool, PoolConnection } from "mysql2/promise";
 import { codigoErrorSql } from "@/lib/tms/codigo-plan-colision";
 import { aplicarLimitesSesion, cancelarConsulta, conLimite, esErrorSqlLimpio, restablecerLimitesSesion, type ConexionControl } from "@/lib/db-limites";
-import { abrirConexionControl } from "@/lib/db-plazo";
+import { abrirConexionControl, alcanceActual } from "@/lib/db-plazo";
 
 /**
  * Lector de la VISTA PREVIA de «Copiar programación»: una conexión dedicada, SOLO LECTURA, con presupuesto de tiempo.
@@ -64,10 +64,45 @@ function copiaDeResultado(r: unknown): unknown {
   return r;
 }
 
+function lectorEnAlcance(alcance: NonNullable<ReturnType<typeof alcanceActual>>, empresaId?: number): LectorVistaPrevia {
+  const ambito = empresaId != null ? `e${empresaId}` : "e*";
+  const cache = new Map<string, Promise<unknown>>();
+  let envia = 0;
+  let liberada = false;
+  const consultar = async (sql: unknown, args?: unknown[]): Promise<unknown> => {
+    const texto = typeof sql === "string" ? sql : "";
+    if (liberada) throw new ErrorVistaPrevia("El lector de la vista previa ya fue liberado.");
+    if (!SELECT_PURO.test(texto) || PROHIBIDO.test(texto)) throw new ErrorVistaPrevia("La vista previa solo puede ejecutar consultas de lectura.");
+    if (alcance.restanteMs() <= 0) throw new ErrorVistaPrevia(MSG_TIEMPO);
+    const clave = `${ambito}\u0000${texto}\u0000${JSON.stringify(args ?? [])}`;
+    let previa = cache.get(clave);
+    if (!previa) {
+      envia++;
+      previa = alcance.consultar(texto, args, "query").catch((e) => { cache.delete(clave); throw e; });
+      cache.set(clave, previa);
+    }
+    return copiaDeResultado(await previa);
+  };
+  return {
+    query: ((sql: unknown, args?: unknown[]) => consultar(sql, args)) as PoolConnection["query"],
+    execute: ((sql: unknown, args?: unknown[]) => consultar(sql, args)) as PoolConnection["execute"],
+    sentencias: () => envia,
+    limitesAplicados: [],
+    limiteSentenciaDisponible: false,
+    estado: () => ({ liberada, descartada: false }),
+    async liberar() { liberada = true; },   // la conexión es de la operación (conPlazo): ella la libera o destruye
+  };
+}
+
 export async function abrirLectorVistaPrevia(
   pool: Pick<Pool, "getConnection">,
   opts: { empresaId?: number; presupuestoMs?: number; limiteSentenciaMs?: number; ahora?: () => number; abrirControl?: () => Promise<ConexionControl | null> } = {},
 ): Promise<LectorVistaPrevia> {
+  // Dentro de `conPlazo` (GET/validar) el lector NO abre una segunda conexión: reutiliza la de la operación (misma conexión, mismos límites, mismo KILL/plazo)
+  // y conserva sus garantías (SELECT puro, sentencias idénticas reutilizadas, copia por llamada). Así cada vista previa ocupa UNA conexión del pool, no dos.
+  const alcance = alcanceActual();
+  if (alcance) return lectorEnAlcance(alcance, opts.empresaId);
+
   const presupuestoMs = opts.presupuestoMs ?? PRESUPUESTO_VISTA_PREVIA_MS;
   const limiteMs = opts.limiteSentenciaMs ?? LIMITE_SENTENCIA_VISTA_PREVIA_MS;
   const ahora = opts.ahora ?? Date.now;
@@ -111,7 +146,7 @@ export async function abrirLectorVistaPrevia(
       envia++;
       // Una sentencia YA enviada también está limitada por lo que resta del presupuesto. Si vence, la conexión queda en estado incierto: se descarta (nunca vuelve al pool).
       // Al vencer: se marca descartada y se CANCELA la sentencia en curso (KILL QUERY, best-effort) antes de destruir la conexión en `liberar()`.
-      previa = conLimite(original(texto, args), restante(), () => { descartada = true; cancelacion = cancelarConsulta(abrirControl, (conn as { threadId?: number }).threadId); }, crearError)
+      previa = conLimite(original(texto, args), restante(), () => { descartada = true; cancelacion = cancelarConsulta(abrirControl, (conn as { threadId?: number }).threadId, texto); }, crearError)
         .catch((e) => { cache.delete(clave); if (!(e instanceof ErrorVistaPrevia) && !esErrorSqlLimpio(e)) descartada = true; throw e; });
       cache.set(clave, previa);
     }

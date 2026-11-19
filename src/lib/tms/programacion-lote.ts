@@ -1,6 +1,6 @@
 import { resolverUnidadTmsSoloLectura, resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
 import { abrirLectorVistaPrevia, errorVistaPrevia, PRESUPUESTO_VISTA_PREVIA_MS, type LectorVistaPrevia } from "@/lib/tms/lector-vista-previa";
-import { plazoRestanteMs } from "@/lib/db-plazo";
+import { ErrorPlazoOperacion, plazoRestanteMs } from "@/lib/db-plazo";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
@@ -395,7 +395,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
         if (motivo) { f.errores.push(`Unidad ${norm(u.placa)}: ${motivo}`); f.resuelto = null; }
       }
     } catch (e) {
-      const controlado = errorVistaPrevia(e);
+      const controlado = e instanceof ErrorPlazoOperacion ? e : errorVistaPrevia(e);   // el plazo vencido de la operación conserva su mensaje
       console.error("resolverYValidar: verificación de identidad de unidades no completada", { codigo: controlado.codigo });   // solo el código; nunca datos de la empresa
       if (identidadEstricta) throw controlado;
     } finally {
