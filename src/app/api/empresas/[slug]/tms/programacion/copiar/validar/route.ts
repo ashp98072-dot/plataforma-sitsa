@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { validarLote } from "@/lib/tms/programacion-lote";
 import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { getPool } from "@/lib/db";
+import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
+import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { borradoresDesdeCliente } from "@/lib/tms/programacion-copia";
 import { cuerpoCopiaSchema } from "@/lib/tms/programacion-copia-schema";
 
@@ -15,13 +18,15 @@ export async function POST(req: Request, ctx: Ctx) {
   const parsed = cuerpoCopiaSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." }, { status: 400 });
   const { fechaOrigen, fechaDestino, filas } = parsed.data;
-  const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas);
-  if (!b.ok) return NextResponse.json({ error: b.error }, { status: 400 });
   try {
-    const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);
-    return NextResponse.json({ validacion }, { headers: { "Cache-Control": "private, no-store" } });
+    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS }, async () => {
+      const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas);
+      if (!b.ok) return NextResponse.json({ error: b.error }, { status: 400 });
+      const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);
+      return NextResponse.json({ validacion }, { headers: { "Cache-Control": "private, no-store" } });
+    });
   } catch (e) {
-    if (e instanceof ErrorVistaPrevia) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
+    if (e instanceof ErrorVistaPrevia || e instanceof ErrorPlazoOperacion) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
     throw e;
   }
 }

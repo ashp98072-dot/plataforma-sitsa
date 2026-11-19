@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantProgramacion: vi.fn(), requireTenantProgramacionOTms: vi.fn() }));
-vi.mock("@/lib/db", () => ({ query: vi.fn() }));
+vi.mock("@/lib/db", () => ({ query: vi.fn(), getPool: vi.fn(() => ({})) }));
+// El plazo de la operación se prueba aparte (db-plazo.test.ts, copiar-routes.test.ts y la prueba con MariaDB): aquí el cuerpo corre tal cual.
+vi.mock("@/lib/db-plazo", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/db-plazo")>()), conPlazo: async (_pool: unknown, _opts: unknown, fn: () => Promise<unknown>) => fn() }));
 vi.mock("@/lib/tms/paradas", () => ({ listarParadasDePlanes: vi.fn(async (ids: number[]) => new Map(ids.map((i) => [i, []]))) }));
 vi.mock("@/lib/tms/programacion-lote", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/tms/programacion-lote")>()),

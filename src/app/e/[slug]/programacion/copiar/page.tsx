@@ -8,6 +8,8 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import type { CatalogosCopia, OrigenFila } from "@/lib/tms/programacion-copia";
 import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lote";
+import { PLAZO_CLIENTE_COPIAR_MS } from "@/lib/tms/plazos-copia";
+import { clasificarFalloSolicitud, crearGestorSolicitudes, esRespuestaReintentable } from "./solicitud-cancelable";
 import {
   aplicarErroresConfirmacion,
   aplicarValidacion,
@@ -56,42 +58,57 @@ export default function CopiarProgramacionPage() {
   const [error, setError] = useState("");
   const [creado, setCreado] = useState<{ creados: number; codigos: string[] } | null>(null);
   const version = useRef(0);
+  // Qué se puede reintentar tras un fallo recuperable (plazo vencido, 503, red): la carga completa o solo la revalidación.
+  const [reintentable, setReintentable] = useState<"cargar" | "validar" | null>(null);
+  // Solicitudes cancelables: una nueva cancela la anterior, ninguna respuesta vieja sobrescribe a una nueva y ninguna espera más que el plazo del cliente.
+  const cargas = useRef(crearGestorSolicitudes(PLAZO_CLIENTE_COPIAR_MS));
+  const validaciones = useRef(crearGestorSolicitudes(PLAZO_CLIENTE_COPIAR_MS));
+  useEffect(() => { const c = cargas.current, v = validaciones.current; return () => { c.cancelar(); v.cancelar(); }; }, []);
 
   const cargar = useCallback(async () => {
+    const sol = cargas.current.iniciar();   // cancela la carga anterior, si la hay
     setCargando(true);
     setError("");
+    setReintentable(null);
     setCreado(null);
     try {
       const p = new URLSearchParams({ fechaOrigen, fechaDestino });
-      const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar?${p.toString()}`, { cache: "no-store" });
+      const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar?${p.toString()}`, { cache: "no-store", signal: sol.signal });
       const data = (await res.json().catch(() => ({}))) as Partial<RespuestaCarga> & { error?: string };
-      if (!res.ok || !data.filas) { setError(data.error ?? "No se pudo cargar la programación."); return; }
+      if (!sol.esVigente()) return;   // llegó tarde: ya hay una carga más nueva (o esta se canceló)
+      if (!res.ok || !data.filas) { setError(data.error ?? "No se pudo cargar la programación."); setReintentable(esRespuestaReintentable(res.status) ? "cargar" : null); return; }
       setFilas(data.filas.map(filaDesdeCarga)); // todas DESMARCADAS: el usuario marca lo que quiere copiar
       setCatalogos(data.catalogos ?? null);
       setCargado(true);
-    } catch {
-      setError("Error de conexión.");
+    } catch (e) {
+      const f = clasificarFalloSolicitud(e, sol);
+      if (f.ignorar) return;   // cancelada por reemplazo o al salir de la pantalla: no es un error
+      setError(f.mensaje); setReintentable(f.reintentable ? "cargar" : null);
     } finally {
-      setCargando(false);
+      sol.terminar();
+      if (sol.esVigente() || sol.vencio()) setCargando(false);   // solo la solicitud vigente (o la vencida) apaga el indicador; una reemplazada deja el de la nueva
     }
   }, [slug, fechaOrigen, fechaDestino]);
 
   const validar = useCallback(async (actuales: FilaEditable[]) => {
     if (!filasIncluidas(actuales).length) return;
     const mia = ++version.current;
+    const sol = validaciones.current.iniciar();   // cancela la revalidación anterior, si la hay
     setValidando(true);
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar/validar`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpoLote(fechaOrigen, fechaDestino, actuales)),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpoLote(fechaOrigen, fechaDestino, actuales)), signal: sol.signal,
       });
       const data = (await res.json().catch(() => ({}))) as { validacion?: ResultadoFilaLote[]; error?: string };
-      if (mia !== version.current) return; // llegó una respuesta más nueva
-      if (!res.ok || !data.validacion) { setError(data.error ?? "No se pudo revalidar."); return; }
-      setError("");
+      if (mia !== version.current || !sol.esVigente()) return; // llegó una respuesta más nueva
+      if (!res.ok || !data.validacion) { setError(data.error ?? "No se pudo revalidar."); setReintentable(esRespuestaReintentable(res.status) ? "validar" : null); return; }
+      setError(""); setReintentable(null);
       setFilas((f) => aplicarValidacion(f, data.validacion!));
-    } catch {
-      if (mia === version.current) setError("Error de conexión al revalidar.");
+    } catch (e) {
+      const f = clasificarFalloSolicitud(e, sol);
+      if (!f.ignorar && mia === version.current) { setError(f.mensaje); setReintentable(f.reintentable ? "validar" : null); }
     } finally {
+      sol.terminar();
       if (mia === version.current) setValidando(false);
     }
   }, [slug, fechaOrigen, fechaDestino]);
@@ -168,7 +185,16 @@ export default function CopiarProgramacionPage() {
         ) : null}
       </div>
 
-      {error ? <p role="alert" className="text-sm text-rose-400">{error}</p> : null}
+      {error ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 text-sm text-rose-400">
+          <p>{error}</p>
+          {reintentable ? (
+            <button type="button" disabled={cargando || validando} onClick={() => (reintentable === "cargar" ? void cargar() : void validar(filas))} className="rounded border border-[var(--border)] px-3 py-1 disabled:opacity-40">
+              Reintentar
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {creado ? (
         <section aria-label="Resultado de la copia" className="rounded-lg border border-emerald-700/60 bg-emerald-950/20 px-3 py-2 text-sm text-emerald-300">
           <p>Copia creada: {creado.creados} viaje(s) para el {fechaVisible(fechaDestino)}.</p>

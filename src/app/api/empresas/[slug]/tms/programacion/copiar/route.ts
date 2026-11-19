@@ -3,6 +3,9 @@ import { z } from "zod";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { validarLote } from "@/lib/tms/programacion-lote";
 import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { getPool } from "@/lib/db";
+import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
+import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -22,20 +25,22 @@ export async function GET(req: Request, ctx: Ctx) {
   if (!origen.success || !destino.success) return NextResponse.json({ error: "Fechas inválidas (YYYY-MM-DD)." }, { status: 400 });
   if (origen.data === destino.data) return NextResponse.json({ error: "La fecha destino debe ser distinta de la fecha origen." }, { status: 400 });
 
-  const filas = await cargarCopiaDeFecha(guard.empresa.id, origen.data);
-  let validacion: Awaited<ReturnType<typeof validarLote>> = [];
-  if (filas.length) {
-    try { validacion = await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)); }
-    catch (e) {
-      // Fallo técnico de la vista previa (bloqueo, tiempo agotado, base ocupada): mensaje CONTROLADO y claro, nunca una espera infinita ni un error silencioso.
-      if (e instanceof ErrorVistaPrevia) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
-      throw e;
-    }
+  try {
+    // TODA la operación (cargar + validar + catálogos) con plazo y cancelación real: una conexión dedicada, límites de sesión por sentencia y, al vencer,
+    // KILL QUERY + destrucción de la conexión ANTES de responder (db-plazo.ts). Las validaciones de identidad y su lector no cambian.
+    return await conPlazo(getPool(), { presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS }, async () => {
+      const filas = await cargarCopiaDeFecha(guard.empresa.id, origen.data);
+      const validacion = filas.length ? await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)) : [];
+      const rutaIds = [...new Set(filas.map((f) => f.borrador.rutaId).filter((n): n is number => n != null))];
+      const catalogos = await catalogosParaCopia(guard.empresa.id, rutaIds);
+      return NextResponse.json(
+        { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos },
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    });
+  } catch (e) {
+    // Fallo técnico controlado (bloqueo, plazo agotado, base ocupada): 503 con mensaje claro; nunca una espera infinita. Otros errores no se disfrazan.
+    if (e instanceof ErrorVistaPrevia || e instanceof ErrorPlazoOperacion) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
+    throw e;
   }
-  const rutaIds = [...new Set(filas.map((f) => f.borrador.rutaId).filter((n): n is number => n != null))];
-  const catalogos = await catalogosParaCopia(guard.empresa.id, rutaIds);
-  return NextResponse.json(
-    { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos },
-    { headers: { "Cache-Control": "private, no-store" } },
-  );
 }

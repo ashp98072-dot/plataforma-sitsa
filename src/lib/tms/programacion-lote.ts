@@ -1,5 +1,6 @@
 import { resolverUnidadTmsSoloLectura, resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
-import { abrirLectorVistaPrevia, errorVistaPrevia, type LectorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { abrirLectorVistaPrevia, errorVistaPrevia, PRESUPUESTO_VISTA_PREVIA_MS, type LectorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { plazoRestanteMs } from "@/lib/db-plazo";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
@@ -381,7 +382,8 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   if (porIdentidad.length) {
     let lector: LectorVistaPrevia | null = null;
     try {
-      lector = await abrirLectorVistaPrevia(getPool(), { empresaId });
+      // El presupuesto del lector nunca excede lo que resta del plazo de la operación que lo contiene (GET/validar).
+      lector = await abrirLectorVistaPrevia(getPool(), { empresaId, presupuestoMs: Math.min(PRESUPUESTO_VISTA_PREVIA_MS, plazoRestanteMs()) });
       const vistas = new Map<string, string | null>();   // placa+vehículo → motivo (una sola resolución por unidad)
       for (const f of porIdentidad) {
         const u = f.resuelto!.unidad!; const clave = `${norm(u.placa)}|${u.flotaVehiculoId ?? ""}`;
