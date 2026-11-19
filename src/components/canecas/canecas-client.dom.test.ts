@@ -6,6 +6,18 @@ import { CanecasClient } from "./canecas-client";
 
 describe("recepciones de Canecas", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
+  it("oculta las acciones cuando no existe permiso", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => Response.json({datos: String(input).endsWith("/recepciones") ? [{id:1,estado:"BORRADOR"}] : []})));
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"recepciones",permisos:{}})); });
+      await act(async () => { await new Promise(r => setTimeout(r,20)); });
+      expect(host.textContent).not.toContain("Confirmar recepción física");
+      expect(host.textContent).not.toContain("Nuevo registro");
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
   it("muestra la recepción, confirma y recarga el historial", async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     let confirmado = false;
@@ -19,7 +31,7 @@ describe("recepciones de Canecas", () => {
     const host = document.createElement("div"); document.body.append(host);
     const root = createRoot(host);
     try {
-      await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"recepciones"})); });
+      await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"recepciones",permisos:{catalogo:true,compras:true,recepciones:true,confirmar:true}})); });
       await act(async () => { await new Promise(r => setTimeout(r,20)); });
       expect(host.textContent).toContain("FAC-1");
       const button = Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Confirmar recepción física");
