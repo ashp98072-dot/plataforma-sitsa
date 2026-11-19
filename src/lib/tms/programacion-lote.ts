@@ -127,9 +127,10 @@ export type ResultadoFilaLote = {
   errores: string[];
   /** Solo si estado = ok: lo que se creará (tarifa efectiva incluida). */
   tarifa: TarifaResuelta | null;
+  diagnostico?: { horaInvalida: boolean; regresoInvalido: boolean; filasAfectadas: number[]; recursosCompartidos: string[] };
 };
 
-type FilaInterna = { borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[] };
+type FilaInterna = { borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string> };
 
 const fmt = (iso: string) => iso.split("-").reverse().join("/");
 
@@ -428,6 +429,12 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       const otras = filas.filter((n) => n !== fila && ventanasProgramacionSeSolapan(ventanaPorFila.get(fila)!, ventanaPorFila.get(n)!));
       if (!otras.length || marcadas.has(`${clave}|${fila}`)) continue;
       marcadas.add(`${clave}|${fila}`);
+      if (!ventanaPorFila.get(fila)!.horaCarga || !ventanaPorFila.get(fila)!.regresoEstimado) {
+        f.filasAfectadas ??= new Set<number>();
+        for (const otra of otras) f.filasAfectadas.add(otra);
+        f.recursosCompartidos ??= new Set<string>();
+        f.recursosCompartidos.add(clave.startsWith("persona:") ? "personal" : clave.startsWith("unidad:") ? "unidad" : "remolque");
+      }
       const etiqueta = usos[0].etiqueta;
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
       const incompleta = !f.borrador.horaCarga || !ventanaPorFila.get(fila)!.regresoEstimado || otras.some(n => !ventanaPorFila.get(n)!.horaCarga || !ventanaPorFila.get(n)!.regresoEstimado);
@@ -439,11 +446,12 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   return internas;
 }
 
-const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
+const aResultado = (f: FilaInterna, fechaDiagnostico: string): ResultadoFilaLote => ({
   fila: f.borrador.fila,
   estado: f.errores.length ? "error" : "ok",
   errores: f.errores,
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
+  diagnostico: { horaInvalida: !ventanaDeBorrador(f.borrador, fechaDiagnostico).horaCarga, regresoInvalido: !ventanaDeBorrador(f.borrador, fechaDiagnostico).regresoEstimado, filasAfectadas: [...(f.filasAfectadas ?? [])].sort((a, b) => a - b), recursosCompartidos: [...(f.recursosCompartidos ?? [])] },
 });
 
 /**
@@ -453,7 +461,7 @@ const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
  */
 export async function validarLote(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<ResultadoFilaLote[]> {
   if (!FECHA_RE.test(fechaDestino)) throw new Error("Fecha destino inválida.");
-  return (await resolverYValidar(empresaId, fechaDestino, borradores, true)).map(aResultado);
+  return (await resolverYValidar(empresaId, fechaDestino, borradores, true)).map((f) => aResultado(f, fechaDestino));
 }
 
 export type ResultadoConfirmarLote =
@@ -473,6 +481,7 @@ export async function confirmarLote(
   fechaDestino: string,
   origen: OrigenLote,
   borradores: BorradorLote[],
+  tarifasEsperadas?: { fila: number; tarifa: { id: number; monto: number; moneda: string } | null }[],
 ): Promise<ResultadoConfirmarLote> {
   if (!FECHA_RE.test(fechaDestino)) return { ok: false, status: 400, error: "Fecha destino inválida." };
   if (!borradores.length) return { ok: false, status: 400, error: "No hay filas para crear." };
@@ -503,6 +512,16 @@ export async function confirmarLote(
 
     // Revalidación COMPLETA bajo el candado (también detecta una copia hecha entre la vista previa y ahora).
     const filas = await resolverYValidar(empresaId, fechaDestino, borradores);
+    if (tarifasEsperadas) {
+      const expectativas = new Map(tarifasEsperadas.map((t) => [t.fila, t.tarifa]));
+      for (const f of filas) {
+        const anterior = expectativas.get(f.borrador.fila);
+        const vigente = f.resuelto?.tarifa ?? null;
+        if (!expectativas.has(f.borrador.fila) || (anterior === null) !== (vigente === null) || (anterior && vigente && (anterior.id !== vigente.id || anterior.monto !== vigente.monto || anterior.moneda !== vigente.moneda))) {
+          f.errores.push("La tarifa vigente cambi? desde la vista previa. Vuelve a validar antes de confirmar.");
+        }
+      }
+    }
     const malas = filas.filter((f) => f.errores.length);
     if (malas.length) {
       return {
