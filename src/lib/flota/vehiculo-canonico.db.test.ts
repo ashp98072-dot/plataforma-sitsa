@@ -382,4 +382,128 @@ describe("aislamiento por empresa y recuperación de historia en reportes (fondo
       expect([falsos.length, faltantes.length]).toEqual([0, 0]);
     });
   });
+describe("migración v2: respaldo verificado antes de cada DROP (sin INSERT IGNORE), aborto ante discrepancias e interrupción parcial", () => {
+    const MIGRACION = "sql/migrate-2026-11-flota-fusiones-guardas-v2.sql";
+    const ROLLBACK = "sql/rollback-2026-11-flota-fusiones-guardas-v2.sql";
+    let base: Record<string, unknown>[] = [];
+    // Las DOS guardas del falso positivo (tms_planes_viaje.vehiculo_solicitado_perfil_id), con el mismo hash que usa la migración.
+    let ffi = "", ffu = "";
+    const tablaRespaldo = async () => (await q("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_fusion_guardas_v2_respaldo'")).length > 0;
+    /** Deja el esquema en el estado ORIGINAL de las guardas (sin v2): si hay respaldo, el rollback las recrea. */
+    async function restablecer() {
+      if (await tablaRespaldo()) await ejecutarScript(ROLLBACK);
+    }
+    /** Solo el CREATE TABLE de la migración (para simular una ejecución previa interrumpida). */
+    async function crearRespaldoVacio() {
+      const c = await mysql.createConnection({ host: "127.0.0.1", port: Number(PUERTO), user: "root", password: "", database: ESQUEMA });
+      try { await c.query(readFileSync(MIGRACION, "utf8").replace(/^\s*--.*$/gm, "").split(/DELIMITER/i)[0]); } finally { await c.end(); }
+    }
+    const respaldar = (nombre: string) => q("INSERT INTO flota_fusion_guardas_v2_respaldo (tabla, campo, trigger_nombre, momento, evento, accion) SELECT EVENT_OBJECT_TABLE, 'vehiculo_solicitado_perfil_id', TRIGGER_NAME, ACTION_TIMING, EVENT_MANIPULATION, ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME=?", [nombre]);
+    const insertarPlan = (codigo: string) => q("INSERT INTO tms_planes_viaje (empresa_id, codigo, estado, fecha_plan, vehiculo_solicitado_perfil_id) VALUES (1,?, 'Cerrado','2026-10-03',3)", [codigo]);
+    const mismaDefinicion = async () => expect((await accionGuardas()).map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT])).toEqual(base.map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT]));
+
+    beforeAll(async () => {
+      await restablecer();
+      base = await accionGuardas();
+      const [h] = await q("SELECT LEFT(SHA2('tms_planes_viaje:vehiculo_solicitado_perfil_id',256),32) AS h");
+      ffi = `ffi_${h.h}`; ffu = `ffu_${h.h}`;
+      expect(base.map((g) => g.TRIGGER_NAME)).toEqual(expect.arrayContaining([ffi, ffu]));
+    });
+
+    it("la migración NO usa INSERT IGNORE y verifica expresamente el respaldo antes de cada DROP (estático)", () => {
+      const sql = readFileSync(MIGRACION, "utf8").replace(/^\s*--.*$/gm, "");
+      expect(sql).not.toMatch(/INSERT\s+IGNORE/i);
+      // Cada DROP TRIGGER está dentro de retirar_guarda_v2, precedido de la comprobación y del SIGNAL de aborto.
+      const retirar = sql.slice(sql.indexOf("CREATE PROCEDURE retirar_guarda_v2"), sql.indexOf("CREATE PROCEDURE corregir_guardas_fusion_v2"));
+      expect(retirar.indexOf("SIGNAL SQLSTATE")).toBeGreaterThan(-1);
+      expect(retirar.indexOf("SIGNAL SQLSTATE")).toBeLessThan(retirar.indexOf("DROP TRIGGER"));
+      expect((sql.match(/DROP TRIGGER/gi) ?? []).length).toBe(1);
+    });
+
+    it("camino normal: respalda 2 guardas idénticas, las retira y el rollback recrea las definiciones originales", async () => {
+      await ejecutarScript(MIGRACION);
+      const respaldo = await q("SELECT trigger_nombre, tabla, campo, momento, evento, accion FROM flota_fusion_guardas_v2_respaldo ORDER BY trigger_nombre");
+      expect(respaldo.length).toBe(2);
+      for (const r of respaldo) {
+        const original = base.find((g) => g.TRIGGER_NAME === r.trigger_nombre)!;
+        expect(r.accion).toBe(original.ACTION_STATEMENT); // definición exacta recuperable
+        expect(r.evento).toBe(original.EVENT_MANIPULATION);
+      }
+      await expect(insertarPlan("P-R-1")).resolves.toBeDefined(); // falso positivo corregido
+      await ejecutarScript(ROLLBACK);
+      await mismaDefinicion();
+      await expect(insertarPlan("P-R-2")).rejects.toThrow(/fusionado/i);
+    });
+
+    it("respaldo previo DISTINTO para el mismo trigger: aborta SIN eliminar ese trigger ni sobrescribir el respaldo", async () => {
+      await restablecer();
+      await crearRespaldoVacio();
+      await respaldar(ffi);
+      await q("UPDATE flota_fusion_guardas_v2_respaldo SET accion = 'BEGIN SET @distinto = 1; END' WHERE trigger_nombre = ?", [ffi]);
+      await expect(ejecutarScript(MIGRACION)).rejects.toThrow(/Respaldo de guarda ausente o distinto/);
+      // Ninguna guarda se eliminó (ni la discrepante ni su par ffu) y el respaldo discrepante se conserva tal cual para su revisión.
+      await mismaDefinicion();
+      await expect(insertarPlan("P-R-3")).rejects.toThrow(/fusionado/i);
+      expect(await q("SELECT trigger_nombre, accion FROM flota_fusion_guardas_v2_respaldo")).toEqual([{ trigger_nombre: ffi, accion: "BEGIN SET @distinto = 1; END" }]);
+      await q("DROP TABLE flota_fusion_guardas_v2_respaldo"); // limpieza de la simulación; las guardas originales siguen intactas
+      await mismaDefinicion();
+    });
+
+    it("interrupción parcial A: respaldo hecho de ambas guardas pero ningún DROP -> al reejecutar completa sin duplicar", async () => {
+      await restablecer();
+      await crearRespaldoVacio();
+      for (const n of [ffi, ffu]) await respaldar(n);
+      await mismaDefinicion(); // el corte ocurrió antes de eliminar nada
+      await ejecutarScript(MIGRACION);
+      expect((await q("SELECT COUNT(*) AS n FROM flota_fusion_guardas_v2_respaldo"))[0].n).toBe(2);
+      expect((await accionGuardas()).length).toBe(base.length - 2);
+      await expect(insertarPlan("P-R-4")).resolves.toBeDefined();
+      await ejecutarScript(ROLLBACK);
+      await mismaDefinicion();
+    });
+
+    it("interrupción parcial B: ffi ya respaldada y eliminada, ffu intacta sin respaldo -> al reejecutar respalda y retira ffu", async () => {
+      await restablecer();
+      await crearRespaldoVacio();
+      await respaldar(ffi);
+      await q(`DROP TRIGGER \`${ffi}\``); // el corte ocurrió entre el DROP de ffi y el de ffu
+      expect((await accionGuardas()).length).toBe(base.length - 1);
+      await ejecutarScript(MIGRACION);
+      expect((await q("SELECT COUNT(*) AS n FROM flota_fusion_guardas_v2_respaldo"))[0].n).toBe(2);
+      expect((await accionGuardas()).length).toBe(base.length - 2);
+      await expect(insertarPlan("P-R-5")).resolves.toBeDefined();
+      // y el rollback recrea AMBAS con su definición original (también la que se respaldó antes del corte)
+      await ejecutarScript(ROLLBACK);
+      await mismaDefinicion();
+      expect(await tablaRespaldo()).toBe(false);
+    });
+
+    it("interrupción parcial C: ffi eliminada SIN respaldo (no recuperable) -> la migración no inventa nada: ffu sigue respaldada y retirada con su definición exacta", async () => {
+      await restablecer();
+      await crearRespaldoVacio();
+      await q(`DROP TRIGGER \`${ffi}\``); // estado imposible con la migración v2, pero posible por intervención manual
+      await ejecutarScript(MIGRACION);
+      // Solo ffu tiene respaldo; ffi no se puede recuperar desde v2 y el rollback no la inventa.
+      expect((await q("SELECT trigger_nombre FROM flota_fusion_guardas_v2_respaldo")).map((r) => r.trigger_nombre)).toEqual([ffu]);
+      await ejecutarScript(ROLLBACK);
+      expect((await accionGuardas()).map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT]))
+        .toEqual(base.filter((g) => g.TRIGGER_NAME !== ffi).map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT]));
+      // Restablecer el estado original de la guarda ffi manualmente a partir de la definición capturada, para dejar el esquema íntegro.
+      const original = base.find((g) => String(g.TRIGGER_NAME) === ffi)!;
+      await q(`CREATE TRIGGER \`${ffi}\` BEFORE INSERT ON tms_planes_viaje FOR EACH ROW ${original.ACTION_STATEMENT}`);
+      await mismaDefinicion();
+    });
+
+    it("la migración sigue siendo idempotente tras todo lo anterior (aplicar dos veces) y el postcheck v2 queda limpio", async () => {
+      await restablecer();
+      await mismaDefinicion();
+      await ejecutarScript(MIGRACION);
+      await ejecutarScript(MIGRACION);
+      expect((await q("SELECT COUNT(*) AS n FROM flota_fusion_guardas_v2_respaldo"))[0].n).toBe(2);
+      const [falsos, faltantes] = await consultasScript("sql/postcheck-2026-11-flota-fusiones-guardas-v2.sql");
+      expect([falsos.length, faltantes.length]).toEqual([0, 0]);
+      await ejecutarScript(ROLLBACK);
+      await mismaDefinicion();
+    });
+  });
 });
