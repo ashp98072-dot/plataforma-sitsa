@@ -99,6 +99,18 @@ describe("reportes: filtrar por vehículo incluye la historia de todos los IDs d
     expect(sql).toContain("g.vehiculo_id IN (?,?)");
     expect(sql).toContain("l.vehiculo_id IN (?,?)");
     expect(params.filter((p) => p === 2 || p === 3)).toHaveLength(4);
+    // Aislamiento por empresa: las dos ramas filtran por la empresa de la sesión (nunca solo por los IDs de vehículo).
+    expect(sql).toContain("g.empresa_id = ?");
+    expect(params.filter((p) => p === 7)).toHaveLength(2);
+    expect(params[0]).toBe(7);
+  });
+
+  it("fondos: la empresa filtra SIEMPRE (l.empresa_id) además de los IDs de vehículo", async () => {
+    vi.mocked(query).mockResolvedValue([] as never);
+    await reporteSolicitudesFondo(7, { vehiculoIds: [2, 3] });
+    const [sql, params] = vi.mocked(query).mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toContain("l.empresa_id = ?");
+    expect(params[0]).toBe(7);
   });
 
   it("obtenerReporteGastosPorTipo resuelve los IDs históricos desde el vehiculoId (fondos y gastosDetalle) y no lo hace sin vehiculoId", async () => {

@@ -6,7 +6,7 @@ vi.mock("@/lib/firmas/usuario-firmas", () => ({ leerBytesFirmaGuardada: vi.fn() 
 vi.mock("@/lib/uploads", () => ({ guardarUpload: vi.fn(), borrarUpload: vi.fn() }));
 import { getPool, query } from "@/lib/db";
 import { actualizarSolicitudFondo, crearSolicitudFondo } from "./fondos";
-import { crearGasto } from "./gastos";
+import { actualizarGasto, crearGasto } from "./gastos";
 
 /**
  * Operaciones NUEVAS -> identidad canónica. Un ID de vehículo absorbido por una fusión (flota_vehiculos_fusiones) llega desde un formulario
@@ -119,23 +119,82 @@ describe("Fondos — la línea nueva se guarda con la identidad canónica", () =
   });
 });
 
-describe("Gastos operativos — el gasto nuevo se guarda con la identidad canónica", () => {
-  const gasto = (vehiculoId: number) => crearGasto(EMPRESA, {
-    fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, vehiculoId, requirenteUsuarioId: 9,
-  }, "admin");
-  const insertGasto = (conn: ReturnType<typeof conexion>) => conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"));
-
-  it("ID absorbido (3) -> INSERT con el canónico (2)", async () => {
+describe("Gastos operativos — el gasto nuevo se guarda con la identidad canónica (INSERT confirmado, sin tolerar fallos previos)", () => {
+  const FILA_LECTURA = {
+    id: 1, empresa_id: EMPRESA, fecha_solicitud: "2026-09-01", fecha_viaje: null, empleado_id: null, empleado_codigo: null, empleado_nombre: null, empleado_cargo: null,
+    vehiculo_id: 2, vehiculo_placa: "558 BSJ", cliente_id: null, cliente_nombre: null, plan_id: null, plan_codigo: null,
+    categoria: "Combustible", descripcion: null, cantidad: "1.00", monto: "100.00", metodo_pago: null, numero_cuenta_pago: null, tiene_factura: 0,
+    observaciones: null, activo: 1, creado_por: "admin", creado_en: "2026-09-01 10:00:00", actualizado_en: "2026-09-01 10:00:00",
+  };
+  const FILA_RAW = {
+    id: 1, fecha_solicitud: "2026-09-01", fecha_viaje: null, empleado_id: null, vehiculo_id: 1, cliente_id: null, plan_id: null, categoria: "Combustible", descripcion: null,
+    cantidad: "1.00", monto: "100.00", metodo_pago: null, numero_cuenta_pago: null, tiene_factura: 0, factura_nombre_original: null, observaciones: null, activo: 1,
+    entidad_requirente_id: null, entidad_requirente_nombre: null, requirente_empleado_id: null, requirente_nombre: null, requirente_usuario_id: null,
+    solicitante_usuario_id: null, solicitante_nombre: null, estado: null,
+  };
+  function conexionGasto() {
     const conn = conexion();
-    vi.mocked(query).mockResolvedValue([{ id: 1, codigo: "GASTO-1", empresa_id: EMPRESA }] as never);
-    await gasto(3).then(() => null, (e: Error) => e); // otras validaciones del flujo pueden fallar con este mock mínimo
+    const base = conn.query;
+    conn.query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes("FROM tms_gastos_operativos") && sql.includes("FOR UPDATE")) return [[FILA_RAW]];
+      if (sql.includes("FROM tms_gasto_operativo_lineas")) return [[]];
+      return base(sql, params);
+    }) as never;
+    vi.mocked(query).mockImplementation((async (sql: string) => (String(sql).includes("tms_gasto_operativo_lineas") ? [] : [FILA_LECTURA])) as never);
+    return conn;
+  }
+  const gasto = (vehiculoId: number) => crearGasto(EMPRESA, { fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, vehiculoId, requirenteUsuarioId: 9 }, "admin");
+  const insertGasto = (conn: ReturnType<typeof conexion>) => conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))!;
+  // Orden de parámetros del INSERT: empresa, fecha_solicitud, fecha_viaje, empleado, VEHÍCULO, cliente, plan, ...
+  const VEHICULO = 4;
+
+  it("ID absorbido (3): el flujo COMPLETA (commit) y el INSERT lleva el canónico (2), nunca el 3", async () => {
+    const conn = conexionGasto();
+    await gasto(3);
     const ins = insertGasto(conn);
-    if (ins) {
-      expect(ins[1]).toContain(2);
-      expect(ins[1]).not.toContain(3);
+    expect((ins[1] as unknown[])[VEHICULO]).toBe(2);
+    expect(ins[1]).not.toContain(3);
+    expect(conn.commit).toHaveBeenCalledOnce();
+    expect(conn.rollback).not.toHaveBeenCalled();
+  });
+
+  it("ID canónico (2) y ID sin alias (1): el INSERT conserva su ID y el flujo completa", async () => {
+    for (const id of [2, 1]) {
+      const conn = conexionGasto();
+      await gasto(id);
+      expect((insertGasto(conn)[1] as unknown[])[VEHICULO]).toBe(id);
+      expect(conn.commit).toHaveBeenCalledOnce();
     }
-    // En cualquier caso nunca se valida/consulta el absorbido como vehículo operativo.
+  });
+
+  it("la validación de acceso se hace sobre el canónico, no sobre el absorbido", async () => {
+    const conn = conexionGasto();
+    await gasto(3);
     const lecturas = conn.query.mock.calls.filter((c) => String(c[0]).includes("FROM flota_vehiculos v") && String(c[0]).includes("flota_vehiculo_acceso"));
+    expect(lecturas.length).toBeGreaterThan(0);
     expect(lecturas.every((c) => (c[1] as number[])[1] === 2)).toBe(true);
+  });
+
+  it("un ID inexistente se sigue rechazando (rollback, sin INSERT)", async () => {
+    const conn = conexionGasto();
+    await expect(gasto(424242)).rejects.toThrow("El vehículo indicado no pertenece a esta empresa.");
+    expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT INTO tms_gastos_operativos"))).toBe(false);
+  });
+
+  it("editar: cambiar el vehículo a un ID absorbido (3) guarda el canónico (2) en el UPDATE", async () => {
+    const conn = conexionGasto();
+    await actualizarGasto(EMPRESA, 1, { vehiculoId: 3 });
+    const upd = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+    // UPDATE: fecha_solicitud, fecha_viaje, empleado_id, VEHÍCULO, cliente_id, ...
+    expect((upd[1] as unknown[])[3]).toBe(2);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("editar sin tocar el vehículo conserva el que ya tenía (la historia no se reinterpreta)", async () => {
+    const conn = conexionGasto();
+    await actualizarGasto(EMPRESA, 1, { descripcion: "otra" });
+    const upd = conn.execute.mock.calls.find((c) => String(c[0]).includes("UPDATE tms_gastos_operativos SET"))!;
+    expect((upd[1] as unknown[])[3]).toBe(1);
   });
 });

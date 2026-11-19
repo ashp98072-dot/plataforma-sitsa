@@ -35,6 +35,30 @@ const E1 = 1;
 const ADMIN = 1;
 const q = async (sql: string, params: unknown[] = []) => (await getPool().query(sql, params as never))[0] as Record<string, unknown>[];
 
+/** Ejecuta un script .sql real: sin DELIMITER (todo junto) o con bloque DELIMITER // ... DELIMITER ; (se parte como en crearEsquema). */
+async function ejecutarScript(ruta: string): Promise<void> {
+  const c = await mysql.createConnection({ host: "127.0.0.1", port: Number(PUERTO), user: "root", password: "", database: ESQUEMA, multipleStatements: true });
+  try {
+    const sql = readFileSync(ruta, "utf8").replace(/^\s*--.*$/gm, "");
+    if (!/DELIMITER/i.test(sql)) { await c.query(sql); return; }
+    const [antes, resto] = sql.split(/DELIMITER\s+\/\//i);
+    for (const parte of antes.split(";")) if (parte.trim()) await c.query(parte);
+    const [bloque, despues] = resto.split(/DELIMITER\s+;/i);
+    for (const parte of bloque.split("//")) if (parte.trim()) await c.query(parte);
+    for (const parte of (despues ?? "").split(";")) if (parte.trim()) await c.query(parte);
+  } finally { await c.end(); }
+}
+/** Ejecuta un script de SOLO LECTURA con varias consultas y devuelve el resultado de cada una. */
+async function consultasScript(ruta: string, primeras?: number): Promise<Record<string, unknown>[][]> {
+  const c = await mysql.createConnection({ host: "127.0.0.1", port: Number(PUERTO), user: "root", password: "", database: ESQUEMA, multipleStatements: true });
+  try {
+    const sentencias = readFileSync(ruta, "utf8").replace(/^\s*--.*$/gm, "").split(";").filter((x) => x.trim());
+    const r = (await c.query(sentencias.slice(0, primeras ?? sentencias.length).join(";\n")))[0] as unknown;
+    return (primeras === 1 ? [r] : r) as Record<string, unknown>[][];
+  } finally { await c.end(); }
+}
+const accionGuardas = async () => q("SELECT TRIGGER_NAME, EVENT_MANIPULATION, ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='tms_planes_viaje' AND TRIGGER_NAME REGEXP '^ff[iu]_' ORDER BY TRIGGER_NAME");
+
 async function crearEsquema() {
   const admin = await mysql.createConnection({ host: "127.0.0.1", port: Number(PUERTO), user: "root", password: "", multipleStatements: true });
   await admin.query(`DROP DATABASE IF EXISTS ${ESQUEMA}`);
@@ -56,7 +80,7 @@ async function crearEsquema() {
       FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB;
     CREATE TABLE tms_cotizacion_costeo_perfiles (id INT AUTO_INCREMENT PRIMARY KEY, nombre VARCHAR(60)) ENGINE=InnoDB;
     CREATE TABLE tms_unidades (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, placa VARCHAR(40) NOT NULL, flota_vehiculo_id INT NULL) ENGINE=InnoDB;
-    CREATE TABLE tms_planes_viaje (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, codigo VARCHAR(40) NOT NULL, estado VARCHAR(20) NOT NULL DEFAULT 'Cerrado', fecha_plan DATE NOT NULL,
+    CREATE TABLE tms_planes_viaje (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, codigo VARCHAR(40) NOT NULL, ruta_codigo_historico VARCHAR(40) NULL, estado VARCHAR(20) NOT NULL DEFAULT 'Cerrado', fecha_plan DATE NOT NULL,
       unidad_id INT NULL, tc_vehiculo_id INT NULL, vehiculo_solicitado_perfil_id INT NULL,
       FOREIGN KEY (vehiculo_solicitado_perfil_id) REFERENCES tms_cotizacion_costeo_perfiles(id)) ENGINE=InnoDB;
     CREATE TABLE tms_solicitudes_fondo (
@@ -73,8 +97,16 @@ async function crearEsquema() {
       FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id) ON DELETE RESTRICT,
       FOREIGN KEY (empresa_id, solicitud_id) REFERENCES tms_solicitudes_fondo (empresa_id, id) ON DELETE CASCADE
     ) ENGINE=InnoDB;
-    CREATE TABLE tms_gastos_operativos (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, fecha_solicitud DATE NOT NULL, vehiculo_id INT NULL, categoria VARCHAR(40) NOT NULL,
-      cantidad DECIMAL(10,2) NOT NULL DEFAULT 1, monto DECIMAL(12,2) NOT NULL, activo TINYINT(1) NOT NULL DEFAULT 1, FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB;
+    CREATE TABLE empleados (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, nombre VARCHAR(100), puesto VARCHAR(60)) ENGINE=InnoDB;
+    CREATE TABLE tms_clientes (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, nombre VARCHAR(100)) ENGINE=InnoDB;
+    CREATE TABLE tms_gastos_operativos (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, fecha_solicitud DATE NOT NULL, fecha_viaje DATE NULL, empleado_id INT NULL,
+      vehiculo_id INT NULL, cliente_id INT NULL, plan_id INT NULL, categoria VARCHAR(40) NOT NULL, descripcion VARCHAR(300) NULL,
+      cantidad DECIMAL(10,2) NOT NULL DEFAULT 1, monto DECIMAL(12,2) NOT NULL, metodo_pago VARCHAR(40) NULL, numero_cuenta_pago VARCHAR(80) NULL,
+      observaciones VARCHAR(300) NULL, creado_por VARCHAR(100) NULL, activo TINYINT(1) NOT NULL DEFAULT 1, FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id)) ENGINE=InnoDB;
+    CREATE TABLE tms_gasto_operativo_lineas (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, gasto_id INT NOT NULL, fecha_viaje DATE NULL, plan_id INT NULL,
+      empleado_id INT NULL, empleado_nombre VARCHAR(100) NULL, cargo VARCHAR(100) NULL, vehiculo_id INT NULL, placa VARCHAR(20) NULL, cliente_id INT NULL, cliente_nombre VARCHAR(100) NULL,
+      categoria VARCHAR(40) NOT NULL, descripcion VARCHAR(300) NULL, cantidad DECIMAL(10,2) NOT NULL DEFAULT 1, monto DECIMAL(12,2) NOT NULL, metodo_pago VARCHAR(40) NULL,
+      numero_cuenta_pago VARCHAR(80) NULL, FOREIGN KEY (vehiculo_id) REFERENCES flota_vehiculos(id), FOREIGN KEY (gasto_id) REFERENCES tms_gastos_operativos(id)) ENGINE=InnoDB;
   `);
   // Migración REAL de fusiones: tabla + triggers (parte 1) y procedimiento que instala las guardas por columna (parte 2, con DELIMITER //).
   const sql = readFileSync("sql/migrate-2026-11-flota-fusiones.sql", "utf8").replace(/^\s*--.*$/gm, ""); // los comentarios contienen ";"
@@ -217,5 +249,137 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA})`, () => {
     // El inventario de referencias de la aplicación ya lo excluye (prueba 1); el trigger SQL requiere una migración nueva, a decidir por el propietario.
     await expect(q("INSERT INTO tms_planes_viaje (empresa_id, codigo, estado, fecha_plan, vehiculo_solicitado_perfil_id) VALUES (1,'P-2','Cerrado','2026-10-01',3)")).rejects.toThrow();
     await expect(q("INSERT INTO tms_planes_viaje (empresa_id, codigo, estado, fecha_plan, vehiculo_solicitado_perfil_id) VALUES (1,'P-3','Cerrado','2026-10-01',2)")).resolves.toBeDefined();
+  });
+describe("aislamiento por empresa y recuperación de historia en reportes (fondos y detalle de gastos)", () => {
+    let v10 = 0, v11 = 0;
+    beforeAll(async () => {
+      // Alias previo V10 -> V11 (insertado directamente: emula una fusión ya registrada; la fusión nueva bloquea gastos históricos a propósito).
+      v10 = await vehiculo({ placa: "ALI 100", chasis: "CHASISALIAS0100" });
+      v11 = await vehiculo({ placa: "ALI100", chasis: "CHASISALIAS0100" });
+      const g = async (empresa: number, vehiculo: number, monto: string) =>
+        Number(((await getPool().query("INSERT INTO tms_gastos_operativos (empresa_id, fecha_solicitud, vehiculo_id, categoria, monto) VALUES (?, '2026-09-15', ?, 'Combustible', ?)", [empresa, vehiculo, monto]))[0] as { insertId: number }).insertId);
+      const gHist = await g(E1, v10, "30.00"); // historia bajo el ID absorbido (cabecera, sin líneas)
+      await g(E1, v11, "20.00");               // historia bajo el canónico
+      const gLin = await g(E1, v10, "0.00");  // gasto CON líneas (rama B del detalle)
+      await getPool().query("INSERT INTO tms_gasto_operativo_lineas (empresa_id, gasto_id, vehiculo_id, placa, categoria, monto) VALUES (?,?,?,?, 'Combustible', 5.00)", [E1, gLin, v10, "ALI 100"]);
+      void gHist;
+      await q("INSERT INTO flota_vehiculos_fusiones (origen_id, destino_id, empresa_id, administrador_id, motivo, origen_snapshot, destino_snapshot) VALUES (?,?,?,?,?,?,?)", [v10, v11, E1, ADMIN, "alias previo (prueba)", "{}", "{}"]);
+      // Empresa 2: tiene acceso COMPARTIDO al canónico V11 y registra sus propios movimientos con ese ID.
+      await q("INSERT INTO flota_vehiculo_acceso (vehiculo_id, empresa_id) VALUES (?, 2)", [v11]);
+      await g(2, v11, "999.00");
+      await solicitud2("F-E2", "Autorizada", v11, "777.00", "ALI100");
+    });
+    async function solicitud2(codigo: string, estado: string, vehiculo: number, monto: string, placa: string) {
+      const sid = Number(((await getPool().query("INSERT INTO tms_solicitudes_fondo (empresa_id, codigo, fecha_requerimiento, estado, total) VALUES (2,?, '2026-09-10', ?, ?)", [codigo, estado, monto]))[0] as { insertId: number }).insertId);
+      await getPool().query("INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, categoria, cantidad, monto, vehiculo_id, placa) VALUES (2,?, 'Combustible', 1, ?, ?, ?)", [sid, monto, vehiculo, placa]);
+    }
+
+    it("detalle de gastos por el canónico (V11) en la empresa 1: historia de AMBOS IDs (cabecera y líneas), sin movimientos de la empresa 2", async () => {
+      const r = await obtenerReporteGastosPorTipo(E1, "gastosDetalle", { vehiculoId: v11 });
+      if (r.tipo !== "gastosDetalle") throw new Error("tipo");
+      expect(r.filas.map((f) => [f.vehiculoId, f.monto, f.lineaId !== null]).sort()).toEqual([[v10, 30, false], [v10, 5, true], [v11, 20, false]].sort());
+      expect(r.filas.some((f) => f.monto === 999)).toBe(false); // el gasto de la empresa 2 con el mismo vehículo compartido
+      // y desde el absorbido se recupera lo mismo
+      const desdeAbsorbido = await obtenerReporteGastosPorTipo(E1, "gastosDetalle", { vehiculoId: v10 });
+      if (desdeAbsorbido.tipo !== "gastosDetalle") throw new Error("tipo");
+      expect(desdeAbsorbido.filas.length).toBe(3);
+    });
+
+    it("empresa 2 (acceso compartido al canónico): ve SOLO sus movimientos y nunca la historia de la empresa 1 bajo el ID absorbido", async () => {
+      // idsHistoricosVehiculo conserva el comportamiento de resolverUnidadCanonica: puede listar IDs de OTRAS empresas del mismo grupo (solo IDs, sin datos).
+      // El aislamiento de datos lo garantizan las consultas de los reportes, que SIEMPRE filtran por empresa_id: ningún dato de otra empresa puede salir.
+      expect(await idsHistoricosVehiculo(2, v11)).toContain(v11);
+      const gastos = await obtenerReporteGastosPorTipo(2, "gastosDetalle", { vehiculoId: v11 });
+      if (gastos.tipo !== "gastosDetalle") throw new Error("tipo");
+      expect(gastos.filas.map((f) => f.monto)).toEqual([999]);
+      const fondos = await obtenerReporteGastosPorTipo(2, "fondos", { vehiculoId: v11 });
+      if (fondos.tipo !== "fondos") throw new Error("tipo");
+      expect(fondos.filas.map((f) => f.solicitudCodigo)).toEqual(["F-E2"]);
+      expect(fondos.resumen.totalSolicitado).toBe(777);
+    });
+
+    it("fondos de la empresa 1 por el canónico 558 BSJ no incluyen la solicitud de la empresa 2, y la empresa 2 no ve las de la empresa 1", async () => {
+      const e1 = await obtenerReporteGastosPorTipo(E1, "fondos", { vehiculoId: v11 });
+      if (e1.tipo !== "fondos") throw new Error("tipo");
+      expect(e1.filas.some((f) => f.solicitudCodigo === "F-E2")).toBe(false);
+      const e2 = await obtenerReporteGastosPorTipo(2, "fondos", { vehiculoId: v2 });
+      if (e2.tipo !== "fondos") throw new Error("tipo");
+      expect(e2.filas).toEqual([]); // la empresa 2 no tiene acceso al vehículo 2 de la empresa 1: reporte vacío, sin filtrar historia ajena
+    });
+  });
+
+  describe("migración v2 de las guardas (propuesta separada): corrige el falso positivo y es reversible", () => {
+    let originales: Record<string, unknown>[] = [];
+    const insertarPlan = (codigo: string, perfil: number | null, tc: number | null = null) =>
+      q("INSERT INTO tms_planes_viaje (empresa_id, codigo, estado, fecha_plan, vehiculo_solicitado_perfil_id, tc_vehiculo_id) VALUES (1,?, 'Cerrado','2026-10-02',?,?)", [codigo, perfil, tc]);
+
+    it("preflight (solo lectura): lista EXACTAMENTE las dos guardas del falso positivo y los prerrequisitos", async () => {
+      originales = await accionGuardas();
+      const [prerreq, candidatas] = await consultasScript("sql/preflight-2026-11-flota-fusiones-guardas-v2.sql");
+      expect(prerreq[0]).toMatchObject({ tabla_fusiones: 1, trigger_principal: 1, respaldo_ya_existe: 0 });
+      expect(candidatas.map((f) => [f.tabla, f.campo, f.fk_hacia, String(f.guarda).slice(0, 4)]).sort()).toEqual([
+        ["tms_planes_viaje", "vehiculo_solicitado_perfil_id", "tms_cotizacion_costeo_perfiles", "ffi_"],
+        ["tms_planes_viaje", "vehiculo_solicitado_perfil_id", "tms_cotizacion_costeo_perfiles", "ffu_"],
+      ]);
+    });
+
+    it("antes de v2 (estado actual): el perfil 3 se bloquea por la guarda; el postcheck v2 detecta el falso positivo", async () => {
+      await expect(insertarPlan("P-V2-0", 3)).rejects.toThrow(/fusionado/i);
+      const [falsos] = await consultasScript("sql/postcheck-2026-11-flota-fusiones-guardas-v2.sql", 1); // antes de v2 la tabla de respaldo no existe: solo la consulta 1
+      expect(falsos.length).toBe(2);
+    });
+
+    it("aplica v2: el perfil de costeo legítimo (ID 3) se permite al insertar y al actualizar", async () => {
+      await ejecutarScript("sql/migrate-2026-11-flota-fusiones-guardas-v2.sql");
+      await expect(insertarPlan("P-V2-1", 3)).resolves.toBeDefined();
+      await expect(q("UPDATE tms_planes_viaje SET vehiculo_solicitado_perfil_id=3 WHERE codigo='P-V2-1'")).resolves.toBeDefined();
+      await expect(insertarPlan("P-V2-2", 2)).resolves.toBeDefined();
+    });
+
+    it("aplica v2: SIGUEN bloqueadas las referencias nuevas a vehículos absorbidos (fondos, plan por tc_vehiculo_id, gastos y sus líneas)", async () => {
+      const sid = Number(((await getPool().query("INSERT INTO tms_solicitudes_fondo (empresa_id, codigo, fecha_requerimiento, estado, total) VALUES (1,'F-V2-B','2026-10-01','Pendiente',1)"))[0] as { insertId: number }).insertId);
+      await expect(q("INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, categoria, monto, vehiculo_id) VALUES (1,?, 'Combustible', 1, 3)", [sid])).rejects.toThrow(/fusionado/i);
+      await expect(insertarPlan("P-V2-3", null, 3)).rejects.toThrow(/fusionado/i);
+      await expect(q("INSERT INTO tms_gastos_operativos (empresa_id, fecha_solicitud, vehiculo_id, categoria, monto) VALUES (1,'2026-10-01',3,'Combustible',1)")).rejects.toThrow(/fusionado/i);
+      await expect(q("INSERT INTO tms_gasto_operativo_lineas (empresa_id, gasto_id, vehiculo_id, categoria, monto) VALUES (1,1,3,'Combustible',1)")).rejects.toThrow(/fusionado/i);
+      // y el canónico sigue aceptándose
+      await expect(q("INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, categoria, monto, vehiculo_id) VALUES (1,?, 'Combustible', 1, 2)", [sid])).resolves.toBeDefined();
+      await expect(insertarPlan("P-V2-4", null, 2)).resolves.toBeDefined();
+    });
+
+    it("postcheck v2: cero falsos positivos, cero guardas faltantes y respaldo de 2 guardas", async () => {
+      const [falsos, faltantes, respaldo] = await consultasScript("sql/postcheck-2026-11-flota-fusiones-guardas-v2.sql");
+      expect(falsos).toEqual([]);
+      expect(faltantes).toEqual([]);
+      expect(respaldo.map((r) => [r.tabla, r.campo, String(r.trigger_nombre).slice(0, 4), r.evento]).sort()).toEqual([
+        ["tms_planes_viaje", "vehiculo_solicitado_perfil_id", "ffi_", "INSERT"],
+        ["tms_planes_viaje", "vehiculo_solicitado_perfil_id", "ffu_", "UPDATE"],
+      ]);
+      // Solo se retiraron esas dos guardas: las demás de tms_planes_viaje siguen intactas.
+      const restantes = (await accionGuardas()).map((g) => g.TRIGGER_NAME);
+      expect(restantes).toEqual(originales.map((g) => g.TRIGGER_NAME).filter((n) => restantes.includes(n)));
+      expect(restantes.length).toBe(originales.length - 2);
+    });
+
+    it("idempotente: reaplicar v2 no falla ni duplica el respaldo", async () => {
+      await ejecutarScript("sql/migrate-2026-11-flota-fusiones-guardas-v2.sql");
+      expect((await q("SELECT COUNT(*) AS n FROM flota_fusion_guardas_v2_respaldo"))[0].n).toBe(2);
+      await expect(insertarPlan("P-V2-5", 3)).resolves.toBeDefined();
+    });
+
+    it("rollback: recrea EXACTAMENTE las guardas originales (misma definición), vuelve el falso positivo y elimina la tabla de respaldo", async () => {
+      await ejecutarScript("sql/rollback-2026-11-flota-fusiones-guardas-v2.sql");
+      const despues = await accionGuardas();
+      expect(despues.map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT])).toEqual(originales.map((g) => [g.TRIGGER_NAME, g.EVENT_MANIPULATION, g.ACTION_STATEMENT]));
+      await expect(insertarPlan("P-V2-6", 3)).rejects.toThrow(/fusionado/i);
+      expect(await q("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_fusion_guardas_v2_respaldo'")).toEqual([]);
+    });
+
+    it("tras el rollback v2 se puede volver a aplicar (ciclo completo reversible)", async () => {
+      await ejecutarScript("sql/migrate-2026-11-flota-fusiones-guardas-v2.sql");
+      await expect(insertarPlan("P-V2-7", 3)).resolves.toBeDefined();
+      const [falsos, faltantes] = await consultasScript("sql/postcheck-2026-11-flota-fusiones-guardas-v2.sql");
+      expect([falsos.length, faltantes.length]).toEqual([0, 0]);
+    });
   });
 });
