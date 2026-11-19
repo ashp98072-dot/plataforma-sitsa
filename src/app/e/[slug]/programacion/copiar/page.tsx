@@ -7,6 +7,7 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import type { CatalogosCopia, OrigenFila } from "@/lib/tms/programacion-copia";
+import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
 import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lote";
 import { PLAZO_CLIENTE_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { clasificarFalloSolicitud, crearGestorSolicitudes, esRespuestaReintentable } from "./solicitud-cancelable";
@@ -217,7 +218,7 @@ export default function CopiarProgramacionPage() {
             <table className="w-full min-w-[1200px] text-left text-xs">
               <thead className="bg-[var(--thead)] text-[var(--muted)]">
                 <tr>
-                  {["✓", "Origen", "Cliente", "Ruta", "Unidad", "TC", "Piloto", "Auxiliares", "Hora", "Tarifa", "Estado / disponibilidad"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}
+                  {["✓", "Origen", "Cliente", "Ruta", "Unidad", "TC", "Piloto", "Auxiliares", "Hora", "Regreso estimado", "Tarifa", "Estado / disponibilidad"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -284,12 +285,14 @@ export default function CopiarProgramacionPage() {
                         )}
                       </td>
                       <td className="px-2 py-1.5"><input type="time" className={celda} disabled={!f.incluida} value={b.horaCarga ?? ""} onChange={(e) => cambiar(i, { horaCarga: e.target.value || null })} /></td>
+                      <td className="px-2 py-1.5"><input type="datetime-local" aria-label={`Regreso estimado fila ${b.fila}`} className={celda} disabled={!f.incluida} value={b.regresoEditado !== undefined ? b.regresoEditado ?? "" : b.regresoOffsetDias != null && b.regresoHora ? regresoTrasladado(fechaDestino, { offsetDias: b.regresoOffsetDias, hora: b.regresoHora }) ?? "" : ""} onChange={(e) => cambiar(i, { regresoEditado: e.target.value || null })} /></td>
                       <td className="px-2 py-1.5">
                         {tarifas.length ? (
                           <select className={celda} disabled={!f.incluida} value={efectiva} onChange={(e) => cambiar(i, { tarifaId: Number(e.target.value) })}>
+                            {b.tarifaId != null && !tarifas.some((t) => t.id === b.tarifaId) ? <option value={b.tarifaId}>Tarifa del origen no vigente — seleccione otra</option> : null}
                             {tarifas.map((t) => <option key={t.id} value={t.id}>{t.nombre} · {t.moneda} {t.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</option>)}
                           </select>
-                        ) : <span className="text-[var(--muted)]" title="Sin tarifa vigente: el viaje se copia sin tarifa">Sin tarifa</span>}
+                        ) : b.tarifaId != null ? <button type="button" className="underline" disabled={!f.incluida} onClick={() => cambiar(i, { tarifaId: null })}>Tarifa del origen no vigente — quitar</button> : <span className="text-[var(--muted)]" title="Sin tarifa vigente: el viaje se copia sin tarifa">Sin tarifa</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         {!f.incluida ? (
