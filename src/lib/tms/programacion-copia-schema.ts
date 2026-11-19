@@ -39,4 +39,5 @@ export const cuerpoCopiaSchema = z.object({
   fechaOrigen: fecha,
   fechaDestino: fecha,
   filas: z.array(filaEdicionSchema).min(1).max(MAX_FILAS_LOTE),
+  tarifasEsperadas: z.array(z.object({ fila: z.number().int().positive(), tarifa: z.object({ id: z.number().int().positive(), monto: z.number().nonnegative(), moneda: z.string().min(1).max(10) }).strict().nullable() }).strict()).optional(),
 }).strict().refine((d) => d.fechaOrigen !== d.fechaDestino, { message: "La fecha destino debe ser distinta de la fecha origen." });
