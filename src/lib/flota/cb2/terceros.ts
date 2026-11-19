@@ -50,7 +50,12 @@ export async function registrarUnidad(ctx: ContextoTerceros, entrada: unknown) {
   return txTerceros(ctx, async c => {
     const [u] = await rows(c, "SELECT * FROM flota_cb2_externos_unidades WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (u && (placaComparable(String(u.placa)) !== placaComparable(op.placa) || u.tipo !== op.tipo)) throw new ErrorCB2("Referencia de unidad con datos contradictorios; requiere revisión.");
-    if (u) return { id: Number(u.id), existente: true };
+    if (u) {
+      // Una unidad externa ya registrada tampoco se reutiliza si su placa ya es de Flota (p. ej. alta posterior del vehículo o fusión): sin esta comprobación la
+      // devolución anticipada saltaba la guarda. Solo bloqueo duro; no se modifica ni se borra el registro externo ni sus consumos.
+      await exigirPlacaNoEsFlota(c, ctx.empresaId, String(u.placa), false, { reutilizando: { id: Number(u.id) } });
+      return { id: Number(u.id), existente: true };
+    }
     // La placa no puede existir ya en Flota (activa, inactiva, en taller o absorbida por una fusión): evita duplicar la unidad en dos catálogos.
     await exigirPlacaNoEsFlota(c, ctx.empresaId, op.placa, op.confirmarCoincidencias);
     const candidatos = await rows(c, "SELECT id,placa,referencia FROM flota_cb2_externos_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE", [ctx.empresaId]) as unknown as UnidadTercera[];

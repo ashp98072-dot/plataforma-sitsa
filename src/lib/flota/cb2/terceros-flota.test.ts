@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { exigirPlacaNoEsFlota } from "./terceros-flota";
+import { exigirPlacaNoEsFlota, relacionPlaca } from "./terceros-flota";
 
 /**
  * Guarda de unidad EXTERNA contra Flota. La base se simula en memoria:
@@ -82,5 +82,53 @@ describe("exigirPlacaNoEsFlota — una placa de Flota no se registra como unidad
   it("sin tabla de fusiones (migración no instalada) la guarda funciona igual, sin canónico", async () => {
     await expect(guarda("558BSJ", false, conexion(false))).rejects.toThrow(/#2 \(558 BSJ\) \/ #3 \(558BSJ\)/);
     await expect(guarda("558BSJ", false, conexion(false))).rejects.not.toThrow(/canónico/);
+  });
+
+  describe("caso INVERSO: placa nueva COMPLETA frente a una placa de Flota ABREVIADA (comprobación bidireccional local)", () => {
+    it("«C-558BSJ» (completa) frente a «558 BSJ» y «558BSJ» de Flota: bloquea e indica el canónico; `confirmarCoincidencias` NO lo salta", async () => {
+      for (const confirmar of [false, true]) {
+        await expect(guarda("C-558BSJ", confirmar), String(confirmar)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/ya existe en Flota: #2 \(558 BSJ\) \/ #3 \(558BSJ\) — no operable: inactiva o en taller; fusionada, vehículo canónico #2 \(558 BSJ\)/) });
+      }
+    });
+    it("cualquier letra de prefijo coincide con la abreviada (M-558BSJ, c558bsj, C 558 BSJ)", async () => {
+      for (const p of ["M-558BSJ", "c558bsj", "C 558 BSJ"]) await expect(guarda(p, true), p).rejects.toThrow(/ya existe en Flota: #2/);
+    });
+    it("el sentido directo se conserva (abreviada nueva frente a Flota completa) y sigue sin poder confirmarse", async () => {
+      await expect(guarda("001 MON", true)).rejects.toThrow(/ya existe en Flota: #1 \(M-001MON\)/);
+    });
+    it("una placa distinta a un carácter sigue siendo solo «casi igual» (confirmable), no coincidencia exacta/abreviada", async () => {
+      await expect(guarda("558 BSK")).rejects.toThrow(/casi igual/);
+      await expect(guarda("558 BSK", true)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("relacionPlaca (local, simétrica)", () => {
+    it.each([
+      ["M-001MON", "m 001 mon", "EXACTA"],
+      ["C-558BSJ", "558 BSJ", "ABREVIADA"],
+      ["558 BSJ", "C558BSJ", "ABREVIADA"],
+      ["130 BQA", "C-130BQA", "ABREVIADA"],
+      ["C-130BQA", "130 BQA", "ABREVIADA"],
+      ["C-130BQA", "P-130BQA", null], // dos placas completas con prefijos distintos NO son la misma
+      ["558BSJ", "558BSK", null],
+      ["558BSJ", "M-001MON", null],
+      ["", "558BSJ", null],
+      ["CANECA", "558BSJ", null],
+    ] as const)("%s vs %s -> %s (y al revés)", (a, b, esperado) => {
+      expect(relacionPlaca(a, b)).toBe(esperado);
+      expect(relacionPlaca(b, a)).toBe(esperado);
+    });
+  });
+
+  describe("reutilización de una unidad externa ya registrada (devolución anticipada de registrarUnidad)", () => {
+    it("si su placa ya es de Flota: bloquea (no se reutiliza) e identifica la unidad externa; confirmar no lo salta", async () => {
+      await expect(exigirPlacaNoEsFlota(conexion() as never, EMPRESA, "M-001MON", true, { reutilizando: { id: 21 } }))
+        .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/La unidad externa #21 \(«M-001MON»\) coincide con una unidad de Flota: #1 \(M-001MON\)\. No se reutiliza como externa.*no se modifican/) });
+      await expect(exigirPlacaNoEsFlota(conexion() as never, EMPRESA, "C-558BSJ", false, { reutilizando: { id: 21 } })).rejects.toThrow(/La unidad externa #21/);
+    });
+    it("conserva la idempotencia: una externa legítima (sin choque, o solo «casi igual» ya confirmada al crearla) se reutiliza sin error", async () => {
+      await expect(exigirPlacaNoEsFlota(conexion() as never, EMPRESA, "P-999ZZZ", false, { reutilizando: { id: 21 } })).resolves.toBeUndefined();
+      await expect(exigirPlacaNoEsFlota(conexion() as never, EMPRESA, "C-130BQB", false, { reutilizando: { id: 21 } })).resolves.toBeUndefined();
+    });
   });
 });

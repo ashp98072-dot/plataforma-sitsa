@@ -24,6 +24,8 @@ import mysql from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarUnidad } from "./terceros";
 import { referenciaUnidadShell } from "@/components/flota/cb2/placas-pendientes";
+import { hash } from "./model";
+import { nombreComparable } from "../combustible-coincidencias";
 
 const E1 = 1, E2 = 2, OPERADOR = 5;
 const q = async (sql: string, params: unknown[] = []) => (await getPool().query(sql, params as never))[0] as Record<string, unknown>[];
@@ -105,5 +107,30 @@ describe.skipIf(!PUERTO)(`BD real desechable (${ESQUEMA})`, () => {
   it("auditoría: solo las altas efectivas quedan registradas (los rechazos no dejan rastro de unidades)", async () => {
     const altas = await q("SELECT COUNT(*) AS n FROM auditoria WHERE accion='cb2_unidad_tercera_creada'");
     expect(altas[0].n).toBe((await externas()).length);
+  });
+
+  it("CASO INVERSO en base real: placa COMPLETA frente a Flota ABREVIADA («C-558BSJ» vs «558 BSJ»/«558BSJ»): bloquea con el canónico y confirmarCoincidencias no la salta", async () => {
+    const antes = await externas();
+    for (const confirmar of [false, true]) await expect(alta("C-558BSJ", confirmar ? { confirmarCoincidencias: true } : {})).rejects.toThrow(/ya existe en Flota: #2 \(558 BSJ\) \/ #3 \(558BSJ\).*vehículo canónico #2/);
+    await expect(alta("M-558BSJ", { confirmarCoincidencias: true })).rejects.toMatchObject({ status: 409 });
+    await expect(alta("001 MON", { confirmarCoincidencias: true })).rejects.toThrow(/ya existe en Flota: #1 \(M-001MON\)/); // sentido directo
+    expect(await externas()).toEqual(antes);
+  });
+
+  it("REUTILIZACIÓN: una unidad externa registrada ANTES de que existiera el vehículo en Flota ya no se reutiliza (409), sin modificar el registro externo", async () => {
+    const ref = referenciaUnidadShell("P-888LAT");
+    await q("INSERT INTO flota_cb2_externos_unidades (empresa_id, referencia, referencia_hash, placa, tipo, descripcion) VALUES (1, ?, ?, 'P-888LAT', 'VEHICULO', 'Registrada antes del alta en Flota')", [ref, hash(nombreComparable(ref))]);
+    expect(await alta("P-888LAT")).toMatchObject({ existente: true }); // todavía no hay vehículo en Flota con esa placa: idempotente como siempre
+    const antes = await q("SELECT * FROM flota_cb2_externos_unidades WHERE placa='P-888LAT'");
+    await q("INSERT INTO flota_vehiculos (empresa_id, placa) VALUES (1, 'P-888LAT')"); // ahora la unidad existe en Flota
+    await expect(alta("P-888LAT")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/La unidad externa #\d+ \(«P-888LAT»\) coincide con una unidad de Flota: #\d+ \(P-888LAT\)\. No se reutiliza/) });
+    await expect(alta("p 888-lat", { confirmarCoincidencias: true })).rejects.toMatchObject({ status: 409 }); // otro formato, misma referencia estable; confirmar no salta la coincidencia
+    expect(await q("SELECT * FROM flota_cb2_externos_unidades WHERE placa='P-888LAT'")).toEqual(antes); // la historia externa no se toca
+  });
+
+  it("REUTILIZACIÓN idempotente: una externa «casi igual» confirmada al crearla se sigue reutilizando al reintentar (sin pedir confirmar otra vez)", async () => {
+    const primera = await alta("M-002MOX", { confirmarCoincidencias: true }); // casi igual a M-001MON
+    expect(primera.existente).toBe(false);
+    expect(await alta("M-002MOX")).toEqual({ id: primera.id, existente: true });
   });
 });
