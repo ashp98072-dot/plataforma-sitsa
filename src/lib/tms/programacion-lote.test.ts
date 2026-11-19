@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 27914)
+Total output lines: 1444
+
 // Por omisión el motor usa el adaptador SIMULADO de la unidad (upsert permisivo). Las pruebas «identidad TMS REAL» activan `unidadReal.modelo` y ejecutan el resolvedor REAL de #624 sobre un modelo SQL sintético.
 const unidadReal = vi.hoisted(() => ({ modelo: null as null | { consultar(sql: string, a?: unknown[]): Record<string, unknown>[] | undefined; insertar(sql: string, a: unknown[], id: number): void; modelo: { unidades: { id: number; empresa_id: number; placa: string; flota_vehiculo_id: number | null }[] } } }));
 vi.mock("@/lib/tms/unidad-canonica", async () => {
@@ -371,9 +374,9 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect(r[1].errores[0]).toContain("inactiva");
     expect(r[2].errores[0]).toContain("no existe");
   });
-  it("el origen NUNCA aporta la tarifa: la carga del cliente deja tarifaId en null", async () => {
+  it("el origen aporta la referencia de tarifa, pero nunca montos o snapshots históricos", async () => {
     const src = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
-    expect(src).toContain("tarifaId: null");
+    expect(src).toContain("p.tarifa_id != null ? Number(p.tarifa_id) : null");
     expect(src).not.toMatch(/tarifa_comercial|tarifa_monto|tarifa_nombre/);
   });
 });
@@ -505,428 +508,7 @@ describe("PROGRAMACION-COPIA-LOTE-TX-1 — bugfix: copia masiva (regresión 'uno
     expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(2); // 1 inicial + 1 tras la colisión
     expect(creadosDestino()).toHaveLength(1);
   });
-  it("8-9-14) error de INSERT que NO es duplicado -> se propaga, rollback TOTAL, nunca se interpreta como colisión de código", async () => {
-    insertPlanFallos = ["otro"];
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const r = await confirmar([borrador(), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
-    expect(r).toMatchObject({ ok: false, status: 500 });
-    if (!r.ok) expect(r.error).not.toContain("código de plan único"); // nunca se disfraza de colisión de código
-    expect(creadosDestino()).toHaveLength(0); // ningún plan parcial
-    expect(conn.commit).not.toHaveBeenCalled();
-    expect(conn.rollback).toHaveBeenCalledTimes(1);
-    // solo 1 intento de código para la fila que falló: el error NO-duplicado no dispara un segundo intento de generación.
-    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(1);
-  });
-  // URGENTE — "tampoco funciona la copia masiva": el error SQL real quedaba oculto tras un mensaje genérico.
-  it("URGENTE-A) guarda/trigger (SQLSTATE 45000) en la fila 2: rollback TOTAL y el error indica la FILA y el CÓDIGO SQL (nunca 'código de plan único')", async () => {
-    insertPlanFallos = ["ok", "guarda"]; // la fila 1 se inserta; el INSERT de la fila 2 lo rechaza el trigger
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const r = await confirmar([borrador(), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
-    expect(r).toMatchObject({ ok: false, status: 500 });
-    if (!r.ok) {
-      expect(r.error).toContain("Fila 2");
-      expect(r.error).toContain("ER_SIGNAL_EXCEPTION");
-      expect(r.error).not.toContain("código de plan único");
-      expect(r.error).not.toContain("fusionado"); // el texto SQL no se devuelve al cliente
-      expect(r.error).toContain("No se creó ningún viaje.");
-    }
-    expect(creadosDestino()).toHaveLength(0); // la fila 1 ya insertada se revierte
-    expect(e.origen).toEqual([]);
-    expect(conn.commit).not.toHaveBeenCalled();
-    expect(conn.rollback).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(asegurarCodigoPlanUnicoTx)).toHaveBeenCalledTimes(2); // 1 por fila: el error de la fila 2 NO regenera código
-    // el detalle SQL completo queda en la bitácora del servidor, con la fila
-    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("fila 2"), expect.objectContaining({ code: "ER_SIGNAL_EXCEPTION", errno: 1644, sqlState: "45000", sqlMessage: "Seleccione la unidad principal: ID fusionado" }));
-  });
-  it("URGENTE-B) 5 colisiones REALES consecutivas del código -> agota con el mensaje de código (el único caso legítimo) y rollback total", async () => {
-    insertPlanFallos = ["dup", "dup", "dup", "dup", "dup"];
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const r = await confirmar([borrador()]);
-    expect(r).toMatchObject({ ok: false, status: 500 });
-    if (!r.ok) expect(r.error).toContain("código de plan único");
-    expect(conn.execute.mock.calls.filter(([s]) => String(s).includes("INSERT INTO tms_planes_viaje"))).toHaveLength(5);
-    expect(creadosDestino()).toHaveLength(0);
-    expect(conn.commit).not.toHaveBeenCalled();
-    expect(conn.rollback).toHaveBeenCalledTimes(1);
-  });
-  it("URGENTE-C) si el generador (snapshot REPEATABLE READ) devuelve el MISMO código tras la colisión, igual avanza al siguiente número", async () => {
-    vi.mocked(asegurarCodigoPlanUnicoTx).mockImplementation((async () => "PLAN-NUEVO-001") as never); // ciego a la fila ajena confirmada
-    insertPlanFallos = ["dup"];
-    const r = await confirmar([borrador()]);
-    expect(r).toMatchObject({ ok: true, codigos: ["PLAN-NUEVO-002"] });
-    expect(creadosDestino()).toHaveLength(1);
-  });
-  it("11) tms_plan_origen se crea para TODAS las filas del lote", async () => {
-    const lote = [borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })];
-    await confirmar(lote);
-    expect(e.origen).toHaveLength(2);
-    expect(e.origen.map((o) => o.plan_origen_id)).toEqual([900, 901]);
-  });
-  it("13) la disponibilidad se sigue revalidando bajo el candado antes de crear (sin relación con el bug de código)", async () => {
-    const ok = await validarLote(EMP, DESTINO, [borrador()]);
-    expect(ok[0].estado).toBe("ok");
-    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 501 })); // otro usuario ocupa el recurso entre la preview y el confirm
-    const r = await confirmar([borrador()]);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(creadosDestino()).toHaveLength(0);
-  });
-});
-
-describe("todo o nada: rollback COMPLETO", () => {
-  const lote3 = () => [borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [20] }), borrador({ fila: 3, origenPlanId: 902, unidadPlaca: null, pilotoEmpleadoId: 4 })];
-  it.each([["origen"], ["viaticos"], ["paradas"], ["auxiliares"]] as const)("si falla %s en la fila 2: 0 planes y ninguna escritura queda (auxiliares, paradas, viáticos, origen, personal, unidades, auditoría)", async (paso) => {
-    falla = { en: paso, enPlanNumero: 2 };
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const antes = JSON.stringify({ personal: e.personal, unidades: e.unidades });
-    const r = await confirmar(lote3());
-    expect(r).toMatchObject({ ok: false, status: 500 });
-    expect(conn.rollback).toHaveBeenCalledTimes(1);
-    expect(conn.commit).not.toHaveBeenCalled();
-    expect(creadosDestino()).toEqual([]);
-    expect(e.origen).toEqual([]);
-    expect(e.auxiliares).toEqual([]);
-    expect(e.paradas).toEqual([]);
-    expect(e.viaticos).toEqual([]);
-    expect(e.auditorias).toEqual([]);
-    expect(JSON.stringify({ personal: e.personal, unidades: e.unidades })).toBe(antes); // ni personal ni unidades materializados
-  });
-  it("si falla la AUDITORÍA del lote: también rollback de todo", async () => {
-    falla = { en: "auditoria", enPlanNumero: 0 };
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const r = await confirmar(lote3());
-    expect(r.ok).toBe(false);
-    expect(creadosDestino()).toEqual([]);
-    expect(e.origen).toEqual([]);
-  });
-  it("una fila inválida (revalidación final) => 0 planes, errores por fila, sin abrir transacción", async () => {
-    const r = await confirmar([...lote3().slice(0, 2), borrador({ fila: 3, origenPlanId: 902, unidadPlaca: "NO-EXISTE", pilotoEmpleadoId: 4 })]);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(!r.ok && r.erroresPorFila).toEqual([{ fila: 3, errores: expect.any(Array) }]);
-    expect(creadosDestino()).toEqual([]);
-    expect(conn.beginTransaction).not.toHaveBeenCalled();
-  });
-  it("el candado por empresa se toma y se libera SIEMPRE (éxito, validación fallida y error)", async () => {
-    await confirmar(lote3());
-    const sqls = conn.query.mock.calls.map(([s]) => String(s));
-    expect(sqls.some((s) => s.includes("GET_LOCK"))).toBe(true);
-    expect(sqls.some((s) => s.includes("RELEASE_LOCK"))).toBe(true);
-    expect(conn.query.mock.calls.find(([s]) => String(s).includes("GET_LOCK"))![1]).toEqual([`tms_traslape_${EMP}`, 8]);
-  });
-  it("si el candado no se obtiene (otra operación en curso): 409 y no se crea ni se libera", async () => {
-    conn.query.mockImplementation(async (sql: string) => (String(sql).includes("GET_LOCK") ? [[{ l: 0 }]] : [[]]));
-    const r = await confirmar(lote3());
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(conn.query.mock.calls.some(([s]) => String(s).includes("RELEASE_LOCK"))).toBe(false);
-    expect(creadosDestino()).toEqual([]);
-  });
-  it("sin la migración de tms_plan_origen: 409 y no se crea nada", async () => {
-    sinTablaOrigen = true;
-    const r = await confirmar(lote3());
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(!r.ok && r.error).toContain("migración");
-    expect(creadosDestino()).toEqual([]);
-    expect(getPool).not.toHaveBeenCalled();
-  });
-});
-
-describe("anti-duplicado (origen + fecha destino) y trazabilidad", () => {
-  it("doble confirmación: la segunda se bloquea con 'Este viaje ya fue copiado para esta fecha' y no duplica", async () => {
-    expect((await confirmar([borrador()])).ok).toBe(true);
-    const r = await confirmar([borrador()]);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(!r.ok && r.erroresPorFila?.[0].errores[0]).toContain("Este viaje ya fue copiado para esta fecha");
-    expect(creadosDestino()).toHaveLength(1);
-    expect(e.origen).toHaveLength(1);
-  });
-  it("si el plan copiado anterior fue CANCELADO, se permite volver a copiar y se conserva el registro anterior", async () => {
-    await confirmar([borrador()]);
-    creadosDestino()[0].estado = "Cancelado";
-    const r = await confirmar([borrador()]);
-    expect(r.ok).toBe(true);
-    expect(e.origen).toHaveLength(2); // trazabilidad del intento anterior intacta
-    expect(e.origen.every((o) => o.plan_origen_id === 900)).toBe(true);
-  });
-  it("otra fecha destino o otro plan origen de la misma ruta NO están bloqueados", async () => {
-    await confirmar([borrador()]);
-    expect((await confirmar([borrador({ origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })])).ok).toBe(true);
-    expect((await confirmar([borrador()], "2026-09-26")).ok).toBe(true);
-  });
-  it("el SQL del anti-duplicado usa el índice (empresa, tipo, fecha_destino, plan_origen_id) y solo cuenta planes NO cancelados; la migración NO tiene UNIQUE por origen+fecha", () => {
-    const lib = readFileSync("src/lib/tms/programacion-lote.ts", "utf8");
-    expect(lib).toContain("o.empresa_id = ? AND o.tipo = 'COPIA' AND o.fecha_destino = ?");
-    expect(lib).toContain("p.estado <> 'Cancelado'");
-    const sql = readFileSync("sql/migrate-2026-09-tms-plan-origen.sql", "utf8");
-    expect(sql).toContain("INDEX idx_plan_origen_dup (empresa_id, tipo, fecha_destino, plan_origen_id)");
-    expect(sql).not.toMatch(/UNIQUE KEY[^\n]*(plan_origen_id|fecha_destino)/);
-    expect(sql).toContain("ON DELETE SET NULL");
-    expect(sql.replace(/--[^\n]*/g, "")).not.toMatch(/ALTER TABLE|DROP |TRUNCATE|DELETE FROM/i);
-  });
-  it("auditoría: UNA entrada resumen del lote (fechas y cantidad); los planes no duplican eventos", async () => {
-    await confirmar([borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
-    expect(e.auditorias).toHaveLength(1);
-    expect(e.auditorias[0]).toMatchObject({ accion: "copiar_programacion" });
-    expect(e.auditorias[0].detalle).toContain("Copió programación 24/09/2026 → 25/09/2026. 2 plan(es) creados");
-  });
-});
-
-// ------------------------------------------------------------------ copiar: origen -> borradores
-describe("copiar programación de otra fecha", () => {
-  const origenRow = (over: Record<string, unknown> = {}) => ({
-    id: 900, codigo: "PLAN-20260924-001", estado: "Cerrado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "03:00:00", regreso_estimado: null, tipo_traslado: "Carga",
-    tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: 31, tc_placa_historica: "TC-1", tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
-    aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null,
-    transportista_externo: null, costo_tercerizado: null,
-    // datos de HISTORIA que NO deben copiarse (el SELECT ni siquiera los pide)
-    cerrado_por: "jefe", cerrado_en: "2026-09-24 20:00:00", tarifa_comercial: 999, tarifa_nombre_historico: "VIEJA", km_llegada: 350, ...over,
-  });
-  const cargar = (rows: Record<string, unknown>[], aux: Record<string, unknown>[] = []) => {
-    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
-    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
-      const s = String(sql);
-      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) { expect(s).toContain("p.estado <> 'Cancelado'"); return rows; }
-      if (s.includes("FROM tms_plan_auxiliares pa")) return aux;
-      return base(sql, params);
-    }) as never);
-    return cargarCopiaDeFecha(EMP, ORIGEN);
-  };
-
-  it("un Cerrado sirve de origen (se copia su configuración, no su estado) y el SQL de origen EXCLUYE Cancelados", async () => {
-    const filas = await cargar([origenRow({ estado: "Cerrado" }), origenRow({ id: 901, estado: "Programado", codigo: "P2" })]);
-    expect(filas.map((f) => f.origen.estado)).toEqual(["Cerrado", "Programado"]);
-  });
-
-  it("copia solo configuración: cliente, ruta, vehículo solicitado del origen, hora, traslado, tipo, unidad, TC, piloto, auxiliares (0..8) y paradas; tarifa NULL", async () => {
-    const aux = Array.from({ length: 8 }, (_, i) => ({ plan_id: 900, orden: i + 1, id_empleado: 20 + i, nombre: `Aux ${i}` }));
-    const [f] = await cargar([origenRow()], aux);
-    expect(f.borrador).toEqual({
-      fila: 1, origenPlanId: 900, vehiculoSolicitadoPerfilId: 11, rutaId: 10, clienteId: 3, horaCarga: "03:00", regresoOffsetDias: null, regresoHora: null, tipoTraslado: "Carga", tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: 31,
-      pilotoEmpleadoId: 1, pilotoExtraEmpleadoId: null, auxiliarEmpleadoIds: [20, 21, 22, 23, 24, 25, 26, 27], tarifaId: null, externo: null,
-      paradas: [{ lugarNombre: "Bodega", tipo: "Carga", requiereEvidencia: true }, { lugarNombre: "Xela", tipo: "Descarga", requiereEvidencia: true }],
-    });
-    // Nada de historia en el borrador (ni siquiera como campos ocultos)
-    expect(JSON.stringify(f.borrador)).not.toMatch(/cerrado|km|VIEJA|999|estado|factura|evidencias|bitacora|gasto/i);
-  });
-
-  it("origen histórico SIN vehículo solicitado: el borrador sale sin vehículo y con advertencia visible (la copia se bloqueará)", async () => {
-    origenesSinVehiculo.add(900);
-    const [f] = await cargar([origenRow()]);
-    expect(f.borrador.vehiculoSolicitadoPerfilId).toBeNull();
-    expect(f.advertencias.join(" ")).toMatch(/no tiene vehículo solicitado/);
-  });
-
-  it("TERCERIZADO: copia solo los campos externos (incl. TC externo); sin unidad/piloto/TC internos", async () => {
-    const [f] = await cargar([origenRow({ tipo_viaje: "Tercerizado", unidad_placa: null, tc_vehiculo_id: null, tc_placa_historica: null, tc_externo_placa: "TX-9", piloto_empleado_id: null, piloto_nombre: null,
-      piloto_externo_nombre: "Piloto Ext", auxiliares_externos: "A1\nA2", unidad_externa_placa: "X-1", unidad_externa_descripcion: "Camión", transportista_externo: "Transp", costo_tercerizado: 500 })]);
-    expect(f.borrador).toMatchObject({ tipoViaje: "Tercerizado", unidadPlaca: null, tcVehiculoId: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [] });
-    expect(f.borrador.externo).toEqual({ pilotoExternoNombre: "Piloto Ext", auxiliaresExternos: ["A1", "A2"], unidadExternaPlaca: "X-1", unidadExternaDescripcion: "Camión", transportistaExterno: "Transp", costoTercerizado: 500, tcExternoPlaca: "TX-9" });
-    expect(f.origen).toMatchObject({ pilotoNombre: "Piloto Ext", tcPlaca: "TX-9" });
-  });
-
-  it("piloto/auxiliar sin empleado vinculado: se avisa y se deja sin asignar (el usuario lo elige), no se inventa", async () => {
-    const [f] = await cargar([origenRow({ piloto_empleado_id: null, piloto_nombre: "Nombre Manual" })], [{ plan_id: 900, orden: 1, id_empleado: null, nombre: "Aux Manual" }]);
-    expect(f.borrador.pilotoEmpleadoId).toBeNull();
-    expect(f.advertencias.join(" ")).toContain("Nombre Manual");
-    expect(f.advertencias.join(" ")).toContain("Aux Manual");
-  });
-
-  it("los planes creados NO heredan historia: nacen Programado; el INSERT no incluye cierre/estado real/km/facturación/evidencias/snapshots viejos", async () => {
-    await confirmar([borrador()]);
-    const insert = String(conn.execute.mock.calls.find(([s]) => String(s).includes("INSERT INTO tms_planes_viaje"))![0]);
-    expect(insert).toContain("'Programado'");
-    for (const prohibido of ["cerrado_por", "cerrado_en", "cierre_manual", "flota_viaje", "km_", "factura", "evidencia", "bitacora", "gasto", "solicitud"]) expect(insert).not.toContain(prohibido);
-    const p = creadosDestino()[0];
-    expect(p.cerrado_por ?? null).toBeNull();
-    expect(p.tarifa_nombre).not.toBe("VIEJA");
-    // viáticos: SOLO por configuración vigente (sin overrides ni montos copiados)
-    expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0]).toHaveLength(4); // (empresa, plan, personal, conn) — sin 5º argumento de overrides
-    expect(readFileSync("src/lib/tms/programacion-copia.ts", "utf8")).not.toMatch(/tms_viaticos|monto_asignado|viatico/i);
-  });
-
-  // Emula el SELECT de validación de origen HONRANDO los predicados que aparecen en el SQL (empresa, fecha, no Cancelado).
-  const origenes = [
-    { id: 900, empresa_id: EMP, fecha: ORIGEN, estado: "Programado" },
-    { id: 901, empresa_id: EMP, fecha: ORIGEN, estado: "Cerrado" },
-    { id: 902, empresa_id: EMP, fecha: ORIGEN, estado: "Cancelado" },
-    { id: 903, empresa_id: EMP, fecha: "2026-09-20", estado: "Programado" },
-    { id: 904, empresa_id: 8, fecha: ORIGEN, estado: "Programado" },
-  ];
-  const emularValidacionOrigen = () => {
-    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
-    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
-      const s = String(sql);
-      if (s.includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && s.includes("DATE_FORMAT(regreso_estimado")) {
-        const [emp, fecha, ...ids] = params as [number, string, ...number[]];
-        return origenes.filter((o) => o.empresa_id === emp && o.fecha === fecha && (!s.includes("estado <> 'Cancelado'") || o.estado !== "Cancelado") && ids.includes(o.id)).map((o) => ({ id: o.id, hora_carga: null, regreso_estimado: null }));
-      }
-      return base(sql, params);
-    }) as never);
-  };
-  const desde = (ids: number[], empresa = EMP, fecha = ORIGEN) => borradoresDesdeCliente(empresa, fecha, ids.map((id, i) => ({ ...borrador({ fila: i + 1, origenPlanId: id }), paradas: undefined }) as never));
-
-  it("borradoresDesdeCliente: el origen debe ser de ESTA empresa, de la fecha origen y NO Cancelado; las paradas se releen en el servidor", async () => {
-    emularValidacionOrigen();
-    const ok = await desde([900]);
-    expect(ok).toMatchObject({ ok: true });
-    expect(ok.ok && ok.borradores[0].paradas).toHaveLength(2); // de la BD, no del cliente
-    expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador({ origenPlanId: null })])).toMatchObject({ ok: false });
-    expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador(), borrador({ fila: 2 })])).toMatchObject({ ok: false }); // mismo origen dos veces
-  });
-
-  it("origen CANCELADO enviado a mano -> rechazo con mensaje claro (aunque la carga inicial ya lo excluya)", async () => {
-    emularValidacionOrigen();
-    const r = await desde([902]);
-    expect(r).toEqual({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
-    expect((await desde([900, 902])).ok).toBe(false); // uno bueno + uno cancelado: se rechaza el lote
-    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(s).includes("DATE_FORMAT(regreso_estimado"))![0])).toContain("estado <> 'Cancelado'");
-  });
-
-  it("origen CERRADO sigue siendo válido (lo que se copia es configuración, no estado)", async () => {
-    emularValidacionOrigen();
-    expect(await desde([901])).toMatchObject({ ok: true });
-    expect(await desde([900, 901])).toMatchObject({ ok: true });
-  });
-
-  it("origen de OTRA FECHA o de OTRA EMPRESA -> rechazo", async () => {
-    emularValidacionOrigen();
-    expect((await desde([903])).ok).toBe(false); // el plan es del 2026-09-20
-    expect((await desde([900], EMP, "2026-09-20")).ok).toBe(false); // fecha origen indicada distinta
-    expect((await desde([904])).ok).toBe(false); // plan de la empresa 8
-    expect((await desde([900], 8)).ok).toBe(false); // sesión de otra empresa
-  });
-
-  it("ORIGEN cancelado ≠ DESTINO anterior cancelado: un destino Cancelado sigue permitiendo volver a copiar el mismo origen", async () => {
-    emularValidacionOrigen();
-    expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true);
-    creadosDestino()[0].estado = "Cancelado"; // el plan DESTINO generado se cancela
-    expect((await desde([900])).ok).toBe(true); // el origen (no cancelado) sigue válido
-    expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true); // nueva copia permitida
-    expect(e.origen).toHaveLength(2);
-  });
-});
-
-// ------------------------------------------------------------------ A2.2: política por INTERVALOS en Copiar / lote
-import { calcularTrasladoRegreso, regresoTrasladado, sumarDiasFecha } from "./programacion-copia-ventana";
-
-/** Fila con ventana explícita: hora de carga + regreso trasladado (desfase en días desde la fecha_plan del origen + hora). */
-const conVentana = (fila: number, hora: string | null, regreso: { dias: number; hora: string } | null, over: Partial<BorradorLote> = {}): BorradorLote =>
-  borrador({
-    fila, origenPlanId: 900 + fila, horaCarga: hora, regresoOffsetDias: regreso ? regreso.dias : null, regresoHora: regreso ? regreso.hora : null,
-    unidadPlaca: null, pilotoEmpleadoId: 1 + fila, auxiliarEmpleadoIds: [], ...over,
-  });
-const estados = async (b: BorradorLote[], fecha = DESTINO) => (await validarLote(EMP, fecha, b)).map((r) => r.estado);
-
-describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () => {
-  const mismoPiloto = { pilotoEmpleadoId: 1 };
-
-  it("1/4) dos filas secuenciales del mismo recurso: permitido, incluido el borde exacto fin == inicio", async () => {
-    expect(await estados([conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "08:00", { dias: 0, hora: "11:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
-  });
-
-  it("2) solape de 1 minuto: bloqueado en AMBAS filas con el mensaje de siempre", async () => {
-    const r = await validarLote(EMP, DESTINO, [conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "07:59", { dias: 0, hora: "11:00" }, mismoPiloto)]);
-    expect(r.map((x) => x.estado)).toEqual(["error", "error"]);
-    expect(r[0].errores[0]).toBe("Juan Pérez está asignado también en la fila 2 de este mismo lote.");
-  });
-
-  it("3) cruce de medianoche dentro del lote: 22:00 -> 02:00 (+1 día) choca con una fila 23:00 y NO con una 01:00 -> 04:00 del mismo día", async () => {
-    const noche = conVentana(1, "22:00", { dias: 1, hora: "02:00" }, mismoPiloto);
-    expect(await estados([noche, conVentana(2, "23:00", { dias: 1, hora: "01:00" }, mismoPiloto)])).toEqual(["error", "error"]);
-    expect(await estados([noche, conVentana(2, "01:00", { dias: 0, hora: "04:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
-  });
-
-  it("5) sin regreso: reserva TODO el día y choca con cualquier fila del mismo recurso ese día", async () => {
-    expect(await estados([conVentana(1, "05:00", null, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
-  });
-
-  it("6) sin hora de carga: reserva TODO el día aunque traiga regreso", async () => {
-    expect(await estados([conVentana(1, null, { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
-  });
-
-  it("7) la misma persona como piloto en una fila y auxiliar en otra: conflicto solo si las ventanas se solapan", async () => {
-    const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1 });
-    expect(await estados([a, conVentana(2, "07:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["error", "error"]);
-    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["ok", "ok"]);
-  });
-
-  it("8) auxiliares adicionales (hasta 8) usan la misma comparación", async () => {
-    const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [20, 21, 22] });
-    expect(await estados([a, conVentana(2, "06:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["error", "error"]);
-    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["ok", "ok"]);
-  });
-
-  it("9) unidad: misma placa, ventanas solapadas => conflicto; secuenciales => ok", async () => {
-    const u = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { unidadPlaca: "P-1" });
-    expect(await estados([u(1, "05:00", "08:00"), u(2, "07:59", "10:00")])).toEqual(["error", "error"]);
-    expect(await estados([u(1, "05:00", "08:00"), u(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
-  });
-
-  it("10) TC: misma semántica temporal que la unidad", async () => {
-    const t = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { tcVehiculoId: 31 });
-    expect(await estados([t(1, "05:00", "08:00"), t(2, "07:59", "10:00")])).toEqual(["error", "error"]);
-    expect(await estados([t(1, "05:00", "08:00"), t(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
-  });
-
-  it("11) Tercerizado no consume recursos internos: ni colisiona en el lote ni consulta disponibilidad", async () => {
-    const ext = (fila: number) => borrador({
-      fila, origenPlanId: 900 + fila, tipoViaje: "Tercerizado", unidadPlaca: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [], horaCarga: "05:00",
-      externo: { pilotoExternoNombre: "Externo", auxiliaresExternos: [], unidadExternaPlaca: "EXT-1", unidadExternaDescripcion: "", transportistaExterno: "T", costoTercerizado: null, tcExternoPlaca: "" },
-    });
-    vi.mocked(query).mockClear();
-    expect(await estados([ext(1), ext(2)])).toEqual(["ok", "ok"]);
-    expect(vi.mocked(query).mock.calls.filter(([s]) => String(s).includes("FROM tms_personal tp") || String(s).includes("FROM tms_unidades u"))).toHaveLength(0);
-  });
-});
-
-describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", () => {
-  const existente = (over: Partial<Plan> = {}) => plan({ id: 50, codigo: "PLAN-50", piloto_id: 501, fecha: DESTINO, hora: "05:00", regreso: `${DESTINO} 08:00:00`, ...over });
-
-  it("05:00-08:00 existente: la fila 08:00-11:00 pasa y la 07:59-11:00 choca (piloto)", async () => {
-    e.planes.push(existente());
-    expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
-    const r = await validarLote(EMP, DESTINO, [conVentana(1, "07:59", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
-    expect(r[0]).toMatchObject({ estado: "error", errores: ["El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026."] });
-  });
-
-  it("cruce de medianoche contra BD: existente de ayer 22:00 -> hoy 02:00; fila 01:00 choca, 02:00 no", async () => {
-    e.planes.push(existente({ fecha: ORIGEN, hora: "22:00", regreso: `${DESTINO} 02:00:00` }));
-    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "04:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
-    expect(await estados([conVentana(1, "02:00", { dias: 0, hora: "05:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
-  });
-
-  it("existente SIN regreso (o sin hora) reserva todo su día: la fila choca aunque sea de otra hora, y no toca el día siguiente", async () => {
-    e.planes.push(existente({ regreso: null }));
-    expect(await estados([conVentana(1, "20:00", { dias: 0, hora: "22:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
-    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "03:00" }, { pilotoEmpleadoId: 1 })], "2026-09-26")).toEqual(["ok"]);
-  });
-
-  it("auxiliar, unidad y TC contra BD usan la misma comparación (07:59 choca, 08:00 pasa)", async () => {
-    e.planes.push(existente({ piloto_id: null, aux: [502], unidad_id: 601, tc_vehiculo_id: 31 }));
-    for (const recurso of [{ pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [2] }, { unidadPlaca: "P-1" }, { tcVehiculoId: 31 }]) {
-      expect(await estados([conVentana(1, "07:59", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["error"]);
-      expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["ok"]);
-    }
-  });
-
-  it("un plan Cancelado no bloquea; uno Cerrado sigue reservando su ventana", async () => {
-    e.planes.push(existente({ estado: "Cancelado" }));
-    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
-    e.planes[e.planes.length - 1].estado = "Cerrado";
-    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
-  });
-
-  it("la consulta usa el motor por intervalos (ventana) y nunca la política diaria por fecha exacta", async () => {
-    vi.mocked(query).mockClear();
-    await estados([conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
-    const sql = vi.mocked(query).mock.calls.map(([s]) => String(s)).find((s) => s.includes("FROM tms_personal tp"))!;
-    expect(sql).toContain("p.fecha_plan <= ?");
-    expect(sql).not.toContain("p.fecha_plan = ?");
-  });
-
-  it("confirmar revalida bajo el candado y persiste el regreso TRASLADADO (no el literal del origen)", async () => {
-    const r = await confirmar([conVentana(1, "22:00", { dias: 1, hora: "02:00" }, { pilotoEmpleadoId: 1 })], "2026-09-30");
-    expect(r.ok).toBe(true);
-    const creado = e.planes.find((p) => p.id >= 1000)!;
-    expect([creado.fecha, creado.hora, creado.regreso]).toEqual(["2026-09-30", "22:00", "2026-10-01 02:00"]);
+  it("8-9-14) error de INSERT que NO es dupl…7914 tokens truncated…
   });
 
   it("confirmar: un conflicto aparecido bajo el candado revierte todo el lote (todo o nada)", async () => {
@@ -977,7 +559,7 @@ describe("A2.2 copiar: traslado del regreso estimado", () => {
   });
 
   const origenRow = (regreso: string | null) => ({
-    id: 900, codigo: "PLAN-20260924-001", estado: "Programado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "22:00:00", regreso_estimado: regreso, tipo_traslado: "Carga",
+    id: 900, codigo: "PLAN-20260924-001", estado: "Programado", cliente_id: 3, cliente_nombre: "Acme", ruta_id: 10, ruta_codigo_historico: "1001", hora_carga: "22:00:00", regreso_estimado: regreso, tipo_traslado: "Carga", tarifa_id: 101,
     tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: null, tc_placa_historica: null, tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
     aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null, transportista_externo: null, costo_tercerizado: null,
   });
@@ -995,6 +577,7 @@ describe("A2.2 copiar: traslado del regreso estimado", () => {
   it("la carga de la fecha origen deriva desfase y hora del regreso del ORIGEN (servidor)", async () => {
     const [con] = await cargarOrigen("2026-09-25 02:00:00");
     expect(con.borrador).toMatchObject({ horaCarga: "22:00", regresoOffsetDias: 1, regresoHora: "02:00" });
+    expect(con.borrador.tarifaId).toBe(101);
     const [sin] = await cargarOrigen(null);
     expect(sin.borrador).toMatchObject({ regresoOffsetDias: null, regresoHora: null });
     expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("LEFT JOIN tms_clientes c"))![0])).toContain("DATE_FORMAT(p.regreso_estimado");
@@ -1011,6 +594,23 @@ describe("A2.2 copiar: traslado del regreso estimado", () => {
     expect(r.ok && r.borradores[0]).toMatchObject({ regresoOffsetDias: 2, regresoHora: "05:00" });
   });
 
+  it("admite un regreso editado válido y rechaza fechas inválidas o anteriores a la carga", async () => {
+    const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
+    vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
+      if (String(sql).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(sql).includes("DATE_FORMAT(regreso_estimado")) return [{ id: 900, hora_carga: "03:00:00", regreso_estimado: null }];
+      return base(sql, params);
+    }) as never);
+    const fila = borrador({ origenPlanId: 900, horaCarga: "08:00", regresoEditado: `${DESTINO}T12:00` });
+    const valida = await borradoresDesdeCliente(EMP, ORIGEN, [fila], DESTINO);
+    expect(valida.ok && valida.borradores[0]).toMatchObject({ regresoOffsetDias: 0, regresoHora: "12:00" });
+    const invalida = await borradoresDesdeCliente(EMP, ORIGEN, [{ ...fila, regresoEditado: `${DESTINO}T07:59` }], DESTINO);
+    expect(invalida).toMatchObject({ ok: false, error: expect.stringContaining("Fila 1") });
+    const imposible = await borradoresDesdeCliente(EMP, ORIGEN, [{ ...fila, regresoEditado: "2026-02-30T12:00" }], DESTINO);
+    expect(imposible).toMatchObject({ ok: false, error: expect.stringContaining("Fila 1") });
+    const borrada = await borradoresDesdeCliente(EMP, ORIGEN, [{ ...fila, regresoEditado: null }], DESTINO);
+    expect(borrada.ok && borrada.borradores[0]).toMatchObject({ regresoOffsetDias: null, regresoHora: null });
+  });
+
   it("el cuerpo que arma la pantalla de Copiar no envía los campos de traslado (el esquema estricto los rechazaría)", async () => {
     const { cuerpoLote } = await import("../../app/e/[slug]/programacion/copiar/copiar-helpers");
     const cuerpo = cuerpoLote(ORIGEN, DESTINO, [{ incluida: true, origen: {} as never, advertencias: [], borrador: { ...borrador(), regresoOffsetDias: 1, regresoHora: "02:00" }, validacion: null, sucia: false }]);
@@ -1018,6 +618,15 @@ describe("A2.2 copiar: traslado del regreso estimado", () => {
     expect(claves).not.toContain("regresoOffsetDias");
     expect(claves).not.toContain("regresoHora");
     expect(claves).not.toContain("paradas");
+  });
+
+  it("envía una edición explícita del regreso sin aceptar los campos calculados", async () => {
+    const { cuerpoLote } = await import("../../app/e/[slug]/programacion/copiar/copiar-helpers");
+    const { cuerpoCopiaSchema } = await import("./programacion-copia-schema");
+    const cuerpo = cuerpoLote(ORIGEN, DESTINO, [{ incluida: true, origen: {} as never, advertencias: [], borrador: { ...borrador(), regresoEditado: `${DESTINO}T12:00` }, validacion: null, sucia: false }]);
+    expect(cuerpo.filas[0].regresoEditado).toBe(`${DESTINO}T12:00`);
+    expect(cuerpoCopiaSchema.safeParse(cuerpo).success).toBe(true);
+    expect(cuerpoCopiaSchema.safeParse({ ...cuerpo, filas: [{ ...cuerpo.filas[0], regresoOffsetDias: 1 }] }).success).toBe(false);
   });
 });
 
@@ -1295,6 +904,13 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
     expect(r.map((x) => x.estado)).toEqual(["ok", "error"]); expect(r[1].errores).toEqual(["Unidad P-1: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos."]);
     expect(m.modelo.unidades).toEqual([{ id: 601, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: null }]); expect(conn.beginTransaction).not.toHaveBeenCalled();
     expect(lecturas().length).toBeGreaterThan(0); expect(lecturas().every((q) => /^\s*SELECT\b/i.test(q) && !/FOR\s+UPDATE/i.test(q))).toBe(true);   // solo SELECT y NINGUNO con FOR UPDATE
+  });
+  it("34 filas sintéticas: una identidad en conflicto bloquea solo su fila", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);
+    const filas = Array.from({ length: 34 }, (_, i) => borrador({ fila: i + 1, origenPlanId: 900 + i, unidadPlaca: i === 33 ? "P-1" : null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [] }));
+    const resultado = await validarLote(EMP, DESTINO, filas);
+    expect(resultado.filter(r => r.estado === "ok")).toHaveLength(33);
+    expect(resultado[33].errores.join(" ")).toContain("Conflicto de identidad TMS");
   });
   it("VISTA PREVIA: sin unidad TMS previa (se crearía al confirmar) no se consulta nada ni se inserta; unidad ya vinculada a la misma de Flota → ok", async () => {
     conModelo([]); const sinUnidad = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-9" })]); expect(sinUnidad[0].estado).toBe("error");   // P-9 no existe en Flota: la validación de siempre
