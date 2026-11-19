@@ -6,11 +6,11 @@ export default async function CanecasPage({ params }: { params: Promise<{ slug: 
   const { slug, seccion = [] } = await params;
   const vista = seccion[0] ?? "panel";
   if (seccion.length > 1 || !["panel", "productos", "ubicaciones", "compras", "recepciones", "inventario", "movimientos"].includes(vista)) notFound();
-  const lectura = await accesoCanecas(slug, "ver");
+  const lectura = await accesoCanecas(slug, "ver", { soloLectura: true });
   if (lectura.error?.status === 401) redirect("/login");
   if (lectura.error) return <p role="alert">No tienes permiso para consultar Gestión de Canecas.</p>;
   const acciones = ["catalogo", "compras", "recepciones", "confirmar"] as const;
-  const resultados = await Promise.all(acciones.map(accion => accesoCanecas(slug, accion)));
+  const resultados = await Promise.all(acciones.map(accion => accesoCanecas(slug, accion, { soloLectura: true })));
   const permisos = Object.fromEntries(acciones.map((accion, i) => [accion, !resultados[i].error]));
   return <CanecasClient slug={slug} vista={vista} permisos={permisos} />;
 }

@@ -84,7 +84,7 @@ describe("recepciones de Canecas", () => {
     try {
       await act(async()=>{root.render(createElement(CanecasClient,{slug:"demo",vista:"compras",permisos:{catalogo:true}}));});
       await act(async()=>{await new Promise(r=>setTimeout(r,30));});
-      const form=host.querySelector("details form")!;
+      const form=host.querySelector<HTMLFormElement>("details form")!;
       (form.elements.namedItem("nombre_comercial") as HTMLInputElement).value="Proveedor sintético";
       expect(form.checkValidity()).toBe(true);
       await act(async()=>{form.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true}));await new Promise(r=>setTimeout(r,20));});

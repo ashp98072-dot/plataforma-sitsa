@@ -10,7 +10,7 @@ describe("acceso a la página de Canecas", () => {
     acceso.mockResolvedValue({error:{status:403}});
     const result = await Page({params:Promise.resolve({slug:"demo"})});
     expect(acceso).toHaveBeenCalledTimes(1);
-    expect(acceso).toHaveBeenCalledWith("demo", "ver");
+    expect(acceso).toHaveBeenCalledWith("demo", "ver", { soloLectura: true });
     expect(result.props.role).toBe("alert");
   });
   it("redirige si la sesión no está autenticada", async () => {
@@ -22,5 +22,7 @@ describe("acceso a la página de Canecas", () => {
     acceso.mockImplementation(async (_slug:string, accion:string) => accion === "catalogo" || accion === "confirmar" ? {} : accion === "ver" ? {} : {error:{status:403}});
     const result = await Page({params:Promise.resolve({slug:"demo",seccion:["compras"]})});
     expect(result.props.permisos).toEqual({catalogo:true,compras:false,recepciones:false,confirmar:true});
+    expect(acceso).toHaveBeenCalledTimes(5);
+    expect(acceso.mock.calls.every(([, , opciones]) => opciones?.soloLectura === true)).toBe(true);
   });
 });
