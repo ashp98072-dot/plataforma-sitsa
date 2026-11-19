@@ -914,4 +914,3 @@ export function AppShell({
     </EmpresaSessionProvider>
   );
 }
-
