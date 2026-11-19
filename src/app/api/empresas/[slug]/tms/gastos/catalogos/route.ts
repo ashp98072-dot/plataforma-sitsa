@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2";
 import { query, type SqlParams } from "@/lib/db";
 import { requireTenantGastos } from "@/lib/tenant";
 import { listarVehiculosActivosAccesibles, predicadoVehiculoAccesible } from "@/lib/flota/acceso";
+import { canonicosDeAlias } from "@/lib/flota/vehiculos-alias";
 import { CATEGORIAS_GASTO, METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 import { esUsuarioOperaciones } from "@/lib/tms/identidad-administrativa";
 
@@ -88,6 +89,10 @@ export async function GET(_req: Request, ctx: Ctx) {
     ),
     ]);
 
+    // Una unidad TMS puede seguir ligada a un vehículo absorbido por una fusión: el formulario debe recibir el canónico (el absorbido ya no
+    // es seleccionable y la base rechaza referencias nuevas a él). La historia no se toca.
+    const canonicos = await canonicosDeAlias(planes.map((r) => Number(r.vehiculo_id)).filter((v) => Number.isInteger(v) && v > 0), eid);
+
     return NextResponse.json(
     {
       empleados: empleados.map((r) => ({ id: Number(r.id), codigo: String(r.codigo), nombre: String(r.nombre), puesto: r.puesto != null ? String(r.puesto) : null, cuentaBancaria: r.cuenta_bancaria != null ? String(r.cuenta_bancaria) : null, telefono: r.telefono != null ? String(r.telefono) : null })),
@@ -104,8 +109,8 @@ export async function GET(_req: Request, ctx: Ctx) {
         clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
         clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
         fechaPlan: String(r.fecha_plan),
-        vehiculoId: r.vehiculo_id != null ? Number(r.vehiculo_id) : null,
-        placa: r.placa != null ? String(r.placa) : null,
+        vehiculoId: r.vehiculo_id != null ? (canonicos.get(Number(r.vehiculo_id))?.id ?? Number(r.vehiculo_id)) : null,
+        placa: r.vehiculo_id != null && canonicos.get(Number(r.vehiculo_id))?.placa != null ? String(canonicos.get(Number(r.vehiculo_id))!.placa) : (r.placa != null ? String(r.placa) : null),
         empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
         empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
         empleadoPuesto: r.empleado_puesto != null ? String(r.empleado_puesto) : null,
