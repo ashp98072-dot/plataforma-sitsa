@@ -7,6 +7,7 @@ CREATE TABLE canecas_traslados (
   destino_id INT NOT NULL,
   numero VARCHAR(64) NOT NULL,
   clave_operacion CHAR(36) NOT NULL,
+  huella CHAR(64) NOT NULL,
   estado VARCHAR(20) NOT NULL DEFAULT 'BORRADOR',
   entrega VARCHAR(200) NOT NULL,
   transporte VARCHAR(200) NOT NULL DEFAULT '',
