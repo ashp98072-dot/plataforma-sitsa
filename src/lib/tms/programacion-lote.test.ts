@@ -398,11 +398,14 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect(r[1].errores[0]).toContain("inactiva");
     expect(r[2].errores[0]).toContain("no existe");
   });
-  it("el origen aporta la referencia de tarifa, pero nunca montos o snapshots históricos", async () => {
+  it("el origen aporta SOLO la referencia de tarifa al borrador; los montos/nombres históricos jamás entran al borrador (solo se muestran en `origen.tarifaOriginal`)", async () => {
     const src = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
     expect(src).toContain("p.tarifa_id != null ? Number(p.tarifa_id) : null");
     expect(src).toContain("tarifaOriginal:");
     expect(src).not.toMatch(/tarifa_monto_historico|tarifa_nombre_historico/);
+    const bloqueBorrador = src.slice(src.indexOf("const borrador"), src.indexOf("origen: {"));
+    expect(bloqueBorrador).not.toMatch(/tarifa_comercial|tarifa_monto|tarifa_nombre|tarifa_moneda/);   // el borrador no toca montos históricos
+    expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/tarifaOriginal|tarifaMonto|tarifa_monto/i);   // y el cliente no puede enviar la tarifa del origen
   });
 });
 
@@ -704,7 +707,7 @@ describe("copiar programación de otra fecha", () => {
     tipo_viaje: "Propio", unidad_placa: "P-1", tc_vehiculo_id: 31, tc_placa_historica: "TC-1", tc_externo_placa: null, piloto_empleado_id: 1, piloto_nombre: "Juan Pérez",
     aux1_empleado_id: null, aux1_nombre: null, piloto_externo_nombre: null, auxiliares_externos: null, unidad_externa_placa: null, unidad_externa_descripcion: null,
     transportista_externo: null, costo_tercerizado: null,
-    // datos de HISTORIA que NO deben copiarse (el SELECT ni siquiera los pide)
+    // datos de HISTORIA que NO deben copiarse al borrador (solo la tarifa del origen se LEE, para mostrarla en `origen.tarifaOriginal`)
     cerrado_por: "jefe", cerrado_en: "2026-09-24 20:00:00", tarifa_comercial: 999, tarifa_nombre_historico: "VIEJA", km_llegada: 350, ...over,
   });
   const cargar = (rows: Record<string, unknown>[], aux: Record<string, unknown>[] = []) => {
@@ -733,6 +736,27 @@ describe("copiar programación de otra fecha", () => {
     });
     // Nada de historia en el borrador (ni siquiera como campos ocultos)
     expect(JSON.stringify(f.borrador)).not.toMatch(/cerrado|km|VIEJA|999|estado|factura|evidencias|bitacora|gasto/i);
+  });
+
+  it("la tarifa del ORIGEN se lee SOLO para mostrarla (origen.tarifaOriginal): jamás entra al borrador ni a lo que se guarda", async () => {
+    const [f] = await cargar([origenRow({ tarifa_id: 100, tarifa_comercial: "1234.50", tarifa_moneda_historico: "GTQ" })]);
+    expect(f.origen.tarifaOriginal).toEqual({ monto: 1234.5, moneda: "GTQ" });
+    expect(f.borrador.tarifaId).toBe(100);                                       // solo la REFERENCIA de catálogo, que se revalida como vigente
+    expect(JSON.stringify(f.borrador)).not.toMatch(/1234|GTQ|tarifaOriginal/);
+    const [sin] = await cargar([origenRow({ tarifa_id: null, tarifa_comercial: null, tarifa_moneda_historico: null })]);
+    expect(sin.origen.tarifaOriginal).toEqual({ monto: null, moneda: null });     // el origen no tenía tarifa
+    expect(sin.borrador.tarifaId).toBeNull();
+    const sql = String(vi.mocked(query).mock.calls.find(([q]) => String(q).includes("LEFT JOIN tms_clientes c"))![0]);
+    expect(sql).toContain("p.tarifa_comercial, p.tarifa_moneda_historico");      // solo lectura: se pide para mostrar
+  });
+
+  it("al CONFIRMAR, el cliente no puede enviar la tarifa/monto del origen: el esquema estricto lo rechaza y el destino usa el catálogo vigente", async () => {
+    const { cuerpoCopiaSchema } = await import("./programacion-copia-schema");
+    const { cuerpoLote } = await import("../../app/e/[slug]/programacion/copiar/copiar-helpers");
+    const cuerpo = cuerpoLote(ORIGEN, DESTINO, [{ incluida: true, origen: { tarifaOriginal: { monto: 1, moneda: "GTQ" } } as never, advertencias: [], borrador: borrador(), validacion: null, sucia: false }]);
+    expect(JSON.stringify(cuerpo)).not.toMatch(/tarifaOriginal|monto/);
+    expect(cuerpoCopiaSchema.safeParse({ ...cuerpo, filas: [{ ...cuerpo.filas[0], tarifaOriginal: { monto: 1 } }] }).success).toBe(false);
+    expect(cuerpoCopiaSchema.safeParse({ ...cuerpo, filas: [{ ...cuerpo.filas[0], tarifaComercial: 1 }] }).success).toBe(false);
   });
 
   it("origen histórico SIN vehículo solicitado: el borrador sale sin vehículo y con advertencia visible (la copia se bloqueará)", async () => {
@@ -1478,5 +1502,102 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
   it("ErrorCB2 con estado inesperado o errores genéricos siguen sin filtrarse: mensaje genérico 500 y rollback", async () => {
     conModelo([]); conn.execute.mockImplementationOnce(async () => { throw new Error("detalle interno SQL secreto"); });
     const r = await confirmar([borrador({ unidadPlaca: "P-1" })]); expect(r).toMatchObject({ ok: false, status: 500 }); if (!r.ok) expect(r.error).not.toContain("secreto");
+  });
+});
+
+// ------------------------------------------------------------------ DIAGNÓSTICO de bloqueos por lote y comparación de tarifas
+import { diagnosticarBloqueos, sugerenciaDeDiagnostico } from "./programacion-copia-diagnostico";
+
+describe("diagnóstico de bloqueos: un lote de 66 viajes con recursos repetidos", () => {
+  const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const compartido = { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 };
+  const lote66 = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, compartido));
+  const sinRegreso33 = () => { const f = lote66(); f[32] = { ...f[32], regresoHora: null, regresoOffsetDias: null }; return f; };
+
+  it("sin filas problemáticas: 66 ok y diagnóstico vacío", async () => {
+    const r = await validarLote(EMP, DESTINO, lote66());
+    expect(r.filter((x) => x.estado === "ok")).toHaveLength(66);
+    expect(diagnosticarBloqueos(r)).toMatchObject({ total: 66, bloqueadas: 0, derivadas: 0, origenes: [] });
+    expect(sugerenciaDeDiagnostico(diagnosticarBloqueos(r))).toBeNull();
+  });
+
+  it("UNA fila sin regreso bloquea a las otras 65: el diagnóstico la señala como ORIGEN y las otras 65 como derivadas", async () => {
+    const r = await validarLote(EMP, DESTINO, sinRegreso33());
+    const d = diagnosticarBloqueos(r);
+    expect(d.bloqueadas).toBe(66);
+    expect(d.porMotivo).toMatchObject({ hora_o_regreso_ausente: 66, solape_real: 0 });
+    expect(d.origenes).toEqual([{ fila: 33, falta: "regreso", afecta: 65 }]);
+    expect(d.derivadas).toBe(65);                       // corregir la fila 33 libera 65 filas
+    expect(r[32].derivada).toBeUndefined();             // la propia fila origen no es «derivada»
+    expect(r[0].derivada).toEqual({ origenes: [33] });
+    expect(r[0].conflictos?.every((c) => c.causa === "dia_completo")).toBe(true);
+    expect(r[0].errores.join(" ")).toContain("fila 33: sin regreso estimado");   // el mensaje señala QUÉ falta y DÓNDE
+    expect(sugerenciaDeDiagnostico(d)).toContain("fila 33");
+    expect(sugerenciaDeDiagnostico(d)).toContain("bloquea a 65");
+  });
+
+  it("el diagnóstico NO contiene datos personales (ni nombres, ni placas) aunque los mensajes de las filas sí los tengan", async () => {
+    const r = await validarLote(EMP, DESTINO, sinRegreso33());
+    expect(r[0].errores.join(" ")).toMatch(/Juan Pérez|P-1/);   // los mensajes de fila conservan el contexto operativo
+    const seguro = JSON.stringify({ d: diagnosticarBloqueos(r), s: sugerenciaDeDiagnostico(diagnosticarBloqueos(r)), c: r[0].conflictos, o: r[32].diagnostico, dv: r[0].derivada });
+    expect(seguro).not.toMatch(/Juan|Pérez|P-1|TC-1|Acme|PLAN-/i);
+  });
+
+  it("EDITAR el regreso de la fila origen resuelve automáticamente las 65 derivadas (el servidor revalida todo el lote)", async () => {
+    const lote = sinRegreso33();
+    expect((await validarLote(EMP, DESTINO, lote)).filter((x) => x.estado === "error")).toHaveLength(66);
+    lote[32] = { ...lote[32], regresoOffsetDias: 0, regresoHora: hora(33 * 20) };   // regreso consecutivo: 33*20 == inicio de la fila 34
+    const r = await validarLote(EMP, DESTINO, lote);
+    expect(r.filter((x) => x.estado === "ok")).toHaveLength(66);
+    expect(diagnosticarBloqueos(r)).toMatchObject({ bloqueadas: 0, derivadas: 0, origenes: [] });
+  });
+
+  it("editar el regreso a un valor que SÍ se solapa NO relaja la regla: solo las dos filas que se cruzan quedan bloqueadas, por solape REAL (no por día completo)", async () => {
+    const lote = sinRegreso33();
+    lote[32] = { ...lote[32], regresoOffsetDias: 0, regresoHora: hora(33 * 20 + 5) };   // invade 5 min la fila 34
+    const r = await validarLote(EMP, DESTINO, lote);
+    const malas = r.filter((x) => x.estado === "error").map((x) => x.fila);
+    expect(malas).toEqual([33, 34]);
+    expect(r[32].conflictos).toEqual(expect.arrayContaining([expect.objectContaining({ causa: "solape" })]));
+    expect(r[32].conflictos?.some((c) => c.causa === "dia_completo")).toBe(false);
+    expect(r[32].derivada).toBeUndefined(); expect(r[33].derivada).toBeUndefined();   // no hay origen «sin ventana»: es un solape de verdad
+    const d = diagnosticarBloqueos(r);
+    expect(d.porMotivo).toMatchObject({ solape_real: 2, hora_o_regreso_ausente: 0 });
+    expect(d.origenes).toEqual([]);
+    expect(r[32].errores.join(" ")).toContain("Los horarios se solapan.");
+  });
+
+  it("varias filas sin hora/regreso: se listan ordenadas por alcance y se redacta una sola sugerencia, no 66 mensajes", async () => {
+    const lote = lote66();
+    lote[9] = { ...lote[9], horaCarga: null };                                   // fila 10 sin hora
+    lote[40] = { ...lote[40], regresoHora: null, regresoOffsetDias: null };      // fila 41 sin regreso
+    const d = diagnosticarBloqueos(await validarLote(EMP, DESTINO, lote));
+    expect(d.origenes.map((o) => o.fila).sort((a, b) => a - b)).toEqual([10, 41]);
+    expect(d.origenes[0].afecta).toBeGreaterThanOrEqual(d.origenes[1].afecta);
+    expect(sugerenciaDeDiagnostico(d)).toMatch(/2 filas sin hora o regreso válido/);
+  });
+
+  it("otros motivos se cuentan aparte (tarifa no vigente, ruta inactiva) y no se confunden con día completo ni con solape", async () => {
+    const filas = [
+      borrador({ fila: 1, origenPlanId: 901, tarifaId: 99999, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], unidadPlaca: null }),
+      borrador({ fila: 2, origenPlanId: 902, rutaId: 13, pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [], unidadPlaca: null }),
+      borrador({ fila: 3, origenPlanId: 903, pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [], unidadPlaca: null }),
+    ];
+    const d = diagnosticarBloqueos(await validarLote(EMP, DESTINO, filas));
+    expect(d).toMatchObject({ total: 3, bloqueadas: 2 });
+    expect(d.porMotivo).toMatchObject({ tarifa: 1, otro: 1, hora_o_regreso_ausente: 0, solape_real: 0 });
+  });
+});
+
+describe("confirmación del lote de 66: sigue siendo atómica, con permisos de la ruta y sin duplicar", () => {
+  const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const lote = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 }));
+  it("con UNA fila sin regreso el lote completo se rechaza (todo o nada): no se crea ningún viaje y la respuesta lista las 66 filas", async () => {
+    const f = lote(); f[32] = { ...f[32], regresoHora: null, regresoOffsetDias: null };
+    const r = await confirmar(f);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(creadosDestino()).toHaveLength(0);
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    if (!r.ok) { expect(r.erroresPorFila).toHaveLength(66); expect(diagnosticarBloqueos(r.erroresPorFila!.map((x) => ({ fila: x.fila, estado: "error" as const, errores: x.errores, tarifa: null }))).bloqueadas).toBe(66); }
   });
 });

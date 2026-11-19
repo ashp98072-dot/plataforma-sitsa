@@ -127,10 +127,26 @@ export type ResultadoFilaLote = {
   errores: string[];
   /** Solo si estado = ok: lo que se creará (tarifa efectiva incluida). */
   tarifa: TarifaResuelta | null;
+  /**
+   * DIAGNÓSTICO por fila (solo números de fila y tipos de recurso, sin nombres ni placas): si la fila no tiene hora/regreso válido (reserva todo el día),
+   * a cuántas otras filas bloquea y por qué tipo de recurso compartido.
+   */
   diagnostico?: { horaInvalida: boolean; regresoInvalido: boolean; filasAfectadas: number[]; recursosCompartidos: string[] };
+  /**
+   * Choques DENTRO del lote por recurso. `causa = dia_completo`: alguna de las filas no tiene hora o regreso válido y por eso reserva todo el día;
+   * `solape`: las ventanas se cruzan de verdad (no se relaja).
+   */
+  conflictos?: ConflictoLote[];
+  /** Bloqueada SOLO por conflictos con filas sin hora/regreso válido: corregir esas filas (`origenes`) la libera. */
+  derivada?: { origenes: number[] };
 };
 
-type FilaInterna = { borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string> };
+export type ConflictoLote = { recurso: "persona" | "unidad" | "tc"; filas: number[]; causa: "dia_completo" | "solape" };
+
+type FilaInterna = {
+  borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string>;
+  conflictos?: ConflictoLote[]; derivada?: ResultadoFilaLote["derivada"];
+};
 
 const fmt = (iso: string) => iso.split("-").reverse().join("/");
 
@@ -419,10 +435,20 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     if (b.tcVehiculoId != null) anotar(`tc:${b.tcVehiculoId}`, b.fila, `TC #${b.tcVehiculoId}`);
   }
   const ventanaPorFila = new Map(internas.map((f) => [f.borrador.fila, ventanaDeBorrador(f.borrador, fechaDestino)]));
+  // Una ventana SIN hora o SIN regreso válido reserva TODO el día (política vigente, no se relaja): se identifica qué falta para poder señalar el origen.
+  const faltante = (n: number): "hora" | "regreso" | "hora_y_regreso" | null => {
+    const v = ventanaPorFila.get(n)!;
+    return !v.horaCarga && !v.regresoEstimado ? "hora_y_regreso" : !v.horaCarga ? "hora" : !v.regresoEstimado ? "regreso" : null;
+  };
+  const textoFalta = (n: number) => { const x = faltante(n); return `fila ${n}: sin ${x === "hora" ? "hora de carga" : x === "regreso" ? "regreso estimado" : "hora de carga ni regreso estimado"}`; };
   const marcadas = new Set<string>(); // "clave|fila": un mensaje por recurso y fila
+  const origenesDe = new Map<number, Set<number>>();   // fila -> filas sin ventana completa que la bloquean
+  const nColisiones = new Map<number, number>();       // mensajes de colisión añadidos por fila
+  const soloDiaCompleto = new Map<number, boolean>();  // todos sus conflictos son por día completo
   for (const [clave, usos] of uso) {
     const filas = [...new Set(usos.map((u) => u.fila))];
     if (filas.length < 2) continue;
+    const recurso: ConflictoLote["recurso"] = clave.startsWith("persona:") ? "persona" : clave.startsWith("unidad:") ? "unidad" : "tc";
     for (const f of internas) {
       const fila = f.borrador.fila;
       if (!filas.includes(fila)) continue;
@@ -437,11 +463,25 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       }
       const etiqueta = usos[0].etiqueta;
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
-      const incompleta = !f.borrador.horaCarga || !ventanaPorFila.get(fila)!.regresoEstimado || otras.some(n => !ventanaPorFila.get(n)!.horaCarga || !ventanaPorFila.get(n)!.regresoEstimado);
-      const causa = incompleta ? " Alguna fila no tiene hora o regreso válido: se reserva todo el día." : " Los horarios se solapan.";
-      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.${causa}`);
+      const incompletas = [fila, ...otras].filter((n) => faltante(n) !== null);
+      const causa: ConflictoLote["causa"] = incompletas.length ? "dia_completo" : "solape";
+      const detalle = causa === "dia_completo" ? ` Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}).` : " Los horarios se solapan.";
+      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.${detalle}`);
+      f.conflictos = [...(f.conflictos ?? []), { recurso, filas: otras, causa }];
+      nColisiones.set(fila, (nColisiones.get(fila) ?? 0) + 1);
+      soloDiaCompleto.set(fila, (soloDiaCompleto.get(fila) ?? true) && causa === "dia_completo");
+      for (const n of otras) {
+        if (faltante(n) !== null) origenesDe.set(fila, (origenesDe.get(fila) ?? new Set()).add(n));
+      }
       f.resuelto = null;
     }
+  }
+  // Filas bloqueadas SOLO por conflictos con filas sin hora/regreso válido (se liberan al corregir el origen; el origen y sus alcances están en `diagnostico`).
+  for (const f of internas) {
+    const fila = f.borrador.fila;
+    const falta = faltante(fila);
+    const origenes = [...(origenesDe.get(fila) ?? [])].sort((x, y) => x - y);
+    if (!falta && origenes.length && soloDiaCompleto.get(fila) && f.errores.length === nColisiones.get(fila)) f.derivada = { origenes };
   }
   return internas;
 }
@@ -452,6 +492,8 @@ const aResultado = (f: FilaInterna, fechaDiagnostico: string): ResultadoFilaLote
   errores: f.errores,
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
   diagnostico: { horaInvalida: !ventanaDeBorrador(f.borrador, fechaDiagnostico).horaCarga, regresoInvalido: !ventanaDeBorrador(f.borrador, fechaDiagnostico).regresoEstimado, filasAfectadas: [...(f.filasAfectadas ?? [])].sort((a, b) => a - b), recursosCompartidos: [...(f.recursosCompartidos ?? [])] },
+  ...(f.conflictos ? { conflictos: f.conflictos } : {}),
+  ...(f.derivada ? { derivada: f.derivada } : {}),
 });
 
 /**

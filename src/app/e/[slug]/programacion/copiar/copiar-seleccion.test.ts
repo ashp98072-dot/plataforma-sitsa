@@ -163,7 +163,7 @@ describe("pantalla: controles y contador (código fuente)", () => {
     expect(page).toContain("NO bloquea la confirmación");
   });
   it("el botón Confirmar y las peticiones dependen solo de las seleccionadas", () => {
-    expect(page).toContain("disabled={!puedeConfirmar(filas, validando || confirmando)}");
+    expect(page).toContain("disabled={!puedeConfirmarConTarifas(filas, validando || confirmando, tarifasAceptadas)}");
     expect(page.match(/cuerpoLote\(fechaOrigen, fechaDestino, (actuales|filas)\)/g)).toHaveLength(2);
   });
   it("no toca motor ni SQL: la pantalla usa las mismas rutas", () => {

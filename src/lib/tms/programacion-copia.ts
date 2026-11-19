@@ -29,6 +29,10 @@ export type OrigenFila = {
   auxiliaresNombres: string[];
   unidadPlaca: string | null;
   tcPlaca: string | null;
+  /**
+   * Tarifa que tenía el viaje ORIGEN, SOLO PARA MOSTRAR y comparar con la que se usará en destino. Es informativa: nunca forma parte del borrador,
+   * no se envía como dato de la copia y no se copia (el destino siempre usa la tarifa VIGENTE del catálogo de la ruta).
+   */
   tarifaOriginal?: { monto: number | null; moneda: string | null };
 };
 

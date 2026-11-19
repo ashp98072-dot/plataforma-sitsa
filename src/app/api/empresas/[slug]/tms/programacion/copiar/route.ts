@@ -6,6 +6,7 @@ import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
 import { getPool } from "@/lib/db";
 import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
 import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
+import { diagnosticarBloqueos, registrarDiagnosticoBloqueo } from "@/lib/tms/programacion-copia-diagnostico";
 import { cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -33,8 +34,10 @@ export async function GET(req: Request, ctx: Ctx) {
       const validacion = filas.length ? await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)) : [];
       const rutaIds = [...new Set(filas.map((f) => f.borrador.rutaId).filter((n): n is number => n != null))];
       const catalogos = await catalogosParaCopia(guard.empresa.id, rutaIds);
+      const diagnostico = diagnosticarBloqueos(validacion);   // solo conteos y números de fila
+      registrarDiagnosticoBloqueo(diagnostico);
       return NextResponse.json(
-        { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos },
+        { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos, diagnostico },
         { headers: { "Cache-Control": "private, no-store" } },
       );
     });
