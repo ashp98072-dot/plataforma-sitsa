@@ -4,6 +4,7 @@ import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motivoUnidadNoOperable, unidadOperable } from "./unidades-bloqueo";
 import { causasAsignacion } from "./problemas-asignacion";
+import { advertenciaPlacaRepetida, filasAmbiguasMismaPlaca } from "./unidad-preferida";
 import { claseUnidadShell, unidadElegida } from "./unidad-shell";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
@@ -103,6 +104,8 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
     const blockedPage = Math.min(bloqueadasPagina, Math.max(0, Math.ceil(sinIdentidad.length / 25) - 1));
     function filtrar(fn: () => void) { fn(); setPagina(0); setIgnoradasPagina(0); setBloqueadasPagina(0); }
     function asignar(key: string, value: string) { if (onAsignar) onAsignar(key, value); else onChange?.({ ...seleccion, [key]: value }); }
+    /** Aplica una misma ficha a varias filas en UNA sola actualización (varias llamadas seguidas a onChange pisarían el estado anterior). */
+    function asignarVarias(keys: string[], value: string) { if (onAsignar) keys.forEach(k => onAsignar(k, value)); else onChange?.({ ...seleccion, ...Object.fromEntries(keys.map(k => [k, value])) }); }
     function elegir(g: CandidatoRevision, valor: boolean) { if (onSeleccionar) onSeleccionar(g.clave, valor); else onChange?.({ ...seleccion, [g.clave]: valor ? g.vehiculoId : "" }); }
     function revisar(key: string, valor: boolean) { if (onRevisar) onRevisar(key, valor); else setRevisadosLocales(prev => ({ ...prev, [key]: valor })); }
 
@@ -152,6 +155,8 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
                 <section aria-label={`Unidad y placa del vale ${f.vale}`}><h3>Unidad y placa</h3><strong>{vehiculo?.placa || (g.vehiculoId ? `Unidad #${g.vehiculoId} no disponible` : "Sin unidad")}</strong><p className="text-xs">{fuente === "AUTOMATICA" ? "Identificada automáticamente" : fuente === "MANUAL" ? "Elegida manualmente" : fuente === "AMBIGUA" ? "Resolver ambigüedad" : fuente === "INEXISTENTE" ? "Vehículo no encontrado" : "Unidad pendiente"} · {unidad.estado}</p>
                     {g.estado !== "BLOQUEADO" && g.estado !== "RESUELTO" && <fieldset disabled={disabled}>
                         {unidad.candidatos.length === 1 && <p className="text-xs">Unidad sugerida: {unidad.candidatos[0].placa}</p>}
+                        {(() => { const aviso = advertenciaPlacaRepetida(cat, f.placaNormalizada || f.placa); return aviso ? <p role="alert" className="text-xs">{aviso}</p> : null; })()}
+                        {(() => { const hermanas = g.vehiculoId ? filasAmbiguasMismaPlaca(r.revision, cat, g, g.vehiculoId) : []; return hermanas.length ? <button type="button" className={button} disabled={disabled} onClick={() => asignarVarias(hermanas, g.vehiculoId)}>Usar esta ficha (#{g.vehiculoId}) en las {hermanas.length} filas ambiguas de este archivo con la placa {f.placa}</button> : null; })()}
                         <CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={g.vehiculoId} onChange={value => asignar(g.clave, value)} options={opcionesVehiculo(cat.vehiculos.filter(unidadOperable))} inputClassName={input}/>
                         {unidad.candidatos.map(motivoUnidadNoOperable).filter(Boolean).map(t => <p key={t} role="alert" className="text-xs">{t} No se ofrece como opción elegible.</p>)}
                         {unidad.candidatos.length === 1 && unidadOperable(unidad.candidatos[0]) && ["EXACTA", "ABREVIADA"].includes(unidad.estado) && !g.vehiculoId && <button type="button" className={button} onClick={() => asignar(g.clave, String(unidad.candidatos[0].id))}>Usar sugerencia para vale {f.vale}</button>}

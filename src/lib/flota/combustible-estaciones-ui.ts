@@ -3,7 +3,13 @@ import { opcionesConHistorico } from "@/components/tms/catalogo-search-select";
 import { diagnosticarVehiculos } from "./vehiculos-catalogo";
 
 export type EstacionOpcion = { id: number; proveedorId: number; nombre: string; proveedorNombre?: string | null; direccion?: string | null };
-export type VehiculoOpcion = { id: number; placa: string; descripcion?: string | null; tipo_unidad?: string | null };
+export type VehiculoOpcion = { id: number; placa: string; descripcion?: string | null; tipo_unidad?: string | null; propia?: boolean; empresa_duena_nombre?: string | null; marca?: string | null; modelo?: string | null };
+/** Procedencia y datos propios de una ficha de placa repetida («Compartida de Frescofresh · International 1998»); vacío si el catálogo no los trae. */
+export function procedenciaFicha(v: VehiculoOpcion): string {
+  const duena = v.empresa_duena_nombre?.trim();
+  const origen = v.propia === undefined ? "" : v.propia ? "Ficha propia" : `Ficha compartida${duena ? ` de ${duena}` : ""}`;
+  return [origen, [v.marca?.trim(), v.modelo?.trim()].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+}
 export const estacionesDelProveedor = (estaciones: EstacionOpcion[], proveedorId: string) => estaciones.filter(e => e.proveedorId === Number(proveedorId));
 export const estacionAlCambiarProveedor = (estaciones: EstacionOpcion[], proveedorId: string, estacionId: string) => estacionesDelProveedor(estaciones, proveedorId).some(e => String(e.id) === estacionId) ? estacionId : "";
 
@@ -32,7 +38,7 @@ export function opcionesVehiculo(vehiculos: VehiculoOpcion[], historico?: { id: 
   const ambiguos = new Set(diagnostico.posiblesDuplicados.flatMap(g => g.ids));
   return diagnostico.vehiculos.map(v => historicoAusente && v.id === Number(historico.id) && !ambiguos.has(v.id)
     ? { value: String(v.id), label: `${v.placa} (histórico)` } : ({ value: String(v.id), label: `${v.placa}${historicoAusente && v.id === Number(historico.id) ? " (histórico)" : ""}`,
-    detail: [v.tipo_unidad?.trim(), v.descripcion?.trim(), v.id < 0 ? `Unidad externa #${-v.id}` : ambiguos.has(v.id) ? `Registro #${v.id} · placa repetida, verificar unidad` : ""].filter(Boolean).join(" · ") || undefined,
+    detail: [v.tipo_unidad?.trim(), v.descripcion?.trim(), v.id < 0 ? `Unidad externa #${-v.id}` : ambiguos.has(v.id) ? [`Registro #${v.id}`, procedenciaFicha(v), "placa repetida, verificar unidad"].filter(Boolean).join(" · ") : ""].filter(Boolean).join(" · ") || undefined,
     searchText: [v.descripcion, v.tipo_unidad, `#${v.id}`].filter(Boolean).join(" ") }));
 }
 
