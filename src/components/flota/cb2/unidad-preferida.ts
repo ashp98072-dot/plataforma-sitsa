@@ -32,11 +32,12 @@ export function advertenciaPlacaRepetida(cat: CatalogosCB2, placa: string): stri
   return `La placa ${fichas[0].placa} tiene ${fichas.length} fichas sin identidad física aprobada: ${detalle}. Pueden ser unidades distintas; elige la ficha explícitamente. Para unirlas, aprueba su identidad física en Identidades físicas.`;
 }
 
-/** Claves de las OTRAS filas del archivo a las que se puede aplicar la ficha elegida para `g` (misma placa, ambiguas y pendientes). */
-export function filasAmbiguasMismaPlaca(revision: CandidatoRevision[], cat: CatalogosCB2, g: CandidatoRevision, vehiculoId: string): string[] {
+/** Claves de las OTRAS filas del archivo a las que se puede aplicar la ficha elegida para `g` (misma placa, ambiguas y pendientes).
+ *  `manuales`: filas con una decisión manual previa (incluida una unidad borrada a propósito) quedan fuera aunque hoy no tengan unidad. */
+export function filasAmbiguasMismaPlaca(revision: CandidatoRevision[], cat: CatalogosCB2, g: CandidatoRevision, vehiculoId: string, manuales: Record<string, string> = {}): string[] {
   const elegida = cat.vehiculos.find(v => String(v.id) === vehiculoId && v.id > 0);
   if (!elegida) return [];
   const clave = comparable(elegida.placa);
-  return revision.filter(h => h.clave !== g.clave && !h.vehiculoId && h.estado !== "BLOQUEADO" && h.estado !== "RESUELTO"
+  return revision.filter(h => h.clave !== g.clave && !h.vehiculoId && !Object.hasOwn(manuales, h.clave) && h.estado !== "BLOQUEADO" && h.estado !== "RESUELTO"
     && comparable(h.fila.placaNormalizada || h.fila.placa) === clave && sugerenciaVehiculo(h.fila, cat).estado === "AMBIGUA").map(h => h.clave);
 }
