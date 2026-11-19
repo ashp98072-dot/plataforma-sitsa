@@ -76,6 +76,23 @@ describe("recepciones de Canecas", () => {
       expect(host.textContent).toContain("Operación registrada correctamente");
     } finally {await act(async()=>root.unmount());host.remove();}
   });
+  it("registra un proveedor comercial con datos sintéticos", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const fetchMock=vi.fn(async (_input:string|URL|Request, init?:RequestInit) => init?.method === "POST" ? Response.json({}) : Response.json({datos:[]}));
+    vi.stubGlobal("fetch",fetchMock);
+    const host=document.createElement("div"), root=createRoot(host);document.body.append(host);
+    try {
+      await act(async()=>{root.render(createElement(CanecasClient,{slug:"demo",vista:"compras",permisos:{catalogo:true}}));});
+      await act(async()=>{await new Promise(r=>setTimeout(r,30));});
+      const form=host.querySelector("details form")!;
+      (form.elements.namedItem("nombre_comercial") as HTMLInputElement).value="Proveedor sintético";
+      expect(form.checkValidity()).toBe(true);
+      await act(async()=>{form.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true}));await new Promise(r=>setTimeout(r,20));});
+      const post=fetchMock.mock.calls.find(([,init])=>init?.method==="POST");
+      expect(String(post?.[0])).toMatch(/\/proveedores$/);
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({nombre_comercial:"Proveedor sintético"});
+    } finally {await act(async()=>root.unmount());host.remove();}
+  });
   it("muestra carga y elimina el error anterior al cambiar de vista", async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     let resolveReload!: (r:Response)=>void;
