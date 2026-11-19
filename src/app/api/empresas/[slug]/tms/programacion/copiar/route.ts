@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { validarLote } from "@/lib/tms/programacion-lote";
+import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
 import { cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -22,7 +23,15 @@ export async function GET(req: Request, ctx: Ctx) {
   if (origen.data === destino.data) return NextResponse.json({ error: "La fecha destino debe ser distinta de la fecha origen." }, { status: 400 });
 
   const filas = await cargarCopiaDeFecha(guard.empresa.id, origen.data);
-  const validacion = filas.length ? await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)) : [];
+  let validacion: Awaited<ReturnType<typeof validarLote>> = [];
+  if (filas.length) {
+    try { validacion = await validarLote(guard.empresa.id, destino.data, filas.map((f) => f.borrador)); }
+    catch (e) {
+      // Fallo técnico de la vista previa (bloqueo, tiempo agotado, base ocupada): mensaje CONTROLADO y claro, nunca una espera infinita ni un error silencioso.
+      if (e instanceof ErrorVistaPrevia) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
+      throw e;
+    }
+  }
   const rutaIds = [...new Set(filas.map((f) => f.borrador.rutaId).filter((n): n is number => n != null))];
   const catalogos = await catalogosParaCopia(guard.empresa.id, rutaIds);
   return NextResponse.json(

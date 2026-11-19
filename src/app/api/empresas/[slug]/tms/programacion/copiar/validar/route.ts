@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireTenantProgramacionOTms } from "@/lib/tenant";
 import { validarLote } from "@/lib/tms/programacion-lote";
+import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
 import { borradoresDesdeCliente } from "@/lib/tms/programacion-copia";
 import { cuerpoCopiaSchema } from "@/lib/tms/programacion-copia-schema";
 
@@ -16,6 +17,11 @@ export async function POST(req: Request, ctx: Ctx) {
   const { fechaOrigen, fechaDestino, filas } = parsed.data;
   const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas);
   if (!b.ok) return NextResponse.json({ error: b.error }, { status: 400 });
-  const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);
-  return NextResponse.json({ validacion }, { headers: { "Cache-Control": "private, no-store" } });
+  try {
+    const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);
+    return NextResponse.json({ validacion }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (e) {
+    if (e instanceof ErrorVistaPrevia) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });
+    throw e;
+  }
 }

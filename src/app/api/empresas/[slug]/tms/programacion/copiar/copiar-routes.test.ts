@@ -12,6 +12,7 @@ vi.mock("@/lib/tms/programacion-copia", () => ({ cargarCopiaDeFecha: vi.fn(), ca
 import { requireTenantProgramacion, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { confirmarLote, validarLote } from "@/lib/tms/programacion-lote";
 import { borradoresDesdeCliente, cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
+import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
 import { GET as cargar } from "./route";
 import { POST as validar } from "./validar/route";
 import { POST as confirmar } from "./confirmar/route";
@@ -112,5 +113,26 @@ describe("respuestas", () => {
   });
   it("validar devuelve la validación por fila", async () => {
     expect(await (await post(validar, cuerpo())).json()).toEqual({ validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }] });
+  });
+});
+
+describe("vista previa: fallo técnico CONTROLADO (bloqueo / tiempo agotado), nunca una espera infinita ni un 500 sin cuerpo", () => {
+  const msg = "No se pudo verificar la identidad de las unidades: la base de datos está ocupada con otra operación (error ER_LOCK_WAIT_TIMEOUT). Intenta de nuevo en unos minutos.";
+  it("GET cargar: 503 con el mensaje claro; sin datos de la empresa ni texto SQL", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: msg });
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+  it("POST validar: 503 con el mismo mensaje controlado", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await post(validar, cuerpo());
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe(msg);
+  });
+  it("cualquier OTRO error inesperado NO se disfraza: sigue subiendo (500 de Next)", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new Error("bug"));
+    await expect(cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx)).rejects.toThrow("bug");
   });
 });
