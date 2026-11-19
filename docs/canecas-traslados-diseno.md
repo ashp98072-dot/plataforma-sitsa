@@ -1,6 +1,6 @@
 # Traslados de Canecas: diseño de trabajo
 
-Este documento describe trabajo en curso; las reglas añadidas en esta rama aún no están conectadas a la aplicación ni a la base de datos.
+Este documento describe trabajo en curso. La rama incorpora una implementación inicial que requiere revisión y pruebas adicionales antes de habilitarse.
 
 ## Modelo y saldos
 
@@ -16,10 +16,16 @@ Al emitir el envío debe conservarse una instantánea inmutable de la identidad 
 
 Seleccionar la marca de la empresa emisora; para MONACO reutilizar el logo existente si corresponde a su configuración. No usar una marca predeterminada de otra empresa. La impresión incluirá espacios para firmas de entrega, transporte y recepción. Consultar y reimprimir desde el historial requiere el mismo aislamiento y permiso de lectura que el módulo.
 
-## Pendiente para completar la funcionalidad
+## Instalación y rollback propuestos
 
-- Migración revisada con claves foráneas por empresa, partidas, eventos de recepción e instantáneas documentales.
-- Transacciones de creación, envío y recepción con bloqueos, controles de idempotencia y permisos.
-- Interfaz, consulta histórica y generación del comprobante imprimible.
-- Pruebas dirigidas de concurrencia y aislamiento en MySQL de laboratorio, permisos, documentos y flujos de interfaz.
+La instalación requiere autorización independiente, respaldo verificado, suspensión de escrituras y comprobación de la versión del motor y del esquema existente. Ejecutar `preflight-2026-11-canecas-traslados.sql` y detenerse si alguna fila indica DETENER; luego revisar y ejecutar `migrate-2026-11-canecas-traslados.sql`, verificar `postcheck-2026-11-canecas-traslados.sql` y solo entonces coordinar la versión compatible de aplicación. Los scripts no son transaccionales y el preflight no sustituye la revisión del esquema. Un fallo intermedio requiere diagnóstico manual; no reejecutar a ciegas.
+
+El rollback SQL está diseñado solo para tablas vacías y con escrituras suspendidas. Su procedimiento detiene la operación si existen registros: no revierte saldos ni elimina datos históricos. Si ya hubo traslados, primero se necesita un plan específico de reversión operativa y conservación documental. Tras un error, comprobar si quedó el procedimiento auxiliar antes de reintentar. No ejecutar estos scripts en producción durante el desarrollo.
+
+## Condiciones y trabajo pendiente de revisión
+
+- Las cantidades de inventario son enteras en el esquema existente; la capacidad de cada presentación puede ser decimal.
+- Crear borradores requiere permiso de recepciones; envío y recepción, incluido declarar faltantes, requieren permiso de confirmación. El actor autorizado se registra en cada evento.
+- El envío exige un logotipo válido configurado para la empresa. Para el recurso estático de MONACO existe un caso explícito sujeto a que la empresa tenga el slug y ruta configurados correspondientes; verificar esta configuración antes de instalar.
+- La validación de laboratorio usa MariaDB aislada; faltan revisión del SQL frente al motor de destino, pruebas de navegador reales y revisión del PDF y sus escenarios de impresión.
 
