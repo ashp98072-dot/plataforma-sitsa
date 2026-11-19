@@ -4,6 +4,7 @@ import type { PoolConnection } from "mysql2/promise";
 import { getPool, query, type SqlParams } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
+import { canonizarVehiculoTx } from "@/lib/flota/vehiculos-alias";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
@@ -654,7 +655,7 @@ async function resolverSnapshotLineaGastoTx(
   conn: PoolConnection,
   empresaId: number,
   input: Pick<LineaGastoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje">,
-): Promise<{ empleadoNombre: string | null; cargo: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
+): Promise<{ empleadoNombre: string | null; cargo: string | null; placa: string | null; vehiculoId: number | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
   if (input.empleadoId != null) {
@@ -664,8 +665,10 @@ async function resolverSnapshotLineaGastoTx(
     cargo = rows[0].puesto != null ? String(rows[0].puesto) : null;
   }
   let placa: string | null = null;
-  if (input.vehiculoId != null) {
-    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, input.vehiculoId);
+  // Operación NUEVA -> identidad canónica (ID absorbido por fusión -> su canónico); la historia no se toca.
+  const vehiculoId = await canonizarVehiculoTx(conn, empresaId, input.vehiculoId);
+  if (vehiculoId != null) {
+    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, vehiculoId);
     if (!veh) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
     placa = String(veh.placa);
   }
@@ -692,7 +695,7 @@ async function resolverSnapshotLineaGastoTx(
     }
     if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
   }
-  return { empleadoNombre, cargo, placa, clienteId, clienteNombre, fechaViaje };
+  return { empleadoNombre, cargo, placa, vehiculoId, clienteId, clienteNombre, fechaViaje };
 }
 
 /**
@@ -749,7 +752,7 @@ async function insertarLineasGastoTx(
         empresaId, gastoId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto,
         l.metodoPago ?? null, numeroCuentaPago, orden,
         snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo,
-        l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
+        snapshot.vehiculoId, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
       ],
     );
     orden += 1;
@@ -830,7 +833,8 @@ export async function crearGasto(
   const codigoTemporal = `TMP-${randomBytes(12).toString("hex")}`;
   try {
     await conn.beginTransaction();
-    await validarReferenciasGastoTx(conn, empresaId, input);
+    const vehiculoIdCanonico = await canonizarVehiculoTx(conn, empresaId, input.vehiculoId ?? null);
+    await validarReferenciasGastoTx(conn, empresaId, { ...input, vehiculoId: vehiculoIdCanonico });
     numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, input.empleadoId, input.metodoPago, input.numeroCuentaPago);
     const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, input);
 
@@ -848,7 +852,7 @@ export async function crearGasto(
         input.fechaSolicitud,
         input.fechaViaje ?? null,
         input.empleadoId ?? null,
-        input.vehiculoId ?? null,
+        vehiculoIdCanonico,
         input.clienteId ?? null,
         input.planId ?? null,
         input.categoria,
@@ -1031,13 +1035,13 @@ export async function actualizarGasto(
     const cambioDestino = cambios.empleadoId !== undefined && cambios.empleadoId !== actual.empleado_id || cambios.metodoPago !== undefined && cambios.metodoPago !== metodoPagoActual;
     const numeroCuentaPago = await resolverDestinoEmpleadoTx(conn, empresaId, empleadoId, metodoPago,
       cambios.numeroCuentaPago !== undefined ? cambios.numeroCuentaPago : cambioDestino ? undefined : numeroCuentaPagoActual);
-    const vehiculoId = cambios.vehiculoId !== undefined ? cambios.vehiculoId : (actual.vehiculo_id != null ? Number(actual.vehiculo_id) : null);
+    const vehiculoId = cambios.vehiculoId !== undefined ? await canonizarVehiculoTx(conn, empresaId, cambios.vehiculoId) : (actual.vehiculo_id != null ? Number(actual.vehiculo_id) : null);
     const clienteId = cambios.clienteId !== undefined ? cambios.clienteId : (actual.cliente_id != null ? Number(actual.cliente_id) : null);
     const planId = cambios.planId !== undefined ? cambios.planId : (actual.plan_id != null ? Number(actual.plan_id) : null);
     // Solo valida lo que REALMENTE cambia — las referencias ya guardadas
     // fueron validadas al crear el gasto (no se re-valida en cada edición
     // no relacionada; cambios.x en undefined significa "no tocar este campo").
-    await validarReferenciasGastoTx(conn, empresaId, cambios);
+    await validarReferenciasGastoTx(conn, empresaId, cambios.vehiculoId === undefined ? cambios : { ...cambios, vehiculoId });
     const { entidadRequirente, requirenteUsuario, solicitanteUsuario } = await resolverIdentidadAdministrativaGastoTx(conn, empresaId, cambios, actual);
 
     // GASTOS-ADMINISTRATIVO-1 (Fase 5) — mismo criterio que

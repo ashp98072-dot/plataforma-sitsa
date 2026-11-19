@@ -1,6 +1,52 @@
 import type { RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
+import { ErrorCB2 } from "./cb2/model";
 import { estadoEsquemaFisico } from "./identidad-fisica-schema";
 import { query, type SqlValue } from "@/lib/db";
+
+/**
+ * ID canónico de un vehículo absorbido por una fusión (alias). Un ID sin alias —o sin la tabla de fusiones instalada— se devuelve
+ * tal cual. Sirve para que las operaciones NUEVAS se asocien a la identidad canónica sin tocar nunca la historia existente.
+ * Las fusiones no admiten cadenas (trigger), así que basta un salto.
+ */
+export async function canonizarVehiculoTx(c: PoolConnection, empresaId: number, id: number | null | undefined): Promise<number | null> {
+  if (id == null) return null;
+  const [tabla] = await c.query<RowDataPacket[]>("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_vehiculos_fusiones'");
+  if (!tabla.length) return id;
+  const [alias] = await c.query<RowDataPacket[]>("SELECT destino_id FROM flota_vehiculos_fusiones WHERE origen_id=? AND empresa_id=? LIMIT 1", [id, empresaId]);
+  return alias[0] ? Number(alias[0].destino_id) : id;
+}
+
+/** Para listas de solo lectura (catálogos): ID absorbido -> canónico y su placa; los IDs sin alias no aparecen en el mapa. */
+export async function canonicosDeAlias(ids: number[], empresaId: number, consultar: (sql: string, args?: SqlValue[]) => Promise<RowDataPacket[]> = (sql, args) => query<RowDataPacket[]>(sql, args)): Promise<Map<number, { id: number; placa: string | null }>> {
+  const unicos = [...new Set(ids.filter((v) => Number.isInteger(v) && v > 0))];
+  const mapa = new Map<number, { id: number; placa: string | null }>();
+  if (!unicos.length) return mapa;
+  const tabla = (await consultar("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_vehiculos_fusiones'")) ?? [];
+  if (!tabla.length) return mapa;
+  const marks = unicos.map(() => "?").join(",");
+  const filas = await consultar(`SELECT f.origen_id, f.destino_id, v.placa FROM flota_vehiculos_fusiones f JOIN flota_vehiculos v ON v.id=f.destino_id WHERE f.empresa_id=? AND f.origen_id IN (${marks})`, [empresaId, ...unicos]);
+  for (const f of filas ?? []) mapa.set(Number(f.origen_id), { id: Number(f.destino_id), placa: f.placa != null ? String(f.placa) : null });
+  return mapa;
+}
+
+/**
+ * Todos los IDs de una misma unidad (canónico, absorbidos por alias e identidad física aprobada) para leer su historia completa en
+ * reportes. Si la unidad no existe en la empresa se devuelve solo el ID pedido (el reporte queda vacío, como antes).
+ */
+export async function idsHistoricosVehiculo(empresaId: number, vehiculoId: number): Promise<number[]> {
+  const { getPool } = await import("@/lib/db");
+  const { resolverUnidadCanonica } = await import("./unidad-canonica");
+  const c = await getPool().getConnection();
+  try {
+    return (await resolverUnidadCanonica(c, empresaId, vehiculoId)).idsHistoricos;
+  } catch (e) {
+    if (e instanceof ErrorCB2 && e.status === 404) return [vehiculoId];
+    throw e;
+  } finally {
+    c.release();
+  }
+}
 
 /** Read aliases independently of the flag that authorizes NEW merges. Historical IDs remain untouched. */
 export async function catalogoSinAlias<T extends { id: number; descripcion?: unknown; empresa_id?: unknown }>(vehiculos: T[], empresaId?: number, consultar: (sql:string,args?:SqlValue[])=>Promise<RowDataPacket[]> = (sql,args)=>query<RowDataPacket[]>(sql,args)):Promise<(T & {identidadFisicaId?:number;identidadCanonica?:string;vehiculoCanonicoId?:number;equivalenciasHistoricas?:number[]})[]> {
