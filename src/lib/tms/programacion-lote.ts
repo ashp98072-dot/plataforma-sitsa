@@ -81,6 +81,8 @@ export type BorradorLote = {
    */
   regresoOffsetDias?: number | null;
   regresoHora?: string | null;
+  /** Edición explícita de la fecha/hora de regreso de la copia; validada por el servidor. */
+  regresoEditado?: string | null;
   tipoTraslado: string | null;
   tipoViaje: "Propio" | "Tercerizado";
   unidadPlaca: string | null;
@@ -428,7 +430,9 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       marcadas.add(`${clave}|${fila}`);
       const etiqueta = usos[0].etiqueta;
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
-      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.`);
+      const incompleta = !f.borrador.horaCarga || !ventanaPorFila.get(fila)!.regresoEstimado || otras.some(n => !ventanaPorFila.get(n)!.horaCarga || !ventanaPorFila.get(n)!.regresoEstimado);
+      const causa = incompleta ? " Alguna fila no tiene hora o regreso válido: se reserva todo el día." : " Los horarios se solapan.";
+      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.${causa}`);
       f.resuelto = null;
     }
   }
