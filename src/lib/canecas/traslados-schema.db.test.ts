@@ -25,9 +25,17 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
   it("instala las tablas y exige preflight y postcheck satisfactorios", async () => {
     const [pre] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
     expect(pre.every(r => r.resultado === "OK")).toBe(true);
+    await pool.query("CREATE TABLE canecas_traslados (id INT) ENGINE=InnoDB");
+    const [parcial] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
+    expect(parcial.find(r => r.comprobacion === "Tablas de traslado aún no instaladas")?.resultado).toBe("DETENER");
+    await pool.query("DROP TABLE canecas_traslados");
     await migrar();
     const [post] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/postcheck-2026-11-canecas-traslados.sql", "utf8"));
     expect(post.every(r => r.resultado === "OK")).toBe(true);
+    const [preRepetido] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
+    expect(preRepetido.some(r => r.resultado === "DETENER")).toBe(true);
+    const [diagnostico] = await pool.query<mysql.RowDataPacket[][]>(readFileSync("sql/diagnostico-2026-11-canecas-traslados.sql", "utf8"));
+    expect(diagnostico[1]).toHaveLength(5);
   });
   it("permite rollback únicamente con las tablas vacías y volver a instalar", async () => {
     const sql = readFileSync("sql/rollback-2026-11-canecas-traslados.sql", "utf8");
@@ -65,6 +73,7 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     const marca = { nombre: "MONACO", logo: Buffer.from("logo"), logoTipo: "image/png" };
     const envios = await Promise.all([enviarTraslado(pool,1,2,1,marca), enviarTraslado(pool,1,2,1,marca)]);
     expect(envios.filter(e => e.yaEnviado)).toHaveLength(1);
+    await pool.query("UPDATE canecas_productos SET nombre='Nombre cambiado' WHERE empresa_id=1 AND id=1");
     const input = { clave: "rec-1", recibe: "Berta", condicion: "Bien", observaciones: "", partidas: [{ partidaId: 1, recibido: 3, faltante: 0, motivo: "" }] };
     const recepciones = await Promise.all([recibirTraslado(pool,1,2,1,input,false), recibirTraslado(pool,1,2,1,input,false)]);
     expect(recepciones.filter(r => r.yaRegistrada)).toHaveLength(1);
@@ -76,9 +85,12 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     expect(cierre).toMatchObject({ estado: "CON_DIFERENCIAS", enTransito: 0 });
     const [saldos] = await pool.query<mysql.RowDataPacket[]>("SELECT ubicacion_id,fisico FROM canecas_saldos WHERE empresa_id=1 ORDER BY ubicacion_id");
     expect(saldos.map(s => s.fisico)).toEqual([2,7]);
-    const [documentos] = await pool.query<mysql.RowDataPacket[]>("SELECT version,logo FROM canecas_traslado_documentos WHERE empresa_id=1 AND traslado_id=2 ORDER BY version");
+    const [documentos] = await pool.query<mysql.RowDataPacket[]>("SELECT version,logo,datos FROM canecas_traslado_documentos WHERE empresa_id=1 AND traslado_id=2 ORDER BY version");
     expect(documentos.map(d => d.version)).toEqual([1,2,3]);
     expect(documentos.every(d => Buffer.from(d.logo).equals(marca.logo))).toBe(true);
+    const datos = documentos.map(d => typeof d.datos === "string" ? JSON.parse(d.datos) : d.datos);
+    expect(datos.map(d => d.detalles[0].producto)).toEqual(["Aceite", "Aceite", "Aceite"]);
+    expect(datos.map(d => d.recepciones.length)).toEqual([0,1,2]);
   });
   it("crea borradores idempotentes sin tocar stock y bloquea envíos sin disponible", async () => {
     const input = { clave: "draft-1", origenId: 1, destinoId: 2, entrega: "Ana", transporte: "", observaciones: "", partidas: [{ productoId: 1, cantidad: 3 }] };
@@ -102,5 +114,39 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     const [saldos] = await pool.query<mysql.RowDataPacket[]>("SELECT fisico,reservado FROM canecas_saldos WHERE empresa_id=1 AND producto_id=1 AND ubicacion_id=1");
     expect(saldos[0]).toMatchObject({ fisico: 1, reservado: 1 });
   });
+  it("revierte salida, movimientos y estado si falla la emisión del documento", async () => {
+    await pool.query("UPDATE canecas_saldos SET fisico=5 WHERE empresa_id=1 AND producto_id=1 AND ubicacion_id=1");
+    const input = { clave: "rollback-envio", origenId: 1, destinoId: 2, entrega: "Ana", transporte: "", observaciones: "", partidas: [{ productoId: 1, cantidad: 2 }] };
+    const borrador = await crearTraslado(pool,1,1,input);
+    await pool.query("CREATE TRIGGER can_doc_fallo_test BEFORE INSERT ON canecas_traslado_documentos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fallo sintetico'");
+    try {
+      await expect(enviarTraslado(pool,1,borrador.id,1,{ nombre: "A", logo: null, logoTipo: null })).rejects.toThrow("fallo sintetico");
+      const [s] = await pool.query<mysql.RowDataPacket[]>("SELECT fisico,reservado FROM canecas_saldos WHERE empresa_id=1 AND producto_id=1 AND ubicacion_id=1");
+      const [t] = await pool.query<mysql.RowDataPacket[]>("SELECT estado,numero FROM canecas_traslados WHERE empresa_id=1 AND id=?", [borrador.id]);
+      const [m] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n FROM canecas_movimientos WHERE empresa_id=1 AND documento=?", [t[0].numero]);
+      expect(s[0]).toMatchObject({ fisico: 5, reservado: 1 });
+      expect(t[0].estado).toBe("BORRADOR");
+      expect(Number(m[0].n)).toBe(0);
+    } finally { await pool.query("DROP TRIGGER can_doc_fallo_test"); }
+  });
+  it("revierte recepción, saldo de destino y movimientos si falla el documento", async () => {
+    const input = { clave: "rollback-recepcion", origenId: 1, destinoId: 2, entrega: "Ana", transporte: "", observaciones: "", partidas: [{ productoId: 1, cantidad: 2 }] };
+    const borrador = await crearTraslado(pool,1,1,input);
+    await enviarTraslado(pool,1,borrador.id,1,{ nombre: "A", logo: null, logoTipo: null });
+    const [p] = await pool.query<mysql.RowDataPacket[]>("SELECT id FROM canecas_traslado_partidas WHERE empresa_id=1 AND traslado_id=?", [borrador.id]);
+    await pool.query("CREATE TRIGGER can_doc_fallo_test BEFORE INSERT ON canecas_traslado_documentos FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='fallo sintetico'");
+    try {
+      await expect(recibirTraslado(pool,1,borrador.id,1,{ clave: "rollback-rec", recibe: "Berta", condicion: "Bien", observaciones: "", partidas: [{ partidaId: Number(p[0].id), recibido: 1, faltante: 0, motivo: "" }] },false)).rejects.toThrow("fallo sintetico");
+      const [s] = await pool.query<mysql.RowDataPacket[]>("SELECT fisico FROM canecas_saldos WHERE empresa_id=1 AND producto_id=1 AND ubicacion_id=2");
+      const [partida] = await pool.query<mysql.RowDataPacket[]>("SELECT recibido,faltante FROM canecas_traslado_partidas WHERE empresa_id=1 AND id=?", [p[0].id]);
+      const [recepciones] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n FROM canecas_traslado_recepciones WHERE empresa_id=1 AND traslado_id=?", [borrador.id]);
+      const [movimientos] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n FROM canecas_movimientos WHERE empresa_id=1 AND documento=(SELECT numero FROM canecas_traslados WHERE empresa_id=1 AND id=?)", [borrador.id]);
+      const [docs] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n FROM canecas_traslado_documentos WHERE empresa_id=1 AND traslado_id=?", [borrador.id]);
+      expect(s[0].fisico).toBe(7);
+      expect(partida[0]).toMatchObject({ recibido: 0, faltante: 0 });
+      expect(Number(recepciones[0].n)).toBe(0);
+      expect(Number(movimientos[0].n)).toBe(1);
+      expect(Number(docs[0].n)).toBe(1);
+    } finally { await pool.query("DROP TRIGGER can_doc_fallo_test"); }
+  });
 });
-
