@@ -26,7 +26,7 @@ describe("catálogo usado para sugerir vehículos en preview", () => {
         expect(r.status).toBe(200); expect(m.guard).toHaveBeenCalledWith("demo", "ver");
         expect(m.query).toHaveBeenCalledTimes(5);
         const vehiculos = m.query.mock.calls.find(([sql]) => sql.includes("FROM flota_vehiculos"))!;
-        expect(vehiculos[1]).toEqual([7, 7]);
+        expect(vehiculos[1]).toEqual([7, 7, 7]); // propia + predicado de acceso (propio o compartido); todos derivados de la empresa del guard
         expect(vehiculos[0]).toContain("empresa_id");
         for (const [sql, params] of m.query.mock.calls) { expect(sql).toMatch(/^SELECT/); expect(params.every((p: number) => p === 7)).toBe(true); }
         expect(r.headers.get("cache-control")).toBe("private, no-store");
