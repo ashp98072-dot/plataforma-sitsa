@@ -137,15 +137,19 @@ export type ResultadoFilaLote = {
    * `solape`: las ventanas se cruzan de verdad (no se relaja).
    */
   conflictos?: ConflictoLote[];
-  /** Bloqueada SOLO por conflictos con filas sin hora/regreso válido: corregir esas filas (`origenes`) la libera. */
-  derivada?: { origenes: number[] };
+  /**
+   * AVISOS que NO bloquean (la copia es fiel al origen): la fila se crea igual. `ventana_incompleta`: comparte recurso con otras filas del lote y alguna no
+   * tiene hora/regreso válido (reserva todo el día); `destino_ocupado`: el recurso ya tiene otro viaje en la fecha destino.
+   */
+  avisos?: AvisoLote[];
 };
 
 export type ConflictoLote = { recurso: "persona" | "unidad" | "tc"; filas: number[]; causa: "dia_completo" | "solape" };
+export type AvisoLote = { tipo: "ventana_incompleta" | "destino_ocupado"; mensaje: string; filas?: number[] };
 
 type FilaInterna = {
   borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string>;
-  conflictos?: ConflictoLote[]; derivada?: ResultadoFilaLote["derivada"];
+  conflictos?: ConflictoLote[]; avisos?: AvisoLote[];
 };
 
 const fmt = (iso: string) => iso.split("-").reverse().join("/");
@@ -384,11 +388,14 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     if (b.origenPlanId != null && copias?.has(b.origenPlanId)) errores.push(`Este viaje ya fue copiado para esta fecha (${copias.get(b.origenPlanId)}).`);
 
     // --- disponibilidad diaria contra viajes ya existentes (solo si no hay errores previos de resolución) ---
+    // COPIA FIEL AL ORIGEN: que el recurso ya tenga otro viaje en la fecha destino NO bloquea; se avisa y la fila se crea igual (decisión del propietario).
+    // El resto de controles de disponibilidad (unidad/TC fuera de servicio, personal inactivo, viaje en curso…) siguen bloqueando.
+    const avisos: AvisoLote[] = [];
     if (!errores.length && recursos.length) {
       const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDeBorrador(b, fechaDestino), []);
-      if (conflicto) errores.push(mensajeConflictoProgramacionIntervalo(conflicto));
+      if (conflicto) avisos.push({ tipo: "destino_ocupado", mensaje: `${mensajeConflictoProgramacionIntervalo(conflicto)} Se copia igual que el origen.` });
     }
-    internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos });
+    internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos, ...(avisos.length ? { avisos } : {}) });
   }
 
   // --- identidad de la unidad TMS (#624), SOLO LECTURA REAL ---
@@ -442,9 +449,6 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   };
   const textoFalta = (n: number) => { const x = faltante(n); return `fila ${n}: sin ${x === "hora" ? "hora de carga" : x === "regreso" ? "regreso estimado" : "hora de carga ni regreso estimado"}`; };
   const marcadas = new Set<string>(); // "clave|fila": un mensaje por recurso y fila
-  const origenesDe = new Map<number, Set<number>>();   // fila -> filas sin ventana completa que la bloquean
-  const nColisiones = new Map<number, number>();       // mensajes de colisión añadidos por fila
-  const soloDiaCompleto = new Map<number, boolean>();  // todos sus conflictos son por día completo
   for (const [clave, usos] of uso) {
     const filas = [...new Set(usos.map((u) => u.fila))];
     if (filas.length < 2) continue;
@@ -465,23 +469,17 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
       const incompletas = [fila, ...otras].filter((n) => faltante(n) !== null);
       const causa: ConflictoLote["causa"] = incompletas.length ? "dia_completo" : "solape";
-      const detalle = causa === "dia_completo" ? ` Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}).` : " Los horarios se solapan.";
-      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.${detalle}`);
+      const quien = clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`;
       f.conflictos = [...(f.conflictos ?? []), { recurso, filas: otras, causa }];
-      nColisiones.set(fila, (nColisiones.get(fila) ?? 0) + 1);
-      soloDiaCompleto.set(fila, (soloDiaCompleto.get(fila) ?? true) && causa === "dia_completo");
-      for (const n of otras) {
-        if (faltante(n) !== null) origenesDe.set(fila, (origenesDe.get(fila) ?? new Set()).add(n));
+      if (causa === "dia_completo") {
+        // COPIA FIEL: sin hora/regreso válido el recurso «reserva todo el día», pero esos viajes ya conviven así en el origen. Se AVISA y no se bloquea.
+        f.avisos = [...(f.avisos ?? []), { tipo: "ventana_incompleta", filas: otras, mensaje: `${quien} también en la fila ${otras.join(", ")} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}). Se copia igual que el origen.` }];
+      } else {
+        // Solape REAL (ambas ventanas conocidas y cruzadas): sigue bloqueando.
+        f.errores.push(`${quien} también en la fila ${otras.join(", ")} de este mismo lote. Los horarios se solapan.`);
+        f.resuelto = null;
       }
-      f.resuelto = null;
     }
-  }
-  // Filas bloqueadas SOLO por conflictos con filas sin hora/regreso válido (se liberan al corregir el origen; el origen y sus alcances están en `diagnostico`).
-  for (const f of internas) {
-    const fila = f.borrador.fila;
-    const falta = faltante(fila);
-    const origenes = [...(origenesDe.get(fila) ?? [])].sort((x, y) => x - y);
-    if (!falta && origenes.length && soloDiaCompleto.get(fila) && f.errores.length === nColisiones.get(fila)) f.derivada = { origenes };
   }
   return internas;
 }
@@ -493,7 +491,7 @@ const aResultado = (f: FilaInterna, fechaDiagnostico: string): ResultadoFilaLote
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
   diagnostico: { horaInvalida: !ventanaDeBorrador(f.borrador, fechaDiagnostico).horaCarga, regresoInvalido: !ventanaDeBorrador(f.borrador, fechaDiagnostico).regresoEstimado, filasAfectadas: [...(f.filasAfectadas ?? [])].sort((a, b) => a - b), recursosCompartidos: [...(f.recursosCompartidos ?? [])] },
   ...(f.conflictos ? { conflictos: f.conflictos } : {}),
-  ...(f.derivada ? { derivada: f.derivada } : {}),
+  ...(f.avisos?.length ? { avisos: f.avisos } : {}),
 });
 
 /**

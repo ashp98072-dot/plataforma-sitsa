@@ -54,60 +54,80 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-describe("Copiar programación: diagnóstico del bloqueo (una fila sin regreso bloquea a las demás)", () => {
+describe("Copiar programación: copia fiel al origen (sin regreso o recurso ya ocupado = aviso, no bloqueo)", () => {
   const N = 5; const ORIGEN = 3;
-  const bloqueadas = (): Val[] => Array.from({ length: N }, (_, i) => {
+  const detalle = `El recurso está asignado también en la fila ${ORIGEN} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila ${ORIGEN}: sin regreso estimado). Se copia igual que el origen.`;
+  const conAvisos = (): Val[] => Array.from({ length: N }, (_, i) => {
     const fila = i + 1;
-    const detalle = `El recurso está asignado también en la fila ${ORIGEN} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila ${ORIGEN}: sin regreso estimado).`;
     return fila === ORIGEN
-      ? { fila, estado: "error", errores: [detalle], tarifa: null, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }], diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1, 2, 4, 5], recursosCompartidos: ["personal"] } }
-      : { fila, estado: "error", errores: [detalle], tarifa: null, conflictos: [{ recurso: "persona", filas: [ORIGEN], causa: "dia_completo" }], derivada: { origenes: [ORIGEN] } };
+      ? { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", filas: [1, 2, 4, 5], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }], diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1, 2, 4, 5], recursosCompartidos: ["personal"] } }
+      : { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", filas: [ORIGEN], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [ORIGEN], causa: "dia_completo" }] };
   });
-  const todasOk = (): Val[] => Array.from({ length: N }, (_, i) => ({ fila: i + 1, estado: "ok", errores: [], tarifa: TARIFA }));
+  const sinAvisos = (): Val[] => Array.from({ length: N }, (_, i) => ({ fila: i + 1, estado: "ok", errores: [], tarifa: TARIFA }));
+  const botonConfirmar = () => boton("Confirmar copia")!;
+  const casilla = () => host.querySelector('section[aria-label="Avisos de la copia"] input[type="checkbox"]') as HTMLInputElement;
 
   beforeEach(async () => {
-    filasServidor = Array.from({ length: N }, (_, i) => filaCarga(i + 1));
-    validador = () => bloqueadas();
+    filasServidor = Array.from({ length: N }, (_, i) => filaCarga(i + 1, { monto: 1500, moneda: "GTQ" }));
+    validador = () => conAvisos();
     await pulsar("Cargar programación"); await esperar(20);
     await marcarTodasYValidar();
   });
 
-  it("muestra UN diagnóstico (motivos, fila origen y cuántas bloquea) en vez de obligar a leer 5 mensajes repetidos", async () => {
-    expect(texto()).toContain("5 de 5 fila(s) bloqueada(s)");
-    expect(texto()).toContain("Sin hora o regreso válido (reserva todo el día): 5 fila(s)");
-    expect(texto()).toContain(`La fila ${ORIGEN} está sin regreso estimado y reserva todo el día: bloquea a 4 filas`);
-    expect(boton(`Fila ${ORIGEN} (sin regreso) · bloquea a 4`)).toBeDefined();
-    // las 4 derivadas muestran UNA línea corta que remite al origen; el texto largo queda en «Ver detalle»
-    const cortas = [...host.querySelectorAll("p")].filter((p) => /bloqueada por la fila 3/.test(p.textContent ?? ""));
-    expect(cortas).toHaveLength(4);
-    expect(host.querySelectorAll("details")).toHaveLength(4);
+  it("NINGUNA fila queda bloqueada: las 5 están OK, con un solo resumen de avisos en vez de 5 errores", () => {
+    expect(texto()).toContain("OK: 5");
+    expect(texto()).toContain("Con error: 0");
+    expect(texto()).not.toContain("no se pueden copiar");
+    expect(texto()).toContain("5 fila(s) se copiarán igual que el origen, con avisos");
+    expect(texto()).toContain("Comparten recursos con filas sin hora o regreso válido (reservan todo el día, igual que en el origen): 5 fila(s)");
+    expect(texto()).toContain(`La fila ${ORIGEN} está sin regreso estimado y reserva todo el día: comparte recursos con 4 filas`);
+    expect(boton(`Fila ${ORIGEN} (sin regreso) · comparte con 4`)).toBeDefined();
+    // cada fila muestra una línea corta; el texto largo queda en «Ver detalle»
+    expect([...host.querySelectorAll("p")].filter((p) => /Comparte recursos con la fila\(s\) 3 sin hora\/regreso válido/.test(p.textContent ?? ""))).toHaveLength(4);
+    expect(host.querySelectorAll("tbody details")).toHaveLength(5);
   });
 
-  it("«Fila 3 …» lleva directo al campo de regreso de la fila origen", async () => {
+  it("para copiar hay que ACEPTAR los avisos una vez (casilla); sin aceptar el botón queda deshabilitado y con aceptar se habilita; desmarcar lo vuelve a bloquear", async () => {
+    expect(botonConfirmar().disabled).toBe(true);
+    await act(async () => { casilla().click(); });
+    expect(botonConfirmar().disabled).toBe(false);
+    await act(async () => { casilla().click(); });
+    expect(botonConfirmar().disabled).toBe(true);
+  });
+
+  it("confirmar con avisos aceptados envía TODAS las filas y crea la copia (el servidor decide; la aceptación no viaja como dato)", async () => {
+    await act(async () => { casilla().click(); });
+    const respuesta = vi.mocked(fetch);
+    respuesta.mockImplementationOnce(async (url, init) => { posts.push({ url: String(url), cuerpo: JSON.parse(String((init as RequestInit).body)) }); return Response.json({ creados: 5, planIds: [1, 2, 3, 4, 5], codigos: ["P1", "P2", "P3", "P4", "P5"] }); });
+    await pulsar("Confirmar copia");
+    await esperar(20);
+    const ultimo = posts[posts.length - 1];
+    expect(ultimo.url).toContain("/copiar/confirmar");
+    expect(ultimo.cuerpo.filas).toHaveLength(N);
+    expect(JSON.stringify(ultimo.cuerpo)).not.toMatch(/avisosAceptados|aceptad/i);
+    expect(texto()).toContain("Copia creada: 5 viaje(s)");
+  });
+
+  it("«Fila 3 …» lleva al campo de regreso de la fila para quien prefiera completarlo", async () => {
     await pulsar(`Fila ${ORIGEN} (sin regreso)`);
     expect(document.activeElement).toBe(host.querySelector(`#regreso-${ORIGEN}`));
   });
 
-  it("EDITAR el regreso de la fila origen: el lote se revalida completo, el diagnóstico desaparece y se puede confirmar", async () => {
-    validador = (c) => {
-      const editado = c.filas.find((f) => f.fila === ORIGEN)?.regresoEditado;
-      return editado ? todasOk() : bloqueadas();
-    };
-    const input = host.querySelector(`#regreso-${ORIGEN}`) as HTMLInputElement;
-    await escribir(input, "2026-11-20T12:00");
+  it("EDITAR el regreso de la fila origen: el lote se revalida completo, los avisos desaparecen y se puede confirmar SIN aceptar nada", async () => {
+    validador = (c) => (c.filas.find((f) => f.fila === ORIGEN)?.regresoEditado ? sinAvisos() : conAvisos());
+    await escribir(host.querySelector(`#regreso-${ORIGEN}`) as HTMLInputElement, "2026-11-20T12:00");
     await esperar(900);
     const ultimo = posts[posts.length - 1];
     expect(ultimo.url).toContain("/copiar/validar");
     expect(ultimo.cuerpo.filas).toHaveLength(N);                                              // se revalida TODO el lote, no solo la fila editada
     expect(ultimo.cuerpo.filas.find((f) => f.fila === ORIGEN)?.regresoEditado).toBe("2026-11-20T12:00");
-    expect(ultimo.cuerpo.filas.filter((f) => f.fila !== ORIGEN).every((f) => !("regresoEditado" in f) || f.regresoEditado === undefined)).toBe(true);
-    expect(texto()).not.toContain("fila(s) bloqueada(s)");
-    expect(texto()).not.toContain("bloqueada por la fila");
+    expect(texto()).not.toContain("con avisos");
+    expect(texto()).not.toContain("Comparte recursos con la fila");
     expect(texto()).toContain("OK: 5");
-    // sin diferencias de tarifa (origen sin tarifa → destino con tarifa SÍ avisa; aquí no hay tarifa de origen): se acepta aparte, ver pruebas de tarifa
+    expect(botonConfirmar().disabled).toBe(false);
   });
 
-  it("si el nuevo regreso SIGUE solapándose, el servidor mantiene el bloqueo y la pantalla lo muestra como solape real (no se relaja nada)", async () => {
+  it("un SOLAPE REAL (horas conocidas) sigue BLOQUEANDO: se muestra como bloqueo, no como aviso, y el botón queda deshabilitado", async () => {
     validador = () => [
       { fila: 1, estado: "ok", errores: [], tarifa: TARIFA },
       { fila: 2, estado: "error", errores: ["La unidad X está asignada también en la fila 3 de este mismo lote. Los horarios se solapan."], tarifa: null, conflictos: [{ recurso: "unidad", filas: [3], causa: "solape" }] },
@@ -116,11 +136,21 @@ describe("Copiar programación: diagnóstico del bloqueo (una fila sin regreso b
     ];
     await escribir(host.querySelector(`#regreso-${ORIGEN}`) as HTMLInputElement, "2026-11-20T04:00");
     await esperar(900);
-    expect(texto()).toContain("2 de 5 fila(s) bloqueada(s)");
+    expect(texto()).toContain("2 de 5 fila(s) no se pueden copiar");
     expect(texto()).toContain("Horarios que se solapan de verdad: 2 fila(s)");
-    expect(texto()).not.toContain("Corregir primero");                     // no hay fila «sin regreso»: es un solape real
     expect(texto()).toContain("Los horarios se solapan.");
-    expect(boton("Confirmar copia")!.disabled).toBe(true);
+    expect(botonConfirmar().disabled).toBe(true);
+  });
+
+  it("el recurso ya ocupado en la fecha DESTINO se muestra como aviso (no bloquea) y también exige la aceptación", async () => {
+    validador = () => sinAvisos().map((v) => (v.fila === 2 ? { ...v, avisos: [{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 20/11/2026. Se copia igual que el origen." }] } : v));
+    await escribir(host.querySelector(`#regreso-1`) as HTMLInputElement, "2026-11-20T10:00");
+    await esperar(900);
+    expect(texto()).toContain("El recurso ya tiene otro viaje en la fecha destino: 1 fila(s)");
+    expect(texto()).toContain("ya está asignado al PLAN-9");
+    expect(botonConfirmar().disabled).toBe(true);
+    await act(async () => { casilla().click(); });
+    expect(botonConfirmar().disabled).toBe(false);
   });
 });
 

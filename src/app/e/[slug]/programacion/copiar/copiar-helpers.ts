@@ -159,3 +159,26 @@ export function puedeConfirmarConTarifas(filas: FilaEditable[], ocupado: boolean
   const clave = claveAvisoTarifas(comparacionesDeTarifa(filas));
   return clave === "" || clave === aceptada;
 }
+
+// ---------------------------------------------------------------- Avisos que NO bloquean (copia fiel al origen)
+
+/** Filas incluidas y validadas OK que se copiarán igual pero con avisos (recurso compartido sin hora/regreso, destino ya ocupado). */
+export function filasConAvisos(filas: FilaEditable[]) {
+  return filasIncluidas(filas)
+    .filter((f) => !f.sucia && f.validacion?.estado === "ok" && (f.validacion.avisos?.length ?? 0) > 0)
+    .map((f) => ({ fila: f.borrador.fila, avisos: f.validacion!.avisos! }));
+}
+
+/** Identifica EXACTAMENTE los avisos aceptados (fila, tipo y filas relacionadas): si cambian, hay que aceptar de nuevo. */
+export function claveAvisosCopia(filas: FilaEditable[]): string {
+  return filasConAvisos(filas)
+    .map((i) => JSON.stringify([i.fila, i.avisos.map((a) => [a.tipo, [...(a.filas ?? [])].sort((x, y) => x - y)])]))
+    .join("|");
+}
+
+/** Igual que `puedeConfirmarConTarifas`, y además exige aceptar expresamente los avisos de la copia (si los hay). */
+export function puedeConfirmarCopia(filas: FilaEditable[], ocupado: boolean, tarifasAceptadas: string, avisosAceptados: string): boolean {
+  if (!puedeConfirmarConTarifas(filas, ocupado, tarifasAceptadas)) return false;
+  const clave = claveAvisosCopia(filas);
+  return clave === "" || clave === avisosAceptados;
+}

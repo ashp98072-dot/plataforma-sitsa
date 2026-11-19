@@ -411,23 +411,30 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
 
 describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", () => {
   const ocupar = (over: Partial<Plan>) => e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", ...over }));
-  it("piloto ocupado el mismo día por un viaje existente", async () => {
+  // COPIA FIEL AL ORIGEN (decisión del propietario): que el recurso ya tenga otro viaje en la fecha destino NO bloquea; se avisa y la fila se crea igual.
+  it("piloto ocupado el mismo día por un viaje existente: AVISO (no bloquea)", async () => {
     ocupar({ piloto_id: 501 });
     const r = await validarLote(EMP, DESTINO, [borrador({ pilotoEmpleadoId: 1 })]);
-    expect(r[0].errores).toEqual(["El piloto Juan Pérez ya está asignado al PLAN-EXISTENTE para el 25/09/2026."]);
+    expect(r[0]).toMatchObject({ estado: "ok", errores: [] });
+    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-EXISTENTE para el 25/09/2026. Se copia igual que el origen." }]);
   });
-  it("auxiliar ocupado", async () => {
+  it("auxiliar ocupado: aviso", async () => {
     ocupar({ aux: [502] });
     const r = await validarLote(EMP, DESTINO, [borrador({ auxiliarEmpleadoIds: [2] })]);
-    expect(r[0].errores[0]).toContain("Ana López ya está asignado");
+    expect(r[0].estado).toBe("ok");
+    expect(r[0].avisos?.[0]).toMatchObject({ tipo: "destino_ocupado", mensaje: expect.stringContaining("Ana López ya está asignado") });
   });
-  it("unidad ocupada", async () => {
+  it("unidad ocupada: aviso", async () => {
     ocupar({ unidad_id: 601 });
-    expect((await validarLote(EMP, DESTINO, [borrador()]))[0].errores[0]).toBe("La unidad P-1 ya está asignada al PLAN-EXISTENTE para el 25/09/2026.");
+    const r = (await validarLote(EMP, DESTINO, [borrador()]))[0];
+    expect(r.estado).toBe("ok");
+    expect(r.avisos?.[0].mensaje).toBe("La unidad P-1 ya está asignada al PLAN-EXISTENTE para el 25/09/2026. Se copia igual que el origen.");
   });
-  it("TC ocupado", async () => {
+  it("TC ocupado: aviso", async () => {
     ocupar({ tc_vehiculo_id: 31 });
-    expect((await validarLote(EMP, DESTINO, [borrador({ tcVehiculoId: 31 })]))[0].errores[0]).toBe("El TC TC-1 ya está asignado al PLAN-EXISTENTE para el 25/09/2026.");
+    const r = (await validarLote(EMP, DESTINO, [borrador({ tcVehiculoId: 31 })]))[0];
+    expect(r.estado).toBe("ok");
+    expect(r.avisos?.[0].mensaje).toBe("El TC TC-1 ya está asignado al PLAN-EXISTENTE para el 25/09/2026. Se copia igual que el origen.");
   });
   it("un viaje Cancelado o de otra fecha/empresa NO ocupa el recurso", async () => {
     ocupar({ piloto_id: 501, estado: "Cancelado" });
@@ -435,26 +442,27 @@ describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", 
     ocupar({ id: 52, piloto_id: 501, empresa_id: 8 });
     expect((await validarLote(EMP, DESTINO, [borrador()]))[0].estado).toBe("ok");
   });
-  it("conflicto ENTRE dos filas del lote (piloto, unidad y TC repetidos): error en ambas con la fila del otro", async () => {
+  it("recursos repetidos ENTRE dos filas SIN regreso (piloto, unidad y TC): se copian igual, con aviso en ambas y la fila del otro", async () => {
     const r = await validarLote(EMP, DESTINO, [
       borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", tcVehiculoId: 31, pilotoEmpleadoId: 1 }),
       borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-1", tcVehiculoId: 31, pilotoEmpleadoId: 1 }),
     ]);
-    expect(r.map((x) => x.estado)).toEqual(["error", "error"]);
-    const txt = r[0].errores.join(" | ");
+    expect(r.map((x) => x.estado)).toEqual(["ok", "ok"]);
+    expect(r[0].avisos?.every((a) => a.tipo === "ventana_incompleta")).toBe(true);
+    const txt = (r[0].avisos ?? []).map((a) => a.mensaje).join(" | ");
     expect(txt).toContain("Juan Pérez está asignado también en la fila 2");
     expect(txt).toContain("La unidad P-1 está asignada también en la fila 2");
     expect(txt).toContain("El TC #31 está asignado también en la fila 2");
-    expect(r[1].errores.join(" ")).toContain("fila 1");
+    expect(txt).toContain("Se copia igual que el origen.");
+    expect((r[1].avisos ?? []).map((a) => a.mensaje).join(" ")).toContain("fila 1");
   });
-  it("cambio DESPUÉS de la preview: la preview era ok pero al confirmar otro viaje tomó el recurso => nada se crea", async () => {
-    expect((await validarLote(EMP, DESTINO, [borrador()]))[0].estado).toBe("ok");
+  it("cambio DESPUÉS de la preview: otro viaje ocupó el recurso => la copia se crea igual (aviso, no bloqueo)", async () => {
+    expect((await validarLote(EMP, DESTINO, [borrador()]))[0]).toMatchObject({ estado: "ok" });
     ocupar({ piloto_id: 501 }); // otro usuario programó al piloto entre tanto
+    expect((await validarLote(EMP, DESTINO, [borrador()]))[0].avisos?.[0].tipo).toBe("destino_ocupado");
     const r = await confirmar([borrador()]);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(!r.ok && r.erroresPorFila?.[0].errores[0]).toContain("PLAN-EXISTENTE");
-    expect(creadosDestino()).toHaveLength(0);
-    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(1);
   });
   it("hoy: un piloto con viaje en curso se rechaza (mismo control del POST manual)", async () => {
     const hoy = new Date().toISOString().slice(0, 10);
@@ -593,11 +601,11 @@ describe("PROGRAMACION-COPIA-LOTE-TX-1 — bugfix: copia masiva (regresión 'uno
     expect(e.origen).toHaveLength(2);
     expect(e.origen.map((o) => o.plan_origen_id)).toEqual([900, 901]);
   });
-  it("13) la disponibilidad se sigue revalidando bajo el candado antes de crear (sin relación con el bug de código)", async () => {
+  it("13) el confirm revalida bajo el candado: un recurso ocupado entre la preview y el confirm es un AVISO (copia fiel), pero un error real sí lo revierte todo", async () => {
     const ok = await validarLote(EMP, DESTINO, [borrador()]);
     expect(ok[0].estado).toBe("ok");
     e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 501 })); // otro usuario ocupa el recurso entre la preview y el confirm
-    const r = await confirmar([borrador()]);
+    const r = await confirmar([borrador(), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: null, pilotoEmpleadoId: 3 })]);   // la fila 2 tiene un error REAL (ruta inactiva)
     expect(r).toMatchObject({ ok: false, status: 409 });
     expect(creadosDestino()).toHaveLength(0);
   });
@@ -886,19 +894,24 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
     expect(await estados([noche, conVentana(2, "01:00", { dias: 0, hora: "04:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
   });
 
-  it("5) sin regreso: reserva TODO el día y choca con cualquier fila del mismo recurso ese día", async () => {
-    expect(await estados([conVentana(1, "05:00", null, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
+  it("5) sin regreso: reserva TODO el día; ya NO bloquea (copia fiel): ambas filas pasan con aviso", async () => {
+    const r = await validarLote(EMP, DESTINO, [conVentana(1, "05:00", null, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)]);
+    expect(r.map((x) => x.estado)).toEqual(["ok", "ok"]);
+    expect(r[1].avisos?.[0]).toMatchObject({ tipo: "ventana_incompleta", filas: [1] });
+    expect(r[0].diagnostico).toMatchObject({ regresoInvalido: true, filasAfectadas: [2] });   // el origen sigue identificado
   });
 
-  it("66 filas con recursos repetidos: permite ventanas consecutivas y explica el bloqueo por regreso ausente", async () => {
+  it("66 filas con recursos repetidos: ventanas consecutivas sin avisos; con una sin regreso las 66 pasan CON avisos que señalan la fila", async () => {
     const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2,"0")}:${String(m % 60).padStart(2,"0")}`;
     const filas = Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 }));
     expect((await validarLote(EMP, DESTINO, filas)).filter(r => r.estado === "ok")).toHaveLength(66);
     filas[32] = { ...filas[32], regresoHora: null, regresoOffsetDias: null };
-    const bloqueadas = await validarLote(EMP, DESTINO, filas);
-    expect(bloqueadas.filter(r => r.estado === "error")).toHaveLength(66);
-    expect(bloqueadas[0].errores.join(" ")).toContain("fila 33");
-    expect(bloqueadas[0].errores.join(" ")).toContain("se reserva todo el día");
+    const conAvisos = await validarLote(EMP, DESTINO, filas);
+    expect(conAvisos.filter(r => r.estado === "ok")).toHaveLength(66);
+    expect(conAvisos.every((r) => (r.avisos?.length ?? 0) > 0)).toBe(true);
+    const texto = conAvisos[0].avisos!.map((a) => a.mensaje).join(" ");
+    expect(texto).toContain("fila 33");
+    expect(texto).toContain("se reserva todo el día");
   });
 
   it("confirma un lote de 66 ventanas consecutivas y rechaza el reintento sin duplicar viajes", async () => {
@@ -912,8 +925,10 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
     expect(creadosDestino()).toHaveLength(66);
   });
 
-  it("6) sin hora de carga: reserva TODO el día aunque traiga regreso", async () => {
-    expect(await estados([conVentana(1, null, { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
+  it("6) sin hora de carga: reserva TODO el día aunque traiga regreso; ya no bloquea (aviso)", async () => {
+    const r = await validarLote(EMP, DESTINO, [conVentana(1, null, { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)]);
+    expect(r.map((x) => x.estado)).toEqual(["ok", "ok"]);
+    expect(r[1].avisos?.[0].mensaje).toContain("sin hora de carga");
   });
 
   it("7) la misma persona como piloto en una fila y auxiliar en otra: conflicto solo si las ventanas se solapan", async () => {
@@ -954,38 +969,46 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
 describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", () => {
   const existente = (over: Partial<Plan> = {}) => plan({ id: 50, codigo: "PLAN-50", piloto_id: 501, fecha: DESTINO, hora: "05:00", regreso: `${DESTINO} 08:00:00`, ...over });
 
-  it("05:00-08:00 existente: la fila 08:00-11:00 pasa y la 07:59-11:00 choca (piloto)", async () => {
+  it("05:00-08:00 existente: la fila 08:00-11:00 pasa limpia y la 07:59-11:00 pasa con AVISO (piloto)", async () => {
     e.planes.push(existente());
-    expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+    const limpio = await validarLote(EMP, DESTINO, [conVentana(1, "08:00", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(limpio[0]).toMatchObject({ estado: "ok" }); expect(limpio[0].avisos).toBeUndefined();          // borde exacto: sin aviso
     const r = await validarLote(EMP, DESTINO, [conVentana(1, "07:59", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
-    expect(r[0]).toMatchObject({ estado: "error", errores: ["El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026."] });
+    expect(r[0]).toMatchObject({ estado: "ok", errores: [] });
+    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026. Se copia igual que el origen." }]);
   });
 
-  it("cruce de medianoche contra BD: existente de ayer 22:00 -> hoy 02:00; fila 01:00 choca, 02:00 no", async () => {
+  it("cruce de medianoche contra BD: existente de ayer 22:00 -> hoy 02:00; fila 01:00 avisa, 02:00 no", async () => {
     e.planes.push(existente({ fecha: ORIGEN, hora: "22:00", regreso: `${DESTINO} 02:00:00` }));
-    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "04:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
-    expect(await estados([conVentana(1, "02:00", { dias: 0, hora: "05:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+    const choca = await validarLote(EMP, DESTINO, [conVentana(1, "01:00", { dias: 0, hora: "04:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(choca[0]).toMatchObject({ estado: "ok" }); expect(choca[0].avisos?.[0].tipo).toBe("destino_ocupado");
+    const libre = await validarLote(EMP, DESTINO, [conVentana(1, "02:00", { dias: 0, hora: "05:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(libre[0].avisos).toBeUndefined();
   });
 
-  it("existente SIN regreso (o sin hora) reserva todo su día: la fila choca aunque sea de otra hora, y no toca el día siguiente", async () => {
+  it("existente SIN regreso (o sin hora) reserva todo su día: la fila avisa aunque sea de otra hora, y no toca el día siguiente", async () => {
     e.planes.push(existente({ regreso: null }));
-    expect(await estados([conVentana(1, "20:00", { dias: 0, hora: "22:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
-    expect(await estados([conVentana(1, "01:00", { dias: 0, hora: "03:00" }, { pilotoEmpleadoId: 1 })], "2026-09-26")).toEqual(["ok"]);
+    const mismoDia = await validarLote(EMP, DESTINO, [conVentana(1, "20:00", { dias: 0, hora: "22:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(mismoDia[0]).toMatchObject({ estado: "ok" }); expect(mismoDia[0].avisos?.[0].tipo).toBe("destino_ocupado");
+    const diaSiguiente = await validarLote(EMP, "2026-09-26", [conVentana(1, "01:00", { dias: 0, hora: "03:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(diaSiguiente[0].avisos).toBeUndefined();
   });
 
-  it("auxiliar, unidad y TC contra BD usan la misma comparación (07:59 choca, 08:00 pasa)", async () => {
+  it("auxiliar, unidad y TC contra BD usan la misma comparación (07:59 avisa, 08:00 pasa limpia)", async () => {
     e.planes.push(existente({ piloto_id: null, aux: [502], unidad_id: 601, tc_vehiculo_id: 31 }));
     for (const recurso of [{ pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [2] }, { unidadPlaca: "P-1" }, { tcVehiculoId: 31 }]) {
-      expect(await estados([conVentana(1, "07:59", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["error"]);
-      expect(await estados([conVentana(1, "08:00", { dias: 0, hora: "10:00" }, recurso)])).toEqual(["ok"]);
+      const avisa = await validarLote(EMP, DESTINO, [conVentana(1, "07:59", { dias: 0, hora: "10:00" }, recurso)]);
+      expect(avisa[0]).toMatchObject({ estado: "ok" }); expect(avisa[0].avisos?.[0].tipo).toBe("destino_ocupado");
+      const limpia = await validarLote(EMP, DESTINO, [conVentana(1, "08:00", { dias: 0, hora: "10:00" }, recurso)]);
+      expect(limpia[0].avisos).toBeUndefined();
     }
   });
 
-  it("un plan Cancelado no bloquea; uno Cerrado sigue reservando su ventana", async () => {
+  it("un plan Cancelado no genera aviso; uno Cerrado sigue reservando su ventana (aviso)", async () => {
     e.planes.push(existente({ estado: "Cancelado" }));
-    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["ok"]);
+    expect((await validarLote(EMP, DESTINO, [conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })]))[0].avisos).toBeUndefined();
     e.planes[e.planes.length - 1].estado = "Cerrado";
-    expect(await estados([conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })])).toEqual(["error"]);
+    expect((await validarLote(EMP, DESTINO, [conVentana(1, "06:00", { dias: 0, hora: "07:00" }, { pilotoEmpleadoId: 1 })]))[0].avisos?.[0].tipo).toBe("destino_ocupado");
   });
 
   it("la consulta usa el motor por intervalos (ventana) y nunca la política diaria por fecha exacta", async () => {
@@ -1003,10 +1026,14 @@ describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", (
     expect([creado.fecha, creado.hora, creado.regreso]).toEqual(["2026-09-30", "22:00", "2026-10-01 02:00"]);
   });
 
-  it("confirmar: un conflicto aparecido bajo el candado revierte todo el lote (todo o nada)", async () => {
+  it("confirmar con un recurso ya ocupado en destino: se crean TODOS (aviso, copia fiel); un SOLAPE REAL dentro del lote sí lo revierte todo (todo o nada)", async () => {
     e.planes.push(existente());
-    const r = await confirmar([conVentana(1, "10:00", { dias: 0, hora: "12:00" }, { pilotoEmpleadoId: 2 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 1 })]);
-    expect(r.ok).toBe(false);
+    const fiel = await confirmar([conVentana(1, "10:00", { dias: 0, hora: "12:00" }, { pilotoEmpleadoId: 2 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 1 })]);
+    expect(fiel.ok).toBe(true);
+    expect(e.planes.filter((p) => p.id >= 1000)).toHaveLength(2);
+    e.planes = e.planes.filter((p) => p.id < 1000); e.origen = [];   // vuelve al estado inicial para el segundo escenario
+    const real = await confirmar([conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 3 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 3 })]);   // ambas ventanas conocidas y cruzadas
+    expect(real.ok).toBe(false);
     expect(e.planes.filter((p) => p.id >= 1000)).toHaveLength(0);
   });
 });
@@ -1309,20 +1336,22 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
     expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toMatchObject({ pilotoExtra: null });
   });
 
-  it("el extra pasa por la MISMA validación de disponibilidad: ocupado el mismo día en otro viaje → error de fila y NO se crea nada", async () => {
+  it("el extra pasa por la MISMA comprobación de disponibilidad: ocupado el mismo día en otro viaje → AVISO que nombra al extra y la copia se crea con su extra", async () => {
     e.personal.push({ id: 702, id_empleado: 6, nombre: "Extra Piloto" });
     e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 502, extra: 702, unidad_id: 602, hora: "03:00", regreso: `${DESTINO} 06:00:00` }));
+    const previa = await validarLote(EMP, DESTINO, [conExtra()]);
+    expect(previa[0]).toMatchObject({ estado: "ok" });
+    expect(JSON.stringify(previa[0].avisos)).toContain("Extra Piloto");
     const r = await confirmar([conExtra()]);
-    expect(r).toMatchObject({ ok: false, status: 409 });
-    expect(JSON.stringify((r as { erroresPorFila?: unknown }).erroresPorFila)).toContain("Extra Piloto");
-    expect(creadosDestino()).toHaveLength(0);
-    expect(extras()).toHaveLength(0);
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(1);
+    expect(extras()).toHaveLength(2);   // el viaje existente (con su extra) + el nuevo con su extra copiado
   });
 
-  it("colisión DENTRO del lote: el extra de una fila y el principal de otra con ventanas solapadas → error en ambas", async () => {
+  it("colisión DENTRO del lote: el extra de una fila y el principal de otra (sin regreso) → ambas pasan con aviso que señala la otra fila", async () => {
     const res = await validarLote(EMP, DESTINO, [conExtra(1, 900), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 6 })]);
-    expect(res.every((f) => f.estado === "error")).toBe(true);
-    expect(res[0].errores.join(" ")).toContain("también en la fila 2");
+    expect(res.every((f) => f.estado === "ok")).toBe(true);
+    expect((res[0].avisos ?? []).map((a) => a.mensaje).join(" ")).toContain("también en la fila 2");
   });
 
   it("4/5/6) el extra no puede repetir al principal ni a un auxiliar", async () => {
@@ -1508,66 +1537,78 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
 // ------------------------------------------------------------------ DIAGNÓSTICO de bloqueos por lote y comparación de tarifas
 import { diagnosticarBloqueos, sugerenciaDeDiagnostico } from "./programacion-copia-diagnostico";
 
-describe("diagnóstico de bloqueos: un lote de 66 viajes con recursos repetidos", () => {
+describe("diagnóstico y avisos: un lote de 66 viajes con recursos repetidos (copia fiel al origen)", () => {
   const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const compartido = { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 };
   const lote66 = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, compartido));
   const sinRegreso33 = () => { const f = lote66(); f[32] = { ...f[32], regresoHora: null, regresoOffsetDias: null }; return f; };
+  const todasSinRegreso = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), null, { pilotoEmpleadoId: 100 + Math.floor(i / 2), auxiliarEmpleadoIds: [], unidadPlaca: null }));   // recursos repetidos POR PARES, ninguna con regreso
 
-  it("sin filas problemáticas: 66 ok y diagnóstico vacío", async () => {
+  it("sin filas problemáticas: 66 ok, sin avisos y diagnóstico vacío", async () => {
     const r = await validarLote(EMP, DESTINO, lote66());
     expect(r.filter((x) => x.estado === "ok")).toHaveLength(66);
-    expect(diagnosticarBloqueos(r)).toMatchObject({ total: 66, bloqueadas: 0, derivadas: 0, origenes: [] });
+    expect(r.every((x) => !x.avisos)).toBe(true);
+    expect(diagnosticarBloqueos(r)).toMatchObject({ total: 66, bloqueadas: 0, conAvisos: 0, origenes: [] });
     expect(sugerenciaDeDiagnostico(diagnosticarBloqueos(r))).toBeNull();
   });
 
-  it("UNA fila sin regreso bloquea a las otras 65: el diagnóstico la señala como ORIGEN y las otras 65 como derivadas", async () => {
+  it("CASO REAL (captura): 66 filas sin regreso con recursos repetidos por pares → las 66 se pueden copiar; cada una avisa de su par; ya no hay bloqueo", async () => {
+    for (let i = 0; i < 33; i++) empleados[100 + i] = { id: 100 + i, nombre: `Piloto ${i}`, estado: "Activo" };   // 33 personas distintas, cada una en 2 viajes
+    const r = await validarLote(EMP, DESTINO, todasSinRegreso());
+    expect(r.filter((x) => x.estado === "ok")).toHaveLength(66);
+    const d = diagnosticarBloqueos(r);
+    expect(d).toMatchObject({ total: 66, bloqueadas: 0, conAvisos: 66, avisosPorTipo: { ventana_incompleta: 66, destino_ocupado: 0 } });
+    expect(d.origenes).toHaveLength(66);
+    expect(d.origenes.every((o) => o.falta === "regreso" && o.afecta === 1)).toBe(true);   // «Fila N (sin regreso) · comparte con 1», como en la captura
+    // y se crean todas, tal como en el origen
+    const c = await confirmar(todasSinRegreso());
+    expect(c.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(66);
+    for (let i = 0; i < 33; i++) delete empleados[100 + i];
+  });
+
+  it("UNA fila sin regreso comparte recursos con las otras 65: las 66 pasan con aviso y la fila origen queda identificada", async () => {
     const r = await validarLote(EMP, DESTINO, sinRegreso33());
     const d = diagnosticarBloqueos(r);
-    expect(d.bloqueadas).toBe(66);
-    expect(d.porMotivo).toMatchObject({ hora_o_regreso_ausente: 66, solape_real: 0 });
+    expect(d).toMatchObject({ bloqueadas: 0, conAvisos: 66, avisosPorTipo: { ventana_incompleta: 66, destino_ocupado: 0 } });
     expect(d.origenes).toEqual([{ fila: 33, falta: "regreso", afecta: 65 }]);
-    expect(d.derivadas).toBe(65);                       // corregir la fila 33 libera 65 filas
-    expect(r[32].derivada).toBeUndefined();             // la propia fila origen no es «derivada»
-    expect(r[0].derivada).toEqual({ origenes: [33] });
-    expect(r[0].conflictos?.every((c) => c.causa === "dia_completo")).toBe(true);
-    expect(r[0].errores.join(" ")).toContain("fila 33: sin regreso estimado");   // el mensaje señala QUÉ falta y DÓNDE
+    expect(r[0].avisos?.[0]).toMatchObject({ tipo: "ventana_incompleta", filas: [33] });
+    expect(r[0].avisos![0].mensaje).toContain("fila 33: sin regreso estimado");
+    expect(r[0].avisos![0].mensaje).toContain("Se copia igual que el origen.");
     expect(sugerenciaDeDiagnostico(d)).toContain("fila 33");
-    expect(sugerenciaDeDiagnostico(d)).toContain("bloquea a 65");
+    expect(sugerenciaDeDiagnostico(d)).toContain("comparte recursos con 65 filas");
   });
 
   it("el diagnóstico NO contiene datos personales (ni nombres, ni placas) aunque los mensajes de las filas sí los tengan", async () => {
     const r = await validarLote(EMP, DESTINO, sinRegreso33());
-    expect(r[0].errores.join(" ")).toMatch(/Juan Pérez|P-1/);   // los mensajes de fila conservan el contexto operativo
-    const seguro = JSON.stringify({ d: diagnosticarBloqueos(r), s: sugerenciaDeDiagnostico(diagnosticarBloqueos(r)), c: r[0].conflictos, o: r[32].diagnostico, dv: r[0].derivada });
+    expect(r[0].avisos!.map((a) => a.mensaje).join(" ")).toMatch(/Juan Pérez|P-1/);   // los mensajes de fila conservan el contexto operativo
+    const d = diagnosticarBloqueos(r);
+    const seguro = JSON.stringify({ d, s: sugerenciaDeDiagnostico(d), c: r[0].conflictos, o: r[32].diagnostico });
     expect(seguro).not.toMatch(/Juan|Pérez|P-1|TC-1|Acme|PLAN-/i);
   });
 
-  it("EDITAR el regreso de la fila origen resuelve automáticamente las 65 derivadas (el servidor revalida todo el lote)", async () => {
+  it("darle regreso a la fila origen QUITA los avisos de las demás (el servidor revalida todo el lote)", async () => {
     const lote = sinRegreso33();
-    expect((await validarLote(EMP, DESTINO, lote)).filter((x) => x.estado === "error")).toHaveLength(66);
     lote[32] = { ...lote[32], regresoOffsetDias: 0, regresoHora: hora(33 * 20) };   // regreso consecutivo: 33*20 == inicio de la fila 34
     const r = await validarLote(EMP, DESTINO, lote);
     expect(r.filter((x) => x.estado === "ok")).toHaveLength(66);
-    expect(diagnosticarBloqueos(r)).toMatchObject({ bloqueadas: 0, derivadas: 0, origenes: [] });
+    expect(r.every((x) => !x.avisos)).toBe(true);
+    expect(diagnosticarBloqueos(r)).toMatchObject({ bloqueadas: 0, conAvisos: 0, origenes: [] });
   });
 
-  it("editar el regreso a un valor que SÍ se solapa NO relaja la regla: solo las dos filas que se cruzan quedan bloqueadas, por solape REAL (no por día completo)", async () => {
+  it("un regreso editado que SE SOLAPA de verdad con la fila siguiente SÍ bloquea (solape real con horas conocidas): solo esas dos filas", async () => {
     const lote = sinRegreso33();
     lote[32] = { ...lote[32], regresoOffsetDias: 0, regresoHora: hora(33 * 20 + 5) };   // invade 5 min la fila 34
     const r = await validarLote(EMP, DESTINO, lote);
-    const malas = r.filter((x) => x.estado === "error").map((x) => x.fila);
-    expect(malas).toEqual([33, 34]);
+    expect(r.filter((x) => x.estado === "error").map((x) => x.fila)).toEqual([33, 34]);
     expect(r[32].conflictos).toEqual(expect.arrayContaining([expect.objectContaining({ causa: "solape" })]));
-    expect(r[32].conflictos?.some((c) => c.causa === "dia_completo")).toBe(false);
-    expect(r[32].derivada).toBeUndefined(); expect(r[33].derivada).toBeUndefined();   // no hay origen «sin ventana»: es un solape de verdad
     const d = diagnosticarBloqueos(r);
-    expect(d.porMotivo).toMatchObject({ solape_real: 2, hora_o_regreso_ausente: 0 });
-    expect(d.origenes).toEqual([]);
+    expect(d).toMatchObject({ bloqueadas: 2, conAvisos: 0 });
+    expect(d.porMotivo).toMatchObject({ solape_real: 2 });
     expect(r[32].errores.join(" ")).toContain("Los horarios se solapan.");
   });
 
-  it("varias filas sin hora/regreso: se listan ordenadas por alcance y se redacta una sola sugerencia, no 66 mensajes", async () => {
+  it("varias filas sin hora/regreso: se listan ordenadas por alcance y se redacta una sola sugerencia", async () => {
     const lote = lote66();
     lote[9] = { ...lote[9], horaCarga: null };                                   // fila 10 sin hora
     lote[40] = { ...lote[40], regresoHora: null, regresoOffsetDias: null };      // fila 41 sin regreso
@@ -1577,27 +1618,41 @@ describe("diagnóstico de bloqueos: un lote de 66 viajes con recursos repetidos"
     expect(sugerenciaDeDiagnostico(d)).toMatch(/2 filas sin hora o regreso válido/);
   });
 
-  it("otros motivos se cuentan aparte (tarifa no vigente, ruta inactiva) y no se confunden con día completo ni con solape", async () => {
+  it("los errores REALES se cuentan aparte (tarifa no vigente, ruta inactiva) y siguen bloqueando", async () => {
     const filas = [
       borrador({ fila: 1, origenPlanId: 901, tarifaId: 99999, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], unidadPlaca: null }),
       borrador({ fila: 2, origenPlanId: 902, rutaId: 13, pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [], unidadPlaca: null }),
       borrador({ fila: 3, origenPlanId: 903, pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [], unidadPlaca: null }),
     ];
     const d = diagnosticarBloqueos(await validarLote(EMP, DESTINO, filas));
-    expect(d).toMatchObject({ total: 3, bloqueadas: 2 });
-    expect(d.porMotivo).toMatchObject({ tarifa: 1, otro: 1, hora_o_regreso_ausente: 0, solape_real: 0 });
+    expect(d).toMatchObject({ total: 3, bloqueadas: 2, conAvisos: 0 });
+    expect(d.porMotivo).toMatchObject({ tarifa: 1, otro: 1, solape_real: 0 });
+  });
+
+  it("el recurso ocupado en el DESTINO cuenta como aviso `destino_ocupado`, no como bloqueo", async () => {
+    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 501 }));
+    const d = diagnosticarBloqueos(await validarLote(EMP, DESTINO, [borrador({ pilotoEmpleadoId: 1 })]));
+    expect(d).toMatchObject({ bloqueadas: 0, conAvisos: 1, avisosPorTipo: { destino_ocupado: 1, ventana_incompleta: 0 } });
   });
 });
 
-describe("confirmación del lote de 66: sigue siendo atómica, con permisos de la ruta y sin duplicar", () => {
+describe("confirmación del lote de 66: atómica, con permisos de la ruta y sin duplicar", () => {
   const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   const lote = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 }));
-  it("con UNA fila sin regreso el lote completo se rechaza (todo o nada): no se crea ningún viaje y la respuesta lista las 66 filas", async () => {
+  it("con UNA fila sin regreso el lote se copia COMPLETO (copia fiel): 66 viajes, ninguno duplicado en el reintento", async () => {
     const f = lote(); f[32] = { ...f[32], regresoHora: null, regresoOffsetDias: null };
+    const r = await confirmar(f);
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(66);
+    expect((await confirmar(f)).ok).toBe(false);          // reintento: «ya fue copiado», no duplica
+    expect(creadosDestino()).toHaveLength(66);
+  });
+  it("con UNA fila con un error REAL (ruta inactiva) el lote completo se rechaza (todo o nada): no se crea nada", async () => {
+    const f = lote(); f[10] = { ...f[10], rutaId: 13 };
     const r = await confirmar(f);
     expect(r).toMatchObject({ ok: false, status: 409 });
     expect(creadosDestino()).toHaveLength(0);
     expect(conn.beginTransaction).not.toHaveBeenCalled();
-    if (!r.ok) { expect(r.erroresPorFila).toHaveLength(66); expect(diagnosticarBloqueos(r.erroresPorFila!.map((x) => ({ fila: x.fila, estado: "error" as const, errores: x.errores, tarifa: null }))).bloqueadas).toBe(66); }
+    if (!r.ok) expect(r.erroresPorFila).toHaveLength(1);
   });
 });

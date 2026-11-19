@@ -4,7 +4,10 @@ import {
   aplicarErroresConfirmacion,
   aplicarValidacion,
   claveAvisoTarifas,
+  claveAvisosCopia,
   comparacionesDeTarifa,
+  filasConAvisos,
+  puedeConfirmarCopia,
   cuerpoLote,
   diagnosticoDeFilas,
   puedeConfirmarConTarifas,
@@ -115,61 +118,86 @@ describe("pantalla y acceso (código fuente)", () => {
   });
 });
 
-describe("diagnóstico de bloqueos y edición del regreso (cliente)", () => {
-  const dia = (fila: number, over: Partial<NonNullable<FilaEditable["validacion"]>> = {}) => ({ fila, estado: "error" as const, errores: [`x de este mismo lote.`], tarifa: null, ...over });
+describe("avisos de la copia fiel y edición del regreso (cliente)", () => {
+  const avisoVentana = (origenes: number[]) => ({ tipo: "ventana_incompleta" as const, mensaje: "x", filas: origenes });
+  const okFila = (n: number, over: Partial<NonNullable<FilaEditable["validacion"]>> = {}) => ({ fila: n, estado: "ok" as const, errores: [], tarifa: null, ...over });
   const lote = (n: number, origen = 33): FilaEditable[] =>
     Array.from({ length: n }, (_, i) => {
-      const fila = i + 1;
-      return fila === origen
-        ? fila_(fila, { validacion: dia(fila, { diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: Array.from({ length: n }, (_, k) => k + 1).filter((x) => x !== origen), recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] }) })
-        : fila_(fila, { validacion: dia(fila, { derivada: { origenes: [origen] }, conflictos: [{ recurso: "persona", filas: [origen], causa: "dia_completo" }] }) });
+      const f = i + 1;
+      return fila(f, { validacion: f === origen
+        ? okFila(f, { avisos: [avisoVentana([1])], diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: Array.from({ length: n }, (_, k) => k + 1).filter((x) => x !== origen), recursosCompartidos: ["personal"] } })
+        : okFila(f, { avisos: [avisoVentana([origen])] }) });
     });
-  const fila_ = (n: number, over: Partial<FilaEditable> = {}) => fila(n, over);
 
-  it("66 filas bloqueadas por UNA: el diagnóstico agrupa en un origen y 65 derivadas (no 66 problemas distintos)", () => {
+  it("66 filas con aviso por UNA sin regreso: el diagnóstico agrupa en un origen y 66 avisos; ninguna queda bloqueada", () => {
     const d = diagnosticoDeFilas(lote(66));
-    expect(d).toMatchObject({ total: 66, bloqueadas: 66, derivadas: 65 });
+    expect(d).toMatchObject({ total: 66, bloqueadas: 0, conAvisos: 66 });
     expect(d.origenes).toEqual([{ fila: 33, falta: "regreso", afecta: 65 }]);
+    expect(puedeConfirmar(lote(66), false)).toBe(true);            // las filas son OK: los avisos no bloquean…
+    expect(puedeConfirmarCopia(lote(66), false, "", "")).toBe(false);   // …pero exigen aceptación expresa
   });
 
-  it("las filas pendientes de revalidar no cuentan en el diagnóstico (su resultado es viejo) y las excluidas tampoco", () => {
-    const filas = lote(4, 2);
+  it("la aceptación de los avisos habilita confirmar y se invalida si cambian los avisos (otra fila, otro tipo, otras filas relacionadas)", () => {
+    const filas = lote(5, 3);
+    const clave = claveAvisosCopia(filas);
+    expect(clave).not.toBe("");
+    expect(puedeConfirmarCopia(filas, false, "", clave)).toBe(true);
+    expect(puedeConfirmarCopia(filas, true, "", clave)).toBe(false);                                   // ocupado: manda la regla previa
+    const otra = lote(5, 4);                                                                           // el origen del aviso cambió
+    expect(claveAvisosCopia(otra)).not.toBe(clave);
+    expect(puedeConfirmarCopia(otra, false, "", clave)).toBe(false);
+    const conDestino = filas.map((f, i) => (i === 0 ? { ...f, validacion: { ...f.validacion!, avisos: [...f.validacion!.avisos!, { tipo: "destino_ocupado" as const, mensaje: "y" }] } } : f));
+    expect(claveAvisosCopia(conDestino)).not.toBe(clave);                                               // un aviso nuevo (destino ocupado) también exige aceptar de nuevo
+    expect(puedeConfirmarCopia(conDestino, false, "", clave)).toBe(false);
+  });
+
+  it("sin avisos no se exige aceptar nada; las pendientes y las excluidas no cuentan", () => {
+    const limpias = [fila(1), fila(2)];
+    expect(claveAvisosCopia(limpias)).toBe("");
+    expect(puedeConfirmarCopia(limpias, false, "", "")).toBe(true);
+    const filas = lote(3, 2);
     filas[0] = { ...filas[0], sucia: true }; filas[2] = { ...filas[2], incluida: false };
-    expect(diagnosticoDeFilas(filas).total).toBe(2);
+    expect(filasConAvisos(filas).map((f) => f.fila)).toEqual([2]);
   });
 
-  it("EDITAR el regreso de la fila origen: solo ella queda pendiente; al llegar la nueva validación TODAS las derivadas se liberan y se puede confirmar", () => {
+  it("una fila con ERROR real sigue bloqueando aunque las demás solo tengan avisos", () => {
+    const filas = lote(3, 2);
+    filas[1] = { ...filas[1], validacion: { fila: 2, estado: "error", errores: ["La ruta está inactiva."], tarifa: null } };
+    expect(puedeConfirmarCopia(filas, false, "", claveAvisosCopia(filas))).toBe(false);
+    expect(diagnosticoDeFilas(filas)).toMatchObject({ bloqueadas: 1, conAvisos: 2 });
+  });
+
+  it("EDITAR el regreso de la fila origen: solo ella queda pendiente; al llegar la nueva validación desaparecen los avisos y se confirma sin aceptar nada", () => {
     const antes = lote(66);
     const editada = antes.map((f, i) => (i === 32 ? editarFila(f, { regresoEditado: "2026-11-20T12:00" }) : f));
     expect(editada.filter((f) => f.sucia).map((f) => f.borrador.fila)).toEqual([33]);   // solo la editada
     expect(editada[32].borrador.regresoEditado).toBe("2026-11-20T12:00");
-    expect(puedeConfirmar(editada, false)).toBe(false);                               // aún hay pendientes y errores
-    const respuesta = Array.from({ length: 66 }, (_, i) => ({ fila: i + 1, estado: "ok" as const, errores: [], tarifa: null }));
-    const despues = aplicarValidacion(editada, respuesta);                            // el servidor revalida TODO el lote
+    expect(puedeConfirmar(editada, false)).toBe(false);                               // aún hay una pendiente
+    const respuesta = Array.from({ length: 66 }, (_, i) => okFila(i + 1));            // el servidor revalida TODO el lote: sin avisos
+    const despues = aplicarValidacion(editada, respuesta);
     expect(despues.every((f) => f.validacion?.estado === "ok" && !f.sucia)).toBe(true);
-    expect(puedeConfirmar(despues, false)).toBe(true);
-    expect(diagnosticoDeFilas(despues)).toMatchObject({ bloqueadas: 0, derivadas: 0, origenes: [] });
+    expect(claveAvisosCopia(despues)).toBe("");
+    expect(puedeConfirmarCopia(despues, false, "", "")).toBe(true);
   });
 
-  it("si el nuevo regreso SIGUE solapándose, el servidor mantiene el bloqueo y el cliente lo refleja (no se relaja nada)", () => {
+  it("si el nuevo regreso SE SOLAPA de verdad, el servidor mantiene el bloqueo y el cliente lo refleja (el solape real no se relaja)", () => {
     const editada = lote(4, 2).map((f, i) => (i === 1 ? editarFila(f, { regresoEditado: "2026-11-20T09:00" }) : f));
     const respuesta = [
-      { fila: 1, estado: "ok" as const, errores: [], tarifa: null },
+      okFila(1),
       { fila: 2, estado: "error" as const, errores: ["La unidad X está asignada también en la fila 3 de este mismo lote. Los horarios se solapan."], tarifa: null, conflictos: [{ recurso: "unidad" as const, filas: [3], causa: "solape" as const }] },
       { fila: 3, estado: "error" as const, errores: ["La unidad X está asignada también en la fila 2 de este mismo lote. Los horarios se solapan."], tarifa: null, conflictos: [{ recurso: "unidad" as const, filas: [2], causa: "solape" as const }] },
-      { fila: 4, estado: "ok" as const, errores: [], tarifa: null },
+      okFila(4),
     ];
     const despues = aplicarValidacion(editada, respuesta);
     expect(puedeConfirmar(despues, false)).toBe(false);
     expect(diagnosticoDeFilas(despues).porMotivo.solape_real).toBe(2);
-    expect(diagnosticoDeFilas(despues).origenes).toEqual([]);
   });
 
   it("el cuerpo enviado al servidor lleva el regreso editado y nunca los campos calculados ni la tarifa del origen", () => {
     const f = editarFila(fila(1), { regresoEditado: "2026-11-20T12:00" });
     const c = cuerpoLote("2026-11-19", "2026-11-20", [{ ...f, origen: { ...f.origen, tarifaOriginal: { monto: 5, moneda: "GTQ" } } }]);
     expect(c.filas[0].regresoEditado).toBe("2026-11-20T12:00");
-    expect(JSON.stringify(c)).not.toMatch(/tarifaOriginal|regresoOffsetDias|regresoHora/);
+    expect(JSON.stringify(c)).not.toMatch(/tarifaOriginal|regresoOffsetDias|regresoHora|avisos/);
   });
 });
 

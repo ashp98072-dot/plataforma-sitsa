@@ -136,7 +136,7 @@ describe("respuestas", () => {
   it("validar devuelve la validación por fila", async () => {
     expect(await (await post(validar, cuerpo())).json()).toEqual({
       validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }],
-      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { hora_o_regreso_ausente: 0, solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, derivadas: 0, origenes: [] },   // campo aditivo (solo conteos)
+      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, conAvisos: 0, avisosPorTipo: { ventana_incompleta: 0, destino_ocupado: 0 }, origenes: [] },   // campo aditivo (solo conteos)
     });
   });
 });
@@ -195,24 +195,24 @@ describe("plazo de TODA la operación (cargar + validar + catálogos) con cancel
   });
 });
 
-describe("diagnóstico seguro de bloqueos en las respuestas (solo conteos y números de fila)", () => {
+describe("diagnóstico seguro de bloqueos y avisos en las respuestas (solo conteos y números de fila)", () => {
   const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
-  const bloqueadas = [
-    { fila: 1, estado: "error", errores: ["Juan Pérez está asignado también en la fila 2 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado)."], tarifa: null,
-      derivada: { origenes: [2] }, conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] },
-    { fila: 2, estado: "error", errores: ["Juan Pérez está asignado también en la fila 1 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado)."], tarifa: null,
+  const conAvisos = [
+    { fila: 1, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", filas: [2], mensaje: "Juan Pérez está asignado también en la fila 2 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado). Se copia igual que el origen." }],
+      conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] },
+    { fila: 2, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", filas: [1], mensaje: "Juan Pérez está asignado también en la fila 1 de este mismo lote. Se copia igual que el origen." }, { tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 19/11/2026. Se copia igual que el origen." }],
       diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1], recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] },
   ];
-  it("GET cargar y POST validar devuelven `diagnostico` con el origen del bloqueo, sin nombres ni textos de error, y lo dejan en la bitácora solo como conteos", async () => {
+  it("GET cargar y POST validar devuelven `diagnostico` con avisos y origen, sin nombres ni textos de error, y lo dejan en la bitácora solo como conteos", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    vi.mocked(validarLote).mockResolvedValue(bloqueadas as never);
+    vi.mocked(validarLote).mockResolvedValue(conAvisos as never);
     const g = await (await cargar(new Request(url), ctx)).json();
-    expect(g.diagnostico).toMatchObject({ total: 2, bloqueadas: 2, derivadas: 1, origenes: [{ fila: 2, falta: "regreso", afecta: 1 }] });
+    expect(g.diagnostico).toMatchObject({ total: 2, bloqueadas: 0, conAvisos: 2, avisosPorTipo: { ventana_incompleta: 2, destino_ocupado: 1 }, origenes: [{ fila: 2, falta: "regreso", afecta: 1 }] });
     const v = await (await post(validar, cuerpo())).json();
     expect(v.diagnostico).toEqual(g.diagnostico);
-    expect(JSON.stringify(g.diagnostico)).not.toMatch(/Juan|Pérez|asignado/);
+    expect(JSON.stringify(g.diagnostico)).not.toMatch(/Juan|Pérez|asignado|PLAN-9/);
     expect(info).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(info.mock.calls)).not.toMatch(/Juan|Pérez|asignado|acme/i);
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/Juan|Pérez|asignado|acme|PLAN-9/i);
     info.mockRestore();
   });
   it("un lote sin bloqueos no genera ruido en la bitácora", async () => {

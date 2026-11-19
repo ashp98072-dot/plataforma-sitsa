@@ -8,7 +8,7 @@ import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import type { CatalogosCopia, OrigenFila } from "@/lib/tms/programacion-copia";
 import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
-import { comparacionRequiereAviso, ETIQUETA_MOTIVO, MOTIVOS_BLOQUEO, sugerenciaDeDiagnostico } from "@/lib/tms/programacion-copia-diagnostico";
+import { comparacionRequiereAviso, ETIQUETA_AVISO, ETIQUETA_MOTIVO, MOTIVOS_BLOQUEO, sugerenciaDeDiagnostico, type TipoAviso } from "@/lib/tms/programacion-copia-diagnostico";
 import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lote";
 import { PLAZO_CLIENTE_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { clasificarFalloSolicitud, crearGestorSolicitudes, esRespuestaReintentable } from "./solicitud-cancelable";
@@ -27,7 +27,9 @@ import {
   fechaVisible,
   filasIncluidas,
   MAX_AUXILIARES_UI,
-  puedeConfirmarConTarifas,
+  puedeConfirmarCopia,
+  claveAvisosCopia,
+  filasConAvisos,
   resumenFilas,
   tarifasEsperadas,
   sumarDias,
@@ -66,6 +68,8 @@ export default function CopiarProgramacionPage() {
   const version = useRef(0);
   // Clave de las diferencias de tarifa (origen → destino) que el usuario aceptó expresamente antes de confirmar.
   const [tarifasAceptadas, setTarifasAceptadas] = useState("");
+  // Clave de los avisos de la copia (recurso compartido sin hora/regreso, destino ya ocupado) que el usuario aceptó expresamente.
+  const [avisosAceptados, setAvisosAceptados] = useState("");
   // Qué se puede reintentar tras un fallo recuperable (plazo vencido, 503, red): la carga completa o solo la revalidación.
   const [reintentable, setReintentable] = useState<"cargar" | "validar" | null>(null);
   // Solicitudes cancelables: una nueva cancela la anterior, ninguna respuesta vieja sobrescribe a una nueva y ninguna espera más que el plazo del cliente.
@@ -144,7 +148,7 @@ export default function CopiarProgramacionPage() {
   }
 
   async function confirmar() {
-    if (!puedeConfirmarConTarifas(filas, validando || confirmando, tarifasAceptadas)) return;
+    if (!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados)) return;
     setConfirmando(true);
     setError("");
     try {
@@ -172,6 +176,8 @@ export default function CopiarProgramacionPage() {
   const sugerencia = sugerenciaDeDiagnostico(diag);
   const comparaciones = comparacionesDeTarifa(filas);
   const claveTarifas = claveAvisoTarifas(comparaciones);
+  const claveAvisos = claveAvisosCopia(filas);
+  const nConAvisos = filasConAvisos(filas).length;
   const conAvisoTarifa = comparaciones.filter((c) => comparacionRequiereAviso(c.comparacion)).length;
   const irAFila = (fila: number) => { const el = document.getElementById(`regreso-${fila}`); el?.scrollIntoView({ block: "center" }); el?.focus(); };
   const comparacion = (f: FilaEditable) => {
@@ -237,23 +243,35 @@ export default function CopiarProgramacionPage() {
             {r.total} viaje(s) en {fechaVisible(fechaOrigen)} · Seleccionados: <strong>{r.incluidas}</strong> de <strong>{r.total}</strong> · OK: <strong>{r.ok}</strong> · Con error: <strong>{r.conError}</strong> · Pendientes de validar: <strong>{r.pendientes}</strong>
           </p>
           {diag.bloqueadas > 0 ? (
-            <section aria-label="Diagnóstico de bloqueos" className="space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
-              <p className="font-medium">{diag.bloqueadas} de {diag.total} fila(s) bloqueada(s). Motivos:</p>
+            <section aria-label="Diagnóstico de bloqueos" className="space-y-2 rounded-lg border border-rose-700/60 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">
+              <p className="font-medium">{diag.bloqueadas} de {diag.total} fila(s) no se pueden copiar. Motivos:</p>
               <ul className="list-inside list-disc">
                 {MOTIVOS_BLOQUEO.filter((m) => diag.porMotivo[m] > 0).map((m) => <li key={m}>{ETIQUETA_MOTIVO[m]}: {diag.porMotivo[m]} fila(s)</li>)}
+              </ul>
+              <p className="text-rose-300/80">Los solapes reales de horario (con horas conocidas) siguen bloqueando.</p>
+            </section>
+          ) : null}
+          {nConAvisos > 0 ? (
+            <section aria-label="Avisos de la copia" className="space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              <p className="font-medium">⚠ {nConAvisos} fila(s) se copiarán igual que el origen, con avisos:</p>
+              <ul className="list-inside list-disc">
+                {(Object.keys(ETIQUETA_AVISO) as TipoAviso[]).filter((t) => diag.avisosPorTipo[t] > 0).map((t) => <li key={t}>{ETIQUETA_AVISO[t]}: {diag.avisosPorTipo[t]} fila(s)</li>)}
               </ul>
               {sugerencia ? <p>{sugerencia}</p> : null}
               {diag.origenes.length ? (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span>Corregir primero:</span>
+                  <span>Si prefieres evitar el aviso, da un regreso a:</span>
                   {diag.origenes.slice(0, 5).map((o) => (
                     <button key={o.fila} type="button" onClick={() => irAFila(o.fila)} className="rounded border border-amber-700/60 px-2 py-1 underline">
-                      Fila {o.fila} ({o.falta === "hora" ? "sin hora" : o.falta === "regreso" ? "sin regreso" : "sin hora ni regreso"}) · bloquea a {o.afecta}
+                      Fila {o.fila} ({o.falta === "hora" ? "sin hora" : o.falta === "regreso" ? "sin regreso" : "sin hora ni regreso"}) · comparte con {o.afecta}
                     </button>
                   ))}
                 </div>
               ) : null}
-              <p className="text-amber-300/80">Al corregir una fila, el servidor revalida todo el lote: los solapes reales de horario siguen bloqueando.</p>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={avisosAceptados === claveAvisos} onChange={(e) => setAvisosAceptados(e.target.checked ? claveAvisos : "")} />
+                Entiendo los avisos y acepto copiar estos viajes tal como están en el origen
+              </label>
             </section>
           ) : null}
           <div className="flex flex-wrap gap-2">
@@ -354,11 +372,19 @@ export default function CopiarProgramacionPage() {
                           </div>
                         )
                           : f.sucia || !f.validacion ? <span className="text-[var(--muted)]">Validando…</span>
-                          : f.validacion.estado === "ok" ? <span className="text-emerald-400">Disponible</span>
-                          : f.validacion.derivada ? (
-                            <div className="space-y-0.5 text-rose-400">
-                              <p>Fila {b.fila}: bloqueada por la fila {f.validacion.derivada.origenes.join(", ")} (sin hora o regreso válido: reserva todo el día). Corrige esa fila.</p>
-                              <details className="text-[var(--muted)]"><summary className="cursor-pointer">Ver detalle</summary><ul>{f.validacion.errores.map((e, k) => <li key={k}>{e}</li>)}</ul></details>
+                          : f.validacion.estado === "ok" ? (
+                            <div className="space-y-0.5">
+                              <span className="text-emerald-400">{f.validacion.avisos?.length ? "Se copia con avisos" : "Disponible"}</span>
+                              {f.validacion.avisos?.length ? (
+                                <div className="text-amber-300">
+                                  {(() => {
+                                    const rel = [...new Set(f.validacion.avisos.filter((a) => a.tipo === "ventana_incompleta").flatMap((a) => a.filas ?? []))].sort((x, y) => x - y);
+                                    return rel.length ? <p>Comparte recursos con la fila(s) {rel.join(", ")} sin hora/regreso válido (se reserva todo el día); se copia igual que el origen.</p> : null;
+                                  })()}
+                                  {f.validacion.avisos.filter((a) => a.tipo === "destino_ocupado").map((a, k) => <p key={k}>{a.mensaje}</p>)}
+                                  <details className="text-[var(--muted)]"><summary className="cursor-pointer">Ver detalle</summary><ul>{f.validacion.avisos.map((a, k) => <li key={k}>{a.mensaje}</li>)}</ul></details>
+                                </div>
+                              ) : null}
                             </div>
                           )
                           : <ul className="space-y-0.5 text-rose-400">{f.validacion.errores.map((e, k) => <li key={k}>Fila {b.fila}: {e}</li>)}</ul>}
@@ -382,7 +408,7 @@ export default function CopiarProgramacionPage() {
             </section>
           ) : null}
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={!puedeConfirmarConTarifas(filas, validando || confirmando, tarifasAceptadas)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
+            <button type="button" disabled={!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
               {confirmando ? "Creando…" : `Confirmar copia (${r.incluidas} viaje${r.incluidas === 1 ? "" : "s"})`}
             </button>
             <span className="text-xs text-[var(--muted)]">Se crean todos o ninguno; los viajes nuevos nacen Programados con tarifa y viáticos vigentes.</span>
