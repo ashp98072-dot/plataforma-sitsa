@@ -6,6 +6,12 @@ import { crearTraslado, enviarTraslado, recibirTraslado } from "./traslados";
 const pipe = process.env.CANECAS_TEST_PIPE;
 describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
   const pool = mysql.createPool({ socketPath: `\\\\.\\pipe\\${pipe}`, user: "root", database: "canecas_traslados_test", multipleStatements: true });
+  async function migrar() {
+    const sql = readFileSync("sql/migrate-2026-11-canecas-traslados.sql", "utf8");
+    const [tablas, triggers] = sql.split("DELIMITER //");
+    await pool.query(tablas);
+    for (const trigger of triggers.split("//").map(s => s.trim()).filter(s => s.startsWith("CREATE TRIGGER"))) await pool.query(trigger);
+  }
   beforeAll(async () => {
     const schema = readFileSync("sql/schema.sql", "utf8");
     for (const tabla of ["empresas", "usuarios", "empleados", "compras_proveedores", "auditoria"]) {
@@ -19,12 +25,18 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
   it("instala las tablas y exige preflight y postcheck satisfactorios", async () => {
     const [pre] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
     expect(pre.every(r => r.resultado === "OK")).toBe(true);
-    const sql = readFileSync("sql/migrate-2026-11-canecas-traslados.sql", "utf8");
-    const [tablas, triggers] = sql.split("DELIMITER //");
-    await pool.query(tablas);
-    for (const trigger of triggers.split("//").map(s => s.trim()).filter(s => s.startsWith("CREATE TRIGGER"))) await pool.query(trigger);
+    await migrar();
     const [post] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/postcheck-2026-11-canecas-traslados.sql", "utf8"));
     expect(post.every(r => r.resultado === "OK")).toBe(true);
+  });
+  it("permite rollback únicamente con las tablas vacías y volver a instalar", async () => {
+    const sql = readFileSync("sql/rollback-2026-11-canecas-traslados.sql", "utf8");
+    await pool.query(sql.split("DELIMITER //")[1].split("//")[0].trim());
+    await pool.query("CALL can_tras_rollback_vacio()");
+    await pool.query("DROP PROCEDURE can_tras_rollback_vacio");
+    const [pre] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
+    expect(pre.every(r => r.resultado === "OK")).toBe(true);
+    await migrar();
   });
   it("rechaza referencias cruzadas y documentos históricos mutables", async () => {
     await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a'),(2,'B','B','b');
