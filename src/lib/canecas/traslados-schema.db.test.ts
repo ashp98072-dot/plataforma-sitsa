@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import mysql from "mysql2/promise";
-import { enviarTraslado, recibirTraslado } from "./traslados";
+import { crearTraslado, enviarTraslado, recibirTraslado } from "./traslados";
 
 const pipe = process.env.CANECAS_TEST_PIPE;
 describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
@@ -30,8 +30,8 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a'),(2,'B','B','b');
       INSERT INTO usuarios (id,username,password_hash,salt) VALUES (1,'test','hash','salt');
       INSERT INTO canecas_ubicaciones (id,empresa_id,nombre) VALUES (1,1,'Origen'),(2,1,'Destino'),(3,2,'Ajena');`);
-    await expect(pool.query("INSERT INTO canecas_traslados (empresa_id,origen_id,destino_id,numero,clave_operacion,entrega,creado_por) VALUES (1,1,3,'1','1','Ana',1)")).rejects.toThrow();
-    await pool.query("INSERT INTO canecas_traslados (id,empresa_id,origen_id,destino_id,numero,clave_operacion,entrega,creado_por) VALUES (1,1,1,2,'1','1','Ana',1)");
+    await expect(pool.query("INSERT INTO canecas_traslados (empresa_id,origen_id,destino_id,numero,clave_operacion,huella,entrega,creado_por) VALUES (1,1,3,'1','1','hash','Ana',1)")).rejects.toThrow();
+    await pool.query("INSERT INTO canecas_traslados (id,empresa_id,origen_id,destino_id,numero,clave_operacion,huella,entrega,creado_por) VALUES (1,1,1,2,'1','1','hash','Ana',1)");
     await pool.query("INSERT INTO canecas_traslado_documentos (empresa_id,traslado_id,version,datos,creado_por) VALUES (1,1,1,'{}',1)");
     await expect(pool.query("UPDATE canecas_traslado_documentos SET datos='{}' WHERE id=1")).rejects.toThrow();
     await expect(pool.query("DELETE FROM canecas_traslado_documentos WHERE id=1")).rejects.toThrow();
@@ -48,7 +48,7 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
   it("envía una sola vez y registra recepciones parciales idempotentes", async () => {
     await pool.query(`INSERT INTO canecas_productos (id,empresa_id,codigo,nombre,presentacion,capacidad,unidad_capacidad,unidad_inventario) VALUES (1,1,'A','Aceite','Caneca',5,'galones','caneca');
       INSERT INTO canecas_saldos (empresa_id,producto_id,ubicacion_id,fisico,reservado) VALUES (1,1,1,10,1);
-      INSERT INTO canecas_traslados (id,empresa_id,origen_id,destino_id,numero,clave_operacion,entrega,creado_por) VALUES (2,1,1,2,'T-2','2','Ana',1);
+      INSERT INTO canecas_traslados (id,empresa_id,origen_id,destino_id,numero,clave_operacion,huella,entrega,creado_por) VALUES (2,1,1,2,'T-2','2','hash','Ana',1);
       INSERT INTO canecas_traslado_partidas (id,empresa_id,traslado_id,producto_id,cantidad) VALUES (1,1,2,1,8);`);
     const marca = { nombre: "MONACO", logo: Buffer.from("logo"), logoTipo: "image/png" };
     const envios = await Promise.all([enviarTraslado(pool,1,2,1,marca), enviarTraslado(pool,1,2,1,marca)]);
@@ -67,6 +67,17 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     const [documentos] = await pool.query<mysql.RowDataPacket[]>("SELECT version,logo FROM canecas_traslado_documentos WHERE empresa_id=1 AND traslado_id=2 ORDER BY version");
     expect(documentos.map(d => d.version)).toEqual([1,2,3]);
     expect(documentos.every(d => Buffer.from(d.logo).equals(marca.logo))).toBe(true);
+  });
+  it("crea borradores idempotentes sin tocar stock y bloquea envíos sin disponible", async () => {
+    const input = { clave: "draft-1", origenId: 1, destinoId: 2, entrega: "Ana", transporte: "", observaciones: "", partidas: [{ productoId: 1, cantidad: 3 }] };
+    const duplicados = await Promise.all([crearTraslado(pool,1,1,input), crearTraslado(pool,1,1,input)]);
+    expect(duplicados[0].id).toBe(duplicados[1].id);
+    await expect(crearTraslado(pool,1,1,{...input, entrega: "Otra"})).rejects.toThrow("CLAVE_REUTILIZADA");
+    await expect(enviarTraslado(pool,1,duplicados[0].id,1,{ nombre: "A", logo: null, logoTipo: null })).rejects.toThrow("EXISTENCIA_INSUFICIENTE");
+    const [saldos] = await pool.query<mysql.RowDataPacket[]>("SELECT ubicacion_id,fisico FROM canecas_saldos WHERE empresa_id=1 ORDER BY ubicacion_id");
+    expect(saldos.map(s => s.fisico)).toEqual([2,7]);
+    const [rows] = await pool.query<mysql.RowDataPacket[]>("SELECT estado FROM canecas_traslados WHERE empresa_id=1 AND id=?", [duplicados[0].id]);
+    expect(rows[0].estado).toBe("BORRADOR");
   });
 });
 
