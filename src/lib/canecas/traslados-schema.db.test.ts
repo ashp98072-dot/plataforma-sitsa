@@ -25,6 +25,17 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
   it("instala las tablas y exige preflight y postcheck satisfactorios", async () => {
     const [pre] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
     expect(pre.every(r => r.resultado === "OK")).toBe(true);
+    const [revision] = await pool.query<mysql.RowDataPacket[][]>(readFileSync("sql/verificacion-lectura-canecas-traslados.sql", "utf8"));
+    expect(revision[0][0].base_seleccionada).toBe("canecas_traslados_test");
+    expect(revision[1].every(r => r.resultado === "OK")).toBe(true);
+    expect(revision[2].every(r => r.resultado === "OK")).toBe(true);
+    expect(revision[3].every(r => String(r.resultado).startsWith("OK"))).toBe(true);
+    expect(revision[4].every(r => r.resultado === "OK")).toBe(true);
+    expect(revision[8].every(r => r.resultado === "OK")).toBe(true);
+    await pool.query("ALTER TABLE canecas_saldos MODIFY fisico INT UNSIGNED NOT NULL DEFAULT 0");
+    const [signo] = await pool.query<mysql.RowDataPacket[][]>(readFileSync("sql/verificacion-lectura-canecas-traslados.sql", "utf8"));
+    expect(signo[2].find(r => r.tabla === "canecas_saldos" && r.columna === "fisico")?.resultado).toBe("DETENER");
+    await pool.query("ALTER TABLE canecas_saldos MODIFY fisico INT NOT NULL DEFAULT 0");
     await pool.query("CREATE TABLE canecas_traslados (id INT) ENGINE=InnoDB");
     const [parcial] = await pool.query<mysql.RowDataPacket[]>(readFileSync("sql/preflight-2026-11-canecas-traslados.sql", "utf8"));
     expect(parcial.find(r => r.comprobacion === "Tablas de traslado aún no instaladas")?.resultado).toBe("DETENER");
