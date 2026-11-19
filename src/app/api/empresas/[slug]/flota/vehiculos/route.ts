@@ -1,5 +1,6 @@
 import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { placaComparable } from "@/lib/flota/combustible-coincidencias";
+import { errorEliminacionVehiculo } from "@/lib/flota/vehiculo-eliminacion";
 import type { SqlParams } from "@/lib/db";
 import { propiedadesVehiculos, propiedadHabilitada } from "@/lib/flota/propiedad";
 import { diagnosticarVehiculos } from "@/lib/flota/vehiculos-catalogo";
@@ -715,6 +716,8 @@ export async function DELETE(req: Request, ctx: Ctx) {
       conn.destroy();
       console.error("Rollback DELETE vehículo", rollbackError);
     }
+    const bloqueada = errorEliminacionVehiculo(error);
+    if (bloqueada) return NextResponse.json({ error: bloqueada.error }, { status: bloqueada.status });
     console.error("DELETE vehículo", error);
     return NextResponse.json(
       { error: "No se pudo completar la eliminación del vehículo. Utiliza Dar de baja si debe conservarse su historial." },
