@@ -17,7 +17,7 @@ export async function POST(req: Request, ctx: Ctx) {
   const parsed = cuerpoCopiaSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos." }, { status: 400 });
   const { fechaOrigen, fechaDestino, filas } = parsed.data;
-  const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas);
+  const b = await borradoresDesdeCliente(guard.empresa.id, fechaOrigen, filas, fechaDestino);
   if (!b.ok) return NextResponse.json({ error: b.error }, { status: 400 });
   const r = await confirmarLote(guard.empresa.id, guard.session.username, fechaDestino, { tipo: "COPIA", fechaOrigen }, b.borradores);
   if (!r.ok) return NextResponse.json({ error: r.error, erroresPorFila: r.erroresPorFila }, { status: r.status });
