@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { calcularTransito, estadoTraslado, registrarRecepcion } from "./traslados-reglas";
 
 type PartidaRecepcion = { partidaId: number; recibido: number; faltante: number; motivo: string };
 type Recepcion = { clave: string; recibe: string; condicion: string; observaciones: string; partidas: PartidaRecepcion[] };
 type Marca = { nombre: string; logo: Buffer | null; logoTipo: string | null };
+type Borrador = { clave: string; origenId: number; destinoId: number; entrega: string; transporte: string; observaciones: string; partidas: { productoId: number; cantidad: number }[] };
 
 async function transaccion<T>(pool: Pool, fn: (conn: PoolConnection) => Promise<T>): Promise<T> {
   const conn = await pool.getConnection();
@@ -28,6 +29,36 @@ async function partidasTraslado(conn: PoolConnection, empresa: number, id: numbe
   const [rows] = await conn.query<RowDataPacket[]>("SELECT * FROM canecas_traslado_partidas WHERE empresa_id=? AND traslado_id=? ORDER BY producto_id FOR UPDATE", [empresa, id]);
   if (!rows.length) throw new Error("SIN_PARTIDAS");
   return rows;
+}
+
+/** Crear el borrador nunca altera los saldos. El mismo UUID solo admite el mismo contenido. */
+export async function crearTraslado(pool: Pool, empresa: number, usuario: number, input: Borrador) {
+  const partidas = [...input.partidas].sort((a, b) => a.productoId - b.productoId);
+  if (input.origenId === input.destinoId || !partidas.length || new Set(partidas.map(p => p.productoId)).size !== partidas.length) throw new Error("PARTIDAS_INVALIDAS");
+  if (partidas.some(p => !Number.isSafeInteger(p.cantidad) || p.cantidad <= 0 || p.cantidad > 2147483647)) throw new Error("CANTIDAD_INVALIDA");
+  const huella = createHash("sha256").update(JSON.stringify({ ...input, partidas })).digest("hex");
+  try { return await transaccion(pool, async conn => {
+    const [previos] = await conn.query<RowDataPacket[]>("SELECT id,huella FROM canecas_traslados WHERE empresa_id=? AND clave_operacion=? FOR UPDATE", [empresa, input.clave]);
+    if (previos[0]) {
+      if (previos[0].huella !== huella) throw new Error("CLAVE_REUTILIZADA");
+      return { id: Number(previos[0].id), yaRegistrado: true };
+    }
+    const [ubicaciones] = await conn.query<RowDataPacket[]>("SELECT id FROM canecas_ubicaciones WHERE empresa_id=? AND id IN (?,?) AND activo=1", [empresa, input.origenId, input.destinoId]);
+    if (ubicaciones.length !== 2) throw new Error("UBICACION_NO_ENCONTRADA");
+    for (const p of partidas) {
+      const [productos] = await conn.query<RowDataPacket[]>("SELECT id FROM canecas_productos WHERE empresa_id=? AND id=? AND activo=1", [empresa, p.productoId]);
+      if (!productos.length) throw new Error("PRODUCTO_NO_ENCONTRADO");
+    }
+    const [r] = await conn.execute<ResultSetHeader>("INSERT INTO canecas_traslados (empresa_id,origen_id,destino_id,numero,clave_operacion,huella,entrega,transporte,observaciones,creado_por) VALUES (?,?,?,?,?,?,?,?,?,?)", [empresa, input.origenId, input.destinoId, `TR-${randomUUID()}`, input.clave, huella, input.entrega, input.transporte, input.observaciones, usuario]);
+    for (const p of partidas) await conn.execute("INSERT INTO canecas_traslado_partidas (empresa_id,traslado_id,producto_id,cantidad) VALUES (?,?,?,?)", [empresa, r.insertId, p.productoId, p.cantidad]);
+    return { id: r.insertId, yaRegistrado: false };
+  }); } catch (error) {
+    if ((error as { code?: string }).code !== "ER_DUP_ENTRY") throw error;
+    const [previos] = await pool.query<RowDataPacket[]>("SELECT id,huella FROM canecas_traslados WHERE empresa_id=? AND clave_operacion=?", [empresa, input.clave]);
+    if (!previos[0]) throw error;
+    if (previos[0].huella !== huella) throw new Error("CLAVE_REUTILIZADA");
+    return { id: Number(previos[0].id), yaRegistrado: true };
+  }
 }
 
 /** Descuenta una sola vez el disponible no reservado y emite el documento inicial. */
