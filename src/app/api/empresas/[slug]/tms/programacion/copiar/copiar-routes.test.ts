@@ -24,7 +24,7 @@ import { POST as confirmar } from "./confirmar/route";
 
 const ctx = { params: Promise.resolve({ slug: "acme" }) };
 const fila = { fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: null, tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: null, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], tarifaId: null, externo: null };
-const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], ...over });
+const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], tarifasEsperadas: [{ fila: 1, tarifa: null }], ...over });
 const post = (fn: typeof validar, body: unknown) => fn(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
 const sesion = { session: { username: "jefe" }, empresa: { id: 7 } };
 
