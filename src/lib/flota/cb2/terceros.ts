@@ -5,6 +5,7 @@ import { ErrorCB2, hash } from "./model";
 import { rows, insert, type Contexto } from "./repository";
 import { altaPiloto, altaUnidad, altaAsociacion, reconocerTercero, type AsociacionExterna, type CatalogosTerceros, type PilotoTercero, type UnidadTercera } from "./terceros-model";
 import { exigirTerceros, txTerceros, type ContextoTerceros } from "./terceros-transaccion";
+import { exigirPlacaNoEsFlota } from "./terceros-flota";
 export { exigirTerceros, tercerosHabilitados } from "./terceros-transaccion";
 import { tercerosHabilitados } from "./terceros-transaccion";
 import { identificarPlaca, nombreComparable, placaComparable } from "../combustible-coincidencias";
@@ -50,6 +51,8 @@ export async function registrarUnidad(ctx: ContextoTerceros, entrada: unknown) {
     const [u] = await rows(c, "SELECT * FROM flota_cb2_externos_unidades WHERE empresa_id=? AND referencia_hash=? FOR UPDATE", [ctx.empresaId, hash(nombreComparable(op.referencia))]);
     if (u && (placaComparable(String(u.placa)) !== placaComparable(op.placa) || u.tipo !== op.tipo)) throw new ErrorCB2("Referencia de unidad con datos contradictorios; requiere revisión.");
     if (u) return { id: Number(u.id), existente: true };
+    // La placa no puede existir ya en Flota (activa, inactiva, en taller o absorbida por una fusión): evita duplicar la unidad en dos catálogos.
+    await exigirPlacaNoEsFlota(c, ctx.empresaId, op.placa, op.confirmarCoincidencias);
     const candidatos = await rows(c, "SELECT id,placa,referencia FROM flota_cb2_externos_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE", [ctx.empresaId]) as unknown as UnidadTercera[];
     const coincidencias = candidatos.filter(u => identificarPlaca(op.placa, [u], u => u.placa).candidatos.length || identificarPlaca(u.placa, [{ placa: op.placa }], u => u.placa).candidatos.length).map(u => u.id);
     if (coincidencias.length && !op.confirmarCoincidencias) throw new ErrorCB2(`Placa coincidente con unidades #${coincidencias.join(", #")}. Reutiliza su referencia o confirma una unidad distinta con referencia real.`);
