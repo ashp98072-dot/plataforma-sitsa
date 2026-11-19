@@ -30,6 +30,13 @@ describe("permisos y aislamiento de traslados", () => {
     expect(m.acceso).toHaveBeenCalledWith("uno","confirmar");
     expect(m.recibir).not.toHaveBeenCalled();
   });
+  it("registra la autorización de confirmar con el actor de la sesión", async () => {
+    const payload = { accion: "recibir", id: 2, clave, recibe: "Ana", condicion: "Daño", observaciones: "", partidas: [{ partidaId: 1, recibido: 0, faltante: 1, motivo: "Daño" }] };
+    m.recibir.mockResolvedValue({ estado: "CON_DIFERENCIAS" });
+    expect((await POST(req(payload),ctx)).status).toBe(200);
+    expect(m.acceso).toHaveBeenCalledWith("uno","confirmar");
+    expect(m.recibir).toHaveBeenCalledWith(expect.anything(),5,2,7,payload,true);
+  });
   it("impide emitir si no existe logo configurado de la empresa", async () => {
     m.logo.mockResolvedValue(null);
     expect((await POST(req({ accion: "enviar", id: 1 }),ctx)).status).toBe(409);
@@ -42,4 +49,3 @@ describe("permisos y aislamiento de traslados", () => {
     expect(m.query.mock.calls[0][1]).toEqual([5,9,null,null]);
   });
 });
-
