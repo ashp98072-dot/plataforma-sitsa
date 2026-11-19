@@ -24,7 +24,7 @@ import { POST as confirmar } from "./confirmar/route";
 
 const ctx = { params: Promise.resolve({ slug: "acme" }) };
 const fila = { fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: null, tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: null, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], tarifaId: null, externo: null };
-const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], ...over });
+const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], tarifasEsperadas: [{ fila: 1, tarifa: null }], ...over });
 const post = (fn: typeof validar, body: unknown) => fn(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
 const sesion = { session: { username: "jefe" }, empresa: { id: 7 } };
 
@@ -64,6 +64,23 @@ describe("permisos y tenant", () => {
     expect(r.status).toBe(200);
     expect(vi.mocked(borradoresDesdeCliente).mock.calls[0][0]).toBe(7);
     expect(vi.mocked(confirmarLote).mock.calls[0].slice(0, 4)).toEqual([7, "jefe", "2026-09-25", { tipo: "COPIA", fechaOrigen: "2026-09-24" }]);
+  });
+  it("las tarifas esperadas son obligatorias y coherentes con las filas: ausentes, duplicadas, de más, de menos o con claves extra -> 400 sin confirmar", async () => {
+    const dos = [fila, { ...fila, fila: 2 }];
+    const sin = { fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila] };
+    const mal: unknown[] = [
+      sin,                                                                                                    // sin tarifasEsperadas
+      cuerpo({ tarifasEsperadas: [] }),                                                                         // de menos
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: null }, { fila: 2, tarifa: null }] }),                     // de más
+      cuerpo({ filas: dos, tarifasEsperadas: [{ fila: 1, tarifa: null }, { fila: 1, tarifa: null }] }),         // duplicada
+      cuerpo({ tarifasEsperadas: [{ fila: 9, tarifa: null }] }),                                                // otra fila
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 1, monto: 5, moneda: "GTQ", extra: 1 } }] }),         // clave extra
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 1, monto: -5, moneda: "GTQ" } }] }),                 // monto inválido
+    ];
+    for (const cuerpoMalo of mal) expect((await post(confirmar, cuerpoMalo)).status).toBe(400);
+    expect(confirmarLote).not.toHaveBeenCalled();
+    expect((await post(confirmar, cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 101, monto: 1800, moneda: "GTQ" } }] }))).status).toBe(200);
+    expect(vi.mocked(confirmarLote).mock.calls[0][5]).toEqual([{ fila: 1, tarifa: { id: 101, monto: 1800, moneda: "GTQ" } }]); // llegan al servidor como expectativa a comparar
   });
   it("otra empresa: si algún origen no es accesible para la sesión, 400 y no se crea nada", async () => {
     vi.mocked(borradoresDesdeCliente).mockResolvedValue({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });

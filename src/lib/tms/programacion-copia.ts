@@ -29,6 +29,7 @@ export type OrigenFila = {
   auxiliaresNombres: string[];
   unidadPlaca: string | null;
   tcPlaca: string | null;
+  tarifaOriginal?: { monto: number | null; moneda: string | null };
 };
 
 export type FilaCopia = { borrador: BorradorLote; origen: OrigenFila; advertencias: string[] };
@@ -50,7 +51,7 @@ function trasladoDeOrigen(fechaOrigen: string, horaCargaOrigen: unknown, regreso
 export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string): Promise<FilaCopia[]> {
   const planes = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.cliente_id, c.nombre AS cliente_nombre, p.ruta_id, p.ruta_codigo_historico,
-            p.hora_carga, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_traslado, p.tipo_viaje, p.tarifa_id, u.placa AS unidad_placa,
+            p.hora_carga, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_traslado, p.tipo_viaje, p.tarifa_id, p.tarifa_comercial, p.tarifa_moneda_historico, u.placa AS unidad_placa,
             p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
             pil.id_empleado AS piloto_empleado_id, pil.nombre AS piloto_nombre,
             aux1.id_empleado AS aux1_empleado_id, aux1.nombre AS aux1_nombre,
@@ -147,6 +148,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       advertencias,
       origen: {
         planId: id, codigo: String(p.codigo), estado: String(p.estado),
+        tarifaOriginal: { monto: p.tarifa_comercial == null ? null : Number(p.tarifa_comercial), moneda: texto(p.tarifa_moneda_historico) },
         clienteNombre: texto(p.cliente_nombre), rutaCodigo: texto(p.ruta_codigo_historico),
         pilotoNombre: tercerizado ? texto(p.piloto_externo_nombre) : texto(p.piloto_nombre),
         pilotoExtraNombre: extra ? texto(extra.nombre) : null,

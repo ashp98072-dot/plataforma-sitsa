@@ -25,6 +25,7 @@ import {
   MAX_AUXILIARES_UI,
   puedeConfirmar,
   resumenFilas,
+  tarifasEsperadas,
   sumarDias,
   type CambiosFila,
   type FilaEditable,
@@ -122,10 +123,17 @@ export default function CopiarProgramacionPage() {
     return () => clearTimeout(t);
   }, [hayPendientes, filas, validar]);
 
+  function invalidarSolicitud() {
+    version.current++;
+    validaciones.current.cancelar();
+    setValidando(false);
+  }
   function cambiar(indice: number, cambios: CambiosFila) {
+    invalidarSolicitud();
     setFilas((f) => f.map((x, i) => (i === indice ? editarFila(x, cambios) : x)));
   }
   function alternar(indice: number) {
+    invalidarSolicitud();
     setFilas((f) => alternarSeleccion(f, indice));
   }
 
@@ -135,7 +143,7 @@ export default function CopiarProgramacionPage() {
     setError("");
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar/confirmar`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpoLote(fechaOrigen, fechaDestino, filas)),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...cuerpoLote(fechaOrigen, fechaDestino, filas), tarifasEsperadas: tarifasEsperadas(filas) }),
       });
       const data = (await res.json().catch(() => ({}))) as { creados?: number; codigos?: string[]; error?: string; erroresPorFila?: ErrorFila[] };
       if (!res.ok) {
@@ -154,6 +162,14 @@ export default function CopiarProgramacionPage() {
   }
 
   const r = resumenFilas(filas);
+  const diagnostico = filas.filter((f) => f.incluida && !f.sucia && (f.validacion?.diagnostico?.regresoInvalido || f.validacion?.diagnostico?.horaInvalida));
+  const comparacion = (f: FilaEditable) => {
+    const origen = f.origen.tarifaOriginal;
+    const destino = f.validacion?.estado === "ok" && !f.sucia ? f.validacion.tarifa : undefined;
+    const mostrar = (t: { monto: number | null; moneda: string | null } | null | undefined) => t === undefined ? "Pendiente de validar" : t === null || t.monto === null ? "Sin tarifa" : `${t.moneda ?? "Moneda no registrada"} ${t.monto.toFixed(2)}`;
+    const diferente = origen && destino !== undefined && (origen.monto !== (destino?.monto ?? null) || (origen.moneda && destino?.moneda && origen.moneda.toUpperCase() !== destino.moneda.toUpperCase()));
+    return { origen: mostrar(origen), destino: mostrar(destino), diferente: Boolean(diferente), monedaDesconocida: Boolean(origen?.monto != null && !origen.moneda) };
+  };
 
   if (!puedeCrear) {
     return <p role="alert" className="p-6 text-sm">No tienes permiso para copiar programación (programacion:crear).</p>;
@@ -209,9 +225,13 @@ export default function CopiarProgramacionPage() {
           <p className="text-sm" aria-live="polite">
             {r.total} viaje(s) en {fechaVisible(fechaOrigen)} · Seleccionados: <strong>{r.incluidas}</strong> de <strong>{r.total}</strong> · OK: <strong>{r.ok}</strong> · Con error: <strong>{r.conError}</strong> · Pendientes de validar: <strong>{r.pendientes}</strong>
           </p>
+          {!hayPendientes && !validando && diagnostico.length ? <section aria-label="Diagnóstico de bloqueos" className="rounded border border-amber-700 p-3 text-sm">
+            <p>{diagnostico.length} fila(s) seleccionadas sin horario o regreso válido; se reserva el día completo. Los conflictos reales siguen vigentes.</p>
+            {diagnostico.filter((f) => f.validacion!.diagnostico!.filasAfectadas.length > 0).map((f) => <p key={f.borrador.fila}>Fila {f.borrador.fila}: afecta a {f.validacion!.diagnostico!.filasAfectadas.length} otra(s) fila(s), recursos: {f.validacion!.diagnostico!.recursosCompartidos.join(", ")}.</p>)}
+          </section> : null}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={!r.total || r.incluidas === r.total} onClick={() => setFilas((f) => seleccionarTodos(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Seleccionar todos</button>
-            <button type="button" disabled={!r.incluidas} onClick={() => setFilas((f) => limpiarSeleccion(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Limpiar selección</button>
+            <button type="button" disabled={!r.total || r.incluidas === r.total} onClick={() => { invalidarSolicitud(); setFilas((f) => seleccionarTodos(f)); }} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Seleccionar todos</button>
+            <button type="button" disabled={!r.incluidas} onClick={() => { invalidarSolicitud(); setFilas((f) => limpiarSeleccion(f)); }} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Limpiar selección</button>
           </div>
           {!filas.length ? <p className="text-sm text-[var(--muted)]">No hay viajes (no cancelados) en la fecha origen.</p> : null}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
@@ -225,6 +245,7 @@ export default function CopiarProgramacionPage() {
                 {filas.map((f, i) => {
                   const b = f.borrador;
                   const terc = b.tipoViaje === "Tercerizado";
+                  const precio = comparacion(f);
                   const tarifas = b.rutaId != null ? catalogos?.tarifasPorRuta[b.rutaId] ?? [] : [];
                   const efectiva = f.validacion?.tarifa?.id ?? b.tarifaId ?? tarifas.find((t) => t.predeterminada)?.id ?? tarifas[0]?.id ?? "";
                   return (
@@ -287,6 +308,9 @@ export default function CopiarProgramacionPage() {
                       <td className="px-2 py-1.5"><input type="time" className={celda} disabled={!f.incluida} value={b.horaCarga ?? ""} onChange={(e) => cambiar(i, { horaCarga: e.target.value || null })} /></td>
                       <td className="px-2 py-1.5"><input type="datetime-local" aria-label={`Regreso estimado fila ${b.fila}`} className={celda} disabled={!f.incluida} value={b.regresoEditado !== undefined ? b.regresoEditado ?? "" : b.regresoOffsetDias != null && b.regresoHora ? regresoTrasladado(fechaDestino, { offsetDias: b.regresoOffsetDias, hora: b.regresoHora }) ?? "" : ""} onChange={(e) => cambiar(i, { regresoEditado: e.target.value || null })} /></td>
                       <td className="px-2 py-1.5">
+                        <p>Origen: {precio.origen}</p><p>Destino: {precio.destino}</p>
+                        {precio.diferente ? <p className="text-amber-300">La tarifa de destino es diferente a la del origen.</p> : null}
+                        {precio.monedaDesconocida ? <p className="text-amber-300">Verifica la moneda del origen antes de confirmar.</p> : null}
                         {tarifas.length ? (
                           <select className={celda} disabled={!f.incluida} value={efectiva} onChange={(e) => cambiar(i, { tarifaId: Number(e.target.value) })}>
                             {b.tarifaId != null && !tarifas.some((t) => t.id === b.tarifaId) ? <option value={b.tarifaId}>Tarifa del origen no vigente — seleccione otra</option> : null}

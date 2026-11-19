@@ -8,6 +8,7 @@ import {
   puedeConfirmar,
   resumenFilas,
   sumarDias,
+  tarifasEsperadas,
   type FilaEditable,
 } from "./copiar-helpers";
 
@@ -48,6 +49,16 @@ describe("vista previa editable: qué se puede confirmar", () => {
     const conError = aplicarErroresConfirmacion(validada, [{ fila: 1, errores: ["El piloto X ya está asignado"] }]);
     expect(conError[0].validacion?.errores).toEqual(["El piloto X ya está asignado"]);
     expect(puedeConfirmar(conError, false)).toBe(false);
+  });
+  it("tras un rechazo por cambio de tarifa, «Revalidar» trae la tarifa vigente y se confirma con ella (la expectativa enviada se recalcula)", () => {
+    const antes = aplicarValidacion([fila(1)], [{ fila: 1, estado: "ok", errores: [], tarifa: { id: 100, nombre: "Base", monto: 1499, moneda: "GTQ" } as never }]);
+    expect(tarifasEsperadas(antes)).toEqual([{ fila: 1, tarifa: { id: 100, monto: 1499, moneda: "GTQ" } }]);
+    const rechazada = aplicarErroresConfirmacion(antes, [{ fila: 1, errores: ["La tarifa vigente cambió desde la vista previa. Vuelve a validar antes de confirmar."] }]);
+    expect(puedeConfirmar(rechazada, false)).toBe(false); // bloqueada hasta revalidar
+    const revalidada = aplicarValidacion(rechazada, [{ fila: 1, estado: "ok", errores: [], tarifa: { id: 100, nombre: "Base", monto: 1500, moneda: "GTQ" } as never }]);
+    expect(puedeConfirmar(revalidada, false)).toBe(true);
+    expect(tarifasEsperadas(revalidada)).toEqual([{ fila: 1, tarifa: { id: 100, monto: 1500, moneda: "GTQ" } }]);
+    expect(tarifasEsperadas([fila(1, { validacion: null }), fila(2, { incluida: false })])).toEqual([{ fila: 1, tarifa: null }]); // solo las filas incluidas; sin validación = sin tarifa
   });
   it("resumen: incluidas, excluidas, OK, con error y pendientes", () => {
     const r = resumenFilas([fila(1), fila(2, { validacion: { fila: 2, estado: "error", errores: ["x"], tarifa: null } }), fila(3, { sucia: true }), fila(4, { incluida: false })]);
