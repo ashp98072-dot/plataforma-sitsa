@@ -45,6 +45,8 @@ beforeEach(() => {
     if (sql.includes("FROM compras_proveedores")) return [[{ id: 3 }]];
     if (sql.includes("FROM empresas")) return [[{ id: p[0], activa: 1 }]];
     if (sql.includes("FROM usuarios")) return [[{ id: p[0], activo: 1, rol_global: "Admin" }]];
+    // Guarda de unidad externa vs Flota: estos escenarios no tienen vehículos de Flota con la misma placa (la guarda se prueba en terceros-flota.*test.ts).
+    if (sql.includes("FROM flota_vehiculos v")) return [[]];
     if (sql.includes("FROM flota_cb2_externos_asociaciones a JOIN")) return [p[0] === 1 ? catalogo : []];
     if (sql.includes("FROM flota_cb2_externos_pilotos")) return [p[0] === 1 && piloto ? [piloto] : []];
     if (sql.includes("FROM flota_cb2_externos_unidades")) return [p[0] === 1 && unidad ? [unidad] : []];
