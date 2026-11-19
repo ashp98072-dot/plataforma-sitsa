@@ -14,6 +14,7 @@ export const filaEdicionSchema = z.object({
   rutaId: idNullable,
   clienteId: idNullable,
   horaCarga: z.string().regex(/^\d{2}:\d{2}$/).nullable(),
+  regresoEditado: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/).nullable().optional(),
   tipoTraslado: z.string().max(80).nullable(),
   tipoViaje: z.enum(["Propio", "Tercerizado"]),
   unidadPlaca: z.string().max(40).nullable(),
