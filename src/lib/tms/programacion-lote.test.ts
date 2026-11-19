@@ -77,7 +77,7 @@ let sinTablaOrigen = false;
 // por intento de INSERT): permite reproducir, dentro de la MISMA transacción del lote, una colisión real de
 // código (ER_DUP_ENTRY) que debe reintentar, o cualquier otro error de INSERT que debe propagarse tal cual.
 let insertPlanFallos: ("ok" | "dup" | "otro" | "guarda")[] = [];
-const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
+const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(), destroy: vi.fn() };
 
 const flota: Record<number, { id: number; placa: string; activo: number; en_taller: number; tipo_unidad: string; empresa_id: number }> = {
   31: { id: 31, placa: "TC-1", activo: 1, en_taller: 0, tipo_unidad: "TC", empresa_id: 7 },
@@ -1323,13 +1323,20 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
     expect(conn.beginTransaction).not.toHaveBeenCalled();
     expect(vi.mocked(console.error)).toHaveBeenCalledWith("resolverYValidar: verificación de identidad de unidades no completada", { codigo: "ER_LOCK_WAIT_TIMEOUT" });   // sin placas ni datos de la empresa
   });
-  it("VISTA PREVIA — la conexión dedicada se libera siempre (también tras un fallo)", async () => {
-    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
-    const base = conn.query.getMockImplementation()!;
-    conn.query.mockImplementation((async (sql: string, a?: unknown[]) => { if (/FROM tms_unidades/i.test(String(sql))) throw new Error("boom"); return base(sql, a); }) as never);
-    conn.release.mockClear();
-    await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-1" })]).catch(() => undefined);
-    expect(conn.release).toHaveBeenCalled();
+  it("VISTA PREVIA — la conexión dedicada nunca queda sin liberar: error SQL normal → vuelve al pool; error de estado incierto → se DESTRUYE (nunca vuelve al pool)", async () => {
+    for (const [err, esperado] of [
+      [Object.assign(new Error("x"), { code: "ER_LOCK_WAIT_TIMEOUT", errno: 1205 }), "release"],
+      [new Error("socket hang up"), "destroy"],
+    ] as const) {
+      conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+      const base = conn.query.getMockImplementation()!;
+      conn.query.mockImplementation((async (sql: string, a?: unknown[]) => { if (/FROM tms_unidades/i.test(String(sql))) throw err; return base(sql, a); }) as never);
+      conn.release.mockClear(); conn.destroy.mockClear();
+      await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-1" })]).catch(() => undefined);
+      const otro = esperado === "release" ? "destroy" : "release";
+      expect(conn[esperado]).toHaveBeenCalledTimes(1);
+      expect(conn[otro]).not.toHaveBeenCalled();
+    }
   });
   it("CONFIRMAR — la verificación previa NO es fatal ante un fallo técnico: la transacción real es la autoridad; si ella también falla, rollback total y nada creado", async () => {
     conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);

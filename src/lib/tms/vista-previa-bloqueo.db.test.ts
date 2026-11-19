@@ -141,6 +141,34 @@ describe.skipIf(!port)("Vista previa sin bloqueos — MariaDB DESECHABLE SOLO LO
       expect(c.message).toMatch(/tardó demasiado/);
       expect(c.message).not.toMatch(/SLEEP|SELECT/i);
     }, 20_000);
+    it("servidor REAL: se aplican los límites que soporta (max_statement_time, lock_wait_timeout…) y solo se tolera max_execution_time inexistente en MariaDB", async () => {
+      const lector = await abrirLectorVistaPrevia(holder.pool!);
+      expect(lector.limitesAplicados).toEqual(expect.arrayContaining(["max_statement_time", "lock_wait_timeout", "innodb_lock_wait_timeout"]));
+      expect(lector.limitesAplicados).not.toContain("max_execution_time");   // MariaDB: «Unknown system variable» (1193), tolerado a propósito
+      expect(lector.limiteSentenciaDisponible).toBe(true);
+      await lector.liberar();
+    });
+    it("LÍMITE ESTRICTO: aun SIN límite por sentencia en el servidor, una consulta ya enviada se corta al vencer el presupuesto (≈0,5 s, no 10 s) y la conexión se descarta", async () => {
+      const lector = await abrirLectorVistaPrevia(holder.pool!, { presupuestoMs: 500, limiteSentenciaMs: 600_000 });   // max_statement_time enorme: solo el presupuesto actúa
+      const t0 = Date.now();
+      const r = await capturar(lector.query("SELECT SLEEP(10) AS s" as never));
+      expect("e" in r).toBe(true);
+      expect(Date.now() - t0).toBeLessThan(2_000);
+      expect(errorVistaPrevia((r as { e: unknown }).e).message).toMatch(/tardó demasiado/);
+      expect(lector.estado().descartada).toBe(true);
+      await lector.liberar(); await lector.liberar();   // idempotente
+      expect(lector.estado()).toEqual({ liberada: true, descartada: true });
+      // el pool sigue sano: se puede obtener otra conexión y no hereda límites alterados
+      const [fila] = await sql("SELECT @@max_statement_time AS t");
+      expect(Number(fila.t)).toBe(0);
+    }, 20_000);
+    it("liberar() repetido sobre una conexión sana no corrompe el pool (se libera una vez)", async () => {
+      const lector = await abrirLectorVistaPrevia(holder.pool!);
+      await Promise.all([lector.liberar(), lector.liberar(), lector.liberar()]);
+      const conexiones = await Promise.all(Array.from({ length: 10 }, () => holder.pool!.getConnection()));   // el pool entrega 10 conexiones distintas: ninguna se liberó dos veces
+      expect(new Set(conexiones.map((c) => (c as unknown as { threadId: number }).threadId)).size).toBe(10);
+      conexiones.forEach((c) => c.release());
+    });
     it("al liberar, los límites de sesión se restablecen (la conexión del pool no queda alterada)", async () => {
       const lector = await abrirLectorVistaPrevia(holder.pool!, { limiteSentenciaMs: 1_000 });
       await lector.liberar();

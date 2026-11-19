@@ -381,7 +381,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   if (porIdentidad.length) {
     let lector: LectorVistaPrevia | null = null;
     try {
-      lector = await abrirLectorVistaPrevia(getPool());
+      lector = await abrirLectorVistaPrevia(getPool(), { empresaId });
       const vistas = new Map<string, string | null>();   // placa+vehículo → motivo (una sola resolución por unidad)
       for (const f of porIdentidad) {
         const u = f.resuelto!.unidad!; const clave = `${norm(u.placa)}|${u.flotaVehiculoId ?? ""}`;

@@ -120,3 +120,135 @@ describe("errorVistaPrevia — mensajes CONTROLADOS (código ER_*, nunca texto S
     expect(errorVistaPrevia(e)).toBe(e);
   });
 });
+
+describe("abrirLectorVistaPrevia — configuración de límites: solo se tolera «variable no soportada»", () => {
+  const fatal = (code: string) => Object.assign(new Error("conexión perdida (host interno)"), { code, fatal: true });
+  it.each([[1193, "ER_UNKNOWN_SYSTEM_VARIABLE"], [1238, "ER_INCORRECT_GLOBAL_LOCAL_VAR"]])("errno %i (%s) se tolera y el lector abre", async (errno, code) => {
+    const { pool: p } = pool((sql) => { if (/max_execution_time/.test(sql)) throw sqlError(code, errno); return [[]]; });
+    const lector = await abrirLectorVistaPrevia(p);
+    expect(lector.limitesAplicados).not.toContain("max_execution_time");
+    expect(lector.limiteSentenciaDisponible).toBe(true);   // max_statement_time sí quedó aplicado
+  });
+  it.each([
+    ["conexión caída (fatal)", fatal("PROTOCOL_CONNECTION_LOST")],
+    ["ECONNRESET", fatal("ECONNRESET")],
+    ["demasiadas conexiones", sqlError("ER_CON_COUNT_ERROR", 1040)],
+    ["sin privilegios", sqlError("ER_SPECIFIC_ACCESS_DENIED_ERROR", 1227)],
+    ["error de sintaxis (no es «variable no soportada»)", sqlError("ER_PARSE_ERROR", 1064)],
+    ["error sin código SQL", new Error("boom")],
+  ])("%s NO se ignora: el lector no abre, la conexión se DESTRUYE y el error es controlado", async (_n, err) => {
+    const { conn, pool: p } = pool((sql) => { if (/max_statement_time/.test(sql)) throw err; return [[]]; });
+    const r = await abrirLectorVistaPrevia(p).then(() => null, (e: unknown) => e);
+    expect(r).toBeInstanceOf(ErrorVistaPrevia);
+    expect((r as ErrorVistaPrevia).message).not.toMatch(/host interno|boom/);
+    expect(conn.destroy).toHaveBeenCalledTimes(1);
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+  it("sin ningún límite por sentencia disponible, lo declara (solo queda el presupuesto de la operación)", async () => {
+    const { pool: p } = pool((sql) => { if (/max_statement_time|max_execution_time/.test(sql)) throw sqlError("ER_UNKNOWN_SYSTEM_VARIABLE", 1193); return [[]]; });
+    const lector = await abrirLectorVistaPrevia(p);
+    expect(lector.limiteSentenciaDisponible).toBe(false);
+    expect(lector.limitesAplicados).toEqual(["lock_wait_timeout", "innodb_lock_wait_timeout"]);
+  });
+});
+
+describe("abrirLectorVistaPrevia — límite ESTRICTO de la operación (también para una consulta ya enviada)", () => {
+  it("una consulta que nunca responde se corta al vencer el presupuesto, la conexión se DESCARTA y se destruye (no vuelve al pool)", async () => {
+    const { conn, pool: p } = pool((sql) => (/^SET SESSION/.test(sql) ? [[]] : new Promise(() => undefined)));
+    const lector = await abrirLectorVistaPrevia(p, { presupuestoMs: 60 });
+    const t0 = Date.now();
+    await expect(lector.query("SELECT SLEEP(100)" as never)).rejects.toMatchObject({ name: "ErrorVistaPrevia", status: 503, message: expect.stringContaining("tardó demasiado") });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(lector.estado().descartada).toBe(true);
+    await expect(lector.query("SELECT 2" as never)).rejects.toBeInstanceOf(ErrorVistaPrevia);   // nada más se envía por esa conexión
+    await lector.liberar();
+    expect(conn.destroy).toHaveBeenCalledTimes(1);
+    expect(conn.release).not.toHaveBeenCalled();
+    expect(conn.query.mock.calls.map((c) => String(c[0])).filter((q) => /= DEFAULT/.test(q))).toEqual([]);   // no se intenta restablecer sobre una conexión incierta
+  });
+  it("getConnection que no responde dentro del presupuesto: falla controlado y, si la conexión llega tarde, se devuelve al pool", async () => {
+    let entregar!: (c: unknown) => void;
+    const tarde = { query: vi.fn(async () => [[]]), release: vi.fn(), destroy: vi.fn() };
+    const p = { getConnection: vi.fn(() => new Promise((r) => { entregar = r; })) } as never;
+    await expect(abrirLectorVistaPrevia(p, { presupuestoMs: 40 })).rejects.toMatchObject({ name: "ErrorVistaPrevia", message: expect.stringContaining("tardó demasiado") });
+    entregar(tarde);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(tarde.release).toHaveBeenCalledTimes(1);
+    expect(tarde.query).not.toHaveBeenCalled();   // nunca se usa una conexión que llegó fuera de plazo
+  });
+});
+
+describe("abrirLectorVistaPrevia — ciclo de vida de la conexión", () => {
+  it("liberar() es idempotente: varias llamadas (también concurrentes) liberan UNA sola vez; después no se puede consultar", async () => {
+    const { conn, pool: p } = pool();
+    const lector = await abrirLectorVistaPrevia(p);
+    await Promise.all([lector.liberar(), lector.liberar(), lector.liberar()]);
+    await lector.liberar();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+    expect(conn.destroy).not.toHaveBeenCalled();
+    expect(lector.estado()).toEqual({ liberada: true, descartada: false });
+    await expect(lector.query("SELECT 1" as never)).rejects.toBeInstanceOf(ErrorVistaPrevia);
+    expect(datos(conn)).toEqual([]);
+  });
+  it("conexión descartada: varias llamadas a liberar() destruyen UNA vez y nunca la liberan", async () => {
+    const { conn, pool: p } = pool((sql) => { if (/= DEFAULT/.test(sql)) throw new Error("conexión perdida"); return [[]]; });
+    const lector = await abrirLectorVistaPrevia(p);
+    await lector.liberar(); await lector.liberar();
+    expect(conn.destroy).toHaveBeenCalledTimes(1);
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+  it("un error SQL normal del servidor (ER_LOCK_WAIT_TIMEOUT) deja la conexión sana: se restablece y vuelve al pool", async () => {
+    const { conn, pool: p } = pool((sql) => { if (/FROM t/.test(sql)) throw sqlError("ER_LOCK_WAIT_TIMEOUT", 1205); return [[]]; });
+    const lector = await abrirLectorVistaPrevia(p);
+    await expect(lector.query("SELECT 1 FROM t" as never)).rejects.toMatchObject({ code: "ER_LOCK_WAIT_TIMEOUT" });
+    expect(lector.estado().descartada).toBe(false);
+    await lector.liberar();
+    expect(conn.release).toHaveBeenCalledTimes(1);
+    expect(conn.destroy).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["error sin código SQL (socket)", new Error("socket hang up")],
+    ["error fatal de conexión", Object.assign(new Error("lost"), { code: "PROTOCOL_CONNECTION_LOST", fatal: true })],
+    ["código ER_ pero marcado fatal", Object.assign(new Error("x"), { code: "ER_SERVER_SHUTDOWN", errno: 1053, fatal: true })],
+  ])("%s deja la conexión en estado INCIERTO: se destruye y no vuelve al pool", async (_n, err) => {
+    const { conn, pool: p } = pool((sql) => { if (/FROM t/.test(sql)) throw err; return [[]]; });
+    const lector = await abrirLectorVistaPrevia(p);
+    await expect(lector.query("SELECT 1 FROM t" as never)).rejects.toBe(err);
+    expect(lector.estado().descartada).toBe(true);
+    await lector.liberar();
+    expect(conn.destroy).toHaveBeenCalledTimes(1);
+    expect(conn.release).not.toHaveBeenCalled();
+  });
+});
+
+describe("abrirLectorVistaPrevia — caché: ni se mezcla entre empresas ni se altera por accidente", () => {
+  const filas = (empresa: number) => [{ id: 1, empresa_id: empresa, placa: `P-${empresa}` }];
+  it("lo servido es una COPIA: modificar el resultado de una llamada no altera el de la siguiente", async () => {
+    const { conn, pool: p } = pool(() => [filas(7), [{ name: "id" }]]);
+    const lector = await abrirLectorVistaPrevia(p, { empresaId: 7 });
+    const a = (await lector.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [7] as never)) as unknown as [{ placa: string }[]];
+    a[0][0].placa = "MUTADA"; a[0].push({ placa: "EXTRA" });
+    const b = (await lector.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [7] as never)) as unknown as [{ placa: string }[]];
+    expect(b[0]).toEqual([{ id: 1, empresa_id: 7, placa: "P-7" }]);
+    expect(datos(conn)).toHaveLength(1);   // seguía sirviéndose desde la caché
+  });
+  it("dos operaciones de empresas distintas con la MISMA sentencia no comparten nada (cada lector tiene su propia caché y su ámbito)", async () => {
+    const A = pool((_s, a) => [filas(Number((a as number[])[0]))]);
+    const B = pool((_s, a) => [filas(Number((a as number[])[0]))]);
+    const la = await abrirLectorVistaPrevia(A.pool, { empresaId: 7 });
+    const lb = await abrirLectorVistaPrevia(B.pool, { empresaId: 8 });
+    const ra = (await la.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [7] as never)) as unknown as [{ placa: string }[]];
+    const rb = (await lb.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [8] as never)) as unknown as [{ placa: string }[]];
+    expect(ra[0][0].placa).toBe("P-7");
+    expect(rb[0][0].placa).toBe("P-8");
+    expect(datos(A.conn)).toHaveLength(1); expect(datos(B.conn)).toHaveLength(1);
+  });
+  it("dentro de un mismo lector, el empresa_id como parámetro forma parte de la clave: no se reutiliza un resultado de otra empresa", async () => {
+    const { conn, pool: p } = pool((_s, a) => [filas(Number((a as number[])[0]))]);
+    const lector = await abrirLectorVistaPrevia(p, { empresaId: 7 });
+    const r7 = (await lector.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [7] as never)) as unknown as [{ placa: string }[]];
+    const r8 = (await lector.query("SELECT id, placa FROM tms_unidades WHERE empresa_id=?" as never, [8] as never)) as unknown as [{ placa: string }[]];
+    expect([r7[0][0].placa, r8[0][0].placa]).toEqual(["P-7", "P-8"]);
+    expect(datos(conn)).toHaveLength(2);
+  });
+});
