@@ -16,4 +16,3 @@ export default async function CanecasPage({ params }: { params: Promise<{ slug: 
   if (vista === "traslados") return <TrasladosClient slug={slug} permisos={permisos} />;
   return <CanecasClient slug={slug} vista={vista} permisos={permisos} />;
 }
-
