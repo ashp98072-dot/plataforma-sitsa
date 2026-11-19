@@ -354,6 +354,12 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect(r.ok).toBe(true);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1500, tarifa_id: 100, tarifa_nombre: "Base" });
   });
+  it.each([{ id: 100, monto: 1499, moneda: "GTQ" }, { id: 101, monto: 1500, moneda: "GTQ" }, { id: 100, monto: 1500, moneda: "USD" }])("rechaza cambios de tarifa antes de escribir", async (tarifa) => {
+    const r = await confirmarLote(EMP, "jefe", DESTINO, { tipo: "COPIA", fechaOrigen: ORIGEN }, [borrador()], [{ fila: 1, tarifa }]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.erroresPorFila?.[0].errores.join(" ")).toContain("tarifa vigente cambi?");
+    expect(creadosDestino()).toHaveLength(0);
+  });
   it("puede elegir OTRA tarifa vigente de la ruta", async () => {
     await confirmar([borrador({ tarifaId: 101 })]);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1800, tarifa_id: 101, tarifa_nombre: "Refrigerado" });
@@ -362,7 +368,7 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     const r = await validarLote(EMP, DESTINO, [borrador({ tarifaId: 110 }), borrador({ fila: 2, origenPlanId: 901, tarifaId: 99999 })]);
     expect(r.map((x) => x.estado)).toEqual(["error", "error"]);
     expect(r[0].errores[0]).toContain("no es una tarifa vigente de esta ruta");
-    expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/tarifaComercial|monto/i); // el esquema no admite montos
+    expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8")).not.toMatch(/tarifaComercial/);
   });
   it("ruta sin tarifa vigente NO bloquea (se copia sin tarifa); ruta inactiva/inexistente -> error", async () => {
     const r = await validarLote(EMP, DESTINO, [borrador({ rutaId: 12 }), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: "P-2", pilotoEmpleadoId: 2 }), borrador({ fila: 3, origenPlanId: 902, rutaId: 99, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
@@ -374,7 +380,8 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
   it("el origen aporta la referencia de tarifa, pero nunca montos o snapshots históricos", async () => {
     const src = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
     expect(src).toContain("p.tarifa_id != null ? Number(p.tarifa_id) : null");
-    expect(src).not.toMatch(/tarifa_comercial|tarifa_monto|tarifa_nombre/);
+    expect(src).toContain("tarifaOriginal:");
+    expect(src).not.toMatch(/tarifa_monto_historico|tarifa_nombre_historico/);
   });
 });
 
@@ -1182,7 +1189,7 @@ describe("Copiar: la ausencia de tarifa NO bloquea", () => {
 
   it("2/8) una fila SIN tarifa es válida: sin errores, estado ok y tarifa null (advertencia solo visual)", async () => {
     const [r] = await validarLote(EMP, DESTINO, [sinTarifa()]);
-    expect(r).toEqual({ fila: 1, estado: "ok", errores: [], tarifa: null });
+    expect(r).toMatchObject({ fila: 1, estado: "ok", errores: [], tarifa: null });
   });
 
   it("2) en la pantalla de Copiar la fila sin tarifa es seleccionable y CUENTA para Confirmar copia (X viajes)", () => {
