@@ -17,6 +17,21 @@ export function useRevisionCB2(filas: FilaCB2[], cat: CatalogosCB2, decisiones: 
     const solicitudes = Object.fromEntries(Object.entries(asignaciones).filter(([key, value]) => value && !omitidos[key]));
     return {
         asignaciones, manuales, omitidos, revisados, resumen, solicitudes,
+        /** Misma ficha para VARIAS filas en una sola actualización de `manuales` y de `decisiones` (nada se pierde por llamadas sucesivas). */
+        asignarVarias: (claves: string[], vehiculoId: string) => {
+            if (!claves.length) return;
+            setManuales(prev => ({ ...prev, ...Object.fromEntries(claves.map(k => [k, vehiculoId])) }));
+            const cambian = claves.filter(k => vehiculoId !== (asignaciones[k] ?? ""));
+            if (!cambian.length) return;
+            const unidadExternaId = Number(vehiculoId) < 0 ? -Number(vehiculoId) : null;
+            // El selector general es una decisión posterior: no conservar una asociación de otra unidad (la política independiente conserva el piloto externo).
+            const independiente = politicaIndependiente(cat);
+            setDecisiones?.(prev => {
+                const siguientes = { ...prev };
+                for (const k of cambian) siguientes[k] = independiente ? { ...prev[k], unidadExternaId, asociacionExternaId: null } : { ...prev[k], pilotoExternoId: null, unidadExternaId, asociacionExternaId: null };
+                return siguientes;
+            });
+        },
         asignar: (clave: string, vehiculoId: string) => {
             setManuales(prev => ({ ...prev, [clave]: vehiculoId }));
             if (politicaIndependiente(cat) && vehiculoId !== (asignaciones[clave] ?? "")) setDecisiones?.(prev=>({...prev,[clave]:{...prev[clave],unidadExternaId:Number(vehiculoId)<0?-Number(vehiculoId):null,asociacionExternaId:null}}));
