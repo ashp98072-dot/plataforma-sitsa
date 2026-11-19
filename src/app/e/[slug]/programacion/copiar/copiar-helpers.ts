@@ -15,7 +15,7 @@ export type FilaEditable = {
   sucia: boolean;
 };
 
-export type CambiosFila = Partial<Pick<BorradorLote, "horaCarga" | "unidadPlaca" | "tcVehiculoId" | "pilotoEmpleadoId" | "auxiliarEmpleadoIds" | "tarifaId">>;
+export type CambiosFila = Partial<Pick<BorradorLote, "horaCarga" | "regresoEditado" | "unidadPlaca" | "tcVehiculoId" | "pilotoEmpleadoId" | "auxiliarEmpleadoIds" | "tarifaId">>;
 
 export const MAX_AUXILIARES_UI = 8;
 
