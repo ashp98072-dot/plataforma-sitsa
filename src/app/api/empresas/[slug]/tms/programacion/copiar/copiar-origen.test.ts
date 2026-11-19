@@ -35,7 +35,7 @@ const planes = [
   { id: 904, empresa_id: 8, fecha: ORIGEN, estado: "Programado" }, // otra empresa
 ];
 const fila = (origenPlanId: number, n = 1) => ({ fila: n, origenPlanId, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: null, tipoViaje: "Propio", unidadPlaca: null, tcVehiculoId: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [], tarifaId: null, externo: null });
-const cuerpo = (ids: number[]) => ({ fechaOrigen: ORIGEN, fechaDestino: "2026-09-25", filas: ids.map((id, i) => fila(id, i + 1)) });
+const cuerpo = (ids: number[]) => ({ fechaOrigen: ORIGEN, fechaDestino: "2026-09-25", filas: ids.map((id, i) => fila(id, i + 1)), tarifasEsperadas: ids.map((_, i) => ({ fila: i + 1, tarifa: null })) });
 const post = (fn: typeof validar, body: unknown) => fn(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
 const MENSAJE = "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada.";
 
@@ -86,7 +86,7 @@ describe("POST /validar con orígenes enviados a mano", () => {
     const payload = cuerpoLote(ORIGEN, "2026-09-25", seleccionarTodos(data.filas.map(filaDesdeCarga)));
     for (const f of payload.filas) expect(f).not.toHaveProperty("vehiculoSolicitadoPerfilId");
     vi.mocked(validarLote).mockClear();
-    expect((await post(handler, payload)).status).toBe(200);
+    expect((await post(handler, handler === confirmar ? { ...payload, tarifasEsperadas: payload.filas.map((f) => ({ fila: f.fila, tarifa: null })) } : payload)).status).toBe(200);
     const borradores = handler === validar
       ? vi.mocked(validarLote).mock.calls[0][2]
       : vi.mocked(confirmarLote).mock.calls[0][4];

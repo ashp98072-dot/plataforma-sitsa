@@ -29,6 +29,11 @@ export type OrigenFila = {
   auxiliaresNombres: string[];
   unidadPlaca: string | null;
   tcPlaca: string | null;
+  /**
+   * Tarifa que tenía el viaje ORIGEN, SOLO PARA MOSTRAR y comparar con la que se usará en destino. Es informativa: nunca forma parte del borrador,
+   * no se envía como dato de la copia y no se copia (el destino siempre usa la tarifa VIGENTE del catálogo de la ruta).
+   */
+  tarifaOriginal?: { monto: number | null; moneda: string | null };
 };
 
 export type FilaCopia = { borrador: BorradorLote; origen: OrigenFila; advertencias: string[] };
@@ -50,7 +55,7 @@ function trasladoDeOrigen(fechaOrigen: string, horaCargaOrigen: unknown, regreso
 export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string): Promise<FilaCopia[]> {
   const planes = await query<RowDataPacket[]>(
     `SELECT p.id, p.codigo, p.estado, p.cliente_id, c.nombre AS cliente_nombre, p.ruta_id, p.ruta_codigo_historico,
-            p.hora_carga, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_traslado, p.tipo_viaje, u.placa AS unidad_placa,
+            p.hora_carga, DATE_FORMAT(p.regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado, p.tipo_traslado, p.tipo_viaje, p.tarifa_id, p.tarifa_comercial, p.tarifa_moneda_historico, u.placa AS unidad_placa,
             p.tc_vehiculo_id, p.tc_placa_historica, p.tc_externo_placa,
             pil.id_empleado AS piloto_empleado_id, pil.nombre AS piloto_nombre,
             aux1.id_empleado AS aux1_empleado_id, aux1.nombre AS aux1_nombre,
@@ -130,7 +135,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       pilotoEmpleadoId,
       pilotoExtraEmpleadoId,
       auxiliarEmpleadoIds: tercerizado ? [] : auxiliarEmpleadoIds,
-      tarifaId: null, // NUNCA la del origen: el motor toma la vigente/predeterminada de la ruta
+      tarifaId: p.tarifa_id != null ? Number(p.tarifa_id) : null, // se revalida que siga vigente y pertenezca a la ruta
       externo: tercerizado ? {
         pilotoExternoNombre: texto(p.piloto_externo_nombre) ?? "",
         auxiliaresExternos: String(p.auxiliares_externos ?? "").split("\n").map((n) => n.trim()).filter(Boolean).slice(0, MAX_AUXILIARES),
@@ -147,6 +152,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
       advertencias,
       origen: {
         planId: id, codigo: String(p.codigo), estado: String(p.estado),
+        tarifaOriginal: { monto: p.tarifa_comercial == null ? null : Number(p.tarifa_comercial), moneda: texto(p.tarifa_moneda_historico) },
         clienteNombre: texto(p.cliente_nombre), rutaCodigo: texto(p.ruta_codigo_historico),
         pilotoNombre: tercerizado ? texto(p.piloto_externo_nombre) : texto(p.piloto_nombre),
         pilotoExtraNombre: extra ? texto(extra.nombre) : null,
@@ -189,11 +195,17 @@ export async function borradoresDesdeCliente(
   empresaId: number,
   fechaOrigen: string,
   filas: EdicionFilaCopia[],
+  fechaDestino?: string,
 ): Promise<{ ok: true; borradores: BorradorLote[] } | { ok: false; error: string }> {
   if (filas.length > MAX_FILAS_LOTE) return { ok: false, error: `Máximo ${MAX_FILAS_LOTE} filas por lote.` };
   const origenIds = [...new Set(filas.map((f) => f.origenPlanId).filter((n): n is number => n != null))];
   if (filas.some((f) => f.origenPlanId == null)) return { ok: false, error: "Cada fila debe provenir de un viaje de la fecha origen." };
   if (new Set(filas.map((f) => f.origenPlanId)).size !== filas.length) return { ok: false, error: "Un mismo viaje origen no puede copiarse dos veces en el lote." };
+  for (const f of filas) {
+    if (f.regresoEditado != null && (!fechaDestino || !calcularTrasladoRegreso(fechaDestino, f.horaCarga, f.regresoEditado))) {
+      return { ok: false, error: `Fila ${f.fila}: el regreso debe ser una fecha y hora válida posterior a la hora de carga en la fecha destino.` };
+    }
+  }
   const validos = origenIds.length
     ? await query<RowDataPacket[]>(
         `SELECT id, hora_carga, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
@@ -208,7 +220,10 @@ export async function borradoresDesdeCliente(
     ok: true,
     borradores: filas.map((f) => ({
       ...f,
-      ...trasladoDeOrigen(fechaOrigen, origenPorId.get(f.origenPlanId as number)?.hora_carga, origenPorId.get(f.origenPlanId as number)?.regreso_estimado), // del ORIGEN en servidor, nunca del cliente
+      ...(f.regresoEditado === undefined
+        ? trasladoDeOrigen(fechaOrigen, origenPorId.get(f.origenPlanId as number)?.hora_carga, origenPorId.get(f.origenPlanId as number)?.regreso_estimado)
+        : f.regresoEditado === null ? { regresoOffsetDias: null, regresoHora: null }
+        : (() => { const t = calcularTrasladoRegreso(fechaDestino!, f.horaCarga, f.regresoEditado)!; return { regresoOffsetDias: t.offsetDias, regresoHora: t.hora }; })()),
       vehiculoSolicitadoPerfilId: vehiculoOrigen.get(f.origenPlanId as number) ?? null, // del ORIGEN en servidor, nunca del cliente
       paradas: (paradasMap.get(f.origenPlanId as number) ?? []).map((pp) => ({
         lugarNombre: String(pp.lugar_nombre), tipo: String(pp.tipo), requiereEvidencia: Boolean(pp.requiere_evidencia),

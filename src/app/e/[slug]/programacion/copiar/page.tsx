@@ -7,6 +7,8 @@ import { useEmpresaSession } from "@/lib/empresa-session";
 import { tienePermiso } from "@/lib/permisos-shared";
 import { hoyLocal } from "@/lib/rrhh/dates";
 import type { CatalogosCopia, OrigenFila } from "@/lib/tms/programacion-copia";
+import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
+import { comparacionRequiereAviso, ETIQUETA_MOTIVO, MOTIVOS_BLOQUEO, sugerenciaDeDiagnostico } from "@/lib/tms/programacion-copia-diagnostico";
 import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lote";
 import { PLAZO_CLIENTE_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { clasificarFalloSolicitud, crearGestorSolicitudes, esRespuestaReintentable } from "./solicitud-cancelable";
@@ -17,13 +19,17 @@ import {
   filaDesdeCarga,
   limpiarSeleccion,
   seleccionarTodos,
+  claveAvisoTarifas,
+  comparacionesDeTarifa,
   cuerpoLote,
+  diagnosticoDeFilas,
   editarFila,
   fechaVisible,
   filasIncluidas,
   MAX_AUXILIARES_UI,
-  puedeConfirmar,
+  puedeConfirmarConTarifas,
   resumenFilas,
+  tarifasEsperadas,
   sumarDias,
   type CambiosFila,
   type FilaEditable,
@@ -58,6 +64,8 @@ export default function CopiarProgramacionPage() {
   const [error, setError] = useState("");
   const [creado, setCreado] = useState<{ creados: number; codigos: string[] } | null>(null);
   const version = useRef(0);
+  // Clave de las diferencias de tarifa (origen → destino) que el usuario aceptó expresamente antes de confirmar.
+  const [tarifasAceptadas, setTarifasAceptadas] = useState("");
   // Qué se puede reintentar tras un fallo recuperable (plazo vencido, 503, red): la carga completa o solo la revalidación.
   const [reintentable, setReintentable] = useState<"cargar" | "validar" | null>(null);
   // Solicitudes cancelables: una nueva cancela la anterior, ninguna respuesta vieja sobrescribe a una nueva y ninguna espera más que el plazo del cliente.
@@ -121,20 +129,27 @@ export default function CopiarProgramacionPage() {
     return () => clearTimeout(t);
   }, [hayPendientes, filas, validar]);
 
+  function invalidarSolicitud() {
+    version.current++;
+    validaciones.current.cancelar();
+    setValidando(false);
+  }
   function cambiar(indice: number, cambios: CambiosFila) {
+    invalidarSolicitud();
     setFilas((f) => f.map((x, i) => (i === indice ? editarFila(x, cambios) : x)));
   }
   function alternar(indice: number) {
+    invalidarSolicitud();
     setFilas((f) => alternarSeleccion(f, indice));
   }
 
   async function confirmar() {
-    if (!puedeConfirmar(filas, validando || confirmando)) return;
+    if (!puedeConfirmarConTarifas(filas, validando || confirmando, tarifasAceptadas)) return;
     setConfirmando(true);
     setError("");
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar/confirmar`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpoLote(fechaOrigen, fechaDestino, filas)),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...cuerpoLote(fechaOrigen, fechaDestino, filas), tarifasEsperadas: tarifasEsperadas(filas) }),
       });
       const data = (await res.json().catch(() => ({}))) as { creados?: number; codigos?: string[]; error?: string; erroresPorFila?: ErrorFila[] };
       if (!res.ok) {
@@ -153,6 +168,19 @@ export default function CopiarProgramacionPage() {
   }
 
   const r = resumenFilas(filas);
+  const diag = diagnosticoDeFilas(filas);
+  const sugerencia = sugerenciaDeDiagnostico(diag);
+  const comparaciones = comparacionesDeTarifa(filas);
+  const claveTarifas = claveAvisoTarifas(comparaciones);
+  const conAvisoTarifa = comparaciones.filter((c) => comparacionRequiereAviso(c.comparacion)).length;
+  const irAFila = (fila: number) => { const el = document.getElementById(`regreso-${fila}`); el?.scrollIntoView({ block: "center" }); el?.focus(); };
+  const comparacion = (f: FilaEditable) => {
+    const origen = f.origen.tarifaOriginal;
+    const destino = f.validacion?.estado === "ok" && !f.sucia ? f.validacion.tarifa : undefined;
+    const mostrar = (t: { monto: number | null; moneda: string | null } | null | undefined) => t === undefined ? "Pendiente de validar" : t === null || t.monto === null ? "Sin tarifa" : `${t.moneda ?? "Moneda no registrada"} ${t.monto.toFixed(2)}`;
+    const diferente = origen && destino !== undefined && (origen.monto !== (destino?.monto ?? null) || (origen.moneda && destino?.moneda && origen.moneda.toUpperCase() !== destino.moneda.toUpperCase()));
+    return { origen: mostrar(origen), destino: mostrar(destino), diferente: Boolean(diferente), monedaDesconocida: Boolean(origen?.monto != null && !origen.moneda) };
+  };
 
   if (!puedeCrear) {
     return <p role="alert" className="p-6 text-sm">No tienes permiso para copiar programación (programacion:crear).</p>;
@@ -208,22 +236,43 @@ export default function CopiarProgramacionPage() {
           <p className="text-sm" aria-live="polite">
             {r.total} viaje(s) en {fechaVisible(fechaOrigen)} · Seleccionados: <strong>{r.incluidas}</strong> de <strong>{r.total}</strong> · OK: <strong>{r.ok}</strong> · Con error: <strong>{r.conError}</strong> · Pendientes de validar: <strong>{r.pendientes}</strong>
           </p>
+          {diag.bloqueadas > 0 ? (
+            <section aria-label="Diagnóstico de bloqueos" className="space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              <p className="font-medium">{diag.bloqueadas} de {diag.total} fila(s) bloqueada(s). Motivos:</p>
+              <ul className="list-inside list-disc">
+                {MOTIVOS_BLOQUEO.filter((m) => diag.porMotivo[m] > 0).map((m) => <li key={m}>{ETIQUETA_MOTIVO[m]}: {diag.porMotivo[m]} fila(s)</li>)}
+              </ul>
+              {sugerencia ? <p>{sugerencia}</p> : null}
+              {diag.origenes.length ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>Corregir primero:</span>
+                  {diag.origenes.slice(0, 5).map((o) => (
+                    <button key={o.fila} type="button" onClick={() => irAFila(o.fila)} className="rounded border border-amber-700/60 px-2 py-1 underline">
+                      Fila {o.fila} ({o.falta === "hora" ? "sin hora" : o.falta === "regreso" ? "sin regreso" : "sin hora ni regreso"}) · bloquea a {o.afecta}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <p className="text-amber-300/80">Al corregir una fila, el servidor revalida todo el lote: los solapes reales de horario siguen bloqueando.</p>
+            </section>
+          ) : null}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={!r.total || r.incluidas === r.total} onClick={() => setFilas((f) => seleccionarTodos(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Seleccionar todos</button>
-            <button type="button" disabled={!r.incluidas} onClick={() => setFilas((f) => limpiarSeleccion(f))} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Limpiar selección</button>
+            <button type="button" disabled={!r.total || r.incluidas === r.total} onClick={() => { invalidarSolicitud(); setFilas((f) => seleccionarTodos(f)); }} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Seleccionar todos</button>
+            <button type="button" disabled={!r.incluidas} onClick={() => { invalidarSolicitud(); setFilas((f) => limpiarSeleccion(f)); }} className="rounded border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40">Limpiar selección</button>
           </div>
           {!filas.length ? <p className="text-sm text-[var(--muted)]">No hay viajes (no cancelados) en la fecha origen.</p> : null}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="w-full min-w-[1200px] text-left text-xs">
               <thead className="bg-[var(--thead)] text-[var(--muted)]">
                 <tr>
-                  {["✓", "Origen", "Cliente", "Ruta", "Unidad", "TC", "Piloto", "Auxiliares", "Hora", "Tarifa", "Estado / disponibilidad"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}
+                  {["✓", "Origen", "Cliente", "Ruta", "Unidad", "TC", "Piloto", "Auxiliares", "Hora", "Regreso estimado", "Tarifa", "Estado / disponibilidad"].map((h) => <th key={h} className="px-2 py-2">{h}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {filas.map((f, i) => {
                   const b = f.borrador;
                   const terc = b.tipoViaje === "Tercerizado";
+                  const precio = comparacion(f);
                   const tarifas = b.rutaId != null ? catalogos?.tarifasPorRuta[b.rutaId] ?? [] : [];
                   const efectiva = f.validacion?.tarifa?.id ?? b.tarifaId ?? tarifas.find((t) => t.predeterminada)?.id ?? tarifas[0]?.id ?? "";
                   return (
@@ -284,12 +333,17 @@ export default function CopiarProgramacionPage() {
                         )}
                       </td>
                       <td className="px-2 py-1.5"><input type="time" className={celda} disabled={!f.incluida} value={b.horaCarga ?? ""} onChange={(e) => cambiar(i, { horaCarga: e.target.value || null })} /></td>
+                      <td className="px-2 py-1.5"><input type="datetime-local" id={`regreso-${b.fila}`} aria-label={`Regreso estimado fila ${b.fila}`} className={celda} disabled={!f.incluida} value={b.regresoEditado !== undefined ? b.regresoEditado ?? "" : b.regresoOffsetDias != null && b.regresoHora ? regresoTrasladado(fechaDestino, { offsetDias: b.regresoOffsetDias, hora: b.regresoHora }) ?? "" : ""} onChange={(e) => cambiar(i, { regresoEditado: e.target.value || null })} /></td>
                       <td className="px-2 py-1.5">
+                        <p>Origen: {precio.origen}</p><p>Destino: {precio.destino}</p>
+                        {precio.diferente ? <p className="text-amber-300">La tarifa de destino es diferente a la del origen.</p> : null}
+                        {precio.monedaDesconocida ? <p className="text-amber-300">Verifica la moneda del origen antes de confirmar.</p> : null}
                         {tarifas.length ? (
                           <select className={celda} disabled={!f.incluida} value={efectiva} onChange={(e) => cambiar(i, { tarifaId: Number(e.target.value) })}>
+                            {b.tarifaId != null && !tarifas.some((t) => t.id === b.tarifaId) ? <option value={b.tarifaId}>Tarifa del origen no vigente — seleccione otra</option> : null}
                             {tarifas.map((t) => <option key={t.id} value={t.id}>{t.nombre} · {t.moneda} {t.monto.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</option>)}
                           </select>
-                        ) : <span className="text-[var(--muted)]" title="Sin tarifa vigente: el viaje se copia sin tarifa">Sin tarifa</span>}
+                        ) : b.tarifaId != null ? <button type="button" className="underline" disabled={!f.incluida} onClick={() => cambiar(i, { tarifaId: null })}>Tarifa del origen no vigente — quitar</button> : <span className="text-[var(--muted)]" title="Sin tarifa vigente: el viaje se copia sin tarifa">Sin tarifa</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         {!f.incluida ? (
@@ -301,6 +355,12 @@ export default function CopiarProgramacionPage() {
                         )
                           : f.sucia || !f.validacion ? <span className="text-[var(--muted)]">Validando…</span>
                           : f.validacion.estado === "ok" ? <span className="text-emerald-400">Disponible</span>
+                          : f.validacion.derivada ? (
+                            <div className="space-y-0.5 text-rose-400">
+                              <p>Fila {b.fila}: bloqueada por la fila {f.validacion.derivada.origenes.join(", ")} (sin hora o regreso válido: reserva todo el día). Corrige esa fila.</p>
+                              <details className="text-[var(--muted)]"><summary className="cursor-pointer">Ver detalle</summary><ul>{f.validacion.errores.map((e, k) => <li key={k}>{e}</li>)}</ul></details>
+                            </div>
+                          )
                           : <ul className="space-y-0.5 text-rose-400">{f.validacion.errores.map((e, k) => <li key={k}>Fila {b.fila}: {e}</li>)}</ul>}
                         {f.incluida && f.validacion?.estado === "ok" && !f.validacion.tarifa ? <p className="text-amber-300">Sin tarifa — podrás asignarla después</p> : null}
                         {f.advertencias.map((a, k) => <p key={k} className="text-amber-300">⚠ {a}</p>)}
@@ -311,8 +371,18 @@ export default function CopiarProgramacionPage() {
               </tbody>
             </table>
           </div>
+          {conAvisoTarifa > 0 ? (
+            <section aria-label="Aviso de tarifas" className="space-y-1 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              <p className="font-medium">⚠ {conAvisoTarifa} viaje(s) usarán una tarifa distinta a la del origen.</p>
+              <p>Los montos del viaje origen NO se copian: cada viaje nuevo usa la tarifa vigente del catálogo de su ruta (columna Tarifa muestra origen → destino).</p>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={tarifasAceptadas === claveTarifas} onChange={(e) => setTarifasAceptadas(e.target.checked ? claveTarifas : "")} />
+                Revisé las diferencias de tarifa y acepto crear los viajes con la tarifa del destino
+              </label>
+            </section>
+          ) : null}
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={!puedeConfirmar(filas, validando || confirmando)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
+            <button type="button" disabled={!puedeConfirmarConTarifas(filas, validando || confirmando, tarifasAceptadas)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
               {confirmando ? "Creando…" : `Confirmar copia (${r.incluidas} viaje${r.incluidas === 1 ? "" : "s"})`}
             </button>
             <span className="text-xs text-[var(--muted)]">Se crean todos o ninguno; los viajes nuevos nacen Programados con tarifa y viáticos vigentes.</span>

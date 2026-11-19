@@ -1,3 +1,4 @@
+import { compararTarifa, comparacionRequiereAviso, diagnosticarBloqueos, type ComparacionTarifa, type DiagnosticoBloqueos } from "@/lib/tms/programacion-copia-diagnostico";
 import type { BorradorLote, ResultadoFilaLote } from "@/lib/tms/programacion-lote";
 import type { EdicionFilaCopia, OrigenFila } from "@/lib/tms/programacion-copia";
 
@@ -15,7 +16,7 @@ export type FilaEditable = {
   sucia: boolean;
 };
 
-export type CambiosFila = Partial<Pick<BorradorLote, "horaCarga" | "unidadPlaca" | "tcVehiculoId" | "pilotoEmpleadoId" | "auxiliarEmpleadoIds" | "tarifaId">>;
+export type CambiosFila = Partial<Pick<BorradorLote, "horaCarga" | "regresoEditado" | "unidadPlaca" | "tcVehiculoId" | "pilotoEmpleadoId" | "auxiliarEmpleadoIds" | "tarifaId">>;
 
 export const MAX_AUXILIARES_UI = 8;
 
@@ -118,3 +119,43 @@ export function sumarDias(iso: string, dias: number): string {
 }
 
 export const fechaVisible = (iso: string) => iso.split("-").reverse().join("/");
+
+/** La tarifa enviada es una expectativa de comparación, nunca una fuente del importe facturado. */
+export function tarifasEsperadas(filas: FilaEditable[]) {
+  return filasIncluidas(filas).map((f) => ({ fila: f.borrador.fila, tarifa: f.validacion?.tarifa ? { id: f.validacion.tarifa.id, monto: f.validacion.tarifa.monto, moneda: f.validacion.tarifa.moneda } : null }));
+}
+
+// ---------------------------------------------------------------- Diagnóstico de bloqueos y tarifas (solo lectura, sin datos personales)
+
+/** Diagnóstico del lote sobre las filas INCLUIDAS ya validadas (las pendientes de revalidar no cuentan: su resultado es viejo). */
+export function diagnosticoDeFilas(filas: FilaEditable[]): DiagnosticoBloqueos {
+  return diagnosticarBloqueos(filasIncluidas(filas).filter((f) => !f.sucia).map((f) => f.validacion));
+}
+
+/** Comparación origen → destino de las filas incluidas y validadas OK: el destino es lo que REALMENTE se creará (tarifa vigente del catálogo). */
+export function comparacionesDeTarifa(filas: FilaEditable[]): { fila: number; comparacion: ComparacionTarifa }[] {
+  return filasIncluidas(filas)
+    .filter((f) => !f.sucia && f.validacion?.estado === "ok")
+    .map((f) => ({ fila: f.borrador.fila, comparacion: compararTarifa(f.origen.tarifaOriginal, f.validacion!.tarifa) }));
+}
+
+/**
+ * Identifica EXACTAMENTE lo que el usuario aceptó: por cada fila con diferencia, el tipo de diferencia, la tarifa del origen (monto y moneda) y la del
+ * destino (id, monto y moneda). Si cambia cualquiera de esos datos (otro monto, otra moneda, otra tarifa vigente, otra fila), la clave cambia y hay que
+ * aceptar de nuevo. Los valores se codifican con JSON para que ningún separador de un dato pueda confundirse con otro.
+ */
+export function claveAvisoTarifas(items: { fila: number; comparacion: ComparacionTarifa }[]): string {
+  const origen = (c: ComparacionTarifa) => ("origen" in c ? [c.origen.monto ?? null, c.origen.moneda?.toUpperCase() ?? null] : null);
+  const destino = (c: ComparacionTarifa) => ("destino" in c ? [c.destino.id, c.destino.monto, c.destino.moneda.toUpperCase()] : null);
+  return items
+    .filter((i) => comparacionRequiereAviso(i.comparacion))
+    .map((i) => JSON.stringify([i.fila, i.comparacion.estado, origen(i.comparacion), destino(i.comparacion)]))
+    .join("|");
+}
+
+/** Igual que `puedeConfirmar`, pero exige aceptar expresamente las diferencias de tarifa entre origen y destino (si las hay). */
+export function puedeConfirmarConTarifas(filas: FilaEditable[], ocupado: boolean, aceptada: string): boolean {
+  if (!puedeConfirmar(filas, ocupado)) return false;
+  const clave = claveAvisoTarifas(comparacionesDeTarifa(filas));
+  return clave === "" || clave === aceptada;
+}

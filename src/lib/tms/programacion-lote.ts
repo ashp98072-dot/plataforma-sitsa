@@ -81,6 +81,8 @@ export type BorradorLote = {
    */
   regresoOffsetDias?: number | null;
   regresoHora?: string | null;
+  /** Edición explícita de la fecha/hora de regreso de la copia; validada por el servidor. */
+  regresoEditado?: string | null;
   tipoTraslado: string | null;
   tipoViaje: "Propio" | "Tercerizado";
   unidadPlaca: string | null;
@@ -125,9 +127,26 @@ export type ResultadoFilaLote = {
   errores: string[];
   /** Solo si estado = ok: lo que se creará (tarifa efectiva incluida). */
   tarifa: TarifaResuelta | null;
+  /**
+   * DIAGNÓSTICO por fila (solo números de fila y tipos de recurso, sin nombres ni placas): si la fila no tiene hora/regreso válido (reserva todo el día),
+   * a cuántas otras filas bloquea y por qué tipo de recurso compartido.
+   */
+  diagnostico?: { horaInvalida: boolean; regresoInvalido: boolean; filasAfectadas: number[]; recursosCompartidos: string[] };
+  /**
+   * Choques DENTRO del lote por recurso. `causa = dia_completo`: alguna de las filas no tiene hora o regreso válido y por eso reserva todo el día;
+   * `solape`: las ventanas se cruzan de verdad (no se relaja).
+   */
+  conflictos?: ConflictoLote[];
+  /** Bloqueada SOLO por conflictos con filas sin hora/regreso válido: corregir esas filas (`origenes`) la libera. */
+  derivada?: { origenes: number[] };
 };
 
-type FilaInterna = { borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[] };
+export type ConflictoLote = { recurso: "persona" | "unidad" | "tc"; filas: number[]; causa: "dia_completo" | "solape" };
+
+type FilaInterna = {
+  borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string>;
+  conflictos?: ConflictoLote[]; derivada?: ResultadoFilaLote["derivada"];
+};
 
 const fmt = (iso: string) => iso.split("-").reverse().join("/");
 
@@ -416,30 +435,65 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     if (b.tcVehiculoId != null) anotar(`tc:${b.tcVehiculoId}`, b.fila, `TC #${b.tcVehiculoId}`);
   }
   const ventanaPorFila = new Map(internas.map((f) => [f.borrador.fila, ventanaDeBorrador(f.borrador, fechaDestino)]));
+  // Una ventana SIN hora o SIN regreso válido reserva TODO el día (política vigente, no se relaja): se identifica qué falta para poder señalar el origen.
+  const faltante = (n: number): "hora" | "regreso" | "hora_y_regreso" | null => {
+    const v = ventanaPorFila.get(n)!;
+    return !v.horaCarga && !v.regresoEstimado ? "hora_y_regreso" : !v.horaCarga ? "hora" : !v.regresoEstimado ? "regreso" : null;
+  };
+  const textoFalta = (n: number) => { const x = faltante(n); return `fila ${n}: sin ${x === "hora" ? "hora de carga" : x === "regreso" ? "regreso estimado" : "hora de carga ni regreso estimado"}`; };
   const marcadas = new Set<string>(); // "clave|fila": un mensaje por recurso y fila
+  const origenesDe = new Map<number, Set<number>>();   // fila -> filas sin ventana completa que la bloquean
+  const nColisiones = new Map<number, number>();       // mensajes de colisión añadidos por fila
+  const soloDiaCompleto = new Map<number, boolean>();  // todos sus conflictos son por día completo
   for (const [clave, usos] of uso) {
     const filas = [...new Set(usos.map((u) => u.fila))];
     if (filas.length < 2) continue;
+    const recurso: ConflictoLote["recurso"] = clave.startsWith("persona:") ? "persona" : clave.startsWith("unidad:") ? "unidad" : "tc";
     for (const f of internas) {
       const fila = f.borrador.fila;
       if (!filas.includes(fila)) continue;
       const otras = filas.filter((n) => n !== fila && ventanasProgramacionSeSolapan(ventanaPorFila.get(fila)!, ventanaPorFila.get(n)!));
       if (!otras.length || marcadas.has(`${clave}|${fila}`)) continue;
       marcadas.add(`${clave}|${fila}`);
+      if (!ventanaPorFila.get(fila)!.horaCarga || !ventanaPorFila.get(fila)!.regresoEstimado) {
+        f.filasAfectadas ??= new Set<number>();
+        for (const otra of otras) f.filasAfectadas.add(otra);
+        f.recursosCompartidos ??= new Set<string>();
+        f.recursosCompartidos.add(clave.startsWith("persona:") ? "personal" : clave.startsWith("unidad:") ? "unidad" : "remolque");
+      }
       const etiqueta = usos[0].etiqueta;
       const que = clave.startsWith("unidad:") ? "la" : clave.startsWith("tc:") ? "el" : "";
-      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.`);
+      const incompletas = [fila, ...otras].filter((n) => faltante(n) !== null);
+      const causa: ConflictoLote["causa"] = incompletas.length ? "dia_completo" : "solape";
+      const detalle = causa === "dia_completo" ? ` Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}).` : " Los horarios se solapan.";
+      f.errores.push(`${clave.startsWith("persona:") ? `${etiqueta} está asignado` : `${que === "la" ? "La" : "El"} ${etiqueta} está asignad${que === "la" ? "a" : "o"}`} también en la fila ${otras.join(", ")} de este mismo lote.${detalle}`);
+      f.conflictos = [...(f.conflictos ?? []), { recurso, filas: otras, causa }];
+      nColisiones.set(fila, (nColisiones.get(fila) ?? 0) + 1);
+      soloDiaCompleto.set(fila, (soloDiaCompleto.get(fila) ?? true) && causa === "dia_completo");
+      for (const n of otras) {
+        if (faltante(n) !== null) origenesDe.set(fila, (origenesDe.get(fila) ?? new Set()).add(n));
+      }
       f.resuelto = null;
     }
+  }
+  // Filas bloqueadas SOLO por conflictos con filas sin hora/regreso válido (se liberan al corregir el origen; el origen y sus alcances están en `diagnostico`).
+  for (const f of internas) {
+    const fila = f.borrador.fila;
+    const falta = faltante(fila);
+    const origenes = [...(origenesDe.get(fila) ?? [])].sort((x, y) => x - y);
+    if (!falta && origenes.length && soloDiaCompleto.get(fila) && f.errores.length === nColisiones.get(fila)) f.derivada = { origenes };
   }
   return internas;
 }
 
-const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
+const aResultado = (f: FilaInterna, fechaDiagnostico: string): ResultadoFilaLote => ({
   fila: f.borrador.fila,
   estado: f.errores.length ? "error" : "ok",
   errores: f.errores,
   tarifa: f.errores.length ? null : f.resuelto?.tarifa ?? null,
+  diagnostico: { horaInvalida: !ventanaDeBorrador(f.borrador, fechaDiagnostico).horaCarga, regresoInvalido: !ventanaDeBorrador(f.borrador, fechaDiagnostico).regresoEstimado, filasAfectadas: [...(f.filasAfectadas ?? [])].sort((a, b) => a - b), recursosCompartidos: [...(f.recursosCompartidos ?? [])] },
+  ...(f.conflictos ? { conflictos: f.conflictos } : {}),
+  ...(f.derivada ? { derivada: f.derivada } : {}),
 });
 
 /**
@@ -449,7 +503,7 @@ const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
  */
 export async function validarLote(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<ResultadoFilaLote[]> {
   if (!FECHA_RE.test(fechaDestino)) throw new Error("Fecha destino inválida.");
-  return (await resolverYValidar(empresaId, fechaDestino, borradores, true)).map(aResultado);
+  return (await resolverYValidar(empresaId, fechaDestino, borradores, true)).map((f) => aResultado(f, fechaDestino));
 }
 
 export type ResultadoConfirmarLote =
@@ -469,6 +523,7 @@ export async function confirmarLote(
   fechaDestino: string,
   origen: OrigenLote,
   borradores: BorradorLote[],
+  tarifasEsperadas?: { fila: number; tarifa: { id: number; monto: number; moneda: string } | null }[],
 ): Promise<ResultadoConfirmarLote> {
   if (!FECHA_RE.test(fechaDestino)) return { ok: false, status: 400, error: "Fecha destino inválida." };
   if (!borradores.length) return { ok: false, status: 400, error: "No hay filas para crear." };
@@ -499,6 +554,16 @@ export async function confirmarLote(
 
     // Revalidación COMPLETA bajo el candado (también detecta una copia hecha entre la vista previa y ahora).
     const filas = await resolverYValidar(empresaId, fechaDestino, borradores);
+    if (tarifasEsperadas) {
+      const expectativas = new Map(tarifasEsperadas.map((t) => [t.fila, t.tarifa]));
+      for (const f of filas) {
+        const anterior = expectativas.get(f.borrador.fila);
+        const vigente = f.resuelto?.tarifa ?? null;
+        if (!expectativas.has(f.borrador.fila) || (anterior === null) !== (vigente === null) || (anterior && vigente && (anterior.id !== vigente.id || anterior.monto !== vigente.monto || anterior.moneda !== vigente.moneda))) {
+          f.errores.push("La tarifa vigente cambió desde la vista previa. Vuelve a validar antes de confirmar.");
+        }
+      }
+    }
     const malas = filas.filter((f) => f.errores.length);
     if (malas.length) {
       return {
