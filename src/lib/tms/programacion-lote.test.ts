@@ -849,6 +849,17 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
     expect(bloqueadas[0].errores.join(" ")).toContain("se reserva todo el día");
   });
 
+  it("confirma un lote de 66 ventanas consecutivas y rechaza el reintento sin duplicar viajes", async () => {
+    const hora = (m: number) => `${String(Math.floor(m / 60)).padStart(2,"0")}:${String(m % 60).padStart(2,"0")}`;
+    const filas = Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 }));
+    const primera = await confirmar(filas);
+    expect(primera.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(66);
+    const segunda = await confirmar(filas);
+    expect(segunda.ok).toBe(false);
+    expect(creadosDestino()).toHaveLength(66);
+  });
+
   it("6) sin hora de carga: reserva TODO el día aunque traiga regreso", async () => {
     expect(await estados([conVentana(1, null, { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "20:00", { dias: 0, hora: "22:00" }, mismoPiloto)])).toEqual(["error", "error"]);
   });
