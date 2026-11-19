@@ -7,11 +7,17 @@ vi.mock("@/lib/tms/programacion-lote", async (importOriginal) => ({
   validarLote: vi.fn(),
   confirmarLote: vi.fn(),
 }));
+vi.mock("@/lib/db", () => ({ getPool: vi.fn(() => ({})) }));
+// conPlazo se prueba aparte (db-plazo.test.ts + prueba con MariaDB): aquí se ejecuta el cuerpo tal cual y se verifican los parámetros del plazo.
+vi.mock("@/lib/db-plazo", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/db-plazo")>()), conPlazo: vi.fn(async (_pool: unknown, _opts: unknown, fn: () => Promise<unknown>) => fn()) }));
 vi.mock("@/lib/tms/programacion-copia", () => ({ cargarCopiaDeFecha: vi.fn(), catalogosParaCopia: vi.fn(), borradoresDesdeCliente: vi.fn() }));
 
 import { requireTenantProgramacion, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { confirmarLote, validarLote } from "@/lib/tms/programacion-lote";
 import { borradoresDesdeCliente, cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
+import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
+import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { GET as cargar } from "./route";
 import { POST as validar } from "./validar/route";
 import { POST as confirmar } from "./confirmar/route";
@@ -112,5 +118,59 @@ describe("respuestas", () => {
   });
   it("validar devuelve la validación por fila", async () => {
     expect(await (await post(validar, cuerpo())).json()).toEqual({ validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }] });
+  });
+});
+
+describe("vista previa: fallo técnico CONTROLADO (bloqueo / tiempo agotado), nunca una espera infinita ni un 500 sin cuerpo", () => {
+  const msg = "No se pudo verificar la identidad de las unidades: la base de datos está ocupada con otra operación (error ER_LOCK_WAIT_TIMEOUT). Intenta de nuevo en unos minutos.";
+  it("GET cargar: 503 con el mensaje claro; sin datos de la empresa ni texto SQL", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: msg });
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+  it("POST validar: 503 con el mismo mensaje controlado", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await post(validar, cuerpo());
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe(msg);
+  });
+  it("cualquier OTRO error inesperado NO se disfraza: sigue subiendo (500 de Next)", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new Error("bug"));
+    await expect(cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx)).rejects.toThrow("bug");
+  });
+});
+
+describe("plazo de TODA la operación (cargar + validar + catálogos) con cancelación real", () => {
+  const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
+  it("GET cargar corre dentro de conPlazo de SOLO LECTURA con el plazo del servidor y el límite por sentencia", async () => {
+    const res = await cargar(new Request(url), ctx);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(conPlazo)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
+    expect(cargarCopiaDeFecha).toHaveBeenCalled(); expect(validarLote).toHaveBeenCalled(); expect(catalogosParaCopia).toHaveBeenCalled();
+  });
+  it("plazo agotado (ErrorPlazoOperacion) → 503 con mensaje claro y sin cache; no responde 200 ni se queda esperando", async () => {
+    vi.mocked(conPlazo).mockRejectedValueOnce(new ErrorPlazoOperacion("La operación tardó demasiado y se canceló. No se guardó ningún cambio. Intenta de nuevo."));
+    const res = await cargar(new Request(url), ctx);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/tardó demasiado/);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+  it("POST validar también corre acotado (borradores + validación) y mapea el plazo agotado a 503", async () => {
+    expect((await post(validar, cuerpo())).status).toBe(200);
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
+    vi.mocked(conPlazo).mockRejectedValueOnce(new ErrorPlazoOperacion("tardó demasiado"));
+    expect((await post(validar, cuerpo())).status).toBe(503);
+  });
+  it("las validaciones previas (permiso, fechas) responden SIN abrir conexión ni plazo", async () => {
+    expect((await cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-18"), ctx)).status).toBe(400);
+    expect(vi.mocked(conPlazo)).not.toHaveBeenCalled();
+  });
+  it("la CONFIRMACIÓN no pasa por conPlazo: conserva su transacción y su candado intactos", async () => {
+    expect((await post(confirmar, cuerpo())).status).toBe(200);
+    expect(vi.mocked(conPlazo)).not.toHaveBeenCalled();
+    expect(confirmarLote).toHaveBeenCalledTimes(1);
   });
 });

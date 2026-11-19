@@ -1,4 +1,6 @@
-import { resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+import { resolverUnidadTmsSoloLectura, resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
+import { abrirLectorVistaPrevia, errorVistaPrevia, PRESUPUESTO_VISTA_PREVIA_MS, type LectorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { ErrorPlazoOperacion, plazoRestanteMs } from "@/lib/db-plazo";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
@@ -187,7 +189,7 @@ export async function copiasVigentesDeOrigen(empresaId: number, fechaDestino: st
  * Resuelve y valida TODAS las filas (solo lectura). Cada fila sale `ok` o `error` con mensajes claros.
  * `filasInternas` se reutiliza al confirmar para crear sin volver a resolver.
  */
-async function resolverYValidar(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<FilaInterna[]> {
+async function resolverYValidar(empresaId: number, fechaDestino: string, borradores: BorradorLote[], identidadEstricta = false): Promise<FilaInterna[]> {
   const rutaIds = [...new Set(borradores.map((b) => b.rutaId).filter((n): n is number => n != null))];
   const clienteIds = [...new Set(borradores.filter((b) => b.rutaId == null).map((b) => b.clienteId).filter((n): n is number => n != null))];
   const empleadoIds = [...new Set(borradores.flatMap((b) => [b.pilotoEmpleadoId, b.pilotoExtraEmpleadoId ?? null, ...b.auxiliarEmpleadoIds]).filter((n): n is number => n != null))];
@@ -370,24 +372,35 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos });
   }
 
-  // --- identidad de la unidad TMS (#624), SOLO LECTURA ---
-  // Antes el conflicto de identidad solo aparecía al CONFIRMAR (la vista previa decía «OK» y después fallaba el lote entero). Se ejecuta el MISMO resolvedor real, solo para unidades que YA tienen fila en
-  // tms_unidades (el resolvedor nunca llega a su INSERT), a través de un lector que RECHAZA cualquier sentencia que no sea SELECT (sin transacción, sin escrituras posibles, sin AUTO_INCREMENT consumido).
-  // Un rechazo (ErrorCB2) marca esa fila con error; cualquier otro fallo no bloquea la vista previa (la confirmación lo revalida). No se relaja nada: es el mismo resolvedor que crea los viajes.
+  // --- identidad de la unidad TMS (#624), SOLO LECTURA REAL ---
+  // Antes el conflicto de identidad solo aparecía al CONFIRMAR (la vista previa decía «OK» y después fallaba el lote entero). Se aplican las MISMAS reglas del resolvedor real, solo para unidades que YA tienen
+  // fila en tms_unidades, con su variante de LECTURA (`resolverUnidadTmsSoloLectura`: sin FOR UPDATE y sin INSERT) sobre un lector dedicado que: rechaza todo lo que no sea un SELECT puro, reutiliza los
+  // metadatos/listas ya consultados en la operación (una consulta por sentencia distinta, no por unidad) y limita el tiempo de TODA la operación. La vista previa nunca espera bloqueos de otras transacciones.
+  // Un conflicto de identidad (ErrorCB2) marca esa fila con error. Un fallo TÉCNICO (bloqueo, tiempo agotado, base caída) NO se oculta: en la vista previa (`identidadEstricta`) sube como ErrorVistaPrevia
+  // con un mensaje controlado (sin texto SQL); en la confirmación no es fatal porque la transacción real vuelve a validar la identidad con bloqueo y es la autoridad.
   const porIdentidad = internas.filter((f) => !f.errores.length && f.borrador.tipoViaje === "Propio" && f.resuelto?.unidad && unidadIdPorPlaca.has(norm(f.resuelto.unidad.placa)));
   if (porIdentidad.length) {
+    let lector: LectorVistaPrevia | null = null;
     try {
-      const pool = getPool() as unknown as { query: (sql: string, args?: unknown[]) => Promise<unknown>; execute: (sql: string, args?: unknown[]) => Promise<unknown> };
-      const soloSelect = (sql: string) => { if (!/^\s*SELECT\b/i.test(sql)) throw new Error("SOLO_LECTURA"); };
-      const lector = { query: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.query(sql, args); }, execute: (sql: string, args?: unknown[]) => { soloSelect(sql); return pool.execute(sql, args); } } as unknown as Parameters<typeof resolverUnidadTmsTx>[0];
+      // El presupuesto del lector nunca excede lo que resta del plazo de la operación que lo contiene (GET/validar).
+      lector = await abrirLectorVistaPrevia(getPool(), { empresaId, presupuestoMs: Math.min(PRESUPUESTO_VISTA_PREVIA_MS, plazoRestanteMs()) });
       const vistas = new Map<string, string | null>();   // placa+vehículo → motivo (una sola resolución por unidad)
       for (const f of porIdentidad) {
         const u = f.resuelto!.unidad!; const clave = `${norm(u.placa)}|${u.flotaVehiculoId ?? ""}`;
-        if (!vistas.has(clave)) { try { await resolverUnidadTmsTx(lector, empresaId, u.placa, u.flotaVehiculoId); vistas.set(clave, null); } catch (e) { vistas.set(clave, e instanceof ErrorCB2 ? e.message : null); } }
+        if (!vistas.has(clave)) {
+          try { await resolverUnidadTmsSoloLectura(lector, empresaId, u.placa, u.flotaVehiculoId); vistas.set(clave, null); }
+          catch (e) { if (e instanceof ErrorCB2) vistas.set(clave, e.message); else throw e; }   // el primer fallo técnico detiene la verificación: sin esperas acumuladas por unidad
+        }
         const motivo = vistas.get(clave);
         if (motivo) { f.errores.push(`Unidad ${norm(u.placa)}: ${motivo}`); f.resuelto = null; }
       }
-    } catch { /* sin pool o error técnico: no se bloquea la vista previa; la confirmación revalida */ }
+    } catch (e) {
+      const controlado = e instanceof ErrorPlazoOperacion ? e : errorVistaPrevia(e);   // el plazo vencido de la operación conserva su mensaje
+      console.error("resolverYValidar: verificación de identidad de unidades no completada", { codigo: controlado.codigo });   // solo el código; nunca datos de la empresa
+      if (identidadEstricta) throw controlado;
+    } finally {
+      await lector?.liberar().catch(() => undefined);
+    }
   }
 
   // --- colisiones DENTRO del lote (A2.2): la misma persona / unidad / TC en dos filas cuyas VENTANAS se solapan ---
@@ -436,7 +449,7 @@ const aResultado = (f: FilaInterna): ResultadoFilaLote => ({
  */
 export async function validarLote(empresaId: number, fechaDestino: string, borradores: BorradorLote[]): Promise<ResultadoFilaLote[]> {
   if (!FECHA_RE.test(fechaDestino)) throw new Error("Fecha destino inválida.");
-  return (await resolverYValidar(empresaId, fechaDestino, borradores)).map(aResultado);
+  return (await resolverYValidar(empresaId, fechaDestino, borradores, true)).map(aResultado);
 }
 
 export type ResultadoConfirmarLote =

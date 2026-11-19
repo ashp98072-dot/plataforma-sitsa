@@ -3,11 +3,16 @@ const unidadReal = vi.hoisted(() => ({ modelo: null as null | { consultar(sql: s
 vi.mock("@/lib/tms/unidad-canonica", async () => {
   const sim = (await import("./unidad-canonica.test-fixture")).unidadEnSimulador;
   const real = await vi.importActual<typeof import("./unidad-canonica")>("./unidad-canonica");
-  return { resolverUnidadTmsTx: (...a: Parameters<typeof sim>) => (unidadReal.modelo ? real.resolverUnidadTmsTx(...a) : sim(...a)) };
+  return {
+    resolverUnidadTmsTx: (...a: Parameters<typeof sim>) => (unidadReal.modelo ? real.resolverUnidadTmsTx(...a) : sim(...a)),
+    // Vista previa: por omisión no hay identidad que verificar (equivale a «sin conflicto»); con `unidadReal.modelo` corre el resolvedor REAL de LECTURA sobre el modelo SQL.
+    resolverUnidadTmsSoloLectura: (...a: Parameters<typeof real.resolverUnidadTmsSoloLectura>) => (unidadReal.modelo ? real.resolverUnidadTmsSoloLectura(...a) : Promise.resolve(null)),
+  };
 });
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { modeloSqlUnidadTms } from "./unidad-canonica-sql.fixture";
+import { ErrorVistaPrevia } from "./lector-vista-previa";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
@@ -72,7 +77,7 @@ let sinTablaOrigen = false;
 // por intento de INSERT): permite reproducir, dentro de la MISMA transacción del lote, una colisión real de
 // código (ER_DUP_ENTRY) que debe reintentar, o cualquier otro error de INSERT que debe propagarse tal cual.
 let insertPlanFallos: ("ok" | "dup" | "otro" | "guarda")[] = [];
-const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() };
+const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(), destroy: vi.fn() };
 
 const flota: Record<number, { id: number; placa: string; activo: number; en_taller: number; tipo_unidad: string; empresa_id: number }> = {
   31: { id: 31, placa: "TC-1", activo: 1, en_taller: 0, tipo_unidad: "TC", empresa_id: 7 },
@@ -1277,12 +1282,11 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
 
 describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes con referencias anteriores a la canonicalización)", () => {
   const flotaP1 = { id: 1, empresa_id: EMP, placa: "P-1", activo: 1, estado: "Activo" };
-  const sentenciasPool: string[] = [];
+  const lecturas = () => conn.query.mock.calls.map((c) => String(c[0])).filter((q) => !/^\s*SET\s+SESSION\b/i.test(q));   // sentencias de datos de la vista previa (sin los SET de sesión del lector)
   const conModelo = (unidades: { id: number; placa: string; flota_vehiculo_id: number | null }[]) => {
     const m = modeloSqlUnidadTms(EMP, [flotaP1, { ...flotaP1, id: 2, placa: "P-2" }]); for (const u of unidades) m.modelo.unidades.push({ ...u, empresa_id: EMP }); unidadReal.modelo = m as never;
     e.unidades = m.modelo.unidades.map((u) => ({ id: u.id, placa: u.placa }));   // el motor y el modelo SQL ven las MISMAS unidades TMS
-    sentenciasPool.length = 0;
-    vi.mocked(getPool).mockReturnValue({ getConnection: vi.fn().mockResolvedValue(conn), query: async (sql: string, a: unknown[] = []) => { sentenciasPool.push(String(sql)); return [m.consultar(String(sql), a) ?? []]; }, execute: async (sql: string) => { sentenciasPool.push(String(sql)); throw new Error("el lector no debe ejecutar"); } } as never);
+    conn.query.mockClear();   // la vista previa lee por una conexión dedicada (getConnection): sus sentencias quedan en conn.query
     return m;
   };
   it("VISTA PREVIA: la unidad histórica sin vínculo a Flota se marca con error en SU fila (antes la preview decía «ok» y fallaba todo al confirmar); la otra fila queda ok; no se escribe nada y solo se ejecutan SELECT", async () => {
@@ -1290,12 +1294,63 @@ describe("copia: identidad de unidad TMS con el resolvedor REAL de #624 (viajes 
     const r = await validarLote(EMP, DESTINO, [borrador({ fila: 1, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 }), borrador({ fila: 2, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
     expect(r.map((x) => x.estado)).toEqual(["ok", "error"]); expect(r[1].errores).toEqual(["Unidad P-1: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos."]);
     expect(m.modelo.unidades).toEqual([{ id: 601, empresa_id: EMP, placa: "P-1", flota_vehiculo_id: null }]); expect(conn.beginTransaction).not.toHaveBeenCalled();
-    expect(sentenciasPool.length).toBeGreaterThan(0); expect(sentenciasPool.every((q) => /^\s*SELECT\b/i.test(q))).toBe(true);
+    expect(lecturas().length).toBeGreaterThan(0); expect(lecturas().every((q) => /^\s*SELECT\b/i.test(q) && !/FOR\s+UPDATE/i.test(q))).toBe(true);   // solo SELECT y NINGUNO con FOR UPDATE
   });
   it("VISTA PREVIA: sin unidad TMS previa (se crearía al confirmar) no se consulta nada ni se inserta; unidad ya vinculada a la misma de Flota → ok", async () => {
     conModelo([]); const sinUnidad = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-9" })]); expect(sinUnidad[0].estado).toBe("error");   // P-9 no existe en Flota: la validación de siempre
-    sentenciasPool.length = 0; const nueva = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-2" })]); expect(nueva[0].estado).toBe("ok"); expect(sentenciasPool).toEqual([]);   // P-2 sin fila TMS: el resolvedor no se invoca
+    conn.query.mockClear(); const nueva = await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-2" })]); expect(nueva[0].estado).toBe("ok"); expect(lecturas().filter((q) => /tms_unidades|flota_vehiculos|empresas/i.test(q))).toEqual([]);   // P-2 sin fila TMS: el resolvedor no se invoca
     conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]); expect((await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-1" })]))[0].estado).toBe("ok");
+  });
+  it("VISTA PREVIA — varias unidades: las consultas de metadatos y listas por empresa se hacen UNA vez para todo el lote (no por unidad) y la lectura no usa FOR UPDATE", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }, { id: 602, placa: "P-2", flota_vehiculo_id: 2 }]);
+    const r = await validarLote(EMP, DESTINO, [borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 }), borrador({ fila: 2, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 })]);
+    expect(r.map((x) => x.estado)).toEqual(["ok", "ok"]);
+    const q = lecturas();
+    expect(q.filter((x) => /FROM tms_unidades/i.test(x))).toHaveLength(1);
+    expect(q.filter((x) => /FROM empresas/i.test(x))).toHaveLength(1);
+    expect(q.filter((x) => /information_schema/i.test(x)).length).toBeLessThanOrEqual(3);   // metadatos: tablas/fusiones/identidad, una vez cada uno
+    expect(q.some((x) => /FOR\s+UPDATE/i.test(x))).toBe(false);
+  });
+  it("VISTA PREVIA — fallo TÉCNICO (ER_LOCK_WAIT_TIMEOUT): no se oculta, sube como ErrorVistaPrevia con mensaje controlado, se detiene en la PRIMERA unidad (sin esperas acumuladas) y no escribe nada", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }, { id: 602, placa: "P-2", flota_vehiculo_id: 2 }]);
+    const base = conn.query.getMockImplementation()!; let intentos = 0;
+    conn.query.mockImplementation((async (sql: string, a?: unknown[]) => { if (/FROM tms_unidades/i.test(String(sql))) { intentos++; throw Object.assign(new Error("Lock wait timeout exceeded on `tms_unidades` (host interno)"), { code: "ER_LOCK_WAIT_TIMEOUT", errno: 1205 }); } return base(sql, a); }) as never);
+    const err = await validarLote(EMP, DESTINO, [borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 }), borrador({ fila: 2, unidadPlaca: "P-2", origenPlanId: 901, pilotoEmpleadoId: 2 })]).then(() => null, (x: unknown) => x);
+    expect(err).toBeInstanceOf(ErrorVistaPrevia);
+    expect((err as ErrorVistaPrevia).message).toContain("ER_LOCK_WAIT_TIMEOUT");
+    expect((err as ErrorVistaPrevia).message).not.toMatch(/tms_unidades|host interno/);
+    expect(intentos).toBe(1);
+    expect(conn.beginTransaction).not.toHaveBeenCalled();
+    expect(vi.mocked(console.error)).toHaveBeenCalledWith("resolverYValidar: verificación de identidad de unidades no completada", { codigo: "ER_LOCK_WAIT_TIMEOUT" });   // sin placas ni datos de la empresa
+  });
+  it("VISTA PREVIA — la conexión dedicada nunca queda sin liberar: error SQL normal → vuelve al pool; error de estado incierto → se DESTRUYE (nunca vuelve al pool)", async () => {
+    for (const [err, esperado] of [
+      [Object.assign(new Error("x"), { code: "ER_LOCK_WAIT_TIMEOUT", errno: 1205 }), "release"],
+      [new Error("socket hang up"), "destroy"],
+    ] as const) {
+      conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+      const base = conn.query.getMockImplementation()!;
+      conn.query.mockImplementation((async (sql: string, a?: unknown[]) => { if (/FROM tms_unidades/i.test(String(sql))) throw err; return base(sql, a); }) as never);
+      conn.release.mockClear(); conn.destroy.mockClear();
+      await validarLote(EMP, DESTINO, [borrador({ unidadPlaca: "P-1" })]).catch(() => undefined);
+      const otro = esperado === "release" ? "destroy" : "release";
+      expect(conn[esperado]).toHaveBeenCalledTimes(1);
+      expect(conn[otro]).not.toHaveBeenCalled();
+    }
+  });
+  it("CONFIRMAR — la verificación previa NO es fatal ante un fallo técnico: la transacción real es la autoridad; si ella también falla, rollback total y nada creado", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+    const base = conn.query.getMockImplementation()!;
+    conn.query.mockImplementation((async (sql: string, a?: unknown[]) => { if (/FROM tms_unidades/i.test(String(sql))) throw Object.assign(new Error("x"), { code: "ER_LOCK_WAIT_TIMEOUT", errno: 1205 }); return base(sql, a); }) as never);
+    const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    expect(creadosDestino()).toHaveLength(0); expect(conn.commit).not.toHaveBeenCalled(); expect(conn.rollback).toHaveBeenCalled();
+  });
+  it("CONFIRMAR — el resolvedor de la TRANSACCIÓN sigue tomando FOR UPDATE (la autoridad conserva sus bloqueos)", async () => {
+    conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: 1 }]);
+    const r = await confirmar([borrador({ fila: 1, unidadPlaca: "P-1", origenPlanId: 900, pilotoEmpleadoId: 1 })]);
+    expect(r).toMatchObject({ ok: true });
+    expect(lecturas().some((x) => /FROM tms_unidades.*FOR UPDATE/i.test(x))).toBe(true);
   });
   it("CONFIRMAR con la unidad histórica en conflicto: la revalidación bajo candado lo rechaza ANTES de abrir transacción (409, errores por fila), nada se crea", async () => {
     conModelo([{ id: 601, placa: "P-1", flota_vehiculo_id: null }]);

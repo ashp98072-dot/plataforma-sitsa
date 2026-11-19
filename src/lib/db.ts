@@ -6,6 +6,7 @@ import mysql, {
 import { loadRuntimeEnv } from "./load-env";
 import { sandboxMode } from "../../scripts/sandbox-config.mjs";
 import { sandboxPool } from "./sandbox-db";
+import { alcanceActual, registrarConfigControl } from "./db-plazo";
 
 let pool: Pool | null = null;
 let poolSandbox: boolean | null = null;
@@ -42,6 +43,8 @@ export function getPool(): Pool {
   });
   poolSandbox = sandboxMode();
   pool = poolSandbox ? sandboxPool(raw) : raw;
+  // Conexión de CONTROL (KILL QUERY) independiente del pool, solo para cancelar sentencias vencidas (db-plazo). Nunca en modo sandbox.
+  registrarConfigControl(poolSandbox ? null : { host, port: Number(process.env.DB_PORT ?? "3306"), user, password: process.env.DB_PASSWORD ?? "", database });
   return pool;
 }
 
@@ -49,6 +52,9 @@ export async function query<T extends RowDataPacket[]>(
   sql: string,
   params: SqlParams = [],
 ): Promise<T> {
+  // Dentro de `conPlazo` (db-plazo.ts) la sentencia pasa por la conexión dedicada de esa operación (con plazo y cancelación); fuera, igual que siempre.
+  const alcance = alcanceActual();
+  if (alcance) return ((await alcance.consultar(sql, params, "query")) as [T, unknown])[0];
   const [rows] = await getPool().query<T>(sql, params);
   return rows;
 }
@@ -57,6 +63,8 @@ export async function execute(
   sql: string,
   params: SqlParams = [],
 ): Promise<ResultSetHeader> {
+  const alcance = alcanceActual();
+  if (alcance) return ((await alcance.consultar(sql, params, "execute")) as [ResultSetHeader, unknown])[0];
   const [result] = await getPool().execute<ResultSetHeader>(sql, params);
   return result;
 }
