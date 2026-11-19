@@ -51,7 +51,11 @@ export async function POST(req: Request, ctx: Ctx) {
       if (!logo) return NextResponse.json({ error: "Configure un logotipo válido para la empresa antes de emitir el comprobante." }, { status: 409 });
       return NextResponse.json(await enviarTraslado(getPool(), guard.empresa.id, d.id, guard.session.id, { nombre: guard.empresa.nombre, logo, logoTipo: logo[0] === 0xff ? "image/jpeg" : "image/png" }));
     }
-    return NextResponse.json(await recibirTraslado(getPool(), guard.empresa.id, d.id, guard.session.id, d, true));
+    // Tanto la recepción como la declaración de faltantes requieren el permiso
+    // canecas_confirmar. El guard anterior comprueba además lectura y empresa;
+    // el usuario de esa sesión queda registrado como responsable del faltante.
+    const autorizaFaltante = !guard.error && d.accion === "recibir";
+    return NextResponse.json(await recibirTraslado(getPool(), guard.empresa.id, d.id, guard.session.id, d, autorizaFaltante));
   } catch (error) {
     const codigo = (error as Error).message;
     if (codigo === "TRASLADO_NO_ENCONTRADO") return NextResponse.json({ error: "Traslado no encontrado." }, { status: 404 });
@@ -59,4 +63,3 @@ export async function POST(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "No se pudo completar el traslado." }, { status: 500 });
   }
 }
-
