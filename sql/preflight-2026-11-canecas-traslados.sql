@@ -12,5 +12,9 @@ SELECT 'Tablas de traslado aún no instaladas',
 UNION ALL
 SELECT 'Triggers de documento aún no instalados',
   IF((SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema=DATABASE()
-      AND trigger_name IN ('can_tras_doc_no_update','can_tras_doc_no_delete'))=0,'OK','DETENER');
+      AND trigger_name IN ('can_tras_doc_no_update','can_tras_doc_no_delete'))=0,'OK','DETENER')
+UNION ALL
+SELECT 'Sin procedimiento residual de rollback',
+  IF((SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema=DATABASE()
+      AND routine_name='can_tras_rollback_vacio')=0,'OK','DETENER');
 
