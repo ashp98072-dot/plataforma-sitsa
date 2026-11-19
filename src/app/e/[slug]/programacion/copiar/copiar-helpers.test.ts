@@ -188,7 +188,7 @@ describe("comparación de tarifas y aceptación antes de confirmar", () => {
   it("con una tarifa distinta NO se puede confirmar hasta aceptarla expresamente; la aceptación es de ESE conjunto de diferencias", () => {
     const filas = [conTarifa(1, 1500, 1500), conTarifa(2, 1200, 1500)];
     const clave = claveAvisoTarifas(comparacionesDeTarifa(filas));
-    expect(clave).toBe("2:100@1500");
+    expect(clave).toBe('[2,"distinta",[1200,"GTQ"],[100,1500,"GTQ"]]');
     expect(puedeConfirmarConTarifas(filas, false, "")).toBe(false);
     expect(puedeConfirmarConTarifas(filas, false, clave)).toBe(true);
     // si cambia el destino (otra tarifa vigente) o la fila, la aceptación anterior ya no vale
@@ -209,5 +209,53 @@ describe("comparación de tarifas y aceptación antes de confirmar", () => {
   it("solo se comparan las filas incluidas y validadas OK", () => {
     const filas = [{ ...conTarifa(1, 1200, 1500), incluida: false }, conTarifa(2, 1500, 1500), { ...conTarifa(3, 1200, 1500), sucia: true }];
     expect(comparacionesDeTarifa(filas).map((c) => c.fila)).toEqual([2]);
+  });
+
+  describe("la aceptación se invalida cuando cambia CUALQUIER dato relevante de la diferencia", () => {
+    const fila2 = (o: { monto: number | null; moneda: string | null }, d: { id?: number; monto?: number; moneda?: string } | null): FilaEditable => {
+      const f = fila(2);
+      return { ...f, origen: { ...f.origen, tarifaOriginal: o }, validacion: { fila: 2, estado: "ok", errores: [], tarifa: d ? { id: d.id ?? 100, nombre: "Base", monto: d.monto ?? 1500, moneda: d.moneda ?? "GTQ" } : null } };
+    };
+    const clave = (...filas: FilaEditable[]) => claveAvisoTarifas(comparacionesDeTarifa(filas));
+    const base = () => fila2({ monto: 1200, moneda: "GTQ" }, {});
+
+    it("la MONEDA del destino distinta invalida la aceptación aunque el id y el monto sean los mismos", () => {
+      const aceptada = clave(base());
+      const otraMoneda = fila2({ monto: 1200, moneda: "GTQ" }, { moneda: "USD" });
+      expect(clave(otraMoneda)).not.toBe(aceptada);
+      expect(puedeConfirmarConTarifas([otraMoneda], false, aceptada)).toBe(false);
+      expect(puedeConfirmarConTarifas([base()], false, aceptada)).toBe(true);          // lo mismo que se aceptó sí sigue aceptado
+    });
+    it("la MONEDA del origen distinta también invalida (misma diferencia aparente de monto, otra moneda de origen)", () => {
+      const aceptada = clave(base());
+      const origenUsd = fila2({ monto: 1200, moneda: "USD" }, {});
+      expect(clave(origenUsd)).not.toBe(aceptada);
+      expect(puedeConfirmarConTarifas([origenUsd], false, aceptada)).toBe(false);
+    });
+    it.each([
+      ["el monto del origen", fila2({ monto: 1100, moneda: "GTQ" }, {})],
+      ["el monto del destino", fila2({ monto: 1200, moneda: "GTQ" }, { monto: 1600 })],
+      ["el id de la tarifa de destino (mismo monto y moneda)", fila2({ monto: 1200, moneda: "GTQ" }, { id: 101 })],
+      ["el tipo de diferencia (origen con tarifa → sin tarifa en destino)", fila2({ monto: 1200, moneda: "GTQ" }, null)],
+      ["el tipo de diferencia (origen sin tarifa → con tarifa en destino)", fila2({ monto: null, moneda: null }, {})],
+    ])("cambiar %s invalida la aceptación anterior", (_n, otra) => {
+      const aceptada = clave(base());
+      expect(clave(otra)).not.toBe(aceptada);
+      expect(puedeConfirmarConTarifas([otra], false, aceptada)).toBe(false);
+    });
+    it("distinguir mayúsculas/minúsculas de la moneda no cambia la clave (gtq == GTQ); un dato no relevante tampoco", () => {
+      const aceptada = clave(base());
+      const minuscula = fila2({ monto: 1200, moneda: "gtq" }, { moneda: "gtq" });
+      expect(clave(minuscula)).toBe(aceptada);
+      const otroNombre = { ...base(), validacion: { ...base().validacion!, tarifa: { id: 100, nombre: "Otro nombre", monto: 1500, moneda: "GTQ" } } };
+      expect(clave(otroNombre)).toBe(aceptada);
+    });
+    it("un conjunto con otra fila con diferencia, o con una diferencia menos, también cambia la clave", () => {
+      const f2 = base();
+      const f3 = { ...fila2({ monto: 900, moneda: "GTQ" }, {}), borrador: { ...fila(3).borrador }, validacion: { fila: 3, estado: "ok" as const, errores: [], tarifa: { id: 100, nombre: "Base", monto: 1500, moneda: "GTQ" } } };
+      const dos = clave(f2, f3);
+      expect(dos).not.toBe(clave(f2));
+      expect(puedeConfirmarConTarifas([f2, f3], false, clave(f2))).toBe(false);
+    });
   });
 });

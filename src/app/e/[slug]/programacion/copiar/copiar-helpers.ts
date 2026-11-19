@@ -139,11 +139,17 @@ export function comparacionesDeTarifa(filas: FilaEditable[]): { fila: number; co
     .map((f) => ({ fila: f.borrador.fila, comparacion: compararTarifa(f.origen.tarifaOriginal, f.validacion!.tarifa) }));
 }
 
-/** Identifica el conjunto de diferencias de tarifa que el usuario aceptó: si cambia (otra tarifa, otra fila), hay que volver a aceptar. */
+/**
+ * Identifica EXACTAMENTE lo que el usuario aceptó: por cada fila con diferencia, el tipo de diferencia, la tarifa del origen (monto y moneda) y la del
+ * destino (id, monto y moneda). Si cambia cualquiera de esos datos (otro monto, otra moneda, otra tarifa vigente, otra fila), la clave cambia y hay que
+ * aceptar de nuevo. Los valores se codifican con JSON para que ningún separador de un dato pueda confundirse con otro.
+ */
 export function claveAvisoTarifas(items: { fila: number; comparacion: ComparacionTarifa }[]): string {
+  const origen = (c: ComparacionTarifa) => ("origen" in c ? [c.origen.monto ?? null, c.origen.moneda?.toUpperCase() ?? null] : null);
+  const destino = (c: ComparacionTarifa) => ("destino" in c ? [c.destino.id, c.destino.monto, c.destino.moneda.toUpperCase()] : null);
   return items
     .filter((i) => comparacionRequiereAviso(i.comparacion))
-    .map((i) => `${i.fila}:${"destino" in i.comparacion ? `${i.comparacion.destino.id}@${i.comparacion.destino.monto}` : "sin"}`)
+    .map((i) => JSON.stringify([i.fila, i.comparacion.estado, origen(i.comparacion), destino(i.comparacion)]))
     .join("|");
 }
 
