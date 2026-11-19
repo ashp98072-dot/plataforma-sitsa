@@ -91,5 +91,16 @@ describe.skipIf(!pipe)("esquema de traslados en MariaDB aislada", () => {
     const [rows] = await pool.query<mysql.RowDataPacket[]>("SELECT estado FROM canecas_traslados WHERE empresa_id=1 AND id=?", [duplicados[0].id]);
     expect(rows[0].estado).toBe("BORRADOR");
   });
+  it("serializa dos envíos distintos que compiten por el mismo saldo disponible", async () => {
+    const input = { clave: "competencia-1", origenId: 1, destinoId: 2, entrega: "Ana", transporte: "", observaciones: "", partidas: [{ productoId: 1, cantidad: 1 }] };
+    const a = await crearTraslado(pool,1,1,input);
+    const b = await crearTraslado(pool,1,1,{ ...input, clave: "competencia-2" });
+    const marca = { nombre: "A", logo: null, logoTipo: null };
+    const resultados = await Promise.allSettled([enviarTraslado(pool,1,a.id,1,marca), enviarTraslado(pool,1,b.id,1,marca)]);
+    expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(resultados.filter(r => r.status === "rejected")).toHaveLength(1);
+    const [saldos] = await pool.query<mysql.RowDataPacket[]>("SELECT fisico,reservado FROM canecas_saldos WHERE empresa_id=1 AND producto_id=1 AND ubicacion_id=1");
+    expect(saldos[0]).toMatchObject({ fisico: 1, reservado: 1 });
+  });
 });
 
