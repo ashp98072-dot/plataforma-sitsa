@@ -118,3 +118,8 @@ export function sumarDias(iso: string, dias: number): string {
 }
 
 export const fechaVisible = (iso: string) => iso.split("-").reverse().join("/");
+
+/** La tarifa enviada es una expectativa de comparaci?n, nunca una fuente del importe facturado. */
+export function tarifasEsperadas(filas: FilaEditable[]) {
+  return filasIncluidas(filas).map((f) => ({ fila: f.borrador.fila, tarifa: f.validacion?.tarifa ? { id: f.validacion.tarifa.id, monto: f.validacion.tarifa.monto, moneda: f.validacion.tarifa.moneda } : null }));
+}
