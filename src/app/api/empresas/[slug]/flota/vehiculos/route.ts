@@ -1,4 +1,4 @@
-import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo, conflictosAlCompartirTx, mensajeConflictoCompartir, PLACA_REPETIDA_AL_COMPARTIR } from "@/lib/flota/vehiculos-escritura";
 import { placaComparable } from "@/lib/flota/combustible-coincidencias";
 import { errorEliminacionVehiculo } from "@/lib/flota/vehiculo-eliminacion";
 import type { SqlParams } from "@/lib/db";
@@ -302,6 +302,8 @@ const patchSchema = z.object({
     .optional(),
   /** Empresas que pueden usar este vehículo (además de la dueña). */
   accesoEmpresaIds: z.array(z.number().int().positive()).optional(),
+  /** Confirmación explícita de compartir con una empresa que ya tiene una ficha propia con la misma placa (queda en auditoría). */
+  confirmarPlacaRepetida: z.boolean().optional(),
 });
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -520,11 +522,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
     if (d.accesoEmpresaIds && esDueno) {
+      // Bloqueo suave: compartir no debe dejar a otra empresa con dos fichas de la misma placa sin decidirlo. Solo se revisan accesos NUEVOS.
+      const conflictos = await conflictosAlCompartirTx(conn, d.id, d.accesoEmpresaIds);
+      if (conflictos.length && !d.confirmarPlacaRepetida) throw new ErrorIdentidadVehiculo(mensajeConflictoCompartir(conflictos, String(cur[0].placa)), 409, PLACA_REPETIDA_AL_COMPARTIR);
       await guardarAccesoVehiculo(
         d.id,
         d.accesoEmpresaIds,
         Number(cur[0].empresa_id), conn,
       );
+      if (conflictos.length) {
+        // Decisión explícita con trazabilidad: quién compartió, con qué empresas y que ya tenían una ficha con la misma placa.
+        await registrarAuditoriaTx(conn, { empresaId: guard.empresa.id, usuario: guard.session.username, modulo: "flota", accion: "compartir_con_placa_repetida", detalle: JSON.stringify({ vehiculoId: d.id, empresas: conflictos.map(x => x.empresaId), confirmado: true }) });
+      }
     }
     // Auditoría SOLO de la edición transversal (la de la propia empresa y la operación de taller no cambian): vehículo, empresa propietaria,
     // empresa activa y usuario; la fecha/hora la registra la tabla de auditoría.
@@ -560,7 +569,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     });
     });
   } catch (err) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : "No se pudo actualizar." }, { status: err instanceof ErrorIdentidadVehiculo ? err.status : 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : "No se pudo actualizar.", ...(err instanceof ErrorIdentidadVehiculo && err.codigo ? { codigo: err.codigo } : {}) }, { status: err instanceof ErrorIdentidadVehiculo ? err.status : 500 });
   }
 }
 

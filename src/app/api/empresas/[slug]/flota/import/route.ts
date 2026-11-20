@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import type { SqlParams } from "@/lib/db";
 import type { ResultSetHeader } from "mysql2";
-import { escribirVehiculos, coincidenciasPlacaTx, exigirSinDuplicadoCompartidoTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, coincidenciasPlacaTx, exigirSinDuplicadoCompartidoTx, exigirComparticionSinDuplicadoTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
   parsearExcelFlota,
@@ -207,6 +207,7 @@ export async function POST(req: Request, ctx: Ctx) {
         }
         const acc = accesosPara(empId);
         if (acc.length) {
+          await exigirComparticionSinDuplicadoTx(conn, vid, acc); // solo accesos NUEVOS; en la importación no hay diálogo: la fila se reporta con error
           await guardarAccesoVehiculo(vid, acc, empId, conn);
         }
         return false;
@@ -252,6 +253,7 @@ export async function POST(req: Request, ctx: Ctx) {
         if (nuevoId) {
           const acc = accesosPara(duenoId);
           if (acc.length) {
+            await exigirComparticionSinDuplicadoTx(conn, nuevoId, acc);
             await guardarAccesoVehiculo(nuevoId, acc, duenoId, conn);
           }
         }
