@@ -20,6 +20,22 @@ export function verificarTriggers(rows, triggers) {
   }
 }
 
+export function verificarClavesForaneas(rows, ddl) {
+  const expected = [...ddl.matchAll(/CONSTRAINT\s+(fk_can_\w+)\s+FOREIGN KEY\s*\(([^)]+)\)\s+REFERENCES\s+(\w+)\s*\(([^)]+)\)/gi)];
+  if (expected.length !== 9 || !Array.isArray(rows)) throw Error('DETENER: claves foráneas incompletas');
+  for (const [, name, columns, refTable, refColumns] of expected) {
+    const source = columns.split(',').map(x => x.trim());
+    const target = refColumns.split(',').map(x => x.trim());
+    const beforeConstraint = ddl.slice(0, ddl.indexOf(`CONSTRAINT ${name}`));
+    const tables = [...beforeConstraint.matchAll(/CREATE TABLE\s+(\w+)/gi)];
+    const table = tables.at(-1)?.[1];
+    const actual = rows.filter(row => row.CONSTRAINT_NAME === name);
+    if (!table || actual.length !== source.length || source.some((column, i) => !actual.some(row => row.TABLE_NAME === table && row.COLUMN_NAME === column && row.REFERENCED_TABLE_NAME === refTable && row.REFERENCED_COLUMN_NAME === target[i]))) {
+      throw Error(`DETENER: definición incompatible de clave foránea ${name}`);
+    }
+  }
+}
+
 export async function ejecutarCostosControlado(connection) {
   const preflight = sqlFile('preflight-2026-11-canecas-costos-wip.sql');
   const migration = sqlFile('migrate-2026-11-canecas-costos-wip.sql');
@@ -46,6 +62,7 @@ export async function ejecutarCostosControlado(connection) {
       throw Error('DETENER: postcheck incompatible; instalación requiere revisión');
     }
     verificarTriggers(post[8], triggers);
+    verificarClavesForaneas(post[9], ddl);
     return { pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
   } finally {
     await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);

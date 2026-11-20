@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
+import { verificarClavesForaneas, verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
 describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
@@ -33,6 +33,11 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     const triggers = migration.split('DELIMITER //')[1].split('//').map(s => s.trim()).filter(s => s.startsWith('CREATE TRIGGER'));
     const [post] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
     expect(() => verificarTriggers(post[8], triggers)).not.toThrow();
+    expect(() => verificarClavesForaneas(post[9], migration)).not.toThrow();
+    await db.query('ALTER TABLE canecas_valoraciones_iniciales DROP FOREIGN KEY fk_can_val_producto');
+    await db.query('ALTER TABLE canecas_valoraciones_iniciales ADD CONSTRAINT fk_can_val_producto FOREIGN KEY (empresa_id,producto_id) REFERENCES canecas_ubicaciones(empresa_id,id)');
+    const [fkAlterada] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
+    expect(() => verificarClavesForaneas(fkAlterada[9], migration)).toThrow('definición incompatible');
     await db.query('DROP TRIGGER can_valoracion_no_borrar');
     await db.query('CREATE TRIGGER can_valoracion_no_borrar BEFORE DELETE ON canecas_valoraciones_iniciales FOR EACH ROW BEGIN SET @invalido=1; END');
     const [alterado] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
