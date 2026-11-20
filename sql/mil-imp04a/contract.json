@@ -1,0 +1,235 @@
+{
+  "anchors": [
+    [
+      "clientes",
+      "uq_mil04a_cliente_ambito",
+      "empresa_id,id"
+    ],
+    [
+      "fact_facturas",
+      "uq_mil04a_factura_ambito",
+      "empresa_id,entidad_id,cliente_id,id"
+    ]
+  ],
+  "tables": {
+    "fact_credito_perfiles": {
+      "cols": [
+        [
+          "empresa_id",
+          "int",
+          "NO"
+        ],
+        [
+          "entidad_id",
+          "int",
+          "NO"
+        ],
+        [
+          "cliente_id",
+          "int",
+          "NO"
+        ],
+        [
+          "dias",
+          "int",
+          "NO"
+        ],
+        [
+          "aprobada",
+          "tinyint",
+          "NO"
+        ],
+        [
+          "revision",
+          "int",
+          "NO"
+        ],
+        [
+          "actualizado_por",
+          "int",
+          "NO"
+        ],
+        [
+          "actualizado_en",
+          "datetime",
+          "NO"
+        ]
+      ],
+      "ddl": "empresa_id INT NOT NULL, entidad_id INT NOT NULL, cliente_id INT NOT NULL,\n dias INT NOT NULL, aprobada TINYINT NOT NULL, revision INT NOT NULL,\n actualizado_por INT NOT NULL, actualizado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n PRIMARY KEY (empresa_id,entidad_id,cliente_id),\n CONSTRAINT fk_fcp_entidad FOREIGN KEY (empresa_id,entidad_id) REFERENCES cont_entidades(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT fk_fcp_cliente FOREIGN KEY (empresa_id,cliente_id) REFERENCES clientes(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT fk_fcp_actor FOREIGN KEY (actualizado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT ck_fcp_dias CHECK (dias BETWEEN 0 AND 365),\n CONSTRAINT ck_fcp_aprobada CHECK (aprobada IN (0,1)),\n CONSTRAINT ck_fcp_revision CHECK (revision > 0)",
+      "keys": [
+        [
+          "PRIMARY",
+          "empresa_id,entidad_id,cliente_id",
+          0
+        ]
+      ],
+      "fks": [
+        [
+          "fk_fcp_entidad",
+          "empresa_id,entidad_id",
+          "cont_entidades",
+          "empresa_id,id"
+        ],
+        [
+          "fk_fcp_cliente",
+          "empresa_id,cliente_id",
+          "clientes",
+          "empresa_id,id"
+        ],
+        [
+          "fk_fcp_actor",
+          "actualizado_por",
+          "usuarios",
+          "id"
+        ]
+      ],
+      "checks": [
+        [
+          "ck_fcp_dias",
+          "dias between 0 and 365"
+        ],
+        [
+          "ck_fcp_aprobada",
+          "aprobada in (0,1)"
+        ],
+        [
+          "ck_fcp_revision",
+          "revision > 0"
+        ]
+      ]
+    },
+    "fact_vencimientos": {
+      "cols": [
+        [
+          "factura_id",
+          "int",
+          "NO"
+        ],
+        [
+          "empresa_id",
+          "int",
+          "NO"
+        ],
+        [
+          "entidad_id",
+          "int",
+          "NO"
+        ],
+        [
+          "cliente_id",
+          "int",
+          "NO"
+        ],
+        [
+          "fecha_base",
+          "date",
+          "NO"
+        ],
+        [
+          "dias",
+          "int",
+          "NO"
+        ],
+        [
+          "vencimiento",
+          "date",
+          "NO"
+        ],
+        [
+          "regla",
+          "varchar",
+          "NO"
+        ],
+        [
+          "fuente",
+          "varchar",
+          "NO"
+        ],
+        [
+          "revision",
+          "int",
+          "NO"
+        ],
+        [
+          "creado_por",
+          "int",
+          "NO"
+        ],
+        [
+          "creado_en",
+          "datetime",
+          "NO"
+        ]
+      ],
+      "ddl": "factura_id INT NOT NULL, empresa_id INT NOT NULL, entidad_id INT NOT NULL, cliente_id INT NOT NULL,\n fecha_base DATE NOT NULL, dias INT NOT NULL, vencimiento DATE NOT NULL,\n regla VARCHAR(40) NOT NULL, fuente VARCHAR(10) NOT NULL, revision INT NOT NULL,\n creado_por INT NOT NULL, creado_en DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n PRIMARY KEY (factura_id), KEY ix_fv_ambito (empresa_id,entidad_id,vencimiento,factura_id),\n CONSTRAINT fk_fv_factura FOREIGN KEY (empresa_id,entidad_id,cliente_id,factura_id) REFERENCES fact_facturas(empresa_id,entidad_id,cliente_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT fk_fv_entidad FOREIGN KEY (empresa_id,entidad_id) REFERENCES cont_entidades(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT fk_fv_cliente FOREIGN KEY (empresa_id,cliente_id) REFERENCES clientes(empresa_id,id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT fk_fv_actor FOREIGN KEY (creado_por) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE RESTRICT,\n CONSTRAINT ck_fv_dias CHECK (dias BETWEEN 0 AND 365),\n CONSTRAINT ck_fv_fecha CHECK (vencimiento = DATE_ADD(fecha_base, INTERVAL dias DAY)),\n CONSTRAINT ck_fv_regla CHECK (regla = 'MIL04A_CALENDARIO_V1'),\n CONSTRAINT ck_fv_fuente CHECK ((fuente='CONTADO' AND dias=0 AND revision=0) OR (fuente='PERFIL' AND revision>0))",
+      "keys": [
+        [
+          "PRIMARY",
+          "factura_id",
+          0
+        ],
+        [
+          "ix_fv_ambito",
+          "empresa_id,entidad_id,vencimiento,factura_id",
+          1
+        ]
+      ],
+      "fks": [
+        [
+          "fk_fv_factura",
+          "empresa_id,entidad_id,cliente_id,factura_id",
+          "fact_facturas",
+          "empresa_id,entidad_id,cliente_id,id"
+        ],
+        [
+          "fk_fv_entidad",
+          "empresa_id,entidad_id",
+          "cont_entidades",
+          "empresa_id,id"
+        ],
+        [
+          "fk_fv_cliente",
+          "empresa_id,cliente_id",
+          "clientes",
+          "empresa_id,id"
+        ],
+        [
+          "fk_fv_actor",
+          "creado_por",
+          "usuarios",
+          "id"
+        ]
+      ],
+      "checks": [
+        [
+          "ck_fv_dias",
+          "dias between 0 and 365"
+        ],
+        [
+          "ck_fv_fecha",
+          "vencimiento = (fecha_base + interval dias day)"
+        ],
+        [
+          "ck_fv_regla",
+          "regla = 'MIL04A_CALENDARIO_V1'"
+        ],
+        [
+          "ck_fv_fuente",
+          "(fuente='CONTADO' AND dias=0 AND revision=0) OR (fuente='PERFIL' AND revision>0)"
+        ]
+      ]
+    }
+  },
+  "triggers": [
+    [
+      "fv_no_update",
+      "UPDATE",
+      "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Snapshot de vencimiento inmutable'"
+    ],
+    [
+      "fv_no_delete",
+      "DELETE",
+      "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Snapshot de vencimiento inmutable'"
+    ]
+  ]
+}

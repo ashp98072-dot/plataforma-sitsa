@@ -192,8 +192,8 @@ export type FilaCxc = {
     totalConfirmado: string;
     ultima: ConfirmacionBancariaResumen | null;
   };
-  /** Siempre «No disponible»: el vencimiento no existe en el modelo actual (no se inventa). */
-  vencimiento: typeof TEXTO_VENCIMIENTO_NO_DISPONIBLE;
+  /** Lectura base «No disponible»; la vista contable puede incorporar un snapshot MIL04A, nunca un cálculo del perfil vivo. */
+  vencimiento: string;
 };
 
 export type TotalesPorEntidad = {
