@@ -802,6 +802,57 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   expect(await Promise.all(tablas.map(t=>q(`SELECT * FROM ${t} ORDER BY id`)))).toEqual(historicos);
  });
 
+ it("paridad cliente/servidor (preflight #642): empleado activo, de baja, reportado, externo, unidad interna/externa, placa ambigua y combustible pendiente",async()=>{
+  vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");vi.stubEnv("CB2_TERCEROS_D2_APROBADA","");
+  try{
+   const actor={...ctx,escrituraDirecta:true};
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(8801,1,'Marta Activa Prueba','Activo'),(8802,1,'Beto Baja Prueba','Baja')");
+   await q("INSERT INTO flota_vehiculos(id,empresa_id,placa,chasis) VALUES(8810,1,'C-571LAB','LABSERIAL000008810'),(8811,1,'P-581LAB','LABSERIAL000008811'),(8812,1,'C-581LAB','LABSERIAL000008812')");
+   const piloto=await registrarPiloto(actor,{referencia:"paridad-piloto",nombre:"Piloto Paridad Externo"});
+   const unidad=await registrarUnidad(actor,{referencia:"paridad-unidad",placa:"M771LAB",tipo:"MOTOCICLETA",descripcion:"Paridad sintetica"});
+   const cat:CatalogosCB2={tercerosDirectos:true,tercerosHabilitados:true,identidadesIndependientes:true,pilotosReportados:true,pilotoReportadoExterno:true,proveedores:[],
+    empleados:[{id:8801,nombre:"Marta Activa Prueba",estado:"Activo"},{id:8802,nombre:"Beto Baja Prueba",estado:"Baja"}],
+    vehiculos:[{id:8810,placa:"C-571LAB",estado:"Activo"},{id:8811,placa:"P-581LAB",estado:"Activo"},{id:8812,placa:"C-581LAB",estado:"Activo"},{id:-unidad.id,placa:"M771LAB"}],
+    pilotosExternos:[{id:piloto.id,nombre:"Piloto Paridad Externo",referencia:"paridad-piloto"}],unidadesExternas:[{id:unidad.id,placa:"M771LAB",referencia:"paridad-unidad",tipo:"MOTOCICLETA",descripcion:"Paridad sintetica"}]};
+   type Esc={vale:string;piloto:string;placa:string;producto:string;unidad:number|null;decision:(prop:unknown)=>DecisionAsignacion;cliente:"LISTO"|"PENDIENTE";servidor:"OK"|"RECHAZA"|"NO_APLICA"};
+   const base:DecisionAsignacion={exigirProducto:true,exigirPiloto:true};
+   const auto=(id:number)=>(prop:unknown):DecisionAsignacion=>({...base,pilotoTipo:"INTERNO",empleadoId:id,pilotoExternoId:null,decisionNombre:prop as never});
+   const escenarios:Esc[]=[
+    {vale:"PAR-ACTIVO",piloto:"Marta Activa",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:auto(8801),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-BAJA",piloto:"Beto Baja",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:auto(8802),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-REPORTADO",piloto:"Visitante Sin Registro",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:()=>({...base,pilotoTipo:"REPORTADO",empleadoId:null,pilotoExternoId:null,decisionNombre:{tipo:"REPORTADO",confirmado:true}}),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-EXTERNO",piloto:"Cualquier Nombre",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:()=>({...base,pilotoTipo:"EXTERNO",pilotoExternoId:piloto.id,empleadoId:null}),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-UNIDAD-EXTERNA",piloto:"Otra Persona Visitante",placa:"M771LAB",producto:"Diesel",unidad:-unidad.id,decision:()=>({...base,pilotoTipo:"REPORTADO",empleadoId:null,pilotoExternoId:null,decisionNombre:{tipo:"REPORTADO",confirmado:true}}),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-EXTERNO-SIN-IDENTIDAD",piloto:"Sin Identidad Externa",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:()=>({...base,pilotoTipo:"EXTERNO",empleadoId:null}),cliente:"PENDIENTE",servidor:"NO_APLICA"},
+    {vale:"PAR-SIN-DECISION",piloto:"Sin Decision Aun",placa:"C-571LAB",producto:"Diesel",unidad:8810,decision:()=>({...base,pilotoTipo:"REPORTADO",empleadoId:null,pilotoExternoId:null}),cliente:"PENDIENTE",servidor:"NO_APLICA"},
+    {vale:"PAR-AMBIGUA",piloto:"Marta Activa",placa:"581LAB",producto:"Diesel",unidad:null,decision:auto(8801),cliente:"PENDIENTE",servidor:"NO_APLICA"},
+    {vale:"PAR-AMBIGUA-SIN-MOTIVO",piloto:"Marta Activa",placa:"581LAB",producto:"Diesel",unidad:8811,decision:auto(8801),cliente:"PENDIENTE",servidor:"RECHAZA"},
+    {vale:"PAR-AMBIGUA-CON-MOTIVO",piloto:"Marta Activa",placa:"581LAB",producto:"Diesel",unidad:8811,decision:(prop)=>({...auto(8801)(prop),motivoUnidad:"Confirmado con el proveedor: la unidad es P-581LAB"}),cliente:"LISTO",servidor:"OK"},
+    {vale:"PAR-COMBUSTIBLE",piloto:"Marta Activa",placa:"C-571LAB",producto:"20W50",unidad:8810,decision:auto(8801),cliente:"PENDIENTE",servidor:"RECHAZA"},
+   ];
+   const resultados:string[]=[];
+   for(const e of escenarios){
+    const buffer=await libroShell([filaShell(e.vale,e.piloto,e.placa,e.producto)]);
+    const previa=await preview(ctx,buffer,{perfil:"SHELL",moneda:"GTQ",seleccion:[]});
+    const fila=previa.filas.find(f=>f.candidato)!;const propuesta=previa.nombres?.find(n=>n.propuesta)?.propuesta??null;
+    const decision=e.decision(propuesta);
+    const seleccion=e.unidad===null?{}:{[fila.candidato!]:String(e.unidad)};
+    const estado=revisionCandidatos([fila],cat,seleccion,{},{},{[fila.candidato!]:decision})[0].estado;
+    resultados.push(`${e.vale}: cliente=${estado}`);expect(estado,e.vale).toBe(e.cliente);
+    if(e.servidor==="NO_APLICA"||e.unidad===null)continue;
+    const entrada:Entrada={perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato:fila.candidato!,vehiculoId:e.unidad,...seleccionShell(fila,cat,decision,e.unidad),...(decision.productoClasificado?{productoClasificado:decision.productoClasificado}:{}),...(decision.motivoUnidad?.trim()?{motivoUnidad:decision.motivoUnidad.trim()}:{})}]};
+    let servidor="OK";try{const token=await preview(ctx,buffer,entrada);await confirmarArchivo(ctx,buffer,"paridad.xlsx",entrada,key(),token.token);}catch{servidor="RECHAZA";}
+    resultados.push(`${e.vale}: servidor=${servidor}`);expect(servidor,e.vale).toBe(e.servidor);
+    expect(await total(e.vale)).toBe(servidor==="OK"?1:0);
+   }
+   // Consistencia: lo que el cliente da por LISTO el servidor lo acepta, y los consumos guardan identidades reales (sin vehículos ficticios ni empleados modificados).
+   expect((await q("SELECT COUNT(*) n FROM flota_vehiculos WHERE placa='M771LAB'"))[0].n).toBe(0);
+   expect((await q("SELECT empleado_id,piloto_externo_id,unidad_externa_id,vehiculo_id FROM flota_cb2_consumos WHERE vale_norm IN ('PAR-ACTIVO','PAR-BAJA','PAR-EXTERNO','PAR-UNIDAD-EXTERNA') ORDER BY vale_norm")).map(r=>[r.empleado_id,r.piloto_externo_id,r.unidad_externa_id,r.vehiculo_id])).toEqual([[8801,null,null,8810],[8802,null,null,8810],[null,piloto.id,null,8810],[null,null,unidad.id,null]]);
+   expect((await q("SELECT estado FROM empleados WHERE id IN (8801,8802) ORDER BY id")).map(r=>r.estado)).toEqual(["Activo","Baja"]);
+   console.log("PARIDAD "+resultados.join(" | "));
+  }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ });
+
  it("cierre integral Shell: alta directa, pendiente, listo, consumo, fondos, historial y solapamiento",async()=>{
   vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
   vi.stubEnv("CB2_TERCEROS_D2_APROBADA","");
