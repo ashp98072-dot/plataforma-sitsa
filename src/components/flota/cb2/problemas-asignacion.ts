@@ -9,6 +9,7 @@ import type { DecisionAsignacion } from "./asignacion";
 import { claseUnidadShell, unidadElegida } from "./unidad-shell";
 import { avisosDetallados, pilotoShellResuelto, type CandidatoRevision } from "./preview-model";
 
+const decisionExternaIncompatible = (d: DecisionAsignacion) => d.pilotoTipo === "EXTERNO";
 /** Explica la selección actual; nunca convierte un diagnóstico en autorización. */
 export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: DecisionAsignacion = {}) {
   if (g.estado === "RESUELTO") return [];
@@ -19,6 +20,7 @@ export function causasAsignacion(g: CandidatoRevision, cat: CatalogosCB2, d: Dec
     // Qué es la unidad (interna / externa / ambigua / no identificada) y qué falta; una unidad externa con piloto Shell exige la política de identidades independientes.
     const u = claseUnidadShell(g.fila, cat, g.vehiculoId);
     if (!g.vehiculoId || u.clase === "NO_IDENTIFICADA") causas.push(u.mensaje);
+    if (g.vehiculoId === "0" && u.clase === "SIN_VINCULAR" && decisionExternaIncompatible(d)) causas.push("Un piloto tercerizado exige una unidad: elige una unidad de Flota o una unidad externa.");
     if (Number(g.vehiculoId) < 0 && !politicaIndependiente(cat)) causas.push("La unidad externa de un vale Shell requiere identidades independientes habilitadas por el propietario; hasta entonces elige una unidad de Flota.");
   }
   if (g.fila.perfil !== "SHELL") {

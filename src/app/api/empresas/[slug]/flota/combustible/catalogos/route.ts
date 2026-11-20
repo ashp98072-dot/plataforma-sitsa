@@ -1,4 +1,5 @@
 import { esquemaPilotosReportados } from "@/lib/flota/cb2/pilotos-reportados";
+import { esquemaVinculoUnidad } from "@/lib/flota/cb2/vinculo-unidad";
 import { tercerosDirectosHabilitados } from "@/lib/flota/cb2/terceros-directos";
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
@@ -35,7 +36,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string }
     const limitacionPilotos = (empleadosDisponibles ? "" : "Catálogo de empleados no disponible: no se proponen vínculos. ") + "El vínculo usa empleados activos y de baja de la empresa (el estado y la fecha de baja son informativos y no impiden la coincidencia única) y conserva el nombre original. Dos o más tokens completos permiten autopropuesta solo con un empleado coincidente; ante ambigüedad se exige elección manual.";
     const reportado = tercerosDirectosHabilitados() ? await query<RowDataPacket[]>("SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND CONSTRAINT_NAME='ck_cb2_piloto_reportado'") : [];
     const pilotosReportados=await esquemaPilotosReportados();
-    return NextResponse.json({ ...catalogos, pilotosReportados, pilotoReportadoExterno: reportado.length>0, identidadesIndependientes: independencia.length>0, vehiculos: [...catalogos.vehiculos, ...unidadesExternas], tercerosDirectos: tercerosDirectosHabilitados(), terceros, pilotosExternos: externos.pilotos, unidadesExternas: externos.unidades, tercerosHabilitados: tercerosHabilitados(), empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
+    const vinculoUnidad=await esquemaVinculoUnidad().catch((e)=>{console.error("[combustible-catalogos] vinculo-unidad",e);return false;});
+    return NextResponse.json({ ...catalogos, pilotosReportados, vinculoUnidad, pilotoReportadoExterno: reportado.length>0, identidadesIndependientes: independencia.length>0, vehiculos: [...catalogos.vehiculos, ...unidadesExternas], tercerosDirectos: tercerosDirectosHabilitados(), terceros, pilotosExternos: externos.pilotos, unidadesExternas: externos.unidades, tercerosHabilitados: tercerosHabilitados(), empleados, empleadosDisponibles, pilotos, limitacionPilotos }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) {
     // Siempre JSON con mensaje (antes un fallo de cualquiera de las 3 consultas daba un 500 vacío y selectores en blanco sin explicación).
     const referencia = randomUUID().slice(0, 8);

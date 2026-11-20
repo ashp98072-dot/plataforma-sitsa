@@ -4,6 +4,7 @@ import { resolverUnidadCanonica } from "../unidad-canonica";
 import { validarAsignacionIndependiente } from "./asignacion-independiente";
 import { validarTerceroDirecto } from "./terceros-directos";
 import { validarEmpleadosImportacion } from "./empleados-validacion";
+import { esquemaVinculoUnidad, validarVinculoUnidad } from "./vinculo-unidad";
 import { consultarConsumos } from "./consumos-lectura";
 import { tercerosHabilitados, catalogosTercerosTx, reconocerTercero, validarTercero } from "./terceros";
 import { clavesInternas, valesInternos } from "./duplicados";
@@ -176,7 +177,9 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     const equivalencias=new Map<number,number[]>();
     const normalizadas:Seleccion=[];
     const resueltas=new Map<number,Awaited<ReturnType<typeof resolverUnidadCanonica>>>();
-    for(const s of selection){if(s.vehiculoId<0){normalizadas.push(s);continue;}const u=resueltas.get(s.vehiculoId)??await resolverUnidadCanonica(c,ctx.empresaId,s.vehiculoId,true);resueltas.set(s.vehiculoId,u);equivalencias.set(u.vehiculoCanonicoId!,u.idsHistoricos);normalizadas.push({...s,vehiculoId:u.vehiculoCanonicoId!});}
+    // Unidad sin vincular (placa ambigua o desconocida): requiere la migración instalada; si no, se conserva el comportamiento anterior (exigir una unidad).
+    if(selection.some(s=>s.vinculoUnidad)&&!(await esquemaVinculoUnidad(c)))throw new ErrorCB2("Guardar con la unidad sin vincular requiere instalar la migración de vínculo de unidad. Mientras tanto elige una unidad de Flota o una unidad externa.",503);
+    for(const s of selection){if(s.vehiculoId<0||s.vinculoUnidad){normalizadas.push(s);continue;}const u=resueltas.get(s.vehiculoId)??await resolverUnidadCanonica(c,ctx.empresaId,s.vehiculoId,true);resueltas.set(s.vehiculoId,u);equivalencias.set(u.vehiculoCanonicoId!,u.idsHistoricos);normalizadas.push({...s,vehiculoId:u.vehiculoCanonicoId!});}
     selection=normalizadas;
     const decisiones = new Map(selection.map(s => [s.candidato,s]));
     const seleccion = new Map(selection.map(s => [s.candidato, s.vehiculoId]));
@@ -232,6 +235,10 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         if (!docs.has(key))
             docs.set(key, await factura(c, ctx, l.documento!));
     }
+    for (const s of selection) if (s.vinculoUnidad) {
+        const l = lineas.find(l => l.clave === s.candidato)!;
+        await validarVinculoUnidad(c, ctx, l.fila.placaNormalizada, s.vinculoUnidad);   // autoridad del servidor: ambigua de verdad / sin coincidencia de verdad
+    }
     const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && seleccion.get(l.clave)! > 0 && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId).filter(id => id > 0));
     const identidadesExternas = new Map<string, Awaited<ReturnType<typeof validarTercero>> | Awaited<ReturnType<typeof validarTerceroDirecto>> | Awaited<ReturnType<typeof validarAsignacionIndependiente>>>();
@@ -276,7 +283,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
         if (resultado === "CREADA" && l.clave) {
             const vehicle = seleccion.get(l.clave)!;
             const choice = decisiones.get(l.clave)!;
-            const compatible = vehicle < 0 ? identidadesExternas.has(l.clave) : esPlacaAbreviada(f.placaNormalizada)
+            const compatible = choice.vinculoUnidad ? true : vehicle < 0 ? identidadesExternas.has(l.clave) : esPlacaAbreviada(f.placaNormalizada)
                 ? placaCompatible(f.placaNormalizada, vehicle, abreviadas) && placaCompatible(f.placaNormalizada, vehicle, [{ id: vehicle, placa: unidades.get(vehicle) ?? "" }])
                 : !!placaComparable(f.placaNormalizada) && placaComparable(unidades.get(vehicle) ?? "") === placaComparable(f.placaNormalizada);
             if (!compatible && (choice.motivoUnidad?.trim().length ?? 0) < 10)
@@ -285,7 +292,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             if (!resolved) {
                 const previous = previos.get(l.clave) ?? [];
                 const fid = l.documento ? docs.get(JSON.stringify(l.documento))! : null;
-                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || ((choice.pilotoTipo || choice.decisionNombre) && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle && !(vehicle>0 && equivalencias.get(vehicle)?.includes(Number(p.vehiculo_id))) || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
+                if (previous.some(p => Number(p.version_clave) !== 1 || Number(p.version_huella) !== 1 || p.payload_operacion !== l.payload || p.huella_operacion !== l.huella || (p.piloto_externo_id ?? null) !== (choice.pilotoExternoId ?? null) || ((choice.pilotoTipo || choice.decisionNombre) && (p.empleado_id ?? null) !== (choice.empleadoId ?? null)) || (p.asociacion_externa_id ?? null) !== (choice.asociacionExternaId ?? null) || (p.vinculo_unidad ?? null) !== (choice.vinculoUnidad ?? null) || (p.vehiculo_id == null && p.identidad_externa ? -Number(JSON.parse(String(p.identidad_externa)).unidad_id) : Number(p.vehiculo_id)) !== vehicle && !(vehicle>0 && equivalencias.get(vehicle)?.includes(Number(p.vehiculo_id))) || (p.factura_id !== null && fid !== null && Number(p.factura_id) !== fid)) || previous.length > 1) {
                     resultado = "BLOQUEADA";
                 }
                 else if (previous.length) {
@@ -294,7 +301,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 else {
                     const productoClasificado = choice.productoClasificado ?? clasificarProducto(f.producto);
                     if (!productoClasificado) throw new ErrorCB2("Clasifica el combustible o confirma NO DETERMINADO antes de importar.", 400);
-                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(vehicle < 0 || choice.pilotoTipo ? { asociacion_externa_id: choice.asociacionExternaId ?? null, ...((choice.pilotoExternoId !== undefined || choice.pilotoTipo) ? { piloto_externo_id: choice.pilotoExternoId ?? null, unidad_externa_id: vehicle < 0 ? -vehicle : null } : {}), identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.textos.piloto || null, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
+                    const id = await insert(c, "flota_cb2_consumos", { empleado_id: choice.empleadoId ?? null, producto_clasificado: productoClasificado, empresa_id: ctx.empresaId, proveedor_id: ctx.proveedorId, importacion_origen_id: iid, vehiculo_id: vehicle > 0 ? vehicle : null, ...(choice.vinculoUnidad ? { vinculo_unidad: choice.vinculoUnidad } : {}), ...(vehicle < 0 || choice.pilotoTipo ? { asociacion_externa_id: choice.asociacionExternaId ?? null, ...((choice.pilotoExternoId !== undefined || choice.pilotoTipo) ? { piloto_externo_id: choice.pilotoExternoId ?? null, unidad_externa_id: vehicle < 0 ? -vehicle : null } : {}), identidad_externa: JSON.stringify(identidadesExternas.get(l.clave)) } : {}), factura_id: fid, fecha_consumo: f.fechaConsumo, numero_vale: f.textos.vale, vale_norm: f.vale, placa_original: f.placaOriginal, placa_normalizada: f.placaNormalizada, version_clave: 1, clave_candidata: l.clave, version_huella: 1, huella_operacion: l.huella, payload_operacion: l.payload, piloto_informado: f.textos.piloto || null, producto: f.producto, galones: f.galones, precio: f.precio, monto: f.monto, kilometraje: f.kilometraje, kilometraje_texto: f.textos.km || null, galones_calculados: f.galonesCalculados, moneda: JSON.parse(l.payload!)[11], creado_por: ctx.actor.id, creado_en: ahoraLocal(), factura_asociada_por: fid ? ctx.actor.id : null, factura_asociada_en: fid ? ahoraLocal() : null });
                     resolved = { id, resultado: "CREADA", factura: fid };
                 }
                 if (resolved)
@@ -308,7 +315,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
                 resultado = resolved.resultado;
             }
         }
-        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ ...(l.clave && identidadesExternas.has(l.clave) ? { identidadExterna: identidadesExternas.get(l.clave) } : {}), version: 1, moneda: currency, vehiculoSolicitadoId:l.clave?originalesSeleccion.get(l.clave):undefined, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, errores: l.errores, metodoEmpleadoValidado: l.clave ? metodosEmpleados.get(l.clave) ?? "SIN_ASIGNACION" : "SIN_ASIGNACION", ...(l.clave && metodosEmpleados.estados.get(l.clave) === "Baja" ? { estadoEmpleado: "Baja" } : {}), asignacion: l.clave ? decisiones.get(l.clave) ?? null : null }), motivo: l.errores.length ? `${motivo} - ${l.errores.join(", ")}` : motivo });
+        eventos.push({ importacion_id: iid, revision, tipo: origenes ? "RESOLUCION" : "ORIGEN", origen_fila_id: original ? Number(original.id) : null, hoja_indice: l.hoja, hoja_nombre: f.hoja, fila_excel: f.fila, resultado, consumo_id: cid, datos_origen: origenes ? null : JSON.stringify(f), decision: JSON.stringify({ ...(l.clave && identidadesExternas.has(l.clave) ? { identidadExterna: identidadesExternas.get(l.clave) } : {}), version: 1, moneda: currency, vehiculoSolicitadoId:l.clave?originalesSeleccion.get(l.clave):undefined, candidato: l.clave, vehiculoId: l.clave ? seleccion.get(l.clave) ?? null : null, ...(l.clave && decisiones.get(l.clave)?.vinculoUnidad ? { vinculoUnidad: decisiones.get(l.clave)!.vinculoUnidad } : {}), errores: l.errores, metodoEmpleadoValidado: l.clave ? metodosEmpleados.get(l.clave) ?? "SIN_ASIGNACION" : "SIN_ASIGNACION", ...(l.clave && metodosEmpleados.estados.get(l.clave) === "Baja" ? { estadoEmpleado: "Baja" } : {}), asignacion: l.clave ? decisiones.get(l.clave) ?? null : null }), motivo: l.errores.length ? `${motivo} - ${l.errores.join(", ")}` : motivo });
     }
     return eventos;
 }
@@ -372,7 +379,7 @@ export async function asociarFactura(ctx: Contexto, op: {
         return { eventos: await diario(c, ctx, "ASOCIAR_FACTURA", op.clave, request, eventos), repetida: false };
     });
 }
-export type FiltrosCB2 = { pilotoExternoId?: number; unidadExternaId?: number; vehiculoId?: number; empleadoId?: number; importacionId?: number; producto?: string; proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string };
+export type FiltrosCB2 = { pilotoExternoId?: number; unidadExternaId?: number; vehiculoId?: number; empleadoId?: number; importacionId?: number; producto?: string; proveedorId?: number; estado?: string; desde?: string; hasta?: string; buscar?: string; piloto?: string; vinculo?: "FLOTA" | "EXTERNA" | "AMBIGUA" | "SIN_VINCULO" };
 export async function consultar(empresa: number, tipo: "importaciones" | "consumos" | "facturas" | "filas", importacion?: number, limite = 100, despues = 0, filtros: FiltrosCB2 = {}) {
     const c = await getPool().getConnection();
     try {

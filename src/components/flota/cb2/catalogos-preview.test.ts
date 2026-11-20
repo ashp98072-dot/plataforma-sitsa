@@ -19,12 +19,12 @@ describe("catálogo usado para sugerir vehículos en preview", () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); const data = await r.json();
         expect(data.empleados).toEqual([]); expect(data.empleadosDisponibles).toBe(false); expect(data.limitacionPilotos).toContain("no disponible");
-        expect(m.query).toHaveBeenCalledTimes(5);   // un error que no es de columna inexistente NO se reintenta
+        expect(m.query).toHaveBeenCalledTimes(7);   // un error que no es de columna inexistente NO se reintenta (+2 consultas de solo lectura de la detección del vínculo de unidad)
     });
     it("deriva empresa del guard, no de parámetros controlados por el navegador", async () => {
         const r = await GET(new Request("https://novalvion.com/api/catalogos?empresaId=99"), { params: Promise.resolve({ slug: "demo" }) });
         expect(r.status).toBe(200); expect(m.guard).toHaveBeenCalledWith("demo", "ver");
-        expect(m.query).toHaveBeenCalledTimes(5);
+        expect(m.query).toHaveBeenCalledTimes(7);   // +2: detección de la migración de vínculo de unidad (information_schema, solo lectura)
         const vehiculos = m.query.mock.calls.find(([sql]) => sql.includes("FROM flota_vehiculos"))!;
         expect(vehiculos[1]).toEqual([7, 7, 7]); // propia + predicado de acceso (propio o compartido); todos derivados de la empresa del guard
         expect(vehiculos[0]).toContain("empresa_id");

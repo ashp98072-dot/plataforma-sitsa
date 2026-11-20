@@ -1,6 +1,8 @@
 import { resolverUnidadCanonica } from "../unidad-canonica";
 import type { PoolConnection } from "mysql2/promise";
 import { rows } from "./repository";
+import { ErrorCB2 } from "./model";
+import { esquemaVinculoUnidad } from "./vinculo-unidad";
 import type { FiltrosCB2 } from "./service";
 export async function consultarConsumos(c: PoolConnection, empresa: number, limite: number, despues: number, filtros: FiltrosCB2) {
     const where = ["c.empresa_id=?", "c.id>?"], args: (string | number)[] = [empresa, despues];
@@ -8,6 +10,14 @@ export async function consultarConsumos(c: PoolConnection, empresa: number, limi
     if(filtros.vehiculoId!==undefined){const u=await resolverUnidadCanonica(c,empresa,filtros.vehiculoId);where.push(`c.vehiculo_id IN (${u.idsHistoricos.map(()=>'?').join(',')})`);args.push(...u.idsHistoricos);}
     for (const [campo, json, valor] of [["piloto_externo_id","piloto_id",filtros.pilotoExternoId],["unidad_externa_id","unidad_id",filtros.unidadExternaId]] as const) if (valor !== undefined) {
         where.push(`(c.${campo}=? OR (c.${campo} IS NULL AND c.asociacion_externa_id IS NOT NULL AND JSON_VALUE(c.identidad_externa,'$.${json}')=?))`); args.push(valor, valor);
+    }
+    // Historial por piloto (nombre original informado) y por estado de vínculo de la unidad.
+    if (filtros.piloto) { where.push("LOCATE(UPPER(?),UPPER(COALESCE(c.piloto_informado,'')))>0"); args.push(filtros.piloto); }
+    if (filtros.vinculo === "FLOTA") where.push("c.vehiculo_id IS NOT NULL");
+    else if (filtros.vinculo === "EXTERNA") where.push("c.vehiculo_id IS NULL AND c.unidad_externa_id IS NOT NULL");
+    else if (filtros.vinculo) {
+        if (!(await esquemaVinculoUnidad(c))) throw new ErrorCB2("El filtro de unidades sin vincular requiere instalar la migración de vínculo de unidad.", 400);
+        where.push("c.vinculo_unidad=?"); args.push(filtros.vinculo);
     }
     if (filtros.desde) { where.push("c.fecha_consumo>=?"); args.push(filtros.desde); }
     if (filtros.hasta) { where.push("c.fecha_consumo<=?"); args.push(filtros.hasta); }

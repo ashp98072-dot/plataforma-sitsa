@@ -41,6 +41,8 @@ export type Registro = {
 };
 export type CatalogosCB2 = {
     pilotosReportados?:boolean;
+    /** Migración de vínculo de unidad instalada: un consumo Shell puede guardarse con la placa original sin vincular (ambigua / sin unidad en Flota). */
+    vinculoUnidad?: boolean;
     identidadesIndependientes?: boolean;
     pilotoReportadoExterno?: boolean;
     pilotosExternos?: import("@/lib/flota/cb2/terceros-model").PilotoTercero[];
