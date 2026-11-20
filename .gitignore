@@ -15,6 +15,7 @@
 
 # next.js
 /.next/
+/.next-c3c15b/
 /out/
 
 # production
