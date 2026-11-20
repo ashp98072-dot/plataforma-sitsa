@@ -1,7 +1,7 @@
 # Fichas #602 y #603 (Fresco Fresh): diagnóstico, plan de eliminación controlada y arquitectura
 
 Estado: **PROPUESTA para aprobación**. Nada de lo descrito se ha ejecutado. No hay migraciones, no se desactivan claves foráneas, no se reasigna ningún registro y no se toca `empresa_id`.
-Script de lectura: [`sql/diagnostico-2026-11-flota-602-603-eliminacion.sql`](../../sql/diagnostico-2026-11-flota-602-603-eliminacion.sql) (13 sentencias de solo lectura).
+Script de lectura: [`sql/diagnostico-2026-11-flota-602-603-eliminacion.sql`](../../sql/diagnostico-2026-11-flota-602-603-eliminacion.sql) (26 sentencias SELECT de solo lectura).
 
 ## 1. Qué impide eliminar y qué se perdería (según esquema y código)
 Reproducido en una base **desechable de laboratorio con datos sintéticos** (no es producción):
