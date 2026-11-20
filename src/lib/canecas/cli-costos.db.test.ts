@@ -19,6 +19,10 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     const [diagnostico] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/diagnostico-lectura-2026-11-canecas-fifo.sql', 'utf8'));
     expect(diagnostico[0][0].version_servidor).toContain('11.8.9-MariaDB');
     expect(diagnostico[1][0].veredicto_version).toContain('VERSION ENSAYADA');
+    const [auxiliar] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/diagnostico-canecas-metadatos-auxiliar.sql', 'utf8'));
+    expect(auxiliar[0][0].base_actual).toBe('canecas_cli_test');
+    expect(auxiliar[2].find(row => row.fuente === 'COLUMNS')?.filas).toBeGreaterThan(0);
+    expect(auxiliar[2].find(row => row.fuente === 'STATISTICS')?.filas).toBeGreaterThan(0);
   });
   afterAll(async () => { await db.end(); });
   it('ejecuta el instalador una vez y bloquea el reintento sin cambiar el esquema', async () => {
