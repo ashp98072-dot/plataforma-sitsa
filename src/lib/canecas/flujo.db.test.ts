@@ -18,6 +18,9 @@ describe.skipIf(!pipe)("flujo API contra MariaDB desechable", () => {
       INSERT INTO empresas VALUES (1); INSERT INTO usuarios VALUES (1,'tester');
       INSERT INTO empleados VALUES (1,1,'Ana','Activo');`);
     await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql","utf8"));
+    const [ddlCostos, triggersCostos] = readFileSync("sql/migrate-2026-11-canecas-costos-wip.sql", "utf8").split("DELIMITER //");
+    await pool.query(ddlCostos);
+    for (const trigger of triggersCostos.split("//").map(s => s.trim()).filter(s => s.startsWith("CREATE TRIGGER"))) await pool.query(trigger);
   });
   afterAll(async () => { await pool.end(); });
   it("registra compra sin saldo, recibe 20, reintenta y acumula otra recepción", async () => {

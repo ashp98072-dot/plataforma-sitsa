@@ -1,6 +1,6 @@
 # Canecas llenas: diseño pendiente de integración de costos
 
-Este documento describe decisiones técnicas propuestas para el Draft; no afirma que estén implementadas ni autoriza una instalación.
+El Draft integra el registro de precios, recepciones con capas, valoración inicial respaldada y gastos posteriores pendientes. La implementación y los scripts requieren auditoría independiente y no autorizan una instalación.
 
 ## Recepción y capas
 
@@ -18,9 +18,38 @@ Este documento describe decisiones técnicas propuestas para el Draft; no afirma
 ## Gastos posteriores y compatibilidad
 
 - Los gastos tardíos y rectificaciones deben ser eventos adicionales identificables, con responsable, motivo y documento, nunca una edición silenciosa de la recepción. La política de distribuirlos entre existencias, tránsito y salidas ya consumidas queda pendiente de aprobación; no automatizarla antes de implementar conciliación e historial de consumo.
+- Alternativa A: asignar el gasto al costo de adquisición y distribuirlo entre las unidades que permanecen en inventario o tránsito y las ya entregadas. Esto cambia la valoración vigente y puede requerir ajustes auditados del costo de ventas de períodos anteriores. Deben decidirse la base de reparto, el tratamiento de cierres, devoluciones y faltantes, y si se ajustan períodos anteriores o el período actual.
+- Alternativa B: reconocer el gasto íntegro en el período en que se registra, sin redistribuirlo a capas. Esto conserva la valoración anterior, pero reduce el resultado del período y no incorpora ese importe al costo unitario de las existencias. Deben decidirse la fecha de reconocimiento, la clasificación contable y el tratamiento de gastos aplicables a inventario bajo las reglas que correspondan a la empresa.
+- Hasta que se apruebe una alternativa, el evento queda pendiente de aplicación contable; su registro no demuestra que se haya reconocido como gasto ni que esté incorporado en la valoración o el resultado. Los reportes deben identificar el importe pendiente por separado y no sumarlo dos veces.
 - El traslado del PR #650 descuenta saldos pero aún no transporta capas. Debe permanecer separado; antes de habilitar ambos flujos se necesita preservar la identidad de la capa y sus costos en tránsito, recepción parcial y faltantes. Una salida sin asignación de capas impediría calcular FIFO correctamente.
 - Las futuras ventas deberán consumir capas disponibles bajo bloqueo, registrar las asignaciones y proteger reintentos. Reservas y tránsito no equivalen a consumo ni a costo de ventas.
 
 ## Controles pendientes
 
 La implementación debe comprobar aislamiento por empresa en todas las claves y consultas, permisos para compras, confirmaciones y valoración, y reintentos con huella de operación. Los scripts deben verificar motor, columnas, índices, permisos y estado parcial; el DDL de MySQL/MariaDB no es transaccional. Con datos registrados, recuperación y conciliación requieren un plan específico: no borrar tablas o capas automáticamente.
+
+## Estado de implementación local
+
+El saldo anterior sin costo respaldado permanece sin capa y se muestra como pendiente. La valoración inicial exige costo y moneda explícitos, documento y motivo; no modifica el saldo físico. Las capas de recepciones nuevas con costo desconocido permanecen identificadas como pendientes. No existe todavía un flujo auditado para resolver después el costo desconocido de una recepción ya confirmada: esa resolución debe diseñarse sin sobrescribir la capa histórica y queda bloqueada para esta versión. Tampoco se establece una prioridad FIFO ficticia para existencias iniciales de fecha desconocida: la futura salida debe detenerse hasta que se apruebe y registre su orden de consumo.
+
+Las nuevas fichas usan `caneca` como unidad de inventario. Las fichas históricas no se modifican: si alguna existencia tiene otra unidad, debe detenerse la instalación y conciliarse con la operación antes de interpretar o valorar esas cantidades.
+
+El reparto de gastos conocidos usa la cantidad total comprada como denominador; mientras falten unidades por recibir, la porción correspondiente permanece sin incorporar a inventario. Una compra abandonada o cerrada parcialmente requiere una decisión auditada para ese remanente.
+
+## Instalación futura y recuperación
+
+Los scripts con sufijo `wip` no son instalables ni autorización de despliegue. Antes de una versión definitiva debe comprobarse que el postcheck de la Fase 1 original (#640) es satisfactorio, ejecutar el diagnóstico con la base correcta, revisar permisos efectivos y resultados, comprobar un respaldo y detener escrituras de Canecas. La versión ensayada es MariaDB 11.8.9; cualquier otra exige una validación específica. Una vez autorizada e instalada la estructura, debe revisarse el postcheck antes de habilitar el código que depende de las nuevas columnas.
+
+Los cuatro archivos preparados son `sql/preflight-2026-11-canecas-costos-wip.sql`, `sql/migrate-2026-11-canecas-costos-wip.sql`, `sql/postcheck-2026-11-canecas-costos-wip.sql` y `sql/recuperacion-2026-11-canecas-costos-wip.sql`. La recuperación es un diagnóstico de solo lectura, no un rollback automático: cualquier reparación o retirada de objetos necesita un plan específico y autorización después de revisar el estado y los datos existentes.
+
+El DDL no es transaccional: ante un fallo parcial se suspenden escrituras y no se repite el script a ciegas. El diagnóstico de recuperación enumera el estado visible; una reparación posterior debe ser específica, revisada y conservar datos. Si existen capas, valoraciones o gastos, no es seguro retirar las tablas automáticamente. Un retroceso del código también requiere mantener detenidas las escrituras hasta conciliar los movimientos nuevos.
+
+El diagnóstico es idempotente y exclusivamente de lectura. `SIN_OBJETOS_REVISAR_PREFLIGHT` exige completar y aprobar el preflight antes de plantear una instalación. `OBJETOS_PRESENTES_REVISAR_POSTCHECK_Y_DATOS` solo indica que aparecen los nombres esperados: no demuestra integridad, ni ausencia de datos; hay que revisar definiciones y conciliar datos mediante el postcheck. `DETENER_INSTALACION_PARCIAL`, `DETENER_OBJETO_INCOMPATIBLE`, `DETENER_BASE_INCOMPATIBLE` y `DETENER_SIN_BASE` exigen suspender escrituras y revisión manual.
+
+Ante una instalación parcial, conservar un respaldo verificable y registrar el error y los resultados completos del diagnóstico. Comparar cada columna, restricción, índice, clave foránea y trigger con el DDL versionado, así como capas, valoraciones, gastos, saldos y movimientos que ya existan. Solo después preparar y ensayar en una copia aislada un parche de avance específico, sin eliminar ni sobrescribir información; revisar de nuevo preflight y postcheck antes de restablecer el servicio. Si no se puede demostrar la correspondencia o conservación de los datos, mantener la parada y escalar el caso. Esta versión no proporciona todavía ese parche automático ni acredita recuperación de todas las interrupciones posibles.
+
+Caso ensayado en laboratorio: interrupción inmediatamente antes de crear `can_valoracion_no_borrar`. Con escrituras detenidas, respaldo verificado y las definiciones y relaciones previas contrastadas con el DDL exacto, el operador puede aplicar únicamente la sentencia `CREATE TRIGGER can_valoracion_no_borrar` del archivo de migración; después debe ejecutar el postcheck y conciliar capas y movimientos antes de reanudar. El ensayo conservó filas de ambos tipos y confirmó que repetir la sentencia produce error sin cambiar sus datos. Este procedimiento no cubre un trigger homónimo con definición distinta ni ninguna otra interrupción: esos estados siguen siendo NO-GO hasta ensayar su reparación específica.
+
+**Guarda de laboratorio:** `scripts/ci/canecas/ejecutar-costos-controlado.mjs` ejecuta el preflight en la misma conexión y rechaza cualquier `DETENER` antes de enviar DDL; adquiere además un bloqueo consultivo para impedir dos ejecuciones de esta ruta. El bloqueo no impide DDL de otros clientes: deben detenerse escrituras y cambios de esquema durante toda la operación. La ejecución directa de sentencias SQL o desde phpMyAdmin elude la guarda y no se considera una instalación segura. El módulo se ha ejercitado mediante el laboratorio desechable; todavía no existe un procedimiento instalador de producción validado ni se han automatizado las comprobaciones manuales de permisos. Los archivos siguen en borrador y no deben instalarse.
+
+El preflight detiene si existen tablas del traslado #650, que todavía no trasladan capas. No debe habilitarse ese flujo junto con costos hasta adaptar y probar el transporte de capas, recepción parcial y faltantes.

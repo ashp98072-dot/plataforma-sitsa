@@ -17,15 +17,15 @@ export function capasParaRecepcion(input: {
   if (![cantidadComprada, cantidadPrevia, cantidadRecibida].every(Number.isSafeInteger) ||
       cantidadComprada <= 0 || cantidadPrevia < 0 || cantidadRecibida <= 0 ||
       cantidadPrevia + cantidadRecibida > cantidadComprada ||
-      (precioUnitarioCentavos !== null && precioUnitarioCentavos < 0n) ||
-      (gastosCentavos !== null && gastosCentavos < 0n)) throw new Error('COSTO_O_CANTIDAD_INVALIDOS');
+      (precioUnitarioCentavos !== null && precioUnitarioCentavos < BigInt("0")) ||
+      (gastosCentavos !== null && gastosCentavos < BigInt("0"))) throw new Error('COSTO_O_CANTIDAD_INVALIDOS');
   if (precioUnitarioCentavos === null || gastosCentavos === null) return [{ cantidad: cantidadRecibida, costoUnitarioCentavos: null }];
   const unidades = BigInt(cantidadComprada);
   const base = precioUnitarioCentavos + gastosCentavos / unidades;
   const conCentavoExtra = Number(gastosCentavos % unidades);
   const cantidadExtra = Math.max(0, Math.min(cantidadPrevia + cantidadRecibida, conCentavoExtra) - cantidadPrevia);
   const capas: CapaRecepcion[] = [];
-  if (cantidadExtra) capas.push({ cantidad: cantidadExtra, costoUnitarioCentavos: base + 1n });
+  if (cantidadExtra) capas.push({ cantidad: cantidadExtra, costoUnitarioCentavos: base + BigInt("1") });
   if (cantidadRecibida > cantidadExtra) capas.push({ cantidad: cantidadRecibida - cantidadExtra, costoUnitarioCentavos: base });
   return capas;
 }
