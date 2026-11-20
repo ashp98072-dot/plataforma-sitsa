@@ -1,9 +1,9 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verificarClavesForaneas, verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
-import { obtenerContrato, verificarContrato } from '../../../scripts/ci/canecas/contrato-costos.mjs';
+import { verificarContrato } from '../../../scripts/ci/canecas/contrato-costos.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
 describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
@@ -21,14 +21,25 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
   it('ejecuta el instalador una vez y bloquea el reintento sin cambiar el esquema', async () => {
     const env = { ...process.env, CANECAS_SQL_PIPE: pipe, CANECAS_SQL_DATABASE: 'canecas_cli_test', CANECAS_SQL_USER: 'fifo_lab', CANECAS_SQL_PASSWORD: 'fifo-lab-only' };
     const run = () => spawnSync(process.execPath, ['scripts/ci/canecas/ejecutar-costos-controlado.mjs', '--ejecutar'], { env, encoding: 'utf8', timeout: 30000 });
+    const ddlInspection = "SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION";
+    const [beforePermissions] = await db.query(ddlInspection);
+    for (let i = 0; i < 6; i++) {
+      const insufficient = spawnSync(process.execPath, ['scripts/ci/canecas/ejecutar-costos-controlado.mjs', '--ejecutar'], { env: { ...env, CANECAS_SQL_USER: `fifo_missing_${i}`, CANECAS_SQL_PASSWORD: 'fifo-test-only' }, encoding: 'utf8', timeout: 30000 });
+      expect(insufficient.status).not.toBe(0);
+      expect(insufficient.stderr).toContain('DETENER');
+      expect((await db.query(ddlInspection))[0]).toEqual(beforePermissions);
+    }
     const first = run();
     expect(first.stderr).toBe('');
     expect(first.status).toBe(0);
     expect(first.stdout).toContain('postcheck completos');
-    if (process.env.CANECAS_GENERAR_CONTRATO === '1') {
-      writeFileSync('scripts/ci/canecas/contrato-costos-mariadb-11.8.9.json', `${JSON.stringify(await obtenerContrato(db), null, 2)}\n`);
-    }
     await expect(verificarContrato(db)).resolves.toBeUndefined();
+    await db.query("ALTER TABLE canecas_gastos_posteriores COMMENT='modificado'");
+    await expect(verificarContrato(db)).rejects.toThrow('tablas');
+    await db.query("ALTER TABLE canecas_gastos_posteriores COMMENT=''");
+    await db.query("ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(250) NOT NULL COMMENT 'modificado'");
+    await expect(verificarContrato(db)).rejects.toThrow('columnas');
+    await db.query('ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(250) NOT NULL');
     await db.query('ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(240) NOT NULL');
     await expect(verificarContrato(db)).rejects.toThrow('columnas');
     await db.query('ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(250) NOT NULL');

@@ -2,18 +2,30 @@
   "tablas": [
     {
       "TABLE_NAME": "canecas_capas_costo",
+      "TABLE_TYPE": "BASE TABLE",
       "ENGINE": "InnoDB",
-      "TABLE_COLLATION": "utf8mb4_unicode_ci"
+      "ROW_FORMAT": "Dynamic",
+      "TABLE_COLLATION": "utf8mb4_unicode_ci",
+      "CREATE_OPTIONS": "",
+      "TABLE_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
+      "TABLE_TYPE": "BASE TABLE",
       "ENGINE": "InnoDB",
-      "TABLE_COLLATION": "utf8mb4_unicode_ci"
+      "ROW_FORMAT": "Dynamic",
+      "TABLE_COLLATION": "utf8mb4_unicode_ci",
+      "CREATE_OPTIONS": "",
+      "TABLE_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
+      "TABLE_TYPE": "BASE TABLE",
       "ENGINE": "InnoDB",
-      "TABLE_COLLATION": "utf8mb4_unicode_ci"
+      "ROW_FORMAT": "Dynamic",
+      "TABLE_COLLATION": "utf8mb4_unicode_ci",
+      "CREATE_OPTIONS": "",
+      "TABLE_COMMENT": ""
     }
   ],
   "columnas": [
@@ -27,7 +39,12 @@
       "EXTRA": "auto_increment",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -39,7 +56,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -51,7 +73,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -63,7 +90,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -75,7 +107,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -87,7 +124,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -99,7 +141,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -111,7 +158,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -123,7 +175,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -135,7 +192,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -147,7 +209,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 3,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -159,7 +226,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": 0,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_compras",
@@ -171,7 +243,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_compras",
@@ -183,7 +260,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_compras",
@@ -195,7 +277,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 3,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -207,7 +294,12 @@
       "EXTRA": "auto_increment",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -219,7 +311,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -231,7 +328,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -243,7 +345,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -255,7 +362,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 3,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -267,7 +379,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -279,7 +396,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 250,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -291,7 +413,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 500,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -303,7 +430,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 20,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -315,7 +447,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 36,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -327,7 +464,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -339,7 +481,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": 0,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_productos",
@@ -351,7 +498,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_productos",
@@ -363,7 +515,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 3,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -375,7 +532,12 @@
       "EXTRA": "auto_increment",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -387,7 +549,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -399,7 +566,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -411,7 +583,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -423,7 +600,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -435,7 +617,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 19,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -447,7 +634,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 3,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -459,7 +651,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 250,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -471,7 +668,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 500,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -483,7 +685,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": "utf8mb4",
       "COLLATION_NAME": "utf8mb4_unicode_ci",
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": 36,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -495,7 +702,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": 10,
+      "NUMERIC_SCALE": 0,
+      "DATETIME_PRECISION": null,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -507,7 +719,12 @@
       "EXTRA": "",
       "CHARACTER_SET_NAME": null,
       "COLLATION_NAME": null,
-      "GENERATION_EXPRESSION": null
+      "GENERATION_EXPRESSION": null,
+      "NUMERIC_PRECISION": null,
+      "NUMERIC_SCALE": null,
+      "DATETIME_PRECISION": 0,
+      "CHARACTER_MAXIMUM_LENGTH": null,
+      "COLUMN_COMMENT": ""
     }
   ],
   "indices": [
@@ -519,7 +736,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -529,7 +749,10 @@
       "COLUMN_NAME": "ubicacion_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -539,7 +762,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -549,7 +775,10 @@
       "COLUMN_NAME": "producto_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -559,7 +788,10 @@
       "COLUMN_NAME": "ubicacion_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -569,7 +801,10 @@
       "COLUMN_NAME": "creado_en",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -579,7 +814,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -589,7 +827,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -599,7 +840,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -609,7 +853,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -619,7 +866,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -629,7 +879,10 @@
       "COLUMN_NAME": "recepcion_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "YES",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -639,7 +892,10 @@
       "COLUMN_NAME": "segmento",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -649,7 +905,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -659,7 +918,10 @@
       "COLUMN_NAME": "valoracion_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "YES",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_capas_costo",
@@ -669,7 +931,10 @@
       "COLUMN_NAME": "segmento",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -679,7 +944,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -689,7 +957,10 @@
       "COLUMN_NAME": "compra_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -699,7 +970,10 @@
       "COLUMN_NAME": "creado_por",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -709,7 +983,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -719,7 +996,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_gastos_posteriores",
@@ -729,7 +1009,10 @@
       "COLUMN_NAME": "clave_operacion",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -739,7 +1022,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -749,7 +1035,10 @@
       "COLUMN_NAME": "producto_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -759,7 +1048,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -769,7 +1061,10 @@
       "COLUMN_NAME": "ubicacion_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -779,7 +1074,10 @@
       "COLUMN_NAME": "creado_por",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -789,7 +1087,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -799,7 +1100,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -809,7 +1113,10 @@
       "COLUMN_NAME": "clave_operacion",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -819,7 +1126,10 @@
       "COLUMN_NAME": "empresa_id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     },
     {
       "TABLE_NAME": "canecas_valoraciones_iniciales",
@@ -829,7 +1139,10 @@
       "COLUMN_NAME": "id",
       "SUB_PART": null,
       "INDEX_TYPE": "BTREE",
-      "COLLATION": "A"
+      "COLLATION": "A",
+      "NULLABLE": "",
+      "INDEX_COMMENT": "",
+      "IGNORED": "NO"
     }
   ],
   "foraneas": [
