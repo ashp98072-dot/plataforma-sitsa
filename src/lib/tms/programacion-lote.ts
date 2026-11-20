@@ -255,6 +255,35 @@ export async function copiasVigentesDeOrigen(empresaId: number, fechaDestino: st
   }
 }
 
+/** Clave de un viaje PROPIO "gemelo": misma ruta + misma hora de carga + misma unidad + mismo piloto (empleado). */
+export const claveGemelo = (rutaId: number, hora: string, placa: string, pilotoEmpleadoId: number) => `${rutaId}|${hora}|${norm(placa)}|${pilotoEmpleadoId}`;
+
+/**
+ * ANTI-DUPLICADO POR CONTENIDO (TMS-PROGRAMACION-DUPLICADA-1). El anti-duplicado por `tms_plan_origen` solo ve copias previas del MISMO plan
+ * origen: no detecta que el destino YA tenga el mismo viaje porque lo creó la importación de Excel, el alta manual o la copia de OTRO día
+ * origen con idéntica programación. Aquí se buscan, en la fecha destino, viajes PROPIOS no cancelados con la misma ruta, la misma hora de
+ * carga (no nula), la misma unidad y el mismo piloto — una combinación físicamente imposible de ser dos viajes distintos (la unidad y el piloto
+ * no pueden salir dos veces a la misma hora). Solo lectura, acotada a la empresa. Devuelve clave → código del plan existente.
+ */
+export async function gemelosExactosEnDestino(empresaId: number, fechaDestino: string): Promise<Map<string, string>> {
+  const rows = await query<RowDataPacket[]>(
+    `SELECT p.id AS plan_gemelo_id, p.codigo, p.ruta_id, LEFT(p.hora_carga, 5) AS hora, u.placa AS unidad_placa, tp.id_empleado AS piloto_empleado_id
+     FROM tms_planes_viaje p
+     INNER JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
+     INNER JOIN tms_personal tp ON tp.id = p.piloto_id AND tp.empresa_id = p.empresa_id
+     WHERE p.empresa_id = ? AND p.fecha_plan = ? AND p.estado <> 'Cancelado' AND p.tipo_viaje = 'Propio'
+       AND p.hora_carga IS NOT NULL AND p.hora_carga <> '' AND p.ruta_id IS NOT NULL AND tp.id_empleado IS NOT NULL
+     ORDER BY p.id`,
+    [empresaId, fechaDestino],
+  );
+  const mapa = new Map<string, string>();
+  for (const r of rows) {
+    const k = claveGemelo(Number(r.ruta_id), String(r.hora), String(r.unidad_placa), Number(r.piloto_empleado_id));
+    if (!mapa.has(k)) mapa.set(k, String(r.codigo));
+  }
+  return mapa;
+}
+
 /**
  * Resuelve y valida TODAS las filas (solo lectura). Cada fila sale `ok` o `error` con mensajes claros.
  * `filasInternas` se reutiliza al confirmar para crear sin volver a resolver.
@@ -266,7 +295,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   const origenIds = borradores.map((b) => b.origenPlanId).filter((n): n is number => n != null);
   const perfilIds = [...new Set(borradores.map((b) => b.vehiculoSolicitadoPerfilId).filter((n): n is number => n != null && n > 0))];
 
-  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias, perfilesRows, origenRows] = await Promise.all([
+  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias, perfilesRows, origenRows, gemelos] = await Promise.all([
     rutaIds.length
       ? query<RowDataPacket[]>(
           `SELECT r.id, r.codigo, r.cliente_id, r.activo, r.lugar_carga_texto, r.destino_descripcion,
@@ -299,6 +328,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       ? query<RowDataPacket[]>(`SELECT id, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_comercial, tarifa_moneda_historico, costo_operativo_referencia
                                 FROM tms_planes_viaje WHERE empresa_id = ? AND id IN ${ids(origenIds)}`, [empresaId, ...origenIds])
       : Promise.resolve([] as RowDataPacket[]),
+    gemelosExactosEnDestino(empresaId, fechaDestino),
   ]);
 
   const perfilesCatalogo = new Map(perfilesRows.map((r) => [Number(r.id), { nombre: String(r.nombre), activo: Number(r.activo ?? 1) === 1 }]));
@@ -462,6 +492,12 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
 
     // --- trazabilidad / anti-duplicado (solo copia no cancelada del mismo plan origen y fecha) ---
     if (b.origenPlanId != null && copias?.has(b.origenPlanId)) errores.push(`Este viaje ya fue copiado para esta fecha (${copias.get(b.origenPlanId)}).`);
+
+    // --- anti-duplicado por CONTENIDO: el destino ya tiene un viaje propio no cancelado con la misma ruta, hora, unidad y piloto (creado por Excel, a mano o por otra copia). BLOQUEA: no es un recurso "ocupado", es el mismo viaje. ---
+    if (b.tipoViaje === "Propio" && b.rutaId != null && b.horaCarga && b.unidadPlaca?.trim() && b.pilotoEmpleadoId != null) {
+      const gemelo = gemelos.get(claveGemelo(b.rutaId, b.horaCarga, b.unidadPlaca, b.pilotoEmpleadoId));
+      if (gemelo) errores.push(`Posible duplicado: la fecha destino ya tiene el viaje ${gemelo} con la misma ruta, hora, unidad y piloto. No se copia para no duplicar la programación.`);
+    }
 
     // --- disponibilidad diaria contra viajes ya existentes (solo si no hay errores previos de resolución) ---
     // COPIA FIEL AL ORIGEN: que el recurso ya tenga otro viaje en la fecha destino NO bloquea; se avisa y la fila se crea igual (decisión del propietario).

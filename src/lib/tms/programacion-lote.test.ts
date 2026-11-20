@@ -172,6 +172,12 @@ beforeEach(() => {
         .map((o) => ({ o, p: e.planes.find((p) => p.id === o.plan_id)! })).filter(({ p }) => p.empresa_id === emp && p.estado !== "Cancelado")
         .map(({ o, p }) => ({ plan_origen_id: o.plan_origen_id, codigo: p.codigo }));
     }
+    // Anti-duplicado por CONTENIDO (TMS-PROGRAMACION-DUPLICADA-1): viajes PROPIOS no cancelados del destino con unidad, piloto, ruta y hora.
+    if (s.includes("plan_gemelo_id")) {
+      const [emp, fecha] = params as [number, string];
+      return e.planes.filter((p) => p.empresa_id === emp && p.fecha === fecha && p.estado !== "Cancelado" && p.tipo_viaje === "Propio" && p.hora != null && p.ruta_id != null && p.unidad_id != null && p.piloto_id != null)
+        .flatMap((p) => { const u = e.unidades.find((x) => x.id === p.unidad_id); const tp = e.personal.find((x) => x.id === p.piloto_id); return u && tp ? [{ plan_gemelo_id: p.id, codigo: p.codigo, ruta_id: p.ruta_id, hora: p.hora, unidad_placa: u.placa, piloto_empleado_id: tp.id_empleado }] : []; });
+    }
     if (s.includes("FROM tms_cliente_rutas r")) { const [emp, ...ids] = params as number[]; return emp === EMP ? ids.map((i) => rutas[i]).filter(Boolean) : []; }
     // Catálogo de perfiles de vehículo solicitado: SOLO el 11 (activo) de la empresa EMP; el 12 está inactivo y el 99 es de otra empresa.
     if (s.includes("FROM tms_cotizacion_costeo_perfiles")) { const [emp, ...pids] = params as number[]; return emp === EMP ? pids.filter((i) => i === 11 || i === 12).map((i) => ({ id: i, nombre: i === 11 ? "Camión 2.5 toneladas" : "Furgón (inactivo)", activo: i === 11 ? 1 : 0 })) : []; }
@@ -762,6 +768,43 @@ describe("anti-duplicado (origen + fecha destino) y trazabilidad", () => {
     expect(sql).not.toMatch(/UNIQUE KEY[^\n]*(plan_origen_id|fecha_destino)/);
     expect(sql).toContain("ON DELETE SET NULL");
     expect(sql.replace(/--[^\n]*/g, "")).not.toMatch(/ALTER TABLE|DROP |TRUNCATE|DELETE FROM/i);
+  });
+  // ---- TMS-PROGRAMACION-DUPLICADA-1: el mismo lote NO puede entrar dos veces aunque el plan origen sea otro ----
+  const lote33 = (origenBase: number): BorradorLote[] => Array.from({ length: 33 }, (_, i) => borrador({
+    fila: i + 1, origenPlanId: origenBase + i, horaCarga: `${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`,
+  }));
+  it("REGRESIÓN 33 pares: el MISMO lote de 33 viajes copiado de OTRO día origen se rechaza completo (0 planes nuevos, 33 errores 'Posible duplicado'); no depende del plan origen", async () => {
+    expect((await confirmarAceptando(lote33(900))).ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(33);
+    const r = await confirmar(lote33(5000));   // otro día origen: planes origen DISTINTOS, idéntica programación
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(!r.ok && r.erroresPorFila).toHaveLength(33);
+    expect(!r.ok && r.erroresPorFila?.every((f) => f.errores.some((m) => m.startsWith("Posible duplicado")))).toBe(true);
+    expect(creadosDestino()).toHaveLength(33);   // nada nuevo
+    expect(e.origen).toHaveLength(33);
+  });
+  it("REGRESIÓN: también bloquea cuando el viaje existente NO nació de una copia (Excel o alta manual: sin tms_plan_origen) y nombra el código existente", async () => {
+    e.planes.push(plan({ id: 5, codigo: "PLAN-MANUAL-001", unidad_id: 601, piloto_id: 501, ruta_id: 10, hora: "03:00" }));   // unidad P-1, piloto = empleado 1
+    const r = await confirmar([borrador()]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(!r.ok && r.erroresPorFila?.[0].errores.join(" ")).toContain("PLAN-MANUAL-001");
+    expect(creadosDestino()).toHaveLength(0);
+    expect(e.origen).toHaveLength(0);
+  });
+  it.each([
+    ["el gemelo está CANCELADO", { estado: "Cancelado" }],
+    ["distinta hora de carga", { hora: "04:00" }],
+    ["otra unidad con el mismo piloto", { unidad_id: 602 }],
+    ["otro piloto en la misma unidad", { piloto_id: 502 }],
+    ["otra ruta", { ruta_id: 11 }],
+    ["otra fecha", { fecha: "2026-09-26" }],
+    ["otra empresa", { empresa_id: 99 }],
+  ] as const)("NO es duplicado (no se suponen duplicados por ruta igual): %s", async (_n, cambio) => {
+    e.planes.push(plan({ id: 5, codigo: "PLAN-MANUAL-001", unidad_id: 601, piloto_id: 501, ruta_id: 10, hora: "03:00", ...cambio }));
+    const b = [borrador()];
+    const r = await confirmarAceptando(b);
+    expect(r.ok).toBe(true);   // un recurso ocupado sigue siendo solo AVISO (decisión de copia fiel intacta)
+    expect(creadosDestino()).toHaveLength(1);
   });
   it("auditoría: UNA entrada resumen del lote (fechas y cantidad); los planes no duplican eventos", async () => {
     await confirmar([borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
