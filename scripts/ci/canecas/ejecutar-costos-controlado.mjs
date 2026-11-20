@@ -5,6 +5,20 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sqlFile = name => readFileSync(path.join(root, 'sql', name), 'utf8');
+const normalizar = value => value.replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+export function verificarTriggers(rows, triggers) {
+  if (!Array.isArray(rows) || rows.length !== triggers.length) throw Error('DETENER: triggers incompletos');
+  for (const ddl of triggers) {
+    const parts = ddl.match(/^CREATE TRIGGER\s+(\w+)\s+(BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\s+ON\s+(\w+)\s+FOR EACH ROW\s+([\s\S]+)$/i);
+    if (!parts) throw Error('DETENER: definición esperada inválida');
+    const [, name, timing, event, table, body] = parts;
+    const row = rows.find(item => item.TRIGGER_NAME === name);
+    if (!row || row.EVENT_OBJECT_TABLE !== table || row.ACTION_TIMING !== timing || row.EVENT_MANIPULATION !== event || normalizar(row.ACTION_STATEMENT) !== normalizar(body)) {
+      throw Error(`DETENER: definición incompatible del trigger ${name}`);
+    }
+  }
+}
 
 export async function ejecutarCostosControlado(connection) {
   const preflight = sqlFile('preflight-2026-11-canecas-costos-wip.sql');
@@ -31,6 +45,7 @@ export async function ejecutarCostosControlado(connection) {
     if (postChecks.length < 20 || postChecks.some(row => row.resultado === 'DETENER') || post[5].length || post[3].some(row => Number(row.unidades_sin_capa) < 0)) {
       throw Error('DETENER: postcheck incompatible; instalación requiere revisión');
     }
+    verificarTriggers(post[8], triggers);
     return { pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
   } finally {
     await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);

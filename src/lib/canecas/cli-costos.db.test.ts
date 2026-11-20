@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
 describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
@@ -28,5 +29,13 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     expect(second.status).not.toBe(0);
     expect(second.stderr).toContain('DETENER');
     expect((await db.query('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME'))[0]).toEqual(before);
+    const migration = readFileSync('sql/migrate-2026-11-canecas-costos-wip.sql', 'utf8');
+    const triggers = migration.split('DELIMITER //')[1].split('//').map(s => s.trim()).filter(s => s.startsWith('CREATE TRIGGER'));
+    const [post] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
+    expect(() => verificarTriggers(post[8], triggers)).not.toThrow();
+    await db.query('DROP TRIGGER can_valoracion_no_borrar');
+    await db.query('CREATE TRIGGER can_valoracion_no_borrar BEFORE DELETE ON canecas_valoraciones_iniciales FOR EACH ROW BEGIN SET @invalido=1; END');
+    const [alterado] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
+    expect(() => verificarTriggers(alterado[8], triggers)).toThrow('definición incompatible');
   });
 });
