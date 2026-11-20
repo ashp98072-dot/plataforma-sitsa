@@ -1,5 +1,6 @@
 import { estadoEsquemaFisico, consultaFisicaTx } from "./identidad-fisica-schema";
 import { sinOperacionesAbiertas } from "./identidad-fisica-operaciones";
+import { evidenciaDelegada } from "./identidad-fisica-delegada";
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
@@ -46,7 +47,7 @@ export async function proponerIdentidadFisica(ctx:ContextoFisico,op:{ids:number[
   await actor(c,ctx);
   if(vs.length!==ids.length)throw new ErrorCB2("No hay acceso vigente a todos los registros.",403);
   if(vs.some(v=>firma(v)!==op.revisiones[String(v.id)]))throw new ErrorCB2("Los registros cambiaron; inspecciona nuevamente.");
-  const fisica=verificarIdentidad(vs);await sinOperacionesAbiertas(c,ids);
+  const fisica=verificarIdentidad(vs);await sinOperacionesAbiertas(c,ids,vs.map(v=>({id:Number(v.id),empresa_id:Number(v.empresa_id)})));
   const id=await insert(c,"flota_identidades_fisicas",{placa_comparable:fisica.placa,chasis_comparable:fisica.chasis,tipo_unidad:fisica.tipo,creado_por:ctx.usuarioId,motivo:op.motivo});
   for(const v of vs)await insert(c,"flota_identidad_miembros",{vehiculo_id:Number(v.id),empresa_id:Number(v.empresa_id),identidad_id:id,snapshot:JSON.stringify(v)});
   await registrarAuditoriaTx(c,{empresaId:ctx.empresaId,usuario:ctx.usuario,modulo:"flota",accion:"proponer_identidad_fisica",detalle:JSON.stringify({id,ids,motivo:op.motivo})});
@@ -65,18 +66,19 @@ export async function consultarIdentidadFisica(ctx:ContextoFisico,id?:number) {
  const c=await getPool().getConnection();try{await esquema(c);await actor(c,ctx);if(id)return await vista(c,ctx,id);
  return rows(c,"SELECT f.id,f.placa_comparable,f.estado FROM flota_identidades_fisicas f JOIN flota_identidad_empresas e ON e.identidad_id=f.id WHERE e.empresa_id=? ORDER BY f.id DESC LIMIT 100",[ctx.empresaId]);}finally{c.release();}
 }
-export async function aprobarIdentidadFisica(ctx:ContextoFisico,op:{id:number;revision:string;evidencia:string}) {
+export async function aprobarIdentidadFisica(ctx:ContextoFisico,op:{id:number;revision:string;evidencia:string;delegadaDesdeEmpresaId?:number}) {
  return transaccion(ctx,async c=>{
   const v=await vista(c,ctx,op.id,true);await actor(c,ctx);
   if(v.cabecera.estado!=="PROPUESTA"||v.revision!==op.revision)throw new ErrorCB2("La propuesta cambió o ya está aprobada. Revisa nuevamente.");
   if(v.empresas.some(e=>Number(e.empresa_id)===ctx.empresaId&&e.administrador_id!=null))throw new ErrorCB2("Esta empresa ya aprobó; no se duplica la operación.");
-  await insert(c,"flota_identidad_aprobaciones",{identidad_id:op.id,empresa_id:ctx.empresaId,administrador_id:ctx.usuarioId,evidencia:op.evidencia});
+  const evidencia=op.delegadaDesdeEmpresaId?evidenciaDelegada(op.evidencia,op.delegadaDesdeEmpresaId):op.evidencia;
+  await insert(c,"flota_identidad_aprobaciones",{identidad_id:op.id,empresa_id:ctx.empresaId,administrador_id:ctx.usuarioId,evidencia});
   const pendientes=await rows(c,"SELECT e.empresa_id FROM flota_identidad_empresas e LEFT JOIN flota_identidad_aprobaciones a ON a.identidad_id=e.identidad_id AND a.empresa_id=e.empresa_id WHERE e.identidad_id=? AND a.identidad_id IS NULL",[op.id]);
   if(!pendientes.length){
    const vigentes=await rows(c,"SELECT a.empresa_id FROM flota_identidad_aprobaciones a JOIN usuarios u ON u.id=a.administrador_id AND u.activo=1 AND u.rol_global='Admin' JOIN empresas e ON e.id=a.empresa_id AND e.activa=1 WHERE a.identidad_id=? ORDER BY u.id LOCK IN SHARE MODE",[op.id]);
    if(vigentes.length!==v.empresas.length)throw new ErrorCB2("Una aprobación dejó de tener administrador o empresa vigente.",403);
-   const vs=await rows(c,"SELECT v.* FROM flota_identidad_miembros m JOIN flota_vehiculos v ON v.id=m.vehiculo_id WHERE m.identidad_id=? ORDER BY v.id FOR UPDATE",[op.id]);verificarIdentidad(vs);await sinOperacionesAbiertas(c,vs.map(v=>Number(v.id)));await c.execute("UPDATE flota_identidades_fisicas SET estado='APROBADA' WHERE id=?",[op.id]);}
-  await registrarAuditoriaTx(c,{empresaId:ctx.empresaId,usuario:ctx.usuario,modulo:"flota",accion:"aprobar_identidad_fisica",detalle:JSON.stringify({id:op.id,empresa:ctx.empresaId,evidencia:op.evidencia,pendientes:pendientes.length})});
+   const vs=await rows(c,"SELECT v.* FROM flota_identidad_miembros m JOIN flota_vehiculos v ON v.id=m.vehiculo_id WHERE m.identidad_id=? ORDER BY v.id FOR UPDATE",[op.id]);verificarIdentidad(vs);await sinOperacionesAbiertas(c,vs.map(v=>Number(v.id)),vs.map(v=>({id:Number(v.id),empresa_id:Number(v.empresa_id)})));await c.execute("UPDATE flota_identidades_fisicas SET estado='APROBADA' WHERE id=?",[op.id]);}
+  await registrarAuditoriaTx(c,{empresaId:ctx.empresaId,usuario:ctx.usuario,modulo:"flota",accion:"aprobar_identidad_fisica",detalle:JSON.stringify({id:op.id,empresa:ctx.empresaId,evidencia,pendientes:pendientes.length,...(op.delegadaDesdeEmpresaId?{delegadaDesde:op.delegadaDesdeEmpresaId}:{})})});
   return {id:op.id,estado:pendientes.length?"PROPUESTA":"APROBADA",historicosReasignados:0};
  });
 }

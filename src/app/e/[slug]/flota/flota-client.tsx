@@ -35,6 +35,7 @@ import { normalizarFotoCamara, normalizarFotosCamara } from "@/lib/flota/camera-
 import { ImportErroresLista } from "@/components/import-errores-lista";
 import { resolverVehiculoPorPlacaInput } from "@/lib/flota/placa";
 import { useEmpresaSession } from "@/lib/empresa-session";
+import { serialChasis } from "@/lib/flota/chasis";
 import { ETIQUETA_TIPO_UNIDAD, TIPOS_UNIDAD, normalizarTipoUnidad, type TipoUnidad } from "@/lib/flota/tipo-unidad";
 import {
   ahoraLocal,
@@ -121,6 +122,12 @@ type Vehiculo = {
   /** PROGRAMACION-TC-CAJA-REMOLQUE-1: 'VEHICULO' | 'CABEZAL' | 'TC' (ausente = VEHICULO). */
   tipo_unidad?: string | null;
   compartido?: boolean;
+  chasis?: string | null;
+  /** Identidad física APROBADA (la API manda la lista completa; la pantalla muestra una sola unidad). */
+  esRepresentante?: boolean;
+  vinculadaA?: number | null;
+  identidadFisicaId?: number | null;
+  fichasVinculadas?: number[];
   esDueno?: boolean;
   /** FLOTA-EDITAR-VEHICULOS-OTRAS-EMPRESAS: el backend decide (dueña OR permiso transversal con empresa propietaria autorizada); la UI solo lo refleja. */
   puedeEditar?: boolean;
@@ -290,6 +297,7 @@ type Tab =
 
 const emptyForm = {
   placa: "",
+  chasis: "",
   marca: "",
   modelo: "",
   descripcion: "",
@@ -388,6 +396,7 @@ export default function FlotaClient() {
     "todos" | "en_taller" | "cerrados" | "compras"
   >("todos");
   const [posiblesDuplicados, setPosiblesDuplicados] = useState<{ placa: string; ids: number[] }[]>([]);
+  const [mostrarVinculadas, setMostrarVinculadas] = useState(false);
   const [propiedadActiva, setPropiedadActiva] = useState(false);
   const [propiedad, setPropiedad] = useState<PropiedadForm>({ tipoPropiedad: "EMPRESA", empresaPropietariaId: null, propietarioExterno: "", tipoVehiculo: "" });
   const [basePropiedad, setBasePropiedad] = useState("");
@@ -532,8 +541,12 @@ export default function FlotaClient() {
   const confirmarSalidaPendiente = useProtegerFormulario(cambiosVehiculoPendientes, guardandoVehiculo);
   const confirmarSalidaFormulario = () => !guardadoVehiculo.ocupado() && confirmarSalidaPendiente();
 
+  /** Fichas unidas a otra por una identidad física APROBADA: la tabla muestra UNA unidad (la representante); «Mostrar vinculadas» las vuelve a listar. */
+  const vinculadasOcultas = useMemo(() => vehiculos.filter((v) => v.esRepresentante === false), [vehiculos]);
+
   const vehiculosFiltrados = useMemo(() => {
     return vehiculos.filter((v) => {
+      if (!mostrarVinculadas && v.esRepresentante === false) return false;
       const activo = esVehiculoActivo(v);
       if (filtroEstado === "activos" && !activo) return false;
       if (filtroEstado === "inactivos" && activo) return false;
@@ -544,7 +557,7 @@ export default function FlotaClient() {
         `${v.marca ?? ""} ${v.modelo ?? ""} ${v.descripcion ?? ""} ${v.empresa_activo ?? ""} ${v.propietario_nombre ?? ""} ${v.propietario_externo ?? ""}`,
       );
     });
-  }, [vehiculos, filtroEstado, filtroTaller, matchQ]);
+  }, [vehiculos, mostrarVinculadas, filtroEstado, filtroTaller, matchQ]);
 
   const PAGE_SIZE_VEH = 30;
   const totalPaginasVeh = Math.max(
@@ -597,7 +610,7 @@ export default function FlotaClient() {
 
   /** Activos sin filtro de búsqueda (base). */
   const vehiculosActivos = useMemo(
-    () => vehiculos.filter((v) => esVehiculoActivo(v)),
+    () => vehiculos.filter((v) => esVehiculoActivo(v) && v.esRepresentante !== false),
     [vehiculos],
   );
 
@@ -1125,6 +1138,7 @@ export default function FlotaClient() {
     setAccesoEmpresaIds(v.accesoEmpresaIds ?? []);
     const siguienteForm = {
       placa: v.placa,
+      chasis: String(v.chasis ?? ""),
       marca: v.marca ?? "",
       modelo: v.modelo ?? "",
       descripcion: v.descripcion ?? "",
@@ -1208,6 +1222,8 @@ export default function FlotaClient() {
           modelo: form.modelo,
           descripcion: form.descripcion,
           color: form.color,
+          // Chasis: solo se envía si cambió y hay un valor (la API valida que sea real y lo audita).
+          chasis: editId && form.chasis.trim() && serialChasis(form.chasis) !== serialChasis(vehiculos.find((x) => x.id === editId)?.chasis) ? form.chasis.trim() : undefined,
           // PROGRAMACION-TC-CAJA-REMOLQUE-1: solo se edita desde la empresa dueña
           // (empezarEdicion ya bloquea las unidades compartidas; el backend también lo exige).
           tipoUnidad: ajeno ? undefined : form.tipoUnidad,
@@ -3001,6 +3017,18 @@ export default function FlotaClient() {
                     />
                   </label>
                 ))}
+                {editId ? (
+                  <label className="text-xs text-[var(--muted)]">
+                    Chasis (tarjeta de circulación)
+                    <input
+                      className={`${input} mt-1 w-full`}
+                      value={form.chasis}
+                      disabled={Boolean(vehiculoEnEdicion?.fichasVinculadas?.length)}
+                      onChange={(e) => setForm((f) => ({ ...f, chasis: e.target.value }))}
+                      placeholder="6 a 32 letras o números"
+                    />
+                  </label>
+                ) : null}
                 <label className="text-xs text-[var(--muted)]">
                   ¿Funciona el odómetro / medidor de kilometraje?
                   <select className={`${input} mt-1 w-full`} value={form.odometroFuncional ? "si" : "no"} onChange={(e) => setForm((f) => ({ ...f, odometroFuncional: e.target.value === "si" }))}>
@@ -3294,6 +3322,7 @@ export default function FlotaClient() {
             </form>
           ) : null}
 
+          {vinculadasOcultas.length > 0 && <p role="note" data-fichas-vinculadas className="rounded border border-[var(--border)] p-3 text-sm">{mostrarVinculadas ? `Se muestran ${vinculadasOcultas.length} ficha(s) vinculadas por identidad física.` : `${vinculadasOcultas.length} ficha(s) vinculada(s) por identidad física a otra unidad están ocultas: se muestra una sola unidad.`} <button type="button" className="underline" onClick={() => setMostrarVinculadas((m) => !m)}>{mostrarVinculadas ? "Ocultar vinculadas" : "Mostrar vinculadas"}</button></p>}
           {posiblesDuplicados.length > 0 && <p role="status" className="rounded border border-amber-500 p-3 text-sm">Hay {posiblesDuplicados.length} placas con varios registros accesibles. Verifica los identificadores antes de asignar combustible. No se fusionan ni eliminan unidades.</p>}
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
             <table className="min-w-full text-left text-sm">
@@ -3324,6 +3353,7 @@ export default function FlotaClient() {
                     <td className="px-3 py-2 font-mono">
                       {v.placa}
                       {posiblesDuplicados.some(g => g.ids.includes(v.id)) && <span className="block text-xs">Posible duplicado: registro #{v.id}</span>}
+                      {v.fichasVinculadas?.length ? <span data-unidad-vinculada className="block text-xs text-sky-300">Unidad vinculada por identidad física · fichas {[v.id, ...v.fichasVinculadas].sort((a, b) => a - b).map((n) => `#${n}`).join(" · ")}</span> : null}
                       {v.compartido ? (
                         <span className="ml-1 text-[10px] text-amber-300">
                           compartida

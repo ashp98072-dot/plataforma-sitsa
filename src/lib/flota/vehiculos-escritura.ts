@@ -1,10 +1,14 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { placaComparable } from "./combustible-coincidencias";
+import { estadoEsquemaFisico, consultaFisicaTx } from "./identidad-fisica-schema";
 
 export class ErrorIdentidadVehiculo extends Error {
-  constructor(message: string, public status = 409) { super(message); }
+  constructor(message: string, public status = 409, public codigo?: string) { super(message); }
 }
+
+/** Código con el que la API avisa que la placa ya pertenece a una unidad física con identidad vinculada. */
+export const PLACA_CON_IDENTIDAD_VINCULADA = "PLACA_CON_IDENTIDAD_VINCULADA";
 
 /** All application plate writers lock the owning company on the same transaction connection.
  * No UNIQUE/DDL or changes to existing plates. External SQL writers remain outside this guarantee. */
@@ -41,6 +45,30 @@ export async function exigirPlacaLibreTx(c: PoolConnection, empresa: number, pla
 
 /** Sharing authorizes use, not creation of a second local physical record. */
 export async function exigirSinDuplicadoCompartidoTx(c:PoolConnection,empresa:number,placa:string,id?:number){
+ await exigirSinIdentidadVinculadaTx(c,placa);
  const [compartidos]=await c.query<RowDataPacket[]>("SELECT v.id,v.placa FROM flota_vehiculos v JOIN flota_vehiculo_acceso a ON a.vehiculo_id=v.id AND a.empresa_id=? WHERE v.empresa_id<>? AND v.activo=1 ORDER BY v.id FOR UPDATE",[empresa,empresa]);
  if(compartidos.some(v=>Number(v.id)!==id&&placaComparable(String(v.placa))===placaComparable(placa)))throw new ErrorIdentidadVehiculo("La placa ya corresponde a una unidad compartida vigente. Usa ese registro o revisa su identidad fisica.");
+}
+
+/**
+ * No se crea otra ficha con la placa de una unidad física que YA tiene una identidad APROBADA: se usa la unidad existente y se solicita la autorización de uso
+ * (evita nuevos duplicados sin bloquear unidades legítimas). Solo informa que la placa ya está vinculada; nunca datos de las fichas ni de otras empresas.
+ * Se ejecuta bajo el bloqueo de la empresa que escribe. Interruptor de emergencia: `FLOTA_GUARDA_ALTA_IDENTIDAD=0`.
+ */
+export async function exigirSinIdentidadVinculadaTx(c: PoolConnection, placa: string) {
+  if (process.env.FLOTA_GUARDA_ALTA_IDENTIDAD === "0") return;
+  const clave = placaComparable(placa);
+  if (!clave) return;
+  if (await estadoEsquemaFisico(consultaFisicaTx(c)) !== "COMPLETO") return;
+  const [aprobadas] = await c.query<RowDataPacket[]>("SELECT v.placa FROM flota_identidad_miembros m JOIN flota_identidades_fisicas f ON f.id = m.identidad_id AND f.estado = 'APROBADA' JOIN flota_vehiculos v ON v.id = m.vehiculo_id");
+  if (aprobadas.some(r => placaComparable(String(r.placa)) === clave)) {
+    throw new ErrorIdentidadVehiculo("Esta placa ya corresponde a una unidad física con identidad vinculada. No se crea otra ficha: solicita al administrador la autorización de uso de la unidad existente.", 409, PLACA_CON_IDENTIDAD_VINCULADA);
+  }
+}
+
+/** ¿La ficha pertenece a alguna identidad física (en cualquier estado)? Sus datos de identidad quedan inmutables. */
+export async function fichaEnIdentidadTx(c: PoolConnection, vehiculoId: number) {
+  if (await estadoEsquemaFisico(consultaFisicaTx(c)) === "AUSENTE") return false;
+  const [m] = await c.query<RowDataPacket[]>("SELECT 1 FROM flota_identidad_miembros WHERE vehiculo_id = ? LIMIT 1", [vehiculoId]);
+  return m.length > 0;
 }
