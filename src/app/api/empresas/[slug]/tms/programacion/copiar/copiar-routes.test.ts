@@ -136,7 +136,7 @@ describe("respuestas", () => {
   it("validar devuelve la validación por fila", async () => {
     expect(await (await post(validar, cuerpo())).json()).toEqual({
       validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }],
-      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, conAvisos: 0, avisosPorTipo: { ventana_incompleta: 0, destino_ocupado: 0 }, origenes: [] },   // campo aditivo (solo conteos)
+      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, conAvisos: 0, avisosPorTipo: { ventana_incompleta: 0, destino_ocupado: 0, solape_lote: 0, tarifa_historica: 0, recurso_no_disponible: 0, dato_incompleto: 0 }, origenes: [] },   // campo aditivo (solo conteos)
       huellaAvisos: "",   // sin avisos no hay nada que aceptar
     });
   });

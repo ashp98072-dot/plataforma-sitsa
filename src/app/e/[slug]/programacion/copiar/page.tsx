@@ -391,7 +391,7 @@ export default function CopiarProgramacionPage() {
                                     const rel = [...new Set(f.validacion.avisos.filter((a) => a.tipo === "ventana_incompleta").flatMap((a) => a.filas ?? []))].sort((x, y) => x - y);
                                     return rel.length ? <p>Comparte recursos con la fila(s) {rel.join(", ")} sin hora/regreso válido (se reserva todo el día); se copia igual que el origen.</p> : null;
                                   })()}
-                                  {f.validacion.avisos.filter((a) => a.tipo === "destino_ocupado").map((a, k) => <p key={k}>{a.mensaje}</p>)}
+                                  {f.validacion.avisos.filter((a) => a.tipo !== "ventana_incompleta").map((a, k) => <p key={k}>{a.mensaje}</p>)}
                                   <details className="text-[var(--muted)]"><summary className="cursor-pointer">Ver detalle</summary><ul>{f.validacion.avisos.map((a, k) => <li key={k}>{a.mensaje}</li>)}</ul></details>
                                 </div>
                               ) : null}

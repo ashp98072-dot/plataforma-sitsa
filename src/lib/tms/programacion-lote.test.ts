@@ -36,6 +36,7 @@ vi.mock("@/lib/tms/codigo-plan", async () => {
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { listarDisponibilidadVehiculos } from "@/lib/operaciones/disponibilidad";
+import { hoyLocal } from "@/lib/rrhh/dates";
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import { personalDesdeEmpleado } from "@/lib/tms/personal-resolucion";
@@ -62,7 +63,7 @@ type Plan = {
   id: number; empresa_id: number; codigo: string; estado: string; fecha: string; cliente_id: number | null; unidad_id: number | null; piloto_id: number | null;
   auxiliar_id: number | null; aux: number[]; extra?: number | null; tc_vehiculo_id: number | null; tipo_viaje: string; ruta_id: number | null;
   hora: string | null; regreso?: string | null; tarifa_comercial: number | null; tarifa_id: number | null; tarifa_nombre: string | null; tc_placa: string | null;
-  tc_externo: string | null; piloto_externo: string | null; unidad_ext: string | null; cerrado_por?: string | null;
+  tc_externo: string | null; piloto_externo: string | null; unidad_ext: string | null; cerrado_por?: string | null; costo_ref?: number | null;
 };
 type Estado = {
   planes: Plan[]; origen: { plan_id: number; tipo: string; plan_origen_id: number | null; fecha_destino: string; creado_por: string }[];
@@ -113,10 +114,13 @@ const borrador = (over: Partial<BorradorLote> = {}): BorradorLote => ({
 });
 
 const origenesSinVehiculo = new Set<number>();
+/** Fotografía económica de los planes ORIGEN (lo que el servidor lee del plan origen, nunca del cliente). */
+const origenEconomico = new Map<number, Record<string, unknown>>();
 
 beforeEach(() => {
   vi.resetAllMocks();
   origenesSinVehiculo.clear();
+  origenEconomico.clear();
   sinTablaOrigen = false;
   falla = { en: null, enPlanNumero: 0 };
   insertPlanFallos = [];
@@ -131,6 +135,7 @@ beforeEach(() => {
   vi.mocked(tarifasActivasDeVariasRutas).mockImplementation((async (_e: number, ids: number[]) => new Map([...tarifas].filter(([id]) => ids.includes(id)))) as never);
   vi.mocked(asegurarCodigoPlanUnicoTx).mockImplementation((async () => `PLAN-NUEVO-${String(e.sigCodigo++).padStart(3, "0")}`) as never);
   vi.mocked(personalDesdeEmpleado).mockImplementation((async (_e: number, empleadoId: number) => {
+    if (empleados[empleadoId] && String(empleados[empleadoId].estado).toLowerCase() !== "activo") return null;   // igual que la función real: solo empleados ACTIVOS
     const ya = e.personal.find((p) => p.id_empleado === empleadoId);
     if (ya) return ya.id;
     const p = { id: e.sigPersonal++, id_empleado: empleadoId, nombre: empleados[empleadoId]?.nombre ?? "?" };
@@ -169,7 +174,9 @@ beforeEach(() => {
     }
     if (s.includes("FROM tms_cliente_rutas r")) { const [emp, ...ids] = params as number[]; return emp === EMP ? ids.map((i) => rutas[i]).filter(Boolean) : []; }
     // Catálogo de perfiles de vehículo solicitado: SOLO el 11 (activo) de la empresa EMP; el 12 está inactivo y el 99 es de otra empresa.
-    if (s.includes("FROM tms_cotizacion_costeo_perfiles")) { const [emp, ...pids] = params as number[]; return emp === EMP ? pids.filter((i) => i === 11).map((i) => ({ id: i, nombre: "Camión 2.5 toneladas" })) : []; }
+    if (s.includes("FROM tms_cotizacion_costeo_perfiles")) { const [emp, ...pids] = params as number[]; return emp === EMP ? pids.filter((i) => i === 11 || i === 12).map((i) => ({ id: i, nombre: i === 11 ? "Camión 2.5 toneladas" : "Furgón (inactivo)", activo: i === 11 ? 1 : 0 })) : []; }
+    // Fotografía económica del plan ORIGEN (tarifa histórica y costo de referencia): por defecto sin datos; los tests la fijan en `origenEconomico`.
+    if (s.includes("tarifa_nombre_historico, tarifa_monto_historico, tarifa_comercial")) { const [emp, ...pids] = params as number[]; return emp === EMP ? pids.filter((i) => origenEconomico.has(i)).map((i) => ({ id: i, ...origenEconomico.get(i) })) : []; }
     // Vehículo solicitado de los viajes ORIGEN (lectura aparte de borradoresDesdeCliente): en este escenario todos tienen el perfil 11, salvo los ids de `origenesSinVehiculo`.
     if (s.includes("SELECT id, vehiculo_solicitado_perfil_id FROM tms_planes_viaje")) { const [, ...pids] = params as number[]; return pids.map((id) => ({ id, vehiculo_solicitado_perfil_id: origenesSinVehiculo.has(id) ? null : 11 })); }
     if (s.includes("FROM tms_clientes WHERE")) return [{ id: 3 }];
@@ -214,6 +221,8 @@ beforeEach(() => {
     if (unidadReal.modelo && s === "INSERT INTO tms_unidades(empresa_id,placa,tipo,flota_vehiculo_id) VALUES(?,?,?,?)") {
       unidadReal.modelo.insertar(s, p, 900 + unidadReal.modelo.modelo.unidades.length); return [{ insertId: 0 }];   // insertId 0 a propósito (causa raíz de #619): el resolvedor relee por SELECT
     }
+    // Copia fiel con personal INACTIVO: se reutiliza su registro de personal existente (lectura; no se crea ni modifica nada).
+    if (s.includes("FROM tms_personal p JOIN empleados e")) return [e.personal.filter((x) => x.id_empleado === p[1]).map((x) => ({ id: x.id }))];
     if (s.includes("INSERT INTO tms_unidades")) {
       const placa = p[1] as string;
       let u = e.unidades.find((x) => x.placa === placa);
@@ -231,8 +240,8 @@ beforeEach(() => {
       }
       const id = e.sigPlan++;
       e.planes.push(plan({ id, codigo: p[1] as string, cliente_id: p[2] as number | null, unidad_id: p[5] as number | null, piloto_id: p[6] as number | null, auxiliar_id: p[7] as number | null,
-        fecha: p[8] as string, hora: p[9] as string | null, regreso: p[11] as string | null, tarifa_comercial: p[12] as number | null, tarifa_id: p[13] as number | null, tarifa_nombre: p[14] as string | null, ruta_id: p[17] as number | null,
-        tipo_viaje: p[23] as string, piloto_externo: p[24] as string | null, unidad_ext: p[26] as string | null, tc_vehiculo_id: p[30] as number | null, tc_placa: p[31] as string | null, tc_externo: p[32] as string | null,
+        fecha: p[8] as string, hora: p[9] as string | null, regreso: p[11] as string | null, tarifa_comercial: p[12] as number | null, tarifa_id: p[13] as number | null, tarifa_nombre: p[14] as string | null, ruta_id: p[18] as number | null, costo_ref: p[17] as number | null,
+        tipo_viaje: p[24] as string, piloto_externo: p[25] as string | null, unidad_ext: p[27] as string | null, tc_vehiculo_id: p[31] as number | null, tc_placa: p[32] as string | null, tc_externo: p[33] as string | null,
         aux: [] }));
       return [{ insertId: id }];
     }
@@ -302,26 +311,33 @@ describe("motor: creación por lote (feliz)", () => {
     expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("SET vehiculo_solicitado_perfil_id"))).toBe(false); // nunca se crea el plan y luego se completa
   });
 
-  it("VEHÍCULO SOLICITADO: origen SIN vehículo, perfil inactivo, inexistente o de otra empresa → el lote NO crea nada (antes de cualquier INSERT) y el mensaje es claro", async () => {
-    for (const [perfil, texto] of [[null, /no tiene vehículo solicitado/], [12, /ya no existe en el catálogo.*inactivo/], [99, /ya no existe en el catálogo/], [5555, /ya no existe en el catálogo/]] as const) {
+  it("VEHÍCULO SOLICITADO (copia fiel): sin vehículo o con perfil inexistente/de otra empresa se copia SIN él (aviso, nunca se inventa); inactivo se copia tal cual con aviso", async () => {
+    const casos: [number | null, string, number | null, string | null][] = [
+      [null, "dato_incompleto", null, null],
+      [99, "dato_incompleto", null, null],       // perfil de otra empresa: no existe para esta
+      [5555, "dato_incompleto", null, null],     // inexistente
+      [12, "recurso_no_disponible", 12, "Furgón (inactivo)"],   // existe pero inactivo: se conserva
+    ];
+    for (const [perfil, tipoAviso, idCopiado, nombreCopiado] of casos) {
       const lote = [
-        borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1, vehiculoSolicitadoPerfilId: 11 }), // esta fila sola sería válida
+        borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1, vehiculoSolicitadoPerfilId: 11 }),
         borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3, vehiculoSolicitadoPerfilId: perfil }),
       ];
       const validacion = await validarLote(EMP, DESTINO, lote);
-      expect(validacion[0].estado).toBe("ok");
-      expect(validacion[1].estado).toBe("error");
-      expect(validacion[1].errores.join(" ")).toMatch(texto);
-      const antes = creadosDestino().length;
-      const r = await confirmar(lote);
-      expect(r.ok).toBe(false);
-      expect(creadosDestino().length).toBe(antes); // todo o nada: ni siquiera la fila válida
-      expect(conn.execute.mock.calls.some((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje"))).toBe(false);
+      expect(validacion.map((v) => v.estado)).toEqual(["ok", "ok"]);
+      expect(validacion[0].avisos).toBeUndefined();
+      expect(validacion[1].avisos?.map((a) => a.tipo)).toEqual([tipoAviso]);
+      // Sin aceptar los avisos NO se crea nada; aceptándolos se crea con el dato EXACTO del origen (o sin él).
+      expect(await confirmar(lote)).toMatchObject({ ok: false, requiereRevalidar: true });
       conn.execute.mockClear();
+      expect((await confirmarAceptando(lote)).ok).toBe(true);
+      const inserts = conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje")).map((c) => (c[1] as unknown[]).slice(-2));
+      expect(inserts[1]).toEqual([idCopiado, nombreCopiado]);
+      e.planes = e.planes.filter((x) => x.id < 1000); e.origen = []; conn.execute.mockClear();
     }
   });
 
-  it("VEHÍCULO SOLICITADO: borradoresDesdeCliente lo lee del ORIGEN en el servidor (ignora lo que mande el cliente) y un origen histórico produce borrador sin vehículo → bloqueado", async () => {
+  it("VEHÍCULO SOLICITADO: borradoresDesdeCliente lo lee del ORIGEN en el servidor (ignora lo que mande el cliente) y un origen histórico produce borrador sin vehículo → se copia sin él (aviso)", async () => {
     const { borradoresDesdeCliente } = await import("./programacion-copia");
     const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
@@ -336,13 +352,15 @@ describe("motor: creación por lote (feliz)", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.borradores.map((b) => b.vehiculoSolicitadoPerfilId)).toEqual([11, null]); // lo del origen, nunca lo del cliente
-    expect((await validarLote(EMP, DESTINO, r.borradores))[1].errores.join(" ")).toMatch(/no tiene vehículo solicitado/);
+    const v = await validarLote(EMP, DESTINO, r.borradores);
+    expect(v[1].estado).toBe("ok");
+    expect(v[1].avisos?.[0]).toMatchObject({ tipo: "dato_incompleto", recurso: { tipo: "dato", id: "vehiculo_solicitado" } });
   });
 
   it("VEHÍCULO SOLICITADO: nunca se infiere de la unidad, la placa ni la tarifa", () => {
     const src = readFileSync("src/lib/tms/programacion-lote.ts", "utf8");
     expect(src).not.toMatch(/vehiculo\s*=\s*[^;]*(unidad|placa|tarifa)/i);
-    expect(src).toContain("r.vehiculo!.id, r.vehiculo!.nombre");
+    expect(src).toContain("r.vehiculo?.id ?? null, r.vehiculo?.nombre ?? null");
   });
 
   it("límites: máximo 8 auxiliares y máximo de filas por lote", async () => {
@@ -353,10 +371,34 @@ describe("motor: creación por lote (feliz)", () => {
 });
 
 describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () => {
-  it("toma la tarifa vigente/predeterminada de la ruta y crea snapshots NUEVOS (no la del origen)", async () => {
-    const r = await confirmar([borrador()]);
+  it("si la tarifa del origen sigue vigente en la ruta se copia con el snapshot del catálogo vigente (sin aviso)", async () => {
+    expect((await validarLote(EMP, DESTINO, [borrador({ tarifaId: 100 })]))[0].avisos).toBeUndefined();
+    const r = await confirmar([borrador({ tarifaId: 100 })]);
     expect(r.ok).toBe(true);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1500, tarifa_id: 100, tarifa_nombre: "Base" });
+  });
+  it("COPIA FIEL: un origen SIN tarifa nace SIN tarifa (no se asigna la predeterminada de la ruta ni se inventa un monto)", async () => {
+    const [v] = await validarLote(EMP, DESTINO, [borrador({ tarifaId: null })]);
+    expect(v).toMatchObject({ estado: "ok", tarifa: null });
+    expect((await confirmar([borrador({ tarifaId: null })])).ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: null, tarifa_id: null, tarifa_nombre: null });
+  });
+  it("COPIA FIEL: una tarifa HISTÓRICA (ya no vigente) se copia con su fotografía del origen y un aviso; el costo operativo de referencia también", async () => {
+    origenEconomico.set(900, { tarifa_id: 555, tarifa_nombre_historico: "Tarifa 2025", tarifa_monto_historico: 1234.5, tarifa_comercial: 1234.5, tarifa_moneda_historico: "GTQ", costo_operativo_referencia: 700 });
+    const lote = [borrador({ tarifaId: 555 })];
+    const [v] = await validarLote(EMP, DESTINO, lote);
+    expect(v).toMatchObject({ estado: "ok", tarifa: { id: 555, nombre: "Tarifa 2025", monto: 1234.5, moneda: "GTQ" } });
+    expect(v.avisos).toEqual([expect.objectContaining({ tipo: "tarifa_historica", recurso: { tipo: "tarifa", id: "555" } })]);
+    expect(await confirmar(lote)).toMatchObject({ ok: false, requiereRevalidar: true });   // los avisos hay que aceptarlos
+    expect((await confirmarAceptando(lote)).ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1234.5, tarifa_id: 555, tarifa_nombre: "Tarifa 2025", costo_ref: 700 });
+  });
+  it("el cliente NO puede inyectar una tarifa: sin fotografía del origen (o con otro tarifa_id) una tarifa no vigente sigue siendo error", async () => {
+    expect((await validarLote(EMP, DESTINO, [borrador({ tarifaId: 555 })]))[0].estado).toBe("error");   // el origen no tiene esa tarifa
+    origenEconomico.set(900, { tarifa_id: 556, tarifa_nombre_historico: "Otra", tarifa_monto_historico: 1, tarifa_comercial: 1, tarifa_moneda_historico: "GTQ" });
+    expect((await validarLote(EMP, DESTINO, [borrador({ tarifaId: 555 })]))[0].estado).toBe("error");   // el origen tiene OTRA
+    origenEconomico.set(900, { tarifa_id: 555, tarifa_nombre_historico: "Ajena", tarifa_monto_historico: 9, tarifa_comercial: 9, tarifa_moneda_historico: "GTQ" });
+    expect((await validarLote(7777, DESTINO, [borrador({ tarifaId: 555 })]))[0].estado).toBe("error");   // la fotografía es de ESTA empresa (el mock solo devuelve la de EMP)
   });
   it.each([{ id: 100, monto: 1499, moneda: "GTQ" }, { id: 101, monto: 1500, moneda: "GTQ" }, { id: 100, monto: 1500, moneda: "USD" }])("rechaza cambios de tarifa antes de escribir", async (tarifa) => {
     const r = await confirmarLote(EMP, "jefe", DESTINO, { tipo: "COPIA", fechaOrigen: ORIGEN }, [borrador()], [{ fila: 1, tarifa }]);
@@ -367,7 +409,7 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
   it("una expectativa ausente, o 'sin tarifa' cuando hoy hay tarifa vigente, también se rechaza sin escribir (solicitud manipulada o desactualizada)", async () => {
     const origen = { tipo: "COPIA" as const, fechaOrigen: ORIGEN };
     for (const esperadas of [[], [{ fila: 2, tarifa: { id: 100, monto: 1500, moneda: "GTQ" } }], [{ fila: 1, tarifa: null }]]) {
-      const r = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador()], esperadas);
+      const r = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador({ tarifaId: 100 })], esperadas);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.erroresPorFila?.[0].errores.join(" ")).toContain("tarifa vigente cambió");
     }
@@ -375,12 +417,12 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
   });
   it("tras el rechazo, el usuario revalida y confirma con la tarifa actualizada: nada se escribió antes y ahora se crea una sola copia", async () => {
     const origen = { tipo: "COPIA" as const, fechaOrigen: ORIGEN };
-    const rechazo = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador()], [{ fila: 1, tarifa: { id: 100, monto: 1499, moneda: "GTQ" } }]);
+    const rechazo = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador({ tarifaId: 100 })], [{ fila: 1, tarifa: { id: 100, monto: 1499, moneda: "GTQ" } }]);
     expect(rechazo.ok).toBe(false);
     expect(creadosDestino()).toHaveLength(0);
-    const [revalidada] = await validarLote(EMP, DESTINO, [borrador()]); // lo que hace «Revalidar»: trae la tarifa vigente
+    const [revalidada] = await validarLote(EMP, DESTINO, [borrador({ tarifaId: 100 })]); // lo que hace «Revalidar»: trae la tarifa vigente
     expect(revalidada.tarifa).toMatchObject({ id: 100, monto: 1500, moneda: "GTQ" });
-    const ok = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador()], [{ fila: 1, tarifa: { id: revalidada.tarifa!.id, monto: revalidada.tarifa!.monto, moneda: revalidada.tarifa!.moneda } }]);
+    const ok = await confirmarLote(EMP, "jefe", DESTINO, origen, [borrador({ tarifaId: 100 })], [{ fila: 1, tarifa: { id: revalidada.tarifa!.id, monto: revalidada.tarifa!.monto, moneda: revalidada.tarifa!.moneda } }]);
     expect(ok.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(1);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1500, tarifa_id: 100 }); // el importe sale del catálogo vigente, no de lo enviado
@@ -395,12 +437,13 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect(r[0].errores[0]).toContain("no es una tarifa vigente de esta ruta");
     expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8")).not.toMatch(/tarifaComercial/);
   });
-  it("ruta sin tarifa vigente NO bloquea (se copia sin tarifa); ruta inactiva/inexistente -> error", async () => {
+  it("ruta sin tarifa vigente NO bloquea (se copia sin tarifa); ruta inactiva = aviso; ruta inexistente -> error", async () => {
     const r = await validarLote(EMP, DESTINO, [borrador({ rutaId: 12 }), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: "P-2", pilotoEmpleadoId: 2 }), borrador({ fila: 3, origenPlanId: 902, rutaId: 99, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
     expect(r[0].errores).toEqual([]);
     expect(r[0]).toMatchObject({ estado: "ok", tarifa: null });
-    expect(r[1].errores[0]).toContain("inactiva");
-    expect(r[2].errores[0]).toContain("no existe");
+    expect(r[1]).toMatchObject({ estado: "ok" });   // ruta inactiva: se copia igual que el origen, con aviso
+    expect(r[1].avisos?.[0]).toMatchObject({ tipo: "recurso_no_disponible", recurso: { tipo: "ruta" } });
+    expect(r[2].errores[0]).toContain("no existe");   // ruta inexistente: integridad referencial, sigue bloqueando
   });
   it("el origen aporta SOLO la referencia de tarifa al borrador; los montos/nombres históricos jamás entran al borrador (solo se muestran en `origen.tarifaOriginal`)", async () => {
     const src = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
@@ -468,13 +511,15 @@ describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", 
     expect(r.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(1);
   });
-  it("hoy: un piloto con viaje en curso se rechaza (mismo control del POST manual)", async () => {
-    const hoy = new Date().toISOString().slice(0, 10);
+  it("hoy: un piloto con viaje en curso NO bloquea la copia: se avisa y se copia igual que el origen (la programación ordinaria sigue rechazándolo)", async () => {
+    const hoy = hoyLocal();
     vi.mocked(listarDisponibilidadPersonal).mockResolvedValue([{ personalId: 501, nombre: "Juan Pérez", viajeActual: { id: 1 } }] as never);
     const r = await validarLote(EMP, hoy, [borrador()]);
-    expect(r[0].errores.join(" ")).toContain("viaje en curso");
+    expect(r[0].estado).toBe("ok");
+    expect(r[0].avisos?.map((a) => a.mensaje).join(" ")).toContain("viaje en curso");
+    expect(r[0].avisos?.[0]).toMatchObject({ tipo: "recurso_no_disponible", recurso: { tipo: "persona" } });
   });
-  it("recursos inválidos: unidad inexistente / no disponible / es TC; TC que no es TC; piloto inactivo; misma persona dos veces", async () => {
+  it("recursos: inexistentes / TC como unidad / TC no accesible / misma persona dos veces BLOQUEAN (integridad); no disponibles o inactivos se copian con aviso", async () => {
     const r = await validarLote(EMP, DESTINO, [
       borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "NO-EXISTE" }),
       borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-3", pilotoEmpleadoId: 2 }),
@@ -484,10 +529,14 @@ describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", 
       borrador({ fila: 6, origenPlanId: 905, unidadPlaca: null, pilotoEmpleadoId: 20, auxiliarEmpleadoIds: [20] }),
     ]);
     expect(r[0].errores[0]).toContain("no existe en el sistema");
-    expect(r[1].errores[0]).toContain("no está disponible: En taller");
+    expect(r[1].estado).toBe("ok");   // unidad en taller: se copia con aviso
+    expect(r[1].avisos?.[0]).toMatchObject({ tipo: "recurso_no_disponible", recurso: { tipo: "unidad", id: "P-3" } });
+    expect(r[1].avisos?.[0].mensaje).toContain("no está disponible: En taller");
     expect(r[2].errores[0]).toContain("clasificada como TC");
     expect(r[3].errores[0]).toContain("no existe o no es accesible");
-    expect(r[4].errores[0]).toContain("inactivo");
+    expect(r[4].estado).toBe("ok");   // piloto inactivo: se copia con aviso
+    expect(r[4].avisos?.[0]).toMatchObject({ tipo: "recurso_no_disponible", recurso: { tipo: "persona", id: "5" } });
+    expect(r[4].avisos?.[0].mensaje).toContain("inactivo");
     expect(r[5].errores[0]).toContain("no pueden repetirse");
   });
 });
@@ -506,14 +555,15 @@ describe("tercerizados: solo texto externo, sin recursos ni disponibilidad inter
     expect(vi.mocked(sincronizarViaticosPlan).mock.calls[0][2]).toEqual({ piloto: null, pilotoExtra: null, auxiliares: [] });
     expect(conn.execute.mock.calls.some(([s]) => String(s).includes("INSERT INTO tms_unidades"))).toBe(false);
   });
-  it("valida: piloto externo obligatorio, límites de longitud (placa 40) y no mezcla recursos internos", async () => {
+  it("valida: piloto externo ausente = aviso (sin inventar), límites de longitud (placa 40) y no mezcla recursos internos", async () => {
     const r = await validarLote(EMP, DESTINO, [
-      terc({ fila: 1, origenPlanId: 900, externo: { ...externo, pilotoExternoNombre: " " } }),
+      terc({ fila: 1, origenPlanId: 900, externo: { ...externo, pilotoExternoNombre: " " } }),   // sin piloto externo: se copia SIN él (aviso), no se inventa
       terc({ fila: 2, origenPlanId: 901, externo: { ...externo, tcExternoPlaca: "T".repeat(41) } }),
       terc({ fila: 3, origenPlanId: 902, tcVehiculoId: 31, pilotoEmpleadoId: 1 }),
       borrador({ fila: 4, origenPlanId: 903, externo }),
     ]);
-    expect(r[0].errores[0]).toContain("piloto externo");
+    expect(r[0].estado).toBe("ok");
+    expect(r[0].avisos?.[0]).toMatchObject({ tipo: "dato_incompleto", recurso: { tipo: "dato", id: "piloto_externo" } });
     expect(r[1].errores[0]).toContain("40");
     expect(r[2].errores[0]).toContain("no usa recursos internos");
     expect(r[3].errores[0]).toContain("propio no lleva datos de tercerizado");
@@ -877,6 +927,8 @@ const conVentana = (fila: number, hora: string | null, regreso: { dias: number; 
     fila, origenPlanId: 900 + fila, horaCarga: hora, regresoOffsetDias: regreso ? regreso.dias : null, regresoHora: regreso ? regreso.hora : null,
     unidadPlaca: null, pilotoEmpleadoId: 1 + fila, auxiliarEmpleadoIds: [], ...over,
   });
+/** Copia fiel: un solape con ventanas conocidas ya no bloquea; se informa como aviso `solape_lote`. */
+const solapes = async (b: BorradorLote[]) => (await validarLote(EMP, DESTINO, b)).map((r) => (r.estado === "error" ? "error" : r.avisos?.some((a) => a.tipo === "solape_lote") ? "solape" : "ok"));
 const estados = async (b: BorradorLote[], fecha = DESTINO) => (await validarLote(EMP, fecha, b)).map((r) => r.estado);
 
 describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () => {
@@ -886,16 +938,18 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
     expect(await estados([conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "08:00", { dias: 0, hora: "11:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
   });
 
-  it("2) solape de 1 minuto: bloqueado en AMBAS filas con el mensaje de siempre", async () => {
+  it("2) solape de 1 minuto con horas conocidas: COPIA FIEL, ya no bloquea; ambas filas pasan con aviso `solape_lote` que señala a la otra", async () => {
     const r = await validarLote(EMP, DESTINO, [conVentana(1, "05:00", { dias: 0, hora: "08:00" }, mismoPiloto), conVentana(2, "07:59", { dias: 0, hora: "11:00" }, mismoPiloto)]);
-    expect(r.map((x) => x.estado)).toEqual(["error", "error"]);
-    expect(r[0].errores[0]).toBe("Juan Pérez está asignado también en la fila 2 de este mismo lote. Los horarios se solapan.");
+    expect(r.map((x) => x.estado)).toEqual(["ok", "ok"]);
+    expect(r[0].avisos).toEqual([expect.objectContaining({ tipo: "solape_lote", filas: [2], recurso: { tipo: "persona", id: "1" } })]);
+    expect(r[0].avisos![0].mensaje).toContain("Juan Pérez está asignado también en la fila 2 de este mismo lote. Los horarios se solapan.");
+    expect(r[0].conflictos).toEqual([{ recurso: "persona", filas: [2], causa: "solape" }]);
   });
 
   it("3) cruce de medianoche dentro del lote: 22:00 -> 02:00 (+1 día) choca con una fila 23:00 y NO con una 01:00 -> 04:00 del mismo día", async () => {
     const noche = conVentana(1, "22:00", { dias: 1, hora: "02:00" }, mismoPiloto);
-    expect(await estados([noche, conVentana(2, "23:00", { dias: 1, hora: "01:00" }, mismoPiloto)])).toEqual(["error", "error"]);
-    expect(await estados([noche, conVentana(2, "01:00", { dias: 0, hora: "04:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
+    expect(await solapes([noche, conVentana(2, "23:00", { dias: 1, hora: "01:00" }, mismoPiloto)])).toEqual(["solape", "solape"]);
+    expect(await solapes([noche, conVentana(2, "01:00", { dias: 0, hora: "04:00" }, mismoPiloto)])).toEqual(["ok", "ok"]);
   });
 
   it("5) sin regreso: reserva TODO el día; ya NO bloquea (copia fiel): ambas filas pasan con aviso", async () => {
@@ -937,26 +991,26 @@ describe("A2.2 lote: colisiones DENTRO del lote por ventanas (no por día)", () 
 
   it("7) la misma persona como piloto en una fila y auxiliar en otra: conflicto solo si las ventanas se solapan", async () => {
     const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1 });
-    expect(await estados([a, conVentana(2, "07:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["error", "error"]);
-    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["ok", "ok"]);
+    expect(await solapes([a, conVentana(2, "07:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["solape", "solape"]);
+    expect(await solapes([a, conVentana(2, "08:00", { dias: 0, hora: "10:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [1] })])).toEqual(["ok", "ok"]);
   });
 
   it("8) auxiliares adicionales (hasta 8) usan la misma comparación", async () => {
     const a = conVentana(1, "05:00", { dias: 0, hora: "08:00" }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [20, 21, 22] });
-    expect(await estados([a, conVentana(2, "06:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["error", "error"]);
-    expect(await estados([a, conVentana(2, "08:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["ok", "ok"]);
+    expect(await solapes([a, conVentana(2, "06:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["solape", "solape"]);
+    expect(await solapes([a, conVentana(2, "08:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [28, 22] })])).toEqual(["ok", "ok"]);
   });
 
   it("9) unidad: misma placa, ventanas solapadas => conflicto; secuenciales => ok", async () => {
     const u = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { unidadPlaca: "P-1" });
-    expect(await estados([u(1, "05:00", "08:00"), u(2, "07:59", "10:00")])).toEqual(["error", "error"]);
-    expect(await estados([u(1, "05:00", "08:00"), u(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
+    expect(await solapes([u(1, "05:00", "08:00"), u(2, "07:59", "10:00")])).toEqual(["solape", "solape"]);
+    expect(await solapes([u(1, "05:00", "08:00"), u(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
   });
 
   it("10) TC: misma semántica temporal que la unidad", async () => {
     const t = (fila: number, h: string, r: string) => conVentana(fila, h, { dias: 0, hora: r }, { tcVehiculoId: 31 });
-    expect(await estados([t(1, "05:00", "08:00"), t(2, "07:59", "10:00")])).toEqual(["error", "error"]);
-    expect(await estados([t(1, "05:00", "08:00"), t(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
+    expect(await solapes([t(1, "05:00", "08:00"), t(2, "07:59", "10:00")])).toEqual(["solape", "solape"]);
+    expect(await solapes([t(1, "05:00", "08:00"), t(2, "08:00", "10:00")])).toEqual(["ok", "ok"]);
   });
 
   it("11) Tercerizado no consume recursos internos: ni colisiona en el lote ni consulta disponibilidad", async () => {
@@ -1258,8 +1312,8 @@ describe("Copiar: la ausencia de tarifa NO bloquea", () => {
   const insertPlan = () => conn.execute.mock.calls.filter((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje")) as unknown as [string, unknown[]][];
   const sinTarifa = (over: Partial<BorradorLote> = {}) => borrador({ rutaId: 12, ...over }); // ruta 12: sin tarifa vigente
 
-  it("1) una fila CON tarifa sigue copiando su tarifa vigente/predeterminada", async () => {
-    expect((await confirmar([borrador()])).ok).toBe(true);
+  it("1) una fila CON tarifa (vigente en la ruta) sigue copiando esa tarifa", async () => {
+    expect((await confirmar([borrador({ tarifaId: 100 })])).ok).toBe(true);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1500, tarifa_id: 100, tarifa_nombre: "Base" });
   });
 
@@ -1286,7 +1340,7 @@ describe("Copiar: la ausencia de tarifa NO bloquea", () => {
   });
 
   it("7) lote mixto: A con tarifa y B sin tarifa copian ambos, cada uno con lo suyo", async () => {
-    const r = await confirmar([borrador({ fila: 1, origenPlanId: 900 }), sinTarifa({ fila: 2, origenPlanId: 901, pilotoEmpleadoId: 2, unidadPlaca: "P-2" })]);
+    const r = await confirmar([borrador({ fila: 1, origenPlanId: 900, tarifaId: 100 }), sinTarifa({ fila: 2, origenPlanId: 901, pilotoEmpleadoId: 2, unidadPlaca: "P-2" })]);
     expect(r.ok).toBe(true);
     const [a, b] = creadosDestino();
     expect([a.tarifa_id, a.tarifa_comercial]).toEqual([100, 1500]);
@@ -1366,8 +1420,13 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
   });
 
   it("solo RRHH activo con puesto de piloto: un auxiliar/inactivo/inexistente no puede ser extra", async () => {
-    expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 8 })]))[0].errores.join(" ")).toContain("no tiene puesto de piloto");
-    expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 5 })]))[0].errores.join(" ")).toContain("inactivo");
+    // Copia fiel: un extra sin puesto de piloto o inactivo (así estaba en el origen) se copia con aviso; uno inexistente sigue bloqueando.
+    const sinPuesto = (await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 8 })]))[0];
+    expect(sinPuesto.estado).toBe("ok");
+    expect(sinPuesto.avisos?.map((a) => a.mensaje).join(" ")).toContain("no tiene puesto de piloto");
+    const inactivo = (await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 5 })]))[0];
+    expect(inactivo.estado).toBe("ok");
+    expect(inactivo.avisos?.map((a) => a.mensaje).join(" ")).toContain("inactivo");
     expect((await validarLote(EMP, DESTINO, [borrador({ pilotoExtraEmpleadoId: 999 })]))[0].errores.join(" ")).toContain("piloto extra seleccionado no existe");
   });
 
@@ -1600,16 +1659,17 @@ describe("diagnóstico y avisos: un lote de 66 viajes con recursos repetidos (co
     expect(diagnosticarBloqueos(r)).toMatchObject({ bloqueadas: 0, conAvisos: 0, origenes: [] });
   });
 
-  it("un regreso editado que SE SOLAPA de verdad con la fila siguiente SÍ bloquea (solape real con horas conocidas): solo esas dos filas", async () => {
+  it("un regreso editado que SE SOLAPA con la fila siguiente (horas conocidas) tampoco bloquea: copia fiel, aviso `solape_lote` en esas dos filas", async () => {
     const lote = sinRegreso33();
     lote[32] = { ...lote[32], regresoOffsetDias: 0, regresoHora: hora(33 * 20 + 5) };   // invade 5 min la fila 34
     const r = await validarLote(EMP, DESTINO, lote);
-    expect(r.filter((x) => x.estado === "error").map((x) => x.fila)).toEqual([33, 34]);
+    expect(r.filter((x) => x.estado === "error")).toHaveLength(0);
+    expect(r.filter((x) => x.avisos?.some((a) => a.tipo === "solape_lote")).map((x) => x.fila)).toEqual([33, 34]);
     expect(r[32].conflictos).toEqual(expect.arrayContaining([expect.objectContaining({ causa: "solape" })]));
     const d = diagnosticarBloqueos(r);
-    expect(d).toMatchObject({ bloqueadas: 2, conAvisos: 0 });
-    expect(d.porMotivo).toMatchObject({ solape_real: 2 });
-    expect(r[32].errores.join(" ")).toContain("Los horarios se solapan.");
+    expect(d.bloqueadas).toBe(0);
+    expect(d.conAvisos).toBeGreaterThanOrEqual(2);
+    expect(d.avisosPorTipo.solape_lote).toBe(2);
   });
 
   it("varias filas sin hora/regreso: se listan ordenadas por alcance y se redacta una sola sugerencia", async () => {
@@ -1622,14 +1682,14 @@ describe("diagnóstico y avisos: un lote de 66 viajes con recursos repetidos (co
     expect(sugerenciaDeDiagnostico(d)).toMatch(/2 filas sin hora o regreso válido/);
   });
 
-  it("los errores REALES se cuentan aparte (tarifa no vigente, ruta inactiva) y siguen bloqueando", async () => {
+  it("los errores REALES se cuentan aparte (tarifa inyectada, ruta inexistente) y siguen bloqueando; ruta inactiva es aviso", async () => {
     const filas = [
       borrador({ fila: 1, origenPlanId: 901, tarifaId: 99999, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], unidadPlaca: null }),
-      borrador({ fila: 2, origenPlanId: 902, rutaId: 13, pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [], unidadPlaca: null }),
-      borrador({ fila: 3, origenPlanId: 903, pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [], unidadPlaca: null }),
+      borrador({ fila: 2, origenPlanId: 902, rutaId: 99, pilotoEmpleadoId: 2, auxiliarEmpleadoIds: [], unidadPlaca: null }),   // ruta inexistente
+      borrador({ fila: 3, origenPlanId: 903, rutaId: 13, pilotoEmpleadoId: 3, auxiliarEmpleadoIds: [], unidadPlaca: null }),   // ruta inactiva: aviso, no bloqueo
     ];
     const d = diagnosticarBloqueos(await validarLote(EMP, DESTINO, filas));
-    expect(d).toMatchObject({ total: 3, bloqueadas: 2, conAvisos: 0 });
+    expect(d).toMatchObject({ total: 3, bloqueadas: 2, conAvisos: 1 });
     expect(d.porMotivo).toMatchObject({ tarifa: 1, otro: 1, solape_real: 0 });
   });
 
@@ -1651,8 +1711,8 @@ describe("confirmación del lote de 66: atómica, con permisos de la ruta y sin 
     expect((await confirmar(f)).ok).toBe(false);          // reintento: «ya fue copiado», no duplica
     expect(creadosDestino()).toHaveLength(66);
   });
-  it("con UNA fila con un error REAL (ruta inactiva) el lote completo se rechaza (todo o nada): no se crea nada", async () => {
-    const f = lote(); f[10] = { ...f[10], rutaId: 13 };
+  it("con UNA fila con un error REAL (ruta inexistente) el lote completo se rechaza (todo o nada): no se crea nada", async () => {
+    const f = lote(); f[10] = { ...f[10], rutaId: 99 };
     const r = await confirmar(f);
     expect(r).toMatchObject({ ok: false, status: 409 });
     expect(creadosDestino()).toHaveLength(0);
@@ -1736,7 +1796,7 @@ describe("aceptación de avisos: el servidor verifica la huella de los avisos VI
 
   it("los errores REALES tienen prioridad: se devuelven por fila (sin pedir aceptación) y todo el lote se rechaza", async () => {
     ocuparPiloto();
-    const r = await confirmar([...filaOcupada(), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
+    const r = await confirmar([...filaOcupada(), borrador({ fila: 2, origenPlanId: 901, rutaId: 99, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
     expect(r).toMatchObject({ ok: false, status: 409 });
     expect(r.ok === false && r.requiereRevalidar).toBeUndefined();
     expect(r.ok === false && r.erroresPorFila).toHaveLength(1);
@@ -1759,3 +1819,104 @@ const sinCrearDespues = (r: Awaited<ReturnType<typeof confirmarLote>>) => {
   expect(creadosDestino()).toHaveLength(0);
   expect(conn.beginTransaction).not.toHaveBeenCalled();
 };
+
+
+// ------------------------------------------------------------------ COPIA FIEL TOTAL (decisión del propietario, PR #657)
+describe("COPIAR PROGRAMACIÓN reproduce fielmente el origen (solo en este flujo)", () => {
+  const aceptado = confirmarAceptando;
+  const insertSql = () => String(conn.execute.mock.calls.find((c) => String(c[0]).includes("INSERT INTO tms_planes_viaje"))![0]);
+
+  it("los viajes nuevos SIEMPRE nacen Programado: sin cierres, evidencias ni movimientos financieros (el INSERT ni los menciona)", async () => {
+    expect((await confirmar([borrador()])).ok).toBe(true);
+    const sql = insertSql();
+    expect(sql).toContain("'Programado'");
+    expect(sql).not.toMatch(/cerrado_por|cerrado_en|evidencia|factura|cobro|pago|liquidaci|km_|odometro|fecha_cierre|iniciado|salida_real|llegada_real/i);
+    expect(creadosDestino()[0].estado).toBe("Programado");
+    expect(creadosDestino()[0].cerrado_por ?? null).toBeNull();
+    // Ningún otro movimiento: solo las tablas operativas del plan (+ paradas, auxiliares, extra, viáticos de configuración y trazabilidad).
+    const tablas = conn.execute.mock.calls.map((c) => /INSERT INTO (\w+)/.exec(String(c[0]))?.[1]).filter(Boolean);
+    expect(tablas.filter((t) => !["tms_planes_viaje", "tms_plan_origen", "tms_unidades", "tms_lugares"].includes(String(t)))).toEqual([]);
+  });
+
+  it("el origen En curso / Cerrado se copia como Programado (el origen no se modifica y su estado no se copia)", async () => {
+    e.planes.push(plan({ id: 900, codigo: "ORI-900", estado: "En curso", fecha: ORIGEN, piloto_id: 501 }));
+    expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true);
+    expect(creadosDestino()[0].estado).toBe("Programado");
+    expect(e.planes.find((x) => x.id === 900)!.estado).toBe("En curso");
+    expect(conn.execute.mock.calls.some((c) => /UPDATE\s+tms_planes_viaje/i.test(String(c[0])))).toBe(false);
+  });
+
+  it("personal INACTIVO del origen: la copia reutiliza su registro de personal existente (sin crear ni modificar personal) y exige aceptar el aviso", async () => {
+    e.personal.push({ id: 505, id_empleado: 5, nombre: "Inactivo Uno" });
+    const lote = [borrador({ pilotoEmpleadoId: 5, unidadPlaca: null })];
+    expect((await confirmar(lote)).ok).toBe(false);
+    expect((await aceptado(lote)).ok).toBe(true);
+    expect(creadosDestino()[0].piloto_id).toBe(505);
+    expect(conn.execute.mock.calls.some((c) => /INSERT INTO tms_personal|UPDATE tms_personal/i.test(String(c[0])))).toBe(false);
+  });
+
+  it("personal inactivo SIN registro de personal: no se puede resolver → rollback total, nada creado (integridad referencial)", async () => {
+    const lote = [borrador({ fila: 1, origenPlanId: 900, unidadPlaca: "P-1", pilotoEmpleadoId: 1 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: null, pilotoEmpleadoId: 5 })];
+    const r = await aceptado(lote);
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    expect(r.ok === false && r.error).toContain("Fila 2: no se pudo resolver el piloto");
+    expect(creadosDestino()).toHaveLength(0);
+    expect(conn.rollback).toHaveBeenCalled();
+  });
+
+  it("TERCERIZADO: sigue siendo tercerizado (no se vuelve propio ni se crean recursos internos); sin piloto externo ni tarifa se copia sin inventar nada", async () => {
+    const ext = { pilotoExternoNombre: "", auxiliaresExternos: [], unidadExternaPlaca: "", unidadExternaDescripcion: "", transportistaExterno: "Transp", costoTercerizado: 500, tcExternoPlaca: "" };
+    const lote = [borrador({ tipoViaje: "Tercerizado", unidadPlaca: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [], tcVehiculoId: null, externo: ext, tarifaId: null })];
+    const [v] = await validarLote(EMP, DESTINO, lote);
+    expect(v).toMatchObject({ estado: "ok", tarifa: null });
+    expect(v.avisos?.map((a) => a.recurso.id)).toEqual(["piloto_externo"]);
+    expect((await aceptado(lote)).ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tipo_viaje: "Tercerizado", piloto_externo: null, unidad_id: null, piloto_id: null, tc_vehiculo_id: null, tarifa_id: null, tarifa_comercial: null });
+    expect(personalDesdeEmpleado).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some(([q]) => String(q).includes("INSERT INTO tms_unidades"))).toBe(false);
+    // Un tercerizado con recursos internos (convertirlo en propio) sigue prohibido.
+    expect((await validarLote(EMP, DESTINO, [borrador({ tipoViaje: "Tercerizado", externo: ext })]))[0].errores.join(" ")).toContain("no usa recursos internos");
+  });
+
+  it("lote REAL mezclado: en curso, sin horarios, tercerizado, sin tarifa, tarifa histórica, recursos compartidos y ocupados en destino → TODO se copia con UNA aceptación, atómico", async () => {
+    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", piloto_id: 501 }));   // piloto 1 ocupado en el destino
+    origenEconomico.set(902, { tarifa_id: 555, tarifa_nombre_historico: "Vieja", tarifa_monto_historico: 800, tarifa_comercial: 800, tarifa_moneda_historico: "GTQ", costo_operativo_referencia: 300 });
+    const ext = { pilotoExternoNombre: "Ext", auxiliaresExternos: ["A"], unidadExternaPlaca: "x-1", unidadExternaDescripcion: "Camión", transportistaExterno: "T", costoTercerizado: 400, tcExternoPlaca: "" };
+    const lote = [
+      borrador({ fila: 1, origenPlanId: 900, pilotoEmpleadoId: 1, unidadPlaca: "P-1", horaCarga: null }),                      // sin hora; piloto ocupado en destino
+      borrador({ fila: 2, origenPlanId: 901, pilotoEmpleadoId: 1, unidadPlaca: "P-2", horaCarga: null }),                      // comparte piloto con la fila 1
+      borrador({ fila: 3, origenPlanId: 902, pilotoEmpleadoId: 2, unidadPlaca: "P-3", tarifaId: 555 }),                         // tarifa histórica; unidad en taller
+      borrador({ fila: 4, origenPlanId: 903, pilotoEmpleadoId: 5, unidadPlaca: null }),                                        // piloto inactivo
+      borrador({ fila: 5, origenPlanId: 904, tipoViaje: "Tercerizado", unidadPlaca: null, pilotoEmpleadoId: null, auxiliarEmpleadoIds: [], tcVehiculoId: null, externo: ext }),
+    ];
+    e.personal.push({ id: 505, id_empleado: 5, nombre: "Inactivo Uno" });
+    const v = await validarLote(EMP, DESTINO, lote);
+    expect(v.every((x) => x.estado === "ok")).toBe(true);
+    const tipos = new Set(v.flatMap((x) => (x.avisos ?? []).map((a) => a.tipo)));
+    expect(tipos).toEqual(new Set(["destino_ocupado", "ventana_incompleta", "tarifa_historica", "recurso_no_disponible"]));
+    const r = await aceptado(lote);
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(5);
+    expect(creadosDestino().every((p) => p.estado === "Programado")).toBe(true);
+    expect(creadosDestino().find((p) => p.tarifa_id === 555)).toMatchObject({ tarifa_comercial: 800, costo_ref: 300 });
+    expect(e.origen).toHaveLength(5);
+    expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("seguridad: la fotografía económica del origen se lee SOLO de esta empresa (empresa_id en la consulta) y nunca del cliente", async () => {
+    await validarLote(EMP, DESTINO, [borrador({ tarifaId: 555 })]);
+    const llamada = vi.mocked(query).mock.calls.find(([q]) => String(q).includes("tarifa_nombre_historico, tarifa_monto_historico, tarifa_comercial"))!;
+    expect(String(llamada[0])).toMatch(/WHERE empresa_id = \? AND id IN/);
+    expect((llamada[1] as unknown[])[0]).toBe(EMP);
+    expect(readFileSync("src/lib/tms/programacion-copia-schema.ts", "utf8").replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(/tarifaMonto|tarifaNombre|costoReferencia|costo_operativo/i);   // el cliente no puede mandarlos
+  });
+
+  it("anti-duplicado y recurso inexistente SIGUEN bloqueando: no hay copia doble ni referencias rotas", async () => {
+    expect((await confirmarAceptando([borrador()])).ok).toBe(true);
+    const otra = await validarLote(EMP, DESTINO, [borrador()]);
+    expect(otra[0].estado).toBe("error");
+    expect(otra[0].errores.join(" ")).toContain("ya fue copiado");
+    const rotas = await validarLote(EMP, DESTINO, [borrador({ fila: 1, origenPlanId: 950, pilotoEmpleadoId: 999 }), borrador({ fila: 2, origenPlanId: 951, clienteId: 77, rutaId: null })]);
+    expect(rotas.map((x) => x.estado)).toEqual(["error", "error"]);
+  });
+});

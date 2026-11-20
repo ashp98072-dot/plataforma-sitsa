@@ -83,4 +83,11 @@ describe("compararTarifa: valor del origen vs el que REALMENTE se usará en dest
     const r = resumenComparacionesTarifa([{ fila: 1, comparacion: compararTarifa({ nombre: "B", monto: 1500, moneda: "GTQ" }, dest) }, { fila: 2, comparacion: compararTarifa({ nombre: "B", monto: 1, moneda: "GTQ" }, dest) }, { fila: 3, comparacion: compararTarifa(null, null) }]);
     expect(r).toEqual({ conAviso: 1, filas: [2] });
   });
+
+  it("cuenta TODOS los tipos de aviso de la copia fiel (tarifa histórica, recurso no disponible, dato incompleto, solape del lote) y ninguno bloquea", () => {
+    const mk = (fila: number, tipo: "solape_lote" | "tarifa_historica" | "recurso_no_disponible" | "dato_incompleto") =>
+      ok(fila, { avisos: [{ tipo, recurso: { tipo: "x", id: String(fila) }, mensaje: "m" }] });
+    const d = diagnosticarBloqueos([mk(1, "solape_lote"), mk(2, "tarifa_historica"), mk(3, "recurso_no_disponible"), mk(4, "dato_incompleto"), mk(5, "dato_incompleto")]);
+    expect(d).toMatchObject({ total: 5, bloqueadas: 0, conAvisos: 5, avisosPorTipo: { solape_lote: 1, tarifa_historica: 1, recurso_no_disponible: 1, dato_incompleto: 2, ventana_incompleta: 0, destino_ocupado: 0 } });
+  });
 });

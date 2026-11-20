@@ -1,4 +1,4 @@
-import type { ResultadoFilaLote, TarifaResuelta } from "@/lib/tms/programacion-lote";
+import type { ResultadoFilaLote, TarifaResuelta, TipoAvisoLote } from "@/lib/tms/programacion-lote";
 
 /**
  * Diagnóstico SEGURO de «Copiar programación»: puro (sin base de datos), solo cuenta motivos y números de fila.
@@ -17,10 +17,14 @@ export const ETIQUETA_MOTIVO: Record<MotivoBloqueo, string> = {
   otro: "Otros motivos",
 };
 
-export type TipoAviso = "ventana_incompleta" | "destino_ocupado";
+export type TipoAviso = TipoAvisoLote;
 export const ETIQUETA_AVISO: Record<TipoAviso, string> = {
   ventana_incompleta: "Comparten recursos con filas sin hora o regreso válido (reservan todo el día, igual que en el origen)",
   destino_ocupado: "El recurso ya tiene otro viaje en la fecha destino",
+  solape_lote: "Comparten recursos con horarios que se cruzan (igual que en el origen)",
+  tarifa_historica: "Tarifa del origen ya no vigente: se conserva tal como estaba",
+  recurso_no_disponible: "Recurso inactivo, en taller, fuera de servicio o con viaje en curso (se copia igual que el origen)",
+  dato_incompleto: "El origen no tiene el dato: la copia queda sin él",
 };
 
 export type OrigenDeBloqueo = { fila: number; falta: "hora" | "regreso" | "hora_y_regreso"; afecta: number };
@@ -58,7 +62,7 @@ export function motivosDeFila(r: Pick<ResultadoFilaLote, "errores" | "conflictos
 
 export function diagnosticarBloqueos(resultados: readonly (ResultadoFilaLote | null | undefined)[]): DiagnosticoBloqueos {
   const porMotivo = Object.fromEntries(MOTIVOS_BLOQUEO.map((m) => [m, 0])) as Record<MotivoBloqueo, number>;
-  const avisosPorTipo: Record<TipoAviso, number> = { ventana_incompleta: 0, destino_ocupado: 0 };
+  const avisosPorTipo: Record<TipoAviso, number> = { ventana_incompleta: 0, destino_ocupado: 0, solape_lote: 0, tarifa_historica: 0, recurso_no_disponible: 0, dato_incompleto: 0 };
   let bloqueadas = 0;
   let conAvisos = 0;
   const origenes: OrigenDeBloqueo[] = [];

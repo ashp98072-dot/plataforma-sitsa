@@ -5,6 +5,7 @@ import { ErrorPlazoOperacion, plazoRestanteMs } from "@/lib/db-plazo";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 import type { ResultSetHeader, RowDataPacket } from "mysql2";
+import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { hoyLocal } from "@/lib/rrhh/dates";
@@ -19,6 +20,7 @@ import { guardarParadasPlan, type ParadaInput } from "@/lib/tms/paradas";
 import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
 import { resolverTcInterno } from "@/lib/tms/tc-plan";
+import { obtenerVehiculoAccesible } from "@/lib/flota/acceso";
 import type { RecursoDia } from "@/lib/tms/disponibilidad-programacion-dia";
 import {
   mensajeConflictoProgramacionIntervalo,
@@ -48,9 +50,18 @@ import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
  * filas insertándose dentro de la MISMA transacción, y cada una debe ver los códigos que las anteriores ya
  * insertaron sin confirmar. No refactoriza el POST manual ni el importador (decisión de alcance del PR A).
  *
- * Nunca se copia historia operativa: los planes nuevos nacen 'Programado', con snapshots NUEVOS de ruta y
- * tarifa; la tarifa solo puede ser una tarifa VIGENTE del catálogo de la ruta (sin monto libre). Una ruta sin tarifa vigente
- * NO bloquea la copia: el viaje nace SIN tarifa (se puede asignar después, p. ej. desde Edición rápida).
+ * COPIA FIEL (decisión del propietario; SOLO este flujo — la programación ordinaria conserva todas sus reglas):
+ *  - Nunca se copia historia operativa: estado (siempre 'Programado'), código, cierres, evidencias, kilometraje, cobros, facturas, pagos
+ *    ni movimientos financieros; viáticos se recalculan por la configuración vigente; notas y referencia del cliente NO se copian.
+ *  - Se copian los datos operativos y económicos del plan origen: ruta (re-resuelta), tarifa (vigente tal cual; histórica con su
+ *    fotografía id/nombre/monto/moneda leída del plan origen en el servidor; sin tarifa = sin tarifa), costo operativo de referencia,
+ *    costo tercerizado y datos externos, vehículo solicitado (sin dato o inexistente = sin él).
+ *  - No bloquean, solo AVISAN (y exigen aceptación verificada en el servidor): ventana incompleta, solape entre filas del lote, recurso ocupado en
+ *    el destino, personal inactivo / unidad o TC fuera de servicio o en taller / viaje en curso, ruta o vehículo solicitado inactivo,
+ *    tarifa histórica y datos faltantes del origen.
+ *  - Siguen bloqueando: recursos o ruta/cliente inexistentes, TC como unidad, identidad de unidad TMS, repetir una persona en el mismo
+ *    viaje, convertir un tercerizado en propio (o viceversa), límites de longitud, hora inválida, copia ya existente, permisos y empresa.
+ *  - No copiables EXACTAMENTE: el personal inactivo reutiliza su registro de personal existente; si no existe, el lote se rechaza.
  */
 export const MAX_FILAS_LOTE = 200;
 export const MAX_AUXILIARES = 8;
@@ -120,6 +131,8 @@ type Resuelto = {
   auxiliaresNombres: string[];
   /** Perfil de vehículo solicitado heredado del origen y re-validado contra el catálogo ACTIVO de la empresa (id + nombre vigente para la fotografía). */
   vehiculo: { id: number; nombre: string } | null;
+  /** Costo operativo de referencia del origen (dato económico informativo; no es cobro ni movimiento). */
+  costoReferencia: number | null;
 };
 
 export type ResultadoFilaLote = {
@@ -150,8 +163,14 @@ export type ConflictoLote = { recurso: "persona" | "unidad" | "tc"; filas: numbe
  * Aviso con datos ESTRUCTURADOS: lo que define materialmente el conflicto es `tipo`, `recurso` (qué recurso afecta), `ocupadoPor` (viaje existente que lo ocupa,
  * solo en `destino_ocupado`) y `filas` (filas relacionadas del lote, solo en `ventana_incompleta`). `mensaje` es solo presentación y NO se usa para decidir ni para aceptar.
  */
+export type TipoAvisoLote =
+  | "ventana_incompleta" | "destino_ocupado"
+  | "solape_lote"            // dos filas del lote con ventanas conocidas que se cruzan (el origen ya lo tenía así)
+  | "tarifa_historica"       // la tarifa del origen ya no es vigente: se copia su fotografía (id, nombre, monto, moneda)
+  | "recurso_no_disponible"  // personal inactivo, unidad/TC fuera de servicio o en taller, ruta/vehículo solicitado inactivo, viaje en curso
+  | "dato_incompleto";       // el origen no tiene el dato: se copia sin él (nunca se inventa)
 export type AvisoLote = {
-  tipo: "ventana_incompleta" | "destino_ocupado";
+  tipo: TipoAvisoLote;
   recurso: { tipo: string; id: string };
   filas?: number[];
   ocupadoPor?: { planId: number };
@@ -230,7 +249,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
   const origenIds = borradores.map((b) => b.origenPlanId).filter((n): n is number => n != null);
   const perfilIds = [...new Set(borradores.map((b) => b.vehiculoSolicitadoPerfilId).filter((n): n is number => n != null && n > 0))];
 
-  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias, perfilesRows] = await Promise.all([
+  const [rutasRows, clientesRows, empleadosRows, personalRows, unidadesRows, disp, tarifas, copias, perfilesRows, origenRows] = await Promise.all([
     rutaIds.length
       ? query<RowDataPacket[]>(
           `SELECT r.id, r.codigo, r.cliente_id, r.activo, r.lugar_carga_texto, r.destino_descripcion,
@@ -254,13 +273,19 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     listarDisponibilidadVehiculos(empresaId),
     tarifasActivasDeVariasRutas(empresaId, rutaIds),
     copiasVigentesDeOrigen(empresaId, fechaDestino, origenIds),
-    // Perfiles de vehículo solicitado ACTIVOS de ESTA empresa entre los heredados (un id de otra empresa o inactivo simplemente no aparece).
+    // Perfiles de vehículo solicitado de ESTA empresa entre los heredados (un id de otra empresa simplemente no aparece; uno inactivo se copia con aviso).
     perfilIds.length
-      ? query<RowDataPacket[]>(`SELECT id, nombre FROM tms_cotizacion_costeo_perfiles WHERE empresa_id = ? AND activo = 1 AND id IN ${ids(perfilIds)}`, [empresaId, ...perfilIds])
+      ? query<RowDataPacket[]>(`SELECT id, nombre, activo FROM tms_cotizacion_costeo_perfiles WHERE empresa_id = ? AND id IN ${ids(perfilIds)}`, [empresaId, ...perfilIds])
+      : Promise.resolve([] as RowDataPacket[]),
+    // Fotografía económica del PLAN ORIGEN (siempre del servidor y de ESTA empresa; jamás del cliente): tarifa histórica y costo operativo de referencia.
+    origenIds.length
+      ? query<RowDataPacket[]>(`SELECT id, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_comercial, tarifa_moneda_historico, costo_operativo_referencia
+                                FROM tms_planes_viaje WHERE empresa_id = ? AND id IN ${ids(origenIds)}`, [empresaId, ...origenIds])
       : Promise.resolve([] as RowDataPacket[]),
   ]);
 
-  const perfilesActivos = new Map(perfilesRows.map((r) => [Number(r.id), String(r.nombre)]));
+  const perfilesCatalogo = new Map(perfilesRows.map((r) => [Number(r.id), { nombre: String(r.nombre), activo: Number(r.activo ?? 1) === 1 }]));
+  const origenes = new Map(origenRows.map((r) => [Number(r.id), r]));
   const rutas = new Map(rutasRows.map((r) => [Number(r.id), r]));
   const clientesOk = new Set(clientesRows.map((r) => Number(r.id)));
   const empleados = new Map(empleadosRows.map((r) => [Number(r.id), r]));
@@ -282,25 +307,45 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     const errores: string[] = [];
     const recursos: RecursoDia[] = [];
     const res: Resuelto = { clienteId: null, rutaId: null, rutaCodigo: null, destino: null, lugarCarga: null, contacto: { nombre: null, cargo: null, telefono: null },
-      tarifa: null, unidad: null, tc: null, pilotoNombre: null, auxiliaresNombres: [], vehiculo: null };
+      tarifa: null, unidad: null, tc: null, pilotoNombre: null, auxiliaresNombres: [], vehiculo: null, costoReferencia: null };
+    const avisos: AvisoLote[] = [];
+    const avisar = (tipo: TipoAvisoLote, recurso: { tipo: string; id: string }, mensaje: string) => avisos.push({ tipo, recurso, mensaje: `${mensaje} Se copia igual que el origen.` });
+    const origenPlan = b.origenPlanId != null ? origenes.get(b.origenPlanId) : undefined;
+    if (origenPlan?.costo_operativo_referencia != null) res.costoReferencia = Number(origenPlan.costo_operativo_referencia);
 
     if (b.horaCarga && !HORA_RE.test(b.horaCarga)) errores.push(`Hora inválida: "${b.horaCarga}" (HH:mm).`);
 
-    // --- vehículo solicitado (OBLIGATORIO; heredado del origen; nunca inferido) ---
+    // --- vehículo solicitado (heredado del origen; nunca inferido). Copia fiel: sin dato o con perfil inexistente se copia SIN él (aviso); inactivo se copia con aviso. ---
     if (b.vehiculoSolicitadoPerfilId == null) {
-      errores.push("El viaje origen no tiene vehículo solicitado: complétalo en Programación (editar el viaje) antes de copiarlo.");
-    } else if (!perfilesActivos.has(b.vehiculoSolicitadoPerfilId)) {
-      errores.push("El vehículo solicitado del viaje origen ya no existe en el catálogo de esta empresa o está inactivo: actualízalo en Programación antes de copiarlo.");
+      avisar("dato_incompleto", { tipo: "dato", id: "vehiculo_solicitado" }, "El viaje origen no tiene vehículo solicitado: la copia queda sin él.");
     } else {
-      res.vehiculo = { id: b.vehiculoSolicitadoPerfilId, nombre: perfilesActivos.get(b.vehiculoSolicitadoPerfilId) as string };
+      const perfil = perfilesCatalogo.get(b.vehiculoSolicitadoPerfilId);
+      if (!perfil) avisar("dato_incompleto", { tipo: "dato", id: "vehiculo_solicitado" }, "El vehículo solicitado del viaje origen ya no existe en el catálogo de esta empresa: la copia queda sin él.");
+      else {
+        res.vehiculo = { id: b.vehiculoSolicitadoPerfilId, nombre: perfil.nombre };
+        if (!perfil.activo) avisar("recurso_no_disponible", { tipo: "vehiculo_solicitado", id: String(b.vehiculoSolicitadoPerfilId) }, `El vehículo solicitado "${perfil.nombre}" está inactivo en el catálogo.`);
+      }
     }
 
-    // --- ruta / cliente / tarifa (siempre re-resueltos: nunca se copia el snapshot del viaje origen) ---
+    // --- ruta / cliente / tarifa (la ruta se re-resuelve; la TARIFA se copia fiel: vigente tal cual, histórica con su fotografía, ausente = sin tarifa) ---
+    // Una tarifa solo puede venir de (a) el catálogo VIGENTE de la ruta o (b) la fotografía del propio plan origen cuando su `tarifa_id` coincide con la pedida:
+    // el cliente no puede inyectar montos. Si no hay tarifa en el origen, la copia nace sin tarifa (no se asigna la predeterminada).
+    const tarifaHistorica = (): TarifaResuelta | null => {
+      if (b.tarifaId == null || !origenPlan || Number(origenPlan.tarifa_id) !== b.tarifaId) return null;
+      const monto = origenPlan.tarifa_monto_historico ?? origenPlan.tarifa_comercial;
+      if (monto == null) return null;
+      return { id: b.tarifaId, nombre: String(origenPlan.tarifa_nombre_historico ?? ""), monto: Number(monto), moneda: String(origenPlan.tarifa_moneda_historico ?? "") };
+    };
+    const aplicarTarifaFaltante = () => {
+      const h = tarifaHistorica();
+      if (h) { res.tarifa = h; avisar("tarifa_historica", { tipo: "tarifa", id: String(h.id) }, `La tarifa del viaje origen${h.nombre ? ` "${h.nombre}"` : ""} ya no es una tarifa vigente de esta ruta: se conserva tal como estaba.`); }
+      else errores.push("La tarifa seleccionada no es una tarifa vigente de esta ruta.");
+    };
     if (b.rutaId != null) {
       const ruta = rutas.get(b.rutaId);
       if (!ruta) errores.push("La ruta del viaje no existe en esta empresa.");
-      else if (Number(ruta.activo ?? 0) !== 1) errores.push(`La ruta "${String(ruta.codigo)}" está inactiva.`);
       else {
+        if (Number(ruta.activo ?? 0) !== 1) avisar("recurso_no_disponible", { tipo: "ruta", id: String(ruta.id) }, `La ruta "${String(ruta.codigo)}" está inactiva.`);
         res.rutaId = Number(ruta.id);
         res.rutaCodigo = String(ruta.codigo);
         res.clienteId = Number(ruta.cliente_id);
@@ -311,22 +356,14 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
           cargo: ruta.contacto_cargo != null ? String(ruta.contacto_cargo) : null,
           telefono: ruta.contacto_telefono != null ? String(ruta.contacto_telefono) : null,
         };
-        const opciones = tarifas.get(res.rutaId)?.tarifas ?? [];
-        if (!opciones.length) {
-          // La tarifa NO es requisito para copiar: una ruta sin tarifa vigente crea el viaje SIN tarifa (tarifa_id, snapshots y
-          // tarifa_comercial en NULL; no se inventa ninguna). Solo si el usuario ELIGIÓ una tarifa concreta y la ruta no la
-          // tiene vigente se rechaza (una elección explícita inválida nunca se ignora en silencio).
-          if (b.tarifaId != null) errores.push("La tarifa seleccionada no es una tarifa vigente de esta ruta.");
-        } else {
-          const elegida = b.tarifaId != null
-            ? opciones.find((t) => t.id === b.tarifaId)
-            : opciones.find((t) => t.predeterminada) ?? opciones[0];
-          if (!elegida) errores.push("La tarifa seleccionada no es una tarifa vigente de esta ruta.");
-          else res.tarifa = { id: elegida.id, nombre: elegida.nombre, monto: elegida.monto, moneda: elegida.moneda };
+        if (b.tarifaId != null) {
+          const elegida = (tarifas.get(res.rutaId)?.tarifas ?? []).find((t) => t.id === b.tarifaId);
+          if (elegida) res.tarifa = { id: elegida.id, nombre: elegida.nombre, monto: elegida.monto, moneda: elegida.moneda };
+          else aplicarTarifaFaltante();
         }
       }
     } else {
-      if (b.tarifaId != null) errores.push("Un viaje sin ruta no tiene tarifa de catálogo.");
+      if (b.tarifaId != null) aplicarTarifaFaltante();
       if (b.clienteId != null) {
         if (clientesOk.has(b.clienteId)) res.clienteId = b.clienteId;
         else errores.push("El cliente del viaje no existe en esta empresa.");
@@ -339,7 +376,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       if (b.unidadPlaca || b.tcVehiculoId != null || b.pilotoEmpleadoId != null || b.pilotoExtraEmpleadoId != null || b.auxiliarEmpleadoIds.length) {
         errores.push("Un viaje tercerizado no usa recursos internos (unidad, TC, piloto, piloto extra ni auxiliares).");
       }
-      if (!x || !x.pilotoExternoNombre.trim()) errores.push("Un viaje tercerizado requiere el nombre del piloto externo.");
+      if (!x || !x.pilotoExternoNombre.trim()) avisar("dato_incompleto", { tipo: "dato", id: "piloto_externo" }, "El viaje tercerizado del origen no tiene nombre del piloto externo: la copia queda sin él.");
       if (x) {
         if (x.pilotoExternoNombre.length > 160 || x.unidadExternaDescripcion.length > 160 || x.transportistaExterno.length > 160) errores.push("Algún dato externo supera 160 caracteres.");
         if (x.unidadExternaPlaca.length > 40 || x.tcExternoPlaca.length > 40) errores.push("La placa externa (unidad o TC) supera 40 caracteres.");
@@ -357,17 +394,18 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       for (const id of todos) {
         const e = empleados.get(id);
         if (!e) errores.push(`El ${rolDe(id)} seleccionado no existe en esta empresa.`);
-        else if (String(e.estado ?? "").toLowerCase() !== "activo") errores.push(`${String(e.nombre)} está inactivo y no puede asignarse.`);
-        else if (id === extraId && !(String(e.categoria_ops ?? "") === "Piloto" || String(e.puesto ?? "").toLowerCase().includes("piloto") || String(e.categoria_ops ?? "").toLowerCase().includes("piloto"))) {
-          errores.push(`${String(e.nombre)} no tiene puesto de piloto y no puede ser piloto extra.`);
-        } else {
+        else {
+          if (String(e.estado ?? "").toLowerCase() !== "activo") avisar("recurso_no_disponible", { tipo: "persona", id: String(id) }, `${String(e.nombre)} está inactivo.`);
+          if (id === extraId && !(String(e.categoria_ops ?? "") === "Piloto" || String(e.puesto ?? "").toLowerCase().includes("piloto") || String(e.categoria_ops ?? "").toLowerCase().includes("piloto"))) {
+            avisar("recurso_no_disponible", { tipo: "persona", id: String(id) }, `${String(e.nombre)} no tiene puesto de piloto.`);
+          }
           if (id === b.pilotoEmpleadoId) res.pilotoNombre = String(e.nombre);
           else if (id !== extraId) res.auxiliaresNombres.push(String(e.nombre));
           const pid = personalPorEmpleado.get(id);
           // El piloto extra consume disponibilidad EXACTAMENTE igual que el principal (rol piloto, mismo motor por intervalos).
           if (pid != null) recursos.push({ tipo: id === b.pilotoEmpleadoId || id === extraId ? "piloto" : "auxiliar", id: pid });
           const ocupado = pid != null ? enCurso.get(pid) : undefined;
-          if (ocupado !== undefined) errores.push(id === b.pilotoEmpleadoId || id === extraId ? `El ${rolDe(id)} seleccionado tiene un viaje en curso.` : `El auxiliar ${ocupado} tiene un viaje en curso.`);
+          if (ocupado !== undefined) avisar("recurso_no_disponible", { tipo: "persona", id: String(id) }, id === b.pilotoEmpleadoId || id === extraId ? `El ${rolDe(id)} seleccionado tiene un viaje en curso.` : `El auxiliar ${ocupado} tiene un viaje en curso.`);
         }
       }
       // --- unidad (misma regla que el POST manual: existe, no es TC, disponible) ---
@@ -376,8 +414,8 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
         const v = vehiculos.get(placa);
         if (!v) errores.push(`La unidad con placa "${placa}" no existe en el sistema.`);
         else if (v.tipoUnidad === "TC") errores.push(`La placa ${placa} está clasificada como TC: asígnala en el campo TC, no como Unidad.`);
-        else if (!v.puedeEnviar) errores.push(`La unidad ${placa} no está disponible: ${v.motivoNoDisponible ?? v.estadoDisponibilidad}.`);
         else {
+          if (!v.puedeEnviar) avisar("recurso_no_disponible", { tipo: "unidad", id: placa }, `La unidad ${placa} no está disponible: ${v.motivoNoDisponible ?? v.estadoDisponibilidad}.`);
           res.unidad = { placa: v.placa, flotaVehiculoId: v.id };
           const uid = unidadIdPorPlaca.get(placa);
           if (uid != null) recursos.push({ tipo: "unidad", id: uid });
@@ -385,7 +423,12 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       }
       // --- TC interno (misma resolución que Programación manual: acceso, tipo TC, activo, fuera de taller) ---
       if (b.tcVehiculoId != null) {
-        const tc = await resolverTcInterno(empresaId, b.tcVehiculoId);
+        let tc = await resolverTcInterno(empresaId, b.tcVehiculoId);
+        if (!tc.ok && tc.status === 409) {
+          // TC inactivo o en taller (existe y es accesible): se copia igual que el origen, con aviso.
+          const v = await obtenerVehiculoAccesible(empresaId, b.tcVehiculoId, "v.id, v.placa");
+          if (v) { avisar("recurso_no_disponible", { tipo: "tc", id: String(v.id) }, tc.error); tc = { ok: true, vehiculoId: Number(v.id), placa: String(v.placa ?? "").toUpperCase() }; }
+        }
         if (!tc.ok) errores.push(tc.error);
         else if (res.unidad && norm(res.unidad.placa) === norm(tc.placa)) errores.push(`El TC ${tc.placa} no puede ser la misma placa que la unidad del viaje.`);
         else {
@@ -401,7 +444,6 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     // --- disponibilidad diaria contra viajes ya existentes (solo si no hay errores previos de resolución) ---
     // COPIA FIEL AL ORIGEN: que el recurso ya tenga otro viaje en la fecha destino NO bloquea; se avisa y la fila se crea igual (decisión del propietario).
     // El resto de controles de disponibilidad (unidad/TC fuera de servicio, personal inactivo, viaje en curso…) siguen bloqueando.
-    const avisos: AvisoLote[] = [];
     if (!errores.length && recursos.length) {
       const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDeBorrador(b, fechaDestino), []);
       if (conflicto) avisos.push({ tipo: "destino_ocupado", recurso: { tipo: conflicto.tipo, id: String(conflicto.id) }, ocupadoPor: { planId: conflicto.planIdConflicto }, mensaje: `${mensajeConflictoProgramacionIntervalo(conflicto)} Se copia igual que el origen.` });
@@ -486,13 +528,27 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
         // COPIA FIEL: sin hora/regreso válido el recurso «reserva todo el día», pero esos viajes ya conviven así en el origen. Se AVISA y no se bloquea.
         f.avisos = [...(f.avisos ?? []), { tipo: "ventana_incompleta", recurso: { tipo: recurso, id: clave.slice(clave.indexOf(":") + 1) }, filas: otras, mensaje: `${quien} también en la fila ${otras.join(", ")} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}). Se copia igual que el origen.` }];
       } else {
-        // Solape REAL (ambas ventanas conocidas y cruzadas): sigue bloqueando.
-        f.errores.push(`${quien} también en la fila ${otras.join(", ")} de este mismo lote. Los horarios se solapan.`);
-        f.resuelto = null;
+        // Solape con ventanas conocidas: el origen ya lo tenía así (datos históricos). Copia fiel: se AVISA, no se bloquea.
+        f.avisos = [...(f.avisos ?? []), { tipo: "solape_lote", recurso: { tipo: recurso, id: clave.slice(clave.indexOf(":") + 1) }, filas: otras, mensaje: `${quien} también en la fila ${otras.join(", ")} de este mismo lote. Los horarios se solapan. Se copia igual que el origen.` }];
       }
     }
   }
   return internas;
+}
+
+/**
+ * Personal para la copia: lo normal es `personalDesdeEmpleado` (empleado ACTIVO; crea/sincroniza su registro de personal). Si el empleado del origen ya está INACTIVO
+ * la copia fiel conserva su asignación usando el registro de personal que YA existe (solo lectura, misma empresa): no se crea ni se modifica personal.
+ */
+async function personalOCopiaFiel(empresaId: number, empleadoId: number, tipo: "Piloto" | "Auxiliar", conn: PoolConnection): Promise<number | null> {
+  const activo = await personalDesdeEmpleado(empresaId, empleadoId, tipo, conn);
+  if (activo) return activo;
+  const [rows] = await conn.execute<RowDataPacket[]>(
+    `SELECT p.id FROM tms_personal p JOIN empleados e ON e.id = p.id_empleado AND e.empresa_id = p.empresa_id
+     WHERE p.empresa_id = ? AND p.id_empleado = ? ORDER BY (p.tipo = ?) DESC, p.id LIMIT 1`,
+    [empresaId, empleadoId, tipo],
+  );
+  return rows[0] ? Number(rows[0].id) : null;
 }
 
 const aResultado = (f: FilaInterna, fechaDiagnostico: string): ResultadoFilaLote => ({
@@ -615,15 +671,15 @@ export async function confirmarLote(
             unidadId = await resolverUnidadTmsTx(conn,empresaId,r.unidad.placa,r.unidad.flotaVehiculoId);
           }
           if (b.pilotoEmpleadoId != null) {
-            pilotoId = await personalDesdeEmpleado(empresaId, b.pilotoEmpleadoId, "Piloto", conn);
+            pilotoId = await personalOCopiaFiel(empresaId, b.pilotoEmpleadoId, "Piloto", conn);
             if (!pilotoId) throw new Error(`Fila ${b.fila}: no se pudo resolver el piloto.`);
           }
           if (b.pilotoExtraEmpleadoId != null) {
-            pilotoExtraId = await personalDesdeEmpleado(empresaId, b.pilotoExtraEmpleadoId, "Piloto", conn);
+            pilotoExtraId = await personalOCopiaFiel(empresaId, b.pilotoExtraEmpleadoId, "Piloto", conn);
             if (!pilotoExtraId) throw new Error(`Fila ${b.fila}: no se pudo resolver el piloto extra.`);
           }
           for (const eid of b.auxiliarEmpleadoIds) {
-            const pid = await personalDesdeEmpleado(empresaId, eid, "Auxiliar", conn);
+            const pid = await personalOCopiaFiel(empresaId, eid, "Auxiliar", conn);
             if (!pid) throw new Error(`Fila ${b.fila}: no se pudo resolver un auxiliar.`);
             auxIds.push(pid);
           }
@@ -658,22 +714,22 @@ export async function confirmarLote(
                 const [ins] = await conn.execute<ResultSetHeader>(
                   `INSERT INTO tms_planes_viaje
                     (empresa_id, codigo, cliente_id, lugar_carga_id, lugar_descarga_id, unidad_id, piloto_id, auxiliar_id, fecha_plan, hora_carga, tipo_traslado, regreso_estimado, tarifa_comercial, tarifa_id, tarifa_nombre_historico, tarifa_monto_historico, tarifa_moneda_historico, costo_operativo_referencia, referencia_cliente, ruta_id, ruta_codigo_historico, lugar_descarga_historico, contacto_nombre_historico, contacto_cargo_historico, contacto_telefono_historico, notas, estado, tipo_viaje, piloto_externo_nombre, auxiliares_externos, unidad_externa_placa, unidad_externa_descripcion, transportista_externo, costo_tercerizado, tc_vehiculo_id, tc_placa_historica, tc_externo_placa, vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, 'Programado', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                   [
                     empresaId, codigoIntento, r.clienteId, lugarCargaId, lugarDescargaId, unidadId, pilotoId, auxIds[0] ?? null, fechaDestino,
                     b.horaCarga, b.tipoTraslado, regresoPersistidoDeBorrador(b, fechaDestino)?.replace("T", " ") ?? null,
-                    r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre ?? null, r.tarifa?.monto ?? null, r.tarifa?.moneda ?? null,
+                    r.tarifa?.monto ?? null, r.tarifa?.id ?? null, r.tarifa?.nombre || null, r.tarifa?.monto ?? null, r.tarifa?.moneda || null, r.costoReferencia,
                     r.rutaId, r.rutaCodigo, r.destino, r.contacto.nombre, r.contacto.cargo, r.contacto.telefono,
                     b.tipoViaje,
-                    esTerc ? x!.pilotoExternoNombre.trim() : null,
-                    esTerc ? (x!.auxiliaresExternos.map((n) => n.trim()).filter(Boolean).slice(0, MAX_AUXILIARES).join("\n") || null) : null,
-                    esTerc ? (norm(x!.unidadExternaPlaca) || null) : null,
-                    esTerc ? (x!.unidadExternaDescripcion.trim() || null) : null,
-                    esTerc ? (x!.transportistaExterno.trim() || null) : null,
-                    esTerc ? x!.costoTercerizado : null,
+                    esTerc ? (x?.pilotoExternoNombre.trim() || null) : null,
+                    esTerc ? (x?.auxiliaresExternos.map((n) => n.trim()).filter(Boolean).slice(0, MAX_AUXILIARES).join("\n") || null) : null,
+                    esTerc ? (norm(x?.unidadExternaPlaca ?? "") || null) : null,
+                    esTerc ? (x?.unidadExternaDescripcion.trim() || null) : null,
+                    esTerc ? (x?.transportistaExterno.trim() || null) : null,
+                    esTerc ? (x?.costoTercerizado ?? null) : null,
                     r.tc?.vehiculoId ?? null, r.tc?.placa ?? null,
-                    esTerc ? (norm(x!.tcExternoPlaca) || null) : null,
-                    r.vehiculo!.id, r.vehiculo!.nombre, // obligatorio: validado arriba (resolverYValidar) bajo el mismo candado
+                    esTerc ? (norm(x?.tcExternoPlaca ?? "") || null) : null,
+                    r.vehiculo?.id ?? null, r.vehiculo?.nombre ?? null, // heredado del origen; null si el origen no lo tenía (aviso `dato_incompleto`)
                   ],
                 );
               return Number(ins.insertId);
