@@ -35,8 +35,8 @@ try {
   const [version, net, socket, dir] = ready.stdout.trim().split('\t');
   if (!version.startsWith('11.8.9-MariaDB') || net !== '1' || socket !== pipe || path.resolve(dir).toLowerCase() !== data.toLowerCase()) throw Error('Identidad incorrecta');
   verified = true;
-  if (sql('CREATE DATABASE canecas_fifo_test; CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test; CREATE DATABASE canecas_schema_test; CREATE DATABASE canecas_recovery_test;').status !== 0) throw Error('No se crearon bases desechables');
-  const test = cp.spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.mts', 'src/lib/canecas/recuperacion.db.test.ts', 'src/lib/canecas/costos-fifo.db.test.ts', 'src/lib/canecas/confirmar.db.test.ts', 'src/lib/canecas/flujo.db.test.ts', 'src/lib/canecas/schema.db.test.ts', '--maxWorkers=1'], { cwd: repo, env: { ...env, CANECAS_FIFO_TEST_PIPE: pipe, CANECAS_TEST_PIPE: pipe }, encoding: 'utf8', windowsHide: true, timeout: 180000 });
+  if (sql("CREATE DATABASE canecas_fifo_test; CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test; CREATE DATABASE canecas_schema_test; CREATE DATABASE canecas_recovery_test; CREATE DATABASE canecas_cli_test; CREATE USER 'fifo_lab'@'localhost' IDENTIFIED BY 'fifo-lab-only'; GRANT ALL PRIVILEGES ON canecas_cli_test.* TO 'fifo_lab'@'localhost';").status !== 0) throw Error('No se crearon bases desechables');
+  const test = cp.spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.mts', 'src/lib/canecas/cli-costos.db.test.ts', 'src/lib/canecas/recuperacion.db.test.ts', 'src/lib/canecas/costos-fifo.db.test.ts', 'src/lib/canecas/confirmar.db.test.ts', 'src/lib/canecas/flujo.db.test.ts', 'src/lib/canecas/schema.db.test.ts', '--maxWorkers=1'], { cwd: repo, env: { ...env, CANECAS_FIFO_TEST_PIPE: pipe, CANECAS_TEST_PIPE: pipe }, encoding: 'utf8', windowsHide: true, timeout: 180000 });
   console.log(test.stdout, test.stderr);
   process.exitCode = test.status === 0 ? 0 : 1;
 } finally {

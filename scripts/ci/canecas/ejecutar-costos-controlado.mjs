@@ -39,14 +39,16 @@ export async function ejecutarCostosControlado(connection) {
 
 // Esta entrada requiere variables explícitas; no lee .env ni imprime credenciales.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.slice(2).join(' ') !== '--ejecutar' || !process.env.CANECAS_SQL_HOST || !process.env.CANECAS_SQL_DATABASE || !process.env.CANECAS_SQL_USER || !process.env.CANECAS_SQL_PASSWORD) {
-    console.error('DETENER: indicar --ejecutar y CANECAS_SQL_HOST, CANECAS_SQL_DATABASE, CANECAS_SQL_USER y CANECAS_SQL_PASSWORD.');
+  const { CANECAS_SQL_HOST: host, CANECAS_SQL_PIPE: pipe, CANECAS_SQL_CA: ca, CANECAS_SQL_DATABASE: database, CANECAS_SQL_USER: user, CANECAS_SQL_PASSWORD: password } = process.env;
+  if (process.argv.slice(2).join(' ') !== '--ejecutar' || !database || !user || !password || Boolean(host) === Boolean(pipe) || (host && !ca) || (pipe && !/^fifo-[0-9a-f-]{36}$/.test(pipe))) {
+    console.error('DETENER: configurar base, usuario y contraseña; usar host con CA TLS o pipe de laboratorio verificado.');
     process.exitCode = 1;
   } else {
     const mysql = await import('mysql2/promise');
     let connection;
     try {
-      connection = await mysql.createConnection({ host: process.env.CANECAS_SQL_HOST, database: process.env.CANECAS_SQL_DATABASE, user: process.env.CANECAS_SQL_USER, password: process.env.CANECAS_SQL_PASSWORD, multipleStatements: true });
+      const transport = pipe ? { socketPath: `\\\\.\\pipe\\${pipe}` } : { host, ssl: { ca: readFileSync(ca), rejectUnauthorized: true } };
+      connection = await mysql.createConnection({ ...transport, database, user, password, multipleStatements: true });
       const result = await ejecutarCostosControlado(connection);
       console.log('Preflight, migración y postcheck completos.', JSON.stringify(result));
     } catch (error) {
