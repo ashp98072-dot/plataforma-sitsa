@@ -14,6 +14,9 @@ export function diagnosticoCB2() {
   const sha = process.env.NOVALVION_DEPLOY_SHA ?? "";
   return {
     revisionFuncional: "cb2-identidades-independientes-v2",
+    // Marcador funcional de la interfaz Shell por vale (#641/#642: piloto desde el vale, unidad interna/externa, regla única). Un merge NO implica despliegue:
+    // si este campo no aparece en el endpoint de producción, el build desplegado no incluye ese código. Cambia solo cuando cambia ese flujo.
+    revisionShell: "cb2-shell-vales-unidades-v1",
     buildId,
     shaDeclarado: /^[0-9a-f]{40}$/i.test(sha) ? sha : null,
     tercerosDirectos: tercerosDirectosHabilitados(),
