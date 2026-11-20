@@ -159,3 +159,23 @@ export function puedeConfirmarConTarifas(filas: FilaEditable[], ocupado: boolean
   const clave = claveAvisoTarifas(comparacionesDeTarifa(filas));
   return clave === "" || clave === aceptada;
 }
+
+// ---------------------------------------------------------------- Avisos que NO bloquean (copia fiel al origen)
+
+/** Filas incluidas y validadas OK que se copiarán igual pero con avisos (recurso compartido sin hora/regreso, destino ya ocupado). */
+export function filasConAvisos(filas: FilaEditable[]) {
+  return filasIncluidas(filas)
+    .filter((f) => !f.sucia && f.validacion?.estado === "ok" && (f.validacion.avisos?.length ?? 0) > 0)
+    .map((f) => ({ fila: f.borrador.fila, avisos: f.validacion!.avisos! }));
+}
+
+/**
+ * Igual que `puedeConfirmarConTarifas`, y además exige aceptar expresamente los avisos de la copia (si los hay). La aceptación es la HUELLA que el servidor
+ * calculó sobre los avisos estructurados de la última validación (`huellaAvisos`): si la validación cambia los avisos (otro recurso, otro viaje, otras filas),
+ * la huella cambia y la aceptación anterior deja de valer. El servidor vuelve a verificarla al confirmar.
+ */
+export function puedeConfirmarCopia(filas: FilaEditable[], ocupado: boolean, tarifasAceptadas: string, avisosAceptados: string, huellaAvisos: string): boolean {
+  if (!puedeConfirmarConTarifas(filas, ocupado, tarifasAceptadas)) return false;
+  if (filasConAvisos(filas).length === 0) return true;
+  return huellaAvisos !== "" && avisosAceptados === huellaAvisos;
+}

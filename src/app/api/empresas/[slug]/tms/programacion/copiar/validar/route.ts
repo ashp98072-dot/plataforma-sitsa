@@ -6,6 +6,7 @@ import { getPool } from "@/lib/db";
 import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
 import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { diagnosticarBloqueos, registrarDiagnosticoBloqueo } from "@/lib/tms/programacion-copia-diagnostico";
+import { huellaAvisosCopia } from "@/lib/tms/programacion-copia-avisos";
 import { borradoresDesdeCliente } from "@/lib/tms/programacion-copia";
 import { cuerpoCopiaSchema } from "@/lib/tms/programacion-copia-schema";
 
@@ -26,7 +27,7 @@ export async function POST(req: Request, ctx: Ctx) {
       const validacion = await validarLote(guard.empresa.id, fechaDestino, b.borradores);
       const diagnostico = diagnosticarBloqueos(validacion);   // solo conteos y números de fila
       registrarDiagnosticoBloqueo(diagnostico);
-      return NextResponse.json({ validacion, diagnostico }, { headers: { "Cache-Control": "private, no-store" } });
+      return NextResponse.json({ validacion, diagnostico, huellaAvisos: huellaAvisosCopia({ empresaId: guard.empresa.id, fechaOrigen, fechaDestino }, validacion.map((v) => ({ fila: v.fila, avisos: v.avisos }))) }, { headers: { "Cache-Control": "private, no-store" } });
     });
   } catch (e) {
     if (e instanceof ErrorVistaPrevia || e instanceof ErrorPlazoOperacion) return NextResponse.json({ error: e.message }, { status: e.status, headers: { "Cache-Control": "private, no-store" } });

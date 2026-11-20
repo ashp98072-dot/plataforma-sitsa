@@ -136,7 +136,8 @@ describe("respuestas", () => {
   it("validar devuelve la validación por fila", async () => {
     expect(await (await post(validar, cuerpo())).json()).toEqual({
       validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }],
-      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { hora_o_regreso_ausente: 0, solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, derivadas: 0, origenes: [] },   // campo aditivo (solo conteos)
+      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, conAvisos: 0, avisosPorTipo: { ventana_incompleta: 0, destino_ocupado: 0, solape_lote: 0, tarifa_historica: 0, recurso_no_disponible: 0, dato_incompleto: 0 }, origenes: [] },   // campo aditivo (solo conteos)
+      huellaAvisos: "",   // sin avisos no hay nada que aceptar
     });
   });
 });
@@ -195,24 +196,24 @@ describe("plazo de TODA la operación (cargar + validar + catálogos) con cancel
   });
 });
 
-describe("diagnóstico seguro de bloqueos en las respuestas (solo conteos y números de fila)", () => {
+describe("diagnóstico seguro de bloqueos y avisos en las respuestas (solo conteos y números de fila)", () => {
   const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
-  const bloqueadas = [
-    { fila: 1, estado: "error", errores: ["Juan Pérez está asignado también en la fila 2 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado)."], tarifa: null,
-      derivada: { origenes: [2] }, conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] },
-    { fila: 2, estado: "error", errores: ["Juan Pérez está asignado también en la fila 1 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado)."], tarifa: null,
+  const conAvisos = [
+    { fila: 1, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [2], mensaje: "Juan Pérez está asignado también en la fila 2 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado). Se copia igual que el origen." }],
+      conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] },
+    { fila: 2, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [1], mensaje: "Juan Pérez está asignado también en la fila 1 de este mismo lote. Se copia igual que el origen." }, { tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 9 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 19/11/2026. Se copia igual que el origen." }],
       diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1], recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] },
   ];
-  it("GET cargar y POST validar devuelven `diagnostico` con el origen del bloqueo, sin nombres ni textos de error, y lo dejan en la bitácora solo como conteos", async () => {
+  it("GET cargar y POST validar devuelven `diagnostico` con avisos y origen, sin nombres ni textos de error, y lo dejan en la bitácora solo como conteos", async () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    vi.mocked(validarLote).mockResolvedValue(bloqueadas as never);
+    vi.mocked(validarLote).mockResolvedValue(conAvisos as never);
     const g = await (await cargar(new Request(url), ctx)).json();
-    expect(g.diagnostico).toMatchObject({ total: 2, bloqueadas: 2, derivadas: 1, origenes: [{ fila: 2, falta: "regreso", afecta: 1 }] });
+    expect(g.diagnostico).toMatchObject({ total: 2, bloqueadas: 0, conAvisos: 2, avisosPorTipo: { ventana_incompleta: 2, destino_ocupado: 1 }, origenes: [{ fila: 2, falta: "regreso", afecta: 1 }] });
     const v = await (await post(validar, cuerpo())).json();
     expect(v.diagnostico).toEqual(g.diagnostico);
-    expect(JSON.stringify(g.diagnostico)).not.toMatch(/Juan|Pérez|asignado/);
+    expect(JSON.stringify(g.diagnostico)).not.toMatch(/Juan|Pérez|asignado|PLAN-9/);
     expect(info).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(info.mock.calls)).not.toMatch(/Juan|Pérez|asignado|acme/i);
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/Juan|Pérez|asignado|acme|PLAN-9/i);
     info.mockRestore();
   });
   it("un lote sin bloqueos no genera ruido en la bitácora", async () => {
@@ -227,5 +228,55 @@ describe("diagnóstico seguro de bloqueos en las respuestas (solo conteos y núm
     const res = await post(confirmar, cuerpo());
     expect(res.status).toBe(409);
     expect(Object.keys(await res.json()).sort()).toEqual(["error", "erroresPorFila"]);
+  });
+});
+
+describe("aceptación de avisos en el servidor: huella en la vista previa y verificación al confirmar", () => {
+  const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
+  const unAviso = [{ fila: 1, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 9 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9. Se copia igual que el origen." }] }];
+  const HEX = /^[0-9a-f]{64}$/;
+
+  it("GET cargar y POST validar entregan la MISMA huella (hex de 64) cuando hay avisos, y \"\" cuando no los hay; no contiene datos del texto", async () => {
+    vi.mocked(validarLote).mockResolvedValue(unAviso as never);
+    const g = await (await cargar(new Request(url), ctx)).json();
+    const v = await (await post(validar, cuerpo({ fechaOrigen: "2026-11-18", fechaDestino: "2026-11-19" }))).json();
+    expect(g.huellaAvisos).toMatch(HEX);
+    expect(v.huellaAvisos).toBe(g.huellaAvisos);
+    expect(g.huellaAvisos).not.toMatch(/Juan|PLAN-9/);
+    vi.mocked(validarLote).mockResolvedValue([{ fila: 1, estado: "ok", errores: [], tarifa: null }] as never);
+    expect((await (await cargar(new Request(url), ctx)).json()).huellaAvisos).toBe("");
+  });
+
+  it("la huella cambia si cambia materialmente el conflicto (otro viaje que ocupa el recurso) aunque el texto sea idéntico", async () => {
+    vi.mocked(validarLote).mockResolvedValue(unAviso as never);
+    const a = (await (await cargar(new Request(url), ctx)).json()).huellaAvisos;
+    const otroViaje = [{ ...unAviso[0], avisos: [{ ...unAviso[0].avisos[0], ocupadoPor: { planId: 10 } }] }];
+    vi.mocked(validarLote).mockResolvedValue(otroViaje as never);
+    expect((await (await cargar(new Request(url), ctx)).json()).huellaAvisos).not.toBe(a);
+  });
+
+  it("confirmar PASA la aceptación al motor (que la verifica bajo el candado); sin ella pasa undefined", async () => {
+    const huella = "c".repeat(64);
+    expect((await post(confirmar, cuerpo({ avisosAceptados: huella }))).status).toBe(200);
+    expect(vi.mocked(confirmarLote).mock.calls[0][6]).toBe(huella);
+    vi.mocked(confirmarLote).mockClear();
+    await post(confirmar, cuerpo());
+    expect(vi.mocked(confirmarLote).mock.calls[0][6]).toBeUndefined();
+  });
+
+  it("una aceptación mal formada se rechaza con 400 antes de tocar nada (el esquema es estricto)", async () => {
+    for (const mala of ["aceptado", "C".repeat(64), "c".repeat(63), 1, true]) {
+      const res = await post(confirmar, cuerpo({ avisosAceptados: mala }));
+      expect(res.status).toBe(400);
+    }
+    expect(confirmarLote).not.toHaveBeenCalled();
+    expect(borradoresDesdeCliente).not.toHaveBeenCalled();
+  });
+
+  it("si el motor rechaza por avisos sin aceptar/desactualizados, la respuesta es 409 con requiereRevalidar y sin erroresPorFila", async () => {
+    vi.mocked(confirmarLote).mockResolvedValue({ ok: false, status: 409, error: "Hay avisos de la copia sin aceptar o que cambiaron desde la vista previa.", requiereRevalidar: true });
+    const res = await post(confirmar, cuerpo());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "Hay avisos de la copia sin aceptar o que cambiaron desde la vista previa.", requiereRevalidar: true });
   });
 });

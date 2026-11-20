@@ -79,12 +79,12 @@ describe("backend: todos los caminos que crean/modifican viajes", () => {
     expect(ruta).toContain("esPatchDeEdicion(d) && exigeVehiculoSolicitadoAlEditar(antes.estado, antes.pendienteCierre)");
     expect(ruta).toContain("vehiculoEfectivoTrasPatch(d.vehiculoSolicitadoPerfilId, actualVehiculo.id) == null");
   });
-  it("copiar programación hereda el vehículo del ORIGEN en el servidor (nunca del cliente), lo valida ANTES de insertar y lo guarda en el mismo INSERT", () => {
+  it("copiar programación hereda el vehículo del ORIGEN en el servidor (nunca del cliente), lo revalida ANTES de insertar (sin dato: copia fiel con aviso) y lo guarda en el mismo INSERT", () => {
     const copia = readFileSync("src/lib/tms/programacion-copia.ts", "utf8");
     expect(copia).toContain("vehiculoSolicitadoPerfilId: vehiculoPorPlan.get(id) ?? null, // del ORIGEN en servidor");
     const lote = readFileSync("src/lib/tms/programacion-lote.ts", "utf8");
     expect(lote).toContain("vehiculo_solicitado_perfil_id, vehiculo_solicitado_nombre)");
-    expect(lote).toContain("r.vehiculo!.id, r.vehiculo!.nombre");
+    expect(lote).toContain("r.vehiculo?.id ?? null, r.vehiculo?.nombre ?? null"); // COPIA FIEL: un origen sin vehículo se copia sin él (aviso `dato_incompleto`); la creación ORDINARIA sigue exigiéndolo (otros tests de este archivo)
     expect(lote).not.toMatch(/UPDATE tms_planes_viaje\s+SET vehiculo_solicitado/); // nunca «crear sin vehículo y completar después»
   });
   it("importación Excel: valida el vehículo en la vista previa y lo guarda (id + snapshot) en el mismo INSERT", () => {

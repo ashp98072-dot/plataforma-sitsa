@@ -5,45 +5,49 @@ import {
 import type { ResultadoFilaLote } from "./programacion-lote";
 
 const err = (fila: number, errores: string[], extra: Partial<ResultadoFilaLote> = {}): ResultadoFilaLote => ({ fila, estado: "error", errores, tarifa: null, ...extra });
-const ok = (fila: number): ResultadoFilaLote => ({ fila, estado: "ok", errores: [], tarifa: null });
+const ok = (fila: number, extra: Partial<ResultadoFilaLote> = {}): ResultadoFilaLote => ({ fila, estado: "ok", errores: [], tarifa: null, ...extra });
 
 describe("motivosDeFila", () => {
-  it("clasifica por datos estructurados y por mensaje conocido, sin duplicar", () => {
-    expect(motivosDeFila({ errores: ["x de este mismo lote."], conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] })).toEqual(["hora_o_regreso_ausente"]);
-    expect(motivosDeFila({ errores: ["x de este mismo lote."], conflictos: [{ recurso: "unidad", filas: [2], causa: "solape" }] })).toEqual(["solape_real"]);
+  it("clasifica por datos estructurados y por mensaje conocido, sin duplicar; los conflictos por día completo NO son un motivo de bloqueo", () => {
+    expect(motivosDeFila({ errores: ["x de este mismo lote. Los horarios se solapan."], conflictos: [{ recurso: "unidad", filas: [2], causa: "solape" }] })).toEqual(["solape_real"]);
+    expect(motivosDeFila({ errores: [], conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] })).toEqual([]);
     expect(motivosDeFila({ errores: ["Unidad P-1: Conflicto de identidad TMS: revisar los vínculos existentes; no se reescriben planes históricos."] })).toEqual(["identidad_unidad"]);
     expect(motivosDeFila({ errores: ["La tarifa seleccionada no es una tarifa vigente de esta ruta."] })).toEqual(["tarifa"]);
-    expect(motivosDeFila({ errores: ["Juan está asignado a otro viaje de ese día."] })).toEqual(["disponibilidad"]);
+    expect(motivosDeFila({ errores: ["La unidad P-1 no está disponible: En taller."] })).toEqual(["disponibilidad"]);
     expect(motivosDeFila({ errores: ["La ruta \"1001\" está inactiva."] })).toEqual(["otro"]);
   });
-  it("una fila con choque Y otro motivo cuenta ambos", () => {
+  it("una fila con solape real Y otro motivo cuenta ambos", () => {
     const m = motivosDeFila({ errores: ["La unidad X está asignada también en la fila 2 de este mismo lote. Los horarios se solapan.", "La tarifa seleccionada no es una tarifa vigente de esta ruta."], conflictos: [{ recurso: "unidad", filas: [2], causa: "solape" }] });
     expect(m.sort()).toEqual(["solape_real", "tarifa"]);
   });
 });
 
 describe("diagnosticarBloqueos / sugerencia", () => {
-  it("cuenta, ordena los orígenes por alcance y es robusto ante nulos", () => {
+  const origen = (fila: number, falta: "hora" | "regreso" | "hora_y_regreso", afecta: number[]) => ({ horaInvalida: falta !== "regreso", regresoInvalido: falta !== "hora", filasAfectadas: afecta, recursosCompartidos: ["personal"] });
+  const aviso = (tipo: "ventana_incompleta" | "destino_ocupado", filas?: number[]) => ({ tipo, recurso: { tipo: "persona", id: "1" }, mensaje: "x", ...(filas ? { filas } : {}) });
+  it("separa lo que BLOQUEA de lo que solo AVISA, cuenta por tipo y ordena los orígenes por alcance; robusto ante nulos", () => {
     const filas = [
-      err(1, ["a"], { diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [2, 3], recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [2, 3], causa: "dia_completo" }] }),
-      err(2, ["a"], { derivada: { origenes: [1, 4] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] }),
-      err(3, ["a"], { derivada: { origenes: [1] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] }),
-      err(4, ["a"], { diagnostico: { horaInvalida: true, regresoInvalido: false, filasAfectadas: [2], recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] }),
-      ok(5), null, undefined,
+      ok(1, { diagnostico: origen(1, "regreso", [2, 3]), avisos: [aviso("ventana_incompleta", [2, 3])] }),
+      ok(2, { avisos: [aviso("ventana_incompleta", [1]), aviso("destino_ocupado")] }),
+      ok(3, { avisos: [aviso("ventana_incompleta", [1])] }),
+      ok(4, { diagnostico: origen(4, "hora", [2]) }),
+      err(5, ["La tarifa seleccionada no es una tarifa vigente de esta ruta."]),
+      ok(6), null, undefined,
     ];
     const d = diagnosticarBloqueos(filas);
-    expect(d).toMatchObject({ total: 5, bloqueadas: 4, derivadas: 2 });
+    expect(d).toMatchObject({ total: 6, bloqueadas: 1, conAvisos: 3, avisosPorTipo: { ventana_incompleta: 3, destino_ocupado: 1 } });
+    expect(d.porMotivo.tarifa).toBe(1);
     expect(d.origenes).toEqual([{ fila: 1, falta: "regreso", afecta: 2 }, { fila: 4, falta: "hora", afecta: 1 }]);
-    expect(sugerenciaDeDiagnostico(d)).toMatch(/2 filas sin hora o regreso válido.*fila 1/);
+    expect(sugerenciaDeDiagnostico(d)).toMatch(/2 filas sin hora o regreso válido.*se copian igual que el origen.*fila 1/);
   });
   it("una sola fila origen → mensaje específico; sin orígenes → null", () => {
-    const d = diagnosticarBloqueos([err(7, ["a"], { diagnostico: { horaInvalida: true, regresoInvalido: true, filasAfectadas: [1], recursosCompartidos: ["personal"] } }), err(1, ["a"], { derivada: { origenes: [7] } })]);
-    expect(sugerenciaDeDiagnostico(d)).toBe("La fila 7 está sin hora de carga ni regreso estimado y reserva todo el día: bloquea a 1 fila. Corrígela para liberar 1 fila.");
+    const d = diagnosticarBloqueos([ok(7, { diagnostico: origen(7, "hora_y_regreso", [1]) }), ok(1)]);
+    expect(sugerenciaDeDiagnostico(d)).toBe("La fila 7 está sin hora de carga ni regreso estimado y reserva todo el día: comparte recursos con 1 fila. Se copia igual que el origen; puedes darle un regreso si quieres evitar el aviso.");
     expect(sugerenciaDeDiagnostico(diagnosticarBloqueos([err(1, ["La ruta está inactiva."])]))).toBeNull();
   });
-  it("la bitácora recibe SOLO conteos y números de fila (sin textos de error)", () => {
+  it("la bitácora recibe SOLO conteos y números de fila (sin textos de error) y se registra con bloqueos o con avisos", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    registrarDiagnosticoBloqueo(diagnosticarBloqueos([err(1, ["Juan Pérez está asignado en P-1"], { diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [2], recursosCompartidos: ["personal"] } })]));
+    registrarDiagnosticoBloqueo(diagnosticarBloqueos([ok(1, { diagnostico: origen(1, "regreso", [2]), avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, mensaje: "Juan Pérez está asignado en P-1", filas: [2] }] })]));
     expect(info).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(info.mock.calls[0])).not.toMatch(/Juan|P-1|asignado/);
     info.mockClear();
@@ -78,5 +82,12 @@ describe("compararTarifa: valor del origen vs el que REALMENTE se usará en dest
   it("resumen: cuenta solo las filas con aviso", () => {
     const r = resumenComparacionesTarifa([{ fila: 1, comparacion: compararTarifa({ nombre: "B", monto: 1500, moneda: "GTQ" }, dest) }, { fila: 2, comparacion: compararTarifa({ nombre: "B", monto: 1, moneda: "GTQ" }, dest) }, { fila: 3, comparacion: compararTarifa(null, null) }]);
     expect(r).toEqual({ conAviso: 1, filas: [2] });
+  });
+
+  it("cuenta TODOS los tipos de aviso de la copia fiel (tarifa histórica, recurso no disponible, dato incompleto, solape del lote) y ninguno bloquea", () => {
+    const mk = (fila: number, tipo: "solape_lote" | "tarifa_historica" | "recurso_no_disponible" | "dato_incompleto") =>
+      ok(fila, { avisos: [{ tipo, recurso: { tipo: "x", id: String(fila) }, mensaje: "m" }] });
+    const d = diagnosticarBloqueos([mk(1, "solape_lote"), mk(2, "tarifa_historica"), mk(3, "recurso_no_disponible"), mk(4, "dato_incompleto"), mk(5, "dato_incompleto")]);
+    expect(d).toMatchObject({ total: 5, bloqueadas: 0, conAvisos: 5, avisosPorTipo: { solape_lote: 1, tarifa_historica: 1, recurso_no_disponible: 1, dato_incompleto: 2, ventana_incompleta: 0, destino_ocupado: 0 } });
   });
 });

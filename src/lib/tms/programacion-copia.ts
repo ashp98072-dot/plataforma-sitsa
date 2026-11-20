@@ -15,7 +15,8 @@ import { calcularTrasladoRegreso } from "@/lib/tms/programacion-copia-ventana";
  * piloto, auxiliares, paradas y, en tercerizados, los campos externos). NUNCA: código, estado, cierre, evidencias,
  * viaje físico (flota_viajes), horas/km reales, facturación/pagos, bitácora, gastos, solicitudes de cliente,
  * snapshots viejos de tarifa/contacto ni montos de viáticos — todo eso lo genera de nuevo el motor de lote.
- * Los Cerrados sirven como origen; los Cancelados se excluyen.
+ * COPIA FIEL: se cargan TODOS los viajes de la fecha origen, sea cual sea su estado (Programado, En curso, Cerrado o Cancelado). El estado
+ * del origen jamás se copia: los nuevos nacen siempre 'Programado'. (No confundir con la regla del plan DESTINO cancelado, en el motor.)
  */
 export type OrigenFila = {
   planId: number;
@@ -66,7 +67,7 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
      LEFT JOIN tms_unidades u ON u.id = p.unidad_id
      LEFT JOIN tms_personal pil ON pil.id = p.piloto_id
      LEFT JOIN tms_personal aux1 ON aux1.id = p.auxiliar_id
-     WHERE p.empresa_id = ? AND p.fecha_plan = ? AND p.estado <> 'Cancelado'
+     WHERE p.empresa_id = ? AND p.fecha_plan = ?
      ORDER BY p.hora_carga IS NULL, p.hora_carga, p.id`,
     [empresaId, fechaOrigen],
   );
@@ -167,8 +168,8 @@ export async function cargarCopiaDeFecha(empresaId: number, fechaOrigen: string)
 /**
  * Filas que llegan del cliente al validar/confirmar: el cliente solo aporta las EDICIONES permitidas. Todo lo
  * demás (paradas, origen) se vuelve a leer del plan origen en el servidor y se exige que sea de ESTA empresa, de la
- * fecha origen indicada y que NO esté Cancelado (igual que la carga inicial; un Cerrado sí es origen válido — no
- * confundir con la regla del plan DESTINO cancelado, que sí permite volver a copiar) — nunca se confía en ids o paradas enviados por el cliente.
+ * fecha origen indicada, en CUALQUIER estado (igual que la carga inicial: En curso, Cerrado y Cancelado son orígenes válidos; el estado no se copia).
+ * No confundir con la regla del plan DESTINO cancelado, que sí permite volver a copiar — nunca se confía en ids o paradas enviados por el cliente.
  */
 export type EdicionFilaCopia = Omit<BorradorLote, "paradas" | "regresoOffsetDias" | "regresoHora" | "vehiculoSolicitadoPerfilId">;
 
@@ -208,11 +209,11 @@ export async function borradoresDesdeCliente(
   }
   const validos = origenIds.length
     ? await query<RowDataPacket[]>(
-        `SELECT id, hora_carga, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND estado <> 'Cancelado' AND id IN (${origenIds.map(() => "?").join(",")})`,
+        `SELECT id, hora_carga, DATE_FORMAT(regreso_estimado, '%Y-%m-%d %H:%i:%s') AS regreso_estimado FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND id IN (${origenIds.map(() => "?").join(",")})`,
         [empresaId, fechaOrigen, ...origenIds],
       )
     : [];
-  if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." };
+  if (validos.length !== origenIds.length) return { ok: false, error: "Algún viaje origen no existe o no pertenece a la fecha/empresa indicada." };
   const paradasMap = await listarParadasDePlanes(origenIds);
   const origenPorId = new Map(validos.map((v) => [Number(v.id), v])); // hora_carga y regreso del ORIGEN (nunca del cliente)
   const vehiculoOrigen = await vehiculoSolicitadoDeOrigenes(empresaId, origenIds);

@@ -40,4 +40,6 @@ export const cuerpoCopiaSchema = z.object({
   fechaDestino: fecha,
   filas: z.array(filaEdicionSchema).min(1).max(MAX_FILAS_LOTE),
   tarifasEsperadas: z.array(z.object({ fila: z.number().int().positive(), tarifa: z.object({ id: z.number().int().positive(), monto: z.number().nonnegative(), moneda: z.string().min(1).max(10) }).strict().nullable() }).strict()).optional(),
+  /** Huella de los avisos aceptados (la calcula el servidor en la vista previa); el servidor la verifica al confirmar. */
+  avisosAceptados: z.string().regex(/^[0-9a-f]{64}$/, "Aceptación de avisos inválida.").optional(),
 }).strict().refine((d) => d.fechaOrigen !== d.fechaDestino, { message: "La fecha destino debe ser distinta de la fecha origen." });

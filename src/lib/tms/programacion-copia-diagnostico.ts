@@ -1,36 +1,47 @@
-import type { ResultadoFilaLote, TarifaResuelta } from "@/lib/tms/programacion-lote";
+import type { ResultadoFilaLote, TarifaResuelta, TipoAvisoLote } from "@/lib/tms/programacion-lote";
 
 /**
  * Diagnóstico SEGURO de «Copiar programación»: puro (sin base de datos), solo cuenta motivos y números de fila.
  * Nunca incluye nombres de personas, placas, rutas, montos ni identificadores de empresa: es apto para pantalla, bitácora y reportes.
  * No afirma la causa en producción: describe qué condiciones del lote producen los bloqueos y cuántas filas afecta cada una.
  */
-export type MotivoBloqueo = "hora_o_regreso_ausente" | "solape_real" | "identidad_unidad" | "tarifa" | "disponibilidad" | "otro";
+export type MotivoBloqueo = "solape_real" | "identidad_unidad" | "tarifa" | "disponibilidad" | "otro";
 
-export const MOTIVOS_BLOQUEO: readonly MotivoBloqueo[] = ["hora_o_regreso_ausente", "solape_real", "identidad_unidad", "tarifa", "disponibilidad", "otro"];
+export const MOTIVOS_BLOQUEO: readonly MotivoBloqueo[] = ["solape_real", "identidad_unidad", "tarifa", "disponibilidad", "otro"];
 
 export const ETIQUETA_MOTIVO: Record<MotivoBloqueo, string> = {
-  hora_o_regreso_ausente: "Sin hora o regreso válido (reserva todo el día)",
   solape_real: "Horarios que se solapan de verdad",
   identidad_unidad: "Identidad de unidad TMS",
   tarifa: "Tarifa no vigente",
-  disponibilidad: "Disponibilidad (personal, unidad o TC)",
+  disponibilidad: "Recurso no disponible (personal, unidad o TC)",
   otro: "Otros motivos",
+};
+
+export type TipoAviso = TipoAvisoLote;
+export const ETIQUETA_AVISO: Record<TipoAviso, string> = {
+  ventana_incompleta: "Comparten recursos con filas sin hora o regreso válido (reservan todo el día, igual que en el origen)",
+  destino_ocupado: "El recurso ya tiene otro viaje en la fecha destino",
+  solape_lote: "Comparten recursos con horarios que se cruzan (igual que en el origen)",
+  tarifa_historica: "Tarifa del origen ya no vigente: se conserva tal como estaba",
+  recurso_no_disponible: "Recurso inactivo, en taller, fuera de servicio o con viaje en curso (se copia igual que el origen)",
+  dato_incompleto: "El origen no tiene el dato: la copia queda sin él",
 };
 
 export type OrigenDeBloqueo = { fila: number; falta: "hora" | "regreso" | "hora_y_regreso"; afecta: number };
 
 export type DiagnosticoBloqueos = {
   total: number;
+  /** Filas que NO se pueden copiar (errores reales). */
   bloqueadas: number;
   porMotivo: Record<MotivoBloqueo, number>;
-  /** Filas bloqueadas ÚNICAMENTE por conflictos con filas sin hora/regreso válido: se liberan al corregir esos orígenes. */
-  derivadas: number;
-  /** Filas sin hora/regreso válido que bloquean a otras, de mayor a menor alcance. */
+  /** Filas que se copian IGUAL pero con avisos (copia fiel al origen): no bloquean, requieren aceptación expresa en la pantalla. */
+  conAvisos: number;
+  avisosPorTipo: Record<TipoAviso, number>;
+  /** Filas sin hora/regreso válido que reservan todo el día y afectan a otras, de mayor a menor alcance (informativo). */
   origenes: OrigenDeBloqueo[];
 };
 
-/** Clasificación de los errores que NO son choques dentro del lote (los choques se clasifican con los datos estructurados). */
+/** Clasificación de los errores (los choques reales dentro del lote se clasifican con los datos estructurados). */
 function motivoDeMensaje(m: string): MotivoBloqueo {
   if (/conflicto de identidad|identidad tms|placa ambigua|identidad f[ií]sica|representante can[oó]nic/i.test(m)) return "identidad_unidad";
   if (/tarifa/i.test(m)) return "tarifa";
@@ -41,47 +52,45 @@ function motivoDeMensaje(m: string): MotivoBloqueo {
 /** Motivos de bloqueo de UNA fila (sin duplicados). Una fila sin errores devuelve []. */
 export function motivosDeFila(r: Pick<ResultadoFilaLote, "errores" | "conflictos">): MotivoBloqueo[] {
   const motivos = new Set<MotivoBloqueo>();
-  for (const c of r.conflictos ?? []) motivos.add(c.causa === "dia_completo" ? "hora_o_regreso_ausente" : "solape_real");
-  const colisiones = (r.conflictos ?? []).length;
+  const solapes = (r.conflictos ?? []).filter((c) => c.causa === "solape").length;
+  if (solapes) motivos.add("solape_real");
   // Los mensajes de choque dentro del lote ya están representados por `conflictos`: se excluyen para no contarlos como «disponibilidad».
   const otros = r.errores.filter((e) => !/de este mismo lote\./.test(e));
-  if (colisiones === 0 || otros.length) for (const e of otros) motivos.add(motivoDeMensaje(e));
+  if (!solapes || otros.length) for (const e of otros) motivos.add(motivoDeMensaje(e));
   return [...motivos];
 }
 
 export function diagnosticarBloqueos(resultados: readonly (ResultadoFilaLote | null | undefined)[]): DiagnosticoBloqueos {
   const porMotivo = Object.fromEntries(MOTIVOS_BLOQUEO.map((m) => [m, 0])) as Record<MotivoBloqueo, number>;
+  const avisosPorTipo: Record<TipoAviso, number> = { ventana_incompleta: 0, destino_ocupado: 0, solape_lote: 0, tarifa_historica: 0, recurso_no_disponible: 0, dato_incompleto: 0 };
   let bloqueadas = 0;
-  let derivadas = 0;
+  let conAvisos = 0;
   const origenes: OrigenDeBloqueo[] = [];
   const validas = resultados.filter((r): r is ResultadoFilaLote => !!r);
   for (const r of validas) {
-    if (r.estado !== "error") continue;
-    bloqueadas++;
-    for (const m of motivosDeFila(r)) porMotivo[m]++;
-    if (r.derivada) derivadas++;
+    if (r.estado === "error") { bloqueadas++; for (const m of motivosDeFila(r)) porMotivo[m]++; }
+    else if (r.avisos?.length) { conAvisos++; for (const t of new Set(r.avisos.map((a) => a.tipo))) avisosPorTipo[t]++; }
     const d = r.diagnostico;
     if (d && (d.horaInvalida || d.regresoInvalido) && d.filasAfectadas.length) origenes.push({ fila: r.fila, falta: d.horaInvalida && d.regresoInvalido ? "hora_y_regreso" : d.horaInvalida ? "hora" : "regreso", afecta: d.filasAfectadas.length });
   }
   origenes.sort((a, b) => b.afecta - a.afecta || a.fila - b.fila);
-  return { total: validas.length, bloqueadas, porMotivo, derivadas, origenes };
+  return { total: validas.length, bloqueadas, porMotivo, conAvisos, avisosPorTipo, origenes };
 }
 
-/** Texto corto y accionable para el usuario (sin datos personales). null si no hay nada que destacar. */
+/** Texto corto para el usuario (sin datos personales) sobre las filas sin hora/regreso que reservan todo el día. null si no hay nada que destacar. */
 export function sugerenciaDeDiagnostico(d: DiagnosticoBloqueos): string | null {
   if (!d.origenes.length) return null;
   const primero = d.origenes[0];
   const que = primero.falta === "hora" ? "sin hora de carga" : primero.falta === "regreso" ? "sin regreso estimado" : "sin hora de carga ni regreso estimado";
-  if (d.origenes.length === 1) return `La fila ${primero.fila} está ${que} y reserva todo el día: bloquea a ${primero.afecta} fila${primero.afecta === 1 ? "" : "s"}. Corrígela para liberar ${d.derivadas ? `${d.derivadas} fila${d.derivadas === 1 ? "" : "s"}` : "las demás"}.`;
-  const afectadas = d.origenes.reduce((n, o) => n + o.afecta, 0);
-  return `${d.origenes.length} filas sin hora o regreso válido reservan todo el día y bloquean a otras (${afectadas} bloqueos en total); la de mayor alcance es la fila ${primero.fila} (${que}, bloquea a ${primero.afecta}).`;
+  if (d.origenes.length === 1) return `La fila ${primero.fila} está ${que} y reserva todo el día: comparte recursos con ${primero.afecta} fila${primero.afecta === 1 ? "" : "s"}. Se copia igual que el origen; puedes darle un regreso si quieres evitar el aviso.`;
+  return `${d.origenes.length} filas sin hora o regreso válido reservan todo el día y comparten recursos con otras; se copian igual que el origen. La de mayor alcance es la fila ${primero.fila} (${que}, comparte con ${primero.afecta}).`;
 }
 
 /** Bitácora del servidor: SOLO conteos y números de fila (nunca nombres, placas, montos ni empresa). No escribe en la base de datos. */
 export function registrarDiagnosticoBloqueo(d: DiagnosticoBloqueos): void {
-  if (!d.bloqueadas) return;
-  console.info("copiar-programacion: lote con filas bloqueadas", {
-    total: d.total, bloqueadas: d.bloqueadas, derivadas: d.derivadas, porMotivo: d.porMotivo,
+  if (!d.bloqueadas && !d.conAvisos) return;
+  console.info("copiar-programacion: lote con bloqueos o avisos", {
+    total: d.total, bloqueadas: d.bloqueadas, conAvisos: d.conAvisos, porMotivo: d.porMotivo, avisosPorTipo: d.avisosPorTipo,
     origenes: d.origenes.slice(0, 5).map((o) => ({ fila: o.fila, falta: o.falta, afecta: o.afecta })),
   });
 }
