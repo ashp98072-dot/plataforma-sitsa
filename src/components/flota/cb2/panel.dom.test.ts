@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { webcrypto } from "node:crypto";
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import { CombustiblesCB2 } from "./panel";
+vi.setConfig({ testTimeout: 30000 });   // DOM + user-event: en paralelo bajo carga supera los 5 s por omisión (aisladas tardan ~1 s); un timeout no es un fallo funcional
 let root: Root, host: HTMLDivElement;
 const calls: {
     url: string;

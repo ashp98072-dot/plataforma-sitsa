@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ConsumosCB2, documentoVacio } from "./consumos";
 import { TablaConsumosCB2 } from "./tabla-consumos";
 import type { CatalogosCB2, Registro } from "./client";
+vi.setConfig({ testTimeout: 30000 });   // DOM + user-event: en paralelo bajo carga supera los 5 s por omisión (aisladas tardan ~1 s); un timeout no es un fallo funcional
 
 const cat: CatalogosCB2 = { proveedores: [{ id: 1, nombre: "Proveedor demo" }], vehiculos: [{ id: 1, placa: "C-001ABC" }], empleados: [{ id: 77, nombre: "Marta López" }] };
 const original = Object.freeze({ id: 3, proveedor_id: 1, importacion_origen_id: 2, vehiculo_id: 1, unidad_placa: "C-001ABC", placa_original: "001 ABC", numero_vale: "0001", fecha_consumo: "2026-10-01", moneda: "GTQ", galones: "9.999900", precio: "40.123456", monto: "400.004300", factura_id: null, estado_factura: "PENDIENTE_FACTURA", empleado_id: 77, empleado_nombre: "Marta López", producto_clasificado: "DIESEL", origenes: '[{"hoja":"DEMO","fila":2,"piloto":"M LOPEZ","motivos":["Aviso original"]}]', correcciones: '[{"anterior":{"vehiculo_id":1},"nuevo":{"vehiculoId":1,"empleadoId":77,"productoClasificado":"DIESEL"},"motivo":"Asignación verificada","usuario":9,"fecha":"2026-10-02"}]' });
