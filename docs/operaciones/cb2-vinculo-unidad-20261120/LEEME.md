@@ -13,7 +13,7 @@ Archivos (SHA-256 del contenido con saltos LF):
 |---|---|
 | `sql/preflight-2026-11-cb2-vinculo-unidad.sql` (solo lectura) | `87b0cc8f53e9d626a0c8d10bac6a24dfc518adb57d633cb6e1551712c8c0f8b3` |
 | `sql/migrate-2026-11-cb2-vinculo-unidad.sql` | `50fa21daf4bc0d5a6c0776a13be2f0fa92e3a0e1a9ac6a918a0975e28064c312` |
-| `sql/postcheck-2026-11-cb2-vinculo-unidad.sql` (solo lectura) | `da2e3a82ee1f6e97077deacf025abe4573aac7beac348c3a84cd37068ae3f844` |
+| `sql/postcheck-2026-11-cb2-vinculo-unidad.sql` (solo lectura) | `de5259a8a3dc5205265ff343e2005eaaaa2a1bb84b055e0681773ecb1322b684` |
 | `sql/rollback-2026-11-cb2-vinculo-unidad.sql` | `8f33a35cbad7a61db4fd27318d7b2a8a31dc1a36af08ace91cde72c42c901be6` |
 
 Contenido: `ADD COLUMN vinculo_unidad VARCHAR(20) NULL`, `ck_cb2c_unidad_tipo` ampliado con una rama más (las anteriores idénticas al nivel 4), y `ck_cb2c_vinculo`. No crea tablas ni toca filas ni FK; las filas existentes quedan con `vinculo_unidad` NULL y siguen cumpliendo el CHECK. Guarda de orden: si el nivel 4 no está, el ALTER entero falla sin cambiar nada. No es idempotente (repetirlo falla sin cambiar nada).
@@ -22,7 +22,7 @@ Procedimiento (lo ejecuta el operador, no la aplicación):
 1. Pausar importaciones CB2 durante la ventana (el ALTER reconstruye `flota_cb2_consumos` como los niveles anteriores). Anotar `SELECT COUNT(*) FROM flota_cb2_consumos`.
 2. Preflight → debe decir `APTO PARA APLICAR` (si dice `YA INSTALADO`, no aplicar; `DETENER Y AUDITAR`, parar).
 3. Aplicar `migrate-…` completo, una sola vez.
-4. Postcheck → `OK: VÍNCULO DE UNIDAD INSTALADO`, mismo conteo de filas.
+4. Postcheck → `OK: VÍNCULO DE UNIDAD INSTALADO`, mismo conteo de filas. Valida las 4 restricciones CHECK (`ck_cb2_piloto_unico`, `ck_cb2_piloto_reportado`, `ck_cb2c_unidad_tipo`, `ck_cb2c_vinculo`) por la **firma SHA-256 de su definición completa normalizada** (minúsculas, sin espacios ni comillas de identificador): responde `FALLA` ante cualquier definición distinta aunque conserve el nombre y las palabras clave; solo tolera diferencias de formato. La salida incluye la firma observada y la esperada de cada una (las esperadas son las que produce MariaDB 11.8.9 con las migraciones del repositorio).
 5. Verificar con sesión: `GET …/flota/combustible/catalogos` debe incluir `"vinculoUnidad": true`.
 Reversión: ver `rollback-…` (solo posible con 0 filas que usen `vinculo_unidad`; si las hay falla sin cambiar nada).
 
