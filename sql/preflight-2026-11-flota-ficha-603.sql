@@ -15,11 +15,16 @@ FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_C
 WHERE k.TABLE_SCHEMA = DATABASE() AND k.REFERENCED_TABLE_NAME = 'flota_vehiculos' ORDER BY k.TABLE_NAME, k.COLUMN_NAME;
 
 -- P3) GENERADOR de conteos: devuelve una sentencia SELECT por cada columna que podría referenciar un vehículo (clave foránea real o nombre *vehiculo*_id / unidad_recurrente_id).
--- Copiar TODA la columna `ejecutar` y ejecutarla (son solo SELECT). Esperado: filas = 0 en todas salvo flota_vehiculo_acceso (1).
+-- Copiar TODA la columna `ejecutar` y ejecutarla (son solo SELECT). Esperado: filas = 0 en todas salvo flota_vehiculo_acceso (1). (Se excluye tms_planes_viaje.vehiculo_solicitado_perfil_id: apunta a perfiles de costeo, no a vehículos.)
 SELECT CONCAT('SELECT ''', c.TABLE_NAME, '.', c.COLUMN_NAME, ''' AS origen, COUNT(*) AS filas FROM `', c.TABLE_NAME, '` WHERE `', c.COLUMN_NAME, '` = 603;') AS ejecutar
 FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME AND t.TABLE_TYPE = 'BASE TABLE'
-WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME <> 'flota_vehiculos' AND (c.COLUMN_NAME REGEXP 'vehiculo.*_id$' OR c.COLUMN_NAME = 'unidad_recurrente_id' OR c.COLUMN_NAME = 'tc_vehiculo_id' OR c.COLUMN_NAME = 'flota_vehiculo_id')
+WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME <> 'flota_vehiculos' AND c.COLUMN_NAME <> 'vehiculo_solicitado_perfil_id' AND (c.COLUMN_NAME REGEXP 'vehiculo.*_id$' OR c.COLUMN_NAME = 'unidad_recurrente_id' OR c.COLUMN_NAME = 'tc_vehiculo_id' OR c.COLUMN_NAME = 'flota_vehiculo_id')
 ORDER BY c.TABLE_NAME, c.COLUMN_NAME;
+
+-- P3b) Lo mismo en UNA sola sentencia: devuelve una celda `ejecutar_todo`; copiar ese texto, pegarlo en la pestaña SQL y ejecutarlo para obtener UNA tabla con todos los conteos.
+SELECT GROUP_CONCAT(CONCAT('SELECT ''', c.TABLE_NAME, '.', c.COLUMN_NAME, ''' AS origen, COUNT(*) AS filas FROM `', c.TABLE_NAME, '` WHERE `', c.COLUMN_NAME, '` = 603') ORDER BY c.TABLE_NAME, c.COLUMN_NAME SEPARATOR ' UNION ALL ') AS ejecutar_todo
+FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME AND t.TABLE_TYPE = 'BASE TABLE'
+WHERE c.TABLE_SCHEMA = DATABASE() AND c.TABLE_NAME <> 'flota_vehiculos' AND c.COLUMN_NAME <> 'vehiculo_solicitado_perfil_id' AND (c.COLUMN_NAME REGEXP 'vehiculo.*_id$' OR c.COLUMN_NAME = 'unidad_recurrente_id' OR c.COLUMN_NAME = 'tc_vehiculo_id' OR c.COLUMN_NAME = 'flota_vehiculo_id');
 
 -- P4) Referencias dentro de datos JSON (sin clave foránea): asignaciones de combustible CB2 y consumos con instantánea.
 SELECT 'flota_cb2_asignaciones (anterior/nuevo)' AS origen, COUNT(*) AS filas FROM flota_cb2_asignaciones WHERE JSON_VALUE(anterior, '$.vehiculoId') = 603 OR JSON_VALUE(anterior, '$.vehiculo_id') = 603 OR JSON_VALUE(nuevo, '$.vehiculoId') = 603 OR JSON_VALUE(nuevo, '$.vehiculo_id') = 603;
