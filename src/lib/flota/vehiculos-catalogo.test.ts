@@ -49,13 +49,15 @@ it("catálogo diagnostica exclusivamente filas accesibles, parametriza tenant y 
   vi.mocked(query).mockReset();
   vi.mocked(query).mockImplementation((async (sql: string, params: number[]) => {
     if (sql.includes("FROM flota_vehiculos")) {
-      expect(sql).toContain("EXISTS"); expect(sql).toContain("v.tipo_unidad"); expect(sql).not.toContain("JOIN"); expect(params).toEqual([3, 3]);
-      return [{ id: 7, placa: "C-035BXR" }, { id: 7, placa: "C-035BXR" }, { id: 9, placa: "C-035BXR" }];
+      expect(sql).toContain("EXISTS"); expect(sql).toContain("v.tipo_unidad"); expect(sql).not.toContain("JOIN"); expect(params).toEqual([3, 3, 3]); // propia + predicado de acceso (propio o compartido)
+      expect(sql).toContain("AS propia"); expect(sql).toContain("empresa_duena_nombre");
+      return [{ id: 7, placa: "C-035BXR", propia: 1 }, { id: 7, placa: "C-035BXR", propia: 1 }, { id: 9, placa: "C-035BXR", propia: 0, empresa_duena_nombre: "Frescofresh" }];
     }
     return [];
   }) as never);
   const result = await catalogosCombustible(3);
   expect(result.vehiculos.map(v => v.id)).toEqual([7, 9]);
+  expect(result.vehiculos.map(v => (v as { propia?: boolean }).propia)).toEqual([true, false]); // procedencia para distinguir placas repetidas
   expect(result.diagnosticoVehiculos).toEqual({ idsRepetidos: [7], posiblesDuplicados: [{ placa: "C035BXR", ids: [7, 9] }] });
   expect(query).toHaveBeenCalledTimes(3);
 });

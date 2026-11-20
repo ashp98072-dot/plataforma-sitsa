@@ -8,6 +8,7 @@ import { leerBytesFirmaGuardada } from "@/lib/firmas/usuario-firmas";
 import { sha256Hex } from "@/lib/firmas/imagen-firma";
 import { borrarUpload, guardarUpload } from "@/lib/uploads";
 import { obtenerVehiculoAccesibleTx } from "@/lib/flota/acceso";
+import { canonizarVehiculoTx } from "@/lib/flota/vehiculos-alias";
 import { normalizarDestinoPago } from "@/lib/tms/gastos";
 import { CAMPOS_DOMINIO_FONDOS } from "@/lib/tms/validacion-fondos-gastos";
 import { ErrorDominioFormulario, conLinea } from "@/lib/validacion-formulario";
@@ -110,7 +111,7 @@ async function resolverSnapshotLineaTx(
   conn: PoolConnection,
   empresaId: number,
   input: Pick<LineaFondoInput, "empleadoId" | "vehiculoId" | "clienteId" | "planId" | "fechaViaje" | "empleadoNombreOverride" | "cuentaOverride" | "cargoOverride" | "metodoPago">,
-): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
+): Promise<{ empleadoNombre: string | null; cargo: string | null; cuenta: string | null; placa: string | null; vehiculoId: number | null; clienteId: number | null; clienteNombre: string | null; fechaViaje: string | null }> {
   let empleadoNombre: string | null = null;
   let cargo: string | null = null;
   // SOLICITUD-FONDOS-PDF-AUTORIZADO-1 — `cuenta` es empleados.cuenta_bancaria
@@ -138,9 +139,11 @@ async function resolverSnapshotLineaTx(
     cargo = limpiarOverride(input.cargoOverride, 150) ?? cargo;
   }
   let placa: string | null = null;
-  if (input.vehiculoId != null) {
+  // Una operación NUEVA se asocia a la identidad canónica: si el ID enviado fue absorbido por una fusión se guarda su canónico (la historia no se toca).
+  const vehiculoId = await canonizarVehiculoTx(conn, empresaId, input.vehiculoId);
+  if (vehiculoId != null) {
     // Vehículo PROPIO o COMPARTIDO con la empresa activa (regla real de Flota); nunca «cualquier id». La placa se congela como snapshot; la propiedad no cambia.
-    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, input.vehiculoId);
+    const veh = await obtenerVehiculoAccesibleTx(conn, empresaId, vehiculoId);
     if (!veh) throw new ErrorDominioFormulario("El vehículo indicado no pertenece a esta empresa.");
     placa = String(veh.placa);
   }
@@ -167,7 +170,7 @@ async function resolverSnapshotLineaTx(
     }
     if (fechaViaje == null) fechaViaje = String(rows[0].fecha_plan);
   }
-  return { empleadoNombre, cargo, cuenta, placa, clienteId, clienteNombre, fechaViaje };
+  return { empleadoNombre, cargo, cuenta, placa, vehiculoId, clienteId, clienteNombre, fechaViaje };
 }
 
 export const ESTADOS_FONDO = ["Pendiente", "Autorizada", "Rechazada", "Liquidada"] as const;
@@ -529,7 +532,7 @@ export async function crearSolicitudFondo(
         [
           empresaId, solicitudId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
           snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, cuenta, l.metodoPago ?? null,
-          l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
+          snapshot.vehiculoId, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
         ],
       );
       orden += 1;
@@ -762,7 +765,7 @@ export async function actualizarSolicitudFondo(
           [
             empresaId, id, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, orden,
             snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, cuenta, l.metodoPago ?? null,
-            l.vehiculoId ?? null, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
+            snapshot.vehiculoId, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
           ],
         );
         orden += 1;

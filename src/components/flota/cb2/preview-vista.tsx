@@ -4,6 +4,7 @@ import { opcionesVehiculo } from "@/lib/flota/combustible-estaciones-ui";
 import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motivoUnidadNoOperable, unidadOperable } from "./unidades-bloqueo";
 import { causasAsignacion } from "./problemas-asignacion";
+import { advertenciaPlacaRepetida, filasAmbiguasMismaPlaca } from "./unidad-preferida";
 import { claseUnidadShell, unidadElegida } from "./unidad-shell";
 import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import type { CatalogosCB2, FilaCB2 } from "./client";
@@ -53,9 +54,9 @@ function identificacion(g: CandidatoRevision, cat: CatalogosCB2, manuales: Mapa)
     const match = sugerenciaVehiculo(g.fila, cat);
     return match.estado === "AMBIGUA" ? "AMBIGUA" : match.estado === "INEXISTENTE" ? "INEXISTENTE" : "PENDIENTE";
 }
-export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisados, manuales = seleccion, onChange, onAsignar, onSeleccionar, onRevisar, revisionExtra, decisiones = {}, disabled = false, corregir }: Props & {
+export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisados, manuales = seleccion, onChange, onAsignar, onAsignarVarias, onSeleccionar, onRevisar, revisionExtra, decisiones = {}, disabled = false, corregir }: Props & {
     corregir?: { clave: string; intento: number };
-    revisionExtra?: (g: CandidatoRevision) => ReactNode; manuales?: Mapa; onChange?: (v: Mapa) => void; onAsignar?: (clave: string, unidad: string) => void; onSeleccionar?: (clave: string, valor: boolean) => void; onRevisar?: (clave: string, valor: boolean) => void; disabled?: boolean;
+    revisionExtra?: (g: CandidatoRevision) => ReactNode; manuales?: Mapa; onChange?: (v: Mapa) => void; onAsignar?: (clave: string, unidad: string) => void; onAsignarVarias?: (claves: string[], unidad: string) => void; onSeleccionar?: (clave: string, valor: boolean) => void; onRevisar?: (clave: string, valor: boolean) => void; disabled?: boolean;
 }) {
     const panelId = useId();
     const [abiertos, setAbiertos] = useState<Marcas>({}), [vista, setVista] = useState("");
@@ -103,6 +104,13 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
     const blockedPage = Math.min(bloqueadasPagina, Math.max(0, Math.ceil(sinIdentidad.length / 25) - 1));
     function filtrar(fn: () => void) { fn(); setPagina(0); setIgnoradasPagina(0); setBloqueadasPagina(0); }
     function asignar(key: string, value: string) { if (onAsignar) onAsignar(key, value); else onChange?.({ ...seleccion, [key]: value }); }
+    /** Aplica una misma ficha a varias filas en UNA sola actualización atómica: onAsignarVarias si el padre la ofrece; sin ella, onChange recibe el mapa completo
+     *  (varias llamadas seguidas a un onChange sin actualizador funcional pisarían el estado anterior). Solo si el padre únicamente tiene onAsignar se itera sobre él. */
+    function asignarVarias(keys: string[], value: string) {
+        if (onAsignarVarias) onAsignarVarias(keys, value);
+        else if (onChange) onChange({ ...seleccion, ...Object.fromEntries(keys.map(k => [k, value])) });
+        else keys.forEach(k => onAsignar?.(k, value));
+    }
     function elegir(g: CandidatoRevision, valor: boolean) { if (onSeleccionar) onSeleccionar(g.clave, valor); else onChange?.({ ...seleccion, [g.clave]: valor ? g.vehiculoId : "" }); }
     function revisar(key: string, valor: boolean) { if (onRevisar) onRevisar(key, valor); else setRevisadosLocales(prev => ({ ...prev, [key]: valor })); }
 
@@ -152,6 +160,8 @@ export function CandidatosCB2({ filas, cat, seleccion, omitidos = vacio, revisad
                 <section aria-label={`Unidad y placa del vale ${f.vale}`}><h3>Unidad y placa</h3><strong>{vehiculo?.placa || (g.vehiculoId ? `Unidad #${g.vehiculoId} no disponible` : "Sin unidad")}</strong><p className="text-xs">{fuente === "AUTOMATICA" ? "Identificada automáticamente" : fuente === "MANUAL" ? "Elegida manualmente" : fuente === "AMBIGUA" ? "Resolver ambigüedad" : fuente === "INEXISTENTE" ? "Vehículo no encontrado" : "Unidad pendiente"} · {unidad.estado}</p>
                     {g.estado !== "BLOQUEADO" && g.estado !== "RESUELTO" && <fieldset disabled={disabled}>
                         {unidad.candidatos.length === 1 && <p className="text-xs">Unidad sugerida: {unidad.candidatos[0].placa}</p>}
+                        {(() => { const aviso = advertenciaPlacaRepetida(cat, f.placaNormalizada || f.placa); return aviso ? <p role="alert" className="text-xs">{aviso}</p> : null; })()}
+                        {(() => { const hermanas = g.vehiculoId ? filasAmbiguasMismaPlaca(r.revision, cat, g, g.vehiculoId, manuales) : []; return hermanas.length ? <button type="button" className={button} disabled={disabled} onClick={() => asignarVarias(hermanas, g.vehiculoId)}>Usar esta ficha (#{g.vehiculoId}) en las {hermanas.length} filas ambiguas de este archivo con la placa {f.placa}</button> : null; })()}
                         <CatalogoSearchSelect label={`Unidad para vale ${f.vale}, ${f.hoja}:${f.fila}`} placeholder="Buscar placa o unidad" value={g.vehiculoId} onChange={value => asignar(g.clave, value)} options={opcionesVehiculo(cat.vehiculos.filter(unidadOperable))} inputClassName={input}/>
                         {unidad.candidatos.map(motivoUnidadNoOperable).filter(Boolean).map(t => <p key={t} role="alert" className="text-xs">{t} No se ofrece como opción elegible.</p>)}
                         {unidad.candidatos.length === 1 && unidadOperable(unidad.candidatos[0]) && ["EXACTA", "ABREVIADA"].includes(unidad.estado) && !g.vehiculoId && <button type="button" className={button} onClick={() => asignar(g.clave, String(unidad.candidatos[0].id))}>Usar sugerencia para vale {f.vale}</button>}

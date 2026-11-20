@@ -62,6 +62,13 @@ export type CatalogosCB2 = {
         tipo_unidad?: string;
         /** Estado en Flota. Solo «Activo» puede recibir consumos; las demás unidades se muestran como bloqueadas con su motivo. */
         estado?: string;
+        /** Procedencia de la ficha para distinguir placas repetidas: propia o compartida de otra empresa (nunca se oculta por esto). */
+        propia?: boolean;
+        empresa_duena_nombre?: string | null;
+        marca?: string | null;
+        modelo?: string | null;
+        /** Solo existe con identidad física APROBADA por todas las empresas (entonces el catálogo ya muestra una sola ficha). */
+        identidadFisicaId?: number;
     }[];
 };
 export type SeleccionCB2 = {

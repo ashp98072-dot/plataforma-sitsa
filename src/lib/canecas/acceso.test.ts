@@ -23,4 +23,9 @@ describe("acceso de Canecas", () => {
     expect((await accesoCanecas("otra","ver")).error?.status).toBe(403);
     expect(mocks.permisos).not.toHaveBeenCalled();
   });
+  it("propaga la opción de solo lectura al guard de empresa", async () => {
+    mocks.permisos.mockResolvedValue([{modulo:"canecas",puedeVer:true}]);
+    await accesoCanecas("uno", "ver", {soloLectura:true});
+    expect(mocks.tenant).toHaveBeenCalledWith("uno", {soloLectura:true});
+  });
 });

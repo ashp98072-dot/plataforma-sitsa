@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { placaComparable } from "./combustible-coincidencias";
 import { predicadoVehiculoAccesible } from "./acceso";
 import { ErrorCB2 } from "./cb2/model";
+import { SQL_FK_A_OTRAS_TABLAS, esColumnaDeVehiculo } from "./vehiculo-referencias";
 
 const rows = async (c: PoolConnection, sql: string, args: (string | number)[] = []) => (await c.query<RowDataPacket[]>(sql, args))[0];
 const firma = (v: RowDataPacket) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
@@ -30,6 +31,7 @@ const quoted = (s: string) => { if (!/^[A-Za-z0-9_]+$/.test(s)) throw new ErrorC
 export async function referencias(c: PoolConnection, empresa: number, id: number, lock: boolean): Promise<ReferenciaVehiculo[]> {
   const columnas = await rows(c, "SELECT c.TABLE_NAME,c.COLUMN_NAME,t.ENGINE,t.TABLE_TYPE FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME WHERE c.TABLE_SCHEMA=DATABASE() ORDER BY c.TABLE_NAME,c.ORDINAL_POSITION");
   const fks = await rows(c, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME='flota_vehiculos' AND REFERENCED_COLUMN_NAME='id'");
+  const fksAjenas = await rows(c, SQL_FK_A_OTRAS_TABLAS);
   if (!columnas.some(r => r.TABLE_NAME === "flota_vehiculos" && r.COLUMN_NAME === "id")) throw new ErrorCB2("Inventario de referencias incompleto.", 503);
   if (!columnas.some(r => r.TABLE_NAME === "flota_vehiculos" && r.ENGINE === "InnoDB" && r.TABLE_TYPE === "BASE TABLE")) throw new ErrorCB2("Catálogo sin garantías transaccionales; revisión bloqueada.", 503);
   const tablas = new Map<string, Set<string>>();
@@ -37,7 +39,7 @@ export async function referencias(c: PoolConnection, empresa: number, id: number
   const encontrados: ReferenciaVehiculo[] = [];
   for (const [tabla, fields] of tablas) {
     if (tabla === "flota_vehiculos") continue;
-    const campos = [...fields].filter(campo => /(^|_)vehiculo(_.*)?_id$/.test(campo) || campo === "vehiculo_id" || campo === "unidad_recurrente_id" || fks.some(r => r.TABLE_NAME === tabla && r.COLUMN_NAME === campo));
+    const campos = [...fields].filter(campo => esColumnaDeVehiculo(tabla, campo, fks, fksAjenas));
     const snapshots: Record<string, string[]> = { flota_cb2_filas: ["decision"], flota_cb2_asignaciones: ["anterior", "nuevo"] };
     for (const campo of [...campos, ...(snapshots[tabla] ?? []).filter(campo => fields.has(campo))]) {
       if (!columnas.some(r => r.TABLE_NAME === tabla && r.ENGINE === "InnoDB" && r.TABLE_TYPE === "BASE TABLE")) throw new ErrorCB2("Una fuente de referencias no permite comprobar bloqueos transaccionales.", 503);

@@ -3,6 +3,7 @@ import { ErrorCB2 } from "./cb2/model";
 import { rows } from "./cb2/repository";
 import { catalogoSinAlias } from "./vehiculos-alias";
 import { estadoEsquemaFisico,consultaFisicaTx } from "./identidad-fisica-schema";
+import { SQL_FK_A_OTRAS_TABLAS,esColumnaDeVehiculo } from "./vehiculo-referencias";
 /** El maestro físico es global; el representante operativo conserva el ámbito de empresa.
  * Leer equivalencias nunca concede acceso ni mueve referencias históricas. */
 export async function resolverUnidadCanonica(c:PoolConnection,empresa:number,id:number,operativa=false) {
@@ -44,13 +45,14 @@ export async function historialUnidadCanonica(c:PoolConnection,empresa:number,id
  const unidad=await resolverUnidadCanonica(c,empresa,id);
  const columnas=await rows(c,"SELECT c.TABLE_NAME,c.COLUMN_NAME,c.DATA_TYPE,t.ENGINE,t.TABLE_TYPE FROM information_schema.COLUMNS c JOIN information_schema.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME WHERE c.TABLE_SCHEMA=DATABASE() ORDER BY c.TABLE_NAME,c.ORDINAL_POSITION");
  const fks=await rows(c,"SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_SCHEMA=DATABASE() AND REFERENCED_TABLE_NAME='flota_vehiculos' AND REFERENCED_COLUMN_NAME='id'");
+ const fksAjenas=await rows(c,SQL_FK_A_OTRAS_TABLAS);
  const tablas=new Map<string,RowDataPacket[]>();for(const r of columnas){const t=String(r.TABLE_NAME);tablas.set(t,[...(tablas.get(t)??[]),r]);}
  const fuentes:Record<string,unknown>[]=[];let items:RowDataPacket[]=[];let siguiente:number|null=null;
  const quote=(v:string)=>{if(!/^[a-zA-Z0-9_]+$/.test(v))throw new ErrorCB2("Inventario SQL no verificable.",503);return '`'+v+'`';};
  for(const [tabla,cols] of tablas){
   if(tabla==='flota_vehiculos')continue;
   const campos=cols.map(r=>String(r.COLUMN_NAME));
-  const refs=campos.filter(k=>/(^|_)vehiculo(_.*)?_id$/.test(k)||k==='vehiculo_id'||k==='unidad_recurrente_id'||fks.some(f=>f.TABLE_NAME===tabla&&f.COLUMN_NAME===k));
+  const refs=campos.filter(k=>esColumnaDeVehiculo(tabla,k,fks,fksAjenas));
   const tms=tabla==='tms_planes_viaje'&&campos.includes('unidad_id');
   const json:Record<string,Record<string,string[]>>={flota_cb2_filas:{decision:['$.vehiculoId','$.asignacion.vehiculoId','$.vehiculoSolicitadoId']},flota_cb2_asignaciones:{anterior:['$.vehiculoId'],nuevo:['$.vehiculoId']},auditoria:{detalle:['$.vehiculoId','$.origenId','$.destinoId']}};
   const snapshots=Object.entries(json[tabla]??{}).filter(([campo])=>campos.includes(campo));

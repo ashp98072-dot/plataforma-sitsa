@@ -23,12 +23,25 @@ export async function fusionarVehiculos(ctx: { empresaId: number; usuarioId: num
     if (!placaComparable(String(origen.placa)) || placaComparable(String(origen.placa)) !== placaComparable(String(destino.placa)) || origen.tipo_unidad !== destino.tipo_unidad || !/^[A-Z0-9]{6,32}$/.test(serial(origen.chasis)) || /^(.)\1+$/.test(serial(origen.chasis)) || ["DESCONOCIDO","PENDIENTE","SINDATO","NOAPLICA"].includes(serial(origen.chasis)) || serial(origen.chasis) !== serial(destino.chasis)) throw new ErrorCB2("La placa no demuestra identidad. Se requiere tipo y chasis/serie real coincidente, no vacío ni genérico.");
     if (Number(origen.activo) !== 1 || Number(destino.activo) !== 1 || origen.estado !== "Activo" || destino.estado !== "Activo" || Number(origen.en_taller ?? 0) || Number(destino.en_taller ?? 0)) throw new ErrorCB2("Ambas unidades deben estar activas y fuera de taller.");
     const refs = await referencias(c, ctx.empresaId, op.id, true);
-    const historicas = new Set(["flota_cb2_consumos","flota_cb2_filas","flota_cb2_asignaciones","flota_combustible_cargas","flota_vehiculo_acceso","flota_viajes","tms_planes_viaje"]);
+    // tms_solicitud_fondo_lineas y tms_unidades se admiten como historia SOLO con las verificaciones de más abajo (fondos pendientes / unidad TMS duplicada).
+    const historicas = new Set(["flota_cb2_consumos","flota_cb2_filas","flota_cb2_asignaciones","flota_combustible_cargas","flota_vehiculo_acceso","flota_viajes","tms_planes_viaje","tms_solicitud_fondo_lineas","tms_unidades"]);
     if (refs.some(r => !historicas.has(r.tabla))) throw new ErrorCB2("Hay referencias operativas, indirectas o de otros ámbitos sin verificación segura. No se fusionan automáticamente.");
     const tablas = await rows(c, "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('flota_viajes','tms_planes_viaje')");
     for (const tabla of tablas) {
       const sql = tabla.TABLE_NAME === "flota_viajes" ? "SELECT id FROM flota_viajes WHERE vehiculo_id IN (?,?) AND (estado<>'cerrado' OR hora_llegada IS NULL) FOR UPDATE" : "SELECT id FROM tms_planes_viaje WHERE tc_vehiculo_id IN (?,?) AND (estado NOT IN ('Cerrado','Cancelado') OR fecha_plan>=CURRENT_DATE) FOR UPDATE";
       if ((await rows(c, sql, [op.id, op.conservarId])).length) throw new ErrorCB2("Hay viajes abiertos o reservas vigentes. Resolverlas antes de fusionar sin cambiar sus IDs.");
+    }
+    const tablasTms = await rows(c, "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('tms_solicitud_fondo_lineas','tms_solicitudes_fondo','tms_unidades')");
+    const hayTms = (t: string) => tablasTms.some(x => x.TABLE_NAME === t);
+    if (hayTms("tms_solicitud_fondo_lineas") && hayTms("tms_solicitudes_fondo")) {
+      // Las solicitudes ya decididas conservan su ID histórico (los lectores resuelven el canónico); una pendiente aún se puede editar y debe resolverse antes.
+      const pendientes = await rows(c, "SELECT l.id FROM tms_solicitud_fondo_lineas l JOIN tms_solicitudes_fondo s ON s.empresa_id=l.empresa_id AND s.id=l.solicitud_id WHERE l.empresa_id=? AND l.vehiculo_id=? AND s.estado='Pendiente' FOR UPDATE", [ctx.empresaId, op.id]);
+      if (pendientes.length) throw new ErrorCB2("Hay solicitudes de fondo pendientes con esta unidad. Autorízalas, recházalas o corrígelas antes de fusionar.");
+    }
+    if (hayTms("tms_unidades")) {
+      // Dos unidades TMS para la misma identidad dejarían ambigua la identidad TMS (ver evaluarUnidadTms); con una sola, el alias la resuelve.
+      const unidades = await rows(c, "SELECT DISTINCT flota_vehiculo_id FROM tms_unidades WHERE empresa_id=? AND flota_vehiculo_id IN (?,?) FOR UPDATE", [ctx.empresaId, op.id, op.conservarId]);
+      if (unidades.length > 1) throw new ErrorCB2("Ambas unidades tienen una unidad TMS propia. Resuelve cuál queda antes de fusionar para no dejar la identidad TMS ambigua.");
     }
     const previas = await rows(c, "SELECT origen_id FROM flota_vehiculos_fusiones WHERE origen_id IN (?,?) OR destino_id=? FOR UPDATE", [op.id, op.conservarId, op.id]);
     if (previas.length) throw new ErrorCB2("No se permiten cadenas, ciclos ni repetir una fusión.");

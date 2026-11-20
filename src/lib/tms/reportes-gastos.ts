@@ -15,6 +15,11 @@ export type FiltrosReporteGastos = {
   fechaHasta?: string;
   clienteId?: number;
   vehiculoId?: number;
+  /**
+   * Todos los IDs de la MISMA unidad (canónico + absorbidos por fusión + identidad física) cuando se filtra por vehículo. Lo completa
+   * obtenerReporteGastosPorTipo desde vehiculoId; si viene, el filtro es IN (...) y el reporte incluye la historia de todos ellos.
+   */
+  vehiculoIds?: number[];
   categoria?: string;
   planId?: number;
   /** REPORTES-VIATICOS-GASTOS-DETALLE-1 (§3 del ticket) — filtro "empleado" por id real (gastos: tms_gastos_operativos.empleado_id). Distinto de `empleadoNombre` (texto exacto, usado por el reporte de fondos sobre un snapshot). */
@@ -164,11 +169,27 @@ export type ResultadoReporteGastos =
  * que puedan divergir), mismo espíritu que construirCondiciones en
  * reportes-viajes.ts.
  */
+/** Filtro por vehículo: IN (todos los IDs de la unidad) si se resolvieron, o igualdad exacta como siempre. */
+function aplicarFiltroVehiculo(condiciones: string[], params: (string | number)[], columna: string, f: FiltrosReporteGastos): void {
+  if (f.vehiculoIds?.length) {
+    condiciones.push(`${columna} IN (${f.vehiculoIds.map(() => "?").join(",")})`);
+    params.push(...f.vehiculoIds);
+  } else if (f.vehiculoId) {
+    condiciones.push(`${columna} = ?`);
+    params.push(f.vehiculoId);
+  }
+}
+
 export async function obtenerReporteGastosPorTipo(
   empresaId: number,
   tipo: TipoReporteGastos,
   filtros: FiltrosReporteGastos,
 ): Promise<ResultadoReporteGastos> {
+  // Filtrar por una unidad incluye la historia de todos sus IDs (alias de fusión / identidad física), sin reescribir nunca los registros.
+  if (filtros.vehiculoId && !filtros.vehiculoIds && (tipo === "fondos" || tipo === "gastosDetalle")) {
+    const { idsHistoricosVehiculo } = await import("@/lib/flota/vehiculos-alias");
+    filtros = { ...filtros, vehiculoIds: await idsHistoricosVehiculo(empresaId, filtros.vehiculoId) };
+  }
   switch (tipo) {
     case "viaje": return { tipo, etiqueta: "Viaje", filas: await reporteGastosPorViaje(empresaId, filtros) };
     case "unidad": return { tipo, etiqueta: "Unidad", filas: await reporteGastosPorUnidad(empresaId, filtros) };
@@ -191,7 +212,7 @@ function condicionesGastos(empresaId: number, f: FiltrosReporteGastos): { where:
   if (f.fechaDesde) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) >= ?"); params.push(f.fechaDesde); }
   if (f.fechaHasta) { condiciones.push("COALESCE(g.fecha_viaje, g.fecha_solicitud) <= ?"); params.push(f.fechaHasta); }
   if (f.clienteId) { condiciones.push("g.cliente_id = ?"); params.push(f.clienteId); }
-  if (f.vehiculoId) { condiciones.push("g.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  aplicarFiltroVehiculo(condiciones, params, "g.vehiculo_id", f);
   if (f.categoria) { condiciones.push("g.categoria = ?"); params.push(f.categoria); }
   if (f.planId) { condiciones.push("g.plan_id = ?"); params.push(f.planId); }
   return { where: condiciones.join(" AND "), params };
@@ -481,7 +502,7 @@ function condicionesGastosDetalleFlat(f: FiltrosReporteGastos): { where: string;
   if (f.fechaViajeDesde) { condiciones.push("g.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
   if (f.fechaViajeHasta) { condiciones.push("g.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
   if (f.clienteId) { condiciones.push("g.cliente_id = ?"); params.push(f.clienteId); }
-  if (f.vehiculoId) { condiciones.push("g.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  aplicarFiltroVehiculo(condiciones, params, "g.vehiculo_id", f);
   if (f.empleadoId) { condiciones.push("g.empleado_id = ?"); params.push(f.empleadoId); }
   if (f.categoria) { condiciones.push("g.categoria = ?"); params.push(f.categoria); }
   if (f.planId) { condiciones.push("g.plan_id = ?"); params.push(f.planId); }
@@ -503,7 +524,7 @@ function condicionesGastosDetalleLineas(f: FiltrosReporteGastos): { where: strin
   if (f.fechaViajeDesde) { condiciones.push("l.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
   if (f.fechaViajeHasta) { condiciones.push("l.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
   if (f.clienteId) { condiciones.push("l.cliente_id = ?"); params.push(f.clienteId); }
-  if (f.vehiculoId) { condiciones.push("l.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  aplicarFiltroVehiculo(condiciones, params, "l.vehiculo_id", f);
   if (f.empleadoId) { condiciones.push("l.empleado_id = ?"); params.push(f.empleadoId); }
   if (f.categoria) { condiciones.push("l.categoria = ?"); params.push(f.categoria); }
   if (f.planId) { condiciones.push("l.plan_id = ?"); params.push(f.planId); }
@@ -823,7 +844,7 @@ function condicionesFondos(empresaId: number, f: FiltrosReporteGastos): { where:
   if (f.fechaViajeDesde) { condiciones.push("l.fecha_viaje >= ?"); params.push(f.fechaViajeDesde); }
   if (f.fechaViajeHasta) { condiciones.push("l.fecha_viaje <= ?"); params.push(f.fechaViajeHasta); }
   if (f.clienteId) { condiciones.push("l.cliente_id = ?"); params.push(f.clienteId); }
-  if (f.vehiculoId) { condiciones.push("l.vehiculo_id = ?"); params.push(f.vehiculoId); }
+  aplicarFiltroVehiculo(condiciones, params, "l.vehiculo_id", f);
   if (f.placa) { condiciones.push("l.placa = ?"); params.push(f.placa); }
   if (f.empleadoNombre) { condiciones.push("l.empleado_nombre = ?"); params.push(f.empleadoNombre); }
   if (f.cargo) { condiciones.push("l.cargo = ?"); params.push(f.cargo); }

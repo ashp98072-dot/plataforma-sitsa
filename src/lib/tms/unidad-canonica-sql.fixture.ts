@@ -9,7 +9,7 @@ export function modeloSqlUnidadTms(empresaId:number, vehiculos:Vehiculo[] = []) 
   return {
     modelo,
     consultar(sql:string, args:unknown[] = []):Record<string,unknown>[]|undefined {
-      if(sql === "SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE")
+      if(sql === "SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE" || sql === "SELECT id FROM empresas WHERE id=? AND activa=1")
         return modelo.empresaActiva && Number(args[0])===empresaId ? [{id:empresaId}] : [];
       if(sql.includes('information_schema.TABLES') && (sql.includes("'flota_vehiculos_fusiones'") || sql.includes("'flota_identidades_fisicas'"))) return [];
       if(sql.startsWith('SELECT v.id,v.empresa_id,v.placa,v.activo,v.estado FROM flota_vehiculos v WHERE')) {
@@ -20,7 +20,7 @@ export function modeloSqlUnidadTms(empresaId:number, vehiculos:Vehiculo[] = []) 
         if(sql.includes('WHERE (v.empresa_id=?') && sql.includes('v.activo=1')) return visibles.filter(v=>v.activo===1);
         throw Error('Consulta Flota desconocida en modelo SQL de unidad TMS');
       }
-      if(sql === 'SELECT id,placa,flota_vehiculo_id FROM tms_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE')
+      if(sql === 'SELECT id,placa,flota_vehiculo_id FROM tms_unidades WHERE empresa_id=? ORDER BY id FOR UPDATE' || sql === 'SELECT id,placa,flota_vehiculo_id FROM tms_unidades WHERE empresa_id=? ORDER BY id')
         return modelo.unidades.filter(u=>u.empresa_id===Number(args[0]));
       if(sql === 'SELECT id FROM tms_unidades WHERE empresa_id=? AND placa=? AND flota_vehiculo_id <=> ?')
         return modelo.unidades.filter(u=>u.empresa_id===Number(args[0]) && u.placa===args[1] && u.flota_vehiculo_id===args[2]);

@@ -7,18 +7,24 @@ vi.mock("@/lib/tms/programacion-lote", async (importOriginal) => ({
   validarLote: vi.fn(),
   confirmarLote: vi.fn(),
 }));
+vi.mock("@/lib/db", () => ({ getPool: vi.fn(() => ({})) }));
+// conPlazo se prueba aparte (db-plazo.test.ts + prueba con MariaDB): aquí se ejecuta el cuerpo tal cual y se verifican los parámetros del plazo.
+vi.mock("@/lib/db-plazo", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/db-plazo")>()), conPlazo: vi.fn(async (_pool: unknown, _opts: unknown, fn: () => Promise<unknown>) => fn()) }));
 vi.mock("@/lib/tms/programacion-copia", () => ({ cargarCopiaDeFecha: vi.fn(), catalogosParaCopia: vi.fn(), borradoresDesdeCliente: vi.fn() }));
 
 import { requireTenantProgramacion, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { confirmarLote, validarLote } from "@/lib/tms/programacion-lote";
 import { borradoresDesdeCliente, cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
+import { ErrorVistaPrevia } from "@/lib/tms/lector-vista-previa";
+import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
+import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { GET as cargar } from "./route";
 import { POST as validar } from "./validar/route";
 import { POST as confirmar } from "./confirmar/route";
 
 const ctx = { params: Promise.resolve({ slug: "acme" }) };
 const fila = { fila: 1, origenPlanId: 900, rutaId: 10, clienteId: 3, horaCarga: "03:00", tipoTraslado: null, tipoViaje: "Propio", unidadPlaca: "P-1", tcVehiculoId: null, pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [], tarifaId: null, externo: null };
-const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], ...over });
+const cuerpo = (over: Record<string, unknown> = {}) => ({ fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila], tarifasEsperadas: [{ fila: 1, tarifa: null }], ...over });
 const post = (fn: typeof validar, body: unknown) => fn(new Request("http://x/api", { method: "POST", body: JSON.stringify(body) }), ctx);
 const sesion = { session: { username: "jefe" }, empresa: { id: 7 } };
 
@@ -58,6 +64,23 @@ describe("permisos y tenant", () => {
     expect(r.status).toBe(200);
     expect(vi.mocked(borradoresDesdeCliente).mock.calls[0][0]).toBe(7);
     expect(vi.mocked(confirmarLote).mock.calls[0].slice(0, 4)).toEqual([7, "jefe", "2026-09-25", { tipo: "COPIA", fechaOrigen: "2026-09-24" }]);
+  });
+  it("las tarifas esperadas son obligatorias y coherentes con las filas: ausentes, duplicadas, de más, de menos o con claves extra -> 400 sin confirmar", async () => {
+    const dos = [fila, { ...fila, fila: 2 }];
+    const sin = { fechaOrigen: "2026-09-24", fechaDestino: "2026-09-25", filas: [fila] };
+    const mal: unknown[] = [
+      sin,                                                                                                    // sin tarifasEsperadas
+      cuerpo({ tarifasEsperadas: [] }),                                                                         // de menos
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: null }, { fila: 2, tarifa: null }] }),                     // de más
+      cuerpo({ filas: dos, tarifasEsperadas: [{ fila: 1, tarifa: null }, { fila: 1, tarifa: null }] }),         // duplicada
+      cuerpo({ tarifasEsperadas: [{ fila: 9, tarifa: null }] }),                                                // otra fila
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 1, monto: 5, moneda: "GTQ", extra: 1 } }] }),         // clave extra
+      cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 1, monto: -5, moneda: "GTQ" } }] }),                 // monto inválido
+    ];
+    for (const cuerpoMalo of mal) expect((await post(confirmar, cuerpoMalo)).status).toBe(400);
+    expect(confirmarLote).not.toHaveBeenCalled();
+    expect((await post(confirmar, cuerpo({ tarifasEsperadas: [{ fila: 1, tarifa: { id: 101, monto: 1800, moneda: "GTQ" } }] }))).status).toBe(200);
+    expect(vi.mocked(confirmarLote).mock.calls[0][5]).toEqual([{ fila: 1, tarifa: { id: 101, monto: 1800, moneda: "GTQ" } }]); // llegan al servidor como expectativa a comparar
   });
   it("otra empresa: si algún origen no es accesible para la sesión, 400 y no se crea nada", async () => {
     vi.mocked(borradoresDesdeCliente).mockResolvedValue({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
@@ -111,6 +134,149 @@ describe("respuestas", () => {
     expect(await (await post(confirmar, cuerpo())).json()).toEqual({ creados: 1, planIds: [1000], codigos: ["PLAN-1"] });
   });
   it("validar devuelve la validación por fila", async () => {
-    expect(await (await post(validar, cuerpo())).json()).toEqual({ validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }] });
+    expect(await (await post(validar, cuerpo())).json()).toEqual({
+      validacion: [{ fila: 1, estado: "ok", errores: [], tarifa: null }],
+      diagnostico: { total: 1, bloqueadas: 0, porMotivo: { solape_real: 0, identidad_unidad: 0, tarifa: 0, disponibilidad: 0, otro: 0 }, conAvisos: 0, avisosPorTipo: { ventana_incompleta: 0, destino_ocupado: 0, solape_lote: 0, tarifa_historica: 0, recurso_no_disponible: 0, dato_incompleto: 0 }, origenes: [] },   // campo aditivo (solo conteos)
+      huellaAvisos: "",   // sin avisos no hay nada que aceptar
+    });
+  });
+});
+
+describe("vista previa: fallo técnico CONTROLADO (bloqueo / tiempo agotado), nunca una espera infinita ni un 500 sin cuerpo", () => {
+  const msg = "No se pudo verificar la identidad de las unidades: la base de datos está ocupada con otra operación (error ER_LOCK_WAIT_TIMEOUT). Intenta de nuevo en unos minutos.";
+  it("GET cargar: 503 con el mensaje claro; sin datos de la empresa ni texto SQL", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: msg });
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+  it("POST validar: 503 con el mismo mensaje controlado", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new ErrorVistaPrevia(msg, "ER_LOCK_WAIT_TIMEOUT"));
+    const res = await post(validar, cuerpo());
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe(msg);
+  });
+  it("cualquier OTRO error inesperado NO se disfraza: sigue subiendo (500 de Next)", async () => {
+    vi.mocked(validarLote).mockRejectedValue(new Error("bug"));
+    await expect(cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19"), ctx)).rejects.toThrow("bug");
+  });
+});
+
+describe("plazo de TODA la operación (cargar + validar + catálogos) con cancelación real", () => {
+  const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
+  it("GET cargar corre dentro de conPlazo de SOLO LECTURA con el plazo del servidor y el límite por sentencia", async () => {
+    const res = await cargar(new Request(url), ctx);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(conPlazo)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
+    expect(cargarCopiaDeFecha).toHaveBeenCalled(); expect(validarLote).toHaveBeenCalled(); expect(catalogosParaCopia).toHaveBeenCalled();
+  });
+  it("plazo agotado (ErrorPlazoOperacion) → 503 con mensaje claro y sin cache; no responde 200 ni se queda esperando", async () => {
+    vi.mocked(conPlazo).mockRejectedValueOnce(new ErrorPlazoOperacion("La operación tardó demasiado y se canceló. No se guardó ningún cambio. Intenta de nuevo."));
+    const res = await cargar(new Request(url), ctx);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toMatch(/tardó demasiado/);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+  it("POST validar también corre acotado (borradores + validación) y mapea el plazo agotado a 503", async () => {
+    expect((await post(validar, cuerpo())).status).toBe(200);
+    expect(vi.mocked(conPlazo).mock.calls[0][1]).toEqual({ presupuestoMs: PLAZO_SERVIDOR_COPIAR_MS, limiteSentenciaMs: LIMITE_SENTENCIA_COPIAR_MS, soloLectura: true });
+    vi.mocked(conPlazo).mockRejectedValueOnce(new ErrorPlazoOperacion("tardó demasiado"));
+    expect((await post(validar, cuerpo())).status).toBe(503);
+  });
+  it("las validaciones previas (permiso, fechas) responden SIN abrir conexión ni plazo", async () => {
+    expect((await cargar(new Request("http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-18"), ctx)).status).toBe(400);
+    expect(vi.mocked(conPlazo)).not.toHaveBeenCalled();
+  });
+  it("la CONFIRMACIÓN no pasa por conPlazo: conserva su transacción y su candado intactos", async () => {
+    expect((await post(confirmar, cuerpo())).status).toBe(200);
+    expect(vi.mocked(conPlazo)).not.toHaveBeenCalled();
+    expect(confirmarLote).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("diagnóstico seguro de bloqueos y avisos en las respuestas (solo conteos y números de fila)", () => {
+  const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
+  const conAvisos = [
+    { fila: 1, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [2], mensaje: "Juan Pérez está asignado también en la fila 2 de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (fila 2: sin regreso estimado). Se copia igual que el origen." }],
+      conflictos: [{ recurso: "persona", filas: [2], causa: "dia_completo" }] },
+    { fila: 2, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [1], mensaje: "Juan Pérez está asignado también en la fila 1 de este mismo lote. Se copia igual que el origen." }, { tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 9 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 19/11/2026. Se copia igual que el origen." }],
+      diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1], recursosCompartidos: ["personal"] }, conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }] },
+  ];
+  it("GET cargar y POST validar devuelven `diagnostico` con avisos y origen, sin nombres ni textos de error, y lo dejan en la bitácora solo como conteos", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.mocked(validarLote).mockResolvedValue(conAvisos as never);
+    const g = await (await cargar(new Request(url), ctx)).json();
+    expect(g.diagnostico).toMatchObject({ total: 2, bloqueadas: 0, conAvisos: 2, avisosPorTipo: { ventana_incompleta: 2, destino_ocupado: 1 }, origenes: [{ fila: 2, falta: "regreso", afecta: 1 }] });
+    const v = await (await post(validar, cuerpo())).json();
+    expect(v.diagnostico).toEqual(g.diagnostico);
+    expect(JSON.stringify(g.diagnostico)).not.toMatch(/Juan|Pérez|asignado|PLAN-9/);
+    expect(info).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/Juan|Pérez|asignado|acme|PLAN-9/i);
+    info.mockRestore();
+  });
+  it("un lote sin bloqueos no genera ruido en la bitácora", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const g = await (await cargar(new Request(url), ctx)).json();
+    expect(g.diagnostico).toMatchObject({ bloqueadas: 0, origenes: [] });
+    expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
+  it("la CONFIRMACIÓN conserva su contrato: no depende del diagnóstico y su respuesta de error por fila no cambia", async () => {
+    vi.mocked(confirmarLote).mockResolvedValue({ ok: false, status: 409, error: "2 de 2 fila(s) no pasaron la validación. No se creó ningún viaje (todo o nada).", erroresPorFila: [{ fila: 1, errores: ["x"] }] });
+    const res = await post(confirmar, cuerpo());
+    expect(res.status).toBe(409);
+    expect(Object.keys(await res.json()).sort()).toEqual(["error", "erroresPorFila"]);
+  });
+});
+
+describe("aceptación de avisos en el servidor: huella en la vista previa y verificación al confirmar", () => {
+  const url = "http://x/api?fechaOrigen=2026-11-18&fechaDestino=2026-11-19";
+  const unAviso = [{ fila: 1, estado: "ok", errores: [], tarifa: null, avisos: [{ tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 9 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9. Se copia igual que el origen." }] }];
+  const HEX = /^[0-9a-f]{64}$/;
+
+  it("GET cargar y POST validar entregan la MISMA huella (hex de 64) cuando hay avisos, y \"\" cuando no los hay; no contiene datos del texto", async () => {
+    vi.mocked(validarLote).mockResolvedValue(unAviso as never);
+    const g = await (await cargar(new Request(url), ctx)).json();
+    const v = await (await post(validar, cuerpo({ fechaOrigen: "2026-11-18", fechaDestino: "2026-11-19" }))).json();
+    expect(g.huellaAvisos).toMatch(HEX);
+    expect(v.huellaAvisos).toBe(g.huellaAvisos);
+    expect(g.huellaAvisos).not.toMatch(/Juan|PLAN-9/);
+    vi.mocked(validarLote).mockResolvedValue([{ fila: 1, estado: "ok", errores: [], tarifa: null }] as never);
+    expect((await (await cargar(new Request(url), ctx)).json()).huellaAvisos).toBe("");
+  });
+
+  it("la huella cambia si cambia materialmente el conflicto (otro viaje que ocupa el recurso) aunque el texto sea idéntico", async () => {
+    vi.mocked(validarLote).mockResolvedValue(unAviso as never);
+    const a = (await (await cargar(new Request(url), ctx)).json()).huellaAvisos;
+    const otroViaje = [{ ...unAviso[0], avisos: [{ ...unAviso[0].avisos[0], ocupadoPor: { planId: 10 } }] }];
+    vi.mocked(validarLote).mockResolvedValue(otroViaje as never);
+    expect((await (await cargar(new Request(url), ctx)).json()).huellaAvisos).not.toBe(a);
+  });
+
+  it("confirmar PASA la aceptación al motor (que la verifica bajo el candado); sin ella pasa undefined", async () => {
+    const huella = "c".repeat(64);
+    expect((await post(confirmar, cuerpo({ avisosAceptados: huella }))).status).toBe(200);
+    expect(vi.mocked(confirmarLote).mock.calls[0][6]).toBe(huella);
+    vi.mocked(confirmarLote).mockClear();
+    await post(confirmar, cuerpo());
+    expect(vi.mocked(confirmarLote).mock.calls[0][6]).toBeUndefined();
+  });
+
+  it("una aceptación mal formada se rechaza con 400 antes de tocar nada (el esquema es estricto)", async () => {
+    for (const mala of ["aceptado", "C".repeat(64), "c".repeat(63), 1, true]) {
+      const res = await post(confirmar, cuerpo({ avisosAceptados: mala }));
+      expect(res.status).toBe(400);
+    }
+    expect(confirmarLote).not.toHaveBeenCalled();
+    expect(borradoresDesdeCliente).not.toHaveBeenCalled();
+  });
+
+  it("si el motor rechaza por avisos sin aceptar/desactualizados, la respuesta es 409 con requiereRevalidar y sin erroresPorFila", async () => {
+    vi.mocked(confirmarLote).mockResolvedValue({ ok: false, status: 409, error: "Hay avisos de la copia sin aceptar o que cambiaron desde la vista previa.", requiereRevalidar: true });
+    const res = await post(confirmar, cuerpo());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "Hay avisos de la copia sin aceptar o que cambiaron desde la vista previa.", requiereRevalidar: true });
   });
 });
