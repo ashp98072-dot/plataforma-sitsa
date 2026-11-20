@@ -117,6 +117,18 @@ export async function POST(req: Request, ctx: Ctx) {
       }
 
       if (duenoId !== guard.empresa.id) throw new ErrorIdentidadVehiculo("Importa desde la empresa propietaria; no se modifican unidades de otra empresa.", 403);
+      const accesosPara = (vehiculoEmpresaId: number) => {
+        const ids = new Set<number>();
+        // Quien importa siempre ve la unidad
+        ids.add(guard.empresa.id);
+        // Grupo compartido KT / Mónaco / Fresco Fresh
+        if (resuelta.grupoCompartido || idsComparten.includes(vehiculoEmpresaId)) {
+          for (const id of idsComparten) ids.add(id);
+        }
+        ids.delete(vehiculoEmpresaId);
+        return [...ids];
+      };
+
       const creado = await escribirVehiculos(duenoId, async conn => {
       const execute = async (sql: string, params: SqlParams = []) => (await conn.execute<ResultSetHeader>(sql, params))[0];
       let existente = await coincidenciasPlacaTx(conn, duenoId, f.placa);
@@ -137,18 +149,6 @@ export async function POST(req: Request, ctx: Ctx) {
           : KM_INTERVALO_SERVICIO_DEFAULT;
       const kmUltimo = f.kmUltimoServicio ?? 0;
       const filtros = parsearFiltrosTexto(f.filtros);
-
-      const accesosPara = (vehiculoEmpresaId: number) => {
-        const ids = new Set<number>();
-        // Quien importa siempre ve la unidad
-        ids.add(guard.empresa.id);
-        // Grupo compartido KT / Mónaco / Fresco Fresh
-        if (resuelta.grupoCompartido || idsComparten.includes(vehiculoEmpresaId)) {
-          for (const id of idsComparten) ids.add(id);
-        }
-        ids.delete(vehiculoEmpresaId);
-        return [...ids];
-      };
 
       if (existente[0]) {
         const vid = Number(existente[0].id);
@@ -259,7 +259,7 @@ export async function POST(req: Request, ctx: Ctx) {
         }
         return true;
       }
-      });
+      }, accesosPara(duenoId)); // bloquea también las empresas destino de la compartición
       if (creado) creados++; else actualizados++;
     } catch (err) {
       errores.push(

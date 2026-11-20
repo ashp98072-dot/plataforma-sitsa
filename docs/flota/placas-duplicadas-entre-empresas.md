@@ -42,3 +42,13 @@ Crear una ficha ya se bloquea si la placa existe en la empresa o corresponde a u
 ## Vista previa de conflictos antes de vincular
 `sql/vista-previa-2026-11-flota-conflictos-pareja.sql` (solo lectura) muestra, para dos fichas: dependencias por tabla, qué se conserva, choques que impedirían unificarlas (vales CB2 repetidos, periodos de multas, unidades TMS distintas, chasis) y operaciones abiertas que bloquean la identidad. Es informativa: no unifica ni reasigna nada.
 
+### Orden de bloqueo (alta, compartición e importación)
+Todo escritor de placas (alta, propiedad, edición e importación) bloquea primero la fila de **su propia empresa** (`empresas … FOR UPDATE`). Para que una compartición y un alta en la empresa **destino** no puedan escapar la una de la otra, la compartición (edición e importación) bloquea además las empresas **destino** en la **misma sentencia** que la dueña y en orden **ascendente de id** (`escribirVehiculos(…, tambien)`):
+
+- Compartición primero: el alta en el destino espera, ve la unidad compartida y se rechaza. Alta primero: la compartición espera, ve la ficha nueva y avisa. Exactamente una gana.
+- Dos comparticiones cruzadas (A→B y B→A) bloquean en el mismo orden: sin interbloqueos.
+- No depende del nivel de aislamiento: sin este bloqueo explícito, con `READ COMMITTED` (sin bloqueos de hueco) no había nada que las serializara; con `REPEATABLE READ` solo lo hacían los bloqueos de hueco del índice y el plan de la consulta.
+- Pruebas de concurrencia contra MariaDB desechable (`compartir-placa-repetida-concurrencia.db.test.ts`, con `REPEATABLE READ` y `READ COMMITTED`).
+
+**Observación (previa a este cambio, no corregida):** `exigirSinDuplicadoCompartidoTx` usa `FOR UPDATE` sobre las fichas de otras empresas, así que una compartición pendiente puede hacer esperar o, con `REPEATABLE READ`, interbloquear altas en empresas no relacionadas. Un interbloqueo devuelve error 500 y se reintenta; conviene revisarlo aparte.
+

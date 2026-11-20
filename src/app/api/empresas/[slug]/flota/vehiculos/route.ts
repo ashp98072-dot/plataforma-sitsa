@@ -567,7 +567,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
                 ? "Vehículo marcado como activo."
                 : "Vehículo actualizado.",
     });
-    });
+    }, esDueno ? (d.accesoEmpresaIds ?? []) : []); // bloquea también las empresas destino (mismo orden que cualquier otro escritor de placas)
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "No se pudo actualizar.", ...(err instanceof ErrorIdentidadVehiculo && err.codigo ? { codigo: err.codigo } : {}) }, { status: err instanceof ErrorIdentidadVehiculo ? err.status : 500 });
   }

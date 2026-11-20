@@ -111,6 +111,13 @@ describe("integración en las rutas (por código fuente)", () => {
     expect(importacion.match(/exigirComparticionSinDuplicadoTx\(conn,/g)).toHaveLength(2);
     for (const llamada of [/exigirComparticionSinDuplicadoTx\(conn, vid, acc\)/, /exigirComparticionSinDuplicadoTx\(conn, nuevoId, acc\)/]) expect(importacion).toMatch(llamada);
   });
+  it("importación y edición bloquean TAMBIÉN las empresas destino al abrir la transacción (mismo orden que cualquier alta)", () => {
+    expect(importacion).toMatch(/escribirVehiculos\(duenoId, async conn => \{[\s\S]*?\}, accesosPara\(duenoId\)\)/);
+    expect(vehiculos).toMatch(/\}, esDueno \? \(d\.accesoEmpresaIds \?\? \[\]\) : \[\]\)/);
+    const escritura = readFileSync("src/lib/flota/vehiculos-escritura.ts", "utf8");
+    expect(escritura).toContain("ORDER BY id FOR UPDATE"); // una sola sentencia ordenada: sin bloqueos en orden inverso
+    expect(escritura).toContain("tambien: number[] = []");
+  });
   it("pantalla: solo reintenta con confirmación explícita del usuario y solo en 409 con el código", () => {
     expect(cliente).toContain('data.codigo === "PLACA_REPETIDA_AL_COMPARTIR" && window.confirm(');
     expect(cliente).toContain("confirmarPlacaRepetida: true");

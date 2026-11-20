@@ -12,13 +12,23 @@ export const PLACA_REPETIDA_AL_COMPARTIR = "PLACA_REPETIDA_AL_COMPARTIR";
 
 /** All application plate writers lock the owning company on the same transaction connection.
  * No UNIQUE/DDL or changes to existing plates. External SQL writers remain outside this guarantee. */
-export async function escribirVehiculos<T>(empresa: number, accion: (c: PoolConnection) => Promise<T>) {
+/**
+ * `tambien`: empresas DESTINO de una compartición. Se bloquean en la MISMA sentencia que la dueña y en orden ascendente de id, de modo que una
+ * compartición y un alta/edición de placa en la empresa destino se serializan (todo escritor de placas bloquea la fila de su propia empresa
+ * primero) y dos comparticiones cruzadas nunca se bloquean en orden inverso (sin interbloqueos). Las destino inexistentes o inactivas no se
+ * bloquean: en ellas la aplicación no puede crear fichas.
+ */
+export async function escribirVehiculos<T>(empresa: number, accion: (c: PoolConnection) => Promise<T>, tambien: number[] = []) {
   const c = await getPool().getConnection();
   let limpia = false, commit = false;
   try {
     await c.beginTransaction();
-    const [e] = await c.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE", [empresa]);
-    if (!e.length) throw new ErrorIdentidadVehiculo("Empresa no disponible.", 403);
+    const ids = [...new Set([empresa, ...tambien].map(Number))].filter(n => Number.isSafeInteger(n) && n > 0).sort((a, b) => a - b);
+    // Sin destinos: la misma sentencia de siempre (altas y ediciones no cambian).
+    const [e] = ids.length > 1 && ids.some(n => n !== Number(empresa))
+      ? await c.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id IN (?) AND activa=1 ORDER BY id FOR UPDATE", [ids])
+      : await c.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE", [empresa]);
+    if (!e.some(r => Number(r.id) === Number(empresa))) throw new ErrorIdentidadVehiculo("Empresa no disponible.", 403);
     const result = await accion(c);
     commit = true; await c.commit(); limpia = true;
     return result;
