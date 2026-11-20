@@ -19,3 +19,7 @@ it("no inventa version si BUILD_ID no existe ni expone valores no validados",asy
 it("sin permisos no lee build ni configuracion",async()=>{
  m.guard.mockResolvedValue({error:Response.json({error:"denied"},{status:403})});expect((await get()).status).toBe(403);expect(m.load).not.toHaveBeenCalled();expect(m.read).not.toHaveBeenCalled();
 });
+it("expone el marcador funcional de Shell para verificar el despliegue (conserva revisionFuncional previo y no cambia los flags)",async()=>{
+ const data=await (await get()).json();expect(data).toMatchObject({revisionFuncional:"cb2-identidades-independientes-v2",revisionShell:"cb2-shell-vales-unidades-v1",tercerosDirectos:false,tercerosHabilitados:true});
+});
+
