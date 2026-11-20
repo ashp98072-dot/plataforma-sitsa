@@ -58,10 +58,27 @@ import { regresoTrasladado } from "@/lib/tms/programacion-copia-ventana";
  *    costo tercerizado y datos externos, vehículo solicitado (sin dato o inexistente = sin él).
  *  - No bloquean, solo AVISAN (y exigen aceptación verificada en el servidor): ventana incompleta, solape entre filas del lote, recurso ocupado en
  *    el destino, personal inactivo / unidad o TC fuera de servicio o en taller / viaje en curso, ruta o vehículo solicitado inactivo,
- *    tarifa histórica y datos faltantes del origen.
- *  - Siguen bloqueando: recursos o ruta/cliente inexistentes, TC como unidad, identidad de unidad TMS, repetir una persona en el mismo
- *    viaje, convertir un tercerizado en propio (o viceversa), límites de longitud, hora inválida, copia ya existente, permisos y empresa.
- *  - No copiables EXACTAMENTE: el personal inactivo reutiliza su registro de personal existente; si no existe, el lote se rechaza.
+ *    tarifa histórica y datos faltantes del origen (incluida una tarifa sin monto: la copia queda sin tarifa).
+ *  - ORIGEN en cualquier estado: se cargan y validan viajes Programado, En curso, Cerrado y Cancelado (el estado nunca se copia).
+ *
+ *  SIGUEN IMPIDIENDO GUARDAR (todo el lote se rechaza, no se crea nada) — todas son INTEGRIDAD de datos o SEGURIDAD, no reglas operativas:
+ *   · Referencias rotas o ajenas: ruta, cliente, empleado, unidad (que no exista en Flota) o TC inexistentes/inaccesibles para ESTA empresa
+ *     (FK / aislamiento multiempresa); piloto extra inexistente.
+ *   · Identidad de la unidad TMS (#624): la placa choca con otra identidad (no se puede resolver `unidad_id` sin duplicar/fusionar unidades).
+ *   · Estructura inválida: tercerizado con recursos internos o propio con datos externos (convertiría el tipo de viaje), la misma persona dos veces
+ *     en un viaje, más de 8 auxiliares, TC con la misma placa que la unidad, placa de TC usada como unidad, textos que exceden la columna
+ *     (truncarlos alteraría el dato), costo tercerizado negativo, hora con formato inválido, regreso editado inválido.
+ *   · Tarifa inyectada: una tarifa no vigente que NO es la del propio plan origen (el cliente no puede fijar montos).
+ *   · Anti-duplicado: ya existe una copia NO cancelada de ese origen para esa fecha destino (una copia destino Cancelada permite re-copiar).
+ *   · Seguridad/consistencia: permisos, empresa de la sesión, origen que no es de esa empresa/fecha, más de MAX_FILAS_LOTE filas, aceptación de
+ *     avisos ausente o desactualizada, tarifa vigente distinta a la de la vista previa, y cualquier error de base de datos (rollback atómico).
+ *
+ *  NO SE PUEDE COPIAR EXACTAMENTE (se copia lo posible, con aviso; nunca se inventa):
+ *   · Personal inactivo: se reutiliza su registro de personal existente (si no existe, el lote se rechaza: no se crea personal inactivo).
+ *   · Vehículo solicitado inexistente en el catálogo de la empresa: queda NULL (la FK impide el id). Inactivo: se conserva con aviso.
+ *   · Tarifa histórica sin monto guardado en el origen: la copia queda sin tarifa. Piloto externo sin nombre: queda sin él.
+ *   · No se copian por diseño: estado, código, cierres, evidencias, kilometraje, cobros/facturas/pagos/movimientos, viáticos del origen (se
+ *     recalculan con la configuración vigente), notas y referencia del cliente.
  */
 export const MAX_FILAS_LOTE = 200;
 export const MAX_AUXILIARES = 8;
@@ -338,6 +355,11 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     };
     const aplicarTarifaFaltante = () => {
       const h = tarifaHistorica();
+      // El origen SÍ tenía esa tarifa pero sin monto guardado: no se puede fotografiar y NO se inventa un monto; la copia nace sin tarifa (aviso), no bloquea.
+      if (!h && b.tarifaId != null && origenPlan && Number(origenPlan.tarifa_id) === b.tarifaId) {
+        avisar("dato_incompleto", { tipo: "dato", id: "tarifa" }, "El viaje origen tiene una tarifa sin monto registrado: la copia queda sin tarifa.");
+        return;
+      }
       if (h) { res.tarifa = h; avisar("tarifa_historica", { tipo: "tarifa", id: String(h.id) }, `La tarifa del viaje origen${h.nombre ? ` "${h.nombre}"` : ""} ya no es una tarifa vigente de esta ruta: se conserva tal como estaba.`); }
       else errores.push("La tarifa seleccionada no es una tarifa vigente de esta ruta.");
     };

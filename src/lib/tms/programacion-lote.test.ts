@@ -393,6 +393,15 @@ describe("tarifa: siempre re-resuelta; solo tarifas vigentes del catálogo", () 
     expect((await confirmarAceptando(lote)).ok).toBe(true);
     expect(creadosDestino()[0]).toMatchObject({ tarifa_comercial: 1234.5, tarifa_id: 555, tarifa_nombre: "Tarifa 2025", costo_ref: 700 });
   });
+  it("tarifa del origen SIN monto guardado: no se inventa; la copia nace sin tarifa con aviso `dato_incompleto` (no bloquea)", async () => {
+    origenEconomico.set(900, { tarifa_id: 555, tarifa_nombre_historico: "Sin monto", tarifa_monto_historico: null, tarifa_comercial: null, tarifa_moneda_historico: null });
+    const lote = [borrador({ tarifaId: 555 })];
+    const [v] = await validarLote(EMP, DESTINO, lote);
+    expect(v).toMatchObject({ estado: "ok", tarifa: null });
+    expect(v.avisos?.[0]).toMatchObject({ tipo: "dato_incompleto", recurso: { tipo: "dato", id: "tarifa" } });
+    expect((await confirmarAceptando(lote)).ok).toBe(true);
+    expect(creadosDestino()[0]).toMatchObject({ tarifa_id: null, tarifa_comercial: null });
+  });
   it("el cliente NO puede inyectar una tarifa: sin fotografía del origen (o con otro tarifa_id) una tarifa no vigente sigue siendo error", async () => {
     expect((await validarLote(EMP, DESTINO, [borrador({ tarifaId: 555 })]))[0].estado).toBe("error");   // el origen no tiene esa tarifa
     origenEconomico.set(900, { tarifa_id: 556, tarifa_nombre_historico: "Otra", tarifa_monto_historico: 1, tarifa_comercial: 1, tarifa_moneda_historico: "GTQ" });
@@ -776,16 +785,17 @@ describe("copiar programación de otra fecha", () => {
     const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
     vi.mocked(query).mockImplementation((async (sql: string, params: unknown[]) => {
       const s = String(sql);
-      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) { expect(s).toContain("p.estado <> 'Cancelado'"); return rows; }
+      if (s.includes("LEFT JOIN tms_clientes c") && s.includes("p.fecha_plan = ?")) { expect(s).not.toContain("Cancelado"); expect(s).toMatch(/p\.empresa_id = \? AND p\.fecha_plan = \?/); return rows; }
       if (s.includes("FROM tms_plan_auxiliares pa")) return aux;
       return base(sql, params);
     }) as never);
     return cargarCopiaDeFecha(EMP, ORIGEN);
   };
 
-  it("un Cerrado sirve de origen (se copia su configuración, no su estado) y el SQL de origen EXCLUYE Cancelados", async () => {
-    const filas = await cargar([origenRow({ estado: "Cerrado" }), origenRow({ id: 901, estado: "Programado", codigo: "P2" })]);
-    expect(filas.map((f) => f.origen.estado)).toEqual(["Cerrado", "Programado"]);
+  it("TODOS los estados sirven de origen (se copia su configuración, no su estado) y el SQL de origen NO filtra por estado", async () => {
+    const filas = await cargar([origenRow({ estado: "Cerrado" }), origenRow({ id: 901, estado: "Programado", codigo: "P2" }), origenRow({ id: 902, estado: "En curso", codigo: "P3" }), origenRow({ id: 903, estado: "Cancelado", codigo: "P4" })]);
+    expect(filas.map((f) => f.origen.estado)).toEqual(["Cerrado", "Programado", "En curso", "Cancelado"]);
+    expect(filas.every((f) => !("estado" in f.borrador))).toBe(true);   // el estado NO viaja en el borrador
   });
 
   it("copia solo configuración: cliente, ruta, vehículo solicitado del origen, hora, traslado, tipo, unidad, TC, piloto, auxiliares (0..8) y paradas; tarifa NULL", async () => {
@@ -856,13 +866,14 @@ describe("copiar programación de otra fecha", () => {
     expect(readFileSync("src/lib/tms/programacion-copia.ts", "utf8")).not.toMatch(/tms_viaticos|monto_asignado|viatico/i);
   });
 
-  // Emula el SELECT de validación de origen HONRANDO los predicados que aparecen en el SQL (empresa, fecha, no Cancelado).
+  // Emula el SELECT de validación de origen HONRANDO los predicados que aparecen en el SQL (empresa, fecha y, si alguien lo reintrodujera, estado).
   const origenes = [
     { id: 900, empresa_id: EMP, fecha: ORIGEN, estado: "Programado" },
     { id: 901, empresa_id: EMP, fecha: ORIGEN, estado: "Cerrado" },
     { id: 902, empresa_id: EMP, fecha: ORIGEN, estado: "Cancelado" },
     { id: 903, empresa_id: EMP, fecha: "2026-09-20", estado: "Programado" },
     { id: 904, empresa_id: 8, fecha: ORIGEN, estado: "Programado" },
+    { id: 905, empresa_id: EMP, fecha: ORIGEN, estado: "En curso" },
   ];
   const emularValidacionOrigen = () => {
     const base = vi.mocked(query).getMockImplementation() as unknown as (s: string, p: unknown[]) => Promise<unknown>;
@@ -877,7 +888,7 @@ describe("copiar programación de otra fecha", () => {
   };
   const desde = (ids: number[], empresa = EMP, fecha = ORIGEN) => borradoresDesdeCliente(empresa, fecha, ids.map((id, i) => ({ ...borrador({ fila: i + 1, origenPlanId: id }), paradas: undefined }) as never));
 
-  it("borradoresDesdeCliente: el origen debe ser de ESTA empresa, de la fecha origen y NO Cancelado; las paradas se releen en el servidor", async () => {
+  it("borradoresDesdeCliente: el origen debe ser de ESTA empresa y de la fecha origen (cualquier estado); las paradas se releen en el servidor", async () => {
     emularValidacionOrigen();
     const ok = await desde([900]);
     expect(ok).toMatchObject({ ok: true });
@@ -886,12 +897,42 @@ describe("copiar programación de otra fecha", () => {
     expect(await borradoresDesdeCliente(EMP, ORIGEN, [borrador(), borrador({ fila: 2 })])).toMatchObject({ ok: false }); // mismo origen dos veces
   });
 
-  it("origen CANCELADO enviado a mano -> rechazo con mensaje claro (aunque la carga inicial ya lo excluya)", async () => {
+  it("origen CANCELADO o EN CURSO enviado a mano -> VÁLIDO (copia fiel); la consulta de validación NO filtra por estado pero sí por empresa y fecha", async () => {
     emularValidacionOrigen();
-    const r = await desde([902]);
-    expect(r).toEqual({ ok: false, error: "Algún viaje origen no existe, está cancelado o no pertenece a la fecha/empresa indicada." });
-    expect((await desde([900, 902])).ok).toBe(false); // uno bueno + uno cancelado: se rechaza el lote
-    expect(String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(s).includes("DATE_FORMAT(regreso_estimado"))![0])).toContain("estado <> 'Cancelado'");
+    expect(await desde([902])).toMatchObject({ ok: true });
+    expect(await desde([905])).toMatchObject({ ok: true });
+    expect(await desde([900, 902, 905])).toMatchObject({ ok: true });   // válidos + cancelado + en curso: un solo lote
+    const sql = String(vi.mocked(query).mock.calls.find(([s]) => String(s).includes("FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ?") && String(s).includes("DATE_FORMAT(regreso_estimado"))![0]);
+    expect(sql).not.toContain("Cancelado");
+    expect(sql).toContain("WHERE empresa_id = ? AND fecha_plan = ? AND id IN");
+    // sigue sin ser posible colar un origen de otra empresa/fecha, aunque esté Cancelado
+    expect((await desde([902], 8)).ok).toBe(false);
+    expect((await desde([902], EMP, "2026-09-20")).ok).toBe(false);
+  });
+
+  it("un origen CANCELADO se copia como PROGRAMADO: nace sin cierre ni estado heredado, el origen no se modifica y la tarifa/datos económicos siguen la política de copia fiel", async () => {
+    emularValidacionOrigen();
+    e.planes.push(plan({ id: 902, codigo: "ORI-902", estado: "Cancelado", fecha: ORIGEN, piloto_id: 501 }));
+    origenEconomico.set(902, { tarifa_id: 555, tarifa_nombre_historico: "Cancelada 2025", tarifa_monto_historico: 650, tarifa_comercial: 650, tarifa_moneda_historico: "GTQ", costo_operativo_referencia: 200 });
+    const lote = [borrador({ fila: 1, origenPlanId: 902, tarifaId: 555 })];
+    expect((await desde([902])).ok).toBe(true);
+    const [v] = await validarLote(EMP, DESTINO, lote);
+    expect(v.estado).toBe("ok");
+    expect((await confirmarAceptando(lote)).ok).toBe(true);
+    const nuevo = creadosDestino()[0];
+    expect(nuevo).toMatchObject({ estado: "Programado", tarifa_id: 555, tarifa_comercial: 650, costo_ref: 200 });
+    expect(nuevo.cerrado_por ?? null).toBeNull();
+    expect(e.planes.find((x) => x.id === 902)!.estado).toBe("Cancelado");   // el origen queda intacto
+    expect(e.origen).toEqual([expect.objectContaining({ tipo: "COPIA", plan_origen_id: 902, fecha_destino: DESTINO })]);   // trazabilidad al origen cancelado
+    expect(conn.execute.mock.calls.some((c) => /UPDATE\s+tms_planes_viaje/i.test(String(c[0])))).toBe(false);
+  });
+
+  it("copiar un origen Cancelado dos veces SIGUE bloqueado por el anti-duplicado (mientras la copia no esté cancelada)", async () => {
+    emularValidacionOrigen();
+    expect((await confirmar([borrador({ fila: 1, origenPlanId: 902 })])).ok).toBe(true);
+    const otra = await validarLote(EMP, DESTINO, [borrador({ fila: 1, origenPlanId: 902 })]);
+    expect(otra[0].estado).toBe("error");
+    expect(otra[0].errores.join(" ")).toContain("ya fue copiado");
   });
 
   it("origen CERRADO sigue siendo válido (lo que se copia es configuración, no estado)", async () => {
@@ -908,11 +949,11 @@ describe("copiar programación de otra fecha", () => {
     expect((await desde([900], 8)).ok).toBe(false); // sesión de otra empresa
   });
 
-  it("ORIGEN cancelado ≠ DESTINO anterior cancelado: un destino Cancelado sigue permitiendo volver a copiar el mismo origen", async () => {
+  it("un DESTINO anterior Cancelado sigue permitiendo volver a copiar el mismo origen (distinto de que el origen esté Cancelado, que ya no importa)", async () => {
     emularValidacionOrigen();
     expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true);
     creadosDestino()[0].estado = "Cancelado"; // el plan DESTINO generado se cancela
-    expect((await desde([900])).ok).toBe(true); // el origen (no cancelado) sigue válido
+    expect((await desde([900])).ok).toBe(true); // el origen sigue válido
     expect((await confirmar([borrador({ origenPlanId: 900 })])).ok).toBe(true); // nueva copia permitida
     expect(e.origen).toHaveLength(2);
   });
