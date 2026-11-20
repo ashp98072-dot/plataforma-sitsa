@@ -218,7 +218,7 @@ export function AppShell({
     if (isAdmin || permisos.some(p => p.modulo === "canecas" && p.puedeVer)) {
       g.push({ id: "canecas", label: "Gestión de Canecas", icon: <IconConta />, links: [
         { href: `${base}/canecas`, label: "Panel general", key: "canecas-panel" },
-        ...[ ["productos", "Aceites"], ["ubicaciones", "Ubicaciones"], ["compras", "Compras"], ["recepciones", "Recepciones"], ["inventario", "Inventario"], ["movimientos", "Movimientos"] ].map(([path, label]) => ({ href: `${base}/canecas/${path}`, label, key: `canecas-${path}` })),
+        ...[ ["productos", "Aceites"], ["ubicaciones", "Ubicaciones"], ["compras", "Compras"], ["recepciones", "Recepciones"], ["inventario", "Inventario"], ["movimientos", "Movimientos"], ["traslados", "Traslados"] ].map(([path, label]) => ({ href: `${base}/canecas/${path}`, label, key: `canecas-${path}` })),
       ] });
     }
 
