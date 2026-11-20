@@ -91,7 +91,7 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                 const f = await service.archivo(ctx.empresaId, iid!);
                 return new Response(new Uint8Array(f.buffer), { headers: { ...headers, "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Content-Disposition": `attachment; filename="cb2-${iid}.xlsx"` } });
             }
-            const filtros = z.object({pilotoExternoId:id.optional(),unidadExternaId:id.optional(),vehiculoId:id.optional(),empleadoId:id.optional(),importacionId:id.optional(),producto:z.enum(productos).optional(),proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional()}).parse({
+            const filtros = z.object({pilotoExternoId:id.optional(),unidadExternaId:id.optional(),vehiculoId:id.optional(),empleadoId:id.optional(),importacionId:id.optional(),producto:z.enum(productos).optional(),proveedorId:id.optional(),estado:z.enum(["PENDIENTE_FACTURA","FACTURADO","PARCIAL","COMPLETA","SOLO_EVIDENCIA"]).optional(),desde:z.iso.date().optional(),hasta:z.iso.date().optional(),buscar:z.string().trim().max(128).optional(),piloto:z.string().trim().max(160).optional(),vinculo:z.enum(["FLOTA","EXTERNA","AMBIGUA","SIN_VINCULO"]).optional()}).parse({
                 pilotoExternoId:url.searchParams.has("pilotoExternoId")?Number(url.searchParams.get("pilotoExternoId")):undefined,
                 unidadExternaId:url.searchParams.has("unidadExternaId")?Number(url.searchParams.get("unidadExternaId")):undefined,
                 vehiculoId:url.searchParams.has("vehiculoId")?Number(url.searchParams.get("vehiculoId")):undefined,
@@ -99,7 +99,7 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                 importacionId:url.searchParams.has("importacionId")?Number(url.searchParams.get("importacionId")):undefined,
                 producto:url.searchParams.get("producto")||undefined,
                 proveedorId:url.searchParams.has("proveedorId")?Number(url.searchParams.get("proveedorId")):undefined,
-                estado:url.searchParams.get("estado")||undefined,desde:url.searchParams.get("desde")||undefined,hasta:url.searchParams.get("hasta")||undefined,buscar:url.searchParams.get("buscar")||undefined,
+                estado:url.searchParams.get("estado")||undefined,desde:url.searchParams.get("desde")||undefined,hasta:url.searchParams.get("hasta")||undefined,buscar:url.searchParams.get("buscar")||undefined,piloto:url.searchParams.get("piloto")||undefined,vinculo:url.searchParams.get("vinculo")||undefined,
             });
             if(filtros.desde && filtros.hasta && filtros.desde>filtros.hasta)throw new ErrorCB2("Rango de fechas invalido.",400);
             const tipo = accion as "importaciones" | "consumos" | "facturas" | "filas";

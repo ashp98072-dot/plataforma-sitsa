@@ -7,6 +7,8 @@ import { corregirAsignacion } from "./asignaciones";
 import { fusionarVehiculos } from "../vehiculos-fusion";
 import { revisarPlacaDuplicada } from "../vehiculos-duplicados";
 import { consultarConsumos } from "./consumos-lectura";
+import { esquemaVinculoUnidad } from "./vinculo-unidad";
+import { vehiculoIdResumen } from "./resumen-mensual";
 import { validarTerceroDirecto } from "./terceros-directos";
 import { registrarTerceros } from "./terceros-fixture";
 /** MariaDB real solo en instancia PIPE creada por run-windows.mjs; adaptadores de archivos sintéticos. */
@@ -863,4 +865,81 @@ describe.skipIf(!pipe)("PR587 MariaDB desechable: migracion y concurrencia reale
   await q("DROP TABLE lab_check_capture");
  });
 
+
+ // ÚLTIMO test: instala la migración mínima de vínculo de unidad (modifica ck_cb2c_unidad_tipo), por eso va después de las pruebas que comparan esa restricción.
+ it("guardar un vale Shell SIN vincular la unidad (placa ambigua o sin unidad en Flota): migración mínima, validación del servidor, historial, idempotencia y aislamiento",async()=>{
+  vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","1");
+  try{
+   await q("INSERT INTO empleados(id,empresa_id,nombre,estado) VALUES(9901,1,'Rene Baja Vinculo','Baja'),(9903,2,'Otra Empresa Vinculo','Activo')");
+   await q("INSERT INTO flota_vehiculos(id,empresa_id,placa,chasis) VALUES(9910,1,'C-591LAB','LABSERIAL000009910'),(9911,1,'C 591LAB','LABSERIAL000009911'),(9912,1,'C-592LAB','LABSERIAL000009912'),(9913,2,'C-594LAB','LABSERIAL000009913')");
+   const reportado={decisionNombre:{tipo:"REPORTADO" as const,confirmado:true},empleadoId:null,metodoEmpleado:"SIN_ASIGNACION" as const};
+   const baja={decisionNombre:{tipo:"EMPLEADO" as const,empleadoId:9901,confirmado:true},empleadoId:9901,metodoEmpleado:"MANUAL" as const};
+   async function guardar(vale:string,piloto:string,placa:string,vinculoUnidad:"AMBIGUA"|"SIN_VINCULO",pilotoSel:Record<string,unknown>=reportado,contexto=ctx,fecha?:string){
+    const buffer=await libroShell([filaShell(vale,piloto,placa,"Diesel")]);const previa=await preview(contexto,buffer,{perfil:"SHELL",moneda:"GTQ",seleccion:[]});
+    const candidato=previa.filas.find(f=>f.candidato)!.candidato!;
+    const entrada={perfil:"SHELL",moneda:"GTQ",seleccion:[{candidato,vehiculoId:0,vinculoUnidad,productoClasificado:"DIESEL",...pilotoSel}]} as Entrada;
+    const token=await preview(contexto,buffer,entrada);
+    return {buffer,entrada,confirmar:()=>confirmarArchivo(contexto,buffer,"vinculo.xlsx",entrada,key(),token.token),fecha};
+   }
+   // 1. SIN la migración: se rechaza con un mensaje claro y no se guarda nada; el catálogo informa que no está instalada.
+   const conn=await state.pool!.getConnection();try{expect(await esquemaVinculoUnidad(conn)).toBe(false);}finally{conn.release();}
+   const previoSinMigracion=await guardar("VINCULO-SIN-MIGRACION","Visitante Sin Registro","C-593LAB","SIN_VINCULO");
+   await expect(previoSinMigracion.confirmar()).rejects.toMatchObject({status:503});expect(await total("VINCULO-SIN-MIGRACION")).toBe(0);
+   // 2. Migración mínima: no cambia filas existentes, no es idempotente (repetirla falla sin cambiar nada), y el preflight/postcheck de solo lectura la reconocen.
+   const antes=await q("SELECT * FROM flota_cb2_consumos ORDER BY id"),vehiculosAntes=await q("SELECT COUNT(*) n FROM flota_vehiculos");
+   const [pre]=await admin.query(readFileSync("sql/preflight-2026-11-cb2-vinculo-unidad.sql","utf8"));expect(String((pre as unknown as RowDataPacket[][]).flat().find(r=>r.veredicto)?.veredicto)).toMatch(/^APTO/);
+   await admin.query(readFileSync("sql/migrate-2026-11-cb2-vinculo-unidad.sql","utf8"));
+   expect((await q("SELECT * FROM flota_cb2_consumos ORDER BY id")).map(r=>{const{vinculo_unidad,...resto}=r;expect(vinculo_unidad).toBeNull();return resto;})).toEqual(antes);
+   await expect(admin.query(readFileSync("sql/migrate-2026-11-cb2-vinculo-unidad.sql","utf8"))).rejects.toThrow();
+   const [post]=await admin.query(readFileSync("sql/postcheck-2026-11-cb2-vinculo-unidad.sql","utf8"));expect(String((post as unknown as RowDataPacket[][]).flat().find(r=>r.veredicto)?.veredicto)).toMatch(/^OK/);
+   const c2=await state.pool!.getConnection();try{expect(await esquemaVinculoUnidad(c2)).toBe(true);}finally{c2.release();}
+   // 3. Placa AMBIGUA (dos fichas de la misma empresa) + empleado de baja: se guarda sin elegir ficha; placa y piloto originales intactos; empleado sin reactivar.
+   const a=await guardar("VINCULO-AMBIGUA","  rene baja vinculo ","C-591LAB","AMBIGUA",baja);await a.confirmar();
+   const [ra]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='VINCULO-AMBIGUA'");
+   expect(ra).toMatchObject({vehiculo_id:null,unidad_externa_id:null,identidad_externa:null,vinculo_unidad:"AMBIGUA",empleado_id:9901,placa_original:"C-591LAB",piloto_informado:"  rene baja vinculo "});
+   expect((await q("SELECT estado FROM empleados WHERE id=9901"))[0].estado).toBe("Baja");
+   // 4. Placa SIN unidad en Flota + piloto externo (nombre reportado): se guarda sin crear vehículos, empleados ni unidades externas.
+   const externasAntes=await q("SELECT COUNT(*) n FROM flota_cb2_externos_unidades"),empleadosAntes=await q("SELECT COUNT(*) n FROM empleados");
+   const b=await guardar("VINCULO-SIN-UNIDAD","Piloto Visitante Externo","C-593LAB","SIN_VINCULO",reportado);await b.confirmar();
+   const [rb]=await q("SELECT * FROM flota_cb2_consumos WHERE vale_norm='VINCULO-SIN-UNIDAD'");
+   expect(rb).toMatchObject({vehiculo_id:null,unidad_externa_id:null,vinculo_unidad:"SIN_VINCULO",empleado_id:null,placa_original:"C-593LAB",piloto_informado:"Piloto Visitante Externo"});
+   expect(await q("SELECT COUNT(*) n FROM flota_vehiculos")).toEqual(vehiculosAntes);expect(await q("SELECT COUNT(*) n FROM flota_cb2_externos_unidades")).toEqual(externasAntes);expect(await q("SELECT COUNT(*) n FROM empleados")).toEqual(empleadosAntes);
+   expect((await q("SELECT p.nombre_muestra FROM flota_cb2_consumo_piloto_reportado l JOIN flota_cb2_pilotos_reportados p ON p.id=l.piloto_reportado_id WHERE l.consumo_id=?",[rb.id]))[0].nombre_muestra).toBe("Piloto Visitante Externo");
+   // 5. El servidor es la autoridad: no acepta marcar «sin vincular» una placa que sí tiene una única unidad, ni «ambigua» una que no lo es, ni «sin unidad» una ambigua.
+   for(const [vale,placa,estado,mensaje] of [["VINCULO-X1","C-592LAB","SIN_VINCULO","vincúlala"],["VINCULO-X2","C-592LAB","AMBIGUA","ya no es ambigua"],["VINCULO-X3","C-591LAB","SIN_VINCULO","varias unidades"],["VINCULO-X4","C-593LAB","AMBIGUA","ya no es ambigua"]] as const){
+    const x=await guardar(vale,"Visitante Sin Registro",placa,estado);await expect(x.confirmar()).rejects.toThrow(mensaje);expect(await total(vale)).toBe(0);
+   }
+   // 6. Aislamiento: una placa que solo existe en OTRA empresa no es candidata (se guarda sin vincular); en su empresa, siendo única, debe vincularse.
+   const ajena=await guardar("VINCULO-AJENA","Visitante Sin Registro","C-594LAB","SIN_VINCULO");await ajena.confirmar();expect(await total("VINCULO-AJENA")).toBe(1);
+   const propia=await guardar("VINCULO-PROPIA-OTRA","Visitante Sin Registro","C-594LAB","SIN_VINCULO",reportado,otra);await expect(propia.confirmar()).rejects.toThrow("vincúlala");expect(await total("VINCULO-PROPIA-OTRA")).toBe(0);
+   // 7. Idempotencia: reimportar el mismo archivo no duplica el vale (ni cambia su estado de vínculo).
+   const total0=await total("VINCULO-AMBIGUA");const otraVez=await guardar("VINCULO-AMBIGUA","  rene baja vinculo ","C-591LAB","AMBIGUA",baja);await otraVez.confirmar().catch(()=>undefined);
+   expect(await total("VINCULO-AMBIGUA")).toBe(total0);expect((await q("SELECT vinculo_unidad FROM flota_cb2_consumos WHERE vale_norm='VINCULO-AMBIGUA'")).map(r=>r.vinculo_unidad)).toEqual(["AMBIGUA"]);
+   // 8. CHECK de base de datos: no hay forma de combinar «sin vincular» con una unidad ni de inventar estados.
+   await expect(q("UPDATE flota_cb2_consumos SET vehiculo_id=9912 WHERE id=?",[ra.id])).rejects.toThrow();
+   await expect(q("UPDATE flota_cb2_consumos SET vinculo_unidad='OTRO' WHERE id=?",[ra.id])).rejects.toThrow();
+   // 9. Historial: consulta y filtros por placa, piloto, fecha, combustible y vínculo; la placa mostrada es la original; otra empresa no los ve.
+   const c3=await state.pool!.getConnection();
+   try{
+    const ver=async(f:Record<string,unknown>,empresa=1)=>(await consultarConsumos(c3,empresa,50,0,f)).map(r=>String(r.vale_norm));
+    expect(await ver({vinculo:"AMBIGUA"})).toEqual(["VINCULO-AMBIGUA"]);expect(await ver({vinculo:"SIN_VINCULO"})).toEqual(expect.arrayContaining(["VINCULO-SIN-UNIDAD","VINCULO-AJENA"]));
+    expect(await ver({piloto:"rene baja"})).toEqual(["VINCULO-AMBIGUA"]);expect(await ver({buscar:"593LAB"})).toEqual(["VINCULO-SIN-UNIDAD"]);expect(await ver({producto:"DIESEL",vinculo:"SIN_VINCULO"})).toEqual(expect.arrayContaining(["VINCULO-SIN-UNIDAD"]));
+    const fila=(await consultarConsumos(c3,1,50,0,{vinculo:"AMBIGUA"}))[0];expect(fila).toMatchObject({unidad_placa:"C-591LAB",vinculo_unidad:"AMBIGUA",empleado_nombre:"Rene Baja Vinculo"});
+    expect(await ver({desde:"2000-01-01",hasta:"2000-01-02",vinculo:"AMBIGUA"})).toEqual([]);expect(await ver({vinculo:"AMBIGUA"},2)).toEqual([]);expect(await ver({vinculo:"FLOTA"})).not.toContain("VINCULO-AMBIGUA");
+    expect(vehiculoIdResumen(fila)).toBe(0);expect(vehiculoIdResumen({vehiculo_id:5})).toBe(5);   // el resumen mensual no falla con filas sin vincular (el lab no trae las columnas legadas de cargas para ejecutar resumenIntegrado completo)
+   }finally{c3.release();}
+   // 10. Vincular DESPUÉS: la corrección auditada reemplaza el vínculo sin tocar la placa original ni el piloto, y deja la fila válida para el CHECK.
+   await corregirAsignacion(ctx,{proveedorId:1,consumoId:Number(rb.id),revision:Number(rb.revision_asignacion),vehiculoId:9912,empleadoId:null,productoClasificado:"DIESEL",motivo:"Se confirmó con el proveedor que la unidad es C-592LAB",clave:"vinculo-posterior-0001"} as never);
+   expect((await q("SELECT vehiculo_id,vinculo_unidad,placa_original,piloto_informado FROM flota_cb2_consumos WHERE id=?",[rb.id]))[0]).toMatchObject({vehiculo_id:9912,vinculo_unidad:null,placa_original:"C-593LAB",piloto_informado:"Piloto Visitante Externo"});
+   // 11. Reversión documentada: falla sin cambiar nada mientras existan filas sin vincular; con 0 filas restaura el nivel 4 exacto (sin columna).
+   const reversion=readFileSync("sql/rollback-2026-11-cb2-vinculo-unidad.sql","utf8"),clausulaAntes=(await q("SELECT CHECK_CLAUSE c FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND CONSTRAINT_NAME='ck_cb2c_unidad_tipo'"))[0].c;
+   await expect(admin.query(reversion)).rejects.toThrow();expect(await q("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND COLUMN_NAME='vinculo_unidad'")).toEqual([{n:1}]);
+   expect((await q("SELECT CHECK_CLAUSE c FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND CONSTRAINT_NAME='ck_cb2c_unidad_tipo'"))[0].c).toBe(clausulaAntes);
+   await q("UPDATE flota_cb2_consumos SET vehiculo_id=9912,vinculo_unidad=NULL WHERE vinculo_unidad IS NOT NULL");   // laboratorio: dejar 0 filas sin vincular
+   await admin.query(reversion);
+   expect(await q("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND COLUMN_NAME='vinculo_unidad'")).toEqual([{n:0}]);
+   expect(String((await q("SELECT CHECK_CLAUSE c FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_consumos' AND CONSTRAINT_NAME='ck_cb2c_unidad_tipo'"))[0].c)).not.toContain("SIN_VINCULO");
+   const c4=await state.pool!.getConnection();try{expect(await esquemaVinculoUnidad(c4)).toBe(false);}finally{c4.release();}   // la aplicación vuelve al comportamiento anterior
+  }finally{vi.stubEnv("CB2_TERCEROS_DIRECTOS_APROBADA","");}
+ });
 });
