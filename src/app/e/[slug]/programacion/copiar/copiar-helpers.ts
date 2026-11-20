@@ -169,16 +169,13 @@ export function filasConAvisos(filas: FilaEditable[]) {
     .map((f) => ({ fila: f.borrador.fila, avisos: f.validacion!.avisos! }));
 }
 
-/** Identifica EXACTAMENTE los avisos aceptados (fila, tipo y filas relacionadas): si cambian, hay que aceptar de nuevo. */
-export function claveAvisosCopia(filas: FilaEditable[]): string {
-  return filasConAvisos(filas)
-    .map((i) => JSON.stringify([i.fila, i.avisos.map((a) => [a.tipo, [...(a.filas ?? [])].sort((x, y) => x - y)])]))
-    .join("|");
-}
-
-/** Igual que `puedeConfirmarConTarifas`, y además exige aceptar expresamente los avisos de la copia (si los hay). */
-export function puedeConfirmarCopia(filas: FilaEditable[], ocupado: boolean, tarifasAceptadas: string, avisosAceptados: string): boolean {
+/**
+ * Igual que `puedeConfirmarConTarifas`, y además exige aceptar expresamente los avisos de la copia (si los hay). La aceptación es la HUELLA que el servidor
+ * calculó sobre los avisos estructurados de la última validación (`huellaAvisos`): si la validación cambia los avisos (otro recurso, otro viaje, otras filas),
+ * la huella cambia y la aceptación anterior deja de valer. El servidor vuelve a verificarla al confirmar.
+ */
+export function puedeConfirmarCopia(filas: FilaEditable[], ocupado: boolean, tarifasAceptadas: string, avisosAceptados: string, huellaAvisos: string): boolean {
   if (!puedeConfirmarConTarifas(filas, ocupado, tarifasAceptadas)) return false;
-  const clave = claveAvisosCopia(filas);
-  return clave === "" || clave === avisosAceptados;
+  if (filasConAvisos(filas).length === 0) return true;
+  return huellaAvisos !== "" && avisosAceptados === huellaAvisos;
 }

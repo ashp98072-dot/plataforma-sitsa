@@ -12,7 +12,10 @@ import Pagina from "./page";
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Val = { fila: number; estado: "ok" | "error"; errores: string[]; tarifa: { id: number; nombre: string; monto: number; moneda: string } | null; conflictos?: unknown[]; diagnostico?: unknown; derivada?: unknown };
+type AvisoVal = { tipo: "ventana_incompleta" | "destino_ocupado"; recurso: { tipo: string; id: string }; filas?: number[]; ocupadoPor?: { planId: number }; mensaje: string };
+type Val = { fila: number; estado: "ok" | "error"; errores: string[]; tarifa: { id: number; nombre: string; monto: number; moneda: string } | null; conflictos?: unknown[]; diagnostico?: unknown; avisos?: AvisoVal[] };
+/** Stand-in de la huella del servidor: función de los datos ESTRUCTURADOS de los avisos (nunca del texto); para la pantalla es opaca. */
+const huellaFake = (v: Val[]) => { const a = v.flatMap((x) => (x.avisos ?? []).map((av) => [x.fila, av.tipo, av.recurso, av.filas ?? [], av.ocupadoPor ?? null])); return a.length ? `h:${JSON.stringify(a)}` : ""; };
 const TARIFA = { id: 100, nombre: "Base", monto: 1500, moneda: "GTQ" };
 const filaCarga = (n: number, tarifaOriginal: { monto: number | null; moneda: string | null } = { monto: null, moneda: null }) => ({
   origen: { planId: 900 + n, codigo: `P${n}`, estado: "Cerrado", clienteNombre: "Acme", rutaCodigo: "1001", pilotoNombre: null, auxiliaresNombres: [], unidadPlaca: "P-1", tcPlaca: null, tarifaOriginal },
@@ -25,7 +28,8 @@ const catalogos = { empleados: [], unidades: [], tcs: [], tarifasPorRuta: { 10: 
 let host: HTMLDivElement; let root: Root;
 let filasServidor: ReturnType<typeof filaCarga>[];
 let validador: (cuerpo: { filas: { fila: number; regresoEditado?: string | null }[] }) => Val[];
-let posts: { url: string; cuerpo: { filas: { fila: number; regresoEditado?: string | null }[] } }[];
+let posts: { url: string; cuerpo: { filas: { fila: number; regresoEditado?: string | null }[]; avisosAceptados?: string } }[];
+let confirmador: (cuerpo: unknown) => Response;
 
 const texto = () => host.textContent ?? "";
 const boton = (t: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.includes(t)) as HTMLButtonElement | undefined;
@@ -41,11 +45,14 @@ const marcarTodasYValidar = async () => { await pulsar("Seleccionar todos"); awa
 
 beforeEach(async () => {
   posts = [];
+  confirmador = () => Response.json({ creados: 5, planIds: [1, 2, 3, 4, 5], codigos: ["P1", "P2", "P3", "P4", "P5"] });
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (init?.method === "POST") {
       const cuerpo = JSON.parse(String(init.body));
       posts.push({ url, cuerpo });
-      return Response.json({ validacion: validador(cuerpo) });
+      if (String(url).includes("/confirmar")) return confirmador(cuerpo);
+      const v = validador(cuerpo);
+      return Response.json({ validacion: v, huellaAvisos: huellaFake(v) });
     }
     return Response.json({ filas: filasServidor, catalogos });
   }));
@@ -60,8 +67,8 @@ describe("Copiar programación: copia fiel al origen (sin regreso o recurso ya o
   const conAvisos = (): Val[] => Array.from({ length: N }, (_, i) => {
     const fila = i + 1;
     return fila === ORIGEN
-      ? { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", filas: [1, 2, 4, 5], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }], diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1, 2, 4, 5], recursosCompartidos: ["personal"] } }
-      : { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", filas: [ORIGEN], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [ORIGEN], causa: "dia_completo" }] };
+      ? { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [1, 2, 4, 5], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [1], causa: "dia_completo" }], diagnostico: { horaInvalida: false, regresoInvalido: true, filasAfectadas: [1, 2, 4, 5], recursosCompartidos: ["personal"] } }
+      : { fila, estado: "ok", errores: [], tarifa: TARIFA, avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, filas: [ORIGEN], mensaje: detalle }], conflictos: [{ recurso: "persona", filas: [ORIGEN], causa: "dia_completo" }] };
   });
   const sinAvisos = (): Val[] => Array.from({ length: N }, (_, i) => ({ fila: i + 1, estado: "ok", errores: [], tarifa: TARIFA }));
   const botonConfirmar = () => boton("Confirmar copia")!;
@@ -95,17 +102,41 @@ describe("Copiar programación: copia fiel al origen (sin regreso o recurso ya o
     expect(botonConfirmar().disabled).toBe(true);
   });
 
-  it("confirmar con avisos aceptados envía TODAS las filas y crea la copia (el servidor decide; la aceptación no viaja como dato)", async () => {
+  it("confirmar con avisos aceptados envía TODAS las filas y la HUELLA que el servidor entregó (lo que el servidor verifica); crea la copia", async () => {
     await act(async () => { casilla().click(); });
-    const respuesta = vi.mocked(fetch);
-    respuesta.mockImplementationOnce(async (url, init) => { posts.push({ url: String(url), cuerpo: JSON.parse(String((init as RequestInit).body)) }); return Response.json({ creados: 5, planIds: [1, 2, 3, 4, 5], codigos: ["P1", "P2", "P3", "P4", "P5"] }); });
     await pulsar("Confirmar copia");
     await esperar(20);
     const ultimo = posts[posts.length - 1];
     expect(ultimo.url).toContain("/copiar/confirmar");
     expect(ultimo.cuerpo.filas).toHaveLength(N);
-    expect(JSON.stringify(ultimo.cuerpo)).not.toMatch(/avisosAceptados|aceptad/i);
+    expect(ultimo.cuerpo.avisosAceptados).toBe(huellaFake(conAvisos()));                  // la huella vigente del servidor, no un booleano del cliente
     expect(texto()).toContain("Copia creada: 5 viaje(s)");
+  });
+
+  it("si el SERVIDOR rechaza porque los avisos cambiaron (requiereRevalidar): muestra el mensaje, desmarca la aceptación y revalida todo el lote", async () => {
+    await act(async () => { casilla().click(); });
+    confirmador = () => Response.json({ error: "Hay avisos de la copia sin aceptar o que cambiaron desde la vista previa. Revisa los avisos y vuelve a validar antes de confirmar. No se creó ningún viaje.", requiereRevalidar: true }, { status: 409 });
+    const antes = posts.filter((p) => p.url.includes("/validar")).length;
+    await pulsar("Confirmar copia");
+    await esperar(900);
+    expect(texto()).toContain("avisos de la copia sin aceptar o que cambiaron");
+    expect(casilla().checked).toBe(false);                                                // hay que aceptar de nuevo
+    expect(botonConfirmar().disabled).toBe(true);
+    expect(posts.filter((p) => p.url.includes("/validar")).length).toBeGreaterThan(antes);   // se revalidó para traer los avisos vigentes
+  });
+
+  it("si una nueva validación trae OTROS avisos materiales (otro viaje que ocupa el recurso), la aceptación anterior se invalida sola", async () => {
+    await act(async () => { casilla().click(); });
+    expect(botonConfirmar().disabled).toBe(false);
+    validador = () => conAvisos().map((v) => (v.fila === 2 ? { ...v, avisos: [...(v.avisos ?? []), { tipo: "destino_ocupado" as const, recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 77 }, mensaje: "otro viaje" }] } : v));
+    await escribir(host.querySelector("#regreso-1") as HTMLInputElement, "2026-11-20T10:00");   // dispara revalidación
+    await esperar(900);
+    expect(casilla().checked).toBe(false);
+    expect(botonConfirmar().disabled).toBe(true);
+    await act(async () => { casilla().click(); });
+    expect(botonConfirmar().disabled).toBe(false);
+    await pulsar("Confirmar copia"); await esperar(20);
+    expect(posts[posts.length - 1].cuerpo.avisosAceptados).toBe(huellaFake(validador({ filas: [] })));   // se envía la NUEVA huella
   });
 
   it("«Fila 3 …» lleva al campo de regreso de la fila para quien prefiera completarlo", async () => {
@@ -143,7 +174,7 @@ describe("Copiar programación: copia fiel al origen (sin regreso o recurso ya o
   });
 
   it("el recurso ya ocupado en la fecha DESTINO se muestra como aviso (no bloquea) y también exige la aceptación", async () => {
-    validador = () => sinAvisos().map((v) => (v.fila === 2 ? { ...v, avisos: [{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 20/11/2026. Se copia igual que el origen." }] } : v));
+    validador = () => sinAvisos().map((v) => (v.fila === 2 ? { ...v, avisos: [{ tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 9 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-9 para el 20/11/2026. Se copia igual que el origen." }] } : v));
     await escribir(host.querySelector(`#regreso-1`) as HTMLInputElement, "2026-11-20T10:00");
     await esperar(900);
     expect(texto()).toContain("El recurso ya tiene otro viaje en la fecha destino: 1 fila(s)");

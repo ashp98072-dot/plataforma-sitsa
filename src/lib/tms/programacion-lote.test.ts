@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { modeloSqlUnidadTms } from "./unidad-canonica-sql.fixture";
 import { ErrorVistaPrevia } from "./lector-vista-previa";
+import { huellaAvisosCopia } from "./programacion-copia-avisos";
 import { ErrorCB2 } from "@/lib/flota/cb2/model";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn(), getPool: vi.fn() }));
@@ -257,7 +258,10 @@ beforeEach(() => {
 });
 
 const creadosDestino = () => e.planes.filter((p) => p.fecha === DESTINO && p.id >= 1000); // los ids < 1000 son viajes preexistentes del escenario
-const confirmar = (b: BorradorLote[], fecha = DESTINO) => confirmarLote(EMP, "jefe", fecha, { tipo: "COPIA", fechaOrigen: ORIGEN }, b);
+const confirmar = (b: BorradorLote[], fecha = DESTINO, avisosAceptados?: string) => confirmarLote(EMP, "jefe", fecha, { tipo: "COPIA", fechaOrigen: ORIGEN }, b, undefined, avisosAceptados);
+/** Confirma como lo hace la pantalla cuando el usuario ACEPTA los avisos: usa la huella que el servidor calculó en la validación. */
+const huellaDe = async (b: BorradorLote[], fecha = DESTINO) => huellaAvisosCopia({ empresaId: EMP, fechaOrigen: ORIGEN, fechaDestino: fecha }, (await validarLote(EMP, fecha, b)).map((r) => ({ fila: r.fila, avisos: r.avisos })));
+const confirmarAceptando = async (b: BorradorLote[], fecha = DESTINO) => confirmar(b, fecha, (await huellaDe(b, fecha)) || undefined);
 
 describe("motor: creación por lote (feliz)", () => {
   it("crea varios viajes Propio con unidad, TC, piloto y 0..8 auxiliares; todos nacen Programado con paradas, viáticos y origen", async () => {
@@ -416,7 +420,7 @@ describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", 
     ocupar({ piloto_id: 501 });
     const r = await validarLote(EMP, DESTINO, [borrador({ pilotoEmpleadoId: 1 })]);
     expect(r[0]).toMatchObject({ estado: "ok", errores: [] });
-    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-EXISTENTE para el 25/09/2026. Se copia igual que el origen." }]);
+    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 50 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-EXISTENTE para el 25/09/2026. Se copia igual que el origen." }]);
   });
   it("auxiliar ocupado: aviso", async () => {
     ocupar({ aux: [502] });
@@ -460,7 +464,7 @@ describe("disponibilidad (política diaria REAL) y colisiones dentro del lote", 
     expect((await validarLote(EMP, DESTINO, [borrador()]))[0]).toMatchObject({ estado: "ok" });
     ocupar({ piloto_id: 501 }); // otro usuario programó al piloto entre tanto
     expect((await validarLote(EMP, DESTINO, [borrador()]))[0].avisos?.[0].tipo).toBe("destino_ocupado");
-    const r = await confirmar([borrador()]);
+    const r = await confirmarAceptando([borrador()]);
     expect(r.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(1);
   });
@@ -975,7 +979,7 @@ describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", (
     expect(limpio[0]).toMatchObject({ estado: "ok" }); expect(limpio[0].avisos).toBeUndefined();          // borde exacto: sin aviso
     const r = await validarLote(EMP, DESTINO, [conVentana(1, "07:59", { dias: 0, hora: "11:00" }, { pilotoEmpleadoId: 1 })]);
     expect(r[0]).toMatchObject({ estado: "ok", errores: [] });
-    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", mensaje: "El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026. Se copia igual que el origen." }]);
+    expect(r[0].avisos).toEqual([{ tipo: "destino_ocupado", recurso: { tipo: "piloto", id: "501" }, ocupadoPor: { planId: 50 }, mensaje: "El piloto Juan Pérez ya está asignado al PLAN-50 para el 25/09/2026. Se copia igual que el origen." }]);
   });
 
   it("cruce de medianoche contra BD: existente de ayer 22:00 -> hoy 02:00; fila 01:00 avisa, 02:00 no", async () => {
@@ -1028,7 +1032,7 @@ describe("A2.2 lote: validación contra BD con la ventana DESTINO trasladada", (
 
   it("confirmar con un recurso ya ocupado en destino: se crean TODOS (aviso, copia fiel); un SOLAPE REAL dentro del lote sí lo revierte todo (todo o nada)", async () => {
     e.planes.push(existente());
-    const fiel = await confirmar([conVentana(1, "10:00", { dias: 0, hora: "12:00" }, { pilotoEmpleadoId: 2 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 1 })]);
+    const fiel = await confirmarAceptando([conVentana(1, "10:00", { dias: 0, hora: "12:00" }, { pilotoEmpleadoId: 2 }), conVentana(2, "07:00", { dias: 0, hora: "09:00" }, { pilotoEmpleadoId: 1 })]);
     expect(fiel.ok).toBe(true);
     expect(e.planes.filter((p) => p.id >= 1000)).toHaveLength(2);
     e.planes = e.planes.filter((p) => p.id < 1000); e.origen = [];   // vuelve al estado inicial para el segundo escenario
@@ -1342,7 +1346,7 @@ describe("piloto extra al copiar programación (máximo 1; misma disponibilidad 
     const previa = await validarLote(EMP, DESTINO, [conExtra()]);
     expect(previa[0]).toMatchObject({ estado: "ok" });
     expect(JSON.stringify(previa[0].avisos)).toContain("Extra Piloto");
-    const r = await confirmar([conExtra()]);
+    const r = await confirmarAceptando([conExtra()]);
     expect(r.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(1);
     expect(extras()).toHaveLength(2);   // el viaje existente (con su extra) + el nuevo con su extra copiado
@@ -1561,7 +1565,7 @@ describe("diagnóstico y avisos: un lote de 66 viajes con recursos repetidos (co
     expect(d.origenes).toHaveLength(66);
     expect(d.origenes.every((o) => o.falta === "regreso" && o.afecta === 1)).toBe(true);   // «Fila N (sin regreso) · comparte con 1», como en la captura
     // y se crean todas, tal como en el origen
-    const c = await confirmar(todasSinRegreso());
+    const c = await confirmarAceptando(todasSinRegreso());
     expect(c.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(66);
     for (let i = 0; i < 33; i++) delete empleados[100 + i];
@@ -1641,7 +1645,7 @@ describe("confirmación del lote de 66: atómica, con permisos de la ruta y sin 
   const lote = () => Array.from({ length: 66 }, (_, i) => conVentana(i + 1, hora(i * 20), { dias: 0, hora: hora((i + 1) * 20) }, { pilotoEmpleadoId: 1, auxiliarEmpleadoIds: [2], unidadPlaca: "P-1", tcVehiculoId: 31 }));
   it("con UNA fila sin regreso el lote se copia COMPLETO (copia fiel): 66 viajes, ninguno duplicado en el reintento", async () => {
     const f = lote(); f[32] = { ...f[32], regresoHora: null, regresoOffsetDias: null };
-    const r = await confirmar(f);
+    const r = await confirmarAceptando(f);
     expect(r.ok).toBe(true);
     expect(creadosDestino()).toHaveLength(66);
     expect((await confirmar(f)).ok).toBe(false);          // reintento: «ya fue copiado», no duplica
@@ -1656,3 +1660,102 @@ describe("confirmación del lote de 66: atómica, con permisos de la ruta y sin 
     if (!r.ok) expect(r.erroresPorFila).toHaveLength(1);
   });
 });
+
+// ------------------------------------------------------------------ ACEPTACIÓN de avisos VERIFICADA EN EL SERVIDOR (no se puede omitir con una llamada directa)
+describe("aceptación de avisos: el servidor verifica la huella de los avisos VIGENTES al confirmar", () => {
+  const ocuparPiloto = (id = 50, codigo = "PLAN-EXISTENTE") => e.planes.push(plan({ id, codigo, piloto_id: 501 }));
+  const filaOcupada = () => [borrador({ pilotoEmpleadoId: 1 })];
+  const sinCrear = () => { expect(creadosDestino()).toHaveLength(0); expect(conn.beginTransaction).not.toHaveBeenCalled(); expect(conn.commit).not.toHaveBeenCalled(); };
+
+  it("sin avisos NO se exige aceptación (comportamiento de siempre)", async () => {
+    const r = await confirmar([borrador()]);
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(1);
+  });
+
+  it("con avisos y SIN aceptación (llamada directa que la omite): 409 requiereRevalidar, sin escribir nada", async () => {
+    ocuparPiloto();
+    const r = await confirmar(filaOcupada());
+    expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true, error: expect.stringContaining("avisos de la copia sin aceptar") });
+    expect(r.ok === false && r.erroresPorFila).toBeUndefined();
+    sinCrear();
+  });
+
+  it.each([["cadena vacía", ""], ["valor arbitrario", "aceptado"], ["huella con formato válido pero inventada", "a".repeat(64)]])("con una aceptación inválida (%s) también se rechaza", async (_n, falsa) => {
+    ocuparPiloto();
+    const r = await confirmar(filaOcupada(), DESTINO, falsa);
+    expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true });
+    sinCrear();
+  });
+
+  it("con la huella VIGENTE (la que el servidor entregó en la validación) la copia se crea", async () => {
+    ocuparPiloto();
+    const r = await confirmar(filaOcupada(), DESTINO, await huellaDe(filaOcupada()));
+    expect(r.ok).toBe(true);
+    expect(creadosDestino()).toHaveLength(1);
+  });
+
+  it("DESACTUALIZADA por otro VIAJE que ocupa el recurso (mismo recurso, otro plan): se rechaza", async () => {
+    ocuparPiloto(50, "PLAN-A");
+    const aceptada = await huellaDe(filaOcupada());
+    e.planes = e.planes.filter((p) => p.id !== 50);
+    ocuparPiloto(51, "PLAN-B");                                   // otro viaje ocupa ahora al piloto
+    expect(await huellaDe(filaOcupada())).not.toBe(aceptada);
+    sinCrearDespues(await confirmar(filaOcupada(), DESTINO, aceptada));
+  });
+
+  it("DESACTUALIZADA por otro RECURSO afectado (antes el piloto, ahora la unidad): se rechaza", async () => {
+    ocuparPiloto();
+    const aceptada = await huellaDe(filaOcupada());
+    e.planes = e.planes.filter((p) => p.id !== 50);
+    e.planes.push(plan({ id: 50, codigo: "PLAN-EXISTENTE", unidad_id: 601 }));   // ahora choca la unidad P-1, no el piloto
+    const r = await confirmar([borrador({ pilotoEmpleadoId: 1, unidadPlaca: "P-1" })], DESTINO, aceptada);
+    expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true });
+    sinCrear();
+  });
+
+  it("DESACTUALIZADA por otras FILAS relacionadas (se agrega otra fila sin regreso que comparte el recurso): se rechaza", async () => {
+    const dos = [conVentana(1, "05:00", null, { pilotoEmpleadoId: 1 }), conVentana(2, "20:00", null, { pilotoEmpleadoId: 1 })];
+    const aceptada = await huellaDe(dos);
+    const tres = [...dos, conVentana(3, "22:00", null, { pilotoEmpleadoId: 1 })];
+    expect(await huellaDe(tres)).not.toBe(aceptada);
+    const r = await confirmar(tres, DESTINO, aceptada);
+    expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true });
+    sinCrear();
+    // y con las filas originales la misma aceptación sí vale
+    expect((await confirmar(dos, DESTINO, aceptada)).ok).toBe(true);
+  });
+
+  it("la aceptación está ligada al CONTEXTO: la de otra fecha destino no sirve", async () => {
+    ocuparPiloto();
+    const deOtraFecha = await huellaDe(filaOcupada(), "2026-09-26");
+    const r = await confirmar(filaOcupada(), DESTINO, deOtraFecha || "b".repeat(64));
+    expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true });
+    sinCrear();
+  });
+
+  it("los errores REALES tienen prioridad: se devuelven por fila (sin pedir aceptación) y todo el lote se rechaza", async () => {
+    ocuparPiloto();
+    const r = await confirmar([...filaOcupada(), borrador({ fila: 2, origenPlanId: 901, rutaId: 13, unidadPlaca: null, pilotoEmpleadoId: 3 })]);
+    expect(r).toMatchObject({ ok: false, status: 409 });
+    expect(r.ok === false && r.requiereRevalidar).toBeUndefined();
+    expect(r.ok === false && r.erroresPorFila).toHaveLength(1);
+    sinCrear();
+  });
+
+  it("la verificación ocurre BAJO EL CANDADO y antes de cualquier escritura: un rechazo libera el candado y no deja trazas", async () => {
+    ocuparPiloto();
+    conn.query.mockClear();
+    await confirmar(filaOcupada());
+    const sqls = conn.query.mock.calls.map((c) => String(c[0]));
+    expect(sqls.some((q) => q.includes("GET_LOCK"))).toBe(true);
+    expect(sqls.some((q) => q.includes("RELEASE_LOCK"))).toBe(true);
+    expect(e.auditorias).toHaveLength(0);
+    expect(e.origen).toHaveLength(0);
+  });
+});
+const sinCrearDespues = (r: Awaited<ReturnType<typeof confirmarLote>>) => {
+  expect(r).toMatchObject({ ok: false, status: 409, requiereRevalidar: true });
+  expect(creadosDestino()).toHaveLength(0);
+  expect(conn.beginTransaction).not.toHaveBeenCalled();
+};

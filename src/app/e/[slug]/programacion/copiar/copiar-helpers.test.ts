@@ -4,7 +4,6 @@ import {
   aplicarErroresConfirmacion,
   aplicarValidacion,
   claveAvisoTarifas,
-  claveAvisosCopia,
   comparacionesDeTarifa,
   filasConAvisos,
   puedeConfirmarCopia,
@@ -119,7 +118,7 @@ describe("pantalla y acceso (código fuente)", () => {
 });
 
 describe("avisos de la copia fiel y edición del regreso (cliente)", () => {
-  const avisoVentana = (origenes: number[]) => ({ tipo: "ventana_incompleta" as const, mensaje: "x", filas: origenes });
+  const avisoVentana = (origenes: number[]) => ({ tipo: "ventana_incompleta" as const, recurso: { tipo: "persona", id: "1" }, mensaje: "x", filas: origenes });
   const okFila = (n: number, over: Partial<NonNullable<FilaEditable["validacion"]>> = {}) => ({ fila: n, estado: "ok" as const, errores: [], tarifa: null, ...over });
   const lote = (n: number, origen = 33): FilaEditable[] =>
     Array.from({ length: n }, (_, i) => {
@@ -129,32 +128,28 @@ describe("avisos de la copia fiel y edición del regreso (cliente)", () => {
         : okFila(f, { avisos: [avisoVentana([origen])] }) });
     });
 
-  it("66 filas con aviso por UNA sin regreso: el diagnóstico agrupa en un origen y 66 avisos; ninguna queda bloqueada", () => {
+  it("66 filas con aviso por UNA sin regreso: el diagnóstico agrupa en un origen; ninguna queda bloqueada, pero confirmar exige aceptar la huella del servidor", () => {
     const d = diagnosticoDeFilas(lote(66));
     expect(d).toMatchObject({ total: 66, bloqueadas: 0, conAvisos: 66 });
     expect(d.origenes).toEqual([{ fila: 33, falta: "regreso", afecta: 65 }]);
-    expect(puedeConfirmar(lote(66), false)).toBe(true);            // las filas son OK: los avisos no bloquean…
-    expect(puedeConfirmarCopia(lote(66), false, "", "")).toBe(false);   // …pero exigen aceptación expresa
+    expect(puedeConfirmar(lote(66), false)).toBe(true);                       // las filas son OK: los avisos no bloquean…
+    expect(puedeConfirmarCopia(lote(66), false, "", "", "h1")).toBe(false);    // …pero exigen aceptación expresa
+    expect(puedeConfirmarCopia(lote(66), false, "", "h1", "h1")).toBe(true);
   });
 
-  it("la aceptación de los avisos habilita confirmar y se invalida si cambian los avisos (otra fila, otro tipo, otras filas relacionadas)", () => {
+  it("la aceptación vale SOLO para la huella que el servidor entregó: si la validación trae otra huella (otro recurso, viaje o filas relacionadas) deja de valer", () => {
     const filas = lote(5, 3);
-    const clave = claveAvisosCopia(filas);
-    expect(clave).not.toBe("");
-    expect(puedeConfirmarCopia(filas, false, "", clave)).toBe(true);
-    expect(puedeConfirmarCopia(filas, true, "", clave)).toBe(false);                                   // ocupado: manda la regla previa
-    const otra = lote(5, 4);                                                                           // el origen del aviso cambió
-    expect(claveAvisosCopia(otra)).not.toBe(clave);
-    expect(puedeConfirmarCopia(otra, false, "", clave)).toBe(false);
-    const conDestino = filas.map((f, i) => (i === 0 ? { ...f, validacion: { ...f.validacion!, avisos: [...f.validacion!.avisos!, { tipo: "destino_ocupado" as const, mensaje: "y" }] } } : f));
-    expect(claveAvisosCopia(conDestino)).not.toBe(clave);                                               // un aviso nuevo (destino ocupado) también exige aceptar de nuevo
-    expect(puedeConfirmarCopia(conDestino, false, "", clave)).toBe(false);
+    expect(puedeConfirmarCopia(filas, false, "", "h1", "h1")).toBe(true);
+    expect(puedeConfirmarCopia(filas, false, "", "h1", "h2")).toBe(false);        // el servidor ahora reporta otro conflicto
+    expect(puedeConfirmarCopia(filas, true, "", "h1", "h1")).toBe(false);         // ocupado: manda la regla previa
+    expect(puedeConfirmarCopia(filas, false, "", "", "")).toBe(false);            // sin huella del servidor no hay nada que aceptar: no se puede confirmar con avisos
+    expect(puedeConfirmarCopia(filas, false, "", "", "h1")).toBe(false);          // sin aceptar
   });
 
   it("sin avisos no se exige aceptar nada; las pendientes y las excluidas no cuentan", () => {
     const limpias = [fila(1), fila(2)];
-    expect(claveAvisosCopia(limpias)).toBe("");
-    expect(puedeConfirmarCopia(limpias, false, "", "")).toBe(true);
+    expect(filasConAvisos(limpias)).toEqual([]);
+    expect(puedeConfirmarCopia(limpias, false, "", "", "")).toBe(true);
     const filas = lote(3, 2);
     filas[0] = { ...filas[0], sucia: true }; filas[2] = { ...filas[2], incluida: false };
     expect(filasConAvisos(filas).map((f) => f.fila)).toEqual([2]);
@@ -163,7 +158,7 @@ describe("avisos de la copia fiel y edición del regreso (cliente)", () => {
   it("una fila con ERROR real sigue bloqueando aunque las demás solo tengan avisos", () => {
     const filas = lote(3, 2);
     filas[1] = { ...filas[1], validacion: { fila: 2, estado: "error", errores: ["La ruta está inactiva."], tarifa: null } };
-    expect(puedeConfirmarCopia(filas, false, "", claveAvisosCopia(filas))).toBe(false);
+    expect(puedeConfirmarCopia(filas, false, "", "h1", "h1")).toBe(false);
     expect(diagnosticoDeFilas(filas)).toMatchObject({ bloqueadas: 1, conAvisos: 2 });
   });
 
@@ -176,8 +171,8 @@ describe("avisos de la copia fiel y edición del regreso (cliente)", () => {
     const respuesta = Array.from({ length: 66 }, (_, i) => okFila(i + 1));            // el servidor revalida TODO el lote: sin avisos
     const despues = aplicarValidacion(editada, respuesta);
     expect(despues.every((f) => f.validacion?.estado === "ok" && !f.sucia)).toBe(true);
-    expect(claveAvisosCopia(despues)).toBe("");
-    expect(puedeConfirmarCopia(despues, false, "", "")).toBe(true);
+    expect(filasConAvisos(despues)).toEqual([]);
+    expect(puedeConfirmarCopia(despues, false, "", "", "")).toBe(true);
   });
 
   it("si el nuevo regreso SE SOLAPA de verdad, el servidor mantiene el bloqueo y el cliente lo refleja (el solape real no se relaja)", () => {

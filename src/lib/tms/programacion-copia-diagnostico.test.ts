@@ -24,7 +24,7 @@ describe("motivosDeFila", () => {
 
 describe("diagnosticarBloqueos / sugerencia", () => {
   const origen = (fila: number, falta: "hora" | "regreso" | "hora_y_regreso", afecta: number[]) => ({ horaInvalida: falta !== "regreso", regresoInvalido: falta !== "hora", filasAfectadas: afecta, recursosCompartidos: ["personal"] });
-  const aviso = (tipo: "ventana_incompleta" | "destino_ocupado", filas?: number[]) => ({ tipo, mensaje: "x", ...(filas ? { filas } : {}) });
+  const aviso = (tipo: "ventana_incompleta" | "destino_ocupado", filas?: number[]) => ({ tipo, recurso: { tipo: "persona", id: "1" }, mensaje: "x", ...(filas ? { filas } : {}) });
   it("separa lo que BLOQUEA de lo que solo AVISA, cuenta por tipo y ordena los orígenes por alcance; robusto ante nulos", () => {
     const filas = [
       ok(1, { diagnostico: origen(1, "regreso", [2, 3]), avisos: [aviso("ventana_incompleta", [2, 3])] }),
@@ -47,7 +47,7 @@ describe("diagnosticarBloqueos / sugerencia", () => {
   });
   it("la bitácora recibe SOLO conteos y números de fila (sin textos de error) y se registra con bloqueos o con avisos", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    registrarDiagnosticoBloqueo(diagnosticarBloqueos([ok(1, { diagnostico: origen(1, "regreso", [2]), avisos: [{ tipo: "ventana_incompleta", mensaje: "Juan Pérez está asignado en P-1", filas: [2] }] })]));
+    registrarDiagnosticoBloqueo(diagnosticarBloqueos([ok(1, { diagnostico: origen(1, "regreso", [2]), avisos: [{ tipo: "ventana_incompleta", recurso: { tipo: "persona", id: "1" }, mensaje: "Juan Pérez está asignado en P-1", filas: [2] }] })]));
     expect(info).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(info.mock.calls[0])).not.toMatch(/Juan|P-1|asignado/);
     info.mockClear();

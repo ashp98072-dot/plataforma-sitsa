@@ -1,3 +1,4 @@
+import { huellaAvisosCopia, MSG_AVISOS_SIN_ACEPTAR } from "@/lib/tms/programacion-copia-avisos";
 import { resolverUnidadTmsSoloLectura, resolverUnidadTmsTx } from "@/lib/tms/unidad-canonica";
 import { abrirLectorVistaPrevia, errorVistaPrevia, PRESUPUESTO_VISTA_PREVIA_MS, type LectorVistaPrevia } from "@/lib/tms/lector-vista-previa";
 import { ErrorPlazoOperacion, plazoRestanteMs } from "@/lib/db-plazo";
@@ -145,7 +146,17 @@ export type ResultadoFilaLote = {
 };
 
 export type ConflictoLote = { recurso: "persona" | "unidad" | "tc"; filas: number[]; causa: "dia_completo" | "solape" };
-export type AvisoLote = { tipo: "ventana_incompleta" | "destino_ocupado"; mensaje: string; filas?: number[] };
+/**
+ * Aviso con datos ESTRUCTURADOS: lo que define materialmente el conflicto es `tipo`, `recurso` (qué recurso afecta), `ocupadoPor` (viaje existente que lo ocupa,
+ * solo en `destino_ocupado`) y `filas` (filas relacionadas del lote, solo en `ventana_incompleta`). `mensaje` es solo presentación y NO se usa para decidir ni para aceptar.
+ */
+export type AvisoLote = {
+  tipo: "ventana_incompleta" | "destino_ocupado";
+  recurso: { tipo: string; id: string };
+  filas?: number[];
+  ocupadoPor?: { planId: number };
+  mensaje: string;
+};
 
 type FilaInterna = {
   borrador: BorradorLote; errores: string[]; resuelto: Resuelto | null; recursos: RecursoDia[]; filasAfectadas?: Set<number>; recursosCompartidos?: Set<string>;
@@ -393,7 +404,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     const avisos: AvisoLote[] = [];
     if (!errores.length && recursos.length) {
       const conflicto = await primerConflictoProgramacionIntervalo(empresaId, recursos, ventanaDeBorrador(b, fechaDestino), []);
-      if (conflicto) avisos.push({ tipo: "destino_ocupado", mensaje: `${mensajeConflictoProgramacionIntervalo(conflicto)} Se copia igual que el origen.` });
+      if (conflicto) avisos.push({ tipo: "destino_ocupado", recurso: { tipo: conflicto.tipo, id: String(conflicto.id) }, ocupadoPor: { planId: conflicto.planIdConflicto }, mensaje: `${mensajeConflictoProgramacionIntervalo(conflicto)} Se copia igual que el origen.` });
     }
     internas.push({ borrador: b, errores, resuelto: errores.length ? null : res, recursos, ...(avisos.length ? { avisos } : {}) });
   }
@@ -473,7 +484,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
       f.conflictos = [...(f.conflictos ?? []), { recurso, filas: otras, causa }];
       if (causa === "dia_completo") {
         // COPIA FIEL: sin hora/regreso válido el recurso «reserva todo el día», pero esos viajes ya conviven así en el origen. Se AVISA y no se bloquea.
-        f.avisos = [...(f.avisos ?? []), { tipo: "ventana_incompleta", filas: otras, mensaje: `${quien} también en la fila ${otras.join(", ")} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}). Se copia igual que el origen.` }];
+        f.avisos = [...(f.avisos ?? []), { tipo: "ventana_incompleta", recurso: { tipo: recurso, id: clave.slice(clave.indexOf(":") + 1) }, filas: otras, mensaje: `${quien} también en la fila ${otras.join(", ")} de este mismo lote. Alguna fila no tiene hora o regreso válido: se reserva todo el día (${incompletas.map(textoFalta).join("; ")}). Se copia igual que el origen.` }];
       } else {
         // Solape REAL (ambas ventanas conocidas y cruzadas): sigue bloqueando.
         f.errores.push(`${quien} también en la fila ${otras.join(", ")} de este mismo lote. Los horarios se solapan.`);
@@ -506,7 +517,7 @@ export async function validarLote(empresaId: number, fechaDestino: string, borra
 
 export type ResultadoConfirmarLote =
   | { ok: true; planIds: number[]; codigos: string[] }
-  | { ok: false; status: 400 | 403 | 409 | 500 | 503; error: string; erroresPorFila?: { fila: number; errores: string[] }[] };
+  | { ok: false; status: 400 | 403 | 409 | 500 | 503; error: string; erroresPorFila?: { fila: number; errores: string[] }[]; /** Los avisos vigentes no coinciden con los aceptados (o no se aceptaron): la pantalla debe revalidar. */ requiereRevalidar?: boolean };
 
 export type OrigenLote = { tipo: "COPIA"; fechaOrigen: string };
 
@@ -522,6 +533,8 @@ export async function confirmarLote(
   origen: OrigenLote,
   borradores: BorradorLote[],
   tarifasEsperadas?: { fila: number; tarifa: { id: number; monto: number; moneda: string } | null }[],
+  /** Huella de los avisos que el usuario aceptó (ver programacion-copia-avisos.ts). Obligatoria y vigente si la copia tiene CUALQUIER aviso. */
+  avisosAceptados?: string,
 ): Promise<ResultadoConfirmarLote> {
   if (!FECHA_RE.test(fechaDestino)) return { ok: false, status: 400, error: "Fecha destino inválida." };
   if (!borradores.length) return { ok: false, status: 400, error: "No hay filas para crear." };
@@ -569,6 +582,12 @@ export async function confirmarLote(
         error: `${malas.length} de ${filas.length} fila(s) no pasaron la validación. No se creó ningún viaje (todo o nada).`,
         erroresPorFila: malas.map((f) => ({ fila: f.borrador.fila, errores: f.errores })),
       };
+    }
+    // COPIA FIEL: los avisos no bloquean, pero la ACEPTACIÓN es obligatoria y se verifica AQUÍ, bajo el candado, contra los avisos VIGENTES (no contra lo que el
+    // cliente vio): ausente o desactualizada ⇒ se rechaza sin escribir nada. Así una llamada directa a la API no puede omitirla.
+    const huellaVigente = huellaAvisosCopia({ empresaId, fechaOrigen: origen.fechaOrigen, fechaDestino }, filas.map((f) => ({ fila: f.borrador.fila, avisos: f.avisos })));
+    if (huellaVigente !== "" && avisosAceptados !== huellaVigente) {
+      return { ok: false, status: 409, error: MSG_AVISOS_SIN_ACEPTAR, requiereRevalidar: true };
     }
 
     const conn = await getPool().getConnection();

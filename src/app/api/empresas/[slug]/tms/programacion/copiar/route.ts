@@ -7,6 +7,7 @@ import { getPool } from "@/lib/db";
 import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
 import { LIMITE_SENTENCIA_COPIAR_MS, PLAZO_SERVIDOR_COPIAR_MS } from "@/lib/tms/plazos-copia";
 import { diagnosticarBloqueos, registrarDiagnosticoBloqueo } from "@/lib/tms/programacion-copia-diagnostico";
+import { huellaAvisosCopia } from "@/lib/tms/programacion-copia-avisos";
 import { cargarCopiaDeFecha, catalogosParaCopia } from "@/lib/tms/programacion-copia";
 
 type Ctx = { params: Promise<{ slug: string }> };
@@ -37,7 +38,7 @@ export async function GET(req: Request, ctx: Ctx) {
       const diagnostico = diagnosticarBloqueos(validacion);   // solo conteos y números de fila
       registrarDiagnosticoBloqueo(diagnostico);
       return NextResponse.json(
-        { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos, diagnostico },
+        { filas: filas.map((f, i) => ({ ...f, validacion: validacion[i] })), catalogos, diagnostico, huellaAvisos: huellaAvisosCopia({ empresaId: guard.empresa.id, fechaOrigen: origen.data, fechaDestino: destino.data }, validacion.map((v) => ({ fila: v.fila, avisos: v.avisos }))) },
         { headers: { "Cache-Control": "private, no-store" } },
       );
     });

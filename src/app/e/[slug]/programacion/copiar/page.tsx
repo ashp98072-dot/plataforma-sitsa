@@ -28,7 +28,6 @@ import {
   filasIncluidas,
   MAX_AUXILIARES_UI,
   puedeConfirmarCopia,
-  claveAvisosCopia,
   filasConAvisos,
   resumenFilas,
   tarifasEsperadas,
@@ -43,6 +42,8 @@ import {
  * empresa y crea el lote completo o nada. Cambiar unidad/TC/piloto/auxiliares/hora/tarifa NO modifica el viaje origen.
  */
 type RespuestaCarga = {
+  /** Huella de los avisos vigentes calculada por el servidor ("" si no hay avisos). */
+  huellaAvisos?: string;
   filas: { borrador: BorradorLote; origen: OrigenFila; advertencias: string[]; validacion: ResultadoFilaLote }[];
   catalogos: CatalogosCopia;
 };
@@ -70,6 +71,9 @@ export default function CopiarProgramacionPage() {
   const [tarifasAceptadas, setTarifasAceptadas] = useState("");
   // Clave de los avisos de la copia (recurso compartido sin hora/regreso, destino ya ocupado) que el usuario aceptó expresamente.
   const [avisosAceptados, setAvisosAceptados] = useState("");
+  const [avisoCambio, setAvisoCambio] = useState("");   // el servidor rechazó la aceptación: se mantiene visible aunque la revalidación limpie el error genérico
+  // Huella de los avisos vigentes según la ÚLTIMA validación del servidor: lo que se acepta y lo que el servidor verifica al confirmar.
+  const [huellaAvisos, setHuellaAvisos] = useState("");
   // Qué se puede reintentar tras un fallo recuperable (plazo vencido, 503, red): la carga completa o solo la revalidación.
   const [reintentable, setReintentable] = useState<"cargar" | "validar" | null>(null);
   // Solicitudes cancelables: una nueva cancela la anterior, ninguna respuesta vieja sobrescribe a una nueva y ninguna espera más que el plazo del cliente.
@@ -91,6 +95,7 @@ export default function CopiarProgramacionPage() {
       if (!res.ok || !data.filas) { setError(data.error ?? "No se pudo cargar la programación."); setReintentable(esRespuestaReintentable(res.status) ? "cargar" : null); return; }
       setFilas(data.filas.map(filaDesdeCarga)); // todas DESMARCADAS: el usuario marca lo que quiere copiar
       setCatalogos(data.catalogos ?? null);
+      setHuellaAvisos(data.huellaAvisos ?? ""); setAvisosAceptados(""); setAvisoCambio("");
       setCargado(true);
     } catch (e) {
       const f = clasificarFalloSolicitud(e, sol);
@@ -111,10 +116,11 @@ export default function CopiarProgramacionPage() {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar/validar`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpoLote(fechaOrigen, fechaDestino, actuales)), signal: sol.signal,
       });
-      const data = (await res.json().catch(() => ({}))) as { validacion?: ResultadoFilaLote[]; error?: string };
+      const data = (await res.json().catch(() => ({}))) as { validacion?: ResultadoFilaLote[]; huellaAvisos?: string; error?: string };
       if (mia !== version.current || !sol.esVigente()) return; // llegó una respuesta más nueva
       if (!res.ok || !data.validacion) { setError(data.error ?? "No se pudo revalidar."); setReintentable(esRespuestaReintentable(res.status) ? "validar" : null); return; }
       setError(""); setReintentable(null);
+      setHuellaAvisos(data.huellaAvisos ?? "");
       setFilas((f) => aplicarValidacion(f, data.validacion!));
     } catch (e) {
       const f = clasificarFalloSolicitud(e, sol);
@@ -148,16 +154,20 @@ export default function CopiarProgramacionPage() {
   }
 
   async function confirmar() {
-    if (!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados)) return;
+    if (!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados, huellaAvisos)) return;
     setConfirmando(true);
     setError("");
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/programacion/copiar/confirmar`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...cuerpoLote(fechaOrigen, fechaDestino, filas), tarifasEsperadas: tarifasEsperadas(filas) }),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...cuerpoLote(fechaOrigen, fechaDestino, filas), tarifasEsperadas: tarifasEsperadas(filas), ...(nConAvisos > 0 && avisosAceptados ? { avisosAceptados } : {}) }),
       });
-      const data = (await res.json().catch(() => ({}))) as { creados?: number; codigos?: string[]; error?: string; erroresPorFila?: ErrorFila[] };
+      const data = (await res.json().catch(() => ({}))) as { creados?: number; codigos?: string[]; error?: string; erroresPorFila?: ErrorFila[]; requiereRevalidar?: boolean };
       if (!res.ok) {
         setError(data.error ?? "No se pudo crear el lote. No se guardó ningún cambio.");
+        setAvisosAceptados("");
+        // El servidor detectó avisos sin aceptar o desactualizados: se revalida TODO el lote para mostrar los avisos vigentes y aceptarlos de nuevo.
+        if (data.requiereRevalidar) setAvisoCambio(data.error ?? "");
+        if (data.requiereRevalidar) setFilas((f) => f.map((x) => (x.incluida ? { ...x, sucia: true, validacion: null } : x)));
         setFilas((f) => aplicarErroresConfirmacion(f, data.erroresPorFila));
         return;
       }
@@ -176,7 +186,6 @@ export default function CopiarProgramacionPage() {
   const sugerencia = sugerenciaDeDiagnostico(diag);
   const comparaciones = comparacionesDeTarifa(filas);
   const claveTarifas = claveAvisoTarifas(comparaciones);
-  const claveAvisos = claveAvisosCopia(filas);
   const nConAvisos = filasConAvisos(filas).length;
   const conAvisoTarifa = comparaciones.filter((c) => comparacionRequiereAviso(c.comparacion)).length;
   const irAFila = (fila: number) => { const el = document.getElementById(`regreso-${fila}`); el?.scrollIntoView({ block: "center" }); el?.focus(); };
@@ -253,6 +262,7 @@ export default function CopiarProgramacionPage() {
           ) : null}
           {nConAvisos > 0 ? (
             <section aria-label="Avisos de la copia" className="space-y-2 rounded-lg border border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+              {avisoCambio ? <p role="alert" className="font-medium text-amber-100">{avisoCambio}</p> : null}
               <p className="font-medium">⚠ {nConAvisos} fila(s) se copiarán igual que el origen, con avisos:</p>
               <ul className="list-inside list-disc">
                 {(Object.keys(ETIQUETA_AVISO) as TipoAviso[]).filter((t) => diag.avisosPorTipo[t] > 0).map((t) => <li key={t}>{ETIQUETA_AVISO[t]}: {diag.avisosPorTipo[t]} fila(s)</li>)}
@@ -269,7 +279,7 @@ export default function CopiarProgramacionPage() {
                 </div>
               ) : null}
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={avisosAceptados === claveAvisos} onChange={(e) => setAvisosAceptados(e.target.checked ? claveAvisos : "")} />
+                <input type="checkbox" checked={avisosAceptados !== "" && avisosAceptados === huellaAvisos} onChange={(e) => { setAvisosAceptados(e.target.checked ? huellaAvisos : ""); if (e.target.checked) setAvisoCambio(""); }} />
                 Entiendo los avisos y acepto copiar estos viajes tal como están en el origen
               </label>
             </section>
@@ -408,7 +418,7 @@ export default function CopiarProgramacionPage() {
             </section>
           ) : null}
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" disabled={!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
+            <button type="button" disabled={!puedeConfirmarCopia(filas, validando || confirmando, tarifasAceptadas, avisosAceptados, huellaAvisos)} onClick={() => void confirmar()} className="rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-40">
               {confirmando ? "Creando…" : `Confirmar copia (${r.incluidas} viaje${r.incluidas === 1 ? "" : "s"})`}
             </button>
             <span className="text-xs text-[var(--muted)]">Se crean todos o ninguno; los viajes nuevos nacen Programados con tarifa y viáticos vigentes.</span>
