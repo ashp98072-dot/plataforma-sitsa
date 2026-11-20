@@ -1,4 +1,6 @@
-import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo, fichaEnIdentidadTx } from "@/lib/flota/vehiculos-escritura";
+import { serialChasis, validarChasisParaRegistro } from "@/lib/flota/chasis";
+import { anotarIdentidades, colapsoPorIdentidadActivo } from "@/lib/flota/vehiculos-identidad";
 import { placaComparable } from "@/lib/flota/combustible-coincidencias";
 import { errorEliminacionVehiculo } from "@/lib/flota/vehiculo-eliminacion";
 import type { SqlParams } from "@/lib/db";
@@ -112,9 +114,16 @@ export async function GET(_req: Request, ctx: Ctx) {
       filtros,
     });
   }
+  // Identidad física APROBADA: la lista sigue completa (para resolver históricos) pero cada ficha dice si es la representante; la pantalla muestra UNA unidad.
+  let lista: typeof vehiculos = vehiculos;
+  if (colapsoPorIdentidadActivo()) {
+    try { lista = await anotarIdentidades(vehiculos.map(v => ({ ...v, id: Number(v.id) })), guard.empresa.id); }
+    catch (e) { console.error("GET vehiculos: colapso por identidad omitido", e); }
+  }
+  const visibles = new Set(lista.filter(v => (v as { esRepresentante?: boolean }).esRepresentante !== false).map(v => Number(v.id)));
   return NextResponse.json({
-    vehiculos,
-    posiblesDuplicados: diagnosticarVehiculos(rows.map(r => ({ id: Number(r.id), placa: String(r.placa) }))).posiblesDuplicados,
+    vehiculos: lista,
+    posiblesDuplicados: diagnosticarVehiculos(rows.filter(r => visibles.has(Number(r.id))).map(r => ({ id: Number(r.id), placa: String(r.placa) }))).posiblesDuplicados,
     empresas,
     empresaActualId: guard.empresa.id,
     propiedadHabilitada: propiedadActiva,
@@ -269,6 +278,8 @@ export async function POST(req: Request, ctx: Ctx) {
 
 const patchSchema = z.object({
   id: z.number().int().positive(),
+  /** Chasis real (tarjeta de circulación). Solo la dueña o quien tiene el permiso de edición de otras empresas; auditado; inmutable si la ficha ya es miembro de una identidad física. */
+  chasis: z.string().max(80).optional(),
   enTaller: z.boolean().optional(),
   motivoTaller: z.string().optional(),
   estado: z.string().optional(),
@@ -425,6 +436,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
         { error: "No se pudo guardar el tipo de unidad. Verifica que la migración de tipo_unidad esté aplicada." },
         { status: 500 },
       );
+    }
+  }
+
+  // Chasis: acredita (junto con la placa y el tipo) que dos fichas son la misma unidad física. Se registra con auditoría y no cambia si la ficha ya es miembro de una identidad.
+  if (d.chasis !== undefined) {
+    const nuevo = validarChasisParaRegistro(d.chasis);
+    if (!nuevo.ok) throw new ErrorIdentidadVehiculo(nuevo.error, 400);
+    const anterior = serialChasis(cur[0].chasis);
+    if (nuevo.valor !== anterior) {
+      if (await fichaEnIdentidadTx(conn, d.id)) throw new ErrorIdentidadVehiculo("La ficha ya pertenece a una identidad física: su chasis no puede cambiarse.", 409);
+      await execute("UPDATE flota_vehiculos SET chasis = ? WHERE id = ? AND empresa_id = ?", [nuevo.valor, d.id, empresaDuenaId]);
+      await registrarAuditoriaTx(conn, { empresaId: guard.empresa.id, usuario: guard.session.username, modulo: "flota", accion: "registrar_chasis_vehiculo", detalle: JSON.stringify({ vehiculoId: d.id, empresaDuenaId, chasisAnterior: anterior || null, chasisNuevo: nuevo.valor }) });
     }
   }
 
