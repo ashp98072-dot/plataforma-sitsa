@@ -4,21 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type Fila = Record<string, string | number | null>;
 type Campo = { nombre: string; etiqueta: string; tipo?: string; opciones?: string };
 const campos: Record<string, Campo[]> = {
-  productos: [{nombre:"codigo",etiqueta:"Código"},{nombre:"nombre",etiqueta:"Aceite"},{nombre:"marca",etiqueta:"Marca"},{nombre:"presentacion",etiqueta:"Presentación"},{nombre:"capacidad",etiqueta:"Capacidad",tipo:"number"},{nombre:"unidad_capacidad",etiqueta:"Unidad de capacidad"},{nombre:"unidad_inventario",etiqueta:"Unidad de inventario"}],
+  productos: [{nombre:"codigo",etiqueta:"Código"},{nombre:"nombre",etiqueta:"Caneca llena"},{nombre:"marca",etiqueta:"Marca"},{nombre:"presentacion",etiqueta:"Presentación"},{nombre:"capacidad",etiqueta:"Capacidad",tipo:"number"},{nombre:"unidad_capacidad",etiqueta:"Unidad de capacidad"},{nombre:"unidad_inventario",etiqueta:"Unidad de inventario"}],
   ubicaciones: [{nombre:"nombre",etiqueta:"Nombre de bodega o ubicación"}],
   proveedores: [{nombre:"nombre_comercial",etiqueta:"Nombre del proveedor"}],
-  compras: [{nombre:"proveedor_id",etiqueta:"Proveedor",opciones:"proveedores"},{nombre:"producto_id",etiqueta:"Aceite",opciones:"productos"},{nombre:"referencia",etiqueta:"Referencia documental"},{nombre:"cantidad",etiqueta:"Canecas compradas",tipo:"number"}],
+  compras: [{nombre:"proveedor_id",etiqueta:"Proveedor",opciones:"proveedores"},{nombre:"producto_id",etiqueta:"Caneca llena",opciones:"productos"},{nombre:"referencia",etiqueta:"Referencia documental"},{nombre:"cantidad",etiqueta:"Canecas compradas",tipo:"number"}],
   recepciones: [{nombre:"compra_id",etiqueta:"Compra",opciones:"compras"},{nombre:"ubicacion_id",etiqueta:"Ubicación",opciones:"ubicaciones"},{nombre:"recibido_por_empleado_id",etiqueta:"Recibido físicamente por",opciones:"empleados"},{nombre:"cantidad",etiqueta:"Canecas recibidas",tipo:"number"}],
 };
 const columnas: Record<string, [string,string][]> = {
-  productos: [["codigo","Código"],["nombre","Aceite"],["marca","Marca"],["presentacion","Presentación"],["capacidad","Capacidad"],["unidad_capacidad","Unidad"],["activo","Activo"]],
+  productos: [["codigo","Código"],["nombre","Caneca llena"],["marca","Marca"],["presentacion","Presentación"],["capacidad","Capacidad"],["unidad_capacidad","Unidad"],["activo","Activo"]],
   ubicaciones: [["nombre","Ubicación"],["activo","Activa"]],
-  compras: [["referencia","Documento"],["proveedor","Proveedor"],["producto","Aceite"],["cantidad","Cantidad"],["creado_en","Fecha"]],
-  recepciones: [["referencia","Documento"],["producto","Aceite"],["ubicacion","Ubicación"],["cantidad","Cantidad"],["recibido_por","Recibió"],["estado","Estado"],["confirmado_usuario","Confirmó"],["confirmado_en","Fecha"]],
-  inventario: [["nombre","Aceite"],["presentacion","Presentación"],["ubicacion","Ubicación"],["fisico","Físico"],["reservado","Reservado"],["disponible","Disponible"]],
-  movimientos: [["tipo","Tipo"],["producto","Aceite"],["presentacion","Presentación"],["ubicacion","Ubicación"],["cantidad","Cantidad"],["documento","Documento"],["recibido_por","Recibió"],["usuario","Confirmó"],["creado_en","Fecha"]],
+  compras: [["referencia","Documento"],["proveedor","Proveedor"],["producto","Caneca llena"],["cantidad","Cantidad"],["creado_en","Fecha"]],
+  recepciones: [["referencia","Documento"],["producto","Caneca llena"],["ubicacion","Ubicación"],["cantidad","Cantidad"],["recibido_por","Recibió"],["estado","Estado"],["confirmado_usuario","Confirmó"],["confirmado_en","Fecha"]],
+  inventario: [["nombre","Caneca llena"],["presentacion","Presentación"],["ubicacion","Ubicación"],["fisico","Físico"],["reservado","Reservado"],["disponible","Disponible"]],
+  movimientos: [["tipo","Tipo"],["producto","Caneca llena"],["presentacion","Presentación"],["ubicacion","Ubicación"],["cantidad","Cantidad"],["documento","Documento"],["recibido_por","Recibió"],["usuario","Confirmó"],["creado_en","Fecha"]],
 };
-const titulos: Record<string,string> = { panel:"Panel general", productos:"Aceites y presentaciones", ubicaciones:"Ubicaciones", compras:"Compras", recepciones:"Recepciones", inventario:"Existencias", movimientos:"Historial de movimientos" };
+const titulos: Record<string,string> = { panel:"Panel general", productos:"Canecas y presentaciones", ubicaciones:"Ubicaciones", compras:"Compras", recepciones:"Recepciones", inventario:"Existencias", movimientos:"Historial de movimientos" };
 export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: string; permisos: Record<string, boolean> }) {
   const [datos,setDatos] = useState<Record<string,Fila[]>>({});
   const [mensaje,setMensaje] = useState("");
