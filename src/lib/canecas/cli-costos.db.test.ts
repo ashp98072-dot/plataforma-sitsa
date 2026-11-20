@@ -16,6 +16,9 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
       await db.query(def[0]);
     }
     await db.query(readFileSync('sql/migrate-2026-11-canecas-fase1.sql', 'utf8'));
+    const [diagnostico] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/diagnostico-lectura-2026-11-canecas-fifo.sql', 'utf8'));
+    expect(diagnostico[0][0].version_servidor).toContain('11.8.9-MariaDB');
+    expect(diagnostico[1][0].veredicto_version).toContain('VERSION ENSAYADA');
   });
   afterAll(async () => { await db.end(); });
   it('ejecuta el instalador una vez y bloquea el reintento sin cambiar el esquema', async () => {
