@@ -22,6 +22,9 @@ describe.skipIf(!pipe)("confirmación contra MariaDB aislada", () => {
     expect(preflight[1].find(r => r.prueba === "RESULTADO")?.estado).toBe("APTO");
     await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql", "utf8"));
     await pool.query(readFileSync("sql/migrate-2026-11-canecas-fase1.sql", "utf8"));
+    const [ddlCostos, triggersCostos] = readFileSync("sql/migrate-2026-11-canecas-costos-wip.sql", "utf8").split("DELIMITER //");
+    await pool.query(ddlCostos);
+    for (const trigger of triggersCostos.split("//").map(s => s.trim()).filter(s => s.startsWith("CREATE TRIGGER"))) await pool.query(trigger);
     await pool.query(`INSERT INTO canecas_productos (id,empresa_id,codigo,nombre,presentacion,capacidad,unidad_capacidad,unidad_inventario) VALUES
       (1,1,'A','Aceite','Caneca',5,'galones','caneca'),(2,2,'A','Aceite','Caneca',5,'galones','caneca');
       INSERT INTO canecas_ubicaciones (id,empresa_id,nombre) VALUES (1,1,'Bodega'),(2,2,'Bodega');
@@ -39,6 +42,9 @@ describe.skipIf(!pipe)("confirmación contra MariaDB aislada", () => {
     const [movs] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n, SUM(cantidad) AS total FROM canecas_movimientos WHERE empresa_id=1");
     expect(Number(movs[0].n)).toBe(2);
     expect(Number(movs[0].total)).toBe(30);
+    const [capas] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n, SUM(costo_unitario_centavos IS NULL) AS pendientes FROM canecas_capas_costo WHERE empresa_id=1");
+    expect(Number(capas[0].n)).toBe(2);
+    expect(Number(capas[0].pendientes)).toBe(2);
   });
   it("rechaza el exceso y el acceso cruzado sin alterar el saldo", async () => {
     await expect(confirmarRecepcion(pool,1,3,1)).rejects.toThrow("CANTIDAD_EXCEDE_COMPRA");
