@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { verificarContrato } from './contrato-costos.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sqlFile = name => readFileSync(path.join(root, 'sql', name), 'utf8');
 const normalizar = value => value.replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -63,6 +64,7 @@ export async function ejecutarCostosControlado(connection) {
     }
     verificarTriggers(post[8], triggers);
     verificarClavesForaneas(post[9], ddl);
+    await verificarContrato(connection);
     return { pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
   } finally {
     await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);
@@ -71,15 +73,16 @@ export async function ejecutarCostosControlado(connection) {
 
 // Esta entrada requiere variables explícitas; no lee .env ni imprime credenciales.
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const { CANECAS_SQL_HOST: host, CANECAS_SQL_PIPE: pipe, CANECAS_SQL_CA: ca, CANECAS_SQL_DATABASE: database, CANECAS_SQL_USER: user, CANECAS_SQL_PASSWORD: password } = process.env;
-  if (process.argv.slice(2).join(' ') !== '--ejecutar' || !database || !user || !password || Boolean(host) === Boolean(pipe) || (host && !ca) || (pipe && !/^fifo-[0-9a-f-]{36}$/.test(pipe))) {
+  const { CANECAS_SQL_HOST: host, CANECAS_SQL_PIPE: pipe, CANECAS_SQL_CA: ca, CANECAS_SQL_DATABASE: database, CANECAS_SQL_USER: user, CANECAS_SQL_PASSWORD: password, CANECAS_SQL_PORT: rawPort } = process.env;
+  const port = rawPort === undefined ? 3306 : Number(rawPort);
+  if (process.argv.slice(2).join(' ') !== '--ejecutar' || !database || !user || !password || Boolean(host) === Boolean(pipe) || (host && (!ca || !Number.isInteger(port) || port < 1 || port > 65535)) || (pipe && !/^fifo-[0-9a-f-]{36}$/.test(pipe))) {
     console.error('DETENER: configurar base, usuario y contraseña; usar host con CA TLS o pipe de laboratorio verificado.');
     process.exitCode = 1;
   } else {
     const mysql = await import('mysql2/promise');
     let connection;
     try {
-      const transport = pipe ? { socketPath: `\\\\.\\pipe\\${pipe}` } : { host, ssl: { ca: readFileSync(ca), rejectUnauthorized: true } };
+      const transport = pipe ? { socketPath: `\\\\.\\pipe\\${pipe}` } : { host, port, ssl: { ca: readFileSync(ca), rejectUnauthorized: true } };
       connection = await mysql.createConnection({ ...transport, database, user, password, multipleStatements: true });
       const result = await ejecutarCostosControlado(connection);
       console.log('Preflight, migración y postcheck completos.', JSON.stringify(result));

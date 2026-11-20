@@ -1,8 +1,9 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verificarClavesForaneas, verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
+import { obtenerContrato, verificarContrato } from '../../../scripts/ci/canecas/contrato-costos.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
 describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
@@ -24,6 +25,26 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     expect(first.stderr).toBe('');
     expect(first.status).toBe(0);
     expect(first.stdout).toContain('postcheck completos');
+    if (process.env.CANECAS_GENERAR_CONTRATO === '1') {
+      writeFileSync('scripts/ci/canecas/contrato-costos-mariadb-11.8.9.json', `${JSON.stringify(await obtenerContrato(db), null, 2)}\n`);
+    }
+    await expect(verificarContrato(db)).resolves.toBeUndefined();
+    await db.query('ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(240) NOT NULL');
+    await expect(verificarContrato(db)).rejects.toThrow('columnas');
+    await db.query('ALTER TABLE canecas_gastos_posteriores MODIFY COLUMN referencia VARCHAR(250) NOT NULL');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DROP INDEX uq_can_gasto_clave');
+    await db.query('ALTER TABLE canecas_gastos_posteriores ADD UNIQUE INDEX uq_can_gasto_clave (clave_operacion,empresa_id)');
+    await expect(verificarContrato(db)).rejects.toThrow('indices');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DROP INDEX uq_can_gasto_clave');
+    await db.query('ALTER TABLE canecas_gastos_posteriores ADD UNIQUE INDEX uq_can_gasto_clave (empresa_id,clave_operacion)');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DROP CONSTRAINT chk_can_gasto_positivo');
+    await db.query('ALTER TABLE canecas_gastos_posteriores ADD CONSTRAINT chk_can_gasto_positivo CHECK (importe_centavos > 0)');
+    await expect(verificarContrato(db)).rejects.toThrow('checks');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DROP CONSTRAINT chk_can_gasto_positivo');
+    await db.query('ALTER TABLE canecas_gastos_posteriores ADD CONSTRAINT chk_can_gasto_positivo CHECK (importe_centavos >= 0)');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci');
+    await expect(verificarContrato(db)).rejects.toThrow('tablas');
+    await db.query('ALTER TABLE canecas_gastos_posteriores DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
     const [before] = await db.query('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME');
     const second = run();
     expect(second.status).not.toBe(0);
@@ -42,5 +63,5 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     await db.query('CREATE TRIGGER can_valoracion_no_borrar BEFORE DELETE ON canecas_valoraciones_iniciales FOR EACH ROW BEGIN SET @invalido=1; END');
     const [alterado] = await db.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
     expect(() => verificarTriggers(alterado[8], triggers)).toThrow('definición incompatible');
-  });
+  }, 30000);
 });
