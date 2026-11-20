@@ -4,8 +4,9 @@ import cp from 'node:child_process';
 import crypto from 'node:crypto';
 import net from 'node:net';
 
-if (process.platform !== 'win32' || !['--run-isolated', '--run-isolated-tls'].includes(process.argv[2])) throw Error('Usar --run-isolated o --run-isolated-tls');
-const tlsLab = process.argv[2] === '--run-isolated-tls';
+if (process.platform !== 'win32' || !['--run-isolated', '--run-isolated-tls', '--run-hostinger-tls'].includes(process.argv[2])) throw Error('Usar --run-isolated, --run-isolated-tls o --run-hostinger-tls');
+const hostingerLab = process.argv[2] === '--run-hostinger-tls';
+const tlsLab = process.argv[2] === '--run-isolated-tls' || hostingerLab;
 const repo = process.cwd();
 const engine = fs.realpathSync(path.resolve(repo, '../.lab-runtime/mariadb-11.8.9-winx64'));
 const bin = name => path.join(engine, 'bin', `${name}.exe`);
@@ -33,7 +34,7 @@ const init = cp.spawnSync(bin('mariadb-install-db'), [`--datadir=${data}`, `--so
 if (init.status !== 0) throw Error(`Inicialización fallida: ${init.stderr}`);
 const fd = fs.openSync(path.join(run, 'server.log'), 'wx');
 const networkArgs = tlsLab ? ['--bind-address=127.0.0.1', `--port=${port}`, `--ssl-ca=${path.join(run, 'server-cert.pem')}`, `--ssl-cert=${path.join(run, 'server-cert.pem')}`, `--ssl-key=${path.join(run, 'server-key.pem')}`] : ['--skip-networking'];
-const server = cp.spawn(bin('mariadbd'), ['--no-defaults', `--basedir=${engine}`, `--datadir=${data}`, ...networkArgs, '--enable-named-pipe', `--socket=${pipe}`, '--innodb-buffer-pool-size=64M', '--console'], { env, stdio: ['ignore', fd, fd], windowsHide: true });
+const server = cp.spawn(bin('mariadbd'), ['--no-defaults', `--basedir=${engine}`, `--datadir=${data}`, ...networkArgs, ...(hostingerLab ? ['--sql-mode=NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '--innodb-strict-mode=0'] : []), '--enable-named-pipe', `--socket=${pipe}`, '--innodb-buffer-pool-size=64M', '--console'], { env, stdio: ['ignore', fd, fd], windowsHide: true });
 fs.closeSync(fd);
 const args = ['--no-defaults', '--protocol=PIPE', '--host=.', `--socket=${pipe}`, '-uroot', '--batch', '--skip-column-names'];
 const sql = input => cp.spawnSync(bin('mariadb'), args, { env, input, encoding: 'utf8', windowsHide: true, timeout: 5000 });
@@ -52,8 +53,8 @@ try {
   verified = true;
   const permissions = ['SELECT', 'CREATE', 'ALTER', 'INDEX', 'REFERENCES', 'TRIGGER'];
   const omissions = permissions.map((permission, i) => `CREATE USER 'fifo_missing_${i}'@'localhost' IDENTIFIED BY 'fifo-test-only'; GRANT ${permissions.filter(p => p !== permission).join(',')} ON canecas_cli_test.* TO 'fifo_missing_${i}'@'localhost';`).join(' ');
-  if (sql(`CREATE DATABASE canecas_fifo_test; CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test; CREATE DATABASE canecas_schema_test; CREATE DATABASE canecas_recovery_test; CREATE DATABASE canecas_cli_test; CREATE DATABASE canecas_tls_test; CREATE USER 'fifo_lab'@'localhost' IDENTIFIED BY 'fifo-lab-only'; GRANT ${permissions.join(',')} ON canecas_cli_test.* TO 'fifo_lab'@'localhost'; CREATE USER 'fifo_tls'@'localhost' IDENTIFIED BY 'fifo-tls-only' REQUIRE SSL; GRANT ${permissions.join(',')} ON canecas_tls_test.* TO 'fifo_tls'@'localhost'; CREATE USER 'fifo_denied'@'localhost' IDENTIFIED BY 'fifo-denied-only' REQUIRE SSL; GRANT SELECT ON canecas_tls_test.* TO 'fifo_denied'@'localhost'; ${omissions}`).status !== 0) throw Error('No se crearon bases desechables');
-  const files = process.env.CANECAS_GENERAR_CONTRATO === '1' ? ['src/lib/canecas/generar-contrato.db.test.ts'] : ['src/lib/canecas/permisos-reales.db.test.ts', 'src/lib/canecas/interrupciones.db.test.ts', 'src/lib/canecas/tls-costos.db.test.ts', 'src/lib/canecas/cli-costos.db.test.ts', 'src/lib/canecas/recuperacion.db.test.ts', 'src/lib/canecas/costos-fifo.db.test.ts', 'src/lib/canecas/confirmar.db.test.ts', 'src/lib/canecas/flujo.db.test.ts', 'src/lib/canecas/schema.db.test.ts'];
+  if (sql(`CREATE DATABASE canecas_fifo_test; CREATE DATABASE canecas_test; CREATE DATABASE canecas_api_test; CREATE DATABASE canecas_schema_test; CREATE DATABASE canecas_recovery_test; CREATE DATABASE canecas_cli_test; CREATE DATABASE canecas_tls_test; CREATE DATABASE canecas_hostinger_test; CREATE USER 'fifo_host'@'localhost' IDENTIFIED BY 'fifo-host-only' REQUIRE SSL; GRANT ${permissions.join(',')} ON canecas_hostinger_test.* TO 'fifo_host'@'localhost'; CREATE USER 'fifo_lab'@'localhost' IDENTIFIED BY 'fifo-lab-only'; GRANT ${permissions.join(',')} ON canecas_cli_test.* TO 'fifo_lab'@'localhost'; CREATE USER 'fifo_tls'@'localhost' IDENTIFIED BY 'fifo-tls-only' REQUIRE SSL; GRANT ${permissions.join(',')} ON canecas_tls_test.* TO 'fifo_tls'@'localhost'; CREATE USER 'fifo_denied'@'localhost' IDENTIFIED BY 'fifo-denied-only' REQUIRE SSL; GRANT SELECT ON canecas_tls_test.* TO 'fifo_denied'@'localhost'; ${omissions}`).status !== 0) throw Error('No se crearon bases desechables');
+  const files = hostingerLab ? ['src/lib/canecas/hostinger-modo.db.test.ts'] : process.env.CANECAS_GENERAR_CONTRATO === '1' ? ['src/lib/canecas/generar-contrato.db.test.ts'] : ['src/lib/canecas/permisos-reales.db.test.ts', 'src/lib/canecas/interrupciones.db.test.ts', 'src/lib/canecas/tls-costos.db.test.ts', 'src/lib/canecas/cli-costos.db.test.ts', 'src/lib/canecas/recuperacion.db.test.ts', 'src/lib/canecas/costos-fifo.db.test.ts', 'src/lib/canecas/confirmar.db.test.ts', 'src/lib/canecas/flujo.db.test.ts', 'src/lib/canecas/schema.db.test.ts'];
   const test = cp.spawnSync(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.mts', ...files, '--maxWorkers=1'], { cwd: repo, env: { ...env, CANECAS_FIFO_TEST_PIPE: pipe, CANECAS_TEST_PIPE: pipe, ...(process.env.CANECAS_GENERAR_CONTRATO === '1' ? { CANECAS_GENERAR_CONTRATO: '1' } : {}), ...(tlsLab ? { CANECAS_TLS_TEST_PORT: String(port), CANECAS_TLS_TEST_CA: path.join(run, 'server-cert.pem'), CANECAS_TLS_TEST_WRONG_CA: path.join(run, 'wrong-cert.pem') } : {}) }, encoding: 'utf8', windowsHide: true, timeout: 180000 });
   console.log(test.stdout, test.stderr);
   process.exitCode = test.status === 0 ? 0 : 1;

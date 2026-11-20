@@ -59,7 +59,20 @@ export async function ejecutarCostosControlado(connection) {
   if (required.some(p => !privileges.has(p) && !privileges.has('ALL PRIVILEGES'))) throw Error('DETENER: privilegios directos insuficientes para la base');
   const [locks] = await connection.query('SELECT GET_LOCK(?, 0) AS adquirido', [`canecas-costos:${identity[0].base}`]);
   if (Number(locks[0]?.adquirido) !== 1) throw Error('DETENER: instalación concurrente');
+  let modoOriginal;
   try {
+    const [modes] = await connection.query('SELECT @@SESSION.sql_mode AS modo');
+    modoOriginal = modes[0]?.modo;
+    if (typeof modoOriginal !== 'string') throw Error('DETENER: no se pudo leer sql_mode de sesión');
+    const previos = modoOriginal.split(',').filter(Boolean);
+    if (!previos.includes('STRICT_TRANS_TABLES') && !previos.includes('STRICT_ALL_TABLES')) {
+      await connection.query("SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'STRICT_TRANS_TABLES')");
+    }
+    const [actual] = await connection.query('SELECT @@SESSION.sql_mode AS modo');
+    const activos = String(actual[0]?.modo || '').split(',').filter(Boolean);
+    if (!previos.every(mode => activos.includes(mode)) || (!activos.includes('STRICT_TRANS_TABLES') && !activos.includes('STRICT_ALL_TABLES'))) {
+      throw Error('DETENER: no se pudo garantizar SQL estricto sin perder modos previos');
+    }
     const [results] = await connection.query(preflight);
     if (!Array.isArray(results) || results.length < 8) throw Error('DETENER: preflight incompleto');
     const checks = results.flat().filter(row => row && typeof row === 'object' && 'resultado' in row);
@@ -79,9 +92,13 @@ export async function ejecutarCostosControlado(connection) {
     verificarTriggers(post[8], triggers);
     verificarClavesForaneas(post[9], ddl);
     await verificarContrato(connection);
-    return { pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
+    return { modoSqlEstricto: true, pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
   } finally {
-    await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);
+    try {
+      if (typeof modoOriginal === 'string') await connection.query('SET SESSION sql_mode = ?', [modoOriginal]);
+    } finally {
+      await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);
+    }
   }
 }
 
