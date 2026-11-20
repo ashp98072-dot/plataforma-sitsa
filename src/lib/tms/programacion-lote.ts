@@ -256,7 +256,7 @@ export async function copiasVigentesDeOrigen(empresaId: number, fechaDestino: st
 }
 
 /** Clave de un viaje PROPIO "gemelo": misma ruta + misma hora de carga + misma unidad + mismo piloto (empleado). */
-export const claveGemelo = (rutaId: number, hora: string, placa: string, pilotoEmpleadoId: number) => `${rutaId}|${hora}|${norm(placa)}|${pilotoEmpleadoId}`;
+export const claveGemelo = (rutaId: number, hora: string, placa: string, pilotoEmpleadoId: number) => `${rutaId}|${hora.trim().slice(0, 5)}|${norm(placa)}|${pilotoEmpleadoId}`;
 
 /**
  * ANTI-DUPLICADO POR CONTENIDO (TMS-PROGRAMACION-DUPLICADA-1). El anti-duplicado por `tms_plan_origen` solo ve copias previas del MISMO plan
@@ -349,8 +349,7 @@ async function resolverYValidar(empresaId: number, fechaDestino: string, borrado
     } catch { /* si falla la disponibilidad de hoy no se bloquea (igual que el POST manual) */ }
   }
 
-  const internas: FilaInterna[] = [];
-  for (const b of borradores) {
+  const internas: FilaInterna[] = [];  for (const b of borradores) {
     const errores: string[] = [];
     const recursos: RecursoDia[] = [];
     const res: Resuelto = { clienteId: null, rutaId: null, rutaCodigo: null, destino: null, lugarCarga: null, contacto: { nombre: null, cargo: null, telefono: null },

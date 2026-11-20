@@ -111,6 +111,25 @@ describe.skipIf(!pipe)("programación duplicada: anti-duplicado por contenido y 
     const aud = r[4] as RowDataPacket[]; expect(aud.map((a) => a.accion)).toEqual(["copiar_programacion", "importar_programacion"]); expect(aud[0].usuario).toBe("jefe");
   });
 
+  it("CONCURRENCIA real (MariaDB): el 2.º GET_LOCK ESPERA al 1.º; tras su COMMIT + RELEASE_LOCK el 2.º ve el viaje y detecta el gemelo (misma clave)", async () => {
+    const abrir = () => mysql.createConnection({ socketPath: `${BARRA}${BARRA}.${BARRA}pipe${BARRA}${pipe}`, user: "root", password: "", database: LAB });
+    const [c1, c2] = [await abrir(), await abrir()];
+    try {
+      const K = "tms_traslape_7_prueba";
+      expect(((await c1.query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [K]))[0][0]).l).toBe(1);
+      let c2Obtuvo = false;
+      const espera = c2.query<RowDataPacket[]>("SELECT GET_LOCK(?, 8) AS l", [K]).then(([r]) => { c2Obtuvo = true; return r[0].l; });
+      await new Promise((r) => setTimeout(r, 300)); expect(c2Obtuvo).toBe(false);   // sigue esperando mientras c1 lo tiene
+      await c1.beginTransaction();
+      await c1.query("INSERT INTO tms_planes_viaje(empresa_id,codigo,cliente_id,unidad_id,piloto_id,fecha_plan,hora_carga,ruta_id,estado,tipo_viaje) VALUES (7,'PLAN-20261125-001',3,1,10,'2026-11-25','09:00',5,'Programado','Propio')");
+      await c1.commit();   // primero commit…
+      await c1.query("SELECT RELEASE_LOCK(?)", [K]);   // …después liberar (mismo orden que confirmarLote)
+      expect(await espera).toBe(1);
+      expect((await gemelosExactosEnDestino(7, "2026-11-25")).get(claveGemelo(5, "09:00", "P-1", 101))).toBe("PLAN-20261125-001");   // el 2.º ya ve el viaje del 1.º
+      await c2.query("SELECT RELEASE_LOCK(?)", [K]);
+    } finally { await c1.end(); await c2.end(); }
+  });
+
   it("parámetros inválidos no ejecutan nada; el script no contiene escritura; otro esquema y fecha sin datos devuelven vacío", async () => {
     for (const malo of ["no_existe_xyz", "a`b", "x' OR '1'='1"]) { const r = await diagnostico(malo); expect(r[0][0].verificacion, malo).toMatch(/^PARAMETROS_INVALIDOS/); }
     expect((await diagnostico(null, "2026-11-19; DROP TABLE x"))[0][0].verificacion).toMatch(/^PARAMETROS_INVALIDOS/);

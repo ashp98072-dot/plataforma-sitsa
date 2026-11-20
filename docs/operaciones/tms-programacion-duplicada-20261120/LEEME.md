@@ -1,6 +1,11 @@
 # TMS — programaciones duplicadas del 19/11/2026 (33 pares PLAN-…-001..033 vs 034..066)
 
-Estado: **IMPLEMENTADO + VERIFICADO TÉCNICAMENTE** (pruebas unitarias y contra MariaDB 11.8.9 desechable). **No probado contra datos de producción**: no hay acceso a la base real, así que la duplicación física **no está confirmada ni descartada** (ver «Evidencia»). Nada se borró, nada se modificó, no hay merge ni despliegue.
+Estado: **IMPLEMENTADO + VERIFICADO TÉCNICAMENTE** (pruebas unitarias y contra MariaDB 11.8.9 desechable). Este PR **no contiene ni ejecuta** ninguna operación sobre producción. Sin merge ni despliegue.
+
+### Situación en producción (según lo informado por el responsable; no verificado por este código ni por quien lo redactó)
+- El responsable informa que los **66 planes del 19/11/2026 (33 pares) fueron confirmados mediante consultas a la base de producción**, y que la **limpieza de los duplicados se realizó** fuera de este PR.
+- Aquí **no se registran** ids, conteos de planes cancelados, método ni resultados de esa limpieza porque no se aportaron a este PR. Debe anexarse la evidencia del responsable (salida de R2/R3 antes y después, ids tratados, usuario y hora) antes de dar el caso por cerrado.
+- Las secciones 4 y 5 describen el procedimiento previsto; **no** deben leerse como constancia de lo ejecutado.
 
 ## 1. Causa raíz (código)
 
@@ -24,16 +29,21 @@ Lo que **no** cambia: un recurso ocupado con otra hora/ruta sigue siendo solo av
 
 No se tocó la importación Excel ni el alta manual (ya bloquean por traslape). Pendiente opcional, **no incluido**: idempotencia por `hashArchivo` en la importación.
 
+### Concurrencia (revisada)
+`confirmarLote` toma `GET_LOCK('tms_traslape_<empresa>')` en una conexión dedicada **antes** de revalidar (incluida `gemelosExactosEnDestino`), inserta en otra conexión con transacción, hace `COMMIT` y **solo después** (bloque `finally`) libera el candado. Por eso una 2.ª confirmación simultánea espera, y cuando obtiene el candado ya ve los planes confirmados de la 1.ª: la consulta inicial **por sí sola no** da exclusividad; la da el candado, que es el mismo que usan el alta manual y la importación Excel. Si no se obtiene en 8 s → 409 sin escribir. Probado: 2 confirmaciones simultáneas del mismo lote, 2 de orígenes distintos con contenido idéntico, orden `GET_LOCK → COMMIT → RELEASE_LOCK`, un control (sin exclusión el duplicado sí entra) y, en MariaDB real, que el 2.º `GET_LOCK` espera y tras `COMMIT + RELEASE_LOCK` ve el viaje. No se encontró una carrera real que corregir en el flujo de copia.
+
+Atomicidad: el rechazo por «Posible duplicado» ocurre antes de abrir la transacción (no escribe nada). Un fallo a mitad de inserción hace rollback total (planes, auxiliares, paradas, viáticos, orígenes y auditoría); probado, y el mismo lote se puede reintentar después.
+
 ## 3. Pruebas
 
-- `src/lib/tms/programacion-lote.test.ts` (183/183): «REGRESIÓN 33 pares» (un lote de 33 se crea; el mismo lote desde otro día origen se rechaza completo: 33 errores, 0 planes nuevos); gemelo sin `tms_plan_origen` (Excel/manual) bloqueado nombrando el código; y 7 casos **negativos** que prueban que NO se suponen duplicados (gemelo cancelado, otra hora, otra unidad, otro piloto, otra ruta, otra fecha, otra empresa). Sin la corrección, las 2 pruebas de regresión fallan (comprobado).
-- `src/lib/tms/programacion-duplicada.db.test.ts` (4/4, MariaDB 11.8.9 real): el SQL real de `gemelosExactosEnDestino` y el diagnóstico de solo lectura (33 pares, relaciones, auditoría, sin modificar filas, parámetros inválidos, sin escrituras).
+- `src/lib/tms/programacion-lote.test.ts` (191/191, incluye concurrencia, atomicidad y normalización): «REGRESIÓN 33 pares» (un lote de 33 se crea; el mismo lote desde otro día origen se rechaza completo: 33 errores, 0 planes nuevos); gemelo sin `tms_plan_origen` (Excel/manual) bloqueado nombrando el código; y 7 casos **negativos** que prueban que NO se suponen duplicados (gemelo cancelado, otra hora, otra unidad, otro piloto, otra ruta, otra fecha, otra empresa). Sin la corrección, las 2 pruebas de regresión fallan (comprobado).
+- `src/lib/tms/programacion-duplicada.db.test.ts` (5/5, MariaDB 11.8.9 real): el SQL real de `gemelosExactosEnDestino` y el diagnóstico de solo lectura (33 pares, relaciones, auditoría, sin modificar filas, parámetros inválidos, sin escrituras).
 - `tsc --noEmit` limpio; ESLint limpio en los 3 archivos. En `src/lib/tms` + `src/app/api/empresas` hay 9 archivos de prueba que fallan (p. ej. `programacion-tc`, `gastos/catalogos`, `cotizacion-doble-eje-sql`); fallan **igual con el `programacion-lote.ts` original** (comprobado en 3 de ellos, 24 pruebas) y no importan este módulo: ajenos a este cambio.
 
 ## 4. Evidencia
 
 - **Confirmado por código:** los tres hechos de la tabla anterior.
-- **NO confirmado:** que los 66 registros existan físicamente como filas distintas, cuál camino los creó y quién. Eso solo lo dicen los datos.
+- **No confirmado por este PR** (solo por la verificación en producción que informa el responsable, ver encabezado): que los 66 registros existan físicamente como filas distintas, cuál camino los creó y quién.
 - Hecho a tener en cuenta: `tms_planes_viaje` **no tiene `creado_en`/`creado_por`**. Hora y usuario de creación salen de `tms_plan_origen` (copias) y de la auditoría del lote (`copiar_programacion`/`importar_programacion`).
 
 ### Cómo comprobarlo (solo lectura)
@@ -53,8 +63,12 @@ Mecanismo recomendado: **cancelar con la pantalla/acción normal de la aplicaci�
 
 Si en algún par ambos tienen relaciones, o no hay origen que indique cuál es la copia, **detenerse y decidir con Operaciones** cuál conservar.
 
-## 6. Riesgos y pendientes
-- Confirmar con el propietario el endurecimiento a bloqueo (§2).
-- No cubre tercerizados ni filas sin hora/unidad/piloto (por diseño: no se suponen duplicados).
-- Idempotencia por `hashArchivo` en importación: no implementada (fuera del alcance probado).
-- Sin datos reales, la causa exacta de los 66 sigue por confirmar con R2–R4.
+## 6. Límites que permanecen
+- **Importación Excel:** sin idempotencia por archivo (`hashArchivo` solo en auditoría) ni anti-duplicado por contenido; depende solo del traslape de recursos (que ignora piloto/unidad aún no existentes en TMS en la primera carga). No se modificó.
+- **Dentro de un mismo lote de copia**, dos filas idénticas siguen siendo un aviso aceptable (decisión de copia fiel con prueba existente), no un bloqueo. Copiar un día que ya contiene duplicados puede, por tanto, replicarlos si el usuario acepta los avisos. Cambiarlo es decisión de negocio.
+- **Ediciones (PATCH):** cambiar hora/unidad/piloto de un plan existente hasta igualar a otro no pasa por esta regla.
+- **Piloto sin `id_empleado`** en `tms_personal` (registros antiguos) y **placas escritas distinto** que no resuelven a la misma unidad no se detectan como gemelo.
+- No hay índice único en base de datos para esta regla (requeriría una migración; no se hizo).
+- Tercerizados y filas sin hora, unidad o piloto no se evalúan (por diseño: no se suponen duplicados).
+- Confirmar con el propietario que el gemelo exacto **bloquee** en vez de solo avisar (§2).
+- Falta anexar la evidencia de la limpieza ya realizada (ver el encabezado).

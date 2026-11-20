@@ -47,7 +47,7 @@ import { tarifasActivasDeVariasRutas } from "@/lib/tms/ruta-tarifas";
 import { asegurarCodigoPlanUnicoTx, esDuplicadoCodigoPlan } from "@/lib/tms/codigo-plan";
 void esDuplicadoCodigoPlan; // real (no mockeada); referenciada para dejar claro que no se reemplaza
 import { ESTADOS_ASIGNACION_DIARIA } from "@/lib/tms/disponibilidad-programacion-dia";
-import { confirmarLote, MAX_FILAS_LOTE, validarLote, type BorradorLote } from "./programacion-lote";
+import { claveGemelo, confirmarLote, MAX_FILAS_LOTE, validarLote, type BorradorLote } from "./programacion-lote";
 import { borradoresDesdeCliente, cargarCopiaDeFecha } from "./programacion-copia";
 
 /**
@@ -79,6 +79,8 @@ let sinTablaOrigen = false;
 // por intento de INSERT): permite reproducir, dentro de la MISMA transacción del lote, una colisión real de
 // código (ER_DUP_ENTRY) que debe reintentar, o cualquier otro error de INSERT que debe propagarse tal cual.
 let insertPlanFallos: ("ok" | "dup" | "otro" | "guarda")[] = [];
+let mutexReal = false, candadoTomado = false;
+let eventos: string[] = [];   // orden de GET_LOCK / COMMIT / RELEASE_LOCK
 const conn = { query: vi.fn(), execute: vi.fn(), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(), destroy: vi.fn() };
 
 const flota: Record<number, { id: number; placa: string; activo: number; en_taller: number; tipo_unidad: string; empresa_id: number }> = {
@@ -124,6 +126,7 @@ beforeEach(() => {
   sinTablaOrigen = false;
   falla = { en: null, enPlanNumero: 0 };
   insertPlanFallos = [];
+  mutexReal = false; candadoTomado = false; eventos = [];
   e = {
     planes: [], origen: [], auxiliares: [], paradas: [], viaticos: [], auditorias: [],
     personal: [{ id: 501, id_empleado: 1, nombre: "Juan Pérez" }, { id: 502, id_empleado: 2, nombre: "Ana López" }],
@@ -215,10 +218,13 @@ beforeEach(() => {
 
   // ---- transacción con respaldo/restauración ----
   conn.beginTransaction.mockImplementation(async () => { respaldo = JSON.stringify(e); });
+  conn.commit.mockImplementation(async () => { eventos.push("COMMIT"); });
   conn.rollback.mockImplementation(async () => { e = JSON.parse(respaldo); });
   unidadReal.modelo = null;
   conn.query.mockImplementation(async (sql: string, args: unknown[] = []) => {
-    if (String(sql).includes("GET_LOCK")) return [[{ l: 1 }]];
+    // Candado por nombre: con `mutexReal` se comporta como GET_LOCK de MariaDB (el 2.º que lo pide ESPERA hasta que se libere); sin él, siempre concede (pruebas anteriores).
+    if (String(sql).includes("GET_LOCK")) { eventos.push("GET_LOCK"); if (mutexReal) { while (candadoTomado) await new Promise((r) => setTimeout(r, 0)); candadoTomado = true; } return [[{ l: 1 }]]; }
+    if (String(sql).includes("RELEASE_LOCK")) { eventos.push("RELEASE_LOCK"); candadoTomado = false; return [[{ l: 1 }]]; }
     const unidad = unidadReal.modelo?.consultar(String(sql), args); if (unidad !== undefined) return [unidad];
     return [[]];
   });
@@ -805,6 +811,51 @@ describe("anti-duplicado (origen + fecha destino) y trazabilidad", () => {
     const r = await confirmarAceptando(b);
     expect(r.ok).toBe(true);   // un recurso ocupado sigue siendo solo AVISO (decisión de copia fiel intacta)
     expect(creadosDestino()).toHaveLength(1);
+  });
+  // ---- Concurrencia: dos confirmaciones simultáneas. La exclusión la da el candado `tms_traslape_<empresa>` (GET_LOCK), tomado ANTES de revalidar y soltado DESPUÉS del commit. ----
+  const loteDos = (base: number): BorradorLote[] => [borrador({ fila: 1, origenPlanId: base }), borrador({ fila: 2, origenPlanId: base + 1, unidadPlaca: "P-2", pilotoEmpleadoId: 3, horaCarga: "04:00" })];
+  it("CONCURRENCIA: dos confirmaciones SIMULTÁNEAS del MISMO lote → exactamente una crea; la otra se rechaza y no queda nada a medias", async () => {
+    mutexReal = true;
+    const [a, b] = await Promise.all([confirmar(loteDos(900)), confirmar(loteDos(900))]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    expect(creadosDestino()).toHaveLength(2); expect(e.origen).toHaveLength(2); expect(e.viaticos).toHaveLength(2);
+  });
+  it("CONCURRENCIA: dos copias SIMULTÁNEAS de DÍAS ORIGEN DISTINTOS con contenido idéntico → solo una entra ('Posible duplicado')", async () => {
+    mutexReal = true;
+    const [a, b] = await Promise.all([confirmar(loteDos(900)), confirmar(loteDos(5000))]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    const rechazada = a.ok ? b : a; expect(!rechazada.ok && rechazada.erroresPorFila?.flatMap((f) => f.errores).some((m) => m.startsWith("Posible duplicado"))).toBe(true);
+    expect(creadosDestino()).toHaveLength(2); expect(e.origen).toHaveLength(2);
+  });
+  it("CONTROL: la exclusión depende del candado — si GET_LOCK concediera a ambos a la vez, la verificación previa por sí sola NO basta (por eso el candado se toma antes de revalidar)", async () => {
+    mutexReal = false;
+    await Promise.all([confirmar(loteDos(900)), confirmar(loteDos(5000))]);
+    expect(creadosDestino().length).toBeGreaterThan(2);
+  });
+  it("el candado se toma ANTES de revalidar y se suelta DESPUÉS del commit (orden GET_LOCK → COMMIT → RELEASE_LOCK)", async () => {
+    expect((await confirmar(loteDos(900))).ok).toBe(true);
+    expect(eventos).toEqual(["GET_LOCK", "COMMIT", "RELEASE_LOCK"]);
+  });
+  it("LÍMITE CONOCIDO (decisión de copia fiel, sin cambio): dos filas idénticas DENTRO del mismo lote siguen siendo aviso aceptable, no bloqueo", async () => {
+    const b = [borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901 })];
+    expect((await confirmar(b)).ok).toBe(false);   // sin aceptar el aviso de ventana incompleta
+    expect((await confirmarAceptando(b)).ok).toBe(true);
+  });
+  it("misma ruta con OTRA hora, unidad o piloto dentro del lote sigue permitida (con avisos de recurso, como siempre)", async () => {
+    const b = [borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, horaCarga: "05:00" }), borrador({ fila: 3, origenPlanId: 902, unidadPlaca: "P-2" }), borrador({ fila: 4, origenPlanId: 903, pilotoEmpleadoId: 3 })];
+    expect((await confirmarAceptando(b)).ok).toBe(true); expect(creadosDestino()).toHaveLength(4);
+  });
+  it("normalización: la clave ignora segundos de la hora, espacios y mayúsculas de la placa", () => {
+    expect(claveGemelo(10, "03:00:00", " p-1 ", 1)).toBe(claveGemelo(10, "03:00", "P-1", 1));
+    expect(claveGemelo(10, "03:00", "P-1", 1)).not.toBe(claveGemelo(10, "03:01", "P-1", 1));
+  });
+  it("ATOMICIDAD: si falla una inserción a mitad del lote → 0 planes, 0 viáticos, 0 orígenes, 0 auxiliares; y el MISMO lote se puede reintentar (nada huérfano lo bloquea)", async () => {
+    falla = { en: "viaticos", enPlanNumero: 2 };
+    const r = await confirmar(loteDos(900));
+    expect(r).toMatchObject({ ok: false, status: 500 });
+    expect(creadosDestino()).toHaveLength(0); expect(e.viaticos).toHaveLength(0); expect(e.origen).toHaveLength(0); expect(e.auditorias).toHaveLength(0);
+    falla = { en: null, enPlanNumero: 0 };
+    expect((await confirmar(loteDos(900))).ok).toBe(true); expect(creadosDestino()).toHaveLength(2);
   });
   it("auditoría: UNA entrada resumen del lote (fechas y cantidad); los planes no duplican eventos", async () => {
     await confirmar([borrador({ fila: 1, origenPlanId: 900 }), borrador({ fila: 2, origenPlanId: 901, unidadPlaca: "P-2", pilotoEmpleadoId: 3 })]);
