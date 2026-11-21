@@ -46,4 +46,31 @@ describe.skipIf(!pipe || !port)('modo de Hostinger en laboratorio aislado', () =
     const [after] = await db.query<mysql.RowDataPacket[]>('SELECT @@GLOBAL.sql_mode global_mode,@@SESSION.sql_mode session_mode,@@SESSION.innodb_strict_mode innodb_mode,@@SESSION.foreign_key_checks fk,@@SESSION.check_constraint_checks checks');
     expect(after).toEqual(before);
   }, 30000);
+  it('detiene antes de DDL si no se activa InnoDB estricto y detiene ante advertencia DDL', async () => {
+    const conn = await mysql.createConnection({ socketPath: `\\\\.\\pipe\\${pipe}`, user: 'root', database: 'canecas_warning_test', multipleStatements: true });
+    try {
+      const schema = readFileSync('sql/schema.sql', 'utf8');
+      for (const table of ['empresas', 'usuarios', 'empleados', 'compras_proveedores', 'auditoria']) {
+        const def = schema.match(new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\([\\s\\S]*?\\) ENGINE=InnoDB[^;]*;`));
+        if (!def) throw Error(`Falta ${table}`);
+        await conn.query(def[0]);
+      }
+      await conn.query(readFileSync('sql/migrate-2026-11-canecas-fase1.sql', 'utf8'));
+      const rejected = { query: async (sql: string, params?: unknown) => {
+        if (sql === 'SET SESSION innodb_strict_mode = 1') throw Error('fallo sintético');
+        return conn.query(sql, params as never);
+      } };
+      await expect(ejecutarCostosControlado(rejected)).rejects.toThrow('fallo sintético');
+      const [before] = await conn.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='precio_unitario_centavos'");
+      expect(before[0].n).toBe(0);
+      const warning = { query: async (sql: string, params?: unknown) => {
+        const result = await conn.query(sql, params as never);
+        return sql === 'SHOW WARNINGS' ? [[{ Level: 'Warning', Code: 1, Message: 'sintética' }], []] : result;
+      } };
+      await expect(ejecutarCostosControlado(warning)).rejects.toThrow('DDL 1/12');
+      const [after] = await conn.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='precio_unitario_centavos'");
+      expect(after[0].n).toBe(1);
+      await expect(ejecutarCostosControlado(conn)).rejects.toThrow('preflight incompatible');
+    } finally { await conn.end(); }
+  }, 30000);
 });

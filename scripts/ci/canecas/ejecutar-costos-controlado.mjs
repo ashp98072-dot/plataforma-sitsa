@@ -60,10 +60,12 @@ export async function ejecutarCostosControlado(connection) {
   const [locks] = await connection.query('SELECT GET_LOCK(?, 0) AS adquirido', [`canecas-costos:${identity[0].base}`]);
   if (Number(locks[0]?.adquirido) !== 1) throw Error('DETENER: instalación concurrente');
   let modoOriginal;
+  let innodbOriginal;
   try {
-    const [modes] = await connection.query('SELECT @@SESSION.sql_mode AS modo');
+    const [modes] = await connection.query('SELECT @@SESSION.sql_mode AS modo, @@SESSION.innodb_strict_mode AS innodb');
     modoOriginal = modes[0]?.modo;
-    if (typeof modoOriginal !== 'string') throw Error('DETENER: no se pudo leer sql_mode de sesión');
+    innodbOriginal = modes[0]?.innodb;
+    if (typeof modoOriginal !== 'string' || ![0, 1].includes(Number(innodbOriginal))) throw Error('DETENER: no se pudieron leer modos de sesión');
     const previos = modoOriginal.split(',').filter(Boolean);
     if (!previos.includes('STRICT_TRANS_TABLES') && !previos.includes('STRICT_ALL_TABLES')) {
       await connection.query("SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'STRICT_TRANS_TABLES')");
@@ -73,6 +75,9 @@ export async function ejecutarCostosControlado(connection) {
     if (!previos.every(mode => activos.includes(mode)) || (!activos.includes('STRICT_TRANS_TABLES') && !activos.includes('STRICT_ALL_TABLES'))) {
       throw Error('DETENER: no se pudo garantizar SQL estricto sin perder modos previos');
     }
+    await connection.query('SET SESSION innodb_strict_mode = 1');
+    const [strict] = await connection.query('SELECT @@SESSION.innodb_strict_mode AS activo');
+    if (Number(strict[0]?.activo) !== 1) throw Error('DETENER: no se pudo activar InnoDB estricto en sesión');
     const [results] = await connection.query(preflight);
     if (!Array.isArray(results) || results.length < 8) throw Error('DETENER: preflight incompleto');
     const checks = results.flat().filter(row => row && typeof row === 'object' && 'resultado' in row);
@@ -81,8 +86,18 @@ export async function ejecutarCostosControlado(connection) {
     if (!triggerSql || extra || !triggerSql.includes('DELIMITER ;')) throw Error('DETENER: formato de migración inesperado');
     const triggers = triggerSql.split('//').map(s => s.trim()).filter(s => s.startsWith('CREATE TRIGGER'));
     if (triggers.length !== 7) throw Error('DETENER: triggers incompletos');
-    await connection.query(ddl);
-    for (const trigger of triggers) await connection.query(trigger);
+    const statements = ddl.split(';').map(s => s.trim()).filter(Boolean);
+    if (statements.length !== 5) throw Error('DETENER: DDL inesperado');
+    const operations = [...statements, ...triggers];
+    for (let i = 0; i < operations.length; i++) {
+      try {
+        await connection.query(operations[i]);
+        const [warnings] = await connection.query('SHOW WARNINGS');
+        if (warnings.length) throw Error('advertencias DDL detectadas');
+      } catch {
+        throw Error(`DETENER: DDL ${i + 1}/${operations.length} falló o produjo advertencias; instalación parcial, ejecutar diagnóstico de recuperación`);
+      }
+    }
     const [post] = await connection.query(postcheck);
     if (!Array.isArray(post) || post.length < 11) throw Error('DETENER: postcheck incompleto; instalación requiere revisión');
     const postChecks = post.flat().filter(row => row && typeof row === 'object' && 'resultado' in row);
@@ -95,7 +110,11 @@ export async function ejecutarCostosControlado(connection) {
     return { modoSqlEstricto: true, pendienteConciliacion: post[3].length, recepcionesHistoricasSinCapa: post[4].length };
   } finally {
     try {
-      if (typeof modoOriginal === 'string') await connection.query('SET SESSION sql_mode = ?', [modoOriginal]);
+      try {
+        if (innodbOriginal !== undefined) await connection.query('SET SESSION innodb_strict_mode = ?', [innodbOriginal]);
+      } finally {
+        if (typeof modoOriginal === 'string') await connection.query('SET SESSION sql_mode = ?', [modoOriginal]);
+      }
     } finally {
       await connection.query('SELECT RELEASE_LOCK(?)', [`canecas-costos:${identity[0].base}`]);
     }
@@ -118,7 +137,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       const result = await ejecutarCostosControlado(connection);
       console.log('Preflight, migración y postcheck completos.', JSON.stringify(result));
     } catch (error) {
-      console.error('DETENER: instalación no completada; conservar datos y ejecutar diagnóstico de recuperación.', error.code || 'ERROR');
+      console.error('DETENER: instalación no completada; conservar datos y ejecutar diagnóstico de recuperación.', error.message?.startsWith('DETENER:') ? error.message : (error.code || 'ERROR'));
       process.exitCode = 1;
     } finally { if (connection) await connection.end(); }
   }
