@@ -2,21 +2,27 @@
 // Ejecuta `actualizarSolicitudFondo` REAL sobre tablas con las MISMAS claves foráneas RESTRICT que protegen a Combustible y CB2
 // (flota_combustible_cargas.fk_fcc_fondo_linea y flota_cb2_fondos_vinculos.fk_cb2fv_linea): demuestra que las líneas conservan su id, que
 // eliminar una línea vinculada falla sin NINGÚN cambio parcial (ni encabezado ni otras líneas) y que no se tocan líneas de otra solicitud/empresa.
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
 import mysql, { type RowDataPacket } from "mysql2/promise";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.setConfig({ testTimeout: 120000, hookTimeout: 120000 });
 const pipe = process.env.CB2_587_PIPE ?? "";
 const LAB = "fondos_edicion_lineas";
 const BARRA = String.fromCharCode(92);
 
+// Usuario con el que la APLICACIÓN se conecta: `root` por omisión; las pruebas de visibilidad lo cambian a un usuario con privilegios restringidos.
+const sesion = vi.hoisted(() => ({ usuario: "root" }));
 vi.mock("@/lib/db", async () => {
   const mysqlReal = await import("mysql2/promise");
-  let pool: ReturnType<typeof mysqlReal.createPool> | null = null;
+  const pools = new Map<string, ReturnType<typeof mysqlReal.createPool>>();
   const obtener = () => {
+    let pool = pools.get(sesion.usuario);
     if (!pool) {
       const b = String.fromCharCode(92);
-      pool = mysqlReal.createPool({ socketPath: `${b}${b}.${b}pipe${b}${process.env.CB2_587_PIPE}`, user: "root", password: "", database: "fondos_edicion_lineas", connectionLimit: 6 });
+      pool = mysqlReal.createPool({ socketPath: `${b}${b}.${b}pipe${b}${process.env.CB2_587_PIPE}`, user: sesion.usuario, password: "", database: "fondos_edicion_lineas", connectionLimit: 6 });
+      pools.set(sesion.usuario, pool);
     }
     return pool;
   };
@@ -200,5 +206,88 @@ describe.skipIf(!pipe)("edición diferencial de líneas de fondo (MariaDB 11.8.9
         CREATE TABLE flota_cb2_fondos_vinculos(empresa_id INT NOT NULL, consumo_id INT NOT NULL, linea_id INT NOT NULL, PRIMARY KEY(empresa_id, consumo_id),
         CONSTRAINT fk_cb2fv_linea FOREIGN KEY(empresa_id, linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB`);
     }
+  });
+
+  /** Un usuario de aplicación SIN privilegios sobre las tablas de Combustible/CB2: information_schema se las oculta, pero EXISTEN. */
+  describe("visibilidad insuficiente del usuario de la base", () => {
+    const DEBIL = "fondos_lim", ANCHO = "fondos_ancho";
+    const TABLAS_FONDOS = ["tms_solicitudes_fondo", "tms_solicitud_fondo_lineas", "empleados", "auditoria"];
+    const recrearModulos = async () => {
+      await admin.query("DROP TABLE IF EXISTS flota_cb2_fondos_vinculos; DROP TABLE IF EXISTS flota_combustible_cargas");
+      await admin.query(`CREATE TABLE flota_combustible_cargas(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, solicitud_fondo_linea_id INT NULL,
+        CONSTRAINT fk_fcc_fondo_linea FOREIGN KEY(empresa_id, solicitud_fondo_linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT) ENGINE=InnoDB;
+        CREATE TABLE flota_cb2_fondos_vinculos(empresa_id INT NOT NULL, consumo_id INT NOT NULL, linea_id INT NOT NULL, PRIMARY KEY(empresa_id, consumo_id),
+        CONSTRAINT fk_cb2fv_linea FOREIGN KEY(empresa_id, linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB`);
+    };
+    beforeAll(async () => {
+      await admin.query(`DROP USER IF EXISTS '${DEBIL}'@'localhost'; DROP USER IF EXISTS '${ANCHO}'@'localhost'; CREATE USER '${DEBIL}'@'localhost'; CREATE USER '${ANCHO}'@'localhost'`);
+      for (const t of TABLAS_FONDOS) await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${LAB}.${t} TO '${DEBIL}'@'localhost'`);
+      await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${LAB}.* TO '${ANCHO}'@'localhost'; FLUSH PRIVILEGES`);
+    });
+    afterAll(async () => { sesion.usuario = "root"; await admin.query(`DROP USER IF EXISTS '${DEBIL}'@'localhost'; DROP USER IF EXISTS '${ANCHO}'@'localhost'`).catch(() => undefined); });
+    afterEach(async () => { sesion.usuario = "root"; await recrearModulos(); });
+
+    it("el usuario restringido NO ve las tablas de vínculos en information_schema aunque existan (es lo que una detección ingenua tomaría por «módulo ausente»)", async () => {
+      const [[vis]] = await admin.query<RowDataPacket[]>(`SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${LAB}' AND TABLE_NAME IN ('flota_combustible_cargas', 'flota_cb2_fondos_vinculos')`);
+      expect(Number(vis.n)).toBe(2);   // root las ve
+      const c = await mysql.createConnection({ socketPath: `${BARRA}${BARRA}.${BARRA}pipe${BARRA}${pipe}`, user: DEBIL, password: "", database: LAB });
+      try {
+        const [filas] = await c.query<RowDataPacket[]>("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('flota_combustible_cargas', 'flota_cb2_fondos_vinculos')");
+        expect(filas).toHaveLength(0);   // oculta
+        await expect(c.query("SELECT 1 FROM flota_combustible_cargas LIMIT 1")).rejects.toMatchObject({ errno: 1142 });   // pero existe: la sonda lo delata como acceso denegado
+      } finally { await c.end(); }
+    });
+
+    it("con módulos presentes y usuario restringido: se DETIENE (visibilidad insuficiente); no se elimina la línea vinculada ni se cambia el monto, el beneficiario o la categoría", async () => {
+      const antes = await foto();
+      sesion.usuario = DEBIL;
+      await expect(actualizarSolicitudFondo(E1, 1, { observaciones: "NO debe persistir", lineas: todas().slice(0, 2) })).rejects.toThrow(/vínculos con Combustible: el usuario de la base no tiene visibilidad suficiente sobre flota_combustible_cargas/);   // retiraría la 103
+      await expect(actualizarSolicitudFondo(E1, 1, { lineas: todas().map((l) => (l.id === 102 ? { ...l, monto: 999 } : l)) })).rejects.toThrow(/visibilidad suficiente/);
+      await expect(actualizarSolicitudFondo(E1, 1, { lineas: todas().map((l) => (l.id === 102 ? { ...l, categoria: "Otros", empleadoId: 5 } : l)) })).rejects.toThrow(/visibilidad suficiente/);
+      sesion.usuario = "root";
+      expect(await foto()).toBe(antes);
+    });
+
+    it("con módulos AUSENTES de verdad y un usuario con acceso a toda la base: la sonda responde «no existe», information_schema ve las tablas de Fondos y la edición procede", async () => {
+      await admin.query("DROP TABLE flota_cb2_fondos_vinculos; DROP TABLE flota_combustible_cargas");
+      sesion.usuario = ANCHO;
+      await actualizarSolicitudFondo(E1, 1, { lineas: [todas()[0], todas()[2]] });
+      sesion.usuario = "root";
+      expect(await idsDe(1)).toEqual([101, 103]);
+    });
+
+    it("con módulos ausentes y un usuario SIN privilegios sobre ellos: no se puede distinguir «ausente» de «oculto» — se detiene en lugar de asumir que son libres", async () => {
+      await admin.query("DROP TABLE flota_cb2_fondos_vinculos; DROP TABLE flota_combustible_cargas");
+      const antes = JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id"));
+      sesion.usuario = DEBIL;
+      await expect(actualizarSolicitudFondo(E1, 1, { lineas: [todas()[0], todas()[2]] })).rejects.toThrow(/visibilidad suficiente/);
+      sesion.usuario = "root";
+      expect(JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id"))).toBe(antes);
+    });
+  });
+
+  /** `fecha_viaje` de una línea vinculada: ni Combustible ni CB2 la leen (usan la fecha de la SOLICITUD); solo los reportes la usan como dimensión. */
+  it("FECHA DEL VIAJE de una línea vinculada: cambiarla no altera NADA de lo que CB2 y Combustible leen, congelan o validan (snapshot de CB2 idéntico, vínculos intactos)", async () => {
+    const snapshotCb2 = async () => JSON.stringify(await R(`SELECT l.id, s.codigo, s.estado, CAST(l.cantidad*l.monto AS DECIMAL(22,4)) AS monto, DATE_FORMAT(s.fecha_requerimiento,'%Y-%m-%d') AS fecha, l.empleado_nombre AS persona, l.placa,
+      l.categoria, l.vehiculo_id FROM tms_solicitud_fondo_lineas l JOIN tms_solicitudes_fondo s ON s.empresa_id = l.empresa_id AND s.id = l.solicitud_id WHERE l.empresa_id = ${E1} AND l.id IN (102, 103) ORDER BY l.id`));   // misma proyección que cb2/fondos.ts y combustible-fondos.ts
+    const vinculos = async () => JSON.stringify([await R("SELECT * FROM flota_combustible_cargas"), await R("SELECT * FROM flota_cb2_fondos_vinculos")]);
+    const antes = [await snapshotCb2(), await vinculos()];
+    await actualizarSolicitudFondo(E1, 1, { lineas: todas().map((l) => (l.id === 102 || l.id === 103 ? { ...l, fechaViaje: "2026-12-24" } : l)) });
+    expect((await R("SELECT DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS f FROM tms_solicitud_fondo_lineas WHERE id IN (102, 103) ORDER BY id")).map((x) => x.f)).toEqual(["2026-12-24", "2026-12-24"]);
+    expect([await snapshotCb2(), await vinculos()]).toEqual(antes);
+  });
+});
+
+/** Premisa de la decisión sobre `fecha_viaje` (ver fondo-lineas-protegidas.ts): ningún código de Flota (Combustible/CB2) lee la fecha de la LÍNEA de fondos. Si algún día lo hace, hay que protegerla. */
+describe("premisa: Combustible y CB2 no dependen de fecha_viaje de la línea (análisis estático, sin base de datos)", () => {
+  const archivos = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? archivos(path.join(dir, e.name)) : /\.(ts|tsx)$/.test(e.name) && !/\.(test|fixture)\./.test(e.name) ? [path.join(dir, e.name)] : []));
+  it("ningún lector de src/lib/flota ni de sus rutas menciona fecha_viaje / fechaViaje", () => {
+    const lectores = [...archivos(path.join("src", "lib", "flota")), ...archivos(path.join("src", "app", "api", "empresas", "[slug]", "flota"))];
+    expect(lectores.length).toBeGreaterThan(50);
+    expect(lectores.filter((f) => /\b(fecha_viaje|fechaViaje)\b/.test(readFileSync(f, "utf8")))).toEqual([]);
+  });
+  it("el contraste de CB2 y la validación de Combustible usan la fecha de la SOLICITUD (fecha_requerimiento), no la de la línea", () => {
+    expect(readFileSync(path.join("src", "lib", "flota", "cb2", "fondos.ts"), "utf8")).toContain("s.fecha_requerimiento");
+    expect(readFileSync(path.join("src", "lib", "flota", "combustible-fondos.ts"), "utf8")).toContain("SELECT categoria, vehiculo_id FROM tms_solicitud_fondo_lineas");   // la validación solo lee categoría y unidad de la línea
   });
 });

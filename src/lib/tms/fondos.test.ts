@@ -68,9 +68,12 @@ function conexion(opts: {
   lineasExistentes?: Record<string, unknown>[];
   lineasConVales?: number[];
   lineasConCb2?: number[];
-  tablasVinculoAusentes?: string[];
-  columnasVinculoFaltantes?: string[];   // "tabla.columna"
+  tablasVinculoAusentes?: string[];          // la consulta responde 1146
+  tablasVinculoSinPrivilegio?: string[];     // la consulta responde 1142
+  columnasVinculoFaltantes?: string[];       // "tabla.columna": la consulta responde 1054
   errorConsultaVinculo?: { errno?: number; code?: string };
+  infoSchemaSinVisibilidad?: boolean;        // information_schema no muestra ni las tablas propias de Fondos
+  infoSchemaListaTablas?: string[];          // tablas que information_schema dice que existen
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -80,14 +83,16 @@ function conexion(opts: {
   const conn = {
     beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
     query: vi.fn(async (sql: string, params: unknown[] = []) => {
-      // FONDOS FASE 1 (C5) — estructura de las tablas OPCIONALES de vínculos (Combustible/CB2): presentes por defecto, con las columnas esperadas.
-      const esVinculo = ["flota_combustible_cargas", "flota_cb2_fondos_vinculos"].includes(String(params[0]));
-      if (esVinculo && sql.includes("FROM information_schema.TABLES")) return [(opts.tablasVinculoAusentes ?? []).includes(String(params[0])) ? [] : [{ ok: 1 }]];
-      if (esVinculo && sql.includes("FROM information_schema.COLUMNS")) {
-        const tabla = String(params[0]);
-        return [["empresa_id", String(params[1])].filter((c) => !(opts.columnasVinculoFaltantes ?? []).includes(`${tabla}.${c}`)).map((c) => ({ COLUMN_NAME: c }))];
+      // FONDOS FASE 1 (C5) — detección de vínculos: la SONDA real decide (errores 1146/1054/privilegios); information_schema solo CONFIRMA una ausencia.
+      const tablaVinculo = (["flota_combustible_cargas", "flota_cb2_fondos_vinculos"] as const).find((t) => sql.includes(`FROM ${t}`));
+      if (tablaVinculo) {
+        if ((opts.tablasVinculoAusentes ?? []).includes(tablaVinculo)) throw Object.assign(new Error("tabla inexistente"), { errno: 1146, code: "ER_NO_SUCH_TABLE" });
+        if ((opts.tablasVinculoSinPrivilegio ?? []).includes(tablaVinculo)) throw Object.assign(new Error("acceso denegado"), { errno: 1142, code: "ER_TABLEACCESS_DENIED_ERROR" });
+        if ((opts.columnasVinculoFaltantes ?? []).some((c) => c.startsWith(`${tablaVinculo}.`))) throw Object.assign(new Error("columna inexistente"), { errno: 1054, code: "ER_BAD_FIELD_ERROR" });
+        if (opts.errorConsultaVinculo) throw Object.assign(new Error("fallo SQL"), opts.errorConsultaVinculo);
       }
-      if (opts.errorConsultaVinculo && (sql.includes("FROM flota_combustible_cargas") || sql.includes("FROM flota_cb2_fondos_vinculos"))) throw Object.assign(new Error("fallo SQL"), opts.errorConsultaVinculo);
+      if (sql.includes("COUNT(*) AS n FROM information_schema.TABLES")) return [[{ n: opts.infoSchemaSinVisibilidad ? 0 : 2 }]];
+      if (sql.includes("SELECT 1 AS ok FROM information_schema.TABLES")) return [(opts.infoSchemaListaTablas ?? []).includes(String(params[0])) ? [{ ok: 1 }] : []];
       if (sql.includes("FROM cont_entidades")) {
         return [opts.entidadRequirenteValida === false ? [] : [{ id: 10, nombre: "Kuiqtrans" }]];
       }
@@ -1227,36 +1232,70 @@ describe("líneas automáticas — protección y sincronizador (FONDOS FASE 1; t
   });
 });
 
-/** CORRECCIÓN 5 — errores SQL: una tabla opcional ausente NO es lo mismo que una estructura incompatible o un fallo de consulta. */
-describe("verificación de vínculos — tablas opcionales vs estructura incompatible (FONDOS FASE 1)", () => {
+/** Detección de vínculos: una respuesta vacía de information_schema NO prueba que un módulo no exista; la sonda real decide y, ante incertidumbre, se detiene. */
+describe("verificación de vínculos — módulo ausente vs visibilidad insuficiente vs estructura incompatible (FONDOS FASE 1)", () => {
   const dos = () => [filaLinea({ id: 11, orden: 0 }), filaLinea({ id: 12, categoria: "Hospedaje", monto: "200.00", orden: 1 })];
+  const editar = (o: Parameters<typeof conexion>[0]) => {
+    const conn = conexion({ lineasExistentes: dos(), ...o });
+    return { conn, run: () => actualizarSolicitudFondo(7, 1, { observaciones: "no debe persistir", lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] }) };
+  };
 
-  it("tablas opcionales AUSENTES (módulos no instalados): no hay vínculos que comprobar y la edición procede", async () => {
+  it("módulos REALMENTE ausentes (la sonda responde 1146, information_schema ve las tablas propias y no lista las de vínculos): la edición procede", async () => {
     const conn = conexion({ lineasExistentes: dos(), tablasVinculoAusentes: ["flota_combustible_cargas", "flota_cb2_fondos_vinculos"] });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] });
     expect(sqlsLineas(conn, "DELETE FROM")[0][1]).toEqual([7, 1, 12]); expect(conn.commit).toHaveBeenCalledOnce();
-    expect(conn.query.mock.calls.some((c) => /FROM (flota_combustible_cargas|flota_cb2_fondos_vinculos)/.test(String(c[0])))).toBe(false);
   });
-  it.each([["flota_combustible_cargas", "solicitud_fondo_linea_id"], ["flota_cb2_fondos_vinculos", "linea_id"], ["flota_cb2_fondos_vinculos", "empresa_id"]])(
-    "tabla %s PRESENTE pero sin la columna %s (estructura incompatible): se DETIENE antes de escribir, sin disfrazarlo de «sin vínculos»", async (tabla, columna) => {
-      const conn = conexion({ lineasExistentes: dos(), columnasVinculoFaltantes: [`${tabla}.${columna}`] });
-      await expect(actualizarSolicitudFondo(7, 1, { observaciones: "no debe persistir", lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] }))
-        .rejects.toThrow(`la estructura de ${tabla} no es la esperada`);
+  it("information_schema SIN visibilidad (no ve ni las tablas propias de Fondos) + sonda 1146: NO se acepta como «módulo ausente» — se detiene sin escribir", async () => {
+    const { conn, run } = editar({ tablasVinculoAusentes: ["flota_combustible_cargas"], infoSchemaSinVisibilidad: true });
+    await expect(run()).rejects.toThrow(/no tiene visibilidad suficiente para confirmar que flota_combustible_cargas no existe/);
+    sinEscrituras(conn);
+  });
+  it("incoherencia: la sonda dice «no existe» pero information_schema SÍ lista la tabla — se detiene sin escribir", async () => {
+    const { conn, run } = editar({ tablasVinculoAusentes: ["flota_cb2_fondos_vinculos"], infoSchemaListaTablas: ["flota_cb2_fondos_vinculos"] });
+    await expect(run()).rejects.toThrow(/aparece en el catálogo pero no responde/);
+    sinEscrituras(conn);
+  });
+  it.each([["flota_combustible_cargas", "Combustible"], ["flota_cb2_fondos_vinculos", "CB2"]])(
+    "la tabla %s puede existir pero el usuario NO tiene privilegios (1142): visibilidad insuficiente → se detiene sin modificar ni eliminar nada", async (tabla, modulo) => {
+      const { conn, run } = editar({ tablasVinculoSinPrivilegio: [tabla] });
+      await expect(run()).rejects.toThrow(new RegExp(`vínculos con ${modulo}: el usuario de la base no tiene visibilidad suficiente sobre ${tabla}`));
       sinEscrituras(conn);
     });
-  it.each([[{ errno: 1054, code: "ER_BAD_FIELD_ERROR" }], [{ errno: 1146, code: "ER_NO_SUCH_TABLE" }], [{ errno: 1205, code: "ER_LOCK_WAIT_TIMEOUT" }]])(
-    "un error de la consulta de vínculos (%j) se PROPAGA — nunca se silencia — y no se modifica nada", async (error) => {
-      const conn = conexion({ lineasExistentes: dos(), errorConsultaVinculo: error });
-      await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("fallo SQL");
+  it("la misma incertidumbre detiene también un cambio SENSIBLE de una línea que no se retira (monto): nunca se asume que la FK lo impida", async () => {
+    const conn = conexion({ lineasExistentes: dos(), tablasVinculoSinPrivilegio: ["flota_combustible_cargas"] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 999 }, { id: 12, categoria: "Hospedaje", monto: 200 }] })).rejects.toThrow("visibilidad suficiente");
+    sinEscrituras(conn);
+  });
+  it("information_schema no lista la tabla pero la sonda SÍ responde: se usan los datos reales de la sonda (la línea vinculada queda protegida)", async () => {
+    const conn = conexion({ lineasExistentes: dos(), lineasConVales: [12] });   // information_schema no se consulta si la sonda responde
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("No se puede eliminar la línea 2: tiene vales");
+    expect(conn.query.mock.calls.some((c) => String(c[0]).includes("information_schema"))).toBe(false);
+    sinEscrituras(conn);
+  });
+  it.each([["flota_combustible_cargas", "Combustible", "solicitud_fondo_linea_id"], ["flota_cb2_fondos_vinculos", "CB2", "linea_id"], ["flota_cb2_fondos_vinculos", "CB2", "empresa_id"]])(
+    "tabla %s PRESENTE sin la columna %s (estructura incompatible, 1054): se DETIENE sin escribir, sin disfrazarlo de «sin vínculos»", async (tabla, modulo, columna) => {
+      const { conn, run } = editar({ columnasVinculoFaltantes: [`${tabla}.${columna}`] });
+      await expect(run()).rejects.toThrow(`vínculos con ${modulo}: la estructura de ${tabla} no es la esperada`);
       sinEscrituras(conn);
     });
-  it("la verificación se hace por empresa y por los ids de las líneas guardadas", async () => {
+  it.each([[{ errno: 1205, code: "ER_LOCK_WAIT_TIMEOUT" }], [{ errno: 2013, code: "PROTOCOL_CONNECTION_LOST" }]])("cualquier otro error de la consulta (%j) se PROPAGA — nunca se silencia — y no se modifica nada", async (error) => {
+    const { conn, run } = editar({ errorConsultaVinculo: error });
+    await expect(run()).rejects.toThrow("fallo SQL");
+    sinEscrituras(conn);
+  });
+  it("la sonda se hace por empresa y por los ids de las líneas guardadas", async () => {
     const conn = conexion({ lineasExistentes: dos() });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }, { id: 12, categoria: "Hospedaje", monto: 200 }] });
     const c = conn.query.mock.calls.find((x) => String(x[0]).includes("FROM flota_combustible_cargas"))!;
     expect(String(c[0])).toContain("empresa_id = ?"); expect(c[1]).toEqual([7, 11, 12]);
+  });
+  it("una solicitud SIN líneas guardadas no necesita sondear nada (no hay líneas que clasificar)", async () => {
+    const conn = conexion({ lineasExistentes: [], tablasVinculoSinPrivilegio: ["flota_combustible_cargas"] });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 10 }] });
+    expect(conn.commit).toHaveBeenCalledOnce();
   });
 });
 

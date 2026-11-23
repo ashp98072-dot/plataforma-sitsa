@@ -14,6 +14,11 @@ import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
  *    unidad/placa (el vale debe coincidir con la unidad de la línea) y el viaje de origen. Esos campos se bloquean; siguen siendo editables la
  *    descripción, la fecha del viaje, el cliente, el cargo, el método de pago, la cuenta/teléfono y la posición. La línea no se puede retirar.
  *
+ *    FECHA DEL VIAJE (`fecha_viaje`) — verificada en el código real: ni Combustible (`combustible-fondos.ts`: valida categoría, estado de la solicitud y unidad) ni CB2
+ *    (`cb2/fondos.ts`: contrasta y congela el monto, la persona, la placa y la fecha de la SOLICITUD, `fecha_requerimiento`) leen la fecha de la LÍNEA. Solo la usan los
+ *    reportes de gastos como dimensión de filtro/periodo, igual que cliente, cargo y descripción (que también siguen editables). Por eso NO se bloquea; la prueba
+ *    `fondos-edicion-lineas.db.test.ts` fija esa premisa (y falla si algún día un lector de Flota empieza a depender de ella: habría que protegerla).
+ *
  * El ORIGEN nunca lo decide el cliente: se lee SIEMPRE de la fila guardada (`origenDeFila`); una entrada que intente declarar un origen se rechaza
  * (`rechazarOrigenDeCliente`), y un origen desconocido se trata como PROTEGIDO (falla cerrado). Una línea nueva creada a mano nace SIEMPRE manual.
  */

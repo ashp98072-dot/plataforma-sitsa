@@ -662,27 +662,54 @@ const esViolacionFkReferenciada = (e: unknown) => {
   return x?.errno === 1451 || x?.code === "ER_ROW_IS_REFERENCED_2" || x?.code === "ER_ROW_IS_REFERENCED";
 };
 
+/** Errores de privilegios de MariaDB/MySQL: la tabla puede EXISTIR pero este usuario no la ve ni la puede leer (1044 db, 1142 tabla, 1143 columna, 1045 acceso). */
+const CODIGOS_SIN_PRIVILEGIO = new Set([1044, 1045, 1142, 1143]);
+const errnoDe = (e: unknown): number | null => {
+  const x = e as { errno?: number; code?: string } | null;
+  if (typeof x?.errno === "number") return x.errno;
+  const porCodigo: Record<string, number> = { ER_NO_SUCH_TABLE: 1146, ER_BAD_FIELD_ERROR: 1054, ER_TABLEACCESS_DENIED_ERROR: 1142, ER_COLUMNACCESS_DENIED_ERROR: 1143, ER_DBACCESS_DENIED_ERROR: 1044, ER_ACCESS_DENIED_ERROR: 1045 };
+  return x?.code ? porCodigo[x.code] ?? null : null;
+};
+const detener = (mensaje: string) => new ErrorDominioFormulario(`${mensaje} No se guardó ningún cambio; avisa a soporte.`, 409);
+
 /**
- * Ids (entre `ids`) con vales de Combustible o vínculos CB2. Distingue tres situaciones:
- *  · tabla AUSENTE (módulo opcional no instalado) → no hay vínculos que comprobar;
- *  · tabla presente con la estructura esperada → se consulta (cualquier error de la consulta SE PROPAGA, nunca se silencia);
- *  · tabla presente pero con estructura incompatible → no se puede comprobar la integridad: se DETIENE la operación antes de escribir.
+ * Ids (entre `ids`) con vales de Combustible o vínculos CB2. La verificación NO se apoya en que `information_schema` «parezca completo»: ese catálogo solo
+ * muestra lo que el usuario de la base puede ver, así que una respuesta vacía no prueba que un módulo no exista. La fuente de verdad es una SONDA REAL
+ * (la propia consulta de vínculos) y se distinguen cuatro situaciones:
+ *  · la sonda responde → hay datos reales (aunque information_schema no la liste);
+ *  · error «tabla inexistente» (1146) → el módulo NO está instalado, pero solo se acepta si information_schema tampoco la lista y VE las tablas propias
+ *    del módulo de Fondos (si no las ve, su silencio no demuestra nada);
+ *  · «columna inexistente» (1054) → la tabla existe con otra estructura: no se puede comprobar la integridad;
+ *  · errores de privilegios (1044/1045/1142/1143) → la tabla puede existir y este usuario no la ve: visibilidad insuficiente;
+ *  · cualquier otro error se propaga tal cual.
+ * Ante incertidumbre se DETIENE la operación antes de modificar o eliminar nada (no se asume que las FK impidan cambios de monto, beneficiario o categoría).
  */
 async function lineasConVinculosTx(conn: PoolConnection, empresaId: number, ids: number[]): Promise<Set<number>> {
   const vinculadas = new Set<number>();
   if (!ids.length) return vinculadas;
   const marcas = ids.map(() => "?").join(",");
   for (const v of VINCULOS_A_LINEAS) {
-    const tabla = await queryConn<RowDataPacket[]>(conn, "SELECT 1 AS ok FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1", [v.tabla]);
-    if (!tabla[0]) continue;   // módulo opcional no instalado
-    const columnas = await queryConn<RowDataPacket[]>(conn,
-      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IN ('empresa_id', ?)", [v.tabla, v.columna]);
-    if (new Set(columnas.map((c) => String(c.COLUMN_NAME))).size !== 2) {
-      throw new ErrorDominioFormulario(
-        `No se puede verificar la integridad de los vínculos con ${v.modulo}: la estructura de ${v.tabla} no es la esperada. No se guardó ningún cambio; avisa a soporte.`, 409,
-      );
+    let filas: RowDataPacket[];
+    try {
+      filas = await queryConn<RowDataPacket[]>(conn, `SELECT DISTINCT ${v.columna} AS linea_id FROM ${v.tabla} WHERE empresa_id = ? AND ${v.columna} IN (${marcas})`, [empresaId, ...ids]);
+    } catch (e) {
+      const errno = errnoDe(e);
+      if (errno === 1146) {
+        const propias = await queryConn<RowDataPacket[]>(conn,
+          "SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('tms_solicitudes_fondo', 'tms_solicitud_fondo_lineas')");
+        if (Number(propias[0]?.n ?? 0) !== 2) {
+          throw detener(`No se puede verificar los vínculos con ${v.modulo}: el usuario de la base no tiene visibilidad suficiente para confirmar que ${v.tabla} no existe.`);
+        }
+        const listada = await queryConn<RowDataPacket[]>(conn, "SELECT 1 AS ok FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1", [v.tabla]);
+        if (listada[0]) throw detener(`No se puede verificar los vínculos con ${v.modulo}: ${v.tabla} aparece en el catálogo pero no responde.`);
+        continue;   // módulo opcional realmente no instalado
+      }
+      if (errno === 1054) throw detener(`No se puede verificar la integridad de los vínculos con ${v.modulo}: la estructura de ${v.tabla} no es la esperada.`);
+      if (errno != null && CODIGOS_SIN_PRIVILEGIO.has(errno)) {
+        throw detener(`No se puede verificar los vínculos con ${v.modulo}: el usuario de la base no tiene visibilidad suficiente sobre ${v.tabla}.`);
+      }
+      throw e;
     }
-    const filas = await queryConn<RowDataPacket[]>(conn, `SELECT DISTINCT ${v.columna} AS linea_id FROM ${v.tabla} WHERE empresa_id = ? AND ${v.columna} IN (${marcas})`, [empresaId, ...ids]);
     for (const r of filas) vinculadas.add(Number(r.linea_id));
   }
   return vinculadas;
