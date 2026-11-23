@@ -22,6 +22,7 @@ import {
   normalizarClaveIdempotencia,
 } from "@/lib/tms/idempotencia-envio";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
+import { fondosDiariosInstalado } from "./fondos-diarios";
 import { nivelDeProteccion, origenDeFila, rechazarOrigenDeCliente, validarEdicionLinea, validarEliminacionLinea, type NivelProteccion } from "./fondo-lineas-protegidas";
 import {
   resolverEntidadRequirenteTx,
@@ -223,12 +224,21 @@ export type LineaFondo = {
   clienteId: number | null;
   clienteNombre: string | null;
   planId: number | null;
+  /** FONDOS DIARIOS — 'AUTO_VIATICO' = línea generada desde Programación (solo método de pago y cuenta editables); null = manual. */
+  origen?: string | null;
+  /** FONDOS DIARIOS — viático (tms_viaticos.id) de origen de una línea automática. */
+  viaticoId?: number | null;
 };
 
 export type SolicitudFondo = {
   id: number;
   empresaId: number;
   codigo: string;
+  /** FONDOS DIARIOS — 'DIARIA' = consolidada por (fecha, empresa requirente) desde Programación; 'MANUAL' = creada a mano. Ausente si la migración no está aplicada. */
+  origen?: "MANUAL" | "DIARIA";
+  /** FONDOS DIARIOS — 'COMPLEMENTARIA' = excepcional, ligada a una principal ya autorizada. */
+  tipo?: "PRINCIPAL" | "COMPLEMENTARIA";
+  solicitudPrincipalId?: number | null;
   entidadRequirenteId?: number | null;
   entidadRequirenteNombre?: string | null;
   requirenteEmpleadoId: number | null;
@@ -264,7 +274,7 @@ function mapLinea(r: RowDataPacket): LineaFondo {
     cantidad: Number(r.cantidad ?? 1),
     monto: Number(r.monto ?? 0),
     orden: Number(r.orden ?? 0),
-    fechaViaje: r.fecha_viaje != null ? String(r.fecha_viaje) : null,
+    fechaViaje: (r.fecha_viaje_txt ?? r.fecha_viaje) != null ? String(r.fecha_viaje_txt ?? r.fecha_viaje) : null,
     empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null,
     empleadoNombre: r.empleado_nombre != null ? String(r.empleado_nombre) : null,
     cargo: r.cargo != null ? String(r.cargo) : null,
@@ -275,7 +285,27 @@ function mapLinea(r: RowDataPacket): LineaFondo {
     clienteId: r.cliente_id != null ? Number(r.cliente_id) : null,
     clienteNombre: r.cliente_nombre != null ? String(r.cliente_nombre) : null,
     planId: r.plan_id != null ? Number(r.plan_id) : null,
+    origen: r.origen != null ? String(r.origen) : null,
+    viaticoId: r.viatico_id != null ? Number(r.viatico_id) : null,
   };
+}
+
+/**
+ * FONDOS DIARIOS — datos de la solicitud que solo existen con la migración (origen, tipo, principal). Una consulta aparte (y solo si la migración está aplicada) evita
+ * cambiar el SELECT base: sin la migración todo funciona exactamente como antes.
+ */
+async function anexarDatosDiarios<T extends Omit<SolicitudFondo, "lineas">>(empresaId: number, solicitudes: T[]): Promise<T[]> {
+  if (!solicitudes.length || !(await fondosDiariosInstalado())) return solicitudes;
+  const rows = await query<RowDataPacket[]>(
+    `SELECT id, origen, tipo, solicitud_principal_id FROM tms_solicitudes_fondo WHERE empresa_id = ? AND id IN (${solicitudes.map(() => "?").join(",")})`,
+    [empresaId, ...solicitudes.map((s) => s.id)],
+  );
+  const porId = new Map((Array.isArray(rows) ? rows : []).map((r) => [Number(r.id), r]));
+  return solicitudes.map((s) => {
+    const r = porId.get(s.id);
+    if (!r || r.origen == null) return s;
+    return { ...s, origen: String(r.origen) as "MANUAL" | "DIARIA", tipo: String(r.tipo) as "PRINCIPAL" | "COMPLEMENTARIA", solicitudPrincipalId: r.solicitud_principal_id != null ? Number(r.solicitud_principal_id) : null };
+  });
 }
 
 function mapSolicitud(r: RowDataPacket): Omit<SolicitudFondo, "lineas"> {
@@ -350,24 +380,21 @@ export async function listarSolicitudesFondo(
     `${SELECT_SOLICITUD} WHERE ${condiciones.join(" AND ")} ORDER BY s.fecha_requerimiento DESC, s.id DESC`,
     params,
   );
-  return rows.map((r) => ({ ...mapSolicitud(r), lineas: [] }));
+  return (await anexarDatosDiarios(empresaId, rows.map((r) => mapSolicitud(r)))).map((s) => ({ ...s, lineas: [] }));
 }
 
 export async function obtenerSolicitudFondo(empresaId: number, id: number): Promise<SolicitudFondo | null> {
   const rows = await query<RowDataPacket[]>(`${SELECT_SOLICITUD} WHERE s.id = ? AND s.empresa_id = ? LIMIT 1`, [id, empresaId]);
   if (!rows[0]) return null;
+  // `*` (con la fecha formateada aparte): trae también `origen` y `viatico_id` cuando la migración de fondos diarios está aplicada, sin romper si no lo está.
   const lineas = await query<RowDataPacket[]>(
-    `SELECT id, categoria, descripcion, cantidad, monto, orden,
-            DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS fecha_viaje,
-            empleado_id, empleado_nombre, cargo, cuenta, metodo_pago,
-            vehiculo_id, placa,
-            cliente_id, cliente_nombre,
-            plan_id
-     FROM tms_solicitud_fondo_lineas
-     WHERE empresa_id = ? AND solicitud_id = ? ORDER BY orden, id`,
+    `SELECT l.*, DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje_txt
+     FROM tms_solicitud_fondo_lineas l
+     WHERE l.empresa_id = ? AND l.solicitud_id = ? ORDER BY l.orden, l.id`,
     [empresaId, id],
   );
-  return { ...mapSolicitud(rows[0]), lineas: lineas.map(mapLinea) };
+  const [solicitud] = await anexarDatosDiarios(empresaId, [mapSolicitud(rows[0])]);
+  return { ...solicitud, lineas: lineas.map(mapLinea) };
 }
 
 export type LineaFondoInput = {
@@ -913,6 +940,16 @@ export async function actualizarSolicitudFondo(
     const estadoActual = String(actual.estado) as EstadoFondo;
     if (estadoActual !== "Pendiente") {
       throw new ErrorDominioFormulario(`No se puede editar una solicitud en estado "${estadoActual}" — solo mientras está Pendiente.`);
+    }
+    // FONDOS DIARIOS — la fecha y la empresa requirente de una solicitud diaria definen su grupo (clave única): no se cambian a mano. Requirente, solicitante,
+    // observaciones, líneas manuales y método de pago/cuenta de las automáticas sí son editables.
+    if (await fondosDiariosInstalado()) {
+      const meta = await queryConn<RowDataPacket[]>(conn, "SELECT origen FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1", [id, empresaId]);
+      if (String(meta[0]?.origen ?? "MANUAL") === "DIARIA") {
+        const cambiaFecha = input.fechaRequerimiento !== undefined && input.fechaRequerimiento !== String(actual.fecha_requerimiento);
+        const cambiaEntidad = input.entidadRequirenteId != null && Number(input.entidadRequirenteId) !== Number(actual.entidad_requirente_id);
+        if (cambiaFecha || cambiaEntidad) throw new ErrorDominioFormulario("La fecha y la empresa requirente de una solicitud diaria las define Programación y no se pueden cambiar aquí.");
+      }
     }
     const entidadRequirente = input.entidadRequirenteId == null
       ? null

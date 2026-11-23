@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db", () => ({ query: vi.fn(), execute: vi.fn() }));
+// FONDOS DIARIOS — estas pruebas cubren el comportamiento previo a la migración: la integración se simula NO instalada (sin consultas extra).
+vi.mock("@/lib/tms/fondos-diarios", () => ({
+  fondosDiariosInstalado: vi.fn(() => Promise.resolve(false)),
+  entidadesRequirentesDisponibles: vi.fn(() => Promise.resolve([])),
+  entidadesDePlanes: vi.fn(() => Promise.resolve(new Map())),
+  asignarEntidadRequirentePlanTx: vi.fn(() => Promise.resolve()),
+  sincronizarFondosDePlanes: vi.fn(() => Promise.resolve({ advertencia: null })),
+}));
 vi.mock("@/lib/tenant", () => ({
   requireTenantProgramacionOTms: vi.fn(), requireTenantModulo: vi.fn(),
 }));
