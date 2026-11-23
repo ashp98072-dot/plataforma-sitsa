@@ -1,4 +1,5 @@
 import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import { capasParaRecepcion } from "./costos-fifo-reglas";
 
 /** Confirma una recepción una sola vez. No se modifica el saldo al crear el borrador. */
 export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcionId: number, usuarioId: number) {
@@ -14,7 +15,7 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
     );
     if (!referencias[0]) throw new Error("RECEPCION_NO_ENCONTRADA");
     const [compras] = await conn.query<RowDataPacket[]>(
-      "SELECT id, producto_id, cantidad, referencia FROM canecas_compras WHERE empresa_id = ? AND id = ? FOR UPDATE",
+      "SELECT id, producto_id, cantidad, referencia, moneda, CAST(precio_unitario_centavos AS CHAR) AS precio_unitario_centavos, CAST(gastos_centavos AS CHAR) AS gastos_centavos FROM canecas_compras WHERE empresa_id = ? AND id = ? FOR UPDATE",
       [empresaId, referencias[0].compra_id],
     );
     const compra = compras[0];
@@ -35,6 +36,14 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
       [empresaId, compra.id],
     );
     if (Number(totales[0].total) + Number(recepcion.cantidad) > Number(compra.cantidad)) throw new Error("CANTIDAD_EXCEDE_COMPRA");
+    const capas = capasParaRecepcion({
+      cantidadComprada: Number(compra.cantidad),
+      cantidadPrevia: Number(totales[0].total),
+      cantidadRecibida: Number(recepcion.cantidad),
+      precioUnitarioCentavos: compra.precio_unitario_centavos == null ? null : BigInt(compra.precio_unitario_centavos),
+      gastosCentavos: compra.gastos_centavos == null ? null : BigInt(compra.gastos_centavos),
+    });
+    if (capas.some(c => c.costoUnitarioCentavos !== null) && !compra.moneda) throw new Error("MONEDA_REQUERIDA");
     await conn.execute(
       "INSERT INTO canecas_saldos (empresa_id,producto_id,ubicacion_id,fisico,reservado) VALUES (?,?,?,0,0) ON DUPLICATE KEY UPDATE fisico=fisico",
       [empresaId, compra.producto_id, recepcion.ubicacion_id],
@@ -52,6 +61,12 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
       "INSERT INTO canecas_movimientos (empresa_id,producto_id,ubicacion_id,tipo,cantidad,recepcion_id,documento,usuario_id) VALUES (?,?,?,'ENTRADA',?,?,?,?)",
       [empresaId, compra.producto_id, recepcion.ubicacion_id, recepcion.cantidad, recepcionId, compra.referencia, usuarioId],
     );
+    for (const [segmento, capa] of capas.entries()) {
+      await conn.execute(
+        "INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,recepcion_id,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda) VALUES (?,?,?,?,?,?,?,?,?)",
+        [empresaId, compra.producto_id, recepcion.ubicacion_id, recepcionId, segmento, capa.cantidad, capa.cantidad, capa.costoUnitarioCentavos?.toString() ?? null, compra.moneda ?? null],
+      );
+    }
     await conn.execute(
       "UPDATE canecas_recepciones SET estado='CONFIRMADA',confirmado_por=?,confirmado_en=CURRENT_TIMESTAMP WHERE empresa_id=? AND id=?",
       [usuarioId, empresaId, recepcionId],
