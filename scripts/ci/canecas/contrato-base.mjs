@@ -1,4 +1,4 @@
-﻿import { readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 // Solo comparación; no proporciona ni aprueba un contrato de Hostinger y no
 // cambia el bloqueo incondicional del instalador.
@@ -31,6 +31,28 @@ function validar(contract) {
     }
   }
   if (contract.tablas.length !== tables.length || tables.some(t => contract.tablas.filter(row => row.TABLE_NAME === t).length !== 1 || !contract.columnas.some(row => row.TABLE_NAME === t))) throw Error('DETENER: tablas o columnas incompletas');
+  if (names.some(name => contract[name].length === 0)) throw Error('DETENER: sección vacía o visibilidad no confirmada');
+  for (const table of tables) {
+    const columns = contract.columnas.filter(row => row.TABLE_NAME === table);
+    if (columns.some((row, i) => Number(row.ORDINAL_POSITION) !== i + 1) || new Set(columns.map(row => row.COLUMN_NAME)).size !== columns.length) throw Error('DETENER: columnas incompletas o contradictorias');
+    const indexes = contract.indices.filter(row => row.TABLE_NAME === table);
+    if (!indexes.length) throw Error('DETENER: índices incompletos o sin visibilidad');
+    for (const name of new Set(indexes.map(row => row.INDEX_NAME))) {
+      const parts = indexes.filter(row => row.INDEX_NAME === name);
+      if (parts.some((row, i) => Number(row.SEQ_IN_INDEX) !== i + 1 || !columns.some(col => col.COLUMN_NAME === row.COLUMN_NAME) || row.NON_UNIQUE !== parts[0].NON_UNIQUE)) throw Error('DETENER: índice incompleto o contradictorio');
+    }
+  }
+  for (const row of contract.foraneas) {
+    if (!contract.columnas.some(col => col.TABLE_NAME === row.TABLE_NAME && col.COLUMN_NAME === row.COLUMN_NAME)) throw Error('DETENER: FK contradictoria con columnas');
+  }
+  for (const table of tables) {
+    const fkRows = contract.foraneas.filter(row => row.TABLE_NAME === table);
+    for (const name of new Set(fkRows.map(row => row.CONSTRAINT_NAME))) {
+      const parts = fkRows.filter(row => row.CONSTRAINT_NAME === name);
+      if (parts.some((row, i) => Number(row.ORDINAL_POSITION) !== i + 1 || ['REFERENCED_TABLE_SCHEMA', 'REFERENCED_TABLE_NAME', 'UPDATE_RULE', 'DELETE_RULE'].some(key => row[key] !== parts[0][key]))) throw Error('DETENER: FK incompleta o contradictoria');
+    }
+  }
+  if (new Set(contract.checks.map(row => JSON.stringify([row.TABLE_NAME, row.CONSTRAINT_NAME]))).size !== contract.checks.length) throw Error('DETENER: CHECK contradictorios');
 }
 export async function obtenerContratoBase(connection) {
   const contract = {};
@@ -52,3 +74,4 @@ export function compararContratoBase(expected, actual) {
   }
   return true;
 }
+
