@@ -23,6 +23,9 @@ export async function GET(_req: Request, ctx: Ctx) {
 }
 
 const lineaSchema = conCuentaMovil(z.object({
+  // FONDOS FASE 1 — id de una línea YA guardada de esta solicitud (actualización diferencial). El servidor lo valida contra la solicitud y la
+  // empresa; sin id = línea nueva. El origen de la línea NO se acepta del cliente (zod descarta cualquier campo no declarado).
+  id: z.number().int().positive().optional(),
   categoria: z.enum(CATEGORIAS_GASTO),
   descripcion: z.string().max(300).nullable().optional(),
   cantidad: z.number().positive().max(999999).optional(),

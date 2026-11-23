@@ -326,7 +326,7 @@ export function remapearLineas(errores: ErrorFormulario[], coleccionKey: string,
 }
 
 /** Posiciones (0-based) de las filas que el usuario realmente llenó: se omiten las que siguen idénticas a la fila en blanco. */
-export function indicesLlenos<T extends Record<string, string>>(filas: T[], blanca: T): number[] {
+export function indicesLlenos<T extends Record<string, unknown>>(filas: T[], blanca: T): number[] {
   const llaves = Object.keys(blanca) as (keyof T)[];
   return filas.flatMap((f, i) => (llaves.every((k) => String(f[k] ?? "").trim() === String(blanca[k] ?? "").trim()) ? [] : [i]));
 }

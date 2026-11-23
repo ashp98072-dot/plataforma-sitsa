@@ -137,3 +137,23 @@ describe("PATCH /tms/fondos/[id] — permiso de autorización", () => {
     expect(requireTenantGastosAutorizar).not.toHaveBeenCalled();
   });
 });
+
+/** FONDOS FASE 1 — el id de línea llega al servidor; el origen de una línea NUNCA lo decide el cliente (zod descarta lo no declarado). */
+describe("PATCH /tms/fondos/[id] — identificador y origen de línea", () => {
+  beforeEach(() => vi.mocked(actualizarSolicitudFondo).mockResolvedValue({ id: 1 } as never));
+
+  it("pasa el id de la línea y DESCARTA cualquier `origen` enviado por el cliente HTTP", async () => {
+    const res = await PATCH(req({ accion: "editar", entidadRequirenteId: 10, lineas: [{ id: 5, categoria: "Combustible", monto: 100, origen: "AUTO_VIATICO", esAutomatica: true }, { categoria: "Hospedaje", monto: 50 }] }), ctx);
+    expect(res.status).toBe(200);
+    const lineas = vi.mocked(actualizarSolicitudFondo).mock.calls[0][2].lineas!;
+    expect(lineas[0]).toMatchObject({ id: 5, categoria: "Combustible", monto: 100 });
+    expect(lineas[0]).not.toHaveProperty("origen"); expect(lineas[0]).not.toHaveProperty("esAutomatica");
+    expect(lineas[1]).not.toHaveProperty("id");
+  });
+
+  it.each([[0], [-1], [1.5], ["7"]])("rechaza un id de línea inválido (%s) sin llegar a la librería", async (id) => {
+    const res = await PATCH(req({ accion: "editar", entidadRequirenteId: 10, lineas: [{ id, categoria: "Combustible", monto: 100 }] }), ctx);
+    expect(res.status).toBe(400);
+    expect(actualizarSolicitudFondo).not.toHaveBeenCalled();
+  });
+});
