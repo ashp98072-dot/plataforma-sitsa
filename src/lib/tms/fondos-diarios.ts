@@ -3,10 +3,14 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2";
 import type { PoolConnection } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
+import { otrosFondosInstalado } from "@/lib/tms/plan-otros-fondos-instalado";
 import { CODIGOS_ENTIDAD_REQUIRIENTE, resolverEntidadRequirenteTx, resolverSolicitanteOperacionesTx } from "@/lib/tms/identidad-administrativa";
 
 /**
  * FONDOS DIARIOS (Fase 2) — integración entre Programación y Solicitudes de fondo.
+ *
+ * FASE 3: la MISMA sincronización consolida también los «Otros fondos del viaje» (tms_plan_otros_fondos → líneas AUTO_OTRO, plan-otros-fondos.ts) en la misma solicitud diaria,
+ * con las mismas reglas (diferencial, complementaria si la principal ya fue autorizada, sin duplicar). Sin la migración de la Fase 3 solo se sincronizan los viáticos.
  *
  * Cada viaje PROPIO puede tener una EMPRESA REQUIRENTE (cont_entidades KT / MONACO, de la misma empresa). Los viáticos reales del viaje (tms_viaticos: monto asignado
  * y persona; nada se inventa) se consolidan en UNA solicitud PRINCIPAL por (empresa, fecha del viaje, empresa requirente). El servidor, nunca el cliente, decide el origen
@@ -86,11 +90,17 @@ export async function asignarEntidadRequirentePlanTx(conn: PoolConnection, empre
 }
 
 // ------------------------------------------------------------------------------------------------------------------ sincronización
+type OrigenAutomatico = "AUTO_VIATICO" | "AUTO_OTRO";
 type DeseadaLinea = {
-  viaticoId: number; planId: number; monto: number; descripcion: string; fecha: string; empleadoId: number | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null;
+  /** Identidad estable de la línea dentro del viaje: «V:<viático>» o «O:<otro fondo>». */
+  clave: string; origen: OrigenAutomatico; viaticoId: number | null; otroFondoId: number | null; categoria: string;
+  planId: number; monto: number; descripcion: string; fecha: string; empleadoId: number | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; metodoPago: string | null;
+  /** El método de pago/cuenta cambió en Programación: se aplica a la línea pendiente aunque se haya editado en Fondos (solo otros fondos). */
+  aplicarPago: boolean;
   vehiculoId: number | null; placa: string | null; clienteId: number | null; clienteNombre: string | null;
 };
-type LineaExistente = RowDataPacket & { id: number; solicitud_id: number; viatico_id: number; sol_estado: string; sol_origen: string; sol_fecha: string; sol_entidad: number | null };
+type LineaExistente = RowDataPacket & { id: number; solicitud_id: number; viatico_id: number | null; otro_fondo_id?: number | null; origen: string; sol_estado: string; sol_origen: string; sol_fecha: string; sol_entidad: number | null };
+const claveDeLinea = (e: LineaExistente) => (String(e.origen) === "AUTO_OTRO" ? `O:${e.otro_fondo_id}` : `V:${e.viatico_id}`);
 
 const igual = (a: unknown, b: unknown) => (a ?? null) === (b ?? null);
 const cortar = (v: unknown, max: number) => (v == null ? null : String(v).slice(0, max));
@@ -111,10 +121,33 @@ async function viaticosDelPlan(conn: PoolConnection, empresaId: number, planId: 
     [empresaId, planId],
   );
   return rows.map((r) => ({
+    clave: `V:${Number(r.viatico_id)}`, origen: "AUTO_VIATICO" as const, otroFondoId: null, categoria: "Viáticos", metodoPago: null, aplicarPago: false,
     viaticoId: Number(r.viatico_id), planId, monto: Number(r.monto_asignado), descripcion: `Viático ${String(r.rol ?? "")} · ${String(r.codigo ?? "")}`.slice(0, 300), fecha,
     empleadoId: r.empleado_id != null ? Number(r.empleado_id) : null, empleadoNombre: cortar(r.empleado_nombre ?? r.personal_nombre, 200), cargo: cortar(r.puesto ?? r.rol, 100),
     cuenta: cortar(r.cuenta_bancaria, 30), vehiculoId: r.flota_vehiculo_id != null ? Number(r.flota_vehiculo_id) : null, placa: cortar(r.unidad_placa, 20),
     clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: cortar(r.cliente_nombre, 200),
+  }));
+}
+
+/** Otros fondos del viaje (Fase 3) como líneas deseadas: monto, categoría, beneficiario, método y cuenta tal como se capturaron; unidad/cliente/fecha se heredan del viaje. */
+async function otrosDelPlan(conn: PoolConnection, empresaId: number, planId: number, fecha: string): Promise<DeseadaLinea[]> {
+  const [rows] = await conn.query<RowDataPacket[]>(
+    `SELECT o.id, o.categoria, o.monto, o.descripcion, o.metodo_pago, o.cuenta, o.pago_pendiente_sync, p.codigo, p.cliente_id, c.nombre AS cliente_nombre, u.placa AS unidad_placa, u.flota_vehiculo_id,
+            e.id AS empleado_id, e.nombre AS empleado_nombre, e.puesto
+     FROM tms_plan_otros_fondos o
+     JOIN tms_planes_viaje p ON p.id = o.plan_id AND p.empresa_id = o.empresa_id
+     JOIN empleados e ON e.id = o.empleado_id AND e.empresa_id = o.empresa_id
+     LEFT JOIN tms_unidades u ON u.id = p.unidad_id AND u.empresa_id = p.empresa_id
+     LEFT JOIN tms_clientes c ON c.id = p.cliente_id AND c.empresa_id = p.empresa_id
+     WHERE o.empresa_id = ? AND o.plan_id = ? AND o.monto > 0
+     ORDER BY o.id`,
+    [empresaId, planId],
+  );
+  return rows.map((r) => ({
+    clave: `O:${Number(r.id)}`, origen: "AUTO_OTRO" as const, viaticoId: null, otroFondoId: Number(r.id), categoria: String(r.categoria), planId, monto: Number(r.monto),
+    descripcion: `${String(r.descripcion ?? "").trim() || String(r.categoria)} · ${String(r.codigo ?? "")}`.slice(0, 300), fecha, empleadoId: Number(r.empleado_id), empleadoNombre: cortar(r.empleado_nombre, 200),
+    cargo: cortar(r.puesto, 100), cuenta: cortar(r.cuenta, 100), metodoPago: cortar(r.metodo_pago, 40), aplicarPago: Number(r.pago_pendiente_sync) === 1,
+    vehiculoId: r.flota_vehiculo_id != null ? Number(r.flota_vehiculo_id) : null, placa: cortar(r.unidad_placa, 20), clienteId: r.cliente_id != null ? Number(r.cliente_id) : null, clienteNombre: cortar(r.cliente_nombre, 200),
   }));
 }
 
@@ -174,6 +207,7 @@ async function complementariaTx(conn: PoolConnection, empresaId: number, princip
 }
 
 const COLUMNAS_LINEA = "categoria, descripcion, cantidad, monto, orden, fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, metodo_pago, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id, origen, viatico_id";
+const COLUMNAS_LINEA_CON_OTROS = `${COLUMNAS_LINEA}, otro_fondo_id`;
 
 async function sincronizarPlanTx(conn: PoolConnection, empresaId: number, planId: number, actor: ActorFondosDiarios, tocadas: Set<number>): Promise<number> {
   let cambios = 0;
@@ -183,45 +217,51 @@ async function sincronizarPlanTx(conn: PoolConnection, empresaId: number, planId
   if (!plan) return 0;
   const elegible = String(plan.estado) !== "Cancelado" && String(plan.tipo_viaje ?? "Propio") === "Propio" && plan.entidad_requirente_id != null;
   const fecha = String(plan.fecha), entidadId = plan.entidad_requirente_id != null ? Number(plan.entidad_requirente_id) : 0;
-  const deseadas = new Map<number, DeseadaLinea>();
-  if (elegible) for (const d of await viaticosDelPlan(conn, empresaId, planId, fecha)) deseadas.set(d.viaticoId, d);
+  const conOtros = await otrosFondosInstalado();
+  const deseadas = new Map<string, DeseadaLinea>();
+  if (elegible) {
+    for (const d of await viaticosDelPlan(conn, empresaId, planId, fecha)) deseadas.set(d.clave, d);
+    if (conOtros) for (const d of await otrosDelPlan(conn, empresaId, planId, fecha)) deseadas.set(d.clave, d);
+  }
 
   const [existentes] = await conn.query<LineaExistente[]>(
     `SELECT l.*, s.estado AS sol_estado, s.origen AS sol_origen, DATE_FORMAT(s.fecha_requerimiento, '%Y-%m-%d') AS sol_fecha, s.entidad_requirente_id AS sol_entidad
      FROM tms_solicitud_fondo_lineas l JOIN tms_solicitudes_fondo s ON s.empresa_id = l.empresa_id AND s.id = l.solicitud_id
-     WHERE l.empresa_id = ? AND l.plan_id = ? AND l.origen = 'AUTO_VIATICO' ORDER BY l.solicitud_id, l.id FOR UPDATE`,
+     WHERE l.empresa_id = ? AND l.plan_id = ? AND l.origen IN ('AUTO_VIATICO', 'AUTO_OTRO') ORDER BY l.solicitud_id, l.id FOR UPDATE`,
     [empresaId, planId],
   );
 
-  const cubiertos = new Set<number>();
+  const cubiertos = new Set<string>();
   for (const e of existentes) {
     const estado = String(e.sol_estado);
     if (estado === "Rechazada") continue;   // historia de una solicitud rechazada: no cubre ni se toca
-    const d = deseadas.get(Number(e.viatico_id));
+    const clave = claveDeLinea(e);
+    const d = deseadas.get(clave);
     const enGrupo = elegible && String(e.sol_origen) === "DIARIA" && String(e.sol_fecha) === fecha && Number(e.sol_entidad) === entidadId;
-    if (estado !== "Pendiente") { cubiertos.add(Number(e.viatico_id)); continue; }   // autorizada/liquidada: inmutable; el dinero ya está cubierto
+    if (estado !== "Pendiente") { cubiertos.add(clave); continue; }   // autorizada/liquidada: inmutable; el dinero ya está cubierto
     if (!d || !enGrupo) {
-      await conn.execute("DELETE FROM tms_solicitud_fondo_lineas WHERE id = ? AND empresa_id = ? AND solicitud_id = ? AND origen = 'AUTO_VIATICO'", [e.id, empresaId, e.solicitud_id]);
+      await conn.execute("DELETE FROM tms_solicitud_fondo_lineas WHERE id = ? AND empresa_id = ? AND solicitud_id = ? AND origen IN ('AUTO_VIATICO', 'AUTO_OTRO')", [e.id, empresaId, e.solicitud_id]);
       tocadas.add(Number(e.solicitud_id)); cambios++;
       continue;
     }
-    cubiertos.add(Number(e.viatico_id));
+    cubiertos.add(clave);
     // Pendiente y en su grupo: los datos de ORIGEN se actualizan; método de pago y cuenta (lo editable) se conservan, salvo que el beneficiario cambie.
     const cambiaBeneficiario = !igual(e.empleado_id, d.empleadoId) || !igual(e.empleado_nombre, d.empleadoNombre);
-    const diferente = Number(e.monto).toFixed(2) !== d.monto.toFixed(2) || !igual(e.descripcion, d.descripcion) || cambiaBeneficiario || !igual(e.cargo, d.cargo) || !igual(e.vehiculo_id, d.vehiculoId)
-      || !igual(e.placa, d.placa) || !igual(e.cliente_id, d.clienteId) || !igual(e.cliente_nombre, d.clienteNombre) || Number(e.cantidad) !== 1 || String(e.categoria) !== "Viáticos";
+    const pagoDesdeOrigen = cambiaBeneficiario || d.aplicarPago;   // otros fondos: el pago capturado en Programación se refleja si cambió; si no, se conserva lo editado en Fondos
+    const diferente = (d.aplicarPago && (!igual(e.metodo_pago, d.metodoPago) || !igual(e.cuenta, d.cuenta))) || Number(e.monto).toFixed(2) !== d.monto.toFixed(2) || !igual(e.descripcion, d.descripcion) || cambiaBeneficiario || !igual(e.cargo, d.cargo) || !igual(e.vehiculo_id, d.vehiculoId)
+      || !igual(e.placa, d.placa) || !igual(e.cliente_id, d.clienteId) || !igual(e.cliente_nombre, d.clienteNombre) || Number(e.cantidad) !== 1 || String(e.categoria) !== d.categoria;
     if (diferente) {
       await conn.execute(
-        `UPDATE tms_solicitud_fondo_lineas SET categoria = 'Viáticos', descripcion = ?, cantidad = 1, monto = ?, empleado_id = ?, empleado_nombre = ?, cargo = ?, vehiculo_id = ?, placa = ?, cliente_id = ?, cliente_nombre = ?,
-           cuenta = ${cambiaBeneficiario ? "?" : "cuenta"}, metodo_pago = ${cambiaBeneficiario ? "NULL" : "metodo_pago"}
+        `UPDATE tms_solicitud_fondo_lineas SET categoria = ?, descripcion = ?, cantidad = 1, monto = ?, empleado_id = ?, empleado_nombre = ?, cargo = ?, vehiculo_id = ?, placa = ?, cliente_id = ?, cliente_nombre = ?,
+           cuenta = ${pagoDesdeOrigen ? "?" : "cuenta"}, metodo_pago = ${pagoDesdeOrigen ? "?" : "metodo_pago"}
          WHERE id = ? AND empresa_id = ? AND solicitud_id = ?`,
-        [d.descripcion, d.monto, d.empleadoId, d.empleadoNombre, d.cargo, d.vehiculoId, d.placa, d.clienteId, d.clienteNombre, ...(cambiaBeneficiario ? [d.cuenta] : []), e.id, empresaId, e.solicitud_id],
+        [d.categoria, d.descripcion, d.monto, d.empleadoId, d.empleadoNombre, d.cargo, d.vehiculoId, d.placa, d.clienteId, d.clienteNombre, ...(pagoDesdeOrigen ? [d.cuenta, d.metodoPago] : []), e.id, empresaId, e.solicitud_id],
       );
       tocadas.add(Number(e.solicitud_id)); cambios++;
     }
   }
 
-  const nuevas = [...deseadas.values()].filter((d) => !cubiertos.has(d.viaticoId));
+  const nuevas = [...deseadas.values()].filter((d) => !cubiertos.has(d.clave));
   if (elegible && nuevas.length) {
     const principal = await principalDiariaTx(conn, empresaId, fecha, entidadId, actor);
     const destino = principal.estado === "Pendiente" ? principal.id : await complementariaTx(conn, empresaId, principal, fecha, entidadId, actor);
@@ -229,15 +269,18 @@ async function sincronizarPlanTx(conn: PoolConnection, empresaId: number, planId
     let orden = Number(mx[0]?.siguiente ?? 0);
     for (const d of nuevas) {
       await conn.execute(
-        `INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, ${COLUMNAS_LINEA})
-         VALUES (?, ?, 'Viáticos', ?, 1, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'AUTO_VIATICO', ?)
+        `INSERT INTO tms_solicitud_fondo_lineas (empresa_id, solicitud_id, ${conOtros ? COLUMNAS_LINEA_CON_OTROS : COLUMNAS_LINEA})
+         VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${conOtros ? ", ?" : ""})
          ON DUPLICATE KEY UPDATE id = id`,
-        [empresaId, destino, d.descripcion, d.monto, orden++, d.fecha, d.empleadoId, d.empleadoNombre, d.cargo, d.cuenta, d.vehiculoId, d.placa, d.clienteId, d.clienteNombre, d.planId, d.viaticoId],
+        [empresaId, destino, d.categoria, d.descripcion, d.monto, orden++, d.fecha, d.empleadoId, d.empleadoNombre, d.cargo, d.cuenta, d.metodoPago, d.vehiculoId, d.placa, d.clienteId, d.clienteNombre, d.planId, d.origen, d.viaticoId,
+          ...(conOtros ? [d.otroFondoId] : [])],
       );
       cambios++;
     }
     tocadas.add(destino);
   }
+  // El pago capturado en Programación ya se reflejó (o la línea no existe aún y nacerá con él): se limpia la marca.
+  if (conOtros) await conn.execute("UPDATE tms_plan_otros_fondos SET pago_pendiente_sync = 0 WHERE empresa_id = ? AND plan_id = ? AND pago_pendiente_sync = 1", [empresaId, planId]);
   return cambios;
 }
 
@@ -311,7 +354,7 @@ export async function resincronizarGrupoDiario(empresaId: number, fecha: string,
     const [planes] = await conn.query<RowDataPacket[]>(
       `SELECT id FROM tms_planes_viaje WHERE empresa_id = ? AND fecha_plan = ? AND entidad_requirente_id = ?
        UNION SELECT l.plan_id FROM tms_solicitud_fondo_lineas l JOIN tms_solicitudes_fondo s ON s.empresa_id = l.empresa_id AND s.id = l.solicitud_id
-         WHERE l.empresa_id = ? AND l.origen = 'AUTO_VIATICO' AND l.plan_id IS NOT NULL AND s.origen = 'DIARIA' AND s.fecha_requerimiento = ? AND s.entidad_requirente_id = ? AND s.estado = 'Pendiente'`,
+         WHERE l.empresa_id = ? AND l.origen IN ('AUTO_VIATICO', 'AUTO_OTRO') AND l.plan_id IS NOT NULL AND s.origen = 'DIARIA' AND s.fecha_requerimiento = ? AND s.entidad_requirente_id = ? AND s.estado = 'Pendiente'`,
       [empresaId, fecha, entidadId, empresaId, fecha, entidadId],
     );
     return sincronizarInterno(conn, empresaId, planes.map((p) => Number(p.id)), actor);

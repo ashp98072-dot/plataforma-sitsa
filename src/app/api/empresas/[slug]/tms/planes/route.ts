@@ -29,6 +29,8 @@ import { debeLimpiarTarifaPorCambioDeRuta, rutaPerteneceACliente, tarifaParaSnap
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { listarOtrosFondosDePlanes, otrosFondosInstalado, otrosFondosSchema, reemplazarOtrosFondosTx } from "@/lib/tms/plan-otros-fondos";
+import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 import { asignarEntidadRequirentePlanTx, entidadesDePlanes, entidadesRequirentesDisponibles, fondosDiariosInstalado, sincronizarFondosDePlanes, type ActorFondosDiarios } from "@/lib/tms/fondos-diarios";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
@@ -435,6 +437,7 @@ export async function GET(req: Request, ctx: Ctx) {
   // EDICIÓN RÁPIDA (aditivo, en lote y DESPUÉS de las lecturas previas): viáticos por viaje y tarifas ACTIVAS por ruta.
   const viaticosMap = await viaticosDePlanes(guard.empresa.id, planIds);
   // FONDOS DIARIOS (aditivo): empresa requirente de cada viaje, en una consulta aparte y solo si la migración está aplicada.
+  const otrosMap = (await fondosDiariosInstalado()) && (await otrosFondosInstalado()) ? await listarOtrosFondosDePlanes(guard.empresa.id, planIds) : null;
   const entidadesMap = (await fondosDiariosInstalado()) ? await entidadesDePlanes(guard.empresa.id, planIds) : new Map<number, { id: number; nombre: string }>();
   const tarifasPorRuta = await tarifasActivasDeVariasRutas(guard.empresa.id, rows.map((r) => Number(r.ruta_id)).filter((n) => n > 0)).catch(
     () => new Map<number, { tarifas: unknown[]; predeterminadaId: number | null }>(),
@@ -506,6 +509,7 @@ export async function GET(req: Request, ctx: Ctx) {
       viaticos: viaticosMap.get(id) ?? [],
       entidad_requirente_id: entidadesMap.get(id)?.id ?? null,
       entidad_requirente_nombre: entidadesMap.get(id)?.nombre ?? null,
+      ...(otrosMap ? { otros_fondos: otrosMap.get(id) ?? [] } : {}),
       paradas,
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,
@@ -630,6 +634,8 @@ const schema = z.object({
   vehiculoSolicitadoPerfilId: z.number().int().positive().optional(),
   // FONDOS DIARIOS — empresa requirente del viaje (KT / Mónaco). Opcional: sin ella el viaje no genera solicitud de fondos. Se valida contra ESTA empresa.
   entidadRequirenteId: z.number().int().positive().nullable().optional(),
+  // FONDOS DIARIOS Fase 3 — «Otros fondos del viaje»: lista COMPLETA (los que traen id se conservan; los demás se crean; los ausentes se retiran). Se ignora sin la migración.
+  otrosFondos: otrosFondosSchema.optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -1266,11 +1272,17 @@ export async function POST(req: Request, ctx: Ctx) {
     );
     // FONDOS DIARIOS — la empresa requirente se guarda con el viaje (misma transacción); las solicitudes se sincronizan DESPUÉS del commit.
     if (fondosDiarios && d.entidadRequirenteId != null) await asignarEntidadRequirentePlanTx(conn, empresaId, planId, d.entidadRequirenteId);
+    // Otros fondos del viaje (Fase 3): misma transacción; exigen empresa requirente (a ella pertenece la solicitud diaria que los consolida).
+    if (fondosDiarios && d.otrosFondos?.length && (await otrosFondosInstalado())) {
+      if (d.entidadRequirenteId == null) throw new ErrorDominioFormulario("Para registrar otros fondos del viaje elige primero la empresa requirente.");
+      await reemplazarOtrosFondosTx(conn, empresaId, planId, d.otrosFondos, guard.session.username);
+    }
 
     await conn.commit();
   } catch (e) {
     await conn.rollback();
     if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
+    if (e instanceof ErrorDominioFormulario) return NextResponse.json({ error: e.message }, { status: e.status });
     console.error("POST tms/planes (transacción de alta)", e);
     const detalle = detalleErrorSqlUsuario(e);
     return NextResponse.json(
@@ -1440,6 +1452,8 @@ const patchSchema = z.object({
   vehiculoSolicitadoPerfilId: z.number().int().positive().nullable().optional(),
   // FONDOS DIARIOS — `null` la quita; ausente = no se toca.
   entidadRequirenteId: z.number().int().positive().nullable().optional(),
+  // FONDOS DIARIOS Fase 3 — «Otros fondos del viaje»: lista COMPLETA (los que traen id se conservan; los demás se crean; los ausentes se retiran). Se ignora sin la migración.
+  otrosFondos: otrosFondosSchema.optional(),
 });
 
 /**
@@ -2435,11 +2449,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
     // FONDOS DIARIOS — la empresa requirente se guarda con el viaje (misma transacción); las solicitudes se sincronizan DESPUÉS del commit.
     if (fondosDiarios && d.entidadRequirenteId !== undefined) await asignarEntidadRequirentePlanTx(conn, empresaId, d.id, d.entidadRequirenteId);
+    // Otros fondos del viaje (Fase 3): reemplazo diferencial en la misma transacción; con empresa requirente definida (la del viaje ya guardada o la que llega ahora).
+    if (fondosDiarios && d.otrosFondos !== undefined && (await otrosFondosInstalado())) {
+      const [ent] = await conn.query<RowDataPacket[]>("SELECT entidad_requirente_id FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1", [d.id, empresaId]);
+      if (d.otrosFondos.length && ent[0]?.entidad_requirente_id == null) throw new ErrorDominioFormulario("Para registrar otros fondos del viaje elige primero la empresa requirente.");
+      await reemplazarOtrosFondosTx(conn, empresaId, d.id, d.otrosFondos, guard.session.username);
+    }
 
     await conn.commit();
   } catch (e) {
     await conn.rollback();
     console.error("PATCH tms/planes transacción", e);
+    if (e instanceof ErrorDominioFormulario) return NextResponse.json({ error: e.message }, { status: e.status });
     if (e instanceof ErrorCB2) return NextResponse.json({ error:e.message }, { status:e.status });
     if (e instanceof CuadrillaError) return NextResponse.json({ error: e.message }, { status: e.status });
     return NextResponse.json(
