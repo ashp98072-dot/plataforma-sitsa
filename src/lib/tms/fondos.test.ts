@@ -1246,6 +1246,16 @@ describe("verificación de vínculos — módulo ausente vs visibilidad insufici
     await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] });
     expect(sqlsLineas(conn, "DELETE FROM")[0][1]).toEqual([7, 1, 12]); expect(conn.commit).toHaveBeenCalledOnce();
   });
+  it("ESCENARIO DE PRODUCCIÓN: Combustible instalado y CB2 AUSENTE (1146) — los vales de Combustible siguen protegiendo y una línea libre se puede retirar", async () => {
+    const protegida = conexion({ lineasExistentes: dos(), tablasVinculoAusentes: ["flota_cb2_fondos_vinculos"], lineasConVales: [12] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("No se puede eliminar la línea 2: tiene vales de Combustible");
+    sinEscrituras(protegida);
+    const libre = conexion({ lineasExistentes: dos(), tablasVinculoAusentes: ["flota_cb2_fondos_vinculos"] });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] });
+    expect(sqlsLineas(libre, "DELETE FROM")[0][1]).toEqual([7, 1, 12]); expect(libre.commit).toHaveBeenCalledOnce();
+    expect(libre.query.mock.calls.filter((c) => String(c[0]).includes("FROM flota_combustible_cargas"))).toHaveLength(1);   // Combustible sí se sondeó
+  });
   it("information_schema SIN visibilidad (no ve ni las tablas propias de Fondos) + sonda 1146: NO se acepta como «módulo ausente» — se detiene sin escribir", async () => {
     const { conn, run } = editar({ tablasVinculoAusentes: ["flota_combustible_cargas"], infoSchemaSinVisibilidad: true });
     await expect(run()).rejects.toThrow(/no tiene visibilidad suficiente para confirmar que flota_combustible_cargas no existe/);

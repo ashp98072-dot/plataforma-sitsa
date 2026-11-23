@@ -208,6 +208,20 @@ describe.skipIf(!pipe)("edición diferencial de líneas de fondo (MariaDB 11.8.9
     }
   });
 
+  it("ESCENARIO DE PRODUCCIÓN: Combustible instalado y CB2 AUSENTE (1146) — el vale sigue protegiendo la línea 102 y las libres se pueden retirar", async () => {
+    await admin.query("DROP TABLE flota_cb2_fondos_vinculos");
+    try {
+      const antes = JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id"));
+      await expect(actualizarSolicitudFondo(E1, 1, { observaciones: "NO debe persistir", lineas: [todas()[0], todas()[2]] })).rejects.toThrow(/No se puede eliminar la línea 2: tiene vales de Combustible/);   // la 102 tiene un vale
+      expect(JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id"))).toBe(antes);
+      await actualizarSolicitudFondo(E1, 1, { lineas: [todas()[1], todas()[2]] });   // se retira la 101 (libre); la 103 ya no tiene vínculo CB2 que la proteja porque el módulo no existe
+      expect(await idsDe(1)).toEqual([102, 103]);
+    } finally {
+      await admin.query(`CREATE TABLE flota_cb2_fondos_vinculos(empresa_id INT NOT NULL, consumo_id INT NOT NULL, linea_id INT NOT NULL, PRIMARY KEY(empresa_id, consumo_id),
+        CONSTRAINT fk_cb2fv_linea FOREIGN KEY(empresa_id, linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB`);
+    }
+  });
+
   /** Un usuario de aplicación SIN privilegios sobre las tablas de Combustible/CB2: information_schema se las oculta, pero EXISTEN. */
   describe("visibilidad insuficiente del usuario de la base", () => {
     const DEBIL = "fondos_lim", ANCHO = "fondos_ancho";
