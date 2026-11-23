@@ -2,11 +2,12 @@
 
 La causa de los resultados contradictorios observados en Hostinger está **no determinada**. Un resultado vacío no demuestra que una tabla no exista. Esta guía solo recoge evidencia; no autoriza instalar ni ejecutar migraciones.
 
-1. En phpMyAdmin seleccione la base prevista y abra la pestaña **SQL**. Use una cuenta autorizada para consultas de lectura. Abra [diagnostico-canecas-comparacion-solo-select.sql](../sql/diagnostico-canecas-comparacion-solo-select.sql) y ejecute sus cuatro bloques por separado, en este orden, sin modificar la selección de base:
-   1. Identidad y sesión: desde `SELECT DATABASE()` hasta `nombres_en_minuscula`.
-   2. Conteos de las seis vistas: desde `SELECT 'TABLES' fuente` hasta `CHECK_CONSTRAINTS`.
+1. En phpMyAdmin seleccione la base prevista y abra la pestaña **SQL**. Use una cuenta autorizada para consultas de lectura. Abra [diagnostico-canecas-comparacion-solo-select.sql](../sql/diagnostico-canecas-comparacion-solo-select.sql) y, antes de ejecutar las consultas, reemplace **todas** las apariciones de `ESQUEMA_OBJETIVO` por el nombre exacto de la base objetivo, manteniendo las comillas simples SQL (por ejemplo, `'mi_base'`). No deje el marcador sin sustituir. Ejecute los cuatro bloques por separado, en este orden:
+   1. Identidad y sesión: desde `SELECT 'ESQUEMA_OBJETIVO' AS esquema_objetivo` hasta `nombres_en_minuscula`.
+   2. Conteos de las seis vistas: desde `SELECT DATABASE() base_sesion` hasta `CHECK_CONSTRAINTS`.
    3. Comparación de las ocho tablas: desde `SELECT e.nombre` hasta `ORDER BY e.nombre`.
-   4. Conteos por fuente y tabla: desde `SELECT 'TABLES' fuente,TABLE_NAME` hasta `ORDER BY fuente,TABLE_NAME`.
+   4. Conteos por fuente y tabla: desde `SELECT DATABASE() base_sesion` hasta `ORDER BY fuente,TABLE_NAME`.
+   En el resultado del primer bloque, `comparacion_contexto = 'DISTINTOS: no usar DATABASE() como objetivo'` indica que la base seleccionada de esa sesión difiere del esquema objetivo indicado. Registre ambos valores y `id_conexion`; use el esquema objetivo explícito y no interprete los resultados vacíos como ausencia de tablas. Compruebe el contexto de cada bloque, pues las sesiones pueden diferir.
 2. Tras cada bloque, guarde inmediatamente el resultado completo antes de ejecutar el siguiente: en la zona de resultados use **Exportar** y elija CSV u otro formato tabular disponible que incluya encabezados. Compruebe que la exportación contiene todas las filas y columnas, también las que no aparecen en la página visible; si hay paginación o límite, seleccione todas las filas o exporte todas las páginas. Conserve valores NULL, ceros y campos vacíos sin modificarlos. Si un bloque no devuelve filas o falla, registre ese resultado o el mensaje de error; no lo omita. No use la exportación completa de la base ni incluya registros de negocio.
 3. En la misma base, ejecute por separado los ocho bloques siguientes y guarde el resultado completo de cada uno mediante la exportación de resultados o copiando íntegramente la salida, sin truncar la columna `Create Table`:
 
