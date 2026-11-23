@@ -27,7 +27,7 @@ import { nivelDeProteccion, origenDeFila, rechazarOrigenDeCliente, validarEdicio
 import {
   resolverEntidadRequirenteTx,
   resolverRequirenteOperacionesTx,
-  resolverSolicitanteOperacionesTx,
+  resolverSolicitanteFondosGastosTx,
   resolverUsuarioDeEmpresaTx,
   validarEmpleadoDeEmpresaTx,
 } from "@/lib/tms/identidad-administrativa";
@@ -473,7 +473,7 @@ export async function crearSolicitudFondo(
 ): Promise<SolicitudFondo> {
   if (!input.fechaRequerimiento) throw new ErrorDominioFormulario("Fecha de requerimiento requerida.");
   if (!input.requirenteEmpleadoId && !input.requirenteUsuarioId && !input.requirenteNombre?.trim()) {
-    throw new ErrorDominioFormulario("Requirente requerido: selecciona un usuario de Operaciones.");
+    throw new ErrorDominioFormulario("Requirente requerido: selecciona un usuario.");
   }
   if (!input.lineas.length) throw new ErrorDominioFormulario("La solicitud necesita al menos una línea de gasto.");
   for (const [i, l] of input.lineas.entries()) {
@@ -516,7 +516,7 @@ export async function crearSolicitudFondo(
     const solicitanteId = input.solicitanteUsuarioId ?? solicitanteLegado?.usuarioId ?? null;
     const solicitanteUsuario = solicitanteId == null ? null
       : input.solicitanteUsuarioId != null
-        ? await resolverSolicitanteOperacionesTx(conn, empresaId, solicitanteId)
+        ? await resolverSolicitanteFondosGastosTx(conn, empresaId, solicitanteId)
         : await resolverUsuarioDeEmpresaTx(conn, empresaId, solicitanteId);
     if (solicitanteId != null && !solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
 
@@ -969,7 +969,7 @@ export async function actualizarSolicitudFondo(
     const solicitanteUsuarioCambio = input.solicitanteUsuarioId !== undefined
       && input.solicitanteUsuarioId !== (actual.solicitante_usuario_id != null ? Number(actual.solicitante_usuario_id) : null);
     if (input.solicitanteUsuarioId != null) {
-      solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
+      solicitanteUsuario = await resolverSolicitanteFondosGastosTx(conn, empresaId, input.solicitanteUsuarioId);
       if (!solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
     }
     // FONDOS FASE 1: las líneas se validan y se calculan ANTES de escribir nada (ni el encabezado); el total sale de los valores finales.
@@ -1052,13 +1052,13 @@ export async function actualizarSolicitudFondo(
 }
 
 export const MENSAJE_SIN_EMPRESA_REQUIRENTE = "No se puede autorizar: la solicitud no tiene empresa requirente. Edítala y selecciona una antes de autorizar.";
-export const MENSAJE_SIN_REQUIRENTE = "No se puede autorizar: la solicitud no tiene un requirente identificable (usuario de Operaciones). Edítala, selecciona el requirente y vuelve a autorizar.";
-export const MENSAJE_REQUIRENTE_NO_VALIDO = "No se puede autorizar: el requirente de la solicitud ya no es válido (debe ser un usuario activo de Operaciones con acceso a esta empresa). Edítala y selecciona otro requirente.";
+export const MENSAJE_SIN_REQUIRENTE = "No se puede autorizar: la solicitud no tiene un requirente identificable (usuario activo habilitado). Edítala, selecciona el requirente y vuelve a autorizar.";
+export const MENSAJE_REQUIRENTE_NO_VALIDO = "No se puede autorizar: el requirente de la solicitud ya no es válido (debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación con acceso a esta empresa). Edítala y selecciona otro requirente.";
 
 /**
  * Requisitos previos a AUTORIZAR (FONDOS FASE 1):
  *  · Empresa requirente: debe existir y seguir siendo válida (activa, KT/MONACO, de ESTA empresa) — misma regla que al crear.
- *  · Requirente: debe ser un USUARIO identificable y vigente (activo, con acceso a la empresa y de rol Operaciones), como exige la creación. Las solicitudes
+ *  · Requirente: debe ser un USUARIO identificable y vigente (activo, con acceso a la empresa y de un rol habilitado para Fondos), como exige la creación. Las solicitudes
  *    históricas con solo texto/empleado siguen consultables y editables, pero para autorizarlas se corrige antes la identidad desde el formulario.
  */
 async function exigirRequirentesParaAutorizarTx(conn: PoolConnection, empresaId: number, fila: RowDataPacket): Promise<void> {
@@ -1067,7 +1067,7 @@ async function exigirRequirentesParaAutorizarTx(conn: PoolConnection, empresaId:
 
   // El texto libre (requirente_nombre) o un empleado de RRHH sin usuario NO prueban identidad: solo cuenta un usuario identificable.
   if (fila.requirente_usuario_id == null) throw new ErrorDominioFormulario(MENSAJE_SIN_REQUIRENTE);
-  const usuario = await resolverSolicitanteOperacionesTx(conn, empresaId, Number(fila.requirente_usuario_id));   // activo, con acceso a la empresa y de rol Operaciones
+  const usuario = await resolverSolicitanteFondosGastosTx(conn, empresaId, Number(fila.requirente_usuario_id));   // activo, con acceso a la empresa y de un rol habilitado (Operaciones o administrativo)
   if (!usuario) throw new ErrorDominioFormulario(MENSAJE_REQUIRENTE_NO_VALIDO);
 }
 

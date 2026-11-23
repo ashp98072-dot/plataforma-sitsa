@@ -1,8 +1,13 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { PoolConnection } from "mysql2/promise";
 import {
   CODIGOS_ENTIDAD_REQUIRIENTE,
   ROLES_SOLICITANTE_OPERACIONES,
+  ROLES_SOLICITANTE_FONDOS_GASTOS,
+  ERROR_REQUIRIENTE_FONDOS_GASTOS,
+  esUsuarioSolicitanteFondosGastos,
+  resolverSolicitanteFondosGastosTx,
   resolverEntidadRequirenteTx,
   resolverRequirenteOperacionesTx,
   esUsuarioOperaciones,
@@ -30,13 +35,27 @@ describe("criterio único de usuario Operaciones y snapshots históricos", () =>
     expect(await resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 9, requirenteNombre: "Inventado" })).toEqual({ nombre: "Servidor", rol });
     expect(c.query).toHaveBeenCalledWith(expect.stringContaining("ue.empresa_id = ?"), [7, 9]);
   });
-  it.each(["Admin", "Contabilidad", "Gerencia", "", null])("rol %s rechazado", async rol => {
+  it.each(["Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("FONDOS/GASTOS: rol %s también aceptado (con validación de empresa), pero NO es Operaciones para Compras", async rol => {
+    expect(esUsuarioSolicitanteFondosGastos(rol)).toBe(true);
+    expect(esUsuarioOperaciones(rol)).toBe(false);   // Compras conserva la regla estricta
+    const c = conn([{ nombre: "Servidor", rol_global: rol }]);
+    expect(await resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 9, requirenteNombre: "Inventado" })).toEqual({ nombre: "Servidor", rol });
+    expect(c.query).toHaveBeenCalledWith(expect.stringContaining("ue.empresa_id = ?"), [7, 9]);
+    expect(await resolverSolicitanteFondosGastosTx(conn([{ nombre: "Servidor", rol_global: rol }]), 7, 9)).toEqual({ nombre: "Servidor", rol });
+    expect(await resolverSolicitanteOperacionesTx(conn([{ nombre: "Servidor", rol_global: rol }]), 7, 9)).toBeNull();   // la resolución de Compras NO cambió
+  });
+  it.each(["RRHH", "Reclutamiento", "Marcaje", "Piloto", "Visualizador", "Gerencia", "", null])("rol %s rechazado", async rol => {
+    expect(esUsuarioSolicitanteFondosGastos(rol)).toBe(false);
     expect(esUsuarioOperaciones(rol)).toBe(false);
-    await expect(resolverRequirenteOperacionesTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, { requirenteUsuarioId: 9 })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+    await expect(resolverRequirenteOperacionesTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, { requirenteUsuarioId: 9 })).rejects.toThrow(ERROR_REQUIRIENTE_FONDOS_GASTOS);
+    expect(await resolverSolicitanteFondosGastosTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, 9)).toBeNull();
+  });
+  it("el conjunto de roles habilitados es exactamente Operaciones + Admin, Contabilidad, Facturador y Coordinadores (nada más)", () => {
+    expect([...ROLES_SOLICITANTE_FONDOS_GASTOS].sort()).toEqual([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"].sort());
   });
   it("usuario ajeno o inactivo se rechaza con consulta tenant-safe", async () => {
     const c = conn([]);
-    await expect(resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 999 })).rejects.toThrow("usuario de Operaciones");
+    await expect(resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 999 })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.query).toHaveBeenCalledWith(expect.stringContaining("u.activo = 1"), [7, 999]);
   });
   it.each([9, null])("histórico %s sin cambios no requiere revalidación", async id => {
@@ -45,8 +64,36 @@ describe("criterio único de usuario Operaciones y snapshots históricos", () =>
     expect(c.query).not.toHaveBeenCalled();
   });
   it("texto libre nuevo o cambio manual histórico rechazados", async () => {
-    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Manual" })).rejects.toThrow("usuario de Operaciones");
-    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Otro" }, { requirente_nombre: "Anterior" })).rejects.toThrow("usuario de Operaciones");
+    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Manual" })).rejects.toThrow("usuario activo de Operaciones");
+    await expect(resolverRequirenteOperacionesTx(conn([]), 7, { requirenteNombre: "Otro" }, { requirente_nombre: "Anterior" })).rejects.toThrow("usuario activo de Operaciones");
+  });
+});
+
+describe("alcance de la ampliación de roles: SOLO Fondos y Gastos", () => {
+  const leer = (r: string) => readFileSync(r, "utf8");
+  it("el catálogo que alimenta las listas de Fondos y Gastos usa el criterio ampliado (solicitante y requirente)", () => {
+    const src = leer("src/app/api/empresas/[slug]/tms/gastos/catalogos/route.ts");
+    expect(src.match(/esUsuarioSolicitanteFondosGastos\(r\.rol_global\)/g)).toHaveLength(2);
+    expect(src).not.toContain("esUsuarioOperaciones");
+  });
+  it("Fondos y Gastos validan en el SERVIDOR con el criterio ampliado (no basta con mostrar más usuarios en la lista)", () => {
+    for (const f of ["src/lib/tms/fondos.ts", "src/lib/tms/gastos.ts"]) {
+      const src = leer(f);
+      expect(src).toContain("resolverSolicitanteFondosGastosTx(");
+      expect(src).not.toContain("resolverSolicitanteOperacionesTx");
+    }
+  });
+  it("Compras (requerimientos) CONSERVA la regla estricta de Operaciones", () => {
+    const src = leer("src/lib/compras/requerimientos.ts");
+    expect(src).toContain("resolverSolicitanteOperacionesTx(conn, empresaId, datos.requirente_usuario_id)");
+    expect(src).toContain("esUsuarioOperaciones(r.rol_global)");
+    expect(src).not.toContain("FondosGastos");
+  });
+  it("sigue validando empresa y usuario activo (la consulta no cambió)", async () => {
+    const c = conn([]);
+    expect(await resolverSolicitanteFondosGastosTx(c, 7, 999)).toBeNull();
+    expect(c.query).toHaveBeenCalledWith(expect.stringContaining("u.activo = 1"), [7, 999]);
+    expect(c.query).toHaveBeenCalledWith(expect.stringContaining("ue.empresa_id = ?"), [7, 999]);
   });
 });
 

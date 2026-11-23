@@ -150,7 +150,7 @@ export default function FondosPage() {
   // FONDOS DIARIOS — la fecha y la empresa requirente de una solicitud diaria las define Programación.
   const [esDiariaEditando, setEsDiariaEditando] = useState(false);
   const [requirenteNombre, setRequirenteNombre] = useState("");
-  // Nuevas selecciones solo de Operaciones; el nombre libre se conserva
+  // Nuevas selecciones: Operaciones y roles administrativos habilitados (Admin, Contabilidad, Facturador, Coordinadores); el nombre libre se conserva
   // únicamente para visualizar históricos, nunca como nueva entrada editable.
   const [requirenteUsuarioId, setRequirenteUsuarioId] = useState("");
   const [solicitanteUsuarioId, setSolicitanteUsuarioId] = useState("");
@@ -312,8 +312,8 @@ export default function FondosPage() {
   async function guardarSolicitud() {
     setError(""); setMsg(""); setErrores([]);
     if (!entidadRequirenteId) { setError("Selecciona la empresa requirente."); return; }
-    if (!requirenteUsuarioId && !(editandoId && !requirenteHistorico.id)) { setError("Selecciona un requirente de Operaciones."); return; }
-    if (!solicitanteUsuarioId) { setError("Selecciona el solicitante de Operaciones."); return; }
+    if (!requirenteUsuarioId && !(editandoId && !requirenteHistorico.id)) { setError("Selecciona el requirente."); return; }
+    if (!solicitanteUsuarioId) { setError("Selecciona el solicitante."); return; }
     // Se envían todas las líneas que el usuario llenó (antes se descartaban en silencio las incompletas): así el servidor puede
     // decir «Línea 2 — Monto: …». Las filas totalmente en blanco se omiten; `lineasPantalla` conserva su número visible.
     const lineasLlenas = indicesLlenos(lineas, LINEA_VACIA);
@@ -514,7 +514,7 @@ export default function FondosPage() {
             </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={requirenteUsuarioId} options={opcionesConHistorico(opcionesUsuarios(catalogos.usuariosOperaciones), requirenteUsuarioId === requirenteHistorico.id ? requirenteUsuarioId : "", requirenteHistorico.nombre)} inputClassName={inputCls} onChange={(value) => { setRequirenteUsuarioId(value); if (value) setRequirenteNombre(""); }} />
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
-            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={claseCampo(errores, "solicitanteUsuarioId", inputCls)} onChange={setSolicitanteUsuarioId} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={claseCampo(errores, "solicitanteUsuarioId", inputCls)} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
               <input disabled={esDiariaEditando} type="date" className={`${claseCampo(errores, "fechaRequerimiento", inputCls)} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
               <ErrorCampo errores={errores} campo="fechaRequerimiento" />

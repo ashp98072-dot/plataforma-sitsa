@@ -211,10 +211,16 @@ describe("listarSolicitudesFondo — filtro Requirente", () => {
 });
 
 describe("regresión requirente de Operaciones Fondos", () => {
-  it.each(["Contabilidad", "Admin", "Gerencia"])("rechaza nuevo requirente %s sin escritura", async rol => {
+  it.each(["Gerencia", "RRHH", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
     const c = conexion({ usuarioRol: rol });
-    await expect(crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] })).rejects.toThrow("usuario de Operaciones");
+    await expect(crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
+  });
+  it.each(["Contabilidad", "Admin", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
+    const c = conexion({ usuarioRol: rol });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] });
+    expect(c.commit).toHaveBeenCalledOnce();
   });
   it.each([9, null])("preserva histórico %s fuera del catálogo al editar otros datos", async id => {
     const c = conexion({ actualRequirenteUsuarioId: id, actualRequirenteNombre: "Anterior", usuarioRol: "Contabilidad" });
@@ -223,9 +229,9 @@ describe("regresión requirente de Operaciones Fondos", () => {
     expect(c.query.mock.calls.some(([sql]) => sql.includes("FROM usuarios"))).toBe(false);
     expect(c.execute.mock.calls.find(([sql]) => sql.includes("UPDATE tms_solicitudes_fondo"))?.[1]).toContain("Anterior");
   });
-  it("cambiar histórico a usuario no Operaciones rechaza antes de escrituras", async () => {
-    const c = conexion({ actualRequirenteUsuarioId: 8, usuarioRol: "Contabilidad" });
-    await expect(actualizarSolicitudFondo(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+  it("cambiar histórico a usuario con rol no habilitado rechaza antes de escrituras", async () => {
+    const c = conexion({ actualRequirenteUsuarioId: 8, usuarioRol: "Gerencia" });
+    await expect(actualizarSolicitudFondo(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled();
   });
 });
@@ -586,7 +592,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     const conn = conexion({ usuarioEnEmpresa: false });
     await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 999, lineas: [{ categoria: "Combustible", monto: 100 }],
-    })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"))).toBe(false);
@@ -598,7 +604,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan Pérez (texto libre)", lineas: [{ categoria: "Combustible", monto: 100 }],
-    })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
     expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(conn.execute).not.toHaveBeenCalled();
@@ -1125,8 +1131,8 @@ describe("cambiarEstadoSolicitudFondo — requisitos previos a autorizar (FONDOS
       sinEscriturasAut(conn); vi.mocked(borrarUpload).mockClear(); vi.mocked(crearFirmaInterna).mockClear();
     }
   });
-  it("un requirente-usuario sin acceso a la empresa, o que ya no es de Operaciones, NO es válido", async () => {
-    for (const o of [{ actualRequirenteUsuarioId: 5, usuarioEnEmpresa: false }, { actualRequirenteUsuarioId: 5, usuarioRol: "Contabilidad" }]) {
+  it("un requirente-usuario sin acceso a la empresa, o con un rol NO habilitado, NO es válido (Contabilidad/Admin sí lo son ahora)", async () => {
+    for (const o of [{ actualRequirenteUsuarioId: 5, usuarioEnEmpresa: false }, { actualRequirenteUsuarioId: 5, usuarioRol: "Gerencia" }, { actualRequirenteUsuarioId: 5, usuarioRol: "RRHH" }]) {
       const conn = conexion(o);
       await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut), JSON.stringify(o)).rejects.toThrow(MENSAJE_REQUIRENTE_NO_VALIDO);
       sinEscriturasAut(conn); vi.mocked(borrarUpload).mockClear(); vi.mocked(crearFirmaInterna).mockClear();
