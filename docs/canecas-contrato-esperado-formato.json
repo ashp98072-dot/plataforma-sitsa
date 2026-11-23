@@ -1,0 +1,11 @@
+{
+  "formato": 1,
+  "base": "REEMPLAZAR_CON_NOMBRE_EXACTO",
+  "contrato": {
+    "tablas": [],
+    "columnas": [],
+    "indices": [],
+    "foraneas": [],
+    "checks": []
+  }
+}
