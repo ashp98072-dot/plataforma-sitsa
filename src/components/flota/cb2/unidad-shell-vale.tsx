@@ -10,7 +10,7 @@ import { claseUnidadShell } from "./unidad-shell";
  * Confirmar una unidad externa registra su identidad reutilizable (referencia derivada de la placa; auditoría con quién la confirmó) y la deja elegida.
  * El tipo (vehículo/motocicleta) lo elige la persona; las placas sospechosas o sin forma de placa no se registran.
  */
-export function UnidadShellVale({ fila, cat, vehiculoId, api, recargar, onUnidad, disabled }: { fila: FilaCB2; cat: CatalogosCB2; vehiculoId: string; api?: string; recargar?: () => Promise<unknown>; onUnidad?: (valor: string) => void; disabled?: boolean }) {
+export function UnidadShellVale({ fila, cat, vehiculoId, api, recargar, onUnidad, disabled, parte = "todo" }: { /** «estado»: explicación de la unidad (panel derecho); «casilla»: solo la casilla de unidad externa (panel «Unidad y placa»); «todo»: ambos. */ parte?: "todo" | "estado" | "casilla"; fila: FilaCB2; cat: CatalogosCB2; vehiculoId: string; api?: string; recargar?: () => Promise<unknown>; onUnidad?: (valor: string) => void; disabled?: boolean }) {
   const [tipo, setTipo] = useState(""), [busy, setBusy] = useState(false), [mensaje, setMensaje] = useState(""), enCurso = useRef(false);
   const c = claseUnidadShell(fila, cat, vehiculoId), p = placasPendientes([fila], cat).registrables[0];
   const habilitado = !!cat.tercerosDirectos && !!api && !!recargar;
@@ -24,15 +24,26 @@ export function UnidadShellVale({ fila, cat, vehiculoId, api, recargar, onUnidad
     } catch (e) { setMensaje(e instanceof Error ? e.message : "No se pudo registrar la unidad externa."); }
     finally { enCurso.current = false; setBusy(false); }
   }
+  // La casilla solo existe si la placa NO está en Flota ni entre las unidades externas, tiene forma de placa y las políticas CB2 permiten registrarla.
+  const casillaVisible = c.clase === "NO_IDENTIFICADA" && !vehiculoId && c.registrable && !!p && habilitado;
+  if (parte === "casilla") {
+    if (!casillaVisible && !mensaje) return null;
+    return <section aria-label={`Unidad externa del vale ${fila.vale}`} className="space-y-1">
+      {casillaVisible && p && <fieldset disabled={disabled || busy} className="space-y-1"><label>Tipo de unidad externa para {fila.placa}<select className={input} value={tipo} onChange={e => setTipo(e.target.value)}><option value="">Elegir tipo</option>{p.tipos.map(t => <option key={t} value={t}>{t === "VEHICULO" ? "Vehículo" : "Motocicleta"}</option>)}</select></label>
+        <label className="flex items-start gap-2"><input type="checkbox" checked={false} disabled={!tipo || busy} onChange={e => { if (e.target.checked) void confirmarExterna(); }}/><span>Guardar como unidad externa para futuras importaciones</span></label>
+        <p className="text-xs">No crea ningún vehículo en Flota: guarda una identidad externa reutilizable en futuras importaciones y reportes.</p></fieldset>}
+      {mensaje && <p role="status" className="text-xs">{mensaje}</p>}
+    </section>;
+  }
   return <section aria-label={`Clasificación de la unidad del vale ${fila.vale}`} className="space-y-1">
     <p role="status"><strong>{c.clase === "INTERNA" ? "Unidad interna" : c.clase === "EXTERNA" ? "Unidad externa" : c.clase === "AMBIGUA" ? "Unidad ambigua" : c.clase === "NO_IDENTIFICADA" ? "Unidad no identificada" : "Unidad por confirmar"}</strong>: {c.mensaje}</p>
     {c.clase === "NO_IDENTIFICADA" && !vehiculoId && (c.registrable && p
       ? habilitado
-        ? <fieldset disabled={disabled || busy} className="space-y-1"><label>Tipo de unidad externa para {fila.placa}<select className={input} value={tipo} onChange={e => setTipo(e.target.value)}><option value="">Elegir tipo</option>{p.tipos.map(t => <option key={t} value={t}>{t === "VEHICULO" ? "Vehículo" : "Motocicleta"}</option>)}</select></label>
-          <label className="flex items-start gap-2"><input type="checkbox" checked={false} disabled={!tipo || busy} onChange={e => { if (e.target.checked) void confirmarExterna(); }}/><span>Guardar «{fila.placa}» como unidad externa para futuras importaciones</span></label>
+        ? parte === "estado" ? null : <fieldset disabled={disabled || busy} className="space-y-1"><label>Tipo de unidad externa para {fila.placa}<select className={input} value={tipo} onChange={e => setTipo(e.target.value)}><option value="">Elegir tipo</option>{p.tipos.map(t => <option key={t} value={t}>{t === "VEHICULO" ? "Vehículo" : "Motocicleta"}</option>)}</select></label>
+          <label className="flex items-start gap-2"><input type="checkbox" checked={false} disabled={!tipo || busy} onChange={e => { if (e.target.checked) void confirmarExterna(); }}/><span>Guardar como unidad externa para futuras importaciones</span></label>
           <p className="text-xs">No crea ningún vehículo en Flota: guarda una identidad externa reutilizable en futuras importaciones y reportes.</p></fieldset>
         : <p className="text-xs">El registro de unidades externas está deshabilitado por configuración del servidor; la activación corresponde al propietario.</p>
       : c.motivoNoRegistrable && <p role="alert" className="text-xs">{c.motivoNoRegistrable}</p>)}
-    {mensaje && <p role="status" className="text-xs">{mensaje}</p>}
+    {parte !== "estado" && mensaje && <p role="status" className="text-xs">{mensaje}</p>}
   </section>;
 }
