@@ -39,7 +39,7 @@ it("con la migración: ambigua y sin unidad quedan LISTAS sin elegir unidad, con
   // El piloto desconocido se confirma una vez desde el vale 2 (aplica a las 2 filas con ese nombre)
   await act(async () => (host.querySelector('tr[data-candidato="2"] button') as HTMLButtonElement).click());
   const detalle = [...host.querySelectorAll("tr")].find(tr => tr.getAttribute("hidden") === null && tr.textContent?.includes("Piloto del Excel") && tr.textContent?.includes("Unidad sin vincular") === false)!;
-  await act(async () => [...detalle.querySelectorAll("button")].find(b => b.textContent === "Guardar el nombre original como piloto reportado")!.click());
+  await act(async () => [...detalle.querySelectorAll("label")].find(l => l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector("input")!.click());
   expect(fila_("2")).toContain("LISTO"); expect(fila_("3")).toContain("LISTO");
   await act(async () => control("Confirmo el procesamiento").click());
   await act(async () => boton("Confirmar selección parcial").click());

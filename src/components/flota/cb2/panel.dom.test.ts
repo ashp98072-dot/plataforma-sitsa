@@ -84,6 +84,8 @@ function btn(text: string) {
     return b;
 }
 async function click(text: string) { await act(async () => btn(text).click()); await flush(); }
+/** Casilla «Guardar como piloto reportado…» (antes era un botón). */
+async function marcarPilotoReportado() { await act(async () => Array.from(host.querySelectorAll("label")).find(l => l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector("input")!.click()); await flush(); }
 function control(text: string) {
     const l = Array.from(host.querySelectorAll("label")).find(e => e.textContent?.startsWith(text) && !e.closest("[hidden]"));
     const e = l?.querySelector("input,select,textarea") ?? (l?.htmlFor ? document.getElementById(l.htmlFor) : null);
@@ -205,7 +207,7 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await change("Unidad para vale", "1");
         await change("Motivo de reanudación", "Completar el piloto pendiente");
         expect(btn("Reanudar selección").disabled).toBe(true);   // PENDIENTE: falta el piloto
-        await click("Guardar el nombre original como piloto reportado");
+        await marcarPilotoReportado();
         await click("Reanudar selección");
         const sel = JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body)).seleccion;
         expect(sel).toHaveLength(1); expect(sel[0]).toMatchObject({ candidato, vehiculoId: 1, decisionNombre: { tipo: "REPORTADO", confirmado: true } });
@@ -224,7 +226,7 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await click("Editar");
         await change("Unidad para vale", "1");
         await change("Motivo de reanudación", "Completar el piloto pendiente");
-        await click("Guardar el nombre original como piloto reportado");   // decisión tomada mientras la carga falló
+        await marcarPilotoReportado();   // decisión tomada mientras la carga falló
         expect(btn("Reanudar selección").disabled).toBe(true);           // información incompleta: no se puede continuar
         await click("Reanudar selección");
         expect(calls.some(c => c.url.endsWith("/reanudar"))).toBe(false);
@@ -243,7 +245,7 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
         await click("Editar");
         await change("Unidad para vale", "1");
         await change("Motivo de reanudación", "Completar el piloto pendiente");
-        await click("Guardar el nombre original como piloto reportado");
+        await marcarPilotoReportado();
         expect(btn("Reanudar selección").disabled).toBe(false);
     });
     it("reanudación Shell: una respuesta inválida (no es una lista) también se trata como fallo", async () => {

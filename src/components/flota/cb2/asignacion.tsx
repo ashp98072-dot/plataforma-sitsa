@@ -7,7 +7,7 @@ import { CatalogoSearchSelect } from "@/components/tms/catalogo-search-select";
 import { clasificarProducto, identificarEmpleado, productos, etiquetasProducto, type Producto } from "@/lib/flota/cb2/clasificacion";
 import type { CatalogosCB2, FilaCB2 } from "./client";
 import { input } from "./controles";
-import { PilotoShellVale } from "./revision-nombres";
+import { PilotoShellVale, CasillaPilotoReportado, etiquetaTipoPiloto } from "./revision-nombres";
 import { UnidadShellVale } from "./unidad-shell-vale";
 import type { DecisionNombre, RevisionNombre } from "@/lib/flota/cb2/pilotos-nombres";
 import { politicaIndependiente, pilotoIndependiente, unidadIndependiente } from "./piloto-independiente";
@@ -29,7 +29,7 @@ export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actua
         onChange({ ...value, empleadoId: null, pilotoExternoId: p ?? null, unidadExternaId: u ?? null, asociacionExternaId: !cat.tercerosDirectos && asociaciones.length === 1 ? asociaciones[0].id : null });
     }
     return <div className="space-y-4">{fila.perfil==="SHELL" && <PilotoShellVale original={fila.origen?.piloto ?? ""} nombre={nombre} decision={value.decisionNombre} externo={value.pilotoTipo==="EXTERNO"?pilotos.find(p=>p.id===value.pilotoExternoId)?.nombre:undefined} empleados={cat.empleados} instalado={!!cat.pilotosReportados} disabled={disabled} onElegir={onNombre ?? (() => undefined)}/>}
-        {fila.perfil==="SHELL" && <UnidadShellVale fila={fila} cat={cat} vehiculoId={vehiculoId} api={api} recargar={actualizarCatalogos} onUnidad={onUnidad} disabled={disabled}/>}
+        {<UnidadShellVale fila={fila} cat={cat} vehiculoId={vehiculoId} api={api} recargar={actualizarCatalogos} onUnidad={onUnidad} disabled={disabled}/>}
         {independiente && fila.perfil==="SHELL" && <fieldset disabled={disabled}><legend>Piloto tercerizado (opcional)</legend><p className="text-xs">Solo si el piloto es una identidad externa registrada. Para empleados o piloto reportado usa «Piloto del Excel».</p>
           <CatalogoSearchSelect label={`Piloto tercerizado para vale ${fila.vale}`} placeholder="Buscar piloto externo" inputClassName={input} value={value.pilotoTipo==="EXTERNO"&&value.pilotoExternoId?String(value.pilotoExternoId):""} options={pilotos.map(p=>({value:String(p.id),label:p.nombre,detail:p.referencia}))} onChange={v=>onChange(v?{...value,decisionNombre:undefined,pilotoTipo:"EXTERNO",pilotoExternoId:Number(v),empleadoId:null,asociacionExternaId:null}:{...value,decisionNombre:undefined,pilotoTipo:undefined,pilotoExternoId:null,empleadoId:null,asociacionExternaId:null})}/>
         </fieldset>}
@@ -48,6 +48,9 @@ export function AsignacionCB2({ fila, cat, value, onChange, disabled, api, actua
         {fila.perfil!=="SHELL" && <>
         <p>Piloto original: {fila.origen?.piloto || "No informado"}. {match.estado}: {match.motivo}.</p>
         <p>Candidatos: {match.candidatos.map(p => etiquetaEmpleado(p)).join(" / ") || "Sin coincidencia"}</p>
+        {/* Mismo registro de pilotos reportados que Shell: un piloto que no está en RR. HH. se guarda una vez y se reconoce solo en futuras importaciones (HALEL y Shell). */}
+        {!!cat.pilotosReportados && !!onNombre && empleado == null && value.pilotoTipo !== "EXTERNO" && <div className="space-y-1"><p data-estado-piloto><strong>{etiquetaTipoPiloto(value.decisionNombre)}</strong></p>
+          <CasillaPilotoReportado nombre={nombre} decision={value.decisionNombre} instalado={!!cat.pilotosReportados} disabled={disabled} onElegir={onNombre}/></div>}
         <p>{value.empleadoId !== undefined ? "Elección manual" : match.metodo === "TOKENS_COMPLETOS_UNICOS" ? "Autopropuesta única por tokens completos" : match.propuesta ? "Autopropuesta exacta única" : "Sin vinculo de catalogo (opcional)"}: {(cat.empleados ?? []).find(p => p.id === empleado)?.nombre ?? "Sin empleado vinculado"}</p>
         </>}
         {cat.tercerosDirectos ? <p>{independiente ? "Piloto y unidad independientes:" : "Terceros directos:"} el servidor valida ambos IDs en esta empresa al confirmar. No se exige asociación.</p> : externa ? <p>Piloto externo verificado: {externa.nombre} · identidad #{externa.piloto_id} · {externa.relacion}. No se vincula a empleados.</p> : fila.perfil!=="SHELL" && <CatalogoSearchSelect label={`Empleado para vale ${fila.vale}`} placeholder="Buscar empleado de la empresa" inputClassName={input} value={empleado ? String(empleado) : ""} options={(cat.empleados ?? []).map(p => ({ value: String(p.id), label: p.nombre }))} onChange={v => onChange({ ...value, empleadoId: v ? Number(v) : null })}/>}

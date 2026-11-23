@@ -13,7 +13,7 @@ async function montar(f: FilaCB2, c: CatalogosCB2, vehiculoId = "", api: string 
   await act(async () => root.render(createElement(UnidadShellVale, { fila: f, cat: c, vehiculoId, api, recargar: api ? recargar : undefined, onUnidad })));
   return { host, onUnidad, recargar, limpiar: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
-const boton = (host: HTMLElement, t: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.includes(t));
+const boton = (host: HTMLElement, t: string) => [...host.querySelectorAll("label")].find(l => l.textContent?.includes(t) && l.querySelector("input[type=checkbox]"))?.querySelector("input") as HTMLInputElement | undefined;
 
 it("unidad no identificada: explica qué falta y NO registra nada hasta que se elige el tipo y se confirma; luego usa la identidad externa devuelta", async () => {
   const llamadas: { url: string; body: Record<string, unknown> }[] = [];
@@ -21,9 +21,9 @@ it("unidad no identificada: explica qué falta y NO registra nada hasta que se e
   const m = await montar(fila("C-123XYZ"), cat());
   try {
     expect(m.host.textContent).toContain("Unidad no identificada"); expect(m.host.textContent).toContain("«C-123XYZ»"); expect(m.host.textContent).toContain("No crea ningún vehículo en Flota");
-    expect(boton(m.host, "Confirmar «C-123XYZ» como unidad externa")!.disabled).toBe(true); expect(llamadas).toHaveLength(0);
+    expect(boton(m.host, "Guardar «C-123XYZ» como unidad externa para futuras importaciones")!.disabled).toBe(true); expect(llamadas).toHaveLength(0);
     const sel = m.host.querySelector("select")!; await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(sel, "VEHICULO"); sel.dispatchEvent(new Event("change", { bubbles: true })); });
-    await act(async () => boton(m.host, "Confirmar «C-123XYZ» como unidad externa")!.click());
+    await act(async () => boton(m.host, "Guardar «C-123XYZ» como unidad externa para futuras importaciones")!.click());
     expect(llamadas).toHaveLength(1); expect(llamadas[0].url).toBe("/demo/terceros");
     expect(llamadas[0].body).toMatchObject({ recurso: "UNIDAD", referencia: "shell:C123XYZ", placa: "C-123XYZ", tipo: "VEHICULO" }); expect(String(llamadas[0].body.descripcion)).toContain("«C-123XYZ»");
     expect(m.recargar).toHaveBeenCalledTimes(1); expect(m.onUnidad).toHaveBeenCalledWith("-12");   // se elige la identidad externa, no un vehículo de Flota
@@ -44,7 +44,7 @@ it("un fallo del registro se muestra y no elige ninguna unidad; el doble clic no
   const m = await montar(fila("C-123XYZ"), cat());
   try {
     const sel = m.host.querySelector("select")!; await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(sel, "VEHICULO"); sel.dispatchEvent(new Event("change", { bubbles: true })); });
-    const b = boton(m.host, "Confirmar «C-123XYZ»")!; await act(async () => { b.click(); b.click(); await new Promise(r => setTimeout(r, 60)); });
+    const b = boton(m.host, "Guardar «C-123XYZ»")!; await act(async () => { b.click(); b.click(); await new Promise(r => setTimeout(r, 60)); });
     expect(f).toHaveBeenCalledTimes(1); expect(m.host.textContent).toContain("Placa coincidente"); expect(m.onUnidad).not.toHaveBeenCalled();
   } finally { vi.unstubAllGlobals(); await m.limpiar(); }
 });

@@ -36,7 +36,7 @@ it("sin panel global; reconocido (baja) LISTO solo; desconocido PENDIENTE → pi
   await act(async () => (host.querySelector('tr[data-candidato="2"] button') as HTMLButtonElement).click());
   const detalle = host.querySelector('tr[id$="-2"]') ?? [...host.querySelectorAll("tr")].find(tr => tr.getAttribute("hidden") === null && tr.textContent?.includes("Piloto del Excel"))!;
   expect(detalle.textContent).toContain("Nombre original:"); expect(detalle.textContent).toContain("Visitante Nuevo");
-  await act(async () => [...detalle.querySelectorAll("button")].find(b => b.textContent === "Guardar el nombre original como piloto reportado")!.click());
+  await act(async () => [...detalle.querySelectorAll("label")].find(l => l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector("input")!.click());
   expect(estadoDe("2")).toContain("LISTO"); expect(estadoDe("2")).toContain("Piloto reportado");
   // El vale 3 comparte nombre pero su placa coincide con dos unidades: el piloto ya está resuelto y SIGUE PENDIENTE hasta elegir la unidad
   expect(estadoDe("3")).toContain("Piloto reportado"); expect(estadoDe("3")).toContain("PENDIENTE");

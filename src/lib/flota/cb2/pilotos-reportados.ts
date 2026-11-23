@@ -70,7 +70,9 @@ async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null
  if(decision.confirmado) {
   const [anterior]=await rows(c,"SELECT * FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=? FOR UPDATE",[ctx.empresaId,digest]);
   // La elección para un archivo no acredita un nombre ambiguo para futuros consumos.
-  const requiereRevision=Number(revision.candidatos.length>1 || Number(anterior?.requiere_revision)===1);
+  // Un piloto REPORTADO confirmado expresamente («ninguno corresponde») solo exige revisión futura si hoy hay VARIOS empleados elegibles (ambigüedad real). Los candidatos aproximados
+  // (parecidos) son solo ayuda visual: contarlos dejaba el alias marcado «requiere revisión» y el piloto aparecía pendiente en cada importación aunque ya estuviera guardado.
+  const requiereRevision=decision.tipo==="REPORTADO"?Number((revision.elegibles?.length??0)>1):Number(revision.candidatos.length>1 || Number(anterior?.requiere_revision)===1);
   await c.execute("INSERT INTO flota_cb2_pilotos_equivalencias(empresa_id,nombre_hash,nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision,confirmado_por,confirmado_en) VALUES(?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE empleado_id=VALUES(empleado_id),piloto_reportado_id=VALUES(piloto_reportado_id),requiere_revision=VALUES(requiere_revision),confirmado_por=VALUES(confirmado_por),confirmado_en=VALUES(confirmado_en)",[ctx.empresaId,digest,normalizado,decision.tipo==="EMPLEADO"?decision.empleadoId:null,reportado,requiereRevision,ctx.actor.id,ahoraLocal()]);
   await registrarAuditoriaTx(c,{empresaId:ctx.empresaId,usuario:ctx.actor.username,modulo:"flota_combustible",accion:"cb2_confirmar_equivalencia_piloto",detalle:JSON.stringify({proveedorId:ctx.proveedorId,nombreHash:digest,nombreNormalizado:normalizado,anterior:anterior??null,nuevo:{empleado_id:decision.tipo==="EMPLEADO"?decision.empleadoId:null,piloto_reportado_id:reportado,requiere_revision:requiereRevision,confirmado_por:ctx.actor.id}})});
  }
