@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { verificarContrato } from './contrato-costos.mjs';
+import { obtenerContratoBase, compararContratoBase } from './contrato-base.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const sqlFile = name => readFileSync(path.join(root, 'sql', name), 'utf8');
 const normalizar = value => value.replace(/\r\n/g, '\n').trim();
@@ -37,9 +38,21 @@ export function verificarClavesForaneas(rows, ddl) {
   }
 }
 
-// El contrato posterior de laboratorio no acredita el esquema base real.
-export function verificarContratoBaseReal() {
-  throw Error('DETENER: contrato real completo del esquema base pendiente; no se ejecutará DDL');
+// Únicamente un contrato incorporado y revisado para la base concreta puede
+// autorizar la comparación; no se acepta una ruta o evidencia del llamador.
+export async function verificarContratoBaseReal(connection) {
+  let evidencia;
+  try {
+    evidencia = JSON.parse(readFileSync(new URL('./contrato-base-hostinger-validado.json', import.meta.url), 'utf8'));
+  } catch (cause) {
+    throw new Error('DETENER: contrato real completo del esquema base pendiente o inválido; no se ejecutará DDL', { cause });
+  }
+  const [identity] = await connection.query('SELECT DATABASE() AS base');
+  if (!evidencia || evidencia.formato !== 1 || typeof evidencia.base !== 'string' || !evidencia.base || evidencia.base !== identity[0]?.base || !evidencia.contrato) {
+    throw Error('DETENER: contrato real incompleto o base distinta; no se ejecutará DDL');
+  }
+  const actual = await obtenerContratoBase(connection);
+  compararContratoBase(evidencia.contrato, actual);
 }
 
 export async function ejecutarOperacionesDDL(connection, operations) {
@@ -114,7 +127,7 @@ export async function ejecutarCostosControlado(connection) {
     const statements = ddl.split(';').map(s => s.trim()).filter(Boolean);
     if (statements.length !== 5) throw Error('DETENER: DDL inesperado');
     const operations = [...statements, ...triggers];
-    verificarContratoBaseReal();
+    await verificarContratoBaseReal(connection);
     await ejecutarOperacionesDDL(connection, operations);
     const [post] = await connection.query(postcheck);
     if (!Array.isArray(post) || post.length < 11) throw Error('DETENER: postcheck incompleto; instalación requiere revisión');
@@ -160,3 +173,4 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     } finally { if (connection) await connection.end(); }
   }
 }
+
