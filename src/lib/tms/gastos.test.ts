@@ -220,7 +220,7 @@ describe("catálogo de categorías", () => {
   it("incluye las categorías originales más las del Excel operativo real (GASTOS-OPERATIVOS-DETALLE-FORMATO-1); 'Otros' siempre al final", () => {
     expect(CATEGORIAS_GASTO).toEqual([
       "Combustible", "Hospedaje", "Parqueo", "Cuadrilla", "Auxiliar extra",
-      "Mantenimiento", "Arbitrios", "Transporte",
+      "Mantenimiento", "Arbitrios", "Peajes", "Transporte",
       "Comida", "Aceite", "Medicamento", "Bonificación",
       "Reintegro de gastos",
       "Viáticos",

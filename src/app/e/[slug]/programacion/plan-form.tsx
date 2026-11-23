@@ -20,6 +20,7 @@ import { FechaHora12Input } from "@/components/tms/fecha-hora-12h-input";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { horaCorta } from "@/lib/rrhh/dates";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
+import OtrosFondosViaje, { errorOtrosFondos, otrosFondosParaEnviar, type CatalogoOtrosFondos, type OtroFondoForm } from "./otros-fondos-viaje";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
 import { useEmpresaSession } from "@/lib/empresa-session";
@@ -326,7 +327,11 @@ export default function PlanForm({
    */
   fechaSugerida?: string;
   /** FONDOS DIARIOS — el listado de Programación añade la empresa requirente del viaje (null/ausente = sin empresa requirente). */
-  plan?: (Plan & { entidad_requirente_id?: number | null; entidad_requirente_nombre?: string | null }) | null;
+  plan?: (Plan & {
+    entidad_requirente_id?: number | null; entidad_requirente_nombre?: string | null;
+    /** Fase 3 — otros fondos del viaje (con `bloqueado` = ya en una solicitud autorizada). */
+    otros_fondos?: { id: number; categoria: string; monto: number; descripcion: string | null; empleadoId: number; metodoPago: string | null; cuenta: string | null; bloqueado: boolean }[];
+  }) | null;
   /**
    * OPERACIONES-UX-PLANES-SIMPLIFICADO-1: `cerrado` = true SOLO cuando el
    * guardado fue un cierre de viaje (confirmarCierre) — Programación lo usa
@@ -343,6 +348,10 @@ export default function PlanForm({
   // FONDOS DIARIOS — empresas requirentes (KT / Mónaco); el selector solo aparece si la migración está aplicada (GET /tms/catalogos).
   const [fondosDiarios, setFondosDiarios] = useState(false);
   const [entidadesRequirentes, setEntidadesRequirentes] = useState<{ id: number; nombre: string }[]>([]);
+  // FONDOS DIARIOS Fase 3 — «Otros fondos del viaje»: catálogo (null = migración no aplicada, la sección no existe) y lista editable.
+  const [otrosCatalogo, setOtrosCatalogo] = useState<CatalogoOtrosFondos | null>(null);
+  const otrosInicial: OtroFondoForm[] = (plan?.otros_fondos ?? []).map((o) => ({ id: o.id, categoria: o.categoria, monto: String(o.monto), descripcion: o.descripcion ?? "", empleadoId: String(o.empleadoId), metodoPago: o.metodoPago ?? "", cuenta: o.cuenta ?? "", bloqueado: o.bloqueado }));
+  const [otrosFondos, setOtrosFondos] = useState<OtroFondoForm[]>(otrosInicial);
   const [pilotos, setPilotos] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [auxiliares, setAuxiliares] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
@@ -587,6 +596,7 @@ export default function PlanForm({
       setClientesCat((c.clientes ?? []) as ClienteCat[]);
       setVehiculosSolicitables((c.vehiculosSolicitables ?? []) as VehiculoSolicitadoOpcion[]);
       setFondosDiarios(Boolean(c.fondosDiarios));
+      setOtrosCatalogo((c.otrosFondos ?? null) as CatalogoOtrosFondos | null);
       setEntidadesRequirentes((c.entidadesRequirentes ?? []) as { id: number; nombre: string }[]);
     }
     if (ops.ok) {
@@ -1210,6 +1220,10 @@ export default function PlanForm({
       return;
     }
 
+    // FONDOS DIARIOS Fase 3 — validación visible de «Otros fondos» antes de enviar (el servidor valida de nuevo).
+    const errorOtros = otrosCatalogo && form.entidadRequirenteId > 0 ? errorOtrosFondos(otrosFondos) : null;
+    if (errorOtros) { setError(errorOtros); return; }
+
     setSaving(true);
     try {
       if (!esEdicion) {
@@ -1230,6 +1244,7 @@ export default function PlanForm({
             vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId,
             // FONDOS DIARIOS — solo si hay migración y se eligió una empresa requirente.
             entidadRequirenteId: fondosDiarios && form.entidadRequirenteId > 0 ? form.entidadRequirenteId : undefined,
+            otrosFondos: otrosCatalogo && form.entidadRequirenteId > 0 && otrosFondos.length ? otrosFondosParaEnviar(otrosFondos) : undefined,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1383,6 +1398,8 @@ export default function PlanForm({
             : cambioVehiculoSolicitado(plan?.vehiculo_solicitado_perfil_id, form.vehiculoSolicitadoPerfilId),
           // FONDOS DIARIOS — solo si cambió (null la quita).
           entidadRequirenteId: !fondosDiarios || bloqueadoParaPreCierre || form.entidadRequirenteId === (plan?.entidad_requirente_id ?? 0) ? undefined : (form.entidadRequirenteId || null),
+          // Fase 3 — la lista completa solo si cambió (sin empresa requirente se envía vacía: no hay solicitud a la que consolidar).
+          otrosFondos: !otrosCatalogo || bloqueadoParaPreCierre || JSON.stringify(otrosFondos) === JSON.stringify(otrosInicial) ? undefined : (form.entidadRequirenteId > 0 ? otrosFondosParaEnviar(otrosFondos) : []),
           // rutaId ahora distingue "no tocar" (undefined, sin cambios) de "quitar" (null, el usuario limpió el
           // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
           // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
@@ -2480,6 +2497,19 @@ export default function PlanForm({
           )}
         </div>
       )}
+
+      {/* FONDOS DIARIOS Fase 3 — «Otros fondos del viaje», debajo de los viáticos. Solo con la migración aplicada y para viajes Propios. */}
+      {otrosCatalogo && form.tipoViaje === "Propio" ? (
+        <OtrosFondosViaje
+          slug={slug}
+          items={otrosFondos}
+          onChange={setOtrosFondos}
+          catalogo={otrosCatalogo}
+          empleadosDelViaje={[form.pilotoEmpleadoId, form.mostrarPilotoExtra ? form.pilotoExtraEmpleadoId : null, ...form.auxiliarEmpleadoIds].filter((x): x is number => typeof x === "number" && x > 0)}
+          habilitado={form.entidadRequirenteId > 0}
+          deshabilitado={bloqueadoParaPreCierre || bloqueado}
+        />
+      ) : null}
 
       {/* OPS-AJUSTES (sección 4) — "Bitácora del viaje": visible en
           cualquier estado, incluido Cerrado (sección 12: "Bitácora sigue

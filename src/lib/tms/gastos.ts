@@ -104,6 +104,8 @@ export const CATEGORIAS_GASTO = [
   "Auxiliar extra",
   "Mantenimiento",
   "Arbitrios",
+  // FONDOS Fase 3 — «Otros fondos del viaje» pide peajes como concepto propio (catálogo compartido con Gastos).
+  "Peajes",
   "Transporte",
   // GASTOS-OPERATIVOS-DETALLE-FORMATO-1: categorías del Excel operativo
   // real que faltaban. La clasificación por categoría es INTERNA — la

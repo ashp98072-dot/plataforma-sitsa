@@ -23,11 +23,11 @@ import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
  * (`rechazarOrigenDeCliente`), y un origen desconocido se trata como PROTEGIDO (falla cerrado). Una línea nueva creada a mano nace SIEMPRE manual.
  */
 
-export type OrigenLinea = "MANUAL" | "AUTO_VIATICO";
+export type OrigenLinea = "MANUAL" | "AUTO_VIATICO" | "AUTO_OTRO";
 export type NivelProteccion = "NINGUNA" | "AUTOMATICA" | "VINCULADA";
 
 /** Orígenes conocidos que son automáticos (cuando exista la columna). Cualquier valor no vacío distinto de MANUAL también se protege. */
-export const ORIGENES_AUTOMATICOS: readonly OrigenLinea[] = ["AUTO_VIATICO"];
+export const ORIGENES_AUTOMATICOS: readonly OrigenLinea[] = ["AUTO_VIATICO", "AUTO_OTRO"];
 
 /** Campos de una línea automática que SÍ se pueden editar a mano. */
 export const CAMPOS_EDITABLES_LINEA_AUTOMATICA = ["metodoPago", "cuenta"] as const;

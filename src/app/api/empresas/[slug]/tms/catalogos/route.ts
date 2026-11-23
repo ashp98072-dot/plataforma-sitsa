@@ -18,6 +18,8 @@ import { execute, query } from "@/lib/db";
 import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { listarVehiculosSolicitables } from "@/lib/tms/vehiculo-solicitado-db";
 import { entidadesRequirentesDisponibles, fondosDiariosInstalado } from "@/lib/tms/fondos-diarios";
+import { CATEGORIAS_OTROS_FONDOS, empleadosBeneficiarios, otrosFondosInstalado } from "@/lib/tms/plan-otros-fondos";
+import { METODOS_PAGO_GASTO } from "@/lib/tms/gastos";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -95,10 +97,15 @@ export async function GET(_req: Request, ctx: Ctx) {
   // FONDOS DIARIOS — empresas requirentes (KT / Mónaco) para elegirla por viaje; sin la migración el selector no se ofrece.
   const fondosDiarios = await fondosDiariosInstalado();
   const entidadesRequirentes = fondosDiarios ? await entidadesRequirentesDisponibles(eid).catch(() => []) : [];
+  // Fase 3 — «Otros fondos del viaje»: categorías (catálogo compartido sin Viáticos), métodos de pago y beneficiarios (empleados activos, SIN datos bancarios: la cuenta se sugiere bajo demanda).
+  const otrosFondos = fondosDiarios && (await otrosFondosInstalado())
+    ? { categorias: CATEGORIAS_OTROS_FONDOS, metodosPago: [...METODOS_PAGO_GASTO], empleados: await empleadosBeneficiarios(eid).catch(() => []) }
+    : null;
 
   return NextResponse.json(
     {
       fondosDiarios,
+      otrosFondos,
       entidadesRequirentes,
       clientes,
       lugares,

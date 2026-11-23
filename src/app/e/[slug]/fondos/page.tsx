@@ -289,7 +289,7 @@ export default function FondosPage() {
           cuenta: l.cuenta ?? "",
           cargo: l.cargo ?? "",
           metodoPago: l.metodoPago ?? "",
-          automatica: l.origen === "AUTO_VIATICO",
+          automatica: l.origen === "AUTO_VIATICO" || l.origen === "AUTO_OTRO",
         }))
       : [{ ...LINEA_VACIA }]);
     setMostrarForm(true);

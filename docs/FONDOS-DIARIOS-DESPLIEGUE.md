@@ -31,3 +31,24 @@ El código detecta la migración con una sonda de columnas. **Sin migración la 
 ## Verificación realizada
 - Laboratorio MariaDB 11.8.9 desechable: migración aplicada 2 veces, 17 pruebas de integración (agrupación, sin duplicados, concurrencia, diferencial, autorizada→complementaria, permisos, protección de líneas, rechazadas, unicidad, aislamiento de empresa, resincronizar, rollback seguro) y 21 de Fase 1.
 - Pendiente (no hecho): prueba manual en un entorno con datos reales y de la interfaz en navegador.
+
+---
+
+# Fase 3 — «Otros fondos del viaje»
+
+Estado: **IMPLEMENTADO y VERIFICADO TÉCNICAMENTE** (tsc, ESLint, build, 48 pruebas contra MariaDB 11.8.9 desechable). No probado en producción ni en navegador. Requiere la Fase 2 (migración `sql/migrate-2026-11-fondos-diarios.sql`) ya aplicada.
+
+## Qué agrega
+- Sección «Otros fondos del viaje» en Programación (debajo de los viáticos): varias líneas con categoría, monto, descripción, beneficiario (empleado de RRHH: piloto, auxiliar u otro), método de pago y cuenta/teléfono (sugeridos desde RRHH y corregibles).
+- Se guardan con el viaje (tabla `tms_plan_otros_fondos`) y se consolidan **en la misma solicitud diaria** (misma lógica de la Fase 2) como líneas `AUTO_OTRO`: unidad, cliente, fecha, viaje y empresa requirente se heredan del viaje.
+- Reglas: diferencial con ids estables; método de pago/cuenta editados en Fondos se conservan salvo que se cambien en Programación; autorizada → complementaria; un otro fondo ya autorizado no se edita ni retira desde Programación; «Viáticos» no es categoría de otros fondos (evita pagar dos veces); nueva categoría compartida «Peajes».
+- Combustible: no crea desembolsos; solo concilia vales contra una línea de fondos ya autorizada. Una línea `AUTO_OTRO` de categoría «Combustible» es la solicitud de dinero y los vales la justifican; no hay segundo desembolso.
+
+## Orden exacto
+1. Respaldo de `tms_solicitud_fondo_lineas` y `tms_solicitudes_fondo`.
+2. Código a `main` (sin migración la sección no aparece y los viáticos siguen igual).
+3. Migración manual: `sql/migrate-2026-12-fondos-otros.sql` (idempotente; reemplaza de forma atómica la restricción `ck_fondolin_origen`).
+4. Comprobación: en un viaje Propio con empresa requirente agregar un hospedaje y un peaje → la solicitud diaria muestra 1 línea de viático + 2 de otros fondos, protegidas (solo método de pago/cuenta editables); guardar de nuevo no duplica; tras autorizar, un nuevo otro fondo va a una complementaria.
+
+## Reversión
+- Código: revertir el merge. Estructura: `sql/rollback-2026-12-fondos-otros.sql` — **se niega a borrar si existen otros fondos o líneas `AUTO_OTRO`** (`BLOQUEADO`); con `SET @CONFIRMAR_PERDIDA_DE_DATOS = 'SI';` revierte y convierte esas líneas en manuales. Debe ejecutarse **antes** que el rollback de la Fase 2.
