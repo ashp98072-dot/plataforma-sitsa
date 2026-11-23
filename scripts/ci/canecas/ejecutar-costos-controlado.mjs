@@ -38,12 +38,13 @@ export function verificarClavesForaneas(rows, ddl) {
   }
 }
 
-// Únicamente un contrato incorporado y revisado para la base concreta puede
-// autorizar la comparación; no se acepta una ruta o evidencia del llamador.
+// El archivo privado debe contener un contrato revisado para la base concreta.
+// Su lectura no sustituye la revisión independiente de la evidencia de origen.
 export async function verificarContratoBaseReal(connection) {
   let evidencia;
   try {
-    evidencia = JSON.parse(readFileSync(new URL('./contrato-base-hostinger-validado.json', import.meta.url), 'utf8'));
+    const archivo = process.env.CANECAS_CONTRATO_VALIDADO || new URL('./contrato-base-hostinger-validado.json', import.meta.url);
+    evidencia = JSON.parse(readFileSync(archivo, 'utf8'));
   } catch (cause) {
     throw new Error('DETENER: contrato real completo del esquema base pendiente o inválido; no se ejecutará DDL', { cause });
   }
