@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { verificarClavesForaneas, verificarTriggers } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
+import { prepararCostosLaboratorio } from './preparar-costos-laboratorio';
 import { verificarContrato } from '../../../scripts/ci/canecas/contrato-costos.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
@@ -25,7 +26,7 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     expect(auxiliar[2].find(row => row.fuente === 'STATISTICS')?.filas).toBeGreaterThan(0);
   });
   afterAll(async () => { await db.end(); });
-  it('ejecuta el instalador una vez y bloquea el reintento sin cambiar el esquema', async () => {
+  it('bloquea la CLI sin contrato y verifica por separado el esquema de laboratorio', async () => {
     const env = { ...process.env, CANECAS_SQL_PIPE: pipe, CANECAS_SQL_DATABASE: 'canecas_cli_test', CANECAS_SQL_USER: 'fifo_lab', CANECAS_SQL_PASSWORD: 'fifo-lab-only' };
     const run = () => spawnSync(process.execPath, ['scripts/ci/canecas/ejecutar-costos-controlado.mjs', '--ejecutar'], { env, encoding: 'utf8', timeout: 30000 });
     const ddlInspection = "SELECT TABLE_NAME,COLUMN_NAME,COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION";
@@ -37,9 +38,11 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
       expect((await db.query(ddlInspection))[0]).toEqual(beforePermissions);
     }
     const first = run();
-    expect(first.stderr).toBe('');
-    expect(first.status).toBe(0);
-    expect(first.stdout).toContain('postcheck completos');
+    expect(first.status).not.toBe(0);
+    expect(first.stderr).toContain('contrato real completo del esquema base pendiente');
+    expect((await db.query(ddlInspection))[0]).toEqual(beforePermissions);
+    const conn = await db.getConnection();
+    try { await prepararCostosLaboratorio(conn, pipe, 'canecas_cli_test'); } finally { conn.release(); }
     await expect(verificarContrato(db)).resolves.toBeUndefined();
     await db.query("ALTER TABLE canecas_gastos_posteriores COMMENT='modificado'");
     await expect(verificarContrato(db)).rejects.toThrow('tablas');
@@ -83,3 +86,4 @@ describe.skipIf(!pipe)('CLI contra MariaDB desechable', () => {
     expect(() => verificarTriggers(alterado[8], triggers)).toThrow('definición incompatible');
   }, 30000);
 });
+
