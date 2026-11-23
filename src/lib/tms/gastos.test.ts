@@ -88,12 +88,12 @@ function filaGastoRaw(overrides: Record<string, unknown> = {}) {
 
 /** GASTOS-ADMINISTRATIVO-1 (Fase 2) — fila mínima que autorizarGasto/rechazarGasto relee FOR UPDATE. */
 describe("regresión requirente de Operaciones Gastos", () => {
-  it.each(["Gerencia", "RRHH", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
+  it.each(["Gerencia", "Reclutamiento", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
     const c = conexion({ usuarioRol: rol });
     await expect(crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
   });
-  it.each(["Contabilidad", "Admin", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
+  it.each(["Contabilidad", "Admin", "Facturador", "RRHH", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
     const c = conexion({ usuarioRol: rol });
     vi.mocked(query).mockResolvedValue([filaGasto()] as never);
     await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 });
@@ -544,7 +544,7 @@ describe("crearGasto", () => {
       conexion({ usuarioEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteUsuarioId: 999,
-      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
+      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación (Compras/Predios) de esta empresa.");
     });
 
     it("solicitanteUsuarioId con un rol NO habilitado se rechaza (resolverSolicitanteFondosGastosTx)", async () => {
@@ -615,7 +615,7 @@ describe("crearGasto", () => {
       vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteNombre: "Juan Pérez (texto libre)",
-      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
+      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación (Compras/Predios) de esta empresa.");
       expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
       expect(crearFirmaInterna).not.toHaveBeenCalled();
       expect(conn.execute).not.toHaveBeenCalled();

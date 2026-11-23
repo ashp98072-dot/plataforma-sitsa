@@ -1053,7 +1053,7 @@ export async function actualizarSolicitudFondo(
 
 export const MENSAJE_SIN_EMPRESA_REQUIRENTE = "No se puede autorizar: la solicitud no tiene empresa requirente. Edítala y selecciona una antes de autorizar.";
 export const MENSAJE_SIN_REQUIRENTE = "No se puede autorizar: la solicitud no tiene un requirente identificable (usuario activo habilitado). Edítala, selecciona el requirente y vuelve a autorizar.";
-export const MENSAJE_REQUIRENTE_NO_VALIDO = "No se puede autorizar: el requirente de la solicitud ya no es válido (debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación con acceso a esta empresa). Edítala y selecciona otro requirente.";
+export const MENSAJE_REQUIRENTE_NO_VALIDO = "No se puede autorizar: el requirente de la solicitud ya no es válido (debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación con acceso a esta empresa). Edítala y selecciona otro requirente.";
 
 /**
  * Requisitos previos a AUTORIZAR (FONDOS FASE 1):
