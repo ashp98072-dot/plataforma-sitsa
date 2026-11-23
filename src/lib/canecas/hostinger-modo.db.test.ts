@@ -1,6 +1,7 @@
 ﻿import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { obtenerContratoBase, compararContratoBase } from '../../../scripts/ci/canecas/contrato-base.mjs';
 import { ejecutarCostosControlado, ejecutarOperacionesDDL } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
@@ -18,6 +19,16 @@ describe.skipIf(!pipe || !port)('modo de Hostinger en laboratorio aislado', () =
     await db.query(readFileSync('sql/migrate-2026-11-canecas-fase1.sql', 'utf8'));
   });
   afterAll(async () => { await db.end(); });
+  it('lee los metadatos del laboratorio y detecta una diferencia sin habilitar DDL', async () => {
+    const conn = await db.getConnection();
+    try {
+      const actual = await obtenerContratoBase(conn);
+      expect(compararContratoBase(actual, structuredClone(actual))).toBe(true);
+      const diferente = structuredClone(actual) as { columnas: { COLUMN_TYPE: string }[] };
+      diferente.columnas[0].COLUMN_TYPE += ' cambiado';
+      expect(() => compararContratoBase(actual, diferente)).toThrow('columnas');
+    } finally { conn.release(); }
+  });
   it('rechaza FK y CHECK desactivados y restaura el modo aun si falla el preflight', async () => {
     const conn = await db.getConnection();
     try {
