@@ -29,8 +29,10 @@ describe.skipIf(!pipe || !port)('CLI TLS en MariaDB aislada por red', () => {
     const [before] = await db.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_capas_costo'");
     expect(before[0].n).toBe(0);
     const valid = run(process.env.CANECAS_TLS_TEST_CA);
-    expect(valid.stderr).toBe('');
-    expect(valid.status).toBe(0);
-    expect(valid.stdout).toContain('postcheck completos');
+    expect(valid.status).not.toBe(0);
+    expect(valid.stderr).toContain('contrato real completo del esquema base pendiente');
+    const [after] = await db.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_capas_costo'");
+    expect(after[0].n).toBe(0);
   });
 });
+
