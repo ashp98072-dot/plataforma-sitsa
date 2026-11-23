@@ -6,6 +6,20 @@ import { CanecasClient } from "./canecas-client";
 
 describe("recepciones de Canecas", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
+  it("muestra controles de costo solo con los permisos correspondientes", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({datos:[]})));
+    const host=document.createElement("div"), root=createRoot(host); document.body.append(host);
+    try {
+      await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"inventario",permisos:{}})); await new Promise(r=>setTimeout(r,20)); });
+      expect(host.textContent).not.toContain("Conciliar existencia inicial");
+      expect(host.textContent).not.toContain("Costo conocido por moneda");
+      await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"inventario",permisos:{confirmar:true,compras:true}})); await new Promise(r=>setTimeout(r,20)); });
+      expect(host.textContent).toContain("Conciliar existencia inicial");
+      expect(host.textContent).toContain("Costo conocido por moneda");
+      expect(host.querySelector('input[name="costo"]')).not.toBeNull();
+    } finally { await act(async()=>root.unmount()); host.remove(); }
+  });
   it.each([
     ["productos", "catalogo"], ["ubicaciones", "catalogo"], ["compras", "compras"], ["recepciones", "recepciones"],
   ])("muestra el formulario de %s solo con permiso %s", async (vista, permiso) => {
@@ -68,7 +82,12 @@ describe("recepciones de Canecas", () => {
       await act(async()=>{await new Promise(r=>setTimeout(r,30));});
       await act(async()=>{Array.from(host.querySelectorAll("button")).find(b=>b.textContent==="Nuevo registro")!.click();});
       const form=host.querySelector("form")!;
-      for(const input of form.querySelectorAll("input")) input.value=input.name === "capacidad" ? "0.001" : input.type === "number" ? "2" : "Dato sintético";
+      if (vista === "productos") {
+        const unidad = form.elements.namedItem("unidad_inventario") as HTMLInputElement;
+        expect(unidad.value).toBe("caneca");
+        expect(unidad.readOnly).toBe(true);
+      }
+      for(const input of form.querySelectorAll("input")) input.value=input.name === "capacidad" ? "0.001" : input.name === "precio_venta_referencia" ? "2.00" : input.name === "moneda" ? "GTQ" : input.type === "number" ? "2" : "Dato sintético";
       for(const select of form.querySelectorAll("select")) select.value="1";
       expect(form.checkValidity()).toBe(true);
       await act(async()=>{form.dispatchEvent(new Event("submit",{bubbles:true,cancelable:true})); await new Promise(r=>setTimeout(r,20));});
