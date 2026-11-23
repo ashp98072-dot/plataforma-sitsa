@@ -304,4 +304,27 @@ describe.skipIf(!pipe)("fondos diarios (MariaDB 11.8.9)", () => {
     expect(await N("SELECT COUNT(*) n FROM tms_solicitud_fondo_lineas")).toBe(2); expect(v1).not.toBe(v2);
     await expect(resincronizarGrupoDiario(E, DIA, 9, OPS)).rejects.toThrow(/empresa requirente no es válida/);
   });
+
+  it("ROLLBACK SEGURO: con solicitudes o líneas automáticas existentes NO borra nada; sin datos revierte; con confirmación explícita revierte aun con datos; la migración se puede reaplicar", async () => {
+    const COLS = "SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND ((TABLE_NAME='tms_planes_viaje' AND COLUMN_NAME='entidad_requirente_id') OR (TABLE_NAME='tms_solicitudes_fondo' AND COLUMN_NAME IN ('origen','tipo','solicitud_principal_id','clave_diaria')) OR (TABLE_NAME='tms_solicitud_fondo_lineas' AND COLUMN_NAME IN ('origen','viatico_id')))";
+    const rollback = (confirmar = false) => admin.query(`${confirmar ? "SET @CONFIRMAR_PERDIDA_DE_DATOS = 'SI';" : "SET @CONFIRMAR_PERDIDA_DE_DATOS = NULL;"}
+${sql("rollback-2026-11-fondos-diarios.sql")}`);
+    await sincronizar([await viaje(DIA, KT, [[200, 150]])]);
+    expect(await N("SELECT COUNT(*) n FROM tms_solicitud_fondo_lineas WHERE origen = 'AUTO_VIATICO'")).toBe(1);
+    // 1) con datos y sin confirmar: no cambia nada (ni estructura ni filas)
+    await rollback(); await rollback();
+    expect(await N(COLS)).toBe(7);
+    expect(await N("SELECT COUNT(*) n FROM tms_solicitud_fondo_lineas WHERE origen = 'AUTO_VIATICO'")).toBe(1);
+    // 2) sin datos de la integración: revierte por completo y es idempotente
+    await sembrar();
+    await rollback(); await rollback();
+    expect(await N(COLS)).toBe(0);
+    reiniciarDeteccionFondosDiarios(); expect(await fondosDiariosInstalado()).toBe(false);
+    // 3) se vuelve a migrar y, con datos, SOLO revierte con la confirmación explícita
+    await admin.query(sql("migrate-2026-11-fondos-diarios.sql"));
+    reiniciarDeteccionFondosDiarios(); expect(await fondosDiariosInstalado()).toBe(true);
+    await sincronizar([await viaje(DIA, KT, [[200, 150]])]);
+    await rollback(); expect(await N(COLS)).toBe(7);
+    await rollback(true); expect(await N(COLS)).toBe(0);
+  });
 });
