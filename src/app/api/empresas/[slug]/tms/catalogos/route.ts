@@ -17,6 +17,7 @@ import {
 import { execute, query } from "@/lib/db";
 import { requireTenantModulo, requireTenantProgramacionOTms } from "@/lib/tenant";
 import { listarVehiculosSolicitables } from "@/lib/tms/vehiculo-solicitado-db";
+import { entidadesRequirentesDisponibles, fondosDiariosInstalado } from "@/lib/tms/fondos-diarios";
 
 type Ctx = { params: Promise<{ slug: string }> };
 
@@ -91,8 +92,14 @@ export async function GET(_req: Request, ctx: Ctx) {
     };
   });
 
+  // FONDOS DIARIOS — empresas requirentes (KT / Mónaco) para elegirla por viaje; sin la migración el selector no se ofrece.
+  const fondosDiarios = await fondosDiariosInstalado();
+  const entidadesRequirentes = fondosDiarios ? await entidadesRequirentesDisponibles(eid).catch(() => []) : [];
+
   return NextResponse.json(
     {
+      fondosDiarios,
+      entidadesRequirentes,
       clientes,
       lugares,
       unidades: unidadesTmsVisibles(unidades as (RowDataPacket & {id:number})[],flotaVehiculos as (RowDataPacket & {id:number})[]),

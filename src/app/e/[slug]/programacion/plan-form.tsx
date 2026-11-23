@@ -325,7 +325,8 @@ export default function PlanForm({
    * siempre "hoy". Si no se pasa, cae a `hoy` (mismo comportamiento previo).
    */
   fechaSugerida?: string;
-  plan?: Plan | null;
+  /** FONDOS DIARIOS — el listado de Programación añade la empresa requirente del viaje (null/ausente = sin empresa requirente). */
+  plan?: (Plan & { entidad_requirente_id?: number | null; entidad_requirente_nombre?: string | null }) | null;
   /**
    * OPERACIONES-UX-PLANES-SIMPLIFICADO-1: `cerrado` = true SOLO cuando el
    * guardado fue un cierre de viaje (confirmarCierre) — Programación lo usa
@@ -339,6 +340,9 @@ export default function PlanForm({
   const [clientesCat, setClientesCat] = useState<ClienteCat[]>([]);
   // PROGRAMACION-VEHICULO-SOLICITADO — perfiles activos de costeo (Cotizaciones) de la empresa, vía GET /tms/catalogos.
   const [vehiculosSolicitables, setVehiculosSolicitables] = useState<VehiculoSolicitadoOpcion[]>([]);
+  // FONDOS DIARIOS — empresas requirentes (KT / Mónaco); el selector solo aparece si la migración está aplicada (GET /tms/catalogos).
+  const [fondosDiarios, setFondosDiarios] = useState(false);
+  const [entidadesRequirentes, setEntidadesRequirentes] = useState<{ id: number; nombre: string }[]>([]);
   const [pilotos, setPilotos] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [auxiliares, setAuxiliares] = useState<(EmpOps & { habilitacionEstado: "HABILITADO" | "CAPACITACION" | null })[]>([]);
   const [empleadosCuadrilla, setEmpleadosCuadrilla] = useState<EmpOps[]>([]);
@@ -406,6 +410,8 @@ export default function PlanForm({
     tarifaId: plan?.tarifa_id ?? 0,
     // PROGRAMACION-VEHICULO-SOLICITADO — 0 = sin dato. Independiente de la unidad y de la tarifa: cambiar uno no toca el otro.
     vehiculoSolicitadoPerfilId: plan?.vehiculo_solicitado_perfil_id ?? 0,
+    // FONDOS DIARIOS — 0 = sin empresa requirente (no genera solicitud de fondos).
+    entidadRequirenteId: plan?.entidad_requirente_id ?? 0,
     // VIAT-4/VIAT-4b: fotografía histórica de qué ruta maestra se usó —
     // se recalcula al elegir otra ruta; no bloquea guardar el viaje sin
     // ruta (código/ruta sigue siendo opcional). lugarDescargaHistorico y
@@ -580,6 +586,8 @@ export default function PlanForm({
       const c = await cat.json();
       setClientesCat((c.clientes ?? []) as ClienteCat[]);
       setVehiculosSolicitables((c.vehiculosSolicitables ?? []) as VehiculoSolicitadoOpcion[]);
+      setFondosDiarios(Boolean(c.fondosDiarios));
+      setEntidadesRequirentes((c.entidadesRequirentes ?? []) as { id: number; nombre: string }[]);
     }
     if (ops.ok) {
       const o = await ops.json();
@@ -1220,6 +1228,8 @@ export default function PlanForm({
             // monto/moneda en el viaje.
             tarifaId: form.tarifaId > 0 ? form.tarifaId : undefined,
             vehiculoSolicitadoPerfilId: form.vehiculoSolicitadoPerfilId,
+            // FONDOS DIARIOS — solo si hay migración y se eligió una empresa requirente.
+            entidadRequirenteId: fondosDiarios && form.entidadRequirenteId > 0 ? form.entidadRequirenteId : undefined,
             // PROGRAMACION-REPORTES-FILTROS-1: costo operativo de referencia,
             // referencia del cliente y observaciones ya no se capturan desde
             // este formulario (ver comentario en Part A del ticket) — no se
@@ -1257,7 +1267,7 @@ export default function PlanForm({
           setError(leidos.errores.length ? "" : leidos.mensaje);
           return;
         }
-        setMsg(data.mensaje ?? "Viaje creado.");
+        setMsg(`${data.mensaje ?? "Viaje creado."}${data.advertenciaFondos ? ` — ${data.advertenciaFondos}` : ""}`);
         onSaved({ id: Number(data.id), fechaPlan: form.fechaPlan });
         return;
       }
@@ -1371,6 +1381,8 @@ export default function PlanForm({
           vehiculoSolicitadoPerfilId: bloqueadoParaPreCierre
             ? undefined
             : cambioVehiculoSolicitado(plan?.vehiculo_solicitado_perfil_id, form.vehiculoSolicitadoPerfilId),
+          // FONDOS DIARIOS — solo si cambió (null la quita).
+          entidadRequirenteId: !fondosDiarios || bloqueadoParaPreCierre || form.entidadRequirenteId === (plan?.entidad_requirente_id ?? 0) ? undefined : (form.entidadRequirenteId || null),
           // rutaId ahora distingue "no tocar" (undefined, sin cambios) de "quitar" (null, el usuario limpió el
           // selector — p. ej. al cambiar de cliente) de "cambiar" (number). Antes `form.rutaId || undefined`
           // nunca podía mandar null, así que un viaje con ruta jamás podía quedarse SIN ruta vía este formulario.
@@ -1400,7 +1412,7 @@ export default function PlanForm({
         setError(leidos.errores.length ? "" : leidos.mensaje);
         return;
       }
-      setMsg(data.mensaje ?? "Viaje actualizado.");
+      setMsg(`${data.mensaje ?? "Viaje actualizado."}${data.advertenciaFondos ? ` — ${data.advertenciaFondos}` : ""}`);
       // PROGRAMACION-RECHAZADO-AVISO-1 — se separan del resto de
       // advertencias (que siguen exactamente igual, sin tocar ese flujo)
       // para no mezclar un aviso de viático rechazado con el banner verde
@@ -1883,6 +1895,29 @@ export default function PlanForm({
         ) : null}
         {msgVehiculo ? <span id="error-vehiculo-solicitado" role="alert" className="mt-0.5 block text-[11px] font-medium text-red-500">{msgVehiculo}</span> : null}
       </label>
+
+      {/* FONDOS DIARIOS — empresa requirente del viaje: agrupa los viáticos en UNA solicitud de fondos por fecha y empresa requirente. Opcional; sin ella el viaje no genera solicitud. */}
+      {fondosDiarios ? (
+        <label className={`text-xs text-[var(--muted)] ${bloqueadoParaPreCierre || bloqueado ? "pointer-events-none opacity-50" : ""}`}>
+          Empresa requirente (fondos)
+          <select
+            className={`${inputCls} mt-1 w-full`}
+            value={form.entidadRequirenteId}
+            disabled={bloqueadoParaPreCierre || bloqueado}
+            aria-describedby="ayuda-entidad-requirente"
+            onChange={(e) => setForm((f) => ({ ...f, entidadRequirenteId: Number(e.target.value) }))}
+          >
+            <option value={0}>— Sin empresa requirente (no genera solicitud de fondos) —</option>
+            {entidadesRequirentes.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+            {plan?.entidad_requirente_id && !entidadesRequirentes.some((e) => e.id === plan.entidad_requirente_id) ? (
+              <option value={plan.entidad_requirente_id}>{plan.entidad_requirente_nombre ?? `Empresa #${plan.entidad_requirente_id}`}</option>
+            ) : null}
+          </select>
+          <span id="ayuda-entidad-requirente" className="mt-0.5 block text-[10px]">
+            Los viáticos de los viajes del mismo día y empresa requirente se consolidan en una sola solicitud de fondos. El requirente inicial es quien programa (si es de Operaciones) y se puede cambiar en Solicitudes de fondo.
+          </span>
+        </label>
+      ) : null}
 
       {/* OPS-3.2c: unidad/piloto/auxiliares pasan de `soloNotas` a
           `bloqueadoParaPreCierre` — se habilitan en pendiente de cierre.

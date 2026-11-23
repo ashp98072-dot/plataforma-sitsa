@@ -29,6 +29,7 @@ import { debeLimpiarTarifaPorCambioDeRuta, rutaPerteneceACliente, tarifaParaSnap
 import { listarDisponibilidadPersonal } from "@/lib/operaciones/disponibilidad-personal";
 import { ahoraLocal, hoyLocal, toIsoDate } from "@/lib/rrhh/dates";
 import { listarViaticosRechazadosDelPlan, personalRecienAsignadoDelPlan, sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { asignarEntidadRequirentePlanTx, entidadesDePlanes, entidadesRequirentesDisponibles, fondosDiariosInstalado, sincronizarFondosDePlanes, type ActorFondosDiarios } from "@/lib/tms/fondos-diarios";
 import { planesConCierreManual } from "@/lib/tms/cierre-manual-planes";
 import { SQL_HORA_LLEGADA_REAL } from "@/lib/tms/disponibilidad-traslapes";
 import type { RecursoProgramacion as RecursoDia } from "@/lib/tms/disponibilidad-programacion-intervalos";
@@ -433,6 +434,8 @@ export async function GET(req: Request, ctx: Ctx) {
   ]);
   // EDICIÓN RÁPIDA (aditivo, en lote y DESPUÉS de las lecturas previas): viáticos por viaje y tarifas ACTIVAS por ruta.
   const viaticosMap = await viaticosDePlanes(guard.empresa.id, planIds);
+  // FONDOS DIARIOS (aditivo): empresa requirente de cada viaje, en una consulta aparte y solo si la migración está aplicada.
+  const entidadesMap = (await fondosDiariosInstalado()) ? await entidadesDePlanes(guard.empresa.id, planIds) : new Map<number, { id: number; nombre: string }>();
   const tarifasPorRuta = await tarifasActivasDeVariasRutas(guard.empresa.id, rows.map((r) => Number(r.ruta_id)).filter((n) => n > 0)).catch(
     () => new Map<number, { tarifas: unknown[]; predeterminadaId: number | null }>(),
   );
@@ -501,6 +504,8 @@ export async function GET(req: Request, ctx: Ctx) {
       // EDICIÓN RÁPIDA (aditivo): viáticos del viaje por tms_personal.id (mismo espacio de ids que piloto/auxiliares),
       // para el snapshot de concurrencia y para mostrar/editar montos. Ver viaticosDePlanes.
       viaticos: viaticosMap.get(id) ?? [],
+      entidad_requirente_id: entidadesMap.get(id)?.id ?? null,
+      entidad_requirente_nombre: entidadesMap.get(id)?.nombre ?? null,
       paradas,
       paradasPendientes: paradas.filter(
         (p) => p.requiere_evidencia && p.evidencias < 1,
@@ -623,6 +628,8 @@ const schema = z.object({
   // PROGRAMACION-VEHICULO-SOLICITADO — perfil de costeo (Cotizaciones) que el cliente solicitó/cotizó. Aplica a Propio
   // y Tercerizado. Se valida contra ESTA empresa y se fotografía su nombre; nunca se deriva de la unidad.
   vehiculoSolicitadoPerfilId: z.number().int().positive().optional(),
+  // FONDOS DIARIOS — empresa requirente del viaje (KT / Mónaco). Opcional: sin ella el viaje no genera solicitud de fondos. Se valida contra ESTA empresa.
+  entidadRequirenteId: z.number().int().positive().nullable().optional(),
   lugarCarga: z.string().optional(),
   lugarDescarga: z.string().optional(),
   // VIAT-4/VIAT-4b: de qué ruta maestra (tms_cliente_rutas) salió la
@@ -687,6 +694,11 @@ const schema = z.object({
 // confirmarImportacionProgramacion pueda reutilizarlas sin duplicar
 // lógica — ver import arriba.
 
+/** Identidad real de sesión (nunca del cliente) para las solicitudes de fondos que genera Programación. */
+function actorFondos(session: { id: number; nombre?: string | null; username: string }): ActorFondosDiarios {
+  return { usuarioId: session.id, nombre: session.nombre || session.username, username: session.username };
+}
+
 export async function POST(req: Request, ctx: Ctx) {
   const { slug } = await ctx.params;
   // Corrección de matriz de permisos: crear un viaje es una acción propia
@@ -736,6 +748,11 @@ export async function POST(req: Request, ctx: Ctx) {
     d.vehiculoSolicitadoPerfilId != null ? await resolverVehiculoSolicitado(empresaId, d.vehiculoSolicitadoPerfilId) : null;
   if (d.vehiculoSolicitadoPerfilId != null && !vehiculoSolicitado) {
     return NextResponse.json({ error: MSG_VEHICULO_SOLICITADO_INVALIDO }, { status: 400 });
+  }
+  // FONDOS DIARIOS — empresa requirente del viaje: solo si la migración está aplicada; debe ser una entidad válida de ESTA empresa (activa, KT/MONACO).
+  const fondosDiarios = await fondosDiariosInstalado();
+  if (fondosDiarios && d.entidadRequirenteId != null && !(await entidadesRequirentesDisponibles(empresaId)).some((e) => e.id === d.entidadRequirenteId)) {
+    return NextResponse.json({ error: "La empresa requirente no es válida, no está activa o no pertenece a esta empresa." }, { status: 400 });
   }
   // El monto del viaje se DERIVA de la tarifa elegida, pero sigue siendo
   // editable como override manual (si el usuario mandó tarifaComercial).
@@ -1247,6 +1264,8 @@ export async function POST(req: Request, ctx: Ctx) {
       conn,
       viaticosOverrides,
     );
+    // FONDOS DIARIOS — la empresa requirente se guarda con el viaje (misma transacción); las solicitudes se sincronizan DESPUÉS del commit.
+    if (fondosDiarios && d.entidadRequirenteId != null) await asignarEntidadRequirentePlanTx(conn, empresaId, planId, d.entidadRequirenteId);
 
     await conn.commit();
   } catch (e) {
@@ -1291,9 +1310,13 @@ export async function POST(req: Request, ctx: Ctx) {
     detalle: `Plan #${planId} ${codigoFinal} · fecha ${d.fechaPlan} · tipo ${tipoViaje} · piloto ${(esTercerizado ? snapshotTercerizado.pilotoExternoNombre : d.pilotoNombre?.trim()) || "—"} · placa ${(esTercerizado ? snapshotTercerizado.unidadExternaPlaca : (d.placa || "").toUpperCase()) || "—"} · TC ${(esTercerizado ? snapshotTercerizado.tcExternoPlaca : tcPlacaHistorica) || "—"} · ${paradasInput.length} parada(s)${paradasTxt ? `: ${paradasTxt}` : ""}`,
   });
 
+  // FONDOS DIARIOS — fuera de la transacción del viaje (ya confirmado): transacción propia, idempotente y con reintentos; nunca impide haber guardado el viaje.
+  const fondos = fondosDiarios && d.entidadRequirenteId != null ? await sincronizarFondosDePlanes(empresaId, [planId], actorFondos(guard.session)) : null;
+
   return NextResponse.json({
     id: planId,
     codigo: codigoFinal,
+    ...(fondos?.advertencia ? { advertenciaFondos: fondos.advertencia } : {}),
     mensaje: `Plan ${codigoFinal} creado${
       auxPersonalIds.length > 1
         ? ` con ${auxPersonalIds.length} auxiliares`
@@ -1415,6 +1438,8 @@ const patchSchema = z.object({
   // PROGRAMACION-VEHICULO-SOLICITADO — `null` lo quita; ausente = no se toca. Es un dato COMERCIAL: sigue las reglas
   // por estado de los datos comerciales (camposTocados.comercial) y NUNCA cambia unidad, tarifa ni personal.
   vehiculoSolicitadoPerfilId: z.number().int().positive().nullable().optional(),
+  // FONDOS DIARIOS — `null` la quita; ausente = no se toca.
+  entidadRequirenteId: z.number().int().positive().nullable().optional(),
 });
 
 /**
@@ -1445,6 +1470,7 @@ async function patchTipoViaje(
   empresaId: number,
   d: z.infer<typeof patchSchema>,
   usuario?: string | null,
+  actor?: ActorFondosDiarios,
 ): Promise<NextResponse> {
   const rows = await query<RowDataPacket[]>(
     `SELECT id, codigo, estado, tipo_viaje FROM tms_planes_viaje WHERE id = ? AND empresa_id = ? LIMIT 1`,
@@ -1543,7 +1569,9 @@ async function patchTipoViaje(
   } finally {
     conn.release();
   }
-  return NextResponse.json({ mensaje: "Plan actualizado.", id: d.id });
+  // FONDOS DIARIOS — cambiar a Tercerizado retira los viáticos PROGRAMADO: se retiran sus líneas pendientes (transacción propia, tras el commit).
+  const fondosTipo = actor && (await fondosDiariosInstalado()) ? await sincronizarFondosDePlanes(empresaId, [d.id], actor) : null;
+  return NextResponse.json({ mensaje: "Plan actualizado.", id: d.id, ...(fondosTipo?.advertencia ? { advertenciaFondos: fondosTipo.advertencia } : {}) });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -1574,7 +1602,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (d.tipoViaje !== undefined) {
     if (d.cuadrilla !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del cambio de cuadrilla." }, { status: 400 });
     if (d.vehiculoSolicitadoPerfilId !== undefined) return NextResponse.json({ error: "Guarda el cambio de tipo de viaje separado del vehículo solicitado." }, { status: 400 });
-    return patchTipoViaje(empresaId, d, guard.session.username);
+    return patchTipoViaje(empresaId, d, guard.session.username, actorFondos(guard.session));
   }
 
   // Fase P5.1c: SELECT ampliado — se agregan fecha_plan, piloto_id y
@@ -1600,6 +1628,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
   );
   if (!plan[0]) {
     return NextResponse.json({ error: "Plan no encontrado." }, { status: 404 });
+  }
+  // FONDOS DIARIOS — empresa requirente (null la quita): válida y de ESTA empresa; solo con la migración aplicada.
+  const fondosDiarios = await fondosDiariosInstalado();
+  if (fondosDiarios && d.entidadRequirenteId != null && !(await entidadesRequirentesDisponibles(empresaId)).some((e) => e.id === d.entidadRequirenteId)) {
+    return NextResponse.json({ error: "La empresa requirente no es válida, no está activa o no pertenece a esta empresa." }, { status: 400 });
   }
   const antes = {
     codigo: String(plan[0].codigo ?? ""),
@@ -2400,6 +2433,9 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
 
+    // FONDOS DIARIOS — la empresa requirente se guarda con el viaje (misma transacción); las solicitudes se sincronizan DESPUÉS del commit.
+    if (fondosDiarios && d.entidadRequirenteId !== undefined) await asignarEntidadRequirentePlanTx(conn, empresaId, d.id, d.entidadRequirenteId);
+
     await conn.commit();
   } catch (e) {
     await conn.rollback();
@@ -2428,6 +2464,10 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }
     conn.release();
   }
+
+  // FONDOS DIARIOS — viaje y viáticos ya confirmados: se sincronizan las solicitudes de fondos del día (nuevo y anterior grupo) en una transacción propia, idempotente y con
+  // reintentos. Un fallo nunca deshace el guardado del viaje: se devuelve una advertencia.
+  const fondos = fondosDiarios ? await sincronizarFondosDePlanes(empresaId, [d.id], actorFondos(guard.session)) : null;
 
   // Solo se llega aquí si la transacción hizo COMMIT correctamente. Se
   // relee el estado final del plan (fuera de la transacción — ya no hay
@@ -2539,5 +2579,5 @@ export async function PATCH(req: Request, ctx: Ctx) {
     }`,
   });
 
-  return NextResponse.json({ mensaje: "Plan actualizado.", advertencias });
+  return NextResponse.json({ mensaje: "Plan actualizado.", advertencias, ...(fondos?.advertencia ? { advertenciaFondos: fondos.advertencia } : {}) });
 }

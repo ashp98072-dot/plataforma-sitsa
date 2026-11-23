@@ -6,6 +6,7 @@ import { getPool } from "@/lib/db";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { guardarAuxiliaresPlan } from "@/lib/tms/plan-comunes";
 import { sincronizarViaticosPlan } from "@/lib/tms/viaticos";
+import { fondosDiariosInstalado, sincronizarFondosDePlanes, type ActorFondosDiarios } from "@/lib/tms/fondos-diarios";
 import type { FilaResultadoEdicionRapida, ValidarEdicionRapida } from "./edicion-rapida-schema";
 import { evaluarEdicionRapida, type ContextoEdicionRapida, type FilaTrabajo } from "./edicion-rapida-validar";
 
@@ -22,7 +23,7 @@ const LOCK_TIMEOUT_SEGUNDOS = 8; // igual que planes/route.ts, programacion-impo
 
 export type FilaGuardada = { planId: number; estado: "guardado" | "sin_cambios" };
 export type ResultadoGuardarEdicionRapida =
-  | { ok: true; guardados: number; filas: FilaGuardada[] }
+  | { ok: true; guardados: number; filas: FilaGuardada[]; advertenciaFondos?: string }
   | { ok: false; status: 409; error: string; filas?: FilaResultadoEdicionRapida[] }
   | { ok: false; status: 500; error: string };
 
@@ -63,7 +64,7 @@ function detalleAuditoria(f: FilaTrabajo, ctx: ContextoEdicionRapida, motivo: st
   return `Plan #${plan.id} ${plan.codigo} · edición rápida · ${cambios.join("; ")}${motivo ? ` · motivo: ${motivo}` : ""}`;
 }
 
-export async function guardarEdicionRapida(empresaId: number, usuario: string, datos: ValidarEdicionRapida): Promise<ResultadoGuardarEdicionRapida> {
+export async function guardarEdicionRapida(empresaId: number, usuario: string, datos: ValidarEdicionRapida, actorFondos?: ActorFondosDiarios): Promise<ResultadoGuardarEdicionRapida> {
   const motivo = datos.motivoCambio?.trim() || undefined;
   const lockKey = `tms_traslape_${empresaId}`;
   const conn = await getPool().getConnection();
@@ -150,7 +151,10 @@ export async function guardarEdicionRapida(empresaId: number, usuario: string, d
     }
 
     await conn.commit();
-    return { ok: true, guardados: aGuardar.length, filas: filas.map((f) => ({ planId: f.planId, estado: aGuardar.includes(f) ? "guardado" as const : "sin_cambios" as const })) };
+    // FONDOS DIARIOS — personal/viáticos ya confirmados: se sincronizan las solicitudes de fondos de esos viajes (transacción propia, idempotente; un fallo solo da advertencia).
+    const aSincronizar = aGuardar.filter((x) => x.cambiaPiloto || x.cambiaAuxiliares || x.cambiaViaticos).map((x) => x.planId);
+    const fondos = actorFondos && aSincronizar.length && (await fondosDiariosInstalado()) ? await sincronizarFondosDePlanes(empresaId, aSincronizar, actorFondos) : null;
+    return { ok: true, guardados: aGuardar.length, ...(fondos?.advertencia ? { advertenciaFondos: fondos.advertencia } : {}), filas: filas.map((f) => ({ planId: f.planId, estado: aGuardar.includes(f) ? "guardado" as const : "sin_cambios" as const })) };
   } catch (e) {
     try { await conn.rollback(); } catch { /* la conexión puede haberse perdido: el candado se libera abajo */ }
     if (e instanceof GuardadoAbortado) return { ok: false, status: 409, error: e.message };

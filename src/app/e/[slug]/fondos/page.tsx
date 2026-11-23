@@ -28,6 +28,8 @@ type LineaFondo = {
   id: number; categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number;
   fechaViaje: string | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; metodoPago: string | null; placa: string | null; clienteNombre: string | null;
   empleadoId: number | null; vehiculoId: number | null; clienteId: number | null; planId: number | null;
+  /** FONDOS DIARIOS — "AUTO_VIATICO": línea generada desde Programación; solo método de pago y cuenta/teléfono son editables. */
+  origen?: string | null; viaticoId?: number | null;
 };
 type SolicitudFondo = {
   id: number;
@@ -45,6 +47,8 @@ type SolicitudFondo = {
   motivoRechazo: string | null;
   observaciones: string | null;
   lineas: LineaFondo[];
+  /** FONDOS DIARIOS — "DIARIA" la generó Programación; tipo "COMPLEMENTARIA" = excepcional posterior a la autorización de la principal. */
+  origen?: string | null; tipo?: string | null; solicitudPrincipalId?: number | null;
 };
 
 const inputCls = "rounded border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-sm";
@@ -82,6 +86,8 @@ type LineaForm = {
   categoria: string; descripcion: string; cantidad: string; monto: string;
   fechaViaje: string; empleadoId: string; vehiculoId: string; clienteId: string; planId: string;
   empleadoNombre: string; cuenta: string; cargo: string; metodoPago: string;
+  /** FONDOS DIARIOS — línea automática (protegida) de Programación. */
+  automatica?: boolean;
 };
 const LINEA_VACIA: LineaForm = {
   categoria: "", descripcion: "", cantidad: "1", monto: "",
@@ -141,6 +147,8 @@ export default function FondosPage() {
   const [editandoId, setEditandoId] = useState<number | null>(null);
   const [requirenteHistorico, setRequirenteHistorico] = useState<{ id: string; nombre: string }>({ id: "", nombre: "" });
   const [entidadRequirenteId, setEntidadRequirenteId] = useState("");
+  // FONDOS DIARIOS — la fecha y la empresa requirente de una solicitud diaria las define Programación.
+  const [esDiariaEditando, setEsDiariaEditando] = useState(false);
   const [requirenteNombre, setRequirenteNombre] = useState("");
   // Nuevas selecciones solo de Operaciones; el nombre libre se conserva
   // únicamente para visualizar históricos, nunca como nueva entrada editable.
@@ -254,6 +262,7 @@ export default function FondosPage() {
    */
   async function abrirEditar(s: SolicitudFondo) {
     claveEnvioRef.current = null;
+    setEsDiariaEditando(s.origen === "DIARIA");
     setError("");
     const res = await fetch(`/api/empresas/${slug}/tms/fondos/${s.id}`);
     const data = await res.json().catch(() => ({}));
@@ -280,6 +289,7 @@ export default function FondosPage() {
           cuenta: l.cuenta ?? "",
           cargo: l.cargo ?? "",
           metodoPago: l.metodoPago ?? "",
+          automatica: l.origen === "AUTO_VIATICO",
         }))
       : [{ ...LINEA_VACIA }]);
     setMostrarForm(true);
@@ -387,6 +397,19 @@ export default function FondosPage() {
     await cargar();
   }
 
+  /** FONDOS DIARIOS — reparación explícita: recalcula las líneas automáticas de ESTE día y empresa requirente desde Programación (idempotente). */
+  async function resincronizar(s: SolicitudFondo) {
+    setError(""); setMsg("");
+    const res = await fetch(`/api/empresas/${slug}/tms/fondos/diarios/resincronizar`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fecha: s.fechaRequerimiento, entidadRequirenteId: s.entidadRequirenteId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(data.error ?? "No se pudo resincronizar."); return; }
+    setMsg(data.mensaje ?? "Sincronizado.");
+    await cargar();
+  }
+
   async function cambiarEstado(id: number, accion: "autorizar" | "rechazar" | "liquidar") {
     const body: Record<string, unknown> = { accion };
     if (accion === "rechazar") {
@@ -484,7 +507,7 @@ export default function FondosPage() {
           <fieldset disabled={!editandoId && borrador.congelado} className="m-0 min-w-0 space-y-3 border-0 p-0">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
             <label className="text-xs text-[var(--muted)]">Empresa requirente *
-              <select className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
+              <select disabled={esDiariaEditando} className={`${claseCampo(errores, "entidadRequirenteId", inputCls)} mt-0.5 w-full`} value={entidadRequirenteId} onChange={(e) => setEntidadRequirenteId(e.target.value)} required>
                 <option value="">Seleccionar empresa requirente…</option>
                 {catalogos.entidadesRequirentes.map((entidad) => <option key={entidad.id} value={entidad.id}>{entidad.nombre}</option>)}
               </select>
@@ -493,7 +516,7 @@ export default function FondosPage() {
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
             <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={solicitanteUsuarioId} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={claseCampo(errores, "solicitanteUsuarioId", inputCls)} onChange={setSolicitanteUsuarioId} />
             <label className="text-xs text-[var(--muted)]">Fecha de requerimiento
-              <input type="date" className={`${claseCampo(errores, "fechaRequerimiento", inputCls)} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
+              <input disabled={esDiariaEditando} type="date" className={`${claseCampo(errores, "fechaRequerimiento", inputCls)} mt-0.5 w-full`} value={fechaRequerimiento} onChange={(e) => setFechaRequerimiento(e.target.value)} />
               <ErrorCampo errores={errores} campo="fechaRequerimiento" />
             </label>
           </div>
@@ -502,17 +525,19 @@ export default function FondosPage() {
             {lineas.map((l, i) => {
               const set = (patch: Partial<LineaForm>) => setLineas((ls) => ls.map((x, j) => (j === i ? { ...x, ...patch } : x)));
               const totalLinea = (Number(l.cantidad) || 1) * (Number(l.monto) || 0);
+              const auto = Boolean(l.automatica);
               return (
                 <div key={i} className="space-y-1 rounded border border-[var(--border)]/60 p-2">
+                  {auto ? <p className="text-[11px] text-amber-300">Línea generada desde Programación: solo se puede editar el método de pago y la cuenta o teléfono.</p> : null}
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
-                    <select className={claseCampo(errores, `lineas.${i}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
+                    <select disabled={auto} className={claseCampo(errores, `lineas.${i}.categoria`, inputCls)} value={l.categoria} onChange={(e) => set({ categoria: e.target.value })}>
                       <option value="">Categoría…</option>
                       {catalogos.categorias.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
-                    <input className={claseCampo(errores, `lineas.${i}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
-                    <input type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
-                    <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>
+                    <input disabled={auto} className={claseCampo(errores, `lineas.${i}.descripcion`, inputCls)} placeholder="Descripción" value={l.descripcion} onChange={(e) => set({ descripcion: e.target.value })} />
+                    <input disabled={auto} type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.cantidad`, inputCls)} placeholder="Cantidad" value={l.cantidad} onChange={(e) => set({ cantidad: e.target.value })} />
+                    <input disabled={auto} type="number" min="0.01" step="0.01" className={claseCampo(errores, `lineas.${i}.monto`, inputCls)} placeholder="Monto (Q)" value={l.monto} onChange={(e) => set({ monto: e.target.value })} />
+                    {auto ? <span className="text-[11px] text-[var(--muted)]">Protegida</span> : <button type="button" onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))} className="text-red-400">Quitar</button>}
                   </div>
                   {/*
                     SOLICITUD-FONDOS-REPORTE-1 — relaciones OPCIONALES por
@@ -521,7 +546,7 @@ export default function FondosPage() {
                     servidor resuelve nombre/cargo/placa/cliente y los
                     congela como snapshot al guardar (fondos.ts).
                   */}
-                  <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                  <fieldset disabled={auto} className="m-0 min-w-0 border-0 p-0"><div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                     <CatalogoSearchSelect label="Empleado" placeholder="Buscar empleado por nombre..." sinResultados="No se encontraron empleados." value={l.empleadoId} options={catalogos.empleados.map((e) => ({ value: String(e.id), label: e.nombre, detail: [e.codigo, e.puesto].filter(Boolean).join(" · "), searchText: e.nombre }))} inputClassName={inputCls} onChange={(value) => {
                       const empleado = catalogos.empleados.find((e) => String(e.id) === value);
                       set(aplicarEmpleadoSeleccionado(l, empleado, value));
@@ -543,14 +568,14 @@ export default function FondosPage() {
                       set(aplicarPlanSeleccionado(l, plan, value, empleado));
                     }} />
                     <label className="text-xs text-[var(--muted)]">Fecha de viaje
-                      <input type="date" className={`${claseCampo(errores, `lineas.${i}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
+                      <input disabled={auto} type="date" className={`${claseCampo(errores, `lineas.${i}.fechaViaje`, inputCls)} mt-0.5 w-full`} value={l.fechaViaje} onChange={(e) => set({ fechaViaje: e.target.value })} />
                       <ErrorCampo errores={errores} campo={`lineas.${i}.fechaViaje`} />
                       <span className="mt-0.5 block text-[10px]">Si la dejas vacía y eliges un viaje, se completa con su fecha.</span>
                     </label>
-                  </div>
+                  </div></fieldset>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
                     <label className="text-xs text-[var(--muted)]">Nombre
-                      <input className={`${inputCls} mt-0.5 w-full`} value={l.empleadoNombre} onChange={(e) => set({ empleadoNombre: e.target.value })} maxLength={200} />
+                      <input disabled={auto} className={`${inputCls} mt-0.5 w-full`} value={l.empleadoNombre} onChange={(e) => set({ empleadoNombre: e.target.value })} maxLength={200} />
                     </label>
                     {/*
                       FONDOS-GASTOS-METODO-PAGO-1 — método de pago POR
@@ -572,7 +597,7 @@ export default function FondosPage() {
                       {l.empleadoId && l.metodoPago === "Transferencia móvil" && !catalogos.empleados.find((x) => String(x.id) === l.empleadoId)?.telefono?.trim() ? <span className="block">El empleado no tiene teléfono registrado en RRHH.</span> : null}
                     </label>
                     <label className="text-xs text-[var(--muted)]">Cargo
-                      <input className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />
+                      <input disabled={auto} className={`${inputCls} mt-0.5 w-full`} value={l.cargo} onChange={(e) => set({ cargo: e.target.value })} maxLength={150} />
                     </label>
                   </div>
                   <p className="text-right text-xs text-[var(--muted)]">Total de la línea: Q{totalLinea.toLocaleString("es-GT", { minimumFractionDigits: 2 })}</p>
@@ -609,7 +634,9 @@ export default function FondosPage() {
           <div key={s.id} className="rounded-lg border border-[var(--border)] p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <span className="font-medium">{s.codigo}</span> · {s.requirenteNombre ?? "—"} · {s.fechaRequerimiento} ·{" "}
+                <span className="font-medium">{s.codigo}</span>
+                {s.origen === "DIARIA" ? <span className="ml-1 rounded border border-sky-500/60 px-1.5 py-0.5 text-[11px] text-sky-300">{s.tipo === "COMPLEMENTARIA" ? "Complementaria (excepcional)" : "Diaria · Programación"}</span> : null}
+                {" "}· {s.entidadRequirenteNombre ?? "—"} · {s.requirenteNombre ?? "—"} · {s.fechaRequerimiento} ·{" "}
                 <span className={s.estado === "Rechazada" ? "text-red-400" : s.estado === "Autorizada" ? "text-emerald-400" : s.estado === "Liquidada" ? "text-[var(--muted)]" : "text-amber-400"}>
                   {s.estado}
                 </span>
@@ -643,6 +670,9 @@ export default function FondosPage() {
                 {s.estado === "Pendiente" ? (
                   <>
                     <button type="button" onClick={() => void abrirEditar(s)} className="rounded border border-[var(--border)] px-2 py-1">Editar</button>
+                    {s.origen === "DIARIA" && s.tipo !== "COMPLEMENTARIA" && s.entidadRequirenteId != null ? (
+                      <button type="button" onClick={() => void resincronizar(s)} className="rounded border border-[var(--border)] px-2 py-1" title="Vuelve a calcular las líneas con los viajes y viáticos actuales de Programación">Resincronizar</button>
+                    ) : null}
                     {s.entidadRequirenteId == null || s.requirenteUsuarioId == null ? (
                       <span className="text-amber-500">Falta {s.entidadRequirenteId == null ? "la empresa requirente" : "el requirente de Operaciones"}: edita la solicitud antes de autorizarla.</span>
                     ) : null}

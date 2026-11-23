@@ -26,7 +26,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!parsed.success) {
     return NextResponse.json({ ok: false, error: parsed.error.issues[0]?.message || "Datos inválidos." }, { status: 400 });
   }
-  const r = await guardarEdicionRapida(guard.empresa.id, guard.session.username, parsed.data);
+  const r = await guardarEdicionRapida(guard.empresa.id, guard.session.username, parsed.data, { usuarioId: guard.session.id, nombre: guard.session.nombre || guard.session.username, username: guard.session.username });
   const { status, ...cuerpoRespuesta } = r.ok ? { status: 200, ...r } : r;
   return NextResponse.json(cuerpoRespuesta, { status, headers: { "Cache-Control": "private, no-store" } });
 }
