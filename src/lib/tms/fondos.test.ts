@@ -16,8 +16,11 @@ import {
   cambiarEstadoSolicitudFondo,
   crearSolicitudFondo,
   listarSolicitudesFondo,
+  MENSAJE_SIN_EMPRESA_REQUIRENTE,
+  MENSAJE_SIN_REQUIRENTE,
   type IdentidadFirmante,
 } from "./fondos";
+import { camposProtegidosModificados, esLineaProtegida, origenDeFila, rechazarOrigenDeCliente } from "./fondo-lineas-protegidas";
 
 const AUTORIZANTE: IdentidadFirmante = { usuarioId: 9, nombre: "Heber Sitan", rol: "JefeOperaciones" };
 const IMAGEN_FIRMA = { bytes: new ArrayBuffer(4), original: "firma.png" };
@@ -55,6 +58,13 @@ function conexion(opts: {
   cambiarSolicitanteUsuarioId?: number | null;
   cambiarCreadoPor?: string | null;
   entidadRequirenteValida?: boolean;
+  // FONDOS FASE 1 — fila RAW usada al AUTORIZAR (empresa requirente y requirente de la solicitud guardada).
+  actualEntidadRequirenteId?: number | null;
+  sinRequirente?: boolean;
+  // FONDOS FASE 1 — líneas ya guardadas (SELECT … FOR UPDATE por empresa+solicitud) y vínculos que impiden retirarlas.
+  lineasExistentes?: Record<string, unknown>[];
+  lineasConVales?: number[];
+  lineasConCb2?: number[];
 } = {}) {
   const empleadoEnEmpresa = opts.empleadoEnEmpresa ?? true;
   const vehiculoEnEmpresa = opts.vehiculoEnEmpresa ?? true;
@@ -68,12 +78,17 @@ function conexion(opts: {
       if (sql.includes("FROM cont_entidades")) {
         return [opts.entidadRequirenteValida === false ? [] : [{ id: 10, nombre: "Kuiqtrans" }]];
       }
+      // FONDOS FASE 1 — líneas guardadas y sus vínculos (Combustible / CB2) dentro de la transacción de edición.
+      if (sql.includes("FROM tms_solicitud_fondo_lineas l WHERE")) return [opts.lineasExistentes ?? []];
+      if (sql.includes("FROM flota_combustible_cargas")) return [(opts.lineasConVales ?? []).map((n) => ({ linea_id: n }))];
+      if (sql.includes("FROM flota_cb2_fondos_vinculos")) return [(opts.lineasConCb2 ?? []).map((n) => ({ linea_id: n }))];
       if (sql.includes("FROM tms_solicitudes_fondo WHERE id")) {
         return [[{
           id: 1, estado: opts.estadoActual ?? "Pendiente",
+          entidad_requirente_id: opts.actualEntidadRequirenteId === undefined ? 10 : opts.actualEntidadRequirenteId,
           requirente_empleado_id: opts.actualRequirenteEmpleadoId ?? null,
-          requirente_nombre: opts.actualRequirenteNombre ?? "Juan Perez",
-          requirente_usuario_id: opts.cambiarRequirenteUsuarioId ?? opts.actualRequirenteUsuarioId ?? null,
+          requirente_nombre: opts.sinRequirente ? null : (opts.actualRequirenteNombre ?? "Juan Perez"),
+          requirente_usuario_id: opts.sinRequirente ? null : (opts.cambiarRequirenteUsuarioId ?? opts.actualRequirenteUsuarioId ?? null),
           solicitante_usuario_id: opts.cambiarSolicitanteUsuarioId ?? null,
           creado_por: opts.cambiarCreadoPor ?? "admin",
           fecha_requerimiento: opts.actualFechaRequerimiento ?? "2026-09-01",
@@ -748,7 +763,7 @@ describe("cambiarEstadoSolicitudFondo — firma real del autorizante (§2 del ti
  * resolverSnapshotLineaTx (mismo criterio de seguridad que al crear).
  */
 describe("actualizarSolicitudFondo", () => {
-  it("edita Pendiente: encabezado y líneas se reemplazan, el total se recalcula", async () => {
+  it("edita Pendiente: encabezado y líneas se actualizan (inserta las nuevas), el total se recalcula", async () => {
     const conn = conexion({ estadoActual: "Pendiente" });
     vi.mocked(query).mockResolvedValue([filaSolicitud({ total: "600.00" })] as never);
     await actualizarSolicitudFondo(7, 1, {
@@ -761,9 +776,9 @@ describe("actualizarSolicitudFondo", () => {
       ],
     }, "admin");
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([undefined, undefined, null, "Mario Caal", 9, "2026-09-05", 600, "Actualizada", 1, 7]);
-    const deleteLineas = conn.execute.mock.calls.find((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"));
-    expect(deleteLineas?.[1]).toEqual([7, 1]);
+    expect(updateHeader[1]).toEqual([10, undefined, null, "Mario Caal", 9, "2026-09-05", 600, "Actualizada", 1, 7]);
+    // Sin líneas guardadas previas ya NO se hace un DELETE masivo: solo se insertan las nuevas.
+    expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("DELETE FROM tms_solicitud_fondo_lineas"))).toBe(false);
     const insertsLinea = conn.execute.mock.calls.filter((c) => (c[0] as string).includes("INSERT INTO tms_solicitud_fondo_lineas"));
     expect(insertsLinea).toHaveLength(2);
     expect(conn.commit).toHaveBeenCalledOnce();
@@ -775,7 +790,7 @@ describe("actualizarSolicitudFondo", () => {
     // Solo se envían las líneas — ningún campo de encabezado.
     await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 100 }] });
     const updateHeader = conn.execute.mock.calls.find((c) => (c[0] as string).includes("UPDATE tms_solicitudes_fondo"))!;
-    expect(updateHeader[1]).toEqual([undefined, undefined, 9, "Nombre Original", null, "2026-08-20", 100, "Nota original", 1, 7]);
+    expect(updateHeader[1]).toEqual([10, undefined, 9, "Nombre Original", null, "2026-08-20", 100, "Nota original", 1, 7]);
   });
 
   it("sin lineas en el input: NO se tocan las líneas existentes ni el total", async () => {
@@ -853,4 +868,273 @@ describe('categoria Viaticos en lineas de fondo',()=>{
   conn.execute.mockClear();await actualizarSolicitudFondo(7,1,{lineas:[{categoria:'Viáticos',monto:100}]});
   expect(conn.execute.mock.calls.find(c=>String(c[0]).includes('INSERT INTO tms_solicitud_fondo_lineas'))?.[1]).toEqual(expect.arrayContaining(['Viáticos']));
  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// FONDOS FASE 1 — edición diferencial de líneas, protección de líneas automáticas y requisitos previos a autorizar.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const filaLinea = (o: Record<string, unknown> = {}) => ({
+  id: 11, empresa_id: 7, solicitud_id: 1, categoria: "Combustible", descripcion: null, cantidad: "1.00", monto: "100.00", orden: 0,
+  fecha_viaje: null, fecha_viaje_txt: null, empleado_id: null, empleado_nombre: null, cargo: null, cuenta: null, metodo_pago: null,
+  vehiculo_id: null, placa: null, cliente_id: null, cliente_nombre: null, plan_id: null, ...o,
+});
+const sqlsLineas = (conn: ReturnType<typeof conexion>, verbo: "INSERT INTO" | "UPDATE" | "DELETE FROM") =>
+  conn.execute.mock.calls.filter((c) => String(c[0]).includes(`${verbo} tms_solicitud_fondo_lineas`));
+
+describe("actualizarSolicitudFondo — actualización diferencial de líneas (FONDOS FASE 1)", () => {
+  const dos = () => [filaLinea({ id: 11, categoria: "Combustible", monto: "100.00", orden: 0 }), filaLinea({ id: 12, categoria: "Hospedaje", monto: "200.00", orden: 1 })];
+
+  it("1) editar una línea la actualiza EN SU SITIO: el UPDATE apunta a su id y no se borra ni reinserta nada", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 150 }, { id: 12, categoria: "Hospedaje", monto: 200 }] });
+    const updates = sqlsLineas(conn, "UPDATE");
+    expect(updates).toHaveLength(1);
+    expect((updates[0][1] as unknown[]).slice(-3)).toEqual([11, 7, 1]);   // WHERE id = ? AND empresa_id = ? AND solicitud_id = ?
+    expect((updates[0][1] as unknown[])[3]).toBe(150);
+    expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0); expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(0);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("2) las líneas SIN cambios conservan su identidad: no se escribe nada sobre ellas", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { observaciones: "x", lineas: [{ id: 11, categoria: "Combustible", monto: 100 }, { id: 12, categoria: "Hospedaje", monto: 200 }] });
+    expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0); expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0); expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(0);
+    expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("3) agregar una línea (sin id) solo inserta esa; las existentes no se tocan", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }, { id: 12, categoria: "Hospedaje", monto: 200 }, { categoria: "Parqueo", monto: 30 }] });
+    const inserts = sqlsLineas(conn, "INSERT INTO");
+    expect(inserts).toHaveLength(1); expect((inserts[0][1] as unknown[])[2]).toBe("Parqueo"); expect((inserts[0][1] as unknown[])[6]).toBe(2);
+    expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0); expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0);
+  });
+
+  it("4) eliminar una línea libre borra SOLO esa (por id, empresa y solicitud) y conserva el resto", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] });
+    const borrados = sqlsLineas(conn, "DELETE FROM");
+    expect(borrados).toHaveLength(1);
+    expect(String(borrados[0][0])).toContain("WHERE empresa_id = ? AND solicitud_id = ? AND id IN (?)"); expect(borrados[0][1]).toEqual([7, 1, 12]);
+    expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0); expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["vales de Combustible", { lineasConVales: [12] }],
+    ["vínculos CB2", { lineasConCb2: [12] }],
+  ])("5) NO se puede eliminar una línea con %s: error controlado, ROLLBACK total y sin ningún cambio de líneas", async (_n, vinculos) => {
+    const conn = conexion({ lineasExistentes: dos(), ...vinculos });
+    await expect(actualizarSolicitudFondo(7, 1, { observaciones: "no debe persistir", lineas: [{ id: 11, categoria: "Combustible", monto: 999 }] }))
+      .rejects.toThrow("No se puede eliminar la línea 2 (Hospedaje): tiene vales de Combustible o vínculos CB2 asociados");
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
+    expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0); expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0); expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(0);   // ni la línea 1 (monto 999) llegó a escribirse
+  });
+
+  it("5b) respaldo: si la base rechaza el DELETE por una FK (errno 1451) el error es controlado y se revierte todo", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    const base = conn.execute.getMockImplementation()!;
+    conn.execute.mockImplementation(async (...a: [string, ...unknown[]]) => {
+      if (a[0].includes("DELETE FROM tms_solicitud_fondo_lineas")) throw Object.assign(new Error("FK"), { errno: 1451, code: "ER_ROW_IS_REFERENCED_2" });
+      return base(...a);
+    });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("tiene registros asociados");
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("5c) un error de la base distinto de FK al borrar NO se disfraza: se propaga y se revierte", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    const base = conn.execute.getMockImplementation()!;
+    conn.execute.mockImplementation(async (...a: [string, ...unknown[]]) => {
+      if (a[0].includes("DELETE FROM tms_solicitud_fondo_lineas")) throw new Error("disco lleno");
+      return base(...a);
+    });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("disco lleno");
+    expect(conn.rollback).toHaveBeenCalledOnce();
+  });
+
+  it("6) AISLAMIENTO: las líneas se leen SOLO por (empresa, solicitud); un id de otra solicitud o empresa se rechaza sin escribir líneas", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    const lectura = () => conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_solicitud_fondo_lineas l WHERE"))!;
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 999, categoria: "Combustible", monto: 100 }] }))
+      .rejects.toThrow("Línea 1: el identificador de la línea no pertenece a esta solicitud.");
+    expect(lectura()[1]).toEqual([7, 1]);
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
+    expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0); expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0); expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(0);
+  });
+
+  it.each([[0], [-3], [1.5]])("6b) un id inválido (%s) se rechaza", async (id) => {
+    const conn = conexion({ lineasExistentes: dos() });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("no pertenece a esta solicitud");
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("6c) la misma línea dos veces en la lista se rechaza", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 100 }, { id: 11, categoria: "Combustible", monto: 100 }] }))
+      .rejects.toThrow("la misma línea aparece más de una vez");
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+
+  it("7) una solicitud AUTORIZADA sigue inmutable: ni siquiera se leen o escriben líneas", async () => {
+    const conn = conexion({ estadoActual: "Autorizada", lineasExistentes: dos() });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 11, categoria: "Combustible", monto: 1 }] })).rejects.toThrow('No se puede editar una solicitud en estado "Autorizada"');
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.query.mock.calls.some((c) => String(c[0]).includes("tms_solicitud_fondo_lineas"))).toBe(false);
+    expect(conn.execute.mock.calls.some((c) => /UPDATE|DELETE|INSERT/.test(String(c[0])))).toBe(false);
+  });
+
+  it("10) compatibilidad: un cliente que NO envía ids (comportamiento anterior) reemplaza las líneas libres; las nuevas se insertan en el orden recibido", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 10 }, { categoria: "Hospedaje", monto: 20 }] });
+    expect(sqlsLineas(conn, "DELETE FROM")[0][1]).toEqual([7, 1, 11, 12]);
+    expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(2); expect(conn.commit).toHaveBeenCalledOnce();
+  });
+
+  it("10b) compatibilidad con vínculos: ese mismo cliente sin ids NO puede borrar una línea con vales; falla de forma controlada", async () => {
+    const conn = conexion({ lineasExistentes: dos(), lineasConVales: [11] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 10 }] })).rejects.toThrow("tiene vales de Combustible o vínculos CB2");
+    expect(conn.commit).not.toHaveBeenCalled(); expect(sqlsLineas(conn, "INSERT INTO")).toHaveLength(0);
+  });
+
+  it("un cambio de orden se persiste (UPDATE solo de la columna orden efectiva) y las líneas conservan su id", async () => {
+    const conn = conexion({ lineasExistentes: dos() });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ id: 12, categoria: "Hospedaje", monto: 200 }, { id: 11, categoria: "Combustible", monto: 100 }] });
+    const updates = sqlsLineas(conn, "UPDATE");
+    expect(updates.map((u) => [(u[1] as unknown[])[4], (u[1] as unknown[]).slice(-3)[0]])).toEqual([[0, 12], [1, 11]]);
+    expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0);
+  });
+});
+
+describe("líneas automáticas — protección reutilizable (FONDOS FASE 1; todavía no existen líneas automáticas)", () => {
+  const auto = (o: Record<string, unknown> = {}) => filaLinea({
+    id: 21, categoria: "Viáticos", monto: "150.00", empleado_id: 3, empleado_nombre: "Juan Pérez", cargo: "Piloto", cuenta: "1234567890", plan_id: 5, origen: "AUTO_VIATICO", ...o,
+  });
+  const base = { id: 21, categoria: "Viáticos", monto: 150, empleadoId: 3, planId: 5 };
+
+  it("cambiar el monto de una línea automática se rechaza", async () => {
+    const conn = conexion({ lineasExistentes: [auto()] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ ...base, monto: 999 }] })).rejects.toThrow(/Línea 1: es una línea automática.*monto/);
+    expect(conn.commit).not.toHaveBeenCalled(); expect(sqlsLineas(conn, "UPDATE")).toHaveLength(0);
+  });
+  it("cambiar el beneficiario (empleado, nombre o cargo) o el viaje se rechaza", async () => {
+    for (const cambio of [{ empleadoId: 4 }, { empleadoNombreOverride: "Otra Persona" }, { cargoOverride: "Auxiliar" }, { planId: 6 }, { categoria: "Otros" }]) {
+      const conn = conexion({ lineasExistentes: [auto()] });
+      await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ ...base, ...cambio }] }), JSON.stringify(cambio)).rejects.toThrow("línea automática");
+      expect(conn.commit).not.toHaveBeenCalled();
+    }
+  });
+  it("SÍ se pueden editar método de pago y cuenta: los campos protegidos se conservan EXACTAMENTE como están guardados", async () => {
+    const conn = conexion({ lineasExistentes: [auto()] });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ ...base, metodoPago: "Transferencia", cuentaOverride: "9988776655" }] });
+    const [u] = sqlsLineas(conn, "UPDATE"); const p = u[1] as unknown[];
+    expect(p[0]).toBe("Viáticos"); expect(p[3]).toBe(150); expect(p[6]).toBe(3); expect(p[7]).toBe("Juan Pérez"); expect(p[8]).toBe("Piloto"); expect(p[15]).toBe(5);   // protegidos = lo guardado
+    expect(p[9]).toBe("9988776655"); expect(p[10]).toBe("Transferencia");   // editables
+    expect(p.slice(-3)).toEqual([21, 7, 1]); expect(conn.commit).toHaveBeenCalledOnce();
+  });
+  it("una línea automática no se puede retirar con la edición manual", async () => {
+    const conn = conexion({ lineasExistentes: [auto(), filaLinea({ id: 22, orden: 1 })] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ id: 22, categoria: "Combustible", monto: 100 }] })).rejects.toThrow("Línea 1: es una línea automática y no se puede eliminar manualmente");
+    expect(conn.commit).not.toHaveBeenCalled(); expect(sqlsLineas(conn, "DELETE FROM")).toHaveLength(0);
+  });
+  it("el cliente HTTP no puede declarar ni cambiar el origen de una línea (nueva o existente)", async () => {
+    for (const lineas of [[{ ...base, origen: "MANUAL" }], [{ categoria: "Combustible", monto: 10, origen: "AUTO_VIATICO" }]]) {
+      const conn = conexion({ lineasExistentes: [auto()] });
+      await expect(actualizarSolicitudFondo(7, 1, { lineas: lineas as never })).rejects.toThrow("el origen de una línea no se puede enviar");
+      expect(conn.commit).not.toHaveBeenCalled();
+    }
+    conexion();
+    await expect(crearSolicitudFondo(7, { requirenteUsuarioId: 9, fechaRequerimiento: "2026-09-01", lineas: [{ categoria: "Viáticos", monto: 10, origen: "AUTO_VIATICO" } as never] })).rejects.toThrow("el origen de una línea");
+  });
+  it("un origen DESCONOCIDO se trata como protegido (falla cerrado)", async () => {
+    const conn = conexion({ lineasExistentes: [auto({ origen: "OTRO_FUTURO" })] });
+    await expect(actualizarSolicitudFondo(7, 1, { lineas: [{ ...base, monto: 1 }] })).rejects.toThrow("línea automática");
+    expect(conn.commit).not.toHaveBeenCalled();
+  });
+  it("una línea nueva creada por edición manual nace SIEMPRE manual (el INSERT no lleva origen)", async () => {
+    const conn = conexion({ lineasExistentes: [] });
+    vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
+    await actualizarSolicitudFondo(7, 1, { lineas: [{ categoria: "Combustible", monto: 10 }] });
+    expect(String(sqlsLineas(conn, "INSERT INTO")[0][0])).not.toContain("origen");
+  });
+});
+
+describe("módulo fondo-lineas-protegidas (puro)", () => {
+  it("origenDeFila: ausente/NULL/MANUAL = manual; AUTO_VIATICO = automática; cualquier otro valor = desconocido y protegido", () => {
+    expect(origenDeFila({})).toBe("MANUAL"); expect(origenDeFila({ origen: null })).toBe("MANUAL"); expect(origenDeFila({ origen: "MANUAL" })).toBe("MANUAL");
+    expect(origenDeFila({ origen: "AUTO_VIATICO" })).toBe("AUTO_VIATICO"); expect(origenDeFila({ origen: "x" })).toBe("DESCONOCIDO");
+    expect(esLineaProtegida("MANUAL")).toBe(false); expect(esLineaProtegida("AUTO_VIATICO")).toBe(true); expect(esLineaProtegida("DESCONOCIDO")).toBe(true);
+  });
+  it("camposProtegidosModificados: compara normalizado; undefined = no enviado; null explícito sí cuenta", () => {
+    const actual = { categoria: "Viáticos", monto: "150.00", cantidad: "1.00", empleadoId: 3, fechaViaje: "2026-11-19", descripcion: null, planId: 5 };
+    expect(camposProtegidosModificados(actual, { monto: 150, cantidad: 1, empleadoId: "3", fechaViaje: "2026-11-19T00:00:00Z", categoria: " Viáticos ", descripcion: "" })).toEqual([]);
+    expect(camposProtegidosModificados(actual, {})).toEqual([]);
+    expect(camposProtegidosModificados(actual, { monto: 150.01, empleadoId: null, planId: 6 })).toEqual(["monto", "empleadoId", "planId"]);
+  });
+  it("rechazarOrigenDeCliente solo se activa si la clave `origen` viene en la entrada", () => {
+    expect(() => rechazarOrigenDeCliente({ categoria: "x" }, 1)).not.toThrow();
+    expect(() => rechazarOrigenDeCliente({ origen: undefined }, 2)).toThrow("Línea 2");
+  });
+});
+
+describe("cambiarEstadoSolicitudFondo — requisitos previos a autorizar (FONDOS FASE 1)", () => {
+  const aut = { autorizante: { ...AUTORIZANTE, imagen: IMAGEN_FIRMA } };
+  const sinEscrituras = (conn: ReturnType<typeof conexion>) => {
+    expect(conn.rollback).toHaveBeenCalledOnce(); expect(conn.commit).not.toHaveBeenCalled();
+    expect(conn.execute.mock.calls.some((c) => /UPDATE tms_solicitudes_fondo/.test(String(c[0])))).toBe(false);
+    expect(crearFirmaInterna).not.toHaveBeenCalled(); expect(borrarUpload).toHaveBeenCalledWith("empresas/7/firmas/firma_x.png");   // la copia física de la firma se compensa
+  };
+
+  it("8) sin REQUIRENTE no se autoriza: mensaje claro, sin escrituras ni firma", async () => {
+    const conn = conexion({ sinRequirente: true });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut)).rejects.toThrow(MENSAJE_SIN_REQUIRENTE);
+    sinEscrituras(conn);
+  });
+  it("9) sin EMPRESA REQUIRENTE no se autoriza", async () => {
+    const conn = conexion({ actualEntidadRequirenteId: null });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut)).rejects.toThrow(MENSAJE_SIN_EMPRESA_REQUIRENTE);
+    sinEscrituras(conn);
+  });
+  it("9b) una empresa requirente que ya no es válida (inactiva, de otra empresa o fuera de KT/MONACO) tampoco se autoriza", async () => {
+    const conn = conexion({ entidadRequirenteValida: false });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut)).rejects.toThrow("La empresa requirente no es válida");
+    sinEscrituras(conn);
+  });
+  it("un requirente-usuario guardado que ya no tiene acceso a la empresa NO es válido", async () => {
+    const conn = conexion({ actualRequirenteUsuarioId: 5, usuarioEnEmpresa: false });
+    await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut)).rejects.toThrow("el requirente de la solicitud ya no es válido");
+    sinEscrituras(conn);
+  });
+  it("un requirente histórico (empleado de RRHH o nombre guardado) de una solicitud Pendiente sigue pudiendo autorizarse", async () => {
+    for (const o of [{ actualRequirenteNombre: "Juan Perez" }, { actualRequirenteEmpleadoId: 3, actualRequirenteNombre: "" }, { actualRequirenteUsuarioId: 5 }]) {
+      const conn = conexion(o);
+      vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+      await cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut);
+      expect(conn.commit, JSON.stringify(o)).toHaveBeenCalledOnce();
+    }
+  });
+  it("las verificaciones corren con la fila bloqueada, por empresa, y solo al AUTORIZAR (rechazar/liquidar no las exigen)", async () => {
+    const conn = conexion({ actualEntidadRequirenteId: null, sinRequirente: true });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Rechazada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "rechazar", { motivoRechazo: "no procede" });
+    expect(conn.commit).toHaveBeenCalledOnce();
+    const lectura = conn.query.mock.calls.find((c) => String(c[0]).includes("FROM tms_solicitudes_fondo WHERE id"))!;
+    expect(String(lectura[0])).toContain("FOR UPDATE"); expect(lectura[1]).toEqual([1, 7]);
+    const conn2 = conexion({ estadoActual: "Autorizada", actualEntidadRequirenteId: null, sinRequirente: true });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Liquidada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "liquidar");
+    expect(conn2.commit).toHaveBeenCalledOnce();   // una solicitud ya Autorizada histórica sin esos datos NO se bloquea ni se modifica
+  });
+  it("10) solicitudes manuales completas conservan su comportamiento: autorizan con firma como antes", async () => {
+    const conn = conexion({ actualEntidadRequirenteId: 10, actualRequirenteUsuarioId: 5 });
+    vi.mocked(query).mockResolvedValue([filaSolicitud({ estado: "Autorizada" })] as never);
+    await cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut);
+    expect(conn.commit).toHaveBeenCalledOnce(); expect(crearFirmaInterna).toHaveBeenCalledOnce();
+  });
 });

@@ -77,6 +77,8 @@ type Catalogos = {
 };
 
 type LineaForm = {
+  /** Solo al EDITAR: id de la línea ya guardada (el servidor la actualiza en su sitio y conserva sus vínculos). Las líneas nuevas no lo tienen. */
+  id?: number;
   categoria: string; descripcion: string; cantidad: string; monto: string;
   fechaViaje: string; empleadoId: string; vehiculoId: string; clienteId: string; planId: string;
   empleadoNombre: string; cuenta: string; cargo: string; metodoPago: string;
@@ -267,6 +269,7 @@ export default function FondosPage() {
     setObservaciones(completa.observaciones ?? "");
     setLineas(completa.lineas.length
       ? completa.lineas.map((l) => ({
+          id: l.id,
           categoria: l.categoria, descripcion: l.descripcion ?? "", cantidad: String(l.cantidad), monto: String(l.monto),
           fechaViaje: l.fechaViaje ?? "",
           empleadoId: l.empleadoId != null ? String(l.empleadoId) : "",
@@ -311,6 +314,7 @@ export default function FondosPage() {
     const lineasPayload = lineasLlenas.map((i) => lineas[i]).map((l) => {
       const empleado = catalogos.empleados.find((e) => String(e.id) === l.empleadoId);
       return {
+        ...(editandoId && l.id ? { id: l.id } : {}),
         categoria: l.categoria, descripcion: l.descripcion.trim() || null, cantidad: Number(l.cantidad) || 1, monto: Number(l.monto),
         fechaViaje: l.fechaViaje || undefined,
         empleadoId: l.empleadoId ? Number(l.empleadoId) : undefined,
