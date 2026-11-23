@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-// Solo comparación; no proporciona ni aprueba un contrato de Hostinger y no
-// cambia el bloqueo incondicional del instalador.
+// La comparación no proporciona ni aprueba un contrato de Hostinger.
 const names = ['tablas', 'columnas', 'indices', 'foraneas', 'checks'];
 const tables = ['empresas', 'usuarios', 'canecas_productos', 'canecas_ubicaciones', 'canecas_saldos', 'canecas_compras', 'canecas_recepciones', 'canecas_movimientos'];
 const fields = {
@@ -74,4 +73,5 @@ export function compararContratoBase(expected, actual) {
   }
   return true;
 }
+
 
