@@ -43,7 +43,9 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
     let nombres:RevisionNombre[]=[];
     const avisos = new Map<string, string[]>(), externas = new Map<string, ReturnType<typeof reconocerTercero>["asociacion"]>();
     try {
+        // Shell exige resolver cada nombre; HALEL usa el MISMO registro de pilotos reportados de forma opcional (reconoce los ya guardados). Un registro mal instalado nunca debe romper la vista previa de HALEL.
         if(entrada.perfil==="SHELL") nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),await esquemaPilotosReportados(c),lineas.filter(l=>!l.bloqueada).map(l=>l.fila.fechaConsumo));
+        else { try { const registro=await esquemaPilotosReportados(c); if(registro) nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),true,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.fechaConsumo)); } catch(e) { console.error("cb2 nombres reportados (HALEL)",e); nombres=[]; } }
         const internos = clavesInternas(await valesInternos(c, ctx, false));
         const anteriores = await rows(c, "SELECT clave_candidata,payload_operacion FROM flota_cb2_consumos WHERE empresa_id=? AND proveedor_id=? ORDER BY id", [ctx.empresaId, ctx.proveedorId]);
         const c2b = await rows(c, "SELECT f.clave_operacion FROM flota_combustible_conciliacion_filas f JOIN flota_combustible_conciliaciones h ON h.empresa_id=f.empresa_id AND h.id=f.conciliacion_id WHERE h.empresa_id=? AND h.proveedor_id=? AND h.perfil_parser='HALEL'", [ctx.empresaId, ctx.proveedorId]);

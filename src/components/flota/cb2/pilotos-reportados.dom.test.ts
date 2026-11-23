@@ -28,13 +28,33 @@ it("resolución desde el vale: candidatos requieren elegir, el nombre original s
  expect(host.textContent).toContain("  Luis Escobr ");expect(host.textContent).toContain("12 filas");expect(host.textContent).toContain("Pendiente");expect(onElegir).not.toHaveBeenCalled();
  const select=host.querySelector('select')!;await act(async()=>{select.value="1";select.dispatchEvent(new Event('change',{bubbles:true}));});
  expect(onElegir).toHaveBeenCalledWith({tipo:"EMPLEADO",empleadoId:1,confirmado:true});
- await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent?.includes("Ninguno corresponde"))!.click());expect(onElegir).toHaveBeenLastCalledWith({tipo:"REPORTADO",confirmado:true});
+ await act(async()=>[...host.querySelectorAll('label')].find(l=>l.textContent?.includes("Ninguno corresponde"))!.querySelector('input')!.click());expect(onElegir).toHaveBeenLastCalledWith({tipo:"REPORTADO",confirmado:true});
  onElegir.mockClear();
  await montar("Visitante",{clave:"VISITANTE",originales:["Visitante"],filas:8,candidatos:[],elegibles:[],propuesta:null});
  expect(host.textContent).toContain("Ningún empleado coincide");
- await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent==="Guardar el nombre original como piloto reportado")!.click());expect(onElegir).toHaveBeenCalledWith({tipo:"REPORTADO",confirmado:true});
+ await act(async()=>[...host.querySelectorAll('label')].find(l=>l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector('input')!.click());expect(onElegir).toHaveBeenCalledWith({tipo:"REPORTADO",confirmado:true});
  // piloto reportado ya confirmado: no se vuelve a pedir
  await montar("Visitante",{clave:"VISITANTE",originales:["Visitante"],filas:8,candidatos:[],elegibles:[],propuesta:null},{tipo:"REPORTADO",reportadoId:5,confirmado:true});
- expect(host.textContent).toContain("Piloto reportado #5");expect([...host.querySelectorAll('button')].find(b=>b.textContent?.includes("piloto reportado"))!.disabled).toBe(true);
+ expect(host.textContent).toContain("Piloto reportado #5");expect([...host.querySelectorAll('label')].find(l=>l.textContent?.includes("piloto reportado"))!.querySelector('input')!.disabled).toBe(true);
  }finally{await act(async()=>root.unmount());host.remove();}
+});
+
+it("HALEL: piloto fuera de RR. HH. muestra «pendiente» y la casilla para guardarlo; si ya está guardado aparece marcado y reconocido, sin pedir confirmación",async()=>{
+ (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
+ const fila={perfil:"HALEL",vale:"H1",placa:"C001LAB",placaNormalizada:"C001LAB",origen:{piloto:"Pedro Coc",producto:"Diesel"}} as FilaCB2;
+ const nombre={clave:"PEDRO COC",originales:["Pedro Coc"],filas:3,candidatos:[],elegibles:[],propuesta:null};
+ const cat={proveedores:[],vehiculos:[],empleados:[],pilotosReportados:true};
+ const montarHalel=async(value:Record<string,unknown>,onNombre:(d:unknown)=>void)=>{const host=document.createElement("div"),root=createRoot(host);document.body.append(host);
+  await act(async()=>root.render(createElement(AsignacionCB2,{fila,cat:cat as never,value:value as never,onChange:vi.fn(),disabled:false,nombre:nombre as never,onNombre:onNombre as never})));return {host,limpiar:async()=>{await act(async()=>root.unmount());host.remove();}};};
+ const casilla=(h:HTMLElement)=>[...h.querySelectorAll('label')].find(l=>l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))?.querySelector('input') as HTMLInputElement|undefined;
+ const onNombre=vi.fn();let m=await montarHalel({},onNombre);
+ try{expect(m.host.textContent).toContain("Piloto pendiente");expect(casilla(m.host)!.checked).toBe(false);expect(casilla(m.host)!.disabled).toBe(false);
+  await act(async()=>casilla(m.host)!.click());expect(onNombre).toHaveBeenCalledWith({tipo:"REPORTADO",confirmado:true});
+  await m.limpiar();
+  m=await montarHalel({decisionNombre:{tipo:"REPORTADO",reportadoId:5,confirmado:false}},vi.fn());
+  expect(m.host.textContent).toContain("Piloto externo (reportado)");expect(casilla(m.host)!.checked).toBe(true);expect(casilla(m.host)!.disabled).toBe(true);expect(m.host.textContent).toContain("se reconocerá automáticamente");
+  await m.limpiar();
+  // Con empleado vinculado de RR. HH. no se ofrece guardar como reportado
+  m=await montarHalel({empleadoId:9},vi.fn());expect(casilla(m.host)).toBeUndefined();
+ }finally{await m.limpiar();}
 });

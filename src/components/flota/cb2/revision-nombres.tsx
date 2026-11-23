@@ -18,6 +18,25 @@ export function textoDecisionPiloto(d: DecisionNombre | undefined, empleados: Em
   return d.reportadoId ? `Piloto reportado #${d.reportadoId} ya registrado (${d.confirmado ? "confirmado" : "reconocido"}).` : "Se guardará el nombre original como piloto reportado al importar.";
 }
 
+/** Etiqueta corta del tipo de piloto: interno (RRHH), externo (reportado, guardado) o pendiente. */
+export function etiquetaTipoPiloto(d: DecisionNombre | undefined) {
+  return d?.tipo === "EMPLEADO" ? "Piloto interno (RR. HH.)" : d?.tipo === "REPORTADO" ? "Piloto externo (reportado)" : "Piloto pendiente";
+}
+
+/**
+ * Casilla única para guardar un piloto que no está en RR. HH. como piloto reportado (flota_cb2_pilotos_reportados). No crea empleados ni toca planilla. Al confirmar la importación el nombre
+ * queda registrado y las importaciones siguientes (Shell y HALEL) lo reconocen solas, sin pedir confirmación otra vez. Marcada y bloqueada = ya guardado (reconocido o confirmado).
+ */
+export function CasillaPilotoReportado({ nombre, decision, instalado, disabled, onElegir }: { nombre?: RevisionNombre; decision?: DecisionNombre; instalado: boolean; disabled?: boolean; onElegir: (d: DecisionNombre) => void }) {
+  const hayCandidatos = (nombre?.candidatos?.length ?? 0) > 0, guardado = decision?.tipo === "REPORTADO";
+  const etiqueta = hayCandidatos ? "Ninguno corresponde; guardar como piloto reportado para futuras importaciones" : "Guardar como piloto reportado para futuras importaciones";
+  return <label className="flex items-start gap-2 text-sm">
+    <input type="checkbox" checked={guardado} disabled={!instalado || disabled || guardado}
+      onChange={e => { if (e.target.checked) onElegir({ tipo: "REPORTADO", ...(decision?.tipo === "REPORTADO" && decision.reportadoId ? { reportadoId: decision.reportadoId } : {}), confirmado: true }); }}/>
+    <span>{etiqueta}{guardado ? " (ya guardado: se reconocerá automáticamente)" : ""}</span>
+  </label>;
+}
+
 /**
  * Resolución del piloto DESDE el vale (sin panel global). El nombre original se muestra y se conserva tal cual; la decisión se aplica a todas las
  * filas que comparten ese nombre y solo se persiste al confirmar la importación. No crea ni modifica empleados.
@@ -31,10 +50,10 @@ export function PilotoShellVale({ original, nombre, decision, empleados = [], in
   const seleccionado = decision?.tipo === "EMPLEADO" ? opciones.find(p => p.id === decision.empleadoId) : undefined;
   const ventana = seleccionado ? ventanaLaboral(seleccionado, nombre?.rango) : "ACTIVO";
   const ambiguo = elegibles.length > 1, conflicto = nombre?.conflictoEquivalencia;
-  const reportadoConfirmado = decision?.tipo === "REPORTADO";
   return <fieldset disabled={disabled} className="space-y-2" aria-label={`Piloto del vale`}>
     <legend className="text-sm font-semibold">Piloto del Excel</legend>
     <p>Nombre original: <strong>{original || "No informado"}</strong>{nombre && nombre.filas > 1 ? ` · se aplica a las ${nombre.filas} filas con este nombre` : ""}.</p>
+    <p data-estado-piloto><strong>{externo ? "Piloto externo (tercerizado)" : etiquetaTipoPiloto(decision)}</strong></p>
     <p role="status">{externo ? `Piloto tercerizado elegido: ${externo}. Elige un empleado o confirma el nombre original para reemplazarlo.` : textoDecisionPiloto(decision, opciones)}</p>
     {conflicto && <p role="alert">Conflicto: una equivalencia guardada apunta al empleado #{conflicto.equivalenciaId}, pero hoy el nombre identifica al empleado #{conflicto.reconocidoId}. No se asigna ninguno automáticamente: elige y confirma.</p>}
     {ambiguo && <p role="alert">Varios empleados coinciden con dos o más palabras ({elegibles.length}): elige manualmente a la persona correcta.</p>}
@@ -43,8 +62,7 @@ export function PilotoShellVale({ original, nombre, decision, empleados = [], in
     <CatalogoSearchSelect label={`Empleado existente para ${original || "este vale"}`} placeholder="Buscar empleado activo o de baja" inputClassName={input}
       value={seleccionado ? String(seleccionado.id) : ""} options={opciones.map(p => ({ value: String(p.id), label: etiquetaEmpleado(p) }))}
       onChange={v => { if (v) onElegir({ tipo: "EMPLEADO", empleadoId: Number(v), confirmado: true }); }}/>
-    <button type="button" disabled={!instalado || (reportadoConfirmado && decision?.confirmado)} onClick={() => onElegir({ tipo: "REPORTADO", ...(decision?.tipo === "REPORTADO" && decision.reportadoId ? { reportadoId: decision.reportadoId } : {}), confirmado: true })}>
-      {candidatos.length ? "Ninguno corresponde; guardar el nombre original como piloto reportado" : "Guardar el nombre original como piloto reportado"}</button>
+    <CasillaPilotoReportado nombre={nombre} decision={decision} instalado={instalado} disabled={disabled} onElegir={onElegir}/>
     {!instalado && <p role="alert">Registro de pilotos reportados no instalado: solo se pueden vincular empleados existentes.</p>}
   </fieldset>;
 }

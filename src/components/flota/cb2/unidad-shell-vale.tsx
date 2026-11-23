@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { jsonCB2, type CatalogosCB2, type FilaCB2 } from "./client";
-import { button, input } from "./controles";
+import { input } from "./controles";
 import { placasPendientes, referenciaUnidadShell } from "./placas-pendientes";
 import { claseUnidadShell } from "./unidad-shell";
 
@@ -29,7 +29,7 @@ export function UnidadShellVale({ fila, cat, vehiculoId, api, recargar, onUnidad
     {c.clase === "NO_IDENTIFICADA" && !vehiculoId && (c.registrable && p
       ? habilitado
         ? <fieldset disabled={disabled || busy} className="space-y-1"><label>Tipo de unidad externa para {fila.placa}<select className={input} value={tipo} onChange={e => setTipo(e.target.value)}><option value="">Elegir tipo</option>{p.tipos.map(t => <option key={t} value={t}>{t === "VEHICULO" ? "Vehículo" : "Motocicleta"}</option>)}</select></label>
-          <button type="button" className={button} disabled={!tipo} onClick={() => void confirmarExterna()}>Confirmar «{fila.placa}» como unidad externa</button>
+          <label className="flex items-start gap-2"><input type="checkbox" checked={false} disabled={!tipo || busy} onChange={e => { if (e.target.checked) void confirmarExterna(); }}/><span>Guardar «{fila.placa}» como unidad externa para futuras importaciones</span></label>
           <p className="text-xs">No crea ningún vehículo en Flota: guarda una identidad externa reutilizable en futuras importaciones y reportes.</p></fieldset>
         : <p className="text-xs">El registro de unidades externas está deshabilitado por configuración del servidor; la activación corresponde al propietario.</p>
       : c.motivoNoRegistrable && <p role="alert" className="text-xs">{c.motivoNoRegistrable}</p>)}
