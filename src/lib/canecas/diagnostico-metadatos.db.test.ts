@@ -17,11 +17,28 @@ describe.skipIf(!pipe)('metadatos de MariaDB 11.8.9 de laboratorio existente', (
         expect(plain[0].n).toBeGreaterThan(0);
         expect(binary[0].n).toBe(plain[0].n);
       }
-      const [diagnostic] = await c.query(readFileSync('sql/diagnostico-canecas-comparacion-solo-select.sql', 'utf8'));
+      const [diagnostic] = await c.query(readFileSync('sql/diagnostico-canecas-comparacion-solo-select.sql', 'utf8').replaceAll('ESQUEMA_OBJETIVO', 'canecas_hostinger_test'));
       expect(Array.isArray(diagnostic)).toBe(true);
       const metadata = await obtenerContratoBase(c);
       expect((metadata as { tablas: unknown[] }).tablas).toHaveLength(8);
     } finally { await c.end(); }
   });
+  it('distingue DATABASE() information_schema y recupera el objetivo explicito', async () => {
+    const c = await mysql.createConnection({ socketPath: `\\\\.\\pipe\\${pipe}`, user: 'root', database: 'information_schema', multipleStatements: true });
+    try {
+      const template = readFileSync('sql/diagnostico-canecas-comparacion-solo-select.sql', 'utf8');
+      const [unconfigured] = await c.query<mysql.RowDataPacket[][]>(template);
+      expect(unconfigured[0][0].comparacion_contexto).toBe('DETENER: sustituya el marcador');
+      const sql = template.replaceAll('ESQUEMA_OBJETIVO', 'canecas_hostinger_test');
+      const [result] = await c.query<mysql.RowDataPacket[][]>(sql);
+      expect(result[0][0]).toMatchObject({ base_seleccionada: 'information_schema', esquema_objetivo: 'canecas_hostinger_test', comparacion_contexto: 'DISTINTOS: no usar DATABASE() como objetivo' });
+      expect(result[2]).toHaveLength(8);
+      expect(result[2].every(row => row.tabla_visible === row.nombre)).toBe(true);
+      expect(result[3].some(row => row.fuente === 'COLUMNS' && row.TABLE_NAME === 'canecas_productos')).toBe(true);
+      const [wrong] = await c.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_productos'");
+      expect(wrong[0].n).toBe(0);
+    } finally { await c.end(); }
+  });
+
 });
 
