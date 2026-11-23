@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import mysql from 'mysql2/promise';
 import { ejecutarCostosControlado } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
+import { prepararCostosLaboratorio } from './preparar-costos-laboratorio';
 import { confirmarRecepcion } from './confirmar';
 import { valorarExistenciaInicial } from './valoracion-inicial';
 import { registrarGastoPosterior } from './gasto-posterior';
@@ -61,7 +62,10 @@ describe.skipIf(!pipe)('prototipo de recepción contra MariaDB aislada', () => {
     await pool.query('DROP TABLE canecas_traslados');
     // Migración local en desarrollo, aplicada exclusivamente a esta base nueva.
     const instalacion = await pool.getConnection();
-    try { await ejecutarCostosControlado(instalacion); } finally { instalacion.release(); }
+    try {
+      await expect(ejecutarCostosControlado(instalacion)).rejects.toThrow('contrato real completo del esquema base pendiente');
+      await prepararCostosLaboratorio(instalacion, pipe, 'canecas_fifo_test');
+    } finally { instalacion.release(); }
     const [post] = await pool.query<mysql.RowDataPacket[][]>(readFileSync('sql/postcheck-2026-11-canecas-costos-wip.sql', 'utf8'));
     expect(post[1].filter(r => r.resultado === 'DETENER')).toEqual([]);
     expect(post[2].filter(r => r.resultado === 'DETENER')).toEqual([]);
@@ -217,3 +221,4 @@ describe.skipIf(!pipe)('prototipo de recepción contra MariaDB aislada', () => {
     expect(eventos[0].n).toBe(0);
   });
 });
+
