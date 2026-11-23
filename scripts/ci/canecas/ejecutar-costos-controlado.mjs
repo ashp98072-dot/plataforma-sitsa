@@ -37,6 +37,31 @@ export function verificarClavesForaneas(rows, ddl) {
   }
 }
 
+// El contrato posterior de laboratorio no acredita el esquema base real.
+export function verificarContratoBaseReal() {
+  throw Error('DETENER: contrato real completo del esquema base pendiente; no se ejecutará DDL');
+}
+
+export async function ejecutarOperacionesDDL(connection, operations) {
+  for (let i = 0; i < operations.length; i++) {
+    const nombre = operations[i].match(/\b(?:ALTER TABLE|CREATE TABLE|CREATE TRIGGER)\s+\w+/i)?.[0] || 'operación desconocida';
+    try {
+      await connection.query(operations[i]);
+      const [warnings] = await connection.query('SHOW WARNINGS');
+      if (!Array.isArray(warnings)) throw Error('resultado SHOW WARNINGS incompleto');
+      if (warnings.length) throw Error(`advertencias DDL: ${JSON.stringify(warnings)}`);
+    } catch (cause) {
+      const codigo = cause?.code ?? cause?.errno ?? 'no disponible';
+      const estado = cause?.sqlState ?? cause?.sqlstate ?? 'no disponible';
+      const error = new Error(`DETENER: DDL ${i + 1}/${operations.length} (${nombre}): código ${codigo}; SQLSTATE ${estado}; ${cause?.message ?? String(cause)}; instalación parcial, ejecutar diagnóstico de recuperación supervisada`, { cause });
+      error.code = cause?.code;
+      error.errno = cause?.errno;
+      error.sqlState = cause?.sqlState ?? cause?.sqlstate;
+      throw error;
+    }
+  }
+}
+
 export async function ejecutarCostosControlado(connection) {
   const preflight = sqlFile('preflight-2026-11-canecas-costos-wip.sql');
   const migration = sqlFile('migrate-2026-11-canecas-costos-wip.sql');
@@ -89,15 +114,8 @@ export async function ejecutarCostosControlado(connection) {
     const statements = ddl.split(';').map(s => s.trim()).filter(Boolean);
     if (statements.length !== 5) throw Error('DETENER: DDL inesperado');
     const operations = [...statements, ...triggers];
-    for (let i = 0; i < operations.length; i++) {
-      try {
-        await connection.query(operations[i]);
-        const [warnings] = await connection.query('SHOW WARNINGS');
-        if (warnings.length) throw Error('advertencias DDL detectadas');
-      } catch {
-        throw Error(`DETENER: DDL ${i + 1}/${operations.length} falló o produjo advertencias; instalación parcial, ejecutar diagnóstico de recuperación`);
-      }
-    }
+    verificarContratoBaseReal();
+    await ejecutarOperacionesDDL(connection, operations);
     const [post] = await connection.query(postcheck);
     if (!Array.isArray(post) || post.length < 11) throw Error('DETENER: postcheck incompleto; instalación requiere revisión');
     const postChecks = post.flat().filter(row => row && typeof row === 'object' && 'resultado' in row);
