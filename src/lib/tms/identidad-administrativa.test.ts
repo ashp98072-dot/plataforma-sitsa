@@ -35,7 +35,7 @@ describe("criterio único de usuario Operaciones y snapshots históricos", () =>
     expect(await resolverRequirenteOperacionesTx(c, 7, { requirenteUsuarioId: 9, requirenteNombre: "Inventado" })).toEqual({ nombre: "Servidor", rol });
     expect(c.query).toHaveBeenCalledWith(expect.stringContaining("ue.empresa_id = ?"), [7, 9]);
   });
-  it.each(["Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("FONDOS/GASTOS: rol %s también aceptado (con validación de empresa), pero NO es Operaciones para Compras", async rol => {
+  it.each(["Admin", "Contabilidad", "Facturador", "RRHH", "CoordinadorCompras", "CoordinadorPredios"])("FONDOS/GASTOS: rol %s también aceptado (con validación de empresa), pero NO es Operaciones para Compras", async rol => {
     expect(esUsuarioSolicitanteFondosGastos(rol)).toBe(true);
     expect(esUsuarioOperaciones(rol)).toBe(false);   // Compras conserva la regla estricta
     const c = conn([{ nombre: "Servidor", rol_global: rol }]);
@@ -44,14 +44,14 @@ describe("criterio único de usuario Operaciones y snapshots históricos", () =>
     expect(await resolverSolicitanteFondosGastosTx(conn([{ nombre: "Servidor", rol_global: rol }]), 7, 9)).toEqual({ nombre: "Servidor", rol });
     expect(await resolverSolicitanteOperacionesTx(conn([{ nombre: "Servidor", rol_global: rol }]), 7, 9)).toBeNull();   // la resolución de Compras NO cambió
   });
-  it.each(["RRHH", "Reclutamiento", "Marcaje", "Piloto", "Visualizador", "Gerencia", "", null])("rol %s rechazado", async rol => {
+  it.each(["Reclutamiento", "Marcaje", "Piloto", "Visualizador", "Gerencia", "", null])("rol %s rechazado", async rol => {
     expect(esUsuarioSolicitanteFondosGastos(rol)).toBe(false);
     expect(esUsuarioOperaciones(rol)).toBe(false);
     await expect(resolverRequirenteOperacionesTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, { requirenteUsuarioId: 9 })).rejects.toThrow(ERROR_REQUIRIENTE_FONDOS_GASTOS);
     expect(await resolverSolicitanteFondosGastosTx(conn([{ nombre: "Persona", rol_global: rol }]), 7, 9)).toBeNull();
   });
-  it("el conjunto de roles habilitados es exactamente Operaciones + Admin, Contabilidad, Facturador y Coordinadores (nada más)", () => {
-    expect([...ROLES_SOLICITANTE_FONDOS_GASTOS].sort()).toEqual([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"].sort());
+  it("el conjunto de roles habilitados es exactamente Operaciones + Admin, Contabilidad, Facturador, RRHH y Coordinadores (nada más)", () => {
+    expect([...ROLES_SOLICITANTE_FONDOS_GASTOS].sort()).toEqual([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "RRHH", "CoordinadorCompras", "CoordinadorPredios"].sort());
   });
   it("usuario ajeno o inactivo se rechaza con consulta tenant-safe", async () => {
     const c = conn([]);

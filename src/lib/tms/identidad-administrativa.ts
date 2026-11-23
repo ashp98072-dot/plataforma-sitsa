@@ -114,16 +114,16 @@ export function esUsuarioOperaciones(rol: unknown): boolean {
 export const ERROR_REQUIRIENTE_OPERACIONES = "La persona que requiere debe ser un usuario de Operaciones.";
 
 /**
- * FONDOS y GASTOS (solicitante y requirente): además de Operaciones pueden actuar Admin, Contabilidad, Facturador y los coordinadores de Compras y de
+ * FONDOS y GASTOS (solicitante y requirente): además de Operaciones pueden actuar Admin, Contabilidad, Facturador, RRHH y los coordinadores de Compras y de
  * Predios. Compras (requerimientos) conserva la regla estricta de Operaciones (`esUsuarioOperaciones`). Misma validación de empresa y usuario activo.
  */
-export const ROLES_SOLICITANTE_FONDOS_GASTOS = new Set([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"]);
+export const ROLES_SOLICITANTE_FONDOS_GASTOS = new Set([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "RRHH", "CoordinadorCompras", "CoordinadorPredios"]);
 
 export function esUsuarioSolicitanteFondosGastos(rol: unknown): boolean {
   return typeof rol === "string" && ROLES_SOLICITANTE_FONDOS_GASTOS.has(rol);
 }
 
-export const ERROR_REQUIRIENTE_FONDOS_GASTOS = "La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.";
+export const ERROR_REQUIRIENTE_FONDOS_GASTOS = "La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación (Compras/Predios) de esta empresa.";
 
 /** Crear/cambiar valida rol y tenant; identidad sin cambios conserva el snapshot histórico. (Solo Fondos y Gastos.) */
 export async function resolverRequirenteOperacionesTx(

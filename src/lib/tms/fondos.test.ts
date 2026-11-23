@@ -211,12 +211,12 @@ describe("listarSolicitudesFondo — filtro Requirente", () => {
 });
 
 describe("regresión requirente de Operaciones Fondos", () => {
-  it.each(["Gerencia", "RRHH", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
+  it.each(["Gerencia", "Reclutamiento", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
     const c = conexion({ usuarioRol: rol });
     await expect(crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
   });
-  it.each(["Contabilidad", "Admin", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
+  it.each(["Contabilidad", "Admin", "Facturador", "RRHH", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
     const c = conexion({ usuarioRol: rol });
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await crearSolicitudFondo(7, { fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 9, lineas: [{ categoria: "Otros", monto: 10 }] });
@@ -592,7 +592,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     const conn = conexion({ usuarioEnEmpresa: false });
     await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteUsuarioId: 999, lineas: [{ categoria: "Combustible", monto: 100 }],
-    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
+    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación (Compras/Predios) de esta empresa.");
     expect(conn.rollback).toHaveBeenCalledOnce();
     expect(conn.commit).not.toHaveBeenCalled();
     expect(conn.execute.mock.calls.some((c) => (c[0] as string).includes("INSERT INTO tms_solicitudes_fondo"))).toBe(false);
@@ -604,7 +604,7 @@ describe("crearSolicitudFondo — firma real de solicitante y requirente (§1/§
     vi.mocked(query).mockResolvedValue([filaSolicitud()] as never);
     await expect(crearSolicitudFondo(7, {
       fechaRequerimiento: "2026-09-01", requirenteNombre: "Juan Pérez (texto libre)", lineas: [{ categoria: "Combustible", monto: 100 }],
-    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
+    })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación, Recursos Humanos o Coordinación (Compras/Predios) de esta empresa.");
     expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
     expect(crearFirmaInterna).not.toHaveBeenCalled();
     expect(conn.execute).not.toHaveBeenCalled();
@@ -1132,7 +1132,7 @@ describe("cambiarEstadoSolicitudFondo — requisitos previos a autorizar (FONDOS
     }
   });
   it("un requirente-usuario sin acceso a la empresa, o con un rol NO habilitado, NO es válido (Contabilidad/Admin sí lo son ahora)", async () => {
-    for (const o of [{ actualRequirenteUsuarioId: 5, usuarioEnEmpresa: false }, { actualRequirenteUsuarioId: 5, usuarioRol: "Gerencia" }, { actualRequirenteUsuarioId: 5, usuarioRol: "RRHH" }]) {
+    for (const o of [{ actualRequirenteUsuarioId: 5, usuarioEnEmpresa: false }, { actualRequirenteUsuarioId: 5, usuarioRol: "Gerencia" }, { actualRequirenteUsuarioId: 5, usuarioRol: "Reclutamiento" }]) {
       const conn = conexion(o);
       await expect(cambiarEstadoSolicitudFondo(7, 1, "autorizar", aut), JSON.stringify(o)).rejects.toThrow(MENSAJE_REQUIRENTE_NO_VALIDO);
       sinEscriturasAut(conn); vi.mocked(borrarUpload).mockClear(); vi.mocked(crearFirmaInterna).mockClear();
