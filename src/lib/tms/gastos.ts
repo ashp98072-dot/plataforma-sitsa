@@ -9,7 +9,7 @@ import { destinoPagoEmpleado } from "./destino-pago-empleado";
 import {
   resolverEntidadRequirenteTx,
   resolverRequirenteOperacionesTx,
-  resolverSolicitanteOperacionesTx,
+  resolverSolicitanteFondosGastosTx,
   validarEmpleadoDeEmpresaTx,
 } from "@/lib/tms/identidad-administrativa";
 import { crearFirmaInterna } from "@/lib/firmas/firmas-internas";
@@ -633,7 +633,7 @@ async function resolverIdentidadAdministrativaGastoTx(
     ? null : await resolverRequirenteOperacionesTx(conn, empresaId, input, actual);
   let solicitanteUsuario: { nombre: string; rol: string | null } | null = null;
   if (input.solicitanteUsuarioId != null) {
-    solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
+    solicitanteUsuario = await resolverSolicitanteFondosGastosTx(conn, empresaId, input.solicitanteUsuarioId);
     if (!solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
   }
   return { entidadRequirente, requirenteUsuario, solicitanteUsuario };

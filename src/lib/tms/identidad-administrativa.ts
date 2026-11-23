@@ -113,7 +113,19 @@ export function esUsuarioOperaciones(rol: unknown): boolean {
 
 export const ERROR_REQUIRIENTE_OPERACIONES = "La persona que requiere debe ser un usuario de Operaciones.";
 
-/** Crear/cambiar valida rol y tenant; identidad sin cambios conserva el snapshot histórico. */
+/**
+ * FONDOS y GASTOS (solicitante y requirente): además de Operaciones pueden actuar Admin, Contabilidad, Facturador y los coordinadores de Compras y de
+ * Predios. Compras (requerimientos) conserva la regla estricta de Operaciones (`esUsuarioOperaciones`). Misma validación de empresa y usuario activo.
+ */
+export const ROLES_SOLICITANTE_FONDOS_GASTOS = new Set([...ROLES_SOLICITANTE_OPERACIONES, "Admin", "Contabilidad", "Facturador", "CoordinadorCompras", "CoordinadorPredios"]);
+
+export function esUsuarioSolicitanteFondosGastos(rol: unknown): boolean {
+  return typeof rol === "string" && ROLES_SOLICITANTE_FONDOS_GASTOS.has(rol);
+}
+
+export const ERROR_REQUIRIENTE_FONDOS_GASTOS = "La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.";
+
+/** Crear/cambiar valida rol y tenant; identidad sin cambios conserva el snapshot histórico. (Solo Fondos y Gastos.) */
 export async function resolverRequirenteOperacionesTx(
   conn: PoolConnection, empresaId: number,
   input: { requirenteUsuarioId?: number | null; requirenteNombre?: string | null; requirenteEmpleadoId?: number | null },
@@ -121,15 +133,16 @@ export async function resolverRequirenteOperacionesTx(
 ): Promise<{ nombre: string; rol: string | null } | null> {
   const idActual = actual?.requirente_usuario_id == null ? null : Number(actual.requirente_usuario_id);
   const mismoId = input.requirenteUsuarioId === undefined || input.requirenteUsuarioId === idActual;
-  const mismoNombre = idActual !== null || input.requirenteNombre === undefined || (input.requirenteNombre?.trim() || null) === (actual?.requirente_nombre == null ? null : String(actual.requirente_nombre).trim() || null);
+  const mismoNombre = idActual !== null || input.requirenteNombre === undefined || (input.requirenteNombre?.trim() || null) === (actual?.requirente_nombre == null ? null : String(actual.requirente_nombre).trim() || null)
   const mismoEmpleado = input.requirenteEmpleadoId === undefined || input.requirenteEmpleadoId === (actual?.requirente_empleado_id == null ? null : Number(actual.requirente_empleado_id));
   if (actual && mismoId && mismoNombre && mismoEmpleado) return null;
-  if (input.requirenteUsuarioId == null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_OPERACIONES);
-  const usuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.requirenteUsuarioId);
-  if (!usuario || input.requirenteEmpleadoId != null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_OPERACIONES);
+  if (input.requirenteUsuarioId == null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_FONDOS_GASTOS);
+  const usuario = await resolverSolicitanteFondosGastosTx(conn, empresaId, input.requirenteUsuarioId);
+  if (!usuario || input.requirenteEmpleadoId != null) throw new ErrorDominioFormulario(ERROR_REQUIRIENTE_FONDOS_GASTOS);
   return usuario;
 }
 
+/** Operaciones estricto (Compras). */
 export async function resolverSolicitanteOperacionesTx(
   conn: PoolConnection,
   empresaId: number,
@@ -137,4 +150,14 @@ export async function resolverSolicitanteOperacionesTx(
 ): Promise<{ nombre: string; rol: string | null } | null> {
   const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
   return usuario && esUsuarioOperaciones(usuario.rol) ? usuario : null;
+}
+
+/** Fondos y Gastos: solicitante/requirente de Operaciones o de los roles administrativos habilitados (mismo tenant y usuario activo). */
+export async function resolverSolicitanteFondosGastosTx(
+  conn: PoolConnection,
+  empresaId: number,
+  usuarioId: number | null,
+): Promise<{ nombre: string; rol: string | null } | null> {
+  const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
+  return usuario && esUsuarioSolicitanteFondosGastos(usuario.rol) ? usuario : null;
 }

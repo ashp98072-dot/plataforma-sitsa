@@ -605,7 +605,7 @@ export default function GastosPage() {
             </label>
             <CatalogoSearchSelect label="Requirente" placeholder="Buscar requirente..." value={String(form.requirenteUsuarioId || "")} options={opcionesConHistorico(opcionesUsuarios(catalogos.usuariosOperaciones), String(form.requirenteUsuarioId || "") === requirenteHistorico.id ? requirenteHistorico.id : "", requirenteHistorico.nombre)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, requirenteUsuarioId: Number(value) || 0, requirenteNombre: value ? "" : f.requirenteNombre }))} />
             {editandoId && !requirenteHistorico.id && <p>Requirente histórico: {requirenteHistorico.nombre || "Sin dato histórico"}</p>}
-            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante de Operaciones..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
+            <CatalogoSearchSelect label="Solicitante" placeholder="Buscar solicitante..." value={String(form.solicitanteUsuarioId || "")} options={opcionesUsuarios(catalogos.solicitantes)} inputClassName={inputCls} onChange={(value) => setForm((f) => ({ ...f, solicitanteUsuarioId: Number(value) || 0 }))} />
             <label className="text-xs text-[var(--muted)]">Fecha solicitud
               <input type="date" className={`${claseCampo(errores, "fechaSolicitud", inputCls)} mt-0.5 w-full`} value={form.fechaSolicitud} onChange={(e) => setForm((f) => ({ ...f, fechaSolicitud: e.target.value }))} />
             </label>

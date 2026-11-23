@@ -88,10 +88,16 @@ function filaGastoRaw(overrides: Record<string, unknown> = {}) {
 
 /** GASTOS-ADMINISTRATIVO-1 (Fase 2) — fila mínima que autorizarGasto/rechazarGasto relee FOR UPDATE. */
 describe("regresión requirente de Operaciones Gastos", () => {
-  it.each(["Contabilidad", "Admin", "Gerencia"])("rechaza nuevo requirente %s sin escritura", async rol => {
+  it.each(["Gerencia", "RRHH", "Visualizador", "Piloto"])("rechaza nuevo requirente %s sin escritura", async rol => {
     const c = conexion({ usuarioRol: rol });
-    await expect(crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+    await expect(crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled(); expect(c.rollback).toHaveBeenCalledOnce();
+  });
+  it.each(["Contabilidad", "Admin", "Facturador", "CoordinadorCompras", "CoordinadorPredios"])("acepta nuevo requirente con rol %s (misma empresa)", async rol => {
+    const c = conexion({ usuarioRol: rol });
+    vi.mocked(query).mockResolvedValue([filaGasto()] as never);
+    await crearGasto(7, { fechaSolicitud: "2026-09-01", categoria: "Otros", monto: 10, requirenteUsuarioId: 9 });
+    expect(c.commit).toHaveBeenCalledOnce();
   });
   it.each([9, null])("preserva histórico %s fuera del catálogo al editar otros datos", async id => {
     const c = conexion({ actualRaw: filaGastoRaw({ requirente_usuario_id: id, requirente_nombre: "Anterior" }), usuarioRol: "Contabilidad" });
@@ -100,9 +106,9 @@ describe("regresión requirente de Operaciones Gastos", () => {
     expect(c.query.mock.calls.some(([sql]) => String(sql).includes("FROM usuarios"))).toBe(false);
     expect(c.execute.mock.calls.find(([sql]) => String(sql).includes("UPDATE tms_gastos_operativos"))?.[1]).toContain("Anterior");
   });
-  it("cambiar histórico a usuario no Operaciones rechaza antes de escrituras", async () => {
-    const c = conexion({ actualRaw: filaGastoRaw({ requirente_usuario_id: 8 }), usuarioRol: "Contabilidad" });
-    await expect(actualizarGasto(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario de Operaciones");
+  it("cambiar histórico a usuario con rol no habilitado rechaza antes de escrituras", async () => {
+    const c = conexion({ actualRaw: filaGastoRaw({ requirente_usuario_id: 8 }), usuarioRol: "Gerencia" });
+    await expect(actualizarGasto(7, 1, { requirenteUsuarioId: 9 })).rejects.toThrow("usuario activo de Operaciones");
     expect(c.execute).not.toHaveBeenCalled();
   });
 });
@@ -538,11 +544,11 @@ describe("crearGasto", () => {
       conexion({ usuarioEnEmpresa: false });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteUsuarioId: 999,
-      })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
     });
 
-    it("solicitanteUsuarioId sin rol de Operaciones se rechaza (resolverSolicitanteOperacionesTx)", async () => {
-      conexion({ usuarioRol: "Contabilidad" });
+    it("solicitanteUsuarioId con un rol NO habilitado se rechaza (resolverSolicitanteFondosGastosTx)", async () => {
+      conexion({ usuarioRol: "Gerencia" });
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, solicitanteUsuarioId: 6,
       })).rejects.toThrow("El usuario solicitante indicado no pertenece a esta empresa.");
@@ -609,7 +615,7 @@ describe("crearGasto", () => {
       vi.mocked(query).mockResolvedValue([filaGasto({ id: 55 })] as never);
       await expect(crearGasto(7, {
         fechaSolicitud: "2026-09-01", categoria: "Combustible", monto: 100, requirenteNombre: "Juan Pérez (texto libre)",
-      })).rejects.toThrow("La persona que requiere debe ser un usuario de Operaciones.");
+      })).rejects.toThrow("La persona que requiere debe ser un usuario activo de Operaciones, Administración, Contabilidad, Facturación o Coordinación (Compras/Predios) de esta empresa.");
       expect(leerBytesFirmaGuardada).not.toHaveBeenCalled();
       expect(crearFirmaInterna).not.toHaveBeenCalled();
       expect(conn.execute).not.toHaveBeenCalled();
