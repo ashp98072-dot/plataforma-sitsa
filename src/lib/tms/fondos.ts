@@ -22,7 +22,7 @@ import {
   normalizarClaveIdempotencia,
 } from "@/lib/tms/idempotencia-envio";
 import { destinoPagoEmpleado } from "./destino-pago-empleado";
-import { origenDeFila, rechazarOrigenDeCliente, validarEdicionLinea, validarEliminacionLinea } from "./fondo-lineas-protegidas";
+import { nivelDeProteccion, origenDeFila, rechazarOrigenDeCliente, validarEdicionLinea, validarEliminacionLinea, type NivelProteccion } from "./fondo-lineas-protegidas";
 import {
   resolverEntidadRequirenteTx,
   resolverRequirenteOperacionesTx,
@@ -633,38 +633,57 @@ export type SolicitudFondoUpdate = {
 };
 
 /**
- * FONDOS FASE 1 — actualización DIFERENCIAL de las líneas de una solicitud Pendiente (reemplaza el antiguo DELETE de todas + INSERT de todas).
- *  · Con `id`: la línea se actualiza en su sitio SOLO si algo cambió; su identificador no cambia (los vales de Combustible y los vínculos CB2
- *    apuntan a él). El id debe pertenecer a ESTA solicitud y a ESTA empresa (se relee FOR UPDATE por (empresa, solicitud)); si no, se rechaza.
- *  · Sin `id`: línea nueva (siempre manual: el origen jamás lo decide el cliente).
- *  · Las líneas guardadas que no aparecen en la lista se RETIRAN. Antes de borrar se comprueba que no tengan vales de Combustible ni vínculos
- *    CB2; si los tienen, error controlado y la transacción completa se revierte (sin cambios parciales).
- *  · Las líneas automáticas (columna `origen`, futura) solo aceptan cambios de método de pago y cuenta, y no se pueden retirar a mano.
- * Todo ocurre en la transacción del llamador (`conn`).
+ * FONDOS FASE 1 — actualización DIFERENCIAL de las líneas de una solicitud Pendiente, en DOS fases dentro de la transacción del llamador:
+ *   1) `planificarLineasTx` (SOLO LECTURA): relee las líneas FOR UPDATE por (empresa, solicitud), valida todo y calcula los valores finales y el total.
+ *      Se ejecuta ANTES de escribir nada (ni siquiera el encabezado): un rechazo no ha tocado ningún registro.
+ *   2) `aplicarLineasTx` (escritura): borra las retiradas y actualiza/inserta lo que cambió.
+ *
+ * Reglas:
+ *  · Con `id`: la línea se actualiza en su sitio SOLO si algo cambió; su identificador no cambia (Combustible y CB2 apuntan a él). El id debe pertenecer a
+ *    ESTA solicitud y ESTA empresa. Sin `id`: línea nueva (siempre manual: el origen jamás lo decide el cliente).
+ *  · Un cliente que no envía NINGÚN id sobre una solicitud que ya tiene líneas no identifica cuáles conservar: se RECHAZA antes de escribir
+ *    (nunca se sustituyen en silencio las líneas originales).
+ *  · Las líneas guardadas que no aparecen en la lista se retiran, salvo las automáticas y las vinculadas a Combustible/CB2 (rechazo controlado).
+ *  · Líneas automáticas y vinculadas: ver fondo-lineas-protegidas.ts. Sus campos protegidos salen SIEMPRE de la fila guardada, nunca de lo enviado, y
+ *    el `orden` de una automática nunca lo decide el cliente. Cuenta y método de pago solo se recalculan si el cliente los cambia explícitamente.
+ *  · El total se calcula de los valores FINALES (no de lo enviado).
  */
-const esTablaOColumnaInexistente = (e: unknown) => {
-  const x = e as { errno?: number; code?: string } | null;
-  return x?.errno === 1146 || x?.errno === 1054 || x?.code === "ER_NO_SUCH_TABLE" || x?.code === "ER_BAD_FIELD_ERROR";
-};
+export const MENSAJE_LINEAS_SIN_ID =
+  "Esta solicitud ya tiene líneas guardadas y el envío no identifica ninguna de ellas, así que no se sabe cuáles conservar. Recarga la pantalla y vuelve a editarla. No se guardó ningún cambio.";
+
+/** Vínculos que apuntan a una línea. Ambos módulos son OPCIONALES (pueden no estar instalados), pero si existen su estructura debe ser la esperada. */
+const VINCULOS_A_LINEAS = [
+  { tabla: "flota_combustible_cargas", columna: "solicitud_fondo_linea_id", modulo: "Combustible" },
+  { tabla: "flota_cb2_fondos_vinculos", columna: "linea_id", modulo: "CB2" },
+] as const;
+
 const esViolacionFkReferenciada = (e: unknown) => {
   const x = e as { errno?: number; code?: string } | null;
   return x?.errno === 1451 || x?.code === "ER_ROW_IS_REFERENCED_2" || x?.code === "ER_ROW_IS_REFERENCED";
 };
 
-/** Ids (entre `ids`) con vales de Combustible o vínculos CB2. Una tabla aún no instalada equivale a «sin vínculos» (la FK real, si existe, sigue protegiendo). */
+/**
+ * Ids (entre `ids`) con vales de Combustible o vínculos CB2. Distingue tres situaciones:
+ *  · tabla AUSENTE (módulo opcional no instalado) → no hay vínculos que comprobar;
+ *  · tabla presente con la estructura esperada → se consulta (cualquier error de la consulta SE PROPAGA, nunca se silencia);
+ *  · tabla presente pero con estructura incompatible → no se puede comprobar la integridad: se DETIENE la operación antes de escribir.
+ */
 async function lineasConVinculosTx(conn: PoolConnection, empresaId: number, ids: number[]): Promise<Set<number>> {
   const vinculadas = new Set<number>();
   if (!ids.length) return vinculadas;
   const marcas = ids.map(() => "?").join(",");
-  for (const sql of [
-    `SELECT DISTINCT solicitud_fondo_linea_id AS linea_id FROM flota_combustible_cargas WHERE empresa_id = ? AND solicitud_fondo_linea_id IN (${marcas})`,
-    `SELECT DISTINCT linea_id FROM flota_cb2_fondos_vinculos WHERE empresa_id = ? AND linea_id IN (${marcas})`,
-  ]) {
-    try {
-      for (const r of await queryConn<RowDataPacket[]>(conn, sql, [empresaId, ...ids])) vinculadas.add(Number(r.linea_id));
-    } catch (e) {
-      if (!esTablaOColumnaInexistente(e)) throw e;
+  for (const v of VINCULOS_A_LINEAS) {
+    const tabla = await queryConn<RowDataPacket[]>(conn, "SELECT 1 AS ok FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1", [v.tabla]);
+    if (!tabla[0]) continue;   // módulo opcional no instalado
+    const columnas = await queryConn<RowDataPacket[]>(conn,
+      "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME IN ('empresa_id', ?)", [v.tabla, v.columna]);
+    if (new Set(columnas.map((c) => String(c.COLUMN_NAME))).size !== 2) {
+      throw new ErrorDominioFormulario(
+        `No se puede verificar la integridad de los vínculos con ${v.modulo}: la estructura de ${v.tabla} no es la esperada. No se guardó ningún cambio; avisa a soporte.`, 409,
+      );
     }
+    const filas = await queryConn<RowDataPacket[]>(conn, `SELECT DISTINCT ${v.columna} AS linea_id FROM ${v.tabla} WHERE empresa_id = ? AND ${v.columna} IN (${marcas})`, [empresaId, ...ids]);
+    for (const r of filas) vinculadas.add(Number(r.linea_id));
   }
   return vinculadas;
 }
@@ -678,7 +697,25 @@ const cadena = (v: unknown): string | null => (v == null ? null : String(v));
 const num2 = (v: unknown): string => Number(v ?? 0).toFixed(2);
 const idONull = (v: unknown): number | null => (v == null ? null : Number(v));
 
-async function sincronizarLineasTx(conn: PoolConnection, empresaId: number, solicitudId: number, entradas: LineaFondoInput[]): Promise<void> {
+type ValoresFinales = {
+  categoria: string; descripcion: string | null; cantidad: number; monto: number; orden: number; fechaViaje: string | null;
+  empleadoId: number | null; empleadoNombre: string | null; cargo: string | null; cuenta: string | null; metodoPago: string | null;
+  vehiculoId: number | null; placa: string | null; clienteId: number | null; clienteNombre: string | null; planId: number | null;
+};
+type OperacionLinea = { fila: RowDataPacket | null; v: ValoresFinales };
+type PlanLineas = { total: number; retiradas: number[]; operaciones: OperacionLinea[] };
+
+const valoresDeFila = (r: RowDataPacket): ValoresFinales => ({
+  categoria: String(r.categoria), descripcion: cadena(r.descripcion), cantidad: Number(r.cantidad ?? 1), monto: Number(r.monto ?? 0), orden: Number(r.orden ?? 0), fechaViaje: fechaDeFila(r),
+  empleadoId: idONull(r.empleado_id), empleadoNombre: cadena(r.empleado_nombre), cargo: cadena(r.cargo), cuenta: cadena(r.cuenta), metodoPago: cadena(r.metodo_pago),
+  vehiculoId: idONull(r.vehiculo_id), placa: cadena(r.placa), clienteId: idONull(r.cliente_id), clienteNombre: cadena(r.cliente_nombre), planId: idONull(r.plan_id),
+});
+const iguales = (a: ValoresFinales, b: ValoresFinales) =>
+  a.categoria === b.categoria && a.descripcion === b.descripcion && num2(a.cantidad) === num2(b.cantidad) && num2(a.monto) === num2(b.monto) && a.orden === b.orden
+  && a.fechaViaje === b.fechaViaje && a.empleadoId === b.empleadoId && a.empleadoNombre === b.empleadoNombre && a.cargo === b.cargo && a.cuenta === b.cuenta
+  && a.metodoPago === b.metodoPago && a.vehiculoId === b.vehiculoId && a.placa === b.placa && a.clienteId === b.clienteId && a.clienteNombre === b.clienteNombre && a.planId === b.planId;
+
+async function planificarLineasTx(conn: PoolConnection, empresaId: number, solicitudId: number, entradas: LineaFondoInput[]): Promise<PlanLineas> {
   const existentes = await queryConn<RowDataPacket[]>(conn,
     `SELECT l.*, DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') AS fecha_viaje_txt
      FROM tms_solicitud_fondo_lineas l WHERE l.empresa_id = ? AND l.solicitud_id = ? ORDER BY l.orden, l.id FOR UPDATE`,
@@ -686,112 +723,122 @@ async function sincronizarLineasTx(conn: PoolConnection, empresaId: number, soli
   );
   const porId = new Map(existentes.map((r) => [Number(r.id), r]));
 
-  // 1) Identificadores recibidos: deben ser de ESTA solicitud y empresa, y no repetirse.
+  // 1) Identificadores recibidos: de ESTA solicitud y empresa, sin repetirse; y nunca origen enviado por el cliente.
   const usados = new Set<number>();
   entradas.forEach((l, i) => {
     rechazarOrigenDeCliente(l, i + 1);
     if (l.id == null) return;
-    if (!Number.isInteger(l.id) || l.id <= 0 || !porId.has(l.id)) {
-      throw new ErrorDominioFormulario(`Línea ${i + 1}: el identificador de la línea no pertenece a esta solicitud.`);
-    }
+    if (!Number.isInteger(l.id) || l.id <= 0 || !porId.has(l.id)) throw new ErrorDominioFormulario(`Línea ${i + 1}: el identificador de la línea no pertenece a esta solicitud.`);
     if (usados.has(l.id)) throw new ErrorDominioFormulario(`Línea ${i + 1}: la misma línea aparece más de una vez.`);
     usados.add(l.id);
   });
+  // Cliente que no identifica ninguna línea guardada: ambiguo → rechazo ANTES de escribir (nada se sustituye en silencio).
+  if (existentes.length && entradas.every((l) => l.id == null)) throw new ErrorDominioFormulario(MENSAJE_LINEAS_SIN_ID);
 
-  // 2) Líneas retiradas: no automáticas y sin vínculos de Combustible/CB2.
+  // 2) Nivel de protección de cada línea guardada (origen guardado + vínculos reales).
+  const vinculadas = await lineasConVinculosTx(conn, empresaId, existentes.map((r) => Number(r.id)));
+  const nivelDe = (r: RowDataPacket) => nivelDeProteccion(origenDeFila(r), vinculadas.has(Number(r.id)));
+
+  // 3) Retiradas: ni automáticas ni vinculadas.
   const retiradas = existentes.filter((r) => !usados.has(Number(r.id)));
-  for (const r of retiradas) validarEliminacionLinea(origenDeFila(r), Number(r.orden ?? 0) + 1);
-  const vinculadas = await lineasConVinculosTx(conn, empresaId, retiradas.map((r) => Number(r.id)));
-  const bloqueada = retiradas.find((r) => vinculadas.has(Number(r.id)));
-  if (bloqueada) {
-    throw new ErrorDominioFormulario(
-      `No se puede eliminar la línea ${Number(bloqueada.orden ?? 0) + 1} (${String(bloqueada.categoria)}): tiene vales de Combustible o vínculos CB2 asociados. Conserva la línea o quita primero el vínculo.`,
-    );
+  for (const r of retiradas) validarEliminacionLinea(nivelDe(r), Number(r.orden ?? 0) + 1);
+
+  // 4) Orden: las automáticas conservan SIEMPRE el suyo; las demás se numeran a continuación, en el orden recibido.
+  const ordenesAuto = existentes.filter((r) => nivelDe(r) === "AUTOMATICA").map((r) => Number(r.orden ?? 0));
+  let siguiente = ordenesAuto.length ? Math.max(...ordenesAuto) + 1 : 0;
+
+  const operaciones: OperacionLinea[] = [];
+  for (const [indice, l] of entradas.entries()) {
+    const numero = indice + 1;
+    const fila = l.id != null ? porId.get(l.id)! : null;
+    const nivel: NivelProteccion = fila ? nivelDe(fila) : "NINGUNA";
+    let v: ValoresFinales;
+    if (fila && nivel !== "NINGUNA") {
+      const guardado = valoresDeFila(fila);
+      // Fuera de conLinea: estos mensajes ya indican la línea y no deben reetiquetarse como errores de un campo.
+      validarEdicionLinea(nivel, {
+        categoria: guardado.categoria, descripcion: guardado.descripcion, cantidad: guardado.cantidad, monto: guardado.monto, fechaViaje: guardado.fechaViaje,
+        empleadoId: guardado.empleadoId, empleadoNombre: guardado.empleadoNombre, cargo: guardado.cargo, vehiculoId: guardado.vehiculoId, clienteId: guardado.clienteId, planId: guardado.planId,
+      }, {
+        categoria: l.categoria, descripcion: l.descripcion === undefined ? undefined : l.descripcion?.trim() || null, cantidad: l.cantidad ?? 1, monto: l.monto, fechaViaje: l.fechaViaje,
+        empleadoId: l.empleadoId, empleadoNombre: l.empleadoNombreOverride ?? undefined, cargo: l.cargoOverride ?? undefined, vehiculoId: l.vehiculoId,
+        clienteId: l.clienteId, planId: l.planId,
+      }, numero);
+      try {
+        // Cuenta y método de pago: se recalculan SOLO si el cliente los cambia; si no, se conserva el snapshot guardado (nunca se refresca desde RRHH).
+        const metodo = l.metodoPago ?? null;
+        let cuenta = guardado.cuenta;
+        if (metodo !== guardado.metodoPago || (l.cuentaOverride !== undefined && l.cuentaOverride !== null)) {
+          const derivado = await resolverSnapshotLineaTx(conn, empresaId, { empleadoId: guardado.empleadoId, metodoPago: l.metodoPago, cuentaOverride: l.cuentaOverride });
+          cuenta = normalizarDestinoPago(metodo, derivado.cuenta);
+        }
+        if (nivel === "AUTOMATICA") {
+          v = { ...guardado, cuenta, metodoPago: metodo };   // todo lo demás, incluido `orden`, es lo guardado
+        } else {
+          // VINCULADA: se pueden editar descripción, fecha del viaje, cliente, cargo, método de pago, cuenta y la posición.
+          let clienteId = guardado.clienteId, clienteNombre = guardado.clienteNombre;
+          if (l.clienteId != null && l.clienteId !== guardado.clienteId) {
+            const c = await resolverSnapshotLineaTx(conn, empresaId, { clienteId: l.clienteId });
+            clienteId = c.clienteId; clienteNombre = c.clienteNombre;
+          }
+          v = {
+            ...guardado, descripcion: l.descripcion === undefined ? guardado.descripcion : l.descripcion?.trim() || null, fechaViaje: l.fechaViaje ?? guardado.fechaViaje, clienteId, clienteNombre,
+            cargo: limpiarOverride(l.cargoOverride, 150) ?? guardado.cargo, cuenta, metodoPago: metodo, orden: siguiente++,
+          };
+        }
+      } catch (e) {
+        throw conLinea(e, numero, "lineas", "Línea", CAMPOS_DOMINIO_FONDOS);
+      }
+    } else {
+      try {
+        const snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
+        v = {
+          categoria: l.categoria, descripcion: l.descripcion?.trim() || null, cantidad: l.cantidad ?? 1, monto: l.monto, orden: siguiente++, fechaViaje: snapshot.fechaViaje,
+          empleadoId: l.empleadoId ?? null, empleadoNombre: snapshot.empleadoNombre, cargo: snapshot.cargo, cuenta: normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta),
+          metodoPago: l.metodoPago ?? null, vehiculoId: snapshot.vehiculoId, placa: snapshot.placa, clienteId: snapshot.clienteId, clienteNombre: snapshot.clienteNombre, planId: l.planId ?? null,
+        };
+      } catch (e) {
+        throw conLinea(e, numero, "lineas", "Línea", CAMPOS_DOMINIO_FONDOS);
+      }
+    }
+    operaciones.push({ fila, v });
   }
-  if (retiradas.length) {
+  const total = operaciones.reduce((s, o) => s + o.v.cantidad * o.v.monto, 0);
+  return { total, retiradas: retiradas.map((r) => Number(r.id)), operaciones };
+}
+
+async function aplicarLineasTx(conn: PoolConnection, empresaId: number, solicitudId: number, plan: PlanLineas): Promise<void> {
+  if (plan.retiradas.length) {
     try {
       await executeConn(conn,
-        `DELETE FROM tms_solicitud_fondo_lineas WHERE empresa_id = ? AND solicitud_id = ? AND id IN (${retiradas.map(() => "?").join(",")})`,
-        [empresaId, solicitudId, ...retiradas.map((r) => Number(r.id))],
+        `DELETE FROM tms_solicitud_fondo_lineas WHERE empresa_id = ? AND solicitud_id = ? AND id IN (${plan.retiradas.map(() => "?").join(",")})`,
+        [empresaId, solicitudId, ...plan.retiradas],
       );
     } catch (e) {
       if (esViolacionFkReferenciada(e)) throw new ErrorDominioFormulario("No se puede eliminar una línea que tiene registros asociados (Combustible, CB2 u otros). No se guardó ningún cambio.");
       throw e;
     }
   }
-
-  // 3) Actualizar las que cambiaron e insertar las nuevas, en el orden recibido.
-  for (const [indice, l] of entradas.entries()) {
-    const numero = indice + 1;
-    const actual = l.id != null ? porId.get(l.id)! : null;
-    const origen = actual ? origenDeFila(actual) : "MANUAL";
-    const automatica = origen !== "MANUAL";
-
-    let snapshot: Awaited<ReturnType<typeof resolverSnapshotLineaTx>>;
-    let cuenta: string | null;
-    try {
-      if (actual && automatica) {
-        validarEdicionLinea(origen, {
-          categoria: cadena(actual.categoria), descripcion: cadena(actual.descripcion), cantidad: actual.cantidad, monto: actual.monto, fechaViaje: fechaDeFila(actual),
-          empleadoId: idONull(actual.empleado_id), empleadoNombre: cadena(actual.empleado_nombre), cargo: cadena(actual.cargo), vehiculoId: idONull(actual.vehiculo_id),
-          clienteId: idONull(actual.cliente_id), planId: idONull(actual.plan_id),
-        }, {
-          categoria: l.categoria, descripcion: l.descripcion?.trim() || null, cantidad: l.cantidad ?? 1, monto: l.monto, fechaViaje: l.fechaViaje,
-          empleadoId: l.empleadoId, empleadoNombre: l.empleadoNombreOverride ?? undefined, cargo: l.cargoOverride ?? undefined, vehiculoId: l.vehiculoId,
-          clienteId: l.clienteId, planId: l.planId,
-        }, numero);
-        // Solo método de pago y cuenta: el resto sale de la fila GUARDADA (el beneficiario nunca sale de lo enviado).
-        const derivado = await resolverSnapshotLineaTx(conn, empresaId, { empleadoId: idONull(actual.empleado_id), metodoPago: l.metodoPago, cuentaOverride: l.cuentaOverride });
-        snapshot = {
-          empleadoNombre: cadena(actual.empleado_nombre), cargo: cadena(actual.cargo), cuenta: derivado.cuenta, placa: cadena(actual.placa), vehiculoId: idONull(actual.vehiculo_id),
-          clienteId: idONull(actual.cliente_id), clienteNombre: cadena(actual.cliente_nombre), fechaViaje: fechaDeFila(actual),
-        };
-        cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
-      } else {
-        snapshot = await resolverSnapshotLineaTx(conn, empresaId, l);
-        cuenta = normalizarDestinoPago(l.metodoPago ?? null, snapshot.cuenta);
-      }
-    } catch (e) {
-      throw conLinea(e, numero, "lineas", "Línea", CAMPOS_DOMINIO_FONDOS);
-    }
-
-    if (!actual) {
+  for (const { fila, v } of plan.operaciones) {
+    if (!fila) {
       await executeConn(conn,
         `INSERT INTO tms_solicitud_fondo_lineas
           (empresa_id, solicitud_id, categoria, descripcion, cantidad, monto, orden,
            fecha_viaje, empleado_id, empleado_nombre, cargo, cuenta, metodo_pago, vehiculo_id, placa, cliente_id, cliente_nombre, plan_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          empresaId, solicitudId, l.categoria, l.descripcion?.trim() || null, l.cantidad ?? 1, l.monto, indice,
-          snapshot.fechaViaje, l.empleadoId ?? null, snapshot.empleadoNombre, snapshot.cargo, cuenta, l.metodoPago ?? null,
-          snapshot.vehiculoId, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, l.planId ?? null,
-        ],
+        [empresaId, solicitudId, v.categoria, v.descripcion, v.cantidad, v.monto, v.orden, v.fechaViaje, v.empleadoId, v.empleadoNombre, v.cargo, v.cuenta, v.metodoPago,
+          v.vehiculoId, v.placa, v.clienteId, v.clienteNombre, v.planId],
       );
       continue;
     }
-
-    // Línea existente: valores finales (en una automática, los protegidos son los guardados).
-    const nuevo = automatica
-      ? { categoria: String(actual.categoria), descripcion: cadena(actual.descripcion), cantidad: Number(actual.cantidad ?? 1), monto: Number(actual.monto), empleadoId: idONull(actual.empleado_id), planId: idONull(actual.plan_id) }
-      : { categoria: l.categoria, descripcion: l.descripcion?.trim() || null, cantidad: l.cantidad ?? 1, monto: l.monto, empleadoId: l.empleadoId ?? null, planId: l.planId ?? null };
-    const metodo = l.metodoPago ?? null;
-    const sinCambios =
-      String(actual.categoria) === nuevo.categoria && cadena(actual.descripcion) === nuevo.descripcion && num2(actual.cantidad) === num2(nuevo.cantidad) && num2(actual.monto) === num2(nuevo.monto)
-      && Number(actual.orden ?? 0) === indice && fechaDeFila(actual) === snapshot.fechaViaje && idONull(actual.empleado_id) === nuevo.empleadoId
-      && cadena(actual.empleado_nombre) === snapshot.empleadoNombre && cadena(actual.cargo) === snapshot.cargo && cadena(actual.cuenta) === cuenta && cadena(actual.metodo_pago) === metodo
-      && idONull(actual.vehiculo_id) === snapshot.vehiculoId && cadena(actual.placa) === snapshot.placa && idONull(actual.cliente_id) === snapshot.clienteId
-      && cadena(actual.cliente_nombre) === snapshot.clienteNombre && idONull(actual.plan_id) === nuevo.planId;
-    if (sinCambios) continue;
+    if (iguales(valoresDeFila(fila), v)) continue;
     await executeConn(conn,
       `UPDATE tms_solicitud_fondo_lineas
        SET categoria = ?, descripcion = ?, cantidad = ?, monto = ?, orden = ?, fecha_viaje = ?, empleado_id = ?, empleado_nombre = ?, cargo = ?, cuenta = ?, metodo_pago = ?,
            vehiculo_id = ?, placa = ?, cliente_id = ?, cliente_nombre = ?, plan_id = ?
        WHERE id = ? AND empresa_id = ? AND solicitud_id = ?`,
-      [
-        nuevo.categoria, nuevo.descripcion, nuevo.cantidad, nuevo.monto, indice, snapshot.fechaViaje, nuevo.empleadoId, snapshot.empleadoNombre, snapshot.cargo, cuenta, metodo,
-        snapshot.vehiculoId, snapshot.placa, snapshot.clienteId, snapshot.clienteNombre, nuevo.planId,
-        Number(actual.id), empresaId, solicitudId,
-      ],
+      [v.categoria, v.descripcion, v.cantidad, v.monto, v.orden, v.fechaViaje, v.empleadoId, v.empleadoNombre, v.cargo, v.cuenta, v.metodoPago,
+        v.vehiculoId, v.placa, v.clienteId, v.clienteNombre, v.planId, Number(fila.id), empresaId, solicitudId],
     );
   }
 }
@@ -861,7 +908,9 @@ export async function actualizarSolicitudFondo(
       solicitanteUsuario = await resolverSolicitanteOperacionesTx(conn, empresaId, input.solicitanteUsuarioId);
       if (!solicitanteUsuario) throw new ErrorDominioFormulario("El usuario solicitante indicado no pertenece a esta empresa.");
     }
-    const total = input.lineas !== undefined ? calcularTotal(input.lineas) : Number(actual.total ?? 0);
+    // FONDOS FASE 1: las líneas se validan y se calculan ANTES de escribir nada (ni el encabezado); el total sale de los valores finales.
+    const planLineas = input.lineas !== undefined ? await planificarLineasTx(conn, empresaId, id, input.lineas) : null;
+    const total = planLineas ? planLineas.total : Number(actual.total ?? 0);
 
     const actualizarSolicitanteSql = input.solicitanteUsuarioId !== undefined ? ", solicitante_usuario_id = ?, solicitante_nombre = ?" : "";
     const actualizarSolicitanteParams = input.solicitanteUsuarioId !== undefined
@@ -917,8 +966,8 @@ export async function actualizarSolicitudFondo(
       }
     }
 
-    // FONDOS FASE 1: actualización diferencial por id (conserva la identidad de las líneas; ver sincronizarLineasTx).
-    if (input.lineas !== undefined) await sincronizarLineasTx(conn, empresaId, id, input.lineas);
+    // FONDOS FASE 1: aplicación diferencial por id (conserva la identidad de las líneas; ver planificarLineasTx/aplicarLineasTx).
+    if (planLineas) await aplicarLineasTx(conn, empresaId, id, planLineas);
 
     await registrarAuditoriaTx(conn, {
       empresaId,
@@ -939,27 +988,23 @@ export async function actualizarSolicitudFondo(
 }
 
 export const MENSAJE_SIN_EMPRESA_REQUIRENTE = "No se puede autorizar: la solicitud no tiene empresa requirente. Edítala y selecciona una antes de autorizar.";
-export const MENSAJE_SIN_REQUIRENTE = "No se puede autorizar: la solicitud no tiene requirente. Edítala y selecciona un requirente de Operaciones antes de autorizar.";
+export const MENSAJE_SIN_REQUIRENTE = "No se puede autorizar: la solicitud no tiene un requirente identificable (usuario de Operaciones). Edítala, selecciona el requirente y vuelve a autorizar.";
+export const MENSAJE_REQUIRENTE_NO_VALIDO = "No se puede autorizar: el requirente de la solicitud ya no es válido (debe ser un usuario activo de Operaciones con acceso a esta empresa). Edítala y selecciona otro requirente.";
 
 /**
  * Requisitos previos a AUTORIZAR (FONDOS FASE 1):
  *  · Empresa requirente: debe existir y seguir siendo válida (activa, KT/MONACO, de ESTA empresa) — misma regla que al crear.
- *  · Requirente: un usuario de la empresa (el modelo vigente) o, SOLO para solicitudes históricas Pendientes, la identidad de requirente que ya
- *    tenían (empleado de RRHH o nombre guardado). Un requirente-usuario guardado se revalida (activo y con acceso a la empresa).
+ *  · Requirente: debe ser un USUARIO identificable y vigente (activo, con acceso a la empresa y de rol Operaciones), como exige la creación. Las solicitudes
+ *    históricas con solo texto/empleado siguen consultables y editables, pero para autorizarlas se corrige antes la identidad desde el formulario.
  */
 async function exigirRequirentesParaAutorizarTx(conn: PoolConnection, empresaId: number, fila: RowDataPacket): Promise<void> {
   if (fila.entidad_requirente_id == null) throw new ErrorDominioFormulario(MENSAJE_SIN_EMPRESA_REQUIRENTE);
   await resolverEntidadRequirenteTx(conn, empresaId, Number(fila.entidad_requirente_id));
 
-  const usuarioId = fila.requirente_usuario_id != null ? Number(fila.requirente_usuario_id) : null;
-  const empleadoId = fila.requirente_empleado_id != null ? Number(fila.requirente_empleado_id) : null;
-  const nombre = fila.requirente_nombre != null ? String(fila.requirente_nombre).trim() : "";
-  if (usuarioId == null && empleadoId == null && !nombre) throw new ErrorDominioFormulario(MENSAJE_SIN_REQUIRENTE);
-  if (usuarioId != null) {
-    const usuario = await resolverUsuarioDeEmpresaTx(conn, empresaId, usuarioId);
-    if (!usuario) throw new ErrorDominioFormulario("No se puede autorizar: el requirente de la solicitud ya no es válido (usuario inactivo o sin acceso a esta empresa). Edítala y selecciona otro.");
-  }
-  if (empleadoId != null) await validarEmpleadoDeEmpresaTx(conn, empresaId, empleadoId, "requirente");
+  // El texto libre (requirente_nombre) o un empleado de RRHH sin usuario NO prueban identidad: solo cuenta un usuario identificable.
+  if (fila.requirente_usuario_id == null) throw new ErrorDominioFormulario(MENSAJE_SIN_REQUIRENTE);
+  const usuario = await resolverSolicitanteOperacionesTx(conn, empresaId, Number(fila.requirente_usuario_id));   // activo, con acceso a la empresa y de rol Operaciones
+  if (!usuario) throw new ErrorDominioFormulario(MENSAJE_REQUIRENTE_NO_VALIDO);
 }
 
 export type AccionFondo = "autorizar" | "rechazar" | "liquidar";
@@ -1016,7 +1061,7 @@ export async function cambiarEstadoSolicitudFondo(
   try {
     await conn.beginTransaction();
     const rows = await queryConn<RowDataPacket[]>(conn,
-      `SELECT id, estado, entidad_requirente_id, requirente_empleado_id, requirente_nombre, requirente_usuario_id, solicitante_usuario_id, creado_por
+      `SELECT id, estado, entidad_requirente_id, requirente_usuario_id, solicitante_usuario_id, creado_por
        FROM tms_solicitudes_fondo WHERE id = ? AND empresa_id = ? LIMIT 1 FOR UPDATE`,
       [id, empresaId],
     );

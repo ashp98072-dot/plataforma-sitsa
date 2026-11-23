@@ -155,13 +155,50 @@ describe.skipIf(!pipe)("edición diferencial de líneas de fondo (MariaDB 11.8.9
     expect((await R("SELECT id, monto FROM tms_solicitud_fondo_lineas WHERE solicitud_id = 1 ORDER BY id")).map((x) => [Number(x.id), Number(x.monto)])).toEqual([[101, 100], [102, 200], [103, 300]]);
   });
 
-  it("COMPATIBILIDAD: un cliente que reenvía todo SIN ids reemplaza las líneas libres (como antes), pero NO puede borrar las vinculadas: falla y no cambia nada", async () => {
-    await admin.query("DELETE FROM flota_cb2_fondos_vinculos; DELETE FROM flota_combustible_cargas");   // solicitud sin vínculos
-    await actualizarSolicitudFondo(E1, 1, { lineas: [{ categoria: "Combustible", monto: 10 }, { categoria: "Otros", monto: 20 }] });
-    expect(await idsDe(1)).toHaveLength(2); expect((await idsDe(1)).every((id) => id > 401)).toBe(true);
-    await sembrar();
+  it("CLIENTE ANTIGUO (sin ids): se rechaza ANTES de escribir tanto con líneas libres como con vinculadas; las líneas originales jamás se sustituyen en silencio", async () => {
     const antes = await foto();
-    await expect(actualizarSolicitudFondo(E1, 1, { lineas: [{ categoria: "Combustible", monto: 10 }] })).rejects.toThrow(/tiene vales de Combustible o vínculos CB2/);
+    await expect(actualizarSolicitudFondo(E1, 1, { observaciones: "NO debe persistir", lineas: [{ categoria: "Combustible", monto: 10 }] })).rejects.toThrow(/no identifica ninguna de ellas/);
     expect(await foto()).toBe(antes);
+    await admin.query("DELETE FROM flota_cb2_fondos_vinculos; DELETE FROM flota_combustible_cargas");   // ahora con líneas LIBRES
+    const libres = await foto();
+    await expect(actualizarSolicitudFondo(E1, 1, { lineas: [{ categoria: "Combustible", monto: 10 }, { categoria: "Otros", monto: 20 }] })).rejects.toThrow(/no identifica ninguna de ellas/);
+    expect(await foto()).toBe(libres); expect(await idsDe(1)).toEqual([101, 102, 103]);
+  });
+
+  it("LÍNEA VINCULADA: se RECHAZA cambiar monto, cantidad, categoría o beneficiario sin ningún cambio parcial; SÍ se editan descripción, fecha y cuenta conservando id y vínculo", async () => {
+    const antes = await foto();
+    for (const cambio of [{ monto: 201 }, { cantidad: 2 }, { categoria: "Otros" }, { empleadoId: 77 }]) {
+      const lineas = todas().map((l) => (l.id === 102 ? { ...l, ...cambio } : l));
+      await expect(actualizarSolicitudFondo(E1, 1, { observaciones: "NO debe persistir", lineas }), JSON.stringify(cambio)).rejects.toThrow(/tiene vales de Combustible o vínculos CB2; no se puede cambiar/);
+      expect(await foto()).toBe(antes);
+    }
+    await actualizarSolicitudFondo(E1, 1, { lineas: todas().map((l) => (l.id === 102 ? { ...l, descripcion: "nota", fechaViaje: "2026-11-20", metodoPago: "Transferencia" } : l)) });
+    const [fila] = await R("SELECT id, categoria, monto, descripcion, metodo_pago, DATE_FORMAT(fecha_viaje, '%Y-%m-%d') AS f FROM tms_solicitud_fondo_lineas WHERE id = 102");
+    expect([fila.id, fila.categoria, Number(fila.monto), fila.descripcion, fila.metodo_pago, fila.f]).toEqual([102, "Hospedaje", 200, "nota", "Transferencia", "2026-11-20"]);
+    expect(Number((await R("SELECT COUNT(*) c FROM flota_combustible_cargas WHERE solicitud_fondo_linea_id = 102"))[0].c)).toBe(1);
+  });
+
+  it("ESTRUCTURA INCOMPATIBLE de una tabla de vínculos (existe pero sin la columna esperada): se DETIENE sin escribir; nunca se confunde con «sin vínculos»", async () => {
+    await admin.query("ALTER TABLE flota_cb2_fondos_vinculos DROP FOREIGN KEY fk_cb2fv_linea, CHANGE linea_id linea_x INT NOT NULL");
+    try {
+      const lineasAntes = JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id")), cabAntes = JSON.stringify(await R("SELECT * FROM tms_solicitudes_fondo ORDER BY id"));
+      await expect(actualizarSolicitudFondo(E1, 1, { observaciones: "NO debe persistir", lineas: [todas()[0], todas()[1]] })).rejects.toThrow(/la estructura de flota_cb2_fondos_vinculos no es la esperada/);   // retiraría la 103, que SÍ tiene vínculo
+      expect(JSON.stringify(await R("SELECT * FROM tms_solicitud_fondo_lineas ORDER BY id"))).toBe(lineasAntes); expect(JSON.stringify(await R("SELECT * FROM tms_solicitudes_fondo ORDER BY id"))).toBe(cabAntes);
+    } finally {
+      await admin.query("ALTER TABLE flota_cb2_fondos_vinculos CHANGE linea_x linea_id INT NOT NULL, ADD CONSTRAINT fk_cb2fv_linea FOREIGN KEY(empresa_id, linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT");
+    }
+  });
+
+  it("TABLAS OPCIONALES AUSENTES (módulos de Combustible/CB2 no instalados): no hay vínculos que comprobar y la edición procede", async () => {
+    await admin.query("DROP TABLE flota_cb2_fondos_vinculos; DROP TABLE flota_combustible_cargas");
+    try {
+      await actualizarSolicitudFondo(E1, 1, { lineas: [todas()[0], todas()[2]] });   // retira la 102 (sin tabla de vales ya no hay vínculo que la proteja)
+      expect(await idsDe(1)).toEqual([101, 103]);
+    } finally {
+      await admin.query(`CREATE TABLE flota_combustible_cargas(id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT NOT NULL, solicitud_fondo_linea_id INT NULL,
+        CONSTRAINT fk_fcc_fondo_linea FOREIGN KEY(empresa_id, solicitud_fondo_linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON UPDATE RESTRICT ON DELETE RESTRICT) ENGINE=InnoDB;
+        CREATE TABLE flota_cb2_fondos_vinculos(empresa_id INT NOT NULL, consumo_id INT NOT NULL, linea_id INT NOT NULL, PRIMARY KEY(empresa_id, consumo_id),
+        CONSTRAINT fk_cb2fv_linea FOREIGN KEY(empresa_id, linea_id) REFERENCES tms_solicitud_fondo_lineas(empresa_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB`);
+    }
   });
 });

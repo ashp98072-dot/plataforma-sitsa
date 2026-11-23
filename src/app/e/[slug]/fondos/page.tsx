@@ -643,6 +643,9 @@ export default function FondosPage() {
                 {s.estado === "Pendiente" ? (
                   <>
                     <button type="button" onClick={() => void abrirEditar(s)} className="rounded border border-[var(--border)] px-2 py-1">Editar</button>
+                    {s.entidadRequirenteId == null || s.requirenteUsuarioId == null ? (
+                      <span className="text-amber-500">Falta {s.entidadRequirenteId == null ? "la empresa requirente" : "el requirente de Operaciones"}: edita la solicitud antes de autorizarla.</span>
+                    ) : null}
                     {puedeAutorizar ? (
                       <button type="button" onClick={() => setConfirmandoAutorizacionId(s.id)} disabled={autorizandoId !== null} className="rounded bg-emerald-600 px-2 py-1 text-white disabled:opacity-50">Autorizar</button>
                     ) : null}

@@ -1,19 +1,25 @@
 import { ErrorDominioFormulario } from "@/lib/validacion-formulario";
 
 /**
- * FONDOS FASE 1 — validaciones REUTILIZABLES para líneas de solicitud de fondo de origen AUTOMÁTICO (p. ej. un viático que algún día
- * generará Programación). Módulo PURO: sin acceso a base de datos ni al cliente HTTP.
+ * FONDOS FASE 1 — validaciones REUTILIZABLES de edición de líneas de solicitud de fondo con protección. Módulo PURO: sin base de datos ni HTTP.
  *
- * Esta fase NO crea líneas automáticas ni cambia el esquema. Solo deja lista la regla para que, cuando exista el origen, no se pueda eludir:
- *   · En una línea automática el beneficiario y el monto original NO se pueden modificar manualmente; solo el método de pago y la
- *     cuenta/teléfono de destino son editables.
- *   · Una línea automática no se elimina por la edición manual de la solicitud (solo la retira quien la generó).
- *   · El ORIGEN nunca lo decide el cliente: se lee SIEMPRE de la fila ya guardada (`origenDeFila`). Una entrada HTTP que intente declarar un
- *     origen se rechaza (`rechazarOrigenDeCliente`), y una fila con un origen desconocido se trata como PROTEGIDA (falla cerrado).
- *   · Una línea nueva creada por una edición manual nace SIEMPRE manual: no hay camino para que un cliente cree o convierta una línea automática.
+ * Hay dos niveles de protección (ambos se aplican en el servidor, dentro de la transacción, sobre la fila GUARDADA):
+ *
+ *  · AUTOMÁTICA — línea de origen automático (p. ej. un viático que algún día generará Programación; hoy no existen). Solo se pueden editar
+ *    manualmente el método de pago y la cuenta/teléfono de destino. Beneficiario, monto, categoría, viaje, unidad, cliente, fecha y descripción
+ *    son inmodificables, y la línea no se puede retirar ni reordenar a mano.
+ *
+ *  · VINCULADA — línea con vales de Combustible o vínculos CB2. Su significado financiero depende de: la categoría (el vínculo exige «Combustible»),
+ *    el monto y la cantidad (el vale se concilia contra monto×cantidad y CB2 congeló ese contraste), el beneficiario (la persona del contraste) y la
+ *    unidad/placa (el vale debe coincidir con la unidad de la línea) y el viaje de origen. Esos campos se bloquean; siguen siendo editables la
+ *    descripción, la fecha del viaje, el cliente, el cargo, el método de pago, la cuenta/teléfono y la posición. La línea no se puede retirar.
+ *
+ * El ORIGEN nunca lo decide el cliente: se lee SIEMPRE de la fila guardada (`origenDeFila`); una entrada que intente declarar un origen se rechaza
+ * (`rechazarOrigenDeCliente`), y un origen desconocido se trata como PROTEGIDO (falla cerrado). Una línea nueva creada a mano nace SIEMPRE manual.
  */
 
 export type OrigenLinea = "MANUAL" | "AUTO_VIATICO";
+export type NivelProteccion = "NINGUNA" | "AUTOMATICA" | "VINCULADA";
 
 /** Orígenes conocidos que son automáticos (cuando exista la columna). Cualquier valor no vacío distinto de MANUAL también se protege. */
 export const ORIGENES_AUTOMATICOS: readonly OrigenLinea[] = ["AUTO_VIATICO"];
@@ -21,11 +27,13 @@ export const ORIGENES_AUTOMATICOS: readonly OrigenLinea[] = ["AUTO_VIATICO"];
 /** Campos de una línea automática que SÍ se pueden editar a mano. */
 export const CAMPOS_EDITABLES_LINEA_AUTOMATICA = ["metodoPago", "cuenta"] as const;
 
-/** Campos protegidos: beneficiario, monto original y la trazabilidad con el viaje. */
 export const CAMPOS_PROTEGIDOS_LINEA_AUTOMATICA = [
   "categoria", "descripcion", "cantidad", "monto", "fechaViaje", "empleadoId", "empleadoNombre", "cargo", "vehiculoId", "clienteId", "planId",
 ] as const;
 export type CampoProtegido = (typeof CAMPOS_PROTEGIDOS_LINEA_AUTOMATICA)[number];
+
+/** Campos que NO pueden cambiar en una línea vinculada a Combustible/CB2 (ver el encabezado del módulo). */
+export const CAMPOS_PROTEGIDOS_LINEA_VINCULADA: readonly CampoProtegido[] = ["categoria", "cantidad", "monto", "empleadoId", "empleadoNombre", "vehiculoId", "planId"];
 
 const ETIQUETA_CAMPO: Record<CampoProtegido, string> = {
   categoria: "categoría", descripcion: "descripción", cantidad: "cantidad", monto: "monto", fechaViaje: "fecha del viaje",
@@ -53,9 +61,15 @@ export function origenDeFila(fila: Record<string, unknown>): OrigenLinea | "DESC
   return (ORIGENES_AUTOMATICOS as readonly unknown[]).includes(o) ? (o as OrigenLinea) : "DESCONOCIDO";
 }
 
-/** ¿La línea está protegida? Todo lo que no sea explícitamente MANUAL lo está (falla cerrado). */
+/** ¿La línea es automática (o de origen desconocido)? Todo lo que no sea explícitamente MANUAL lo es (falla cerrado). */
 export function esLineaProtegida(origen: OrigenLinea | "DESCONOCIDO"): boolean {
   return origen !== "MANUAL";
+}
+
+/** Nivel de protección: una línea automática manda sobre una vinculada (más estricta). */
+export function nivelDeProteccion(origen: OrigenLinea | "DESCONOCIDO", vinculada: boolean): NivelProteccion {
+  if (esLineaProtegida(origen)) return "AUTOMATICA";
+  return vinculada ? "VINCULADA" : "NINGUNA";
 }
 
 /** El cliente HTTP no puede declarar, cambiar ni quitar el origen de una línea. */
@@ -88,12 +102,14 @@ const NORMALIZADOR: Record<CampoProtegido, (v: unknown) => string | null> = {
 };
 
 /**
- * Campos PROTEGIDOS que la propuesta intenta cambiar. `undefined` en la propuesta significa «no enviado» y conserva el valor guardado (no es un
- * cambio); `null` explícito sí es un valor y se compara. Comparación normalizada (espacios, decimales, fechas), nunca por referencia.
+ * Campos de `campos` (por omisión, todos los protegidos de una línea automática) que la propuesta intenta cambiar. `undefined` en la propuesta
+ * significa «no enviado» y conserva el valor guardado; `null` explícito sí es un valor y se compara. Comparación normalizada, nunca por referencia.
  */
-export function camposProtegidosModificados(actual: ValoresLinea, propuesta: ValoresLinea): CampoProtegido[] {
+export function camposProtegidosModificados(
+  actual: ValoresLinea, propuesta: ValoresLinea, campos: readonly CampoProtegido[] = CAMPOS_PROTEGIDOS_LINEA_AUTOMATICA,
+): CampoProtegido[] {
   const cambiados: CampoProtegido[] = [];
-  for (const campo of CAMPOS_PROTEGIDOS_LINEA_AUTOMATICA) {
+  for (const campo of campos) {
     const nuevo = propuesta[campo];
     if (nuevo === undefined) continue;
     const f = NORMALIZADOR[campo];
@@ -102,20 +118,24 @@ export function camposProtegidosModificados(actual: ValoresLinea, propuesta: Val
   return cambiados;
 }
 
-/** Lanza si se intenta cambiar algo protegido de una línea automática. Una línea manual no tiene restricciones adicionales. */
-export function validarEdicionLinea(origen: OrigenLinea | "DESCONOCIDO", actual: ValoresLinea, propuesta: ValoresLinea, numeroLinea: number): void {
-  if (!esLineaProtegida(origen)) return;
-  const cambios = camposProtegidosModificados(actual, propuesta);
-  if (cambios.length) {
-    throw new ErrorDominioFormulario(
-      `Línea ${numeroLinea}: es una línea automática; solo se puede editar el método de pago y la cuenta o teléfono de destino (no se puede cambiar: ${cambios.map((c) => ETIQUETA_CAMPO[c]).join(", ")}).`,
-    );
-  }
+/** Lanza si la propuesta cambia algo protegido para el nivel indicado. Una línea sin protección no tiene restricciones adicionales. */
+export function validarEdicionLinea(nivel: NivelProteccion, actual: ValoresLinea, propuesta: ValoresLinea, numeroLinea: number): void {
+  if (nivel === "NINGUNA") return;
+  const campos = nivel === "AUTOMATICA" ? CAMPOS_PROTEGIDOS_LINEA_AUTOMATICA : CAMPOS_PROTEGIDOS_LINEA_VINCULADA;
+  const cambios = camposProtegidosModificados(actual, propuesta, campos);
+  if (!cambios.length) return;
+  const lista = cambios.map((c) => ETIQUETA_CAMPO[c]).join(", ");
+  throw new ErrorDominioFormulario(
+    nivel === "AUTOMATICA"
+      ? `Línea ${numeroLinea}: es una línea automática; solo se puede editar el método de pago y la cuenta o teléfono de destino (no se puede cambiar: ${lista}).`
+      : `Línea ${numeroLinea}: tiene vales de Combustible o vínculos CB2; no se puede cambiar ${lista} porque alteraría el significado de esos vínculos. Sí se puede editar descripción, fecha del viaje, cliente, cargo, método de pago y cuenta.`,
+  );
 }
 
-/** Lanza si se intenta retirar una línea automática con la edición manual. */
-export function validarEliminacionLinea(origen: OrigenLinea | "DESCONOCIDO", numeroLinea: number): void {
-  if (esLineaProtegida(origen)) {
-    throw new ErrorDominioFormulario(`Línea ${numeroLinea}: es una línea automática y no se puede eliminar manualmente.`);
+/** Lanza si se intenta retirar una línea protegida con la edición manual. */
+export function validarEliminacionLinea(nivel: NivelProteccion, numeroLinea: number): void {
+  if (nivel === "AUTOMATICA") throw new ErrorDominioFormulario(`Línea ${numeroLinea}: es una línea automática y no se puede eliminar manualmente.`);
+  if (nivel === "VINCULADA") {
+    throw new ErrorDominioFormulario(`No se puede eliminar la línea ${numeroLinea}: tiene vales de Combustible o vínculos CB2 asociados. Conserva la línea o quita primero el vínculo.`);
   }
 }
