@@ -60,4 +60,5 @@ capas históricas, y el reverso de la redistribución lo tiene en cuenta.
    `ejecutar-salidas-controlado.mjs`) no se incluyen aquí: el contrato real debe generarse en el
    laboratorio 11.8.9. Hasta entonces no puede instalarse.
 5. **Sin API ni interfaz todavía.** Las funciones no están expuestas por `route.ts`.
-6. Las capas con `valoracion_id` (existencia inicial) no son parte de ningún lote y no se redistribuyen.
+6. **Empates de antigüedad.** `creado_en` tiene precisión de segundo y FIFO ordena por `(creado_en, id)`. Si dos compras distintas se confirman en el mismo segundo, las capas redistribuidas (id posterior) quedarían después de las de la otra compra en ese empate. Es un efecto de orden de segundos, no de costo total; si se considera relevante, requiere precisión de fracciones de segundo en `creado_en` (cambio de esquema aparte).
+7. Las capas con `valoracion_id` (existencia inicial) no son parte de ningún lote y no se redistribuyen.

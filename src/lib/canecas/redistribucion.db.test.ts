@@ -184,6 +184,37 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       expect(par.filter(x => x.yaRegistrada)).toHaveLength(1);
       expect(await saldo(p8)).toBe(12);
       expect(await valorDisponible(p8)).toBe('1000');
+
+      // ── Múltiples compras del mismo producto ─────────────────
+      const p9 = await producto();
+      const a9 = await compra(p9, 10, 10000, 0); // Q1,000.00
+      await new Promise(resolve => setTimeout(resolve, 1100)); // creado_en tiene precisión de segundo: la compra B debe ser realmente más reciente
+      const b9 = await compra(p9, 10, 15000, 0); // Q1,500.00 (más reciente)
+      const rA = await registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-A', compraId: a9, cantidadResultante: 12, claveOperacion: k(15) });
+      expect(rA).toMatchObject({ costoTotalCentavos: '100000', cantidadOrigen: 10, diferencia: 2 });
+      const lotes = await capas(p9);
+      expect(lotes.filter(c => c.recepcion_id === b9).map(c => [c.cantidad_inicial, c.cantidad_disponible, c.costo])).toEqual([[10, 10, '15000']]); // la otra compra no se toca
+      expect(await saldo(p9)).toBe(22);
+      const mix = await registrarSalidaFifo(pool, 1, 1, { productoId: p9, ubicacionId: 1, cantidad: 15, documento: 'S-3', claveOperacion: k(16) });
+      // 12 unidades redistribuidas (100000/12 = 8333 r 4 → 4 a 8334 y 8 a 8333) + 3 de la compra B a 15000.
+      expect(mix.costoCentavos).toBe(String(4 * 8334 + 8 * 8333 + 3 * 15000));
+      expect(BigInt(await valorDisponible(p9)) + BigInt(await costoSalidas(p9))).toBe(BigInt(250000));
+      await reversarSalidaFifo(pool, 1, 1, mix.id, 'Prueba');
+      expect(BigInt(await valorDisponible(p9)) + BigInt(await costoSalidas(p9))).toBe(BigInt(250000));
+
+      // ── Concurrencia: redistribución y salida simultáneas del mismo producto ──
+      const p10 = await producto();
+      const a10 = await compra(p10, 10, 10000, 0);
+      await compra(p10, 10, 15000, 0);
+      const resultados = await Promise.allSettled([
+        registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-C', compraId: a10, cantidadResultante: 12, claveOperacion: k(17) }),
+        registrarSalidaFifo(pool, 1, 1, { productoId: p10, ubicacionId: 1, cantidad: 5, documento: 'S-4', claveOperacion: k(18) }),
+      ]);
+      expect(resultados.every(r => r.status === 'fulfilled')).toBe(true);
+      // Cualquiera que sea el orden, el costo total (Q2,500.00) queda repartido entre existencias y costo vendido.
+      expect(BigInt(await valorDisponible(p10)) + BigInt(await costoSalidas(p10))).toBe(BigInt(250000));
+      const [conc] = await pool.query<Fila[]>('SELECT s.fisico,COALESCE((SELECT SUM(cantidad_disponible) FROM canecas_capas_costo c WHERE c.empresa_id=s.empresa_id AND c.producto_id=s.producto_id),0) capas FROM canecas_saldos s WHERE s.empresa_id=1 AND s.producto_id=?', [p10]);
+      expect(Number(conc[0].fisico)).toBe(Number(conc[0].capas));
     } finally { await pool.end(); }
   }, 120000);
 });
