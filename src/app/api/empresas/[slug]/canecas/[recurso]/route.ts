@@ -4,6 +4,7 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { accesoCanecas } from "@/lib/canecas/acceso";
 import { confirmarRecepcion } from "@/lib/canecas/confirmar";
+import { registrarSalidaFifo, reversarSalidaFifo } from "@/lib/canecas/salidas-fifo";
 import { guardarProveedor, ErrorProveedorDuplicado } from "@/lib/compras/proveedores";
 import { valorarExistenciaInicial } from "@/lib/canecas/valoracion-inicial";
 import { registrarGastoPosterior } from "@/lib/canecas/gasto-posterior";
@@ -26,6 +27,8 @@ const schemas = {
   compras: z.object({ proveedor_id: id, producto_id: id, cantidad: id, referencia: texto(250), clave_operacion: clave, precio_compra: importe, gastos_adquisicion: importe, moneda: moneda }).strict(),
   recepciones: z.object({ compra_id: id, ubicacion_id: id, recibido_por_empleado_id: id, cantidad: id, clave_operacion: clave }).strict(),
   confirmar: z.object({ id }).strict(),
+  salidas: z.object({ producto_id: id, ubicacion_id: id, cantidad: id, documento: texto(250), clave_operacion: clave }).strict(),
+  reversar_salida: z.object({ salida_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
   valoracion_inicial: z.object({ producto_id: id, ubicacion_id: id, cantidad: id, costo: importe.refine(x => x !== ''), moneda: moneda.refine(x => x !== ''), documento: texto(250), motivo: texto(500), clave_operacion: clave }).strict(),
   gastos_posteriores: z.object({ compra_id: id, importe: importe.refine(x => x !== ''), moneda: moneda.refine(x => x !== ''), fecha_documento: z.iso.date(), referencia: texto(250), motivo: texto(500), clave_operacion: clave }).strict(),
   precio_referencia: z.object({ producto_id: id, precio_venta_referencia: importe, moneda }).strict(),
@@ -41,12 +44,13 @@ const lecturas: Record<string, string> = {
   gastos_posteriores: "SELECT g.id,c.referencia AS compra,g.moneda,FORMAT(g.importe_centavos/100,2) AS importe,DATE_FORMAT(g.fecha_documento,'%Y-%m-%d') AS fecha_documento,g.estado,g.referencia,g.motivo,us.username AS usuario,g.creado_en FROM canecas_gastos_posteriores g JOIN canecas_compras c ON c.empresa_id=g.empresa_id AND c.id=g.compra_id JOIN usuarios us ON us.id=g.creado_por WHERE g.empresa_id=? ORDER BY g.id DESC",
   inventario: "SELECT p.nombre,p.presentacion,u.nombre AS ubicacion,s.fisico,s.reservado,s.fisico-s.reservado AS disponible,s.fisico-COALESCE((SELECT SUM(c.cantidad_disponible) FROM canecas_capas_costo c WHERE c.empresa_id=s.empresa_id AND c.producto_id=s.producto_id AND c.ubicacion_id=s.ubicacion_id),0) AS sin_capa, COALESCE((SELECT SUM(c.cantidad_disponible) FROM canecas_capas_costo c WHERE c.empresa_id=s.empresa_id AND c.producto_id=s.producto_id AND c.ubicacion_id=s.ubicacion_id AND c.costo_unitario_centavos IS NULL),0) AS con_costo_pendiente FROM canecas_saldos s JOIN canecas_productos p ON p.empresa_id=s.empresa_id AND p.id=s.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=s.empresa_id AND u.id=s.ubicacion_id WHERE s.empresa_id=? ORDER BY p.nombre,u.nombre",
   valoracion_inventario: "SELECT p.nombre,p.presentacion,u.nombre AS ubicacion,c.moneda,SUM(c.cantidad_disponible) AS unidades,CAST(SUM(CAST(c.costo_unitario_centavos AS DECIMAL(38,0))*c.cantidad_disponible)/100 AS DECIMAL(38,2)) AS costo_conocido FROM canecas_capas_costo c JOIN canecas_productos p ON p.empresa_id=c.empresa_id AND p.id=c.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=c.empresa_id AND u.id=c.ubicacion_id WHERE c.empresa_id=? AND c.costo_unitario_centavos IS NOT NULL AND c.cantidad_disponible>0 GROUP BY c.empresa_id,c.producto_id,c.ubicacion_id,c.moneda,p.nombre,p.presentacion,u.nombre ORDER BY p.nombre,u.nombre,c.moneda",
+  salidas: "SELECT CAST(s.id AS CHAR) AS id,p.nombre AS producto,u.nombre AS ubicacion,s.cantidad,s.documento,CONCAT(s.moneda,' ',FORMAT(s.costo_centavos/100,2)) AS costo,s.moneda,s.creado_en,us.username AS usuario,s.reversado_en,ur.username AS reversado_por,s.motivo_reverso,CAST(s.movimiento_reverso_id AS CHAR) AS movimiento_reverso_id FROM canecas_salidas_fifo s JOIN canecas_productos p ON p.empresa_id=s.empresa_id AND p.id=s.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=s.empresa_id AND u.id=s.ubicacion_id JOIN usuarios us ON us.id=s.creado_por LEFT JOIN usuarios ur ON ur.id=s.reversado_por WHERE s.empresa_id=? ORDER BY s.id DESC LIMIT 200",
   movimientos: "SELECT m.*,p.nombre AS producto,p.presentacion,u.nombre AS ubicacion,us.username AS usuario,e.nombre AS recibido_por FROM canecas_movimientos m JOIN canecas_productos p ON p.empresa_id=m.empresa_id AND p.id=m.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=m.empresa_id AND u.id=m.ubicacion_id JOIN usuarios us ON us.id=m.usuario_id LEFT JOIN canecas_recepciones r ON r.empresa_id=m.empresa_id AND r.id=m.recepcion_id LEFT JOIN empleados e ON e.empresa_id=r.empresa_id AND e.id=r.recibido_por_empleado_id WHERE m.empresa_id=? ORDER BY m.id DESC LIMIT 200",
 };
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { slug, recurso } = await ctx.params;
-  const accion = recurso === "gastos_posteriores" || recurso === "valoracion_inventario" ? "compras" : recurso === "valoracion_inicial" ? "confirmar" : "ver";
+  const accion = recurso === "gastos_posteriores" || recurso === "valoracion_inventario" || recurso === "salidas" ? "compras" : recurso === "valoracion_inicial" ? "confirmar" : "ver";
   const guard = await accesoCanecas(slug, accion);
   if (guard.error) return guard.error;
   if (!lecturas[recurso]) return NextResponse.json({ error: "Recurso desconocido." }, { status: 404 });
@@ -65,9 +69,13 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, recurso } = await ctx.params;
-  const accion = recurso === "confirmar" || recurso === "valoracion_inicial" ? "confirmar" : recurso === "compras" || recurso === "gastos_posteriores" ? "compras" : recurso === "recepciones" ? "recepciones" : "catalogo";
+  const accion = recurso === "confirmar" || recurso === "valoracion_inicial" || recurso === "salidas" || recurso === "reversar_salida" ? "confirmar" : recurso === "compras" || recurso === "gastos_posteriores" ? "compras" : recurso === "recepciones" ? "recepciones" : "catalogo";
   const guard = await accesoCanecas(slug, accion);
   if (guard.error) return guard.error;
+  if (recurso === "salidas" || recurso === "reversar_salida") {
+    const costos = await accesoCanecas(slug, "compras");
+    if (costos.error) return costos.error;
+  }
   const schema = schemas[recurso as keyof typeof schemas];
   if (!schema) return NextResponse.json({ error: "Recurso desconocido." }, { status: 404 });
   let body: unknown;
@@ -78,6 +86,8 @@ export async function POST(req: Request, ctx: Ctx) {
   const empresa = guard.empresa.id, usuario = guard.session.id;
   try {
     if ((d.precio_compra || d.gastos_adquisicion || d.precio_venta_referencia || d.costo) && !d.moneda) return NextResponse.json({ error: "Indique la moneda del importe." }, { status: 400 });
+    if (recurso === "salidas") return NextResponse.json(await registrarSalidaFifo(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), documento: String(d.documento), claveOperacion: String(d.clave_operacion) }));
+    if (recurso === "reversar_salida") return NextResponse.json(await reversarSalidaFifo(getPool(), empresa, usuario, String(d.salida_id), String(d.motivo)));
     if (recurso === "confirmar") return NextResponse.json(await confirmarRecepcion(getPool(), empresa, Number(d.id), usuario));
     if (recurso === "valoracion_inicial") return NextResponse.json(await valorarExistenciaInicial(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), costoCentavos: centavos(String(d.costo)), moneda: String(d.moneda) || null, documento: String(d.documento), motivo: String(d.motivo), claveOperacion: String(d.clave_operacion) }));
     if (recurso === "gastos_posteriores") return NextResponse.json(await registrarGastoPosterior(getPool(), empresa, usuario, { compraId: Number(d.compra_id), importeCentavos: centavos(String(d.importe))!, moneda: String(d.moneda), fechaDocumento: String(d.fecha_documento), referencia: String(d.referencia), motivo: String(d.motivo), claveOperacion: String(d.clave_operacion) }));
@@ -134,9 +144,10 @@ export async function POST(req: Request, ctx: Ctx) {
     } finally { conn.release(); }
   } catch (error) {
     const e = error as { code?: string; message?: string };
-    if (error instanceof ErrorProveedorDuplicado || e.code === "ER_DUP_ENTRY" || ["CLAVE_REUTILIZADA","CANTIDAD_EXCEDE_COMPRA","REFERENCIA_INVALIDA","CONCILIACION_INVALIDA","MONEDA_INCOMPATIBLE"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro duplicado o datos incompatibles. Verifique la operación." }, { status: 409 });
-    if (["VALORACION_INVALIDA","GASTO_INVALIDO","MONEDA_REQUERIDA"].includes(e.message ?? "")) return NextResponse.json({ error: "Revise los importes, la moneda y los demás campos." }, { status: 400 });
-    if (["RECEPCION_NO_ENCONTRADA","COMPRA_NO_ENCONTRADA","SALDO_NO_ENCONTRADO"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro no encontrado." }, { status: 404 });
+    if (e.message === "RESERVAS_PENDIENTES") return NextResponse.json({ error: "No se pueden registrar salidas mientras existan reservas sin asignación FIFO." }, { status: 409 });
+    if (error instanceof ErrorProveedorDuplicado || e.code === "ER_DUP_ENTRY" || ["CLAVE_REUTILIZADA","CANTIDAD_EXCEDE_COMPRA","REFERENCIA_INVALIDA","CONCILIACION_INVALIDA","MONEDA_INCOMPATIBLE","SALDO_INSUFICIENTE","RESERVAS_PENDIENTES","CAPAS_NO_CONCILIADAS","COSTO_PENDIENTE","PRIORIDAD_INICIAL_PENDIENTE","CAPAS_INSUFICIENTES","TRAZABILIDAD_INVALIDA","REVERSO_YA_REGISTRADO"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro duplicado o datos incompatibles. Verifique la operación." }, { status: 409 });
+    if (["VALORACION_INVALIDA","GASTO_INVALIDO","MONEDA_REQUERIDA","SALIDA_INVALIDA","REVERSO_INVALIDO"].includes(e.message ?? "")) return NextResponse.json({ error: "Revise los importes, la moneda y los demás campos." }, { status: 400 });
+    if (["RECEPCION_NO_ENCONTRADA","COMPRA_NO_ENCONTRADA","SALDO_NO_ENCONTRADO","SALIDA_NO_ENCONTRADA"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro no encontrado." }, { status: 404 });
     return NextResponse.json({ error: "No se pudo completar la operación." }, { status: 500 });
   }
 }
