@@ -4,8 +4,11 @@ import { checksEquivalentes } from '../../../scripts/ci/canecas/check-equivalent
 describe('equivalencia conservadora de CHECK', () => {
   it.each([
     ['`cantidad` > 0', ' ((( CANTIDAD>0 ))) '],
+    ['`capacidad` > 0', 'CAPACIDAD>0'],
+    ['`cantidad` <> 0', 'CANTIDAD<>0'],
+    ['`fisico` >= 0 and `reservado` >= 0 and `reservado` <= `fisico`', 'FISICO>=0 AND RESERVADO>=0 AND RESERVADO<=FISICO'],
+    ["`estado` = 'BORRADOR' and `confirmado_por` is null and `confirmado_en` is null or `estado` = 'CONFIRMADA' and `confirmado_por` is not null and `confirmado_en` is not null", "ESTADO='BORRADOR' AND CONFIRMADO_POR IS NULL AND CONFIRMADO_EN IS NULL OR ESTADO='CONFIRMADA' AND CONFIRMADO_POR IS NOT NULL AND CONFIRMADO_EN IS NOT NULL"],
     ['json_valid(`modulos_json`)', 'JSON_VALID( MODULOS_JSON )'],
-    ["(`estado` = 'BORRADOR' AND `confirmado_por` IS NULL)", "( ESTADO='BORRADOR' and confirmado_por is null )"],
   ])('acepta formato equivalente', (a, b) => expect(checksEquivalentes(a, b)).toBe(true));
   it.each([
     ['cantidad > 0', 'cantidad >= 0'],
