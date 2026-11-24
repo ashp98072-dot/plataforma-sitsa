@@ -24,7 +24,7 @@ describe.skipIf(!pipe)('instalación real en MariaDB desechable', () => {
       const [antes] = await conn.query('SELECT id,codigo,nombre,slug FROM empresas WHERE id=901');
       const contrato = await obtenerContratoBase(conn);
       const archivo = path.join(dir, 'contrato.json');
-      const incompatible = structuredClone(contrato);
+      const incompatible = structuredClone(contrato) as { columnas: { COLUMN_TYPE: string }[] };
       incompatible.columnas[0].COLUMN_TYPE += ' alterado';
       writeFileSync(archivo, JSON.stringify({ formato: 1, base: 'canecas_instalacion_test', contrato: incompatible }), { mode: 0o600 });
       process.env.CANECAS_CONTRATO_VALIDADO = archivo;
