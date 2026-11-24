@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantModulo } from "@/lib/tenant";
 import { actualizarMontoViatico } from "@/lib/tms/viaticos";
+import { sincronizarFondosTrasViatico } from "@/lib/tms/fondos-diarios-viatico";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -45,5 +46,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!r.ok) {
     return NextResponse.json({ error: r.error }, { status: 400 });
   }
-  return NextResponse.json({ mensaje: "Viático actualizado." });
+  // FONDOS DIARIOS: el monto ya está confirmado; se refleja en la solicitud (diferencial, sin duplicar; autorizada intacta). Si no se pudo, se AVISA (el monto no se revierte).
+  const s = guard.session;
+  const { advertenciaFondos } = await sincronizarFondosTrasViatico(guard.empresa.id, viaticoId, { usuarioId: s.id, nombre: s.nombre || s.username, username: s.username });
+  return NextResponse.json({ mensaje: "Viático actualizado.", ...(advertenciaFondos ? { advertenciaFondos } : {}) });
 }

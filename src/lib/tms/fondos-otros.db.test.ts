@@ -164,6 +164,59 @@ describe.skipIf(!pipe)("fondos diarios Fase 3: otros fondos del viaje (MariaDB 1
     expect(await otrosDe(v)).toHaveLength(2);   // el rechazo no dejó nada a medias
   });
 
+  it("RECHAZO DE VIÁTICO: retira la fila automática de la solicitud PENDIENTE (total al día, sin tocar las demás); en una AUTORIZADA la fila NO se elimina ni modifica; sin duplicar", async () => {
+    const v = await viaje(DIA, KT, [[200, 50], [201, 100]]);
+    await guardarOtros(v, [{ categoria: "Combustible", monto: 200, empleadoId: 100, metodoPago: "Efectivo" }]); await sincronizar([v]);
+    const [p] = await principales(); expect(Number(p.total)).toBe(350);
+    const idsAntes = new Map((await lineasDe(Number(p.id))).map((l) => [l.empleado_nombre + l.categoria, Number(l.id)]));
+    // rechazo (estado RECHAZADO, como lo deja rechazarViatico) y sincronización dos veces concurrentes
+    await admin.query("UPDATE tms_viaticos SET estado = 'RECHAZADO' WHERE plan_id = ? AND personal_id = 201", [v]);
+    await Promise.all([sincronizar([v]), sincronizar([v])]);
+    const lin = await lineasDe(Number(p.id));
+    expect(lin.map((l) => [l.empleado_nombre, l.categoria, Number(l.monto)]).sort()).toEqual([["Juan Pérez", "Combustible", 200], ["Juan Pérez", "Viáticos", 50]]);
+    expect(Number((await principales())[0].total)).toBe(250);
+    for (const l of lin) expect(Number(l.id)).toBe(idsAntes.get(l.empleado_nombre + l.categoria));   // las demás filas conservan su id
+    expect(await R("SELECT id FROM tms_solicitudes_fondo WHERE tipo = 'COMPLEMENTARIA'")).toHaveLength(0);
+    // solicitud AUTORIZADA: el rechazo de otro viático NO borra ni modifica su fila ya autorizada; no se crea nada nuevo
+    await autorizar(p.id);
+    const congelado = JSON.stringify([await principales(), await lineasDe(Number(p.id))]);
+    await admin.query("UPDATE tms_viaticos SET estado = 'RECHAZADO' WHERE plan_id = ? AND personal_id = 200", [v]);
+    await Promise.all([sincronizar([v]), sincronizar([v])]);
+    expect(JSON.stringify([await principales(), await lineasDe(Number(p.id))])).toBe(congelado);
+    expect(await R("SELECT id FROM tms_solicitudes_fondo WHERE tipo = 'COMPLEMENTARIA'")).toHaveLength(0);
+    // un viático ya rechazado no vuelve a aparecer en ninguna solicitud
+    expect(await N("SELECT COUNT(*) n FROM tms_solicitud_fondo_lineas l JOIN tms_viaticos t ON t.id = l.viatico_id WHERE t.estado = 'RECHAZADO' AND l.solicitud_id <> " + Number(p.id))).toBe(0);
+  });
+
+  it("VIÁTICOS INDIVIDUALES: Piloto Q50 + Auxiliar Q100 + Auxiliar Q0 + Combustible Q200 = Q350 en tres filas; Q0 no genera fila; editar el monto sincroniza SIN duplicar; autorizada no se toca", async () => {
+    const v = await viaje(DIA, KT, [[200, 50], [201, 100], [202, 0]]);
+    await guardarOtros(v, [{ categoria: "Combustible", monto: 200, empleadoId: 100, metodoPago: "Efectivo" }]); await sincronizar([v]);
+    const [p] = await principales(); const lin = await lineasDe(Number(p.id));
+    expect(lin).toHaveLength(3); expect(Number(p.total)).toBe(350);
+    expect(lin.map((l) => [l.origen, l.categoria, l.empleado_nombre, Number(l.monto)]).sort()).toEqual([["AUTO_OTRO", "Combustible", "Juan Pérez", 200], ["AUTO_VIATICO", "Viáticos", "Ana López", 100], ["AUTO_VIATICO", "Viáticos", "Juan Pérez", 50]]);
+    const [fila] = await R("SELECT l.*, s.entidad_requirente_id e, DATE_FORMAT(l.fecha_viaje, '%Y-%m-%d') f FROM tms_solicitud_fondo_lineas l JOIN tms_solicitudes_fondo s ON s.id = l.solicitud_id WHERE l.origen = 'AUTO_VIATICO' AND l.empleado_id = 101");
+    expect(fila).toMatchObject({ plan_id: v, f: DIA, e: KT, cargo: "Auxiliar" }); expect(fila.viatico_id).not.toBeNull();
+    // editar el monto del viático (como PATCH /tms/viaticos/:id) y volver a sincronizar: mismo id de línea, sin duplicar; total al día
+    const idsAntes = lin.map((l) => Number(l.id)).sort();
+    await admin.query("UPDATE tms_viaticos SET monto_asignado = 80 WHERE plan_id = ? AND personal_id = 201", [v]);
+    await Promise.all([sincronizar([v]), sincronizar([v])]);
+    const lin2 = await lineasDe(Number(p.id)); expect(lin2.map((l) => Number(l.id)).sort()).toEqual(idsAntes);
+    expect(Number((await principales())[0].total)).toBe(330);
+    // un Q0 que pasa a Q25 crea su fila; un viático que baja a Q0 retira la suya
+    await admin.query("UPDATE tms_viaticos SET monto_asignado = 25 WHERE plan_id = ? AND personal_id = 202", [v]);
+    await admin.query("UPDATE tms_viaticos SET monto_asignado = 0 WHERE plan_id = ? AND personal_id = 200", [v]);
+    await sincronizar([v]);
+    expect((await lineasDe(Number(p.id))).map((l) => [l.empleado_nombre, Number(l.monto)]).sort()).toEqual([["Ana López", 80], ["Beto Ruiz", 25], ["Juan Pérez", 200]]);
+    // autorizada: no se toca; el viático nuevo posterior va a UNA complementaria
+    await autorizar(p.id);
+    const congelado = JSON.stringify(await lineasDe(Number(p.id)));
+    await admin.query("UPDATE tms_viaticos SET monto_asignado = 999 WHERE plan_id = ? AND personal_id = 201", [v]);
+    await admin.query("UPDATE tms_viaticos SET monto_asignado = 40 WHERE plan_id = ? AND personal_id = 200", [v]);
+    await Promise.all([sincronizar([v]), sincronizar([v])]);
+    expect(JSON.stringify(await lineasDe(Number(p.id)))).toBe(congelado);
+    const comp = await R("SELECT id, total FROM tms_solicitudes_fondo WHERE tipo = 'COMPLEMENTARIA'"); expect(comp).toHaveLength(1); expect(Number(comp[0].total)).toBe(40);
+    expect(await N("SELECT COUNT(*) n FROM (SELECT viatico_id FROM tms_solicitud_fondo_lineas WHERE viatico_id IS NOT NULL GROUP BY viatico_id HAVING COUNT(*) > 1) d")).toBe(0);
+  });
   it("IDEMPOTENCIA y CONCURRENCIA: repetir/concurrir la sincronización no crea solicitudes ni líneas nuevas y conserva los ids; guardar la misma lista no cambia nada", async () => {
     const v = await viaje(DIA, KT, [[200, 150]]); await guardarOtros(v, [HOSPEDAJE]); await sincronizar([v]);
     const [p] = await principales(); const antes = JSON.stringify(await lineasDe(Number(p.id)));

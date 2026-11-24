@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/tenant", () => ({ requireTenantViaticosAutorizar: vi.fn() }));
 vi.mock("@/lib/tms/viaticos", () => ({ rechazarViatico: vi.fn() }));
+vi.mock("@/lib/tms/fondos-diarios-viatico", () => ({ sincronizarFondosTrasViatico: vi.fn(async () => ({})) }));   // la sincronización con fondos se prueba en rechazar-fondos.test.ts
 
 import { requireTenantViaticosAutorizar } from "@/lib/tenant";
 import { rechazarViatico } from "@/lib/tms/viaticos";

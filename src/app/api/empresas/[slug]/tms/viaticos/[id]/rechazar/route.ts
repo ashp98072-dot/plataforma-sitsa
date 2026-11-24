@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireTenantViaticosAutorizar } from "@/lib/tenant";
 import { rechazarViatico } from "@/lib/tms/viaticos";
+import { sincronizarFondosTrasViatico } from "@/lib/tms/fondos-diarios-viatico";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -36,7 +37,10 @@ export async function POST(req: Request, ctx: Ctx) {
     if (!r.ok) {
       return NextResponse.json({ error: r.error }, { status: r.status });
     }
-    return NextResponse.json({ mensaje: "Viático rechazado." });
+    // FONDOS DIARIOS: el rechazo ya está confirmado; se retira la línea automática de la solicitud PENDIENTE (una AUTORIZADA no se toca). Si no se pudo, se AVISA.
+    const s = guard.session;
+    const { advertenciaFondos } = await sincronizarFondosTrasViatico(guard.empresa.id, viaticoId, { usuarioId: s.id, nombre: s.nombre || s.username, username: s.username });
+    return NextResponse.json({ mensaje: "Viático rechazado.", ...(advertenciaFondos ? { advertenciaFondos } : {}) });
   } catch (error) {
     console.error("POST rechazar viático", error);
     return NextResponse.json({ error: "No se pudo rechazar el viático." }, { status: 500 });
