@@ -38,12 +38,12 @@ export async function ejecutarSalidasControlado(connection) {
     if (Number(actual[0]?.innodb) !== 1 || !previos.every(x => activos.includes(x)) || !activos.some(x => ['STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES'].includes(x))) throw Error('DETENER: no se pudieron activar modos estrictos');
     await verificarContrato(connection);
     const costos = sql('migrate-2026-11-canecas-costos-wip.sql');
-    const [ddl, triggerSql] = costos.split('DELIMITER //');
-    const triggers = triggerSql?.split('//').map(x => x.trim()).filter(x => x.startsWith('CREATE TRIGGER')) || [];
-    if (triggers.length !== 7) throw Error('DETENER: triggers esperados incompletos');
+    const [ddl, costoTriggerSql] = costos.split('DELIMITER //');
+    const costoTriggers = costoTriggerSql?.split('//').map(x => x.trim()).filter(x => x.startsWith('CREATE TRIGGER')) || [];
+    if (costoTriggers.length !== 7) throw Error('DETENER: triggers esperados incompletos');
     const [post] = await connection.query(sql('postcheck-2026-11-canecas-costos-wip.sql'));
     if (!Array.isArray(post) || post.length < 11 || post.flat().some(row => row?.resultado === 'DETENER') || post[5].length || post[3].some(row => Number(row.unidades_sin_capa) < 0)) throw Error('DETENER: postcheck de costos incompatible');
-    verificarTriggers(post[8], triggers);
+    verificarTriggers(post[8], costoTriggers);
     verificarClavesForaneas(post[9], ddl);
     const [existentes] = await connection.query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('canecas_salidas_fifo','canecas_salidas_fifo_capas')");
     if (!Array.isArray(existentes) || existentes.length) throw Error('DETENER: salidas presentes o instalación parcial; diagnóstico supervisado');
