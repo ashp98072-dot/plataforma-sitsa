@@ -21,7 +21,7 @@ export async function ejecutarSalidasControlado(connection) {
     const local = value.indexOf(marker), pos = local >= 0 ? local : value.indexOf(' ON *.* TO ');
     if (pos >= 0 && value.startsWith('GRANT ')) for (const item of value.slice(6, pos).split(',')) permisos.add(item.trim().toUpperCase());
   }
-  if (['SELECT', 'CREATE', 'REFERENCES'].some(p => !permisos.has(p) && !permisos.has('ALL PRIVILEGES'))) throw Error('DETENER: privilegios directos insuficientes');
+  if (['SELECT', 'CREATE', 'REFERENCES', 'TRIGGER'].some(p => !permisos.has(p) && !permisos.has('ALL PRIVILEGES'))) throw Error('DETENER: privilegios directos insuficientes');
   const lock = `canecas-costos:${base}`;
   const [locks] = await connection.query('SELECT GET_LOCK(?, 0) AS adquirido', [lock]);
   if (Number(locks[0]?.adquirido) !== 1) throw Error('DETENER: instalación concurrente');
