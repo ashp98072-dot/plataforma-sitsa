@@ -41,3 +41,96 @@ CREATE TABLE canecas_salidas_fifo_capas (
   CONSTRAINT fk_can_salida_capa_salida FOREIGN KEY (empresa_id,salida_id) REFERENCES canecas_salidas_fifo(empresa_id,id),
   CONSTRAINT fk_can_salida_capa_capa FOREIGN KEY (empresa_id,capa_id) REFERENCES canecas_capas_costo(empresa_id,id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DELIMITER //
+CREATE TRIGGER trg_can_salida_fifo_bu
+BEFORE UPDATE ON canecas_salidas_fifo
+FOR EACH ROW
+BEGIN
+  IF NOT (NEW.id <=> OLD.id)
+    OR NOT (NEW.empresa_id <=> OLD.empresa_id)
+    OR NOT (NEW.producto_id <=> OLD.producto_id)
+    OR NOT (NEW.ubicacion_id <=> OLD.ubicacion_id)
+    OR NOT (NEW.cantidad <=> OLD.cantidad)
+    OR NOT (NEW.documento <=> OLD.documento)
+    OR NOT (NEW.clave_operacion <=> OLD.clave_operacion)
+    OR NOT (NEW.movimiento_id <=> OLD.movimiento_id)
+    OR NOT (NEW.costo_centavos <=> OLD.costo_centavos)
+    OR NOT (NEW.moneda <=> OLD.moneda)
+    OR NOT (NEW.creado_por <=> OLD.creado_por)
+    OR NOT (NEW.creado_en <=> OLD.creado_en) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_SALIDA_INMUTABLE';
+  END IF;
+
+  IF OLD.reversado_por IS NOT NULL THEN
+    IF NOT (NEW.reversado_por <=> OLD.reversado_por)
+      OR NOT (NEW.reversado_en <=> OLD.reversado_en)
+      OR NOT (NEW.motivo_reverso <=> OLD.motivo_reverso)
+      OR NOT (NEW.movimiento_reverso_id <=> OLD.movimiento_reverso_id) THEN
+      SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_REVERSO_INMUTABLE';
+    END IF;
+  ELSEIF NOT (
+    (NEW.reversado_por IS NULL AND NEW.reversado_en IS NULL AND NEW.motivo_reverso IS NULL AND NEW.movimiento_reverso_id IS NULL)
+    OR
+    (NEW.reversado_por IS NOT NULL AND NEW.reversado_en IS NOT NULL AND NEW.motivo_reverso IS NOT NULL AND NEW.movimiento_reverso_id IS NOT NULL)
+  ) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_REVERSO_INCOMPLETO';
+  END IF;
+END//
+
+CREATE TRIGGER trg_can_salida_fifo_bd
+BEFORE DELETE ON canecas_salidas_fifo
+FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_SALIDA_NO_ELIMINABLE';
+END//
+
+CREATE TRIGGER trg_can_salida_fifo_capas_bi
+BEFORE INSERT ON canecas_salidas_fifo_capas
+FOR EACH ROW
+BEGIN
+  DECLARE v_producto INT DEFAULT NULL;
+  DECLARE v_ubicacion INT DEFAULT NULL;
+  DECLARE v_reversado DATETIME DEFAULT NULL;
+  DECLARE v_capa_producto INT DEFAULT NULL;
+  DECLARE v_capa_ubicacion INT DEFAULT NULL;
+  DECLARE v_costo BIGINT DEFAULT NULL;
+  DECLARE v_moneda CHAR(3) DEFAULT NULL;
+
+  SELECT producto_id, ubicacion_id, reversado_en
+    INTO v_producto, v_ubicacion, v_reversado
+    FROM canecas_salidas_fifo
+    WHERE empresa_id = NEW.empresa_id AND id = NEW.salida_id;
+
+  IF v_producto IS NULL OR v_reversado IS NOT NULL THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_DETALLE_SALIDA_INVALIDO';
+  END IF;
+
+  SELECT producto_id, ubicacion_id, costo_unitario_centavos, moneda
+    INTO v_capa_producto, v_capa_ubicacion, v_costo, v_moneda
+    FROM canecas_capas_costo
+    WHERE empresa_id = NEW.empresa_id AND id = NEW.capa_id;
+
+  IF v_capa_producto IS NULL
+    OR NOT (v_capa_producto <=> v_producto)
+    OR NOT (v_capa_ubicacion <=> v_ubicacion)
+    OR NOT (NEW.costo_unitario_centavos <=> v_costo)
+    OR NOT (NEW.moneda <=> v_moneda) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_DETALLE_CAPA_INCOMPATIBLE';
+  END IF;
+END//
+
+CREATE TRIGGER trg_can_salida_fifo_capas_bu
+BEFORE UPDATE ON canecas_salidas_fifo_capas
+FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_DETALLE_SALIDA_INMUTABLE';
+END//
+
+CREATE TRIGGER trg_can_salida_fifo_capas_bd
+BEFORE DELETE ON canecas_salidas_fifo_capas
+FOR EACH ROW
+BEGIN
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_DETALLE_SALIDA_NO_ELIMINABLE';
+END//
+DELIMITER ;
