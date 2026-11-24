@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ acceso: vi.fn(), query: vi.fn(), confirmar: vi.fn(), valorar: vi.fn(), gasto: vi.fn() }));
+const mocks = vi.hoisted(() => ({ acceso: vi.fn(), query: vi.fn(), confirmar: vi.fn(), valorar: vi.fn(), gasto: vi.fn(), crear: vi.fn(), editar: vi.fn(), estado: vi.fn(), mapear: vi.fn() }));
 vi.mock("@/lib/canecas/acceso", () => ({ accesoCanecas: mocks.acceso }));
 vi.mock("@/lib/canecas/confirmar", () => ({ confirmarRecepcion: mocks.confirmar }));
 vi.mock("@/lib/canecas/valoracion-inicial", () => ({ valorarExistenciaInicial: mocks.valorar }));
 vi.mock("@/lib/canecas/gasto-posterior", () => ({ registrarGastoPosterior: mocks.gasto }));
 vi.mock("@/lib/db", () => ({ getPool: () => ({}), query: mocks.query }));
-vi.mock("@/lib/compras/proveedores", () => ({ guardarProveedor: vi.fn(), ErrorProveedorDuplicado: class extends Error {} }));
-import { GET, POST } from "./route";
+vi.mock("@/lib/canecas/catalogos", async importOriginal => ({ ...(await importOriginal<typeof import("@/lib/canecas/catalogos")>()), crearCatalogo: mocks.crear, editarCatalogo: mocks.editar, cambiarEstadoCatalogo: mocks.estado, mapearProveedorCompra: mocks.mapear }));
+import { ErrorCatalogoDuplicado, ErrorCatalogoNoEncontrado } from "@/lib/canecas/catalogos";
+import { GET, PATCH, POST } from "./route";
 const ctx = (recurso: string) => ({params:Promise.resolve({slug:"uno",recurso})});
 describe("API de Canecas", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.acceso.mockResolvedValue({empresa:{id:5},session:{id:7,username:"u"}}); });
@@ -70,10 +71,11 @@ describe("API de Canecas", () => {
     expect(mocks.acceso).toHaveBeenCalledWith("uno","compras");
     expect(mocks.gasto).toHaveBeenCalledWith({},5,7,expect.objectContaining({importeCentavos:BigInt(107)}));
   });
-  it("no acepta costo conocido sin moneda", async () => {
-    const req = new Request("http://local", { method:"POST",body:JSON.stringify({producto_id:2,ubicacion_id:3,cantidad:4,costo:"1.00",moneda:"",documento:"Conteo",motivo:"Saldo",clave_operacion:"a0000000-0000-4000-8000-000000000001"}) });
-    expect((await POST(req,ctx("valoracion_inicial"))).status).toBe(400);
-    expect(mocks.valorar).not.toHaveBeenCalled();
+  it("asume GTQ cuando no se envía moneda: el usuario no elige ni escribe el código", async () => {
+    mocks.valorar.mockResolvedValue({ok:true});
+    const req = new Request("http://local", { method:"POST",body:JSON.stringify({producto_id:2,ubicacion_id:3,cantidad:4,costo:"1.00",documento:"Conteo",motivo:"Saldo",clave_operacion:"a0000000-0000-4000-8000-000000000001"}) });
+    expect((await POST(req,ctx("valoracion_inicial"))).status).toBe(200);
+    expect(mocks.valorar.mock.calls[0][3]).toMatchObject({ moneda:"GTQ", costoCentavos:BigInt(100) });
   });
   it("deja el saldo anterior pendiente cuando no se conoce su costo", async () => {
     const req = new Request("http://local", { method:"POST",body:JSON.stringify({producto_id:2,ubicacion_id:3,cantidad:4,costo:"",moneda:"",documento:"Conteo",motivo:"Saldo",clave_operacion:"a0000000-0000-4000-8000-000000000001"}) });
@@ -86,5 +88,64 @@ describe("API de Canecas", () => {
     expect((await POST(req,ctx(recurso))).status).toBe(403);
     expect(mocks.valorar).not.toHaveBeenCalled();
     expect(mocks.gasto).not.toHaveBeenCalled();
+  });
+  describe("catálogos exclusivos de Canecas (proveedores y clientes)", () => {
+    const solicitud = (metodo: string, cuerpo: unknown) => new Request("http://local", { method: metodo, body: JSON.stringify(cuerpo) });
+    it.each([["proveedores","canecas_proveedores"],["clientes","canecas_clientes"]])("lee %s de su propia tabla y solo de la empresa de la sesión", async (recurso, tabla) => {
+      mocks.query.mockResolvedValue([]);
+      expect((await GET(new Request("http://local"), ctx(recurso))).status).toBe(200);
+      expect(mocks.acceso).toHaveBeenCalledWith("uno", "ver");
+      expect(mocks.query.mock.calls[0][0]).toContain(`FROM ${tabla} WHERE empresa_id=?`);
+      expect(mocks.query.mock.calls[0][0]).not.toMatch(/compras_proveedores/);
+      expect(mocks.query.mock.calls[0][1]).toEqual([5]);
+    });
+    it.each(["proveedores","clientes"])("%s: crea con la empresa y el usuario de la sesión y exige permiso de catálogo", async recurso => {
+      mocks.crear.mockResolvedValue(11);
+      const res = await POST(solicitud("POST", { nombre_comercial: "Aceites", nit: "123-4", telefono: "", direccion: "" }), ctx(recurso));
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ id: 11 });
+      expect(mocks.acceso).toHaveBeenCalledWith("uno", "catalogo");
+      expect(mocks.crear).toHaveBeenCalledWith(expect.anything(), recurso, 5, 7, { nombre_comercial: "Aceites", nit: "123-4", telefono: null, direccion: null });
+    });
+    it("no confía en la empresa ni en el usuario enviados por el cliente", async () => {
+      for (const extra of [{ empresa_id: 99 }, { creado_por: 99 }, { moneda: "USD" }]) expect((await POST(solicitud("POST", { nombre_comercial: "X", ...extra }), ctx("clientes"))).status).toBe(400);
+      expect(mocks.crear).not.toHaveBeenCalled();
+    });
+    it.each([["POST"],["PATCH"]])("%s: deniega sin permiso de catálogo y no toca la base", async metodo => {
+      mocks.acceso.mockResolvedValue({ error: new Response(null, { status: 403 }) });
+      const res = metodo === "POST" ? await POST(solicitud("POST", { nombre_comercial: "X" }), ctx("proveedores")) : await PATCH(solicitud("PATCH", { id: 1, activo: false }), ctx("proveedores"));
+      expect(res.status).toBe(403);
+      expect(mocks.crear).not.toHaveBeenCalled(); expect(mocks.estado).not.toHaveBeenCalled(); expect(mocks.editar).not.toHaveBeenCalled();
+    });
+    it.each([["proveedores","nit","proveedor","NIT"],["clientes","nombre","cliente","nombre"]])("%s: un duplicado de %s responde 409 con mensaje propio", async (recurso, campo, palabra, texto) => {
+      mocks.crear.mockRejectedValue(new ErrorCatalogoDuplicado(campo as "nit" | "nombre"));
+      const res = await POST(solicitud("POST", { nombre_comercial: "Repetido" }), ctx(recurso));
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe(`Ya existe un ${palabra} de Canecas con ese ${texto}.`);
+    });
+    it("activa y desactiva con la empresa y el usuario de la sesión", async () => {
+      expect((await PATCH(solicitud("PATCH", { id: 3, activo: false }), ctx("clientes"))).status).toBe(200);
+      expect(mocks.estado).toHaveBeenCalledWith(expect.anything(), "clientes", 5, 7, 3, false);
+      mocks.estado.mockRejectedValueOnce(new ErrorCatalogoNoEncontrado());
+      expect((await PATCH(solicitud("PATCH", { id: 4, activo: true }), ctx("clientes"))).status).toBe(404);
+    });
+    it("edita datos y rechaza cuerpos inválidos o con campos ajenos", async () => {
+      expect((await PATCH(solicitud("PATCH", { id: 3, nombre_comercial: "Nuevo nombre", nit: "", telefono: "5555-1111", direccion: "Zona 1" }), ctx("proveedores"))).status).toBe(200);
+      expect(mocks.editar).toHaveBeenCalledWith(expect.anything(), "proveedores", 5, 7, 3, { nombre_comercial: "Nuevo nombre", nit: null, telefono: "5555-1111", direccion: "Zona 1" });
+      mocks.editar.mockRejectedValueOnce(new ErrorCatalogoDuplicado("nombre"));
+      expect((await PATCH(solicitud("PATCH", { id: 3, nombre_comercial: "Repetido" }), ctx("proveedores"))).status).toBe(409);
+      for (const cuerpo of [{ id: 3 }, { nombre_comercial: "Sin id" }, { id: 3, nombre_comercial: "A", empresa_id: 9 }, { id: 3, activo: "si" }]) expect((await PATCH(solicitud("PATCH", cuerpo), ctx("proveedores"))).status).toBe(400);
+      expect(mocks.editar).toHaveBeenCalledTimes(2);
+    });
+    it("mapea una compra histórica a un proveedor de Canecas solo con permiso de catálogo", async () => {
+      expect((await POST(solicitud("POST", { compra_id: 8, proveedor_id: 2 }), ctx("mapeo_proveedor_compra"))).status).toBe(200);
+      expect(mocks.acceso).toHaveBeenCalledWith("uno", "catalogo");
+      expect(mocks.mapear).toHaveBeenCalledWith(expect.anything(), 5, 7, 8, 2);
+      mocks.mapear.mockRejectedValueOnce(new Error("COMPRA_YA_MAPEADA"));
+      expect((await POST(solicitud("POST", { compra_id: 8, proveedor_id: 2 }), ctx("mapeo_proveedor_compra"))).status).toBe(409);
+    });
+    it("PATCH sigue sin aceptar recursos desconocidos", async () => {
+      expect((await PATCH(solicitud("PATCH", { id: 1, activo: true }), ctx("inventario"))).status).toBe(404);
+    });
   });
 });

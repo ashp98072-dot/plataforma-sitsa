@@ -11,6 +11,8 @@ on:
       - 'src/components/canecas/**'
       - 'scripts/ci/canecas/**'
       - 'sql/*canecas*'
+      - 'src/lib/permisos*'
+      - 'src/components/app-shell.tsx'
       - 'sql/schema.sql'
       - '.github/workflows/canecas-lab.yml'
       - 'package-lock.json'
@@ -84,6 +86,19 @@ jobs:
             exit 1
           fi
 
+      - name: Contrato de catálogos generado en 11.8.9 igual al versionado
+        env:
+          CANECAS_GENERAR_CONTRATO: catalogos
+        run: |
+          node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
+          if git ls-files --error-unmatch scripts/ci/canecas/contrato-catalogos-mariadb-11.8.9.json >/dev/null 2>&1; then
+            git diff --exit-code --stat -- scripts/ci/canecas/contrato-catalogos-mariadb-11.8.9.json || { echo "::error::El contrato versionado difiere del generado por la migración en MariaDB 11.8.9"; exit 1; }
+          else
+            echo "=====CONTRATO-CATALOGOS-INICIO====="
+            cat scripts/ci/canecas/contrato-catalogos-mariadb-11.8.9.json
+            echo "=====CONTRATO-CATALOGOS-FIN====="
+          fi
+
       - name: Laboratorio costos, salidas y redistribución (aislado, sin red)
         run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
 
@@ -97,7 +112,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: ESLint dirigido
-        run: npx eslint src/lib/canecas/orden-fifo.ts src/lib/canecas/orden-fifo.test.ts src/lib/canecas/salidas-fifo.ts src/lib/canecas/redistribucion.ts src/lib/canecas/redistribucion-reglas.ts src/lib/canecas/redistribucion-reglas.test.ts src/lib/canecas/redistribucion.db.test.ts src/lib/canecas/lab-runners-paridad.test.ts
+        run: npx eslint src/lib/canecas/catalogos.ts src/lib/canecas/catalogos.test.ts src/lib/canecas/catalogos.db.test.ts src/lib/canecas/instalacion-catalogos.db.test.ts src/lib/canecas/generar-contrato-catalogos.db.test.ts src/components/canecas/canecas-client.tsx src/components/canecas/canecas-client.dom.test.ts "src/app/api/empresas/[slug]/canecas/[recurso]/route.ts" "src/app/api/empresas/[slug]/canecas/[recurso]/route.test.ts" src/lib/canecas/orden-fifo.ts src/lib/canecas/orden-fifo.test.ts src/lib/canecas/salidas-fifo.ts src/lib/canecas/redistribucion.ts src/lib/canecas/redistribucion-reglas.ts src/lib/canecas/redistribucion-reglas.test.ts src/lib/canecas/redistribucion.db.test.ts src/lib/canecas/lab-runners-paridad.test.ts
 
       - name: Build
         run: npm run build

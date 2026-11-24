@@ -13,10 +13,10 @@ describe("recepciones de Canecas", () => {
     try {
       await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"inventario",permisos:{}})); await new Promise(r=>setTimeout(r,20)); });
       expect(host.textContent).not.toContain("Conciliar existencia inicial");
-      expect(host.textContent).not.toContain("Costo conocido por moneda");
+      expect(host.textContent).not.toContain("Costo conocido en Q");
       await act(async () => { root.render(createElement(CanecasClient,{slug:"demo",vista:"inventario",permisos:{confirmar:true,compras:true}})); await new Promise(r=>setTimeout(r,20)); });
       expect(host.textContent).toContain("Conciliar existencia inicial");
-      expect(host.textContent).toContain("Costo conocido por moneda");
+      expect(host.textContent).toContain("Costo conocido en Q");
       expect(host.querySelector('input[name="costo"]')).not.toBeNull();
     } finally { await act(async()=>root.unmount()); host.remove(); }
   });
@@ -165,5 +165,102 @@ describe("recepciones de Canecas", () => {
       expect(host.textContent).toContain("operador");
       expect(fetchMock.mock.calls.filter(([url,init]) => String(url).endsWith("/confirmar") && init?.method === "POST")).toHaveLength(1);
     } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+  const montar = async (vista: string, permisos: Record<string, boolean>, datos: Record<string, unknown[]>, respuestas: { patch?: unknown } = {}) => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST" || init?.method === "PATCH") return Response.json(respuestas.patch ?? {});
+      const recurso = String(input).split("/canecas/")[1];
+      return Response.json({ datos: datos[recurso] ?? [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+    await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista, permisos })); });
+    await act(async () => { await new Promise(r => setTimeout(r, 30)); }); // los efectos se ejecutan al salir del primer act
+    return { host, root, fetchMock, limpiar: async () => { await act(async () => root.unmount()); host.remove(); } };
+  };
+  const cliente = { id: 3, nombre_comercial: "Aceites del Sur", nit: "1234567-8", telefono: "5555-1111", direccion: "Zona 4", estado: "Activo", activo: 1, creado_en: "2026-11-01" };
+  it.each(["proveedores", "clientes"])("%s: muestra el catálogo, busca y no ofrece campos de moneda", async vista => {
+    const { host, limpiar } = await montar(vista, { catalogo: true }, { [vista]: [cliente, { ...cliente, id: 4, nombre_comercial: "Distribuidora Norte", nit: "9999999-9", estado: "Inactivo", activo: 0 }] });
+    try {
+      for (const texto of ["Aceites del Sur", "1234567-8", "Distribuidora Norte", "Inactivo", "Dirección"]) expect(host.textContent).toContain(texto);
+      const buscador = host.querySelector<HTMLInputElement>('input[placeholder="Buscar en registros"]')!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(buscador, "norte"); buscador.dispatchEvent(new Event("input", { bubbles: true })); });
+      expect(host.textContent).toContain("Distribuidora Norte");
+      expect(host.textContent).not.toContain("Aceites del Sur");
+      await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); });
+      expect(host.querySelector('input[name="moneda"]')).toBeNull();
+      expect(host.querySelector('select[name="moneda"]')).toBeNull();
+      for (const nombre of ["nombre_comercial", "nit", "telefono", "direccion"]) expect(host.querySelector(`input[name="${nombre}"]`)).not.toBeNull();
+    } finally { await limpiar(); }
+  });
+  it.each(["proveedores", "clientes"])("%s: crea un registro con los campos opcionales vacíos", async vista => {
+    const { host, fetchMock, limpiar } = await montar(vista, { catalogo: true }, {});
+    try {
+      await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); });
+      const form = host.querySelector<HTMLFormElement>("main form")!;
+      (form.elements.namedItem("nombre_comercial") as HTMLInputElement).value = "Nuevo registro de prueba";
+      expect(form.checkValidity()).toBe(true);
+      await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 20)); });
+      const post = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
+      expect(String(post[0])).toMatch(new RegExp(`/canecas/${vista}$`));
+      expect(JSON.parse(String(post[1]?.body))).toEqual({ nombre_comercial: "Nuevo registro de prueba", nit: "", telefono: "", direccion: "" });
+    } finally { await limpiar(); }
+  });
+  it("edita un registro existente con PATCH y conserva su identificador", async () => {
+    const { host, fetchMock, limpiar } = await montar("proveedores", { catalogo: true }, { proveedores: [cliente] });
+    try {
+      await act(async () => { Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Editar")!.click(); });
+      const form = host.querySelector<HTMLFormElement>("main form")!;
+      expect((form.elements.namedItem("nombre_comercial") as HTMLInputElement).value).toBe("Aceites del Sur");
+      expect((form.elements.namedItem("telefono") as HTMLInputElement).value).toBe("5555-1111");
+      (form.elements.namedItem("telefono") as HTMLInputElement).value = "5555-2222";
+      await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 20)); });
+      const patch = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH")!;
+      expect(JSON.parse(String(patch[1]?.body))).toMatchObject({ id: 3, nombre_comercial: "Aceites del Sur", telefono: "5555-2222" });
+      expect(host.textContent).toContain("Registro actualizado.");
+    } finally { await limpiar(); }
+  });
+  it("activa y desactiva clientes solo con permiso de catálogo", async () => {
+    const sin = await montar("clientes", {}, { clientes: [cliente] });
+    try {
+      expect(sin.host.textContent).not.toContain("Desactivar");
+      expect(sin.host.textContent).not.toContain("Editar");
+      expect(sin.host.textContent).not.toContain("Nuevo registro");
+    } finally { await sin.limpiar(); }
+    const con = await montar("clientes", { catalogo: true }, { clientes: [cliente] });
+    try {
+      await act(async () => { Array.from(con.host.querySelectorAll("button")).find(b => b.textContent === "Desactivar")!.click(); await new Promise(r => setTimeout(r, 20)); });
+      const patch = con.fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH")!;
+      expect(JSON.parse(String(patch[1]?.body))).toEqual({ id: 3, activo: false });
+    } finally { await con.limpiar(); }
+  });
+  it("muestra el error del servidor por duplicado sin cerrar el formulario", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const fetchMock = vi.fn(async (_i: string | URL | Request, init?: RequestInit) => init?.method === "POST" ? Response.json({ error: "Ya existe un cliente de Canecas con ese NIT." }, { status: 409 }) : Response.json({ datos: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+    try {
+      await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista: "clientes", permisos: { catalogo: true } })); });
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); });
+      const form = host.querySelector<HTMLFormElement>("main form")!;
+      (form.elements.namedItem("nombre_comercial") as HTMLInputElement).value = "Duplicado";
+      await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 20)); });
+      expect(host.textContent).toContain("Ya existe un cliente de Canecas con ese NIT.");
+      expect(host.querySelector("main form")).not.toBeNull();
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+  it("las compras no piden moneda ni gastos y muestran importes en Q", async () => {
+    const { host, limpiar } = await montar("compras", { compras: true }, { proveedores: [cliente, { ...cliente, id: 9, nombre_comercial: "Proveedor inactivo", activo: 0 }], productos: [{ id: 2, nombre: "Aceite", activo: 1 }] });
+    try {
+      await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); });
+      expect(host.querySelector('input[name="moneda"]')).toBeNull();
+      expect(host.querySelector('input[name="gastos_adquisicion"]')).toBeNull();
+      expect(host.textContent).toContain("Precio unitario de compra en Q");
+      const opciones = Array.from(host.querySelectorAll('select[name="proveedor_id"] option')).map(o => o.textContent);
+      expect(opciones).toContain("Aceites del Sur");
+      expect(opciones).not.toContain("Proveedor inactivo");
+    } finally { await limpiar(); }
   });
 });
