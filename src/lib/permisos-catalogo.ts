@@ -45,6 +45,7 @@ export const CATALOGO_PERMISOS: ModuloCatalogo[] = [
     accion("canecas_compras","compras","Registrar compras","puedeVer"),
     accion("canecas_recepciones","recepciones","Registrar recepciones","puedeVer"),
     accion("canecas_confirmar","confirmar","Confirmar recepciones","puedeVer"),
+    accion("canecas_ventas","ventas","Registrar ventas, anularlas y hacer ajustes de canecas","puedeVer"),
   ] },
   modulo("rrhh","Dashboard Talento Humano","rrhh",[]),
   modulo("empleados","Empleados","rrhh",[[C,"registrar","Registrar / importar empleados"],[E,"editar","Editar ficha y documentos"],[D,"desactivar","Desactivar / quitar documentos"]]),

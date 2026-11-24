@@ -1,4 +1,4 @@
-import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { consultarCapasFifo } from './orden-fifo';
 
 type Salida = { productoId: number; ubicacionId: number; cantidad: number; documento: string; claveOperacion: string };
@@ -10,13 +10,21 @@ export async function registrarSalidaFifo(pool: Pool, empresaId: number, usuario
   try {
     await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await conn.beginTransaction();
+    const resultado = await ejecutarSalidaFifo(conn, empresaId, usuarioId, dato);
+    await conn.commit();
+    return resultado;
+  } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
+}
+
+/** Versión para ejecutarse dentro de una transacción ya abierta por el llamador (READ COMMITTED); no confirma ni revierte. */
+export async function ejecutarSalidaFifo(conn: PoolConnection, empresaId: number, usuarioId: number, dato: Salida) {
+  if (![empresaId, usuarioId, dato.productoId, dato.ubicacionId, dato.cantidad].every(x => Number.isSafeInteger(x) && x > 0 && x <= 2147483647) || !dato.documento.trim() || dato.documento.length > 250 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(dato.claveOperacion)) throw Error('SALIDA_INVALIDA');
     const [saldos] = await conn.query<RowDataPacket[]>('SELECT s.fisico,s.reservado,p.activo AS producto_activo,u.activo AS ubicacion_activa FROM canecas_saldos s JOIN canecas_productos p ON p.empresa_id=s.empresa_id AND p.id=s.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=s.empresa_id AND u.id=s.ubicacion_id WHERE s.empresa_id=? AND s.producto_id=? AND s.ubicacion_id=? FOR UPDATE', [empresaId, dato.productoId, dato.ubicacionId]);
     if (!saldos[0]) throw Error('SALDO_NO_ENCONTRADO');
     const [previas] = await conn.query<RowDataPacket[]>('SELECT id,producto_id,ubicacion_id,cantidad,documento,CAST(costo_centavos AS CHAR) costo,moneda FROM canecas_salidas_fifo WHERE empresa_id=? AND clave_operacion=?', [empresaId, dato.claveOperacion]);
     if (previas[0]) {
       const p = previas[0];
       if (Number(p.producto_id) !== dato.productoId || Number(p.ubicacion_id) !== dato.ubicacionId || Number(p.cantidad) !== dato.cantidad || p.documento !== dato.documento) throw Error('CLAVE_REUTILIZADA');
-      await conn.commit();
       return { id: String(p.id), costoCentavos: p.costo as string, moneda: p.moneda as string, yaRegistrada: true };
     }
     if (Number(saldos[0].producto_activo) !== 1 || Number(saldos[0].ubicacion_activa) !== 1) throw Error('REFERENCIA_INVALIDA');
@@ -48,10 +56,9 @@ export async function registrarSalidaFifo(pool: Pool, empresaId: number, usuario
       await conn.execute('INSERT INTO canecas_salidas_fifo_capas (empresa_id,salida_id,capa_id,cantidad,costo_unitario_centavos,moneda) VALUES (?,?,?,?,?,?)', [empresaId, salida.insertId, parte.id, parte.cantidad, parte.costo, moneda]);
     }
     await conn.execute('UPDATE canecas_saldos SET fisico=fisico-? WHERE empresa_id=? AND producto_id=? AND ubicacion_id=?', [dato.cantidad, empresaId, dato.productoId, dato.ubicacionId]);
-    await conn.commit();
     return { id: String(salida.insertId), costoCentavos: total.toString(), moneda, yaRegistrada: false };
-  } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
 }
+
 
 /** Reintegra exactamente las capas históricas y crea un movimiento inverso. */
 export async function reversarSalidaFifo(pool: Pool, empresaId: number, usuarioId: number, salidaId: string, motivo: string) {
@@ -60,12 +67,21 @@ export async function reversarSalidaFifo(pool: Pool, empresaId: number, usuarioI
   try {
     await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await conn.beginTransaction();
+    const resultado = await ejecutarReversoSalidaFifo(conn, empresaId, usuarioId, salidaId, motivo);
+    await conn.commit();
+    return resultado;
+  } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
+}
+
+/** Versión para ejecutarse dentro de una transacción ya abierta por el llamador (READ COMMITTED); no confirma ni revierte. */
+export async function ejecutarReversoSalidaFifo(conn: PoolConnection, empresaId: number, usuarioId: number, salidaId: string, motivo: string) {
+  if (!/^[1-9][0-9]{0,18}$/.test(salidaId) || !motivo.trim() || motivo.length > 500 || !Number.isSafeInteger(empresaId) || empresaId <= 0 || !Number.isSafeInteger(usuarioId) || usuarioId <= 0) throw Error('REVERSO_INVALIDO');
     const [salidas] = await conn.query<RowDataPacket[]>('SELECT * FROM canecas_salidas_fifo WHERE empresa_id=? AND id=? FOR UPDATE', [empresaId, salidaId]);
     const salida = salidas[0];
     if (!salida) throw Error('SALIDA_NO_ENCONTRADA');
     if (salida.reversado_en != null) {
       if (salida.motivo_reverso !== motivo) throw Error('REVERSO_YA_REGISTRADO');
-      await conn.commit(); return { yaReversada: true };
+      return { yaReversada: true };
     }
     const [saldos] = await conn.query<RowDataPacket[]>('SELECT fisico FROM canecas_saldos WHERE empresa_id=? AND producto_id=? AND ubicacion_id=? FOR UPDATE', [empresaId, salida.producto_id, salida.ubicacion_id]);
     if (!saldos[0] || Number(saldos[0].fisico) + Number(salida.cantidad) > 2147483647) throw Error('SALDO_INVALIDO');
@@ -75,6 +91,6 @@ export async function reversarSalidaFifo(pool: Pool, empresaId: number, usuarioI
     await conn.execute('UPDATE canecas_saldos SET fisico=fisico+? WHERE empresa_id=? AND producto_id=? AND ubicacion_id=?', [salida.cantidad, empresaId, salida.producto_id, salida.ubicacion_id]);
     const [mov] = await conn.execute<ResultSetHeader>("INSERT INTO canecas_movimientos (empresa_id,producto_id,ubicacion_id,tipo,cantidad,movimiento_reversado_id,documento,motivo,usuario_id) VALUES (?,?,?,'REVERSO',?,?,?,?,?)", [empresaId, salida.producto_id, salida.ubicacion_id, salida.cantidad, salida.movimiento_id, salida.documento, motivo, usuarioId]);
     await conn.execute('UPDATE canecas_salidas_fifo SET reversado_por=?,reversado_en=CURRENT_TIMESTAMP,motivo_reverso=?,movimiento_reverso_id=? WHERE empresa_id=? AND id=?', [usuarioId, motivo, mov.insertId, empresaId, salidaId]);
-    await conn.commit(); return { yaReversada: false };
-  } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
+    return { yaReversada: false };
 }
+

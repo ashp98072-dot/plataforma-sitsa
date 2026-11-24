@@ -10,6 +10,11 @@ const opciones = (database?: string) => ({ socketPath: socket ?? `\\\\.\\pipe\\$
 type Fila = mysql.RowDataPacket;
 const BASE = 'canecas_cat_lib_test';
 const leer = (archivo: string) => readFileSync(archivo, 'utf8');
+async function aplicar(pool: mysql.Pool, archivo: string) {
+  const [ddl, resto] = leer(archivo).split('DELIMITER //');
+  await pool.query(ddl);
+  for (const t of (resto ?? '').replace(/DELIMITER ;\s*$/, '').split('//').map(x => x.trim()).filter(x => /^CREATE (OR REPLACE )?TRIGGER /.test(x))) await pool.query(t);
+}
 
 describe.skipIf(!pipe && !socket)('catálogos exclusivos de Canecas en MariaDB desechable', () => {
   it('aísla empresas, evita duplicados, respeta inactivos, no toca Operaciones y mapea compras históricas sin alterar datos', async () => {
@@ -25,6 +30,8 @@ describe.skipIf(!pipe && !socket)('catálogos exclusivos de Canecas en MariaDB d
         await pool.query(ddl[0]);
       }
       await pool.query(leer('sql/migrate-2026-11-canecas-fase1.sql'));
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-costos-wip.sql'); // prerrequisitos de la bitácora de mapeos
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-salidas-fifo-wip.sql');
       await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a'),(2,'B','B','b');
         INSERT INTO usuarios (id,username,password_hash,salt) VALUES (1,'ana','hash','salt'),(2,'beto','hash','salt');
         INSERT INTO compras_proveedores (id,empresa_id,nombre_comercial,nombre_normalizado) VALUES (1,1,'Aceites del Sur','ACEITES DEL SUR');
@@ -37,6 +44,8 @@ describe.skipIf(!pipe && !socket)('catálogos exclusivos de Canecas en MariaDB d
       // Migración (aditiva) sobre una base con compras históricas.
       const [ddl] = leer('sql/migrate-2026-11-canecas-catalogos-wip.sql').split('DELIMITER //');
       await pool.query(ddl);
+      // La bitácora de mapeos (migración de ventas) se instala después de los catálogos.
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-ventas-wip.sql');
       expect((await historicas()).map(c => ({ ...c, canecas_proveedor_id: undefined }))).toEqual(comprasAntes.map(c => ({ ...c, canecas_proveedor_id: undefined })));
 
       // Independencia: crear en Canecas no escribe en Compras y lo de Compras no aparece en Canecas.
@@ -92,6 +101,7 @@ describe.skipIf(!pipe && !socket)('catálogos exclusivos de Canecas en MariaDB d
       const finales = await historicas();
       expect(finales[0]).toMatchObject({ id: 1, proveedor_id: 1, canecas_proveedor_id: a }); // proveedor_id intacto
       expect(finales[1]).toMatchObject({ id: 2, proveedor_id: 1, canecas_proveedor_id: null }); // sin mapeo automático
+      expect((await pool.query<Fila[]>('SELECT compra_id,proveedor_anterior_id,canecas_proveedor_id,realizado_por FROM canecas_compras_mapeo_proveedor'))[0]).toEqual([{ compra_id: 1, proveedor_anterior_id: 1, canecas_proveedor_id: a, realizado_por: 1 }]);
       expect(await proveedoresCompras()).toEqual([...operacionesAntes, expect.objectContaining({ id: 2 })]);
     } finally { await pool.end(); const limpia = await mysql.createConnection(opciones()); try { await limpia.query(`DROP DATABASE IF EXISTS ${BASE}`); } finally { await limpia.end(); } }
   }, 90000);

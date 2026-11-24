@@ -5,6 +5,8 @@ import { getPool, query } from "@/lib/db";
 import { accesoCanecas } from "@/lib/canecas/acceso";
 import { confirmarRecepcion } from "@/lib/canecas/confirmar";
 import { registrarSalidaFifo, reversarSalidaFifo } from "@/lib/canecas/salidas-fifo";
+import { salidaPerteneceAVenta } from "@/lib/canecas/ventas";
+import { getComercial, postComercial, RECURSOS_COMERCIALES_GET, RECURSOS_COMERCIALES_POST } from "@/lib/canecas/comercial-api";
 import { esquemaCatalogo, crearCatalogo, editarCatalogo, cambiarEstadoCatalogo, mapearProveedorCompra, sqlListarCatalogo, ErrorCatalogoDuplicado, ErrorCatalogoNoEncontrado, type DatosCatalogo } from "@/lib/canecas/catalogos";
 import { valorarExistenciaInicial } from "@/lib/canecas/valoracion-inicial";
 import { registrarGastoPosterior } from "@/lib/canecas/gasto-posterior";
@@ -52,8 +54,9 @@ const lecturas: Record<string, string> = {
   movimientos: "SELECT m.*,p.nombre AS producto,p.presentacion,u.nombre AS ubicacion,us.username AS usuario,e.nombre AS recibido_por FROM canecas_movimientos m JOIN canecas_productos p ON p.empresa_id=m.empresa_id AND p.id=m.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=m.empresa_id AND u.id=m.ubicacion_id JOIN usuarios us ON us.id=m.usuario_id LEFT JOIN canecas_recepciones r ON r.empresa_id=m.empresa_id AND r.id=m.recepcion_id LEFT JOIN empleados e ON e.empresa_id=r.empresa_id AND e.id=r.recibido_por_empleado_id WHERE m.empresa_id=? ORDER BY m.id DESC LIMIT 200",
 };
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const { slug, recurso } = await ctx.params;
+  if (RECURSOS_COMERCIALES_GET.has(recurso)) return getComercial(req, { slug, recurso });
   const accion = recurso === "gastos_posteriores" || recurso === "valoracion_inventario" || recurso === "salidas" ? "compras" : recurso === "valoracion_inicial" ? "confirmar" : "ver";
   const guard = await accesoCanecas(slug, accion);
   if (guard.error) return guard.error;
@@ -73,6 +76,7 @@ export async function GET(_req: Request, ctx: Ctx) {
 
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, recurso } = await ctx.params;
+  if (RECURSOS_COMERCIALES_POST.has(recurso)) return postComercial(req, { slug, recurso });
   const accion = recurso === "confirmar" || recurso === "valoracion_inicial" || recurso === "salidas" || recurso === "reversar_salida" ? "confirmar" : recurso === "compras" || recurso === "gastos_posteriores" ? "compras" : recurso === "recepciones" ? "recepciones" : "catalogo";
   const guard = await accesoCanecas(slug, accion);
   if (guard.error) return guard.error;
@@ -94,6 +98,7 @@ export async function POST(req: Request, ctx: Ctx) {
     if (["compras", "valoracion_inicial", "gastos_posteriores", "precio_referencia"].includes(recurso) && !d.moneda) d.moneda = "GTQ";
     if (recurso === "compras" && d.precio_compra && !d.gastos_adquisicion) d.gastos_adquisicion = "0";
     if (recurso === "salidas") return NextResponse.json(await registrarSalidaFifo(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), documento: String(d.documento), claveOperacion: String(d.clave_operacion) }));
+    if (recurso === "reversar_salida" && await salidaPerteneceAVenta(getPool(), empresa, String(d.salida_id))) return NextResponse.json({ error: "Esta salida pertenece a una venta: anule la venta para revertirla." }, { status: 409 });
     if (recurso === "reversar_salida") return NextResponse.json(await reversarSalidaFifo(getPool(), empresa, usuario, String(d.salida_id), String(d.motivo)));
     if (recurso === "confirmar") return NextResponse.json(await confirmarRecepcion(getPool(), empresa, Number(d.id), usuario));
     if (recurso === "valoracion_inicial") return NextResponse.json(await valorarExistenciaInicial(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), costoCentavos: centavos(String(d.costo)), moneda: String(d.moneda) || null, documento: String(d.documento), motivo: String(d.motivo), claveOperacion: String(d.clave_operacion) }));

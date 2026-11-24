@@ -32,7 +32,7 @@ describe('normalización y validación de catálogos de Canecas', () => {
 
 describe('independencia respecto de Operaciones y Compras', () => {
   const lee = (archivo: string) => readFileSync(archivo, 'utf8');
-  const codigo = ['src/lib/canecas/catalogos.ts', 'src/app/api/empresas/[slug]/canecas/[recurso]/route.ts', 'src/components/canecas/canecas-client.tsx'];
+  const codigo = ['src/lib/canecas/catalogos.ts', 'src/app/api/empresas/[slug]/canecas/[recurso]/route.ts', 'src/components/canecas/canecas-client.tsx', 'src/lib/canecas/comercial-api.ts', 'src/lib/canecas/ventas.ts', 'src/lib/canecas/reportes.ts', 'src/components/canecas/reportes-comerciales.tsx', 'src/components/canecas/mapeo-proveedores.tsx'];
   it.each(codigo)('%s no consulta ni escribe compras_proveedores ni importa Compras/TMS', archivo => {
     const texto = lee(archivo).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''); // sin comentarios
     expect(texto).not.toMatch(/compras_proveedores/);
@@ -50,5 +50,13 @@ describe('independencia respecto de Operaciones y Compras', () => {
     expect(sql).not.toMatch(/\b(INSERT|UPDATE\s+\w+\s+SET|TRUNCATE|DROP)\b/i);
     expect(sql).not.toMatch(/DELETE\s+FROM/i);
     expect(sql).not.toMatch(/TRIGGER/i);
+  });
+  it('el único acceso a Compras es la lectura histórica: solo SELECT, sin importar sus módulos', () => {
+    const texto = lee('src/lib/canecas/historico-proveedores.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(texto).toMatch(/LEFT JOIN compras_proveedores/);
+    expect(texto).not.toMatch(/(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+compras_proveedores/i);
+    expect(texto).not.toMatch(/from ["']@\/lib\/(compras|tms|clientes|facturacion)/);
+    // Ningún otro archivo de Canecas (código de producción) consulta compras_proveedores.
+    for (const archivo of ['src/lib/canecas/redistribucion.ts', 'src/lib/canecas/salidas-fifo.ts', 'src/lib/canecas/confirmar.ts']) expect(lee(archivo)).not.toMatch(/compras_proveedores/);
   });
 });
