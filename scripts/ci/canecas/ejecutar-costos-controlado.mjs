@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { privilegiosDirectos } from './privilegios.mjs';
 import { verificarContrato } from './contrato-costos.mjs';
 import { obtenerContratoBase, compararContratoBase } from './contrato-base.mjs';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -85,16 +86,7 @@ export async function ejecutarCostosControlado(connection) {
   // Política conservadora: solo concesiones directas; no interpreta roles.
   const [grants] = await connection.query('SHOW GRANTS FOR CURRENT_USER');
   const required = ['SELECT', 'CREATE', 'ALTER', 'INDEX', 'REFERENCES', 'TRIGGER'];
-  const base = String(identity[0].base).replace(/`/g, '``');
-  const onDatabase = ` ON \`${base}\`.* TO `;
-  const privileges = new Set();
-  for (const row of grants) {
-    const value = String(Object.values(row)[0]);
-    const local = value.indexOf(onDatabase);
-    const pos = local >= 0 ? local : value.indexOf(' ON *.* TO ');
-    if (pos < 0 || !value.startsWith('GRANT ')) continue;
-    for (const item of value.slice(6, pos).split(',')) privileges.add(item.trim().toUpperCase());
-  }
+  const privileges = privilegiosDirectos(grants, identity[0].base);
   if (required.some(p => !privileges.has(p) && !privileges.has('ALL PRIVILEGES'))) throw Error('DETENER: privilegios directos insuficientes para la base');
   const [locks] = await connection.query('SELECT GET_LOCK(?, 0) AS adquirido', [`canecas-costos:${identity[0].base}`]);
   if (Number(locks[0]?.adquirido) !== 1) throw Error('DETENER: instalación concurrente');

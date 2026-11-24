@@ -4,6 +4,7 @@ import path from 'node:path';
 import { verificarContratoRedistribucion, verificarCriterioFifo } from './contrato-redistribucion.mjs';
 import { verificarContratoCatalogos } from './contrato-catalogos.mjs';
 import { verificarContratoVentas, triggersEsperadosVentas } from './contrato-ventas.mjs';
+import { privilegiosDirectos } from './privilegios.mjs';
 import { ejecutarOperacionesDDL } from './ejecutar-costos-controlado.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -17,13 +18,7 @@ export async function ejecutarVentasControlado(connection) {
   const base = identity[0]?.base;
   if (!base || !String(identity[0]?.version).startsWith('11.8.9-MariaDB')) throw Error('DETENER: base o versión incompatible');
   const [grants] = await connection.query('SHOW GRANTS FOR CURRENT_USER');
-  const marker = ` ON \`${String(base).replace(/`/g, '``')}\`.* TO `;
-  const permisos = new Set();
-  for (const row of grants) {
-    const value = String(Object.values(row)[0]);
-    const local = value.indexOf(marker), pos = local >= 0 ? local : value.indexOf(' ON *.* TO ');
-    if (pos >= 0 && value.startsWith('GRANT ')) for (const item of value.slice(6, pos).split(',')) permisos.add(item.trim().toUpperCase());
-  }
+  const permisos = privilegiosDirectos(grants, base);
   if (['SELECT', 'CREATE', 'INDEX', 'REFERENCES', 'TRIGGER'].some(p => !permisos.has(p) && !permisos.has('ALL PRIVILEGES'))) throw Error('DETENER: privilegios directos insuficientes');
   const lock = `canecas-costos:${base}`;
   const [locks] = await connection.query('SELECT GET_LOCK(?, 0) AS adquirido', [lock]);
