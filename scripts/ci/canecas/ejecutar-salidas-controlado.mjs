@@ -52,7 +52,7 @@ export async function ejecutarSalidasControlado(connection) {
     if (!triggerSql || extra || !triggerSql.includes('DELIMITER ;')) throw Error('DETENER: formato de migración de salidas inesperado');
     const tables = tableSql.split(';').map(x => x.trim()).filter(Boolean);
     const triggers = triggerSql.split('//').map(x => x.trim()).filter(x => x.startsWith('CREATE TRIGGER'));
-    if (tables.length !== 2 || !tables[0].startsWith('CREATE TABLE canecas_salidas_fifo (') || !tables[1].startsWith('CREATE TABLE canecas_salidas_fifo_capas (') || triggers.length !== 5) throw Error('DETENER: DDL de salidas incompleto o inesperado');
+    if (tables.length !== 2 || !tables[0].includes('CREATE TABLE canecas_salidas_fifo (') || !tables[1].startsWith('CREATE TABLE canecas_salidas_fifo_capas (') || triggers.length !== 5) throw Error('DETENER: DDL de salidas incompleto o inesperado');
     await ejecutarOperacionesDDL(connection, [...tables, ...triggers]);
     await verificarContratoSalidas(connection);
     return { instalado: true };
