@@ -71,6 +71,15 @@ jobs:
       - name: Pruebas unitarias de Canecas
         run: npx vitest run --config vitest.config.mts src/lib/canecas src/components/canecas "src/app/api/empresas/[slug]/canecas" --maxWorkers=1
 
+      - name: Generar el contrato de redistribución en MariaDB 11.8.9 (informativo en la primera ejecución)
+        env:
+          CANECAS_GENERAR_CONTRATO: redistribucion
+        run: |
+          node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
+          echo "=====CONTRATO-REDISTRIBUCION-INICIO====="
+          cat scripts/ci/canecas/contrato-redistribucion-mariadb-11.8.9.json
+          echo "=====CONTRATO-REDISTRIBUCION-FIN====="
+
       - name: Laboratorio costos, salidas y redistribución (aislado, sin red)
         run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
 

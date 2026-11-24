@@ -15,7 +15,7 @@ async function migracion(pool: mysql.Pool, archivo: string) {
   const [ddl, resto] = readFileSync(archivo, 'utf8').split('DELIMITER //');
   await pool.query(ddl);
   if (!resto) return;
-  const sentencias = resto.replace(/DELIMITER ;\s*$/, '').split('//').map(s => s.trim()).filter(s => /^(CREATE TRIGGER|DROP TRIGGER)/.test(s));
+  const sentencias = resto.replace(/DELIMITER ;\s*$/, '').split('//').map(s => s.trim()).filter(s => /^CREATE (OR REPLACE )?TRIGGER/.test(s));
   for (const s of sentencias) await pool.query(s);
 }
 

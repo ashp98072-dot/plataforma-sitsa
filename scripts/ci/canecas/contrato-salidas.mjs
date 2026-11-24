@@ -19,7 +19,7 @@ export async function obtenerContratoSalidas(connection) {
   }
   return resultado;
 }
-function normalizarSql(value) {
+export function normalizarSql(value) {
   const sql = String(value ?? '');
   const tokens = [];
   let i = 0;

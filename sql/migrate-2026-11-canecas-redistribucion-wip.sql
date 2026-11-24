@@ -69,7 +69,7 @@ CREATE TABLE canecas_redistribuciones_origen (
 -- prioridad efectiva COALESCE(orden_fifo,id) de la capa de origen. El criterio único de
 -- consumo es ORDER BY creado_en, COALESCE(orden_fifo,id), id. Las capas normales dejan
 -- orden_fifo en NULL (su prioridad es su id), así que no se reescribe ni se rellena nada.
--- El trigger de capas sigue impidiendo cambiar creado_en, costo, cantidad inicial,
+-- El trigger de capas (reemplazado atómicamente con CREATE OR REPLACE, sin ventana sin protección) sigue impidiendo cambiar creado_en, costo, cantidad inicial,
 -- redistribucion_id y orden_fifo.
 ALTER TABLE canecas_capas_costo
   ADD COLUMN redistribucion_id BIGINT NULL,
@@ -81,8 +81,7 @@ ALTER TABLE canecas_capas_costo
   ADD CONSTRAINT chk_can_capa_orden CHECK (orden_fifo IS NULL OR (orden_fifo > 0 AND redistribucion_id IS NOT NULL));
 
 DELIMITER //
-DROP TRIGGER can_capa_costo_inmutable//
-CREATE TRIGGER can_capa_costo_inmutable BEFORE UPDATE ON canecas_capas_costo FOR EACH ROW
+CREATE OR REPLACE TRIGGER can_capa_costo_inmutable BEFORE UPDATE ON canecas_capas_costo FOR EACH ROW
 BEGIN
   IF OLD.id <> NEW.id OR OLD.creado_en <> NEW.creado_en OR OLD.empresa_id <> NEW.empresa_id OR OLD.producto_id <> NEW.producto_id OR OLD.ubicacion_id <> NEW.ubicacion_id OR NOT (OLD.recepcion_id <=> NEW.recepcion_id) OR NOT (OLD.valoracion_id <=> NEW.valoracion_id) OR NOT (OLD.redistribucion_id <=> NEW.redistribucion_id) OR NOT (OLD.orden_fifo <=> NEW.orden_fifo) OR OLD.segmento <> NEW.segmento OR OLD.cantidad_inicial <> NEW.cantidad_inicial OR NOT (OLD.costo_unitario_centavos <=> NEW.costo_unitario_centavos) OR NOT (OLD.moneda <=> NEW.moneda) THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Costo historico de capa inmutable';
