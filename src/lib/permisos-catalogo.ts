@@ -41,10 +41,11 @@ const C: FlagPermiso = "puedeCrear", E: FlagPermiso = "puedeEditar", D: FlagPerm
 export const CATALOGO_PERMISOS: ModuloCatalogo[] = [
   { id:"canecas", label:"Gestión de Canecas", area:"canecas", acciones:[
     accion("canecas","ver","Ver","puedeVer"),
-    accion("canecas_catalogo","catalogo","Gestionar aceites, ubicaciones y proveedores","puedeVer"),
+    accion("canecas_catalogo","catalogo","Gestionar aceites, ubicaciones, proveedores y clientes","puedeVer"),
     accion("canecas_compras","compras","Registrar compras","puedeVer"),
     accion("canecas_recepciones","recepciones","Registrar recepciones","puedeVer"),
     accion("canecas_confirmar","confirmar","Confirmar recepciones","puedeVer"),
+    accion("canecas_ventas","ventas","Registrar ventas, anularlas y hacer ajustes de canecas","puedeVer"),
   ] },
   modulo("rrhh","Dashboard Talento Humano","rrhh",[]),
   modulo("empleados","Empleados","rrhh",[[C,"registrar","Registrar / importar empleados"],[E,"editar","Editar ficha y documentos"],[D,"desactivar","Desactivar / quitar documentos"]]),

@@ -21,6 +21,7 @@ describe.skipIf(!pipe)("flujo API contra MariaDB desechable", () => {
     const [ddlCostos, triggersCostos] = readFileSync("sql/migrate-2026-11-canecas-costos-wip.sql", "utf8").split("DELIMITER //");
     await pool.query(ddlCostos);
     for (const trigger of triggersCostos.split("//").map(s => s.trim()).filter(s => s.startsWith("CREATE TRIGGER"))) await pool.query(trigger);
+    await pool.query(readFileSync("sql/migrate-2026-11-canecas-catalogos-wip.sql","utf8").split("DELIMITER //")[0]);
   });
   afterAll(async () => { await pool.end(); });
   it("registra compra sin saldo, recibe 20, reintenta y acumula otra recepción", async () => {
@@ -51,5 +52,16 @@ describe.skipIf(!pipe)("flujo API contra MariaDB desechable", () => {
     expect(movimientos.datos[0].creado_en).toBeTruthy();
     const [rows] = await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n,SUM(cantidad) AS total FROM canecas_movimientos");
     expect(Number(rows[0].n)).toBe(2); expect(Number(rows[0].total)).toBe(25);
+    // El proveedor es del catálogo exclusivo de Canecas: Compras no recibe nada y las compras no usan proveedor_id.
+    expect(Number((await pool.query<mysql.RowDataPacket[]>("SELECT COUNT(*) AS n FROM compras_proveedores"))[0][0].n)).toBe(0);
+    const [compras] = await pool.query<mysql.RowDataPacket[]>("SELECT proveedor_id,canecas_proveedor_id FROM canecas_compras ORDER BY id");
+    expect(compras.every(c => c.proveedor_id === null && c.canecas_proveedor_id === proveedor)).toBe(true);
+    const listadoCompras = await (await GET(new Request("http://local"),ctx("compras"))).json();
+    expect(listadoCompras.datos[0]).toMatchObject({proveedor:"Proveedor"});
+    // Un proveedor inactivo no puede usarse en compras nuevas.
+    const nuevo = (await (await post("proveedores",{nombre_comercial:"Inactivo"})).json()).id;
+    await pool.query("UPDATE canecas_proveedores SET activo=0 WHERE id=?",[nuevo]);
+    expect((await post("compras",{...compra,proveedor_id:nuevo,clave_operacion:"a1e24707-54bd-4483-a668-6e39bb64cf15"})).status).toBe(409);
+    expect((await post("proveedores",{nombre_comercial:"  PROVEEDOR "})).status).toBe(409);
   });
 });

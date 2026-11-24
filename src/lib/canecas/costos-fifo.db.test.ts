@@ -153,6 +153,8 @@ describe.skipIf(!pipe)('prototipo de recepción contra MariaDB aislada', () => {
     await expect(pool.query('UPDATE canecas_capas_costo SET costo_unitario_centavos=99 WHERE empresa_id=1 AND recepcion_id IS NOT NULL')).rejects.toThrow();
   });
   it('crea compra con costo por API y confirma su recepción con capas', async () => {
+    await pool.query(readFileSync('sql/migrate-2026-11-canecas-catalogos-wip.sql', 'utf8').split('DELIMITER //')[0]);
+    await pool.query("INSERT INTO canecas_proveedores (id,empresa_id,nombre_comercial,nombre_normalizado,creado_por) VALUES (1,1,'Proveedor API','PROVEEDOR API',1)");
     const ctx = (recurso: string) => ({ params: Promise.resolve({ slug:'a', recurso }) });
     const post = (recurso: string, data: object) => POST(new Request('http://local', { method:'POST', body:JSON.stringify(data) }), ctx(recurso));
     const compra = { proveedor_id:1, producto_id:1, cantidad:2, referencia:'API', precio_compra:'12.34', gastos_adquisicion:'0.05', moneda:'GTQ', clave_operacion:'c0000000-0000-4000-8000-000000000001' };
@@ -219,6 +221,20 @@ describe.skipIf(!pipe)('prototipo de recepción contra MariaDB aislada', () => {
     await expect(valorarExistenciaInicial(pool,1,1,valoracion)).rejects.toThrow('FALLO_CAPA');
     const [eventos] = await pool.query<mysql.RowDataPacket[]>('SELECT COUNT(*) n FROM canecas_valoraciones_iniciales WHERE empresa_id=1 AND clave_operacion=?',[valoracion.claveOperacion]);
     expect(eventos[0].n).toBe(0);
+  });
+  it('la API asume GTQ y gastos Q0 con precio conocido, y conserva como desconocido un costo sin precio', async () => {
+    const ctx = (recurso: string) => ({ params: Promise.resolve({ slug:'a', recurso }) });
+    const post = (recurso: string, data: object) => POST(new Request('http://local', { method:'POST', body:JSON.stringify(data) }), ctx(recurso));
+    const base = { proveedor_id:1, producto_id:1, cantidad:3, referencia:'GTQ-1' };
+    const conPrecio = await post('compras', { ...base, precio_compra:'10.00', clave_operacion:'d0000000-0000-4000-8000-000000000001' });
+    expect(conPrecio.status).toBe(201);
+    const sinPrecio = await post('compras', { ...base, referencia:'GTQ-2', clave_operacion:'d0000000-0000-4000-8000-000000000002' });
+    expect(sinPrecio.status).toBe(201);
+    const [filas] = await pool.query<mysql.RowDataPacket[]>('SELECT referencia,CAST(precio_unitario_centavos AS CHAR) precio,CAST(gastos_centavos AS CHAR) gastos,moneda FROM canecas_compras WHERE referencia IN (\'GTQ-1\',\'GTQ-2\') ORDER BY referencia');
+    expect(filas[0]).toEqual({ referencia:'GTQ-1', precio:'1000', gastos:'0', moneda:'GTQ' }); // gastos adicionales Q0 explícitos
+    expect(filas[1]).toEqual({ referencia:'GTQ-2', precio:null, gastos:null, moneda:'GTQ' }); // costo realmente desconocido (NULL), distinto de Q0
+    const lectura = (await (await GET(new Request('http://local'), ctx('compras'))).json()).datos as { referencia:string; precio_compra_visible:string|null }[];
+    expect(lectura.find(c => c.referencia === 'GTQ-1')?.precio_compra_visible).toBe('Q 10.00');
   });
 });
 

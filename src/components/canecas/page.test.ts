@@ -21,8 +21,22 @@ describe("acceso a la página de Canecas", () => {
   it("transmite los permisos de acciones después de autorizar lectura", async () => {
     acceso.mockImplementation(async (_slug:string, accion:string) => accion === "catalogo" || accion === "confirmar" ? {} : accion === "ver" ? {} : {error:{status:403}});
     const result = await Page({params:Promise.resolve({slug:"demo",seccion:["compras"]})});
-    expect(result.props.permisos).toEqual({catalogo:true,compras:false,recepciones:false,confirmar:true});
-    expect(acceso).toHaveBeenCalledTimes(5);
+    expect(result.props.permisos).toEqual({catalogo:true,compras:false,recepciones:false,confirmar:true,ventas:false});
+    expect(acceso).toHaveBeenCalledTimes(6);
     expect(acceso.mock.calls.every(([, , opciones]) => opciones?.soloLectura === true)).toBe(true);
+  });
+  it.each([["reportes","ventas","ReportesComerciales"],["proveedores-historicos","catalogo","MapeoProveedores"]])("muestra %s solo con el permiso %s", async (seccion, permiso, componente) => {
+    acceso.mockImplementation(async (_slug:string, accion:string) => accion === "ver" || accion === permiso ? {} : {error:{status:403}});
+    const con = await Page({params:Promise.resolve({slug:"demo",seccion:[seccion]})}) as { type: { name: string } };
+    expect(con.type.name).toBe(componente);
+    acceso.mockImplementation(async (_slug:string, accion:string) => accion === "ver" ? {} : {error:{status:403}});
+    const sin = await Page({params:Promise.resolve({slug:"demo",seccion:[seccion]})}) as { type: string; props: { role: string } };
+    expect(sin.type).toBe("p");
+    expect(sin.props.role).toBe("alert");
+  });
+  it.each(["ventas","redistribuciones","proveedores","clientes"])("acepta la sección %s", async seccion => {
+    acceso.mockImplementation(async () => ({}));
+    const r = await Page({params:Promise.resolve({slug:"demo",seccion:[seccion]})}) as { props: { vista: string } };
+    expect(r.props.vista).toBe(seccion);
   });
 });

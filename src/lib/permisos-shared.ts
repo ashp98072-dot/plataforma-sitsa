@@ -239,6 +239,7 @@ export const PLATAFORMA_PERMISIBLES = [
   "canecas_compras",
   "canecas_recepciones",
   "canecas_confirmar",
+  "canecas_ventas",
   "cotizaciones",
   "proveedor_portales",
   "compras_proveedores",
@@ -989,6 +990,7 @@ export function modulosPlataformaDesdePermisos(
         p.modulo !== "canecas_compras" &&
         p.modulo !== "canecas_recepciones" &&
         p.modulo !== "canecas_confirmar" &&
+        p.modulo !== "canecas_ventas" &&
       p.modulo !== "compras_proveedores" &&
       p.modulo !== "compras_requerimientos" &&
       p.modulo !== "compras_autorizar" &&

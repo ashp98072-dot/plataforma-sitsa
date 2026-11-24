@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireTenant } from "@/lib/tenant";
 import { permisosEfectivos } from "@/lib/permisos";
 
-export async function accesoCanecas(slug: string, accion: "ver" | "catalogo" | "compras" | "recepciones" | "confirmar", opciones: { soloLectura?: boolean } = {}) {
+export async function accesoCanecas(slug: string, accion: "ver" | "catalogo" | "compras" | "recepciones" | "confirmar" | "ventas", opciones: { soloLectura?: boolean } = {}) {
   const guard = await requireTenant(slug, opciones);
   if (guard.error) return guard;
   if (guard.session.rol === "Admin") return guard;
