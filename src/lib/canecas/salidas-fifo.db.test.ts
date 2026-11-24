@@ -74,7 +74,13 @@ describe.skipIf(!pipe)('salida FIFO y reverso en MariaDB desechable', () => {
         INSERT INTO canecas_compras (id,empresa_id,proveedor_id,referencia,producto_id,cantidad,creado_por,clave_operacion) VALUES (3,1,1,'C3',2,1,1,'compra-3');
         INSERT INTO canecas_recepciones (id,empresa_id,compra_id,ubicacion_id,recibido_por_empleado_id,clave_operacion,cantidad,creado_por) VALUES (3,1,3,1,1,'recepcion-3',1,1);`);
       await confirmarRecepcion(pool, 1, 3, 1);
-      await expect(registrarSalidaFifo(pool, 1, 1, { ...dato, productoId: 2, cantidad: 1, claveOperacion: '00000000-0000-4000-8000-000000000004' })).rejects.toThrow('COSTO_PENDIENTE');
+      await pool.query('UPDATE canecas_productos SET activo=0 WHERE empresa_id=1 AND id=2');
+      await expect(registrarSalidaFifo(pool, 1, 1, { ...dato, productoId: 2, cantidad: 1, claveOperacion: '00000000-0000-4000-8000-000000000004' })).rejects.toThrow('REFERENCIA_INVALIDA');
+      await pool.query('UPDATE canecas_productos SET activo=1 WHERE empresa_id=1 AND id=2');
+      await expect(registrarSalidaFifo(pool, 1, 1, { ...dato, productoId: 2, cantidad: 1, claveOperacion: '00000000-0000-4000-8000-000000000006' })).rejects.toThrow('COSTO_PENDIENTE');
+      await pool.query('UPDATE canecas_ubicaciones SET activo=0 WHERE empresa_id=1 AND id=1');
+      await expect(registrarSalidaFifo(pool, 1, 1, { ...dato, cantidad: 1, claveOperacion: '00000000-0000-4000-8000-000000000007' })).rejects.toThrow('REFERENCIA_INVALIDA');
+      await pool.query('UPDATE canecas_ubicaciones SET activo=1 WHERE empresa_id=1 AND id=1');
       const [sinCambios] = await pool.query<mysql.RowDataPacket[]>('SELECT fisico FROM canecas_saldos WHERE empresa_id=1 AND producto_id=2 AND ubicacion_id=1');
       expect(sinCambios[0].fisico).toBe(1);
     } finally { await pool.end(); }
