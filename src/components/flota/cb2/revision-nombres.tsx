@@ -27,9 +27,9 @@ export function etiquetaTipoPiloto(d: DecisionNombre | undefined) {
  * Casilla única para guardar un piloto que no está en RR. HH. como piloto reportado (flota_cb2_pilotos_reportados). No crea empleados ni toca planilla. Al confirmar la importación el nombre
  * queda registrado y las importaciones siguientes (Shell y HALEL) lo reconocen solas, sin pedir confirmación otra vez. Marcada y bloqueada = ya guardado (reconocido o confirmado).
  */
-export function CasillaPilotoReportado({ nombre, decision, instalado, disabled, onElegir }: { nombre?: RevisionNombre; decision?: DecisionNombre; instalado: boolean; disabled?: boolean; onElegir: (d: DecisionNombre) => void }) {
-  const hayCandidatos = (nombre?.candidatos?.length ?? 0) > 0, guardado = decision?.tipo === "REPORTADO";
-  const etiqueta = hayCandidatos ? "Ninguno corresponde; guardar como piloto reportado para futuras importaciones" : "Guardar como piloto reportado para futuras importaciones";
+export function CasillaPilotoReportado({ decision, instalado, disabled, onElegir }: { nombre?: RevisionNombre; decision?: DecisionNombre; instalado: boolean; disabled?: boolean; onElegir: (d: DecisionNombre) => void }) {
+  const guardado = decision?.tipo === "REPORTADO";
+  const etiqueta = "Guardar como piloto reportado para futuras importaciones";
   return <label className="flex items-start gap-2 text-sm">
     <input type="checkbox" checked={guardado} disabled={!instalado || disabled || guardado}
       onChange={e => { if (e.target.checked) onElegir({ tipo: "REPORTADO", ...(decision?.tipo === "REPORTADO" && decision.reportadoId ? { reportadoId: decision.reportadoId } : {}), confirmado: true }); }}/>

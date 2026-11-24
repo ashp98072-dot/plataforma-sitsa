@@ -28,7 +28,7 @@ it("resolución desde el vale: candidatos requieren elegir, el nombre original s
  expect(host.textContent).toContain("  Luis Escobr ");expect(host.textContent).toContain("12 filas");expect(host.textContent).toContain("Pendiente");expect(onElegir).not.toHaveBeenCalled();
  const select=host.querySelector('select')!;await act(async()=>{select.value="1";select.dispatchEvent(new Event('change',{bubbles:true}));});
  expect(onElegir).toHaveBeenCalledWith({tipo:"EMPLEADO",empleadoId:1,confirmado:true});
- await act(async()=>[...host.querySelectorAll('label')].find(l=>l.textContent?.includes("Ninguno corresponde"))!.querySelector('input')!.click());expect(onElegir).toHaveBeenLastCalledWith({tipo:"REPORTADO",confirmado:true});
+ await act(async()=>[...host.querySelectorAll('label')].find(l=>l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector('input')!.click());expect(onElegir).toHaveBeenLastCalledWith({tipo:"REPORTADO",confirmado:true});
  onElegir.mockClear();
  await montar("Visitante",{clave:"VISITANTE",originales:["Visitante"],filas:8,candidatos:[],elegibles:[],propuesta:null});
  expect(host.textContent).toContain("Ningún empleado coincide");
