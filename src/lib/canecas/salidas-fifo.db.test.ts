@@ -20,7 +20,13 @@ describe.skipIf(!pipe)('salida FIFO y reverso en MariaDB desechable', () => {
       const [ddl, triggers] = migration.split('DELIMITER //');
       await pool.query(ddl);
       for (const trigger of triggers.split('//').map(s => s.trim()).filter(s => s.startsWith('CREATE TRIGGER'))) await pool.query(trigger);
-      await pool.query(readFileSync('sql/migrate-2026-11-canecas-salidas-fifo-wip.sql', 'utf8'));
+      const salidaMigration = readFileSync('sql/migrate-2026-11-canecas-salidas-fifo-wip.sql', 'utf8');
+      const [salidaTables, salidaTriggerSql, salidaExtra] = salidaMigration.split('DELIMITER //');
+      if (!salidaTriggerSql || salidaExtra || !salidaTriggerSql.includes('DELIMITER ;')) throw Error('Migración FIFO de salidas incompleta');
+      for (const statement of salidaTables.split(';').map(s => s.trim()).filter(Boolean)) await pool.query(statement);
+      const salidaTriggers = salidaTriggerSql.split('//').map(s => s.trim()).filter(s => s.startsWith('CREATE TRIGGER'));
+      if (salidaTriggers.length !== 5) throw Error('Faltan triggers de protección de salidas');
+      for (const trigger of salidaTriggers) await pool.query(trigger);
       await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a');
         INSERT INTO usuarios (id,username,password_hash,salt) VALUES (1,'test','hash','salt');
         INSERT INTO empleados (id,empresa_id,codigo,nombre) VALUES (1,1,'A','Ana');
