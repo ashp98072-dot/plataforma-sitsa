@@ -144,6 +144,7 @@ export async function POST(req: Request, ctx: Ctx) {
     } finally { conn.release(); }
   } catch (error) {
     const e = error as { code?: string; message?: string };
+    if (e.message === "RESERVAS_PENDIENTES") return NextResponse.json({ error: "No se pueden registrar salidas mientras existan reservas sin asignación FIFO." }, { status: 409 });
     if (error instanceof ErrorProveedorDuplicado || e.code === "ER_DUP_ENTRY" || ["CLAVE_REUTILIZADA","CANTIDAD_EXCEDE_COMPRA","REFERENCIA_INVALIDA","CONCILIACION_INVALIDA","MONEDA_INCOMPATIBLE","SALDO_INSUFICIENTE","RESERVAS_PENDIENTES","CAPAS_NO_CONCILIADAS","COSTO_PENDIENTE","PRIORIDAD_INICIAL_PENDIENTE","CAPAS_INSUFICIENTES","TRAZABILIDAD_INVALIDA","REVERSO_YA_REGISTRADO"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro duplicado o datos incompatibles. Verifique la operación." }, { status: 409 });
     if (["VALORACION_INVALIDA","GASTO_INVALIDO","MONEDA_REQUERIDA","SALIDA_INVALIDA","REVERSO_INVALIDO"].includes(e.message ?? "")) return NextResponse.json({ error: "Revise los importes, la moneda y los demás campos." }, { status: 400 });
     if (["RECEPCION_NO_ENCONTRADA","COMPRA_NO_ENCONTRADA","SALDO_NO_ENCONTRADO","SALIDA_NO_ENCONTRADA"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro no encontrado." }, { status: 404 });
