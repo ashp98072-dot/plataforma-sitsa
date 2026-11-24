@@ -9,7 +9,7 @@ export async function registrarSalidaFifo(pool: Pool, empresaId: number, usuario
   try {
     await conn.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
     await conn.beginTransaction();
-    const [saldos] = await conn.query<RowDataPacket[]>('SELECT fisico,reservado FROM canecas_saldos WHERE empresa_id=? AND producto_id=? AND ubicacion_id=? FOR UPDATE', [empresaId, dato.productoId, dato.ubicacionId]);
+    const [saldos] = await conn.query<RowDataPacket[]>('SELECT s.fisico,s.reservado,p.activo AS producto_activo,u.activo AS ubicacion_activa FROM canecas_saldos s JOIN canecas_productos p ON p.empresa_id=s.empresa_id AND p.id=s.producto_id JOIN canecas_ubicaciones u ON u.empresa_id=s.empresa_id AND u.id=s.ubicacion_id WHERE s.empresa_id=? AND s.producto_id=? AND s.ubicacion_id=? FOR UPDATE', [empresaId, dato.productoId, dato.ubicacionId]);
     if (!saldos[0]) throw Error('SALDO_NO_ENCONTRADO');
     const [previas] = await conn.query<RowDataPacket[]>('SELECT id,producto_id,ubicacion_id,cantidad,documento,CAST(costo_centavos AS CHAR) costo,moneda FROM canecas_salidas_fifo WHERE empresa_id=? AND clave_operacion=?', [empresaId, dato.claveOperacion]);
     if (previas[0]) {
@@ -18,6 +18,7 @@ export async function registrarSalidaFifo(pool: Pool, empresaId: number, usuario
       await conn.commit();
       return { id: String(p.id), costoCentavos: p.costo as string, moneda: p.moneda as string, yaRegistrada: true };
     }
+    if (Number(saldos[0].producto_activo) !== 1 || Number(saldos[0].ubicacion_activa) !== 1) throw Error('REFERENCIA_INVALIDA');
     // Las reservas aún no están asignadas a capas concretas. Consumir FIFO mientras
     // exista cualquier reserva podría descontar precisamente una unidad reservada.
     if (Number(saldos[0].reservado) > 0) throw Error('RESERVAS_PENDIENTES');
