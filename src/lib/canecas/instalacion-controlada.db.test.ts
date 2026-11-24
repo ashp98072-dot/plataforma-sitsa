@@ -33,9 +33,17 @@ describe.skipIf(!pipe)('instalación real en MariaDB desechable', () => {
       const [saldosAntes] = await conn.query('SELECT * FROM canecas_saldos WHERE empresa_id=901');
       const [movimientosAntes] = await conn.query('SELECT * FROM canecas_movimientos WHERE empresa_id=901');
       const contrato = await obtenerContratoBase(conn);
-      const checks = (contrato as { checks: { CONSTRAINT_NAME: string; CHECK_CLAUSE: string }[] }).checks;
-      const cantidad = checks.find(c => c.CONSTRAINT_NAME === 'chk_can_compra_cantidad');
-      expect(cantidad && checksEquivalentes('`cantidad` > 0', cantidad.CHECK_CLAUSE)).toBe(true);
+      const checks = (contrato as { checks: { TABLE_NAME: string; CONSTRAINT_NAME: string; CHECK_CLAUSE: string }[] }).checks;
+      expect(checks.map(c => `${c.TABLE_NAME}.${c.CONSTRAINT_NAME}`).sort()).toEqual([
+        'canecas_compras.chk_can_compra_cantidad',
+        'canecas_movimientos.chk_can_movimiento_cantidad',
+        'canecas_productos.chk_can_capacidad',
+        'canecas_recepciones.chk_can_recepcion_cantidad',
+        'canecas_recepciones.chk_can_recepcion_estado',
+        'canecas_saldos.chk_can_saldo',
+        'empresas.modulos_json',
+      ]);
+      for (const check of checks) expect(checksEquivalentes(check.CHECK_CLAUSE, ` ( ${check.CHECK_CLAUSE} ) `)).toBe(true);
       const archivo = path.join(dir, 'contrato.json');
       const incompatible = structuredClone(contrato) as { columnas: { COLUMN_TYPE: string }[] };
       incompatible.columnas[0].COLUMN_TYPE += ' alterado';
