@@ -3,7 +3,7 @@
 Pendiente de autorización de instalación, contrato estructural completo revisado y acceso TLS verificable para la cuenta instaladora. No ejecutar mientras alguno falte.
 
 1. Suspender escrituras y DDL de Canecas; obtener respaldo completo, verificar restauración en base aislada y conservarlo. El bloqueo del instalador no impide escrituras de otros clientes.
-2. Usar el respaldo estructural existente para construir y revisar el contrato de las ocho tablas en formato `formato`, `base`, `contrato`; comprobarlo contra el esquema esperado, no solo contra conteos. Guardarlo en una ruta privada y configurar `CANECAS_CONTRATO_VALIDADO` con esa ruta. El respaldo existente debe incluir las ocho tablas y ser del mismo entorno.
+2. Usar el respaldo estructural existente para construir y revisar el contrato de las ocho tablas en formato `formato`, `base`, `contrato`; comprobarlo contra el esquema esperado, no solo contra conteos. Guardarlo en una ruta privada y configurar `CANECAS_CONTRATO_VALIDADO` con esa ruta. El respaldo existente debe incluir las ocho tablas y ser del mismo entorno. **No reconstruir el contrato copiando el DDL ni las expresiones CHECK reconstituidas de un resumen:** las expresiones deben provenir literalmente de `information_schema.CHECK_CONSTRAINTS`, y columnas, índices, FK, motores y collation de sus consultas de metadatos completas. La evidencia estructural parcial sirve para revisión, pero no reemplaza el contrato exacto.
 3. En la terminal autorizada, configurar `CANECAS_SQL_HOST`, `CANECAS_SQL_DATABASE`, `CANECAS_SQL_USER`, `CANECAS_SQL_PASSWORD` y `CANECAS_SQL_CA`; `CANECAS_SQL_PORT` es opcional. Ejecutar desde la raíz de la versión revisada y detenerse ante cualquier error:
 
 ```sh
