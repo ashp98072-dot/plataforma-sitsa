@@ -38,7 +38,7 @@ function triggersEsperados() {
 export async function verificarContratoSalidas(connection) {
   const esperado = JSON.parse(readFileSync(new URL('./contrato-salidas-mariadb-11.8.9.json', import.meta.url), 'utf8'));
   const actual = await obtenerContratoSalidas(connection);
-  for (const nombre of Object.keys(queries)) if (JSON.stringify(actual[nombre]) !== JSON.stringify(esperado[nombre])) throw Error(`DETENER: contrato de salidas incompatible en ${nombre}`);
+  for (const nombre of ['tablas', 'columnas', 'indices', 'foraneas', 'checks']) if (JSON.stringify(actual[nombre]) !== JSON.stringify(esperado[nombre])) throw Error(`DETENER: contrato de salidas incompatible en ${nombre}`);
   const expectedTriggers = triggersEsperados();
   if (expectedTriggers.length !== 5 || actual.triggers.length !== expectedTriggers.length) throw Error('DETENER: triggers de salidas incompletos');
   for (const expected of expectedTriggers) {
