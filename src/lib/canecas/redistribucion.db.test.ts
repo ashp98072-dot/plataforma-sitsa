@@ -205,6 +205,7 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       // ── Concurrencia: redistribución y salida simultáneas del mismo producto ──
       const p10 = await producto();
       const a10 = await compra(p10, 10, 10000, 0);
+      await new Promise(resolve => setTimeout(resolve, 1100)); // evita el empate de antigüedad (se prueba aparte)
       await compra(p10, 10, 15000, 0);
       const resultados = await Promise.allSettled([
         registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-C', compraId: a10, cantidadResultante: 12, claveOperacion: k(17) }),
@@ -215,6 +216,31 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       expect(BigInt(await valorDisponible(p10)) + BigInt(await costoSalidas(p10))).toBe(BigInt(250000));
       const [conc] = await pool.query<Fila[]>('SELECT s.fisico,COALESCE((SELECT SUM(cantidad_disponible) FROM canecas_capas_costo c WHERE c.empresa_id=s.empresa_id AND c.producto_id=s.producto_id),0) capas FROM canecas_saldos s WHERE s.empresa_id=1 AND s.producto_id=?', [p10]);
       expect(Number(conc[0].fisico)).toBe(Number(conc[0].capas));
+
+      // ── Dos compras confirmadas durante el mismo segundo ─────
+      const p11 = await producto();
+      const [ca, cb, rca, rcb] = [++sig, ++sig, ++sig, ++sig];
+      await pool.query(`INSERT INTO canecas_compras (id,empresa_id,proveedor_id,referencia,producto_id,cantidad,creado_por,clave_operacion,precio_unitario_centavos,gastos_centavos,moneda) VALUES
+        (${ca},1,1,'MA',${p11},6,1,'ma-1',100,0,'GTQ'),(${cb},1,1,'MB',${p11},4,1,'mb-1',150,0,'GTQ');
+        INSERT INTO canecas_recepciones (id,empresa_id,compra_id,ubicacion_id,recibido_por_empleado_id,clave_operacion,cantidad,estado,creado_por,confirmado_por,confirmado_en) VALUES
+        (${rca},1,${ca},1,1,'rma-1',6,'CONFIRMADA',1,1,NOW()),(${rcb},1,${cb},1,1,'rmb-1',4,'CONFIRMADA',1,1,NOW());
+        INSERT INTO canecas_saldos (empresa_id,producto_id,ubicacion_id,fisico,reservado) VALUES (1,${p11},1,10,0);
+        INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,recepcion_id,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda,creado_en) VALUES
+        (1,${p11},1,${rca},0,6,6,100,'GTQ','2026-04-01 10:00:00'),(1,${p11},1,${rcb},0,4,4,150,'GTQ','2026-04-01 10:00:00');`);
+      const antesEmpate = JSON.stringify(await capas(p11));
+      // A se confirmó primero (id menor). Redistribuir A dejaría sus capas nuevas DESPUÉS de B: se rechaza sin cambios.
+      await expect(registrarRedistribucion(pool, 1, 1, { ...base, compraId: ca, cantidadResultante: 7, claveOperacion: k(19) })).rejects.toThrow('EMPATE_ANTIGUEDAD');
+      expect(JSON.stringify(await capas(p11))).toBe(antesEmpate);
+      expect(await saldo(p11)).toBe(10);
+      // Redistribuir B (id mayor) sí conserva el orden: sus capas nuevas siguen detrás de A.
+      const rB = await registrarRedistribucion(pool, 1, 1, { ...base, compraId: cb, cantidadResultante: 5, claveOperacion: k(20) });
+      expect(rB).toMatchObject({ costoTotalCentavos: '600', diferencia: 1 });
+      const orden2 = await registrarSalidaFifo(pool, 1, 1, { productoId: p11, ubicacionId: 1, cantidad: 7, documento: 'S-5', claveOperacion: k(21) });
+      const [consumo2] = await pool.query<Fila[]>('SELECT d.cantidad,c.redistribucion_id,c.recepcion_id FROM canecas_salidas_fifo_capas d JOIN canecas_capas_costo c ON c.empresa_id=d.empresa_id AND c.id=d.capa_id WHERE d.empresa_id=1 AND d.salida_id=? ORDER BY c.creado_en,c.id', [orden2.id]);
+      expect(consumo2.map(c => [c.recepcion_id === rca, c.redistribucion_id != null, c.cantidad])).toEqual([[true, false, 6], [false, true, 1]]);
+      // Mientras B' siga disponible en ese mismo segundo, A (id menor) permanece bloqueada.
+      await reversarSalidaFifo(pool, 1, 1, orden2.id, 'Prueba');
+      await expect(registrarRedistribucion(pool, 1, 1, { ...base, compraId: ca, cantidadResultante: 7, claveOperacion: k(22) })).rejects.toThrow('EMPATE_ANTIGUEDAD');
     } finally { await pool.end(); }
   }, 120000);
 });

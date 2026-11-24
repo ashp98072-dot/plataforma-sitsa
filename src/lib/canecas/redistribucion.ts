@@ -40,6 +40,10 @@ export async function registrarRedistribucion(pool: Pool, empresaId: number, usu
     const idsLote = new Set(lote.map(l => String(l.id)));
     const origenes = capas.filter(c => idsLote.has(String(c.id)));
     if (!origenes.length) throw Error('CAPAS_INSUFICIENTES');
+    // FIFO ordena por (creado_en, id) y creado_en tiene precisión de segundo. Las capas nuevas heredan la
+    // antigüedad pero reciben un id mayor; si otra capa disponible comparte ese segundo y tenía id mayor
+    // que el origen, quedaría adelantada y se invertiría el orden real de confirmación. Se rechaza.
+    if (origenes.some(o => capas.some(c => !idsLote.has(String(c.id)) && c.creado_txt === o.creado_txt && BigInt(c.id) > BigInt(o.id)))) throw Error('EMPATE_ANTIGUEDAD');
     if (origenes.some(c => c.costo == null || !c.moneda)) throw Error('COSTO_PENDIENTE');
     const moneda = String(origenes[0].moneda);
     if (origenes.some(c => String(c.moneda) !== moneda)) throw Error('MONEDA_INCOMPATIBLE');
