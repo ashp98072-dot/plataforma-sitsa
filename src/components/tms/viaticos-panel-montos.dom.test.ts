@@ -24,4 +24,19 @@ describe("ViaticosPanel → onMontosChange", () => {
     expect(alCambiar).toHaveBeenLastCalledWith([50, 120, 0]);
     expect(fetchMock).toHaveBeenCalledTimes(1);   // escribir no guarda: solo la lectura inicial
   });
+
+  it("al guardar con advertenciaFondos muestra el aviso de resincronización y NO «Guardado»; sin advertencia sí muestra «Guardado»", async () => {
+    const respuestas: Record<string, unknown>[] = [{ advertenciaFondos: "El viático se guardó, pero la solicitud de fondos necesita resincronización: x" }, {}];
+    const fetchMock = vi.fn(async (_u: string, init?: RequestInit) => init?.method === "PATCH" ? new Response(JSON.stringify({ mensaje: "ok", ...respuestas.shift() })) : new Response(JSON.stringify({ viaticos: [fila(1, "Piloto", 50)] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => { root.render(createElement(ViaticosPanel, { slug: "x", planId: 9 })); });
+    await act(async () => { await Promise.resolve(); });
+    const guardar = () => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Guardar")!;
+    await act(async () => { guardar().click(); await Promise.resolve(); });
+    expect(host.querySelector("[data-aviso-fondos]")?.textContent).toContain("necesita resincronización");
+    expect(host.textContent).not.toContain("Guardado");
+    await act(async () => { guardar().click(); await Promise.resolve(); });
+    expect(host.querySelector("[data-aviso-fondos]")).toBeNull();
+    expect(host.textContent).toContain("Guardado");
+  });
 });

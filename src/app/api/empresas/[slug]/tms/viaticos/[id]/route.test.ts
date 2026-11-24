@@ -42,12 +42,18 @@ describe("PATCH /tms/viaticos/[id]: el monto editado se refleja en Solicitudes d
     expect((await PATCH(peticion({ montoAsignado: 80 }), ctx)).status).toBe(200);
     expect(sincronizarFondosDePlanes).not.toHaveBeenCalled();
   });
-  it("un fallo de la sincronización no revierte el monto: responde 200 con la advertencia (o sin ella si hubo excepción)", async () => {
-    vi.mocked(sincronizarFondosDePlanes).mockResolvedValue({ cambios: 0, solicitudes: [], advertencia: "aviso" });
-    expect(await (await PATCH(peticion({ montoAsignado: 80 }), ctx)).json()).toMatchObject({ mensaje: "Viático actualizado.", advertenciaFondos: "aviso" });
-    vi.mocked(sincronizarFondosDePlanes).mockRejectedValue(new Error("boom"));
+  it("si la sincronización falla (advertencia, excepción o viaje no ubicable) el monto NO se revierte: 200 con advertenciaFondos que dice que necesita resincronización", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
-    expect((await PATCH(peticion({ montoAsignado: 80 }), ctx)).status).toBe(200);
+    vi.mocked(sincronizarFondosDePlanes).mockResolvedValue({ cambios: 0, solicitudes: [], advertencia: "aviso" });
+    expect(await (await PATCH(peticion({ montoAsignado: 80 }), ctx)).json()).toMatchObject({ mensaje: "Viático actualizado.", advertenciaFondos: expect.stringContaining("necesita resincronización") });
+    vi.mocked(sincronizarFondosDePlanes).mockRejectedValue(new Error("boom"));
+    const r = await PATCH(peticion({ montoAsignado: 80 }), ctx);
+    expect(r.status).toBe(200); expect(await r.json()).toMatchObject({ advertenciaFondos: expect.stringContaining("resincronización") });
+    vi.mocked(query).mockResolvedValue([] as never);
+    expect(await (await PATCH(peticion({ montoAsignado: 80 }), ctx)).json()).toMatchObject({ advertenciaFondos: expect.any(String) });
+  });
+  it("sin fallo no hay advertencia (éxito limpio)", async () => {
+    expect(await (await PATCH(peticion({ montoAsignado: 80 }), ctx)).json()).toEqual({ mensaje: "Viático actualizado." });
   });
   it("sin permiso (guarda) no hace nada", async () => {
     vi.mocked(requireTenantModulo).mockResolvedValue({ error: new Response("no", { status: 403 }) } as never);

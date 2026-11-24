@@ -85,6 +85,8 @@ export default function ViaticosPanel({
   const [motivos, setMotivos] = useState<Record<number, string>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
   const [okId, setOkId] = useState<number | null>(null);
+  /** El viático se guardó pero la solicitud de fondos no se pudo actualizar: no se muestra «Guardado» como si todo estuviera al día. */
+  const [avisoFondos, setAvisoFondos] = useState("");
 
   // Carga inicial + al cambiar de plan — IIFE inline con bandera `ignore`
   // (mismo patrón que src/app/e/[slug]/rrhh/horas-extra/page.tsx), en vez de
@@ -140,6 +142,7 @@ export default function ViaticosPanel({
     setSavingId(row.id);
     setError("");
     setOkId(null);
+    setAvisoFondos("");
     try {
       const res = await fetch(`/api/empresas/${slug}/tms/viaticos/${row.id}`, {
         method: "PATCH",
@@ -154,7 +157,8 @@ export default function ViaticosPanel({
         setError(data.error ?? "No se pudo guardar el viático.");
         return;
       }
-      setOkId(row.id);
+      if (data.advertenciaFondos) setAvisoFondos(String(data.advertenciaFondos));
+      else setOkId(row.id);
       setRows((prev) =>
         prev.map((r) =>
           r.id === row.id
@@ -268,6 +272,7 @@ export default function ViaticosPanel({
         </Link>
       </div>
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {avisoFondos ? <p role="alert" className="text-xs text-amber-300" data-aviso-fondos>{avisoFondos}</p> : null}
       {!rows.length ? (
         <p className="text-xs text-[var(--muted)]">
           Sin piloto/auxiliares asignados todavía, o el plan aún no se ha guardado.

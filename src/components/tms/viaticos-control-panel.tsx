@@ -430,7 +430,7 @@ export default function ViaticosControlPanel({ slug }: { slug: string }) {
         setErrorRechazar(data.error ?? `No se pudo rechazar el viático (${res.status}).`);
         return;
       }
-      setMensaje(`Viático rechazado: ${rechazando.personalNombre} (${rechazando.planCodigo}).`);
+      setMensaje(`Viático rechazado: ${rechazando.personalNombre} (${rechazando.planCodigo}).${data.advertenciaFondos ? ` ⚠ ${String(data.advertenciaFondos).replace("El viático se guardó", "El rechazo se guardó")}` : ""}`);
       setRechazando(null);
       await cargar();
     } catch {

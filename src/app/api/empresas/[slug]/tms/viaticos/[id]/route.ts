@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireTenantModulo } from "@/lib/tenant";
 import { actualizarMontoViatico } from "@/lib/tms/viaticos";
-import { query } from "@/lib/db";
-import { fondosDiariosInstalado, sincronizarFondosDePlanes } from "@/lib/tms/fondos-diarios";
-import type { RowDataPacket } from "mysql2";
+import { sincronizarFondosTrasViatico } from "@/lib/tms/fondos-diarios-viatico";
 
 type Ctx = { params: Promise<{ slug: string; id: string }> };
 
@@ -48,15 +46,8 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (!r.ok) {
     return NextResponse.json({ error: r.error }, { status: 400 });
   }
-  // FONDOS DIARIOS: el monto ya está confirmado; se refleja en la línea AUTO_VIATICO de la solicitud (diferencial, sin duplicar; si la principal ya fue AUTORIZADA no se toca
-  // y un viático nuevo iría a la complementaria excepcional). Un fallo no revierte el monto: solo advertencia (se corrige al guardar el viaje o con «Resincronizar»).
-  let advertenciaFondos: string | undefined;
-  try {
-    const [v] = await query<RowDataPacket[]>("SELECT plan_id FROM tms_viaticos WHERE id = ? AND empresa_id = ? LIMIT 1", [viaticoId, guard.empresa.id]);
-    if (v?.plan_id != null && (await fondosDiariosInstalado())) {
-      const s = guard.session;
-      advertenciaFondos = (await sincronizarFondosDePlanes(guard.empresa.id, [Number(v.plan_id)], { usuarioId: s.id, nombre: s.nombre || s.username, username: s.username })).advertencia;
-    }
-  } catch (e) { console.error("viatico PATCH: sincronizar fondos", e); }
+  // FONDOS DIARIOS: el monto ya está confirmado; se refleja en la solicitud (diferencial, sin duplicar; autorizada intacta). Si no se pudo, se AVISA (el monto no se revierte).
+  const s = guard.session;
+  const { advertenciaFondos } = await sincronizarFondosTrasViatico(guard.empresa.id, viaticoId, { usuarioId: s.id, nombre: s.nombre || s.username, username: s.username });
   return NextResponse.json({ mensaje: "Viático actualizado.", ...(advertenciaFondos ? { advertenciaFondos } : {}) });
 }
