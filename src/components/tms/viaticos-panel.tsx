@@ -71,9 +71,12 @@ const METODO_PAGO_LABEL: Record<string, string> = {
 export default function ViaticosPanel({
   slug,
   planId,
+  onMontosChange,
 }: {
   slug: string;
   planId: number;
+  /** Montos vigentes (los escritos en pantalla, sin los RECHAZADOS) cada vez que cambian: alimenta el resumen visual de Programación. */
+  onMontosChange?: (montos: number[]) => void;
 }) {
   const [rows, setRows] = useState<ViaticoRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -114,6 +117,10 @@ export default function ViaticosPanel({
       ignore = true;
     };
   }, [slug, planId]);
+
+  useEffect(() => {
+    onMontosChange?.(rows.filter((r) => r.estado !== "RECHAZADO").map((r) => (r.estado === "PROGRAMADO" ? Number(montos[r.id] ?? r.montoAsignado) : r.montoAsignado)));
+  }, [rows, montos, onMontosChange]);
 
   async function guardar(row: ViaticoRow) {
     const montoTxt = montos[row.id] ?? String(row.montoAsignado);

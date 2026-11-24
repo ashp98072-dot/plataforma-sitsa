@@ -20,6 +20,7 @@ import { FechaHora12Input } from "@/components/tms/fecha-hora-12h-input";
 import { formatearHora12 } from "@/lib/tms/hora-formato";
 import { horaCorta } from "@/lib/rrhh/dates";
 import ViaticosPanel from "@/components/tms/viaticos-panel";
+import { resumenFondosViaje } from "@/lib/tms/plan-fondos-resumen";
 import OtrosFondosViaje, { errorOtrosFondos, otrosFondosParaEnviar, type CatalogoOtrosFondos, type OtroFondoForm } from "./otros-fondos-viaje";
 import type { Plan } from "./programacion-client";
 import NotificarPersonal from "./notificar-personal";
@@ -469,6 +470,8 @@ export default function PlanForm({
   // `key` — así siempre refleja lo que sincronizarViaticosPlan acaba de
   // dejar en BD, sin tocar ViaticosPanel.
   const [viaticosVersion, setViaticosVersion] = useState(0);
+  /** Resumen visual: montos de los viáticos ya guardados (los que reporta el panel, tal como se editan). */
+  const [montosViaticosGuardados, setMontosViaticosGuardados] = useState<number[]>([]);
   // OPS-1 — cierre administrativo (Descargado -> Cerrado). Solo botón +
   // confirmación explícita; la autoridad real es el permiso
   // `viajes_cerrar:editar` que valida el endpoint (esto es únicamente UX,
@@ -1090,9 +1093,16 @@ export default function PlanForm({
   const opcionesViaticos = { sugeridoPorRol, nombreAuxiliar: (id: number) => auxiliares.find((a) => a.id === id)?.nombre };
   const filasViaticos: FilaViaticoCreacion[] = derivarFilasViaticos(estadoPersonalForm, opcionesViaticos);
   const gruposViaticos = agruparViaticosPorRol(filasViaticos);
+  const formatoQ = (n: number) => n.toLocaleString("es-GT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const previewViaticosEdicion =
     esEdicion && form.tipoViaje === "Propio" ? derivarPreviewViaticosEdicion(estadoPersonalForm, empleadosPersistidos(plan!), opcionesViaticos) : [];
 
+  const resumenViaje = resumenFondosViaje(
+    esEdicion
+      ? [...montosViaticosGuardados, ...previewViaticosEdicion.map((f) => f.sugerido)]
+      : filasViaticos.map((f) => (f.empleadoId != null ? viaticosMontos[f.key] ?? f.sugerido : f.sugerido)),
+    otrosCatalogo && form.tipoViaje === "Propio" && form.entidadRequirenteId > 0 ? otrosFondos.map((o) => o.monto) : [],
+  );
   /** POST viaticosAsignados — solo filas con vínculo RRHH (empleadoId conocido, el único id que este formulario tiene antes de guardar); el backend valida pertenencia y traduce a tms_personal.id internamente. */
   function construirViaticosAsignados(): { empleadoId: number; montoAsignado: number }[] {
     return filasViaticos
@@ -2427,7 +2437,7 @@ export default function PlanForm({
 
       {esEdicion ? (
         <div className="md:col-span-3 space-y-2">
-          <ViaticosPanel key={viaticosVersion} slug={slug} planId={plan!.id} />
+          <ViaticosPanel key={viaticosVersion} slug={slug} planId={plan!.id} onMontosChange={setMontosViaticosGuardados} />
           {/* PREVISUALIZACIÓN (no persistida): personal que el formulario ya asignó y el viaje guardado todavía no (p. ej. un piloto extra
               recién agregado). Se muestra al instante, sin recargar; al guardar, el servidor crea su viático y el panel lo trae persistido.
               Quien ya está guardado nunca aparece aquí (no se duplica con el viático real). */}
@@ -2497,6 +2507,15 @@ export default function PlanForm({
           )}
         </div>
       )}
+
+      {/* Resumen automático del viaje (solo visual: se recalcula al editar; lo persistido sigue siendo el guardado del viaje). */}
+      {form.tipoViaje === "Propio" && (resumenViaje.totalGeneral > 0 || filasViaticos.length > 0 || esEdicion) ? (
+        <div className="md:col-span-3 flex flex-wrap gap-x-6 gap-y-1 rounded border border-[var(--border)] p-3 text-xs" data-resumen-fondos-viaje>
+          <span>Total de viáticos: <strong>Q{formatoQ(resumenViaje.totalViaticos)}</strong></span>
+          <span>Total de otros fondos: <strong>Q{formatoQ(resumenViaje.totalOtros)}</strong></span>
+          <span>Total general del viaje: <strong>Q{formatoQ(resumenViaje.totalGeneral)}</strong></span>
+        </div>
+      ) : null}
 
       {/* FONDOS DIARIOS Fase 3 — «Otros fondos del viaje», debajo de los viáticos. Solo con la migración aplicada y para viajes Propios. */}
       {otrosCatalogo && form.tipoViaje === "Propio" ? (
