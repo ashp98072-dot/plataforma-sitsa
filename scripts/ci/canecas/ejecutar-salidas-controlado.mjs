@@ -47,9 +47,13 @@ export async function ejecutarSalidasControlado(connection) {
     verificarClavesForaneas(post[9], ddl);
     const [existentes] = await connection.query("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('canecas_salidas_fifo','canecas_salidas_fifo_capas')");
     if (!Array.isArray(existentes) || existentes.length) throw Error('DETENER: salidas presentes o instalación parcial; diagnóstico supervisado');
-    const operations = sql('migrate-2026-11-canecas-salidas-fifo-wip.sql').split(';').map(x => x.trim()).filter(Boolean);
-    if (operations.length !== 2 || !operations[0].includes('CREATE TABLE canecas_salidas_fifo (') || !operations[1].startsWith('CREATE TABLE canecas_salidas_fifo_capas (')) throw Error('DETENER: migración de salidas inesperada');
-    await ejecutarOperacionesDDL(connection, operations);
+    const migration = sql('migrate-2026-11-canecas-salidas-fifo-wip.sql');
+    const [tableSql, triggerSql, extra] = migration.split('DELIMITER //');
+    if (!triggerSql || extra || !triggerSql.includes('DELIMITER ;')) throw Error('DETENER: formato de migración de salidas inesperado');
+    const tables = tableSql.split(';').map(x => x.trim()).filter(Boolean);
+    const triggers = triggerSql.split('//').map(x => x.trim()).filter(x => x.startsWith('CREATE TRIGGER'));
+    if (tables.length !== 2 || !tables[0].startsWith('CREATE TABLE canecas_salidas_fifo (') || !tables[1].startsWith('CREATE TABLE canecas_salidas_fifo_capas (') || triggers.length !== 5) throw Error('DETENER: DDL de salidas incompleto o inesperado');
+    await ejecutarOperacionesDDL(connection, [...tables, ...triggers]);
     await verificarContratoSalidas(connection);
     return { instalado: true };
   } finally {
