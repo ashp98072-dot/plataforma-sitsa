@@ -20,7 +20,7 @@ export async function obtenerContratoSalidas(connection) {
   return resultado;
 }
 function normalizarSql(value) {
-  return String(value ?? '').replace(/\\s+/g, ' ').trim().replace(/;$/, '').toLowerCase();
+  return String(value ?? '').replace(/\s+/g, ' ').trim().replace(/;$/, '').toLowerCase();
 }
 
 function triggersEsperados() {
@@ -29,7 +29,7 @@ function triggersEsperados() {
   const [, triggerSql, extra] = migration.split('DELIMITER //');
   if (!triggerSql || extra || !triggerSql.includes('DELIMITER ;')) throw Error('DETENER: definiciones de triggers de salidas incompletas');
   return triggerSql.split('//').map(x => x.trim()).filter(x => x.startsWith('CREATE TRIGGER')).map(ddl => {
-    const match = ddl.match(/^CREATE TRIGGER\\s+(\\w+)\\s+(BEFORE|AFTER)\\s+(INSERT|UPDATE|DELETE)\\s+ON\\s+(\\w+)\\s+FOR EACH ROW\\s+([\\s\\S]+)$/i);
+    const match = ddl.match(/^CREATE TRIGGER\s+(\w+)\s+(BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\s+ON\s+(\w+)\s+FOR EACH ROW\s+([\s\S]+)$/i);
     if (!match) throw Error('DETENER: definición de trigger de salidas inesperada');
     return { TRIGGER_NAME: match[1], ACTION_TIMING: match[2].toUpperCase(), EVENT_MANIPULATION: match[3].toUpperCase(), EVENT_OBJECT_TABLE: match[4], ACTION_STATEMENT: match[5] };
   });
