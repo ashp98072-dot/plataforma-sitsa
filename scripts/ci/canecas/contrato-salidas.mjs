@@ -20,7 +20,33 @@ export async function obtenerContratoSalidas(connection) {
   return resultado;
 }
 function normalizarSql(value) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim().replace(/;$/, '').toLowerCase();
+  const sql = String(value ?? '');
+  let resultado = '';
+  let i = 0;
+  while (i < sql.length) {
+    if (/\s/.test(sql[i])) {
+      while (i < sql.length && /\s/.test(sql[i])) i++;
+      resultado += ' ';
+      continue;
+    }
+    if (sql[i] === "'") {
+      const inicio = i++;
+      while (i < sql.length) {
+        if (sql[i] === '\\') { i += 2; continue; }
+        if (sql[i] === "'") {
+          if (sql[i + 1] === "'") { i += 2; continue; }
+          i++;
+          break;
+        }
+        i++;
+      }
+      resultado += sql.slice(inicio, i);
+      continue;
+    }
+    resultado += sql[i].toLowerCase();
+    i++;
+  }
+  return resultado.trim().replace(/;$/, '');
 }
 
 function triggersEsperados() {
