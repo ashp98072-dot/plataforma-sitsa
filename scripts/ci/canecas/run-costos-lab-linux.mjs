@@ -26,9 +26,20 @@ const hashMotor = crypto.createHash('sha256').update(fs.readFileSync(mariadbd)).
 if (process.env.CANECAS_LAB_MARIADBD_SHA256 && process.env.CANECAS_LAB_MARIADBD_SHA256 !== hashMotor) throw Error('Hash del motor distinto del fijado');
 console.log(`Motor: ${reportada.trim()}\nsha256(mariadbd): ${hashMotor}`);
 
-const run = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), 'fifo-lab-'));
-fs.chmodSync(run, 0o700);
-const data = path.join(run, 'data'), sock = path.join(run, 's.sock'), pipe = `fifo-${crypto.randomUUID()}`;
+// Misma disposición que el laboratorio de Windows: las guardas de identidad de las pruebas exigen que el
+// datadir sea ../.lab-runtime/fifo-lab-<uuid>/data y que @@socket coincida con el nombre `fifo-<uuid>`.
+const root = path.resolve(repo, '../.lab-runtime');
+fs.mkdirSync(root, { recursive: true });
+if (fs.lstatSync(root).isSymbolicLink()) throw Error('Raíz enlazada');
+const run = path.join(root, `fifo-lab-${crypto.randomUUID()}`);
+fs.mkdirSync(run, { mode: 0o700 });
+const data = path.join(run, 'data'), pipe = `fifo-${crypto.randomUUID()}`;
+// mariadbd entra en el datadir y crea ahí el socket relativo `pipe`; la ruta absoluta supera el límite de
+// 107 bytes de AF_UNIX, así que los clientes llegan por un enlace corto en un directorio temporal propio.
+const corto = fs.mkdtempSync(path.join(os.tmpdir(), 'fl-'));
+fs.chmodSync(corto, 0o700);
+fs.symlinkSync(data, path.join(corto, 'd'));
+const sock = path.join(corto, 'd', pipe);
 if (Buffer.byteLength(sock) > 100) throw Error('Ruta de socket demasiado larga');
 let port;
 if (tlsLab) {
@@ -47,7 +58,7 @@ const init = cp.spawnSync(installDb, ['--no-defaults', `--basedir=${basedir}`, `
 if (init.status !== 0) throw Error(`Inicialización fallida: ${init.stderr}`);
 const fd = fs.openSync(path.join(run, 'server.log'), 'wx');
 const networkArgs = tlsLab ? ['--bind-address=127.0.0.1', `--port=${port}`, `--ssl-ca=${path.join(run, 'server-cert.pem')}`, `--ssl-cert=${path.join(run, 'server-cert.pem')}`, `--ssl-key=${path.join(run, 'server-key.pem')}`] : ['--skip-networking'];
-const server = cp.spawn(mariadbd, ['--no-defaults', ...comoRoot, `--basedir=${basedir}`, `--datadir=${data}`, ...networkArgs, ...(hostingerLab ? ['--sql-mode=NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '--innodb-strict-mode=0'] : []), `--socket=${sock}`, `--pid-file=${path.join(run, 'mariadbd.pid')}`, '--innodb-buffer-pool-size=64M', '--console'], { env, stdio: ['ignore', fd, fd] });
+const server = cp.spawn(mariadbd, ['--no-defaults', ...comoRoot, `--basedir=${basedir}`, `--datadir=${data}`, ...networkArgs, ...(hostingerLab ? ['--sql-mode=NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', '--innodb-strict-mode=0'] : []), `--socket=${pipe}`, `--pid-file=${path.join(run, 'mariadbd.pid')}`, '--innodb-buffer-pool-size=64M', '--console'], { env, stdio: ['ignore', fd, fd] });
 fs.closeSync(fd);
 const args = ['--no-defaults', '--protocol=SOCKET', `--socket=${sock}`, '-uroot', '--batch', '--skip-column-names'];
 const sql = input => cp.spawnSync(client, args, { env, input, encoding: 'utf8', timeout: 20000 });
@@ -63,7 +74,7 @@ try {
   if (ready?.status !== 0) throw Error('Servidor no disponible');
   const [version, networkDisabled, socket, dir, actualPort] = ready.stdout.trim().split('\t');
   console.log(`VERSION(): ${version}`);
-  if (!version.startsWith('11.8.9-MariaDB') || networkDisabled !== (tlsLab ? '0' : '1') || (tlsLab && Number(actualPort) !== port) || socket !== sock || path.resolve(dir) !== path.resolve(data)) throw Error('Identidad incorrecta');
+  if (!version.startsWith('11.8.9-MariaDB') || networkDisabled !== (tlsLab ? '0' : '1') || (tlsLab && Number(actualPort) !== port) || socket !== pipe || path.resolve(dir) !== path.resolve(data)) throw Error('Identidad incorrecta');
   verified = true;
   const permissions = ['SELECT', 'CREATE', 'ALTER', 'INDEX', 'REFERENCES', 'TRIGGER'];
   const omissions = permissions.map((permission, i) => `CREATE USER 'fifo_missing_${i}'@'localhost' IDENTIFIED BY 'fifo-test-only'; GRANT ${permissions.filter(p => p !== permission).join(',')} ON canecas_cli_test.* TO 'fifo_missing_${i}'@'localhost';`).join(' ');
@@ -81,5 +92,6 @@ try {
   await Promise.race([new Promise(resolve => server.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 10000))]);
   if (server.exitCode === null) { server.kill('SIGKILL'); process.exitCode = 1; }
   console.log('Laboratorio:', run);
+  fs.rmSync(corto, { recursive: true, force: true });
   if (!process.env.CANECAS_LAB_CONSERVAR) fs.rmSync(run, { recursive: true, force: true });
 }
