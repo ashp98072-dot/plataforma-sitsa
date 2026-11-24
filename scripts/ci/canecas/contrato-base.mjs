@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { checksEquivalentes } from './check-equivalente.mjs';
 
 // La comparación no proporciona ni aprueba un contrato de Hostinger.
 const names = ['tablas', 'columnas', 'indices', 'foraneas', 'checks'];
@@ -67,6 +68,10 @@ export function compararContratoBase(expected, actual) {
   validar(expected);
   validar(actual);
   for (const name of names) {
+    if (name === 'checks') {
+      if (expected.checks.length !== actual.checks.length || expected.checks.some((row, i) => row.TABLE_NAME !== actual.checks[i].TABLE_NAME || row.CONSTRAINT_NAME !== actual.checks[i].CONSTRAINT_NAME || !checksEquivalentes(row.CHECK_CLAUSE, actual.checks[i].CHECK_CLAUSE))) throw Error('DETENER: contrato base incompatible en checks');
+      continue;
+    }
     // Comparación estricta independiente del orden de propiedades, pero no de filas.
     const canonical = rows => rows.map(row => fields[name].map(key => row[key]));
     if (JSON.stringify(canonical(expected[name])) !== JSON.stringify(canonical(actual[name]))) throw Error(`DETENER: contrato base incompatible en ${name}`);

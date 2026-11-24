@@ -7,6 +7,7 @@ import { obtenerContratoBase } from '../../../scripts/ci/canecas/contrato-base.m
 import { ejecutarCostosControlado } from '../../../scripts/ci/canecas/ejecutar-costos-controlado.mjs';
 import { ejecutarSalidasControlado } from '../../../scripts/ci/canecas/ejecutar-salidas-controlado.mjs';
 import { verificarContratoSalidas } from '../../../scripts/ci/canecas/contrato-salidas.mjs';
+import { checksEquivalentes } from '../../../scripts/ci/canecas/check-equivalente.mjs';
 
 const pipe = process.env.CANECAS_FIFO_TEST_PIPE;
 describe.skipIf(!pipe)('instalación real en MariaDB desechable', () => {
@@ -32,15 +33,32 @@ describe.skipIf(!pipe)('instalación real en MariaDB desechable', () => {
       const [saldosAntes] = await conn.query('SELECT * FROM canecas_saldos WHERE empresa_id=901');
       const [movimientosAntes] = await conn.query('SELECT * FROM canecas_movimientos WHERE empresa_id=901');
       const contrato = await obtenerContratoBase(conn);
+      const checks = (contrato as { checks: { TABLE_NAME: string; CONSTRAINT_NAME: string; CHECK_CLAUSE: string }[] }).checks;
+      expect(checks.map(c => `${c.TABLE_NAME}.${c.CONSTRAINT_NAME}`).sort()).toEqual([
+        'canecas_compras.chk_can_compra_cantidad',
+        'canecas_movimientos.chk_can_movimiento_cantidad',
+        'canecas_productos.chk_can_capacidad',
+        'canecas_recepciones.chk_can_recepcion_cantidad',
+        'canecas_recepciones.chk_can_recepcion_estado',
+        'canecas_saldos.chk_can_saldo',
+        'empresas.modulos_json',
+      ]);
+      for (const check of checks) expect(checksEquivalentes(check.CHECK_CLAUSE, ` ( ${check.CHECK_CLAUSE} ) `)).toBe(true);
       const archivo = path.join(dir, 'contrato.json');
       const incompatible = structuredClone(contrato) as { columnas: { COLUMN_TYPE: string }[] };
       incompatible.columnas[0].COLUMN_TYPE += ' alterado';
       writeFileSync(archivo, JSON.stringify({ formato: 1, base: 'canecas_instalacion_test', contrato: incompatible }), { mode: 0o600 });
       process.env.CANECAS_CONTRATO_VALIDADO = archivo;
       await expect(ejecutarCostosControlado(conn)).rejects.toThrow('columnas');
+      const checkDiferente = structuredClone(contrato) as { checks: { CHECK_CLAUSE: string }[] };
+      checkDiferente.checks[0].CHECK_CLAUSE = `(${checkDiferente.checks[0].CHECK_CLAUSE}) OR 1=1`;
+      writeFileSync(archivo, JSON.stringify({ formato: 1, base: 'canecas_instalacion_test', contrato: checkDiferente }), { mode: 0o600 });
+      await expect(ejecutarCostosControlado(conn)).rejects.toThrow('checks');
       const [sinDdl] = await conn.query<mysql.RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='precio_unitario_centavos'");
       expect(Number(sinDdl[0].n)).toBe(0);
-      writeFileSync(archivo, JSON.stringify({ formato: 1, base: 'canecas_instalacion_test', contrato }), { mode: 0o600 });
+      const equivalente = structuredClone(contrato) as { checks: { CHECK_CLAUSE: string }[] };
+      equivalente.checks[0].CHECK_CLAUSE = ` ( ( ${equivalente.checks[0].CHECK_CLAUSE} ) ) `;
+      writeFileSync(archivo, JSON.stringify({ formato: 1, base: 'canecas_instalacion_test', contrato: equivalente }), { mode: 0o600 });
       await expect(ejecutarCostosControlado(conn)).resolves.toMatchObject({ modoSqlEstricto: true });
       let primerDdl = false;
       const advertencia = { query: async (statement: string, params?: unknown) => {
