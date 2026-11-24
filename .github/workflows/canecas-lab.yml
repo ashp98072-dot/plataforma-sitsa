@@ -1,0 +1,87 @@
+name: Laboratorio Canecas (MariaDB 11.8.9)
+
+# Valida Canecas FIFO (costos, salidas, redistribución) contra MariaDB 11.8.9 EXACTO instalado desde el
+# repositorio oficial firmado de MariaDB y ejecutado como instancia desechable de la propia ejecución
+# (socket Unix o 127.0.0.1 con TLS verificable). No usa secretos, credenciales ni conexiones de Hostinger.
+on:
+  pull_request:
+    paths:
+      - 'src/lib/canecas/**'
+      - 'src/app/api/empresas/[[]slug]/canecas/**'
+      - 'src/components/canecas/**'
+      - 'scripts/ci/canecas/**'
+      - 'sql/*canecas*'
+      - 'sql/schema.sql'
+      - '.github/workflows/canecas-lab.yml'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: canecas-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lab:
+    name: MariaDB 11.8.9 + pruebas Canecas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CI: 'true'
+      MARIADB_VERSION: '11.8.9'
+      # Huella del certificado de firma del repositorio de MariaDB (MariaDB Signing Key).
+      MARIADB_KEY_FPR: '177F4010FE56CA3336300305F1656F24C74CD1D8'
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Instalar MariaDB 11.8.9 (repositorio oficial firmado, sin iniciar servicios)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://mariadb.org/mariadb_release_signing_key.pgp -o /tmp/mariadb.asc
+          gpg --show-keys --with-colons /tmp/mariadb.asc | awk -F: '$1=="fpr"{print $10}' | tee /tmp/fprs
+          grep -qx "$MARIADB_KEY_FPR" /tmp/fprs || { echo "::error::La huella de la clave de MariaDB no coincide con la fijada"; exit 1; }
+          sudo install -d -m 0755 /etc/apt/keyrings
+          sudo install -m 0644 /tmp/mariadb.asc /etc/apt/keyrings/mariadb.asc
+          echo "deb [signed-by=/etc/apt/keyrings/mariadb.asc] https://archive.mariadb.org/mariadb-${MARIADB_VERSION}/repo/ubuntu noble main" | sudo tee /etc/apt/sources.list.d/mariadb.list
+          # Evita que apt inicie un servidor con datos por defecto: el laboratorio levanta su propia instancia.
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get update
+          VERSION="$(apt-cache madison mariadb-server | awk '{print $3}' | grep -F "${MARIADB_VERSION}" | head -n 1)"
+          test -n "$VERSION" || { echo "::error::MariaDB ${MARIADB_VERSION} no está disponible en el repositorio oficial"; apt-cache madison mariadb-server; exit 1; }
+          echo "Paquete exacto: $VERSION"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "mariadb-server=$VERSION" "mariadb-client=$VERSION" "mariadb-server-core=$VERSION" "mariadb-client-core=$VERSION" "mariadb-common=$VERSION"
+          /usr/sbin/mariadbd --version
+          /usr/sbin/mariadbd --version | grep -q " Ver ${MARIADB_VERSION}-MariaDB"
+
+      - run: npm ci
+
+      - name: Pruebas unitarias de Canecas
+        run: npx vitest run --config vitest.config.mts src/lib/canecas src/components/canecas "src/app/api/empresas/[slug]/canecas" --maxWorkers=1
+
+      - name: Laboratorio costos, salidas y redistribución (aislado, sin red)
+        run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
+
+      - name: Laboratorio con TLS verificable (127.0.0.1, CA propia)
+        run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated-tls
+
+      - name: Laboratorio modo Hostinger (SQL mode y TLS exigido)
+        run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-hostinger-tls
+
+      - name: TypeScript
+        run: npx tsc --noEmit
+
+      - name: ESLint dirigido
+        run: npx eslint src/lib/canecas/orden-fifo.ts src/lib/canecas/orden-fifo.test.ts src/lib/canecas/salidas-fifo.ts src/lib/canecas/redistribucion.ts src/lib/canecas/redistribucion-reglas.ts src/lib/canecas/redistribucion-reglas.test.ts src/lib/canecas/redistribucion.db.test.ts src/lib/canecas/lab-runners-paridad.test.ts
+
+      - name: Build
+        run: npm run build
