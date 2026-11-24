@@ -18,7 +18,10 @@ export async function registrarSalidaFifo(pool: Pool, empresaId: number, usuario
       await conn.commit();
       return { id: String(p.id), costoCentavos: p.costo as string, moneda: p.moneda as string, yaRegistrada: true };
     }
-    if (Number(saldos[0].fisico) - Number(saldos[0].reservado) < dato.cantidad) throw Error('SALDO_INSUFICIENTE');
+    // Las reservas aún no están asignadas a capas concretas. Consumir FIFO mientras
+    // exista cualquier reserva podría descontar precisamente una unidad reservada.
+    if (Number(saldos[0].reservado) > 0) throw Error('RESERVAS_PENDIENTES');
+    if (Number(saldos[0].fisico) < dato.cantidad) throw Error('SALDO_INSUFICIENTE');
     const [capas] = await conn.query<RowDataPacket[]>('SELECT id,cantidad_disponible,valoracion_id,CAST(costo_unitario_centavos AS CHAR) costo,moneda FROM canecas_capas_costo WHERE empresa_id=? AND producto_id=? AND ubicacion_id=? AND cantidad_disponible>0 ORDER BY creado_en,id FOR UPDATE', [empresaId, dato.productoId, dato.ubicacionId]);
     if (capas.reduce((n, c) => n + Number(c.cantidad_disponible), 0) !== Number(saldos[0].fisico)) throw Error('CAPAS_NO_CONCILIADAS');
     // Una valoración inicial de edad desconocida podría preceder a cualquier recepción.
