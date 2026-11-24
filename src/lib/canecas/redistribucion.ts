@@ -1,5 +1,6 @@
 import type { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { repartirRedistribucion, type CapaOrigen } from './redistribucion-reglas';
+import { ORDEN_FIFO, PRIORIDAD_FIFO } from './orden-fifo';
 
 type Redistribucion = { compraId: number; ubicacionId: number; cantidadResultante: number; documento: string; motivo: string; claveOperacion: string };
 const MAX_INT = 2147483647;
@@ -33,21 +34,17 @@ export async function registrarRedistribucion(pool: Pool, empresaId: number, usu
     if (Number(saldos[0].producto_activo) !== 1 || Number(saldos[0].ubicacion_activa) !== 1) throw Error('REFERENCIA_INVALIDA');
     // Las reservas no están asignadas a capas concretas: no se puede reducir ni mover lotes con reservas.
     if (Number(saldos[0].reservado) > 0) throw Error('RESERVAS_PENDIENTES');
-    const [capas] = await conn.query<RowDataPacket[]>("SELECT id,cantidad_disponible,CAST(costo_unitario_centavos AS CHAR) costo,moneda,DATE_FORMAT(creado_en,'%Y-%m-%d %H:%i:%s') AS creado_txt FROM canecas_capas_costo WHERE empresa_id=? AND producto_id=? AND ubicacion_id=? AND cantidad_disponible>0 ORDER BY creado_en,id FOR UPDATE", [empresaId, productoId, dato.ubicacionId]);
+    const [capas] = await conn.query<RowDataPacket[]>(`SELECT id,cantidad_disponible,CAST(costo_unitario_centavos AS CHAR) costo,moneda,CAST(${PRIORIDAD_FIFO} AS CHAR) AS orden,DATE_FORMAT(creado_en,'%Y-%m-%d %H:%i:%s') AS creado_txt FROM canecas_capas_costo WHERE empresa_id=? AND producto_id=? AND ubicacion_id=? AND cantidad_disponible>0 ORDER BY ${ORDEN_FIFO} FOR UPDATE`, [empresaId, productoId, dato.ubicacionId]);
     if (capas.reduce((n, c) => n + Number(c.cantidad_disponible), 0) !== Number(saldos[0].fisico)) throw Error('CAPAS_NO_CONCILIADAS');
     // Lote = capas disponibles cuya compra (directa o heredada de otra redistribución) es la indicada.
     const [lote] = await conn.query<RowDataPacket[]>('SELECT c.id FROM canecas_capas_costo c LEFT JOIN canecas_recepciones r ON r.empresa_id=c.empresa_id AND r.id=c.recepcion_id LEFT JOIN canecas_redistribuciones d ON d.empresa_id=c.empresa_id AND d.id=c.redistribucion_id WHERE c.empresa_id=? AND c.producto_id=? AND c.ubicacion_id=? AND c.cantidad_disponible>0 AND COALESCE(r.compra_id,d.compra_id)=?', [empresaId, productoId, dato.ubicacionId, dato.compraId]);
     const idsLote = new Set(lote.map(l => String(l.id)));
     const origenes = capas.filter(c => idsLote.has(String(c.id)));
     if (!origenes.length) throw Error('CAPAS_INSUFICIENTES');
-    // FIFO ordena por (creado_en, id) y creado_en tiene precisión de segundo. Las capas nuevas heredan la
-    // antigüedad pero reciben un id mayor; si otra capa disponible comparte ese segundo y tenía id mayor
-    // que el origen, quedaría adelantada y se invertiría el orden real de confirmación. Se rechaza.
-    if (origenes.some(o => capas.some(c => !idsLote.has(String(c.id)) && c.creado_txt === o.creado_txt && BigInt(c.id) > BigInt(o.id)))) throw Error('EMPATE_ANTIGUEDAD');
     if (origenes.some(c => c.costo == null || !c.moneda)) throw Error('COSTO_PENDIENTE');
     const moneda = String(origenes[0].moneda);
     if (origenes.some(c => String(c.moneda) !== moneda)) throw Error('MONEDA_INCOMPATIBLE');
-    const entrada: CapaOrigen[] = origenes.map(c => ({ capaId: String(c.id), cantidad: Number(c.cantidad_disponible), creadoEn: String(c.creado_txt), costoUnitarioCentavos: BigInt(c.costo) }));
+    const entrada: CapaOrigen[] = origenes.map(c => ({ capaId: String(c.id), cantidad: Number(c.cantidad_disponible), creadoEn: String(c.creado_txt), orden: BigInt(c.orden), costoUnitarioCentavos: BigInt(c.costo) }));
     const reparto = repartirRedistribucion(entrada, dato.cantidadResultante);
     const diferencia = dato.cantidadResultante - reparto.cantidadOrigen;
     const nuevoFisico = Number(saldos[0].fisico) + diferencia;
@@ -63,7 +60,7 @@ export async function registrarRedistribucion(pool: Pool, empresaId: number, usu
       await conn.execute('UPDATE canecas_capas_costo SET cantidad_disponible=0 WHERE empresa_id=? AND id=?', [empresaId, o.capaId]);
     }
     for (const [segmento, s] of reparto.segmentos.entries()) {
-      await conn.execute('INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,redistribucion_id,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?)', [empresaId, productoId, dato.ubicacionId, redis.insertId, segmento, s.cantidad, s.cantidad, s.costoUnitarioCentavos.toString(), moneda, s.creadoEn]);
+      await conn.execute('INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,redistribucion_id,orden_fifo,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda,creado_en) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [empresaId, productoId, dato.ubicacionId, redis.insertId, s.ordenFifo.toString(), segmento, s.cantidad, s.cantidad, s.costoUnitarioCentavos.toString(), moneda, s.creadoEn]);
     }
     await conn.execute('UPDATE canecas_saldos SET fisico=? WHERE empresa_id=? AND producto_id=? AND ubicacion_id=?', [nuevoFisico, empresaId, productoId, dato.ubicacionId]);
     // Conciliación final dentro de la misma transacción: nada se confirma si el costo no coincide.

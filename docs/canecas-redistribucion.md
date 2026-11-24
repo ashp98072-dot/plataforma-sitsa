@@ -14,6 +14,7 @@ la **antigüedad del lote original** y trazabilidad completa.
 |---|---|
 | `sql/migrate-2026-11-canecas-redistribucion-wip.sql` | Borrador de DDL. No instalar sin instalador controlado y contrato. |
 | `src/lib/canecas/redistribucion-reglas.ts` | Reparto puro del costo y la antigüedad (sin base de datos). |
+| `src/lib/canecas/orden-fifo.ts` | Criterio FIFO único y compatibilidad con esquemas anteriores. |
 | `src/lib/canecas/redistribucion.ts` | `registrarRedistribucion` y `reversarRedistribucion` transaccionales. |
 | `*.test.ts`, `redistribucion.db.test.ts` | Pruebas unitarias y de integración. |
 
@@ -44,6 +45,22 @@ Orden de bloqueos: compra → saldo → capas (igual que `confirmarRecepcion`; `
    antigüedad de la última unidad de origen; en merma se conservan las más antiguas.
 7. Conciliación final en la misma transacción (unidades y costo total); si falla, `ROLLBACK`.
 
+## Prioridad FIFO definitiva
+Criterio único de consumo (salidas, reversos y redistribuciones): `ORDER BY creado_en, COALESCE(orden_fifo, id), id`
+(`src/lib/canecas/orden-fifo.ts`).
+- `canecas_capas_costo.orden_fifo` (BIGINT NULL) existe solo en capas redistribuidas y guarda la prioridad
+  **efectiva de la capa de origen** (`COALESCE(orden_fifo, id)`). Una redistribución de una capa ya redistribuida
+  transmite la misma prioridad, así que múltiples redistribuciones no la alteran.
+- No usa fechas artificiales: `creado_en` conserva la antigüedad real; `orden_fifo` resuelve los empates de
+  segundo sin depender de ids nuevos. No se bloquea ninguna operación legítima (se eliminó `EMPATE_ANTIGUEDAD`).
+- CHECK `chk_can_capa_orden`: `orden_fifo` solo con `redistribucion_id`; el trigger lo hace inmutable.
+- Las capas normales no se reescriben (siguen en NULL = su id).
+- **Compatibilidad con esquemas anteriores:** `consultarCapasFifo` usa el criterio nuevo y, ante
+  `ER_BAD_FIELD_ERROR` (columna inexistente), el anterior `creado_en, id`; sin la migración no existen capas
+  redistribuidas y ambos criterios dan el mismo orden. Por eso el código puede desplegarse antes o después de la
+  migración. Único orden inseguro: migración instalada con código anterior a #684 (que ordena por `creado_en, id`);
+  la migración solo se instala con el código de #684 ya desplegado.
+
 ## Reverso
 Restaura exactamente las capas de origen. Solo si **ninguna capa resultante se consumió ni se volvió a
 redistribuir** (`REDISTRIBUCION_CONSUMIDA`); primero se revierten las salidas o redistribuciones
@@ -60,5 +77,4 @@ capas históricas, y el reverso de la redistribución lo tiene en cuenta.
    `ejecutar-salidas-controlado.mjs`) no se incluyen aquí: el contrato real debe generarse en el
    laboratorio 11.8.9. Hasta entonces no puede instalarse.
 5. **Sin API ni interfaz todavía.** Las funciones no están expuestas por `route.ts`.
-6. **Empates de antigüedad (resuelto sin cambio de esquema).** `creado_en` tiene precisión de segundo y FIFO ordena por `(creado_en, id)`. Las capas redistribuidas heredan `creado_en` pero reciben un id mayor; si otra capa disponible comparte ese segundo y tenía id mayor que el origen, quedaría adelantada e invertiría el orden real de confirmación. `registrarRedistribucion` lo rechaza con `EMPATE_ANTIGUEDAD` (sin modificar nada); la compra con id mayor del empate sí puede redistribuirse. El bloqueo dura mientras la otra compra tenga existencias en ese segundo. Al exponer la API, mapear `EMPATE_ANTIGUEDAD` a 409.
-7. Las capas con `valoracion_id` (existencia inicial) no son parte de ningún lote y no se redistribuyen.
+6. Las capas con `valoracion_id` (existencia inicial) no son parte de ningún lote y no se redistribuyen.

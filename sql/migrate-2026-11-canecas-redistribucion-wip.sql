@@ -65,20 +65,26 @@ CREATE TABLE canecas_redistribuciones_origen (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- La capa resultante de una redistribución conserva la antigüedad (creado_en) del lote
--- original: se inserta con ese valor explícito. El trigger de capas sigue impidiendo
--- cambiar creado_en, costo, cantidad inicial y ahora también redistribucion_id.
+-- original (se inserta con ese valor explícito) y su PRIORIDAD FIFO: orden_fifo guarda la
+-- prioridad efectiva COALESCE(orden_fifo,id) de la capa de origen. El criterio único de
+-- consumo es ORDER BY creado_en, COALESCE(orden_fifo,id), id. Las capas normales dejan
+-- orden_fifo en NULL (su prioridad es su id), así que no se reescribe ni se rellena nada.
+-- El trigger de capas sigue impidiendo cambiar creado_en, costo, cantidad inicial,
+-- redistribucion_id y orden_fifo.
 ALTER TABLE canecas_capas_costo
   ADD COLUMN redistribucion_id BIGINT NULL,
+  ADD COLUMN orden_fifo BIGINT NULL,
   ADD UNIQUE KEY uq_can_capa_redistribucion (empresa_id,redistribucion_id,segmento),
   ADD CONSTRAINT fk_can_capa_redistribucion FOREIGN KEY (empresa_id,redistribucion_id) REFERENCES canecas_redistribuciones(empresa_id,id),
   DROP CONSTRAINT chk_can_capa_fuente,
-  ADD CONSTRAINT chk_can_capa_fuente CHECK ((recepcion_id IS NOT NULL) + (valoracion_id IS NOT NULL) + (redistribucion_id IS NOT NULL) = 1);
+  ADD CONSTRAINT chk_can_capa_fuente CHECK ((recepcion_id IS NOT NULL) + (valoracion_id IS NOT NULL) + (redistribucion_id IS NOT NULL) = 1),
+  ADD CONSTRAINT chk_can_capa_orden CHECK (orden_fifo IS NULL OR (orden_fifo > 0 AND redistribucion_id IS NOT NULL));
 
 DELIMITER //
 DROP TRIGGER can_capa_costo_inmutable//
 CREATE TRIGGER can_capa_costo_inmutable BEFORE UPDATE ON canecas_capas_costo FOR EACH ROW
 BEGIN
-  IF OLD.id <> NEW.id OR OLD.creado_en <> NEW.creado_en OR OLD.empresa_id <> NEW.empresa_id OR OLD.producto_id <> NEW.producto_id OR OLD.ubicacion_id <> NEW.ubicacion_id OR NOT (OLD.recepcion_id <=> NEW.recepcion_id) OR NOT (OLD.valoracion_id <=> NEW.valoracion_id) OR NOT (OLD.redistribucion_id <=> NEW.redistribucion_id) OR OLD.segmento <> NEW.segmento OR OLD.cantidad_inicial <> NEW.cantidad_inicial OR NOT (OLD.costo_unitario_centavos <=> NEW.costo_unitario_centavos) OR NOT (OLD.moneda <=> NEW.moneda) THEN
+  IF OLD.id <> NEW.id OR OLD.creado_en <> NEW.creado_en OR OLD.empresa_id <> NEW.empresa_id OR OLD.producto_id <> NEW.producto_id OR OLD.ubicacion_id <> NEW.ubicacion_id OR NOT (OLD.recepcion_id <=> NEW.recepcion_id) OR NOT (OLD.valoracion_id <=> NEW.valoracion_id) OR NOT (OLD.redistribucion_id <=> NEW.redistribucion_id) OR NOT (OLD.orden_fifo <=> NEW.orden_fifo) OR OLD.segmento <> NEW.segmento OR OLD.cantidad_inicial <> NEW.cantidad_inicial OR NOT (OLD.costo_unitario_centavos <=> NEW.costo_unitario_centavos) OR NOT (OLD.moneda <=> NEW.moneda) THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Costo historico de capa inmutable';
   END IF;
 END//

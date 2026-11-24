@@ -188,7 +188,6 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       // ── Múltiples compras del mismo producto ─────────────────
       const p9 = await producto();
       const a9 = await compra(p9, 10, 10000, 0); // Q1,000.00
-      await new Promise(resolve => setTimeout(resolve, 1100)); // creado_en tiene precisión de segundo: la compra B debe ser realmente más reciente
       const b9 = await compra(p9, 10, 15000, 0); // Q1,500.00 (más reciente)
       const rA = await registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-A', compraId: a9, cantidadResultante: 12, claveOperacion: k(15) });
       expect(rA).toMatchObject({ costoTotalCentavos: '100000', cantidadOrigen: 10, diferencia: 2 });
@@ -205,7 +204,6 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       // ── Concurrencia: redistribución y salida simultáneas del mismo producto ──
       const p10 = await producto();
       const a10 = await compra(p10, 10, 10000, 0);
-      await new Promise(resolve => setTimeout(resolve, 1100)); // evita el empate de antigüedad (se prueba aparte)
       await compra(p10, 10, 15000, 0);
       const resultados = await Promise.allSettled([
         registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-C', compraId: a10, cantidadResultante: 12, claveOperacion: k(17) }),
@@ -217,7 +215,7 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
       const [conc] = await pool.query<Fila[]>('SELECT s.fisico,COALESCE((SELECT SUM(cantidad_disponible) FROM canecas_capas_costo c WHERE c.empresa_id=s.empresa_id AND c.producto_id=s.producto_id),0) capas FROM canecas_saldos s WHERE s.empresa_id=1 AND s.producto_id=?', [p10]);
       expect(Number(conc[0].fisico)).toBe(Number(conc[0].capas));
 
-      // ── Dos compras confirmadas durante el mismo segundo ─────
+      // ── Dos compras confirmadas durante el mismo segundo (prioridad FIFO heredada) ──
       const p11 = await producto();
       const [ca, cb, rca, rcb] = [++sig, ++sig, ++sig, ++sig];
       await pool.query(`INSERT INTO canecas_compras (id,empresa_id,proveedor_id,referencia,producto_id,cantidad,creado_por,clave_operacion,precio_unitario_centavos,gastos_centavos,moneda) VALUES
@@ -227,20 +225,66 @@ describe.skipIf(!pipe && !socket)('redistribución de lotes FIFO en MariaDB dese
         INSERT INTO canecas_saldos (empresa_id,producto_id,ubicacion_id,fisico,reservado) VALUES (1,${p11},1,10,0);
         INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,recepcion_id,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda,creado_en) VALUES
         (1,${p11},1,${rca},0,6,6,100,'GTQ','2026-04-01 10:00:00'),(1,${p11},1,${rcb},0,4,4,150,'GTQ','2026-04-01 10:00:00');`);
-      const antesEmpate = JSON.stringify(await capas(p11));
-      // A se confirmó primero (id menor). Redistribuir A dejaría sus capas nuevas DESPUÉS de B: se rechaza sin cambios.
-      await expect(registrarRedistribucion(pool, 1, 1, { ...base, compraId: ca, cantidadResultante: 7, claveOperacion: k(19) })).rejects.toThrow('EMPATE_ANTIGUEDAD');
-      expect(JSON.stringify(await capas(p11))).toBe(antesEmpate);
+      // A (id menor) se confirmó primero. Orden real: A (6 × Q1.00) antes que B (4 × Q1.50).
+      const etiqueta = (c: Fila) => c.recepcion_id != null ? (c.recepcion_id === rca ? 'A' : 'B') : `R${c.redistribucion_id}`;
+      const consumoDe = async (salidaId: string) => {
+        const [filas] = await pool.query<Fila[]>('SELECT d.cantidad,c.recepcion_id,c.redistribucion_id FROM canecas_salidas_fifo_capas d JOIN canecas_capas_costo c ON c.empresa_id=d.empresa_id AND c.id=d.capa_id WHERE d.empresa_id=1 AND d.salida_id=? ORDER BY c.creado_en,COALESCE(c.orden_fifo,c.id),c.id', [salidaId]);
+        const resumen: [string, number][] = [];
+        for (const f of filas) { const e = etiqueta(f); if (resumen.length && resumen[resumen.length - 1][0] === e) resumen[resumen.length - 1][1] += Number(f.cantidad); else resumen.push([e, Number(f.cantidad)]); }
+        return resumen;
+      };
+      let n = 30;
+      const vender = (cantidad: number) => registrarSalidaFifo(pool, 1, 1, { productoId: p11, ubicacionId: 1, cantidad, documento: `S-${n}`, claveOperacion: k(n++) });
+      const conciliado = async () => BigInt(await valorDisponible(p11)) + BigInt(await costoSalidas(p11));
+      const ordenDe = async (redistribucionId: string) => (await pool.query<Fila[]>('SELECT DISTINCT CAST(orden_fifo AS CHAR) orden FROM canecas_capas_costo WHERE redistribucion_id=?', [redistribucionId]))[0].map(c => c.orden);
+      const idOrigen = async (recepcionId: number) => String((await pool.query<Fila[]>('SELECT id FROM canecas_capas_costo WHERE recepcion_id=?', [recepcionId]))[0][0].id);
+      // 1) Redistribuir la PRIMERA (A: 6→7). Ya no se bloquea y sus capas siguen antes que B.
+      const qA = await registrarRedistribucion(pool, 1, 1, { ...base, compraId: ca, cantidadResultante: 7, claveOperacion: k(19) });
+      expect(qA).toMatchObject({ costoTotalCentavos: '600', diferencia: 1 });
+      expect(await ordenDe(qA.id)).toEqual([await idOrigen(rca)]); // hereda la prioridad (el id) de la capa de origen
+      const s1 = await vender(9);
+      expect(await consumoDe(s1.id)).toEqual([[`R${qA.id}`, 7], ['B', 2]]);
+      expect(await conciliado()).toBe(BigInt(1200));
+      await reversarSalidaFifo(pool, 1, 1, s1.id, 'Prueba');
+      expect(await conciliado()).toBe(BigInt(1200));
+      // 2) Redistribuir la SEGUNDA (B: 4→5). Sus capas nuevas siguen detrás de las de A.
+      const qB = await registrarRedistribucion(pool, 1, 1, { ...base, compraId: cb, cantidadResultante: 5, claveOperacion: k(20) });
+      expect(qB).toMatchObject({ costoTotalCentavos: '600', diferencia: 1 });
+      expect(await ordenDe(qB.id)).toEqual([await idOrigen(rcb)]);
+      // 3) Venta parcial: 8 unidades = 7 de A' + 1 de B'.
+      const s2 = await vender(8);
+      expect(await consumoDe(s2.id)).toEqual([[`R${qA.id}`, 7], [`R${qB.id}`, 1]]);
+      expect(await conciliado()).toBe(BigInt(1200));
+      // 4) Redistribuir otra vez A' (varias redistribuciones): conserva la prioridad del lote original.
+      await reversarSalidaFifo(pool, 1, 1, s2.id, 'Devolución');
+      const qA2 = await registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-6', compraId: ca, cantidadResultante: 8, claveOperacion: k(23) });
+      expect(qA2).toMatchObject({ costoTotalCentavos: '600', cantidadOrigen: 7, diferencia: 1 });
+      expect(await ordenDe(qA2.id)).toEqual([await idOrigen(rca)]);
+      const s3 = await vender(9);
+      expect(await consumoDe(s3.id)).toEqual([[`R${qA2.id}`, 8], [`R${qB.id}`, 1]]);
+      expect(await conciliado()).toBe(BigInt(1200));
+      // 5) Reversos: la venta, luego las redistribuciones en orden inverso. Se restablece el lote original.
+      await reversarSalidaFifo(pool, 1, 1, s3.id, 'Devolución');
+      await expect(reversarRedistribucion(pool, 1, 1, qA.id, 'Antes de tiempo')).rejects.toThrow('REDISTRIBUCION_CONSUMIDA');
+      await reversarRedistribucion(pool, 1, 1, qA2.id, 'Corrección');
+      await reversarRedistribucion(pool, 1, 1, qA.id, 'Corrección');
+      await reversarRedistribucion(pool, 1, 1, qB.id, 'Corrección');
       expect(await saldo(p11)).toBe(10);
-      // Redistribuir B (id mayor) sí conserva el orden: sus capas nuevas siguen detrás de A.
-      const rB = await registrarRedistribucion(pool, 1, 1, { ...base, compraId: cb, cantidadResultante: 5, claveOperacion: k(20) });
-      expect(rB).toMatchObject({ costoTotalCentavos: '600', diferencia: 1 });
-      const orden2 = await registrarSalidaFifo(pool, 1, 1, { productoId: p11, ubicacionId: 1, cantidad: 7, documento: 'S-5', claveOperacion: k(21) });
-      const [consumo2] = await pool.query<Fila[]>('SELECT d.cantidad,c.redistribucion_id,c.recepcion_id FROM canecas_salidas_fifo_capas d JOIN canecas_capas_costo c ON c.empresa_id=d.empresa_id AND c.id=d.capa_id WHERE d.empresa_id=1 AND d.salida_id=? ORDER BY c.creado_en,c.id', [orden2.id]);
-      expect(consumo2.map(c => [c.recepcion_id === rca, c.redistribucion_id != null, c.cantidad])).toEqual([[true, false, 6], [false, true, 1]]);
-      // Mientras B' siga disponible en ese mismo segundo, A (id menor) permanece bloqueada.
-      await reversarSalidaFifo(pool, 1, 1, orden2.id, 'Prueba');
-      await expect(registrarRedistribucion(pool, 1, 1, { ...base, compraId: ca, cantidadResultante: 7, claveOperacion: k(22) })).rejects.toThrow('EMPATE_ANTIGUEDAD');
+      expect((await capas(p11)).filter(c => c.recepcion_id != null).map(c => [c.cantidad_inicial, c.cantidad_disponible, c.costo])).toEqual([[6, 6, '100'], [4, 4, '150']]);
+      const s4 = await vender(7);
+      expect(await consumoDe(s4.id)).toEqual([['A', 6], ['B', 1]]);
+      expect(await conciliado()).toBe(BigInt(1200));
+      // 6) Redistribuir B primero y A después (orden inverso al de confirmación) tampoco invierte el FIFO.
+      await reversarSalidaFifo(pool, 1, 1, s4.id, 'Prueba');
+      const qB3 = await registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-7', compraId: cb, cantidadResultante: 5, claveOperacion: k(24) });
+      const qA3 = await registrarRedistribucion(pool, 1, 1, { ...base, documento: 'RD-8', compraId: ca, cantidadResultante: 7, claveOperacion: k(25) });
+      const s5 = await vender(8);
+      expect(await consumoDe(s5.id)).toEqual([[`R${qA3.id}`, 7], [`R${qB3.id}`, 1]]);
+      expect(await conciliado()).toBe(BigInt(1200));
+      // orden_fifo solo existe en capas redistribuidas y es inmutable.
+      await expect(pool.query(`UPDATE canecas_capas_costo SET orden_fifo=1 WHERE recepcion_id=${rca}`)).rejects.toThrow();
+      await expect(pool.query('UPDATE canecas_capas_costo SET orden_fifo=orden_fifo+1 WHERE redistribucion_id=?', [qA3.id])).rejects.toThrow('Costo historico de capa inmutable');
+      await expect(pool.query(`INSERT INTO canecas_capas_costo (empresa_id,producto_id,ubicacion_id,recepcion_id,orden_fifo,segmento,cantidad_inicial,cantidad_disponible,costo_unitario_centavos,moneda) VALUES (1,${p11},1,${rcb},5,9,1,1,1,'GTQ')`)).rejects.toThrow(/chk_can_capa_orden/);
     } finally { await pool.end(); }
   }, 120000);
 });
