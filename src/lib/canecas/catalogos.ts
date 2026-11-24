@@ -98,19 +98,22 @@ export async function proveedorActivo(pool: Pool, empresaId: number, proveedorId
 
 /**
  * Mapeo MANUAL y explícito de una compra histórica a un proveedor de Canecas. Nunca modifica proveedor_id ni los
- * costos; solo completa canecas_proveedor_id cuando está vacío, dentro de la misma empresa y con un proveedor activo.
+ * costos; solo completa canecas_proveedor_id cuando está vacío, dentro de la misma empresa y con un proveedor activo, y deja
+ * constancia de quién lo hizo en canecas_compras_mapeo_proveedor.
  */
 export async function mapearProveedorCompra(pool: Pool, empresaId: number, usuarioId: number, compraId: number, proveedorId: number) {
   valida(empresaId, usuarioId, compraId, proveedorId);
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [compras] = await conn.query<RowDataPacket[]>("SELECT id,canecas_proveedor_id FROM canecas_compras WHERE empresa_id=? AND id=? FOR UPDATE", [empresaId, compraId]);
+    const [compras] = await conn.query<RowDataPacket[]>("SELECT id,proveedor_id,canecas_proveedor_id FROM canecas_compras WHERE empresa_id=? AND id=? FOR UPDATE", [empresaId, compraId]);
     if (!compras[0]) throw new ErrorCatalogoNoEncontrado();
     if (compras[0].canecas_proveedor_id != null) throw new Error("COMPRA_YA_MAPEADA");
     const [prov] = await conn.query<RowDataPacket[]>("SELECT id FROM canecas_proveedores WHERE empresa_id=? AND id=? AND activo=1 FOR UPDATE", [empresaId, proveedorId]);
     if (!prov[0]) throw new Error("PROVEEDOR_INVALIDO");
     await conn.execute("UPDATE canecas_compras SET canecas_proveedor_id=? WHERE empresa_id=? AND id=? AND canecas_proveedor_id IS NULL", [proveedorId, empresaId, compraId]);
+    // Bitácora inmutable: quién mapeó, cuándo y qué proveedor anterior tenía la compra (dato histórico, sin FK a Compras).
+    await conn.execute("INSERT INTO canecas_compras_mapeo_proveedor (empresa_id,compra_id,proveedor_anterior_id,canecas_proveedor_id,realizado_por) VALUES (?,?,?,?,?)", [empresaId, compraId, compras[0].proveedor_id ?? null, proveedorId, usuarioId]);
     await conn.commit();
   } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
 }
