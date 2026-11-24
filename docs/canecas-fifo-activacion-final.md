@@ -11,7 +11,7 @@ node scripts/ci/canecas/ejecutar-costos-controlado.mjs --ejecutar
 node scripts/ci/canecas/ejecutar-salidas-controlado.mjs --ejecutar
 ```
 
-La primera salida debe confirmar `Preflight, migración y postcheck completos.`; la segunda, `Instalación y postcheck de salidas completos.`. Verificar sus códigos de salida antes de continuar; no encadenar los comandos sin comprobar el primero. Conciliar existencias sin capa y costos pendientes antes de registrar salidas. El saldo inicial de prioridad desconocida bloquea salidas hasta que se defina una política y exista implementación que la respalde.
+La primera salida debe confirmar `Preflight, migración y postcheck completos.`; la segunda, `Instalación y postcheck de salidas completos.`. Verificar sus códigos de salida antes de continuar; no encadenar los comandos sin comprobar el primero. Conciliar existencias sin capa y costos pendientes antes de registrar salidas. Las salidas quedan bloqueadas si hay reservas sin asignación por capa o capas de valoración inicial con prioridad desconocida. No levantar esos bloqueos manualmente: primero debe existir una política FIFO aprobada y probada. El instalador crea y verifica cinco triggers que protegen la inmutabilidad de salidas y detalles; verificar también sus definiciones en el postcheck.
 
 4. Ante error o advertencia, dejar Canecas detenido y no reintentar. El DDL puede haber quedado parcialmente aplicado. Ejecutar únicamente el diagnóstico de lectura `sql/recuperacion-2026-11-canecas-costos-wip.sql` para costos o `sql/recuperacion-canecas-salidas-solo-lectura.sql` para salidas, conservar el registro y decidir recuperación supervisada con el respaldo; no borrar objetos ni restaurar automáticamente producción.
 
