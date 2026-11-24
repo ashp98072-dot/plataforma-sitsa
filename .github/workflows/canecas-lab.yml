@@ -7,7 +7,7 @@ on:
   pull_request:
     paths:
       - 'src/lib/canecas/**'
-      - 'src/app/api/empresas/[[]slug]/canecas/**'
+      - 'src/app/api/empresas/*/canecas/**'
       - 'src/components/canecas/**'
       - 'scripts/ci/canecas/**'
       - 'sql/*canecas*'
