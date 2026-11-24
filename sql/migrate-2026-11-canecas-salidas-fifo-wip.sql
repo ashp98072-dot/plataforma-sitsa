@@ -115,7 +115,7 @@ BEGIN
     OR NOT (v_capa_producto <=> v_producto)
     OR NOT (v_capa_ubicacion <=> v_ubicacion)
     OR NOT (NEW.costo_unitario_centavos <=> v_costo)
-    OR NOT (NEW.moneda <=> v_moneda) THEN
+    OR NOT (BINARY NEW.moneda <=> BINARY v_moneda) THEN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_DETALLE_CAPA_INCOMPATIBLE';
   END IF;
 END//
