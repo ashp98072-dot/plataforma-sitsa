@@ -21,32 +21,43 @@ export async function obtenerContratoSalidas(connection) {
 }
 function normalizarSql(value) {
   const sql = String(value ?? '');
-  let resultado = '';
+  const tokens = [];
   let i = 0;
   while (i < sql.length) {
-    if (/\s/.test(sql[i])) {
-      while (i < sql.length && /\s/.test(sql[i])) i++;
-      resultado += ' ';
-      continue;
-    }
+    const resto = sql.slice(i);
+    if (/\s/.test(sql[i])) { i++; continue; }
+    if (resto.startsWith('--') || resto.startsWith('/*') || sql[i] === '#') throw Error('DETENER: comentario inesperado en trigger');
     if (sql[i] === "'") {
       const inicio = i++;
+      let cerrado = false;
       while (i < sql.length) {
         if (sql[i] === '\\') { i += 2; continue; }
         if (sql[i] === "'") {
           if (sql[i + 1] === "'") { i += 2; continue; }
           i++;
+          cerrado = true;
           break;
         }
         i++;
       }
-      resultado += sql.slice(inicio, i);
+      if (!cerrado) throw Error('DETENER: literal incompleto en trigger');
+      tokens.push({ tipo: 'literal', valor: sql.slice(inicio, i) });
       continue;
     }
-    resultado += sql[i].toLowerCase();
-    i++;
+    const palabra = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(resto);
+    if (palabra) { tokens.push({ tipo: 'palabra', valor: palabra[0].toLowerCase() }); i += palabra[0].length; continue; }
+    const numero = /^\d+(?:\.\d+)?/.exec(resto);
+    if (numero) { tokens.push({ tipo: 'numero', valor: numero[0] }); i += numero[0].length; continue; }
+    const signo = /^(?:<=>|<=|>=|<>|!=|[=<>+*/%(),.;])/.exec(resto);
+    if (!signo) throw Error('DETENER: token inesperado en trigger');
+    tokens.push({ tipo: 'signo', valor: signo[0] });
+    i += signo[0].length;
   }
-  return resultado.trim().replace(/;$/, '');
+  return tokens.map((token, index) => {
+    const anterior = tokens[index - 1];
+    const palabraAdyacente = anterior && ['palabra', 'numero', 'literal'].includes(anterior.tipo) && ['palabra', 'numero', 'literal'].includes(token.tipo);
+    return (palabraAdyacente ? ' ' : '') + token.valor;
+  }).join('');
 }
 
 function triggersEsperados() {
