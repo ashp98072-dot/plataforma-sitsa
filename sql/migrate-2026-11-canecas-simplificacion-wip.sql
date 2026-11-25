@@ -4,9 +4,12 @@
 -- Prerrequisitos: fase 1, costos, salidas, redistribución, catálogos y ventas de Canecas instalados con su contrato exacto.
 -- Las escrituras y el DDL de Canecas deben estar detenidos durante toda la instalación (DDL de MariaDB no es transaccional).
 --
--- Cambios ADITIVOS (no borra ni modifica filas):
+-- Cambios ADITIVOS (no borra ni modifica filas existentes; solo inserta en la tabla nueva canecas_secuencias):
 --   1. canecas_secuencias: contador por empresa y tipo para generar, en el servidor y sin duplicados, los números
---      de compra (COMP-), de venta (VTA-) y los códigos de caneca (CAN-).
+--      de compra (COMP-), de venta (VTA-) y los códigos de caneca (CAN-). Se SIEMBRA con el mayor número histórico de cada
+--      empresa (referencias canecas_compras.referencia, canecas_ventas.documento y canecas_productos.codigo con formato
+--      PREFIJO[ _-]?DÍGITOS, sin distinguir mayúsculas ni espacios): el primer número nuevo es máximo+1. No se rellenan huecos,
+--      no se reutiliza ningún número histórico y no se renumera ni se modifica ningún documento existente.
 --   2. canecas_ventas.direccion_entrega (NULL en ventas históricas): dirección de entrega copiada en cada venta para
 --      conservarla aunque luego cambie la dirección del cliente. CHECK: no vacía cuando existe.
 --   3. canecas_productos.activo_unico (columna virtual) + índice UNIQUE (empresa_id,activo_unico): la base impide más de
@@ -26,6 +29,16 @@ CREATE TABLE canecas_secuencias (
   CONSTRAINT chk_can_secuencia CHECK (ultimo >= 0),
   CONSTRAINT fk_can_secuencia_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO canecas_secuencias (empresa_id,tipo,ultimo)
+SELECT e.id, t.tipo, COALESCE(h.maximo, 0)
+FROM empresas e
+CROSS JOIN (SELECT 'COMPRA' AS tipo UNION ALL SELECT 'PRODUCTO' UNION ALL SELECT 'VENTA') t
+LEFT JOIN (
+  SELECT empresa_id, 'COMPRA' AS tipo, MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(referencia)), '^COMP[ _-]?', '') AS UNSIGNED)) AS maximo FROM canecas_compras WHERE UPPER(TRIM(referencia)) REGEXP '^COMP[ _-]?[0-9]{1,15}$' GROUP BY empresa_id
+  UNION ALL SELECT empresa_id, 'VENTA', MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(documento)), '^VTA[ _-]?', '') AS UNSIGNED)) FROM canecas_ventas WHERE UPPER(TRIM(documento)) REGEXP '^VTA[ _-]?[0-9]{1,15}$' GROUP BY empresa_id
+  UNION ALL SELECT empresa_id, 'PRODUCTO', MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(codigo)), '^CAN[ _-]?', '') AS UNSIGNED)) FROM canecas_productos WHERE UPPER(TRIM(codigo)) REGEXP '^CAN[ _-]?[0-9]{1,15}$' GROUP BY empresa_id
+) h ON h.empresa_id = e.id AND h.tipo = t.tipo;
 
 ALTER TABLE canecas_ventas
   ADD COLUMN direccion_entrega VARCHAR(500) NULL AFTER ubicacion_id,

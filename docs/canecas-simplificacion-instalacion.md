@@ -8,10 +8,26 @@ requiere respaldo verificado y autorización expresa del propietario. Este docum
 
 | Paso | Objeto | Para qué |
 |---|---|---|
-| 1 | `CREATE TABLE canecas_secuencias` | Números `COMP-`, `VTA-` y códigos `CAN-` generados en el servidor sin duplicados |
+| 1 | `CREATE TABLE canecas_secuencias` + siembra | Números `COMP-`, `VTA-` y códigos `CAN-` generados en el servidor sin duplicados; los contadores se siembran con el máximo histórico de cada empresa (ver «Numeración») |
 | 2 | `canecas_ventas.direccion_entrega` + `chk_can_venta_direccion` | Dirección de entrega histórica por venta (NULL en ventas anteriores) |
 | 3 | `canecas_productos.activo_unico` (virtual) + `uq_can_producto_activo_unico` | La base impide dos canecas activas en la misma empresa |
 | 4 | `CREATE OR REPLACE TRIGGER trg_can_venta_bu` | Atómico (nunca queda sin trigger); ahora también protege `direccion_entrega` |
+
+## Numeración automática frente a documentos históricos
+Los documentos anteriores son texto libre (`canecas_compras.referencia`, `canecas_ventas.documento`, `canecas_productos.codigo`) y **no tienen
+índice único**; por eso la migración no puede dar por hecho que `COMP-000001` o `VTA-000001` estén libres.
+
+Política (ejecutada por la migración, el preflight, el postcheck y el servidor):
+- **Se reconoce** `PREFIJO[ _-]?DÍGITOS` (1 a 15 dígitos), sin distinguir mayúsculas ni espacios exteriores: `COMP-000007`, `comp-12`, `COMP 000020`, `COMP000030`, `COMP_5`…
+  Lo demás (`FAC-9999`, `COMP-00005X`, `PRECOMP-000099`) no cuenta.
+- **Siembra**: el contador de cada empresa y tipo arranca en el **mayor número histórico de esa empresa** (0 si no tiene). El primer número nuevo es máximo+1.
+  Los huecos **no se rellenan**, ningún número histórico se reutiliza y **no se renumera ni modifica ningún documento existente**.
+- **Preflight (solo lectura)**: detiene la instalación si hay un sufijo de más de 15 dígitos (no se puede conciliar; lo resuelve el propietario) e informa,
+  por prefijo, el máximo histórico por empresa y cuántos documentos tienen un formato distinto de `PREFIJO-######`.
+- **Postcheck**: ningún contador queda por debajo de su máximo histórico, todas las empresas tienen sus tres contadores y el siguiente número no coincide con ningún documento.
+- **En operación**: si un número candidato ya lo usa un documento de la empresa (p. ej. escrito a mano con la API histórica después de migrar) se salta al siguiente.
+  Una empresa sin contadores (creada después) se siembra desde su propio historial al primer uso. `INSERT IGNORE` solo resuelve la carrera entre dos siembras simultáneas; el valor insertado es siempre el máximo histórico.
+- Limitación conocida: la comparación es por texto exacto (con la intercalación de la tabla); un documento histórico `COMP-5` no bloquea `COMP-000005` en operación, pero **sí** se cuenta en el máximo al sembrar.
 
 ## Orden de despliegue
 1. Respaldo completo restaurable (verificar restauración en una base temporal o con el procedimiento acordado).
@@ -27,8 +43,8 @@ node scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs --ejecutar
 ```
 El instalador, en este orden: valida versión 11.8.9 y privilegios (SELECT, CREATE, ALTER, INDEX, REFERENCES, TRIGGER); toma el bloqueo; exige
 SQL estricto y `foreign_key_checks`/`check_constraint_checks` activos; verifica contra sus contratos redistribución, FIFO, catálogos y
-**ventas anterior**; ejecuta el preflight (`sql/preflight-2026-11-canecas-simplificacion-wip.sql`, 12 comprobaciones); instala; ejecuta el
-postcheck (`sql/postcheck-2026-11-canecas-simplificacion-wip.sql`, 10 comprobaciones); comprueba que los recuentos no cambiaron y que no se
+**ventas anterior**; ejecuta el preflight (`sql/preflight-2026-11-canecas-simplificacion-wip.sql`, 19 comprobaciones); instala; ejecuta el
+postcheck (`sql/postcheck-2026-11-canecas-simplificacion-wip.sql`, 13 comprobaciones); comprueba que los recuentos no cambiaron y que no se
 inventaron direcciones; y verifica el contrato nuevo (`scripts/ci/canecas/contrato-simplificacion-mariadb-11.8.9.json`).
 
 Es idempotente: con la instalación completa y el contrato exacto responde «ya instalada». Con un estado parcial se detiene.

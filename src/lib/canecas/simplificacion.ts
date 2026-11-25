@@ -15,29 +15,62 @@ export function claveDerivada(clave: string, sufijo: string): string {
 export const PREFIJOS = { COMPRA: 'COMP-', VENTA: 'VTA-', PRODUCTO: 'CAN-' } as const;
 export type TipoSecuencia = keyof typeof PREFIJOS;
 
+/** Dónde vive cada número generado: se usa para sembrar el contador y para no repetir un documento existente. */
+const ORIGEN: Record<TipoSecuencia, { tabla: string; columna: string; prefijo: string }> = {
+  COMPRA: { tabla: 'canecas_compras', columna: 'referencia', prefijo: 'COMP' },
+  PRODUCTO: { tabla: 'canecas_productos', columna: 'codigo', prefijo: 'CAN' },
+  VENTA: { tabla: 'canecas_ventas', columna: 'documento', prefijo: 'VTA' },
+};
+// Misma regla que la migración: PREFIJO[ _-]?DÍGITOS (hasta 15), sin distinguir mayúsculas ni espacios exteriores.
+const sqlMaximoHistorico = (t: TipoSecuencia) => {
+  const { tabla, columna, prefijo } = ORIGEN[t];
+  return `SELECT MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(${columna})), '^${prefijo}[ _-]?', '') AS UNSIGNED)) AS maximo FROM ${tabla} WHERE empresa_id=? AND UPPER(TRIM(${columna})) REGEXP '^${prefijo}[ _-]?[0-9]{1,15}$'`;
+};
+
 /**
- * Crea (si faltan) las filas del contador de la empresa FUERA de la transacción de la operación, en autocommit. Así el
- * camino caliente solo hace UPDATE (bloqueo exclusivo directo) y nunca compite por insertar la misma fila, lo que en InnoDB
- * puede producir interbloqueos con muchas solicitudes simultáneas.
+ * Garantiza el contador de la empresa FUERA de la transacción de la operación, en autocommit. Si falta, se SIEMBRA con el mayor
+ * número histórico de la empresa (nunca en cero a ciegas): el primer número nuevo es máximo+1, no se rellenan huecos, no se
+ * reutiliza un número existente y no se renumera nada. El IGNORE solo cubre la carrera de dos solicitudes que siembran a la vez
+ * (la fila ya sembrada gana); no sustituye a la conciliación: el valor insertado es siempre el máximo histórico. El camino caliente solo hace UPDATE (bloqueo exclusivo directo) y
+ * nunca compite por insertar la misma fila, lo que en InnoDB puede producir interbloqueos con muchas solicitudes simultáneas.
  */
 export async function asegurarSecuencias(pool: Pool, empresaId: number): Promise<void> {
   if (!Number.isSafeInteger(empresaId) || empresaId < 1) throw Error('SECUENCIA_INVALIDA');
-  await pool.query("INSERT IGNORE INTO canecas_secuencias (empresa_id,tipo,ultimo) VALUES (?,'COMPRA',0),(?,'PRODUCTO',0),(?,'VENTA',0)", [empresaId, empresaId, empresaId]);
+  const [filas] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM canecas_secuencias WHERE empresa_id=?', [empresaId]);
+  if (Number(filas[0]?.n) === 3) return;
+  for (const tipo of Object.keys(ORIGEN) as TipoSecuencia[]) {
+    // Lectura sin bloqueos del máximo histórico y luego el INSERT con ese valor (no INSERT..SELECT, que bloquearía filas de
+    // compras/ventas/productos). Si un documento aparece entre ambos pasos, siguienteNumero lo salta.
+    const [fila] = await pool.query<RowDataPacket[]>(sqlMaximoHistorico(tipo), [empresaId]);
+    const maximo = Number(fila[0]?.maximo ?? 0);
+    if (!Number.isSafeInteger(maximo) || maximo < 0) throw Error('SECUENCIA_INVALIDA');
+    await pool.query('INSERT IGNORE INTO canecas_secuencias (empresa_id,tipo,ultimo) VALUES (?,?,?)', [empresaId, tipo, maximo]);
+  }
 }
+
+const MAX_SALTOS = 1000;
 
 /**
  * Siguiente número de la empresa, atómico: la fila del contador queda bloqueada hasta que termina la transacción del
  * llamador, por lo que dos solicitudes concurrentes nunca reciben el mismo número. Si la transacción se revierte, el número
- * no se consume. Requiere una transacción abierta en `conn` y `asegurarSecuencias` previo.
+ * no se consume. Si el número candidato ya lo usa un documento de la empresa (por ejemplo, escrito a mano por la API histórica
+ * después de la migración) se salta al siguiente: nunca se repite un número visible. Requiere una transacción abierta en
+ * `conn` y `asegurarSecuencias` previo.
  */
 export async function siguienteNumero(conn: PoolConnection, empresaId: number, tipo: TipoSecuencia): Promise<string> {
   if (!Number.isSafeInteger(empresaId) || empresaId < 1 || !(tipo in PREFIJOS)) throw Error('SECUENCIA_INVALIDA');
-  const [r] = await conn.execute<ResultSetHeader>('UPDATE canecas_secuencias SET ultimo=LAST_INSERT_ID(ultimo+1) WHERE empresa_id=? AND tipo=?', [empresaId, tipo]);
-  if (r.affectedRows !== 1) throw Error('SECUENCIA_NO_INICIALIZADA');
-  const [filas] = await conn.query<RowDataPacket[]>('SELECT LAST_INSERT_ID() AS n');
-  const n = Number(filas[0]?.n);
-  if (!Number.isSafeInteger(n) || n < 1) throw Error('SECUENCIA_INVALIDA');
-  return `${PREFIJOS[tipo]}${String(n).padStart(6, '0')}`;
+  const { tabla, columna } = ORIGEN[tipo];
+  for (let intento = 0; intento < MAX_SALTOS; intento++) {
+    const [r] = await conn.execute<ResultSetHeader>('UPDATE canecas_secuencias SET ultimo=LAST_INSERT_ID(ultimo+1) WHERE empresa_id=? AND tipo=?', [empresaId, tipo]);
+    if (r.affectedRows !== 1) throw Error('SECUENCIA_NO_INICIALIZADA');
+    const [filas] = await conn.query<RowDataPacket[]>('SELECT LAST_INSERT_ID() AS n');
+    const n = Number(filas[0]?.n);
+    if (!Number.isSafeInteger(n) || n < 1) throw Error('SECUENCIA_INVALIDA');
+    const numero = `${PREFIJOS[tipo]}${String(n).padStart(6, '0')}`;
+    const [usados] = await conn.query<RowDataPacket[]>(`SELECT 1 AS x FROM ${tabla} WHERE empresa_id=? AND ${columna}=? LIMIT 1`, [empresaId, numero]);
+    if (!usados.length) return numero;
+  }
+  throw Error('SECUENCIA_SATURADA');
 }
 
 /**

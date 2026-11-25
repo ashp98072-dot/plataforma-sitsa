@@ -33,6 +33,34 @@ describe('migración de simplificación: contenido y garantías', () => {
     expect(sinComentarios).not.toMatch(/^\s*UPDATE\b/im);
     expect(sinComentarios).not.toMatch(/FOREIGN_KEY_CHECKS|foreign_key_checks/);
   });
+  it('siembra los contadores con el máximo histórico por empresa: sin ceros a ciegas, sin UPDATE, sin renumerar y sin rellenar huecos', () => {
+    const insert = sinComentarios.match(/INSERT INTO canecas_secuencias[\s\S]*?;/)![0];
+    expect(insert).toContain('MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(referencia))');
+    expect(insert).toContain('MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(documento))');
+    expect(insert).toContain('MAX(CAST(REGEXP_REPLACE(UPPER(TRIM(codigo))');
+    expect(insert).toContain('GROUP BY empresa_id'); // por empresa
+    expect(insert).toContain('FROM empresas e'); // una fila por empresa y tipo, incluidas las que no tienen historial
+    expect(insert).toContain('COALESCE(h.maximo, 0)');
+    expect(insert).not.toMatch(/INSERT IGNORE|ON DUPLICATE|REPLACE INTO/i); // INSERT IGNORE no es conciliación
+    expect(insert.match(/\{1,15\}/g)).toHaveLength(3);
+  });
+  it('el preflight detiene los sufijos de más de 15 dígitos y reporta máximos y formatos mixtos por tabla', () => {
+    const pre = leer('preflight-2026-11-canecas-simplificacion-wip.sql');
+    for (const t of ['COMP', 'VTA', 'CAN']) {
+      expect(pre).toContain(`'sin sufijos ${t} de más de 15 dígitos`);
+      expect(pre).toContain(`'máximo histórico ${t} por empresa (empresa:valor)'`);
+    }
+    expect(pre).toContain("'documentos históricos con formato distinto de PREFIJO-######'");
+    expect(pre.match(/\{16,\}/g)).toHaveLength(3);
+  });
+  it('el postcheck exige contadores no menores que el máximo histórico y la instalación verifica que no haya números en uso', () => {
+    const post = leer('postcheck-2026-11-canecas-simplificacion-wip.sql');
+    expect(post).toContain("'contadores no menores que el máximo histórico'");
+    expect(post).toContain("'siguientes números ya en uso por un documento'");
+    expect(post).toContain("'empresas sin contador completo'");
+    const instalador = readFileSync('scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs', 'utf8');
+    expect(instalador).toContain("recuento(post, 'siguientes números ya en uso por un documento') !== 0");
+  });
   it('reemplaza el trigger de forma atómica (nunca queda sin trigger) y protege direccion_entrega', () => {
     expect(sinComentarios).toMatch(/CREATE OR REPLACE TRIGGER trg_can_venta_bu/);
     expect(triggersEsperadosSimplificacion().map(t => t.TRIGGER_NAME)).toEqual(['trg_can_venta_bu', 'trg_can_venta_bd']);
@@ -42,9 +70,9 @@ describe('migración de simplificación: contenido y garantías', () => {
     expect(sinComentarios).toMatch(/activo_unico TINYINT\(1\) GENERATED ALWAYS AS \(IF\(activo = 1, 1, NULL\)\) VIRTUAL/);
     expect(sinComentarios).toMatch(/UNIQUE KEY uq_can_producto_activo_unico \(empresa_id,activo_unico\)/);
   });
-  it('tiene exactamente 3 sentencias DDL y 1 trigger, como espera el instalador', () => {
+  it('tiene exactamente 4 sentencias (CREATE TABLE, siembra de contadores, 2 ALTER) y 1 trigger, como espera el instalador', () => {
     const [ddl, triggers] = migracion.split('DELIMITER //');
-    expect(ddl.split('\n').filter(l => !/^\s*--/.test(l)).join('\n').split(';').map(x => x.trim()).filter(Boolean)).toHaveLength(3);
+    expect(ddl.split('\n').filter(l => !/^\s*--/.test(l)).join('\n').split(';').map(x => x.trim()).filter(Boolean)).toHaveLength(4);
     expect(triggers.split('//').filter(x => /CREATE OR REPLACE TRIGGER/.test(x))).toHaveLength(1);
   });
   it('preflight, postcheck y recuperación existen, son de solo lectura y no desactivan comprobaciones', () => {
@@ -53,7 +81,7 @@ describe('migración de simplificación: contenido y garantías', () => {
       expect(texto).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|SET)\b/i);
       expect(texto).not.toMatch(/foreign_key_checks/i);
     }
-    expect((leer('preflight-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(12);
-    expect((leer('postcheck-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(10);
+    expect((leer('preflight-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(19);
+    expect((leer('postcheck-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(13);
   });
 });

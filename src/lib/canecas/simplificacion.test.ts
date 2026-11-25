@@ -21,31 +21,85 @@ describe('claveDerivada', () => {
   });
 });
 
-describe('siguienteNumero y asegurarSecuencias', () => {
+describe('siguienteNumero', () => {
+  const libre = (n: number | string) => (s: string) => s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n }], []] : s.startsWith('SELECT 1 AS x') ? [[], []] : [{ affectedRows: 1 }, []];
   it('incrementa el contador de la empresa con un UPDATE de bloqueo directo y da formato con prefijo', async () => {
-    const c = conexion(s => s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n: '7' }], []] : [{ affectedRows: 1 }, []]);
+    const c = conexion(libre('7'));
     expect(await siguienteNumero(c, 3, 'VENTA')).toBe('VTA-000007');
     const sentencia = (c as unknown as { execute: { mock: { calls: [string, unknown[]][] } } }).execute.mock.calls[0];
     expect(sentencia[0]).toMatch(/^UPDATE canecas_secuencias SET ultimo=LAST_INSERT_ID\(ultimo\+1\) WHERE empresa_id=\? AND tipo=\?/);
     expect(sentencia[1]).toEqual([3, 'VENTA']);
   });
   it('usa prefijos distintos por tipo y rechaza entradas inválidas o contadores sin inicializar', async () => {
-    const c = conexion(s => s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n: 1 }], []] : [{ affectedRows: 1 }, []]);
+    const c = conexion(libre(1));
     expect(await siguienteNumero(c, 1, 'COMPRA')).toBe('COMP-000001');
     expect(await siguienteNumero(c, 1, 'PRODUCTO')).toBe('CAN-000001');
     await expect(siguienteNumero(c, 0, 'VENTA')).rejects.toThrow('SECUENCIA_INVALIDA');
     await expect(siguienteNumero(c, 1, 'OTRO' as never)).rejects.toThrow('SECUENCIA_INVALIDA');
     await expect(siguienteNumero(conexion(() => [{ affectedRows: 0 }, []]), 1, 'VENTA')).rejects.toThrow('SECUENCIA_NO_INICIALIZADA');
-    await expect(siguienteNumero(conexion(s => s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n: 0 }], []] : [{ affectedRows: 1 }, []]), 1, 'VENTA')).rejects.toThrow('SECUENCIA_INVALIDA');
+    await expect(siguienteNumero(conexion(libre(0)), 1, 'VENTA')).rejects.toThrow('SECUENCIA_INVALIDA');
   });
-  it('asegurarSecuencias crea las tres filas del contador con INSERT IGNORE y valida la empresa', async () => {
-    const pool = { query: vi.fn(async () => [{}, []]) };
+  it('un número de más de 6 dígitos conserva todos sus dígitos', async () => {
+    expect(await siguienteNumero(conexion(libre(1000000)), 1, 'COMPRA')).toBe('COMP-1000000');
+  });
+  it('si el candidato ya lo usa un documento de la empresa salta al siguiente y nunca lo repite', async () => {
+    let n = 40;
+    const consultas: [string, unknown[] | undefined][] = [];
+    const c = conexion((s, p) => {
+      if (s.startsWith('SELECT LAST_INSERT_ID')) return [[{ n: ++n }], []];
+      if (s.startsWith('SELECT 1 AS x')) { consultas.push([s, p]); return [(p as unknown[])[1] === 'COMP-000041' || (p as unknown[])[1] === 'COMP-000042' ? [{ x: 1 }] : [], []]; }
+      return [{ affectedRows: 1 }, []];
+    });
+    expect(await siguienteNumero(c, 9, 'COMPRA')).toBe('COMP-000043');
+    expect(consultas.map(x => (x[1] as unknown[])[1])).toEqual(['COMP-000041', 'COMP-000042', 'COMP-000043']);
+    expect(consultas[0][0]).toContain('FROM canecas_compras WHERE empresa_id=? AND referencia=?'); // por empresa
+  });
+  it('consulta la columna correcta de cada tipo', async () => {
+    const sqls: string[] = [];
+    const c = conexion(s => { if (s.startsWith('SELECT 1 AS x')) sqls.push(s); return s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n: 1 }], []] : s.startsWith('SELECT 1 AS x') ? [[], []] : [{ affectedRows: 1 }, []]; });
+    await siguienteNumero(c, 1, 'VENTA'); await siguienteNumero(c, 1, 'PRODUCTO');
+    expect(sqls[0]).toContain('FROM canecas_ventas WHERE empresa_id=? AND documento=?');
+    expect(sqls[1]).toContain('FROM canecas_productos WHERE empresa_id=? AND codigo=?');
+  });
+  it('se detiene (no entra en un ciclo) si no encuentra un número libre', async () => {
+    const c = conexion(s => s.startsWith('SELECT LAST_INSERT_ID') ? [[{ n: 1 }], []] : s.startsWith('SELECT 1 AS x') ? [[{ x: 1 }], []] : [{ affectedRows: 1 }, []]);
+    await expect(siguienteNumero(c, 1, 'VENTA')).rejects.toThrow('SECUENCIA_SATURADA');
+  });
+});
+
+describe('asegurarSecuencias', () => {
+  it('no hace nada si la empresa ya tiene sus tres contadores', async () => {
+    const pool = { query: vi.fn(async () => [[{ n: 3 }], []]) };
     await asegurarSecuencias(pool as never, 5);
-    const [sql, params] = pool.query.mock.calls[0] as unknown as [string, unknown[]];
-    expect(sql).toMatch(/^INSERT IGNORE INTO canecas_secuencias/);
-    expect(sql).toContain("'COMPRA'"); expect(sql).toContain("'PRODUCTO'"); expect(sql).toContain("'VENTA'");
-    expect(params).toEqual([5, 5, 5]);
-    await expect(asegurarSecuencias(pool as never, 0)).rejects.toThrow('SECUENCIA_INVALIDA');
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+  it('siembra cada contador con el MÁXIMO histórico de la empresa (no con cero) y solo ignora la carrera por la misma fila', async () => {
+    const maximos: Record<string, number | null> = { canecas_compras: 30, canecas_ventas: null, canecas_productos: 9 };
+    const pool = { query: vi.fn(async (s: string) => {
+      if (s.startsWith('SELECT COUNT')) return [[{ n: 0 }], []];
+      const tabla = Object.keys(maximos).find(t => s.includes(`FROM ${t} WHERE`));
+      return tabla ? [[{ maximo: maximos[tabla] }], []] : [{}, []];
+    }) };
+    await asegurarSecuencias(pool as never, 5);
+    const lecturas = pool.query.mock.calls.filter(c => String(c[0]).startsWith('SELECT MAX')) as unknown as [string, unknown[]][];
+    expect(lecturas).toHaveLength(3);
+    for (const [sql, params] of lecturas) {
+      expect(params).toEqual([5]); // máximo de ESA empresa
+      expect(sql).toMatch(/MAX\(CAST\(REGEXP_REPLACE\(UPPER\(TRIM\(/);
+      expect(sql).toMatch(/REGEXP '\^(COMP|VTA|CAN)\[ _-\]\?\[0-9\]\{1,15\}\$'/);
+      expect(sql).toContain('WHERE empresa_id=?');
+    }
+    const inserts = pool.query.mock.calls.filter(c => String(c[0]).startsWith('INSERT IGNORE INTO canecas_secuencias')) as unknown as [string, unknown[]][];
+    expect(inserts.map(i => i[1])).toEqual([[5, 'COMPRA', 30], [5, 'PRODUCTO', 9], [5, 'VENTA', 0]]); // sin historial = 0; con historial = máximo
+    for (const [sql] of inserts) expect(sql).not.toMatch(/\b(SELECT|UPDATE|DELETE)\b/);
+  });
+  it('un máximo inválido detiene la siembra', async () => {
+    const pool = { query: vi.fn(async (s: string) => s.startsWith('SELECT COUNT') ? [[{ n: 0 }], []] : s.startsWith('SELECT MAX') ? [[{ maximo: -1 }], []] : [{}, []]) };
+    await expect(asegurarSecuencias(pool as never, 5)).rejects.toThrow('SECUENCIA_INVALIDA');
+    expect(pool.query.mock.calls.some(c => String(c[0]).startsWith('INSERT'))).toBe(false);
+  });
+  it('valida la empresa', async () => {
+    await expect(asegurarSecuencias({ query: vi.fn() } as never, 0)).rejects.toThrow('SECUENCIA_INVALIDA');
   });
 });
 
