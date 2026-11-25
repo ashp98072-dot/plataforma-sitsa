@@ -99,7 +99,7 @@ describe.skipIf(!hayLaboratorio)('diagnóstico previo de solo lectura en MariaDB
     } finally { await pool.end(); }
   }, 180000);
 
-  it('tras instalar la simplificación omite el contrato anterior, verifica el nuevo y el postcheck (15) sin fallos', async () => {
+  it('tras instalar la simplificación omite los contratos anteriores de catálogos y ventas, verifica el nuevo y el postcheck (15) sin fallos', async () => {
     const pool = await crearBase('canecas_simp_diag_d', 8);
     try {
       await prepararBaseHastaVentas(pool, { historial: true });
@@ -109,6 +109,8 @@ describe.skipIf(!hayLaboratorio)('diagnóstico previo de solo lectura en MariaDB
       expect(fallos(r)).toEqual([]);
       expect(por(r, 'Estado de la simplificación')!.detalle).toContain('completa');
       expect(por(r, 'Contrato de ventas ANTERIOR')!.estado).toBe('OMITIDA');
+      expect(por(r, 'Contrato de catálogos ANTERIOR')!.estado).toBe('OMITIDA');
+      expect(por(r, 'Contrato de redistribución')!.estado).toBe('OK'); // este sigue vigente tras la simplificación
       expect(por(r, 'Contrato de simplificación')!.estado).toBe('OK');
       expect(por(r, 'Postcheck')!.estado).toBe('OK');
       expect(sqls.filter(s => ESCRITURA.test(s))).toEqual([]);

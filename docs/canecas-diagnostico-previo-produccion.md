@@ -18,6 +18,8 @@ migración. Lo ejecuta el propietario (el entorno de Claude no tiene acceso de r
 | Compras históricas sin proveedor de Canecas mapeado (informativo) | `verificarMapeoProveedoresCompleto` |
 | Preflight de la simplificación (22 comprobaciones; con la simplificación ya instalada, el postcheck de 15 y el contrato nuevo) | `sql/preflight-…` / `sql/postcheck-…` |
 
+Con la simplificación **ya instalada**, los contratos anteriores de catálogos y ventas se marcan `OMITIDA` (la simplificación modifica `canecas_compras` y `canecas_ventas`, y sus instaladores la rechazan a propósito) y los reemplaza el contrato de simplificación.
+
 Cada contrato se informa por separado: una falla **no** detiene las demás. La sesión se fuerza a `SET SESSION TRANSACTION READ ONLY` y el diagnóstico
 **se detiene sin consultar nada** si el servidor no lo confirma; el servidor rechaza cualquier escritura de esa sesión (probado en MariaDB 11.8.9).
 

@@ -88,11 +88,12 @@ describe('diagnóstico previo de solo lectura', () => {
     expect(estado(r, 'Estado de la simplificación')).toMatchObject({ estado: 'FALLO' });
     expect(estado(r, 'Estado de la simplificación')!.detalle).toContain('recuperacion-canecas-simplificacion-solo-lectura.sql');
   });
-  it('con la simplificación ya instalada omite el contrato anterior de ventas y verifica el nuevo con el postcheck (15)', async () => {
+  it('con la simplificación ya instalada omite los contratos anteriores de catálogos y ventas y verifica el nuevo con el postcheck (15)', async () => {
     m.estado.mockResolvedValue([1, 1, 1, 1, 1, 1]);
     const r = await diagnosticarPrevio(conexion({ preflight: filasPreflight(15) }).c);
-    expect(m.ventas).not.toHaveBeenCalled(); expect(m.simpl).toHaveBeenCalledTimes(1);
+    expect(m.ventas).not.toHaveBeenCalled(); expect(m.catalogos).not.toHaveBeenCalled(); expect(m.simpl).toHaveBeenCalledTimes(1);
     expect(estado(r, 'Contrato de ventas ANTERIOR')!.estado).toBe('OMITIDA');
+    expect(estado(r, 'Contrato de catálogos ANTERIOR')!.estado).toBe('OMITIDA');
     expect(estado(r, 'Postcheck')!.estado).toBe('OK');
     expect(r.falla).toBe(false);
   });

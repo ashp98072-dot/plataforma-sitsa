@@ -79,11 +79,14 @@ export async function diagnosticarPrevio(connection) {
     // Verificadores existentes de los instaladores (no se duplica su lógica).
     await comprobar('Contrato de redistribución (tablas, columnas, índices, FK, CHECK y triggers)', () => verificarContratoRedistribucion(connection));
     await comprobar('Criterio FIFO ejecutable en el esquema instalado', () => verificarCriterioFifo(connection));
-    await comprobar('Contrato de catálogos (proveedores y clientes de Canecas)', () => verificarContratoCatalogos(connection));
     if (instalada) {
+      // La simplificación modifica canecas_compras y canecas_ventas, que cubren los contratos anteriores de catálogos y ventas: con ella instalada
+      // esos contratos ya no aplican (sus instaladores la rechazan a propósito) y los reemplaza el contrato de simplificación.
+      registrar('Contrato de catálogos ANTERIOR', 'OMITIDA', 'la simplificación ya está instalada (agrega ref_auto a canecas_compras): lo cubre el contrato nuevo');
       registrar('Contrato de ventas ANTERIOR', 'OMITIDA', 'la simplificación ya está instalada: corresponde el contrato nuevo');
       await comprobar('Contrato de simplificación (ventas, productos, compras y secuencias)', () => verificarContratoSimplificacion(connection));
     } else {
+      await comprobar('Contrato de catálogos (proveedores y clientes de Canecas)', () => verificarContratoCatalogos(connection));
       await comprobar('Contrato de ventas anterior (canecas_ventas, mapeo y sus 4 triggers)', () => verificarContratoVentas(connection));
     }
     try { await verificarMapeoProveedoresCompleto(connection); registrar('Compras históricas con proveedor de Canecas mapeado', 'INFO', 'todas mapeadas'); }
