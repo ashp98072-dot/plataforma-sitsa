@@ -27,14 +27,12 @@ describe('instalación manual por etapas (phpMyAdmin): archivos SQL generados', 
   });
   it('fidelidad: la sentencia de cada etapa es EXACTAMENTE la de sql/migrate-2026-11-canecas-simplificacion-wip.sql (salvo el esquema explícito)', () => {
     const m = sentenciasMigracion();
-    const esperado: Record<string, string> = { '02-etapa1-crear-secuencias.sql': m.secuencias, '04-etapa2-sembrar-contadores.sql': m.siembra, '06-etapa3-alterar-ventas.sql': m.ventas, '08-etapa4-alterar-productos.sql': m.productos, '10-etapa5-alterar-compras.sql': m.compras };
+    const esperado: Record<string, string> = { '02-etapa1-crear-secuencias.sql': m.secuencias, '04-etapa2-sembrar-contadores.sql': m.siembra, '06-etapa3-alterar-ventas.sql': m.ventas, '08-etapa4-alterar-productos.sql': m.productos, '10-etapa5-alterar-compras.sql': m.compras, [TRIGGER]: m.trigger };
     for (const [archivo, original] of Object.entries(esperado)) expect(compactar(desCalificar(ddlIncrustada(archivo))), archivo).toBe(compactar(original));
-    const trigger = partir(TRIGGER).find(x => /^CREATE OR REPLACE TRIGGER/.test(x))!;
-    expect(compactar(desCalificar(trigger))).toBe(compactar(m.trigger));
   });
   it('conserva íntegros el CHECK, los índices únicos, las columnas virtuales y el trigger de la migración', () => {
     const todo = etapas.map(n => archivos[n]).join('\n');
-    for (const fragmento of ['CONSTRAINT chk_can_venta_direccion CHECK (direccion_entrega IS NULL OR CHAR_LENGTH(TRIM(direccion_entrega)) > 0)', 'ADD UNIQUE KEY uq_can_venta_doc_auto (empresa_id,doc_auto)', 'ADD UNIQUE KEY uq_can_producto_activo_unico (empresa_id,activo_unico)', 'ADD UNIQUE KEY uq_can_compra_ref_auto (empresa_id,ref_auto)', "GENERATED ALWAYS AS (IF(documento REGEXP '^VTA-[0-9]{6,15}$', documento, NULL)) VIRTUAL".replace(/'/g, "''"), "GENERATED ALWAYS AS (IF(referencia REGEXP '^COMP-[0-9]{6,15}$', referencia, NULL)) VIRTUAL".replace(/'/g, "''"), 'GENERATED ALWAYS AS (IF(activo = 1, 1, NULL)) VIRTUAL', 'OR NOT (NEW.direccion_entrega <=> OLD.direccion_entrega)', "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_VENTA_INMUTABLE'", 'CREATE OR REPLACE TRIGGER', 'COALESCE(h.maximo, 0)', "REGEXP ''^COMP[ _-]?[0-9]{1,15}$''"]) expect(todo, fragmento).toContain(fragmento);
+    for (const fragmento of ['CONSTRAINT chk_can_venta_direccion CHECK (direccion_entrega IS NULL OR CHAR_LENGTH(TRIM(direccion_entrega)) > 0)', 'ADD UNIQUE KEY uq_can_venta_doc_auto (empresa_id,doc_auto)', 'ADD UNIQUE KEY uq_can_producto_activo_unico (empresa_id,activo_unico)', 'ADD UNIQUE KEY uq_can_compra_ref_auto (empresa_id,ref_auto)', "GENERATED ALWAYS AS (IF(documento REGEXP '^VTA-[0-9]{6,15}$', documento, NULL)) VIRTUAL".replace(/'/g, "''"), "GENERATED ALWAYS AS (IF(referencia REGEXP '^COMP-[0-9]{6,15}$', referencia, NULL)) VIRTUAL".replace(/'/g, "''"), 'GENERATED ALWAYS AS (IF(activo = 1, 1, NULL)) VIRTUAL', 'OR NOT (NEW.direccion_entrega <=> OLD.direccion_entrega)', "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_VENTA_INMUTABLE'".replace(/'/g, "''"), 'CREATE OR REPLACE TRIGGER', 'COALESCE(h.maximo, 0)', "REGEXP ''^COMP[ _-]?[0-9]{1,15}$''"]) expect(todo, fragmento).toContain(fragmento);
   });
   it('cada referencia a tabla o trigger lleva el esquema explícito: sin USE, sin DATABASE() y sin tablas sin calificar (también en prueba y recuperación)', () => {
     for (const n of nombres) {
@@ -79,19 +77,18 @@ describe('instalación manual por etapas (phpMyAdmin): archivos SQL generados', 
     });
   });
   describe('guardas (hallazgo 4): no se puede ejecutar una etapa si falla una comprobación, aunque el cliente continúe tras un error', () => {
-    it('etapas 1-5: la DDL va dentro de un PREPARE condicionado; con la condición falsa lo ejecutado es una subconsulta que falla (1242)', () => {
-      for (const n of etapas.filter(x => x !== TRIGGER)) {
+    it('etapas 1-6: la DDL va dentro de un PREPARE condicionado; con la condición falsa lo ejecutado es una subconsulta que falla (1242)', () => {
+      for (const n of etapas) {
         const sql = ejecutable(archivos[n]);
-        expect(sql, n).toMatch(/SET @etapa_sql = IF\(\n[\s\S]+?,\n'(?:[^']|'')*',\n'SELECT \(SELECT ''DETENER[^']*(?:''[^']*)*'' UNION ALL SELECT ''ejecute \d\d-verificar[^']*(?:''[^']*)*''\)'\);/);
+        expect(sql, n).toMatch(/SET @etapa_sql = IF\(\n[\s\S]+?,\n'(?:[^']|'')*',\n'SELECT \(SELECT ''DETENER[^']*(?:''[^']*)*'' UNION ALL SELECT ''ejecute \d\d-verificar[^']*(?:''[^']*)*''\)'\)(?:;|\/\/)/);
         expect(partir(n).filter(x => ESCRITURA.test(x)), n).toEqual([]); // ninguna DDL suelta fuera del literal
         const orden = ['PREPARE etapa_stmt FROM @etapa_sql', 'EXECUTE etapa_stmt', 'SHOW WARNINGS', 'DEALLOCATE PREPARE etapa_stmt'].map(x => sql.indexOf(x));
         expect(orden.every((x, i) => x > 0 && (i === 0 || x > orden[i - 1])), n).toBe(true);
       }
     });
-    it('etapa 6 (trigger): no admite PREPARE; su límite está declarado y lleva guarda de mejor esfuerzo; las otras etapas no tienen DDL suelta', () => {
-      expect(archivos[TRIGGER]).toContain('NO tiene guarda intrinseca');
-      expect(partir(TRIGGER).filter(x => ESCRITURA.test(x)).map(x => x.split(/\s/).slice(0, 5).join(' '))).toEqual(['CREATE OR REPLACE TRIGGER `u611730801_Plataforma`.trg_can_venta_bu']);
-      expect(partir(TRIGGER).some(x => /^SELECT CASE WHEN [\s\S]* THEN 'GUARDA OK etapa 6'/.test(x))).toBe(true);
+    it('etapa 6 (trigger): termina en // y declara su guarda intrínseca', () => {
+      expect(archivos[TRIGGER]).toContain('GUARDA INTRINSECA');
+      expect(archivos[TRIGGER]).not.toContain('NO tiene guarda intrinseca');
       expect(ejecutable(archivos[TRIGGER]).trimEnd().endsWith('//')).toBe(true);
     });
     it('cada guarda cita la verificación de solo lectura de la etapa previa', () => {

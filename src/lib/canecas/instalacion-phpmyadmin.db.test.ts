@@ -137,7 +137,7 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       ejecutar('02-etapa1-crear-secuencias', { initCommand: 'SET SESSION foreign_key_checks=0', force: true });
       expect((await objetos(pool))[0]).toBe(0);
       // (d) Sesion estricta por defecto: tambien funciona y deja los modos como estaban.
-      const estricta = ejecutar('02-etapa1-crear-secuencias', { anexo: ANEXO_MODOS, showWarnings: true });
+      const estricta = ejecutar('02-etapa1-crear-secuencias', { anexo: ANEXO_MODOS, showWarnings: true, initCommand: "SET SESSION sql_mode='STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION', innodb_strict_mode=1" });
       expect(estricta.codigo, estricta.stderr).toBe(0);
       const [[modoDespues, innoDespues]] = tabla(estricta.stdout, 'modo\testricto');
       expect(modoDespues).toMatch(/STRICT_TRANS_TABLES/); expect(innoDespues).toBe('1');
@@ -167,16 +167,19 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       await pool.query('DROP TABLE canecas_secuencias; DROP TRIGGER trg_can_venta_bd');
       ejecutar('02-etapa1-crear-secuencias', { force: true });
       expect((await objetos(pool))[0]).toBe(0);
-      // La etapa 6 (trigger) conserva su guarda de mejor esfuerzo: un cliente que se detiene al primer error no la ejecuta.
+      // La etapa 6 (trigger) tambien tiene guarda intrinseca: con el prerequisito incumplido no reemplaza el trigger, ni siquiera con --force.
       await pool.query("CREATE TRIGGER trg_can_venta_bd BEFORE DELETE ON canecas_ventas FOR EACH ROW BEGIN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CANECAS_VENTA_NO_ELIMINABLE'; END");
       const antesTrigger = (await consulta(pool, "SELECT ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu'"))[0].ACTION_STATEMENT;
-      const seis = ejecutar('12-etapa6-reemplazar-trigger');
-      expect(seis.codigo).not.toBe(0); expect(seis.stderr).toMatch(/1242|1146/);
-      expect((await consulta(pool, "SELECT ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu'"))[0].ACTION_STATEMENT).toBe(antesTrigger);
+      for (const force of [false, true]) {
+        const seis = ejecutar('12-etapa6-reemplazar-trigger', { force, initCommand: SESION_HOSTINGER });
+        if (!force) expect(seis.codigo).not.toBe(0);
+        expect(seis.stderr).toMatch(/1242|1146/);
+        expect((await consulta(pool, "SELECT ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu'"))[0].ACTION_STATEMENT).toBe(antesTrigger);
+      }
     } finally { await pool.end(); }
   }, 240000);
 
-  it('MariaDB 11.8.9 no admite CREATE TRIGGER dentro de PREPARE (por eso la etapa 6 no tiene guarda intrínseca) y la prueba de errores distingue clientes que paran o continúan', async () => {
+  it('MariaDB 11.8.9 admite CREATE TRIGGER dentro de PREPARE/EXECUTE (la etapa 6 tiene guarda intrínseca) y la prueba de errores distingue clientes que paran o continúan', async () => {
     const { pool } = await preparar(BASE);
     try {
       // Exploración: ¿acepta MariaDB 11.8.9 CREATE TRIGGER dentro de PREPARE/EXECUTE? (el resultado queda en el log de CI)
@@ -184,7 +187,7 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       for (const sql of ["PREPARE p FROM 'CREATE OR REPLACE TRIGGER trg_sonda BEFORE UPDATE ON canecas_ventas FOR EACH ROW SET @x = 1'", 'EXECUTE p', 'DEALLOCATE PREPARE p']) {
         try { await pool.query(sql); sondaPs.push(`${sql.slice(0, 12)}: ok`); } catch (e) { sondaPs.push(`${sql.slice(0, 12)}: errno ${(e as { errno?: number }).errno}`); }
       }
-      console.log(`SONDA-PS-TRIGGER ${sondaPs.join(' | ')}`);
+      expect(sondaPs.every(x => x.endsWith(': ok')), sondaPs.join(' | ')).toBe(true);
       const para = ejecutar('00-prueba-comportamiento-errores-solo-lectura', { soloLectura: true });
       expect(para.codigo).not.toBe(0); expect(para.stderr).toMatch(/1242/);
       expect(para.stdout).toContain('ANTES DEL ERROR'); expect(para.stdout).not.toContain('DESPUES DEL ERROR');

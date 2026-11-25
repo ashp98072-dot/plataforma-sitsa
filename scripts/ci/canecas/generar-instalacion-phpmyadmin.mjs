@@ -85,18 +85,6 @@ function sentenciasEtapaPS(n, ddl) {
     ...EPILOGO_MODOS,
   ];
 }
-/** Etapa 6 (trigger): CREATE TRIGGER no admite PREPARE en MariaDB, así que NO tiene guarda intrínseca; ver docs. Guarda "mejor esfuerzo" (se detiene en clientes que paran al primer error). */
-function sentenciasEtapa6(ddl) {
-  const [verificacion, condicion] = PREVIA[6];
-  return [
-    ...PROLOGO_MODOS,
-    `SELECT CASE WHEN ${MODOS_OK} AND ${condicion} THEN 'GUARDA OK etapa 6' ELSE (SELECT 'DETENER: prerequisitos o modos de sesion de la etapa 6 incompletos' UNION ALL SELECT 'ejecute ${verificacion} y revise cada fila') END AS guarda`,
-    ddl,
-    'SHOW WARNINGS',
-    ...EPILOGO_MODOS,
-  ];
-}
-
 // ---- Verificación exacta contra el contrato versionado: huella MD5 por tabla y sección (misma consulta que usa el instalador). ----
 const contrato = () => JSON.parse(readFileSync(path.join(root, 'scripts/ci/canecas/contrato-simplificacion-mariadb-11.8.9.json'), 'utf8'));
 /** Huella de un conjunto de filas SIN GROUP_CONCAT (no depende de group_concat_max_len): "conteo:suma1:suma2", con dos sumas exactas de 64 bits del MD5 de cada fila. */
@@ -149,7 +137,7 @@ function pruebaComportamientoErrores() {
   return `${cabecera('PRUEBA CONTROLADA (solo lectura, sin DDL): ¿este cliente continua despues de un error?'.replace('¿', '').replace('?', ''), [...AVISO_LECTURA,
     'Ejecutelo UNA vez en phpMyAdmin, antes de la etapa 1. La segunda sentencia falla A PROPOSITO (error 1242).',
     'Si en el resultado NO aparece la fila "DESPUES DEL ERROR", el cliente se detiene tras un error (esperado).',
-    'Si SI aparece "DESPUES DEL ERROR", el cliente CONTINUA tras un error: no confie en que un error detenga el resto del archivo; la etapa 6 (trigger) es la unica sin guarda intrinseca.'])}
+    'Si SI aparece "DESPUES DEL ERROR", el cliente CONTINUA tras un error: no confie en que un error detenga el resto del archivo; aun asi todas las etapas de escritura llevan guarda intrinseca.'])}
 SELECT 'ANTES DEL ERROR' AS marcador;
 SELECT (SELECT 'error intencional' UNION ALL SELECT 'de la prueba') AS error_intencional;
 SELECT 'DESPUES DEL ERROR: el cliente CONTINUA tras un error' AS marcador;
@@ -224,7 +212,7 @@ export function generar() {
     '09-verificar-etapa4.sql': verif('VERIFICACION de la etapa 4 (y prerequisito de la etapa 5)', [...verificacionTabla('canecas_productos'), ...recuentos]),
     '10-etapa5-alterar-compras.sql': etapa(5, 'canecas_compras: ref_auto (virtual) y UNIQUE de referencias con formato generado', m.compras, ['Falla (clave duplicada) si hay COMP-###### repetido dentro de una empresa: el preflight lo detecta antes.']),
     '11-verificar-etapa5.sql': verif('VERIFICACION de la etapa 5 (y prerequisito de la etapa 6)', [...verificacionTabla('canecas_compras'), ...recuentos]),
-    '12-etapa6-reemplazar-trigger.sql': unir(cabecera('ETAPA 6: reemplazar trg_can_venta_bu (CREATE OR REPLACE: atomico, la tabla nunca queda sin trigger)', [...AVISO_ESCRITURA, 'EN phpMyAdmin (pestana SQL) ponga el campo "Delimitador" en // antes de ejecutar. Cada sentencia de este archivo termina en //.', 'LIMITE CONOCIDO: MariaDB no admite CREATE TRIGGER dentro de PREPARE, por eso esta etapa NO tiene guarda intrinseca. Ejecutela SOLO despues de que 11-verificar-etapa5.sql muestre todo OK y, si 00-prueba-comportamiento-errores-solo-lectura.sql indico que phpMyAdmin continua tras un error, con especial cuidado.']), '', sentenciasEtapa6(trigger).map(x => `${x}//`)),
+    '12-etapa6-reemplazar-trigger.sql': unir(cabecera('ETAPA 6: reemplazar trg_can_venta_bu (CREATE OR REPLACE: atomico, la tabla nunca queda sin trigger)', [...AVISO_ESCRITURA, 'EN phpMyAdmin (pestana SQL) ponga el campo "Delimitador" en // antes de ejecutar. Cada sentencia de este archivo termina en //.', 'GUARDA INTRINSECA: el CREATE OR REPLACE TRIGGER va dentro de un PREPARE condicionado (MariaDB 11.8.9 lo admite; probado); si no se cumplen los prerequisitos o los modos, se ejecuta una subconsulta que falla (1242) y el trigger NO se reemplaza, aunque el cliente siguiera tras el error.']), '', sentenciasEtapaPS(6, trigger).map(x => `${x}//`)),
     '13-verificar-etapa6.sql': verif('VERIFICACION de la etapa 6 (triggers de ventas)', [verificacionTrigger('trg_can_venta_bu', 'canecas_ventas', 'UPDATE', cuerpoTrigger(trigger)), verificacionTrigger('trg_can_venta_bd', 'canecas_ventas', 'DELETE', cuerpoTrigger(calificar(bd)))]),
     '14-verificar-final.sql': verif('VERIFICACION FINAL (solo lectura): postcheck de 15 comprobaciones + contrato exacto de las 4 tablas y 2 triggers', [
       ...postcheck,
