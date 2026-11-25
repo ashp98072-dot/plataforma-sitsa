@@ -1,0 +1,14 @@
+-- PREFLIGHT del comprobante de venta (solo lectura)
+-- Base de datos: u611730801_Plataforma (referencias explicitas; NO depende de USE, DATABASE() ni de la base seleccionada en phpMyAdmin: sirve con information_schema, mysql o ninguna).
+-- SOLO LECTURA: cada SELECT devuelve (verificacion, resultado). Cualquier DETENER indica que NO debe continuar.
+-- Debe correr antes de la etapa 1. Con las columnas ya instaladas (2) y el trigger actualizado, todo sigue en OK (idempotente).
+--
+
+SELECT 'version MariaDB 11.8.9' AS verificacion, IF(VERSION() LIKE '11.8.9%', 'OK', 'DETENER') AS resultado;
+SELECT 'canecas_ventas existe' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas')=1, 'OK', 'DETENER') AS resultado;
+SELECT 'simplificacion (#689) instalada: direccion_entrega y doc_auto' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('direccion_entrega','doc_auto'))=2, 'OK', 'DETENER') AS resultado;
+SELECT 'columnas del comprobante: 0 (por instalar) o 2 (ya instaladas), nunca 1' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('quien_lleva','quien_recibe')) IN (0,2), 'OK', 'DETENER') AS resultado;
+SELECT 'trigger trg_can_venta_bu de la simplificacion (o ya actualizado) y trg_can_venta_bd presentes' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='u611730801_Plataforma' AND TRIGGER_NAME='trg_can_venta_bu' AND EVENT_OBJECT_TABLE='canecas_ventas' AND ACTION_STATEMENT LIKE '%CANECAS_VENTA_ANULADA_INMUTABLE%' AND ACTION_STATEMENT LIKE '%NEW.direccion_entrega%')=1 AND (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='u611730801_Plataforma' AND TRIGGER_NAME='trg_can_venta_bd' AND EVENT_OBJECT_TABLE='canecas_ventas')=1, 'OK', 'DETENER') AS resultado;
+SELECT 'columnas del comprobante presentes (0 = pendiente, 2 = ya instaladas)' AS verificacion, CAST((SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('quien_lleva','quien_recibe')) AS CHAR) AS resultado;
+SELECT 'trigger trg_can_venta_bu ya protege quien_lleva/quien_recibe (0 = no, 1 = si)' AS verificacion, CAST((SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='u611730801_Plataforma' AND TRIGGER_NAME='trg_can_venta_bu' AND ACTION_STATEMENT LIKE '%NEW.quien_lleva%' AND ACTION_STATEMENT LIKE '%NEW.quien_recibe%') AS CHAR) AS resultado;
+SELECT 'recuento canecas_ventas (debe coincidir tras la instalacion)' AS verificacion, CAST((SELECT COUNT(*) FROM `u611730801_Plataforma`.canecas_ventas) AS CHAR) AS resultado;

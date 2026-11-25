@@ -30,9 +30,10 @@ describe("comprobante de venta (media carta)", () => {
       await act(async () => { root.render(createElement(ComprobanteVenta, { datos: base, onCerrar: cerrar })); });
       const marco = host.querySelector("iframe")!;
       expect(marco.getAttribute("srcdoc")).toBe(htmlComprobante(base));
-      const imprimir = vi.fn(); Object.defineProperty(marco, "contentWindow", { value: { focus: vi.fn(), print: imprimir } });
+      const imprimir = vi.fn(); Object.defineProperty(marco, "contentWindow", { value: { focus: vi.fn(), print: imprimir, document: { images: [] } } });
       const botones = [...host.querySelectorAll("button")];
       await act(async () => { botones.find(b => b.textContent === "Imprimir")!.click(); botones.find(b => b.textContent === "Cerrar")!.click(); });
+      await act(async () => { await new Promise(r => setTimeout(r, 10)); });
       expect(imprimir).toHaveBeenCalledTimes(1); expect(cerrar).toHaveBeenCalledTimes(1);
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
@@ -49,6 +50,33 @@ describe("comprobante de venta (media carta)", () => {
       await act(async () => { botones[0].click(); });
       const html = host.querySelector("iframe")!.getAttribute("srcdoc")!;
       for (const t of ["Empresa Demo, S.A.", "/brands/demo/logo.png", "VTA-000012", "Juan", "Zona 4"]) expect(html, t).toContain(t);
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+  it("espera a que el logo cargue (o falle) antes de imprimir", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+    try {
+      await act(async () => { root.render(createElement(ComprobanteVenta, { datos: base, onCerrar: vi.fn() })); });
+      const marco = host.querySelector("iframe")!, imprimir = vi.fn();
+      const img = document.createElement("img"); Object.defineProperty(img, "complete", { value: false });
+      Object.defineProperty(marco, "contentWindow", { value: { focus: vi.fn(), print: imprimir, document: { images: [img] } } });
+      await act(async () => { [...host.querySelectorAll("button")].find(b => b.textContent === "Imprimir")!.click(); await new Promise(r => setTimeout(r, 20)); });
+      expect(imprimir).not.toHaveBeenCalled(); // el logo aún no termina de descargar
+      await act(async () => { img.dispatchEvent(new Event("error")); await new Promise(r => setTimeout(r, 20)); }); // imágenes bloqueadas: imprime igual
+      expect(imprimir).toHaveBeenCalledTimes(1);
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+  it("el comprobante no contiene costos ni utilidad aunque el usuario tenga permiso de costos", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const fila = { id: "1", fecha: "2026-11-24", documento: "VTA-000012", cliente: "Cliente Uno", direccion_entrega: "Zona 4", producto: "Caneca", cantidad: 8, precio_unitario: "Q 95.00", total: "Q 760.00", costo_fifo: "Q 640.00", utilidad: "Q 120.00", estado: "ACTIVA" };
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ datos: [fila] })));
+    const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+    try {
+      await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista: "ventas", permisos: { ventas: true, compras: true }, empresaNombre: "Demo" })); });
+      await act(async () => { await new Promise(r => setTimeout(r, 40)); });
+      await act(async () => { [...host.querySelectorAll("button")].find(b => b.textContent === "Imprimir comprobante")!.click(); });
+      const html = host.querySelector("iframe")!.getAttribute("srcdoc")!;
+      expect(html).not.toMatch(/640\.00|120\.00|[Cc]osto|[Uu]tilidad/); expect(html).toContain("Q 760.00");
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 });

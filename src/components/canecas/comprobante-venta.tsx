@@ -39,6 +39,7 @@ td.n, th.n { text-align: right; }
 .firmas { margin-top: auto; padding-top: 0.6in; display: flex; gap: 0.4in; }
 .firma { flex: 1; text-align: center; }
 .firma .linea { border-top: 1px solid #111; margin-bottom: 3px; }
+@media print { html, body { width: 4.8in; height: 7.8in; overflow: hidden; } .hoja { height: 7.7in; min-height: 0; overflow: hidden; break-inside: avoid; } }
 @media screen { body { background: #f3f3f3; } .hoja { background: #fff; padding: 0.35in; box-shadow: 0 0 6px rgba(0,0,0,.25); margin: 8px auto; } }
 </style></head><body><div class="hoja">
 <div class="enc">${logo ? `<img src="${esc(logo)}" alt="">` : ""}<div class="emp">${esc(d.empresaNombre)}</div></div>
@@ -55,9 +56,17 @@ ${campo("Fecha", d.fecha)}${campo("Cliente", d.cliente)}${campo("Dirección de e
 /** Vista previa del comprobante (en un iframe aislado, con el mismo HTML que se imprime) con los botones Imprimir y Cerrar. */
 export function ComprobanteVenta({ datos, onCerrar }: { datos: DatosComprobante; onCerrar: () => void }) {
   const marco = useRef<HTMLIFrameElement>(null);
+  /** Espera a que el logo termine de cargar (o falle: imágenes bloqueadas) antes de imprimir; sin espera infinita. */
+  async function imprimir() {
+    const ventana = marco.current?.contentWindow;
+    if (!ventana) return;
+    const imagenes = Array.from(ventana.document?.images ?? []);
+    await Promise.all(imagenes.map(img => img.complete ? null : new Promise<void>(listo => { img.addEventListener("load", () => listo(), { once: true }); img.addEventListener("error", () => listo(), { once: true }); setTimeout(listo, 4000); })));
+    ventana.focus(); ventana.print();
+  }
   return <div role="dialog" aria-modal="true" aria-label="Comprobante de venta" className="fixed inset-0 z-50 flex flex-col items-center gap-3 overflow-auto bg-black/60 p-4">
     <div className="flex gap-3">
-      <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white" onClick={() => { marco.current?.contentWindow?.focus(); marco.current?.contentWindow?.print(); }}>Imprimir</button>
+      <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white" onClick={() => void imprimir()}>Imprimir</button>
       <button type="button" className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2" onClick={onCerrar}>Cerrar</button>
     </div>
     <iframe ref={marco} title="Vista previa del comprobante" srcDoc={htmlComprobante(datos)} className="h-[9.2in] w-[6in] max-w-full rounded bg-white" />
