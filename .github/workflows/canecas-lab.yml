@@ -112,6 +112,21 @@ jobs:
             echo "=====CONTRATO-VENTAS-FIN====="
           fi
 
+      - name: Contrato de simplificación generado en 11.8.9 igual al versionado
+        env:
+          CANECAS_GENERAR_CONTRATO: simplificacion
+        run: |
+          node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
+          if git ls-files --error-unmatch scripts/ci/canecas/contrato-simplificacion-mariadb-11.8.9.json >/dev/null 2>&1; then
+            git diff --exit-code --stat -- scripts/ci/canecas/contrato-simplificacion-mariadb-11.8.9.json || { echo "::error::El contrato versionado difiere del generado por la migración en MariaDB 11.8.9"; exit 1; }
+          else
+            echo "=====CONTRATO-SIMPLIFICACION-INICIO====="
+            cat scripts/ci/canecas/contrato-simplificacion-mariadb-11.8.9.json
+            echo "=====CONTRATO-SIMPLIFICACION-FIN====="
+            echo "::error::Falta versionar el contrato de simplificación generado"
+            exit 1
+          fi
+
       - name: Laboratorio costos, salidas y redistribución (aislado, sin red)
         run: node scripts/ci/canecas/run-costos-lab-linux.mjs --run-isolated
 
@@ -125,7 +140,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: ESLint dirigido
-        run: npx eslint src/lib/canecas/ventas.ts src/lib/canecas/ventas-reglas.ts src/lib/canecas/ventas-reglas.test.ts src/lib/canecas/ventas.db.test.ts src/lib/canecas/reportes.ts src/lib/canecas/historico-proveedores.ts src/lib/canecas/comercial-api.ts src/lib/canecas/comercial-api.test.ts src/lib/canecas/instalacion-ventas.db.test.ts src/lib/canecas/instalador-ventas.test.ts src/lib/canecas/generar-contrato-ventas.db.test.ts src/components/canecas src/lib/canecas/catalogos.ts src/lib/canecas/catalogos.test.ts src/lib/canecas/catalogos.db.test.ts src/lib/canecas/instalacion-catalogos.db.test.ts src/lib/canecas/generar-contrato-catalogos.db.test.ts src/components/canecas/canecas-client.tsx src/components/canecas/canecas-client.dom.test.ts "src/app/api/empresas/[slug]/canecas/[recurso]/route.ts" "src/app/api/empresas/[slug]/canecas/[recurso]/route.test.ts" src/lib/canecas/orden-fifo.ts src/lib/canecas/orden-fifo.test.ts src/lib/canecas/salidas-fifo.ts src/lib/canecas/redistribucion.ts src/lib/canecas/redistribucion-reglas.ts src/lib/canecas/redistribucion-reglas.test.ts src/lib/canecas/redistribucion.db.test.ts src/lib/canecas/lab-runners-paridad.test.ts
+        run: npx eslint src/lib/canecas/ventas.ts src/lib/canecas/simplificacion.ts src/lib/canecas/simplificacion.test.ts src/lib/canecas/simplificacion.db.test.ts src/lib/canecas/numeracion-historica.db.test.ts src/lib/canecas/diagnostico-previo.db.test.ts src/lib/canecas/diagnostico-previo.test.ts src/lib/canecas/api-historica-contrato.test.ts src/lib/canecas/compra-ingreso.ts src/lib/canecas/compra-ingreso.test.ts src/lib/canecas/compras-api.test.ts src/lib/canecas/ventas-pos.test.ts src/lib/canecas/lab-simplificacion.ts src/lib/canecas/instalacion-simplificacion.db.test.ts src/lib/canecas/generar-contrato-simplificacion.db.test.ts src/lib/canecas/instalador-simplificacion.test.ts src/lib/canecas/confirmar.ts src/lib/canecas/ventas-reglas.ts src/lib/canecas/ventas-reglas.test.ts src/lib/canecas/ventas.db.test.ts src/lib/canecas/reportes.ts src/lib/canecas/historico-proveedores.ts src/lib/canecas/comercial-api.ts src/lib/canecas/comercial-api.test.ts src/lib/canecas/instalacion-ventas.db.test.ts src/lib/canecas/instalador-ventas.test.ts src/lib/canecas/generar-contrato-ventas.db.test.ts src/components/canecas src/lib/canecas/catalogos.ts src/lib/canecas/catalogos.test.ts src/lib/canecas/catalogos.db.test.ts src/lib/canecas/instalacion-catalogos.db.test.ts src/lib/canecas/generar-contrato-catalogos.db.test.ts src/components/canecas/canecas-client.tsx src/components/canecas/canecas-client.dom.test.ts "src/app/api/empresas/[slug]/canecas/[recurso]/route.ts" "src/app/api/empresas/[slug]/canecas/[recurso]/route.test.ts" src/lib/canecas/orden-fifo.ts src/lib/canecas/orden-fifo.test.ts src/lib/canecas/salidas-fifo.ts src/lib/canecas/redistribucion.ts src/lib/canecas/redistribucion-reglas.ts src/lib/canecas/redistribucion-reglas.test.ts src/lib/canecas/redistribucion.db.test.ts src/lib/canecas/lab-runners-paridad.test.ts
 
       - name: Build
         run: npm run build

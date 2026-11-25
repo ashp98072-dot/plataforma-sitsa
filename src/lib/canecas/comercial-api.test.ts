@@ -18,6 +18,32 @@ const get = (recurso: string, qs = "") => GET(new Request(`http://local/x${qs}`)
 
 describe("API comercial de Canecas", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.acceso.mockResolvedValue(sesion); });
+  describe("ventas_pos (venta tipo POS)", () => {
+    const pos = { cliente_id: 2, ubicacion_id: 4, direccion_entrega: "Zona 4, Ciudad", cantidad: 8, precio_unitario: "95.00", clave_operacion: k };
+    it("registra con empresa y usuario de la sesión, sin producto, fecha ni documento, y devuelve el número automático", async () => {
+      mocks.venta.mockResolvedValue({ id: "9", documento: "VTA-000009", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });
+      const res = await post("ventas_pos", pos);
+      expect(res.status).toBe(201);
+      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, { clienteId: 2, ubicacionId: 4, direccionEntrega: "Zona 4, Ciudad", cantidad: 8, precio: "95.00", claveOperacion: k });
+      expect(await res.json()).toMatchObject({ id: "9", documento: "VTA-000009", mensaje: "Venta VTA-000009 registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00." });
+    });
+    it.each([{ producto_id: 3 }, { documento: "FAC-1" }, { fecha_venta: "2026-11-10" }, { empresa_id: 9 }, { moneda: "USD" }, { direccion_entrega: "" }, { direccion_entrega: "x".repeat(501) }, { cantidad: 0 }, { clave_operacion: "no" }])("rechaza lo que el servidor decide o lo inválido: %j", async extra => {
+      expect((await post("ventas_pos", { ...pos, ...extra })).status).toBe(400);
+      expect(mocks.venta).not.toHaveBeenCalled();
+    });
+    it("exige la dirección de entrega y traduce el error de caneca ambigua", async () => {
+      const { direccion_entrega: _omitida, ...sinDireccion } = pos; void _omitida;
+      expect((await post("ventas_pos", sinDireccion)).status).toBe(400);
+      mocks.venta.mockRejectedValue(new Error("PRODUCTO_AMBIGUO"));
+      const res = await post("ventas_pos", pos);
+      expect(res.status).toBe(409); expect((await res.json()).error).toContain("más de una caneca");
+    });
+    it("el recurso histórico ventas sigue aceptando su esquema anterior (producto, fecha y documento)", async () => {
+      mocks.venta.mockResolvedValue({ id: "9", total: "Q 1.00", costo: "Q 0.00", utilidad: "Q 1.00", yaRegistrada: false });
+      expect((await post("ventas", { cliente_id: 2, producto_id: 3, ubicacion_id: 4, fecha_venta: "2026-11-10", documento: "FAC-1", cantidad: 8, precio_unitario: "95.00", clave_operacion: k })).status).toBe(201);
+      expect(mocks.venta.mock.calls[0][3]).toEqual({ clienteId: 2, productoId: 3, ubicacionId: 4, fechaVenta: "2026-11-10", documento: "FAC-1", cantidad: 8, precio: "95.00", claveOperacion: k });
+    });
+  });
   describe("ventas", () => {
     it("registra con la empresa y el usuario de la sesión y muestra costo y utilidad solo con permiso de costos", async () => {
       mocks.venta.mockResolvedValue({ id: "9", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });

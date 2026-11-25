@@ -7,7 +7,7 @@ import { notFound, redirect } from "next/navigation";
 export default async function CanecasPage({ params }: { params: Promise<{ slug: string; seccion?: string[] }> }) {
   const { slug, seccion = [] } = await params;
   const vista = seccion[0] ?? "panel";
-  if (seccion.length > 1 || !["panel", "productos", "ubicaciones", "compras", "recepciones", "inventario", "movimientos", "salidas", "proveedores", "clientes", "ventas", "redistribuciones", "reportes", "proveedores-historicos"].includes(vista)) notFound();
+  if (seccion.length > 1 || !["panel", "productos", "ubicaciones", "compras", "inventario", "movimientos", "salidas", "proveedores", "clientes", "ventas", "redistribuciones", "reportes", "proveedores-historicos"].includes(vista)) notFound();
   const lectura = await accesoCanecas(slug, "ver", { soloLectura: true });
   if (lectura.error?.status === 401) redirect("/login");
   if (lectura.error) return <p role="alert">No tienes permiso para consultar Gestión de Canecas.</p>;
@@ -16,5 +16,5 @@ export default async function CanecasPage({ params }: { params: Promise<{ slug: 
   const permisos = Object.fromEntries(acciones.map((accion, i) => [accion, !resultados[i].error]));
   if (vista === "reportes") return permisos.ventas ? <ReportesComerciales slug={slug} /> : <p role="alert">No tienes permiso para ver los reportes comerciales.</p>;
   if (vista === "proveedores-historicos") return permisos.catalogo ? <MapeoProveedores slug={slug} /> : <p role="alert">No tienes permiso para administrar proveedores.</p>;
-  return <CanecasClient slug={slug} vista={vista} permisos={permisos} />;
+  return <CanecasClient slug={slug} vista={vista} permisos={permisos} empresaId={lectura.empresa?.id} usuarioId={lectura.session?.id} />;
 }

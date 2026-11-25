@@ -4,6 +4,8 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { accesoCanecas } from "@/lib/canecas/acceso";
 import { confirmarRecepcion } from "@/lib/canecas/confirmar";
+import { registrarCompraConIngreso } from "@/lib/canecas/compra-ingreso";
+import { asegurarSecuencias, productoUnico } from "@/lib/canecas/simplificacion";
 import { registrarSalidaFifo, reversarSalidaFifo } from "@/lib/canecas/salidas-fifo";
 import { salidaPerteneceAVenta } from "@/lib/canecas/ventas";
 import { getComercial, postComercial, RECURSOS_COMERCIALES_GET, RECURSOS_COMERCIALES_POST } from "@/lib/canecas/comercial-api";
@@ -29,6 +31,9 @@ const schemas = {
   clientes: esquemaCatalogo,
   mapeo_proveedor_compra: z.object({ compra_id: id, proveedor_id: id }).strict(),
   compras: z.object({ proveedor_id: id, producto_id: id, cantidad: id, referencia: texto(250), clave_operacion: clave, precio_compra: importe, gastos_adquisicion: importe, moneda: moneda }).strict(),
+  // Recursos nuevos (#688): las rutas históricas "compras" y "productos" conservan su contrato.
+  compras_ingreso: z.object({ proveedor_id: id, ubicacion_id: id, recibido_por_empleado_id: id, cantidad: id, precio_compra: importe.refine(x => x !== ""), clave_operacion: clave }).strict(),
+  caneca_unica: z.object({ precio_venta_referencia: importe, moneda: moneda }).strict(),
   recepciones: z.object({ compra_id: id, ubicacion_id: id, recibido_por_empleado_id: id, cantidad: id, clave_operacion: clave }).strict(),
   confirmar: z.object({ id }).strict(),
   salidas: z.object({ producto_id: id, ubicacion_id: id, cantidad: id, documento: texto(250), clave_operacion: clave }).strict(),
@@ -77,7 +82,7 @@ export async function GET(req: Request, ctx: Ctx) {
 export async function POST(req: Request, ctx: Ctx) {
   const { slug, recurso } = await ctx.params;
   if (RECURSOS_COMERCIALES_POST.has(recurso)) return postComercial(req, { slug, recurso });
-  const accion = recurso === "confirmar" || recurso === "valoracion_inicial" || recurso === "salidas" || recurso === "reversar_salida" ? "confirmar" : recurso === "compras" || recurso === "gastos_posteriores" ? "compras" : recurso === "recepciones" ? "recepciones" : "catalogo";
+  const accion = recurso === "confirmar" || recurso === "valoracion_inicial" || recurso === "salidas" || recurso === "reversar_salida" ? "confirmar" : recurso === "compras" || recurso === "compras_ingreso" || recurso === "gastos_posteriores" ? "compras" : recurso === "recepciones" ? "recepciones" : "catalogo";
   const guard = await accesoCanecas(slug, accion);
   if (guard.error) return guard.error;
   if (recurso === "salidas" || recurso === "reversar_salida") {
@@ -95,7 +100,7 @@ export async function POST(req: Request, ctx: Ctx) {
   try {
     // La moneda es siempre GTQ: la interfaz muestra Q y no pide el código. Gastos de adquisición: Q0 si hay precio y no se indicó gasto;
     // un precio vacío sigue significando costo desconocido (no es lo mismo que Q0).
-    if (["compras", "valoracion_inicial", "gastos_posteriores", "precio_referencia"].includes(recurso) && !d.moneda) d.moneda = "GTQ";
+    if (["compras", "valoracion_inicial", "gastos_posteriores", "precio_referencia", "caneca_unica"].includes(recurso) && !d.moneda) d.moneda = "GTQ";
     if (recurso === "compras" && d.precio_compra && !d.gastos_adquisicion) d.gastos_adquisicion = "0";
     if (recurso === "salidas") return NextResponse.json(await registrarSalidaFifo(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), documento: String(d.documento), claveOperacion: String(d.clave_operacion) }));
     if (recurso === "reversar_salida" && await salidaPerteneceAVenta(getPool(), empresa, String(d.salida_id))) return NextResponse.json({ error: "Esta salida pertenece a una venta: anule la venta para revertirla." }, { status: 409 });
@@ -108,6 +113,26 @@ export async function POST(req: Request, ctx: Ctx) {
       return r.affectedRows ? NextResponse.json({ ok: true }) : NextResponse.json({ error: "Producto no encontrado." }, { status: 404 });
     }
     if (recurso === "proveedores" || recurso === "clientes") return NextResponse.json({ id: await crearCatalogo(getPool(), recurso, empresa, usuario, parsed.data as DatosCatalogo) }, { status: 201 });
+    if (recurso === "compras_ingreso") {
+      // Además de registrar la compra, ingresa y confirma el inventario: exige también los permisos de recepción y confirmación.
+      for (const necesario of ["recepciones", "confirmar"] as const) { const g = await accesoCanecas(slug, necesario); if (g.error) return g.error; }
+      const c = await registrarCompraConIngreso(getPool(), empresa, usuario, { proveedorId: Number(d.proveedor_id), ubicacionId: Number(d.ubicacion_id), recibidoPorEmpleadoId: Number(d.recibido_por_empleado_id), cantidad: Number(d.cantidad), precio: String(d.precio_compra), claveOperacion: String(d.clave_operacion) });
+      return NextResponse.json({ id: c.id, referencia: c.referencia, total: c.total, yaRegistrada: c.yaRegistrada, mensaje: `Compra ${c.referencia} registrada e ingresada al inventario (total ${c.total}).` }, { status: c.yaRegistrada ? 200 : 201 });
+    }
+    if (recurso === "caneca_unica") {
+      await asegurarSecuencias(getPool(), empresa);
+      const conn = await getPool().getConnection();
+      try {
+        await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+        await conn.beginTransaction();
+        const [previos] = await conn.query<RowDataPacket[]>("SELECT id FROM canecas_productos WHERE empresa_id=? LIMIT 1", [empresa]);
+        if (previos.length) { await conn.rollback(); return NextResponse.json({ error: "La empresa ya tiene su caneca. Use «Actualizar precio de venta de referencia»." }, { status: 409 }); }
+        const productoId = await productoUnico(conn, empresa);
+        if (d.precio_venta_referencia) await conn.execute("UPDATE canecas_productos SET precio_venta_referencia_centavos=?,precio_venta_referencia_moneda=? WHERE empresa_id=? AND id=?", [centavos(String(d.precio_venta_referencia))?.toString() ?? null, "GTQ", empresa, productoId]);
+        await conn.commit();
+        return NextResponse.json({ id: productoId }, { status: 201 });
+      } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
+    }
     if (recurso === "mapeo_proveedor_compra") { await mapearProveedorCompra(getPool(), empresa, usuario, Number(d.compra_id), Number(d.proveedor_id)); return NextResponse.json({ ok: true }); }
     const pool = getPool();
     if (recurso === "productos") {
@@ -154,6 +179,8 @@ export async function POST(req: Request, ctx: Ctx) {
     } finally { conn.release(); }
   } catch (error) {
     const e = error as { code?: string; message?: string };
+    if (["PRODUCTO_AMBIGUO","PRODUCTO_INACTIVO"].includes(e.message ?? "")) return NextResponse.json({ error: "La empresa debe tener una sola caneca activa para operar." }, { status: 409 });
+    if (e.message === "COMPRA_INVALIDA") return NextResponse.json({ error: "Revise proveedor, bodega, receptor, cantidad y precio." }, { status: 400 });
     if (e.message === "RESERVAS_PENDIENTES") return NextResponse.json({ error: "No se pueden registrar salidas mientras existan reservas sin asignación FIFO." }, { status: 409 });
     if (error instanceof ErrorCatalogoDuplicado) return NextResponse.json({ error: mensajeDuplicado(error, recurso) }, { status: 409 });
     if (e.code === "ER_DUP_ENTRY" || ["CLAVE_REUTILIZADA","CANTIDAD_EXCEDE_COMPRA","REFERENCIA_INVALIDA","CONCILIACION_INVALIDA","MONEDA_INCOMPATIBLE","SALDO_INSUFICIENTE","RESERVAS_PENDIENTES","CAPAS_NO_CONCILIADAS","COSTO_PENDIENTE","PRIORIDAD_INICIAL_PENDIENTE","CAPAS_INSUFICIENTES","TRAZABILIDAD_INVALIDA","REVERSO_YA_REGISTRADO","COMPRA_YA_MAPEADA","PROVEEDOR_INVALIDO"].includes(e.message ?? "")) return NextResponse.json({ error: "Registro duplicado o datos incompatibles. Verifique la operación." }, { status: 409 });
