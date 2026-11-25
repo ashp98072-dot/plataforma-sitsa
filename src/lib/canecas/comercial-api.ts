@@ -16,9 +16,9 @@ type Ctx = { slug: string; recurso: string };
 const id = z.coerce.number().int().positive().max(2147483647);
 const texto = (n: number) => z.string().trim().min(1).max(n);
 const clave = z.uuid();
-const fecha = z.iso.date();
 const esquemas = {
-  ventas: z.object({ cliente_id: id, producto_id: id, ubicacion_id: id, fecha_venta: fecha, documento: texto(250), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
+  // POS: el producto, la fecha y el número de venta los fija el servidor.
+  ventas: z.object({ cliente_id: id, ubicacion_id: id, direccion_entrega: texto(500), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
   anular_venta: z.object({ venta_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
   redistribuciones: z.object({ compra_id: id, ubicacion_id: id, cantidad_final: id, motivo: texto(500), clave_operacion: clave }).strict(),
   reversar_redistribucion: z.object({ redistribucion_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
@@ -26,14 +26,16 @@ const esquemas = {
 
 /** Código interno -> [estado HTTP, mensaje para la persona usuaria]. */
 const MENSAJES: Record<string, [number, string]> = {
-  VENTA_INVALIDA: [400, "Revise cliente, producto, fecha, cantidad y precio: el precio debe ser mayor que Q0.00 con hasta dos decimales."],
+  VENTA_INVALIDA: [400, "Revise cliente, bodega, dirección de entrega, cantidad y precio: el precio debe ser mayor que Q0.00 con hasta dos decimales."],
+  PRODUCTO_AMBIGUO: [409, "Hay más de una caneca activa en la empresa. Deje una sola activa para operar."],
+  PRODUCTO_INACTIVO: [409, "La caneca de la empresa está desactivada. Actívela para operar."],
   SALIDA_INVALIDA: [400, "Revise los datos de la operación."],
   ANULACION_INVALIDA: [400, "Indique la venta y el motivo."],
   REDISTRIBUCION_INVALIDA: [400, "Revise la compra, la ubicación, la cantidad final y el motivo."],
   REVERSO_INVALIDO: [400, "Indique el ajuste y el motivo."],
   FILTRO_INVALIDO: [400, "Revise las fechas (AAAA-MM-DD) y los filtros."],
   CLIENTE_INVALIDO: [409, "El cliente no existe, es de otra empresa o está inactivo."],
-  REFERENCIA_INVALIDA: [409, "El producto o la ubicación no existe o está inactivo."],
+  REFERENCIA_INVALIDA: [409, "La bodega no existe o está inactiva."],
   SALDO_NO_ENCONTRADO: [409, "No hay existencias de este producto en esa ubicación."],
   SALDO_INSUFICIENTE: [409, "No hay suficientes canecas disponibles para esta operación."],
   RESERVAS_PENDIENTES: [409, "Hay canecas reservadas: libere las reservas antes de vender o ajustar."],
@@ -104,10 +106,10 @@ export async function postComercial(req: Request, { slug, recurso }: Ctx) {
   const empresa = guard.empresa.id, usuario = guard.session.id; // empresa y usuario salen siempre de la sesión
   try {
     if (recurso === "ventas") {
-      const v = await registrarVenta(getPool(), empresa, usuario, { clienteId: Number(d.cliente_id), productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), fechaVenta: String(d.fecha_venta), documento: String(d.documento), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
+      const v = await registrarVenta(getPool(), empresa, usuario, { clienteId: Number(d.cliente_id), ubicacionId: Number(d.ubicacion_id), direccionEntrega: String(d.direccion_entrega), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
       const costos = !(await accesoCanecas(slug, "compras")).error;
-      const mensaje = costos ? `Venta registrada: ingreso ${v.total}, costo FIFO ${v.costo}, utilidad bruta ${v.utilidad}.` : `Venta registrada: ingreso ${v.total}.`;
-      return NextResponse.json({ id: v.id, yaRegistrada: v.yaRegistrada, total: v.total, ...(costos ? { costo: v.costo, utilidad: v.utilidad } : {}), mensaje }, { status: v.yaRegistrada ? 200 : 201 });
+      const mensaje = costos ? `Venta ${v.documento} registrada: ingreso ${v.total}, costo FIFO ${v.costo}, utilidad bruta ${v.utilidad}.` : `Venta ${v.documento} registrada: ingreso ${v.total}.`;
+      return NextResponse.json({ id: v.id, documento: v.documento, yaRegistrada: v.yaRegistrada, total: v.total, ...(costos ? { costo: v.costo, utilidad: v.utilidad } : {}), mensaje }, { status: v.yaRegistrada ? 200 : 201 });
     }
     if (recurso === "anular_venta") return NextResponse.json({ ...(await anularVenta(getPool(), empresa, usuario, String(d.venta_id), String(d.motivo))), mensaje: "Venta anulada: el inventario se restableció." });
     if (recurso === "redistribuciones") {

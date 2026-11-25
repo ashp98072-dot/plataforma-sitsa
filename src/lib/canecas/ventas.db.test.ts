@@ -22,7 +22,7 @@ const HOY = '2026-11-24';
 async function aplicar(pool: mysql.Pool, archivo: string) {
   const [ddl, resto] = leer(archivo).split('DELIMITER //');
   await pool.query(ddl);
-  for (const t of (resto ?? '').replace(/DELIMITER ;\s*$/, '').split('//').map(s => s.trim()).filter(s => /^CREATE (OR REPLACE )?TRIGGER /.test(s))) await pool.query(t);
+  for (const t of (resto ?? '').replace(/DELIMITER ;\s*$/, '').split('//').map(s => s.trim()).filter(s => /^(DROP TRIGGER|CREATE (OR REPLACE )?TRIGGER) /.test(s))) await pool.query(t);
 }
 
 describe.skipIf(!pipe && !socket)('ventas, anulaciones, reportes y mapeo histórico en MariaDB desechable', () => {
@@ -39,7 +39,7 @@ describe.skipIf(!pipe && !socket)('ventas, anulaciones, reportes y mapeo histór
         await pool.query(ddl[0]);
       }
       await pool.query(leer('sql/migrate-2026-11-canecas-fase1.sql'));
-      for (const m of ['costos-wip', 'salidas-fifo-wip', 'redistribucion-wip', 'catalogos-wip', 'ventas-wip']) await aplicar(pool, `sql/migrate-2026-11-canecas-${m}.sql`);
+      for (const m of ['costos-wip', 'salidas-fifo-wip', 'redistribucion-wip', 'catalogos-wip', 'ventas-wip', 'simplificacion-wip']) await aplicar(pool, `sql/migrate-2026-11-canecas-${m}.sql`);
       await pool.query(`INSERT INTO empresas (id,codigo,nombre,slug) VALUES (1,'A','A','a'),(2,'B','B','b');
         INSERT INTO usuarios (id,username,password_hash,salt) VALUES (1,'ana','hash','salt'),(2,'beto','hash','salt');
         INSERT INTO empleados (id,empresa_id,codigo,nombre) VALUES (1,1,'A','Ana'),(2,2,'B','Beto');
@@ -66,7 +66,7 @@ describe.skipIf(!pipe && !socket)('ventas, anulaciones, reportes y mapeo histór
       const capasDisponibles = async (p: number) => (await pool.query<Fila[]>('SELECT id,cantidad_disponible FROM canecas_capas_costo WHERE producto_id=? ORDER BY id', [p]))[0].map(c => [Number(c.id), Number(c.cantidad_disponible)]);
       let n = 100;
       const vender = (productoId: number, cantidad: number, precio: string, extra: Partial<{ clienteId: number; fechaVenta: string; empresa: number; usuario: number; clave: string; documento: string }> = {}) =>
-        registrarVenta(pool, extra.empresa ?? 1, extra.usuario ?? 1, { clienteId: extra.clienteId ?? cli, productoId, ubicacionId: (extra.empresa ?? 1) === 1 ? 1 : 2, fechaVenta: extra.fechaVenta ?? '2026-11-10', documento: extra.documento ?? `FAC-${n}`, cantidad, precio, claveOperacion: extra.clave ?? k(++n) }, HOY);
+        registrarVenta(pool, extra.empresa ?? 1, extra.usuario ?? 1, { clienteId: extra.clienteId ?? cli, productoId, ubicacionId: (extra.empresa ?? 1) === 1 ? 1 : 2, direccionEntrega: 'Zona 1, Ciudad', fechaVenta: extra.fechaVenta ?? '2026-11-10', documento: extra.documento ?? `FAC-${n}`, cantidad, precio, claveOperacion: extra.clave ?? k(++n) }, HOY);
 
       // ── Varias compras con costos distintos y ventas parciales ──────────────
       await comprar(1, 10, 8000, 0);      // A: 10 × Q80.00

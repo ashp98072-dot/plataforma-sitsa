@@ -12,7 +12,7 @@ const ctx = (recurso: string) => ({ params: Promise.resolve({ slug: "uno", recur
 const sesion = { empresa: { id: 5 }, session: { id: 7, username: "u" } };
 const denegado = { error: new Response(null, { status: 403 }) };
 const k = "a0000000-0000-4000-8000-000000000001";
-const venta = { cliente_id: 2, producto_id: 3, ubicacion_id: 4, fecha_venta: "2026-11-10", documento: "FAC-1", cantidad: 8, precio_unitario: "95.00", clave_operacion: k };
+const venta = { cliente_id: 2, ubicacion_id: 4, direccion_entrega: "Zona 4, Ciudad", cantidad: 8, precio_unitario: "95.00", clave_operacion: k };
 const post = (recurso: string, cuerpo: unknown) => POST(new Request("http://local", { method: "POST", body: JSON.stringify(cuerpo) }), ctx(recurso));
 const get = (recurso: string, qs = "") => GET(new Request(`http://local/x${qs}`), ctx(recurso));
 
@@ -20,19 +20,19 @@ describe("API comercial de Canecas", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.acceso.mockResolvedValue(sesion); });
   describe("ventas", () => {
     it("registra con la empresa y el usuario de la sesión y muestra costo y utilidad solo con permiso de costos", async () => {
-      mocks.venta.mockResolvedValue({ id: "9", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });
+      mocks.venta.mockResolvedValue({ id: "9", documento: "VTA-000009", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });
       const res = await post("ventas", venta);
       expect(res.status).toBe(201);
       expect(mocks.acceso).toHaveBeenCalledWith("uno", "ventas");
-      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, { clienteId: 2, productoId: 3, ubicacionId: 4, fechaVenta: "2026-11-10", documento: "FAC-1", cantidad: 8, precio: "95.00", claveOperacion: k });
-      expect((await res.json()).mensaje).toBe("Venta registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00.");
+      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, { clienteId: 2, ubicacionId: 4, direccionEntrega: "Zona 4, Ciudad", cantidad: 8, precio: "95.00", claveOperacion: k });
+      expect((await res.json()).mensaje).toBe("Venta VTA-000009 registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00.");
       mocks.acceso.mockResolvedValueOnce(sesion).mockResolvedValueOnce(denegado);
       const sinCostos = await (await post("ventas", { ...venta, clave_operacion: "a0000000-0000-4000-8000-000000000002" })).json();
-      expect(sinCostos).toMatchObject({ mensaje: "Venta registrada: ingreso Q 760.00." });
+      expect(sinCostos).toMatchObject({ mensaje: "Venta VTA-000009 registrada: ingreso Q 760.00." });
       expect(sinCostos).not.toHaveProperty("costo"); expect(sinCostos).not.toHaveProperty("utilidad");
     });
     it("un reintento ya registrado responde 200", async () => {
-      mocks.venta.mockResolvedValue({ id: "9", total: "Q 1.00", costo: "Q 0.00", utilidad: "Q 1.00", yaRegistrada: true });
+      mocks.venta.mockResolvedValue({ id: "9", documento: "VTA-000009", total: "Q 1.00", costo: "Q 0.00", utilidad: "Q 1.00", yaRegistrada: true });
       expect((await post("ventas", venta)).status).toBe(200);
     });
     it("deniega sin permiso de ventas y no toca la base", async () => {
@@ -42,14 +42,14 @@ describe("API comercial de Canecas", () => {
       expect((await post("redistribuciones", { compra_id: 1, ubicacion_id: 1, cantidad_final: 2, motivo: "x", clave_operacion: k })).status).toBe(403);
       expect(mocks.venta).not.toHaveBeenCalled(); expect(mocks.anular).not.toHaveBeenCalled(); expect(mocks.redis).not.toHaveBeenCalled();
     });
-    it.each([{ empresa_id: 99 }, { creado_por: 99 }, { moneda: "USD" }, { total: "1" }, { costo: "0" }])("rechaza datos que el cliente no debe enviar: %j", async extra => {
+    it.each([{ empresa_id: 99 }, { creado_por: 99 }, { moneda: "USD" }, { total: "1" }, { costo: "0" }, { producto_id: 3 }, { documento: "FAC-1" }, { fecha_venta: "2026-11-10" }])("rechaza datos que el cliente no debe enviar: %j", async extra => {
       expect((await post("ventas", { ...venta, ...extra })).status).toBe(400);
       expect(mocks.venta).not.toHaveBeenCalled();
     });
-    it.each([{ cantidad: 0 }, { cantidad: 1.5 }, { fecha_venta: "10/11/2026" }, { documento: "" }, { clave_operacion: "no" }, { cliente_id: "x" }])("rechaza entradas inválidas: %j", async cambio => {
+    it.each([{ cantidad: 0 }, { cantidad: 1.5 }, { direccion_entrega: "" }, { direccion_entrega: "x".repeat(501) }, { clave_operacion: "no" }, { cliente_id: "x" }])("rechaza entradas inválidas: %j", async cambio => {
       expect((await post("ventas", { ...venta, ...cambio })).status).toBe(400);
     });
-    it.each([["SALDO_INSUFICIENTE", 409, "No hay suficientes canecas"], ["CLIENTE_INVALIDO", 409, "inactivo"], ["COSTO_PENDIENTE", 409, "sin costo conocido"], ["VENTA_INVALIDA", 400, "mayor que Q0.00"], ["CLAVE_REUTILIZADA", 409, "otros datos"], ["RESERVAS_PENDIENTES", 409, "reservadas"]])("traduce %s a un mensaje claro", async (codigo, estado, texto) => {
+    it.each([["SALDO_INSUFICIENTE", 409, "No hay suficientes canecas"], ["CLIENTE_INVALIDO", 409, "inactivo"], ["COSTO_PENDIENTE", 409, "sin costo conocido"], ["VENTA_INVALIDA", 400, "mayor que Q0.00"], ["PRODUCTO_AMBIGUO", 409, "más de una caneca"], ["CLAVE_REUTILIZADA", 409, "otros datos"], ["RESERVAS_PENDIENTES", 409, "reservadas"]])("traduce %s a un mensaje claro", async (codigo, estado, texto) => {
       mocks.venta.mockRejectedValue(new Error(codigo));
       const res = await post("ventas", venta);
       expect(res.status).toBe(estado);

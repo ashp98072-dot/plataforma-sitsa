@@ -83,7 +83,7 @@ export async function reportePorProducto(pool: Pool, empresaId: number, filtros:
 export async function historialVentas(pool: Pool, empresaId: number, filtros: FiltrosReporte, conCostos: boolean) {
   const f = validarFiltros(filtros);
   const c = condiciones(f, { fecha: 'v.fecha_venta', producto: 'v.producto_id', cliente: 'v.cliente_id' });
-  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,p.nombre producto,v.cantidad,
+  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,v.direccion_entrega,p.nombre producto,v.cantidad,
       CONCAT('Q ',FORMAT(v.precio_unitario_centavos/100,2)) precio_unitario,CONCAT('Q ',FORMAT(v.total_centavos/100,2)) total
       ${conCostos ? ",CONCAT('Q ',FORMAT(v.costo_centavos/100,2)) costo_fifo,CONCAT(IF(v.total_centavos-v.costo_centavos<0,'-Q ','Q '),FORMAT(ABS(v.total_centavos-v.costo_centavos)/100,2)) utilidad" : ''},
       v.estado,us.username usuario,v.creado_en,ua.username anulada_por,v.anulada_en,v.motivo_anulacion

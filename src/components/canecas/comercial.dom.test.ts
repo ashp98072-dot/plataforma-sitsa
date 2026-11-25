@@ -22,35 +22,39 @@ async function montar(componente: ReturnType<typeof createElement>, respuestas: 
   await act(async () => { await new Promise(r => setTimeout(r, 40)); });
   return { host, fetchMock, limpiar: async () => { await act(async () => root.unmount()); host.remove(); } };
 }
-const clientes = { datos: [{ id: 1, nombre_comercial: "Cliente Uno", activo: 1 }, { id: 2, nombre_comercial: "Cliente Inactivo", activo: 0 }] };
+const clientes = { datos: [{ id: 1, nombre_comercial: "Cliente Uno", direccion: "Zona 4, Ciudad", activo: 1 }, { id: 2, nombre_comercial: "Cliente Inactivo", activo: 0 }] };
 const productos = { datos: [{ id: 3, nombre: "Aceite 5L", presentacion: "Caneca", activo: 1 }] };
 const ubicaciones = { datos: [{ id: 4, nombre: "Bodega", activo: 1 }] };
 
 describe("pantallas comerciales de Canecas", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
-  it("Nueva venta: campos simples en quetzales, fecha de hoy, sin clientes inactivos y con el resultado calculado por el servidor", async () => {
-    const m = await montar(createElement(CanecasClient, { slug: "demo", vista: "ventas", permisos: { ventas: true, compras: true } }), { clientes, productos, ubicaciones, ventas: { datos: [{ id: "9", fecha: "2026-11-10", documento: "FAC-1", cliente: "Cliente Uno", producto: "Aceite 5L", cantidad: 8, precio_unitario: "Q 95.00", total: "Q 760.00", costo_fifo: "Q 640.00", utilidad: "Q 120.00", estado: "ACTIVA", usuario: "ana" }] } },
-      (url, init) => init?.method === "POST" ? Response.json({ id: "10", mensaje: "Venta registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00." }, { status: 201 }) : undefined);
+  it("Nueva venta tipo POS: sin producto, fecha ni documento; dirección sugerida del cliente, total en vivo y resultado del servidor", async () => {
+    const m = await montar(createElement(CanecasClient, { slug: "demo", vista: "ventas", permisos: { ventas: true, compras: true } }), { clientes, productos, ubicaciones, ventas: { datos: [{ id: "9", fecha: "2026-11-10", documento: "FAC-1", cliente: "Cliente Uno", direccion_entrega: "Zona 4, Ciudad", cantidad: 8, precio_unitario: "Q 95.00", total: "Q 760.00", costo_fifo: "Q 640.00", utilidad: "Q 120.00", estado: "ACTIVA", usuario: "ana" }] } },
+      (url, init) => init?.method === "POST" ? Response.json({ id: "10", documento: "VTA-000010", mensaje: "Venta VTA-000010 registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00." }, { status: 201 }) : undefined);
     try {
       expect(m.host.textContent).toContain("Ventas");
       for (const t of ["Q 760.00", "Q 640.00", "Q 120.00", "ACTIVA"]) expect(m.host.textContent).toContain(t);
       await act(async () => { m.host.querySelector<HTMLButtonElement>("header button")!.click(); });
       const form = m.host.querySelector<HTMLFormElement>("main form")!;
       for (const nombre of ["moneda", "total", "costo", "utilidad", "empresa_id"]) expect(form.elements.namedItem(nombre)).toBeNull();
-      expect((form.elements.namedItem("fecha_venta") as HTMLInputElement).value).toBe(new Date().toISOString().slice(0, 10));
+      for (const nombre of ["producto_id", "fecha_venta", "documento"]) expect(form.elements.namedItem(nombre)).toBeNull();
       expect(m.host.textContent).toContain("Precio por caneca en Q");
       const clientesOpc = Array.from(form.querySelectorAll('select[name="cliente_id"] option')).map(o => o.textContent);
       expect(clientesOpc).toContain("Cliente Uno"); expect(clientesOpc).not.toContain("Cliente Inactivo");
       const poner = (n: string, v: string) => { (form.elements.namedItem(n) as HTMLInputElement | HTMLSelectElement).value = v; };
-      poner("cliente_id", "1"); poner("producto_id", "3"); poner("ubicacion_id", "4"); poner("documento", "FAC-2"); poner("cantidad", "8"); poner("precio_unitario", "95.00");
+      poner("cliente_id", "1"); await act(async () => { form.dispatchEvent(new Event("input", { bubbles: true })); });
+      poner("ubicacion_id", "4"); poner("cantidad", "8"); poner("precio_unitario", "95.00");
+      await act(async () => { form.querySelector("select")!.dispatchEvent(new Event("input", { bubbles: true })); form.dispatchEvent(new Event("input", { bubbles: true })); });
+      expect(m.host.textContent).toContain("Total: Q 760.00");
+      expect((form.elements.namedItem("direccion_entrega") as HTMLInputElement).value).toBe("Zona 4, Ciudad");
       expect(form.checkValidity()).toBe(true);
       await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 30)); });
       const envio = m.fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
       expect(String(envio[0])).toMatch(/\/canecas\/ventas$/);
       const cuerpo = JSON.parse(String(envio[1]?.body));
-      expect(cuerpo).toMatchObject({ cliente_id: "1", producto_id: "3", ubicacion_id: "4", documento: "FAC-2", cantidad: "8", precio_unitario: "95.00" });
+      expect(cuerpo).toMatchObject({ cliente_id: "1", ubicacion_id: "4", direccion_entrega: "Zona 4, Ciudad", cantidad: "8", precio_unitario: "95.00" });
       expect(cuerpo.clave_operacion).toMatch(/^[0-9a-f-]{36}$/);
-      expect(m.host.textContent).toContain("Venta registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00.");
+      expect(m.host.textContent).toContain("Venta VTA-000010 registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00.");
     } finally { await m.limpiar(); }
   });
   it("sin permiso de costos no se muestran costo FIFO ni utilidad, y sin permiso de ventas no hay formulario ni anulación", async () => {

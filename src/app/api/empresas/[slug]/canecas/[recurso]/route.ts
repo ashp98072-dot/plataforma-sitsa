@@ -4,6 +4,8 @@ import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool, query } from "@/lib/db";
 import { accesoCanecas } from "@/lib/canecas/acceso";
 import { confirmarRecepcion } from "@/lib/canecas/confirmar";
+import { registrarCompraConIngreso } from "@/lib/canecas/compra-ingreso";
+import { productoUnico } from "@/lib/canecas/simplificacion";
 import { registrarSalidaFifo, reversarSalidaFifo } from "@/lib/canecas/salidas-fifo";
 import { salidaPerteneceAVenta } from "@/lib/canecas/ventas";
 import { getComercial, postComercial, RECURSOS_COMERCIALES_GET, RECURSOS_COMERCIALES_POST } from "@/lib/canecas/comercial-api";
@@ -23,12 +25,14 @@ function centavos(valor: string): bigint | null {
   return BigInt(entero) * BigInt("100") + BigInt(decimal.padEnd(2, "0"));
 }
 const schemas = {
-  productos: z.object({ codigo: texto(80), nombre: texto(200), marca: z.string().trim().max(160), presentacion: texto(160), capacidad: z.coerce.number().min(0.001).max(999999999).multipleOf(0.001), unidad_capacidad: texto(40), unidad_inventario: z.literal("caneca"), precio_venta_referencia: importe, moneda: moneda }).strict(),
+  // Una sola caneca (aceite) por empresa: código, nombre y demás datos internos los fija el servidor.
+  productos: z.object({ precio_venta_referencia: importe, moneda: moneda }).strict(),
   ubicaciones: z.object({ nombre: texto(160) }).strict(),
   proveedores: esquemaCatalogo,
   clientes: esquemaCatalogo,
   mapeo_proveedor_compra: z.object({ compra_id: id, proveedor_id: id }).strict(),
-  compras: z.object({ proveedor_id: id, producto_id: id, cantidad: id, referencia: texto(250), clave_operacion: clave, precio_compra: importe, gastos_adquisicion: importe, moneda: moneda }).strict(),
+  // Compra + ingreso físico en un solo paso; producto y número de compra los fija el servidor.
+  compras: z.object({ proveedor_id: id, ubicacion_id: id, recibido_por_empleado_id: id, cantidad: id, precio_compra: importe.refine(x => x !== ""), clave_operacion: clave }).strict(),
   recepciones: z.object({ compra_id: id, ubicacion_id: id, recibido_por_empleado_id: id, cantidad: id, clave_operacion: clave }).strict(),
   confirmar: z.object({ id }).strict(),
   salidas: z.object({ producto_id: id, ubicacion_id: id, cantidad: id, documento: texto(250), clave_operacion: clave }).strict(),
@@ -95,8 +99,7 @@ export async function POST(req: Request, ctx: Ctx) {
   try {
     // La moneda es siempre GTQ: la interfaz muestra Q y no pide el código. Gastos de adquisición: Q0 si hay precio y no se indicó gasto;
     // un precio vacío sigue significando costo desconocido (no es lo mismo que Q0).
-    if (["compras", "valoracion_inicial", "gastos_posteriores", "precio_referencia"].includes(recurso) && !d.moneda) d.moneda = "GTQ";
-    if (recurso === "compras" && d.precio_compra && !d.gastos_adquisicion) d.gastos_adquisicion = "0";
+    if (["compras", "valoracion_inicial", "gastos_posteriores", "precio_referencia", "productos"].includes(recurso) && !d.moneda) d.moneda = "GTQ";
     if (recurso === "salidas") return NextResponse.json(await registrarSalidaFifo(getPool(), empresa, usuario, { productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), cantidad: Number(d.cantidad), documento: String(d.documento), claveOperacion: String(d.clave_operacion) }));
     if (recurso === "reversar_salida" && await salidaPerteneceAVenta(getPool(), empresa, String(d.salida_id))) return NextResponse.json({ error: "Esta salida pertenece a una venta: anule la venta para revertirla." }, { status: 409 });
     if (recurso === "reversar_salida") return NextResponse.json(await reversarSalidaFifo(getPool(), empresa, usuario, String(d.salida_id), String(d.motivo)));
@@ -108,47 +111,54 @@ export async function POST(req: Request, ctx: Ctx) {
       return r.affectedRows ? NextResponse.json({ ok: true }) : NextResponse.json({ error: "Producto no encontrado." }, { status: 404 });
     }
     if (recurso === "proveedores" || recurso === "clientes") return NextResponse.json({ id: await crearCatalogo(getPool(), recurso, empresa, usuario, parsed.data as DatosCatalogo) }, { status: 201 });
+    if (recurso === "compras") {
+      // La compra ahora también ingresa y confirma el inventario: exige además los permisos de recepción y confirmación.
+      for (const necesario of ["recepciones", "confirmar"] as const) { const g = await accesoCanecas(slug, necesario); if (g.error) return g.error; }
+      const c = await registrarCompraConIngreso(getPool(), empresa, usuario, { proveedorId: Number(d.proveedor_id), ubicacionId: Number(d.ubicacion_id), recibidoPorEmpleadoId: Number(d.recibido_por_empleado_id), cantidad: Number(d.cantidad), precio: String(d.precio_compra), claveOperacion: String(d.clave_operacion) });
+      return NextResponse.json({ id: c.id, referencia: c.referencia, total: c.total, mensaje: `Compra ${c.referencia} registrada e ingresada al inventario (total ${c.total}).` }, { status: c.yaRegistrada ? 200 : 201 });
+    }
     if (recurso === "mapeo_proveedor_compra") { await mapearProveedorCompra(getPool(), empresa, usuario, Number(d.compra_id), Number(d.proveedor_id)); return NextResponse.json({ ok: true }); }
     const pool = getPool();
     if (recurso === "productos") {
-      const [r] = await pool.execute<ResultSetHeader>("INSERT INTO canecas_productos (empresa_id,codigo,nombre,marca,presentacion,capacidad,unidad_capacidad,unidad_inventario,precio_venta_referencia_centavos,precio_venta_referencia_moneda) VALUES (?,?,?,?,?,?,?,?,?,?)", [empresa,d.codigo,d.nombre,d.marca,d.presentacion,d.capacidad,d.unidad_capacidad,d.unidad_inventario,centavos(String(d.precio_venta_referencia))?.toString() ?? null,String(d.moneda) || null]);
-      return NextResponse.json({ id: r.insertId }, { status: 201 });
+      const [existentes] = await pool.query<RowDataPacket[]>("SELECT id FROM canecas_productos WHERE empresa_id=? LIMIT 1", [empresa]);
+      if (existentes.length) return NextResponse.json({ error: "La empresa ya tiene su caneca. Use «Actualizar precio de venta de referencia»." }, { status: 409 });
+      const conn = await pool.getConnection();
+      try {
+        await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+        await conn.beginTransaction();
+        const productoId = await productoUnico(conn, empresa);
+        if (d.precio_venta_referencia) await conn.execute("UPDATE canecas_productos SET precio_venta_referencia_centavos=?,precio_venta_referencia_moneda=? WHERE empresa_id=? AND id=?", [centavos(String(d.precio_venta_referencia))?.toString() ?? null, "GTQ", empresa, productoId]);
+        await conn.commit();
+        return NextResponse.json({ id: productoId }, { status: 201 });
+      } catch (error) { await conn.rollback(); throw error; } finally { conn.release(); }
     }
     if (recurso === "ubicaciones") {
       const [r] = await pool.execute<ResultSetHeader>("INSERT INTO canecas_ubicaciones (empresa_id,nombre) VALUES (?,?)", [empresa,d.nombre]);
       return NextResponse.json({ id: r.insertId }, { status: 201 });
     }
     const conn = await pool.getConnection();
-    const tabla = recurso === "compras" ? "canecas_compras" : "canecas_recepciones";
+    const tabla = "canecas_recepciones";
     try {
       await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
       await conn.beginTransaction();
       const [existentes] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${tabla} WHERE empresa_id=? AND clave_operacion=?`, [empresa,d.clave_operacion]);
       if (existentes[0]) {
-        const campos = recurso === "compras" ? [["canecas_proveedor_id","proveedor_id"],["producto_id","producto_id"],["cantidad","cantidad"],["referencia","referencia"]] : ["compra_id","ubicacion_id","recibido_por_empleado_id","cantidad"].map(c => [c,c]);
+        const campos = ["compra_id","ubicacion_id","recibido_por_empleado_id","cantidad"].map(c => [c,c]);
         if (campos.some(([col,key]) => String(existentes[0][col]) !== String(d[key]))) throw new Error("CLAVE_REUTILIZADA");
-        if (recurso === "compras" && (String(existentes[0].precio_unitario_centavos) !== String(centavos(String(d.precio_compra))) || String(existentes[0].gastos_centavos) !== String(centavos(String(d.gastos_adquisicion))) || String(existentes[0].moneda ?? "") !== String(d.moneda))) throw new Error("CLAVE_REUTILIZADA");
         await conn.commit();
         return NextResponse.json({ id: existentes[0].id });
       }
-      let r: ResultSetHeader;
-      if (recurso === "compras") {
-        const [validos] = await conn.query<RowDataPacket[]>("SELECT p.id FROM canecas_productos p JOIN canecas_proveedores pr ON pr.empresa_id=p.empresa_id WHERE p.empresa_id=? AND p.id=? AND p.activo=1 AND pr.id=? AND pr.activo=1", [empresa,d.producto_id,d.proveedor_id]);
-        if (!validos.length) throw new Error("REFERENCIA_INVALIDA");
-        [r] = await conn.execute<ResultSetHeader>("INSERT INTO canecas_compras (empresa_id,canecas_proveedor_id,producto_id,cantidad,referencia,clave_operacion,creado_por,precio_unitario_centavos,gastos_centavos,moneda) VALUES (?,?,?,?,?,?,?,?,?,?)", [empresa,d.proveedor_id,d.producto_id,d.cantidad,d.referencia,d.clave_operacion,usuario,centavos(String(d.precio_compra))?.toString() ?? null,centavos(String(d.gastos_adquisicion))?.toString() ?? null,String(d.moneda) || null]);
-      } else {
-        const [validos] = await conn.query<RowDataPacket[]>("SELECT c.id FROM canecas_compras c JOIN canecas_ubicaciones u ON u.empresa_id=c.empresa_id JOIN empleados e ON e.empresa_id=c.empresa_id WHERE c.empresa_id=? AND c.id=? AND u.id=? AND u.activo=1 AND e.id=? AND e.estado='Activo'", [empresa,d.compra_id,d.ubicacion_id,d.recibido_por_empleado_id]);
-        if (!validos.length) throw new Error("REFERENCIA_INVALIDA");
-        [r] = await conn.execute<ResultSetHeader>("INSERT INTO canecas_recepciones (empresa_id,compra_id,ubicacion_id,recibido_por_empleado_id,cantidad,clave_operacion,creado_por) VALUES (?,?,?,?,?,?,?)", [empresa,d.compra_id,d.ubicacion_id,d.recibido_por_empleado_id,d.cantidad,d.clave_operacion,usuario]);
-      }
+      const [validos] = await conn.query<RowDataPacket[]>("SELECT c.id FROM canecas_compras c JOIN canecas_ubicaciones u ON u.empresa_id=c.empresa_id JOIN empleados e ON e.empresa_id=c.empresa_id WHERE c.empresa_id=? AND c.id=? AND u.id=? AND u.activo=1 AND e.id=? AND e.estado='Activo'", [empresa,d.compra_id,d.ubicacion_id,d.recibido_por_empleado_id]);
+      if (!validos.length) throw new Error("REFERENCIA_INVALIDA");
+      const [r] = await conn.execute<ResultSetHeader>("INSERT INTO canecas_recepciones (empresa_id,compra_id,ubicacion_id,recibido_por_empleado_id,cantidad,clave_operacion,creado_por) VALUES (?,?,?,?,?,?,?)", [empresa,d.compra_id,d.ubicacion_id,d.recibido_por_empleado_id,d.cantidad,d.clave_operacion,usuario]);
       await conn.commit();
       return NextResponse.json({ id: r.insertId }, { status: 201 });
     } catch (error) {
       await conn.rollback();
       if ((error as { code?: string }).code === "ER_DUP_ENTRY") {
         const [rows] = await conn.query<RowDataPacket[]>(`SELECT * FROM ${tabla} WHERE empresa_id=? AND clave_operacion=?`, [empresa,d.clave_operacion]);
-        const campos = recurso === "compras" ? [["canecas_proveedor_id","proveedor_id"],["producto_id","producto_id"],["cantidad","cantidad"],["referencia","referencia"]] : ["compra_id","ubicacion_id","recibido_por_empleado_id","cantidad"].map(c => [c,c]);
-        if (rows[0] && campos.every(([col,key]) => String(rows[0][col]) === String(d[key])) && (recurso !== "compras" || (String(rows[0].precio_unitario_centavos) === String(centavos(String(d.precio_compra))) && String(rows[0].gastos_centavos) === String(centavos(String(d.gastos_adquisicion))) && String(rows[0].moneda ?? "") === String(d.moneda)))) return NextResponse.json({ id: rows[0].id });
+        const campos = ["compra_id","ubicacion_id","recibido_por_empleado_id","cantidad"].map(c => [c,c]);
+        if (rows[0] && campos.every(([col,key]) => String(rows[0][col]) === String(d[key]))) return NextResponse.json({ id: rows[0].id });
       }
       throw error;
     } finally { conn.release(); }
