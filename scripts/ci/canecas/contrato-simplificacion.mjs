@@ -9,7 +9,7 @@ import { normalizarSql } from './contrato-salidas.mjs';
 const tablas = "'canecas_secuencias','canecas_ventas','canecas_productos','canecas_compras'";
 const triggersNombres = "'trg_can_venta_bu','trg_can_venta_bd'";
 const nombres = ['tablas', 'columnas', 'indices', 'foraneas', 'checks'];
-const queries = {
+export const consultasContratoSimplificacion = {
   tablas: `SELECT TABLE_NAME,TABLE_TYPE,ENGINE,TABLE_COLLATION,CREATE_OPTIONS FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${tablas}) ORDER BY BINARY TABLE_NAME`,
   columnas: `SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,CHARACTER_SET_NAME,COLLATION_NAME,GENERATION_EXPRESSION,NUMERIC_PRECISION,NUMERIC_SCALE,DATETIME_PRECISION,CHARACTER_MAXIMUM_LENGTH FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${tablas}) ORDER BY BINARY TABLE_NAME,ORDINAL_POSITION`,
   indices: `SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE,COLLATION,NULLABLE,IGNORED FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN (${tablas}) ORDER BY BINARY TABLE_NAME,BINARY INDEX_NAME,SEQ_IN_INDEX`,
@@ -19,7 +19,7 @@ const queries = {
 };
 export async function obtenerContratoSimplificacion(connection) {
   const resultado = {};
-  for (const [nombre, sql] of Object.entries(queries)) {
+  for (const [nombre, sql] of Object.entries(consultasContratoSimplificacion)) {
     const [rows] = await connection.query(sql);
     resultado[nombre] = JSON.parse(JSON.stringify(rows));
   }
