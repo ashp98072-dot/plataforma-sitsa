@@ -4,7 +4,7 @@
 -- No marque "Ignorar errores"; deje activada la casilla de claves foraneas. Si una sentencia da error, DETENGASE y use sql/recuperacion-canecas-simplificacion-solo-lectura.sql.
 --
 
--- GUARDA: si falla, MariaDB responde error 1242 en esta sentencia y NO se ejecuta nada de la etapa 1. Significa: ejecute 01-verificar-previo.sql y revise cada fila
+-- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa 1. Significa: ejecute 01-verificar-previo.sql y revise cada fila
 SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas')=1 AND (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_productos')=1 AND (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_compras')=1 AND (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='empresas')=1 AND (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_secuencias')=0 AND (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='u611730801_Plataforma' AND TRIGGER_NAME IN ('trg_can_venta_bu','trg_can_venta_bd'))=2 THEN 'GUARDA OK etapa 1' ELSE (SELECT 'DETENER: prerequisitos de la etapa 1 incompletos' UNION ALL SELECT 'ver ejecute 01-verificar-previo.sql y revise cada fila') END AS guarda;
 
 CREATE TABLE `u611730801_Plataforma`.canecas_secuencias (

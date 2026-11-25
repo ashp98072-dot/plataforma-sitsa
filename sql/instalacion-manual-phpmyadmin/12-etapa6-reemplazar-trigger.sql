@@ -5,7 +5,7 @@
 -- EN phpMyAdmin (pestana SQL) ponga el campo "Delimitador" en // antes de ejecutar. Cada sentencia de este archivo termina en //.
 --
 
--- GUARDA: si falla, MariaDB responde error 1242 en esta sentencia y NO se ejecuta nada de la etapa 6. Significa: ejecute 11-verificar-etapa5.sql
+-- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa 6. Significa: ejecute 11-verificar-etapa5.sql
 SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto')=1 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='doc_auto')=1 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico')=1 THEN 'GUARDA OK etapa 6' ELSE (SELECT 'DETENER: prerequisitos de la etapa 6 incompletos' UNION ALL SELECT 'ver ejecute 11-verificar-etapa5.sql') END AS guarda//
 
 CREATE OR REPLACE TRIGGER `u611730801_Plataforma`.trg_can_venta_bu

@@ -30,7 +30,7 @@ partida en 6 etapas de escritura auditables, con 8 verificaciones de solo lectur
 | 05 | `05-verificar-etapa2.sql` | solo lectura | Cada contador = máximo histórico; una fila por empresa y tipo; recuentos. |
 | 06 | `06-etapa3-alterar-ventas.sql` | **escribe** | Guarda + un `ALTER TABLE canecas_ventas` (`direccion_entrega`, CHECK, `doc_auto`, UNIQUE). |
 | 07 | `07-verificar-etapa3.sql` | solo lectura | Huella exacta de `canecas_ventas`; ventas históricas sin dirección; recuentos iguales al preflight. |
-| 08 | `08-etapa4-alterar-productos.sql` | **escribe** | Guarda + `ALTER TABLE canecas_productos` (`activo_unico` virtual + UNIQUE). Falla sola, sin cambios, si una empresa tiene más de una caneca activa. |
+| 08 | `08-etapa4-alterar-productos.sql` | **escribe** | Guarda + `ALTER TABLE canecas_productos` (`activo_unico` virtual + UNIQUE). Falla sola, sin cambios, si una empresa tiene más de una caneca activa (MariaDB lo informa como error 1062 o 1834). |
 | 09 | `09-verificar-etapa4.sql` | solo lectura | Huella exacta de `canecas_productos`; recuentos. |
 | 10 | `10-etapa5-alterar-compras.sql` | **escribe** | Guarda + `ALTER TABLE canecas_compras` (`ref_auto` virtual + UNIQUE). Falla sola, sin cambios, si hay `COMP-######` repetido en una empresa. |
 | 11 | `11-verificar-etapa5.sql` | solo lectura | Huella exacta de `canecas_compras`; recuentos. |
@@ -39,7 +39,7 @@ partida en 6 etapas de escritura auditables, con 8 verificaciones de solo lectur
 | 14 | `14-verificar-final.sql` | solo lectura | Postcheck de **15 comprobaciones** + huellas exactas del contrato de las 4 tablas (20) + los 2 triggers. «empresas sin contador completo» y «siguientes números ya en uso» deben ser `0`. |
 
 ## Cómo funcionan las guardas y las verificaciones
-- Cada etapa de escritura empieza con una sentencia `SELECT CASE WHEN <prerequisitos> … ELSE (subconsulta de 2 filas)` que **provoca el error 1242** si la etapa anterior no está completa
+- Cada etapa de escritura empieza con una sentencia `SELECT CASE WHEN <prerequisitos> … ELSE (subconsulta de 2 filas)` que **provoca un error** (1242 «Subquery returns more than 1 row», o 1146 si la guarda cita una tabla que aún no existe) si la etapa anterior no está completa
   (o si la etapa ya se aplicó). phpMyAdmin se detiene en el primer error: no se ejecuta nada de la etapa. Esto impide saltarse etapas o repetirlas.
 - Las verificaciones comparan, con MD5 sobre los metadatos de `information_schema`, cada tabla contra el **contrato versionado** (`contrato-simplificacion-mariadb-11.8.9.json`, generado en MariaDB 11.8.9 y verificado en CI):
   si una columna, índice, FK, CHECK o columna virtual difiere en lo más mínimo, la fila dice `DETENER`. Los triggers se comparan por su cuerpo con espacios normalizados (los saltos de línea CRLF del navegador no importan).
@@ -48,7 +48,7 @@ partida en 6 etapas de escritura auditables, con 8 verificaciones de solo lectur
 ## Probado (MariaDB 11.8.9 desechable, base llamada `u611730801_Plataforma`)
 `src/lib/canecas/instalacion-phpmyadmin.db.test.ts` ejecuta estos mismos archivos con el cliente real de MariaDB: sin base por defecto y con `information_schema`/`mysql` seleccionadas, con CRLF, las
 verificaciones bajo `READ ONLY`, y compara el resultado con la instalación oficial (estructura idéntica, contratos iguales, mismos contadores). También prueba las guardas (etapas fuera de orden o repetidas →
-error 1242 sin cambios), la detección de alteraciones (columna extra, trigger ausente o modificado) y bloqueos del preflight, y que la numeración y la venta POS funcionan sobre lo instalado a mano.
+error 1242/1146 sin cambios), la detección de alteraciones (columna extra, trigger ausente o modificado) y bloqueos del preflight, y que la numeración y la venta POS funcionan sobre lo instalado a mano.
 `src/lib/canecas/instalacion-phpmyadmin.test.ts` comprueba la fidelidad con la migración auditada, el esquema explícito, la ausencia de sentencias peligrosas y que los archivos no se desvían de su generador.
 
 ## Límites

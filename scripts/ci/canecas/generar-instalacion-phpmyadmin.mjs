@@ -53,7 +53,7 @@ const filasVerificacion = (nombre, archivo) => {
 const T = (tabla) => `(SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${BASE}' AND TABLE_NAME='${tabla}')`;
 const C = (tabla, col) => `(SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='${BASE}' AND TABLE_NAME='${tabla}' AND COLUMN_NAME='${col}')`;
 function guarda(etapa, condicion, previa) {
-  return `-- GUARDA: si falla, MariaDB responde error 1242 en esta sentencia y NO se ejecuta nada de la etapa ${etapa}. Significa: ${previa}\n`
+  return `-- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa ${etapa}. Significa: ${previa}\n`
     + `SELECT CASE WHEN ${condicion} THEN 'GUARDA OK etapa ${etapa}' ELSE (SELECT 'DETENER: prerequisitos de la etapa ${etapa} incompletos' UNION ALL SELECT 'ver ${previa}') END AS guarda;`;
 }
 const prerequisitosBase = `${T('canecas_ventas')}=1 AND ${T('canecas_productos')}=1 AND ${T('canecas_compras')}=1 AND ${T('empresas')}=1`;
@@ -91,7 +91,7 @@ function verificacionTrigger(nombre, tabla, evento, cuerpo) {
   const esperado = normalizarTrigger(cuerpo).replace(/'/g, "''");
   return `SELECT 'trigger ${nombre} exacto (tiempo, evento, tabla y cuerpo normalizado)' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='${BASE}' AND TRIGGER_NAME='${nombre}' AND EVENT_OBJECT_TABLE='${tabla}' AND ACTION_TIMING='BEFORE' AND EVENT_MANIPULATION='${evento}' AND BINARY TRIM(REGEXP_REPLACE(REPLACE(ACTION_STATEMENT, CHAR(13), ''), '[[:space:]]+', ' '))=BINARY '${esperado}')=1, 'OK', 'DETENER') AS resultado;`;
 }
-const cuerpoTrigger = ddl => ddl.replace(/^CREATE OR REPLACE TRIGGER\s+\w+\s+BEFORE\s+\w+\s+ON\s+\w+\s+FOR EACH ROW\s+/, '');
+const cuerpoTrigger = ddl => ddl.replace(/^CREATE (?:OR REPLACE )?TRIGGER\s+\S+\s+BEFORE\s+\w+\s+ON\s+\S+\s+FOR EACH ROW\s+/, '');
 
 function cabecera(titulo, lineas) {
   return ascii([`-- ${titulo}`, `-- Base de datos: ${BASE} (referencias explicitas; NO depende de USE ni de la base seleccionada en phpMyAdmin).`, ...lineas.map(l => `-- ${l}`), '--'].join('\n'));
@@ -128,12 +128,12 @@ export function generar() {
     '10-etapa5-alterar-compras.sql': etapa(5, 'canecas_compras: ref_auto (virtual) y UNIQUE de referencias con formato generado', m.compras, ['Falla (clave duplicada) si hay COMP-###### repetido dentro de una empresa: el preflight lo detecta antes.']),
     '11-verificar-etapa5.sql': verif('VERIFICACION de la etapa 5 (y prerequisito de la etapa 6)', [...verificacionTabla('canecas_compras'), ...recuentos]),
     '12-etapa6-reemplazar-trigger.sql': unir(cabecera('ETAPA 6: reemplazar trg_can_venta_bu (CREATE OR REPLACE: atomico, la tabla nunca queda sin trigger)', [...AVISO_ESCRITURA, 'EN phpMyAdmin (pestana SQL) ponga el campo "Delimitador" en // antes de ejecutar. Cada sentencia de este archivo termina en //.']), '', GUARDAS[6].replace(/;$/, '//'), '', `${trigger}//`),
-    '13-verificar-etapa6.sql': verif('VERIFICACION de la etapa 6 (triggers de ventas)', [verificacionTrigger('trg_can_venta_bu', 'canecas_ventas', 'UPDATE', cuerpoTrigger(trigger)), verificacionTrigger('trg_can_venta_bd', 'canecas_ventas', 'DELETE', cuerpoTrigger(calificar(bd)).replace(/^CREATE TRIGGER\s+\S+\s+BEFORE\s+\w+\s+ON\s+\S+\s+FOR EACH ROW\s+/, ''))]),
+    '13-verificar-etapa6.sql': verif('VERIFICACION de la etapa 6 (triggers de ventas)', [verificacionTrigger('trg_can_venta_bu', 'canecas_ventas', 'UPDATE', cuerpoTrigger(trigger)), verificacionTrigger('trg_can_venta_bd', 'canecas_ventas', 'DELETE', cuerpoTrigger(calificar(bd)))]),
     '14-verificar-final.sql': verif('VERIFICACION FINAL (solo lectura): postcheck de 15 comprobaciones + contrato exacto de las 4 tablas y 2 triggers', [
       ...postcheck,
       ...['canecas_secuencias', 'canecas_ventas', 'canecas_productos', 'canecas_compras'].flatMap(t => verificacionTabla(t)),
       verificacionTrigger('trg_can_venta_bu', 'canecas_ventas', 'UPDATE', cuerpoTrigger(trigger)),
-      verificacionTrigger('trg_can_venta_bd', 'canecas_ventas', 'DELETE', cuerpoTrigger(calificar(bd)).replace(/^CREATE TRIGGER\s+\S+\s+BEFORE\s+\w+\s+ON\s+\S+\s+FOR EACH ROW\s+/, '')),
+      verificacionTrigger('trg_can_venta_bd', 'canecas_ventas', 'DELETE', cuerpoTrigger(calificar(bd))),
     ], ['Resultado esperado: todo OK; las filas "empresas sin contador completo" y "siguientes numeros ya en uso" deben decir 0.']),
   };
 }

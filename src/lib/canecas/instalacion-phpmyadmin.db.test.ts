@@ -115,7 +115,7 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       for (const nombre of ['04-etapa2-sembrar-contadores', '06-etapa3-alterar-ventas', '08-etapa4-alterar-productos', '10-etapa5-alterar-compras', '12-etapa6-reemplazar-trigger']) {
         const s = ejecutar(nombre);
         expect(s.codigo, nombre).not.toBe(0);
-        expect(s.stderr, nombre).toMatch(/1242/);
+        expect(s.stderr, nombre).toMatch(/1242|1146/); // 1242: guarda; 1146: la guarda cita una tabla que aun no existe
         expect(await objetos(pool), nombre).toEqual(base);
       }
       expect(ejecutar('02-etapa1-crear-secuencias').codigo).toBe(0);
@@ -123,7 +123,7 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       expect(repetida.codigo).not.toBe(0); expect(repetida.stderr).toMatch(/1242/);
       expect(await objetos(pool)).toEqual([1, 0, 0, 0, 0]);
       // Salto de etapa: con solo la 1 aplicada, la 3 (ventas) sigue bloqueada porque faltan los contadores sembrados.
-      expect(ejecutar('06-etapa3-alterar-ventas').stderr).toMatch(/1242/);
+      expect(ejecutar('06-etapa3-alterar-ventas').stderr).toMatch(/1242|1146/);
       expect(await objetos(pool)).toEqual([1, 0, 0, 0, 0]);
       // Estado previo dañado: sin uno de los triggers de ventas, la etapa 1 no corre.
       await pool.query('DROP TABLE canecas_secuencias; DROP TRIGGER trg_can_venta_bd');
@@ -141,7 +141,8 @@ describe.skipIf(!socket)('instalación manual por etapas (archivos SQL como en p
       // Con dos canecas activas el ALTER de la etapa 4 falla por sí mismo (clave duplicada) sin dejar nada a medias.
       for (const n of ['02-etapa1-crear-secuencias', '04-etapa2-sembrar-contadores', '06-etapa3-alterar-ventas']) expect(ejecutar(n).codigo, n).toBe(0);
       const falla = ejecutar('08-etapa4-alterar-productos');
-      expect(falla.codigo).not.toBe(0); expect(falla.stderr).toMatch(/1062|Duplicate/i);
+      expect(falla.codigo).not.toBe(0); expect(falla.stderr).toMatch(/ERROR (1062|1834)/); // MariaDB informa la clave duplicada como 1062 o, con tablas padre de FK, como 1834
+      expect(falla.stderr).not.toMatch(/ERROR 1242/);
       expect((await objetos(pool))[2]).toBe(0);
       await pool.query("UPDATE canecas_productos SET activo=0 WHERE codigo='B'");
       for (const n of ['08-etapa4-alterar-productos', '10-etapa5-alterar-compras', '12-etapa6-reemplazar-trigger']) expect(ejecutar(n).codigo, n).toBe(0);

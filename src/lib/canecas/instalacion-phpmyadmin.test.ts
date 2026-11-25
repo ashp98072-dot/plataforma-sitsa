@@ -82,6 +82,10 @@ describe('instalación manual por etapas (phpMyAdmin): archivos SQL generados', 
     for (const t of ['canecas_secuencias', 'canecas_ventas', 'canecas_productos', 'canecas_compras']) for (const s of ['tablas', 'columnas', 'indices', 'foraneas', 'checks']) expect(archivos['14-verificar-final.sql']).toContain(`'contrato ${s} de ${t} (huella exacta)'`);
     expect(archivos['14-verificar-final.sql']).toContain("'trigger trg_can_venta_bu exacto");
     expect(archivos['14-verificar-final.sql']).toContain("'trigger trg_can_venta_bd exacto");
+    // El cuerpo esperado de cada trigger es solo el cuerpo (BEGIN … END), sin la cabecera CREATE ni el nombre calificado.
+    expect(archivos['13-verificar-etapa6.sql']).toContain("BINARY 'BEGIN IF NOT (NEW.id <=> OLD.id)");
+    expect(archivos['13-verificar-etapa6.sql']).toContain("BINARY 'BEGIN SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''CANECAS_VENTA_NO_ELIMINABLE''; END'");
+    expect(archivos['13-verificar-etapa6.sql']).not.toMatch(/BINARY 'CREATE/);
   });
   it('calificar/desCalificar son inversos y no tocan literales de texto', () => {
     const original = "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_NAME='canecas_secuencias'";

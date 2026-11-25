@@ -5,7 +5,7 @@
 -- No renumera ni modifica ningun documento existente; no rellena huecos.
 --
 
--- GUARDA: si falla, MariaDB responde error 1242 en esta sentencia y NO se ejecuta nada de la etapa 2. Significa: ejecute 03-verificar-etapa1.sql
+-- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa 2. Significa: ejecute 03-verificar-etapa1.sql
 SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_secuencias')=1 AND (SELECT COUNT(*) FROM `u611730801_Plataforma`.canecas_secuencias)=0 THEN 'GUARDA OK etapa 2' ELSE (SELECT 'DETENER: prerequisitos de la etapa 2 incompletos' UNION ALL SELECT 'ver ejecute 03-verificar-etapa1.sql') END AS guarda;
 
 INSERT INTO `u611730801_Plataforma`.canecas_secuencias (empresa_id,tipo,ultimo)

@@ -5,7 +5,7 @@
 -- Falla (clave duplicada) si hay COMP-###### repetido dentro de una empresa: el preflight lo detecta antes.
 --
 
--- GUARDA: si falla, MariaDB responde error 1242 en esta sentencia y NO se ejecuta nada de la etapa 5. Significa: ejecute 09-verificar-etapa4.sql
+-- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa 5. Significa: ejecute 09-verificar-etapa4.sql
 SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico')=1 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto')=0 THEN 'GUARDA OK etapa 5' ELSE (SELECT 'DETENER: prerequisitos de la etapa 5 incompletos' UNION ALL SELECT 'ver ejecute 09-verificar-etapa4.sql') END AS guarda;
 
 ALTER TABLE `u611730801_Plataforma`.canecas_compras
