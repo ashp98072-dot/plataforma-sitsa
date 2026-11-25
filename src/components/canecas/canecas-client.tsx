@@ -39,7 +39,7 @@ const columnas: Record<string, [string,string][]> = {
 /** Recursos nuevos (#688); las rutas históricas siguen existiendo para clientes anteriores. */
 const ENDPOINT: Record<string,string> = { compras:"compras_ingreso", ventas:"ventas_pos", productos:"caneca_unica" };
 const titulos: Record<string,string> = { panel:"Panel general", ventas:"Ventas", redistribuciones:"Ajuste de canecas", proveedores:"Proveedores de Canecas", clientes:"Clientes de Canecas", productos:"Canecas", ubicaciones:"Ubicaciones", compras:"Compras", inventario:"Existencias", movimientos:"Historial de movimientos", salidas:"Salidas FIFO" };
-export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: string; permisos: Record<string, boolean> }) {
+export function CanecasClient({ slug, vista, permisos, empresaId, usuarioId }: { slug: string; vista: string; permisos: Record<string, boolean>; empresaId?: number; usuarioId?: number }) {
   const [datos,setDatos] = useState<Record<string,Fila[]>>({});
   const [mensaje,setMensaje] = useState("");
   const [cargando,setCargando] = useState(true);
@@ -50,6 +50,8 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
   const [editando,setEditando] = useState<Fila | null>(null);
   const enviando = useRef(false);
   const [totalForm,setTotalForm] = useState("");
+  const [formVersion,setFormVersion] = useState(0); // cambia tras cada operación confirmada: el formulario se vacía y no puede reenviarse por accidente
+  const [listaDesactualizada,setListaDesactualizada] = useState(false);
   const recursos = vista === "panel" ? ["inventario","movimientos"] : Array.from(new Set([vista,...(campos[vista] ?? []).flatMap(c => c.opciones ? [c.opciones] : []),...(vista === "compras" ? ["proveedores",...(permisos.compras ? ["gastos_posteriores"] : [])] : []),...(vista === "inventario" ? ["productos","ubicaciones",...(permisos.confirmar ? ["valoracion_inicial"] : []),...(permisos.compras ? ["valoracion_inventario"] : [])] : [])]));
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -62,7 +64,8 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
         return [r,json.datos] as const;
       }));
       setDatos(Object.fromEntries(resultados));
-    } catch (error) { setErrorCarga(error instanceof Error ? error.message : "Error de consulta."); } finally { setCargando(false); }
+      return true;
+    } catch (error) { setErrorCarga(error instanceof Error ? error.message : "Error de consulta."); return false; } finally { setCargando(false); }
   // La lista depende de la vista y de los permisos de costos.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug,vista,permisos.compras,permisos.confirmar]);
@@ -70,29 +73,40 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
   async function enviar(recurso: string, payload: Record<string,FormDataEntryValue | number>) {
     if (enviando.current) return;
     enviando.current = true;
-    setOcupado(true); setMensaje("");
+    setOcupado(true); setMensaje(""); setListaDesactualizada(false);
     const destino = ENDPOINT[recurso] ?? recurso;
-    // La clave de la operación se guarda en el navegador junto con la huella del formulario: si la respuesta se pierde o se recarga
-    // la página, reenviar el MISMO formulario reutiliza la clave y el servidor no duplica la operación.
-    const llave = `canecas:${slug}:${destino}`;
+    // La clave de la operación se guarda en el navegador junto con la huella del formulario y se delimita por empresa y usuario (terminales
+    // compartidas): si la respuesta se pierde o se recarga la página, reenviar el MISMO formulario reutiliza la clave y el servidor no duplica.
+    const llave = `canecas:${slug}:${empresaId ?? "?"}:${usuarioId ?? "?"}:${destino}`;
     const huella = JSON.stringify(Object.entries(payload).sort(([a],[b]) => a.localeCompare(b)));
     let definitivo = false;
+    let confirmada: string | null = null;
     try {
-      if (["compras", "recepciones", "valoracion_inicial", "gastos_posteriores", "salidas", "ventas", "redistribuciones"].includes(recurso)) {
-        let k = "";
-        try { const g = JSON.parse(window.localStorage.getItem(llave) ?? "null"); if (g && g.huella === huella && typeof g.clave === "string") k = g.clave; } catch { /* sin almacenamiento: la clave solo vive en memoria */ }
-        if (!k) k = crypto.randomUUID();
-        try { window.localStorage.setItem(llave, JSON.stringify({ clave: k, huella })); } catch { /* ignorado */ }
-        payload.clave_operacion = k;
+      try {
+        if (["compras", "recepciones", "valoracion_inicial", "gastos_posteriores", "salidas", "ventas", "redistribuciones"].includes(recurso)) {
+          let k = "";
+          try { const g = JSON.parse(window.localStorage.getItem(llave) ?? "null"); if (g && g.huella === huella && typeof g.clave === "string") k = g.clave; } catch { /* sin almacenamiento: la clave solo vive en memoria */ }
+          if (!k) k = crypto.randomUUID();
+          try { window.localStorage.setItem(llave, JSON.stringify({ clave: k, huella })); } catch { /* ignorado */ }
+          payload.clave_operacion = k;
+        }
+        const res = await fetch(`/api/empresas/${encodeURIComponent(slug)}/canecas/${destino}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+        const result = await res.json();
+        definitivo = res.status < 500; // éxito o rechazo definitivo: la clave ya no sirve; con fallas del servidor/red se conserva para reintentar
+        if (!res.ok) throw new Error(result.error || "No se pudo guardar.");
+        confirmada = typeof result.mensaje === "string" && result.mensaje ? result.mensaje : "Operación registrada correctamente.";
+      } catch (error) { setMensaje(error instanceof Error ? error.message : "Error de operación."); }
+      finally { if (definitivo) { try { window.localStorage.removeItem(llave); } catch { /* ignorado */ } } }
+      if (confirmada) {
+        // El POST ya se confirmó: lo que ocurra al refrescar la lista NUNCA lo convierte en un aparente fallo de guardado. El formulario se
+        // cierra y se vacía: otra operación exige abrir uno nuevo de forma explícita (clave nueva), no reenviar este.
+        setFormAbierto(false); setEditando(null); setFormVersion(v => v + 1); setTotalForm("");
+        setMensaje(confirmada);
+        if (!(await cargar())) { setListaDesactualizada(true); setMensaje(`${confirmada} Guardado correctamente, pero no se pudo actualizar la lista: use «Actualizar lista» antes de registrar otra operación.`); }
       }
-      const res = await fetch(`/api/empresas/${encodeURIComponent(slug)}/canecas/${destino}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
-      const result = await res.json();
-      definitivo = res.status < 500; // éxito o rechazo definitivo: la clave ya no sirve; con fallas del servidor/red se conserva para reintentar
-      if (!res.ok) throw new Error(result.error || "No se pudo guardar.");
-      setMensaje(typeof result.mensaje === "string" && result.mensaje ? result.mensaje : "Operación registrada correctamente."); await cargar();
-    } catch (error) { setMensaje(error instanceof Error ? error.message : "Error de operación."); }
-    finally { if (definitivo) { try { window.localStorage.removeItem(llave); } catch { /* ignorado */ } } enviando.current = false; setOcupado(false); }
+    } finally { enviando.current = false; setOcupado(false); }
   }
+  async function actualizarLista() { if (await cargar()) { setListaDesactualizada(false); setMensaje(m => m.replace(/ Guardado correctamente, pero no se pudo actualizar la lista.*$/, "")); } }
   async function editar(recurso: string, id: string | number | null, payload: Record<string,FormDataEntryValue | number>) {
     if (enviando.current) return;
     enviando.current = true;
@@ -132,7 +146,7 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
   const puedeForm = vista === "compras" ? Boolean(permisos.compras && permisos.recepciones && permisos.confirmar) : Boolean(permisos[permisoFormulario]);
   function formulario(recurso: string, camposDe: string = recurso) {
     const enEdicion = editando && ["proveedores","clientes"].includes(recurso) ? editando : null;
-    return <form key={enEdicion ? `editar-${String(enEdicion.id)}` : `nuevo-${recurso}`} className="my-4 grid min-w-0 gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 md:grid-cols-2 xl:grid-cols-3" onInput={e => alAcumular(e, recurso)} onSubmit={e => { e.preventDefault(); const datos = Object.fromEntries(new FormData(e.currentTarget)); if (enEdicion) void editar(recurso,enEdicion.id,datos); else void enviar(recurso,datos); }}>
+    return <form key={enEdicion ? `editar-${String(enEdicion.id)}` : `nuevo-${recurso}-${formVersion}`} className="my-4 grid min-w-0 gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 md:grid-cols-2 xl:grid-cols-3" onInput={e => alAcumular(e, recurso)} onSubmit={e => { e.preventDefault(); const datos = Object.fromEntries(new FormData(e.currentTarget)); if (enEdicion) void editar(recurso,enEdicion.id,datos); else void enviar(recurso,datos); }}>
       {(campos[camposDe] ?? []).map(c => <label className="grid min-w-0 content-start gap-1.5 text-sm font-medium" key={c.nombre}>{c.etiqueta}{c.opciones ? <select className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" name={c.nombre} required defaultValue=""><option value="">Seleccione</option>{(datos[c.opciones] ?? []).filter(x => x.activo !== 0).map(x => <option key={String(x.id)} value={String(x.id)}>{String(x.nombre_comercial ?? x.nombre ?? x.referencia ?? x.id)}{x.presentacion ? ` — ${x.presentacion}` : ""}{x.producto ? ` — ${x.producto}` : ""}</option>)}</select> : <input className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" name={c.nombre} defaultValue={enEdicion ? String(enEdicion[c.nombre] ?? "") : c.nombre === "unidad_inventario" ? "caneca" : c.hoy ? new Date().toISOString().slice(0,10) : undefined} readOnly={c.nombre === "unidad_inventario"} type={c.decimal ? "text" : c.tipo ?? "text"} inputMode={c.decimal ? "decimal" : undefined} pattern={c.decimal ? "[0-9]+([.][0-9]{1,2})?" : undefined} required={c.nombre !== "marca" && !c.opcional} min={c.tipo === "number" ? (c.nombre === "capacidad" ? "0.001" : c.decimal ? "0" : "1") : undefined} step={c.nombre === "capacidad" ? "0.001" : c.decimal ? "0.01" : undefined} />}</label>)}
       {["ventas","compras"].includes(recurso) && <p className="self-end text-sm font-semibold" aria-live="polite">Total: {totalForm || "Q 0.00"}</p>}
       <button disabled={ocupado} className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white disabled:opacity-50">{enEdicion ? "Guardar cambios" : "Guardar"}</button>{enEdicion && <button type="button" disabled={ocupado} className="rounded-lg border border-[var(--border)] px-4 py-2" onClick={() => { setEditando(null); setFormAbierto(false); }}>Cancelar edición</button>}
@@ -144,7 +158,7 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
     const visibles = (cargando || errorCarga ? [] : filas).filter(row => cols.some(([k]) => String(row[k] ?? "").toLocaleLowerCase().includes(buscar.trim().toLocaleLowerCase())));
     return <div className="table-scroll min-w-0 max-w-full rounded-xl border border-[var(--border)] bg-[var(--card)]"><table className="w-full text-left text-sm"><thead className="bg-[var(--thead)] text-[var(--muted)]"><tr>{cols.map(([k,l]) => <th className="whitespace-nowrap px-4 py-3" key={k}>{l}</th>)}{((["productos","ubicaciones","proveedores","clientes"].includes(recurso) && permisos.catalogo)) && <th className="px-4 py-3">Acción</th>}</tr></thead><tbody>{visibles.map((row,i) => <tr className="border-t border-[var(--border)]" key={String(row.id ?? i)}>{cols.map(([k]) => <td className="whitespace-nowrap px-4 py-3" key={k}>{String(row[k] ?? "—")}</td>)}{["productos","ubicaciones","proveedores","clientes"].includes(recurso) && permisos.catalogo && <td className="whitespace-nowrap px-4 py-3">{["proveedores","clientes"].includes(recurso) && <button disabled={ocupado} className="mr-3 underline" onClick={() => { setEditando(row); setFormAbierto(true); }}>Editar</button>}<button disabled={ocupado} className="underline" onClick={() => void cambiarEstado(recurso,row)}>{row.activo ? "Desactivar" : "Activar"}</button></td>}</tr>)}{!visibles.length && <tr><td colSpan={cols.length + 1} className="px-4 py-8 text-center text-[var(--muted)]">{cargando ? "Cargando registros…" : errorCarga ? "No se pudieron cargar los registros." : buscar ? "No hay resultados para esta búsqueda." : "No hay registros para mostrar."}</td></tr>}</tbody></table></div>;
   }
-  return <main className="min-w-0 max-w-full space-y-6 p-4 md:p-6"><header className="flex min-w-0 flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-sm font-medium text-[var(--muted)]">Gestión de Canecas</p><h1 className="mt-1 text-2xl font-semibold">{titulos[vista]}</h1><p className="mt-2 text-sm text-[var(--muted)]">Consulta y administra la información de {titulos[vista].toLocaleLowerCase()}.</p></div>{campos[vista] && puedeForm && (vista !== "salidas" || permisos.compras) && <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white" aria-expanded={formAbierto} onClick={() => { setEditando(null); setFormAbierto(!formAbierto); }}>{formAbierto ? "Cerrar formulario" : "Nuevo registro"}</button>}</header>{errorCarga && <p role="alert" className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3">{errorCarga}</p>}{mensaje && <p role="status" className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3">{mensaje}</p>}
+  return <main className="min-w-0 max-w-full space-y-6 p-4 md:p-6"><header className="flex min-w-0 flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-sm font-medium text-[var(--muted)]">Gestión de Canecas</p><h1 className="mt-1 text-2xl font-semibold">{titulos[vista]}</h1><p className="mt-2 text-sm text-[var(--muted)]">Consulta y administra la información de {titulos[vista].toLocaleLowerCase()}.</p></div>{campos[vista] && puedeForm && (vista !== "salidas" || permisos.compras) && <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white" aria-expanded={formAbierto} onClick={() => { setEditando(null); setFormAbierto(!formAbierto); }}>{formAbierto ? "Cerrar formulario" : "Nuevo registro"}</button>}</header>{errorCarga && <p role="alert" className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3">{errorCarga}</p>}{listaDesactualizada && <button type="button" disabled={cargando} className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm" onClick={() => void actualizarLista()}>Actualizar lista</button>}{mensaje && <p role="status" className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-3">{mensaje}</p>}
     {vista === "panel" ? <><section className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-5"><p className="text-sm text-[var(--muted)]">Existencias disponibles</p><p className="mt-2 text-3xl font-semibold">{cargando || errorCarga ? "?" : (datos.inventario ?? []).reduce((n,r) => n+Number(r.disponible),0)}</p><p className="text-sm text-[var(--muted)]">canecas</p></section><section className="min-w-0 space-y-3"><h2 className="text-lg font-semibold">Existencias por ubicación</h2>{tabla("inventario",datos.inventario ?? [])}</section><section className="space-y-3"><h2 className="text-lg font-semibold">Movimientos recientes</h2>{tabla("movimientos",(datos.movimientos ?? []).slice(0,10))}</section><div className="flex flex-wrap gap-4 text-sm"><a className="text-[var(--accent)] underline" href={`/e/${slug}/canecas/compras`}>Ver compras</a>{permisos.confirmar && permisos.compras && <a className="text-[var(--accent)] underline" href={`/e/${slug}/canecas/salidas`}>Registrar salidas</a>}</div></> : <>{formAbierto && campos[vista] && puedeForm && (vista !== "salidas" || permisos.compras) && formulario(vista)}{vista === "ventas" && permisos.ventas && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Anular una venta</summary><p className="text-sm">La venta queda registrada como anulada y las canecas regresan al inventario con su costo original. No se borra nada.</p>{formulario("anular_venta")}</details>}{vista === "redistribuciones" && permisos.ventas && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Revertir un ajuste</summary><p className="text-sm">Solo es posible si las canecas del ajuste no se han vendido ni ajustado de nuevo.</p>{formulario("reversar_redistribucion")}</details>}{vista === "salidas" && permisos.confirmar && permisos.compras && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Reversar salida</summary>{formulario("reversar_salida")}</details>}{vista === "compras" && permisos.catalogo && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Registrar proveedor comercial</summary>{formulario("proveedores","proveedor_rapido")}</details>}{vista === "productos" && permisos.catalogo && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Actualizar precio de venta de referencia</summary><p className="text-sm">El precio de referencia no modifica operaciones anteriores.</p>{formulario("precio_referencia")}</details>}{vista === "inventario" && permisos.confirmar && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Conciliar existencia inicial</summary><p className="text-sm">Solo unidades existentes sin capa. Si no conoce su costo, consérvelas pendientes hasta tener respaldo.</p>{formulario("valoracion_inicial")}{tabla("valoracion_inicial",datos.valoracion_inicial ?? [])}</details>}{vista === "compras" && permisos.compras && <details className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-4"><summary className="cursor-pointer font-medium">Registrar gasto posterior</summary><p className="text-sm">Queda pendiente de aplicación contable; no altera costos históricos.</p>{formulario("gastos_posteriores")}{tabla("gastos_posteriores",datos.gastos_posteriores ?? [])}</details>}<section className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-3"><h2 className="text-lg font-semibold">Registros</h2><label className="grid gap-1 text-sm text-[var(--muted)]">Buscar<input className="w-full max-w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2" value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="Buscar en registros" /></label></div>{tabla(vista,datos[vista] ?? [])}</section>{vista === "inventario" && permisos.compras && <section className="space-y-3"><h2 className="text-lg font-semibold">Costo conocido en Q</h2><p className="text-sm text-[var(--muted)]">Subtotal parcial: no incluye unidades sin capa ni capas con costo pendiente.</p>{tabla("valoracion_inventario",datos.valoracion_inventario ?? [])}</section>}</>}
   </main>;
 }

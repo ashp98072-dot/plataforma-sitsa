@@ -12,6 +12,10 @@
 --      no se reutiliza ningún número histórico y no se renumera ni se modifica ningún documento existente.
 --   2. canecas_ventas.direccion_entrega (NULL en ventas históricas): dirección de entrega copiada en cada venta para
 --      conservarla aunque luego cambie la dirección del cliente. CHECK: no vacía cuando existe.
+--   2b. canecas_compras.ref_auto / canecas_ventas.doc_auto (columnas virtuales) + índices UNIQUE (empresa_id,ref_auto|doc_auto): la base
+--      impide dos documentos con formato generado (COMP-###### / VTA-######, 6 a 15 dígitos) en la misma empresa, tanto entre números
+--      automáticos como frente a referencias escritas a mano con las APIs históricas, incluso en inserciones concurrentes. Los demás formatos
+--      (texto libre) siguen aceptando duplicados como siempre: la unicidad NO es absoluta, solo para el formato generado.
 --   3. canecas_productos.activo_unico (columna virtual) + índice UNIQUE (empresa_id,activo_unico): la base impide más de
 --      una caneca activa por empresa, de modo que una creación concurrente nunca produce dos productos activos.
 --   4. trg_can_venta_bu se reemplaza con CREATE OR REPLACE TRIGGER (atómico: nunca queda sin trigger) para que
@@ -42,11 +46,17 @@ LEFT JOIN (
 
 ALTER TABLE canecas_ventas
   ADD COLUMN direccion_entrega VARCHAR(500) NULL AFTER ubicacion_id,
-  ADD CONSTRAINT chk_can_venta_direccion CHECK (direccion_entrega IS NULL OR CHAR_LENGTH(TRIM(direccion_entrega)) > 0);
+  ADD CONSTRAINT chk_can_venta_direccion CHECK (direccion_entrega IS NULL OR CHAR_LENGTH(TRIM(direccion_entrega)) > 0),
+  ADD COLUMN doc_auto VARCHAR(250) GENERATED ALWAYS AS (IF(documento REGEXP '^VTA-[0-9]{6,15}$', documento, NULL)) VIRTUAL,
+  ADD UNIQUE KEY uq_can_venta_doc_auto (empresa_id,doc_auto);
 
 ALTER TABLE canecas_productos
   ADD COLUMN activo_unico TINYINT(1) GENERATED ALWAYS AS (IF(activo = 1, 1, NULL)) VIRTUAL,
   ADD UNIQUE KEY uq_can_producto_activo_unico (empresa_id,activo_unico);
+
+ALTER TABLE canecas_compras
+  ADD COLUMN ref_auto VARCHAR(250) GENERATED ALWAYS AS (IF(referencia REGEXP '^COMP-[0-9]{6,15}$', referencia, NULL)) VIRTUAL,
+  ADD UNIQUE KEY uq_can_compra_ref_auto (empresa_id,ref_auto);
 
 DELIMITER //
 CREATE OR REPLACE TRIGGER trg_can_venta_bu

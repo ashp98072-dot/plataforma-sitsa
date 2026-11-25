@@ -21,6 +21,18 @@ function resumen(totalCentavos: bigint, costoCentavos: bigint) {
  * Una venta nunca se borra: se anula (anularVenta). Sin costo conocido en las capas a consumir la venta se rechaza.
  */
 export async function registrarVenta(pool: Pool, empresaId: number, usuarioId: number, dato: DatosVenta, hoy = fechaHoyGuatemala()) {
+  // Si un documento escrito a mano con el MISMO número generado (API histórica) ganó la carrera, la base lo rechaza (uq_can_venta_doc_auto)
+  // y la venta automática toma el siguiente número. Acotado; los documentos manuales nunca se reintentan (su duplicado es un 409).
+  for (let intento = 0; ; intento++) {
+    try { return await registrarVentaUnIntento(pool, empresaId, usuarioId, dato, hoy); }
+    catch (error) {
+      const colision = (error as { code?: string }).code === 'ER_DUP_ENTRY' && /uq_can_venta_doc_auto/.test(String((error as Error).message));
+      if (!(colision && dato.documento === undefined && intento < 7)) throw error;
+    }
+  }
+}
+
+async function registrarVentaUnIntento(pool: Pool, empresaId: number, usuarioId: number, dato: DatosVenta, hoy: string) {
   const conDireccion = dato.direccionEntrega !== undefined, direccion = dato.direccionEntrega?.trim() ?? '';
   if (![empresaId, usuarioId, dato.clienteId, dato.ubicacionId].every(entero) || (dato.productoId !== undefined && !entero(dato.productoId)) || (dato.documento !== undefined && (!dato.documento.trim() || dato.documento.length > 250)) || (conDireccion && (!direccion || direccion.length > 500)) || !UUID.test(dato.claveOperacion)) throw Error('VENTA_INVALIDA');
   const cantidad = validarCantidadVenta(dato.cantidad), fecha = validarFechaVenta(dato.fechaVenta ?? hoy, hoy), precio = precioACentavos(dato.precio);

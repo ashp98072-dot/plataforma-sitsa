@@ -124,4 +124,42 @@ describe.skipIf(!hayLaboratorio)('numeración automática frente a documentos hi
       await expect(instalar(pool)).resolves.toEqual({ instalado: true, yaInstalado: false });
     } finally { await pool.end(); }
   }, 180000);
+
+  it('concurrencia mixta: números automáticos frente a referencias/documentos manuales de las APIs históricas sin duplicados visibles', async () => {
+    const pool = await crearBase('canecas_simp_num_d', 24);
+    try {
+      await prepararBaseHastaVentas(pool, { historial: true });
+      expect(await instalar(pool)).toEqual({ instalado: true, yaInstalado: false });
+      const prov = await crearCatalogo(pool, 'proveedores', 1, 1, { nombre_comercial: 'Aceites SA', nit: null, telefono: null, direccion: null });
+      const cli = await crearCatalogo(pool, 'clientes', 1, 1, { nombre_comercial: 'Cliente', nit: null, telefono: null, direccion: null });
+      const producto = Number((await todo(pool, 'SELECT id FROM canecas_productos WHERE empresa_id=1 AND activo=1'))[0].id);
+      const duplicados = (sql: string) => todo(pool, sql);
+
+      // ── Compras: 10 automáticas contra 10 manuales con EXACTAMENTE los números que el contador va a emitir (COMP-000001..10) ──
+      const manualesC = rango('COMP', 1, 10).map(ref => insertarCompraHistorica(pool, 1, ref, producto));
+      const automaticasC = Array.from({ length: 10 }, (_, i) => compra(pool, 1, prov, 1, 1, 700 + i));
+      const mezcla = await Promise.allSettled(automaticasC.flatMap((a, i) => [a, manualesC[i]]));
+      const auto = await Promise.allSettled(automaticasC);
+      expect(auto.every(r => r.status === 'fulfilled')).toBe(true);        // toda compra automática triunfa (reintenta con el siguiente número)
+      for (const r of mezcla) if (r.status === 'rejected') expect((r.reason as { code?: string }).code).toBe('ER_DUP_ENTRY'); // el manual que pierde recibe duplicado, nunca pasa en silencio
+      expect(await duplicados("SELECT empresa_id,referencia,COUNT(*) n FROM canecas_compras WHERE referencia REGEXP '^COMP-[0-9]{6}$' GROUP BY empresa_id,referencia HAVING n>1")).toEqual([]);
+      const refsAuto = (await todo(pool, "SELECT referencia FROM canecas_compras WHERE clave_operacion LIKE '00000000-0000-4000-8000-%' ORDER BY id")).map(f => String(f.referencia));
+      expect(new Set(refsAuto).size).toBe(10);
+      // Sin duplicar existencias: 20 históricas + 10 compras de 2 canecas, una sola entrada por compra automática.
+      expect(Number((await todo(pool, 'SELECT SUM(fisico) n FROM canecas_saldos WHERE empresa_id=1'))[0].n)).toBe(40);
+      expect(Number((await todo(pool, "SELECT COUNT(*) n FROM canecas_movimientos WHERE tipo='ENTRADA'"))[0].n)).toBe(11);
+
+      // ── Ventas: 6 automáticas contra 6 manuales (API histórica) con los documentos VTA-000001..06 ──
+      const manualesV = rango('VTA', 1, 6).map((doc, i) => registrarVenta(pool, 1, 1, { clienteId: cli, productoId: producto, ubicacionId: 1, fechaVenta: '2026-11-10', documento: doc, cantidad: 1, precio: '95.00', claveOperacion: k(800 + i) }, '2026-11-24'));
+      const automaticasV = Array.from({ length: 6 }, (_, i) => registrarVenta(pool, 1, 1, { clienteId: cli, ubicacionId: 1, direccionEntrega: 'Zona 4', cantidad: 1, precio: '120.00', claveOperacion: k(900 + i) }));
+      const ventas = await Promise.allSettled([...automaticasV, ...manualesV]);
+      const automaticasOk = ventas.slice(0, 6), manualesRes = ventas.slice(6);
+      expect(automaticasOk.every(r => r.status === 'fulfilled')).toBe(true);
+      for (const r of manualesRes) if (r.status === 'rejected') expect((r.reason as { code?: string }).code).toBe('ER_DUP_ENTRY');
+      expect(await duplicados("SELECT empresa_id,documento,COUNT(*) n FROM canecas_ventas WHERE documento REGEXP '^VTA-[0-9]{6}$' GROUP BY empresa_id,documento HAVING n>1")).toEqual([]);
+      const vendidas = ventas.filter(r => r.status === 'fulfilled').length;
+      expect(Number((await todo(pool, 'SELECT SUM(fisico) n FROM canecas_saldos WHERE empresa_id=1'))[0].n)).toBe(40 - vendidas); // un descuento por venta confirmada; las rechazadas no descuentan
+      expect(Number((await todo(pool, "SELECT COUNT(*) n FROM canecas_ventas WHERE estado='ACTIVA'"))[0].n)).toBe(vendidas);
+    } finally { await pool.end(); }
+  }, 240000);
 });

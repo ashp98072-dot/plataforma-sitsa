@@ -6,6 +6,7 @@ import { formatearQuetzales, precioACentavos } from './ventas-reglas';
 export type DatosCompra = { proveedorId: number; ubicacionId: number; recibidoPorEmpleadoId: number; cantidad: number; precio: string; claveOperacion: string };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export type ResultadoCompra = { id: number; referencia: string; recepcionId: number; total: string; yaRegistrada: boolean };
+const MAX_REINTENTOS_DUPLICADO = 7;
 const entero = (n: number) => Number.isSafeInteger(n) && n > 0 && n <= 2147483647;
 
 /**
@@ -15,7 +16,7 @@ const entero = (n: number) => Number.isSafeInteger(n) && n > 0 && n <= 214748364
  * (proveedor, cantidad, precio, bodega y receptor) se verifica en cada reintento con la misma clave, que devuelve la
  * compra ya registrada sin duplicar compras, recepciones, movimientos ni capas.
  */
-export async function registrarCompraConIngreso(pool: Pool, empresaId: number, usuarioId: number, d: DatosCompra, esReintento = false): Promise<ResultadoCompra> {
+export async function registrarCompraConIngreso(pool: Pool, empresaId: number, usuarioId: number, d: DatosCompra, intento = 0): Promise<ResultadoCompra> {
   if (![empresaId, usuarioId, d.proveedorId, d.ubicacionId, d.recibidoPorEmpleadoId, d.cantidad].every(entero) || !UUID.test(d.claveOperacion)) throw Error('COMPRA_INVALIDA');
   const precio = precioACentavos(d.precio).toString();
   const total = formatearQuetzales(BigInt(precio) * BigInt(d.cantidad));
@@ -50,11 +51,11 @@ export async function registrarCompraConIngreso(pool: Pool, empresaId: number, u
     return { id: c.insertId, referencia, recepcionId: r.insertId, total, yaRegistrada: false };
   } catch (error) {
     await conn.rollback();
-    // Carrera: otra solicitud con la misma clave confirmó primero; se resuelve como reintento idempotente.
-    if ((error as { code?: string }).code === 'ER_DUP_ENTRY' && !esReintento) {
-      const resultado = await registrarCompraConIngreso(pool, empresaId, usuarioId, d, true);
-      if (!resultado.yaRegistrada) throw Error('CLAVE_REUTILIZADA'); // si no estaba registrada no era una carrera de la misma clave
-      return resultado;
+    // Carrera resuelta por la base: (a) otra solicitud con la MISMA clave confirmó primero (uq_can_compra_clave) -> el reintento la encuentra
+    // y la devuelve; (b) un documento escrito a mano con el MISMO número generado (uq_can_compra_ref_auto, API histórica) ganó -> el reintento
+    // toma el siguiente número. Acotado: no se reintenta indefinidamente.
+    if ((error as { code?: string }).code === 'ER_DUP_ENTRY' && intento < MAX_REINTENTOS_DUPLICADO && /uq_can_compra_(clave|ref_auto)/.test(String((error as Error).message))) {
+      return registrarCompraConIngreso(pool, empresaId, usuarioId, d, intento + 1);
     }
     throw error;
   } finally { conn.release(); }

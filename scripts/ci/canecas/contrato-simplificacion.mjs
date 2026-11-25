@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { normalizarSql } from './contrato-salidas.mjs';
 
 // Contrato del estado POSTERIOR a migrate-2026-11-canecas-simplificacion-wip.sql (#688), obtenido en MariaDB 11.8.9.
-// Independiente del contrato de ventas anterior: canecas_secuencias (nueva), canecas_ventas y canecas_productos (con sus columnas,
+// Independiente del contrato de ventas anterior: canecas_secuencias (nueva), canecas_ventas, canecas_productos y canecas_compras (con sus columnas,
 // índices y checks nuevos) y los triggers de inmutabilidad de ventas.
-const tablas = "'canecas_secuencias','canecas_ventas','canecas_productos'";
+const tablas = "'canecas_secuencias','canecas_ventas','canecas_productos','canecas_compras'";
 const triggersNombres = "'trg_can_venta_bu','trg_can_venta_bd'";
 const nombres = ['tablas', 'columnas', 'indices', 'foraneas', 'checks'];
 const queries = {

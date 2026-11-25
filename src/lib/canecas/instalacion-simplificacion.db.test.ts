@@ -15,12 +15,14 @@ const estado = async (pool: mysql.Pool) => {
     (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_secuencias') secuencias,
     (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega') direccion,
     (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico') activo_unico,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto') ref_auto,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='doc_auto') doc_auto,
     (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='canecas_ventas') triggers`);
   return Object.fromEntries(Object.entries(r[0]).map(([a, b]) => [a, Number(b)]));
 };
-const sinCambios = { secuencias: 0, direccion: 0, activo_unico: 0, triggers: 2 };
+const sinCambios = { secuencias: 0, direccion: 0, activo_unico: 0, ref_auto: 0, doc_auto: 0, triggers: 2 };
 // La columna virtual activo_unico es parte de lo que agrega la migración: se excluye al comparar los datos existentes.
-const instantanea = async (pool: mysql.Pool) => Object.fromEntries(await Promise.all(['canecas_productos', 'canecas_compras', 'canecas_recepciones', 'canecas_saldos', 'canecas_movimientos', 'canecas_capas_costo', 'canecas_ventas', 'canecas_clientes'].map(async t => [t, (await pool.query<Fila[]>(`SELECT * FROM ${t}`))[0].map(({ activo_unico: _virtual, ...fila }) => { void _virtual; return fila; })])));
+const instantanea = async (pool: mysql.Pool) => Object.fromEntries(await Promise.all(['canecas_productos', 'canecas_compras', 'canecas_recepciones', 'canecas_saldos', 'canecas_movimientos', 'canecas_capas_costo', 'canecas_ventas', 'canecas_clientes'].map(async t => [t, (await pool.query<Fila[]>(`SELECT * FROM ${t}`))[0].map(({ activo_unico: _v1, ref_auto: _v2, doc_auto: _v3, ...fila }) => { void _v1; void _v2; void _v3; return fila; })])));
 
 describe.skipIf(!hayLaboratorio)('instalador controlado de la simplificación en MariaDB 11.8.9 desechable', () => {
   it('instala sin alterar datos, es idempotente, conserva el trigger y el instalador anterior de ventas no acepta el esquema nuevo', async () => {
@@ -32,10 +34,10 @@ describe.skipIf(!hayLaboratorio)('instalador controlado de la simplificación en
       expect(await estado(pool)).toEqual(sinCambios);
       const antes = await instantanea(pool);
       expect(await instalar(pool)).toEqual({ instalado: true, yaInstalado: false });
-      expect(await estado(pool)).toEqual({ secuencias: 1, direccion: 1, activo_unico: 1, triggers: 2 });
+      expect(await estado(pool)).toEqual({ secuencias: 1, direccion: 1, activo_unico: 1, ref_auto: 1, doc_auto: 1, triggers: 2 });
       // Los datos históricos son idénticos salvo la columna nueva (NULL): no se inventan direcciones.
       const despues = await instantanea(pool);
-      expect(despues.canecas_ventas.map((f: Fila) => ({ ...f, direccion_entrega: undefined }))).toEqual(antes.canecas_ventas.map((f: Fila) => ({ ...f, direccion_entrega: undefined })));
+      expect(despues.canecas_ventas.map((f: Fila) => ({ ...f, direccion_entrega: undefined, doc_auto: undefined }))).toEqual(antes.canecas_ventas.map((f: Fila) => ({ ...f, direccion_entrega: undefined, doc_auto: undefined })));
       expect((despues.canecas_ventas as Fila[]).every(f => f.direccion_entrega === null)).toBe(true);
       expect({ ...despues, canecas_ventas: 0 }).toEqual({ ...antes, canecas_ventas: 0 });
       await instaladorEn(pool, c => verificarContratoSimplificacion(c));
@@ -78,15 +80,27 @@ describe.skipIf(!hayLaboratorio)('instalador controlado de la simplificación en
     } finally { await pool.end(); }
   }, 180000);
 
+  it('preflight: referencias o documentos con formato generado duplicados en una empresa detienen la instalación sin crear nada', async () => {
+    const pool = await crearBase('canecas_simp_inst_f');
+    try {
+      await prepararBaseHastaVentas(pool, { historial: true });
+      for (const clave of ['d-1', 'd-2']) await pool.query("INSERT INTO canecas_compras (empresa_id,proveedor_id,referencia,producto_id,cantidad,creado_por,clave_operacion,precio_unitario_centavos,gastos_centavos,moneda) VALUES (1,1,'COMP-000005',1,1,1,?,10000,0,'GTQ')", [clave]);
+      await expect(instalar(pool)).rejects.toThrow(/sin referencias COMP-###### duplicadas dentro de una empresa/);
+      expect(await estado(pool)).toEqual(sinCambios);
+      await pool.query("UPDATE canecas_compras SET referencia='COMP-000005 B' WHERE clave_operacion='d-2'"); // lo resuelve el propietario
+      await expect(instalar(pool)).resolves.toEqual({ instalado: true, yaInstalado: false });
+    } finally { await pool.end(); }
+  }, 180000);
+
   it('estados parciales: se detiene sin ejecutar más DDL y deja el diagnóstico', async () => {
     const pool = await crearBase(BASES[3]);
     try {
       await prepararBaseHastaVentas(pool, { historial: true });
       await pool.query('CREATE TABLE canecas_secuencias (empresa_id INT NOT NULL, tipo VARCHAR(20) NOT NULL, ultimo BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (empresa_id,tipo)) ENGINE=InnoDB');
       await expect(instalar(pool)).rejects.toThrow('simplificación parcial');
-      expect(await estado(pool)).toEqual({ secuencias: 1, direccion: 0, activo_unico: 0, triggers: 2 });
+      expect(await estado(pool)).toEqual({ secuencias: 1, direccion: 0, activo_unico: 0, ref_auto: 0, doc_auto: 0, triggers: 2 });
       // Completo pero con contrato distinto (tabla manual): se rechaza, no se acepta "arbitrariamente".
-      await pool.query('ALTER TABLE canecas_ventas ADD COLUMN direccion_entrega VARCHAR(500) NULL; ALTER TABLE canecas_productos ADD COLUMN activo_unico TINYINT(1) NULL');
+      await pool.query('ALTER TABLE canecas_ventas ADD COLUMN direccion_entrega VARCHAR(500) NULL, ADD COLUMN doc_auto VARCHAR(250) NULL; ALTER TABLE canecas_productos ADD COLUMN activo_unico TINYINT(1) NULL; ALTER TABLE canecas_compras ADD COLUMN ref_auto VARCHAR(250) NULL');
       await pool.query("CREATE OR REPLACE TRIGGER trg_can_venta_bu BEFORE UPDATE ON canecas_ventas FOR EACH ROW BEGIN IF NOT (NEW.direccion_entrega <=> OLD.direccion_entrega) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='X'; END IF; END");
       await expect(instalar(pool)).rejects.toThrow('contrato incompatible');
     } finally { await pool.end(); }

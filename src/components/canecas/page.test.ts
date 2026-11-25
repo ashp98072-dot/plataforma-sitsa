@@ -34,6 +34,11 @@ describe("acceso a la página de Canecas", () => {
     expect(sin.type).toBe("p");
     expect(sin.props.role).toBe("alert");
   });
+  it("entrega al cliente la empresa y el usuario de la sesión para delimitar las claves de idempotencia", async () => {
+    acceso.mockImplementation(async () => ({ session: { id: 77 }, empresa: { id: 5 } }));
+    const r = await Page({params:Promise.resolve({slug:"demo",seccion:["compras"]})}) as { props: { empresaId: number; usuarioId: number } };
+    expect(r.props).toMatchObject({ empresaId: 5, usuarioId: 77 });
+  });
   it.each(["ventas","redistribuciones","proveedores","clientes"])("acepta la sección %s", async seccion => {
     acceso.mockImplementation(async () => ({}));
     const r = await Page({params:Promise.resolve({slug:"demo",seccion:[seccion]})}) as { props: { vista: string } };

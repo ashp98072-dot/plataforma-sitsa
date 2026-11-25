@@ -73,6 +73,30 @@ describe('venta POS (registrarVenta)', () => {
     await expect(registrarVenta(p, 1, 9, { ...dato, ...cambio })).rejects.toThrow('VENTA_INVALIDA');
     expect(conn.beginTransaction).not.toHaveBeenCalled();
   });
+  it('si un documento manual con el mismo número generado gana la carrera (uq_can_venta_doc_auto) la venta automática toma el siguiente número', async () => {
+    const { pool: p, conn } = pool();
+    let n = 20;
+    mocks.numero.mockImplementation(async () => `VTA-0000${++n}`);
+    conn.execute.mockImplementation(async (...args: unknown[]) => {
+      if ((args[1] as unknown[])?.includes('VTA-000021')) throw Object.assign(new Error("Duplicate entry '1-VTA-000021' for key 'uq_can_venta_doc_auto'"), { code: 'ER_DUP_ENTRY' });
+      return [{ insertId: 77 }, []];
+    });
+    const v = await registrarVenta(p, 1, 9, dato, '2026-11-24');
+    expect(v).toMatchObject({ documento: 'VTA-000022', yaRegistrada: false });
+    expect(conn.rollback).toHaveBeenCalledTimes(1);
+  });
+  it('un documento manual (API histórica) duplicado NO se reintenta: se propaga como duplicado', async () => {
+    const { pool: p, conn } = pool();
+    conn.execute.mockImplementation(async () => { throw Object.assign(new Error("Duplicate entry '1-VTA-000021' for key 'uq_can_venta_doc_auto'"), { code: 'ER_DUP_ENTRY' }); });
+    await expect(registrarVenta(p, 1, 9, { clienteId: 2, productoId: 3, ubicacionId: 4, fechaVenta: '2026-11-10', documento: 'VTA-000021', cantidad: 1, precio: '95.00', claveOperacion: K }, '2026-11-24')).rejects.toMatchObject({ code: 'ER_DUP_ENTRY' });
+    expect(conn.beginTransaction).toHaveBeenCalledTimes(1);
+  });
+  it('la colisión persistente se detiene tras 8 intentos', async () => {
+    const { pool: p, conn } = pool();
+    conn.execute.mockImplementation(async () => { throw Object.assign(new Error("for key 'uq_can_venta_doc_auto'"), { code: 'ER_DUP_ENTRY' }); });
+    await expect(registrarVenta(p, 1, 9, dato, '2026-11-24')).rejects.toMatchObject({ code: 'ER_DUP_ENTRY' });
+    expect(conn.beginTransaction).toHaveBeenCalledTimes(8);
+  });
   it('cliente inactivo o de otra empresa: no descuenta inventario ni genera número', async () => {
     const { pool: p, conn } = pool(undefined, 0);
     await expect(registrarVenta(p, 1, 9, dato, '2026-11-24')).rejects.toThrow('CLIENTE_INVALIDO');

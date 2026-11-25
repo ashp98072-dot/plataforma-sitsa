@@ -70,9 +70,18 @@ describe('migración de simplificación: contenido y garantías', () => {
     expect(sinComentarios).toMatch(/activo_unico TINYINT\(1\) GENERATED ALWAYS AS \(IF\(activo = 1, 1, NULL\)\) VIRTUAL/);
     expect(sinComentarios).toMatch(/UNIQUE KEY uq_can_producto_activo_unico \(empresa_id,activo_unico\)/);
   });
-  it('tiene exactamente 4 sentencias (CREATE TABLE, siembra de contadores, 2 ALTER) y 1 trigger, como espera el instalador', () => {
+  it('la base garantiza la unicidad del formato generado (COMP-######/VTA-######) por empresa, también frente a documentos manuales y concurrentes', () => {
+    expect(sinComentarios).toMatch(/ADD COLUMN ref_auto VARCHAR\(250\) GENERATED ALWAYS AS \(IF\(referencia REGEXP '\^COMP-\[0-9\]\{6,15\}\$', referencia, NULL\)\) VIRTUAL/);
+    expect(sinComentarios).toMatch(/ADD COLUMN doc_auto VARCHAR\(250\) GENERATED ALWAYS AS \(IF\(documento REGEXP '\^VTA-\[0-9\]\{6,15\}\$', documento, NULL\)\) VIRTUAL/);
+    expect(sinComentarios).toMatch(/UNIQUE KEY uq_can_compra_ref_auto \(empresa_id,ref_auto\)/);
+    expect(sinComentarios).toMatch(/UNIQUE KEY uq_can_venta_doc_auto \(empresa_id,doc_auto\)/);
+    const pre = leer('preflight-2026-11-canecas-simplificacion-wip.sql');
+    expect(pre).toContain("'sin referencias COMP-###### duplicadas dentro de una empresa'");
+    expect(pre).toContain("'sin documentos VTA-###### duplicados dentro de una empresa'");
+  });
+  it('tiene exactamente 5 sentencias (CREATE TABLE, siembra de contadores, 3 ALTER) y 1 trigger, como espera el instalador', () => {
     const [ddl, triggers] = migracion.split('DELIMITER //');
-    expect(ddl.split('\n').filter(l => !/^\s*--/.test(l)).join('\n').split(';').map(x => x.trim()).filter(Boolean)).toHaveLength(4);
+    expect(ddl.split('\n').filter(l => !/^\s*--/.test(l)).join('\n').split(';').map(x => x.trim()).filter(Boolean)).toHaveLength(5);
     expect(triggers.split('//').filter(x => /CREATE OR REPLACE TRIGGER/.test(x))).toHaveLength(1);
   });
   it('preflight, postcheck y recuperación existen, son de solo lectura y no desactivan comprobaciones', () => {
@@ -81,7 +90,7 @@ describe('migración de simplificación: contenido y garantías', () => {
       expect(texto).not.toMatch(/\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|SET)\b/i);
       expect(texto).not.toMatch(/foreign_key_checks/i);
     }
-    expect((leer('preflight-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(19);
-    expect((leer('postcheck-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(13);
+    expect((leer('preflight-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(22);
+    expect((leer('postcheck-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? [])).toHaveLength(15);
   });
 });

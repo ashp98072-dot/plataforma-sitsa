@@ -66,10 +66,11 @@ describe('registrarCompraConIngreso (una sola transacción)', () => {
     await expect(registrarCompraConIngreso(pool({ compra, recepcion }).pool, 1, 9, datos)).rejects.toThrow('CLAVE_REUTILIZADA');
     expect(mocks.confirmar).not.toHaveBeenCalled();
   });
-  it('una carrera por la misma clave (clave duplicada al insertar) se resuelve como reintento idempotente', async () => {
+  const dup = (clave: string) => Object.assign(new Error(`Duplicate entry '1-X' for key '${clave}'`), { code: 'ER_DUP_ENTRY' });
+  it('una carrera por la misma clave (uq_can_compra_clave) se resuelve como reintento idempotente', async () => {
     const { pool: p, conn } = pool({ dupEnInsert: true });
-    // Tras perder la carrera, la compra ganadora ya es visible: el reintento la encuentra y la devuelve sin duplicar.
     let intentos = 0;
+    conn.execute.mockImplementationOnce(async () => { throw dup('uq_can_compra_clave'); });
     conn.query.mockImplementation(async (...args: unknown[]) => {
       const sql = String(args[0]);
       if (sql.includes('FROM canecas_compras WHERE empresa_id=? AND clave_operacion')) return [intentos++ > 0 ? [COMPRA_OK] : [], []];
@@ -81,10 +82,30 @@ describe('registrarCompraConIngreso (una sola transacción)', () => {
     expect(r).toMatchObject({ id: 100, yaRegistrada: true });
     expect(conn.rollback).toHaveBeenCalledTimes(1);
   });
-  it('si la clave duplicada persiste no se reintenta indefinidamente: se propaga el error', async () => {
-    const { pool: p, conn } = pool({ dupEnInsert: true });
-    await expect(registrarCompraConIngreso(p, 1, 9, datos)).rejects.toThrow('dup');
-    expect(conn.beginTransaction).toHaveBeenCalledTimes(2); // intento original + un único reintento
+  it('si un documento escrito a mano con el mismo número generado gana la carrera (uq_can_compra_ref_auto) toma el siguiente número', async () => {
+    const { pool: p, conn } = pool({});
+    let numero = 40;
+    mocks.numero.mockImplementation(async () => `COMP-0000${++numero}`);
+    conn.execute.mockImplementation(async (...args: unknown[]) => {
+      const sql = String(args[0]);
+      if (sql.includes('INSERT INTO canecas_compras') && String(args[1] && (args[1] as unknown[])[4]) === 'COMP-000041') throw dup('uq_can_compra_ref_auto');
+      return [{ insertId: sql.includes('canecas_compras') ? 100 : 200 }, []];
+    });
+    const r = await registrarCompraConIngreso(p, 1, 9, datos);
+    expect(r).toMatchObject({ referencia: 'COMP-000042', yaRegistrada: false });
+    expect(conn.rollback).toHaveBeenCalledTimes(1); expect(conn.commit).toHaveBeenCalledTimes(1);
+  });
+  it('si la colisión persiste no se reintenta indefinidamente: tras 8 intentos propaga el error', async () => {
+    const { pool: p, conn } = pool({});
+    conn.execute.mockImplementation(async (...args: unknown[]) => { if (String(args[0]).includes('INSERT INTO canecas_compras')) throw dup('uq_can_compra_ref_auto'); return [{ insertId: 200 }, []]; });
+    await expect(registrarCompraConIngreso(p, 1, 9, datos)).rejects.toThrow('uq_can_compra_ref_auto');
+    expect(conn.beginTransaction).toHaveBeenCalledTimes(8);
+  });
+  it('un duplicado de otra restricción no se reintenta', async () => {
+    const { pool: p, conn } = pool({});
+    conn.execute.mockImplementation(async (...args: unknown[]) => { if (String(args[0]).includes('INSERT INTO canecas_compras')) throw dup('otra_restriccion'); return [{ insertId: 200 }, []]; });
+    await expect(registrarCompraConIngreso(p, 1, 9, datos)).rejects.toThrow('otra_restriccion');
+    expect(conn.beginTransaction).toHaveBeenCalledTimes(1);
   });
   it('rechaza proveedor, bodega o empleado inactivos o de otra empresa sin crear nada', async () => {
     const { pool: p, conn } = pool({ activos: false });

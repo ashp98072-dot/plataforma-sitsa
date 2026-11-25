@@ -46,7 +46,9 @@ export async function ejecutarSimplificacionControlado(connection) {
       (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_secuencias') AS secuencias,
       (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega') AS direccion,
       (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico') AS activo_unico,
-      (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu' AND ACTION_STATEMENT LIKE '%direccion_entrega%') AS trigger_nuevo`);
+      (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu' AND ACTION_STATEMENT LIKE '%direccion_entrega%') AS trigger_nuevo,
+      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto') AS ref_auto,
+      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='doc_auto') AS doc_auto`);
     const estado = presentes[0] ? Object.values(presentes[0]).map(Number) : null;
     if (!estado || estado.some(n => !Number.isSafeInteger(n))) throw Error('DETENER: no se pudo determinar el estado de la simplificación');
     if (estado.some(n => n > 0)) {
@@ -65,10 +67,10 @@ export async function ejecutarSimplificacionControlado(connection) {
     // 3) Preflight de solo lectura.
     const [resultadosPre] = await connection.query(sql('preflight-2026-11-canecas-simplificacion-wip.sql'));
     const pre = filasDe(resultadosPre);
-    if (pre.length !== 19 || pre.some(f => f.resultado === 'DETENER')) throw Error(`DETENER: preflight incompatible${pre.filter(f => f.resultado === 'DETENER').map(f => `: ${f.verificacion}`).join('')}`);
+    if (pre.length !== 22 || pre.some(f => f.resultado === 'DETENER')) throw Error(`DETENER: preflight incompatible${pre.filter(f => f.resultado === 'DETENER').map(f => `: ${f.verificacion}`).join('')}`);
     const antes = { ventas: recuento(pre, 'recuento canecas_ventas'), productos: recuento(pre, 'recuento canecas_productos') };
 
-    // 4) Migración: CREATE TABLE, siembra de contadores desde los máximos históricos (INSERT en la tabla NUEVA), 2 ALTER y 1 trigger
+    // 4) Migración: CREATE TABLE, siembra de contadores desde los máximos históricos (INSERT en la tabla NUEVA), 3 ALTER y 1 trigger
     //    (CREATE OR REPLACE, atómico). Sin UPDATE ni DELETE de filas existentes; ningún documento se renumera.
     const migration = sql('migrate-2026-11-canecas-simplificacion-wip.sql');
     const [ddlSql, triggerSql, extra] = migration.split('DELIMITER //');
@@ -76,13 +78,13 @@ export async function ejecutarSimplificacionControlado(connection) {
     const sinComentarios = ddlSql.split('\n').filter(linea => !/^\s*--/.test(linea)).join('\n');
     const statements = sinComentarios.split(';').map(x => x.trim()).filter(Boolean);
     const triggers = triggerSql.split('//').map(x => x.trim()).filter(x => /^CREATE OR REPLACE TRIGGER /.test(x));
-    if (statements.length !== 4 || !statements[0].startsWith('CREATE TABLE canecas_secuencias (') || !statements[1].startsWith('INSERT INTO canecas_secuencias (empresa_id,tipo,ultimo)') || !statements[2].startsWith('ALTER TABLE canecas_ventas') || !statements[3].startsWith('ALTER TABLE canecas_productos') || triggers.length !== 1 || triggersEsperadosSimplificacion().length !== 2) throw Error('DETENER: DDL de simplificación inesperado');
+    if (statements.length !== 5 || !statements[0].startsWith('CREATE TABLE canecas_secuencias (') || !statements[1].startsWith('INSERT INTO canecas_secuencias (empresa_id,tipo,ultimo)') || !statements[2].startsWith('ALTER TABLE canecas_ventas') || !statements[3].startsWith('ALTER TABLE canecas_productos') || !statements[4].startsWith('ALTER TABLE canecas_compras') || triggers.length !== 1 || triggersEsperadosSimplificacion().length !== 2) throw Error('DETENER: DDL de simplificación inesperado');
     await ejecutarOperacionesDDL(connection, [...statements, ...triggers]);
 
     // 5) Postcheck de solo lectura, datos intactos y contrato exacto.
     const [resultadosPost] = await connection.query(sql('postcheck-2026-11-canecas-simplificacion-wip.sql'));
     const post = filasDe(resultadosPost);
-    if (post.length !== 13 || post.some(f => f.resultado === 'DETENER')) throw Error('DETENER: postcheck incompatible; instalación requiere revisión');
+    if (post.length !== 15 || post.some(f => f.resultado === 'DETENER')) throw Error('DETENER: postcheck incompatible; instalación requiere revisión');
     if (recuento(post, 'empresas sin contador completo') !== 0 || recuento(post, 'siguientes números ya en uso por un documento') !== 0) throw Error('DETENER: numeración automática no conciliada con los documentos históricos; instalación requiere revisión');
     if (recuento(post, 'recuento canecas_ventas') !== antes.ventas || recuento(post, 'recuento canecas_productos') !== antes.productos || recuento(post, 'ventas con dirección de entrega') !== 0) throw Error('DETENER: los datos existentes cambiaron; instalación requiere revisión');
     await verificarContratoSimplificacion(connection);

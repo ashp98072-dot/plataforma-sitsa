@@ -267,4 +267,91 @@ describe("Canecas", () => {
     await enviar("3");
     expect(claves[7]).not.toBe(claves[6]);
   });
+  describe("POST confirmado y refresco fallido (sin aparente fallo ni duplicados)", () => {
+    const montarFlujo = async (vista: "compras" | "ventas", exito: Record<string, unknown>, identidad: { empresaId?: number; usuarioId?: number } = {}) => {
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+      window.localStorage.clear();
+      const estado = { posts: [] as { url: string; cuerpo: Record<string, string> }[], getFalla: false };
+      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "POST") { estado.posts.push({ url: String(input), cuerpo: JSON.parse(String(init.body)) }); return Response.json(exito, { status: 201 }); }
+        if (estado.getFalla) throw new TypeError("sin red");
+        const recurso = String(input).split("/").pop();
+        return Response.json({ datos: recurso === "proveedores" ? [{ id: 1, nombre_comercial: "P", activo: 1 }] : recurso === "clientes" ? [{ id: 1, nombre_comercial: "C", direccion: "Zona 1", activo: 1 }] : recurso === "ubicaciones" ? [{ id: 1, nombre: "B", activo: 1 }] : recurso === "empleados" ? [{ id: 1, nombre: "Ana" }] : [] });
+      }));
+      const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+      await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista, permisos: { compras: true, recepciones: true, confirmar: true, ventas: true, catalogo: true }, ...identidad })); await new Promise(r => setTimeout(r, 30)); });
+      const abrir = async () => { await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); }); return host.querySelector<HTMLFormElement>("main > form, form")!; };
+      const llenar = (form: HTMLFormElement, valores: Record<string, string>) => { for (const [n, v] of Object.entries(valores)) (form.elements.namedItem(n) as HTMLInputElement).value = v; };
+      const enviar = async (form: HTMLFormElement) => { await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 30)); }); };
+      return { host, estado, abrir, llenar, enviar, limpiar: async () => { await act(async () => root.unmount()); host.remove(); } };
+    };
+    it.each([
+      ["compras", { id: 7, referencia: "COMP-000007", mensaje: "Compra COMP-000007 registrada e ingresada al inventario (total Q 21.00)." }, { proveedor_id: "1", ubicacion_id: "1", recibido_por_empleado_id: "1", cantidad: "2", precio_compra: "10.50" }, /compras_ingreso$/, "COMP-000007"],
+      ["ventas", { id: "9", documento: "VTA-000009", mensaje: "Venta VTA-000009 registrada: ingreso Q 190.00." }, { cliente_id: "1", ubicacion_id: "1", direccion_entrega: "Zona 4", cantidad: "2", precio_unitario: "95.00" }, /ventas_pos$/, "VTA-000009"],
+    ] as const)("%s: un POST exitoso seguido de un GET fallido muestra el éxito, avisa de la lista y no permite duplicar", async (vista, exito, valores, destino, correlativo) => {
+      const m = await montarFlujo(vista, exito);
+      try {
+        const form = await m.abrir();
+        m.llenar(form, valores as Record<string, string>);
+        m.estado.getFalla = true; // el refresco posterior al guardado fallará
+        await m.enviar(form);
+        // Éxito del guardado conservado: correlativo visible, aviso de lista desactualizada y NINGÚN mensaje de fallo de guardado.
+        expect(m.host.textContent).toContain(correlativo);
+        expect(m.host.textContent).toContain("Guardado correctamente, pero no se pudo actualizar la lista");
+        expect(m.host.textContent).not.toContain("No se pudo guardar");
+        expect(m.host.querySelector('[role="status"]')!.textContent).toContain(correlativo);
+        // El formulario se cierra y se vacía: no hay nada que reenviar por accidente.
+        expect(m.host.querySelector("main > form, header ~ form, form select[name=\"" + Object.keys(valores)[0] + "\"]")).toBeNull();
+        expect(m.estado.posts).toHaveLength(1);
+        expect(m.estado.posts[0].url).toMatch(destino);
+        // La clave de esa operación ya no se reutiliza: una operación posterior exige abrir un formulario NUEVO (vacío) y lleva clave nueva.
+        expect(window.localStorage.length).toBe(0);
+        const nuevo = await m.abrir();
+        expect((nuevo.elements.namedItem(Object.keys(valores)[0]) as HTMLInputElement).value).toBe("");
+        expect(Array.from(m.host.querySelectorAll("button")).some(b => b.textContent === "Actualizar lista")).toBe(true); // el aviso persiste hasta refrescar
+        // Recuperar la lista quita el aviso sin tocar el guardado.
+        m.estado.getFalla = false;
+        await act(async () => { Array.from(m.host.querySelectorAll("button")).find(b => b.textContent === "Actualizar lista")!.click(); await new Promise(r => setTimeout(r, 30)); });
+        expect(Array.from(m.host.querySelectorAll("button")).some(b => b.textContent === "Actualizar lista")).toBe(false);
+        expect(m.host.textContent).not.toContain("no se pudo actualizar la lista");
+        expect(m.host.textContent).toContain(correlativo); // la confirmación se conserva
+        expect(m.estado.posts).toHaveLength(1); // ni el refresco ni nada volvió a enviar la operación
+      } finally { await m.limpiar(); }
+    });
+    it("el envío doble inmediato (dos submit seguidos) produce un solo POST", async () => {
+      const m = await montarFlujo("compras", { id: 7, mensaje: "ok" });
+      try {
+        const form = await m.abrir();
+        m.llenar(form, { proveedor_id: "1", ubicacion_id: "1", recibido_por_empleado_id: "1", cantidad: "2", precio_compra: "10.50" });
+        await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 30)); });
+        expect(m.estado.posts).toHaveLength(1);
+      } finally { await m.limpiar(); }
+    });
+    it("las claves guardadas se delimitan por empresa y usuario (terminal compartida)", async () => {
+      (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+      window.localStorage.clear();
+      const claves: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "POST") { claves.push(JSON.parse(String(init.body)).clave_operacion); throw new TypeError("sin red"); }
+        const recurso = String(input).split("/").pop();
+        return Response.json({ datos: recurso === "proveedores" ? [{ id: 1, nombre_comercial: "P", activo: 1 }] : recurso === "ubicaciones" ? [{ id: 1, nombre: "B", activo: 1 }] : recurso === "empleados" ? [{ id: 1, nombre: "Ana" }] : [] });
+      }));
+      const enviarComo = async (identidad: { empresaId: number; usuarioId: number }) => {
+        const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+        try {
+          await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista: "compras", permisos: { compras: true, recepciones: true, confirmar: true }, ...identidad })); await new Promise(r => setTimeout(r, 30)); });
+          await act(async () => { host.querySelector<HTMLButtonElement>("header button")!.click(); });
+          const form = host.querySelector("form")!;
+          for (const [n, v] of Object.entries({ proveedor_id: "1", ubicacion_id: "1", recibido_por_empleado_id: "1", cantidad: "2", precio_compra: "10.00" })) (form.elements.namedItem(n) as HTMLInputElement).value = v;
+          await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 20)); });
+        } finally { await act(async () => root.unmount()); host.remove(); }
+      };
+      await enviarComo({ empresaId: 1, usuarioId: 10 }); await enviarComo({ empresaId: 1, usuarioId: 10 });
+      expect(claves[1]).toBe(claves[0]);                  // mismo usuario y empresa tras recargar: misma clave
+      await enviarComo({ empresaId: 1, usuarioId: 11 });  // otro usuario en la misma terminal y mismos datos: clave distinta
+      await enviarComo({ empresaId: 2, usuarioId: 10 });  // otra empresa: clave distinta
+      expect(new Set(claves).size).toBe(3);
+      expect(Object.keys(window.localStorage).filter(k => k.startsWith("canecas:demo:")).sort()).toEqual(["canecas:demo:1:10:compras_ingreso", "canecas:demo:1:11:compras_ingreso", "canecas:demo:2:10:compras_ingreso"]);
+    });
+  });
 });
