@@ -16,5 +16,5 @@ export default async function CanecasPage({ params }: { params: Promise<{ slug: 
   const permisos = Object.fromEntries(acciones.map((accion, i) => [accion, !resultados[i].error]));
   if (vista === "reportes") return permisos.ventas ? <ReportesComerciales slug={slug} /> : <p role="alert">No tienes permiso para ver los reportes comerciales.</p>;
   if (vista === "proveedores-historicos") return permisos.catalogo ? <MapeoProveedores slug={slug} /> : <p role="alert">No tienes permiso para administrar proveedores.</p>;
-  return <CanecasClient slug={slug} vista={vista} permisos={permisos} empresaId={lectura.empresa?.id} usuarioId={lectura.session?.id} />;
+  return <CanecasClient slug={slug} vista={vista} permisos={permisos} empresaId={lectura.empresa?.id} usuarioId={lectura.session?.id} empresaNombre={lectura.empresa?.nombre} logoUrl={lectura.empresa?.logoUrl} />;
 }

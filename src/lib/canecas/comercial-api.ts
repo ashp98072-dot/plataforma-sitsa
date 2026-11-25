@@ -20,7 +20,7 @@ const fecha = z.iso.date();
 const esquemas = {
   ventas: z.object({ cliente_id: id, producto_id: id, ubicacion_id: id, fecha_venta: fecha, documento: texto(250), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
   // Venta POS (#688): el producto, la fecha y el número de venta los fija el servidor; la dirección de entrega es obligatoria.
-  ventas_pos: z.object({ cliente_id: id, ubicacion_id: id, direccion_entrega: texto(500), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
+  ventas_pos: z.object({ cliente_id: id, ubicacion_id: id, direccion_entrega: texto(500), quien_lleva: z.string().trim().max(160).optional().default(""), quien_recibe: z.string().trim().max(160).optional().default(""), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
   anular_venta: z.object({ venta_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
   redistribuciones: z.object({ compra_id: id, ubicacion_id: id, cantidad_final: id, motivo: texto(500), clave_operacion: clave }).strict(),
   reversar_redistribucion: z.object({ redistribucion_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
@@ -29,6 +29,7 @@ const esquemas = {
 /** Código interno -> [estado HTTP, mensaje para la persona usuaria]. */
 const MENSAJES: Record<string, [number, string]> = {
   VENTA_INVALIDA: [400, "Revise cliente, bodega, dirección de entrega, cantidad y precio: el precio debe ser mayor que Q0.00 con hasta dos decimales."],
+  COMPROBANTE_NO_INSTALADO: [409, "Falta aplicar la migración del comprobante de venta (quién lleva / quién recibe). Deje esos dos campos vacíos o pida aplicar la migración."],
   PRODUCTO_AMBIGUO: [409, "Hay más de una caneca activa en la empresa. Deje una sola activa para operar."],
   PRODUCTO_INACTIVO: [409, "La caneca de la empresa está desactivada. Actívela para operar."],
   SALIDA_INVALIDA: [400, "Revise los datos de la operación."],
@@ -109,7 +110,7 @@ export async function postComercial(req: Request, { slug, recurso }: Ctx) {
   try {
     if (recurso === "ventas" || recurso === "ventas_pos") {
       const pos = recurso === "ventas_pos";
-      const v = await registrarVenta(getPool(), empresa, usuario, pos ? { clienteId: Number(d.cliente_id), ubicacionId: Number(d.ubicacion_id), direccionEntrega: String(d.direccion_entrega), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) } : { clienteId: Number(d.cliente_id), productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), fechaVenta: String(d.fecha_venta), documento: String(d.documento), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
+      const v = await registrarVenta(getPool(), empresa, usuario, pos ? { clienteId: Number(d.cliente_id), ubicacionId: Number(d.ubicacion_id), direccionEntrega: String(d.direccion_entrega), quienLleva: String(d.quien_lleva ?? ""), quienRecibe: String(d.quien_recibe ?? ""), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) } : { clienteId: Number(d.cliente_id), productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), fechaVenta: String(d.fecha_venta), documento: String(d.documento), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
       const costos = !(await accesoCanecas(slug, "compras")).error, etiqueta = pos ? `Venta ${v.documento}` : "Venta";
       const mensaje = costos ? `${etiqueta} registrada: ingreso ${v.total}, costo FIFO ${v.costo}, utilidad bruta ${v.utilidad}.` : `${etiqueta} registrada: ingreso ${v.total}.`;
       return NextResponse.json({ id: v.id, ...(pos ? { documento: v.documento } : {}), yaRegistrada: v.yaRegistrada, total: v.total, ...(costos ? { costo: v.costo, utilidad: v.utilidad } : {}), mensaje }, { status: v.yaRegistrada ? 200 : 201 });

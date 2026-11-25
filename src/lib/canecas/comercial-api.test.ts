@@ -20,11 +20,17 @@ describe("API comercial de Canecas", () => {
   beforeEach(() => { vi.clearAllMocks(); mocks.acceso.mockResolvedValue(sesion); });
   describe("ventas_pos (venta tipo POS)", () => {
     const pos = { cliente_id: 2, ubicacion_id: 4, direccion_entrega: "Zona 4, Ciudad", cantidad: 8, precio_unitario: "95.00", clave_operacion: k };
+    it("acepta quién lleva y quién recibe (opcionales, recortados) y los pasa al servicio; rechaza textos de más de 160 caracteres", async () => {
+      mocks.venta.mockResolvedValue({ id: "9", documento: "VTA-000009", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });
+      expect((await post("ventas_pos", { ...pos, quien_lleva: "  Juan Pérez ", quien_recibe: "Ana López" })).status).toBe(201);
+      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, expect.objectContaining({ quienLleva: "Juan Pérez", quienRecibe: "Ana López" }));
+      expect((await post("ventas_pos", { ...pos, quien_lleva: "x".repeat(161) })).status).toBe(400);
+    });
     it("registra con empresa y usuario de la sesión, sin producto, fecha ni documento, y devuelve el número automático", async () => {
       mocks.venta.mockResolvedValue({ id: "9", documento: "VTA-000009", total: "Q 760.00", costo: "Q 640.00", utilidad: "Q 120.00", yaRegistrada: false });
       const res = await post("ventas_pos", pos);
       expect(res.status).toBe(201);
-      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, { clienteId: 2, ubicacionId: 4, direccionEntrega: "Zona 4, Ciudad", cantidad: 8, precio: "95.00", claveOperacion: k });
+      expect(mocks.venta).toHaveBeenCalledWith({ marca: "pool" }, 5, 7, { clienteId: 2, ubicacionId: 4, direccionEntrega: "Zona 4, Ciudad", quienLleva: "", quienRecibe: "", cantidad: 8, precio: "95.00", claveOperacion: k });
       expect(await res.json()).toMatchObject({ id: "9", documento: "VTA-000009", mensaje: "Venta VTA-000009 registrada: ingreso Q 760.00, costo FIFO Q 640.00, utilidad bruta Q 120.00." });
     });
     it.each([{ producto_id: 3 }, { documento: "FAC-1" }, { fecha_venta: "2026-11-10" }, { empresa_id: 9 }, { moneda: "USD" }, { direccion_entrega: "" }, { direccion_entrega: "x".repeat(501) }, { cantidad: 0 }, { clave_operacion: "no" }])("rechaza lo que el servidor decide o lo inválido: %j", async extra => {

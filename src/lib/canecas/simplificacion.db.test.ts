@@ -145,4 +145,35 @@ describe.skipIf(!hayLaboratorio)('simplificación (#688) en MariaDB 11.8.9 desec
       await expect(registrarCompraConIngreso(pool, 1, 1, { proveedorId: prov, ubicacionId: 1, recibidoPorEmpleadoId: 1, cantidad: 1, precio: '10.00', claveOperacion: k(60) })).rejects.toThrow('PRODUCTO_INACTIVO');
     } finally { await pool.end(); }
   }, 240000);
+  it('comprobante de venta: sin la migración se rechaza quién lleva/recibe; con ella (idempotente) se guarda, no altera datos y el historial lo devuelve', async () => {
+    const pool = await crearBase(`${BASE}_comprobante`, 8);
+    try {
+      await prepararBaseHastaVentas(pool, { dosEmpresas: true });
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-simplificacion-wip.sql');
+      await pool.query("INSERT INTO canecas_ubicaciones (id,empresa_id,nombre) VALUES (1,1,'Bodega')");
+      const prov = await crearCatalogo(pool, 'proveedores', 1, 1, { nombre_comercial: 'Aceites SA', nit: null, telefono: null, direccion: null });
+      const cli = await crearCatalogo(pool, 'clientes', 1, 1, { nombre_comercial: 'Cliente Uno', nit: null, telefono: null, direccion: 'Zona 1' });
+      await registrarCompraConIngreso(pool, 1, 1, { proveedorId: prov, ubicacionId: 1, recibidoPorEmpleadoId: 1, cantidad: 10, precio: '80.00', claveOperacion: k(1) });
+      const vender = (clave: number, extra: { quienLleva?: string; quienRecibe?: string } = {}) => registrarVenta(pool, 1, 1, { clienteId: cli, ubicacionId: 1, direccionEntrega: 'Zona 4', cantidad: 1, precio: '95.00', claveOperacion: k(clave), ...extra });
+      // Sin la migración: la venta sin personas sigue funcionando; con personas se rechaza sin tocar nada.
+      const sin = await vender(10);
+      await expect(vender(11, { quienLleva: 'Juan' })).rejects.toThrow('COMPROBANTE_NO_INSTALADO');
+      expect(await n(pool, 'SELECT COUNT(*) FROM canecas_ventas')).toBe(1);
+      expect((await historialVentas(pool, 1, {}, false))[0]).toMatchObject({ documento: sin.documento, quien_lleva: null, quien_recibe: null });
+      // Migración aditiva e idempotente (se aplica dos veces); no altera filas existentes.
+      const antes = await n(pool, "SELECT COUNT(*) FROM canecas_ventas WHERE direccion_entrega='Zona 4'");
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-ventas-comprobante.sql');
+      await aplicar(pool, 'sql/migrate-2026-11-canecas-ventas-comprobante.sql');
+      expect((await pool.query<Fila[]>("SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('quien_lleva','quien_recibe') ORDER BY COLUMN_NAME"))[0]).toEqual([{ COLUMN_NAME: 'quien_lleva', COLUMN_TYPE: 'varchar(160)', IS_NULLABLE: 'YES' }, { COLUMN_NAME: 'quien_recibe', COLUMN_TYPE: 'varchar(160)', IS_NULLABLE: 'YES' }]);
+      expect(await n(pool, "SELECT COUNT(*) FROM canecas_ventas WHERE direccion_entrega='Zona 4' AND quien_lleva IS NULL AND quien_recibe IS NULL")).toBe(antes);
+      const con = await vender(12, { quienLleva: ' Juan Pérez ', quienRecibe: 'Ana López' });
+      const rep = await vender(12, { quienLleva: 'Juan Pérez', quienRecibe: 'Ana López' }); // reintento con la misma clave y los mismos datos
+      expect(rep).toMatchObject({ id: con.id, yaRegistrada: true });
+      await expect(vender(12, { quienLleva: 'Otro', quienRecibe: 'Ana López' })).rejects.toThrow('CLAVE_REUTILIZADA');
+      const hist = await historialVentas(pool, 1, {}, false);
+      expect(hist.find(v => v.documento === con.documento)).toMatchObject({ quien_lleva: 'Juan Pérez', quien_recibe: 'Ana López', direccion_entrega: 'Zona 4' });
+      // Las ventas siguen siendo inmutables: el trigger protege las columnas existentes.
+      await expect(pool.query('DELETE FROM canecas_ventas WHERE id=?', [con.id])).rejects.toThrow(/CANECAS_VENTA_NO_ELIMINABLE/);
+    } finally { await pool.end(); }
+  }, 120000);
 });
