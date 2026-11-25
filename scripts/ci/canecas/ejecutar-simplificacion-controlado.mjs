@@ -14,6 +14,20 @@ const sql = name => readFileSync(path.join(root, 'sql', name), 'utf8');
 const filasDe = resultados => (Array.isArray(resultados) ? resultados : []).flat().filter(f => f && typeof f === 'object' && 'verificacion' in f);
 const recuento = (filas, nombre) => { const f = filas.find(x => x.verificacion === nombre); const n = Number(f?.resultado); if (!f || !Number.isSafeInteger(n)) throw Error(`DETENER: falta el ${nombre}`); return n; };
 
+/** Estado de la simplificación: una cuenta (0/1) por objeto que agrega la migración. Todo 0 = ausente; todo 1 = completa; otra cosa = parcial. */
+export async function obtenerEstadoSimplificacion(connection) {
+  const [presentes] = await connection.query(`SELECT
+    (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_secuencias') AS secuencias,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega') AS direccion,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico') AS activo_unico,
+    (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu' AND ACTION_STATEMENT LIKE '%direccion_entrega%') AS trigger_nuevo,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto') AS ref_auto,
+    (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='doc_auto') AS doc_auto`);
+  const estado = presentes[0] ? Object.values(presentes[0]).map(Number) : null;
+  if (!estado || estado.some(n => !Number.isSafeInteger(n))) throw Error('DETENER: no se pudo determinar el estado de la simplificación');
+  return estado;
+}
+
 // Instala migrate-2026-11-canecas-simplificacion-wip.sql (#688): canecas_secuencias, canecas_ventas.direccion_entrega,
 // índice de caneca activa única y trigger de inmutabilidad ampliado. Solo agrega objetos; no modifica ni borra filas.
 // Requisitos: fase 1, costos, salidas, redistribución, catálogos y ventas instalados con su contrato exacto; escrituras y DDL de
@@ -42,15 +56,7 @@ export async function ejecutarSimplificacionControlado(connection) {
     if (Number(actual[0]?.innodb) !== 1 || !previos.every(x => activos.includes(x)) || !activos.some(x => ['STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES'].includes(x))) throw Error('DETENER: no se pudieron activar modos estrictos');
 
     // 1) Estado: ausente (instalar), completo (idempotente, verificado contra el contrato nuevo) o parcial (detener).
-    const [presentes] = await connection.query(`SELECT
-      (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_secuencias') AS secuencias,
-      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega') AS direccion,
-      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico') AS activo_unico,
-      (SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME='trg_can_venta_bu' AND ACTION_STATEMENT LIKE '%direccion_entrega%') AS trigger_nuevo,
-      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto') AS ref_auto,
-      (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='doc_auto') AS doc_auto`);
-    const estado = presentes[0] ? Object.values(presentes[0]).map(Number) : null;
-    if (!estado || estado.some(n => !Number.isSafeInteger(n))) throw Error('DETENER: no se pudo determinar el estado de la simplificación');
+    const estado = await obtenerEstadoSimplificacion(connection);
     if (estado.some(n => n > 0)) {
       if (estado.some(n => n !== 1)) throw Error('DETENER: simplificación parcial; diagnóstico supervisado (sql/recuperacion-canecas-simplificacion-solo-lectura.sql)');
       try { await verificarContratoSimplificacion(connection); }

@@ -61,6 +61,17 @@ describe('migración de simplificación: contenido y garantías', () => {
     const instalador = readFileSync('scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs', 'utf8');
     expect(instalador).toContain("recuento(post, 'siguientes números ya en uso por un documento') !== 0");
   });
+  it('la documentación de instalación declara el mismo número de comprobaciones que los SQL (22 de preflight y 15 de postcheck)', () => {
+    const doc = readFileSync('docs/canecas-simplificacion-instalacion.md', 'utf8');
+    const pre = (leer('preflight-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? []).length;
+    const post = (leer('postcheck-2026-11-canecas-simplificacion-wip.sql').match(/^SELECT /gm) ?? []).length;
+    expect([pre, post]).toEqual([22, 15]);
+    expect(doc).toContain(`**${pre} comprobaciones**`);
+    expect(doc).toContain(`**${post} comprobaciones**`);
+    expect(doc).not.toMatch(/\b(12|19) comprobaciones|\b(10|13) comprobaciones/);
+    expect(readFileSync('scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs', 'utf8')).toContain(`pre.length !== ${pre}`);
+    expect(readFileSync('scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs', 'utf8')).toContain(`post.length !== ${post}`);
+  });
   it('reemplaza el trigger de forma atómica (nunca queda sin trigger) y protege direccion_entrega', () => {
     expect(sinComentarios).toMatch(/CREATE OR REPLACE TRIGGER trg_can_venta_bu/);
     expect(triggersEsperadosSimplificacion().map(t => t.TRIGGER_NAME)).toEqual(['trg_can_venta_bu', 'trg_can_venta_bd']);
