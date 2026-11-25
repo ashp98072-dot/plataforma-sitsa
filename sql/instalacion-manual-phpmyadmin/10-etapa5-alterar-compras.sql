@@ -1,13 +1,24 @@
 -- ETAPA 5: canecas_compras: ref_auto (virtual) y UNIQUE de referencias con formato generado
 -- Base de datos: u611730801_Plataforma (referencias explicitas; NO depende de USE ni de la base seleccionada en phpMyAdmin).
 -- ETAPA DE ESCRITURA (DDL no transaccional en MariaDB). Requisitos: respaldo restaurable verificado, Canecas sin escrituras, autorizacion expresa.
--- No marque "Ignorar errores"; deje activada la casilla de claves foraneas. Si una sentencia da error, DETENGASE y use sql/recuperacion-canecas-simplificacion-solo-lectura.sql.
+-- Pegue y ejecute TODO el archivo en UNA sola peticion: fija y verifica en esa misma sesion SQL estricto e innodb_strict_mode y los restaura al final. No desactiva claves foraneas ni CHECK.
+-- Si cualquier sentencia da error, DETENGASE: no continue con otra etapa y use 15-recuperacion-solo-lectura.sql. Nunca avance tras un error.
+-- GUARDA INTRINSECA: la DDL va dentro de un PREPARE condicionado; si no se cumplen los prerequisitos o los modos, se ejecuta una subconsulta que falla (1242) y la DDL NO se ejecuta, aunque el cliente siguiera tras el error.
 -- Falla (clave duplicada) si hay COMP-###### repetido dentro de una empresa: el preflight lo detecta antes.
 --
 
--- GUARDA: si falla, MariaDB responde error 1242 (o 1146 si falta una tabla requerida) en esta sentencia y NO se ejecuta nada de la etapa 5. Significa: ejecute 09-verificar-etapa4.sql
-SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico')=1 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto')=0 THEN 'GUARDA OK etapa 5' ELSE (SELECT 'DETENER: prerequisitos de la etapa 5 incompletos' UNION ALL SELECT 'ver ejecute 09-verificar-etapa4.sql') END AS guarda;
-
-ALTER TABLE `u611730801_Plataforma`.canecas_compras
-  ADD COLUMN ref_auto VARCHAR(250) GENERATED ALWAYS AS (IF(referencia REGEXP '^COMP-[0-9]{6,15}$', referencia, NULL)) VIRTUAL,
-  ADD UNIQUE KEY uq_can_compra_ref_auto (empresa_id,ref_auto);
+SET @sql_mode_previo = @@SESSION.sql_mode, @innodb_strict_previo = @@SESSION.innodb_strict_mode;
+SET SESSION sql_mode = IF(FIND_IN_SET('STRICT_TRANS_TABLES', @@SESSION.sql_mode) > 0 OR FIND_IN_SET('STRICT_ALL_TABLES', @@SESSION.sql_mode) > 0, @@SESSION.sql_mode, CONCAT_WS(',', NULLIF(@@SESSION.sql_mode, ''), 'STRICT_TRANS_TABLES'));
+SET SESSION innodb_strict_mode = 1;
+SET @etapa_sql = IF(
+@@SESSION.foreign_key_checks = 1 AND @@SESSION.check_constraint_checks = 1 AND @@SESSION.innodb_strict_mode = 1 AND (FIND_IN_SET('STRICT_TRANS_TABLES', @@SESSION.sql_mode) > 0 OR FIND_IN_SET('STRICT_ALL_TABLES', @@SESSION.sql_mode) > 0) AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_productos' AND COLUMN_NAME='activo_unico')=1 AND (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_compras' AND COLUMN_NAME='ref_auto')=0,
+'ALTER TABLE `u611730801_Plataforma`.canecas_compras
+  ADD COLUMN ref_auto VARCHAR(250) GENERATED ALWAYS AS (IF(referencia REGEXP ''^COMP-[0-9]{6,15}$'', referencia, NULL)) VIRTUAL,
+  ADD UNIQUE KEY uq_can_compra_ref_auto (empresa_id,ref_auto)',
+'SELECT (SELECT ''DETENER: prerequisitos o modos de sesion de la etapa 5 incompletos'' UNION ALL SELECT ''ejecute 09-verificar-etapa4.sql y revise cada fila'')');
+PREPARE etapa_stmt FROM @etapa_sql;
+EXECUTE etapa_stmt;
+SHOW WARNINGS;
+DEALLOCATE PREPARE etapa_stmt;
+SET SESSION sql_mode = @sql_mode_previo;
+SET SESSION innodb_strict_mode = @innodb_strict_previo;

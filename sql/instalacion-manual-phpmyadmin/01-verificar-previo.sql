@@ -4,6 +4,8 @@
 -- Deben quedar solo OK e informativas. Ejecutelo de nuevo justo antes de la etapa 1.
 --
 
+SET SESSION group_concat_max_len = 1048576;
+SELECT 'group_concat_max_len suficiente (>= 1048576) en esta sesion' AS verificacion, IF(@@SESSION.group_concat_max_len >= 1048576, 'OK', 'DETENER') AS resultado;
 SELECT 'version 11.8.9' AS verificacion, IF(VERSION() LIKE '11.8.9-MariaDB%', 'OK', 'DETENER') AS resultado;
 SELECT 'canecas_ventas, canecas_productos y empresas existen' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME IN ('canecas_ventas','canecas_productos','empresas'))=3, 'OK', 'DETENER') AS resultado;
 SELECT 'canecas_secuencias no existe' AS verificacion, IF((SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='u611730801_Plataforma' AND TABLE_NAME='canecas_secuencias')=0, 'OK', 'DETENER') AS resultado;
