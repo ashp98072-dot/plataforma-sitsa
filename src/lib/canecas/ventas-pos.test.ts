@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ salida: vi.fn(), reverso: vi.fn(), producto: vi.fn(), numero: vi.fn() }));
+const mocks = vi.hoisted(() => ({ salida: vi.fn(), reverso: vi.fn(), producto: vi.fn(), numero: vi.fn(), asegurar: vi.fn() }));
 vi.mock('./salidas-fifo', () => ({ ejecutarSalidaFifo: mocks.salida, ejecutarReversoSalidaFifo: mocks.reverso }));
-vi.mock('./simplificacion', async orig => ({ ...(await orig<typeof import('./simplificacion')>()), productoUnico: mocks.producto, siguienteNumero: mocks.numero }));
+vi.mock('./simplificacion', async orig => ({ ...(await orig<typeof import('./simplificacion')>()), productoUnico: mocks.producto, siguienteNumero: mocks.numero, asegurarSecuencias: mocks.asegurar }));
 import { registrarVenta } from './ventas';
 
 const K = '00000000-0000-4000-8000-000000000001';
@@ -38,6 +38,18 @@ describe('venta POS (registrarVenta)', () => {
     mocks.salida.mockImplementation(async () => { orden.push('fifo'); return { id: '5', costoCentavos: '0', moneda: 'GTQ', yaRegistrada: false }; });
     await registrarVenta(pool().pool, 1, 9, dato, '2026-11-24');
     expect(orden).toEqual(['numero', 'fifo']);
+    expect(mocks.asegurar).toHaveBeenCalledTimes(1);
+  });
+  it('el código anterior (producto, fecha y documento explícitos, sin dirección) no usa contadores ni la columna nueva', async () => {
+    const { pool: p, conn } = pool();
+    const v = await registrarVenta(p, 1, 9, { clienteId: 2, productoId: 3, ubicacionId: 4, fechaVenta: '2026-11-10', documento: 'FAC-1', cantidad: 8, precio: '95.00', claveOperacion: K }, '2026-11-24');
+    expect(v).toMatchObject({ documento: 'FAC-1', yaRegistrada: false });
+    expect(mocks.asegurar).not.toHaveBeenCalled(); expect(mocks.numero).not.toHaveBeenCalled(); expect(mocks.producto).not.toHaveBeenCalled();
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).not.toContain('direccion_entrega');
+    expect(params.slice(0, 7)).toEqual([1, 2, 3, 4, '2026-11-10', 'FAC-1', 8]);
+    const consultaPrevia = conn.query.mock.calls.map(c => String(c[0])).find(q => q.includes('FROM canecas_ventas WHERE'))!;
+    expect(consultaPrevia).not.toContain('direccion_entrega');
   });
   it('un reintento con la misma clave devuelve la misma venta y número sin descontar de nuevo', async () => {
     const { pool: p } = pool({ id: 77, cliente_id: 2, producto_id: 7, ubicacion_id: 4, fecha: '2026-11-24', documento: 'VTA-000012', direccion_entrega: 'Zona 4, Ciudad', cantidad: 8, precio: '9500', total: '76000', costo: '64000' });

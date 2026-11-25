@@ -1,24 +1,22 @@
--- BORRADOR (Issue #688): NO ejecutar en producción sin respaldo, instalador controlado y autorización expresa.
--- Prerrequisitos: fase1, costos, salidas, redistribución, catálogos y ventas de Canecas ya instalados.
+-- BORRADOR (Issue #688): requiere instalador controlado (scripts/ci/canecas/ejecutar-simplificacion-controlado.mjs),
+-- contrato revisado, preflight, respaldo restaurable y autorización expresa. No se ejecuta en producción desde este PR.
 --
--- Cambios ADITIVOS (no elimina ni modifica datos existentes):
---   1. canecas_secuencias: contador por empresa y tipo para generar, en el servidor y sin duplicados,
---      los números de compra, de venta y los códigos de caneca.
---   2. canecas_ventas.direccion_entrega: dirección de entrega copiada en cada venta (NULL en ventas históricas),
---      para conservarla aunque luego cambie la dirección del cliente.
---   3. trg_can_venta_bu se reemplaza (DROP + CREATE) para que direccion_entrega también sea inmutable.
---      Es la única sentencia que toca un objeto existente: solo cambia un trigger, ninguna fila.
+-- Prerrequisitos: fase 1, costos, salidas, redistribución, catálogos y ventas de Canecas instalados con su contrato exacto.
+-- Las escrituras y el DDL de Canecas deben estar detenidos durante toda la instalación (DDL de MariaDB no es transaccional).
 --
--- Preflight (solo lectura), debe devolver 0 filas / valores indicados:
---   SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_secuencias';  -- 0
---   SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega'; -- 0
--- Postcheck (solo lectura):
---   SHOW CREATE TABLE canecas_secuencias;  -- PK (empresa_id,tipo), FK a empresas
---   SELECT COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega'; -- varchar(500), YES
---   SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() AND EVENT_OBJECT_TABLE='canecas_ventas'; -- 2 (bu, bd)
--- Los números ya usados por registros históricos no se reutilizan: los prefijos nuevos (COMP-, VTA-, CAN-) son distintos.
--- Reversión: DROP COLUMN direccion_entrega y DROP TABLE canecas_secuencias solo si aún no hay ventas ni compras nuevas.
--- DDL no transaccional en MariaDB.
+-- Cambios ADITIVOS (no borra ni modifica filas):
+--   1. canecas_secuencias: contador por empresa y tipo para generar, en el servidor y sin duplicados, los números
+--      de compra (COMP-), de venta (VTA-) y los códigos de caneca (CAN-).
+--   2. canecas_ventas.direccion_entrega (NULL en ventas históricas): dirección de entrega copiada en cada venta para
+--      conservarla aunque luego cambie la dirección del cliente. CHECK: no vacía cuando existe.
+--   3. canecas_productos.activo_unico (columna virtual) + índice UNIQUE (empresa_id,activo_unico): la base impide más de
+--      una caneca activa por empresa, de modo que una creación concurrente nunca produce dos productos activos.
+--   4. trg_can_venta_bu se reemplaza con CREATE OR REPLACE TRIGGER (atómico: nunca queda sin trigger) para que
+--      direccion_entrega también sea inmutable.
+--
+-- Orden: el ALTER de ventas va antes del trigger porque el trigger nuevo referencia la columna. Entre ambos pasos solo el
+-- trigger anterior protege la tabla (la columna nueva está en NULL); por eso las escrituras deben estar detenidas.
+-- Reversión supervisada: ver sql/recuperacion-canecas-simplificacion-solo-lectura.sql.
 
 CREATE TABLE canecas_secuencias (
   empresa_id INT NOT NULL,
@@ -29,11 +27,16 @@ CREATE TABLE canecas_secuencias (
   CONSTRAINT fk_can_secuencia_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-ALTER TABLE canecas_ventas ADD COLUMN direccion_entrega VARCHAR(500) NULL AFTER ubicacion_id;
+ALTER TABLE canecas_ventas
+  ADD COLUMN direccion_entrega VARCHAR(500) NULL AFTER ubicacion_id,
+  ADD CONSTRAINT chk_can_venta_direccion CHECK (direccion_entrega IS NULL OR CHAR_LENGTH(TRIM(direccion_entrega)) > 0);
+
+ALTER TABLE canecas_productos
+  ADD COLUMN activo_unico TINYINT(1) GENERATED ALWAYS AS (IF(activo = 1, 1, NULL)) VIRTUAL,
+  ADD UNIQUE KEY uq_can_producto_activo_unico (empresa_id,activo_unico);
 
 DELIMITER //
-DROP TRIGGER trg_can_venta_bu//
-CREATE TRIGGER trg_can_venta_bu
+CREATE OR REPLACE TRIGGER trg_can_venta_bu
 BEFORE UPDATE ON canecas_ventas
 FOR EACH ROW
 BEGIN

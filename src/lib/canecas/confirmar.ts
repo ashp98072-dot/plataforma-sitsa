@@ -1,4 +1,4 @@
-import type { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { capasParaRecepcion } from "./costos-fifo-reglas";
 
 /** Confirma una recepción una sola vez. No se modifica el saldo al crear el borrador. */
@@ -9,6 +9,23 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
     // lectura fije una instantánea anterior a la transacción que tiene el bloqueo.
     await conn.query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
     await conn.beginTransaction();
+    const resultado = await confirmarRecepcionEnTransaccion(conn, empresaId, recepcionId, usuarioId);
+    await conn.commit();
+    return resultado;
+  } catch (error) {
+    await conn.rollback();
+    throw error;
+  } finally {
+    conn.release();
+  }
+}
+
+/**
+ * Misma confirmación dentro de una transacción ya abierta (READ COMMITTED) por el llamador, que confirma o revierte.
+ * Permite que una compra con ingreso sea atómica: compra, recepción, saldo, movimiento y capa FIFO, o nada.
+ */
+export async function confirmarRecepcionEnTransaccion(conn: PoolConnection, empresaId: number, recepcionId: number, usuarioId: number) {
+  {
     // Bloquear primero la compra serializa las recepciones parciales de esa compra.
     const [referencias] = await conn.query<RowDataPacket[]>(
       "SELECT compra_id FROM canecas_recepciones WHERE empresa_id = ? AND id = ?", [empresaId, recepcionId],
@@ -26,10 +43,7 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
     );
     const recepcion = recepciones[0];
     if (!recepcion || recepcion.compra_id !== compra.id) throw new Error("RECEPCION_NO_ENCONTRADA");
-    if (recepcion.estado === "CONFIRMADA") {
-      await conn.commit();
-      return { yaConfirmada: true };
-    }
+    if (recepcion.estado === "CONFIRMADA") return { yaConfirmada: true };
     if (recepcion.estado !== "BORRADOR") throw new Error("ESTADO_INVALIDO");
     const [totales] = await conn.query<RowDataPacket[]>(
       "SELECT COALESCE(SUM(cantidad),0) AS total FROM canecas_recepciones WHERE empresa_id = ? AND compra_id = ? AND estado = 'CONFIRMADA'",
@@ -71,12 +85,6 @@ export async function confirmarRecepcion(pool: Pool, empresaId: number, recepcio
       "UPDATE canecas_recepciones SET estado='CONFIRMADA',confirmado_por=?,confirmado_en=CURRENT_TIMESTAMP WHERE empresa_id=? AND id=?",
       [usuarioId, empresaId, recepcionId],
     );
-    await conn.commit();
     return { yaConfirmada: false };
-  } catch (error) {
-    await conn.rollback();
-    throw error;
-  } finally {
-    conn.release();
   }
 }

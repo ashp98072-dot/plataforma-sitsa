@@ -230,4 +230,41 @@ describe("Canecas", () => {
       expect(opciones).not.toContain("Proveedor inactivo");
     } finally { await limpiar(); }
   });
+  it("la clave de la operación es durable: sobrevive a una recarga, se reutiliza con el mismo formulario y se renueva si cambia o si hubo rechazo definitivo", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    window.localStorage.clear();
+    const claves: string[] = [];
+    let respuesta: () => Response | Promise<Response> = () => { throw new TypeError("sin red"); };
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === "POST") { claves.push(JSON.parse(String(init.body)).clave_operacion); expect(String(input)).toMatch(/\/compras_ingreso$/); return respuesta(); }
+      const recurso = String(input).split("/").pop();
+      return Response.json({ datos: recurso === "proveedores" ? [{ id: 1, nombre_comercial: "P", activo: 1 }] : recurso === "ubicaciones" ? [{ id: 1, nombre: "B", activo: 1 }] : recurso === "empleados" ? [{ id: 1, nombre: "Ana" }] : [] });
+    }));
+    const enviar = async (cantidad: string) => {
+      const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+      try {
+        await act(async () => { root.render(createElement(CanecasClient, { slug: "demo", vista: "compras", permisos: { compras: true, recepciones: true, confirmar: true } })); await new Promise(r => setTimeout(r, 30)); });
+        await act(async () => { Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Nuevo registro")!.click(); });
+        const form = host.querySelector("form")!;
+        for (const [n, v] of Object.entries({ proveedor_id: "1", ubicacion_id: "1", recibido_por_empleado_id: "1", cantidad, precio_compra: "10.00" })) (form.elements.namedItem(n) as HTMLInputElement).value = v;
+        await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 20)); });
+      } finally { await act(async () => root.unmount()); host.remove(); }
+    };
+    await enviar("2"); await enviar("2");          // fallo de red + "recarga": misma clave
+    expect(claves[1]).toBe(claves[0]);
+    await enviar("3");                              // otros datos: clave nueva
+    expect(claves[2]).not.toBe(claves[0]);
+    respuesta = () => Response.json({ error: "caído" }, { status: 503 });
+    await enviar("3");                              // 5xx: se conserva
+    expect(claves[3]).toBe(claves[2]);
+    respuesta = () => Response.json({ error: "rechazada" }, { status: 409 });
+    await enviar("3");                              // rechazo definitivo: se descarta
+    expect(claves[4]).toBe(claves[2]);
+    await enviar("3");
+    expect(claves[5]).not.toBe(claves[4]);
+    respuesta = () => Response.json({ id: 1 }, { status: 201 });
+    await enviar("3");                              // éxito: la siguiente operación usa otra clave
+    await enviar("3");
+    expect(claves[7]).not.toBe(claves[6]);
+  });
 });

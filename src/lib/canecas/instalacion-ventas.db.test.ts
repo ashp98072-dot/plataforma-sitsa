@@ -96,13 +96,9 @@ describe.skipIf(!pipe && !socket)('instalador controlado de ventas en MariaDB 11
       expect(fk.map(f => f.t)).toEqual(['canecas_clientes', 'canecas_compras', 'canecas_productos', 'canecas_proveedores', 'canecas_salidas_fifo', 'canecas_ubicaciones', 'usuarios']); // sin Compras ni clientes de Operaciones
       expect(await instalar(pool)).toEqual({ instalado: false, yaInstalado: true });
       expect(await instantanea()).toEqual(antes);
-      // La simplificación (#688) es una migración aditiva posterior; el código actual de ventas la requiere.
-      const [ddlSimple, restoSimple] = leer('sql/migrate-2026-11-canecas-simplificacion-wip.sql').split('DELIMITER //');
-      await pool.query(ddlSimple);
-      for (const t of restoSimple.replace(/DELIMITER ;\s*$/, '').split('//').map(x => x.trim()).filter(x => /^(DROP TRIGGER|CREATE TRIGGER) /.test(x))) await pool.query(t);
       // Con el esquema instalado, el código opera de extremo a extremo y la idempotencia sobrevive a nuevos datos.
       const cliente = await crearCatalogo(pool, 'clientes', 1, 1, { nombre_comercial: 'Cliente', nit: null, telefono: null, direccion: null });
-      const venta = await registrarVenta(pool, 1, 1, { clienteId: cliente, productoId: 1, ubicacionId: 1, direccionEntrega: 'Zona 1', fechaVenta: '2026-11-10', documento: 'FAC-1', cantidad: 8, precio: '95.00', claveOperacion: '00000000-0000-4000-8000-000000000001' }, '2026-11-24');
+      const venta = await registrarVenta(pool, 1, 1, { clienteId: cliente, productoId: 1, ubicacionId: 1, fechaVenta: '2026-11-10', documento: 'FAC-1', cantidad: 8, precio: '95.00', claveOperacion: '00000000-0000-4000-8000-000000000001' }, '2026-11-24');
       expect(venta).toMatchObject({ total: 'Q 760.00', costo: 'Q 800.00', utilidad: '-Q 40.00' }); // 8 × Q100.00 de costo: la pérdida se muestra, no se oculta
       expect(await instalar(pool)).toEqual({ instalado: false, yaInstalado: true });
       await anularVenta(pool, 1, 1, venta.id, 'Prueba');

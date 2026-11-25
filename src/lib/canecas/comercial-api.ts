@@ -10,15 +10,17 @@ import { comprasPendientesDeMapeo, mapeosRealizados } from "@/lib/canecas/histor
 
 /** Recursos comerciales de Canecas: ventas, reportes, Ajuste de canecas (redistribución) y proveedores históricos. */
 export const RECURSOS_COMERCIALES_GET = new Set(["ventas", "reporte_resumen", "reporte_productos", "redistribuciones", "compras_historicas", "mapeos_proveedor"]);
-export const RECURSOS_COMERCIALES_POST = new Set(["ventas", "anular_venta", "redistribuciones", "reversar_redistribucion"]);
+export const RECURSOS_COMERCIALES_POST = new Set(["ventas", "ventas_pos", "anular_venta", "redistribuciones", "reversar_redistribucion"]);
 
 type Ctx = { slug: string; recurso: string };
 const id = z.coerce.number().int().positive().max(2147483647);
 const texto = (n: number) => z.string().trim().min(1).max(n);
 const clave = z.uuid();
+const fecha = z.iso.date();
 const esquemas = {
-  // POS: el producto, la fecha y el número de venta los fija el servidor.
-  ventas: z.object({ cliente_id: id, ubicacion_id: id, direccion_entrega: texto(500), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
+  ventas: z.object({ cliente_id: id, producto_id: id, ubicacion_id: id, fecha_venta: fecha, documento: texto(250), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
+  // Venta POS (#688): el producto, la fecha y el número de venta los fija el servidor; la dirección de entrega es obligatoria.
+  ventas_pos: z.object({ cliente_id: id, ubicacion_id: id, direccion_entrega: texto(500), cantidad: id, precio_unitario: z.string().trim().min(1).max(14), clave_operacion: clave }).strict(),
   anular_venta: z.object({ venta_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
   redistribuciones: z.object({ compra_id: id, ubicacion_id: id, cantidad_final: id, motivo: texto(500), clave_operacion: clave }).strict(),
   reversar_redistribucion: z.object({ redistribucion_id: z.string().regex(/^[1-9][0-9]{0,18}$/), motivo: texto(500) }).strict(),
@@ -35,7 +37,7 @@ const MENSAJES: Record<string, [number, string]> = {
   REVERSO_INVALIDO: [400, "Indique el ajuste y el motivo."],
   FILTRO_INVALIDO: [400, "Revise las fechas (AAAA-MM-DD) y los filtros."],
   CLIENTE_INVALIDO: [409, "El cliente no existe, es de otra empresa o está inactivo."],
-  REFERENCIA_INVALIDA: [409, "La bodega no existe o está inactiva."],
+  REFERENCIA_INVALIDA: [409, "El producto o la ubicación no existe o está inactivo."],
   SALDO_NO_ENCONTRADO: [409, "No hay existencias de este producto en esa ubicación."],
   SALDO_INSUFICIENTE: [409, "No hay suficientes canecas disponibles para esta operación."],
   RESERVAS_PENDIENTES: [409, "Hay canecas reservadas: libere las reservas antes de vender o ajustar."],
@@ -105,11 +107,12 @@ export async function postComercial(req: Request, { slug, recurso }: Ctx) {
   const d = parsed.data as Record<string, string | number>;
   const empresa = guard.empresa.id, usuario = guard.session.id; // empresa y usuario salen siempre de la sesión
   try {
-    if (recurso === "ventas") {
-      const v = await registrarVenta(getPool(), empresa, usuario, { clienteId: Number(d.cliente_id), ubicacionId: Number(d.ubicacion_id), direccionEntrega: String(d.direccion_entrega), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
-      const costos = !(await accesoCanecas(slug, "compras")).error;
-      const mensaje = costos ? `Venta ${v.documento} registrada: ingreso ${v.total}, costo FIFO ${v.costo}, utilidad bruta ${v.utilidad}.` : `Venta ${v.documento} registrada: ingreso ${v.total}.`;
-      return NextResponse.json({ id: v.id, documento: v.documento, yaRegistrada: v.yaRegistrada, total: v.total, ...(costos ? { costo: v.costo, utilidad: v.utilidad } : {}), mensaje }, { status: v.yaRegistrada ? 200 : 201 });
+    if (recurso === "ventas" || recurso === "ventas_pos") {
+      const pos = recurso === "ventas_pos";
+      const v = await registrarVenta(getPool(), empresa, usuario, pos ? { clienteId: Number(d.cliente_id), ubicacionId: Number(d.ubicacion_id), direccionEntrega: String(d.direccion_entrega), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) } : { clienteId: Number(d.cliente_id), productoId: Number(d.producto_id), ubicacionId: Number(d.ubicacion_id), fechaVenta: String(d.fecha_venta), documento: String(d.documento), cantidad: Number(d.cantidad), precio: String(d.precio_unitario), claveOperacion: String(d.clave_operacion) });
+      const costos = !(await accesoCanecas(slug, "compras")).error, etiqueta = pos ? `Venta ${v.documento}` : "Venta";
+      const mensaje = costos ? `${etiqueta} registrada: ingreso ${v.total}, costo FIFO ${v.costo}, utilidad bruta ${v.utilidad}.` : `${etiqueta} registrada: ingreso ${v.total}.`;
+      return NextResponse.json({ id: v.id, ...(pos ? { documento: v.documento } : {}), yaRegistrada: v.yaRegistrada, total: v.total, ...(costos ? { costo: v.costo, utilidad: v.utilidad } : {}), mensaje }, { status: v.yaRegistrada ? 200 : 201 });
     }
     if (recurso === "anular_venta") return NextResponse.json({ ...(await anularVenta(getPool(), empresa, usuario, String(d.venta_id), String(d.motivo))), mensaje: "Venta anulada: el inventario se restableció." });
     if (recurso === "redistribuciones") {

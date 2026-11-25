@@ -1,4 +1,4 @@
-import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 import { createHash } from 'node:crypto';
 
 /** Fecha operativa (AAAA-MM-DD) en Guatemala: el servidor la fija, el cliente no la envía. */
@@ -16,13 +16,24 @@ export const PREFIJOS = { COMPRA: 'COMP-', VENTA: 'VTA-', PRODUCTO: 'CAN-' } as 
 export type TipoSecuencia = keyof typeof PREFIJOS;
 
 /**
- * Siguiente número de la empresa, atómico: la fila del contador queda bloqueada hasta que termina la transacción
- * del llamador, por lo que dos solicitudes concurrentes nunca reciben el mismo número. Si la transacción se revierte,
- * el número no se consume. Requiere una transacción abierta en `conn`.
+ * Crea (si faltan) las filas del contador de la empresa FUERA de la transacción de la operación, en autocommit. Así el
+ * camino caliente solo hace UPDATE (bloqueo exclusivo directo) y nunca compite por insertar la misma fila, lo que en InnoDB
+ * puede producir interbloqueos con muchas solicitudes simultáneas.
+ */
+export async function asegurarSecuencias(pool: Pool, empresaId: number): Promise<void> {
+  if (!Number.isSafeInteger(empresaId) || empresaId < 1) throw Error('SECUENCIA_INVALIDA');
+  await pool.query("INSERT IGNORE INTO canecas_secuencias (empresa_id,tipo,ultimo) VALUES (?,'COMPRA',0),(?,'PRODUCTO',0),(?,'VENTA',0)", [empresaId, empresaId, empresaId]);
+}
+
+/**
+ * Siguiente número de la empresa, atómico: la fila del contador queda bloqueada hasta que termina la transacción del
+ * llamador, por lo que dos solicitudes concurrentes nunca reciben el mismo número. Si la transacción se revierte, el número
+ * no se consume. Requiere una transacción abierta en `conn` y `asegurarSecuencias` previo.
  */
 export async function siguienteNumero(conn: PoolConnection, empresaId: number, tipo: TipoSecuencia): Promise<string> {
   if (!Number.isSafeInteger(empresaId) || empresaId < 1 || !(tipo in PREFIJOS)) throw Error('SECUENCIA_INVALIDA');
-  await conn.execute<ResultSetHeader>('INSERT INTO canecas_secuencias (empresa_id,tipo,ultimo) VALUES (?,?,LAST_INSERT_ID(1)) ON DUPLICATE KEY UPDATE ultimo=LAST_INSERT_ID(ultimo+1)', [empresaId, tipo]);
+  const [r] = await conn.execute<ResultSetHeader>('UPDATE canecas_secuencias SET ultimo=LAST_INSERT_ID(ultimo+1) WHERE empresa_id=? AND tipo=?', [empresaId, tipo]);
+  if (r.affectedRows !== 1) throw Error('SECUENCIA_NO_INICIALIZADA');
   const [filas] = await conn.query<RowDataPacket[]>('SELECT LAST_INSERT_ID() AS n');
   const n = Number(filas[0]?.n);
   if (!Number.isSafeInteger(n) || n < 1) throw Error('SECUENCIA_INVALIDA');
@@ -30,8 +41,9 @@ export async function siguienteNumero(conn: PoolConnection, empresaId: number, t
 }
 
 /**
- * Producto único de aceite de la empresa. Si la empresa no tiene ninguno lo crea con código automático;
- * si tiene varios activos (datos históricos) se detiene: no se elige uno por el usuario.
+ * Producto único de aceite de la empresa. Si la empresa no tiene ninguno lo crea con código automático; si tiene varios
+ * activos (datos históricos) se detiene: no se elige uno por el usuario. La unicidad la garantiza la base (índice único
+ * uq_can_producto_activo_unico): dos creaciones simultáneas nunca dejan dos activos; la perdedora reutiliza la ganadora.
  */
 export async function productoUnico(conn: PoolConnection, empresaId: number): Promise<number> {
   const [filas] = await conn.query<RowDataPacket[]>('SELECT id,activo FROM canecas_productos WHERE empresa_id=? ORDER BY id', [empresaId]);

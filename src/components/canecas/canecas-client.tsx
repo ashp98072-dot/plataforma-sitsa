@@ -36,6 +36,8 @@ const columnas: Record<string, [string,string][]> = {
   valoracion_inicial: [["producto","Caneca"],["ubicacion","Ubicación"],["cantidad","Cantidad"],["costo","Costo unitario"],["documento","Documento"],["motivo","Motivo"],["usuario","Responsable"],["creado_en","Registro"]],
   gastos_posteriores: [["compra","Compra"],["importe","Importe pendiente"],["fecha_documento","Fecha del documento"],["estado","Estado"],["referencia","Documento"],["motivo","Motivo"],["usuario","Responsable"],["creado_en","Registro"]],
 };
+/** Recursos nuevos (#688); las rutas históricas siguen existiendo para clientes anteriores. */
+const ENDPOINT: Record<string,string> = { compras:"compras_ingreso", ventas:"ventas_pos", productos:"caneca_unica" };
 const titulos: Record<string,string> = { panel:"Panel general", ventas:"Ventas", redistribuciones:"Ajuste de canecas", proveedores:"Proveedores de Canecas", clientes:"Clientes de Canecas", productos:"Canecas", ubicaciones:"Ubicaciones", compras:"Compras", inventario:"Existencias", movimientos:"Historial de movimientos", salidas:"Salidas FIFO" };
 export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: string; permisos: Record<string, boolean> }) {
   const [datos,setDatos] = useState<Record<string,Fila[]>>({});
@@ -46,7 +48,6 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
   const [formAbierto,setFormAbierto] = useState(false);
   const [ocupado,setOcupado] = useState(false);
   const [editando,setEditando] = useState<Fila | null>(null);
-  const [claves,setClaves] = useState<Record<string,string>>({});
   const enviando = useRef(false);
   const [totalForm,setTotalForm] = useState("");
   const recursos = vista === "panel" ? ["inventario","movimientos"] : Array.from(new Set([vista,...(campos[vista] ?? []).flatMap(c => c.opciones ? [c.opciones] : []),...(vista === "compras" ? ["proveedores",...(permisos.compras ? ["gastos_posteriores"] : [])] : []),...(vista === "inventario" ? ["productos","ubicaciones",...(permisos.confirmar ? ["valoracion_inicial"] : []),...(permisos.compras ? ["valoracion_inventario"] : [])] : [])]));
@@ -70,18 +71,27 @@ export function CanecasClient({ slug, vista, permisos }: { slug: string; vista: 
     if (enviando.current) return;
     enviando.current = true;
     setOcupado(true); setMensaje("");
+    const destino = ENDPOINT[recurso] ?? recurso;
+    // La clave de la operación se guarda en el navegador junto con la huella del formulario: si la respuesta se pierde o se recarga
+    // la página, reenviar el MISMO formulario reutiliza la clave y el servidor no duplica la operación.
+    const llave = `canecas:${slug}:${destino}`;
+    const huella = JSON.stringify(Object.entries(payload).sort(([a],[b]) => a.localeCompare(b)));
+    let definitivo = false;
     try {
       if (["compras", "recepciones", "valoracion_inicial", "gastos_posteriores", "salidas", "ventas", "redistribuciones"].includes(recurso)) {
-        const k = claves[recurso] ?? crypto.randomUUID();
-        setClaves(old => ({...old,[recurso]:k})); payload.clave_operacion = k;
+        let k = "";
+        try { const g = JSON.parse(window.localStorage.getItem(llave) ?? "null"); if (g && g.huella === huella && typeof g.clave === "string") k = g.clave; } catch { /* sin almacenamiento: la clave solo vive en memoria */ }
+        if (!k) k = crypto.randomUUID();
+        try { window.localStorage.setItem(llave, JSON.stringify({ clave: k, huella })); } catch { /* ignorado */ }
+        payload.clave_operacion = k;
       }
-      const res = await fetch(`/api/empresas/${encodeURIComponent(slug)}/canecas/${recurso}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
+      const res = await fetch(`/api/empresas/${encodeURIComponent(slug)}/canecas/${destino}`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload) });
       const result = await res.json();
+      definitivo = res.status < 500; // éxito o rechazo definitivo: la clave ya no sirve; con fallas del servidor/red se conserva para reintentar
       if (!res.ok) throw new Error(result.error || "No se pudo guardar.");
-      setClaves(old => { const copy={...old}; delete copy[recurso]; return copy; });
       setMensaje(typeof result.mensaje === "string" && result.mensaje ? result.mensaje : "Operación registrada correctamente."); await cargar();
     } catch (error) { setMensaje(error instanceof Error ? error.message : "Error de operación."); }
-    finally { enviando.current = false; setOcupado(false); }
+    finally { if (definitivo) { try { window.localStorage.removeItem(llave); } catch { /* ignorado */ } } enviando.current = false; setOcupado(false); }
   }
   async function editar(recurso: string, id: string | number | null, payload: Record<string,FormDataEntryValue | number>) {
     if (enviando.current) return;

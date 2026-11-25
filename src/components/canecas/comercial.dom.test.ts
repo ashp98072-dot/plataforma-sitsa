@@ -50,7 +50,7 @@ describe("pantallas comerciales de Canecas", () => {
       expect(form.checkValidity()).toBe(true);
       await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await new Promise(r => setTimeout(r, 30)); });
       const envio = m.fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
-      expect(String(envio[0])).toMatch(/\/canecas\/ventas$/);
+      expect(String(envio[0])).toMatch(/\/canecas\/ventas_pos$/);
       const cuerpo = JSON.parse(String(envio[1]?.body));
       expect(cuerpo).toMatchObject({ cliente_id: "1", ubicacion_id: "4", direccion_entrega: "Zona 4, Ciudad", cantidad: "8", precio_unitario: "95.00" });
       expect(cuerpo.clave_operacion).toMatch(/^[0-9a-f-]{36}$/);
