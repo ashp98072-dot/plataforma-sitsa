@@ -80,10 +80,22 @@ export async function reportePorProducto(pool: Pool, empresaId: number, filtros:
 }
 
 /** Historial de ventas y anulaciones (más recientes primero). Sin permiso de costos no se muestran costo ni utilidad. */
+// La dirección de entrega existe solo tras la migración de simplificación (#688): el historial funciona antes y después de instalarla,
+// de modo que desplegar el código antes que la migración no rompe la pantalla de ventas. Solo se memoriza el resultado positivo.
+const conDireccionEntrega = new WeakSet<Pool>();
+async function columnaDireccion(pool: Pool): Promise<string> {
+  if (!conDireccionEntrega.has(pool)) {
+    const [r] = await pool.query<Fila[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME='direccion_entrega'");
+    if (Number(r[0]?.n) === 1) conDireccionEntrega.add(pool);
+  }
+  return conDireccionEntrega.has(pool) ? 'v.direccion_entrega' : 'NULL AS direccion_entrega';
+}
+
 export async function historialVentas(pool: Pool, empresaId: number, filtros: FiltrosReporte, conCostos: boolean) {
   const f = validarFiltros(filtros);
+  const direccion = await columnaDireccion(pool);
   const c = condiciones(f, { fecha: 'v.fecha_venta', producto: 'v.producto_id', cliente: 'v.cliente_id' });
-  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,v.direccion_entrega,p.nombre producto,v.cantidad,
+  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,${direccion},p.nombre producto,v.cantidad,
       CONCAT('Q ',FORMAT(v.precio_unitario_centavos/100,2)) precio_unitario,CONCAT('Q ',FORMAT(v.total_centavos/100,2)) total
       ${conCostos ? ",CONCAT('Q ',FORMAT(v.costo_centavos/100,2)) costo_fifo,CONCAT(IF(v.total_centavos-v.costo_centavos<0,'-Q ','Q '),FORMAT(ABS(v.total_centavos-v.costo_centavos)/100,2)) utilidad" : ''},
       v.estado,us.username usuario,v.creado_en,ua.username anulada_por,v.anulada_en,v.motivo_anulacion

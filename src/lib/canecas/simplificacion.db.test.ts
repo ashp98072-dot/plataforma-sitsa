@@ -3,6 +3,7 @@ import mysql from 'mysql2/promise';
 import { registrarCompraConIngreso } from './compra-ingreso';
 import { anularVenta, registrarVenta } from './ventas';
 import { crearCatalogo } from './catalogos';
+import { historialVentas } from './reportes';
 import { aplicar, crearBase, hayLaboratorio, k, prepararBaseHastaVentas, type Fila } from './lab-simplificacion';
 
 const BASE = 'canecas_simp_flujo_test';
@@ -74,6 +75,9 @@ describe.skipIf(!hayLaboratorio)('simplificación (#688) en MariaDB 11.8.9 desec
       expect(await vender(12, '150.00', 10)).toMatchObject({ id: v1.id, documento: 'VTA-000001', yaRegistrada: true });
       await expect(vender(12, '150.00', 10, 'Otra')).rejects.toThrow('CLAVE_REUTILIZADA');
       expect(await fisico()).toBe(3);
+
+      // El historial muestra la dirección conservada de cada venta.
+      expect((await historialVentas(pool, 1, {}, true)).find(f => f.documento === 'VTA-000001')).toMatchObject({ direccion_entrega: 'Zona 4, Ciudad' });
 
       // ── Anulación: restablece inventario y capas exactamente; repetirla es idempotente ────────
       expect(await anularVenta(pool, 1, 1, v1.id, 'devolución')).toEqual({ yaAnulada: false });

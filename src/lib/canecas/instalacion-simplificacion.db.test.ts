@@ -19,7 +19,8 @@ const estado = async (pool: mysql.Pool) => {
   return Object.fromEntries(Object.entries(r[0]).map(([a, b]) => [a, Number(b)]));
 };
 const sinCambios = { secuencias: 0, direccion: 0, activo_unico: 0, triggers: 2 };
-const instantanea = async (pool: mysql.Pool) => Object.fromEntries(await Promise.all(['canecas_productos', 'canecas_compras', 'canecas_recepciones', 'canecas_saldos', 'canecas_movimientos', 'canecas_capas_costo', 'canecas_ventas', 'canecas_clientes'].map(async t => [t, (await pool.query<Fila[]>(`SELECT * FROM ${t}`))[0]])));
+// La columna virtual activo_unico es parte de lo que agrega la migración: se excluye al comparar los datos existentes.
+const instantanea = async (pool: mysql.Pool) => Object.fromEntries(await Promise.all(['canecas_productos', 'canecas_compras', 'canecas_recepciones', 'canecas_saldos', 'canecas_movimientos', 'canecas_capas_costo', 'canecas_ventas', 'canecas_clientes'].map(async t => [t, (await pool.query<Fila[]>(`SELECT * FROM ${t}`))[0].map(({ activo_unico: _virtual, ...fila }) => { void _virtual; return fila; })])));
 
 describe.skipIf(!hayLaboratorio)('instalador controlado de la simplificación en MariaDB 11.8.9 desechable', () => {
   it('instala sin alterar datos, es idempotente, conserva el trigger y el instalador anterior de ventas no acepta el esquema nuevo', async () => {
