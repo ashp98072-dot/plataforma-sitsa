@@ -1,0 +1,77 @@
+name: Laboratorio PriceSmart E2E (MariaDB 11.8.9)
+
+# Ejecuta los E2E de PriceSmart (POST → persistencia → outbox → vínculo TMS → GET, cancelaciones, idempotencia, estados de revisión) contra una MariaDB 11.8.9 EXACTA instalada desde el repositorio oficial firmado
+# y levantada como instancia DESECHABLE de la propia ejecución (127.0.0.1, puerto aleatorio, socket administrativo), más `next dev` en modo sandbox. Usa `scripts/ci/pricesmart-demo/run-linux.mjs` (el arnés de Windows,
+# `demo.mjs`, no se toca). Sin secretos, sin credenciales, sin bases ni servidores reales: todas las claves se generan en la ejecución y el entorno de la app y de las pruebas se construye desde cero.
+on:
+  pull_request:
+    paths:
+      - 'src/lib/integrations/pricesmart/**'
+      - 'src/app/api/integrations/pricesmart/**'
+      - 'scripts/ci/pricesmart-demo/**'
+      - 'scripts/ci/pricesmart-api06a/**'
+      - 'scripts/ci/pricesmart-api11/**'
+      - 'scripts/ci/portal-e2e/**'
+      - 'docs/integraciones/pricesmart/**'
+      - 'sql/**'
+      - '.github/workflows/pricesmart-lab.yml'
+      - 'package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pricesmart-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: PriceSmart E2E + MariaDB 11.8.9
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Instalar MariaDB 11.8.9 (repositorio oficial firmado, sin iniciar servicios)
+        env:
+          # Nombres SIN prefijo MARIADB_/DB_: el runner rechaza un entorno padre con variables de bases/entornos.
+          PS_MDB_VERSION: '11.8.9'
+          PS_MDB_KEY_FPR: '177F4010FE56CA3336300305F1656F24C74CD1D8'
+        run: |
+          set -euo pipefail
+          curl -fsSL https://mariadb.org/mariadb_release_signing_key.pgp -o /tmp/mariadb.asc
+          gpg --show-keys --with-colons /tmp/mariadb.asc | awk -F: '$1=="fpr"{print $10}' | tee /tmp/fprs
+          grep -qx "$PS_MDB_KEY_FPR" /tmp/fprs || { echo "::error::La huella de la clave de MariaDB no coincide con la fijada"; exit 1; }
+          sudo install -d -m 0755 /etc/apt/keyrings
+          sudo install -m 0644 /tmp/mariadb.asc /etc/apt/keyrings/mariadb.asc
+          echo "deb [signed-by=/etc/apt/keyrings/mariadb.asc] https://archive.mariadb.org/mariadb-${PS_MDB_VERSION}/repo/ubuntu noble main" | sudo tee /etc/apt/sources.list.d/mariadb.list
+          # Evita que apt inicie un servidor con datos por defecto: el runner levanta su propia instancia.
+          printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+          sudo chmod +x /usr/sbin/policy-rc.d
+          sudo apt-get update
+          VERSION="$(apt-cache madison mariadb-server | awk '{print $3}' | grep -F "${PS_MDB_VERSION}" | head -n 1)"
+          test -n "$VERSION" || { echo "::error::MariaDB ${PS_MDB_VERSION} no está disponible en el repositorio oficial"; apt-cache madison mariadb-server; exit 1; }
+          echo "Paquete exacto: $VERSION"
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "mariadb-server=$VERSION" "mariadb-client=$VERSION" "mariadb-server-core=$VERSION" "mariadb-client-core=$VERSION"
+          /usr/sbin/mariadbd --version
+          /usr/sbin/mariadbd --version | grep -q " Ver ${PS_MDB_VERSION}-MariaDB"
+
+      - run: npm ci
+
+      - name: Pruebas unitarias de PriceSmart (puertos simulados)
+        run: npx vitest run --config vitest.config.mts src/lib/integrations/pricesmart "src/app/api/integrations/pricesmart" --maxWorkers=1
+
+      - name: E2E de PriceSmart con MariaDB 11.8.9 desechable
+        env:
+          PS_API06A_LAB_ACK: SINTETICO-LOCAL-SIN-PRODUCCION-NI-HOSTINGER
+          # Mismo binario de mariadbd que el laboratorio de Canecas (paquete 1:11.8.9+maria~ubu2404); el runner falla si cambia.
+          PS_LAB_MARIADBD_SHA256: '136139e894810a605579667c97482d885d1e61ed5783869cdb6f055cd527a99b'
+        run: node scripts/ci/pricesmart-demo/run-linux.mjs
