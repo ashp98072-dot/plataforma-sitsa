@@ -105,7 +105,8 @@ describe.skipIf(scenario !== "open" || step !== "2")("HB.7 tras REINICIAR la app
   });
 });
 
-const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** Vivo = existe y NO es un zombi: el runner (padre) está bloqueado en `spawnSync` y no puede recoger al hijo terminado, así que `kill(pid, 0)` seguiría viéndolo. */
+const alive = (pid: number) => { try { const stat = readFileSync(`/proc/${pid}/stat`, "utf8"); return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z"; } catch { return false; } };
 /** Simula que pasó el tiempo de los arrendamientos (lease) de lo que murió con el proceso (30 s y 120 s por omisión). */
 const expireLeases = async () => { for (const sql of ["UPDATE ps_api01_outbox SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE status = 'LEASED'", "UPDATE ps_api13_link_jobs SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE lease_until IS NOT NULL"]) { for (let i = 0; i < 6; i++) { try { await ctx.db.query(sql); break; } catch (e) { if ((e as { code?: string }).code !== "ER_LOCK_DEADLOCK") throw e; } } } };
 
