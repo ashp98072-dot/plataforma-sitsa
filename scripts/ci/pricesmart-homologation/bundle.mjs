@@ -37,7 +37,7 @@ export const ROLE_POLICY = Object.freeze({
     ps_api18_attestation_nonces: ['SELECT', 'INSERT'], ps_api18_resource_registry: ['SELECT'],
     // Vinculación al TMS (API-12/13): mapeo de solo lectura; vínculo y cola con columnas mutables acotadas; bitácora solo INSERT.
     ps_api12_tms_mapping: ['SELECT'],
-    ps_api12_tms_links: ['SELECT', 'INSERT', 'UPDATE(solicitud_id,linked_at,cancellation_requested_at)'],
+    ps_api12_tms_links: ['SELECT', 'INSERT', 'UPDATE(solicitud_id,linked_at,cancellation_requested_at,cancellation_resolution,cancellation_resolved_by,cancellation_resolved_at,cancellation_resolution_note)'],
     ps_api13_link_jobs: ['SELECT', 'INSERT', 'UPDATE(empresa_id,status,attempts,next_attempt_at,lease_owner,lease_until,last_outcome,last_detail,ack_by,ack_at,updated_at)'],
     ps_api13_link_attempts: ['SELECT', 'INSERT'],
     ps_homolog_provisioning: ['SELECT'],   // estado del aprovisionamiento: el runtime NO se activa si no está COMPLETO (sonda `provisioning`)
