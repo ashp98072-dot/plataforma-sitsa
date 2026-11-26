@@ -50,6 +50,16 @@ describe("logo del comprobante de Canecas", () => {
     const otra = logoDeEmpresa({ id: 7, slug: "kuiqtrans-solo", logoUrl: "empresas/7/logo.png" });
     expect(bytesDe(otra).equals(readFileSync(KUIQTRANS))).toBe(true); // su logo_url sigue funcionando
   });
+  it("si falta el logo oficial de Mónaco nunca usa logo_url de Kuiqtrans como alternativa", () => {
+    const previo = LOGOS_DE_MARCA["kt-monaco"];
+    try {
+      LOGOS_DE_MARCA["kt-monaco"] = "public/brands/monaco/archivo-inexistente-comprobante.png";
+      const resultado = logoDeEmpresa({ id: 1, slug: "kt-monaco", logoUrl: "empresas/1/logo-kuiqtrans.png" });
+      expect(resultado).toBeNull(); // la UI usa el nombre, no un logo ajeno
+    } finally {
+      LOGOS_DE_MARCA["kt-monaco"] = previo;
+    }
+  });
   it("una empresa sin logo propio ni de marca no toma el de otra ni el de Novalvion: devuelve null", () => {
     expect(logoDeEmpresa({ id: 7, slug: "otra-empresa", logoUrl: null })).toBeNull();
     expect(logoDeEmpresa({ id: 7, slug: "otra-empresa", logoUrl: "   " })).toBeNull();
