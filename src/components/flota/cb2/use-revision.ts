@@ -28,15 +28,15 @@ export function useRevisionCB2(filas: FilaCB2[], cat: CatalogosCB2, decisiones: 
             const independiente = politicaIndependiente(cat);
             setDecisiones?.(prev => {
                 const siguientes = { ...prev };
-                for (const k of cambian) siguientes[k] = independiente ? { ...prev[k], unidadExternaId, asociacionExternaId: null } : { ...prev[k], pilotoExternoId: null, unidadExternaId, asociacionExternaId: null };
+                for (const k of cambian) siguientes[k] = independiente ? { ...prev[k], usarEquivalenciaPlaca: false, recordarPlaca: false, unidadExternaId, asociacionExternaId: null } : { ...prev[k], usarEquivalenciaPlaca: false, recordarPlaca: false, pilotoExternoId: null, unidadExternaId, asociacionExternaId: null };
                 return siguientes;
             });
         },
         asignar: (clave: string, vehiculoId: string) => {
             setManuales(prev => ({ ...prev, [clave]: vehiculoId }));
-            if (politicaIndependiente(cat) && vehiculoId !== (asignaciones[clave] ?? "")) setDecisiones?.(prev=>({...prev,[clave]:{...prev[clave],unidadExternaId:Number(vehiculoId)<0?-Number(vehiculoId):null,asociacionExternaId:null}}));
+            if (politicaIndependiente(cat) && vehiculoId !== (asignaciones[clave] ?? "")) setDecisiones?.(prev=>({...prev,[clave]:{...prev[clave],usarEquivalenciaPlaca:false,recordarPlaca:false,unidadExternaId:Number(vehiculoId)<0?-Number(vehiculoId):null,asociacionExternaId:null}}));
             // El selector general es una decisión posterior: no conservar una asociación de otra unidad.
-            if (!politicaIndependiente(cat) && vehiculoId !== (asignaciones[clave] ?? "")) setDecisiones?.(prev => ({ ...prev, [clave]: { ...prev[clave], pilotoExternoId: null, unidadExternaId: Number(vehiculoId) < 0 ? -Number(vehiculoId) : null, asociacionExternaId: null } }));
+            if (!politicaIndependiente(cat) && vehiculoId !== (asignaciones[clave] ?? "")) setDecisiones?.(prev => ({ ...prev, [clave]: { ...prev[clave], usarEquivalenciaPlaca: false, recordarPlaca: false, pilotoExternoId: null, unidadExternaId: Number(vehiculoId) < 0 ? -Number(vehiculoId) : null, asociacionExternaId: null } }));
         },
         cambiarDecision: (clave: string, nueva: DecisionAsignacion) => {
             const anterior = decisiones[clave] ?? {};

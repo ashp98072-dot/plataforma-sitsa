@@ -1,4 +1,5 @@
 import { normalizarNombreReportado,type RevisionNombre } from "./pilotos-nombres";
+import { recordarPlacaTx, sugerenciasPlacas } from "./placas-equivalencias";
 import { esquemaPilotosReportados,registrarPilotoReportadoTx,revisarNombresTx } from "./pilotos-reportados";
 import { resolverUnidadCanonica } from "../unidad-canonica";
 import { validarAsignacionIndependiente } from "./asignacion-independiente";
@@ -41,8 +42,10 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
     const lineas = await analizar(buffer, entrada.perfil, entrada.moneda), sha = hash(buffer);
     const c = await getPool().getConnection();
     let nombres:RevisionNombre[]=[];
+    let placas = new Map<string, { vehiculoId: number; placa: string }>();
     const avisos = new Map<string, string[]>(), externas = new Map<string, ReturnType<typeof reconocerTercero>["asociacion"]>();
     try {
+        placas = await sugerenciasPlacas(c, ctx, lineas.map(l => l.fila.placaNormalizada));
         // Shell exige resolver cada nombre; HALEL usa el MISMO registro de pilotos reportados de forma opcional (reconoce los ya guardados). Un registro mal instalado nunca debe romper la vista previa de HALEL.
         if(entrada.perfil==="SHELL") nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),await esquemaPilotosReportados(c),lineas.filter(l=>!l.bloqueada).map(l=>l.fila.fechaConsumo));
         else { try { const registro=await esquemaPilotosReportados(c); if(registro) nombres=await revisarNombresTx(c,ctx.empresaId,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.textos.piloto),true,lineas.filter(l=>!l.bloqueada).map(l=>l.fila.fechaConsumo)); } catch(e) { console.error("cb2 nombres reportados (HALEL)",e); nombres=[]; } }
@@ -59,7 +62,7 @@ export async function preview(ctx: Contexto, buffer: Buffer, entrada: Entrada) {
         }
     } finally { c.release(); }
     const token = await new SignJWT({ parser: 2, solicitud: digest(ctx, "CONFIRMAR", [sha, entrada]), archivo: sha }).setProtectedHeader({ alg: "HS256" }).setAudience(audience).setIssuedAt().setExpirationTime("15m").sign(getAuthSecretBytes());
-    return { sha256: sha, token, nombres, filas: lineas.map(l => ({ perfil:entrada.perfil, asociacionExterna: externas.get(l.clave ?? "") ?? null, hoja: l.fila.hoja, fila: l.fila.fila, lote: l.fila.lote, kilometraje: l.fila.kilometraje, origen: { ...l.fila.textos }, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: [...l.fila.motivos, ...(avisos.get(l.clave ?? "") ?? [])], vale: l.fila.vale, placa: l.fila.placaOriginal, placaNormalizada: l.fila.placaNormalizada, fecha: l.fila.fechaConsumo, galones: l.fila.galones, precio: l.fila.precio, monto: l.fila.monto, moneda: entrada.moneda })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
+    return { sha256: sha, token, nombres, filas: lineas.map(l => ({ perfil:entrada.perfil, equivalenciaPlaca: placas.get(placaComparable(l.fila.placaNormalizada)) ?? null, asociacionExterna: externas.get(l.clave ?? "") ?? null, hoja: l.fila.hoja, fila: l.fila.fila, lote: l.fila.lote, kilometraje: l.fila.kilometraje, origen: { ...l.fila.textos }, candidato: l.clave, bloqueada: l.bloqueada, documento: l.documento, errores: l.errores, estado: l.fila.estado, motivos: [...l.fila.motivos, ...(avisos.get(l.clave ?? "") ?? [])], vale: l.fila.vale, placa: l.fila.placaOriginal, placaNormalizada: l.fila.placaNormalizada, fecha: l.fila.fechaConsumo, galones: l.fila.galones, precio: l.fila.precio, monto: l.fila.monto, moneda: entrada.moneda })), nota: "Confirmacion revalida historial, vehiculos y documentos bajo bloqueo; el recibo no garantiza elegibilidad." };
 }
 export async function confirmarArchivo(ctx: Contexto, buffer: Buffer, nombre: string, entrada: Entrada, clave: string, token: string) {
     const sha = hash(buffer), request = digest(ctx, "CONFIRMAR", [sha, entrada]);
@@ -243,6 +246,14 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
     }
     const abreviadas = await catalogoAbreviadas(c, ctx, lineas.filter(l => l.clave && seleccion.has(l.clave) && seleccion.get(l.clave)! > 0 && !l.bloqueada).map(l => l.fila.placaNormalizada));
     const unidades = await vehiculos(c, ctx, selection.map(s => s.vehiculoId).filter(id => id > 0));
+    const eleccionesEquivalencia = selection.filter(s => s.usarEquivalenciaPlaca);
+    if (eleccionesEquivalencia.length) {
+        const sugerencias = await sugerenciasPlacas(c, ctx, lineas.filter(l => l.clave && eleccionesEquivalencia.some(s => s.candidato === l.clave)).map(l => l.fila.placaNormalizada));
+        for (const s of eleccionesEquivalencia) {
+            const originales = lineas.filter(l => l.clave === s.candidato && !l.bloqueada);
+            if (!originales.length || originales.some(l => sugerencias.get(placaComparable(l.fila.placaNormalizada))?.vehiculoId !== s.vehiculoId)) throw new ErrorCB2("La equivalencia cambió o ya no es elegible; vuelve a revisar el archivo.", 409);
+        }
+    }
     const identidadesExternas = new Map<string, Awaited<ReturnType<typeof validarTercero>> | Awaited<ReturnType<typeof validarTerceroDirecto>> | Awaited<ReturnType<typeof validarAsignacionIndependiente>>>();
     for (const s of selection) if (s.vehiculoId < 0 || s.pilotoTipo) {
         const l = lineas.find(l => l.clave === s.candidato)!;
@@ -312,6 +323,7 @@ async function resolver(c: PoolConnection, ctx: Contexto, lineas: Linea[], selec
             else
                 resolved = { ...resolved, resultado: "REUTILIZADA" };
             if (resolved) {
+                if (choice.recordarPlaca) await recordarPlacaTx(c, ctx, f.placaOriginal, vehicle, choice.motivoUnidad ?? "");
                 if(registroReportados && choice.decisionNombre) await registrarPilotoReportadoTx(c,ctx,resolved.id,f.textos.piloto || null,choice.decisionNombre,nombresGuardados);
                 cid = resolved.id;
                 resultado = resolved.resultado;

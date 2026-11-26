@@ -1,0 +1,6 @@
+-- Solo lectura. Ejecutar únicamente después de instalación autorizada.
+SELECT TABLE_NAME,ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_placas_equivalencias';
+SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_placas_equivalencias' ORDER BY ORDINAL_POSITION;
+SELECT INDEX_NAME,NON_UNIQUE,GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS columnas FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_placas_equivalencias' GROUP BY INDEX_NAME,NON_UNIQUE;
+SELECT CONSTRAINT_NAME,CONSTRAINT_TYPE FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_placas_equivalencias' ORDER BY CONSTRAINT_NAME;
+SELECT COUNT(*) AS equivalencias, SUM(revocado_en IS NOT NULL) AS revocadas FROM flota_cb2_placas_equivalencias;

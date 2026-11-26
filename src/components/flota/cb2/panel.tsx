@@ -1,6 +1,7 @@
 "use client";
 import { ReportePilotosCB2 } from "./pilotos-reporte";
 import { PilotosEquivalenciasCB2 } from "./pilotos-equivalencias";
+import { PlacasEquivalenciasCB2 } from "./placas-equivalencias";
 import { ConciliacionDocumentalCB2 } from "./conciliacion-documental";
 import styles from "./panel.module.css";
 import { useEffect, useState } from "react";
@@ -129,7 +130,7 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
  {busy && <p role="status">Procesando solicitud. No cierres esta pantalla ni repitas la acción.</p>}{error && <p role="alert" className="text-red-500">{error}</p>}{message && <p role="status" className="rounded border border-[var(--border)] p-3">{message}</p>}
  {op.pending && <aside className="space-y-2 rounded border border-amber-600 p-3"><p>Hay una solicitud pendiente ({op.pending.action}). Conservamos su clave de reintento. No cambies archivo, selección ni revisiones para recuperar un resultado incierto.</p>{op.pending.ejecutar ? <button className={button} disabled={busy} onClick={() => void retry()}>Reintentar exactamente la solicitud</button> : <p>Tras recargar, reproduce el mismo archivo y decisiones. No se guardan archivos ni recibos en el navegador.</p>}<details><summary>Decisiones del intento pendiente</summary><pre className="max-w-xl whitespace-pre-wrap break-all text-xs">{JSON.stringify(op.pending.identidad, null, 2)}</pre></details>{op.pending.definitivo && <button className={button} disabled={busy} onClick={() => { op.editar(); setError(""); setMessage("Solicitud rechazada sin aplicar. Puedes corregirla o actualizar los datos."); }}>Corregir solicitud rechazada</button>}</aside>}
  {catalogosError && <p role="alert">{catalogosError} <button className={button} onClick={() => setRecargarCat(n => n + 1)}>Reintentar catálogos</button></p>}
- {tab === "pilotos" && <><ReportePilotosCB2 api={api}/><PilotosEquivalenciasCB2 api={api} cat={cat} puedeCorregir={admin}/></>}
+ {tab === "pilotos" && <><ReportePilotosCB2 api={api}/><PilotosEquivalenciasCB2 api={api} cat={cat} puedeCorregir={admin}/><PlacasEquivalenciasCB2 api={api} admin={admin}/></>}
  {tab === "historial-consumos" && <HistorialConsumosCB2 api={api} cat={cat}/>}
  <div hidden={tab !== "consumos"}><ConsumosCB2 admin={admin} key={`consumos:${refresh}`} api={api} cat={cat} run={run} canWrite={canWrite && catalogosListos} locked={locked} refresh={refresh} activo={tab === "consumos"} documento={documento} setDocumento={setDocumento}/></div>
  {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <><ImportarCB2 actualizarCatalogos={actualizarCatalogos} key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/></> : <p role="status">Carga los catálogos para importar.</p>}</div>}
