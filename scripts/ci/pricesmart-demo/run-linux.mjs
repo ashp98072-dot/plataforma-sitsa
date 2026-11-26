@@ -388,13 +388,13 @@ async function startDb(m) {
   m.port = await freePort(); validateManifest(m, tempRoot, { requirePort: true });
   const asRoot = process.getuid?.() === 0 ? ['--user=root'] : [];
   const env = { PATH: process.env.PATH, HOME: m.homeDir, TMPDIR: m.tmpDir, LANG: 'C.UTF-8' };
-  const init = cp.spawnSync(INSTALL_DB, ['--no-defaults', `--basedir=${BASEDIR}`, `--datadir=${m.datadir}`, '--auth-root-authentication-method=normal', '--skip-test-db', ...asRoot], { env, encoding: 'utf8', timeout: 120000 });
+  const init = cp.spawnSync(INSTALL_DB, ['--no-defaults', `--basedir=${BASEDIR}`, `--datadir=${m.datadir}`, '--auth-root-authentication-method=normal', '--skip-test-db', '--lower-case-table-names=1', ...asRoot], { env, encoding: 'utf8', timeout: 120000 });
   if (init.status !== 0) throw new Error(`Inicialización del datadir fallida: ${(init.stderr ?? '').slice(-500)}`);
   const fd = fs.openSync(m.serverLog, 'a');
   // Mismos controles de aislamiento que `buildServerArgs` de Windows (solo loopback, sin DNS, sin LOAD DATA LOCAL, datadir/pid/tmp propios, mismo modo SQL y espera de bloqueos); max_connections ya en 400 (el arnés
   // de Windows lo sube con SET GLOBAL tras arrancar: `next dev` duplica los pools). Sin `--enable-named-pipe` (solo Windows); el acceso administrativo es el socket Unix del run.
   const args = ['--no-defaults', ...asRoot, `--basedir=${BASEDIR}`, `--datadir=${m.datadir}`, `--pid-file=${m.pidFile}`, `--tmpdir=${m.tmpDir}`, `--bind-address=${HOST}`, `--port=${m.port}`, '--skip-name-resolve',
-    `--socket=${adminSocket}`, '--local-infile=0', `--secure-file-priv=${m.filesDir}`, '--max-connections=400', `--innodb-lock-wait-timeout=${LOCK_WAIT_SECONDS}`, '--innodb-buffer-pool-size=64M',
+    `--socket=${adminSocket}`, '--local-infile=0', `--secure-file-priv=${m.filesDir}`, '--lower-case-table-names=1', '--max-connections=400', `--innodb-lock-wait-timeout=${LOCK_WAIT_SECONDS}`, '--innodb-buffer-pool-size=64M',
     '--innodb-flush-log-at-trx-commit=1', '--character-set-server=utf8mb4', '--sql-mode=STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO', '--console'];
   serverProc = cp.spawn(MARIADBD, args, { env, stdio: ['ignore', fd, fd] }); fs.closeSync(fd);
   let admin = null;
