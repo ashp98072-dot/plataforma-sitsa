@@ -865,6 +865,16 @@
                   "ALREADY_TERMINAL",
                   "REVIEW_REQUIRED"
                 ]
+              },
+              "resolution": {
+                "type": "string",
+                "enum": [
+                  "PENDING",
+                  "EXECUTED",
+                  "NOT_EXECUTED"
+                ],
+                "description": "PROVISIONAL (D09 pendiente). Resultado de la revisión de Operaciones sobre la solicitud de cancelación: PENDING hasta que una persona la resuelva; EXECUTED solo si el TMS ya refleja la cancelación o el rechazo; NOT_EXECUTED si Operaciones decidió no cancelar (p. ej. viaje iniciado). Presente solo cuando la orden ya está vinculada con el TMS. Nunca expone quién la resolvió ni la nota interna. No es una confirmación de entrega ni de cancelación definitiva acordada con PriceSmart.",
+                "x-contract-status": "PROVISIONAL_LAB"
               }
             }
           }
