@@ -53,6 +53,7 @@ const schema = z.object({
   nombre: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(160),
   passwordInicial: z.string().min(6, "La contraseña temporal debe tener al menos 6 caracteres."),
+  soloLectura: z.boolean().optional(),   // cuenta de SOLO CONSULTA (p. ej. PriceSmart): no crea solicitudes
 });
 
 export async function POST(req: Request, ctx: Ctx) {
@@ -80,6 +81,7 @@ export async function POST(req: Request, ctx: Ctx) {
     email: parsed.data.email,
     passwordInicial: parsed.data.passwordInicial,
     creadoPor: guard.session.username,
+    soloLectura: parsed.data.soloLectura === true,
   });
   if (!r.ok) {
     return NextResponse.json({ error: r.mensaje }, { status: 400 });

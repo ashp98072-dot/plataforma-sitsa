@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getClienteSession } from "@/lib/tms/cliente-portal-session";
-import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
+import { esUsuarioClienteSoloLectura, validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 import { NuevaSolicitudForm } from "./nueva-solicitud-form";
 
 export default async function NuevaSolicitudPage() {
@@ -9,6 +9,7 @@ export default async function NuevaSolicitudPage() {
   if (!session) redirect("/cliente-portal/login");
   const activa = await validarClienteSessionActiva(session!);
   if (!activa) redirect("/cliente-portal/login");
+  if (await esUsuarioClienteSoloLectura(session!)) redirect("/cliente-portal/solicitudes");   // acceso de solo consulta: no crea solicitudes
 
   return (
     <main className="mx-auto max-w-3xl space-y-5 p-6">

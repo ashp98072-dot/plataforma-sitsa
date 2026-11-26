@@ -1,0 +1,12 @@
+-- ============================================================================
+-- CLIENTE-PORTAL — acceso de SOLO CONSULTA para usuarios del Portal del Cliente (p. ej. una cuenta de PriceSmart que solo debe ver sus órdenes).
+-- PARA REVISIÓN: NO SE HA EJECUTADO en ningún entorno. Requiere autorización explícita del propietario; no se aplica solo ni desde la aplicación.
+--
+-- Cambio: una columna booleana NUEVA en tms_cliente_usuarios. DEFAULT 0 = comportamiento actual (todas las cuentas existentes siguen igual: pueden crear solicitudes).
+--   solo_lectura = 1 → el usuario consulta solicitudes, seguimiento y evidencias; NO puede crear solicitudes (POST /api/cliente-portal/solicitudes responde 403).
+-- Idempotente (ADD COLUMN IF NOT EXISTS, MariaDB 10.0.2+). No toca datos, no borra, no cambia índices ni claves.
+-- La aplicación tolera que la columna aún no exista (trata a todos como no solo-lectura) PERO se niega a CREAR una cuenta solo-lectura si falta: aplicar esta migración ANTES de dar de alta cuentas de consulta.
+-- Preflight: sql/preflight-2026-11-tms-cliente-usuarios-solo-lectura.sql · Postcheck: sql/postcheck-2026-11-tms-cliente-usuarios-solo-lectura.sql
+-- Reversión (solo con autorización y si ninguna cuenta depende de ella): ALTER TABLE tms_cliente_usuarios DROP COLUMN solo_lectura;
+-- ============================================================================
+ALTER TABLE tms_cliente_usuarios ADD COLUMN IF NOT EXISTS solo_lectura TINYINT(1) NOT NULL DEFAULT 0 AFTER activo;

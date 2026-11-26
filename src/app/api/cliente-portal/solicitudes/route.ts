@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireClienteSession } from "@/lib/tms/cliente-portal-guard";
+import { requireClienteEscritura, requireClienteSession } from "@/lib/tms/cliente-portal-guard";
 import { crearSolicitudCliente } from "@/lib/tms/solicitudes-cliente";
 import { listarViajesCliente } from "@/lib/tms/cliente-portal-seguimiento";
 
@@ -71,7 +71,8 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const guard = await requireClienteSession();
+  // Cuentas de SOLO CONSULTA (p. ej. PriceSmart) reciben 403: crear solicitudes modifica información operativa.
+  const guard = await requireClienteEscritura();
   if (guard.error) return guard.error;
   const { session } = guard;
 

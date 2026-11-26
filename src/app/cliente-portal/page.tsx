@@ -2,7 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getClienteSession } from "@/lib/tms/cliente-portal-session";
 import { obtenerNombreCliente } from "@/lib/tms/cliente-portal-datos";
-import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
+import { esUsuarioClienteSoloLectura, validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 import { resumenSolicitudesCliente } from "@/lib/tms/solicitudes-cliente";
 import { resumenSeguimientoCliente } from "@/lib/tms/cliente-portal-seguimiento";
 import {
@@ -27,6 +27,7 @@ export default async function ClientePortalHomePage() {
   if (!session) redirect("/cliente-portal/login");
   const activa = await validarClienteSessionActiva(session!);
   if (!activa) redirect("/cliente-portal/login");
+  const soloLectura = await esUsuarioClienteSoloLectura(session!);
 
   const [nombreCliente, resumen, resumenViajes] = await Promise.all([
     obtenerNombreCliente(session!.empresaId, session!.clienteId),
@@ -64,12 +65,14 @@ export default async function ClientePortalHomePage() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link
-          href="/cliente-portal/solicitudes/nueva"
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:brightness-110"
-        >
-          + Nueva solicitud
-        </Link>
+        {soloLectura ? null : (
+          <Link
+            href="/cliente-portal/solicitudes/nueva"
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:brightness-110"
+          >
+            + Nueva solicitud
+          </Link>
+        )}
         <Link
           href="/cliente-portal/solicitudes"
           className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm hover:bg-[var(--input)]"

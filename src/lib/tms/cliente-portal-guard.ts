@@ -3,7 +3,7 @@ import {
   getClienteSession,
   type ClientePortalSessionPayload,
 } from "@/lib/tms/cliente-portal-session";
-import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
+import { esUsuarioClienteSoloLectura, validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 
 /**
  * CLIENTE-PORTAL-1 (alcance E) — guard de aislamiento del Portal del
@@ -58,4 +58,18 @@ export async function requireClienteSession(): Promise<
     };
   }
   return { session };
+}
+
+/**
+ * Guard para operaciones que ESCRIBEN (hoy: crear una solicitud). Igual que requireClienteSession() y además rechaza con 403 a las cuentas de SOLO CONSULTA
+ * (`tms_cliente_usuarios.solo_lectura`, p. ej. un acceso de PriceSmart): consultan solicitudes, seguimiento y evidencias pero no modifican información operativa.
+ * La marca se lee de la fila real en cada petición (no del JWT): activarla o quitarla surte efecto de inmediato.
+ */
+export async function requireClienteEscritura(): ReturnType<typeof requireClienteSession> {
+  const guard = await requireClienteSession();
+  if (guard.error) return guard;
+  if (await esUsuarioClienteSoloLectura(guard.session)) {
+    return { error: NextResponse.json({ error: "Tu acceso es de solo consulta." }, { status: 403 }) };
+  }
+  return guard;
 }
