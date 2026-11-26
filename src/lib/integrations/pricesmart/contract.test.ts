@@ -34,6 +34,10 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
           if (path.replaceAll('\\','/').startsWith('src/app/api/integrations/pricesmart/v1/orders')) {
             expect(text).toMatch(/^import \{ handlePriceSmart \} from "@\/lib\/integrations\/pricesmart\/runtime";/);
             expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql/);
+          } else if (/^src\/app\/api\/empresas\/\[slug\]\/tms\/solicitudes-clientes\/pricesmart\/kpi\/route\.ts$/.test(path.replaceAll('\\','/'))) {
+            // KPI (proyecto separado de la integración operativa): la ruta interna SOLO importa el punto de entrada de laboratorio de la capa KPI (que no toca runtime, transporte, M2M ni handlers).
+            expect(text.match(/from "[^"]*pricesmart[^"]*"/g) ?? []).toEqual(['from "@/lib/integrations/pricesmart/lab-demo/kpi-entry"']);
+            expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql|export async function (POST|PUT|PATCH|DELETE)/);
           } else if (/^src\/app\/api\/empresas\/\[slug\]\/tms\/solicitudes-clientes\/pricesmart\//.test(path.replaceAll('\\','/'))) {
             // API-13: las dos rutas de Operaciones (lectura y «reconocer») solo importan la vista de laboratorio, que se niega a operar fuera del laboratorio ({enabled:false}).
             const imports = text.match(/from "[^"]*pricesmart[^"]*"/g) ?? [];
