@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 const mock = vi.hoisted(() => ({ guard: vi.fn(), list: vi.fn(), resume: vi.fn() }));
+const historial = vi.hoisted(() => vi.fn());
+vi.mock("./historial-consumos", async importOriginal => ({ ...(await importOriginal<typeof import("./historial-consumos")>()), historialConsumos: historial }));
 vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: mock.guard }));
 vi.mock("./service", () => ({ consultar: mock.list, reanudarArchivo: mock.resume }));
 import { cb2Http, bodyAcotado } from "./http";
 const session = { id: 1, username: "op", rol: "Admin" }, empresa = { id: 1 };
 beforeEach(() => { mock.guard.mockResolvedValue({ session, empresa }); mock.list.mockResolvedValue([]); mock.resume.mockResolvedValue({ ok: true }); });
 describe("CB2 HTTP", () => {
+    it("historial cronológico usa tenant y permiso de lectura del servidor", async () => { historial.mockResolvedValue({items:[],siguiente:null}); const r=await cb2Http(new Request("http://localhost/test?desde=2026-10-01&corte=20&fechaCursor=2026-10-03&idCursor=17"),"demo","historial-consumos"); expect(r.status).toBe(200); expect(mock.guard).toHaveBeenCalledWith("demo","ver",{soloLectura:true}); expect(historial).toHaveBeenCalledWith(1,{desde:"2026-10-01"},{corte:20,fecha:"2026-10-03",id:17},100); });
     it.each([401, 403, 404])("propaga guard %s sin tocar datos", async (status) => { mock.guard.mockResolvedValue({ error: new Response(null, { status }) }); expect((await cb2Http(new Request("http://localhost/test"), "otra", "consumos")).status).toBe(status); expect(mock.list).not.toHaveBeenCalled(); });
     it("lectura tenant del servidor, paginada y no-store", async () => { const r = await cb2Http(new Request("http://localhost/test?limite=20&despues=4"), "demo", "consumos"); expect(mock.list).toHaveBeenCalledWith(1, "consumos", undefined, 20, 4); expect(mock.guard).toHaveBeenCalledWith("demo", "ver", { soloLectura: true }); expect(r.headers.get("cache-control")).toContain("no-store"); });
     it("limites de lectura y IDs invalidos", async () => { expect((await cb2Http(new Request("http://localhost/test?limite=501"), "demo", "consumos")).status).toBe(400); expect((await cb2Http(new Request("http://localhost/test"), "demo", "filas", "0")).status).toBe(400); });
