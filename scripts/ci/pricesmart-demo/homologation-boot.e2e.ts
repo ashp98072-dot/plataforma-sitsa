@@ -8,13 +8,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { cancel, connect, empresas, get, post, scopeFull, uid, labOrder } from "./e2e-support";
 
 const scenario = String(process.env.PS_HB_SCENARIO); const step = String(process.env.PS_HB_STEP ?? "1");
-const killFile = String(process.env.PS_HB_KILLFILE); const runDir = String(process.env.PS_DEMO_RUNDIR); const pendingFile = path.join(runDir, "hb-pending.json");
+const killFile = String(process.env.PS_HB_KILLFILE); const runDir = String(process.env.PS_DEMO_RUNDIR); const pendingFile = path.join(runDir, "hb-pending.json"); const burstFile = path.join(runDir, "hb-burst.json");
 let ctx: Awaited<ReturnType<typeof connect>>;
 beforeAll(async () => { ctx = await connect(); });
 afterAll(async () => { await ctx.db.end(); });
 const rows: typeof ctx.rows = (...a) => ctx.rows(...a);
 const A = () => empresas.a.empresaId;
-const bootLine = () => { const lines = readFileSync(path.join(runDir, "next.log"), "utf8").split("\n").filter((l) => l.includes("[pricesmart] runtime de homologación")); return lines.at(-1) ?? ""; };
+const bootLine = () => { const lines = readFileSync(String(process.env.PS_HB_LOG ?? path.join(runDir, "next.log")), "utf8").split("\n").filter((l) => l.includes("[pricesmart] runtime de homologación")); return lines.at(-1) ?? ""; };
 const workerConnections = async () => Number((await rows("SELECT COUNT(*) n FROM information_schema.PROCESSLIST WHERE USER = ?", [String(process.env.PS_HB_WORKER_USER)]))[0].n);
 const counts = async () => ({ orders: Number((await rows("SELECT COUNT(*) n FROM ps_api01_orders"))[0].n), outbox: Number((await rows("SELECT COUNT(*) n FROM ps_api01_outbox"))[0].n) });
 const solicitudes = async (id: string) => Number((await rows("SELECT COUNT(*) n FROM tms_solicitudes_cliente WHERE empresa_id = ? AND referencia_cliente = ?", [A(), id]))[0].n);
@@ -102,5 +102,55 @@ describe.skipIf(scenario !== "open" || step !== "2")("HB.7 tras REINICIAR la app
     const again = await post("a", pending); expect(again.status).toBe(202); expect(await solicitudes(pending)).toBe(1);   // reenviar tras el reinicio no duplica
     const fresh = uid(); expect((await post("a", fresh)).status).toBe(202); expect(await waitFor(async () => (await solicitudes(fresh)) === 1)).toBe(true);
     expect(await workerConnections()).toBeGreaterThan(0);   // el consumidor volvió a abrir su pool con la cuenta del worker
+  });
+});
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+/** Simula que pasó el tiempo de los arrendamientos (lease) de lo que murió con el proceso (30 s y 120 s por omisión). */
+const expireLeases = async () => { for (const sql of ["UPDATE ps_api01_outbox SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE status = 'LEASED'", "UPDATE ps_api13_link_jobs SET lease_until = DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE lease_until IS NOT NULL"]) { for (let i = 0; i < 6; i++) { try { await ctx.db.query(sql); break; } catch (e) { if ((e as { code?: string }).code !== "ER_LOCK_DEADLOCK") throw e; } } } };
+
+describe.skipIf(scenario !== "open" || step !== "3")("HB.8 apagado ORDENADO durante el procesamiento (SIGTERM con órdenes en la outbox)", () => {
+  it("se envían órdenes en ráfaga y se manda SIGTERM a la app a mitad de ráfaga: la app termina; toda orden confirmada (202) sigue guardada y en la outbox; NINGUNA solicitud TMS duplicada", async () => {
+    const pid = Number(process.env.PS_HB_APP_PID); expect(pid).toBeGreaterThan(1);
+    const accepted: string[] = []; let signaled = false;
+    for (let i = 0; i < 14; i++) {
+      const id = uid(); try { const r = await post("a", id); if (r.status === 202) accepted.push(id); } catch { /* la app ya no atiende: esa orden NO fue confirmada */ }
+      if (i === 5 && !signaled) { signaled = true; process.kill(-pid, "SIGTERM"); }   // a mitad de ráfaga, con la outbox procesando
+    }
+    expect(accepted.length).toBeGreaterThanOrEqual(6);   // las confirmadas ANTES del apagado
+    expect(await waitFor(async () => !alive(pid), 40000)).toBe(true);   // la app terminó (apagado ordenado sin colgarse)
+    writeFileSync(burstFile, JSON.stringify({ accepted }));
+    for (const id of accepted) {
+      const o = await rows("SELECT o.id FROM ps_api01_orders o WHERE o.tenant_id = ? AND o.external_order_id = ?", [A(), Buffer.from(id)]); expect(o, `orden ${id} confirmada y no perdida`).toHaveLength(1);
+      const ox = await rows("SELECT status FROM ps_api01_outbox WHERE order_id = ?", [o[0].id]); expect(ox.length, `evento de ${id}`).toBeGreaterThanOrEqual(1); expect(ox.every((x) => ["PENDING", "LEASED", "DONE"].includes(String(x.status))), `estados de ${id}`).toBe(true);
+      expect(await solicitudes(id), `sin duplicar ${id}`).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe.skipIf(scenario !== "open" || step !== "4")("HB.9 recuperación tras el apagado a mitad de procesamiento", () => {
+  it("tras reiniciar, lo que quedó pendiente o con arrendamiento vencido se procesa SIN reenviar: cada orden confirmada tiene EXACTAMENTE una solicitud TMS, la outbox queda sin pendientes y reenviar no duplica", async () => {
+    const { accepted } = JSON.parse(readFileSync(burstFile, "utf8")) as { accepted: string[] };
+    expect(bootLine()).toMatch(/INSTALLED \(sin bloqueos\)/);
+    const ok = await waitFor(async () => { await expireLeases(); await due(); for (const id of accepted) if ((await solicitudes(id)) !== 1) return false; return true; }, 90000); expect(ok).toBe(true);
+    for (const id of accepted) { expect(await solicitudes(id), id).toBe(1); expect((await get("a", id)).json, id).toMatchObject({ confirmsDelivery: false, tms: { linked: true } }); }
+    expect(await waitFor(async () => { const open = await rows("SELECT COUNT(*) n FROM ps_api01_outbox o JOIN ps_api01_orders r ON r.id = o.order_id WHERE o.status IN ('PENDING','LEASED') AND r.external_order_id IN (?)", [accepted.map((x) => Buffer.from(x))]); return Number(open[0].n) === 0; }, 30000)).toBe(true);
+    for (const id of accepted.slice(0, 3)) { expect((await post("a", id)).status).toBe(202); expect(await solicitudes(id)).toBe(1); }   // reenviar tras el reinicio no duplica
+  });
+});
+
+describe.skipIf(scenario !== "prod-disabled")("HB.10 `next build` + `next start` REALES con el runtime DESHABILITADO y sin proveedores sintéticos", () => {
+  it("las tres rutas PriceSmart responden 503 DISABLED, no se guarda nada, no hay conexiones del worker y el arranque no registró ningún runtime", async () => {
+    const before = await counts();
+    for (const r of [await post("a", uid()), await get("a", uid()), await cancel("a", uid())]) { expect(r.status).toBe(503); expect(r.json.code).toBe("DISABLED"); }
+    const noAuth = await post(null, uid()); expect(noAuth.status).toBe(503);   // sin evidencia: sigue cerrado (no hay verificador instalado)
+    expect(await counts()).toEqual(before); expect(await workerConnections()).toBe(0); expect(bootLine()).toBe("");
+  });
+});
+
+describe.skipIf(scenario !== "prod-synthetic-refused")("HB.11 `next start` real: con ENABLED, decisiones, ACK y las variables de proveedores SINTÉTICOS presentes, el proceso de producción los RECHAZA", () => {
+  it("el arranque queda CERRADO con SYNTHETIC_PROVIDERS_REFUSED (nunca instala el verificador de laboratorio); rutas 503, sin órdenes y sin conexiones del worker", async () => {
+    expect(bootLine()).toMatch(/CLOSED \(SYNTHETIC_PROVIDERS_REFUSED/);
+    const before = await counts(); const r = await post("a", uid()); expect(r.status).toBe(503); expect(r.json.code).toBe("DISABLED"); expect(await counts()).toEqual(before); expect(await workerConnections()).toBe(0);
   });
 });

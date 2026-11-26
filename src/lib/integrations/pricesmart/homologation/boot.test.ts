@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bootHomologationRuntime, clearHomologationBootMemo, type BootIO, type BootPools } from './boot';
+import { bootHomologationRuntime, clearHomologationBootMemo, type BootIO, type BootPools, type ShutdownOutcome } from './boot';
 import { REVIEWED_ADAPTERS, resolveHomologationProviders, syntheticProvidersDecision, SYNTHETIC_PROVIDERS_ACK, type HomologationProviders } from './providers';
 import { isPriceSmartHandlerInstalled, installPriceSmartHandler } from '../runtime-state';
 import { ENABLE_ACK } from '../runtime-config';
@@ -17,12 +17,12 @@ const env = (over: Record<string, string | undefined> = {}) => ({
   PS_HOMOLOG_SYNTHETIC_PROVIDERS: SYNTHETIC_PROVIDERS_ACK, PS_HOMOLOG_SYNTHETIC_KEY: KEY, ...over });
 const providers = (): HomologationProviders => ({ evidence: { extract: async () => null }, verifier: { verify: async () => null } as never, cipher: { seal: async () => ({ ciphertext: Buffer.alloc(0), keyReference: 'k' }), open: async () => ({}) }, contract: {} as never });
 function io(over: Partial<BootIO> = {}, install?: BootIO['install']) {
-  const closed = vi.fn(async () => undefined); const shutdown: (() => Promise<void>)[] = []; const stop = vi.fn();
+  const order: string[] = []; const closed = vi.fn(async () => { order.push('pool.close'); }); const shutdown: (() => Promise<ShutdownOutcome>)[] = []; const stop = vi.fn(); const drain = vi.fn(async () => { order.push('consumer.shutdown'); return { drained: true, waitedMs: 0 }; });
   const pools: BootPools = { pool: {} as never, workerPool: {} as never, close: closed };
   const base: BootIO = {
     createPools: vi.fn(async () => pools), resolveProviders: vi.fn(async () => ({ ok: true as const, source: 'REVIEWED_ADAPTER' as const, providers: providers() })),
-    install: vi.fn(install ?? (async () => ({ ready: true, mode: 'ENABLED' as const, blockers: [], consumerStarted: true, stopConsumer: stop }))), onShutdown: (fn) => { shutdown.push(fn); }, ...over };
-  return { base, closed, shutdown, stop };
+    install: vi.fn(install ?? (async () => ({ ready: true, mode: 'ENABLED' as const, blockers: [], consumerStarted: true, stopConsumer: stop, shutdownConsumer: drain }))), onShutdown: (fn) => { shutdown.push(fn); }, ...over };
+  return { base, closed, shutdown, stop, drain, order };
 }
 beforeEach(() => { clearHomologationBootMemo(); installPriceSmartHandler(null); });
 afterEach(() => { clearHomologationBootMemo(); installPriceSmartHandler(null); });
@@ -80,10 +80,38 @@ describe('arranque: instalación y apagado seguro', () => {
     const r = await bootHomologationRuntime(e, x.base); expect(r).toMatchObject({ state: 'INSTALLED', mode: 'ENABLED', consumerStarted: true, providers: 'REVIEWED_ADAPTER', blockers: [] });
     expect(await bootHomologationRuntime(e, x.base)).toBe(r); expect(x.base.install).toHaveBeenCalledTimes(1); expect(x.base.createPools).toHaveBeenCalledTimes(1);
     const deps = vi.mocked(x.base.install).mock.calls[0][1]; expect(deps).toMatchObject({ schema, runtimeUser: e.DB_USER, workerUser }); expect(deps.workerUser).not.toBe(deps.runtimeUser);
-    expect(x.shutdown).toHaveLength(1); await x.shutdown[0](); expect(x.stop).toHaveBeenCalledTimes(1); expect(x.closed).toHaveBeenCalledTimes(1); expect(isPriceSmartHandlerInstalled()).toBe(false);
+    expect(x.shutdown).toHaveLength(1); const out = await x.shutdown[0](); expect(out).toEqual({ drained: true, waitedMs: 0, poolClosed: true }); expect(x.drain).toHaveBeenCalledTimes(1); expect(x.closed).toHaveBeenCalledTimes(1); expect(x.order).toEqual(['consumer.shutdown', 'pool.close']); expect(isPriceSmartHandlerInstalled()).toBe(false);
   });
   it('el arranque nunca expone credenciales en el informe', async () => { const r = await bootHomologationRuntime(env(), io().base); expect(JSON.stringify(r)).not.toMatch(/x{24}|a{64}|PASSWORD|SYNTHETIC_KEY/); });
 });
+
+describe('apagado ordenado del arranque', () => {
+  it('el handler sale ANTES de drenar; el pool del worker se cierra SOLO después de que el consumidor termine su ciclo activo; un segundo apagado comparte el mismo resultado', async () => {
+    let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
+    const x = io(); const steps: string[] = [];
+    vi.mocked(x.base.install).mockImplementation((async () => ({ ready: true, mode: 'ENABLED', blockers: [], consumerStarted: true, stopConsumer: x.stop,
+      shutdownConsumer: async () => { steps.push(`handler:${isPriceSmartHandlerInstalled()}`); steps.push('drain:inicio'); await gate; steps.push('drain:fin'); return { drained: true, waitedMs: 5 }; } })) as never);
+    x.closed.mockImplementation(async () => { steps.push('pool.close'); });
+    installPriceSmartHandler(async () => new Response('x'));
+    await bootHomologationRuntime(env(), x.base); installPriceSmartHandler(async () => new Response('x'));
+    const a = x.shutdown[0](); const b = x.shutdown[0](); await new Promise((r) => setTimeout(r, 20));
+    expect(steps).toEqual(['handler:false', 'drain:inicio']);   // el pool NO se cerró mientras el ciclo sigue activo
+    release(); expect(await a).toEqual({ drained: true, waitedMs: 5, poolClosed: true }); expect(await b).toEqual(await a); expect(steps).toEqual(['handler:false', 'drain:inicio', 'drain:fin', 'pool.close']); expect(x.closed).toHaveBeenCalledTimes(1);
+  });
+  it('si se agota la espera: informa drained=false, cierra el pool igualmente (los trabajos se recuperan al reiniciar) y nunca se cuelga; si cerrar el pool falla, lo informa sin lanzar', async () => {
+    const x = io(); vi.mocked(x.base.install).mockImplementation((async () => ({ ready: true, mode: 'ENABLED', blockers: [], consumerStarted: true, shutdownConsumer: async () => ({ drained: false, waitedMs: 10000 }) })) as never);
+    await bootHomologationRuntime(env(), x.base); expect(await x.shutdown[0]()).toEqual({ drained: false, waitedMs: 10000, poolClosed: true }); expect(x.closed).toHaveBeenCalledTimes(1);
+    resetOnce(); const y = io({}, (async () => ({ ready: true, mode: 'ENABLED', blockers: [], consumerStarted: true, shutdownConsumer: async () => { throw new Error('x'); } })) as never); y.closed.mockRejectedValue(new Error('pool'));
+    await bootHomologationRuntime(env(), y.base); expect(await y.shutdown[0]()).toEqual({ drained: false, waitedMs: 0, poolClosed: false });
+  });
+  it('el límite de espera se toma de PS_HOMOLOG_SHUTDOWN_TIMEOUT_MS (0–60000; otro valor → 10000)', async () => {
+    for (const [value, expected] of [['2500', 2500], ['0', 0], ['60001', 10000], ['-1', 10000], ['abc', 10000], [undefined, 10000]] as const) {
+      clearHomologationBootMemo(); const shutdownConsumer = vi.fn(async () => ({ drained: true, waitedMs: 0 })); const x = io({}, (async () => ({ ready: true, mode: 'ENABLED', blockers: [], consumerStarted: true, shutdownConsumer })) as never);
+      await bootHomologationRuntime(env({ PS_HOMOLOG_SHUTDOWN_TIMEOUT_MS: value }), x.base); await x.shutdown[0](); expect(shutdownConsumer, String(value)).toHaveBeenCalledWith(expected);
+    }
+  });
+});
+const resetOnce = () => clearHomologationBootMemo();
 
 describe('proveedores: lo sintético solo existe en una prueba local', () => {
   it('se rechazan en un proceso de producción (`next start`), sin la frase, con un id que no es homolog-test*, sin clave o fuera de loopback', () => {

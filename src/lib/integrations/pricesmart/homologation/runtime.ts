@@ -28,7 +28,10 @@ export type HomologationDeps = {
   /** true = apagar. Por omisión, `fileKillSwitch` sobre PS_HOMOLOG_KILLSWITCH_FILE. */ killSwitch: () => boolean | Promise<boolean>;
   outbox?: { policy?: OutboxPolicy; log?: (entry: OutboxLogEntry) => void };
 };
-export type OutboxConsumer = { runOnce(): Promise<OutboxRunSummary>; kick(): void; start(everyMs: number): void; stop(): void };
+export type ConsumerShutdownResult = { drained: boolean; waitedMs: number };
+export type OutboxConsumer = { runOnce(): Promise<OutboxRunSummary>; kick(): void; start(everyMs: number): void; stop(): void;
+  /** APAGADO ORDENADO y TERMINAL: impide nuevas ejecuciones (temporizador, `kick`, callbacks ya programados y el encadenado de un `kick` previo) y espera, hasta `timeoutMs`, el ciclo activo. `drained:false` = se agotó la espera. Idempotente. */
+  shutdown(timeoutMs?: number): Promise<ConsumerShutdownResult> };
 export type HomologationRuntime = { ports: RuntimePorts; consumer: OutboxConsumer };
 
 /** Interruptor de emergencia por ARCHIVO: el servicio solo opera si el archivo existe y contiene exactamente `ON`. Ausente, ilegible o con otro contenido ⇒ APAGADO (cierra). Se lee en cada solicitud. */
@@ -38,21 +41,38 @@ export function fileKillSwitch(file: string): () => boolean {
 
 /** Consumidor de la outbox: un despachador (reclamo con lease, fencing, backoff, REVIEW) sobre el almacén real con la cuenta del worker. `kick` solicita un ciclo pronto sin bloquear la solicitud. */
 export function createOutboxConsumer(dispatcher: Pick<OutboxDispatcher, 'runOnce'>, paused?: () => boolean | Promise<boolean>): OutboxConsumer {
-  let running: Promise<OutboxRunSummary> | null = null; let timer: ReturnType<typeof setInterval> | undefined; let kicked = false;
+  let running: Promise<OutboxRunSummary> | null = null; let timer: ReturnType<typeof setInterval> | undefined; let kicked = false; let closed = false; let closing: Promise<ConsumerShutdownResult> | null = null;
   // APAGADO SEGURO: si el interruptor de emergencia apaga el servicio, el temporizador y la vía rápida NO procesan nada hacia el TMS (lo recibido queda durable y se procesa al reactivarlo). Un fallo al leerlo cuenta como apagado.
   // `runOnce` (uso explícito: pruebas y operación manual) no se ve afectado.
   const off = async (): Promise<boolean> => { if (!paused) return false; try { return (await paused()) !== false; } catch { return true; } };
-  const go = () => { if (!paused) { void run().catch(() => undefined); return; } void off().then((o) => { if (!o) return run(); return undefined; }).catch(() => undefined); };
+  // Todo disparo automático (temporizador, `kick`, encadenado) pasa por `go`, que NO inicia nada una vez cerrado el consumidor, ni siquiera desde un callback ya programado (`off().then(...)`).
+  const go = () => {
+    if (closed) return;
+    if (!paused) { void run().catch(() => undefined); return; }
+    void off().then((o) => { if (!o && !closed) return run(); return undefined; }).catch(() => undefined);
+  };
   const run = (): Promise<OutboxRunSummary> => {
     if (running) return running;
+    if (closed) return Promise.reject(new Error('CONSUMER_CLOSED'));   // ninguna ejecución NUEVA tras el apagado (la activa, si la hay, se espera en `shutdown`)
     running = dispatcher.runOnce().finally(() => { running = null; if (kicked) { kicked = false; go(); } });
     return running;
   };
+  const stop = () => { if (timer) clearInterval(timer); timer = undefined; };
   return {
     runOnce: run,
-    kick() { if (running) { kicked = true; return; } go(); },
-    start(everyMs) { if (timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(go, everyMs); timer.unref?.(); },
-    stop() { if (timer) clearInterval(timer); timer = undefined; },
+    kick() { if (closed) return; if (running) { kicked = true; return; } go(); },
+    start(everyMs) { if (closed || timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(go, everyMs); timer.unref?.(); },
+    stop,
+    shutdown(timeoutMs = 10_000) {
+      closed = true; kicked = false; stop();
+      closing ??= (async () => {
+        const active = running; if (!active) return { drained: true, waitedMs: 0 };
+        const wait = Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 && timeoutMs <= 120_000 ? timeoutMs : 10_000; const t0 = Date.now(); let t: ReturnType<typeof setTimeout> | undefined;
+        const outcome = await Promise.race([active.then(() => 'done' as const, () => 'done' as const), new Promise<'timeout'>((resolve) => { t = setTimeout(() => resolve('timeout'), wait); })]);
+        if (t) clearTimeout(t); return { drained: outcome === 'done', waitedMs: Date.now() - t0 };
+      })();
+      return closing;
+    },
   };
 }
 
@@ -103,7 +123,7 @@ export function homologationGate(env: Record<string, string | undefined>): { ok:
 }
 
 /** Único camino de instalación: valida el proceso y delega en `installControlledRuntime` (modo, decisiones ratificadas, ACK, sondas, interruptor). Si algo falla, no instala nada. */
-export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean; stopConsumer?: () => void }> {
+export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean; stopConsumer?: () => void; shutdownConsumer?: (timeoutMs?: number) => Promise<ConsumerShutdownResult> }> {
   const gate = homologationGate(env);
   if (!gate.ok) return { ready: false, mode: 'DISABLED', blockers: [{ code: 'HOMOLOGATION_GATE', detail: gate.reason }], consumerStarted: false };
   let runtime: HomologationRuntime;
@@ -112,5 +132,5 @@ export async function installHomologationRuntime(env: Record<string, string | un
   // El consumidor corre SOLO si el runtime quedó instalado (ready) y no está en solo lectura: nada se procesa hacia el TMS con el servicio apagado o sin decisiones ratificadas.
   const run = report.ready && report.mode === 'ENABLED';
   if (run) runtime.consumer.start(options.consumerEveryMs ?? 2000);
-  return { ...report, consumerStarted: run, stopConsumer: () => runtime.consumer.stop() };
+  return { ...report, consumerStarted: run, stopConsumer: () => runtime.consumer.stop(), shutdownConsumer: (timeoutMs) => runtime.consumer.shutdown(timeoutMs) };
 }

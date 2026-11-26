@@ -506,10 +506,13 @@ const hbAppEnv = (extra = {}) => {
     PS_HOMOLOG_WORKER_USER: hb.names.workerUser, PS_HOMOLOG_WORKER_PASSWORD: hb.secrets.worker, PS_HOMOLOG_KILLSWITCH_FILE: hb.killFile, PS_HOMOLOG_CONSUMER_EVERY_MS: '500',
     PRICESMART_RUNTIME_ENVIRONMENT: 'sandbox', PRICESMART_ORIGIN_CLUB: LAB_CLUB, PRICESMART_DB_SCHEMA: hb.names.schema, PRICESMART_DB_RUNTIME_USER: hb.names.appUser, PRICESMART_RATE_PER_WINDOW: '5000', PRICESMART_RATE_WINDOW_MS: '60000', ...extra };
 };
-async function startHbApp(extra) {
-  const { m } = readState(); const port = await freePort(); const logFile = path.join(m.runDir, 'next.log'); const reportLines = () => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length; } catch { return 0; } };
+async function startHbApp(extra, opts = {}) {
+  const { m } = readState(); const port = await freePort(); const logFile = path.join(m.runDir, opts.logName ?? 'next.log'); const reportLines = () => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length; } catch { return 0; } };
   const linesBefore = reportLines(); const fd = fs.openSync(logFile, 'a');
-  hbProc = cp.spawn(process.execPath, [path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', HOST, '--port', String(port)], { cwd: repoRoot, env: hbAppEnv(extra), detached: true, stdio: ['ignore', fd, fd] }); fs.closeSync(fd);
+  // Producción real (`next start` vía start-sandbox.mjs, el camino de despliegue) o desarrollo (`next dev`). En ambos el entorno se construye desde cero.
+  const argv = opts.prod ? [path.join(repoRoot, 'scripts', 'start-sandbox.mjs')] : [path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', HOST, '--port', String(port)];
+  const env = hbAppEnv(opts.prod ? { ...extra, NODE_ENV: 'production', PORT: String(port) } : extra);
+  hbProc = cp.spawn(process.execPath, argv, { cwd: repoRoot, env, detached: true, stdio: ['ignore', fd, fd] }); fs.closeSync(fd);
   let up = false;
   for (let i = 0; i < 420 && !up; i++) {
     if (hbProc.exitCode !== null) throw new Error(`La app terminó: ${tailOf(logFile)}`);
@@ -523,7 +526,7 @@ async function startHbApp(extra) {
     if (!seen) throw new Error(`El arranque no informó el estado del runtime: ${tailOf(logFile, 30)}`);
   }
   const st = JSON.parse(fs.readFileSync(path.join(m.runDir, 'state-hb.json'), 'utf8')); st.app.port = port; fs.writeFileSync(path.join(m.runDir, 'state-hb.json'), JSON.stringify(st));
-  log(`app de arranque real en http://${HOST}:${port} (${extra.PRICESMART_RUNTIME_MODE ?? 'sin modo'})`);
+  log(`app de arranque real en http://${HOST}:${port} (${opts.prod ? 'next start' : 'next dev'}; ${extra.PRICESMART_RUNTIME_MODE ?? 'sin modo'})`);
 }
 async function stopHbApp() {
   if (!hbProc?.pid) return 'sin app'; const proc = hbProc; hbProc = null;
@@ -536,7 +539,7 @@ function hbVitestEnv(scenario, extra = {}) {
   const { m } = readState(); const hb = ST.demo.hb;
   return { PATH: `${path.dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`, HOME: m.homeDir, TMPDIR: m.tmpDir, LANG: 'C.UTF-8', NODE_ENV: 'test', AUTH_SECRET: hb.sandboxSecrets.AUTH_SECRET, NEXT_TELEMETRY_DISABLED: '1',
     DB_HOST: HOST, DB_PORT: String(m.port), DB_NAME: hb.names.schema, PS_DEMO_OWNER_USER: hb.owner.user, PS_DEMO_OWNER_PASSWORD: hb.owner.password, PS_DEMO_RUNDIR: m.runDir, PS_DEMO_STATE_FILE: 'state-hb.json',
-    PS_HB_SCENARIO: scenario, PS_HB_KILLFILE: hb.killFile, PS_HB_WORKER_USER: hb.names.workerUser, ...extra };
+    PS_HB_SCENARIO: scenario, PS_HB_KILLFILE: hb.killFile, PS_HB_WORKER_USER: hb.names.workerUser, PS_HB_LOG: path.join(m.runDir, `next-hb-${scenario}.log`), ...(hbProc?.pid ? { PS_HB_APP_PID: String(hbProc.pid) } : {}), ...extra };
 }
 /** Escenarios del arranque real: cada uno arranca la app con SU configuración, ejecuta la prueba por HTTP y detiene la app. Devuelve 0 solo si TODOS pasan. */
 /** Next solo admite UN servidor de desarrollo por proyecto (bloqueo en `.next`): antes de arrancar las apps del arranque real se detiene la app de laboratorio de las fases anteriores. */
@@ -557,12 +560,40 @@ async function runHomologBootPhase(demoCfg) {
   ];
   let code = 0;
   for (const [scenario, extra, restart] of plan) {
-    log(`=== Arranque real: escenario «${scenario}»`);
+    log(`=== Arranque real: escenario «${scenario}»`); const logName = `next-hb-${scenario}.log`;
     try {
-      fs.writeFileSync(hb.killFile, 'ON\n'); await startHbApp(extra);
+      fs.writeFileSync(hb.killFile, 'ON\n'); await startHbApp(extra, { logName });
       let c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '1' }), ['--reporter=verbose']);
-      if (c === 0 && restart) { const how = await stopHbApp(); log(`apagado seguro de la app: ${how}`); if (how !== 'detenida') c = 1; else { await startHbApp(extra); c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '2' }), ['--reporter=verbose']); } }
+      if (c === 0 && restart) {
+        const how = await stopHbApp(); log(`apagado seguro de la app: ${how}`); if (how !== 'detenida') c = 1;
+        else {
+          await startHbApp(extra, { logName }); c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '2' }), ['--reporter=verbose']);
+          // HB.8/HB.9: SIGTERM a mitad de una ráfaga (la prueba lo envía), reinicio y recuperación.
+          if (c === 0) { c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '3' }), ['--reporter=verbose']); log(`app tras el SIGTERM a mitad de ráfaga: ${await stopHbApp()}`); }
+          if (c === 0) { await startHbApp(extra, { logName }); c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '4' }), ['--reporter=verbose']); }
+        }
+      }
       if (c !== 0) code = 1;
+    } catch (e) { console.error(`[ps-linux] ERROR en el escenario «${scenario}»: ${e.message}`); code = 1; }
+    finally { await stopHbApp(); }
+  }
+  if (await runProductionStartScenarios(demoCfg, file, enabled, synthetic) !== 0) code = 1;
+  return code;
+}
+
+/** `next build` + `next start` REALES (el camino de despliegue: build sin entorno sandbox y arranque con `start-sandbox.mjs`) con el runtime deshabilitado y con proveedores sintéticos PRESENTES pero prohibidos en producción. */
+async function runProductionStartScenarios(demoCfg, file, enabled, synthetic) {
+  const { m } = readState(); const buildEnv = { PATH: `${path.dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`, HOME: m.homeDir, TMPDIR: m.tmpDir, LANG: 'C.UTF-8', NEXT_TELEMETRY_DISABLED: '1' };
+  log('=== Arranque real: next build (sin entorno sandbox, como en el despliegue)');
+  const b = cp.spawnSync(process.execPath, [path.join(repoRoot, 'scripts', 'next-command.mjs'), 'build'], { cwd: repoRoot, env: buildEnv, encoding: 'utf8', timeout: 30 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
+  if (b.status !== 0) { console.error(`[ps-linux] ERROR: next build falló (código ${b.status})\n${String(b.stdout ?? '').split('\n').slice(-30).join('\n')}\n${String(b.stderr ?? '').split('\n').slice(-30).join('\n')}`); return 1; }
+  log('next build terminado');
+  let code = 0;
+  for (const [scenario, extra] of [['prod-disabled', {}], ['prod-synthetic-refused', { ...enabled, ...synthetic }]]) {
+    log(`=== Arranque real (next start): escenario «${scenario}»`);
+    try {
+      fs.writeFileSync(ST.demo.hb.killFile, 'ON\n'); await startHbApp(extra, { logName: `next-hb-${scenario}.log`, prod: true });
+      if (vitest(demoCfg, file, hbVitestEnv(scenario), ['--reporter=verbose']) !== 0) code = 1;
     } catch (e) { console.error(`[ps-linux] ERROR en el escenario «${scenario}»: ${e.message}`); code = 1; }
     finally { await stopHbApp(); }
   }

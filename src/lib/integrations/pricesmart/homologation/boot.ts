@@ -13,12 +13,13 @@ export type BootState = 'DISABLED' | 'CLOSED' | 'INSTALLED';
 export type BootReport = { state: BootState; mode: string; blockers: { code: string; detail: string }[]; consumerStarted: boolean; providers: 'NONE' | ProviderResolutionSource };
 type ProviderResolutionSource = Extract<ProviderResolution, { ok: true }>['source'];
 
+export type ShutdownOutcome = { drained: boolean; waitedMs: number; poolClosed: boolean };
 export type BootPools = { pool: Pool; workerPool: Pool; close(): Promise<void> };
 export type BootIO = {
   createPools(env: Record<string, string | undefined>): Promise<BootPools>;
   resolveProviders(env: Record<string, string | undefined>): Promise<ProviderResolution>;
   install: typeof installHomologationRuntime;
-  onShutdown(stop: () => Promise<void>): void;
+  onShutdown(stop: () => Promise<ShutdownOutcome>): void;
 };
 
 const STORE = Symbol.for('novalvion.pricesmart.homologation.boot');
@@ -36,7 +37,10 @@ export async function defaultBootIO(): Promise<BootIO> {
     },
     resolveProviders: (env) => resolveHomologationProviders(env),
     install: installHomologationRuntime,
-    onShutdown(stop) { for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => { void stop().catch(() => undefined); }); },
+    onShutdown(stop) {
+      // Un solo apagado por proceso (SIGTERM y SIGINT comparten la misma promesa). Next.js conserva su propio manejo de la señal: este solo ordena lo del runtime.
+      for (const sig of ['SIGTERM', 'SIGINT'] as const) process.once(sig, () => { void stop().then((o) => console.log(`[pricesmart] apagado ordenado: ${o.drained ? 'consumidor drenado' : 'espera agotada (los trabajos pendientes se recuperan al reiniciar)'} (${o.waitedMs} ms)`)).catch(() => undefined); });
+    },
   };
 }
 
@@ -66,7 +70,16 @@ async function run(env: Record<string, string | undefined>, ioIn?: BootIO): Prom
     const report = await io.install(env, deps, { consumerEveryMs: Number.isSafeInteger(everyMs) && everyMs >= 500 ? everyMs : 2000 });
     if (!report.ready) { await pools.close(); pools = null; installPriceSmartHandler(null); return { state: 'CLOSED', mode: report.mode, blockers: report.blockers, consumerStarted: false, providers: resolved.source }; }
     // Apagado seguro del proceso: detiene el temporizador, espera el ciclo en curso y cierra el pool del worker. Lo recibido ya está confirmado en la base; el resto se retoma al reiniciar.
-    const held = pools; io.onShutdown(async () => { installPriceSmartHandler(null); report.stopConsumer?.(); await held.close(); });
+    // Apagado ORDENADO: (1) deja de atender solicitudes nuevas (handler fuera); (2) el consumidor no inicia ejecuciones nuevas y se ESPERA la activa, con límite; (3) solo entonces se cierra el pool del worker.
+    // Si se agota la espera, el pool se cierra igual y el trabajo en curso se recupera al reiniciar (lease con vencimiento, reclamo con token, entrega al-menos-una-vez): no hay solicitudes TMS duplicadas ni órdenes perdidas.
+    const held = pools; const waitMs = Number(env.PS_HOMOLOG_SHUTDOWN_TIMEOUT_MS ?? 10_000); let stopping: Promise<ShutdownOutcome> | null = null;
+    io.onShutdown(() => (stopping ??= (async (): Promise<ShutdownOutcome> => {
+      installPriceSmartHandler(null);
+      let drain = { drained: true, waitedMs: 0 };
+      try { if (report.shutdownConsumer) drain = await report.shutdownConsumer(Number.isSafeInteger(waitMs) && waitMs >= 0 && waitMs <= 60_000 ? waitMs : 10_000); else report.stopConsumer?.(); } catch { drain = { drained: false, waitedMs: 0 }; }
+      let poolClosed = true; try { await held.close(); } catch { poolClosed = false; }
+      return { ...drain, poolClosed };
+    })()));
     return { state: 'INSTALLED', mode: report.mode, blockers: [], consumerStarted: report.consumerStarted, providers: resolved.source };
   } catch {
     installPriceSmartHandler(null); if (pools) await pools.close().catch(() => undefined);
