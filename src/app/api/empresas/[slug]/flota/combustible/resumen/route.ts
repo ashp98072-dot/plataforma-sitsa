@@ -23,10 +23,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
   const mesRaw = url.searchParams.get("mes");
   const mes = mesRaw && /^\d{4}-(0[1-9]|1[0-2])$/.test(mesRaw) ? mesRaw : hoyLocal().slice(0, 7);
 
+  let etapa: "historico" | "integrado" = "historico";
+  const inicio = Date.now();
   try {
     const resumen = await resumenCombustibleMensual(guard.empresa.id, mes);
+    etapa = "integrado";
     return NextResponse.json({ mes, ...resumen, integrado: await resumenIntegrado(guard.empresa.id, mes) }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch {
-    return NextResponse.json({ error: "No se pudo cargar el resumen completo. Verifica la migración PR514 y vuelve a intentar." }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+    const codigo = /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "DESCONOCIDO";
+    console.error("[combustible-resumen]", { etapa, codigo, duracionMs: Date.now() - inicio });
+    return NextResponse.json({ error: "No se pudo cargar el resumen completo. Vuelve a intentar o contacta a soporte." }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
   }
 }

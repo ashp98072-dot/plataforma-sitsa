@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/tenant", () => ({ requireTenantFlotaCombustible: vi.fn() }));
 vi.mock("@/lib/flota/schema", () => ({ asegurarSchemaFlotaLectura: vi.fn(() => Promise.resolve()) }));
 vi.mock("@/lib/flota/combustible", () => ({ resumenCombustibleMensual: vi.fn() }));
+vi.mock("@/lib/flota/cb2/resumen-mensual", () => ({ resumenIntegrado: vi.fn() }));
 
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
 import { resumenCombustibleMensual } from "@/lib/flota/combustible";
+import { resumenIntegrado } from "@/lib/flota/cb2/resumen-mensual";
 import { GET } from "./route";
 
 const ctx = { params: Promise.resolve({ slug: "prueba" }) };
@@ -21,6 +23,7 @@ beforeEach(() => {
     { empresa: { id: 7 }, session: { id: 1, username: "op1" } } as Awaited<ReturnType<typeof requireTenantFlotaCombustible>>,
   );
   vi.mocked(resumenCombustibleMensual).mockResolvedValue(RESUMEN_VACIO);
+  vi.mocked(resumenIntegrado).mockResolvedValue({ grupos: [], subtotales: {}, totalGTQ: { galones: "0", monto: "0" }, excluidas: [], ambiguas: [], provisional: false });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -57,9 +60,10 @@ describe("GET /api/empresas/[slug]/flota/combustible/resumen", () => {
     expect(mesUsado).toMatch(/^\d{4}-\d{2}$/);
   });
 
-  it("si la lib rechaza el mes (rangoMes lanza), responde 400 en vez de un 500 sin cuerpo", async () => {
+  it("si falla el resumen, responde 500 con mensaje genérico", async () => {
     vi.mocked(resumenCombustibleMensual).mockRejectedValue(new Error("Mes inválido"));
     const res = await GET(new Request("http://localhost/x?mes=0001-05"), ctx);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "No se pudo cargar el resumen completo. Vuelve a intentar o contacta a soporte." });
   });
 });
