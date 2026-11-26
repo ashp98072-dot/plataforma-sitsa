@@ -496,7 +496,7 @@ async function main() {
     const migrations = fs.readdirSync(path.join(repoRoot, 'sql')).filter((f) => /^migrate-2026-.*\.sql$/.test(f) && !f.includes('tms-parada-confirmaciones')).sort().map((f) => `sql/${f}`);
     await schema(migrations, true); const second = await schema(migrations, true);
     await schema(['sql/migrate-2026-11-tms-parada-confirmaciones.sql'], true);
-    const pending = second.filter((r) => r.pendingAtEnd > 0);
+    const pending = second.filter((r) => r.pendingAtEnd > 0); ST.pendingMigrations = pending;
     log('migraciones con sentencias pendientes tras la segunda ronda:', pending.length, '(informativo: el arnés de Windows aplica la misma lógica; el esquema que usan las pruebas se verifica con las pruebas)');
     for (const r of pending.slice(0, 40)) log(`  ${r.file}: ${r.pendingAtEnd} pendiente(s); p. ej. ${r.errors[0] ?? ''}`.slice(0, 260));
     await seed();
@@ -525,10 +525,11 @@ async function main() {
       log(`=== Fase: ${ph.name} → ${files.join(' ')}`);
       let c = 1;
       try { if (ph.before) await ph.before(); c = vitest(demoCfg, files, ph.env(), ['--reporter=verbose']); }
-      catch (e) { console.error(`[ps-linux] ERROR en la fase «${ph.name}»: ${e.message}`); c = 1; }
+      catch (e) { console.error(`[ps-linux] ERROR en la fase «${ph.name}»: ${e.message}`); if (e.diagnostic) console.error('[ps-linux] diagnóstico:', JSON.stringify(e.diagnostic).slice(0, 6000)); c = 1; }
       results.push({ fase: ph.name, archivos: files.length, resultado: c === 0 ? 'OK' : 'FALLO' }); if (c !== 0) code = 1;
     }
     log('RESUMEN', JSON.stringify(results));
+    if (code !== 0 && ST.pendingMigrations?.length) for (const r of ST.pendingMigrations.slice(0, 40)) console.error(`[ps-linux] migración con pendientes: ${r.file}: ${r.pendingAtEnd}; ${r.errors[0] ?? ''}`.slice(0, 300));
     if (code !== 0) { console.error('--- next.log (cola) ---\n' + tailOf(path.join(m.runDir, 'next.log'), 80)); }
   } catch (e) {
     console.error(`[ps-linux] ERROR: ${e.message}`);
