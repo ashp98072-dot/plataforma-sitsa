@@ -53,16 +53,17 @@ describe("GET /api/empresas/[slug]/flota/combustible/resumen", () => {
     expect(mesUsado).toMatch(/^\d{4}-\d{2}$/);
   });
 
-  it("?mes= con formato inválido cae al mes actual, en vez de pasarlo tal cual a la lib", async () => {
-    const res = await GET(new Request("http://localhost/x?mes=no-es-un-mes"), ctx);
-    expect(res.status).toBe(200);
-    const [, mesUsado] = vi.mocked(resumenCombustibleMensual).mock.calls[0];
-    expect(mesUsado).toMatch(/^\d{4}-\d{2}$/);
+  it.each(["", "no-es-un-mes", "2026-00", "2026-13", "0001-05", "1999-12", "9999-12"])("mes inválido %s responde 400 sin consultas", async mes => {
+    const res = await GET(new Request(`http://localhost/x?mes=${mes}`), ctx);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Mes inválido. Usa AAAA-MM desde 2000-01 hasta 9999-11." });
+    expect(resumenCombustibleMensual).not.toHaveBeenCalled();
+    expect(resumenIntegrado).not.toHaveBeenCalled();
   });
 
   it("si falla el resumen, responde 500 con mensaje genérico", async () => {
     vi.mocked(resumenCombustibleMensual).mockRejectedValue(new Error("Mes inválido"));
-    const res = await GET(new Request("http://localhost/x?mes=0001-05"), ctx);
+    const res = await GET(new Request("http://localhost/x?mes=2026-05"), ctx);
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "No se pudo cargar el resumen completo. Vuelve a intentar o contacta a soporte." });
   });

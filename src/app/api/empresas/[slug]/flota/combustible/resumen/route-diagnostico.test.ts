@@ -16,3 +16,11 @@ it.each(["historico", "integrado"] as const)("registra etapa %s y código sin ex
   expect(log).toHaveBeenCalledWith("[combustible-resumen]", expect.objectContaining({ etapa, codigo: "ER_BAD_FIELD_ERROR", duracionMs: expect.any(Number) }));
   expect(JSON.stringify(log.mock.calls)).not.toContain("sensibles");
 });
+it("descarta códigos arbitrarios que podrían contener datos", async () => {
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  mocks.historico.mockRejectedValue(Object.assign(new Error("privado"), { code: "DATO_PRIVADO" }));
+  const r = await GET(new Request("http://localhost/resumen?mes=2026-11"), { params: Promise.resolve({ slug: "empresa" }) });
+  expect(r.status).toBe(500);
+  expect(log).toHaveBeenCalledWith("[combustible-resumen]", expect.objectContaining({ codigo: "DESCONOCIDO" }));
+  expect(JSON.stringify(log.mock.calls)).not.toContain("DATO_PRIVADO");
+});
