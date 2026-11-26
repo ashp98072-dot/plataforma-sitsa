@@ -32,6 +32,17 @@ describe("clasificación de la unidad del vale Shell", () => {
 });
 
 describe("estado LISTO exige piloto + unidad (interna o externa confirmada) + combustible", () => {
+  it("vale 18554: el piloto confirmado no elimina la justificación de la placa distinta", () => {
+    const f = fila({ vale: "18554", hoja: "OCTUBRE", fila: 140, fecha: "2026-10-14" }, "125 CCN", "Rafael Caal", "Diesel");
+    const cat = { ...interna, empleados: [{ id: 96, nombre: "Rafael Manuel Cucul Yaxcal", estado: "Activo" }], vehiculos: [{ id: 1190, placa: "C-125CCM", estado: "Activo" }] } as unknown as CatalogosCB2;
+    const d: DecisionAsignacion = { exigirProducto: true, exigirPiloto: true, pilotoTipo: "INTERNO", empleadoId: 96, decisionNombre: { tipo: "EMPLEADO", empleadoId: 96, confirmado: true } };
+    const pendiente = estado(f, cat, { k1: "1190" }, d);
+    expect(pendiente.estado).toBe("PENDIENTE");
+    expect(causasAsignacion(pendiente, cat, d).join(" ")).toMatch(/justific/i);
+    const justificada = estado(f, cat, { k1: "1190" }, { ...d, motivoUnidad: "Placa confirmada con evidencia del vale" });
+    expect(justificada.estado).toBe("LISTO");
+    expect(justificada.fila.placa).toBe("125 CCN");
+  });
   const emp110: DecisionAsignacion = { exigirProducto: true, exigirPiloto: true, pilotoTipo: "INTERNO", empleadoId: 110, decisionNombre: { tipo: "EMPLEADO", empleadoId: 110, confirmado: false } };
   it("los tres resueltos → LISTO (unidad interna); piloto resuelto + unidad pendiente → PENDIENTE; unidad resuelta + combustible pendiente → PENDIENTE", () => {
     expect(estado(fila(), interna, { k1: "1" }, emp110).estado).toBe("LISTO");
