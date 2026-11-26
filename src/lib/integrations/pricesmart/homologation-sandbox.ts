@@ -27,6 +27,9 @@ export type SandboxExposureReport = { authorizesExternalExposure: false; exposab
  */
 export const HOMOLOGATION_SCHEMA_PREFIX = /^sandbox_api02_homolog_[a-z0-9_]{1,30}$/;
 
+/** Regla única de «el proceso se declara de producción» (idéntica a la del ensamblaje del runtime y a la del diagnóstico; una prueba de consistencia lo exige). */
+export const declaresProduction = (nodeEnv: string | undefined, novalvionEnv: string | undefined): boolean => novalvionEnv === 'production' || (nodeEnv === 'production' && novalvionEnv !== 'sandbox');
+
 export function evaluateSandboxExposure(input: unknown, facts: { kmsAdapterReviewed: boolean }): SandboxExposureReport {
   const report = (blockers: string[], satisfied: string[]): SandboxExposureReport => ({ authorizesExternalExposure: false, exposable: false, blockers: [...new Set(blockers)], satisfied });
   const parsed = sandboxProfileSchema.safeParse(input);
@@ -45,7 +48,10 @@ export function evaluateSandboxExposure(input: unknown, facts: { kmsAdapterRevie
   need('DESTROY_PROCEDURE', p.operations.destroyProcedure);
   need('MONITORING', p.operations.monitoring);
   need('REVOCATION_PROCEDURE', p.operations.revocationProcedure);
-  need('PRODUCTION_UNTOUCHED', p.process.productionFlagsUntouched && p.process.nodeEnv !== 'production' && p.process.novalvionEnv !== 'production');
+  // Misma regla que la evaluación de preparación del runtime (API-14/26) y el diagnóstico (`buildReadinessDiagnostic`), que son la fuente: `next start` fija NODE_ENV=production también en el sandbox de homologación, así que
+  // NODE_ENV=production SOLO cuenta como producción si el proceso NO se declara sandbox (NOVALVION_ENV=sandbox); NOVALVION_ENV=production bloquea siempre. Antes se exigía nodeEnv !== 'production' a secas y un sandbox
+  // real (`next start` + NOVALVION_ENV=sandbox) nunca podía quedar sin bloqueantes: el perfil tenía que mentir (p. ej. 'production-like-staging').
+  need('PRODUCTION_UNTOUCHED', p.process.productionFlagsUntouched && !declaresProduction(p.process.nodeEnv, p.process.novalvionEnv));
   need('LAB_COMPOSITION_ABSENT', !p.process.labCompositionFlagPresent);
   // El verificador: el HMAC sintético JAMÁS sirve para un sandbox externo; uno externo exige el acuerdo D02 de PriceSmart.
   if (p.verifier.kind === 'LAB_HMAC') blockers.push('LAB_VERIFIER_NOT_ALLOWED_EXTERNALLY');

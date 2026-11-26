@@ -560,7 +560,8 @@
               "REPLAY_REJECTED",
               "CONFLICT",
               "UNAVAILABLE",
-              "DISABLED"
+              "DISABLED",
+              "READ_ONLY"
             ]
           },
           "correlationId": {
@@ -895,6 +896,15 @@
           "type": "string",
           "const": "nosniff"
         }
+      },
+      "Retry-After": {
+        "description": "CONDITIONAL (never guaranteed on a 503). Seconds. Added ONLY by the runtime wrapper when it closes a request (kill switch on, mode DISABLED, or mode READ_ONLY on a POST). NOT sent by the transport's own 503 answers (`UNAVAILABLE`, or `DISABLED` raised by the application) nor by the default closed state (no runtime installed). PROVISIONAL_D12",
+        "schema": {
+          "type": "string",
+          "const": "60"
+        },
+        "required": false,
+        "x-conditional": "ONLY_RUNTIME_WRAPPER_CLOSED"
       }
     },
     "responses": {
@@ -1221,7 +1231,7 @@
         }
       },
       "Error503": {
-        "description": "PROVISIONAL: Dependency error/timeout, uncertain COMMIT, simulated or malformed guarantees/results",
+        "description": "PROVISIONAL: Dependency error/timeout, uncertain COMMIT, simulated or malformed guarantees/results (`UNAVAILABLE`); or the runtime is closed (`DISABLED`: no runtime installed, mode DISABLED or kill switch; `READ_ONLY`: POST create/cancel while GET keeps working). `Retry-After: 60` is CONDITIONAL: only the runtime wrapper's closed answers (kill switch, mode DISABLED, mode READ_ONLY on a POST) carry it; every other 503 omits it.",
         "headers": {
           "X-Correlation-Id": {
             "$ref": "#/components/headers/X-Correlation-Id"
@@ -1234,6 +1244,9 @@
           },
           "X-Content-Type-Options": {
             "$ref": "#/components/headers/X-Content-Type-Options"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/Retry-After"
           }
         },
         "content": {
@@ -1283,5 +1296,11 @@
       "D12 acuses/errores",
       "D13 prueba de entrega"
     ]
+  },
+  "x-runtime-modes": {
+    "status": "PROVISIONAL_LAB",
+    "DISABLED": "every operation answers 503 DISABLED. With a runtime installed in mode DISABLED (and when the kill switch is on) the answer carries Retry-After: 60; with NO runtime installed (the safe default today) it is a plain 503 DISABLED without Retry-After",
+    "READ_ONLY": "GET answers normally; POST create and POST cancellation-requests answer 503 READ_ONLY",
+    "ENABLED": "all operations, only with the explicit acknowledgement and every required decision ratified"
   }
 }

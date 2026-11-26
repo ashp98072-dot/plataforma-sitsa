@@ -6,7 +6,7 @@ import type { OrderView, Scope } from '../contracts';
 import type { OrderRepository } from '../ports';
 import { assessCancellation, projectExternalStatus } from '../tms-contract-proposal';
 import { assessDeliveryEvidence, deliveryEvidenceUnavailable } from '../delivery-evidence';
-import { labObservations, type LabOrderInput } from './contract';
+import { labObservations, labOrderSchema } from './contract';
 
 // PRICESMART API-12 — vinculación REAL (solo laboratorio) de una orden recibida con UNA solicitud del TMS en estado SOLICITADA.
 // Qué hace: crea la solicitud con crearSolicitudCliente (misma función y validaciones que el Portal del Cliente) para que Operaciones la vea en su bandeja
@@ -26,7 +26,7 @@ import { labObservations, type LabOrderInput } from './contract';
 
 export type LinkResult =
   | { state: 'LINKED' | 'ALREADY_LINKED'; solicitudId: number; warning?: string }
-  | { state: 'UNMAPPED' | 'ORDER_NOT_FOUND' | 'LOCK_TIMEOUT' | 'REJECTED_BY_TMS' | 'RECOVERY_AMBIGUOUS'; detail?: string; warning?: string };
+  | { state: 'UNMAPPED' | 'ORDER_NOT_FOUND' | 'LOCK_TIMEOUT' | 'REJECTED_BY_TMS' | 'RECOVERY_AMBIGUOUS' | 'CONTRACT_NOT_MAPPED'; detail?: string; warning?: string };
 
 export type TmsLinkerDeps = {
   pool: Pool; schema: string; repository: OrderRepository;
@@ -55,6 +55,11 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     const map = maps[0];
     const stored = (await repository.runAtomic(scope, (tx) => tx.findForUpdate(externalOrderId))).value;
     if (!stored) return { state: 'ORDER_NOT_FOUND' };
+    // Este vínculo solo sabe TRADUCIR el contrato `lab-demo-1` (destinatario, dirección, fecha) al crear la solicitud. Con otro contrato (p. ej. el diccionario D06 definitivo, aún sin capa de mapeo) NO se adivinan campos:
+    // antes el acceso a `input.recipient.name` lanzaba una excepción que se reintentaba durante horas mientras el GET decía «RECEIVED». Ahora se bloquea de inmediato. La comprobación se hace SOLO donde la traducción
+    // hace falta (crear la solicitud): una orden ya vinculada, o con un reclamo cuya solicitud se recupera por token, NO la necesita y no se ve afectada (recuperación y reintentos siguen igual).
+    const mapping = () => labOrderSchema.safeParse(stored.input);
+    const notMapped = (): LinkResult => ({ state: 'CONTRACT_NOT_MAPPED', detail: 'la orden no tiene la forma del contrato lab-demo-1 que entiende el vínculo con el TMS (D06 pendiente)' });
     const orderKey = [...ns(scope), uuidBuf(stored.id)];
     const [links] = await conn.execute<RowDataPacket[]>(`SELECT claim_token, solicitud_id FROM ${t('tms_links')} WHERE ${where} AND order_id=?`, orderKey);
     if (links.length && links[0].solicitud_id != null) return { state: 'ALREADY_LINKED', solicitudId: Number(links[0].solicitud_id) };
@@ -62,6 +67,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     let token: Buffer;
     if (links.length) token = links[0].claim_token as Buffer;
     else {
+      if (!mapping().success) return notMapped();   // sin reclamo previo habrá que crear la solicitud: si no se sabe traducir, no se escribe NADA
       token = randomBytes(16);
       await conn.execute(`INSERT INTO ${t('tms_links')} (environment, tenant_id, client_id, integration_id, order_id, empresa_id, claim_token, created_at) VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(6))`, [...orderKey, map.empresa_id, token]);
     }
@@ -74,7 +80,9 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     let solicitudId: number;
     if (found.length === 1) solicitudId = Number(found[0].id);
     else {
-      const input = stored.input as unknown as LabOrderInput;
+      const mapped = mapping();   // reclamo pendiente sin solicitud recuperable: también hay que crearla (el reclamo ya existe; no se escribe nada más)
+      if (!mapped.success) return notMapped();
+      const input = mapped.data;
       const created = await createRequest(
         { empresaId: Number(map.empresa_id), clienteId: Number(map.tms_cliente_id), usuarioClienteId: Number(map.tms_usuario_cliente_id) },
         {

@@ -32,6 +32,7 @@ export function classify(result: LinkResult | { thrown: unknown }, attemptNo: nu
   switch (result.state) {
     case 'LINKED': case 'ALREADY_LINKED': return { status: 'DONE', outcome: result.state, detail: null, delayMs: 0 };
     case 'REJECTED_BY_TMS': return { status: 'BLOCKED', outcome: 'REJECTED_BY_TMS', detail: (result.detail ?? '').slice(0, 200) || null, delayMs: 0 };   // requiere corregir datos: no se reintenta solo
+    case 'CONTRACT_NOT_MAPPED': return { status: 'BLOCKED', outcome: 'CONTRACT_NOT_MAPPED', detail: (result.detail ?? '').slice(0, 200) || null, delayMs: 0 };   // sin capa de mapeo para ese contrato: reintentar no lo arregla
     case 'RECOVERY_AMBIGUOUS': return { status: 'BLOCKED', outcome: 'RECOVERY_AMBIGUOUS', detail: 'más de una solicitud con el mismo reclamo', delayMs: 0 };
     case 'UNMAPPED': return transient('UNMAPPED', 'sin mapeo administrativo para el alcance', attemptNo, policy);   // se puede corregir con configuración: reintenta con límite
     case 'LOCK_TIMEOUT': return transient('LOCK_TIMEOUT', 'otro proceso vinculaba la misma orden', attemptNo, policy);

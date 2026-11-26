@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { labOrderSchema } from './contract';
 import { assessCancellation, EXTERNAL_STATUSES, PLAN_STATES, SOLICITUD_STATES } from '../tms-contract-proposal';
 import { DELIVERY_EVIDENCE_LEVELS } from '../delivery-evidence';
+import { RUNTIME_MODES } from '../runtime-config';
+import { handlePriceSmart, installPriceSmartHandler } from '../runtime';
+import { withRuntimeControls } from '../runtime-assembly';
 
 // PRICESMART API-24/25 — la OpenAPI de HOMOLOGACIÓN debe describir lo REALMENTE implementado y etiquetar qué es provisional y qué está pendiente. Estas pruebas la atan al código: si el código cambia y el documento no, fallan.
 const spec = JSON.parse(readFileSync('docs/integraciones/pricesmart/api25/openapi.homologation.json', 'utf8'));
@@ -55,5 +58,50 @@ describe('API-24 OpenAPI de homologación ↔ código', () => {
     expect(ev.properties.level.enum).toEqual([...DELIVERY_EVIDENCE_LEVELS, 'UNAVAILABLE']);
     expect(ev.properties.confirmsDelivery.const).toBe(false); expect(ev.properties.publishable.const).toBe(false); expect(ev.properties.officialAcceptance.const).toBe('NOT_ACCEPTED_BY_PRICESMART');
     expect(ev.properties.blockedBy.items.const).toBe('D13_PENDING');
+  });
+  it('Error: la lista de códigos es EXACTAMENTE la que el código puede emitir (transporte + runtime cerrado), con sus estados HTTP y la cabecera Retry-After del runtime cerrado', () => {
+    const transport = readFileSync('src/lib/integrations/pricesmart/http-transport.ts', 'utf8'), assembly = readFileSync('src/lib/integrations/pricesmart/runtime-assembly.ts', 'utf8');
+    const emitted = new Set<string>([
+      ...[...transport.matchAll(/HttpFailure\(\d{3}\s*,\s*'([A-Z_]+)'/g)].map((m) => m[1]),
+      ...[...transport.matchAll(/\w+:\[\d{3},'([A-Z_]+)'\]/g)].map((m) => m[1]),
+      ...[...assembly.matchAll(/closed\('([A-Z_]+)'\)/g)].map((m) => m[1]),
+    ]);
+    expect(new Set(spec.components.schemas.Error.properties.code.enum)).toEqual(emitted);
+    // El runtime cerrado responde 503 con Retry-After; la OpenAPI lo describe con el mismo valor.
+    const retry = /'Retry-After':\s*'(\d+)'/.exec(assembly)![1];
+    expect(spec.components.headers['Retry-After'].schema.const).toBe(retry);
+    for (const [p, item] of Object.entries<Record<string, { responses: Record<string, { $ref: string }> }>>(spec.paths)) for (const [m, op] of Object.entries(item)) {
+      expect(op.responses['503'].$ref, `${m} ${p}`).toBe('#/components/responses/Error503');
+    }
+    expect(spec.components.responses.Error503.headers['Retry-After']).toEqual({ $ref: '#/components/headers/Retry-After' });
+  });
+  it('Retry-After es CONDICIONAL: solo el envoltorio del runtime lo añade al cerrar; los demás 503 (estado cerrado por omisión, fallo del manejador, errores del transporte) NO lo llevan, y el OpenAPI lo describe así', async () => {
+    const header = spec.components.headers['Retry-After'];
+    expect(header['x-conditional']).toBe('ONLY_RUNTIME_WRAPPER_CLOSED'); expect(header.required).toBe(false); expect(header.description).toMatch(/^CONDITIONAL \(never guaranteed on a 503\)/);
+    expect(spec.components.responses.Error503.description).toMatch(/CONDITIONAL/);
+    const post = () => new Request('http://local/api/integrations/pricesmart/v1/orders', { method: 'POST', body: '{}' }), get = () => new Request('http://local/api/integrations/pricesmart/v1/orders/A');
+    const inner = async () => new Response('ok', { status: 200 });
+    // Con CABECERA (envoltorio del runtime): modo DISABLED, interruptor de emergencia y POST en READ_ONLY.
+    for (const [label, handler, request] of [['modo DISABLED', withRuntimeControls(inner, 'DISABLED', () => false), get()], ['interruptor encendido', withRuntimeControls(inner, 'ENABLED', () => true), get()],
+      ['interruptor ilegible', withRuntimeControls(inner, 'ENABLED', () => { throw new Error('x'); }), get()], ['READ_ONLY + POST', withRuntimeControls(inner, 'READ_ONLY', () => false), post()]] as const) {
+      const r = await handler(request); expect(r.status, label).toBe(503); expect(r.headers.get('Retry-After'), label).toBe('60');
+    }
+    expect((await withRuntimeControls(inner, 'READ_ONLY', () => false)(get())).status).toBe(200);   // READ_ONLY deja pasar el GET: no es un 503
+    // SIN cabecera: sin runtime instalado (estado seguro por omisión) y manejador que falla.
+    installPriceSmartHandler(null);
+    const bare = await handlePriceSmart(post()); expect(bare.status).toBe(503); expect(await bare.json()).toMatchObject({ code: 'DISABLED' }); expect(bare.headers.get('Retry-After')).toBeNull();
+    installPriceSmartHandler(async () => { throw new Error('boom'); });
+    const failing = await handlePriceSmart(get()); expect(failing.status).toBe(503); expect(failing.headers.get('Retry-After')).toBeNull();
+    installPriceSmartHandler(null);
+    // El transporte jamás lo escribe (sus 503 son `UNAVAILABLE`/`DISABLED` sin Retry-After).
+    expect(readFileSync('src/lib/integrations/pricesmart/http-transport.ts', 'utf8')).not.toMatch(/Retry-After/);
+    expect(readFileSync('src/lib/integrations/pricesmart/runtime.ts', 'utf8').replace(/\/\/.*$/gm, '')).not.toMatch(/Retry-After/);
+  });
+  it('los modos del runtime documentados son los del código; READ_ONLY deja el GET abierto y cierra el POST (503 READ_ONLY), no se presenta como apagado total', () => {
+    const modes = spec['x-runtime-modes']; expect(modes['status']).toBe('PROVISIONAL_LAB');
+    expect(Object.keys(modes).filter((k) => k !== 'status')).toEqual([...RUNTIME_MODES]);
+    expect(modes.READ_ONLY).toMatch(/GET answers normally/); expect(modes.READ_ONLY).toMatch(/503 READ_ONLY/); expect(modes.DISABLED).toMatch(/503 DISABLED/);
+    const assembly = readFileSync('src/lib/integrations/pricesmart/runtime-assembly.ts', 'utf8');
+    expect(assembly).toMatch(/mode === 'READ_ONLY' && request\.method !== 'GET'\) return closed\('READ_ONLY'\)/);
   });
 });

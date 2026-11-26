@@ -22,7 +22,7 @@ Todo sigue **desactivado**: runtime `DISABLED`, `ready=false`, autorización no 
 - **Cancelación en el kit KMS:** con señal ya abortada, `ABORT_SETTLES` exige que la llamada **termine** (no se cuelgue). Si el cliente **rechaza** → `cancellation: HONORED`; si la **completa** → `IGNORED`, que **no valida** la cancelación (informativo, no bloquea `conformant`). El kit solo ejercita una señal abortada *antes* de la llamada; la cancelación a mitad de vuelo hay que revisarla en el adaptador concreto. `createKmsKeyProvider` no envía nada tras abortar aunque el cliente ignore la señal (probado con un contador de llamadas). El cliente de laboratorio ahora respeta la señal (`HONORED`).
 
 ## Bloqueos y fallos documentados (no resueltos aquí)
-- **Build:** falla en HEAD y en `origin/main` limpio con `SecurityFatalError` (aviso del registro sobre Next.js 16.4.1) tras compilar y pasar TypeScript; requiere decisión sobre dependencias, fuera de este alcance.
+- **Build (actualizado):** ya no se reproduce en `main` con Next 16.4.6; ver `../auditoria-homologacion/README.md` § Compilación. Registro original: falla en HEAD y en `origin/main` limpio con `SecurityFatalError` (aviso del registro sobre Next.js 16.4.1) tras compilar y pasar TypeScript; requiere decisión sobre dependencias, fuera de este alcance.
 - **Suite completa:** 5 fallos solo en HEAD frente a `main` (4 DOM de `flota/cb2` con timeouts de 5 s que también ocurren en `main` al correr ese directorio, y `http-transport` «keeps Next HTTP disabled…» que pasa 95/95 aislado y tardó 5,07 s vs 3,14 s en `main` bajo carga). No se demostró la causa de los timeouts.
 
 ## No hecho (depende de terceros)
