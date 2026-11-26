@@ -29,8 +29,8 @@ function comoDataUri(archivo: string): string | null {
 
 export function logoDeEmpresa(empresa: { id: number; slug: string; logoUrl: string | null }): string | null {
   const marca = LOGOS_DE_MARCA[empresa.slug];
-  const deMarca = marca ? comoDataUri(join(process.cwd(), marca)) : null;
-  if (deMarca) return deMarca;
+  // Una marca asignada es exclusiva: si falta su archivo, NO usar logoUrl de otra marca.
+  if (marca) return comoDataUri(join(process.cwd(), marca));
   const ruta = (empresa.logoUrl ?? "").trim();
   if (!ruta || ruta.includes("\0")) return null;
   const normalizada = ruta.replaceAll("\\", "/").replace(/^\.?\/+/, "");
