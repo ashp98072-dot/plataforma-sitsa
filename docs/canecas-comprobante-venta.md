@@ -9,6 +9,16 @@ En **Gestión de Canecas › Ventas**, cada venta ACTIVA tiene **Imprimir compro
 
 Contenido: **solo el logotipo** (sin escribir el nombre de la empresa), COMPROBANTE DE VENTA, n.º de documento, fecha, cliente, **Sale de** (bodega real de la venta, `canecas_ubicaciones` por `ubicacion_id` de la misma empresa), **Va hacia** (`direccion_entrega`; no se repite como «Dirección de entrega» porque es el mismo dato), descripción, cantidad, precio unitario, subtotal, total (Q), quién lleva, quién recibe y dos firmas. **Nunca incluye costo FIFO ni utilidad.** Los datos se escapan antes de armar el HTML. Esta versión no requiere SQL.
 
+**Datos largos: nunca se recorta información.** No hay alto fijo ni `overflow: hidden`. Un script del propio documento mide el contenido y, si no cabe en 5.4 in, lo **reduce** (hasta el 60 %) para que quepa completo en la media hoja; la vista previa avisa («se redujo al X %»). Si ni así cabe, no lo oculta: continúa hacia abajo (en hoja carta, dentro de la misma página; en media carta, en una segunda hoja) y la vista previa muestra una alerta roja. Los límites reales del sistema (cliente 200, bodega 160, dirección 500, producto 200, quién lleva/recibe 160, documento 250, importes de 14 cifras) caben completos reducidos a ≈ 80 %; con 6000 caracteres en la dirección se activa la alerta.
+
+Verificación reproducible en Chromium real (se omite si no hay Playwright/Chromium o `pdftotext`):
+
+```bash
+npx vitest run src/components/canecas/comprobante-chromium.test.ts
+```
+
+Para 4 conjuntos de datos (normal, límites con espacios, límites sin espacios, fuera de límites) × 2 papeles × con/sin logo comprueba, en diseño de impresión: todo el texto presente, ningún elemento recortado ni fuera de la hoja, totales y las dos firmas dentro de la media hoja, el PDF (612 × 792 pt o 612 × 396 pt, 1 página) y el texto completo extraído del propio PDF.
+
 **Logo:** se resuelve en el servidor (`src/lib/canecas/logo-comprobante.ts`) y viaja incrustado (data URI PNG/JPEG), así que ya está cargado al imprimir. `empresas.logo_url` es una ruta relativa a uploads (la de los PDF de la plataforma; la de otra empresa se ignora); si falta, se usa el logo de marca de ESA empresa por su slug (`kt-monaco` → `public/brands/monaco/logo.png`, Logiservicios Mónaco). Sin ninguno, el comprobante muestra el nombre de la empresa como texto; nunca el logo de otra empresa ni el de Novalvion. Para otra empresa: configurar su `logo_url` o añadirla a `LOGOS_DE_MARCA`.
 
 ## Quién lleva / quién recibe

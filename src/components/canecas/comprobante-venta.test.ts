@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ComprobanteVenta, htmlComprobante, type DatosComprobante } from "./comprobante-venta";
+import { ComprobanteVenta, ESCALA_MINIMA, htmlComprobante, type DatosComprobante } from "./comprobante-venta";
 import { CanecasClient } from "./canecas-client";
 
 const base: DatosComprobante = { empresaNombre: "Empresa Demo, S.A.", logoUrl: "/brands/demo/logo.png", documento: "VTA-000012", fecha: "2026-11-24", cliente: "Cliente <Uno>", origen: "Bodega Central", destino: "Zona 4, Ciudad", producto: "Caneca 55 gal", cantidad: "8", precioUnitario: "Q 95.00", total: "Q 760.00", quienLleva: "Juan Pérez", quienRecibe: "Ana López" };
@@ -17,10 +17,14 @@ describe("comprobante de venta (media carta)", () => {
     expect(h).not.toContain("Dirección de entrega"); // mismo dato que «Va hacia»: no se duplica
     expect(h.match(/class="linea"/g)).toHaveLength(2);
   });
-  it("papel: carta imprime la media hoja arriba (8.5 x 11, margen 0); media carta es 8.5 x 5.5; la hoja tiene alto fijo y sin alturas mínimas", () => {
+  it("papel: carta imprime la media hoja arriba (8.5 x 11, margen 0); media carta es 8.5 x 5.5; NO recorta: sin alto fijo, sin overflow oculto ni alturas mínimas; ajusta la escala y lo marca", () => {
     const carta = htmlComprobante(base), media = htmlComprobante(base, "media");
     expect(carta).toContain("@page { size: 8.5in 11in; margin: 0; }"); expect(media).toContain("@page { size: 8.5in 5.5in; margin: 0; }");
-    for (const h of [carta, media]) { expect(h).toContain(".hoja { width: 8.5in; height: 5.5in;"); expect(h).not.toMatch(/min-height|margin-top:\s*auto/); }
+    for (const h of [carta, media]) {
+      expect(h).toContain(".hoja { width: 8.5in; padding: 0.25in 0.45in; }");
+      expect(h).not.toMatch(/overflow:\s*hidden|overflow:\s*clip|min-height|margin-top:\s*auto|\.hoja \{[^}]*height:/);
+      expect(h).toContain("data-ajuste"); expect(h).toContain(`MIN = ${ESCALA_MINIMA}`); expect(h).toContain("DISPONIBLE = 5.4 * 96 - 48");
+    }
     expect(carta.replace(/@page \{[^}]*\}/, "")).toBe(media.replace(/@page \{[^}]*\}/, "")); // mismo contenido; solo cambia el papel
   });
   it("sin logo configurado se muestra el nombre de la empresa (nunca un logo ajeno); los logos incrustados PNG/JPEG se admiten", () => {
@@ -91,6 +95,21 @@ describe("comprobante de venta (media carta)", () => {
       await act(async () => { [...host.querySelectorAll("button")].find(b => b.textContent === "Imprimir comprobante")!.click(); });
       const html = host.querySelector("iframe")!.getAttribute("srcdoc")!;
       expect(html).not.toMatch(/640\.00|120\.00|[Cc]osto|[Uu]tilidad/); expect(html).toContain("Q 760.00");
+    } finally { await act(async () => root.unmount()); host.remove(); }
+  });
+  it("avisa en pantalla cuando el comprobante se redujo o no cabe en la media hoja (nada se oculta en silencio)", async () => {
+    (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
+    try {
+      await act(async () => { root.render(createElement(ComprobanteVenta, { datos: base, onCerrar: vi.fn() })); });
+      const marco = host.querySelector("iframe")!;
+      const simular = async (estado: string, escala: string) => {
+        Object.defineProperty(marco, "contentDocument", { configurable: true, value: { documentElement: { getAttribute: (n: string) => (n === "data-ajuste" ? estado : escala) } } });
+        await act(async () => { marco.dispatchEvent(new Event("load")); });
+      };
+      await simular("normal", "1"); expect(host.querySelector("[role=status],[role=alert]")).toBeNull();
+      await simular("reducido", "0.75"); expect(host.querySelector("[role=status]")!.textContent).toContain("75 %");
+      await simular("extendido", "0.6"); expect(host.querySelector("[role=alert]")!.textContent).toMatch(/No se recorta nada/);
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 });
