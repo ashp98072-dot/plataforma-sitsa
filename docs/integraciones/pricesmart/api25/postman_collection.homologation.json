@@ -30,6 +30,11 @@
     {
       "key": "deliveryDate",
       "value": "2026-12-15"
+    },
+    {
+      "key": "unknownOrderId",
+      "value": "SANDBOX-ORDEN-INEXISTENTE",
+      "description": "Identificador que no existe en el sandbox (para las pruebas de 404)."
     }
   ],
   "item": [
@@ -444,6 +449,218 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test(\"400\", function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.3 Orden inexistente (o de otra empresa) → 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{unknownOrderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{unknownOrderId}}"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Un identificador que no existe para su integración responde 404 NOT_FOUND; no se distingue de «pertenece a otra empresa»."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 NOT_FOUND\", function () { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql(\"NOT_FOUND\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.4 Cancelación de orden inexistente → 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{unknownOrderId}}/cancellation-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{unknownOrderId}}",
+                "cancellation-requests"
+              ]
+            },
+            "description": "[PENDING_PRICESMART] Método de cancelación sin ratificar (D09). Una orden inexistente o de otra empresa responde 404.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"ORIGIN_REQUEST\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 NOT_FOUND\", function () { pm.response.to.have.status(404); pm.expect(pm.response.json().code).to.eql(\"NOT_FOUND\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.5 Cancelación con motivo no admitido → 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders/{{externalOrderId}}/cancellation-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders",
+                "{{externalOrderId}}",
+                "cancellation-requests"
+              ]
+            },
+            "description": "[PENDING_PRICESMART] Método y motivos de cancelación sin ratificar (D09). Un motivo fuera de {ORIGIN_REQUEST, DUPLICATE} se rechaza con 400 INVALID_INPUT.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"MOTIVO-NO-ADMITIDO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 INVALID_INPUT\", function () { pm.response.to.have.status(400); pm.expect(pm.response.json().code).to.eql(\"INVALID_INPUT\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3.6 Tipo de contenido no admitido → 415",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              },
+              {
+                "key": "{{authHeaderName}}",
+                "value": "{{authHeaderValue}}",
+                "description": "D02 PENDIENTE: nombre y formato de la evidencia de autenticación NO están acordados. No se envía nada hasta que PriceSmart y Mónaco lo definan."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/pricesmart/v1/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "pricesmart",
+                "v1",
+                "orders"
+              ]
+            },
+            "description": "[PROVISIONAL_LAB] Solo application/json (charset=utf-8 opcional). Otro tipo responde 415 UNSUPPORTED_FORMAT antes de leer el cuerpo.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"schemaVersion\": \"lab-demo-1\",\n  \"externalOrderId\": \"{{externalOrderId}}\",\n  \"originClubReference\": \"{{originClub}}\",\n  \"recipient\": {\n    \"name\": \"Club Ficticio Zona 10\"\n  },\n  \"address\": \"Avenida Ficticia 12-34, Zona 10, Ciudad de Guatemala\",\n  \"deliveryDate\": \"{{deliveryDate}}\",\n  \"notes\": \"Orden sintética de homologación\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"415 UNSUPPORTED_FORMAT\", function () { pm.response.to.have.status(415); pm.expect(pm.response.json().code).to.eql(\"UNSUPPORTED_FORMAT\"); });"
                 ]
               }
             }
