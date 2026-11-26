@@ -11,6 +11,7 @@ Leyenda: **IMPLEMENTADO Y PROBADO** (código + prueba automática; ver CI) · **
 | [`../api25/openapi.homologation.json`](../api25/openapi.homologation.json) | PriceSmart | OpenAPI de homologación (marcada `PROVISIONAL_LAB`) |
 | [`../api25/postman_collection.homologation.json`](../api25/postman_collection.homologation.json) | PriceSmart | Colección Postman con aserciones (flujo, cancelación, errores) |
 | [`PROCEDIMIENTO-SANDBOX.md`](PROCEDIMIENTO-SANDBOX.md) | Mónaco (infra) | Instalación y verificación del ambiente de homologación separado de producción, apagado y reversión |
+| [`ARRANQUE-RUNTIME.md`](ARRANQUE-RUNTIME.md) | Mónaco (infra/QA) | Cableado real del runtime en Next.js: qué lo activa, qué lo impide y cómo se apaga |
 | [`VERIFICACION-OPERATIVA.md`](VERIFICACION-OPERATIVA.md) | Mónaco (QA) | Los 7 pasos del flujo ↔ pruebas reproducibles (CI y local) |
 | [`../api26/RUNBOOK-APROVISIONAMIENTO.md`](../api26/RUNBOOK-APROVISIONAMIENTO.md) | Mónaco (infra) | Detalle de `provision.mjs` (apply/finalize/status/destroy) |
 

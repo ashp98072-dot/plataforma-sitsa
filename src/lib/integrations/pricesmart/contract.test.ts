@@ -47,6 +47,10 @@ describe('API-01 static contract and exposure audit (not HTTP acceptance)', () =
             // API-15: diagnóstico administrativo de solo lectura; importa únicamente el módulo de diagnóstico (que no instala handlers ni toca datos).
             expect(text.match(/from "[^"]*pricesmart[^"]*"/g) ?? []).toEqual(['from "@/lib/integrations/pricesmart/readiness-diagnostic"']);
             expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|m2m-security|http-transport|createIsolated|process\.env|mysql|export async function (POST|PUT|PATCH|DELETE)/);
+          } else if (path.replaceAll('\\','/') === 'src/instrumentation.ts') {
+            // Arranque real del runtime de homologación (PR de cierre): ÚNICA mención permitida fuera del módulo, una importación diferida de `homologation/boot`, solo si el proceso se declara sandbox y pide un modo distinto de DISABLED.
+            expect(text.match(/integrations\/pricesmart[^"'`]*/g) ?? []).toEqual(['integrations/pricesmart/homologation/boot']);
+            expect(text).toMatch(/process\.env\.NOVALVION_ENV === "sandbox" && priceSmartMode && priceSmartMode !== "DISABLED"/); expect(text).not.toMatch(/PRICESMART_ENABLED|OrderApplication|lab-demo|labKey|PRICESMART_LAB/);
           } else expect(text).not.toMatch(/integrations\/pricesmart|PRICESMART_ENABLED|OrderApplication/);
         }
       }

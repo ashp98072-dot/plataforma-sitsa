@@ -43,3 +43,36 @@ describe('API-26 consumidor de la outbox', () => {
     c.start(500); await vi.advanceTimersByTimeAsync(5000); expect(runOnce).toHaveBeenCalledTimes(1); d.resolve(summary()); await vi.advanceTimersByTimeAsync(500); expect(runOnce).toHaveBeenCalledTimes(2); c.stop();
   });
 });
+
+describe('API-26 apagado ordenado del consumidor (shutdown)', () => {
+  it('sin ciclo activo: termina al instante, detiene el temporizador y NINGÚN disparo posterior (kick, temporizador, runOnce) ejecuta el despachador', async () => {
+    vi.useFakeTimers(); const runOnce = vi.fn(async () => summary()); const c = createOutboxConsumer({ runOnce }); c.start(1000);
+    expect(await c.shutdown(1000)).toEqual({ drained: true, waitedMs: 0 });
+    c.kick(); c.start(1000); await vi.advanceTimersByTimeAsync(5000); expect(runOnce).not.toHaveBeenCalled();
+    await expect(c.runOnce()).rejects.toThrow('CONSUMER_CLOSED'); expect(runOnce).not.toHaveBeenCalled(); expect(await c.shutdown()).toEqual({ drained: true, waitedMs: 0 });   // idempotente
+  });
+  it('con un ciclo activo: espera su terminación; el `kick` pendiente NO encadena otro ciclo; los `kick` posteriores se ignoran', async () => {
+    const d = deferred<OutboxRunSummary>(); const runOnce = vi.fn(() => d.promise); const c = createOutboxConsumer({ runOnce });
+    c.kick(); expect(runOnce).toHaveBeenCalledTimes(1); c.kick(); c.kick();   // quedan «kicked» para encadenar
+    let done = false; const sd = c.shutdown(5000).then((r) => { done = true; return r; }); await new Promise((r) => setTimeout(r, 30)); expect(done).toBe(false);   // sigue esperando
+    c.kick(); d.resolve(summary(4)); const r = await sd; expect(r.drained).toBe(true); await new Promise((x) => setTimeout(x, 30)); expect(runOnce).toHaveBeenCalledTimes(1);   // ningún ciclo encadenado ni nuevo
+    expect(unhandled).toEqual([]);
+  });
+  it('callbacks ya programados: un `kick` que está leyendo el interruptor (off) cuando se apaga NO inicia el ciclo al terminar de leerlo', async () => {
+    const gate = deferred<boolean>(); const runOnce = vi.fn(async () => summary()); const c = createOutboxConsumer({ runOnce }, () => gate.promise);
+    c.kick();   // queda esperando el interruptor
+    const sd = c.shutdown(1000); gate.resolve(false); await sd; await new Promise((r) => setTimeout(r, 30)); expect(runOnce).not.toHaveBeenCalled(); expect(unhandled).toEqual([]);
+  });
+  it('límite de espera: si el ciclo no termina, drained=false al agotarse, sin colgarse; el ciclo que termina después no provoca rechazos no manejados ni ciclos nuevos', async () => {
+    vi.useFakeTimers(); const d = deferred<OutboxRunSummary>(); const runOnce = vi.fn(() => d.promise); const c = createOutboxConsumer({ runOnce }); void c.runOnce().catch(() => undefined);
+    const sd = c.shutdown(3000); await vi.advanceTimersByTimeAsync(2999); let settled = false; void sd.then(() => { settled = true; }); await vi.advanceTimersByTimeAsync(0); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(2); expect(await sd).toEqual({ drained: false, waitedMs: 3000 }); d.reject(new Error('tarde')); await vi.advanceTimersByTimeAsync(100); expect(runOnce).toHaveBeenCalledTimes(1); expect(unhandled).toEqual([]);
+  });
+  it('un ciclo activo que FALLA también cuenta como terminado; los valores de espera inválidos usan el valor seguro por omisión', async () => {
+    const c = createOutboxConsumer({ runOnce: async () => { throw new Error('almacén caído'); } }); void c.runOnce().catch(() => undefined); expect((await c.shutdown(1000)).drained).toBe(true);
+    vi.useFakeTimers(); const d = deferred<OutboxRunSummary>(); const c2 = createOutboxConsumer({ runOnce: () => d.promise }); void c2.runOnce().catch(() => undefined);
+    const sd = c2.shutdown(-5); await vi.advanceTimersByTimeAsync(9999); let settled = false; void sd.then(() => { settled = true; }); await vi.advanceTimersByTimeAsync(0); expect(settled).toBe(false); await vi.advanceTimersByTimeAsync(5); expect((await sd).drained).toBe(false);   // -5 → 10000 ms
+    d.resolve(summary());
+  });
+});
+

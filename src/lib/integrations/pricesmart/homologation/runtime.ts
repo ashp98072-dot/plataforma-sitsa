@@ -28,7 +28,10 @@ export type HomologationDeps = {
   /** true = apagar. Por omisión, `fileKillSwitch` sobre PS_HOMOLOG_KILLSWITCH_FILE. */ killSwitch: () => boolean | Promise<boolean>;
   outbox?: { policy?: OutboxPolicy; log?: (entry: OutboxLogEntry) => void };
 };
-export type OutboxConsumer = { runOnce(): Promise<OutboxRunSummary>; kick(): void; start(everyMs: number): void; stop(): void };
+export type ConsumerShutdownResult = { drained: boolean; waitedMs: number };
+export type OutboxConsumer = { runOnce(): Promise<OutboxRunSummary>; kick(): void; start(everyMs: number): void; stop(): void;
+  /** APAGADO ORDENADO y TERMINAL: impide nuevas ejecuciones (temporizador, `kick`, callbacks ya programados y el encadenado de un `kick` previo) y espera, hasta `timeoutMs`, el ciclo activo. `drained:false` = se agotó la espera. Idempotente. */
+  shutdown(timeoutMs?: number): Promise<ConsumerShutdownResult> };
 export type HomologationRuntime = { ports: RuntimePorts; consumer: OutboxConsumer };
 
 /** Interruptor de emergencia por ARCHIVO: el servicio solo opera si el archivo existe y contiene exactamente `ON`. Ausente, ilegible o con otro contenido ⇒ APAGADO (cierra). Se lee en cada solicitud. */
@@ -37,18 +40,39 @@ export function fileKillSwitch(file: string): () => boolean {
 }
 
 /** Consumidor de la outbox: un despachador (reclamo con lease, fencing, backoff, REVIEW) sobre el almacén real con la cuenta del worker. `kick` solicita un ciclo pronto sin bloquear la solicitud. */
-export function createOutboxConsumer(dispatcher: Pick<OutboxDispatcher, 'runOnce'>): OutboxConsumer {
-  let running: Promise<OutboxRunSummary> | null = null; let timer: ReturnType<typeof setInterval> | undefined; let kicked = false;
+export function createOutboxConsumer(dispatcher: Pick<OutboxDispatcher, 'runOnce'>, paused?: () => boolean | Promise<boolean>): OutboxConsumer {
+  let running: Promise<OutboxRunSummary> | null = null; let timer: ReturnType<typeof setInterval> | undefined; let kicked = false; let closed = false; let closing: Promise<ConsumerShutdownResult> | null = null;
+  // APAGADO SEGURO: si el interruptor de emergencia apaga el servicio, el temporizador y la vía rápida NO procesan nada hacia el TMS (lo recibido queda durable y se procesa al reactivarlo). Un fallo al leerlo cuenta como apagado.
+  // `runOnce` (uso explícito: pruebas y operación manual) no se ve afectado.
+  const off = async (): Promise<boolean> => { if (!paused) return false; try { return (await paused()) !== false; } catch { return true; } };
+  // Todo disparo automático (temporizador, `kick`, encadenado) pasa por `go`, que NO inicia nada una vez cerrado el consumidor, ni siquiera desde un callback ya programado (`off().then(...)`).
+  const go = () => {
+    if (closed) return;
+    if (!paused) { void run().catch(() => undefined); return; }
+    void off().then((o) => { if (!o && !closed) return run(); return undefined; }).catch(() => undefined);
+  };
   const run = (): Promise<OutboxRunSummary> => {
     if (running) return running;
-    running = dispatcher.runOnce().finally(() => { running = null; if (kicked) { kicked = false; void run().catch(() => undefined); } });
+    if (closed) return Promise.reject(new Error('CONSUMER_CLOSED'));   // ninguna ejecución NUEVA tras el apagado (la activa, si la hay, se espera en `shutdown`)
+    running = dispatcher.runOnce().finally(() => { running = null; if (kicked) { kicked = false; go(); } });
     return running;
   };
+  const stop = () => { if (timer) clearInterval(timer); timer = undefined; };
   return {
     runOnce: run,
-    kick() { if (running) { kicked = true; return; } void run().catch(() => undefined); },
-    start(everyMs) { if (timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(() => { void run().catch(() => undefined); }, everyMs); timer.unref?.(); },
-    stop() { if (timer) clearInterval(timer); timer = undefined; },
+    kick() { if (closed) return; if (running) { kicked = true; return; } go(); },
+    start(everyMs) { if (closed || timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(go, everyMs); timer.unref?.(); },
+    stop,
+    shutdown(timeoutMs = 10_000) {
+      closed = true; kicked = false; stop();
+      closing ??= (async () => {
+        const active = running; if (!active) return { drained: true, waitedMs: 0 };
+        const wait = Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 && timeoutMs <= 120_000 ? timeoutMs : 10_000; const t0 = Date.now(); let t: ReturnType<typeof setTimeout> | undefined;
+        const outcome = await Promise.race([active.then(() => 'done' as const, () => 'done' as const), new Promise<'timeout'>((resolve) => { t = setTimeout(() => resolve('timeout'), wait); })]);
+        if (t) clearTimeout(t); return { drained: outcome === 'done', waitedMs: Date.now() - t0 };
+      })();
+      return closing;
+    },
   };
 }
 
@@ -66,7 +90,7 @@ export function createHomologationRuntime(deps: HomologationDeps): HomologationR
   const retry = createLinkRetry({ pool, schema, linker });
   const handler = createLinkOutboxHandler({ pool, schema, retry, linker });
   const store = mariaDbOutboxStore(deps.workerPool, { schema, workerUser: deps.workerUser });
-  const consumer = createOutboxConsumer(new OutboxDispatcher(store, handler, deps.outbox?.policy ?? DEFAULT_OUTBOX_POLICY, deps.outbox?.log));
+  const consumer = createOutboxConsumer(new OutboxDispatcher(store, handler, deps.outbox?.policy ?? DEFAULT_OUTBOX_POLICY, deps.outbox?.log), deps.killSwitch);
   const ports: RuntimePorts = {
     evidence: deps.evidence,
     security: { verifier: guardEvidenceVerifier(deps.verifier, { environment: 'sandbox' }), catalog: security.catalog, revocation: security.revocation, clock: security.clock, counter: security.counter, replay: security.replay },
@@ -79,7 +103,7 @@ export function createHomologationRuntime(deps: HomologationDeps): HomologationR
     probes: {
       database: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT environment, sandbox_id FROM novalvion_environment WHERE id = 1'); return rows.length === 1 && rows[0].environment === 'sandbox'; },
       // El runtime NO se activa con un aprovisionamiento incompleto: ambos pasos deben figurar COMPLETE (y ninguno FAILED/STARTED). Un esquema parcial o sin marcador bloquea la instalación.
-      provisioning: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT step, state FROM ps_homolog_provisioning'); const m = Object.fromEntries(rows.map((r) => [String(r.step), String(r.state)])); return rows.length === 2 && m.bootstrap === 'COMPLETE' && m.finalize === 'COMPLETE'; },
+      provisioning: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT step, state FROM ps_homolog_provisioning'); const m = Object.fromEntries(rows.map((r) => [String(r.step), String(r.state)])); return m.bootstrap === 'COMPLETE' && m.finalize === 'COMPLETE' && rows.length >= 2 && rows.every((r) => String(r.state) === 'COMPLETE'); },   // el aprovisionamiento real añade pasos `account:*`: TODOS deben figurar COMPLETE (ninguno FAILED/STARTED)
       outbox: async () => { const [rows] = await deps.workerPool.execute<import('mysql2/promise').RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${schema}\`.ps_api01_outbox WHERE status = 'REVIEW'`); return rows.length === 1; },
     },
     killSwitch: deps.killSwitch,
@@ -99,7 +123,7 @@ export function homologationGate(env: Record<string, string | undefined>): { ok:
 }
 
 /** Único camino de instalación: valida el proceso y delega en `installControlledRuntime` (modo, decisiones ratificadas, ACK, sondas, interruptor). Si algo falla, no instala nada. */
-export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean }> {
+export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean; stopConsumer?: () => void; shutdownConsumer?: (timeoutMs?: number) => Promise<ConsumerShutdownResult> }> {
   const gate = homologationGate(env);
   if (!gate.ok) return { ready: false, mode: 'DISABLED', blockers: [{ code: 'HOMOLOGATION_GATE', detail: gate.reason }], consumerStarted: false };
   let runtime: HomologationRuntime;
@@ -108,5 +132,5 @@ export async function installHomologationRuntime(env: Record<string, string | un
   // El consumidor corre SOLO si el runtime quedó instalado (ready) y no está en solo lectura: nada se procesa hacia el TMS con el servicio apagado o sin decisiones ratificadas.
   const run = report.ready && report.mode === 'ENABLED';
   if (run) runtime.consumer.start(options.consumerEveryMs ?? 2000);
-  return { ...report, consumerStarted: run };
+  return { ...report, consumerStarted: run, stopConsumer: () => runtime.consumer.stop(), shutdownConsumer: (timeoutMs) => runtime.consumer.shutdown(timeoutMs) };
 }

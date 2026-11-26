@@ -59,7 +59,7 @@ describe('verificación previa a la exposición (local, sin red)', () => {
     expect(env(envText({ DB_PASSWORD: '<generada>' }))).toEqual(expect.arrayContaining(['ENV_NO_PLACEHOLDERS_LEFT', 'ENV_SECRETS_SANDBOX_FORMAT']));
     expect(env(envText({ NOVALVION_ENV: 'production' }))).toContain('ENV_DECLARES_SANDBOX'); expect(env(envText({ DB_NAME: 'u611730801_Plataforma' }))).toContain('ENV_DECLARES_SANDBOX');
     expect(env(envText({ DB_HOST: 'srv1.hstgr.io' }))).toContain('ENV_DB_LOOPBACK_AND_SANDBOX_USER'); expect(env(envText({ DB_USER: 'u611730801_app' }))).toContain('ENV_DB_LOOPBACK_AND_SANDBOX_USER');
-    for (const flag of ['PRICESMART_LAB_KEY=x', 'PRICESMART_LAB_DEMO=1', 'HTTPS_PROXY=http://p:1', 'FEL_CREDENTIALS_KEY=k']) expect(env(`${envText()}\n${flag}`), flag).toContain('ENV_NO_PRODUCTION_OR_LAB_FLAGS');
+    for (const flag of ['PRICESMART_LAB_KEY=x', 'PRICESMART_LAB_DEMO=1', 'HTTPS_PROXY=http://p:1', 'FEL_CREDENTIALS_KEY=k', 'PS_HOMOLOG_SYNTHETIC_PROVIDERS=SINTETICO-LOCAL-SIN-PRODUCCION', 'PS_HOMOLOG_SYNTHETIC_KEY=' + 'a'.repeat(64)]) expect(env(`${envText()}\n${flag}`), flag).toContain('ENV_NO_PRODUCTION_OR_LAB_FLAGS');
     expect(env(envText({ AUTH_SECRET: 'cualquiera' }))).toContain('ENV_SECRETS_SANDBOX_FORMAT');
     expect(env(envText({ PRICESMART_RUNTIME_MODE: 'ENABLED' }))).toContain('RUNTIME_STARTS_DISABLED_OR_READ_ONLY'); expect(env(envText({ PRICESMART_RUNTIME_MODE: 'READ_ONLY' }))).not.toContain('RUNTIME_STARTS_DISABLED_OR_READ_ONLY');
     expect(env(`${envText()}\nPRICESMART_RATIFIED_DECISIONS=D01,D02`)).toContain('RUNTIME_NO_RATIFIED_DECISIONS_DECLARED');
