@@ -19,8 +19,8 @@ describe('API-25 colección Postman de homologación', () => {
     expect(col.info.description).toMatch(/NO EJECUTABLE HOY/); expect(col.info.description).toMatch(/503 DISABLED/);
   });
   it('cada petición existe en la OpenAPI (misma ruta y método), declara su estado y los cuerpos de orden cumplen el contrato lab-demo-1', () => {
-    const pathOf = (raw: string) => raw.replace('{{baseUrl}}', '').replace('{{externalOrderId}}', '{externalOrderId}');
-    expect(all.length).toBeGreaterThanOrEqual(7);
+    const pathOf = (raw: string) => raw.replace('{{baseUrl}}', '').replace(/\/orders\/\{\{(?:externalOrderId|unknownOrderId)\}\}/, '/orders/{externalOrderId}');
+    expect(all.length).toBeGreaterThanOrEqual(11);
     for (const item of all) {
       const r = item.request!; const op = spec.paths[pathOf(r.url.raw)]?.[r.method.toLowerCase()]; expect(op, `${r.method} ${r.url.raw}`).toBeDefined();
       expect(r.description, item.name).toMatch(/^\[(PROVISIONAL_LAB|PENDING_PRICESMART)\]/);

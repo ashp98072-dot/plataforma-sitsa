@@ -515,9 +515,7 @@ async function main() {
     phases.push({ name: 'composición de homologación (cuentas de mínimo privilegio)', files: [`${dir}/homologation-runtime.e2e.ts`, `${dir}/contract-dictionary.e2e.ts`], before: async () => { await prepareHomologation(); },
       env: () => { const e = baseEnv(); const h = ST.demo.homolog; e.PS_DEMO_OWNER_USER = e.DB_USER; e.PS_DEMO_OWNER_PASSWORD = e.DB_PASSWORD; e.DB_USER = h.app.user; e.DB_PASSWORD = h.app.password; e.SANDBOX_ROOT = h.root; e.UPLOAD_DIR = path.join(h.root, 'uploads'); return e; } });
     // Fase 3: ensayo del paquete de aprovisionamiento (`rehearse-homologation`) y auditoría de su informe.
-    // OPCIONAL (PS_LINUX_REHEARSAL=1): en este motor Linux la migración sql/migrate-2026-10-combustibles-pr2-consumos-facturas.sql (guarda estricta de metadatos, ajena a PriceSmart) no crea
-    // flota_cb2_consumos en el esquema del ensayo y `finalize` se rechaza con TMS_SCHEMA_INCOMPLETE. Causa NO identificada: esta fase NO forma parte del CI por defecto (la evidencia de P1–P15 sigue siendo el laboratorio de Windows).
-    if (process.env.PS_LINUX_REHEARSAL === '1') phases.push({ name: 'ensayo del aprovisionamiento de homologación', files: [`${dir}/homologation-provision.e2e.ts`], before: async () => { await rehearseHomologation(); }, env: baseEnv });
+    phases.push({ name: 'ensayo del aprovisionamiento de homologación', files: [`${dir}/homologation-provision.e2e.ts`], before: async () => { await rehearseHomologation(); }, env: baseEnv });
     // Fase 4: trabajador de reintentos DENTRO de la app, tras reiniciarla (`restart-app --worker-ms=3000`).
     phases.push({ name: 'trabajador de reintentos dentro de la app (tras reiniciar)', files: [`${dir}/api13-worker.e2e.ts`], before: async () => { await restartApp(m, ST.demo, 3000); }, env: baseEnv });
     code = 0; const results = [];
