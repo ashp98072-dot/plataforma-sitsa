@@ -50,18 +50,34 @@ Corrección segura si el bloqueo reaparece (con otra versión o aviso): (1) `npm
 - `npx vitest run src/lib/integrations/pricesmart` → 1018 pruebas (47 archivos) en verde (antes 994; +24 nuevas).
 - `npx tsc --noEmit` y `npx eslint src/lib/integrations/pricesmart` limpios; `npm run build` exit 0.
 - **Suite completa del repositorio** (`npx vitest run`): 17 091 pruebas, **71 fallan en 18 archivos** (`flota/*`, `tms/planes/*`, `compras/*`, `next-config-build-workers`, …), **ninguno de PriceSmart**. Las **mismas 71** fallan en un `origin/main` limpio (comprobado en un árbol aparte), así que este PR no introduce regresiones; no se corrigieron (fuera de alcance).
-- **No ejecutadas: E2E con MariaDB 11.8.9 real** (`scripts/ci/pricesmart-demo`). Ver la sección siguiente. **No se afirma homologación completa.**
+- **E2E con MariaDB 11.8.9 real en GitHub Actions** (`pricesmart-lab.yml`): 85 pruebas en verde en 3 fases; el ensayo del aprovisionamiento no corre en Linux. Ver la sección siguiente. **No se afirma homologación completa.**
 
 ## Bloqueantes pendientes (ninguno lo resuelve este PR)
 D02 (verificador/autenticación) · D06 (diccionario definitivo **y capa de mapeo hacia la solicitud TMS**, ver 2.1) · D09 (método de cancelación) · D13 (entrega confirmada) · D05, D07, D08, D10, D11, D12, D14, D15 · adaptador KMS/HSM revisado · infraestructura del sandbox (host MariaDB dedicado, dominio, TLS, allowlist, monitoreo, gestor de secretos) · aprobación humana de `evaluateSandboxExposure` sin bloqueantes y autorización de despliegue · contraste de la matriz con la minuta original.
 
-## Ciclo completo con MariaDB 11.8.9 — NO validado en esta auditoría
-**Lo que pudo ejecutarse:** solo pruebas unitarias con puertos simulados (1018, incluido el recorrido de `tms-link.link()` y `status()` con conexiones simuladas). Ninguna toca una base de datos.
-**Lo que NO pudo ejecutarse y por qué:**
-- Los 9 archivos E2E (`scripts/ci/pricesmart-demo/*.e2e.ts`, ≈ 93 pruebas) necesitan el arnés de laboratorio `node scripts/ci/pricesmart-demo/demo.mjs up|e2e|down`, que levanta MariaDB 11.8.9 desechable **y** una aplicación `next dev`. Ese arnés es **solo Windows** por diseño: `assertLabGate` falla en cualquier otra plataforma con `API-06A: Solo Windows.` (comprobado en este entorno Linux), usa los binarios verificados por hash `mariadb-11.8.9-winx64` (`.exe`) y rutas/`PATH` de Windows. No existe un arnés para Linux ni un workflow de GitHub que lo ejecute (el único workflow, `canecas-lab.yml`, solo corre las pruebas de Canecas). Portarlo exigiría relajar o duplicar guardas de aislamiento que no se tocan sin autorización.
-- Además, este entorno no puede descargar MariaDB 11.8.9 (el proxy bloquea `mariadb.org`/`archive.mariadb.org`: 403).
-**Pendiente (a ejecutar por el propietario en el laboratorio Windows, con base desechable; nada toca Hostinger ni producción):**
-`node scripts/ci/pricesmart-demo/demo.mjs up` → `e2e` → `down` (con `PS_API06A_LAB_ACK` definida según `pricesmart-api06a/constants.mjs`; `prepare-homologation`, `rehearse-homologation` y `restart-app` para los escenarios de homologación y de reinicio). Cobertura existente por etapa del ciclo:
+## Ciclo completo con MariaDB 11.8.9 — E2E en GitHub Actions (CI)
+**Estado: VERIFICADO TÉCNICAMENTE en CI contra MariaDB 11.8.9 real (laboratorio sintético desechable), con un alcance acotado y una fase no ejecutada.** No es aprobación de PriceSmart ni de producción. Las E2E ejercitan la composición del laboratorio (verificador M2M y TMS sustituidos por dobles de prueba), no el verificador real de PriceSmart.
+
+**Cómo se ejecuta.** `.github/workflows/pricesmart-lab.yml` (se dispara con cambios en PriceSmart, en `scripts/ci/pricesmart-demo`, `sql/`, el workflow o `package-lock.json`, y a mano con `workflow_dispatch`). Instala MariaDB **11.8.9 exacta** desde el repositorio apt oficial firmado (huella de la llave verificada; versión del binario comprobada por el runner y hash SHA-256 opcional), levanta una instancia **desechable** solo en socket Unix y `127.0.0.1`, ejecuta las pruebas unitarias y luego `node scripts/ci/pricesmart-demo/run-linux.mjs`. Sin secretos del repositorio, sin base de producción, sin Hostinger, `permissions: contents: read`. Todo (instancia, datos, directorio de ejecución) se destruye al final.
+- `run-linux.mjs` es el equivalente **Linux** de `demo.mjs`; **`demo.mjs` y el arnés de Windows no se tocaron**. Reutiliza `pricesmart-api06a/*` (manifiesto, aislamiento, DDL del laboratorio), `api12/api13DdlStatements` importados de `demo.mjs`, y copia sin cambios el esquema/semilla de `portal-e2e/harness.mjs` y `prepareHomologation`. Solo es propio de Linux: arranque del motor (`install-db`, socket, `lower_case_table_names=1` como en Windows), entorno de lista blanca y control de procesos. Mantiene las guardas: `PS_API06A_LAB_ACK`, entorno padre limpio, `.env*` que `validateSandboxConfig` rechaza, nombres `sandbox_*`.
+- Reproducible a mano en Linux (con `mariadbd` 11.8.9 instalado): `PS_API06A_LAB_ACK=SINTETICO-LOCAL-SIN-PRODUCCION-NI-HOSTINGER node scripts/ci/pricesmart-demo/run-linux.mjs`.
+
+**Resultado por fase (CI, MariaDB 11.8.9):**
+| Fase | Archivos E2E | Pruebas | Estado |
+|---|---|---|---|
+| App de laboratorio | demo, api13, pricesmart-flow, homologation, sandbox-readiness, **contract-not-mapped** | 65 | OK |
+| Composición de homologación (cuentas de mínimo privilegio) | homologation-runtime, contract-dictionary | 19 | OK |
+| Trabajador de reintentos dentro de la app (tras reiniciar) | api13-worker | 1 | OK |
+| Ensayo del aprovisionamiento (`homologation-provision.e2e.ts`, P1–P15) | — | — | **NO EJECUTADO en Linux** (ver abajo) |
+
+**Casos pedidos en la auditoría (`contract-not-mapped.e2e.ts`, NM.1–NM.5, contra base real):** contrato no mapeable → job `BLOCKED/CONTRACT_NOT_MAPPED`, sin reclamo ni solicitud TMS, GET `REVIEW_REQUIRED` con `linkIssue.code`, sin reintento; orden **ya vinculada** → `ALREADY_LINKED` (no se bloquea); **recuperación por token** tras caída después de crear la solicitud → `LINKED` sin crear otra; reclamo pendiente sin solicitud conservado y completado con el mismo token; `lab-demo-1` sigue vinculando.
+
+**Limitaciones reales (no ocultas):**
+- **Ensayo del aprovisionamiento (P1–P15) no corre en Linux.** En este motor la migración `sql/migrate-2026-10-combustibles-pr2-consumos-facturas.sql` (módulo de combustibles, ajeno a PriceSmart, con guarda estricta de metadatos) no crea `flota_cb2_consumos` en la base del ensayo y `finalize` se rechaza con `TMS_SCHEMA_INCOMPLETE`. La causa no se identificó; se descartó la falta de `multipleStatements` (corregida) y no basta `lower_case_table_names=1`. La fase queda **opcional** (`PS_LINUX_REHEARSAL=1`) y fuera del CI por defecto. Su evidencia sigue siendo el laboratorio de Windows (`demo.mjs rehearse-homologation`), que **no** se ejecutó en esta sesión.
+- 40 migraciones del proyecto quedan con sentencias pendientes en el esquema del laboratorio (el cargador simple del laboratorio no entiende `DELIMITER`, `USE` de producción ni dependencias entre módulos). No se comparó con el laboratorio de Windows; las E2E de PriceSmart pasan con ese esquema.
+- No se prueba el verificador real de PriceSmart (D02), el diccionario definitivo (D06), cancelación ejecutada (D09), ni «entrega confirmada» (D13): siguen pendientes.
+
+Cobertura existente por etapa del ciclo:
 
 | Etapa | E2E existentes |
 |---|---|
@@ -72,4 +88,4 @@ D02 (verificador/autenticación) · D06 (diccionario definitivo **y capa de mape
 | Cancelaciones | `demo.e2e.ts` DEMO.7; `pricesmart-flow.e2e.ts` F7–F8; `homologation.e2e.ts` H4; `homologation-runtime.e2e.ts` R4; `sandbox-readiness.e2e.ts` S5 |
 | Idempotencia y concurrencia | `demo.e2e.ts` DEMO.4, DEMO.8; `homologation-runtime.e2e.ts` R3; `contract-dictionary.e2e.ts` C2 |
 | Estados de revisión (TMS rechaza, plan incoherente, sin mapeo) | `homologation.e2e.ts` H2, H5; `demo.e2e.ts` DEMO.10; `homologation-runtime.e2e.ts` R5, R12 |
-| **`CONTRACT_NOT_MAPPED` (este PR)** | **sin E2E**: no existe un escenario que inyecte un contrato distinto de `lab-demo-1`; solo pruebas unitarias. Conviene añadirlo al laboratorio cuando exista el diccionario D06 |
+| **`CONTRACT_NOT_MAPPED`, orden ya vinculada y recuperación por token (este PR)** | `contract-not-mapped.e2e.ts` NM.1–NM.5 (MariaDB real, CI); además `contrato-no-mapeado.test.ts` (unitarias) |
