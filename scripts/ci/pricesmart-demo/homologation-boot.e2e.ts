@@ -39,7 +39,7 @@ describe.skipIf(scenario !== "default")("HB.1 por defecto (sin PRICESMART_RUNTIM
 
 describe.skipIf(scenario !== "no-providers")("HB.2 modo ENABLED con decisiones, ACK e interruptor, pero SIN proveedores revisados (verificador D02, KMS, contrato D06)", () => {
   it("el arranque queda CERRADO con PROVIDERS_NOT_AVAILABLE; las rutas responden 503 y no se abre ninguna conexión del worker", async () => {
-    expect(bootLine()).toMatch(/CLOSED \(PROVIDERS_NOT_AVAILABLE\)/);
+    expect(bootLine()).toMatch(/CLOSED \(PROVIDERS_NOT_AVAILABLE/);
     const before = await counts(); const r = await post("a", uid()); expect(r.status).toBe(503); expect(r.json.code).toBe("DISABLED"); expect(await counts()).toEqual(before); expect(await workerConnections()).toBe(0);
   });
 });

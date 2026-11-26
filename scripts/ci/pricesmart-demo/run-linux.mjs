@@ -507,7 +507,8 @@ const hbAppEnv = (extra = {}) => {
     PRICESMART_RUNTIME_ENVIRONMENT: 'sandbox', PRICESMART_ORIGIN_CLUB: LAB_CLUB, PRICESMART_DB_SCHEMA: hb.names.schema, PRICESMART_DB_RUNTIME_USER: hb.names.appUser, PRICESMART_RATE_PER_WINDOW: '5000', PRICESMART_RATE_WINDOW_MS: '60000', ...extra };
 };
 async function startHbApp(extra) {
-  const { m } = readState(); const port = await freePort(); const logFile = path.join(m.runDir, 'next.log'); const fd = fs.openSync(logFile, 'a');
+  const { m } = readState(); const port = await freePort(); const logFile = path.join(m.runDir, 'next.log'); const reportLines = () => { try { return fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length; } catch { return 0; } };
+  const linesBefore = reportLines(); const fd = fs.openSync(logFile, 'a');
   hbProc = cp.spawn(process.execPath, [path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', HOST, '--port', String(port)], { cwd: repoRoot, env: hbAppEnv(extra), detached: true, stdio: ['ignore', fd, fd] }); fs.closeSync(fd);
   let up = false;
   for (let i = 0; i < 420 && !up; i++) {
@@ -517,8 +518,8 @@ async function startHbApp(extra) {
   }
   if (!up) throw new Error('La app de arranque real no respondió a tiempo.');
   if (extra.PRICESMART_RUNTIME_MODE && extra.PRICESMART_RUNTIME_MODE !== 'DISABLED') {   // el arranque (instrumentation) deja una línea de informe: se espera antes de probar
-    let seen = false; const before = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length;
-    for (let i = 0; i < 90 && !seen; i++) { const now = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length; if (now > before) seen = true; else await sleep(1000); }
+    let seen = false;
+    for (let i = 0; i < 90 && !seen; i++) { if (reportLines() > linesBefore) seen = true; else await sleep(1000); }
     if (!seen) throw new Error(`El arranque no informó el estado del runtime: ${tailOf(logFile, 30)}`);
   }
   const st = JSON.parse(fs.readFileSync(path.join(m.runDir, 'state-hb.json'), 'utf8')); st.app.port = port; fs.writeFileSync(path.join(m.runDir, 'state-hb.json'), JSON.stringify(st));

@@ -18,7 +18,7 @@ export async function register() {
       try {
         const { bootHomologationRuntime } = await import("./lib/integrations/pricesmart/homologation/boot");
         const report = await bootHomologationRuntime(process.env);
-        console.log(`[pricesmart] runtime de homologación: ${report.state} (${report.blockers.map((b) => b.code).join(",") || "sin bloqueos"})`);
+        console.log(`[pricesmart] runtime de homologación: ${report.state} (${report.blockers.map((b) => `${b.code}${b.code === "PROBE_FAILED" ? `:${b.detail}` : ""}`).join(",") || "sin bloqueos"})`);
       } catch {
         console.error("[pricesmart] el arranque del runtime de homologación falló; permanece cerrado.");
       }

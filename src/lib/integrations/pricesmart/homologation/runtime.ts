@@ -83,7 +83,7 @@ export function createHomologationRuntime(deps: HomologationDeps): HomologationR
     probes: {
       database: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT environment, sandbox_id FROM novalvion_environment WHERE id = 1'); return rows.length === 1 && rows[0].environment === 'sandbox'; },
       // El runtime NO se activa con un aprovisionamiento incompleto: ambos pasos deben figurar COMPLETE (y ninguno FAILED/STARTED). Un esquema parcial o sin marcador bloquea la instalación.
-      provisioning: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT step, state FROM ps_homolog_provisioning'); const m = Object.fromEntries(rows.map((r) => [String(r.step), String(r.state)])); return rows.length === 2 && m.bootstrap === 'COMPLETE' && m.finalize === 'COMPLETE'; },
+      provisioning: async () => { const [rows] = await pool.execute<import('mysql2/promise').RowDataPacket[]>('SELECT step, state FROM ps_homolog_provisioning'); const m = Object.fromEntries(rows.map((r) => [String(r.step), String(r.state)])); return m.bootstrap === 'COMPLETE' && m.finalize === 'COMPLETE' && rows.length >= 2 && rows.every((r) => String(r.state) === 'COMPLETE'); },   // el aprovisionamiento real añade pasos `account:*`: TODOS deben figurar COMPLETE (ninguno FAILED/STARTED)
       outbox: async () => { const [rows] = await deps.workerPool.execute<import('mysql2/promise').RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${schema}\`.ps_api01_outbox WHERE status = 'REVIEW'`); return rows.length === 1; },
     },
     killSwitch: deps.killSwitch,
