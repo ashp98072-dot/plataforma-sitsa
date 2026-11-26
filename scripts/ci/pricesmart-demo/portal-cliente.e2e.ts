@@ -61,11 +61,11 @@ describe("Portal del Cliente — consulta de órdenes recibidas por la integraci
   it("CP.2 programación y viaje: el portal muestra el viaje y sus paradas; en ruta y descargado el estado coincide con la API (UNLOADED_UNCONFIRMED) y NINGUNO confirma entrega", async () => {
     const id = uid(); expect((await post("a", id)).status).toBe(202); const sol = await solicitudOf(id); await programar(sol); const s = await solicitudOf(id);
     let seg = await portal("consulta", `/solicitudes/${sol.id}/seguimiento`); expect(seg.status).toBe(200);
-    expect(seg.json.plan).toMatchObject({ estadoPortal: "PROGRAMADO", estadoReal: "Programado" }); expect((seg.json.plan.paradas as Row[]).map((p) => p.tipo)).toEqual(["Carga", "Entrega", "Descarga"]);
-    expect((seg.json.plan.paradas as Row[]).every((p) => p.completada === false && p.cantidadEvidencias === 0)).toBe(true);
+    expect(seg.json.seguimiento.plan).toMatchObject({ estadoPortal: "PROGRAMADO", estadoReal: "Programado" }); expect((seg.json.seguimiento.plan.paradas as Row[]).map((p) => p.tipo)).toEqual(["Carga", "Entrega", "Descarga"]);
+    expect((seg.json.seguimiento.plan.paradas as Row[]).every((p) => p.completada === false && p.cantidadEvidencias === 0)).toBe(true);
     for (const [estado, portalEstado, apiEstado] of [["En ruta", "EN_RUTA", "IN_TRANSIT"], ["Descargado", "FINALIZADO", "UNLOADED_UNCONFIRMED"]] as const) {
       await ctx.db.query("UPDATE tms_planes_viaje SET estado = ? WHERE empresa_id = ? AND id = ?", [estado, empresas.a.empresaId, s.plan_id]);
-      seg = await portal("consulta", `/solicitudes/${sol.id}/seguimiento`); expect(seg.json.plan).toMatchObject({ estadoPortal: portalEstado });
+      seg = await portal("consulta", `/solicitudes/${sol.id}/seguimiento`); expect(seg.json.seguimiento.plan).toMatchObject({ estadoPortal: portalEstado });
       expect((await get("a", id)).json).toMatchObject({ proposedStatus: apiEstado, confirmsDelivery: false });   // «Finalizado» del portal ≠ entrega confirmada
     }
     expect((await portal("otroCliente", `/solicitudes/${sol.id}/seguimiento`)).status).toBe(404);
@@ -82,7 +82,7 @@ describe("Portal del Cliente — consulta de órdenes recibidas por la integraci
     const lista = await portal("consulta", `/solicitudes/${a.sol.id}/paradas/${a.entrega.id}/evidencias`); expect(lista.status).toBe(200);
     expect(lista.json.evidencias).toEqual([expect.objectContaining({ id: ea, nombreOriginal: "entrega-a.jpg", tipo: "producto" })]); expect(JSON.stringify(lista.json)).not.toMatch(/ruta|lab\//);
     expect(JSON.stringify(lista.json)).not.toContain("entrega-b.jpg");   // la evidencia de la OTRA orden no aparece
-    const seg = await portal("consulta", `/solicitudes/${a.sol.id}/seguimiento`); expect((seg.json.plan.paradas as Row[]).find((p) => p.id === a.entrega.id)).toMatchObject({ completada: true, cantidadEvidencias: 1 });
+    const seg = await portal("consulta", `/solicitudes/${a.sol.id}/seguimiento`); expect((seg.json.seguimiento.plan.paradas as Row[]).find((p) => p.id === a.entrega.id)).toMatchObject({ completada: true, cantidadEvidencias: 1 });
     // cruce de órdenes: la parada de B con la solicitud de A (y la evidencia de B por la parada de A) no existen
     expect((await portal("consulta", `/solicitudes/${a.sol.id}/paradas/${b.entrega.id}/evidencias`)).status).toBe(404);
     expect((await portal("consulta", `/solicitudes/${a.sol.id}/paradas/${a.entrega.id}/evidencias/${eb}/archivo`)).status).toBe(404);
