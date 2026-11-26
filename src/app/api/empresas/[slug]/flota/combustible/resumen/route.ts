@@ -4,6 +4,8 @@ import { requireTenantFlotaCombustible } from "@/lib/tenant";
 
 import { resumenCombustibleMensual } from "@/lib/flota/combustible";
 import { hoyLocal } from "@/lib/rrhh/dates";
+import { rangoMes } from "@/lib/rrhh/resumen-mensual";
+import { codigoSeguroResumen } from "@/lib/flota/cb2/resumen-error";
 
 /**
  * FLOTA-COMBUSTIBLE-1 (Fase 3) — "un total de cuánto se echó de diesel o
@@ -21,12 +23,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ slug: string }>
 
   const url = new URL(req.url);
   const mesRaw = url.searchParams.get("mes");
-  const mes = mesRaw && /^\d{4}-(0[1-9]|1[0-2])$/.test(mesRaw) ? mesRaw : hoyLocal().slice(0, 7);
+  const mes = mesRaw === null ? hoyLocal().slice(0, 7) : mesRaw;
+  try {
+    rangoMes(mes);
+    // El límite exclusivo debe poder representarse como DATE en MariaDB.
+    if (mes === "9999-12") throw new Error("Mes fuera de rango");
+  } catch {
+    return NextResponse.json({ error: "Mes inválido. Usa AAAA-MM desde 2000-01 hasta 9999-11." }, { status: 400, headers: { "Cache-Control": "private, no-store" } });
+  }
 
+  let etapa: "historico" | "integrado" = "historico";
+  const inicio = Date.now();
   try {
     const resumen = await resumenCombustibleMensual(guard.empresa.id, mes);
+    etapa = "integrado";
     return NextResponse.json({ mes, ...resumen, integrado: await resumenIntegrado(guard.empresa.id, mes) }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch {
-    return NextResponse.json({ error: "No se pudo cargar el resumen completo. Verifica la migración PR514 y vuelve a intentar." }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    console.error("[combustible-resumen]", { etapa, codigo: codigoSeguroResumen(error), duracionMs: Date.now() - inicio });
+    return NextResponse.json({ error: "No se pudo cargar el resumen completo. Vuelve a intentar o contacta a soporte." }, { status: 500, headers: { "Cache-Control": "private, no-store" } });
   }
 }

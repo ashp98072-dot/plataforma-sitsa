@@ -4,6 +4,7 @@ import { query } from "@/lib/db";
 import type { RowDataPacket } from "mysql2";
 import { rangoMes } from "@/lib/rrhh/resumen-mensual";
 import { normalizarVale } from "../combustible-conciliacion";
+import { codigoSeguroResumen } from "./resumen-error";
 export type OperacionResumen = { id: number; origen: "HISTORICO" | "CB2"; vehiculo_id: number; placa: string; proveedor_id: number | null; numero_vale: string | null; fecha_consumo: string | null; creado_at: string; galones: string; precio: string | null; monto: string; moneda: string; combustible: string };
 function identidad(r: OperacionResumen) {
     return r.proveedor_id && r.numero_vale?.trim() && r.fecha_consumo ? JSON.stringify([r.proveedor_id,r.vehiculo_id,normalizarVale(r.numero_vale),r.fecha_consumo.slice(0,10)]) : null;
@@ -50,9 +51,20 @@ export function vehiculoIdResumen(r: Record<string, unknown>): number {
 }
 export async function resumenIntegrado(empresa: number, mes: string) {
     const [desde, hasta] = rangoMes(mes);
-    const historicos = await query<RowDataPacket[]>(`SELECT c.id,c.vehiculo_id,v.placa,c.proveedor_id,c.numero_vale,c.fecha_consumo,c.creado_at,c.galones,c.precio_galon AS precio,c.monto,c.tipo_combustible FROM flota_combustible_cargas c JOIN flota_vehiculos v ON v.id=c.vehiculo_id WHERE c.empresa_id=? AND c.estado='APROBADO' AND ((c.creado_at>=? AND c.creado_at<?) OR (c.fecha_consumo>=? AND c.fecha_consumo<?))`, [empresa, desde, hasta, desde, hasta]);
+    let etapa: "historicos" | "consumos" | "calculo" = "historicos";
+    const inicio = Date.now();
+    try {
+    // consolidarMes usa creado_at para históricos: traer registros por fecha_consumo
+    // de otro período solo añade trabajo, ya que los descarta antes de calcular.
+    const historicos = await query<RowDataPacket[]>(`SELECT c.id,c.vehiculo_id,v.placa,c.proveedor_id,c.numero_vale,c.fecha_consumo,c.creado_at,c.galones,c.precio_galon AS precio,c.monto,c.tipo_combustible FROM flota_combustible_cargas c JOIN flota_vehiculos v ON v.id=c.vehiculo_id WHERE c.empresa_id=? AND c.estado='APROBADO' AND c.creado_at>=? AND c.creado_at<?`, [empresa, desde, hasta]);
+    etapa = "consumos";
     const consumos = await query<RowDataPacket[]>(`SELECT c.*,COALESCE(v.placa,c.placa_original) AS placa,c.creado_en AS creado_at FROM flota_cb2_consumos c LEFT JOIN flota_vehiculos v ON v.id=c.vehiculo_id WHERE c.empresa_id=? AND c.fecha_consumo>=? AND c.fecha_consumo<?`, [empresa, desde, hasta]);
+    etapa = "calculo";
     const dia = (v: unknown) => v instanceof Date ? `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,"0")}-${String(v.getDate()).padStart(2,"0")}` : String(v ?? "").slice(0,10);
     const ops = (rows: RowDataPacket[], origen: OperacionResumen["origen"]) => rows.map(r => ({ ...r, id: Number(r.id), vehiculo_id: vehiculoIdResumen(r), placa: String(r.placa), proveedor_id: r.proveedor_id == null ? null : Number(r.proveedor_id), numero_vale: r.numero_vale == null ? null : String(r.numero_vale), fecha_consumo: r.fecha_consumo == null ? null : dia(r.fecha_consumo), creado_at: dia(r.creado_at), galones: String(r.galones), precio: r.precio == null ? null : String(r.precio), monto: String(r.monto), moneda: origen === "HISTORICO" ? "GTQ" : String(r.moneda), combustible: origen === "HISTORICO" ? r.tipo_combustible === "gasolina" ? "GASOLINA_HISTORICA_SIN_VARIANTE" : r.tipo_combustible === "diesel" ? "DIESEL" : "NO_DETERMINADO" : r.producto_clasificado ?? "NO_DETERMINADO", origen } satisfies OperacionResumen));
     return consolidarMes([...ops(historicos, "HISTORICO"), ...ops(consumos, "CB2")], desde, hasta);
+    } catch (error) {
+        console.error("[combustible-resumen-integrado]", { etapa, codigo: codigoSeguroResumen(error), duracionMs: Date.now() - inicio });
+        throw error;
+    }
 }
