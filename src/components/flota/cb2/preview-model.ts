@@ -117,7 +117,7 @@ export function pilotoShellResuelto(filas: FilaCB2[], d: DecisionAsignacion | un
         const e = cat?.empleados?.find(p => p.id === n.empleadoId);
         if (cat && !e) return false;   // el empleado debe existir en el catálogo de la empresa
         // Una propuesta sin confirmar solo vale si el motor actual reconoce exactamente a ese empleado para cada nombre original (o hay equivalencia confirmada).
-        return n.confirmado || !cat || nombres.every(o => identificarEmpleado(o, cat.empleados ?? []).propuesta?.id === n.empleadoId);
+        return n.confirmado || !cat || nombres.every(o => { const m = identificarEmpleado(o, cat.empleados ?? []); return m.propuesta?.id === n.empleadoId || (n.origen === "EQUIVALENCIA" && m.candidatos.length === 0); });
     }
     if (d.pilotoTipo !== "REPORTADO" || d.empleadoId != null) return false;
     if (cat && !cat.pilotosReportados) return false;   // sin el registro instalado el servidor no puede guardar la identidad reportada

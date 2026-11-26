@@ -9,6 +9,7 @@ import { productos, etiquetasProducto, type Producto } from "@/lib/flota/cb2/cla
 import { jsonCB2, leerObjeto, type Registro, type CatalogosCB2 } from "./client";
 import { button, input } from "./controles";
 import type { EjecutarCB2 } from "./importar";
+import { IdentificarHistoricos } from "./identificar-historicos";
 export type BorradorCorreccionCB2 = { unidad: string; empleado: string; producto: string; motivo: string; revision: number; pilotoExterno?: string; asociacion?: string };
 const inicial = (r: Registro): BorradorCorreccionCB2 => ({ unidad: r.vehiculo_id == null && r.identidad_externa ? String(-Number(leerObjeto(r.identidad_externa).unidad_id)) : String(r.vehiculo_id ?? ""), empleado: String(r.empleado_id ?? ""), producto: String(r.producto_clasificado ?? ""), motivo: "", pilotoExterno: r.piloto_externo_id ? String(r.piloto_externo_id) : undefined, revision: Number(r.revision_asignacion ?? 0), ...(r.asociacion_externa_id ? { asociacion: String(r.asociacion_externa_id) } : {}) });
 export function CorregirCB2({ r, cat, api, run, locked, borrador, onBorradorChange }: { r: Registro; cat: CatalogosCB2; api: string; run: EjecutarCB2; locked: boolean; borrador?: BorradorCorreccionCB2; onBorradorChange?: (v: BorradorCorreccionCB2 | undefined) => void }) {
@@ -37,5 +38,6 @@ export function CorregirCB2({ r, cat, api, run, locked, borrador, onBorradorChan
         <label>Justificacion de correccion<textarea className={input} minLength={10} maxLength={1000} value={motivo} onChange={e => cambiar({ motivo: e.target.value })}/></label>
         <p>Nuevo: unidad {cat.vehiculos.find(v => String(v.id) === unidad)?.placa ?? "Sin unidad"}; empleado {cat.empleados?.find(e => String(e.id) === empleado)?.nombre ?? "Sin vínculo"}; combustible {producto || "Pendiente"}.</p>
         <label><input type="checkbox" checked={acepta} onChange={e => setAcepta(e.target.checked)}/>Confirmo esta corrección auditada</label><button className={button} disabled={!acepta || !unidad || !producto || (politicaIndependiente(cat) && !empleado && !pilotoExterno) || motivo.trim().length<10} onClick={() => void guardar()}>Guardar corrección #{r.id}</button>{borrador && <button type="button" className={button} onClick={descartar}>Descartar borrador #{r.id}</button>}{error && <p role="alert">{error}</p>}
+        <IdentificarHistoricos key={`${empleado}:${motivo}`} api={api} r={r} cat={cat} empleado={empleado} motivo={motivo}/>
     </fieldset></details>;
 }

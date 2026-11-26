@@ -94,6 +94,15 @@ describe("equivalencias históricas hacia empleados de baja", () => {
   });
 });
 
+it("una equivalencia confirmada se propone al importar una errata, pero no si exige revisión", async () => {
+  const nombre = "Andrez Taracena";
+  sqlMock({ alias: { nombre_normalizado: "ANDREZ TARACENA", empleado_id: 50, piloto_reportado_id: null, requiere_revision: 0, confirmado_por: 9 } });
+  const [r] = await revisarNombresTx(conn(), 7, [nombre], true);
+  expect(r.propuesta).toEqual({ tipo: "EMPLEADO", empleadoId: 50, confirmado: false, origen: "EQUIVALENCIA" });
+  sqlMock({ alias: { nombre_normalizado: "ANDREZ TARACENA", empleado_id: 50, piloto_reportado_id: null, requiere_revision: 1, confirmado_por: 9 } });
+  expect((await revisarNombresTx(conn(), 7, [nombre], true))[0].propuesta).toBeNull();
+});
+
 describe("reintento SQL solo por columna inexistente", () => {
   it("ER_BAD_FIELD_ERROR/1054 reintenta sin fechas; conexión o permisos se propagan", async () => {
     expect(esColumnaInexistente({ code: "ER_BAD_FIELD_ERROR" })).toBe(true); expect(esColumnaInexistente({ errno: 1054 })).toBe(true);

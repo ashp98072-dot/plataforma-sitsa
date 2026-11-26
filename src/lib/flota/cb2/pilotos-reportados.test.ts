@@ -24,6 +24,13 @@ it("reutiliza solo equivalencias confirmadas vigentes; no inventa reportados",()
  expect(proponerNombre("Visitante",[],{tipo:"REPORTADO",reportadoId:3,confirmado:false}).propuesta).toEqual({tipo:"REPORTADO",reportadoId:3,confirmado:false});
  expect(proponerNombre("Visitante",[]).propuesta).toBeNull();
 });
+it("una equivalencia confirmada propone una errata solo si no hay ambigüedad ni homónimos",()=>{
+ const empleado={id:8,nombre:"Jayme Calderón",estado:"Activo"}, alias={tipo:"EMPLEADO" as const,empleadoId:8,confirmado:false};
+ expect(proponerNombre("Jaime Calderon",[empleado],alias,undefined,undefined,true).propuesta).toEqual({...alias,origen:"EQUIVALENCIA"});
+ expect(proponerNombre("Jaime Calderon",[empleado],alias).propuesta).toBeNull();
+ expect(proponerNombre("Jaime Calderon",[empleado,{...empleado,id:9}],alias,undefined,undefined,true).propuesta).toBeNull();
+ expect(proponerNombre("Jaime Calderon",[empleado,{id:10,nombre:"Jaime Calderon",estado:"Activo"}],alias,undefined,undefined,true).propuesta).toBeNull();
+});
 it("normaliza solo etiquetas, conserva acentos/puntuacion y no infiere homonimos",()=>{
  expect(normalizarNombreReportado("  A\u0301lvaro  Pérez ")).toBe("ÁLVARO PÉREZ");
  expect(normalizarNombreReportado("José Pérez")).not.toBe(normalizarNombreReportado("Jose Pérez"));

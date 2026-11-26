@@ -7,6 +7,13 @@ import { ErrorCB2, hash, id, clave } from "./model";
 import { productos } from "./clasificacion";
 import { rows, insert, tx, vehiculos, type Contexto } from "./repository";
 import { validarTercero, tercerosHabilitados } from "./terceros";
+import type { PoolConnection } from "mysql2/promise";
+
+/** Valida bajo bloqueo la pertenencia y el estado del empleado para una corrección. */
+export async function validarEmpleadoCorreccion(c: PoolConnection, empresaId: number, empleadoId: number) {
+    const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') FOR UPDATE", [empresaId, empleadoId]);
+    if (!empleado) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
+}
 export const corregirSchema = z.object({ proveedorId: id, consumoId: id, revision: z.number().int().nonnegative(), vehiculoId: z.number().int().min(-2147483647).max(2147483647).refine(n => n !== 0), pilotoTipo: z.enum(["INTERNO", "EXTERNO"]).optional(), metodoPiloto: z.enum(["AUTOMATICA", "MANUAL"]).optional(), pilotoExternoId: id.optional(), asociacionExternaId: id.optional(), empleadoId: id.nullable(), productoClasificado: z.enum(productos), motivo: z.string().trim().min(10).max(1000), clave }).strict().refine(s => s.pilotoTipo ? !s.asociacionExternaId && (s.pilotoTipo === "INTERNO" ? s.empleadoId !== null && !s.pilotoExternoId : s.empleadoId === null && !!s.pilotoExternoId) : (s.vehiculoId < 0) === (s.asociacionExternaId !== undefined || s.pilotoExternoId !== undefined) && !(s.asociacionExternaId !== undefined && s.pilotoExternoId !== undefined) && !(s.vehiculoId < 0 && s.empleadoId !== null));
 export async function corregirAsignacion(ctx: Contexto, op: z.infer<typeof corregirSchema>) {
     const digest = hash(JSON.stringify([ctx.empresaId, ctx.actor.id, op]));
@@ -23,8 +30,7 @@ export async function corregirAsignacion(ctx: Contexto, op: z.infer<typeof corre
         if (!externa) await vehiculos(c, ctx, [op.vehiculoId]);
         if (consumo.vehiculo_id == null && !consumo.vinculo_unidad && !tercerosHabilitados()) throw new ErrorCB2("Edición externa deshabilitada hasta aprobar D2.", 403);
         if (op.empleadoId !== null) {
-            const [empleado] = await rows(c, "SELECT id FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja') FOR UPDATE", [ctx.empresaId, op.empleadoId]);
-            if (!empleado) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
+            await validarEmpleadoCorreccion(c, ctx.empresaId, op.empleadoId);
         }
         const nuevo = { vehiculoId: op.vehiculoId, empleadoId: op.empleadoId, productoClasificado: op.productoClasificado, revision: op.revision + 1, ...(externa ? { identidadExterna: externa } : {}) };
         if (externa || consumo.vehiculo_id == null) {
