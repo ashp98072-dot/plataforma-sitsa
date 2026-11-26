@@ -1,6 +1,7 @@
 import type { PoolConnection, RowDataPacket } from "mysql2/promise";
 import { getPool } from "@/lib/db";
 import { placaComparable } from "./combustible-coincidencias";
+import { identificarPlaca } from "./combustible-coincidencias";
 
 export class ErrorIdentidadVehiculo extends Error {
   constructor(message: string, public status = 409) { super(message); }
@@ -41,6 +42,16 @@ export async function exigirPlacaLibreTx(c: PoolConnection, empresa: number, pla
 
 /** Sharing authorizes use, not creation of a second local physical record. */
 export async function exigirSinDuplicadoCompartidoTx(c:PoolConnection,empresa:number,placa:string,id?:number){
+ await exigirSinEquivalenciaPlacaTx(c,empresa,placa);
  const [compartidos]=await c.query<RowDataPacket[]>("SELECT v.id,v.placa FROM flota_vehiculos v JOIN flota_vehiculo_acceso a ON a.vehiculo_id=v.id AND a.empresa_id=? WHERE v.empresa_id<>? AND v.activo=1 ORDER BY v.id FOR UPDATE",[empresa,empresa]);
  if(compartidos.some(v=>Number(v.id)!==id&&placaComparable(String(v.placa))===placaComparable(placa)))throw new ErrorIdentidadVehiculo("La placa ya corresponde a una unidad compartida vigente. Usa ese registro o revisa su identidad fisica.");
+}
+
+/** El llamador debe bloquear la fila de empresa antes de comprobar y escribir. */
+export async function exigirSinEquivalenciaPlacaTx(c: PoolConnection, empresa: number, placa: string) {
+ const [tablas] = await c.query<RowDataPacket[]>("SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='flota_cb2_placas_equivalencias'");
+ if (!tablas.length) return;
+ if (tablas[0].ENGINE !== "InnoDB") throw new ErrorIdentidadVehiculo("Registro de equivalencias de placas incompatible.", 503);
+ const [equivalencias] = await c.query<RowDataPacket[]>("SELECT placa_normalizada FROM flota_cb2_placas_equivalencias WHERE empresa_id=? AND revocado_en IS NULL FOR UPDATE", [empresa]);
+ if (equivalencias.some(e => identificarPlaca(String(e.placa_normalizada), [{ placa }], v => v.placa).estado !== "INEXISTENTE")) throw new ErrorIdentidadVehiculo("La placa coincide con una equivalencia CB2 vigente. Revísala y revócala antes de registrar la unidad.");
 }

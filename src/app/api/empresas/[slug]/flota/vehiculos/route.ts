@@ -1,4 +1,4 @@
-import { escribirVehiculos, exigirPlacaLibreTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, exigirPlacaLibreTx, exigirSinEquivalenciaPlacaTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { placaComparable } from "@/lib/flota/combustible-coincidencias";
 import { errorEliminacionVehiculo } from "@/lib/flota/vehiculo-eliminacion";
 import type { SqlParams } from "@/lib/db";
@@ -403,7 +403,15 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (!fresh[0]) throw new ErrorIdentidadVehiculo("Vehiculo no disponible.", 404);
     cur[0] = fresh[0];
     if (d.placa !== undefined && !placaComparable(d.placa)) throw new ErrorIdentidadVehiculo("Placa inválida.", 400);
-    if (d.placa !== undefined && placaComparable(d.placa) !== placaComparable(String(cur[0].placa))) await exigirPlacaLibreTx(conn, empresaDuenaId, d.placa, d.id);
+    if (d.placa !== undefined && placaComparable(d.placa) !== placaComparable(String(cur[0].placa))) {
+      await exigirPlacaLibreTx(conn, empresaDuenaId, d.placa, d.id);
+      const [accesos] = await conn.query<RowDataPacket[]>("SELECT empresa_id FROM flota_vehiculo_acceso WHERE vehiculo_id=? ORDER BY empresa_id FOR UPDATE", [d.id]);
+      for (const acceso of accesos) {
+        const empresa = Number(acceso.empresa_id);
+        await conn.query("SELECT id FROM empresas WHERE id=? FOR UPDATE", [empresa]);
+        await exigirSinEquivalenciaPlacaTx(conn, empresa, d.placa);
+      }
+    }
   // PROGRAMACION-TC-CAJA-REMOLQUE-1: el tipo de unidad es atributo de la
   // empresa dueña (igual que los accesos compartidos). Se guarda aparte del
   // UPDATE principal para que un fallo (columna aún sin migrar) nunca quede

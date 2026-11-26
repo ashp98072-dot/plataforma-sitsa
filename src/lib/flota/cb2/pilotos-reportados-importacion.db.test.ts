@@ -18,7 +18,8 @@ import { resumenIntegrado } from "./resumen-mensual";
 import { revisionCandidatos } from "@/components/flota/cb2/preview-model";
 import type { CatalogosCB2, FilaCB2 } from "@/components/flota/cb2/client";
 import { gruposOrigen, type Registro } from "@/components/flota/cb2/client";
-import { revocarPlaca } from "./placas-equivalencias";
+import { recordarPlacaTx, revocarPlaca } from "./placas-equivalencias";
+import { exigirSinEquivalenciaPlacaTx } from "../vehiculos-escritura";
 import { hash } from "./model";
 
 vi.setConfig({ testTimeout: 240000, hookTimeout: 240000 });
@@ -293,6 +294,55 @@ describe.skipIf(!pipe)("CB2: piloto reportado — primera y segunda importación
     await expect(confirmarArchivo(ctx, bHalel, "sugerida-revocada.xlsx", entradaSugerida, "equivalenciaPlaca0003", reciboSugerido.token)).rejects.toThrow(/equivalencia cambi/i);
     expect((await preview(ctx, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
     expect((await q("SELECT placa_original,vehiculo_id FROM flota_cb2_consumos WHERE numero_vale='EQ-1'"))[0]).toMatchObject({ placa_original: "125 CCN", vehiculo_id: 1191 });
+  });
+  it("recupera con la misma clave después de perder la respuesta al COMMIT real", async () => {
+    const archivo = await libro([[new Date("2026-10-01T00:00:00Z"), "EQ-COMMIT", "125 CCQ", 10, 20, 200, "", "", "Piloto Placa", "DIESEL", null]]);
+    const candidato = (await claves(archivo, "HALEL"))[0];
+    const entrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato, vehiculoId: 1191, productoClasificado: "DIESEL" as const, motivoUnidad: "Verificado contra evidencia original", recordarPlaca: true }] };
+    const recibo = await preview(ctx, archivo, entrada), clave = "commitPerdidoPlaca001";
+    const auditorias = await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')");
+    const obtener = state.pool!.getConnection.bind(state.pool!);
+    let commits = 0;
+    const spy = vi.spyOn(state.pool!, "getConnection").mockImplementation(async () => {
+      const c = await obtener();
+      return new Proxy(c, { get(target, prop) {
+        if (prop === "commit") return async () => { await target.commit(); if (++commits === 2) throw new Error("respuesta perdida tras commit"); };
+        const v = Reflect.get(target, prop, target); return typeof v === "function" ? v.bind(target) : v;
+      } });
+    });
+    try { await expect(confirmarArchivo(ctx, archivo, "perdido.xlsx", entrada, clave, recibo.token)).rejects.toMatchObject({ incierto: true }); }
+    finally { spy.mockRestore(); }
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale='EQ-COMMIT'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='125CCQ'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')")).toBe(auditorias + 2);
+    await expect(confirmarArchivo(ctx, archivo, "perdido.xlsx", entrada, clave, recibo.token)).resolves.toMatchObject({ repetida: true });
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale='EQ-COMMIT'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='125CCQ'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')")).toBe(auditorias + 2);
+  });
+  it("serializa equivalencia y alta de Flota mediante el bloqueo de empresa", async () => {
+    const a = await state.pool!.getConnection(), b = await state.pool!.getConnection();
+    try {
+      await a.beginTransaction(); await b.beginTransaction();
+      await recordarPlacaTx(a, ctx, "123 AAA", 1191, "Verificado contra la evidencia");
+      let desbloqueada = false;
+      const espera = b.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE").then(() => { desbloqueada = true; });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(desbloqueada).toBe(false);
+      await a.commit(); await espera;
+      await expect(exigirSinEquivalenciaPlacaTx(b, 1, "C-123AAA")).rejects.toThrow(/equivalencia CB2/);
+      await b.rollback();
+      expect(await n("SELECT COUNT(*) n FROM flota_vehiculos WHERE placa='C-123AAA'")).toBe(0);
+      await a.beginTransaction();
+      await a.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE");
+      await a.query("INSERT INTO flota_vehiculos (empresa_id,placa,estado,activo) VALUES (1,'C-124AAA','Activo',1)");
+      await b.beginTransaction();
+      const guardar = recordarPlacaTx(b, ctx, "124 AAA", 1191, "Verificado contra la evidencia");
+      await a.commit();
+      await expect(guardar).rejects.toThrow(/coincide con una unidad real/i);
+      await b.rollback();
+      expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='124AAA'")).toBe(0);
+    } finally { await a.rollback(); await b.rollback(); a.release(); b.release(); }
   });
 
 });

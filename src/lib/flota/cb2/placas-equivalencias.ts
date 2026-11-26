@@ -41,6 +41,9 @@ export async function recordarPlacaTx(c: PoolConnection, ctx: Contexto, original
   if (!(await esquemaPlacas(c))) throw new ErrorCB2("Instala la migración de equivalencias de placas antes de recordarla.", 503);
   const normalizada = placaComparable(original);
   if (!normalizada || normalizada.length > 255 || original.length > 255 || motivo.trim().length < 10 || vehiculoId <= 0) throw new ErrorCB2("Equivalencia de placa inválida.", 400);
+  // La misma fila serializa las altas y ediciones de Flota de esta empresa.
+  const [empresa] = await rows(c, "SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE", [ctx.empresaId]);
+  if (!empresa) throw new ErrorCB2("Empresa no disponible.", 403);
   const vs = await catalogo(c, ctx.empresaId);
   if (!vs.some(v => v.id === vehiculoId && v.disponible)) throw new ErrorCB2("Unidad no autorizada o inactiva.", 403);
   if (identificarPlaca(normalizada, vs, v => v.placa).estado !== "INEXISTENTE") throw new ErrorCB2("La placa reportada coincide con una unidad real; revisa el conflicto.", 409);
