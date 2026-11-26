@@ -6,6 +6,7 @@ import { FacturaFormulario } from "@/components/facturacion/factura-formulario";
 import { ConfirmacionesBancariasPanel } from "@/components/facturacion/confirmaciones-bancarias-panel";
 import { BitacoraFacturaPanel } from "@/components/facturacion/bitacora-factura-panel";
 import { parsearMontoCobro } from "@/lib/contabilidad/cxc/monto";
+import { CreditoFactura } from './credito-factura';
 import {
   badgeAdminClase,
   badgeFinancieroClase,
@@ -159,6 +160,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
   const [cargandoDetalle, setCargandoDetalle] = useState(false);
   const [editandoBorrador, setEditandoBorrador] = useState(false);
   const [confirmandoEmitir, setConfirmandoEmitir] = useState(false);
+  const [vencimientoToken, setVencimientoToken] = useState<string | undefined>();
   const [emitNumero, setEmitNumero] = useState("");
   const [emitFecha, setEmitFecha] = useState("");
   const [emitiendo, setEmitiendo] = useState(false);
@@ -250,7 +252,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
       const res = await fetch(`/api/empresas/${slug}/facturacion/facturas/${facturaId}/emitir`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ numeroFactura: emitNumero.trim() || undefined, fechaEmision: emitFecha || undefined }),
+        body: JSON.stringify({ numeroFactura: emitNumero.trim() || undefined, fechaEmision: emitFecha || undefined, vencimientoToken }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { setErrorEmitir(interpretarError(data, "No se pudo emitir la factura.")); return; }
@@ -406,6 +408,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                         />
                       ) : (
                         <div className="space-y-3">
+                          {!esBorrador(detalle.factura.estadoAdmin) && <CreditoFactura slug={slug} factura={f.id} cliente={detalle.factura.clienteId} entidad={detalle.contabilidad?.entidadId ?? null} fecha={detalle.factura.fechaEmision ?? ''} borrador={false} onToken={setVencimientoToken} />}
                           <div className="grid gap-4 lg:grid-cols-3">
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted)]">A. Datos</p>
@@ -554,6 +557,7 @@ export function FacturasPanel({ slug, puedeEditar, puedeEmitir, puedeAnular, pue
                                     <input className={inputCls} type="date" value={emitFecha} onChange={(e) => setEmitFecha(e.target.value)} placeholder={detalle.factura.fechaEmision ?? "Requerida"} />
                                   </label>
                                 </div>
+                                <CreditoFactura slug={slug} factura={f.id} cliente={detalle.factura.clienteId} entidad={detalle.contabilidad.entidadId} fecha={emitFecha || detalle.factura.fechaEmision || ''} borrador onToken={setVencimientoToken} />
                                 {errorEmitir ? <p className="text-rose-500">{errorEmitir}</p> : null}
                                 <div className="flex gap-2 pt-1">
                                   <button type="button" disabled={emitiendo} className="rounded bg-sky-600 px-2.5 py-1 font-medium text-white disabled:opacity-50" onClick={() => void emitir(f.id)}>

@@ -18,6 +18,10 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("POST /facturacion/facturas/[id]/emitir — permisos: facturacion:emitir", () => {
+  it('rechaza vencimiento definitivo y versiones de autoridad del cliente',async()=>{
+    const r=await POST(new Request('http://localhost/x',{method:'POST',body:JSON.stringify({vencimiento:'2026-08-14',revision:5})}),ctx);
+    expect(r.status).toBe(400);expect(emitirFactura).not.toHaveBeenCalled();
+  });
   it("exige el permiso antes de tocar la lib", async () => {
     vi.mocked(requireTenantFacturacion).mockResolvedValue({ error: new Response(null, { status: 403 }) } as Awaited<ReturnType<typeof requireTenantFacturacion>>);
     const res = await POST(new Request("http://localhost/x", { method: "POST", body: "{}" }), ctx);

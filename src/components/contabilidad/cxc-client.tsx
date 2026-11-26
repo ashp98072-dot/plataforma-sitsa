@@ -7,7 +7,7 @@ import { CobrosAplicadosPanel } from "@/components/contabilidad/cobros-aplicados
 
 type Entidad = { id: number; codigo: string; nombre: string; activa: number };
 type Documento = {
-  facturaId: number; clienteId: number; cliente: string; numeroFactura: string | null; fechaEmision: string | null; estadoAdmin: "Emitida" | "Anulada";
+  facturaId: number; clienteId: number; cliente: string; numeroFactura: string | null; fechaEmision: string | null; vencimiento?: string; estadoAdmin: "Emitida" | "Anulada";
   estadoFinanciero: "SIN_PAGOS" | "PARCIAL" | "PAGADA" | "ANULADA"; montoOriginal: string; totalPagado: string; saldoInformativo: string | null; cantidadPagos: number;
 };
 type Totales = { cantidad: number; montoOriginal: string; totalPagado: string; saldoInformativo: string };
@@ -121,9 +121,9 @@ function Documentos({ slug, entidadId, puedeCobrar }: { slug: string; entidadId:
       <div><dt className="text-xs text-[var(--muted)]">Saldo</dt><dd className="font-semibold">{q(tot.saldoInformativo)}</dd></div>
       <div><dt className="text-xs text-[var(--muted)]">Documentos</dt><dd>{tot.cantidad}</dd></div>
     </dl>}
-    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Fecha", "Cliente", "Documento", "Total", "Cobrado", "Saldo", "Situación", ""].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
+    <div className="overflow-auto"><table className="w-full text-sm"><thead><tr>{["Fecha", "Cliente", "Documento", "Vencimiento congelado", "Total", "Cobrado", "Saldo", "Situación", ""].map(t => <th key={t} className="p-2 text-left">{t}</th>)}</tr></thead>
       <tbody>{lista?.filas.map(x => <tr key={x.facturaId} className="border-t border-[var(--border)] align-top">
-        <td className="p-2">{x.fechaEmision ?? "—"}</td><td>{x.cliente}</td><td>{x.numeroFactura ?? `#${x.facturaId}`}</td><td>{q(x.montoOriginal)}</td><td>{q(x.totalPagado)}</td>
+        <td className="p-2">{x.fechaEmision ?? "—"}</td><td>{x.cliente}</td><td>{x.numeroFactura ?? `#${x.facturaId}`}</td><td>{x.vencimiento ?? 'No determinado'}</td><td>{q(x.montoOriginal)}</td><td>{q(x.totalPagado)}</td>
         <td className="font-medium">{x.saldoInformativo == null ? "—" : q(x.saldoInformativo)}</td><td>{SITUACION[x.estadoFinanciero]}</td>
         <td>{puedeCobrar && x.estadoAdmin === "Emitida" && Number(x.saldoInformativo) > 0 && (cobrando === x.facturaId
           ? <div className="flex max-w-xs flex-col gap-1">

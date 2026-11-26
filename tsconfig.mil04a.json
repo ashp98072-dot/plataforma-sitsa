@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/app/api/empresas/[slug]/facturacion/facturas/[id]/emitir/route.test.ts",
+    "src/app/api/empresas/[slug]/facturacion/facturas/[id]/emitir/route.ts",
+    "src/components/contabilidad/cxc-client.tsx",
+    "src/components/facturacion/facturas-panel.tsx",
+    "src/lib/contabilidad/cxc/cxc.ts",
+    "src/lib/facturacion/cuentas-por-cobrar-shared.ts",
+    "src/lib/facturacion/facturas.test.ts",
+    "src/lib/facturacion/facturas.ts",
+    "src/lib/facturacion/permisos-config-requisitos.test.ts",
+    "src/lib/permisos-catalogo.ts",
+    "src/app/api/empresas/[slug]/facturacion/clientes/[id]/credito/route.ts",
+    "src/app/api/empresas/[slug]/facturacion/facturas/[id]/vencimiento/route.ts",
+    "src/components/facturacion/credito-factura.tsx",
+    "src/lib/facturacion/credito-compat.test.ts",
+    "src/lib/facturacion/credito-esquema.ts",
+    "src/lib/facturacion/credito-http.test.ts",
+    "src/lib/facturacion/credito-http.ts",
+    "src/lib/facturacion/credito.db.test.ts",
+    "src/lib/facturacion/credito.ts",
+    "src/lib/facturacion/vencimiento.test.ts",
+    "src/lib/facturacion/vencimiento.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ],
+  "compilerOptions": {
+    "incremental": false,
+    "noEmit": true
+  }
+}
