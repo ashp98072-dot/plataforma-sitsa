@@ -29,7 +29,8 @@ if (process.env[LAB_ACK_ENV] !== LAB_ACK_PHRASE) throw new Error(`Falta confirma
 {
   const bad = Object.keys(process.env).filter((k) => FORBIDDEN_PARENT_ENV.test(k) && process.env[k] !== undefined);
   if (bad.length) throw new Error(`El entorno padre define variables de bases/entornos reales o proxies (${bad.join(', ')}); ejecute desde un entorno limpio.`);
-  const envFiles = fs.readdirSync(repoRoot).filter((f) => /^\.env/.test(f));
+  // Los MISMOS nombres que rechaza `validateSandboxConfig` (un `.env.example` versionado no se carga y no es un problema).
+  const envFiles = ['.env', '.env.local', '.env.production', '.env.production.local', '.env.development', '.env.development.local', '.env.test', '.env.test.local'].filter((f) => fs.existsSync(path.join(repoRoot, f)));
   if (envFiles.length) throw new Error('Hay archivos .env* en el repositorio; validateSandboxConfig los rechaza.');
 }
 const MARIADBD = process.env.PS_LAB_MARIADBD ?? '/usr/sbin/mariadbd';
