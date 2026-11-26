@@ -82,6 +82,6 @@ describe("Resolución de cancelaciones por Operaciones (API-27, parte interna)",
     expect(await resolve(0, "NOT_EXECUTED", "x".repeat(5))).toBe("INVALID"); expect(await resolve(Number(sol.id), "BORRAR" as never, "nota")).toBe("INVALID"); expect(await resolve(Number(sol.id), "NOT_EXECUTED", "n".repeat(301))).toBe("INVALID");
     expect(await resolve(Number(sol.id), "NOT_EXECUTED", "nota válida", empresas.a.empresaId, "  ")).toBe("INVALID");
     expect(await linkRow(Number(sol.id))).toMatchObject({ cancellation_resolution: null });
-    await expect(ctx.db.query("UPDATE ps_api12_tms_links SET cancellation_resolution = 'EXECUTED' WHERE empresa_id = ? AND solicitud_id = ?", [empresas.a.empresaId, sol.id])).rejects.toMatchObject({ code: expect.stringMatching(/ER_CONSTRAINT_FAILED|4025/) });
+    await expect(ctx.db.query("UPDATE ps_api12_tms_links SET cancellation_resolution = 'EXECUTED' WHERE empresa_id = ? AND solicitud_id = ?", [empresas.a.empresaId, sol.id])).rejects.toThrow(/CONSTRAINT.*failed/i);
   });
 });
