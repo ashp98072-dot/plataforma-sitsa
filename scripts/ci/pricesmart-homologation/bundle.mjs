@@ -488,6 +488,71 @@ export function renderEnvTemplate(names, o = {}) {
     'PRICESMART_RUNTIME_MODE=DISABLED', 'PRICESMART_RUNTIME_ENVIRONMENT=sandbox', `PRICESMART_ORIGIN_CLUB=${originClub}`, `PRICESMART_DB_SCHEMA=${names.schema}`, `PRICESMART_DB_RUNTIME_USER=${names.appUser}`, 'PRICESMART_RATIFIED_DECISIONS='].join('\n');
 }
 
+/** Configuración del servidor MariaDB del sandbox (PLANTILLA para revisión): solo loopback, sin resolución de nombres, sin carga de archivos locales, sin acceso remoto. NO se instala desde este repositorio. */
+export function renderMariaDbConfig(o = {}) {
+  const { dbPort = 3306, dataDir = '/var/lib/pricesmart-sandbox-mysql', maxConnections = 100 } = o;
+  if (!Number.isInteger(dbPort) || dbPort < 1024 || dbPort > 65535 || typeof dataDir !== 'string' || !PATH_RE.test(dataDir) || !Number.isInteger(maxConnections) || maxConnections < 20 || maxConnections > 1000) fail('INVALID_MARIADB_OPTIONS');
+  return ['# PRICESMART — configuración de MariaDB 11.8.x del sandbox de homologación (PLANTILLA para revisión). Servidor DEDICADO: nunca el de producción ni el hosting compartido.', '[mysqld]',
+    `datadir=${dataDir}`, 'bind-address=127.0.0.1', `port=${dbPort}`, 'skip-name-resolve', 'local-infile=0', 'secure-file-priv=NULL', 'symbolic-links=0', `max_connections=${maxConnections}`,
+    'character-set-server=utf8mb4', 'sql_mode=STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO', 'innodb_flush_log_at_trx_commit=1', 'innodb_lock_wait_timeout=10',
+    'log_error=/var/log/pricesmart-sandbox-mysql/error.log', '# Sin skip-grant-tables, sin plugins de acceso remoto, sin replicación: nada de esto debe aparecer en este archivo.'].join('\n');
+}
+
+/** Aviso que acompaña SIEMPRE al informe: pasar la verificación local NO es una autorización para exponer el sandbox. */
+export const EXPOSURE_NOTICE = 'ESTA VERIFICACIÓN LOCAL NO AUTORIZA EXPONER EL SANDBOX. Solo detecta errores de configuración comprobables en este host. Exponerlo exige la aprobación humana del perfil (evaluateSandboxExposure sin bloqueantes), el verificador D02 acordado con PriceSmart y un adaptador KMS revisado.';
+
+/**
+ * VERIFICACIÓN PREVIA A LA EXPOSICIÓN (solo lectura, sin red): evalúa los archivos que el operador instalará/instaló en el host. Función PURA: recibe textos y metadatos, devuelve una lista de comprobaciones.
+ * `ok:true` en todas NO autoriza la exposición (eso exige la aprobación humana de `evaluateSandboxExposure`, D02 y KMS); solo detecta errores de configuración que se pueden comprobar localmente.
+ * entrada: { nginx, systemd, mariadb, env?: { text, mode, insideRepo }, killswitch?: { text, exists }, tls?: { certNotAfter, certNames, keyMode } , expectedHostname? }
+ */
+export function evaluateExposureArtifacts(i = {}) {
+  const checks = []; const check = (id, ok, detail) => checks.push({ id, ok: Boolean(ok), ...(ok || !detail ? {} : { detail }) });
+  const nginx = String(i.nginx ?? ''); const unit = String(i.systemd ?? ''); const maria = String(i.mariadb ?? '');
+  check('NGINX_PRESENT', nginx.length > 0, 'falta nginx-pricesmart-sandbox.conf');
+  if (nginx) {
+    check('NGINX_TLS_ONLY_12_13', /ssl_protocols TLSv1\.2 TLSv1\.3;/.test(nginx) && !/TLSv1(?!\.[23])|SSLv/.test(nginx.replace(/TLSv1\.[23]/g, '')));
+    check('NGINX_HTTP_REDIRECTS_ONLY', /listen 80;[\s\S]*?return 301 https:\/\/\$host\$request_uri;/.test(nginx) && (nginx.match(/listen 80;/g) ?? []).length === 1);
+    check('NGINX_ALLOWLIST_AND_DENY_ALL', /\n\s+allow [^\n;]+;/.test(nginx) && /\n\s+deny all;/.test(nginx) && !/allow (all|0\.0\.0\.0\/0|::\/0);/.test(nginx));
+    check('NGINX_ONLY_THREE_ROUTES_REST_404', (nginx.match(/^\s+location /gm) ?? []).length === 4 && /location \/ \{ return 404; \}/.test(nginx));
+    check('NGINX_PROXY_LOOPBACK_ONLY', (nginx.match(/proxy_pass [^\n;]+;/g) ?? []).every((x) => /^proxy_pass http:\/\/127\.0\.0\.1:\d+;$/.test(x)) && /proxy_pass/.test(nginx));
+    check('NGINX_BODY_AND_RATE_LIMITS', /client_max_body_size \d+k;/.test(nginx) && /limit_req_zone/.test(nginx) && /limit_req zone=/.test(nginx));
+    check('NGINX_HSTS_AND_NO_SERVER_TOKENS', /Strict-Transport-Security/.test(nginx) && /server_tokens off;/.test(nginx));
+    if (i.expectedHostname) check('NGINX_HOSTNAME_MATCHES', new RegExp(`server_name ${String(i.expectedHostname).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')};`).test(nginx), 'server_name no coincide');
+  }
+  check('SYSTEMD_PRESENT', unit.length > 0, 'falta pricesmart-sandbox.service');
+  if (unit) {
+    check('SYSTEMD_NOT_ROOT', /^User=(?!root$)[a-z][a-z0-9_-]+$/m.test(unit));
+    check('SYSTEMD_LISTENS_ON_LOOPBACK', /--hostname 127\.0\.0\.1\b/.test(unit) && !/--hostname 0\.0\.0\.0/.test(unit));
+    check('SYSTEMD_HARDENING', ['NoNewPrivileges=true', 'ProtectSystem=strict', 'ProtectHome=true', 'PrivateTmp=true', 'PrivateDevices=true'].every((x) => unit.includes(x)));
+    check('SYSTEMD_SECRETS_FROM_ENVIRONMENT_FILE', /^EnvironmentFile=\/(?!opt\/[^\n]*\/app\/)[^\n]+$/m.test(unit) && !/^Environment=.*(PASSWORD|SECRET|KEY)=/m.test(unit));
+  }
+  check('MARIADB_PRESENT', maria.length > 0, 'falta mariadb-pricesmart-sandbox.cnf');
+  if (maria) {
+    check('MARIADB_BIND_LOOPBACK', /^bind-address=127\.0\.0\.1$/m.test(maria) && !/bind-address=(0\.0\.0\.0|::)/.test(maria));
+    check('MARIADB_NO_UNSAFE_OPTIONS', /^skip-name-resolve$/m.test(maria) && /^local-infile=0$/m.test(maria) && !/skip-grant-tables|skip-networking=0|^secure-file-priv=\/?$/m.test(maria.replace(/#.*$/gm, '')));
+  }
+  if (i.env) {
+    const text = String(i.env.text ?? ''); const get = (k) => (text.match(new RegExp(`^${k}=(.*)$`, 'm')) ?? [])[1];
+    check('ENV_FILE_PERMISSIONS_0600', typeof i.env.mode === 'number' && (i.env.mode & 0o077) === 0, 'el archivo de entorno debe ser 0600');
+    check('ENV_FILE_OUTSIDE_REPOSITORY', i.env.insideRepo === false);
+    check('ENV_NO_PLACEHOLDERS_LEFT', !/<[^>\n]+>/.test(text.replace(/^#.*$/gm, '')), 'quedan marcadores <...> sin reemplazar');
+    check('ENV_DECLARES_SANDBOX', get('NOVALVION_ENV') === 'sandbox' && get('PRICESMART_RUNTIME_ENVIRONMENT') === 'sandbox' && /^sandbox_api02_homolog_[a-z0-9_]+$/.test(get('DB_NAME') ?? ''));
+    check('ENV_DB_LOOPBACK_AND_SANDBOX_USER', get('DB_HOST') === '127.0.0.1' && /^sandbox_[a-z0-9_]+$/.test(get('DB_USER') ?? ''));
+    check('ENV_NO_PRODUCTION_OR_LAB_FLAGS', !/^(PRICESMART_LAB_KEY|PRICESMART_LAB_DEMO|PRICESMART_ENABLED|FEL_CREDENTIALS_KEY|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)=/mi.test(text) && !/^NOVALVION_ENV=production/m.test(text));
+    check('ENV_SECRETS_SANDBOX_FORMAT', ['DB_PASSWORD', 'AUTH_SECRET', 'PORTAL_CREDENTIALS_KEY'].every((k) => new RegExp(`^sandbox:[a-z0-9-]{3,48}:[a-f0-9]{64}$`).test(get(k) ?? '')) || /^# secretos en archivo aparte/m.test(text), 'los secretos deben tener el formato sandbox:<id>:<64 hex>');
+    check('RUNTIME_STARTS_DISABLED_OR_READ_ONLY', ['DISABLED', 'READ_ONLY'].includes(get('PRICESMART_RUNTIME_MODE') ?? ''), 'ENABLED exige aprobación humana y decisiones ratificadas: no se verifica aquí');
+    check('RUNTIME_NO_RATIFIED_DECISIONS_DECLARED', !get('PRICESMART_RATIFIED_DECISIONS'), 'ninguna decisión figura ratificada hoy');
+  }
+  if (i.killswitch) check('KILLSWITCH_PRESENT_AND_OFF', i.killswitch.exists === true && String(i.killswitch.text ?? '').trim() !== 'ON', 'el kill switch debe existir y NO estar en ON antes de exponer');
+  if (i.tls) {
+    const now = i.now ?? Date.now(); check('TLS_CERT_NOT_EXPIRED', typeof i.tls.certNotAfter === 'number' && i.tls.certNotAfter > now + 7 * 864e5, 'certificado vencido o a menos de 7 días');
+    check('TLS_CERT_COVERS_HOSTNAME', !i.expectedHostname || (Array.isArray(i.tls.certNames) && i.tls.certNames.some((n) => n === i.expectedHostname || (n.startsWith('*.') && i.expectedHostname.endsWith(n.slice(1)) && i.expectedHostname.split('.').length === n.split('.').length))));
+    check('TLS_KEY_PERMISSIONS', typeof i.tls.keyMode === 'number' && (i.tls.keyMode & 0o037) === 0, 'la llave privada no debe ser legible por otros');
+  }
+  return { ok: checks.every((c) => c.ok), authorizesExposure: false, aviso: EXPOSURE_NOTICE, checks };
+}
+
 // ---- Secretos internos del sandbox (formato exigido por validateSandboxConfig). NO son credenciales de PriceSmart. Se generan en el host y nunca se imprimen.
 export const generateSandboxSecrets = (names) => Object.fromEntries(['DB_PASSWORD', 'AUTH_SECRET', 'PORTAL_CREDENTIALS_KEY'].map((k) => [k, `sandbox:${names.sandboxId}:${randomBytes(32).toString('hex')}`]));
 /** Manifiesto de aislamiento (`isolation.json`) que valida `validateSandboxConfig`; guarda solo los hashes de los secretos. */

@@ -4,6 +4,7 @@
 //   node provision.mjs status --n sbx1 [--db-port 3306]                  → SOLO LECTURA: estado del aprovisionamiento (preflight; un estado PARCIAL se recupera con destroy + apply)
 //   node provision.mjs finalize --n sbx1 --root <dir> --secrets-env <archivo> [--db-port 3306]   → esquema de ejecución del proyecto + privilegios finales (tras apply)
 //   node provision.mjs apply --n sbx1 --db-port 3306 [--execute]    → por omisión solo muestra el resumen; con --execute aplica (loopback, ACK, credenciales por variables de entorno)
+//   node provision.mjs verify-exposure --dir <salida de plan> [--env-file f] [--killswitch f] [--cert f --key f --hostname dns]   → SOLO LECTURA, sin red: verificaciones locales previas a exponer (no autoriza la exposición)
 //   node provision.mjs register-integration|revoke|destroy ...      → mismas barreras (loopback + ACK)
 // Variables (nunca por argumentos): PS_HOMOLOG_ADMIN_USER, PS_HOMOLOG_ADMIN_PASSWORD, PS_HOMOLOG_PROVISION_ACK, PS_HOMOLOG_APP_PASSWORD, PS_HOMOLOG_WORKER_PASSWORD, PS_HOMOLOG_MONITOR_PASSWORD.
 // No genera ni comparte credenciales de PriceSmart; el verificador HMAC de laboratorio no interviene. La conexión SOLO puede ser 127.0.0.1/::1 (assertApplyTarget).
@@ -28,6 +29,7 @@ export async function plan(args) {
     'bootstrap.sql': B.renderBootstrapSql(B.buildBootstrap(n, repo)), 'destroy.sql': ['-- SOLO PARA REVISIÓN: NO ejecutar a mano. `provision.mjs destroy` comprueba la propiedad de la base y la procedencia de las cuentas antes de cualquier DROP.', ...B.destroyStatements(n).map((s) => `${s};`)].join('\n'),
     'nginx-pricesmart-sandbox.conf': B.renderNginx(nginxOpts), 'pricesmart-sandbox-proxy.conf': B.NGINX_PROXY_INCLUDE,
     'pricesmart-sandbox.service': B.renderSystemd({ appPort: nginxOpts.appPort }), 'runtime.env.template': B.renderEnvTemplate(names, { dbPort: num(args['db-port'], 3306) }),
+    'mariadb-pricesmart-sandbox.cnf': B.renderMariaDbConfig({ dbPort: num(args['db-port'], 3306) }),
     'monitoring.json': JSON.stringify({ queries: B.MONITORING_QUERIES, alerts: B.ALERT_RULES, account: names.monitorUser }, null, 2),
     'tms-schema-phases.json': JSON.stringify(B.tmsSchemaPhases(repo), null, 2),
   };
@@ -83,9 +85,23 @@ export async function destroy(args) {
   try { return { schema: B.homologNames(args.n).schema, ...(await B.destroySandbox(conn, args.n)) }; } finally { await conn.end(); }   // preflight de propiedad/procedencia ANTES de cualquier DROP
 }
 
+/** Solo lectura y sin red: reúne los archivos locales y aplica `evaluateExposureArtifacts`. Devuelve el informe; el proceso sale con error si alguna comprobación falla. */
+export async function verifyExposure(args) {
+  const dir = path.resolve(String(args.dir ?? fail('Falta --dir (salida de `plan`)')));
+  const read = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '');
+  const input = { nginx: read(path.join(dir, 'nginx-pricesmart-sandbox.conf')), systemd: read(path.join(dir, 'pricesmart-sandbox.service')), mariadb: read(path.join(dir, 'mariadb-pricesmart-sandbox.cnf')), expectedHostname: args.hostname };
+  if (args['env-file']) { const f = path.resolve(String(args['env-file'])); const st = fs.existsSync(f) ? fs.statSync(f) : null; const rel = path.relative(repo, f); input.env = { text: read(f), mode: st ? st.mode & 0o777 : undefined, insideRepo: !(rel.startsWith('..') || path.isAbsolute(rel)) }; }
+  if (args.killswitch) { const f = path.resolve(String(args.killswitch)); input.killswitch = { exists: fs.existsSync(f), text: read(f) }; }
+  if (args.cert && args.key) {
+    const { X509Certificate } = await import('node:crypto'); const cert = new X509Certificate(fs.readFileSync(path.resolve(String(args.cert)))); const keyStat = fs.statSync(path.resolve(String(args.key)));
+    input.tls = { certNotAfter: Date.parse(cert.validTo), certNames: [...String(cert.subjectAltName ?? '').matchAll(/DNS:([^,\s]+)/g)].map((m) => m[1]), keyMode: keyStat.mode & 0o777 };
+  }
+  const report = B.evaluateExposureArtifacts(input); if (!report.ok) process.exitCode = 1; else console.error(`AVISO: ${B.EXPOSURE_NOTICE}`); return report;
+}
+
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   const [cmd, ...rest] = process.argv.slice(2); const args = parseArgs(rest);
-  const run = { plan, 'init-secrets': async (a) => initSecrets(a), status, apply, finalize, destroy }[cmd];
-  if (!run) { console.error('Uso: plan | init-secrets | status | apply [--execute] | finalize | destroy'); process.exitCode = 2; }
+  const run = { plan, 'init-secrets': async (a) => initSecrets(a), status, apply, finalize, destroy, 'verify-exposure': verifyExposure }[cmd];
+  if (!run) { console.error('Uso: plan | init-secrets | status | apply [--execute] | finalize | verify-exposure | destroy'); process.exitCode = 2; }
   else run(args).then((r) => console.log(JSON.stringify(r, null, 2))).catch((e) => { console.error(String(e.message).slice(0, 200)); process.exitCode = 1; });
 }
