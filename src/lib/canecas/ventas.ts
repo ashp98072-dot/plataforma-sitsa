@@ -6,9 +6,20 @@ import { calcularVenta, formatearQuetzales, precioACentavos, validarCantidadVent
 /** `direccionEntrega` solo se guarda (y requiere la migración de simplificación) cuando se envía; la API POS siempre la exige.
  * `productoId`, `fechaVenta` y `documento` son opcionales: si faltan, el servidor usa el producto único, la fecha de hoy
  * en Guatemala y un número VTA-###### generado dentro de la misma transacción. */
-export type DatosVenta = { clienteId: number; productoId?: number; ubicacionId: number; direccionEntrega?: string; fechaVenta?: string; documento?: string; cantidad: number; precio: string; claveOperacion: string };
+/** `quienLleva`/`quienRecibe` (opcionales, para el comprobante impreso) requieren la migración de comprobante de venta cuando se envían con valor. */
+export type DatosVenta = { clienteId: number; productoId?: number; ubicacionId: number; direccionEntrega?: string; quienLleva?: string; quienRecibe?: string; fechaVenta?: string; documento?: string; cantidad: number; precio: string; claveOperacion: string };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const entero = (n: number) => Number.isSafeInteger(n) && n > 0 && n <= 2147483647;
+
+// Las columnas del comprobante (migrate-2026-11-canecas-ventas-comprobante.sql) pueden no existir aún: solo se exigen cuando llega un valor.
+const conColumnasComprobante = new WeakSet<Pool>();
+async function columnasComprobante(pool: Pool) {
+  if (!conColumnasComprobante.has(pool)) {
+    const [r] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('quien_lleva','quien_recibe')");
+    if (Number(r[0]?.n) === 2) conColumnasComprobante.add(pool);
+  }
+  return conColumnasComprobante.has(pool);
+}
 
 function resumen(totalCentavos: bigint, costoCentavos: bigint) {
   const utilidadCentavos = totalCentavos - costoCentavos;
@@ -35,6 +46,9 @@ export async function registrarVenta(pool: Pool, empresaId: number, usuarioId: n
 async function registrarVentaUnIntento(pool: Pool, empresaId: number, usuarioId: number, dato: DatosVenta, hoy: string) {
   const conDireccion = dato.direccionEntrega !== undefined, direccion = dato.direccionEntrega?.trim() ?? '';
   if (![empresaId, usuarioId, dato.clienteId, dato.ubicacionId].every(entero) || (dato.productoId !== undefined && !entero(dato.productoId)) || (dato.documento !== undefined && (!dato.documento.trim() || dato.documento.length > 250)) || (conDireccion && (!direccion || direccion.length > 500)) || !UUID.test(dato.claveOperacion)) throw Error('VENTA_INVALIDA');
+  const lleva = dato.quienLleva?.trim() ?? '', recibe = dato.quienRecibe?.trim() ?? '', conPersonas = lleva !== '' || recibe !== '';
+  if (lleva.length > 160 || recibe.length > 160) throw Error('VENTA_INVALIDA');
+  if (conPersonas && !(await columnasComprobante(pool))) throw Error('COMPROBANTE_NO_INSTALADO');
   const cantidad = validarCantidadVenta(dato.cantidad), fecha = validarFechaVenta(dato.fechaVenta ?? hoy, hoy), precio = precioACentavos(dato.precio);
   if (dato.documento === undefined || dato.productoId === undefined) await asegurarSecuencias(pool, empresaId);
   const conn = await pool.getConnection();
@@ -43,10 +57,10 @@ async function registrarVentaUnIntento(pool: Pool, empresaId: number, usuarioId:
     await conn.beginTransaction();
     // Devuelve la venta ya registrada con esta clave (si los datos coinciden) o null; con otros datos, error.
     const buscarPrevia = async () => {
-      const [previas] = await conn.query<RowDataPacket[]>(`SELECT id,cliente_id,producto_id,ubicacion_id,DATE_FORMAT(fecha_venta,'%Y-%m-%d') fecha,documento,${conDireccion ? 'direccion_entrega,' : ''}cantidad,CAST(precio_unitario_centavos AS CHAR) precio,CAST(total_centavos AS CHAR) total,CAST(costo_centavos AS CHAR) costo FROM canecas_ventas WHERE empresa_id=? AND clave_operacion=?`, [empresaId, dato.claveOperacion]);
+      const [previas] = await conn.query<RowDataPacket[]>(`SELECT id,cliente_id,producto_id,ubicacion_id,DATE_FORMAT(fecha_venta,'%Y-%m-%d') fecha,documento,${conDireccion ? 'direccion_entrega,' : ''}${conPersonas ? 'quien_lleva,quien_recibe,' : ''}cantidad,CAST(precio_unitario_centavos AS CHAR) precio,CAST(total_centavos AS CHAR) total,CAST(costo_centavos AS CHAR) costo FROM canecas_ventas WHERE empresa_id=? AND clave_operacion=?`, [empresaId, dato.claveOperacion]);
       const p = previas[0];
       if (!p) return null;
-      if (Number(p.cliente_id) !== dato.clienteId || (dato.productoId !== undefined && Number(p.producto_id) !== dato.productoId) || Number(p.ubicacion_id) !== dato.ubicacionId || (dato.fechaVenta !== undefined && p.fecha !== fecha) || (dato.documento !== undefined && p.documento !== dato.documento) || (conDireccion && p.direccion_entrega !== direccion) || Number(p.cantidad) !== cantidad || p.precio !== precio.toString()) throw Error('CLAVE_REUTILIZADA');
+      if (Number(p.cliente_id) !== dato.clienteId || (dato.productoId !== undefined && Number(p.producto_id) !== dato.productoId) || Number(p.ubicacion_id) !== dato.ubicacionId || (dato.fechaVenta !== undefined && p.fecha !== fecha) || (dato.documento !== undefined && p.documento !== dato.documento) || (conDireccion && p.direccion_entrega !== direccion) || (conPersonas && ((p.quien_lleva ?? '') !== lleva || (p.quien_recibe ?? '') !== recibe)) || Number(p.cantidad) !== cantidad || p.precio !== precio.toString()) throw Error('CLAVE_REUTILIZADA');
       return { id: String(p.id), documento: String(p.documento), ...resumen(BigInt(p.total), BigInt(p.costo)), yaRegistrada: true };
     };
     const previa = await buscarPrevia();
@@ -68,8 +82,8 @@ async function registrarVentaUnIntento(pool: Pool, empresaId: number, usuarioId:
     }
     if (salida.moneda !== 'GTQ') throw Error('MONEDA_INCOMPATIBLE');
     const calculo = calcularVenta(precio, cantidad, BigInt(salida.costoCentavos));
-    const columnas = conDireccion ? 'direccion_entrega,' : '', marcas = conDireccion ? '?,' : '';
-    const valores = [empresaId, dato.clienteId, productoId, dato.ubicacionId, ...(conDireccion ? [direccion] : []), fecha, documento, cantidad, precio.toString(), calculo.totalCentavos.toString(), calculo.costoCentavos.toString(), 'GTQ', salida.id, dato.claveOperacion, usuarioId];
+    const columnas = `${conDireccion ? 'direccion_entrega,' : ''}${conPersonas ? 'quien_lleva,quien_recibe,' : ''}`, marcas = `${conDireccion ? '?,' : ''}${conPersonas ? '?,?,' : ''}`;
+    const valores = [empresaId, dato.clienteId, productoId, dato.ubicacionId, ...(conDireccion ? [direccion] : []), ...(conPersonas ? [lleva || null, recibe || null] : []), fecha, documento, cantidad, precio.toString(), calculo.totalCentavos.toString(), calculo.costoCentavos.toString(), 'GTQ', salida.id, dato.claveOperacion, usuarioId];
     const [venta] = await conn.execute<ResultSetHeader>(`INSERT INTO canecas_ventas (empresa_id,cliente_id,producto_id,ubicacion_id,${columnas}fecha_venta,documento,cantidad,precio_unitario_centavos,total_centavos,costo_centavos,moneda,salida_id,clave_operacion,creado_por) VALUES (?,?,?,?,${marcas}?,?,?,?,?,?,?,?,?,?)`, valores);
     await conn.commit();
     return { id: String(venta.insertId), documento, ...resumen(calculo.totalCentavos, calculo.costoCentavos), yaRegistrada: false };

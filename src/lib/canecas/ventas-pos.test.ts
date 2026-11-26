@@ -32,6 +32,22 @@ describe('venta POS (registrarVenta)', () => {
     expect(params.slice(0, 8)).toEqual([1, 2, 7, 4, 'Zona 4, Ciudad', '2026-11-24', 'VTA-000012', 8]);
     expect(conn.commit).toHaveBeenCalled();
   });
+  it('guarda quién lleva y quién recibe cuando existen las columnas del comprobante', async () => {
+    const { pool: base, conn } = pool();
+    const p = { ...(base as object), query: vi.fn(async () => [[{ n: 2 }], []]) } as never;
+    await registrarVenta(p, 1, 9, { ...dato, quienLleva: ' Juan Pérez ', quienRecibe: 'Ana López' }, '2026-11-24');
+    const [sql, params] = conn.execute.mock.calls[0] as unknown as [string, unknown[]];
+    expect(sql).toContain('direccion_entrega,quien_lleva,quien_recibe,');
+    expect(params.slice(0, 8)).toEqual([1, 2, 7, 4, 'Zona 4, Ciudad', 'Juan Pérez', 'Ana López', '2026-11-24']);
+  });
+  it('sin la migración del comprobante, enviar quién lleva/recibe se rechaza (no se pierde en silencio); vacío sigue funcionando', async () => {
+    const { pool: base, conn } = pool();
+    const p = { ...(base as object), query: vi.fn(async () => [[{ n: 0 }], []]) } as never;
+    await expect(registrarVenta(p, 1, 9, { ...dato, quienLleva: 'Juan' }, '2026-11-24')).rejects.toThrow('COMPROBANTE_NO_INSTALADO');
+    expect(conn.execute).not.toHaveBeenCalled();
+    await registrarVenta(p, 1, 9, { ...dato, quienLleva: '  ', quienRecibe: '' }, '2026-11-24');
+    expect((conn.execute.mock.calls[0] as unknown as [string])[0]).not.toContain('quien_lleva');
+  });
   it('el número se genera antes del bloqueo de inventario y dentro de la misma transacción (mismo orden en toda venta)', async () => {
     const orden: string[] = [];
     mocks.numero.mockImplementation(async () => { orden.push('numero'); return 'VTA-000001'; });

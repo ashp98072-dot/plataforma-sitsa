@@ -91,11 +91,20 @@ async function columnaDireccion(pool: Pool): Promise<string> {
   return conDireccionEntrega.has(pool) ? 'v.direccion_entrega' : 'NULL AS direccion_entrega';
 }
 
+const conPersonas = new WeakSet<Pool>();
+async function columnasPersonas(pool: Pool): Promise<string> {
+  if (!conPersonas.has(pool)) {
+    const [r] = await pool.query<Fila[]>("SELECT COUNT(*) n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='canecas_ventas' AND COLUMN_NAME IN ('quien_lleva','quien_recibe')");
+    if (Number(r[0]?.n) === 2) conPersonas.add(pool);
+  }
+  return conPersonas.has(pool) ? 'v.quien_lleva,v.quien_recibe' : 'NULL AS quien_lleva,NULL AS quien_recibe';
+}
+
 export async function historialVentas(pool: Pool, empresaId: number, filtros: FiltrosReporte, conCostos: boolean) {
   const f = validarFiltros(filtros);
-  const direccion = await columnaDireccion(pool);
+  const direccion = await columnaDireccion(pool), personas = await columnasPersonas(pool);
   const c = condiciones(f, { fecha: 'v.fecha_venta', producto: 'v.producto_id', cliente: 'v.cliente_id' });
-  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,${direccion},p.nombre producto,v.cantidad,
+  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,${direccion},${personas},p.nombre producto,v.cantidad,
       CONCAT('Q ',FORMAT(v.precio_unitario_centavos/100,2)) precio_unitario,CONCAT('Q ',FORMAT(v.total_centavos/100,2)) total
       ${conCostos ? ",CONCAT('Q ',FORMAT(v.costo_centavos/100,2)) costo_fifo,CONCAT(IF(v.total_centavos-v.costo_centavos<0,'-Q ','Q '),FORMAT(ABS(v.total_centavos-v.costo_centavos)/100,2)) utilidad" : ''},
       v.estado,us.username usuario,v.creado_en,ua.username anulada_por,v.anulada_en,v.motivo_anulacion
