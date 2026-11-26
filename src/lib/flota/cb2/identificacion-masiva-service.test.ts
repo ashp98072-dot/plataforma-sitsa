@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 
 const db = vi.hoisted(() => ({ filas: [] as Record<string, unknown>[], registro: new Map<string, string>(), fallar: 0 }));
-vi.mock("@/lib/db", () => ({ query: vi.fn(async (sql: string, args: number[]) => sql.includes("FROM empleados") ? [{ id: args[1], nombre: "Jayme Calderón" }] : db.filas.filter(f => f.empresa_id === args[0] && Number(f.id) > args[1] && (args.length < 3 || f.id === args[2])).sort((a, b) => Number(a.id) - Number(b.id)).slice(0, 1000)) }));
+vi.mock("@/lib/db", () => ({ getPool: vi.fn(), query: vi.fn(async (sql: string, args: number[]) => sql.includes("FROM empleados") ? [{ id: args[1], nombre: "Jayme Calderón" }] : db.filas.filter(f => f.empresa_id === args[0] && Number(f.id) > args[1] && (args.length < 3 || f.id === args[2])).sort((a, b) => Number(a.id) - Number(b.id)).slice(0, 1000)) }));
+vi.mock("@/lib/db-plazo", () => ({ conPlazo: async (_pool: unknown, _opts: unknown, fn: () => Promise<unknown>) => fn(), ErrorPlazoOperacion: class extends Error {} }));
 vi.mock("@/lib/auditoria", () => ({ registrarAuditoriaTx: vi.fn(async () => {}) }));
 vi.mock("./pilotos-reportados", () => ({ esquemaPilotosReportados: vi.fn(async () => false) }));
 vi.mock("./asignaciones", () => ({ validarEmpleadoCorreccion: vi.fn(async (_c, empresa, empleado) => { if (empresa !== 1 || empleado !== 8) throw new Error("Empleado ajeno"); }) }));
@@ -44,6 +45,10 @@ describe("identificación por proveedor", () => {
     expect(r.proveedores[0].pendientes).toEqual([{ id: 12010, revision: 0 }]);
     db.filas.forEach(f => { f.piloto_informado = "Jaime Calderon"; });
     expect((await vistaIdentificacion(1, { nombre: "Jaime Calderon", empleadoId: 8 })).proveedores[0].pendientes).toHaveLength(12010);
+  });
+  it("detiene la vista sin devolver resultados parciales al alcanzar el límite", async () => {
+    db.filas = Array.from({ length: 25000 }, (_, i) => ({ id: i + 1, empresa_id: 1, proveedor_id: 3, piloto_informado: "Persona distinta", empleado_id: null, revision_asignacion: 0 }));
+    await expect(vistaIdentificacion(1, { nombre: "Jaime Calderon", empleadoId: 8 })).rejects.toMatchObject({ status: 413 });
   });
   it("corrige varios y un reintento devuelve el resultado sin repetir escrituras", async () => {
     expect(await confirmarIdentificacion(ctx, op)).toMatchObject({ actualizados: 2, repetidos: 0 });

@@ -44,6 +44,26 @@ describe.skipIf(!pipe)("identificación masiva en MariaDB aislada", () => {
     for (let i = 0; i < 2; i++) expect(despues[i]).toEqual({ ...antes[i], empleado_id: 8, revision_asignacion: 1 });
     expect((await q("SELECT * FROM auditoria")).length).toBe(2);
   });
+  it("una respuesta perdida después del commit se reintenta sin duplicar asignaciones ni auditorías", async () => {
+    const respuestaPerdida = async () => { await confirmarIdentificacion(ctx, op); throw new Error("respuesta perdida después del commit"); };
+    await expect(respuestaPerdida()).rejects.toThrow("respuesta perdida");
+    expect((await q("SELECT * FROM flota_cb2_asignaciones")).length).toBe(2);
+    expect((await q("SELECT * FROM auditoria")).length).toBe(2);
+    await expect(confirmarIdentificacion(ctx, op)).resolves.toMatchObject({ actualizados: 0, repetidos: 2 });
+    expect((await q("SELECT * FROM flota_cb2_asignaciones")).length).toBe(2);
+    expect((await q("SELECT * FROM auditoria")).length).toBe(2);
+  });
+  it("una empresa grande sin coincidencias detiene la vista al límite sin entregar resultados parciales", async () => {
+    for (let inicio = 100; inicio < 25100; inicio += 1000) {
+      const valores = Array.from({ length: 1000 }, (_, i) => [inicio + i, 1, 3, "Otra Persona", null, 0, 11, "DIESEL", 10, 50]);
+      await estado.pool!.query("INSERT INTO flota_cb2_consumos VALUES ?", [valores]);
+    }
+    const inicio = performance.now();
+    await expect(vistaIdentificacion(1, { nombre: "Nadie Coincide", empleadoId: 8 })).rejects.toMatchObject({ status: 413 });
+    const duracion = Math.round(performance.now() - inicio);
+    console.info(`Vista limitada a 25 000 filas en MariaDB aislada: ${duracion} ms`);
+    expect((await q("SELECT * FROM auditoria")).length).toBe(0);
+  }, 120000);
   it("revierte todos los cambios cuando una revisión ya no coincide", async () => {
     await estado.pool!.query("UPDATE flota_cb2_consumos SET revision_asignacion=1 WHERE id=2");
     await expect(confirmarIdentificacion(ctx, op)).rejects.toThrow("ya no es elegible");

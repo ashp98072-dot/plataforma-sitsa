@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { z } from "zod";
-import { query } from "@/lib/db";
+import { getPool, query } from "@/lib/db";
+import { conPlazo, ErrorPlazoOperacion } from "@/lib/db-plazo";
 import { registrarAuditoriaTx } from "@/lib/auditoria";
 import { ahoraLocal } from "@/lib/rrhh/dates";
 import { validarEmpleadoCorreccion } from "./asignaciones";
@@ -18,15 +19,25 @@ type Vista = z.infer<typeof vistaIdentificacionSchema>;
 type Confirmacion = z.infer<typeof confirmarIdentificacionSchema>;
 
 const seleccion = (instalado: boolean) => `SELECT c.*${instalado ? ", r.piloto_reportado_id" : ""} FROM flota_cb2_consumos c ${instalado ? "LEFT JOIN flota_cb2_consumo_piloto_reportado r ON r.empresa_id=c.empresa_id AND r.proveedor_id=c.proveedor_id AND r.consumo_id=c.id" : ""}`;
+// Cada solicitud examina como máximo 25 000 filas; nunca devuelve una vista incompleta como si fuera completa.
+const MAX_PAGINAS_VISTA = 25;
+let vistasActivas = 0;
 
 /** La consulta se limita a la empresa de sesión y compara en JS con la normalización canónica. */
 export async function vistaIdentificacion(empresaId: number, op: Vista) {
+  if (vistasActivas >= 2) throw new ErrorCB2("Hay otras vistas previas en curso; vuelve a intentarlo.", 503);
+  vistasActivas++;
+  try { return await conPlazo(getPool(), { presupuestoMs: 8000, limiteSentenciaMs: 2000, soloLectura: true }, () => consultarVistaIdentificacion(empresaId, op)); }
+  catch (error) { if (error instanceof ErrorPlazoOperacion) throw new ErrorCB2("La vista previa excedió el plazo; esta consulta no modificó consumos.", 503); throw error; }
+  finally { vistasActivas--; }
+}
+async function consultarVistaIdentificacion(empresaId: number, op: Vista) {
   const empleado = await query<RowDataPacket[]>("SELECT id,nombre FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja')", [empresaId, op.empleadoId]);
   if (!empleado.length) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
   const instalado = await esquemaPilotosReportados();
   const proveedores = new Map<number, { proveedorId: number; pendientes: { id: number; revision: number }[]; identificados: number; conflictos: number; conflictoIds: number[] }>();
   let despues = 0;
-  for (;;) {
+  for (let pagina = 0; ; pagina++) {
     const consumos = await query<RowDataPacket[]>(`${seleccion(instalado)} WHERE c.empresa_id=? AND c.id>? AND c.piloto_informado IS NOT NULL${op.consumoId ? " AND c.id=?" : ""} ORDER BY c.id LIMIT 1000`, op.consumoId ? [empresaId, despues, op.consumoId] : [empresaId, despues]);
     for (const c of consumos) {
     const estado = clasificarIdentificacion(c as Parameters<typeof clasificarIdentificacion>[0], op.nombre, op.empleadoId);
@@ -38,6 +49,7 @@ export async function vistaIdentificacion(empresaId: number, op: Vista) {
     proveedores.set(proveedorId, p);
     }
     if (consumos.length < 1000) break;
+    if (pagina + 1 >= MAX_PAGINAS_VISTA) throw new ErrorCB2("La vista alcanzó el límite de 25 000 consumos examinados. Usa la opción de un solo consumo; esta consulta no modificó consumos.", 413);
     const siguiente = Number(consumos[consumos.length - 1].id);
     if (!Number.isSafeInteger(siguiente) || siguiente <= despues) throw new ErrorCB2("No se pudo completar la vista previa; vuelve a consultar.", 503);
     despues = siguiente;

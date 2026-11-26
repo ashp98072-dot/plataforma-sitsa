@@ -48,3 +48,36 @@ it("procesa lotes, conserva resultados parciales y solo guarda equivalencia tras
     expect(host.textContent).toContain("22 de 22 lotes confirmados"); expect(host.textContent).toContain("Equivalencia guardada");
   } finally { await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); vi.unstubAllGlobals(); }
 });
+
+it("si se agota el almacenamiento tras un commit, advierte y permite recuperar con la misma clave", async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  sessionStorage.clear();
+  const original = sessionStorage.setItem.bind(sessionStorage), llamadas: { clave: string }[] = [];
+  let bloquear = false;
+  const spy = vi.spyOn(sessionStorage, "setItem").mockImplementation((key, value) => { if (bloquear) throw new DOMException("Cuota agotada", "QuotaExceededError"); return original(key, value); });
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    if (url.endsWith("identificacion-vista")) return { ok: true, json: async () => ({ nombre: "Jaime Calderon", empleado: { id: 8, nombre: "Jayme" }, empresaId: 1, proveedores: [{ proveedorId: 3, pendientes: Array.from({ length: 251 }, (_, i) => ({ id: i + 1, revision: 0 })), identificados: 0, conflictos: 0, conflictoIds: [] }] }) };
+    llamadas.push(body); if (llamadas.length === 1) bloquear = true;
+    return { ok: true, json: async () => ({ proveedorId: 3, actualizados: body.items.length, repetidos: 0 }) };
+  }));
+  const host = document.createElement("div"); document.body.append(host); let root = createRoot(host);
+  const props = { api: "/cuota", r: { id: 1, proveedor_id: 3, piloto_informado: "Jaime Calderon" }, cat: { proveedores: [{ id: 3, nombre: "Uno" }], vehiculos: [] }, empleado: "8", motivo: "Verificado contra evidencia" };
+  const boton = (s: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.includes(s))!;
+  const control = (s: string) => [...host.querySelectorAll("label")].find(l => l.textContent?.includes(s))!.querySelector("input")!;
+  try {
+    await act(async () => root.render(createElement(IdentificarHistoricos, props)));
+    await act(async () => control("Todos los consumos").click());
+    await act(async () => boton("Consultar vista previa").click());
+    await act(async () => control("Confirmo la identificación").click());
+    await act(async () => boton("Confirmar identificación").click());
+    expect(llamadas).toHaveLength(1); expect(host.textContent).toContain("1 de 2 lotes confirmados");
+    expect(host.textContent).toContain("Anota los resultados visibles"); expect(host.textContent).not.toMatch(/revertid|deshech/i);
+    expect(boton("Confirmar identificación").disabled).toBe(true);
+    bloquear = false; await act(async () => root.unmount()); root = createRoot(host);
+    await act(async () => root.render(createElement(IdentificarHistoricos, props)));
+    await act(async () => control("Confirmo la identificación").click());
+    await act(async () => boton("Confirmar identificación").click());
+    expect(llamadas).toHaveLength(3); expect(llamadas[1].clave).toBe(llamadas[0].clave);
+  } finally { bloquear = false; spy.mockRestore(); await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); vi.unstubAllGlobals(); }
+});
