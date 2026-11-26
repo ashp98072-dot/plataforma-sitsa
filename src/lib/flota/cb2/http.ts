@@ -5,6 +5,7 @@ import { consultarDocumental, consumosDocumentales } from "./conciliacion-docume
 import { estadosDocumentales } from "./conciliacion-documental-model";
 import { productos } from "./clasificacion";
 import { corregirSchema, corregirAsignacion } from "./asignaciones";
+import { vistaIdentificacionSchema, confirmarIdentificacionSchema, recordarIdentificacionSchema, vistaIdentificacion, confirmarIdentificacion, recordarIdentificacion } from "./identificacion-masiva-service";
 import { NextResponse } from "next/server";
 import { ZodError, z } from "zod";
 import { requireTenantFlotaCombustible } from "@/lib/tenant";
@@ -38,20 +39,20 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "historial-consumos" | "pilotos-nombres" | "pilotos-reporte" | "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "historial-consumos" | "identificacion-vista" | "identificacion-confirmar" | "identificacion-recordar" | "pilotos-nombres" | "pilotos-reporte" | "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
     const lectura = ["historial-consumos","pilotos-nombres","pilotos-reporte","fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
     try {
-        if (["reanudar", "corregir"].includes(accion) && g.session.rol !== "Admin")
+        if (["reanudar", "corregir", "identificacion-vista", "identificacion-confirmar", "identificacion-recordar"].includes(accion) && g.session.rol !== "Admin")
             throw new ErrorCB2("Reanudar o corregir requiere Admin hasta disponer de capacidad especifica.", 403);
         if (!lectura)
             validarOrigenCB2(req);
         const ctx = { empresaId: g.empresa.id, proveedorId: 0, actor: { id: g.session.id, username: g.session.username }, autorizar: async () => {
                 const actual = await requireTenantFlotaCombustible(slug, "conciliar");
-                if (actual.error || actual.session.id !== g.session.id || actual.empresa.id !== g.empresa.id || (["reanudar", "corregir"].includes(accion) && actual.session.rol !== "Admin"))
+                if (actual.error || actual.session.id !== g.session.id || actual.empresa.id !== g.empresa.id || (["reanudar", "corregir", "identificacion-vista", "identificacion-confirmar", "identificacion-recordar"].includes(accion) && actual.session.rol !== "Admin"))
                     throw new ErrorCB2("Autorizacion cambio; operacion cancelada.", 403);
             } };
         let resultado: unknown;
@@ -159,7 +160,13 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
                     throw e;
                 throw new ErrorCB2("JSON invalido.", 400);
             }
-            if (accion === "vincular-fondo") {
+            if (accion === "identificacion-vista") {
+                resultado = await vistaIdentificacion(ctx.empresaId, vistaIdentificacionSchema.parse(json));
+            } else if (accion === "identificacion-confirmar") {
+                const op = confirmarIdentificacionSchema.parse(json); ctx.proveedorId = op.proveedorId; resultado = await confirmarIdentificacion(ctx, op);
+            } else if (accion === "identificacion-recordar") {
+                const op = recordarIdentificacionSchema.parse(json); ctx.proveedorId = op.proveedorId; resultado = await recordarIdentificacion(ctx, op);
+            } else if (accion === "vincular-fondo") {
                 const op=vincularFondoSchema.parse(json); ctx.proveedorId=op.proveedorId; resultado=await vincularFondoCB2(ctx,op);
             } else if (accion === "corregir") {
                 const op = corregirSchema.parse(json); ctx.proveedorId = op.proveedorId; resultado = await corregirAsignacion(ctx, op);

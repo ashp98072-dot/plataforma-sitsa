@@ -33,16 +33,16 @@ export async function revisarNombresTx(c:PoolConnection,empresa:number,nombres:s
  for(const [i,nombre] of nombres.entries()) {
   const clave=normalizarNombreReportado(nombre);if(!clave)continue;
   const previo=grupos.get(clave);if(previo){previo.filas++;previo.rango=acumularFecha(previo.rango,fechas[i]);if(!previo.originales.includes(nombre))previo.originales.push(nombre);continue;}
-  const [alias]=instalado?await rows(c,"SELECT nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[empresa,hash(clave)]):[];
+  const [alias]=instalado?await rows(c,"SELECT nombre_normalizado,empleado_id,piloto_reportado_id,requiere_revision,confirmado_por FROM flota_cb2_pilotos_equivalencias WHERE empresa_id=? AND normalizacion_version=1 AND nombre_hash=?",[empresa,hash(clave)]):[];
   if(alias && alias.nombre_normalizado!==clave)throw new ErrorCB2("Colisión de nombre; requiere revisión.");
   const destino:DecisionNombre|undefined=alias?alias.empleado_id!=null?{tipo:"EMPLEADO",empleadoId:Number(alias.empleado_id),confirmado:false}:{tipo:"REPORTADO",reportadoId:Number(alias.piloto_reportado_id),confirmado:false}:undefined;
-  const revision=proponerNombre(nombre,empleados,destino,acumularFecha(undefined,fechas[i]),buscar);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
+  const revision=proponerNombre(nombre,empleados,destino,acumularFecha(undefined,fechas[i]),buscar,alias?.confirmado_por != null && Number(alias?.requiere_revision) === 0);if(Number(alias?.requiere_revision)===1)revision.propuesta=null;grupos.set(clave,revision);
  }
  return [...grupos.values()];
 }
 const mismoDestino=(a:DecisionNombre|undefined|null,b:DecisionNombre)=>!!a && a.tipo===b.tipo && (a.tipo==="EMPLEADO" ? b.tipo==="EMPLEADO" && a.empleadoId===b.empleadoId : b.tipo==="REPORTADO" && a.reportadoId===b.reportadoId);
 /** Solo dentro de confirmar/reanudar. La vista previa no invoca este escritor. */
-async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null,decision?:DecisionNombre) {
+export async function resolverNombreTx(c:PoolConnection,ctx:Contexto,nombre:string|null,decision?:DecisionNombre) {
  const normalizado=normalizarNombreReportado(nombre??"");if(!normalizado || !decision)return null;
  if(normalizado.length>768)throw new ErrorCB2("Nombre reportado excede el límite normalizado.",400);
  const digest=hash(normalizado);
