@@ -24,10 +24,11 @@ export async function vistaIdentificacion(empresaId: number, op: Vista) {
   const empleado = await query<RowDataPacket[]>("SELECT id,nombre FROM empleados WHERE empresa_id=? AND id=? AND estado IN ('Activo','Baja')", [empresaId, op.empleadoId]);
   if (!empleado.length) throw new ErrorCB2("Empleado no autorizado para esta empresa.", 403);
   const instalado = await esquemaPilotosReportados();
-  const consumos = await query<RowDataPacket[]>(`${seleccion(instalado)} WHERE c.empresa_id=?${op.consumoId ? " AND c.id=?" : ""} ORDER BY c.proveedor_id,c.id LIMIT 10001`, op.consumoId ? [empresaId, op.consumoId] : [empresaId]);
-  if (consumos.length > 10000) throw new ErrorCB2("La empresa supera el límite de revisión; acota la operación.", 413);
   const proveedores = new Map<number, { proveedorId: number; pendientes: { id: number; revision: number }[]; identificados: number; conflictos: number; conflictoIds: number[] }>();
-  for (const c of consumos) {
+  let despues = 0;
+  for (;;) {
+    const consumos = await query<RowDataPacket[]>(`${seleccion(instalado)} WHERE c.empresa_id=? AND c.id>? AND c.piloto_informado IS NOT NULL${op.consumoId ? " AND c.id=?" : ""} ORDER BY c.id LIMIT 1000`, op.consumoId ? [empresaId, despues, op.consumoId] : [empresaId, despues]);
+    for (const c of consumos) {
     const estado = clasificarIdentificacion(c as Parameters<typeof clasificarIdentificacion>[0], op.nombre, op.empleadoId);
     if (estado === "AJENO") continue;
     const proveedorId = Number(c.proveedor_id), p = proveedores.get(proveedorId) ?? { proveedorId, pendientes: [], identificados: 0, conflictos: 0, conflictoIds: [] };
@@ -35,6 +36,11 @@ export async function vistaIdentificacion(empresaId: number, op: Vista) {
     else if (estado === "IDENTIFICADO") p.identificados++;
     else { p.conflictos++; p.conflictoIds.push(Number(c.id)); }
     proveedores.set(proveedorId, p);
+    }
+    if (consumos.length < 1000) break;
+    const siguiente = Number(consumos[consumos.length - 1].id);
+    if (!Number.isSafeInteger(siguiente) || siguiente <= despues) throw new ErrorCB2("No se pudo completar la vista previa; vuelve a consultar.", 503);
+    despues = siguiente;
   }
   return { nombre: op.nombre, empleado: { id: op.empleadoId, nombre: String(empleado[0].nombre) }, empresaId, proveedores: [...proveedores.values()] };
 }

@@ -13,6 +13,7 @@ import { preview, confirmarArchivo } from "./service";
 import { libro, libroShell, filaShell } from "./fixture";
 import { productos } from "./clasificacion";
 import { corregirEquivalenciaPiloto, listarEquivalenciasPilotos } from "./pilotos-equivalencias";
+import { recordarIdentificacion, vistaIdentificacion, confirmarIdentificacion } from "./identificacion-masiva-service";
 
 vi.setConfig({ testTimeout: 240000, hookTimeout: 240000 });
 const pipe = process.env.CB2_587_PIPE ?? "";
@@ -57,8 +58,10 @@ describe.skipIf(!pipe)("CB2: piloto reportado — primera y segunda importación
     await admin.query(`CREATE TABLE empleados (id INT PRIMARY KEY AUTO_INCREMENT, empresa_id INT NOT NULL, nombre VARCHAR(200) NOT NULL, estado VARCHAR(20) NOT NULL DEFAULT 'Activo', fecha_alta DATE NULL, fecha_egreso DATE NULL) ENGINE=InnoDB;
       INSERT INTO empleados (empresa_id, nombre) VALUES (1, 'Juan Perez Lopez'), (1, 'Pedro Coz'), (1, 'Pedro Cob'), (1, 'Pedro Cox');`);
     // Cadena de instalación REAL del módulo (en el orden del detector de nivel): asignaciones → terceros → directos → independientes → piloto reportado → registro de pilotos reportados.
-    for (const f of ["migrate-2026-10-combustibles-pr514-asignaciones.sql", "migrate-2026-11-cb2-terceros.sql", "migrate-2026-11-cb2-terceros-directos.sql", "migrate-2026-11-cb2-identidades-independientes.sql", "migrate-2026-11-cb2-piloto-reportado.sql", "migrate-2026-11-cb2-pilotos-reportados.sql"])
+    for (const f of ["migrate-2026-10-combustibles-pr514-asignaciones.sql", "migrate-2026-11-cb2-terceros.sql", "migrate-2026-11-cb2-terceros-directos.sql", "migrate-2026-11-cb2-identidades-independientes.sql", "migrate-2026-11-cb2-piloto-reportado.sql", "migrate-2026-11-cb2-vinculo-unidad.sql", "migrate-2026-11-cb2-pilotos-reportados.sql"])
       await admin.query(readFileSync(`sql/${f}`, "utf8").replace(/^﻿/, ""));
+    await admin.query("CREATE TABLE tms_solicitud_fondo_lineas (id INT NOT NULL PRIMARY KEY, empresa_id INT NOT NULL, UNIQUE KEY uq_fondolin_c2a_empresa_id (empresa_id,id)) ENGINE=InnoDB");
+    await admin.query(readFileSync("sql/migrate-2026-11-cb2-fondos-vinculos.sql", "utf8"));
     state.pool = mysql.createPool({ socketPath: `${BARRA}${BARRA}.${BARRA}pipe${BARRA}${pipe}`, user: "root", password: "", database: LAB, connectionLimit: 4, dateStrings: true });
   });
   afterAll(async () => { await state.pool?.end(); await admin?.query(`DROP DATABASE IF EXISTS ${LAB}`).catch(() => undefined); await admin?.end(); });
@@ -156,5 +159,43 @@ describe.skipIf(!pipe)("CB2: piloto reportado — primera y segunda importación
     await expect(corregirEquivalenciaPiloto({ empresaId: 2, actor }, { accion: "QUITAR", nombreHash: pedro.nombreHash })).rejects.toMatchObject({ status: 404 });
     await expect(corregirEquivalenciaPiloto(c1, { accion: "QUITAR", nombreHash: "0".repeat(64) })).rejects.toMatchObject({ status: 404 });
     expect((await listarEquivalenciasPilotos(2)).items).toEqual([]);
+  });
+  it("equivalencia confirmada propone el empleado en importaciones HALEL y SHELL sin cambiar identidades anteriores", async () => {
+    await admin.query("INSERT INTO empleados (empresa_id,nombre) VALUES (1,'Jayme Calderón')");
+    const [emp] = await q("SELECT id FROM empleados WHERE empresa_id=1 AND nombre='Jayme Calderón'");
+    const empleadoId = Number(emp.id), anterior = await snapshotConsumos();
+    await recordarIdentificacion(ctx, { proveedorId: 1, nombre: "Jaime Calderon", empleadoId });
+    for (const perfil of ["HALEL", "SHELL"] as const) {
+      const b = perfil === "HALEL" ? await halel("H-MASIVA", "Jaime Calderon") : await shell("S-MASIVA", "Jaime Calderon");
+      const p = await preview(ctx, b, await entrada(b, perfil));
+      const decision = p.nombres.find(x => x.clave === "JAIME CALDERON")?.propuesta;
+      expect(decision).toEqual({ tipo: "EMPLEADO", empleadoId, confirmado: false, origen: "EQUIVALENCIA" });
+      const seleccion = (await claves(b, perfil)).map(candidato => ({ candidato, vehiculoId: 1, productoClasificado: productos[0], empleadoId, metodoEmpleado: "MANUAL" as const, decisionNombre: decision! }));
+      const entradaReal = { perfil, moneda: "GTQ" as const, seleccion };
+      const revision = await preview(ctx, b, entradaReal);
+      await confirmarArchivo(ctx, b, "equivalencia.xlsx", entradaReal, randomUUID().replaceAll("-", ""), revision.token);
+    }
+    expect((await snapshotConsumos()).slice(0, anterior.length)).toEqual(anterior);
+    expect(await n(`SELECT COUNT(*) n FROM flota_cb2_consumos WHERE piloto_informado='Jaime Calderon' AND empleado_id=${empleadoId}`)).toBe(2);
+    await admin.query("INSERT INTO empleados (empresa_id,nombre) VALUES (1,'Jaime Calderon')");
+    const conflictivo = await halel("H-CONFLICTO", "Jaime Calderon");
+    const revision = await preview(ctx, conflictivo, await entrada(conflictivo, "HALEL"));
+    const nombre = revision.nombres.find(x => x.clave === "JAIME CALDERON")!;
+    expect(nombre.propuesta).toBeNull();
+    expect(nombre.conflictoEquivalencia?.equivalenciaId).toBe(empleadoId);
+    expect(await n(`SELECT COUNT(*) n FROM flota_cb2_consumos WHERE piloto_informado='Jaime Calderon' AND empleado_id=${empleadoId}`)).toBe(2);
+  });
+  it("corrige históricos con el esquema integral y revierte ante revisión obsoleta", async () => {
+    await importar(await halel("H-MAS-2", "Nombre Pendiente"), "HALEL", () => undefined);
+    await importar(await halel("H-MAS-3", "Nombre Pendiente"), "HALEL", () => undefined);
+    const [emp] = await q("SELECT id FROM empleados WHERE empresa_id=1 AND nombre='Jayme Calderón'");
+    const empleadoId = Number(emp.id), vista = await vistaIdentificacion(1, { nombre: "Nombre Pendiente", empleadoId });
+    const items = vista.proveedores[0].pendientes;
+    expect(items).toHaveLength(2);
+    const op = { nombre: "Nombre Pendiente", empleadoId, proveedorId: 1, items, motivo: "Confirmado contra evidencia", clave: "integral123456789" };
+    await expect(confirmarIdentificacion(ctx, { ...op, items: [items[0], { ...items[1], revision: items[1].revision + 1 }] })).rejects.toThrow("ya no es elegible");
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE piloto_informado='Nombre Pendiente' AND empleado_id IS NOT NULL")).toBe(0);
+    await expect(confirmarIdentificacion(ctx, op)).resolves.toMatchObject({ actualizados: 2 });
+    await expect(confirmarIdentificacion(ctx, op)).resolves.toMatchObject({ repetidos: 2 });
   });
 });
