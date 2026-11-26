@@ -481,7 +481,7 @@ async function stopAll(m) {
   log('cierre', JSON.stringify(report));
 }
 
-const DEFAULT_FILES = ['demo', 'api13', 'pricesmart-flow', 'homologation', 'sandbox-readiness', 'contract-not-mapped'].map((f) => `scripts/ci/pricesmart-demo/${f}.e2e.ts`);
+const DEFAULT_FILES = ['demo', 'api13', 'pricesmart-flow', 'homologation', 'sandbox-readiness', 'contract-not-mapped', 'cancellation-resolution'].map((f) => `scripts/ci/pricesmart-demo/${f}.e2e.ts`);
 
 async function main() {
   const m = createManifest({ randomBytes: crypto.randomBytes, tempRoot }); m.homeDir = path.join(m.runDir, 'home'); validateManifest(m, tempRoot);

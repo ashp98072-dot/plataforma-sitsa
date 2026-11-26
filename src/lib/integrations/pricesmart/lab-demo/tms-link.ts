@@ -134,7 +134,7 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
   /** Estado real para el GET. Nunca afirma entrega: `confirmsDelivery` es siempre false (Cerrado/Descargado no prueban entrega aceptada). */
   async function status(scope: Scope, externalOrderId: string, view: OrderView): Promise<Record<string, unknown>> {
     const [rows] = await pool.execute<RowDataPacket[]>(
-      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, s.estado AS sol_estado, s.plan_id AS plan_id, p.estado AS plan_estado
+      `SELECT l.empresa_id, l.solicitud_id, l.cancellation_requested_at, l.cancellation_resolution, s.estado AS sol_estado, s.plan_id AS plan_id, p.estado AS plan_estado
          FROM ${t('tms_links')} l
          JOIN \`${schema}\`.ps_api01_orders o ON o.environment=l.environment AND o.tenant_id=l.tenant_id AND o.client_id=l.client_id AND o.integration_id=l.integration_id AND o.id=l.order_id
          LEFT JOIN tms_solicitudes_cliente s ON s.empresa_id=l.empresa_id AND s.id=l.solicitud_id
@@ -172,7 +172,9 @@ export function createTmsLinker(deps: TmsLinkerDeps) {
     return {
       labProposal: true, proposedStatus: projection.status, confirmsDelivery: false,
       tms: { linked: true, requestState: r.sol_estado == null ? null : String(r.sol_estado), scheduled: r.plan_estado != null, ...(deliveryEvidence ? { deliveryEvidence } : {}) },
-      ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: assessCancellation(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado)).verdict } } : {}),
+      ...(cancellationAsked ? { cancellation: { requested: true, automatic: false, assessment: assessCancellation(String(r.sol_estado ?? ''), r.plan_estado == null ? null : String(r.plan_estado)).verdict,
+        // Resultado de la revisión de Operaciones: PENDING hasta que una persona la resuelva (quién y cuándo NO se exponen a PriceSmart).
+        resolution: r.cancellation_resolution === 'EXECUTED' || r.cancellation_resolution === 'NOT_EXECUTED' ? String(r.cancellation_resolution) : 'PENDING' } } : {}),
     };
   }
 

@@ -14,6 +14,7 @@ import {
   requiereAtencion,
   textoResultadoVinculacion,
   type PriceSmartBandejaUi,
+  ETIQUETA_RESOLUCION_CANCELACION,
 } from "@/lib/tms/pricesmart-bandeja-ui";
 
 type SolicitudFila = {
@@ -57,6 +58,25 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
         body: JSON.stringify({ id }),
       });
       if (res.ok) await cargarPriceSmart();
+    },
+    [slug, cargarPriceSmart],
+  );
+
+  const resolverCancelacion = useCallback(
+    async (solicitudId: number, resolucion: "EXECUTED" | "NOT_EXECUTED") => {
+      let nota: string | undefined;
+      if (resolucion === "NOT_EXECUTED") {
+        const t = window.prompt("Motivo por el que NO se ejecuta la cancelación (obligatorio):")?.trim();
+        if (!t) return;
+        nota = t;
+      }
+      const res = await fetch(`/api/empresas/${slug}/tms/solicitudes-clientes/pricesmart/cancelacion`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ solicitudId, resolucion, ...(nota ? { nota } : {}) }),
+      });
+      if (!res.ok) window.alert(((await res.json().catch(() => null)) as { error?: string } | null)?.error ?? "No se pudo resolver.");
+      await cargarPriceSmart();
     },
     [slug, cargarPriceSmart],
   );
@@ -197,6 +217,17 @@ export function SolicitudesClientesBandeja({ slug }: { slug: string }) {
                     ) : null}
                     {origenPorId.get(s.id)?.cancelacionPendiente ? (
                       <span className="ml-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-medium text-red-500">Cancelación solicitada</span>
+                    ) : null}
+                    {origenPorId.get(s.id)?.cancelacionPendiente ? (
+                      <span className="ml-1 inline-flex gap-1">
+                        <button type="button" className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] underline" onClick={() => void resolverCancelacion(s.id, "EXECUTED")}>Ya cancelada en el TMS</button>
+                        <button type="button" className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] underline" onClick={() => void resolverCancelacion(s.id, "NOT_EXECUTED")}>No procede</button>
+                      </span>
+                    ) : null}
+                    {origenPorId.get(s.id)?.cancelacionResolucion ? (
+                      <span className="ml-1 rounded-full bg-slate-500/15 px-2 py-0.5 text-[10px] font-medium text-slate-500" title={`Resuelta por ${origenPorId.get(s.id)?.cancelacionResueltaPor ?? "—"}`}>
+                        {ETIQUETA_RESOLUCION_CANCELACION[origenPorId.get(s.id)!.cancelacionResolucion!]}
+                      </span>
                     ) : null}
                   </td>
                   <td className="px-3 py-2 text-xs">{s.cantidadEntregas}</td>
