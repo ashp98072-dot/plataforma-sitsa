@@ -9,8 +9,14 @@ import { ImportarCB2, button, type EjecutarCB2 } from "./importar";
 import { TercerosCB2 } from "./terceros";
 import { DuplicadosVehiculos } from "./duplicados";
 import { HistorialCB2 } from "./historial";
+import { HistorialConsumosCB2 } from "./historial-consumos";
 import { ConsumosCB2, FacturasCB2, documentoVacio } from "./consumos";
-const tabs = [['pilotos', 'Combustible por piloto'], ['consumos', 'Consumos'], ['importar', 'Importar Excel'], ['facturas', 'Facturas'], ['documental', 'Conciliación'], ['historial', 'Historial'], ['terceros', 'Tercerizados'], ['duplicados', 'Placas duplicadas']] as const;
+const grupos = [
+    { label: "Consumos", tabs: [["consumos", "Consumos"]] },
+    { label: "Importaciones", tabs: [["importar", "Importar Excel"], ["historial", "Historial de importaciones"]] },
+    { label: "Facturas y conciliación", tabs: [["facturas", "Facturas"], ["documental", "Conciliación"]] },
+    { label: "Reportes", tabs: [["pilotos", "Combustible por piloto"], ["historial-consumos", "Historial de consumos"], ["terceros", "Tercerizados"], ["duplicados", "Placas duplicadas"]] },
+] as const;
 function storageSeguro() {
     try {
         return typeof window !== "undefined" ? window.sessionStorage : undefined;
@@ -111,11 +117,20 @@ export function CombustiblesCB2({ slug, actorId, canWrite, admin }: {
         }
     }
     return <section className={`${styles.panel} space-y-6 rounded-2xl border border-[var(--border)] p-4 sm:p-6`} aria-label="Consumos y facturas CB2"><header className="space-y-1"><p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">Consumos de proveedores</p><h2 className="text-xl font-semibold">Consumos y facturas de proveedor</h2><p className="text-sm text-[var(--muted)]">Importa, revisa y da seguimiento a tus archivos HALEL y SHELL.</p></header>
- <nav className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--bg)] p-1.5 sm:grid-cols-5" aria-label="Vistas de consumos y facturas">{tabs.filter(([k]) => (k !== "importar" || canWrite) && (k !== "duplicados" || admin)).map(([key, label]) => <button key={key} className={`${button} ${tab === key ? "border-transparent bg-[var(--accent)] text-white shadow-sm" : "border-transparent text-[var(--muted)]"}`} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{label}</button>)}</nav>
+ <nav className="grid grid-cols-2 gap-2 rounded-xl bg-[var(--bg)] p-1.5 sm:grid-cols-4" aria-label="Secciones de combustibles">{grupos.map(grupo => {
+    const visible = grupo.tabs.filter(([key]) => (key !== "importar" || canWrite) && (key !== "duplicados" || admin));
+    const activo = visible.some(([key]) => key === tab);
+    return <button type="button" key={grupo.label} className={`${button} ${activo ? "border-transparent bg-[var(--accent)] text-white shadow-sm" : "border-transparent text-[var(--muted)]"}`} aria-current={activo ? "page" : undefined} onClick={() => setTab(visible[0][0])}>{grupo.label}</button>;
+ })}</nav>
+ {grupos.map(grupo => {
+    const visible = grupo.tabs.filter(([key]) => (key !== "importar" || canWrite) && (key !== "duplicados" || admin));
+    return visible.length > 1 && visible.some(([key]) => key === tab) ? <nav key={grupo.label} className="flex flex-wrap gap-2" aria-label={`Vistas de ${grupo.label}`}>{visible.map(([key, label]) => <button type="button" key={key} className={`${button} ${tab === key ? "border-[var(--accent)] text-[var(--accent)]" : "text-[var(--muted)]"}`} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{label}</button>)}</nav> : null;
+ })}
  {busy && <p role="status">Procesando solicitud. No cierres esta pantalla ni repitas la acción.</p>}{error && <p role="alert" className="text-red-500">{error}</p>}{message && <p role="status" className="rounded border border-[var(--border)] p-3">{message}</p>}
  {op.pending && <aside className="space-y-2 rounded border border-amber-600 p-3"><p>Hay una solicitud pendiente ({op.pending.action}). Conservamos su clave de reintento. No cambies archivo, selección ni revisiones para recuperar un resultado incierto.</p>{op.pending.ejecutar ? <button className={button} disabled={busy} onClick={() => void retry()}>Reintentar exactamente la solicitud</button> : <p>Tras recargar, reproduce el mismo archivo y decisiones. No se guardan archivos ni recibos en el navegador.</p>}<details><summary>Decisiones del intento pendiente</summary><pre className="max-w-xl whitespace-pre-wrap break-all text-xs">{JSON.stringify(op.pending.identidad, null, 2)}</pre></details>{op.pending.definitivo && <button className={button} disabled={busy} onClick={() => { op.editar(); setError(""); setMessage("Solicitud rechazada sin aplicar. Puedes corregirla o actualizar los datos."); }}>Corregir solicitud rechazada</button>}</aside>}
  {catalogosError && <p role="alert">{catalogosError} <button className={button} onClick={() => setRecargarCat(n => n + 1)}>Reintentar catálogos</button></p>}
  {tab === "pilotos" && <><ReportePilotosCB2 api={api}/><PilotosEquivalenciasCB2 api={api} cat={cat} puedeCorregir={admin}/></>}
+ {tab === "historial-consumos" && <HistorialConsumosCB2 api={api} cat={cat}/>}
  <div hidden={tab !== "consumos"}><ConsumosCB2 admin={admin} key={`consumos:${refresh}`} api={api} cat={cat} run={run} canWrite={canWrite && catalogosListos} locked={locked} refresh={refresh} activo={tab === "consumos"} documento={documento} setDocumento={setDocumento}/></div>
  {canWrite && <div hidden={tab !== "importar"}>{catalogosListos ? <><ImportarCB2 actualizarCatalogos={actualizarCatalogos} key={`importar:${refresh}`} api={api} cat={cat} run={run} locked={locked}/></> : <p role="status">Carga los catálogos para importar.</p>}</div>}
  <div hidden={tab !== "facturas"}><FacturasCB2 key={`facturas:${refresh}`} api={api} cat={cat} refresh={refresh} activo={tab === "facturas"} canWrite={canWrite} locked={locked} elegir={(d, p) => { setDocumento(d); setTab("consumos"); setMessage(`Documento del proveedor #${p} seleccionado. Selecciona sus consumos y confirma la asociación.`); }}/></div>

@@ -1,4 +1,5 @@
 import { reportePilotos,filtrosPiloto,csvPilotos } from "./pilotos-reporte";
+import { historialConsumos, filtrosHistorial, cursorHistorial } from "./historial-consumos";
 import { consultarFondoCB2, vincularFondoCB2, vincularFondoSchema } from "./fondos";
 import { consultarDocumental, consumosDocumentales } from "./conciliacion-documental";
 import { estadosDocumentales } from "./conciliacion-documental-model";
@@ -37,9 +38,9 @@ export async function bodyAcotado(req: Request, max: number) {
         reader.releaseLock();
     }
 }
-export type Accion = "pilotos-nombres" | "pilotos-reporte" | "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
+export type Accion = "historial-consumos" | "pilotos-nombres" | "pilotos-reporte" | "fondos" | "vincular-fondo" | "conciliacion-documental" | "consumos-documentales" | "corregir" | "preview" | "confirmar" | "reanudar" | "asociar" | "importaciones" | "consumos" | "facturas" | "filas" | "archivo";
 export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?: string) {
-    const lectura = ["pilotos-nombres","pilotos-reporte","fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
+    const lectura = ["historial-consumos","pilotos-nombres","pilotos-reporte","fondos","conciliacion-documental", "consumos-documentales", "importaciones", "consumos", "facturas", "filas", "archivo"].includes(accion);
     const g = await requireTenantFlotaCombustible(slug, lectura ? "ver" : "conciliar", { soloLectura: lectura || accion === "preview" });
     if (g.error)
         return g.error;
@@ -57,6 +58,12 @@ export async function cb2Http(req: Request, slug: string, accion: Accion, rawId?
         if (lectura) {
             const url = new URL(req.url), after = z.coerce.number().int().min(0).max(2147483647).parse(url.searchParams.get("despues") ?? 0), limit = z.coerce.number().int().min(1).max(500).parse(url.searchParams.get("limite") ?? 100);
             const iid = rawId === undefined ? undefined : id.parse(Number(rawId));
+            if (accion === "historial-consumos") {
+                const f = filtrosHistorial.parse({ desde: url.searchParams.get("desde") || undefined, hasta: url.searchParams.get("hasta") || undefined, piloto: url.searchParams.get("piloto") || undefined, proveedorId: url.searchParams.has("proveedorId") ? Number(url.searchParams.get("proveedorId")) : undefined });
+                const tieneCursor = ["corte", "fechaCursor", "idCursor"].some(k => url.searchParams.has(k));
+                const cursor = tieneCursor ? cursorHistorial.parse({ corte: Number(url.searchParams.get("corte")), fecha: url.searchParams.get("fechaCursor"), id: Number(url.searchParams.get("idCursor")) }) : undefined;
+                return NextResponse.json(await historialConsumos(ctx.empresaId, f, cursor, Math.min(limit, 100)), { headers });
+            }
             if(accion==="pilotos-nombres")return NextResponse.json(await service.nombresImportacion(ctx.empresaId,id.parse(iid)),{headers});
             if (accion === "pilotos-reporte") {
                 const f=filtrosPiloto.parse(Object.fromEntries(["desde","hasta","nombre","producto","proveedorId","pilotoReportadoId","empleadoId","pilotoExternoId"].filter(k=>url.searchParams.has(k)).map(k=>[k,k.endsWith("Id")?Number(url.searchParams.get(k)):url.searchParams.get(k)])));

@@ -83,7 +83,19 @@ function btn(text: string) {
         throw new Error(`Boton ausente ${text}`);
     return b;
 }
-async function click(text: string) { await act(async () => btn(text).click()); await flush(); }
+async function click(text: string) {
+    const destino: Record<string, [string, string]> = {
+        "Importar Excel": ["Importaciones", "Importar Excel"],
+        "Historial": ["Importaciones", "Historial de importaciones"],
+        "Facturas": ["Facturas y conciliación", "Facturas"],
+    };
+    const ruta = destino[text];
+    if (ruta && !Array.from(host.querySelectorAll("button")).some(e => e.textContent === ruta[1] && !e.closest("[hidden]"))) {
+        await act(async () => btn(ruta[0]).click()); await flush();
+    }
+    if (text === "Historial" && !Array.from(host.querySelectorAll("button")).some(e => e.textContent === ruta?.[1] && !e.closest("[hidden]"))) return;
+    await act(async () => btn(ruta?.[1] ?? text).click()); await flush();
+}
 /** Casilla «Guardar como piloto reportado…» (antes era un botón). */
 async function marcarPilotoReportado() { await act(async () => Array.from(host.querySelectorAll("label")).find(l => l.textContent?.startsWith("Guardar como piloto reportado para futuras importaciones"))!.querySelector("input")!.click()); await flush(); }
 function control(text: string) {
@@ -97,6 +109,12 @@ async function change(text: string, value: string) { const el = control(text); a
 async function seleccionarConsumo() { await act(async () => host.querySelector<HTMLInputElement>('[aria-label="Seleccionar consumo 3"]')!.click()); }
 async function prepararAsociacion() { await click("Facturas"); await click("Usar documento #5"); await seleccionarConsumo(); await change("Motivo", "Documento verificado"); }
 describe("interfaz CB2 montada: flujos funcionales", () => {
+    it("agrupa vistas y conserva acceso al historial para lectura y a herramientas administrativas", async () => {
+        await mount();
+        for (const nombre of ["Consumos", "Importaciones", "Facturas y conciliación", "Reportes"]) expect(btn(nombre)).toBeDefined();
+        await click("Importaciones"); expect(btn("Historial de importaciones")).toBeDefined();
+        await click("Reportes"); expect(btn("Tercerizados")).toBeDefined(); expect(btn("Placas duplicadas")).toBeDefined();
+    });
     it("recarga reconstruye la corrección incierta y reintenta la misma clave y revisión",async()=>{
         await mount();await click("Detalles");await change("Unidad corregida #3","1");await change("Combustible corregido","DIESEL");await change("Justificacion de correccion","Verificado por Operaciones");
         await act(async()=>control("Confirmo esta corrección auditada").click());failConfirm=true;await click("Guardar corrección #3");
@@ -158,7 +176,7 @@ describe("interfaz CB2 montada: flujos funcionales", () => {
     it("Admin reanuda desde historial y ofrece descarga privada", async () => { await mount(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.querySelector('a[download]')?.getAttribute("href")).toBe("/api/empresas/demo/flota/combustible/cb2/importaciones/2/archivo"); await click("Editar"); await change("Unidad para vale", "1"); await change("Motivo de reanudación", "Unidad verificada"); await click("Reanudar selección"); expect(JSON.parse(String(calls.find(c => c.url.endsWith("/reanudar"))!.init!.body))).toMatchObject({ importacionId: 2, revision: 1, seleccion: [{ candidato, vehiculoId: 1, empleadoId: null, metodoEmpleado: "SIN_ASIGNACION", productoClasificado: "DIESEL" }] }); });
     it("solo lectura no presenta escrituras", async () => { await mount(false, false); expect(host.textContent).not.toContain("Importar Excel"); expect(host.textContent).not.toContain("Asociar factura al lote"); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.textContent).not.toContain("Reanudar selección"); expect(calls.every(c => !c.init?.method || c.init.method === "GET")).toBe(true); });
     it("filtra en servidor", async () => { await mount(); await change("Buscar vale o placa", "0001"); await click("Aplicar filtros"); expect(calls.some(c => c.url.includes("/consumos?") && c.url.includes("buscar=0001") && c.url.includes("despues=0"))).toBe(true); });
-    it("conciliar no concede reanudacion Admin", async () => { await mount(false, true); expect(btn("Importar Excel")).toBeDefined(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.textContent).toContain("requiere autorización Admin"); expect(host.textContent).not.toContain("Reanudar selección"); });
+    it("conciliar no concede reanudacion Admin", async () => { await mount(false, true); await click("Importaciones"); expect(btn("Importar Excel")).toBeDefined(); await click("Historial"); await click("Ver trazabilidad #2"); expect(host.textContent).toContain("requiere autorización Admin"); expect(host.textContent).not.toContain("Reanudar selección"); });
     it("recarga conserva clave y revision original de asociacion incierta", async () => { await mount(); await prepararAsociacion(); failAsociar = true; await click("Asociar factura al lote"); const first = calls.find(c => c.url.endsWith("/asociar"))!; await act(async () => root.unmount()); root = createRoot(host); await mount(); await click("Reintentar exactamente la solicitud"); const posts = calls.filter(c => c.url.endsWith("/asociar")); expect(posts).toHaveLength(2); expect(posts[1].init!.body).toBe(first.init!.body); expect(JSON.parse(String(posts[1].init!.body)).revisiones).toEqual([{ id: 2, revision: 1 }]); });
     it("pagina con cursor y conserva seleccion al filtrar", async () => { paginado = true; await mount(); await seleccionarConsumo(); await click("Siguiente"); expect(calls.some(c => c.url.includes("/consumos?") && c.url.includes("despues=52"))).toBe(true); expect(host.textContent).toContain("1 consumos seleccionados"); await change("Buscar vale o placa", "0001"); await click("Aplicar filtros"); expect(calls.at(-1)!.url).toContain("despues=0"); expect(calls.at(-1)!.url).toContain("buscar=0001"); });
     it("rechaza factura elegida de otro proveedor antes de enviar", async () => { consumoProveedor = 2; await mount(); await prepararAsociacion(); await click("Asociar factura al lote"); expect(host.textContent).toContain("pertenece a otro proveedor"); expect(calls.some(c => c.url.endsWith("/asociar"))).toBe(false); });
