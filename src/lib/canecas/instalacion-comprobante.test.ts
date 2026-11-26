@@ -38,6 +38,10 @@ describe('instalación manual del comprobante de venta (SQL)', () => {
     expect(cuerpo).toContain("'CANECAS_VENTA_INMUTABLE'"); expect(cuerpo).toContain("'CANECAS_VENTA_ANULADA_INMUTABLE'");
     // El postcheck compara contra ese mismo cuerpo.
     expect(archivos['05-postcheck-solo-lectura.sql']).toContain(`'${cuerpo.replace(/'/g, "''")}'`);
+    // El postcheck normaliza espacios y CR en AMBOS lados (phpMyAdmin envía CRLF): comparación binaria, sin LIKE.
+    const exacta = archivos['05-postcheck-solo-lectura.sql'].match(/SELECT 'trg_can_venta_bu exacto[\s\S]*?AS resultado;/)![0];
+    expect(exacta.match(/BINARY TRIM\(REGEXP_REPLACE\(REPLACE\(/g)).toHaveLength(2);
+    expect(exacta).not.toMatch(/\bLIKE\b/);
   });
   it('etapa 2: guarda intrínseca (PREPARE condicionado), delimitador // y orden PREPARE → EXECUTE → DEALLOCATE', () => {
     const sql = sinComentarios(archivos['04-etapa2-trigger.sql']).trim();

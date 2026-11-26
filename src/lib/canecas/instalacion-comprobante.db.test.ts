@@ -118,4 +118,34 @@ describe.skipIf(!socket)('comprobante de venta: instalación manual por etapas e
       expect(detener(ejecutar('05-postcheck-solo-lectura')).length).toBeGreaterThan(0);
     } finally { await pool.end(); }
   }, 240000);
+
+  it('postcheck 05 (incidente de producción): el trigger instalado con CRLF (como lo envía phpMyAdmin) o reformateado da OK; una condición quitada o un mensaje cambiado da DETENER', async () => {
+    const { pool } = await preparar();
+    try {
+      expect(ejecutar('02-etapa1-columnas').codigo).toBe(0);
+      // Sentencia exacta del postcheck, ejecutada con CR dentro del literal (el cliente mariadb los elimina; mysql2 los conserva, como phpMyAdmin).
+      const sql05 = readFileSync(`${DIR}/05-postcheck-solo-lectura.sql`, 'utf8');
+      const exacta = sql05.match(/SELECT 'trg_can_venta_bu exacto[\s\S]*?AS resultado;/)![0].replace(/;$/, '');
+      const resultado = async (crlf: boolean) => String(((await consulta(pool, crlf ? exacta.replace(/\n/g, '\r\n') : exacta))[0] as Fila).resultado);
+      // Etapa 2 enviada con CRLF por mysql2 (cada sentencia separada por //): el trigger queda almacenado con \r\n, como en Hostinger.
+      const etapa2 = readFileSync(`${DIR}/04-etapa2-trigger.sql`, 'utf8').split('\n').filter(l => !l.startsWith('--')).join('\n').split(/\/\/\s*\n/).map(x => x.trim()).filter(Boolean);
+      const conexion = await pool.getConnection(); // las variables @etapa_sql viven en una sola conexión
+      try { for (const sentencia of etapa2) await conexion.query(sentencia.replace(/\n/g, '\r\n')); } finally { conexion.release(); }
+      expect(await triggerBu(pool)).toContain('\r\n');
+      expect(await resultado(true)).toBe('OK'); // CRLF en la base y en el literal (el caso que dio DETENER en producción)
+      expect(await resultado(false)).toBe('OK'); // CRLF en la base, LF en el literal
+      // Mismo trigger reformateado (sin sangrías, tabuladores, una sola línea): OK.
+      const cuerpo = (await triggerBu(pool)).replace(/\r\n/g, '\n');
+      const crear = (texto: string) => pool.query(`CREATE OR REPLACE TRIGGER \`${BASE}\`.trg_can_venta_bu BEFORE UPDATE ON \`${BASE}\`.canecas_ventas FOR EACH ROW ${texto}`);
+      await crear(cuerpo.replace(/\n\s*/g, '\t'));
+      expect(await resultado(false)).toBe('OK'); expect(await resultado(true)).toBe('OK');
+      // Alteraciones reales: quitar una comparación, cambiar un mensaje o el orden de las condiciones => DETENER.
+      await crear(cuerpo.replace('    OR NOT (NEW.quien_recibe <=> OLD.quien_recibe)\n', ''));
+      expect(await resultado(true)).toBe('DETENER'); expect(await resultado(false)).toBe('DETENER');
+      await crear(cuerpo.replace("'CANECAS_VENTA_INMUTABLE'", "'OTRO_MENSAJE'"));
+      expect(await resultado(false)).toBe('DETENER');
+      await crear(cuerpo.replace('    OR NOT (NEW.quien_lleva <=> OLD.quien_lleva)\n    OR NOT (NEW.quien_recibe <=> OLD.quien_recibe)\n', '    OR NOT (NEW.quien_recibe <=> OLD.quien_recibe)\n    OR NOT (NEW.quien_lleva <=> OLD.quien_lleva)\n'));
+      expect(await resultado(false)).toBe('DETENER');
+    } finally { await pool.end(); }
+  }, 240000);
 });
