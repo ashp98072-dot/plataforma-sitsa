@@ -1,0 +1,56 @@
+# PriceSmart — correcciones de homologación tras la auditoría independiente
+
+Base: `origin/main` (incluye API-25, API-26 y API-27). **Nada se activa**: runtime `DISABLED`, rutas `503 DISABLED`, `authorizesExternalExposure=false`, `REVIEWED_KMS_ADAPTERS` vacío. No hay SQL, ni despliegue, ni credenciales, ni aprobaciones de PriceSmart simuladas. KPI (D16) queda fuera.
+
+> **La minuta original del 30/10/2026 no está en el repositorio.** Lo que se cita de ella es lo que `api24/MATRIZ-REQUISITOS.md` (D01) y `api25/README.md` ya transcriben. La matriz de trazabilidad debe contrastarse con el original antes de la homologación.
+
+## Hallazgos y correcciones
+
+| # | Punto | Resultado | Cambio |
+|---|---|---|---|
+| 1 | `NODE_ENV=production` + `NOVALVION_ENV=sandbox` | **Incompatibilidad real, corregida.** `evaluateSandboxExposure` bloqueaba (`PRODUCTION_UNTOUCHED`) todo perfil con `nodeEnv='production'`, aunque el proceso se declarase sandbox; el ensamblaje del runtime (API-26) y el diagnóstico de preparación sí lo admiten porque `next start` fija `NODE_ENV=production` también en el sandbox. Un sandbox real nunca podía quedar sin bloqueantes (el perfil tenía que «mentir» con `production-like-staging`). | `homologation-sandbox.ts`: `declaresProduction(nodeEnv, novalvionEnv)` = `NOVALVION_ENV=production` **o** (`NODE_ENV=production` y `NOVALVION_ENV≠sandbox`). Los procesos que se declaran de producción siguen bloqueados. |
+| 2 | Flujo POST → persistencia → outbox → TMS → GET | **Fallo funcional corregido** (ver 2.1) y observaciones (2.2–2.5). | `lab-demo/tms-link.ts`, `lab-demo/link-retry.ts` |
+| 3 | Cancelación | Sin defecto en el código; **ahora blindado con pruebas**: pedir una cancelación nunca se muestra como cancelación ejecutada. | `lab-demo/cancelacion-entrega.test.ts` |
+| 4 | Confirmación de entrega | Sin defecto; **pruebas nuevas**: no existe estado DELIVERED, nada se publica mientras D13 esté pendiente. Sin cambios de código. | `lab-demo/cancelacion-entrega.test.ts` |
+| 5 | OpenAPI y Postman ↔ código | **Defecto corregido:** el OpenAPI no describía las respuestas del runtime cerrado (`503 READ_ONLY`, cabecera `Retry-After: 60`) ni los modos del runtime. | `api25/openapi.homologation.json`; `lab-demo/homologation-openapi.test.ts` |
+| 6 | Bloqueo de compilación por Next.js | **No se reproduce** en `main` (Next 16.4.6): `npm run build` termina con éxito. Ver «Compilación». Sin cambios de dependencias. | solo documentación |
+| 7 | Matriz de trazabilidad | Entregada. Una prueba falla si cita un archivo que no existe. | `MATRIZ-TRAZABILIDAD.md`, `lab-demo/trazabilidad.test.ts` |
+
+### 1. Prueba de la incompatibilidad
+`homologation-sandbox.test.ts` (nuevo bloque «NODE_ENV / NOVALVION_ENV»):
+- Con el código anterior la prueba «un sandbox real (`NODE_ENV=production`, `NOVALVION_ENV=sandbox`)» **falla** (`blockers = ['PRODUCTION_UNTOUCHED', 'KMS_ADAPTER_REVIEWED']`); con la corrección solo queda `KMS_ADAPTER_REVIEWED` y la exposición sigue sin autorizarse.
+- Una prueba de **consistencia** recorre toda la matriz `NODE_ENV` × `NOVALVION_ENV` y exige que `evaluateSandboxExposure`, `evaluateReadiness` y `buildReadinessDiagnostic` coincidan con la misma regla.
+- Siguen bloqueados: `NODE_ENV=production` sin sandbox, y `NOVALVION_ENV=production` con cualquier `NODE_ENV`.
+
+### 2. Flujo POST → persistencia → outbox → TMS → GET
+Camino revisado: `orders/route.ts` → `http-transport.ts` (autenticación M2M, autorización, antiabuso, `OrderApplication.receive`) → `mariadb-repository.ts` (insert + evento + outbox + auditoría en UNA transacción) → `homologation/runtime.ts` (`afterCommit` solo despierta al consumidor; el procesamiento es SIEMPRE por la outbox) → `lab-demo/outbox-link-handler.ts` → `lab-demo/tms-link.ts` (`crearSolicitudCliente`) → GET (`readExtra` → `status`).
+
+- **2.1 (corregido) El vínculo con el TMS solo entiende `lab-demo-1`.** `tms-link.ts` convertía `stored.input` a `LabOrderInput` con un `as` sin comprobar. Con otro contrato inyectado (p. ej. el diccionario D06 definitivo, que aún no tiene capa de mapeo) el acceso a `input.recipient.name` lanzaba una excepción que `link-retry` trataba como transitoria (6 intentos con retroceso de hasta 10 min) mientras el GET decía `RECEIVED`. Ahora: se valida con `labOrderSchema` **antes** de persistir nada; si no coincide, el resultado es `CONTRACT_NOT_MAPPED`, se **bloquea de inmediato** (sin reintentos) y el GET informa `REVIEW_REQUIRED` con `linkIssue.code = CONTRACT_NOT_MAPPED` (cabe en `last_outcome VARCHAR(32)` y en el patrón del OpenAPI). Las órdenes `lab-demo-1` se vinculan exactamente igual. Pruebas: `lab-demo/contrato-no-mapeado.test.ts`.
+- 2.2 (informativo) `ps_api01_orders.tms_linked` tiene `CHECK (tms_linked = 0)`: es siempre 0; el vínculo real vive en `ps_api12_tms_links`. Por eso la guarda `order.tmsLinked` de `requestCancellation` nunca se activa y las cancelaciones de órdenes ya vinculadas **sí** se aceptan y se registran (diseño de API-23). No se toca.
+- 2.3 (limitación de esta auditoría) Las pruebas con MariaDB real (`scripts/ci/pricesmart-demo/*.e2e.ts`) **no se ejecutaron aquí** (no hay MariaDB en este entorno y ningún workflow de GitHub las corre). Los cambios se probaron con pruebas unitarias y puertos simulados; deben repetirse en el laboratorio antes de homologar.
+- 2.4 (informativo, D14) cada GET escribe una fila de auditoría (`ps_api01_audit`): con consulta horaria crece N órdenes × consultas/día; su retención depende de D14.
+- 2.5 (informativo, D05) una orden = una entrega = una solicitud = un plan; varias entregas, parciales y reintentos se retienen para revisión.
+
+### 3. Cancelación ≠ cancelación ejecutada (D09)
+Pruebas (`lab-demo/cancelacion-entrega.test.ts`): para **todas** las combinaciones solicitud × plan, pedir la cancelación no cambia el estado externo (`proposedStatus` es el mismo con y sin la petición); `CANCELLED` solo aparece si la solicitud del TMS está `CANCELADA` o el plan `Cancelado`; la petición se marca `{requested:true, automatic:false, assessment}`; sin vínculo queda `REQUESTED_NOT_LINKED` y el pedido sigue `RECEIVED`; `noteCancellation` solo escribe el vínculo y la auditoría (jamás toca `tms_solicitudes_cliente`, `tms_planes_viaje` ni paradas) y es idempotente; ningún código asigna `state = 'CANCELLED'`.
+
+### 4. Confirmación de entrega (D13)
+Pruebas: no existe estado externo de entrega; toda proyección da `confirmsDelivery:false`, `publishable:false`; con todas las entregas confirmadas por el piloto y plan `Cerrado` el GET sigue `CLOSED_ADMINISTRATIVE` con `deliveryEvidence` informativa (`officialAcceptance: NOT_ACCEPTED_BY_PRICESMART`, `blockedBy: [D13_PENDING]`); parciales, rechazos, incidencias, sin evidencia o confirmaciones incoherentes → `REVIEW_REQUIRED`/`PARTIAL`/`NONE`; tabla ausente → `UNAVAILABLE` (nunca «sin entregas»); D13 no es una decisión que habilite el runtime ni existe un parámetro que la «ratifique»; ninguna fuente ni el OpenAPI/Postman contienen `DELIVERED`.
+
+### 5. OpenAPI / Postman
+Ya estaban atados al código (rutas, estados, veredictos, evidencia). Defecto hallado y corregido: el runtime cerrado (`withRuntimeControls`) responde `503 {code: DISABLED|READ_ONLY}` con `Retry-After: 60`, pero el OpenAPI no listaba `READ_ONLY` ni la cabecera. Se añadieron `READ_ONLY` al enum de errores, la cabecera `Retry-After` en `Error503` y `x-runtime-modes` (DISABLED / READ_ONLY / ENABLED, `PROVISIONAL_LAB`). Pruebas nuevas: la lista de códigos de `Error` es **exactamente** el conjunto que el código puede emitir (transporte + runtime cerrado), el valor de `Retry-After` es el del código y los modos son `RUNTIME_MODES`. La documentación sigue distinguiendo lo provisional (`x-contract-status`) y no anuncia un servicio accesible.
+
+### Compilación (Next.js)
+`api27/README.md` documentó que el build fallaba con `SecurityFatalError` (aviso del registro sobre Next 16.4.1). Desde entonces `main` pasó a **Next 16.4.6** (`e833334d` package.json, `85f574d8` package-lock). Verificado en esta auditoría con un árbol limpio: `npm run build` → compilación correcta, TypeScript correcto, 54 páginas, **exit 0**. No se modificó ninguna dependencia.
+**Prueba obsoleta relacionada (no corregida aquí):** `src/next-config-build-workers.test.ts` sigue exigiendo `next@16.4.1` y el script de build `next build`, pero `main` usa `16.4.6` y `node scripts/next-command.mjs build`; por eso falla en `main` limpio (2 de sus 5 pruebas). Corrección propuesta, para decidir con el propietario en un PR aparte (no toca dependencias): que la prueba lea la versión fijada de `package.json` (y el comando de build real) en lugar de la constante `16.4.1`, manteniendo todas las demás comprobaciones del límite de build (`cpus=1`, esquema oficial, headers).
+
+Corrección segura si el bloqueo reaparece (con otra versión o aviso): (1) `npm ci` con el lockfile versionado, nunca `npm install` ni editar `node_modules`; (2) **no** desactivar la comprobación ni saltarse el aviso; (3) subir solo a la versión parcheada indicada en el aviso mediante un PR de dependencias aparte, autorizado por el propietario, con `npm run build` y la suite completa; (4) hasta entonces, no desplegar ese commit. Observación no bloqueante: el build emite avisos de Turbopack «Dynamic filesystem access» (`src/lib/uploads.ts` e importadores, incluida la página de Canecas desde #692); ya existían para otras rutas.
+
+## Pruebas ejecutadas
+- `npx vitest run src/lib/integrations/pricesmart` → 1011 pruebas (47 archivos) en verde (antes 994; +17 nuevas).
+- `npx tsc --noEmit` y `npx eslint src/lib/integrations/pricesmart` limpios; `npm run build` exit 0.
+- **Suite completa del repositorio** (`npx vitest run`): 17 091 pruebas, **71 fallan en 18 archivos** (`flota/*`, `tms/planes/*`, `compras/*`, `next-config-build-workers`, …), **ninguno de PriceSmart**. Las **mismas 71** fallan en un `origin/main` limpio (comprobado en un árbol aparte), así que este PR no introduce regresiones; no se corrigieron (fuera de alcance).
+- **No ejecutadas:** E2E con MariaDB real (`scripts/ci/pricesmart-demo`), suite completa del repositorio.
+
+## Bloqueantes pendientes (ninguno lo resuelve este PR)
+D02 (verificador/autenticación) · D06 (diccionario definitivo **y capa de mapeo hacia la solicitud TMS**, ver 2.1) · D09 (método de cancelación) · D13 (entrega confirmada) · D05, D07, D08, D10, D11, D12, D14, D15 · adaptador KMS/HSM revisado · infraestructura del sandbox (host MariaDB dedicado, dominio, TLS, allowlist, monitoreo, gestor de secretos) · aprobación humana de `evaluateSandboxExposure` sin bloqueantes y autorización de despliegue · contraste de la matriz con la minuta original.

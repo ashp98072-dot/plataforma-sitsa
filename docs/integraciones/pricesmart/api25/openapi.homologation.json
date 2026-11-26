@@ -560,7 +560,8 @@
               "REPLAY_REJECTED",
               "CONFLICT",
               "UNAVAILABLE",
-              "DISABLED"
+              "DISABLED",
+              "READ_ONLY"
             ]
           },
           "correlationId": {
@@ -895,6 +896,13 @@
           "type": "string",
           "const": "nosniff"
         }
+      },
+      "Retry-After": {
+        "description": "Seconds. Sent only by the closed runtime (503 DISABLED / 503 READ_ONLY). PROVISIONAL_D12",
+        "schema": {
+          "type": "string",
+          "const": "60"
+        }
       }
     },
     "responses": {
@@ -1221,7 +1229,7 @@
         }
       },
       "Error503": {
-        "description": "PROVISIONAL: Dependency error/timeout, uncertain COMMIT, simulated or malformed guarantees/results",
+        "description": "PROVISIONAL: Dependency error/timeout, uncertain COMMIT, simulated or malformed guarantees/results; or the runtime is closed by its mode (`DISABLED`: every operation; `READ_ONLY`: POST create/cancel while GET keeps working) or its kill switch (`DISABLED`). Closed-runtime answers carry `Retry-After: 60`.",
         "headers": {
           "X-Correlation-Id": {
             "$ref": "#/components/headers/X-Correlation-Id"
@@ -1234,6 +1242,9 @@
           },
           "X-Content-Type-Options": {
             "$ref": "#/components/headers/X-Content-Type-Options"
+          },
+          "Retry-After": {
+            "$ref": "#/components/headers/Retry-After"
           }
         },
         "content": {
@@ -1283,5 +1294,11 @@
       "D12 acuses/errores",
       "D13 prueba de entrega"
     ]
+  },
+  "x-runtime-modes": {
+    "status": "PROVISIONAL_LAB",
+    "DISABLED": "every operation answers 503 DISABLED (safe default; kill switch also answers 503 DISABLED)",
+    "READ_ONLY": "GET answers normally; POST create and POST cancellation-requests answer 503 READ_ONLY",
+    "ENABLED": "all operations, only with the explicit acknowledgement and every required decision ratified"
   }
 }

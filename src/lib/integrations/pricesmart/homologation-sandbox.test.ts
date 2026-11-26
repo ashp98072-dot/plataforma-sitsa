@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CURRENT_LAB_PROFILE, evaluateSandboxExposure, sandboxProfileSchema, type SandboxProfile } from './homologation-sandbox';
+import { CURRENT_LAB_PROFILE, declaresProduction, evaluateSandboxExposure, sandboxProfileSchema, type SandboxProfile } from './homologation-sandbox';
+import { evaluateReadiness } from './runtime-assembly';
+import { buildReadinessDiagnostic } from './readiness-diagnostic';
+import { ENABLE_ACK } from './runtime-config';
 import { assessDeliveryEvidence, deliveryEvidenceUnavailable } from './delivery-evidence';
 import { hasReviewedKmsAdapter } from './kms-provider-selection';
 
@@ -41,7 +44,7 @@ describe('API-25 requisitos del sandbox de homologación', () => {
       ['LIMITS_AND_REPLAY', (p) => { p.limits.replayProtection = false; }], ['LIMITS_AND_REPLAY', (p) => { p.limits.rateLimit = false; }], ['LIMITS_AND_REPLAY', (p) => { p.limits.bodyLimit = false; }],
       ['PROVISIONING_REPRODUCIBLE', (p) => { p.operations.reproducibleProvisioning = false; }], ['DESTROY_PROCEDURE', (p) => { p.operations.destroyProcedure = false; }],
       ['MONITORING', (p) => { p.operations.monitoring = false; }], ['REVOCATION_PROCEDURE', (p) => { p.operations.revocationProcedure = false; }],
-      ['PRODUCTION_UNTOUCHED', (p) => { p.process.nodeEnv = 'production'; }], ['PRODUCTION_UNTOUCHED', (p) => { p.process.novalvionEnv = 'production'; }], ['PRODUCTION_UNTOUCHED', (p) => { p.process.productionFlagsUntouched = false; }],
+      ['PRODUCTION_UNTOUCHED', (p) => { p.process.nodeEnv = 'production'; p.process.novalvionEnv = ''; }], ['PRODUCTION_UNTOUCHED', (p) => { p.process.novalvionEnv = 'production'; }], ['PRODUCTION_UNTOUCHED', (p) => { p.process.productionFlagsUntouched = false; }],
       ['LAB_COMPOSITION_ABSENT', (p) => { p.process.labCompositionFlagPresent = true; }], ['D02_RATIFIED_BY_PRICESMART', (p) => { p.verifier.d02RatifiedByPriceSmart = false; }],
       ['LAB_VERIFIER_NOT_ALLOWED_EXTERNALLY', (p) => { p.verifier.kind = 'LAB_HMAC'; }], ['VERIFIER_NOT_PROVIDED', (p) => { p.verifier.kind = 'NONE'; }],
     ];
@@ -90,5 +93,36 @@ describe('API-25 evidencia mínima de entrega (interna, sin política externa)',
     expect(assessDeliveryEvidence(stops, [ok(2), ok(2)])).toMatchObject({ level: 'PARTIAL', pilotConfirmed: 1 });
     expect(deliveryEvidenceUnavailable()).toMatchObject({ level: 'UNAVAILABLE', confirmsDelivery: false, publishable: false });
     expect(JSON.stringify(assessDeliveryEvidence(stops, [ok(2), ok(3)]))).not.toMatch(/DELIVERED|ENTREGADA/);
+  });
+
+  describe('NODE_ENV / NOVALVION_ENV: una sola regla en los tres módulos (API-26)', () => {
+    const nodeEnvs = [undefined, 'development', 'test', 'production'], novalvionEnvs = [undefined, '', 'sandbox', 'staging', 'production'];
+    const runtimeEnv = (n?: string, v?: string) => ({ PRICESMART_RUNTIME_MODE: 'ENABLED', PRICESMART_RUNTIME_ACK: ENABLE_ACK, PRICESMART_RUNTIME_ENVIRONMENT: 'sandbox', PRICESMART_ORIGIN_CLUB: 'CLUB-X', PRICESMART_DB_SCHEMA: 'schema_x', PRICESMART_DB_RUNTIME_USER: 'user_x',
+      PRICESMART_RATIFIED_DECISIONS: 'D02,D06,D08,D09,D12', ...(n === undefined ? {} : { NODE_ENV: n }), ...(v === undefined ? {} : { NOVALVION_ENV: v }) });
+    const okPorts = { evidence: { extract: async () => null }, security: { verifier: { verify: async () => null }, catalog: { findByCredential: async () => [] }, revocation: { isRevoked: async () => false }, clock: { nowMs: () => 1 },
+      counter: { consume: async () => ({ allowed: true, used: 1, resetAtMs: 1, assurance: 'DISTRIBUTED_ATOMIC' as const }) }, replay: { claim: async () => ({ status: 'CLAIMED' as const, assurance: 'DURABLE_ATOMIC' as const }) } },
+      repository: { runAtomic: async () => { throw new Error('no usado'); } }, probes: { db: async () => true }, killSwitch: () => false } as never;
+
+    it('un sandbox real (`next start` ⇒ NODE_ENV=production, NOVALVION_ENV=sandbox) NO queda bloqueado por PRODUCTION_UNTOUCHED, como ya admite runtime-assembly (antes de la corrección el perfil tenía que mentir)', () => {
+      const real = ideal(); real.process.nodeEnv = 'production'; real.process.novalvionEnv = 'sandbox';
+      const r = evaluate(real);
+      expect(r.blockers).toEqual(['KMS_ADAPTER_REVIEWED']); expect(r.satisfied).toContain('PRODUCTION_UNTOUCHED');
+      expect(r.authorizesExternalExposure).toBe(false); expect(r.exposable).toBe(false);   // nada se autoriza
+    });
+    it('un proceso que se declara de producción sigue bloqueado: NODE_ENV=production sin sandbox, o NOVALVION_ENV=production con cualquier NODE_ENV', () => {
+      for (const [n, v] of [['production', ''], ['production', 'staging'], ['production', 'production'], ['development', 'production'], ['test', 'production']] as const) {
+        const p = ideal(); p.process.nodeEnv = n; p.process.novalvionEnv = v;
+        expect(evaluate(p).blockers, `${n}/${v}`).toContain('PRODUCTION_UNTOUCHED');
+      }
+    });
+    it('consistencia: evaluateSandboxExposure, evaluateReadiness y buildReadinessDiagnostic coinciden en TODA la matriz NODE_ENV × NOVALVION_ENV', async () => {
+      for (const n of nodeEnvs) for (const v of novalvionEnvs) {
+        const p = ideal(); p.process.nodeEnv = n ?? ''; p.process.novalvionEnv = v ?? '';
+        const sandbox = evaluate(p).blockers.includes('PRODUCTION_UNTOUCHED');
+        const diagnostic = buildReadinessDiagnostic(runtimeEnv(n, v), { handlerInstalled: false, labActive: false }).blockers.includes('RUNNING_IN_PRODUCTION_ENVIRONMENT');
+        const assembly = (await evaluateReadiness(runtimeEnv(n, v), okPorts)).blockers.some(b => b.code === 'PRODUCTION_ENVIRONMENT_NOT_AUTHORIZED' && b.detail.includes('se declara de producción'));
+        expect([sandbox, diagnostic, assembly], `NODE_ENV=${n} NOVALVION_ENV=${v}`).toEqual([declaresProduction(n, v), declaresProduction(n, v), declaresProduction(n, v)]);
+      }
+    });
   });
 });
