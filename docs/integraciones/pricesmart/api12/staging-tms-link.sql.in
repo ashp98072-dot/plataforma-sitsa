@@ -23,7 +23,8 @@ CREATE TABLE ps_api12_tms_mapping (
 
 -- Vínculo: una orden ↔ una solicitud (una sola vez). Identidad PERSISTIDA y verificable: claim_token (128 bits, UNIQUE) se guarda ANTES de crear la solicitud y se escribe al inicio de
 -- sus observaciones ([PS:<hex>]); solicitud_id queda NULL hasta completar el vínculo. Una solicitud solo pertenece a la orden que demuestra su token (nunca por coincidir en referencia).
--- cancellation_requested_at solo deja constancia; no cancela nada.
+-- cancellation_requested_at solo deja constancia; no cancela nada. La RESOLUCIÓN la fija una persona de Operaciones (cancellation_resolved_by/at, nota) y nunca es automática:
+--   EXECUTED = el TMS ya refleja la cancelación/rechazo (se verifica contra el estado real); NOT_EXECUTED = Operaciones decidió no cancelar (nota obligatoria). Una vez fijada no se sobrescribe.
 CREATE TABLE ps_api12_tms_links (
   environment VARBINARY(16) NOT NULL,
   tenant_id BIGINT UNSIGNED NOT NULL,
@@ -36,10 +37,18 @@ CREATE TABLE ps_api12_tms_links (
   created_at DATETIME(6) NOT NULL,
   linked_at DATETIME(6) NULL,
   cancellation_requested_at DATETIME(6) NULL,
+  cancellation_resolution VARCHAR(16) NULL,
+  cancellation_resolved_by VARCHAR(100) NULL,
+  cancellation_resolved_at DATETIME(6) NULL,
+  cancellation_resolution_note VARCHAR(300) NULL,
   PRIMARY KEY (environment, tenant_id, client_id, integration_id, order_id),
   UNIQUE KEY uq_ps_api12_claim (claim_token),
   UNIQUE KEY uq_ps_api12_solicitud (empresa_id, solicitud_id),
   CHECK ((solicitud_id IS NULL) = (linked_at IS NULL)),
+  CHECK (cancellation_resolution IS NULL OR cancellation_resolution IN ('EXECUTED','NOT_EXECUTED')),
+  CHECK ((cancellation_resolution IS NULL) = (cancellation_resolved_at IS NULL) AND (cancellation_resolution IS NULL) = (cancellation_resolved_by IS NULL)),
+  CHECK (cancellation_resolution IS NULL OR cancellation_requested_at IS NOT NULL),
+  CHECK (cancellation_resolution <> 'NOT_EXECUTED' OR cancellation_resolution_note IS NOT NULL),
   FOREIGN KEY (environment, tenant_id, client_id, integration_id, order_id)
     REFERENCES ps_api01_orders(environment, tenant_id, client_id, integration_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (empresa_id, solicitud_id)

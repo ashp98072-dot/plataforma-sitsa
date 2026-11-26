@@ -1,5 +1,5 @@
 // PRICESMART API-13 — tipos y etiquetas (puras, sin servidor) para marcar en la bandeja de solicitudes las que nacieron de PriceSmart y las vinculaciones pendientes/fallidas.
-export type PriceSmartOrigenUi = { solicitudId: number; cancelacionSolicitadaEn: string | null; cancelacionPendiente: boolean };
+export type PriceSmartOrigenUi = { solicitudId: number; cancelacionSolicitadaEn: string | null; cancelacionPendiente: boolean; cancelacionResolucion?: "EXECUTED" | "NOT_EXECUTED" | null; cancelacionResueltaPor?: string | null; cancelacionResueltaEn?: string | null };
 export type PriceSmartPendienteUi = { id: string; referencia: string; estado: "PENDIENTE" | "BLOQUEADA" | "AGOTADA"; intentos: number; ultimoResultado: string | null; ultimoDetalle: string | null; proximoIntento: string | null; reconocidoPor: string | null; reconocidoEn: string | null };
 export type PriceSmartBandejaUi = { enabled: false } | { enabled: true; origen: PriceSmartOrigenUi[]; pendientes: PriceSmartPendienteUi[] };
 
@@ -18,3 +18,5 @@ export function textoResultadoVinculacion(p: Pick<PriceSmartPendienteUi, "ultimo
 }
 /** Una vinculación necesita atención mientras nadie la haya reconocido. */
 export const requiereAtencion = (p: PriceSmartPendienteUi): boolean => p.reconocidoEn == null;
+
+export const ETIQUETA_RESOLUCION_CANCELACION = { EXECUTED: "Cancelación ejecutada", NOT_EXECUTED: "Cancelación no ejecutada" } as const;
