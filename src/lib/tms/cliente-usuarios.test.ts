@@ -11,6 +11,7 @@ import {
   activarUsuarioCliente,
   cambiarPasswordCliente,
   crearUsuarioCliente,
+  esUsuarioClienteSoloLectura,
   normalizarEmail,
   resetearPasswordUsuarioCliente,
   validarClienteSessionActiva,
@@ -354,5 +355,34 @@ describe("resetearPasswordUsuarioCliente", () => {
     const r = await resetearPasswordUsuarioCliente(7, 30, 10, "abc");
     expect(r.ok).toBe(false);
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("acceso de SOLO CONSULTA (solo_lectura)", () => {
+  const SES = { usuarioClienteId: 10, empresaId: 7, clienteId: 30 };
+  beforeEach(() => { vi.mocked(query).mockReset(); vi.mocked(execute).mockReset(); });
+  it("se lee de la fila real acotada por usuario + empresa + cliente de la sesión", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ solo_lectura: 1 }] as never);
+    expect(await esUsuarioClienteSoloLectura(SES)).toBe(true);
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual([10, 7, 30]); expect(String(vi.mocked(query).mock.calls[0][0])).toMatch(/WHERE id = \? AND empresa_id = \? AND cliente_id = \?/);
+    vi.mocked(query).mockResolvedValueOnce([{ solo_lectura: 0 }] as never); expect(await esUsuarioClienteSoloLectura(SES)).toBe(false);
+    vi.mocked(query).mockResolvedValueOnce([] as never); expect(await esUsuarioClienteSoloLectura(SES)).toBe(false);   // fila inexistente: lo rechaza validarClienteSessionActiva, no esta marca
+  });
+  it("sin la columna (migración sin aplicar) no existen cuentas de consulta → false; cualquier otro error se propaga", async () => {
+    vi.mocked(query).mockRejectedValueOnce(Object.assign(new Error("Unknown column"), { code: "ER_BAD_FIELD_ERROR" })); expect(await esUsuarioClienteSoloLectura(SES)).toBe(false);
+    vi.mocked(query).mockRejectedValueOnce(Object.assign(new Error("conexión"), { code: "ECONNRESET" })); await expect(esUsuarioClienteSoloLectura(SES)).rejects.toThrow("conexión");
+  });
+  it("crear una cuenta de consulta incluye solo_lectura = 1; sin la columna NO se crea una cuenta con más permisos", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ id: 30 }] as never).mockResolvedValueOnce([] as never);
+    vi.mocked(execute).mockRejectedValueOnce(Object.assign(new Error("Unknown column"), { code: "ER_BAD_FIELD_ERROR" }));
+    const r = await crearUsuarioCliente({ empresaId: 7, clienteId: 30, nombre: "Consulta PriceSmart", email: "consulta@example.com", passwordInicial: "temporal-123", creadoPor: "admin", soloLectura: true });
+    expect(r).toMatchObject({ ok: false, mensaje: expect.stringContaining("solo_lectura") });
+    expect(String(vi.mocked(execute).mock.calls[0][0])).toMatch(/solo_lectura\)[\s\S]*, 1\)/);
+  });
+  it("una cuenta normal NO menciona la columna nueva (compatible con el esquema actual)", async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ id: 30 }] as never).mockResolvedValueOnce([] as never).mockResolvedValueOnce([filaUsuario()] as never);
+    vi.mocked(execute).mockResolvedValueOnce({ insertId: 11 } as never);
+    const r = await crearUsuarioCliente({ empresaId: 7, clienteId: 30, nombre: "Normal", email: "normal@example.com", passwordInicial: "temporal-123", creadoPor: "admin" });
+    expect(r.ok).toBe(true); expect(String(vi.mocked(execute).mock.calls[0][0])).not.toMatch(/solo_lectura/);
   });
 });

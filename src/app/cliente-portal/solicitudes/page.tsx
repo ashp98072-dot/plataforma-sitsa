@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getClienteSession } from "@/lib/tms/cliente-portal-session";
-import { validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
+import { esUsuarioClienteSoloLectura, validarClienteSessionActiva } from "@/lib/tms/cliente-usuarios";
 import { MisSolicitudes } from "./mis-solicitudes";
 
 /**
@@ -15,6 +15,7 @@ export default async function MisSolicitudesPage() {
   if (!session) redirect("/cliente-portal/login");
   const activa = await validarClienteSessionActiva(session!);
   if (!activa) redirect("/cliente-portal/login");
+  const soloLectura = await esUsuarioClienteSoloLectura(session!);
 
   return (
     <main className="mx-auto max-w-4xl space-y-5 p-6">
@@ -25,12 +26,16 @@ export default async function MisSolicitudesPage() {
           </Link>
           <h1 className="mt-1 text-2xl font-semibold">Mis solicitudes</h1>
         </div>
-        <Link
-          href="/cliente-portal/solicitudes/nueva"
-          className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:brightness-110"
-        >
-          + Nueva solicitud
-        </Link>
+        {soloLectura ? (
+          <span className="rounded-full bg-slate-500/15 px-3 py-1 text-xs font-medium text-slate-500">Acceso de solo consulta</span>
+        ) : (
+          <Link
+            href="/cliente-portal/solicitudes/nueva"
+            className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white hover:brightness-110"
+          >
+            + Nueva solicitud
+          </Link>
+        )}
       </div>
       <MisSolicitudes />
     </main>

@@ -118,6 +118,8 @@ export async function crearUsuarioCliente(input: {
   email: string;
   passwordInicial: string;
   creadoPor: string;
+  /** Cuenta de SOLO CONSULTA (no puede crear solicitudes). Exige la columna `solo_lectura` (migrate-2026-11-tms-cliente-usuarios-solo-lectura.sql). */
+  soloLectura?: boolean;
 }): Promise<{ ok: true; usuario: ClienteUsuario } | { ok: false; mensaje: string }> {
   const nombre = input.nombre.trim();
   const email = normalizarEmail(input.email);
@@ -151,7 +153,12 @@ export async function crearUsuarioCliente(input: {
   let insertId: number;
   try {
     const r = await execute(
-      `INSERT INTO tms_cliente_usuarios
+      input.soloLectura
+        ? `INSERT INTO tms_cliente_usuarios
+         (empresa_id, cliente_id, nombre, email, password_hash, salt, activo,
+          debe_cambiar_password, creado_por, solo_lectura)
+       VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?, 1)`
+        : `INSERT INTO tms_cliente_usuarios
          (empresa_id, cliente_id, nombre, email, password_hash, salt, activo,
           debe_cambiar_password, creado_por)
        VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)`,
@@ -164,6 +171,10 @@ export async function crearUsuarioCliente(input: {
     // quien realmente lo impidió. Mismo mensaje funcional, nunca un 500.
     if (esDuplicadoEmail(err)) {
       return { ok: false, mensaje: "Ese email ya está en uso." };
+    }
+    // Cuenta de consulta pedida pero la columna aún no existe: NUNCA se crea una cuenta con más permisos de los pedidos.
+    if (input.soloLectura && (err as { code?: string })?.code === "ER_BAD_FIELD_ERROR") {
+      return { ok: false, mensaje: "Las cuentas de solo consulta requieren aplicar antes la migración solo_lectura." };
     }
     throw err;
   }
@@ -378,4 +389,25 @@ export async function activarUsuarioCliente(
     return { ok: false, mensaje: "Usuario no encontrado para este cliente." };
   }
   return { ok: true, mensaje: activo ? "Acceso reactivado." : "Acceso desactivado." };
+}
+
+/**
+ * Acceso de SOLO CONSULTA: devuelve true si la cuenta está marcada `solo_lectura`. Se consulta SIEMPRE contra la fila real (empresa + cliente + usuario de la sesión), nunca desde el JWT.
+ * Si la columna aún no existe (migración sin aplicar) no puede haber cuentas de consulta: devuelve false (comportamiento previo). Cualquier otro error se propaga (no se concede por defecto ante un fallo).
+ */
+export async function esUsuarioClienteSoloLectura(session: {
+  usuarioClienteId: number;
+  empresaId: number;
+  clienteId: number;
+}): Promise<boolean> {
+  try {
+    const rows = await query<RowDataPacket[]>(
+      `SELECT solo_lectura FROM tms_cliente_usuarios WHERE id = ? AND empresa_id = ? AND cliente_id = ? LIMIT 1`,
+      [session.usuarioClienteId, session.empresaId, session.clienteId],
+    );
+    return Boolean(rows[0]?.solo_lectura);
+  } catch (err) {
+    if ((err as { code?: string })?.code === "ER_BAD_FIELD_ERROR") return false;
+    throw err;
+  }
 }
