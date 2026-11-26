@@ -31,7 +31,7 @@ describe('D09 — pedir una cancelación NO es cancelar', () => {
       expect(asked.proposedStatus, label).toBe(effective);   // el estado externo NO cambia por pedir la cancelación…
       expect(asked.proposedStatus, label).toBe(plain.proposedStatus);   // …es el mismo que sin pedirla
       if (asked.proposedStatus === 'CANCELLED') expect(sol === 'CANCELADA' || plan === 'Cancelado', label).toBe(true);   // CANCELLED solo si el TMS está realmente cancelado
-      expect(asked.cancellation, label).toEqual({ requested: true, automatic: false, assessment: assessCancellation(sol, plan).verdict });
+      expect(asked.cancellation, label).toEqual({ requested: true, automatic: false, assessment: assessCancellation(sol, plan).verdict, resolution: 'PENDING' });   // la resolución de Operaciones es PENDING hasta que una persona la fije
       expect(plain.cancellation, label).toBeUndefined();
     }
   });
