@@ -29,3 +29,26 @@ La identidad física **no reasigna ni borra nada** (`historicosReasignados = 0`)
 - Registrar un chasis equivocado podría vincular unidades distintas: por eso se exige documento y la aprobación de ambas empresas.
 - Aprobar con viajes u operaciones abiertas está bloqueado.
 - Este cambio no toca M1, M2, M3 ni CB2.
+
+## Cómo se evitan duplicados nuevos al COMPARTIR (bloqueo suave)
+Crear una ficha ya se bloquea si la placa existe en la empresa o corresponde a una unidad compartida vigente. Faltaba el caso inverso: **compartir** una ficha con una empresa que ya tiene la suya con la misma placa dejaba dos fichas visibles sin que nadie lo decidiera.
+
+- Al **editar un vehículo** y agregar empresas con acceso, el servidor revisa solo los accesos **nuevos**. Si la empresa destino ya tiene una ficha **propia y activa** con la misma placa comparable y ambas no están unidas por una **identidad física aprobada**, responde **409** con el código `PLACA_REPETIDA_AL_COMPARTIR` y un aviso que remite a Identidades físicas.
+- La pantalla pide **confirmación explícita**; solo con ella se reintenta con `confirmarPlacaRepetida`. La decisión queda en auditoría (`compartir_con_placa_repetida`). Es un bloqueo *suave* a propósito: para proponer una identidad física hace falta acceso a ambas fichas, así que impedir compartir sin salida crearía un callejón sin salida.
+- En la **importación de Excel** no hay diálogo: la fila se reporta con el error y no se comparte.
+- No se bloquea lo legítimo: comparticiones ya existentes, fichas inactivas, placas distintas, identidad aprobada entre ambas fichas y empresas sin ficha con esa placa pasan sin aviso. El mensaje solo nombra a la empresa que la persona eligió; nunca IDs ni datos de las fichas de otra empresa.
+- Límites: las escrituras directas por SQL fuera de la aplicación no pasan por esta guarda.
+
+## Vista previa de conflictos antes de vincular
+`sql/vista-previa-2026-11-flota-conflictos-pareja.sql` (solo lectura) muestra, para dos fichas: dependencias por tabla, qué se conserva, choques que impedirían unificarlas (vales CB2 repetidos, periodos de multas, unidades TMS distintas, chasis) y operaciones abiertas que bloquean la identidad. Es informativa: no unifica ni reasigna nada.
+
+### Orden de bloqueo (alta, compartición e importación)
+Todo escritor de placas (alta, propiedad, edición e importación) bloquea primero la fila de **su propia empresa** (`empresas … FOR UPDATE`). Para que una compartición y un alta en la empresa **destino** no puedan escapar la una de la otra, la compartición (edición e importación) bloquea además las empresas **destino** en la **misma sentencia** que la dueña y en orden **ascendente de id** (`escribirVehiculos(…, tambien)`):
+
+- Compartición primero: el alta en el destino espera, ve la unidad compartida y se rechaza. Alta primero: la compartición espera, ve la ficha nueva y avisa. Exactamente una gana.
+- Dos comparticiones cruzadas (A→B y B→A) bloquean en el mismo orden: sin interbloqueos.
+- No depende del nivel de aislamiento: sin este bloqueo explícito, con `READ COMMITTED` (sin bloqueos de hueco) no había nada que las serializara; con `REPEATABLE READ` solo lo hacían los bloqueos de hueco del índice y el plan de la consulta.
+- Pruebas de concurrencia contra MariaDB desechable (`compartir-placa-repetida-concurrencia.db.test.ts`, con `REPEATABLE READ` y `READ COMMITTED`).
+
+**Observación (previa a este cambio, no corregida):** `exigirSinDuplicadoCompartidoTx` usa `FOR UPDATE` sobre las fichas de otras empresas, así que una compartición pendiente puede hacer esperar o, con `REPEATABLE READ`, interbloquear altas en empresas no relacionadas. Un interbloqueo devuelve error 500 y se reintenta; conviene revisarlo aparte.
+

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { RowDataPacket } from "mysql2";
 import type { SqlParams } from "@/lib/db";
 import type { ResultSetHeader } from "mysql2";
-import { escribirVehiculos, coincidenciasPlacaTx, exigirSinDuplicadoCompartidoTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
+import { escribirVehiculos, coincidenciasPlacaTx, exigirSinDuplicadoCompartidoTx, exigirComparticionSinDuplicadoTx, ErrorIdentidadVehiculo } from "@/lib/flota/vehiculos-escritura";
 import { requireTenantFlota } from "@/lib/tenant";
 import {
   parsearExcelFlota,
@@ -117,6 +117,18 @@ export async function POST(req: Request, ctx: Ctx) {
       }
 
       if (duenoId !== guard.empresa.id) throw new ErrorIdentidadVehiculo("Importa desde la empresa propietaria; no se modifican unidades de otra empresa.", 403);
+      const accesosPara = (vehiculoEmpresaId: number) => {
+        const ids = new Set<number>();
+        // Quien importa siempre ve la unidad
+        ids.add(guard.empresa.id);
+        // Grupo compartido KT / Mónaco / Fresco Fresh
+        if (resuelta.grupoCompartido || idsComparten.includes(vehiculoEmpresaId)) {
+          for (const id of idsComparten) ids.add(id);
+        }
+        ids.delete(vehiculoEmpresaId);
+        return [...ids];
+      };
+
       const creado = await escribirVehiculos(duenoId, async conn => {
       const execute = async (sql: string, params: SqlParams = []) => (await conn.execute<ResultSetHeader>(sql, params))[0];
       let existente = await coincidenciasPlacaTx(conn, duenoId, f.placa);
@@ -137,18 +149,6 @@ export async function POST(req: Request, ctx: Ctx) {
           : KM_INTERVALO_SERVICIO_DEFAULT;
       const kmUltimo = f.kmUltimoServicio ?? 0;
       const filtros = parsearFiltrosTexto(f.filtros);
-
-      const accesosPara = (vehiculoEmpresaId: number) => {
-        const ids = new Set<number>();
-        // Quien importa siempre ve la unidad
-        ids.add(guard.empresa.id);
-        // Grupo compartido KT / Mónaco / Fresco Fresh
-        if (resuelta.grupoCompartido || idsComparten.includes(vehiculoEmpresaId)) {
-          for (const id of idsComparten) ids.add(id);
-        }
-        ids.delete(vehiculoEmpresaId);
-        return [...ids];
-      };
 
       if (existente[0]) {
         const vid = Number(existente[0].id);
@@ -207,6 +207,7 @@ export async function POST(req: Request, ctx: Ctx) {
         }
         const acc = accesosPara(empId);
         if (acc.length) {
+          await exigirComparticionSinDuplicadoTx(conn, vid, acc); // solo accesos NUEVOS; en la importación no hay diálogo: la fila se reporta con error
           await guardarAccesoVehiculo(vid, acc, empId, conn);
         }
         return false;
@@ -252,12 +253,13 @@ export async function POST(req: Request, ctx: Ctx) {
         if (nuevoId) {
           const acc = accesosPara(duenoId);
           if (acc.length) {
+            await exigirComparticionSinDuplicadoTx(conn, nuevoId, acc);
             await guardarAccesoVehiculo(nuevoId, acc, duenoId, conn);
           }
         }
         return true;
       }
-      });
+      }, accesosPara(duenoId)); // bloquea también las empresas destino de la compartición
       if (creado) creados++; else actualizados++;
     } catch (err) {
       errores.push(

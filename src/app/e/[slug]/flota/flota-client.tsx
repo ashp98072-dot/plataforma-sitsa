@@ -1229,12 +1229,18 @@ export default function FlotaClient() {
             .filter((f) => f.tipo && f.codigo),
           accesoEmpresaIds: editId && !ajeno ? accesoEmpresaIds : undefined,
         };
-        const res = await fetch(`/api/empresas/${slug}/flota/vehiculos${!editId && propiedadActiva ? "/propiedad" : ""}`, {
+        const enviar = (confirmarPlacaRepetida: boolean) => fetch(`/api/empresas/${slug}/flota/vehiculos${!editId && propiedadActiva ? "/propiedad" : ""}`, {
           method: editId ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(editId ? { id: editId, ...payload } : { ...payload, ...(propiedadActiva ? propiedad : {}) }),
+          body: JSON.stringify(editId ? { id: editId, ...payload, ...(confirmarPlacaRepetida ? { confirmarPlacaRepetida: true } : {}) } : { ...payload, ...(propiedadActiva ? propiedad : {}) }),
         });
-        const data = await res.json();
+        let res = await enviar(false);
+        let data = await res.json();
+        // Bloqueo suave al compartir: otra empresa ya tiene una ficha con la misma placa. Solo continúa con confirmación explícita (queda auditado).
+        if (res.status === 409 && data.codigo === "PLACA_REPETIDA_AL_COMPARTIR" && window.confirm(`${data.error}\n\n¿Compartir de todos modos?`)) {
+          res = await enviar(true);
+          data = await res.json();
+        }
         if (!res.ok) {
           setErr(data.error ?? "Error");
           return;
