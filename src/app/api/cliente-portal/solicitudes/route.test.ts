@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/tms/cliente-portal-guard", () => ({ requireClienteSession: vi.fn() }));
+vi.mock("@/lib/tms/cliente-portal-guard", () => ({ requireClienteSession: vi.fn(), requireClienteEscritura: vi.fn() }));
 vi.mock("@/lib/tms/solicitudes-cliente", () => ({ crearSolicitudCliente: vi.fn() }));
 vi.mock("@/lib/tms/cliente-portal-seguimiento", () => ({ listarViajesCliente: vi.fn() }));
 
-import { requireClienteSession } from "@/lib/tms/cliente-portal-guard";
+import { requireClienteEscritura, requireClienteSession } from "@/lib/tms/cliente-portal-guard";
 import { crearSolicitudCliente } from "@/lib/tms/solicitudes-cliente";
 import { listarViajesCliente } from "@/lib/tms/cliente-portal-seguimiento";
 import { GET, POST } from "./route";
@@ -34,6 +34,26 @@ beforeEach(() => {
   vi.mocked(requireClienteSession).mockResolvedValue({
     session: SESSION_A,
   } as Awaited<ReturnType<typeof requireClienteSession>>);
+  vi.mocked(requireClienteEscritura).mockResolvedValue({
+    session: SESSION_A,
+  } as Awaited<ReturnType<typeof requireClienteEscritura>>);
+});
+
+describe("POST /api/cliente-portal/solicitudes — acceso de solo consulta", () => {
+  it("una cuenta de SOLO CONSULTA recibe 403 y NO se crea nada (la escritura pasa por requireClienteEscritura)", async () => {
+    const { NextResponse } = await import("next/server");
+    vi.mocked(requireClienteEscritura).mockResolvedValue({
+      error: NextResponse.json({ error: "Tu acceso es de solo consulta." }, { status: 403 }),
+    } as Awaited<ReturnType<typeof requireClienteEscritura>>);
+    const res = await POST(reqPost(bodyValido));
+    expect(res.status).toBe(403);
+    expect(crearSolicitudCliente).not.toHaveBeenCalled();
+  });
+  it("la consulta (GET) sigue permitida: usa requireClienteSession, no el guard de escritura", async () => {
+    vi.mocked(listarViajesCliente).mockResolvedValue([]);
+    expect((await GET(reqGet())).status).toBe(200);
+    expect(requireClienteEscritura).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/cliente-portal/solicitudes", () => {
@@ -92,9 +112,9 @@ describe("GET /api/cliente-portal/solicitudes", () => {
 
 describe("POST /api/cliente-portal/solicitudes", () => {
   it("sin sesión → 401, no crea nada", async () => {
-    vi.mocked(requireClienteSession).mockResolvedValue({
+    vi.mocked(requireClienteEscritura).mockResolvedValue({
       error: new Response(null, { status: 401 }),
-    } as Awaited<ReturnType<typeof requireClienteSession>>);
+    } as Awaited<ReturnType<typeof requireClienteEscritura>>);
     const res = await POST(reqPost(bodyValido));
     expect(res.status).toBe(401);
     expect(crearSolicitudCliente).not.toHaveBeenCalled();

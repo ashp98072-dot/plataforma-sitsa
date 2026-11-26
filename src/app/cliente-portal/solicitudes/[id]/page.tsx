@@ -82,6 +82,10 @@ export default async function DetalleSolicitudPage({ params }: Props) {
             <Dato titulo="Piloto" valor={plan.pilotoNombre || "Sin asignar"} />
             <Dato titulo="Unidad" valor={plan.unidadPlaca || "Sin asignar"} />
           </div>
+          <p className="text-xs text-[var(--muted)]">
+            «Finalizado» indica que el viaje terminó operativamente. Las marcas ✓ de las paradas indican evidencia registrada por el piloto.
+            Ninguna de las dos constituye una confirmación de entrega aceptada por el cliente.
+          </p>
         </section>
       ) : null}
 

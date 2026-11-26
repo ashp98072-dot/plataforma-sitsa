@@ -125,6 +125,7 @@ describe("POST .../clientes/[id]/portal-usuarios", () => {
       email: "portal.pruebas@grupo-sitsa.com",
       passwordInicial: "temporal1",
       creadoPor: "operaciones1",
+      soloLectura: false,   // por omisión la cuenta NO es de solo consulta (comportamiento previo)
     });
     expect(registrarAuditoria).toHaveBeenCalledTimes(1);
     const call = vi.mocked(registrarAuditoria).mock.calls[0][0];
