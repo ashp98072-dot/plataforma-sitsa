@@ -539,7 +539,7 @@ export function evaluateExposureArtifacts(i = {}) {
     check('ENV_NO_PLACEHOLDERS_LEFT', !/<[^>\n]+>/.test(text.replace(/^#.*$/gm, '')), 'quedan marcadores <...> sin reemplazar');
     check('ENV_DECLARES_SANDBOX', get('NOVALVION_ENV') === 'sandbox' && get('PRICESMART_RUNTIME_ENVIRONMENT') === 'sandbox' && /^sandbox_api02_homolog_[a-z0-9_]+$/.test(get('DB_NAME') ?? ''));
     check('ENV_DB_LOOPBACK_AND_SANDBOX_USER', get('DB_HOST') === '127.0.0.1' && /^sandbox_[a-z0-9_]+$/.test(get('DB_USER') ?? ''));
-    check('ENV_NO_PRODUCTION_OR_LAB_FLAGS', !/^(PRICESMART_LAB_KEY|PRICESMART_LAB_DEMO|PRICESMART_ENABLED|FEL_CREDENTIALS_KEY|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)=/mi.test(text) && !/^NOVALVION_ENV=production/m.test(text));
+    check('ENV_NO_PRODUCTION_OR_LAB_FLAGS', !/^(PRICESMART_LAB_KEY|PRICESMART_LAB_DEMO|PRICESMART_ENABLED|PS_HOMOLOG_SYNTHETIC_PROVIDERS|PS_HOMOLOG_SYNTHETIC_KEY|FEL_CREDENTIALS_KEY|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY)=/mi.test(text) && !/^NOVALVION_ENV=production/m.test(text));
     check('ENV_SECRETS_SANDBOX_FORMAT', ['DB_PASSWORD', 'AUTH_SECRET', 'PORTAL_CREDENTIALS_KEY'].every((k) => new RegExp(`^sandbox:[a-z0-9-]{3,48}:[a-f0-9]{64}$`).test(get(k) ?? '')) || /^# secretos en archivo aparte/m.test(text), 'los secretos deben tener el formato sandbox:<id>:<64 hex>');
     check('RUNTIME_STARTS_DISABLED_OR_READ_ONLY', ['DISABLED', 'READ_ONLY'].includes(get('PRICESMART_RUNTIME_MODE') ?? ''), 'ENABLED exige aprobación humana y decisiones ratificadas: no se verifica aquí');
     check('RUNTIME_NO_RATIFIED_DECISIONS_DECLARED', !get('PRICESMART_RATIFIED_DECISIONS'), 'ninguna decisión figura ratificada hoy');

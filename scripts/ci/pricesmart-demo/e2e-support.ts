@@ -9,7 +9,8 @@ import type { Operation } from "../../../src/lib/integrations/pricesmart/securit
 
 type State = { app: { port: number }; demo: { labKey: string; empresas: Record<"a" | "b", { empresaId: number; clienteId: number; slug: string }>; staff: { id: number; username: string } } };
 const runDir = String(process.env.PS_DEMO_RUNDIR);
-export const state = JSON.parse(readFileSync(path.join(runDir, "state.json"), "utf8")) as State;
+// `PS_DEMO_STATE_FILE` permite a las pruebas del arranque real (otra base y otra app) usar su PROPIO estado sin tocar el del laboratorio.
+export const state = JSON.parse(readFileSync(path.join(runDir, process.env.PS_DEMO_STATE_FILE ?? "state.json"), "utf8")) as State;
 export const BASE = `http://127.0.0.1:${state.app.port}`;
 export const API = `${BASE}/api/integrations/pricesmart/v1/orders`;
 export const { labKey, empresas, staff } = state.demo;

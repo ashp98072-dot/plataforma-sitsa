@@ -462,6 +462,104 @@ async function restartApp(m, demo, workerMs) {
   await fetch(`http://${HOST}:${ST.app.port}/api/integrations/pricesmart/v1/orders/WARMUP`).catch(() => undefined);
 }
 
+
+// ===== ARRANQUE REAL del runtime de homologación (instrumentation.ts → homologation/boot.ts) por HTTP real =====
+/** Aprovisiona con el PAQUETE REAL (apply + finalize) un esquema `sandbox_api02_homolog_test1` persistente en el servidor desechable, y lo puebla con datos FICTICIOS (2 empresas, catálogo M2M, mapeo al TMS). */
+async function prepareHomologBoot() {
+  const state = readState(); const { m } = state; const B = await import('../pricesmart-homologation/bundle.mjs');
+  const admin = await adminConn(m); const n = 'test1'; const names = B.homologNames(n);
+  for (const sql of B.destroyStatements(n)) await admin.query(sql);
+  const sandboxSecrets = B.generateSandboxSecrets(names); const secrets = { app: sandboxSecrets.DB_PASSWORD, worker: crypto.randomBytes(24).toString('hex'), monitor: crypto.randomBytes(24).toString('hex') };
+  const bundle = B.buildBootstrap(n, repoRoot);
+  await B.executeBundle(admin, bundle, secrets, { tms: { repo: repoRoot, files: B.tmsSchemaPhases(repoRoot).base } });
+  const root = path.join(m.runDir, 'hb-root'); fs.rmSync(root, { recursive: true, force: true }); fs.mkdirSync(path.join(root, 'uploads'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'isolation.json'), JSON.stringify(B.buildIsolationManifest(names, sandboxSecrets, { dbPort: m.port })));
+  await B.finalizeBundle(admin, bundle, { repo: repoRoot, sandboxRoot: root, sandboxSecrets, dbPort: m.port, tmpDir: m.tmpDir });
+  await admin.query(`USE \`${names.schema}\``);
+  const id = async (sql, params) => Number((await admin.query(sql, params))[0].insertId);
+  const FROM = 1700000000000; const FAR = 4102444800000; const empresas = {};
+  for (const [key, slug, codigo] of [['a', 'kt-monaco', 'KA'], ['b', 'otra-empresa', 'KB']]) {
+    const empresa = await id("INSERT INTO empresas (codigo, nombre, slug, activa, modulos_json, creado_en) VALUES (?, ?, ?, 1, '[\"rrhh\",\"tms\",\"flota\"]', NOW())", [codigo, `Empresa ficticia ${key}`, slug]);
+    const cliente = await id("INSERT INTO tms_clientes (empresa_id, nombre) VALUES (?, 'PriceSmart (homologación de prueba)')", [empresa]);
+    const usuario = await id("INSERT INTO tms_cliente_usuarios (empresa_id, cliente_id, nombre, email, password_hash, salt, activo, debe_cambiar_password) VALUES (?, ?, 'Integración PriceSmart (prueba)', ?, ?, ?, 0, 1)", [empresa, cliente, `integracion-${key}@hb.invalid`, crypto.randomBytes(32).toString('hex'), crypto.randomBytes(16).toString('hex')]);
+    await admin.query("INSERT INTO ps_api01_scopes (environment, tenant_id, client_id, integration_id) VALUES (_binary'sandbox', ?, 1, ?)", [empresa, Buffer.from(LAB_INTEGRATION)]);
+    await admin.query("INSERT INTO ps_api11_integrations (issuer, subject, credential_reference, environment, tenant_id, client_id, integration_id, revision, status, valid_from_ms, valid_until_ms, credential_valid_from_ms, credential_valid_until_ms, rotated_at_ms, allowed_clubs_json, scopes_json) VALUES (?, ?, ?, _binary'sandbox', ?, 1, ?, 1, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)",
+      [Buffer.from('lab-issuer'), Buffer.from(`lab-subject-${key}`), Buffer.from(`lab-cred-${key}-1`), empresa, Buffer.from(LAB_INTEGRATION), FROM, FAR, FROM, FAR, FROM, JSON.stringify([LAB_CLUB]), JSON.stringify(['orders:create', 'orders:read', 'orders:cancel'])]);
+    await admin.query("INSERT INTO ps_api12_tms_mapping (environment, tenant_id, client_id, integration_id, empresa_id, tms_cliente_id, tms_usuario_cliente_id, pickup_place, dropoff_place) VALUES (_binary'sandbox', ?, 1, ?, ?, ?, ?, 'Centro de distribución ficticio (carga)', 'Punto final ficticio (descarga)')", [empresa, Buffer.from(LAB_INTEGRATION), empresa, cliente, usuario]);
+    empresas[key] = { empresaId: empresa, clienteId: cliente, slug };
+  }
+  // Cuenta propietaria SOLO para que las pruebas observen y adelanten reintentos (no la usa la app): base desechable del run.
+  const ownerPw = crypto.randomBytes(18).toString('hex'); const owner = `${names.schema}_owner`.slice(0, 60);
+  await admin.query(`CREATE USER \`${owner}\`@\`127.0.0.1\` IDENTIFIED BY '${ownerPw}'`); await admin.query(`GRANT ALL PRIVILEGES ON \`${names.schema}\`.* TO \`${owner}\`@\`127.0.0.1\``); await admin.query(`GRANT PROCESS ON *.* TO \`${owner}\`@\`127.0.0.1\``);
+  await admin.end();
+  const killFile = path.join(m.runDir, 'hb-killswitch'); fs.writeFileSync(killFile, 'ON\n');
+  const hb = { names, root, secrets, sandboxSecrets, empresas, owner: { user: owner, password: ownerPw }, killFile, syntheticKey: crypto.randomBytes(32).toString('hex') };
+  state.demo = { ...(state.demo ?? {}), hb }; writeState(state);
+  fs.writeFileSync(path.join(m.runDir, 'state-hb.json'), JSON.stringify({ app: { port: 0 }, demo: { labKey: hb.syntheticKey, empresas, staff: { id: 0, username: 'ops.hb' } } }));
+  console.log(JSON.stringify({ homologBoot: names.schema }));
+}
+let hbProc = null;
+const hbAppEnv = (extra = {}) => {
+  const { m } = readState(); const hb = ST.demo.hb;
+  return { PATH: `${path.dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`, HOME: m.homeDir, TMPDIR: m.tmpDir, LANG: 'C.UTF-8', NODE_ENV: 'development', NOVALVION_ENV: 'sandbox', SANDBOX_ID: hb.names.sandboxId, SANDBOX_ROOT: hb.root, NEXT_TELEMETRY_DISABLED: '1',
+    DB_HOST: HOST, DB_PORT: String(m.port), DB_NAME: hb.names.schema, DB_USER: hb.names.appUser, ...hb.sandboxSecrets, CB2_PUBLIC_ORIGIN: 'https://localhost', EMPRESA_DOMINIOS: '{"localhost":"kt-monaco"}', UPLOAD_DIR: path.join(hb.root, 'uploads'),
+    PS_HOMOLOG_WORKER_USER: hb.names.workerUser, PS_HOMOLOG_WORKER_PASSWORD: hb.secrets.worker, PS_HOMOLOG_KILLSWITCH_FILE: hb.killFile, PS_HOMOLOG_CONSUMER_EVERY_MS: '500',
+    PRICESMART_RUNTIME_ENVIRONMENT: 'sandbox', PRICESMART_ORIGIN_CLUB: LAB_CLUB, PRICESMART_DB_SCHEMA: hb.names.schema, PRICESMART_DB_RUNTIME_USER: hb.names.appUser, PRICESMART_RATE_PER_WINDOW: '5000', PRICESMART_RATE_WINDOW_MS: '60000', ...extra };
+};
+async function startHbApp(extra) {
+  const { m } = readState(); const port = await freePort(); const logFile = path.join(m.runDir, 'next.log'); const fd = fs.openSync(logFile, 'a');
+  hbProc = cp.spawn(process.execPath, [path.join(repoRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', HOST, '--port', String(port)], { cwd: repoRoot, env: hbAppEnv(extra), detached: true, stdio: ['ignore', fd, fd] }); fs.closeSync(fd);
+  let up = false;
+  for (let i = 0; i < 420 && !up; i++) {
+    if (hbProc.exitCode !== null) throw new Error(`La app terminó: ${tailOf(logFile)}`);
+    try { const r = await fetch(`http://${HOST}:${port}/portal/login`, { redirect: 'manual' }); if (r.status < 500) up = true; } catch { /* aún no */ }
+    if (!up) await sleep(1000);
+  }
+  if (!up) throw new Error('La app de arranque real no respondió a tiempo.');
+  if (extra.PRICESMART_RUNTIME_MODE && extra.PRICESMART_RUNTIME_MODE !== 'DISABLED') {   // el arranque (instrumentation) deja una línea de informe: se espera antes de probar
+    let seen = false; const before = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length;
+    for (let i = 0; i < 90 && !seen; i++) { const now = fs.readFileSync(logFile, 'utf8').split('\n').filter((l) => l.includes('[pricesmart] runtime de homologación')).length; if (now > before) seen = true; else await sleep(1000); }
+    if (!seen) throw new Error(`El arranque no informó el estado del runtime: ${tailOf(logFile, 30)}`);
+  }
+  const st = JSON.parse(fs.readFileSync(path.join(m.runDir, 'state-hb.json'), 'utf8')); st.app.port = port; fs.writeFileSync(path.join(m.runDir, 'state-hb.json'), JSON.stringify(st));
+  log(`app de arranque real en http://${HOST}:${port} (${extra.PRICESMART_RUNTIME_MODE ?? 'sin modo'})`);
+}
+async function stopHbApp() {
+  if (!hbProc?.pid) return 'sin app'; const proc = hbProc; hbProc = null;
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* ya terminó */ }
+  for (let i = 0; i < 40 && proc.exitCode === null && proc.signalCode === null; i++) await sleep(250);
+  const clean = proc.exitCode !== null || proc.signalCode !== null; if (!clean) { try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* ok */ } }
+  return clean ? 'detenida' : 'forzada';
+}
+function hbVitestEnv(scenario, extra = {}) {
+  const { m } = readState(); const hb = ST.demo.hb;
+  return { PATH: `${path.dirname(process.execPath)}:/usr/local/bin:/usr/bin:/bin`, HOME: m.homeDir, TMPDIR: m.tmpDir, LANG: 'C.UTF-8', NODE_ENV: 'test', AUTH_SECRET: hb.sandboxSecrets.AUTH_SECRET, NEXT_TELEMETRY_DISABLED: '1',
+    DB_HOST: HOST, DB_PORT: String(m.port), DB_NAME: hb.names.schema, PS_DEMO_OWNER_USER: hb.owner.user, PS_DEMO_OWNER_PASSWORD: hb.owner.password, PS_DEMO_RUNDIR: m.runDir, PS_DEMO_STATE_FILE: 'state-hb.json',
+    PS_HB_SCENARIO: scenario, PS_HB_KILLFILE: hb.killFile, PS_HB_WORKER_USER: hb.names.workerUser, ...extra };
+}
+/** Escenarios del arranque real: cada uno arranca la app con SU configuración, ejecuta la prueba por HTTP y detiene la app. Devuelve 0 solo si TODOS pasan. */
+async function runHomologBootPhase(demoCfg) {
+  const hb = ST.demo.hb; const file = ['scripts/ci/pricesmart-demo/homologation-boot.e2e.ts']; const decisions = 'D02,D06,D08,D09,D12';
+  const enabled = { PRICESMART_RUNTIME_MODE: 'ENABLED', PRICESMART_RUNTIME_ACK: 'CONFIRMO-ACTIVAR-PRICESMART-SANDBOX', PRICESMART_RATIFIED_DECISIONS: decisions };
+  const synthetic = { PS_HOMOLOG_SYNTHETIC_PROVIDERS: 'SINTETICO-LOCAL-SIN-PRODUCCION', PS_HOMOLOG_SYNTHETIC_KEY: hb.syntheticKey };
+  const plan = [
+    ['default', {}, null], ['no-providers', { ...enabled }, null], ['no-decisions', { ...synthetic, PRICESMART_RUNTIME_MODE: 'ENABLED', PRICESMART_RATIFIED_DECISIONS: 'D02' }, null],
+    ['open', { ...enabled, ...synthetic }, 'restart'],
+  ];
+  let code = 0;
+  for (const [scenario, extra, restart] of plan) {
+    log(`=== Arranque real: escenario «${scenario}»`);
+    try {
+      fs.writeFileSync(hb.killFile, 'ON\n'); await startHbApp(extra);
+      let c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '1' }), ['--reporter=verbose']);
+      if (c === 0 && restart) { const how = await stopHbApp(); log(`apagado seguro de la app: ${how}`); if (how !== 'detenida') c = 1; else { await startHbApp(extra); c = vitest(demoCfg, file, hbVitestEnv(scenario, { PS_HB_STEP: '2' }), ['--reporter=verbose']); } }
+      if (c !== 0) code = 1;
+    } catch (e) { console.error(`[ps-linux] ERROR en el escenario «${scenario}»: ${e.message}`); code = 1; }
+    finally { await stopHbApp(); }
+  }
+  return code;
+}
+
 async function stopAll(m) {
   const report = { app: 'sin app', db: 'sin servidor', removed: false };
   if (appProc?.pid) {
@@ -518,13 +616,15 @@ async function main() {
     phases.push({ name: 'ensayo del aprovisionamiento de homologación', files: [`${dir}/homologation-provision.e2e.ts`], before: async () => { await rehearseHomologation(); }, env: baseEnv });
     // Fase 4: trabajador de reintentos DENTRO de la app, tras reiniciarla (`restart-app --worker-ms=3000`).
     phases.push({ name: 'trabajador de reintentos dentro de la app (tras reiniciar)', files: [`${dir}/api13-worker.e2e.ts`], before: async () => { await restartApp(m, ST.demo, 3000); }, env: baseEnv });
+    // Fase 5: ARRANQUE REAL del runtime de homologación (instrumentation → boot) por las rutas HTTP reales, con un esquema aprovisionado por el paquete real (por defecto apagado; cerrado sin proveedores/decisiones; abierto y tras reiniciar).
+    phases.push({ name: 'arranque real del runtime de homologación (HTTP real)', files: ['scripts/ci/pricesmart-demo/homologation-boot.e2e.ts'], run: async () => { await prepareHomologBoot(); return runHomologBootPhase(demoCfg); } });
     code = 0; const results = [];
     for (const ph of phases) {
       const files = only ? ph.files.filter((f) => only.some((o) => f.endsWith(o) || f === o)) : ph.files;
       if (!files.length) continue;
       log(`=== Fase: ${ph.name} → ${files.join(' ')}`);
       let c = 1;
-      try { if (ph.before) await ph.before(); c = vitest(demoCfg, files, ph.env(), ['--reporter=verbose']); }
+      try { if (ph.run) c = await ph.run(); else { if (ph.before) await ph.before(); c = vitest(demoCfg, files, ph.env(), ['--reporter=verbose']); } }
       catch (e) { console.error(`[ps-linux] ERROR en la fase «${ph.name}»: ${e.message}`); if (e.diagnostic) console.error('[ps-linux] diagnóstico:', JSON.stringify(e.diagnostic).slice(0, 6000)); c = 1; }
       results.push({ fase: ph.name, archivos: files.length, resultado: c === 0 ? 'OK' : 'FALLO' }); if (c !== 0) code = 1;
     }

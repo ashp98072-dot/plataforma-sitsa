@@ -176,8 +176,16 @@ describe('API-26 aislamiento estático', () => {
   it('NADA invoca hoy el runtime de homologación (ni rutas ni otros módulos): solo sus pruebas', () => {
     const hits: string[] = [];
     const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && f !== path.join(__dirname, 'runtime.ts') && /homologation\/runtime|installHomologationRuntime|createHomologationRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(src, f)); } };
-    walk(src); expect(hits).toEqual([]);
+    walk(src);
+    // ÚNICA excepción revisada: el arranque real (`boot.ts`), que solo invoca el instrumentation de Next.js y se cierra solo si faltan proveedores, decisiones, ACK o interruptor (ver boot.test.ts).
+    expect(hits).toEqual(['lib/integrations/pricesmart/homologation/boot.ts']);
   }, 30000);
+  it('el arranque real solo lo importa `src/instrumentation.ts`, solo si el proceso declara sandbox y un modo distinto de DISABLED; ningún otro módulo ni ruta lo toca', () => {
+    const importers: string[] = [];
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && f !== path.join(__dirname, 'boot.ts') && /homologation\/boot|\.\/boot['"]/.test(readFileSync(f, 'utf8'))) importers.push(path.relative(src, f)); } };
+    walk(src); expect(importers).toEqual(['instrumentation.ts']);
+    const inst = strip(readFileSync(path.join(src, 'instrumentation.ts'), 'utf8')); expect(inst).toMatch(/NOVALVION_ENV === ["']sandbox["']/); expect(inst).toMatch(/PRICESMART_RUNTIME_MODE/); expect(inst).toMatch(/!== ["']DISABLED["']/);
+  });
   it('el paquete de aprovisionamiento no menciona el verificador HMAC de laboratorio y su ejecutor solo se conecta a loopback', () => {
     const t = strip(readFileSync(path.join(repo, 'scripts/ci/pricesmart-homologation/bundle.mjs'), 'utf8'));
     expect(t.match(/x-lab-evidence/g)).toHaveLength(1); expect(t).toMatch(/proxy_set_header x-lab-evidence "";/);   // única mención: el proxy ELIMINA la cabecera de laboratorio

@@ -37,17 +37,21 @@ export function fileKillSwitch(file: string): () => boolean {
 }
 
 /** Consumidor de la outbox: un despachador (reclamo con lease, fencing, backoff, REVIEW) sobre el almacén real con la cuenta del worker. `kick` solicita un ciclo pronto sin bloquear la solicitud. */
-export function createOutboxConsumer(dispatcher: Pick<OutboxDispatcher, 'runOnce'>): OutboxConsumer {
+export function createOutboxConsumer(dispatcher: Pick<OutboxDispatcher, 'runOnce'>, paused?: () => boolean | Promise<boolean>): OutboxConsumer {
   let running: Promise<OutboxRunSummary> | null = null; let timer: ReturnType<typeof setInterval> | undefined; let kicked = false;
+  // APAGADO SEGURO: si el interruptor de emergencia apaga el servicio, el temporizador y la vía rápida NO procesan nada hacia el TMS (lo recibido queda durable y se procesa al reactivarlo). Un fallo al leerlo cuenta como apagado.
+  // `runOnce` (uso explícito: pruebas y operación manual) no se ve afectado.
+  const off = async (): Promise<boolean> => { if (!paused) return false; try { return (await paused()) !== false; } catch { return true; } };
+  const go = () => { if (!paused) { void run().catch(() => undefined); return; } void off().then((o) => { if (!o) return run(); return undefined; }).catch(() => undefined); };
   const run = (): Promise<OutboxRunSummary> => {
     if (running) return running;
-    running = dispatcher.runOnce().finally(() => { running = null; if (kicked) { kicked = false; void run().catch(() => undefined); } });
+    running = dispatcher.runOnce().finally(() => { running = null; if (kicked) { kicked = false; go(); } });
     return running;
   };
   return {
     runOnce: run,
-    kick() { if (running) { kicked = true; return; } void run().catch(() => undefined); },
-    start(everyMs) { if (timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(() => { void run().catch(() => undefined); }, everyMs); timer.unref?.(); },
+    kick() { if (running) { kicked = true; return; } go(); },
+    start(everyMs) { if (timer || !Number.isSafeInteger(everyMs) || everyMs < 500) return; timer = setInterval(go, everyMs); timer.unref?.(); },
     stop() { if (timer) clearInterval(timer); timer = undefined; },
   };
 }
@@ -66,7 +70,7 @@ export function createHomologationRuntime(deps: HomologationDeps): HomologationR
   const retry = createLinkRetry({ pool, schema, linker });
   const handler = createLinkOutboxHandler({ pool, schema, retry, linker });
   const store = mariaDbOutboxStore(deps.workerPool, { schema, workerUser: deps.workerUser });
-  const consumer = createOutboxConsumer(new OutboxDispatcher(store, handler, deps.outbox?.policy ?? DEFAULT_OUTBOX_POLICY, deps.outbox?.log));
+  const consumer = createOutboxConsumer(new OutboxDispatcher(store, handler, deps.outbox?.policy ?? DEFAULT_OUTBOX_POLICY, deps.outbox?.log), deps.killSwitch);
   const ports: RuntimePorts = {
     evidence: deps.evidence,
     security: { verifier: guardEvidenceVerifier(deps.verifier, { environment: 'sandbox' }), catalog: security.catalog, revocation: security.revocation, clock: security.clock, counter: security.counter, replay: security.replay },
@@ -99,7 +103,7 @@ export function homologationGate(env: Record<string, string | undefined>): { ok:
 }
 
 /** Único camino de instalación: valida el proceso y delega en `installControlledRuntime` (modo, decisiones ratificadas, ACK, sondas, interruptor). Si algo falla, no instala nada. */
-export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean }> {
+export async function installHomologationRuntime(env: Record<string, string | undefined>, deps: HomologationDeps, options: { consumerEveryMs?: number } = {}): Promise<Readiness & { consumerStarted: boolean; stopConsumer?: () => void }> {
   const gate = homologationGate(env);
   if (!gate.ok) return { ready: false, mode: 'DISABLED', blockers: [{ code: 'HOMOLOGATION_GATE', detail: gate.reason }], consumerStarted: false };
   let runtime: HomologationRuntime;
@@ -108,5 +112,5 @@ export async function installHomologationRuntime(env: Record<string, string | un
   // El consumidor corre SOLO si el runtime quedó instalado (ready) y no está en solo lectura: nada se procesa hacia el TMS con el servicio apagado o sin decisiones ratificadas.
   const run = report.ready && report.mode === 'ENABLED';
   if (run) runtime.consumer.start(options.consumerEveryMs ?? 2000);
-  return { ...report, consumerStarted: run };
+  return { ...report, consumerStarted: run, stopConsumer: () => runtime.consumer.stop() };
 }
