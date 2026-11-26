@@ -33,7 +33,7 @@ describe('plantilla de MariaDB del sandbox', () => {
 describe('verificación previa a la exposición (local, sin red)', () => {
   it('los artefactos generados por el propio aprovisionador pasan todas las comprobaciones, y el informe NUNCA autoriza la exposición', () => {
     const r = B.evaluateExposureArtifacts(good) as { ok: boolean; authorizesExposure: boolean; checks: { id: string; ok: boolean }[] };
-    expect(failing(good)).toEqual([]); expect(r.ok).toBe(true); expect(r.authorizesExposure).toBe(false); expect(r.checks.length).toBeGreaterThanOrEqual(25);
+    expect(failing(good)).toEqual([]); expect(r.ok).toBe(true); expect(r.authorizesExposure).toBe(false); expect((r as unknown as { aviso: string }).aviso).toMatch(/NO AUTORIZA EXPONER/); expect(r.checks.length).toBeGreaterThanOrEqual(25);
   });
   it('detecta proxy inseguro: TLS antiguo, sin allowlist, allow all, ruta extra, proxy a un host no loopback, sin límites', () => {
     expect(failing({ ...good, nginx: nginx.replace('TLSv1.2 TLSv1.3', 'TLSv1 TLSv1.1 TLSv1.2') })).toContain('NGINX_TLS_ONLY_12_13');
@@ -81,7 +81,7 @@ describe('verify-exposure (CLI/aprovisionador): plan → verificación local con
     expect(spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '90', '-subj', '/CN=sandbox.ejemplo.com', '-addext', 'subjectAltName=DNS:sandbox.ejemplo.com'], { stdio: 'ignore' }).status).toBe(0);
     chmodSync(key, 0o600); const envFile = path.join(tmp, 'runtime.env'); writeFileSync(envFile, envText(), { mode: 0o600 }); chmodSync(envFile, 0o600); const ks = path.join(tmp, 'killswitch'); writeFileSync(ks, 'OFF\n');
     const args = { dir: out, 'env-file': envFile, killswitch: ks, cert, key, hostname: 'sandbox.ejemplo.com' };
-    const ok = await P.verifyExposure(args) as { ok: boolean; authorizesExposure: boolean; checks: { id: string; ok: boolean }[] }; expect(ok.checks.filter((c) => !c.ok)).toEqual([]); expect(ok.ok).toBe(true); expect(ok.authorizesExposure).toBe(false);
+    const ok = await P.verifyExposure(args) as { ok: boolean; authorizesExposure: boolean; checks: { id: string; ok: boolean }[] }; expect(ok.checks.filter((c) => !c.ok)).toEqual([]); expect(ok.ok).toBe(true); expect(ok.authorizesExposure).toBe(false); expect((ok as unknown as { aviso: string }).aviso).toBe(B.EXPOSURE_NOTICE); expect(B.EXPOSURE_NOTICE).toMatch(/NO AUTORIZA EXPONER EL SANDBOX/);
     chmodSync(envFile, 0o644); writeFileSync(ks, 'ON'); process.exitCode = 0;
     const bad = await P.verifyExposure(args) as { ok: boolean; checks: { id: string; ok: boolean }[] }; expect(bad.checks.filter((c) => !c.ok).map((c) => c.id)).toEqual(expect.arrayContaining(['ENV_FILE_PERMISSIONS_0600', 'KILLSWITCH_PRESENT_AND_OFF'])); expect(process.exitCode).toBe(1); process.exitCode = 0;
   });

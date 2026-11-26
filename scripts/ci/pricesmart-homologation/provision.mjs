@@ -96,7 +96,7 @@ export async function verifyExposure(args) {
     const { X509Certificate } = await import('node:crypto'); const cert = new X509Certificate(fs.readFileSync(path.resolve(String(args.cert)))); const keyStat = fs.statSync(path.resolve(String(args.key)));
     input.tls = { certNotAfter: Date.parse(cert.validTo), certNames: [...String(cert.subjectAltName ?? '').matchAll(/DNS:([^,\s]+)/g)].map((m) => m[1]), keyMode: keyStat.mode & 0o777 };
   }
-  const report = B.evaluateExposureArtifacts(input); if (!report.ok) process.exitCode = 1; return report;
+  const report = B.evaluateExposureArtifacts(input); if (!report.ok) process.exitCode = 1; else console.error(`AVISO: ${B.EXPOSURE_NOTICE}`); return report;
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

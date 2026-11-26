@@ -498,6 +498,9 @@ export function renderMariaDbConfig(o = {}) {
     'log_error=/var/log/pricesmart-sandbox-mysql/error.log', '# Sin skip-grant-tables, sin plugins de acceso remoto, sin replicación: nada de esto debe aparecer en este archivo.'].join('\n');
 }
 
+/** Aviso que acompaña SIEMPRE al informe: pasar la verificación local NO es una autorización para exponer el sandbox. */
+export const EXPOSURE_NOTICE = 'ESTA VERIFICACIÓN LOCAL NO AUTORIZA EXPONER EL SANDBOX. Solo detecta errores de configuración comprobables en este host. Exponerlo exige la aprobación humana del perfil (evaluateSandboxExposure sin bloqueantes), el verificador D02 acordado con PriceSmart y un adaptador KMS revisado.';
+
 /**
  * VERIFICACIÓN PREVIA A LA EXPOSICIÓN (solo lectura, sin red): evalúa los archivos que el operador instalará/instaló en el host. Función PURA: recibe textos y metadatos, devuelve una lista de comprobaciones.
  * `ok:true` en todas NO autoriza la exposición (eso exige la aprobación humana de `evaluateSandboxExposure`, D02 y KMS); solo detecta errores de configuración que se pueden comprobar localmente.
@@ -547,7 +550,7 @@ export function evaluateExposureArtifacts(i = {}) {
     check('TLS_CERT_COVERS_HOSTNAME', !i.expectedHostname || (Array.isArray(i.tls.certNames) && i.tls.certNames.some((n) => n === i.expectedHostname || (n.startsWith('*.') && i.expectedHostname.endsWith(n.slice(1)) && i.expectedHostname.split('.').length === n.split('.').length))));
     check('TLS_KEY_PERMISSIONS', typeof i.tls.keyMode === 'number' && (i.tls.keyMode & 0o037) === 0, 'la llave privada no debe ser legible por otros');
   }
-  return { ok: checks.every((c) => c.ok), authorizesExposure: false, checks };
+  return { ok: checks.every((c) => c.ok), authorizesExposure: false, aviso: EXPOSURE_NOTICE, checks };
 }
 
 // ---- Secretos internos del sandbox (formato exigido por validateSandboxConfig). NO son credenciales de PriceSmart. Se generan en el host y nunca se imprimen.
