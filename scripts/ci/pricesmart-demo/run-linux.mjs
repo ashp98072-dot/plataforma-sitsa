@@ -538,7 +538,15 @@ function hbVitestEnv(scenario, extra = {}) {
     PS_HB_SCENARIO: scenario, PS_HB_KILLFILE: hb.killFile, PS_HB_WORKER_USER: hb.names.workerUser, ...extra };
 }
 /** Escenarios del arranque real: cada uno arranca la app con SU configuración, ejecuta la prueba por HTTP y detiene la app. Devuelve 0 solo si TODOS pasan. */
+/** Next solo admite UN servidor de desarrollo por proyecto (bloqueo en `.next`): antes de arrancar las apps del arranque real se detiene la app de laboratorio de las fases anteriores. */
+async function stopLabApp() {
+  if (!appProc?.pid) return;
+  try { process.kill(-appProc.pid, 'SIGTERM'); } catch { /* ya terminó */ }
+  for (let i = 0; i < 40 && appProc.exitCode === null && appProc.signalCode === null; i++) await sleep(250);
+  if (appProc.exitCode === null && appProc.signalCode === null) { try { process.kill(-appProc.pid, 'SIGKILL'); } catch { /* ya terminó */ } await sleep(1000); }
+}
 async function runHomologBootPhase(demoCfg) {
+  await stopLabApp();
   const hb = ST.demo.hb; const file = ['scripts/ci/pricesmart-demo/homologation-boot.e2e.ts']; const decisions = 'D02,D06,D08,D09,D12';
   const enabled = { PRICESMART_RUNTIME_MODE: 'ENABLED', PRICESMART_RUNTIME_ACK: 'CONFIRMO-ACTIVAR-PRICESMART-SANDBOX', PRICESMART_RATIFIED_DECISIONS: decisions };
   const synthetic = { PS_HOMOLOG_SYNTHETIC_PROVIDERS: 'SINTETICO-LOCAL-SIN-PRODUCCION', PS_HOMOLOG_SYNTHETIC_KEY: hb.syntheticKey };
