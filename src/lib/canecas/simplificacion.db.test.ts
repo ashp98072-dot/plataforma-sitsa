@@ -77,7 +77,7 @@ describe.skipIf(!hayLaboratorio)('simplificación (#688) en MariaDB 11.8.9 desec
       expect(await fisico()).toBe(3);
 
       // El historial muestra la dirección conservada de cada venta.
-      expect((await historialVentas(pool, 1, {}, true)).find(f => f.documento === 'VTA-000001')).toMatchObject({ direccion_entrega: 'Zona 4, Ciudad' });
+      expect((await historialVentas(pool, 1, {}, true)).find(f => f.documento === 'VTA-000001')).toMatchObject({ direccion_entrega: 'Zona 4, Ciudad', ubicacion: 'Bodega' });
 
       // ── Anulación: restablece inventario y capas exactamente; repetirla es idempotente ────────
       expect(await anularVenta(pool, 1, 1, v1.id, 'devolución')).toEqual({ yaAnulada: false });

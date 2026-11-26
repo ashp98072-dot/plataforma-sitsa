@@ -1,10 +1,25 @@
 # Canecas · Comprobante de venta imprimible
 
-En **Gestión de Canecas › Ventas**, cada venta ACTIVA tiene el botón **Imprimir comprobante**. Abre una vista previa (media carta, 5.5 × 8.5 in, vertical) y **Imprimir** usa ese mismo documento (iframe aislado). Antes de imprimir se espera a que el logo termine de descargar o falle (imágenes bloqueadas): en ese caso se imprime igual, sin logo. Las hojas se verificaron en Chromium: 1 sola página de 396 × 612 pt, con logo horizontal (Kuiqtrans) y sin logo.
+En **Gestión de Canecas › Ventas**, cada venta ACTIVA tiene **Imprimir comprobante**. La vista previa (iframe aislado, el mismo HTML que se imprime) permite elegir el papel:
 
-Contenido: logo y nombre de la empresa activa, «Comprobante de Venta», n.º de documento, fecha, cliente, dirección de entrega, cantidad, precio unitario, subtotal, total, «Quién lleva», «Quién recibe» y dos líneas de firma. **Nunca incluye costo FIFO ni utilidad**, aunque el usuario tenga permiso de costos. Los datos se escapan antes de armar el HTML.
+- **Hoja carta (8.5 × 11 in)**: el comprobante ocupa la **mitad superior** (8.5 × 5.5 in, horizontal) y la inferior queda en blanco, para doblar o cortar la hoja.
+- **Papel media carta (8.5 × 5.5 in)**: el mismo comprobante llena el papel directamente.
 
-**Logo:** sale del campo `logoUrl` de la empresa (configuración de la empresa en `requireTenant`). Solo se admiten rutas del propio sitio (`/...`) o `https://`. Un logo enviado por chat o adjunto NO se carga solo: hay que configurarlo en la empresa. Sin `logoUrl` se imprime solo el nombre.
+`@page` fija el tamaño con margen 0 (sin encabezados ni pies del navegador: fecha, URL, paginación). La hoja tiene alto fijo, sin alturas mínimas ni márgenes automáticos: no hay segunda página ni firmas aisladas. En el cuadro de impresión, escala al 100 % (y desactive «Encabezados y pies de página» si el navegador los muestra). Verificado en Chromium: 1 página de 612 × 792 pt (carta) y de 612 × 396 pt (media carta), con la mitad inferior en blanco, también con direcciones largas.
+
+Contenido: **solo el logotipo** (sin escribir el nombre de la empresa), COMPROBANTE DE VENTA, n.º de documento, fecha, cliente, **Sale de** (bodega real de la venta, `canecas_ubicaciones` por `ubicacion_id` de la misma empresa), **Va hacia** (`direccion_entrega`; no se repite como «Dirección de entrega» porque es el mismo dato), descripción, cantidad, precio unitario, subtotal, total (Q), quién lleva, quién recibe y dos firmas. **Nunca incluye costo FIFO ni utilidad.** Los datos se escapan antes de armar el HTML. Esta versión no requiere SQL.
+
+**Datos largos: nunca se recorta información.** No hay alto fijo ni `overflow: hidden`. Un script del propio documento mide el contenido y, si no cabe en 5.4 in, lo **reduce** (hasta el 60 %) para que quepa completo en la media hoja; la vista previa avisa («se redujo al X %»). Si ni así cabe, no lo oculta: continúa hacia abajo (en hoja carta, dentro de la misma página; en media carta, en una segunda hoja) y la vista previa muestra una alerta roja. Los límites reales del sistema (cliente 200, bodega 160, dirección 500, producto 200, quién lleva/recibe 160, documento 250, importes de 14 cifras) caben completos reducidos a ≈ 80 %; con 6000 caracteres en la dirección se activa la alerta.
+
+Verificación reproducible en Chromium real (se omite si no hay Playwright/Chromium o `pdftotext`):
+
+```bash
+npx vitest run src/components/canecas/comprobante-chromium.test.ts
+```
+
+Para 4 conjuntos de datos (normal, límites con espacios, límites sin espacios, fuera de límites) × 2 papeles × con/sin logo comprueba, en diseño de impresión: todo el texto presente, ningún elemento recortado ni fuera de la hoja, totales y las dos firmas dentro de la media hoja, el PDF (612 × 792 pt o 612 × 396 pt, 1 página) y el texto completo extraído del propio PDF.
+
+**Logo:** se resuelve en el servidor (`src/lib/canecas/logo-comprobante.ts`) y viaja incrustado (data URI PNG/JPEG), así que ya está cargado al imprimir. `empresas.logo_url` es una ruta relativa a uploads (la de los PDF de la plataforma; la de otra empresa se ignora); si falta, se usa el logo de marca de ESA empresa por su slug (`kt-monaco` → `public/brands/monaco/logo.png`, Logiservicios Mónaco). Sin ninguno, el comprobante muestra el nombre de la empresa como texto; nunca el logo de otra empresa ni el de Novalvion. Para otra empresa: configurar su `logo_url` o añadirla a `LOGOS_DE_MARCA`.
 
 ## Quién lleva / quién recibe
 Dos campos de texto **opcionales** (hasta 160 caracteres) en el formulario de venta; vacíos, el comprobante deja el espacio en blanco para llenarlo a mano. Se guardan en `canecas_ventas.quien_lleva` y `quien_recibe`. Quedan **inmutables**: el trigger `trg_can_venta_bu` los protege como al resto de la venta (la anulación sigue funcionando y las ventas anuladas siguen congeladas).

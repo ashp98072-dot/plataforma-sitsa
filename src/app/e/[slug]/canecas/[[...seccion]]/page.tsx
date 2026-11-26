@@ -1,4 +1,5 @@
 import { accesoCanecas } from "@/lib/canecas/acceso";
+import { logoDeEmpresa } from "@/lib/canecas/logo-comprobante";
 import { CanecasClient } from "@/components/canecas/canecas-client";
 import { ReportesComerciales } from "@/components/canecas/reportes-comerciales";
 import { MapeoProveedores } from "@/components/canecas/mapeo-proveedores";
@@ -16,5 +17,5 @@ export default async function CanecasPage({ params }: { params: Promise<{ slug: 
   const permisos = Object.fromEntries(acciones.map((accion, i) => [accion, !resultados[i].error]));
   if (vista === "reportes") return permisos.ventas ? <ReportesComerciales slug={slug} /> : <p role="alert">No tienes permiso para ver los reportes comerciales.</p>;
   if (vista === "proveedores-historicos") return permisos.catalogo ? <MapeoProveedores slug={slug} /> : <p role="alert">No tienes permiso para administrar proveedores.</p>;
-  return <CanecasClient slug={slug} vista={vista} permisos={permisos} empresaId={lectura.empresa?.id} usuarioId={lectura.session?.id} empresaNombre={lectura.empresa?.nombre} logoUrl={lectura.empresa?.logoUrl} />;
+  return <CanecasClient slug={slug} vista={vista} permisos={permisos} empresaId={lectura.empresa?.id} usuarioId={lectura.session?.id} empresaNombre={lectura.empresa?.nombre} logoUrl={vista === "ventas" && lectura.empresa ? logoDeEmpresa(lectura.empresa) : null} />;
 }
