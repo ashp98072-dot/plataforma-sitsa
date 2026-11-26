@@ -104,11 +104,11 @@ export async function historialVentas(pool: Pool, empresaId: number, filtros: Fi
   const f = validarFiltros(filtros);
   const direccion = await columnaDireccion(pool), personas = await columnasPersonas(pool);
   const c = condiciones(f, { fecha: 'v.fecha_venta', producto: 'v.producto_id', cliente: 'v.cliente_id' });
-  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,${direccion},${personas},p.nombre producto,v.cantidad,
+  const [rows] = await pool.query<Fila[]>(`SELECT CAST(v.id AS CHAR) id,DATE_FORMAT(v.fecha_venta,'%Y-%m-%d') fecha,v.documento,cl.nombre_comercial cliente,${direccion},${personas},ub.nombre ubicacion,p.nombre producto,v.cantidad,
       CONCAT('Q ',FORMAT(v.precio_unitario_centavos/100,2)) precio_unitario,CONCAT('Q ',FORMAT(v.total_centavos/100,2)) total
       ${conCostos ? ",CONCAT('Q ',FORMAT(v.costo_centavos/100,2)) costo_fifo,CONCAT(IF(v.total_centavos-v.costo_centavos<0,'-Q ','Q '),FORMAT(ABS(v.total_centavos-v.costo_centavos)/100,2)) utilidad" : ''},
       v.estado,us.username usuario,v.creado_en,ua.username anulada_por,v.anulada_en,v.motivo_anulacion
     FROM canecas_ventas v JOIN canecas_clientes cl ON cl.empresa_id=v.empresa_id AND cl.id=v.cliente_id JOIN canecas_productos p ON p.empresa_id=v.empresa_id AND p.id=v.producto_id
-    JOIN usuarios us ON us.id=v.creado_por LEFT JOIN usuarios ua ON ua.id=v.anulada_por WHERE v.empresa_id=? ${c.sql} ORDER BY v.fecha_venta DESC,v.id DESC LIMIT 500`, [empresaId, ...c.params]);
+    JOIN usuarios us ON us.id=v.creado_por LEFT JOIN usuarios ua ON ua.id=v.anulada_por LEFT JOIN canecas_ubicaciones ub ON ub.empresa_id=v.empresa_id AND ub.id=v.ubicacion_id WHERE v.empresa_id=? ${c.sql} ORDER BY v.fecha_venta DESC,v.id DESC LIMIT 500`, [empresaId, ...c.params]);
   return rows;
 }

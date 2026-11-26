@@ -1,61 +1,74 @@
 "use client";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 /** Datos de una venta tal como los devuelve el historial de ventas (cadenas ya formateadas) + los de la empresa activa. */
 export type DatosComprobante = {
-  empresaNombre: string; logoUrl?: string | null; documento: string; fecha: string; cliente: string; direccion: string; producto: string;
+  empresaNombre: string; logoUrl?: string | null; documento: string; fecha: string; cliente: string; origen: string; destino: string; producto: string;
   cantidad: string; precioUnitario: string; total: string; quienLleva: string; quienRecibe: string;
 };
+/** `carta`: hoja carta 8.5 x 11 con el comprobante en la MITAD SUPERIOR (la inferior queda en blanco). `media`: papel media carta 8.5 x 5.5 (horizontal). */
+export type Papel = "carta" | "media";
 
 const esc = (v: string) => v.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
-/** Solo rutas del propio sitio o https: nunca esquemas como javascript:. */
-const logoSeguro = (u?: string | null) => (u && /^(\/(?!\/)|https:\/\/)/.test(u) ? u : "");
+/** Solo rutas del propio sitio, https o imágenes PNG/JPEG incrustadas: nunca esquemas como javascript:. */
+const logoSeguro = (u?: string | null) => (u && /^(\/(?!\/)|https:\/\/|data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$)/.test(u) ? u : "");
 
-/** Documento HTML autónomo, media carta (5.5 x 8.5 in) vertical, listo para imprimir. Todo dato se escapa. */
-export function htmlComprobante(d: DatosComprobante): string {
+/**
+ * Documento HTML autónomo de 8.5 x 5.5 in (media hoja carta, horizontal), listo para imprimir sin encabezados ni pies del navegador
+ * (@page margin 0). La hoja tiene alto FIJO y no hay alturas mínimas ni márgenes automáticos: nada empuja las firmas ni genera otra página.
+ * Todo dato se escapa.
+ */
+export function htmlComprobante(d: DatosComprobante, papel: Papel = "carta"): string {
   const logo = logoSeguro(d.logoUrl);
+  const pagina = papel === "media" ? "8.5in 5.5in" : "8.5in 11in";
   const campo = (etiqueta: string, valor: string) => `<div class="campo"><span class="et">${esc(etiqueta)}</span><span class="va">${valor ? esc(valor) : "&nbsp;"}</span></div>`;
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Comprobante de Venta ${esc(d.documento)}</title><style>
-@page { size: 5.5in 8.5in; margin: 0.35in; }
+@page { size: ${pagina}; margin: 0; }
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: #fff; color: #111; font: 11px/1.35 Arial, Helvetica, sans-serif; }
-.hoja { width: 4.8in; min-height: 7.8in; margin: 0 auto; display: flex; flex-direction: column; }
-.enc { display: flex; align-items: center; gap: 10px; border-bottom: 2px solid #111; padding-bottom: 8px; }
-.enc img { max-height: 0.8in; max-width: 1.6in; object-fit: contain; }
-.enc .emp { font-size: 15px; font-weight: 700; }
-h1 { font-size: 16px; margin: 12px 0 2px; text-align: center; letter-spacing: .5px; }
-.doc { text-align: center; font-size: 12px; margin-bottom: 10px; }
-.campo { display: flex; gap: 6px; padding: 3px 0; border-bottom: 1px solid #bbb; }
-.et { flex: 0 0 1.05in; font-weight: 700; }
-.va { flex: 1; }
-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-th, td { border: 1px solid #111; padding: 4px 6px; text-align: left; }
+html, body { margin: 0; padding: 0; background: #fff; color: #111; font: 10.5px/1.3 Arial, Helvetica, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.hoja { width: 8.5in; height: 5.5in; padding: 0.25in 0.45in; overflow: hidden; break-inside: avoid; }
+.enc { text-align: center; height: 0.72in; display: flex; align-items: center; justify-content: center; }
+.enc img { max-height: 0.72in; max-width: 3in; object-fit: contain; mix-blend-mode: multiply; }
+.enc .emp { font-size: 16px; font-weight: 700; }
+h1 { font-size: 15px; margin: 4px 0 0; text-align: center; letter-spacing: .6px; }
+.doc { text-align: center; font-size: 11.5px; margin-bottom: 6px; }
+.datos { display: grid; grid-template-columns: 1fr 1fr; column-gap: 0.3in; }
+.campo { display: flex; gap: 6px; padding: 2px 0; border-bottom: 1px solid #999; }
+.et { flex: 0 0 0.8in; font-weight: 700; }
+.va { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+th, td { border: 1px solid #111; padding: 3px 6px; text-align: left; }
 th { background: #eee; }
 td.n, th.n { text-align: right; }
-.totales { margin-top: 6px; margin-left: auto; width: 2.3in; }
-.totales div { display: flex; justify-content: space-between; padding: 2px 0; }
+.totales { margin: 4px 0 0 auto; width: 2.4in; }
+.totales div { display: flex; justify-content: space-between; padding: 1px 0; }
 .totales .tot { border-top: 2px solid #111; font-weight: 700; font-size: 13px; }
-.personas { margin-top: 14px; }
-.firmas { margin-top: auto; padding-top: 0.6in; display: flex; gap: 0.4in; }
+.personas { margin-top: 4px; }
+.firmas { margin-top: 0.4in; display: flex; gap: 0.5in; }
 .firma { flex: 1; text-align: center; }
-.firma .linea { border-top: 1px solid #111; margin-bottom: 3px; }
-@media print { html, body { width: 4.8in; height: 7.8in; overflow: hidden; } .hoja { height: 7.7in; min-height: 0; overflow: hidden; break-inside: avoid; } }
-@media screen { body { background: #f3f3f3; } .hoja { background: #fff; padding: 0.35in; box-shadow: 0 0 6px rgba(0,0,0,.25); margin: 8px auto; } }
+.firma .linea { border-top: 1px solid #111; margin-bottom: 2px; }
+@media screen { body { background: #e5e5e5; } .hoja { background: #fff; box-shadow: 0 0 6px rgba(0,0,0,.3); } }
+@media print { html, body { width: 8.5in; height: 5.5in; overflow: hidden; } .hoja { height: 5.45in; } }
 </style></head><body><div class="hoja">
-<div class="enc">${logo ? `<img src="${esc(logo)}" alt="">` : ""}<div class="emp">${esc(d.empresaNombre)}</div></div>
-<h1>Comprobante de Venta</h1><div class="doc">N.º de documento: <strong>${esc(d.documento)}</strong></div>
-${campo("Fecha", d.fecha)}${campo("Cliente", d.cliente)}${campo("Dirección de entrega", d.direccion)}
+<div class="enc">${logo ? `<img src="${esc(logo)}" alt="${esc(d.empresaNombre)}">` : `<div class="emp">${esc(d.empresaNombre)}</div>`}</div>
+<h1>COMPROBANTE DE VENTA</h1><div class="doc">N.º de documento: <strong>${esc(d.documento)}</strong></div>
+<div class="datos">${campo("Fecha", d.fecha)}${campo("Cliente", d.cliente)}${campo("Sale de", d.origen)}${campo("Va hacia", d.destino)}</div>
 <table><thead><tr><th>Descripción</th><th class="n">Cantidad</th><th class="n">Precio unitario</th><th class="n">Subtotal</th></tr></thead>
 <tbody><tr><td>${esc(d.producto || "Caneca")}</td><td class="n">${esc(d.cantidad)}</td><td class="n">${esc(d.precioUnitario)}</td><td class="n">${esc(d.total)}</td></tr></tbody></table>
 <div class="totales"><div><span>Subtotal</span><span>${esc(d.total)}</span></div><div class="tot"><span>Total</span><span>${esc(d.total)}</span></div></div>
-<div class="personas">${campo("Quién lleva", d.quienLleva)}${campo("Quién recibe", d.quienRecibe)}</div>
+<div class="datos personas">${campo("Quién lleva", d.quienLleva)}${campo("Quién recibe", d.quienRecibe)}</div>
 <div class="firmas"><div class="firma"><div class="linea"></div>Firma de quien entrega</div><div class="firma"><div class="linea"></div>Firma de quien recibe</div></div>
 </div></body></html>`;
 }
 
-/** Vista previa del comprobante (en un iframe aislado, con el mismo HTML que se imprime) con los botones Imprimir y Cerrar. */
+const LLAVE_PAPEL = "canecas:comprobante:papel";
+function papelGuardado(): Papel { try { return window.localStorage.getItem(LLAVE_PAPEL) === "media" ? "media" : "carta"; } catch { return "carta"; } }
+
+/** Vista previa del comprobante (iframe aislado con el mismo HTML que se imprime) con elección de papel y los botones Imprimir y Cerrar. */
 export function ComprobanteVenta({ datos, onCerrar }: { datos: DatosComprobante; onCerrar: () => void }) {
   const marco = useRef<HTMLIFrameElement>(null);
+  const [papel, setPapel] = useState<Papel>(papelGuardado);
+  function elegir(p: Papel) { setPapel(p); try { window.localStorage.setItem(LLAVE_PAPEL, p); } catch { /* sin almacenamiento: solo en memoria */ } }
   /** Espera a que el logo termine de cargar (o falle: imágenes bloqueadas) antes de imprimir; sin espera infinita. */
   async function imprimir() {
     const ventana = marco.current?.contentWindow;
@@ -65,10 +78,15 @@ export function ComprobanteVenta({ datos, onCerrar }: { datos: DatosComprobante;
     ventana.focus(); ventana.print();
   }
   return <div role="dialog" aria-modal="true" aria-label="Comprobante de venta" className="fixed inset-0 z-50 flex flex-col items-center gap-3 overflow-auto bg-black/60 p-4">
-    <div className="flex gap-3">
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-[var(--card)] px-4 py-2 text-sm">
+      <fieldset className="flex flex-wrap gap-4"><legend className="sr-only">Papel</legend>
+        <label className="flex items-center gap-1.5"><input type="radio" name="papel" checked={papel === "carta"} onChange={() => elegir("carta")} />Hoja carta (sale en la mitad superior)</label>
+        <label className="flex items-center gap-1.5"><input type="radio" name="papel" checked={papel === "media"} onChange={() => elegir("media")} />Papel media carta</label>
+      </fieldset>
       <button type="button" className="rounded-lg bg-[var(--accent)] px-4 py-2 text-white" onClick={() => void imprimir()}>Imprimir</button>
-      <button type="button" className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2" onClick={onCerrar}>Cerrar</button>
+      <button type="button" className="rounded-lg border border-[var(--border)] px-4 py-2" onClick={onCerrar}>Cerrar</button>
     </div>
-    <iframe ref={marco} title="Vista previa del comprobante" srcDoc={htmlComprobante(datos)} className="h-[9.2in] w-[6in] max-w-full rounded bg-white" />
+    <p className="max-w-[8.5in] text-center text-xs text-white">En el cuadro de impresión desactive «Encabezados y pies de página» si su navegador los muestra, y deje la escala en 100 %.</p>
+    <iframe ref={marco} title="Vista previa del comprobante" srcDoc={htmlComprobante(datos, papel)} className="h-[5.5in] w-[8.5in] max-w-none shrink-0 bg-white" />
   </div>;
 }

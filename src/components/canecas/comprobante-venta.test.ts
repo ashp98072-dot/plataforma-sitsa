@@ -5,16 +5,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComprobanteVenta, htmlComprobante, type DatosComprobante } from "./comprobante-venta";
 import { CanecasClient } from "./canecas-client";
 
-const base: DatosComprobante = { empresaNombre: "Empresa Demo, S.A.", logoUrl: "/brands/demo/logo.png", documento: "VTA-000012", fecha: "2026-11-24", cliente: "Cliente <Uno>", direccion: "Zona 4, Ciudad", producto: "Caneca 55 gal", cantidad: "8", precioUnitario: "Q 95.00", total: "Q 760.00", quienLleva: "Juan Pérez", quienRecibe: "Ana López" };
+const base: DatosComprobante = { empresaNombre: "Empresa Demo, S.A.", logoUrl: "/brands/demo/logo.png", documento: "VTA-000012", fecha: "2026-11-24", cliente: "Cliente <Uno>", origen: "Bodega Central", destino: "Zona 4, Ciudad", producto: "Caneca 55 gal", cantidad: "8", precioUnitario: "Q 95.00", total: "Q 760.00", quienLleva: "Juan Pérez", quienRecibe: "Ana López" };
 
 describe("comprobante de venta (media carta)", () => {
   afterEach(() => { vi.unstubAllGlobals(); });
-  it("incluye logo, empresa, título, documento, fecha, cliente, dirección, cantidad, precios, total, quién lleva/recibe y dos líneas de firma", () => {
-    const h = htmlComprobante(base);
+  it("incluye logo (sin repetir el nombre), título, documento, fecha, cliente, Sale de, Va hacia, detalle, totales, quién lleva/recibe y dos firmas", () => {
+    const h = htmlComprobante({ ...base, logoUrl: "/brands/demo/logo.png" });
     expect(h).toContain('<img src="/brands/demo/logo.png"');
-    for (const t of ["Empresa Demo, S.A.", "Comprobante de Venta", "VTA-000012", "2026-11-24", "Zona 4, Ciudad", "Caneca 55 gal", "Q 95.00", "Subtotal", "Total", "Q 760.00", "Quién lleva", "Juan Pérez", "Quién recibe", "Ana López", "Firma de quien entrega", "Firma de quien recibe"]) expect(h, t).toContain(t);
+    expect(h).not.toContain('class="emp"'); expect(h).not.toMatch(/>Empresa Demo, S\.A\.</); // solo el logo: el nombre no se escribe
+    for (const t of ["COMPROBANTE DE VENTA", "VTA-000012", "2026-11-24", "Sale de", "Bodega Central", "Va hacia", "Zona 4, Ciudad", "Caneca 55 gal", "Q 95.00", "Subtotal", "Total", "Q 760.00", "Quién lleva", "Juan Pérez", "Quién recibe", "Ana López", "Firma de quien entrega", "Firma de quien recibe"]) expect(h, t).toContain(t);
+    expect(h).not.toContain("Dirección de entrega"); // mismo dato que «Va hacia»: no se duplica
     expect(h.match(/class="linea"/g)).toHaveLength(2);
-    expect(h).toContain("@page { size: 5.5in 8.5in;");
+  });
+  it("papel: carta imprime la media hoja arriba (8.5 x 11, margen 0); media carta es 8.5 x 5.5; la hoja tiene alto fijo y sin alturas mínimas", () => {
+    const carta = htmlComprobante(base), media = htmlComprobante(base, "media");
+    expect(carta).toContain("@page { size: 8.5in 11in; margin: 0; }"); expect(media).toContain("@page { size: 8.5in 5.5in; margin: 0; }");
+    for (const h of [carta, media]) { expect(h).toContain(".hoja { width: 8.5in; height: 5.5in;"); expect(h).not.toMatch(/min-height|margin-top:\s*auto/); }
+    expect(carta.replace(/@page \{[^}]*\}/, "")).toBe(media.replace(/@page \{[^}]*\}/, "")); // mismo contenido; solo cambia el papel
+  });
+  it("sin logo configurado se muestra el nombre de la empresa (nunca un logo ajeno); los logos incrustados PNG/JPEG se admiten", () => {
+    expect(htmlComprobante({ ...base, logoUrl: null })).toContain('<div class="emp">Empresa Demo, S.A.</div>');
+    expect(htmlComprobante({ ...base, logoUrl: "data:image/png;base64,iVBORw0KGgo=" })).toContain('<img src="data:image/png;base64,iVBORw0KGgo="');
+    expect(htmlComprobante({ ...base, logoUrl: "data:text/html;base64,AAAA" })).not.toContain("<img");
   });
   it("escapa los datos y solo admite logos del propio sitio o https; sin logo ni personas deja espacios en blanco para llenar a mano", () => {
     const h = htmlComprobante({ ...base, logoUrl: "javascript:alert(1)", quienLleva: "", quienRecibe: "", cliente: '<script>x</script>"' });
@@ -29,7 +41,9 @@ describe("comprobante de venta (media carta)", () => {
     try {
       await act(async () => { root.render(createElement(ComprobanteVenta, { datos: base, onCerrar: cerrar })); });
       const marco = host.querySelector("iframe")!;
-      expect(marco.getAttribute("srcdoc")).toBe(htmlComprobante(base));
+      expect(marco.getAttribute("srcdoc")).toBe(htmlComprobante(base, "carta"));
+      await act(async () => { (host.querySelectorAll("input[name=papel]")[1] as HTMLInputElement).click(); });
+      expect(host.querySelector("iframe")!.getAttribute("srcdoc")).toContain("size: 8.5in 5.5in");
       const imprimir = vi.fn(); Object.defineProperty(marco, "contentWindow", { value: { focus: vi.fn(), print: imprimir, document: { images: [] } } });
       const botones = [...host.querySelectorAll("button")];
       await act(async () => { botones.find(b => b.textContent === "Imprimir")!.click(); botones.find(b => b.textContent === "Cerrar")!.click(); });
@@ -39,7 +53,7 @@ describe("comprobante de venta (media carta)", () => {
   });
   it("Ventas: cada venta activa ofrece «Imprimir comprobante» con los datos de la empresa activa; las anuladas no; el formulario trae quién lleva y quién recibe", async () => {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
-    const fila = { id: "1", fecha: "2026-11-24", documento: "VTA-000012", cliente: "Cliente Uno", direccion_entrega: "Zona 4", producto: "Caneca", cantidad: 8, precio_unitario: "Q 95.00", total: "Q 760.00", estado: "ACTIVA", quien_lleva: "Juan", quien_recibe: null };
+    const fila = { id: "1", fecha: "2026-11-24", documento: "VTA-000012", cliente: "Cliente Uno", direccion_entrega: "Zona 4", ubicacion: "Bodega Real", producto: "Caneca", cantidad: 8, precio_unitario: "Q 95.00", total: "Q 760.00", estado: "ACTIVA", quien_lleva: "Juan", quien_recibe: null };
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ datos: [fila, { ...fila, id: "2", documento: "VTA-000013", estado: "ANULADA" }] })));
     const host = document.createElement("div"), root = createRoot(host); document.body.append(host);
     try {
@@ -49,7 +63,7 @@ describe("comprobante de venta (media carta)", () => {
       expect(botones).toHaveLength(1);
       await act(async () => { botones[0].click(); });
       const html = host.querySelector("iframe")!.getAttribute("srcdoc")!;
-      for (const t of ["Empresa Demo, S.A.", "/brands/demo/logo.png", "VTA-000012", "Juan", "Zona 4"]) expect(html, t).toContain(t);
+      for (const t of ["/brands/demo/logo.png", "VTA-000012", "Juan", "Bodega Real", "Zona 4", "Q 760.00", "Q 95.00"]) expect(html, t).toContain(t);
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
   it("espera a que el logo cargue (o falle) antes de imprimir", async () => {
