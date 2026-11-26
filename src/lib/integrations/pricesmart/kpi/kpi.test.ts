@@ -14,7 +14,7 @@ const scheduled: KpiFacts = { ...base, estadoSolicitud: 'PROGRAMADA', planId: 70
 describe('buildKpiRow — sin inventar', () => {
   it('orden recibida sin programar: solo lo que existe; ventana e ítems NO_DISPONIBLE; sin entrega ni cumplimiento', () => {
     const r = buildKpiRow(base);
-    expect(r).toMatchObject({ numeroOrden: 'PS-100', club: 'C-7', fechaPlanificada: null, ventanaEntrega: null, salidaEn: null, entregaEvidenciadaEn: null, entregaNivelEvidencia: 'NO_PROGRAMADA', estadoServicio: 'SOLICITADA', cantidadItems: null, cumplimientoEntrega: 'NO_CALCULABLE', cumplimientoMotivo: 'SIN_PROGRAMAR', cumplimientoBase: null, confirmaEntrega: false });
+    expect(r).toMatchObject({ numeroOrden: 'PS-100', club: 'C-7', clubFuente: 'OBSERVACIONES_PROVISIONAL_D06', fechaPlanificada: null, ventanaEntrega: null, salidaEn: null, entregaEvidenciadaEn: null, entregaNivelEvidencia: 'NO_PROGRAMADA', estadoServicio: 'SOLICITADA', cantidadItems: null, cumplimientoEntrega: 'NO_CALCULABLE', cumplimientoMotivo: 'SIN_PROGRAMAR', cumplimientoBase: null, confirmaEntrega: false });
     expect(r.disponibilidad).toMatchObject({ numeroOrden: 'DISPONIBLE', club: 'DISPONIBLE', fechaPlanificada: 'SIN_DATO', ventanaEntrega: 'NO_DISPONIBLE', salidaEn: 'SIN_DATO', cantidadItems: 'NO_DISPONIBLE', cumplimientoEntrega: 'SIN_DATO' });
   });
   it('viaje en ruta: fecha planificada y salida reales; estado = estado del plan; sin evidencia de entrega aún', () => {
@@ -50,6 +50,8 @@ describe('CSV', () => {
   it('columnas fijas; NO_DISPONIBLE para lo que SITSA no tiene; vacío para lo que falta; confirma_entrega siempre false', () => {
     const csv = kpiToCsv([buildKpiRow(base)]).split('\n'); expect(csv[0]).toBe(KPI_CSV_COLUMNS.join(','));
     const cells = csv[1].split(','); expect(cells[KPI_CSV_COLUMNS.indexOf('ventana_entrega')]).toBe('NO_DISPONIBLE'); expect(cells[KPI_CSV_COLUMNS.indexOf('cantidad_items')]).toBe('NO_DISPONIBLE');
+    expect(cells[KPI_CSV_COLUMNS.indexOf('club')]).toBe('C-7'); expect(cells[KPI_CSV_COLUMNS.indexOf('club_fuente')]).toBe('OBSERVACIONES_PROVISIONAL_D06');   // el club siempre se identifica como provisional
+    expect(buildKpiRow({ ...base, observaciones: 'otro texto' })).toMatchObject({ club: null, clubFuente: null });
     expect(cells[KPI_CSV_COLUMNS.indexOf('fecha_planificada')]).toBe(''); expect(cells.at(-1)).toBe('false'); expect(csv.at(-1)).toBe('');
   });
   it('neutraliza fórmulas de hoja de cálculo y escapa comillas/saltos de línea (los datos vienen de un tercero)', () => {

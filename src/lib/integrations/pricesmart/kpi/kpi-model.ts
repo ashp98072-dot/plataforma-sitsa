@@ -16,14 +16,14 @@ export type KpiFacts = {
 };
 export type KpiOnTime = 'A_TIEMPO' | 'TARDE' | 'NO_CALCULABLE';
 export type KpiRow = {
-  numeroOrden: string | null; solicitudId: number; club: string | null; fechaPlanificada: string | null; fechaSolicitada: string | null;
+  numeroOrden: string | null; solicitudId: number; club: string | null; clubFuente: 'OBSERVACIONES_PROVISIONAL_D06' | null; fechaPlanificada: string | null; fechaSolicitada: string | null;
   ventanaEntrega: null; salidaEn: string | null; entregaEvidenciadaEn: string | null; entregaNivelEvidencia: string;
   estadoServicio: string; cantidadItems: null; cumplimientoEntrega: KpiOnTime; cumplimientoMotivo: string | null; cumplimientoBase: 'FECHA_DIA' | null;
   confirmaEntrega: false;   // SIEMPRE false: D13 sin ratificar
   disponibilidad: Record<KpiField, KpiAvailability>;
 };
 
-/** Club del contrato de laboratorio `lab-demo-1`: lo escribe la integración en las observaciones («… · club X · destinatario …»). PROVISIONAL (D06): con otro contrato → null, nunca se adivina. */
+/** Club del contrato de laboratorio `lab-demo-1`: lo escribe la integración en las observaciones («… · club X · destinatario …»). PROVISIONAL (D06): con otro contrato → null, nunca se adivina. Toda fila con club lleva `clubFuente = 'OBSERVACIONES_PROVISIONAL_D06'` (y el CSV, la columna `club_fuente`) para que ningún consumidor lo tome por un dato definitivo. */
 export function parseClub(observaciones: string | null): string | null {
   const m = /(?:^|\s·\s)club ([A-Za-z0-9][A-Za-z0-9._:-]{0,63})(?:\s·\s|$)/.exec(observaciones ?? '');
   return m ? m[1] : null;
@@ -50,7 +50,7 @@ export function buildKpiRow(f: KpiFacts): KpiRow {
   else cumplimientoMotivo = !compromiso ? 'SIN_FECHA_COMPROMETIDA' : nivel === 'UNAVAILABLE' ? 'CONFIRMACIONES_NO_DISPONIBLES' : nivel === 'NO_PROGRAMADA' ? 'SIN_PROGRAMAR' : nivel === 'PILOT_CONFIRMED_ALL' ? 'SIN_HORA_DE_EVIDENCIA' : `EVIDENCIA_${nivel}`;
   const has = (v: unknown): KpiAvailability => (v == null ? 'SIN_DATO' : 'DISPONIBLE');
   return {
-    numeroOrden: f.referenciaCliente, solicitudId: f.solicitudId, club, fechaPlanificada, fechaSolicitada: compromiso,
+    numeroOrden: f.referenciaCliente, solicitudId: f.solicitudId, club, clubFuente: club == null ? null : 'OBSERVACIONES_PROVISIONAL_D06', fechaPlanificada, fechaSolicitada: compromiso,
     ventanaEntrega: null, salidaEn: f.salidaEn, entregaEvidenciadaEn, entregaNivelEvidencia: nivel,
     estadoServicio: f.estadoPlan ?? f.estadoSolicitud, cantidadItems: null, cumplimientoEntrega, cumplimientoMotivo, cumplimientoBase, confirmaEntrega: false,
     disponibilidad: {
@@ -61,7 +61,7 @@ export function buildKpiRow(f: KpiFacts): KpiRow {
   };
 }
 
-export const KPI_CSV_COLUMNS = ['numero_orden', 'club', 'fecha_planificada', 'ventana_entrega', 'salida_en', 'entrega_evidenciada_en', 'estado_servicio', 'cantidad_items', 'cumplimiento_entrega', 'cumplimiento_motivo', 'nivel_evidencia_entrega', 'confirma_entrega'] as const;
+export const KPI_CSV_COLUMNS = ['numero_orden', 'club', 'club_fuente', 'fecha_planificada', 'ventana_entrega', 'salida_en', 'entrega_evidenciada_en', 'estado_servicio', 'cantidad_items', 'cumplimiento_entrega', 'cumplimiento_motivo', 'nivel_evidencia_entrega', 'confirma_entrega'] as const;
 /** Celda CSV segura: comillas dobles, y los valores que una hoja de cálculo interpretaría como fórmula (= + - @, tab, CR) se neutralizan con un apóstrofo. */
 export function csvCell(v: string | number | boolean | null | undefined): string {
   if (v == null) return '';
@@ -71,7 +71,7 @@ export function csvCell(v: string | number | boolean | null | undefined): string
 /** Exportación CSV (UTF-8, `\n`). Dato inexistente en SITSA → `NO_DISPONIBLE`; dato existente pero sin valor → vacío. `confirma_entrega` es siempre `false` (D13). */
 export function kpiToCsv(rows: readonly KpiRow[]): string {
   const cell = (r: KpiRow, f: KpiField, v: string | null) => (r.disponibilidad[f] === 'NO_DISPONIBLE' ? 'NO_DISPONIBLE' : csvCell(v));
-  const lines = rows.map((r) => [csvCell(r.numeroOrden), cell(r, 'club', r.club), cell(r, 'fechaPlanificada', r.fechaPlanificada), cell(r, 'ventanaEntrega', null), cell(r, 'salidaEn', r.salidaEn),
+  const lines = rows.map((r) => [csvCell(r.numeroOrden), cell(r, 'club', r.club), csvCell(r.clubFuente), cell(r, 'fechaPlanificada', r.fechaPlanificada), cell(r, 'ventanaEntrega', null), cell(r, 'salidaEn', r.salidaEn),
     cell(r, 'entregaEvidenciadaEn', r.entregaEvidenciadaEn), csvCell(r.estadoServicio), cell(r, 'cantidadItems', null), csvCell(r.cumplimientoEntrega), csvCell(r.cumplimientoMotivo), csvCell(r.entregaNivelEvidencia), 'false'].join(','));
   return [KPI_CSV_COLUMNS.join(','), ...lines].join('\n') + '\n';
 }
