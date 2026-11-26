@@ -21,6 +21,14 @@ it("reporte muestra totales separados, origen, advertencia y exportacion de filt
  try{await act(async()=>root.render(createElement(ReportePilotosCB2,{api:"/lab"})));await act(async()=>host.querySelector('button')!.click());expect(host.textContent).toContain("Homónimos");expect(host.textContent).toContain("1.234567");expect(host.querySelector('a')!.href).toContain("exportar=csv");expect(host.textContent).toContain("Reportado");}finally{await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
 
+it("avisa cuando el desglose por piloto excede el límite",async()=>{
+ (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;
+ const host=document.createElement("div"),root=createRoot(host);document.body.append(host);
+ vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({advertencia:"",items:[],totales:[],porPiloto:[],porPilotoIncompleto:true,siguiente:null}),{headers:{"Content-Type":"application/json"}})));
+ try { await act(async()=>root.render(createElement(ReportePilotosCB2,{api:"/lab"}))); await act(async()=>host.querySelector("button")!.click()); expect(host.textContent).toContain("primeros 500 grupos"); expect(host.textContent).toContain("totales generales incluyen todos"); }
+ finally { await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals(); }
+});
+
 it("resolución desde el vale: candidatos requieren elegir, el nombre original se conserva, sin coincidencias se confirma expresamente como piloto reportado",async()=>{
  (globalThis as Record<string,unknown>).IS_REACT_ACT_ENVIRONMENT=true;const host=document.createElement('div'),root=createRoot(host);document.body.append(host);const onElegir=vi.fn();
  const montar=async(original:string,nombre:Parameters<typeof PilotoShellVale>[0]["nombre"],decision?:Parameters<typeof PilotoShellVale>[0]["decision"])=>act(async()=>root.render(createElement(PilotoShellVale,{original,nombre,decision,empleados:[{id:1,nombre:"Luis Escobar",estado:"Activo"}],instalado:true,onElegir})));
