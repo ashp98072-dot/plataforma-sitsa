@@ -75,7 +75,8 @@ describe('verificación previa a la exposición (local, sin red)', () => {
 describe('verify-exposure (CLI/aprovisionador): plan → verificación local con archivos reales', () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'ps-exposure-'));
   const openssl = spawnSync('openssl', ['version']).status === 0;
-  it.skipIf(!openssl)('el plan escribe la plantilla de MariaDB y la verificación pasa con entorno 0600 fuera del repositorio, kill switch en OFF y certificado válido; falla con permisos abiertos o kill switch ON', async () => {
+  // Los permisos POSIX (0600, llave no legible por otros) no existen en Windows: allí `fs.chmod` no los aplica y la comprobación no es significativa. El CI Linux la ejecuta siempre.
+  it.skipIf(!openssl || process.platform === 'win32')('el plan escribe la plantilla de MariaDB y la verificación pasa con entorno 0600 fuera del repositorio, kill switch en OFF y certificado válido; falla con permisos abiertos o kill switch ON', async () => {
     const out = path.join(tmp, 'plan'); await P.plan({ n: 'r9', out, hostname: 'sandbox.ejemplo.com', cert: '/etc/ssl/ps/fullchain.pem', key: '/etc/ssl/ps/privkey.pem', allow: '203.0.113.0/24' });
     const certDir = path.join(tmp, 'tls'); mkdirSync(certDir); const cert = path.join(certDir, 'c.pem'); const key = path.join(certDir, 'k.pem');
     expect(spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '90', '-subj', '/CN=sandbox.ejemplo.com', '-addext', 'subjectAltName=DNS:sandbox.ejemplo.com'], { stdio: 'ignore' }).status).toBe(0);
