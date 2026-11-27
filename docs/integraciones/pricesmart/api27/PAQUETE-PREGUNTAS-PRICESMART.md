@@ -12,6 +12,7 @@
 | D06 — Contrato definitivo de la orden (diccionario de datos) | PROPUESTA (no ratificada) | AMBOS | 7 |
 | D08 — Estados externos visibles para PriceSmart | PROPUESTA (no ratificada) | AMBOS | 2 |
 | D09 — Cancelación pedida por PriceSmart | PROPUESTA (no ratificada) | AMBOS | 5 |
+| D12 — Respuestas HTTP, acuses y notificaciones | PENDIENTE de PriceSmart | PRICESMART | 4 |
 | D13 — Entrega confirmada (evidencia y quién la confirma) | PENDIENTE de PriceSmart | AMBOS | 5 |
 | KMS — Cifrado de datos: proveedor KMS/HSM y adaptador revisado | PENDIENTE de PriceSmart | AMBOS | 4 |
 
@@ -166,6 +167,36 @@ D09-5. ¿Hay penalizaciones o plazos de cancelación que debamos reflejar o solo
 - `src/lib/integrations/pricesmart/tms-contract-proposal.ts`
 - `src/lib/integrations/pricesmart/lab-demo/tms-link.ts`
 - `src/lib/integrations/pricesmart/contracts.ts`
+
+## D12 — Respuestas HTTP, acuses y notificaciones
+
+Estado: **PENDIENTE de PriceSmart** · Responde: PRICESMART
+
+**Sigue bloqueado mientras esté abierta:**
+- `ENABLED` exige D12 en `PRICESMART_RATIFIED_DECISIONS` (`REQUIRED_DECISIONS` de runtime-config.ts): sin ella el runtime no se instala en modo de escritura
+- No hay notificaciones salientes hacia PriceSmart: el estado solo se conoce consultando con GET
+
+**Ya implementado sin esperar la respuesta (no es ratificación):**
+- Acuse 202 al recibir una orden o una solicitud de cancelación (el procesamiento sigue por la outbox) y 200 en la consulta
+- Errores con cuerpo `{code, correlationId}` y cabeceras sin caché (400, 401, 403, 404, 409, 413, 415, 429 y 503)
+
+**Preguntas:**
+
+D12-1. ¿Les basta consultar el estado con GET o necesitan que les notifiquemos los cambios (callback o webhook)? Si es así, ¿con qué autenticación y reintentos?
+   - Por qué importa: Hoy no existe ninguna llamada saliente; una notificación exigiría un emisor nuevo con su propia seguridad.
+
+D12-2. ¿Aceptan un acuse 202 (recibida, procesamiento posterior) para la orden y para la cancelación, o necesitan el resultado en la misma respuesta?
+   - Por qué importa: El diseño actual es asíncrono por la outbox; una respuesta síncrona cambiaría los tiempos y la recuperación ante fallos.
+
+D12-3. ¿Qué códigos y cuerpos de error esperan, y debemos enviar la cabecera Retry-After en 429 y 503?
+   - Por qué importa: Hoy respondemos con códigos estándar y `{code, correlationId}`, sin Retry-After.
+
+D12-4. ¿Cómo reintentarán ante un error temporal (cuántas veces, cada cuánto) y con qué cabecera de idempotencia?
+   - Por qué importa: Dimensiona los límites de frecuencia y la retención de la protección anti-reenvío (relacionado con D10).
+
+**Dónde se enchufa la respuesta:**
+- `src/lib/integrations/pricesmart/runtime-config.ts`
+- `src/lib/integrations/pricesmart/http-transport.ts`
 
 ## D13 — Entrega confirmada (evidencia y quién la confirma)
 

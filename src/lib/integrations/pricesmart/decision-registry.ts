@@ -1,11 +1,11 @@
-// PRICESMART API-27 — REGISTRO de decisiones externas (D02, D05, D06, D08, D09, D13 y KMS/HSM). Módulo PURO y autocontenido (sin importaciones): es la única fuente de la que se genera el paquete de preguntas
+// PRICESMART API-27 — REGISTRO de decisiones externas (D02, D05, D06, D08, D09, D12, D13 y KMS/HSM). Módulo PURO y autocontenido (sin importaciones): es la única fuente de la que se genera el paquete de preguntas
 // para PriceSmart (docs/integraciones/pricesmart/api27/PAQUETE-PREGUNTAS-PRICESMART.md; una prueba comprueba que el documento coincide con `renderQuestionPackage()`).
 // NO ratifica nada: un estado `PENDING_EXTERNAL`/`PROPOSED` significa que el comportamiento sigue DESACTIVADO y que el código solo contiene lo que podemos implementar y probar sin su respuesta. Las respuestas de
 // PriceSmart no se inventan ni se suponen: cada pregunta está abierta hasta confirmación escrita.
 
 /** Raíz de los módulos de PriceSmart (los puntos de enchufe se componen para no repetir literales que vigilan las guardas estáticas de API-22/API-26). */
 const PS = 'src/lib/integrations/pricesmart/';
-export type DecisionId = 'D02' | 'D05' | 'D06' | 'D08' | 'D09' | 'D13' | 'KMS';
+export type DecisionId = 'D02' | 'D05' | 'D06' | 'D08' | 'D09' | 'D12' | 'D13' | 'KMS';
 export type DecisionStatus = 'APPROVED' | 'PROPOSED' | 'PENDING_EXTERNAL';
 export type DecisionQuestion = Readonly<{ id: string; text: string; why: string }>;
 export type DecisionEntry = Readonly<{
@@ -79,6 +79,18 @@ export const DECISIONS: readonly DecisionEntry[] = Object.freeze([
       { id: 'D09-3', text: '¿Aceptan una respuesta asíncrona (solicitud recibida ahora, resultado después) y cómo quieren conocer el resultado?', why: 'El TMS no cancela solicitudes automáticamente; el resultado depende de una decisión humana.' },
       { id: 'D09-4', text: '¿Qué motivos válidos existen además de ORIGIN_REQUEST y DUPLICATE y quién puede pedirlos (club o central)?', why: 'Es el enum cerrado actual del contrato de cancelación.' },
       { id: 'D09-5', text: '¿Hay penalizaciones o plazos de cancelación que debamos reflejar o solo registrar?', why: 'No inventamos reglas comerciales: solo se registran si PriceSmart las define.' },
+    ],
+  },
+  {
+    id: 'D12', title: 'Respuestas HTTP, acuses y notificaciones', status: 'PENDING_EXTERNAL', owner: 'PRICESMART',
+    blocks: ['`ENABLED` exige D12 en `PRICESMART_RATIFIED_DECISIONS` (`REQUIRED_DECISIONS` de runtime-config.ts): sin ella el runtime no se instala en modo de escritura', 'No hay notificaciones salientes hacia PriceSmart: el estado solo se conoce consultando con GET'],
+    seams: [`${PS}runtime-config.ts`, `${PS}http-transport.ts`],
+    builtWithoutAnswer: ['Acuse 202 al recibir una orden o una solicitud de cancelación (el procesamiento sigue por la outbox) y 200 en la consulta', 'Errores con cuerpo `{code, correlationId}` y cabeceras sin caché (400, 401, 403, 404, 409, 413, 415, 429 y 503)'],
+    questions: [
+      { id: 'D12-1', text: '¿Les basta consultar el estado con GET o necesitan que les notifiquemos los cambios (callback o webhook)? Si es así, ¿con qué autenticación y reintentos?', why: 'Hoy no existe ninguna llamada saliente; una notificación exigiría un emisor nuevo con su propia seguridad.' },
+      { id: 'D12-2', text: '¿Aceptan un acuse 202 (recibida, procesamiento posterior) para la orden y para la cancelación, o necesitan el resultado en la misma respuesta?', why: 'El diseño actual es asíncrono por la outbox; una respuesta síncrona cambiaría los tiempos y la recuperación ante fallos.' },
+      { id: 'D12-3', text: '¿Qué códigos y cuerpos de error esperan, y debemos enviar la cabecera Retry-After en 429 y 503?', why: 'Hoy respondemos con códigos estándar y `{code, correlationId}`, sin Retry-After.' },
+      { id: 'D12-4', text: '¿Cómo reintentarán ante un error temporal (cuántas veces, cada cuánto) y con qué cabecera de idempotencia?', why: 'Dimensiona los límites de frecuencia y la retención de la protección anti-reenvío (relacionado con D10).' },
     ],
   },
   {

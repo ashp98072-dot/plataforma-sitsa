@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { allQuestions, DECISIONS, decisionById, openDecisions, renderQuestionPackage } from './decision-registry';
 import { DECISION_STATUS, EXTERNAL_STATUSES } from './tms-contract-proposal';
 import { REVIEWED_KMS_ADAPTERS } from './kms-provider-selection';
-import { parseRuntimeConfig } from './runtime-config';
+import { parseRuntimeConfig, REQUIRED_DECISIONS } from './runtime-config';
 import { deliveryEvidenceUnavailable } from './delivery-evidence';
 
 const repo = path.resolve(__dirname, '../../../..');
@@ -25,8 +25,8 @@ describe('API-27 registro de decisiones externas y paquete de preguntas', () => 
     expect(EXTERNAL_STATUSES.some((s) => /DELIVERED|ENTREGAD/i.test(s) && !/UNCONFIRMED/.test(s))).toBe(false);
     expect(decisionById('D02').status).toBe('PENDING_EXTERNAL');
   });
-  it('las decisiones abiertas son exactamente las que bloquean la activación: D02, D06, D08, D09, D13 y KMS (D05 está aprobada)', () => {
-    expect(openDecisions().map((d) => d.id)).toEqual(['D02', 'D06', 'D08', 'D09', 'D13', 'KMS']); expect(openDecisions().every((d) => d.status !== 'APPROVED')).toBe(true);
+  it('las decisiones abiertas son exactamente las que bloquean la activación: D02, D06, D08, D09, D12, D13 y KMS (D05 está aprobada)', () => {
+    expect(openDecisions().map((d) => d.id)).toEqual(['D02', 'D06', 'D08', 'D09', 'D12', 'D13', 'KMS']); expect(openDecisions().every((d) => d.status !== 'APPROVED')).toBe(true);
   });
   it('el predeterminado es APAGADO y la ratificación solo admite códigos Dnn (KMS NO se ratifica por variable: exige un adaptador revisado)', () => {
     expect(parseRuntimeConfig({} as never)).toEqual({ ok: false, mode: 'DISABLED', issues: [] }); expect(parseRuntimeConfig({ PRICESMART_RUNTIME_MODE: 'DISABLED', PRICESMART_RATIFIED_DECISIONS: 'D02' } as never)).toMatchObject({ ok: false, mode: 'DISABLED' });
@@ -38,6 +38,12 @@ describe('API-27 registro de decisiones externas y paquete de preguntas', () => 
     const text = renderQuestionPackage(); expect(text).not.toMatch(/https?:\/\/|@[a-z0-9-]+\.[a-z]|password|secret(?!o)|Bearer |BEGIN [A-Z ]*KEY|\b\d{1,3}(\.\d{1,3}){3}\b/i);
     for (const d of DECISIONS) expect(text).toContain(`## ${d.id} — ${d.title}`);
     for (const q of allQuestions()) expect(text).toContain(`${q.id}. ${q.text}`);
+  });
+  it('toda decisión que el runtime exige para READ_ONLY o ENABLED está en el registro y abierta (el paquete de preguntas no puede omitir ninguna)', () => {
+    const exigidas = [...new Set(Object.values(REQUIRED_DECISIONS).flat())];
+    expect(exigidas).toEqual(expect.arrayContaining(['D02', 'D06', 'D08', 'D09', 'D12']));
+    for (const id of exigidas) { const d = DECISIONS.find((x) => x.id === id); expect(d, `${id} exigida por REQUIRED_DECISIONS y ausente del registro`).toBeDefined(); expect(d!.status, id).not.toBe('APPROVED'); }
+    expect(decisionById('D12')).toMatchObject({ status: 'PENDING_EXTERNAL', owner: 'PRICESMART' });
   });
   it('el registro es de solo lectura y autocontenido (sin importaciones, sin acceso a entorno, red ni base de datos)', () => {
     const text = readFileSync(path.join(repo, 'src/lib/integrations/pricesmart/decision-registry.ts'), 'utf8'); expect(text).not.toMatch(/^import |process\.env|fetch\(|mysql/m);
