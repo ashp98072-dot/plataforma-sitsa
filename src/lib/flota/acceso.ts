@@ -4,6 +4,7 @@ import { execute, query } from "@/lib/db";
 import { asegurarSchemaFlota } from "@/lib/flota/schema";
 import { listarEmpresasActivas } from "@/lib/empresas";
 import { catalogoSinAlias } from "./vehiculos-alias";
+import { exigirSinEquivalenciaPlacaTx } from "./vehiculos-escritura";
 
 /**
  * REGLA ÚNICA de «vehículo accesible desde una empresa»: es propio de la empresa o está explícitamente compartido con ella
@@ -219,6 +220,15 @@ export async function guardarAccesoVehiculo(
   conn?: PoolConnection,
 ): Promise<void> {
   if (!conn) await asegurarSchemaFlota().catch(() => undefined);
+  if (conn) {
+    const [vehiculos] = await conn.query<RowDataPacket[]>("SELECT placa FROM flota_vehiculos WHERE id=? FOR UPDATE", [vehiculoId]);
+    if (!vehiculos[0]) throw new Error("Vehículo no disponible.");
+    for (const empresa of [...new Set(empresaIds.map(Number))].filter(id => id > 0 && id !== empresaDuenia).sort((a,b) => a-b)) {
+      const [actual] = await conn.query<RowDataPacket[]>("SELECT id FROM empresas WHERE id=? AND activa=1 FOR UPDATE", [empresa]);
+      if (!actual.length) throw new Error("Empresa de acceso no disponible.");
+      await exigirSinEquivalenciaPlacaTx(conn, empresa, String(vehiculos[0].placa));
+    }
+  }
   const escribir = conn ? async (sql: string, params: (string | number)[]) => conn.execute(sql, params) : execute;
   await escribir("DELETE FROM flota_vehiculo_acceso WHERE vehiculo_id = ?", [
     vehiculoId,

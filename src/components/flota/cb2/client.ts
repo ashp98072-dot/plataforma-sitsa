@@ -1,5 +1,6 @@
 import { productos } from "@/lib/flota/cb2/clasificacion";
 export type FilaCB2 = {
+    equivalenciaPlaca?: { vehiculoId: number; placa: string } | null;
     perfil?: "SHELL"|"HALEL";
     asociacionExterna?: import("@/lib/flota/cb2/terceros-model").AsociacionExterna | null;
     lote?: string | null;

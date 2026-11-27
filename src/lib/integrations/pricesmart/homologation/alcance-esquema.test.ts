@@ -18,6 +18,9 @@ describe('alcance del esquema del TMS en el sandbox (deriva de migraciones)', ()
   it('la migración que causó la deriva está excluida, declarada con su módulo, y la exclusión NO oculta archivos del esquema base ni de PriceSmart', () => {
     expect(excluded).toContain('sql/migrate-2026-11-cb2-vinculo-unidad.sql'); expect(files).not.toContain('sql/migrate-2026-11-cb2-vinculo-unidad.sql');
     expect(bundle.OUT_OF_SCOPE_FILES['cb2-vinculo-unidad']).toBe('combustibles-cb2');
+    expect(excluded).toContain('sql/migrate-2026-11-cb2-equivalencias-placas.sql');
+    expect(files).not.toContain('sql/migrate-2026-11-cb2-equivalencias-placas.sql');
+    expect(bundle.OUT_OF_SCOPE_FILES['cb2-equivalencias-placas']).toBe('combustibles-cb2');
     expect(files).toEqual(expect.arrayContaining(['sql/schema.sql', 'sql/migrate-2026-08-rrhh-colaborador-auth.sql', 'sql/migrate-2026-11-tms-parada-confirmaciones.sql']));
     expect(excluded.some((f) => /pricesmart|ps_api|plan|parada|solicitud/i.test(f))).toBe(false);
   });

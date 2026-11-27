@@ -102,6 +102,8 @@ export class ProvisioningError extends Error {
  * Ninguna de ellas crea objetos que usen PriceSmart ni el flujo de planes/paradas/confirmaciones. Ampliar o reducir la lista exige revisión; el informe de `finalize` la reproduce (`scope.excludedFiles`).
  */
 export const OUT_OF_SCOPE_FILES = Object.freeze({
+  // La equivalencia de placas pertenece a CB2 y requiere sus tablas y proveedores; el sandbox de PriceSmart no instala CB2.
+  'cb2-equivalencias-placas': 'combustibles-cb2',
   'cb2-documentos-fase2-paso1-revision': 'combustibles-cb2', 'cb2-documentos-fase2-paso2-operaciones': 'combustibles-cb2', 'combustibles-pr2-consumos-facturas': 'combustibles-cb2', 'combustibles-pr514-asignaciones': 'combustibles-cb2',
   'cb2-fondos-vinculos': 'combustibles-cb2', 'cb2-identidades-independientes': 'combustibles-cb2', 'cb2-piloto-reportado': 'combustibles-cb2', 'cb2-pilotos-reportados': 'combustibles-cb2', 'cb2-terceros-directos': 'combustibles-cb2', 'cb2-terceros': 'combustibles-cb2', 'cb2-vinculo-unidad': 'combustibles-cb2',
   'compras-idempotencia-requerimientos': 'compras (nombres calificados con la base de producción)', 'documento-entregas': 'documentos (nombres calificados con la base de producción)', 'operaciones-idempotencia-fondos-gastos': 'fondos (nombres calificados con la base de producción)',

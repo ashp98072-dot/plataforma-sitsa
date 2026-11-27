@@ -18,6 +18,9 @@ import { resumenIntegrado } from "./resumen-mensual";
 import { revisionCandidatos } from "@/components/flota/cb2/preview-model";
 import type { CatalogosCB2, FilaCB2 } from "@/components/flota/cb2/client";
 import { gruposOrigen, type Registro } from "@/components/flota/cb2/client";
+import { recordarPlacaTx, revocarPlaca } from "./placas-equivalencias";
+import { exigirSinEquivalenciaPlacaTx } from "../vehiculos-escritura";
+import { hash } from "./model";
 
 vi.setConfig({ testTimeout: 240000, hookTimeout: 240000 });
 const pipe = process.env.CB2_587_PIPE ?? "";
@@ -66,6 +69,7 @@ describe.skipIf(!pipe)("CB2: piloto reportado — primera y segunda importación
       await admin.query(readFileSync(`sql/${f}`, "utf8").replace(/^﻿/, ""));
     await admin.query("CREATE TABLE tms_solicitud_fondo_lineas (id INT NOT NULL PRIMARY KEY, empresa_id INT NOT NULL, UNIQUE KEY uq_fondolin_c2a_empresa_id (empresa_id,id)) ENGINE=InnoDB");
     await admin.query(readFileSync("sql/migrate-2026-11-cb2-fondos-vinculos.sql", "utf8"));
+    await admin.query(readFileSync("sql/migrate-2026-11-cb2-equivalencias-placas.sql", "utf8"));
     state.pool = mysql.createPool({ socketPath: `${BARRA}${BARRA}.${BARRA}pipe${BARRA}${pipe}`, user: "root", password: "", database: LAB, connectionLimit: 4, dateStrings: true });
   });
   afterAll(async () => { await state.pool?.end(); await admin?.query(`DROP DATABASE IF EXISTS ${LAB}`).catch(() => undefined); await admin?.end(); });
@@ -235,4 +239,110 @@ describe.skipIf(!pipe)("CB2: piloto reportado — primera y segunda importación
     expect(resumen.grupos.some(g => g.origen === "HISTORICO" && g.vehiculoId === 1190 && g.galones === "5")).toBe(true);
     expect(resumen.grupos.some(g => g.origen === "CB2" && g.vehiculoId === 1190)).toBe(true);
   });
+  it("equivalencias de placa: importación, aislamiento, reintento, conflicto y revocación", async () => {
+    await admin.query("INSERT INTO flota_vehiculos (id,empresa_id,placa,estado,activo) VALUES (1191,1,'C-125CCM','Activo',1),(1192,1,'C-999XYZ','Activo',1)");
+    const b = await libroShell([filaShell("EQ-1", "Piloto Placa", "125 CCN", "Diesel")]);
+    const key = (await claves(b, "SHELL"))[0];
+    const seleccion = [{ candidato: key, vehiculoId: 1191, productoClasificado: "DIESEL" as const, motivoUnidad: "Verificado contra el vale original", recordarPlaca: true, empleadoId: null, metodoEmpleado: "SIN_ASIGNACION" as const, decisionNombre: { tipo: "REPORTADO" as const, confirmado: true } }];
+    const entradaReal = { perfil: "SHELL" as const, moneda: "GTQ" as const, seleccion };
+    const p = await preview(ctx, b, entradaReal), claveOp = "equivalenciaPlaca0001";
+    await confirmarArchivo(ctx, b, "eq-shell.xlsx", entradaReal, claveOp, p.token);
+    await expect(confirmarArchivo(ctx, b, "eq-shell.xlsx", entradaReal, claveOp, p.token)).resolves.toMatchObject({ repetida: true });
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE empresa_id=1 AND proveedor_id=1")).toBe(1);
+    expect((await q("SELECT placa_original,vehiculo_id FROM flota_cb2_consumos WHERE numero_vale='EQ-1'"))[0]).toMatchObject({ placa_original: "125 CCN", vehiculo_id: 1191 });
+    const futuroShell = await preview(ctx, await libroShell([filaShell("EQ-2", "Piloto Placa", "125 CCN", "Diesel")]), { perfil: "SHELL", moneda: "GTQ", seleccion: [] });
+    expect(futuroShell.filas.find(f => f.candidato)?.equivalenciaPlaca).toEqual({ vehiculoId: 1191, placa: "C-125CCM" });
+    const bHalel = await libro([[new Date("2026-10-01T00:00:00Z"), "EQ-3", "125 CCN", 10, 20, 200, "", "", "Piloto Placa", "DIESEL", null]]);
+    expect((await preview(ctx, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca?.vehiculoId).toBe(1191);
+    await admin.query("UPDATE flota_vehiculos SET activo=0 WHERE id=1191");
+    expect((await preview(ctx, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    await admin.query("UPDATE flota_vehiculos SET activo=1 WHERE id=1191");
+    await admin.query("INSERT INTO flota_vehiculos (id,empresa_id,placa,estado,activo) VALUES (1193,1,'C-125CCN','Baja',0)");
+    expect((await preview(ctx, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    await admin.query("DELETE FROM flota_vehiculos WHERE id=1193");
+    expect((await preview({ ...ctx, proveedorId: 2 }, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    expect((await preview({ ...ctx, empresaId: 2, proveedorId: 3 }, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    const h = await libro([[new Date("2026-10-01T00:00:00Z"), "EQ-H1", "125 CCE", 10, 20, 200, "", "", "Piloto Placa", "DIESEL", null]]);
+    const hEntrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato: (await claves(h, "HALEL"))[0], vehiculoId: 1191, productoClasificado: "DIESEL" as const, motivoUnidad: "Verificado contra vale de HALEL", recordarPlaca: true }] };
+    await confirmarArchivo({ ...ctx, proveedorId: 2 }, h, "eq-halel.xlsx", hEntrada, "equivalenciaHalel001", (await preview({ ...ctx, proveedorId: 2 }, h, hEntrada)).token);
+    const h2 = await libro([[new Date("2026-10-01T00:00:00Z"), "EQ-H2", "125 CCE", 10, 20, 200, "", "", "Piloto Placa", "DIESEL", null]]);
+    expect((await preview({ ...ctx, proveedorId: 2 }, h2, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca?.vehiculoId).toBe(1191);
+    expect((await preview(ctx, h2, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    const conflict = await libroShell([filaShell("EQ-4", "Piloto Placa", "125 CCN", "Diesel")]);
+    const k = (await claves(conflict, "SHELL"))[0], e = { ...entradaReal, seleccion: [{ ...seleccion[0], candidato: k, vehiculoId: 1192 }] };
+    const pc = await preview(ctx, conflict, e);
+    await expect(confirmarArchivo(ctx, conflict, "conflicto.xlsx", e, "equivalenciaPlaca0002", pc.token)).rejects.toThrow(/conflicto/i);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale='EQ-4'")).toBe(0);
+    const auditAntes = await n("SELECT COUNT(*) n FROM auditoria WHERE accion='cb2_recordar_placa'");
+    await confirmarArchivo(ctx, b, "eq-shell.xlsx", entradaReal, claveOp, p.token);
+    expect(await n("SELECT COUNT(*) n FROM auditoria WHERE accion='cb2_recordar_placa'")).toBe(auditAntes);
+    const concurrentes = await Promise.all(["EQ-5", "EQ-6"].map(v => libroShell([filaShell(v, "Piloto Placa", "125 CCD", "Diesel")])));
+    const peticiones = await Promise.all(concurrentes.map(async (archivo, i) => {
+      const candidato = (await claves(archivo, "SHELL"))[0];
+      const entrada = { ...entradaReal, seleccion: [{ ...seleccion[0], candidato, vehiculoId: i ? 1192 : 1191 }] };
+      return { archivo, entrada, token: (await preview(ctx, archivo, entrada)).token };
+    }));
+    const resultados = await Promise.allSettled(peticiones.map((r, i) => confirmarArchivo(ctx, r.archivo, `concurrente-${i}.xlsx`, r.entrada, `concurrenciaPlaca000${i}`, r.token)));
+    expect(resultados.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(resultados.filter(r => r.status === "rejected")).toHaveLength(1);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale IN ('EQ-5','EQ-6')")).toBe(1);
+    const seleccionSugerida = [{ ...seleccion[0], candidato: (await claves(bHalel, "HALEL"))[0], usarEquivalenciaPlaca: true, recordarPlaca: false, decisionNombre: undefined }];
+    const entradaSugerida = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: seleccionSugerida };
+    const reciboSugerido = await preview(ctx, bHalel, entradaSugerida);
+    await expect(revocarPlaca(ctx, hash("125CCN"))).resolves.toMatchObject({ repetida: false });
+    await expect(revocarPlaca(ctx, hash("125CCN"))).resolves.toMatchObject({ repetida: true });
+    await expect(confirmarArchivo(ctx, bHalel, "sugerida-revocada.xlsx", entradaSugerida, "equivalenciaPlaca0003", reciboSugerido.token)).rejects.toThrow(/equivalencia cambi/i);
+    expect((await preview(ctx, bHalel, { perfil: "HALEL", moneda: "GTQ", seleccion: [] })).filas.find(f => f.candidato)?.equivalenciaPlaca).toBeNull();
+    expect((await q("SELECT placa_original,vehiculo_id FROM flota_cb2_consumos WHERE numero_vale='EQ-1'"))[0]).toMatchObject({ placa_original: "125 CCN", vehiculo_id: 1191 });
+  });
+  it("recupera con la misma clave después de perder la respuesta al COMMIT real", async () => {
+    const archivo = await libro([[new Date("2026-10-01T00:00:00Z"), "EQ-COMMIT", "125 CCQ", 10, 20, 200, "", "", "Piloto Placa", "DIESEL", null]]);
+    const candidato = (await claves(archivo, "HALEL"))[0];
+    const entrada = { perfil: "HALEL" as const, moneda: "GTQ" as const, seleccion: [{ candidato, vehiculoId: 1191, productoClasificado: "DIESEL" as const, motivoUnidad: "Verificado contra evidencia original", recordarPlaca: true }] };
+    const recibo = await preview(ctx, archivo, entrada), clave = "commitPerdidoPlaca001";
+    const auditorias = await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')");
+    const obtener = state.pool!.getConnection.bind(state.pool!);
+    let commits = 0;
+    const spy = vi.spyOn(state.pool!, "getConnection").mockImplementation(async () => {
+      const c = await obtener();
+      return new Proxy(c, { get(target, prop) {
+        if (prop === "commit") return async () => { await target.commit(); if (++commits === 2) throw new Error("respuesta perdida tras commit"); };
+        const v = Reflect.get(target, prop, target); return typeof v === "function" ? v.bind(target) : v;
+      } });
+    });
+    try { await expect(confirmarArchivo(ctx, archivo, "perdido.xlsx", entrada, clave, recibo.token)).rejects.toMatchObject({ incierto: true }); }
+    finally { spy.mockRestore(); }
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale='EQ-COMMIT'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='125CCQ'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')")).toBe(auditorias + 2);
+    await expect(confirmarArchivo(ctx, archivo, "perdido.xlsx", entrada, clave, recibo.token)).resolves.toMatchObject({ repetida: true });
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_consumos WHERE numero_vale='EQ-COMMIT'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='125CCQ'")).toBe(1);
+    expect(await n("SELECT COUNT(*) n FROM auditoria WHERE accion IN ('cb2_recordar_placa','cb2_confirmar')")).toBe(auditorias + 2);
+  });
+  it("serializa equivalencia y alta de Flota mediante el bloqueo de empresa", async () => {
+    const a = await state.pool!.getConnection(), b = await state.pool!.getConnection();
+    try {
+      await a.beginTransaction(); await b.beginTransaction();
+      await recordarPlacaTx(a, ctx, "123 AAA", 1191, "Verificado contra la evidencia");
+      let desbloqueada = false;
+      const espera = b.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE").then(() => { desbloqueada = true; });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(desbloqueada).toBe(false);
+      await a.commit(); await espera;
+      await expect(exigirSinEquivalenciaPlacaTx(b, 1, "C-123AAA")).rejects.toThrow(/equivalencia CB2/);
+      await b.rollback();
+      expect(await n("SELECT COUNT(*) n FROM flota_vehiculos WHERE placa='C-123AAA'")).toBe(0);
+      await a.beginTransaction();
+      await a.query("SELECT id FROM empresas WHERE id=1 FOR UPDATE");
+      await a.query("INSERT INTO flota_vehiculos (empresa_id,placa,estado,activo) VALUES (1,'C-124AAA','Activo',1)");
+      await b.beginTransaction();
+      const guardar = recordarPlacaTx(b, ctx, "124 AAA", 1191, "Verificado contra la evidencia");
+      await a.commit();
+      await expect(guardar).rejects.toThrow(/coincide con una unidad real/i);
+      await b.rollback();
+      expect(await n("SELECT COUNT(*) n FROM flota_cb2_placas_equivalencias WHERE placa_normalizada='124AAA'")).toBe(0);
+    } finally { await a.rollback(); await b.rollback(); a.release(); b.release(); }
+  });
+
 });
