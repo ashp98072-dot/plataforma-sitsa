@@ -2,10 +2,10 @@ import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql
 import { isSandboxVerifiedPool } from '../../sandbox-db';
 import { outboxEventSchema, OutboxStoreError, type OutboxClaim, type OutboxStore } from './outbox';
 
-// PRICESMART API-07 — almacén MariaDB de la outbox (ps_api01_outbox). NO crea el pool, NO ejecuta DDL y NO se importa desde rutas ni arranque.
+// PRICESMART API-07 — almacén MariaDB de la outbox (ps_api01_outbox). NO crea el pool, NO ejecuta DDL y NO se importa desde rutas; solo lo compone el runtime de homologación, con la cuenta del worker.
 // Mismos guardas que mariadb-repository.ts (pool verificado de sandbox, esquema/cuenta `sandbox_api02_*`, identidad SQL antes de BEGIN).
-// ESTADO DE VALIDACIÓN: protocolo SQL probado con dobles del driver (SIMULATED). SKIP LOCKED, bloqueos y concurrencia reales NO están validados contra el motor:
-// requieren extender el laboratorio de API-06A (cuenta de worker con SELECT en ps_api01_outbox/events y UPDATE de (status, attempts, next_attempt_at, lease_until)) — autorización aparte.
+// ESTADO DE VALIDACIÓN: protocolo SQL probado con dobles del driver (outbox-mariadb.test.ts) y, contra MariaDB 11.8.9 real en el CI Linux, con dos consumidores concurrentes (SKIP LOCKED + fencing),
+// caída con lease vencido y REVIEW (scripts/ci/pricesmart-demo/homologation-runtime.e2e.ts R10–R12) y reinicio/SIGTERM (homologation-boot.e2e.ts HB.7–HB.9). Laboratorio efímero: no es validación de producción.
 //
 // Una sola fuente de tiempo: el RELOJ DE LA BASE (UTC_TIMESTAMP) para elegibilidad, lease y backoff; así varios workers no dependen de relojes locales.
 // Fencing: cada reclamación hace attempts = attempts + 1; cerrar exige status='LEASED' AND attempts = <intento reclamado>. Sin columnas nuevas.

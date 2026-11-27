@@ -175,7 +175,7 @@ describe('API-26 aislamiento estático', () => {
   });
   it('NADA invoca hoy el runtime de homologación (ni rutas ni otros módulos): solo sus pruebas', () => {
     const hits: string[] = [];
-    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && f !== path.join(__dirname, 'runtime.ts') && /homologation\/runtime|installHomologationRuntime|createHomologationRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(src, f)); } };
+    const walk = (dir: string) => { for (const n of readdirSync(dir)) { const f = path.join(dir, n); if (statSync(f).isDirectory()) walk(f); else if (/\.(ts|tsx)$/.test(n) && !n.includes('.test.') && f !== path.join(__dirname, 'runtime.ts') && /homologation\/runtime|installHomologationRuntime|createHomologationRuntime/.test(readFileSync(f, 'utf8'))) hits.push(path.relative(src, f).split(path.sep).join('/')); } };   // separador POSIX: misma salida en Windows y Linux
     walk(src);
     // ÚNICA excepción revisada: el arranque real (`boot.ts`), que solo invoca el instrumentation de Next.js y se cierra solo si faltan proveedores, decisiones, ACK o interruptor (ver boot.test.ts).
     expect(hits).toEqual(['lib/integrations/pricesmart/homologation/boot.ts']);
