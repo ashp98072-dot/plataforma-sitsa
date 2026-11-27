@@ -22,6 +22,26 @@ on:
       - 'sql/**'
       - '.github/workflows/pricesmart-lab.yml'
       - 'package-lock.json'
+  # Tras cada merge a main con cambios en estas mismas rutas: verifica el estado FUSIONADO (no solo la cabeza del PR). Mismo filtro que pull_request (lo comprueba e2e-cobertura-ci.test.ts).
+  push:
+    branches: [main]
+    paths:
+      - 'src/lib/integrations/pricesmart/**'
+      - 'src/app/api/integrations/pricesmart/**'
+      - 'scripts/ci/pricesmart-demo/**'
+      - 'scripts/ci/pricesmart-api06a/**'
+      - 'scripts/ci/pricesmart-api11/**'
+      - 'scripts/ci/portal-e2e/**'
+      - 'scripts/ci/pricesmart-homologation/**'
+      - 'scripts/sandbox-config.mjs'
+      - 'scripts/start-hostinger.mjs'
+      - 'src/instrumentation.ts'
+      - 'src/lib/db.ts'
+      - 'src/lib/sandbox-db.ts'
+      - 'docs/integraciones/pricesmart/**'
+      - 'sql/**'
+      - '.github/workflows/pricesmart-lab.yml'
+      - 'package-lock.json'
   workflow_dispatch:
 
 permissions:
@@ -29,7 +49,8 @@ permissions:
 
 concurrency:
   group: pricesmart-lab-${{ github.ref }}
-  cancel-in-progress: true
+  # En los PR, un push nuevo cancela la corrida anterior; en main NO: cada merge conserva su propio resultado.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e:
