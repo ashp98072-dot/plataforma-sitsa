@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "./db";
-import { hashPassword, necesitaRehash, verifyPassword } from "./password";
+import { hashPassword, necesitaRehash, verificacionFicticia, verifyPassword } from "./password";
 import type { RolGlobal } from "./roles";
 import {
   guardarPermisosUsuario,
@@ -30,7 +30,7 @@ export async function verificarCredenciales(
     [username.trim()],
   );
   const r = rows[0];
-  if (!r || !r.activo) return null;
+  if (!r || !r.activo) return verificacionFicticia(password) || null;   // A4: mismo costo que una verificación real (no revela si el usuario existe)
   const saltActual = String(r.salt);
   const hashActual = String(r.password_hash);
   if (!verifyPassword(password, saltActual, hashActual)) {

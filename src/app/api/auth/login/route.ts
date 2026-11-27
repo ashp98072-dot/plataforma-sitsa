@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verificarCredenciales } from "@/lib/auth";
+import { ErrorProteccionLogin, protegerLogin, registrarFalloProteccion } from "@/lib/auth-intentos";
+import { leerCuerpoJson, respuestaBloqueado, respuestaNoDisponible } from "@/lib/auth-intentos-http";
 import { homePorRol, slugPorHost } from "@/lib/dominios";
 import { empresasParaUsuario } from "@/lib/empresas";
 import { createSessionToken, setSessionCookie } from "@/lib/session";
@@ -11,18 +13,30 @@ const schema = z.object({
 });
 
 export async function POST(request: Request) {
+  // B3: un cuerpo que no es JSON es un error del cliente (400), no del servidor.
+  const cuerpo = await leerCuerpoJson(request);
+  if (!cuerpo.ok) {
+    return NextResponse.json({ error: "Usuario y contraseña obligatorios." }, { status: 400 });
+  }
   try {
-    const parsed = schema.safeParse(await request.json());
+    const parsed = schema.safeParse(cuerpo.valor);
     if (!parsed.success) {
       return NextResponse.json(
         { error: "Usuario y contraseña obligatorios." },
         { status: 400 },
       );
     }
-    const user = await verificarCredenciales(
-      parsed.data.username,
-      parsed.data.password,
-    );
+    // A4: límite de intentos por usuario y por origen (persistente, compartido entre instancias). Mismo mensaje genérico para cualquier fallo.
+    let resultado;
+    try {
+      resultado = await protegerLogin({ alcance: "staff", identificador: parsed.data.username, headers: request.headers }, () =>
+        verificarCredenciales(parsed.data.username, parsed.data.password));
+    } catch (e) {
+      if (e instanceof ErrorProteccionLogin) { registrarFalloProteccion("staff", e); return respuestaNoDisponible(); }
+      throw e;
+    }
+    if (resultado.tipo === "bloqueado") return respuestaBloqueado(resultado.retryAfterS);
+    const user = resultado.tipo === "ok" ? resultado.valor : null;
     if (!user) {
       return NextResponse.json(
         { error: "Usuario o contraseña incorrectos." },
