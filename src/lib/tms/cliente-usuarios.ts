@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { execute, query } from "@/lib/db";
-import { hashPassword, necesitaRehash, verifyPassword } from "@/lib/password";
+import { hashPassword, necesitaRehash, verificacionFicticia, verifyPassword } from "@/lib/password";
 
 /**
  * CLIENTE-PORTAL-1 — usuarios de acceso al Portal del Cliente
@@ -207,7 +207,7 @@ export async function verificarCredencialesCliente(
     [normalizarEmail(email)],
   );
   const r = rows[0];
-  if (!r || !r.activo || r.cliente_estado !== "Activo") return null;
+  if (!r || !r.activo || r.cliente_estado !== "Activo") return verificacionFicticia(password) || null;   // A4: mismo costo que una verificación real
 
   const saltActual = String(r.salt);
   const hashActual = String(r.password_hash);

@@ -62,3 +62,15 @@ export function verifyPassword(
 export function necesitaRehash(passwordHash: string): boolean {
   return esHashLegado(passwordHash);
 }
+
+/**
+ * A4 — Verificación FICTICIA para identificadores inexistentes o inactivos: ejecuta el mismo scrypt que una verificación real (mismo costo y longitud de clave) contra
+ * un hash fijo e inutilizable y devuelve SIEMPRE false. Iguala el tiempo de respuesta y evita que se pueda averiguar qué usuarios existen midiendo la demora.
+ */
+const SALT_FICTICIO = "a4-verificacion-ficticia-sin-cuenta-0000000000000000000000000000";
+const HASH_FICTICIO = Buffer.alloc(SCRYPT_KEYLEN, 0);
+export function verificacionFicticia(password: string): false {
+  const calc = scryptSync(password, SALT_FICTICIO, SCRYPT_KEYLEN);
+  timingSafeEqual(calc, HASH_FICTICIO);
+  return false;
+}
