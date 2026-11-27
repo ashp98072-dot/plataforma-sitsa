@@ -19,4 +19,21 @@ describe('cobertura de los E2E en el CI Linux', () => {
     expect(workflow).toMatch(/run-linux\.mjs/); expect(workflow).toMatch(/vitest run/); expect(workflow).not.toMatch(/continue-on-error|\|\|\s*true/);
     expect(runner).toMatch(/if \(c !== 0\) code = 1;/); expect(runner).toMatch(/main\(\)\.then\(\(c\) => process\.exit\(c\)/);
   });
+  it('el workflow también corre tras cada merge a main, con EXACTAMENTE el mismo filtro de rutas que los PR, sin cancelar corridas de main y con permisos de solo lectura', () => {
+    const lineas = workflow.split(/\r?\n/);
+    /** Rutas listadas bajo `  <disparador>:` → `    paths:` (hasta la primera línea que no sea `      - '…'`). */
+    const rutas = (disparador: string) => {
+      const i = lineas.indexOf(`  ${disparador}:`); if (i < 0) return null;
+      const p = lineas.indexOf('    paths:', i); if (p < 0) return null; const out: string[] = [];
+      for (let k = p + 1; k < lineas.length; k++) { const m = /^ {6}- '([^']+)'$/.exec(lineas[k]); if (!m) break; out.push(m[1]); }
+      return out;
+    };
+    const pr = rutas('pull_request'), push = rutas('push');
+    expect(pr, 'falta el disparador pull_request con rutas').not.toBeNull(); expect(push, 'falta el disparador push con rutas').not.toBeNull();
+    expect(push).toEqual(pr); expect(pr).toContain('src/lib/integrations/pricesmart/**');
+    const iPush = lineas.indexOf('  push:'); expect(lineas[iPush + 1]).toBe('    branches: [main]');
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+    expect(lineas.slice(lineas.indexOf('permissions:'), lineas.indexOf('permissions:') + 2)).toEqual(['permissions:', '  contents: read']);
+    expect(workflow).not.toMatch(/pull_request_target|^ {2}schedule:/m);
+  });
 });
